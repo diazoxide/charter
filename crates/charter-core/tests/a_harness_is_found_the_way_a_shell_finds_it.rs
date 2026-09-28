@@ -69,6 +69,7 @@ impl Plane {
             cwd: Some(self.root().to_path_buf()),
             resume: None,
             show_footer: false,
+            resuming: None,
         }
     }
 }

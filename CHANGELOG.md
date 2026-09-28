@@ -22,6 +22,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   session list` and `charter session show` read them back, and a chat's briefing names the
   last one. charter's new `smart-close` skill writes one. The window's Smart close, which
   sends that skill to a chat and closes its tab when the record is saved, is next (ADR 0064).
+- **Old sessions come back from the window.** Each workspace has a **Sessions** panel — and the
+  plane root's tab one of the plane's own — listing its session records newest first, with
+  when, persona and harness, and `↻ resumable` on a record that holds a conversation. A row
+  opens the record as a read-only tab. **Resume**, on a row's menu and on the record's tab,
+  starts a new chat in the record's place, on its harness, given its conversation back
+  (`claude --resume`, `codex resume`, `opencode -s`, as a relaunch does) and as its persona where
+  the plane still has it, with the record quoted in its briefing. Where the conversation cannot
+  be given — the record holds none, names no harness a profile here runs, or the harness can no
+  longer find it — the chat starts fresh with the record in its briefing, and says why. The
+  palette has **Open session record: …** and **Resume session: …** for the place in front.
 
 ### Changed
 

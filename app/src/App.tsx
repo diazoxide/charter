@@ -910,6 +910,9 @@ function App() {
       // A view is shown in a project's tab, and there is no project here. The rows that open one
       // do not exist without a plane, for the same reason the workspace rows above do not.
       openView: () => undefined,
+      // A session record is resumed into a project, and there is no project here: its rows are
+      // a project's catalogue's, and this one lists none.
+      resumeSession: async () => nowhere(),
       // An extension's action runs in a project, and there is no project here: its rows are
       // a project's catalogue's, and this one lists none.
       runAction: async () => nowhere(),

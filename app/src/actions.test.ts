@@ -43,6 +43,10 @@ function doing(): Doing & { calls: string[] } {
     calls,
     newChat: note("newChat"),
     newShell: note("newShell"),
+    resumeSession: async (...args: unknown[]) => {
+      note("resumeSession")(...args);
+      return { ok: true };
+    },
     split: note("split"),
     closePane: note("closePane"),
     closeTab: note("closeTab"),

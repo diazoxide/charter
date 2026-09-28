@@ -45,6 +45,7 @@ function panels(over: Partial<Panels> = {}): Panels {
     todos_refused: null,
     personas: [],
     persona: null,
+    sessions: [],
     contributed: [],
     ...over,
   };

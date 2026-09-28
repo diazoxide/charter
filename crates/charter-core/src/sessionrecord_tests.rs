@@ -447,3 +447,132 @@ fn a_chat_the_app_has_no_record_of_is_known_only_by_its_number() {
         }
     );
 }
+
+// ---- reading one back by its plane-relative path (SI-8d) ------------------------------------
+
+#[test]
+fn a_listing_carries_each_records_persona_harness_and_conversation() {
+    let dir = plane(&["alpha"]);
+    write(dir.path(), "Known", BODY, &facts(alpha(), at(10, 0, 0))).unwrap();
+    let mut bare = facts(alpha(), at(9, 0, 0));
+    bare.chat = None;
+    bare.persona = None;
+    write(dir.path(), "Bare", BODY, &bare).unwrap();
+    let listed = list(dir.path(), &alpha());
+    assert_eq!(listed[0].title, "Known");
+    assert_eq!(listed[0].persona.as_deref(), Some("steward"));
+    assert_eq!(listed[0].harness.as_deref(), Some("claude"));
+    assert_eq!(
+        listed[0].conversation.as_deref(),
+        Some("0f6c2a1e-aaaa-bbbb-cccc-123456789abc")
+    );
+    // `unknown` and `none` are charter's words for a fact it did not have, never a value.
+    assert_eq!(listed[1].title, "Bare");
+    assert_eq!(listed[1].persona, None);
+    assert_eq!(listed[1].harness, None);
+    assert_eq!(listed[1].conversation, None);
+}
+
+#[test]
+fn a_conversation_id_a_hand_edit_made_unsafe_is_not_carried() {
+    let dir = plane(&["alpha"]);
+    let done = write(dir.path(), "Edited", BODY, &facts(alpha(), at(9, 0, 0))).unwrap();
+    let text = std::fs::read_to_string(&done.path).unwrap().replace(
+        "conversation: 0f6c2a1e-aaaa-bbbb-cccc-123456789abc",
+        "conversation: --dangerously-skip-permissions",
+    );
+    std::fs::write(&done.path, text).unwrap();
+    let listed = list(dir.path(), &alpha());
+    assert_eq!(listed[0].conversation, None, "a flag is never an id");
+}
+
+#[test]
+fn locate_reads_a_plane_relative_record_path() {
+    assert_eq!(
+        locate("sessions/20260928-140312-ship-it.md"),
+        Ok((Place::PlaneRoot, "20260928-140312-ship-it.md".to_owned()))
+    );
+    assert_eq!(
+        locate("workspaces/alpha/sessions/20260928-140312-ship-it.md"),
+        Ok((alpha(), "20260928-140312-ship-it.md".to_owned()))
+    );
+}
+
+#[test]
+fn locate_refuses_every_path_that_is_not_one_records_own() {
+    for path in [
+        "",
+        "20260928-140312-ship-it.md",
+        "/etc/passwd",
+        "sessions/index.md",
+        "sessions/../charter.toml",
+        "sessions/../../20260928-140312-ship-it.md",
+        "../sessions/20260928-140312-ship-it.md",
+        "/sessions/20260928-140312-ship-it.md",
+        "workspaces/../sessions/20260928-140312-ship-it.md",
+        "workspaces/alpha/../beta/sessions/20260928-140312-ship-it.md",
+        "workspaces/alpha/sessions/../../../20260928-140312-ship-it.md",
+        "workspaces/alpha/sessions/sub/20260928-140312-ship-it.md",
+        "workspaces/alpha/memory/20260928-140312-ship-it.md",
+        "workspaces/.hidden/sessions/20260928-140312-ship-it.md",
+        "sessions\\..\\20260928-140312-ship-it.md",
+        "sessions/20260928-140312-ship-it.md/",
+        "./sessions/20260928-140312-ship-it.md",
+    ] {
+        assert!(
+            locate(path).is_err(),
+            "a path that is not a record's was taken"
+        );
+    }
+}
+
+#[test]
+fn open_reads_a_record_by_its_path_with_its_facts_and_its_text() {
+    let dir = plane(&["alpha"]);
+    let done = write(dir.path(), "Real", BODY, &facts(alpha(), at(9, 0, 0))).unwrap();
+    let opened = open(dir.path(), &done.shown).unwrap();
+    assert_eq!(opened.place, alpha());
+    assert_eq!(opened.listed.title, "Real");
+    assert_eq!(opened.listed.shown, done.shown);
+    assert_eq!(opened.listed.harness.as_deref(), Some("claude"));
+    assert!(opened.text.contains("## How to resume"), "the whole text");
+    assert!(
+        opened.body().starts_with("# Real\n"),
+        "the body is what follows charter's frontmatter"
+    );
+    assert!(!opened.body().contains("conversation:"));
+}
+
+#[test]
+fn open_refuses_a_path_that_leaves_the_sessions_directory_and_a_record_that_is_not_there() {
+    let dir = plane(&["alpha"]);
+    std::fs::write(dir.path().join("secret.md"), "x").unwrap();
+    assert!(open(dir.path(), "sessions/../secret.md").is_err());
+    assert!(open(dir.path(), "workspaces/alpha/workspace.md").is_err());
+    assert!(
+        open(
+            dir.path(),
+            "workspaces/alpha/sessions/20260928-090000-missing.md"
+        )
+        .is_err()
+    );
+    assert!(
+        open(
+            dir.path(),
+            "workspaces/nope/sessions/20260928-090000-missing.md"
+        )
+        .is_err()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn open_refuses_a_plane_root_record_that_is_a_link() {
+    let dir = plane(&[]);
+    std::fs::create_dir_all(dir.path().join(DIR)).unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let target = outside.path().join("x.md");
+    std::fs::write(&target, "---\ntitle: x\n---\n").unwrap();
+    std::os::unix::fs::symlink(&target, dir.path().join("sessions/20260928-090000-x.md")).unwrap();
+    assert!(open(dir.path(), "sessions/20260928-090000-x.md").is_err());
+}

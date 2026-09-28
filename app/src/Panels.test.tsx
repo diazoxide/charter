@@ -144,6 +144,7 @@ const PANELS: PanelsModel = {
   todos_refused: null,
   personas: ["devops", "steward"],
   persona: "steward",
+  sessions: [],
   contributed: [todosPanel([TODO]), personasPanel(["devops", "steward"], "steward")],
 };
 

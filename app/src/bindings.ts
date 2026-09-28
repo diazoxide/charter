@@ -396,6 +396,35 @@ export const commands = {
 	 */
 	workspacePanels: (plane: PlaneId, workspace: string) => typedError<Panels, string>(__TAURI_INVOKE("workspace_panels", { plane, workspace })),
 	/**
+	 *  The plane root's panels (SI-1, SI-8d): its session records, as the Sessions panel draws them.
+	 *  A command of its own because the plane root is not a workspace, and `workspace_panels` asks
+	 *  for one by name.
+	 */
+	planeRootPanels: (plane: PlaneId) => typedError<PlaneRootPanels, string>(__TAURI_INVOKE("plane_root_panels", { plane })),
+	/**
+	 *  One session record, for its view tab (SI-8d): its facts and its text, read by its
+	 *  plane-relative path through `sessionrecord::locate`, which refuses every other path. `null`
+	 *  is a record that is not there any more.
+	 */
+	sessionRecord: (plane: PlaneId, path: string) => typedError<{
+	row: SessionRecordRow,
+	/**  `plane root`, or the workspace's name. */
+	place: string,
+	/**  The record after charter's frontmatter: its `# title` and its five sections. */
+	body: string,
+} | null, string>(__TAURI_INVOKE("session_record", { plane, path })),
+	/**
+	 *  Resumes a session from its record (SI-8d): a NEW chat in the record's place, on its harness,
+	 *  given its conversation where it can be, and told the record in its briefing
+	 *  (`charter_core::sessionresume`). The answer is the chat as the window draws it, whose
+	 *  `resumed` or `fresh` says which happened.
+	 * 
+	 *  `after_failure` is the window saying the chat it resumed this record into ended before its
+	 *  harness reported a session — the harness could not bring the conversation back — so the same
+	 *  record starts fresh this time, and says so.
+	 */
+	resumeSession: (plane: PlaneId, path: string, name: string, afterFailure: boolean, columns: number, rows: number) => typedError<OpenChat, string>(__TAURI_INVOKE("resume_session", { plane, path, name, afterFailure, columns, rows })),
+	/**
 	 *  The window came back into focus: fetch the plane's target branch, unless it was fetched a
 	 *  moment ago. Answers at once; what the fetch finds reaches the window as a plane change.
 	 */
@@ -1903,6 +1932,11 @@ export type Panels = {
 	personas: string[],
 	persona: string | null,
 	/**
+	 *  The workspace's session records, newest first (SI-8d) — facts for the palette's
+	 *  `session.open` and `session.resume` rows, beside the Sessions panel that draws them.
+	 */
+	sessions: SessionRecordRow[],
+	/**
 	 *  **The same facts again, as contributions** — charter's own two panels, in the shape a
 	 *  stranger's extension contributes one in (`charter_core::panel`).
 	 * 
@@ -2081,6 +2115,15 @@ export type PlaneInForce = {
 	sign: InForce,
 	autosave: InForce,
 	autosave_after: InForce,
+};
+
+/**
+ *  What the right region draws for the plane root (SI-1): not a workspace's panels — it has no
+ *  todos or memory — but its own session records.
+ */
+export type PlaneRootPanels = {
+	sessions: SessionRecordRow[],
+	contributed: PanelView[],
 };
 
 /**  Where the plane's unsaved work sits, how far a save goes, and what the last saves did. */
@@ -2540,6 +2583,31 @@ export type SavingInForce = {
  *  ([`vault_secret_reveal`], the only command whose answer holds one).
  */
 export type SecretValue = string;
+
+/**  One session record, as the palette and the Sessions panel name it. */
+export type SessionRecordRow = {
+	/**  Its plane-relative path — what it is opened and resumed by (`sessionrecord::locate`). */
+	path: string,
+	title: string,
+	/**  `YYYY-MM-DD HH:MM`, from its file name. */
+	when: string,
+	persona: string | null,
+	harness: string | null,
+	/**  Whether it holds a conversation id, so Resume can give its harness the conversation. */
+	resumable: boolean,
+};
+
+/**
+ *  One session record opened as a view tab: its facts and its text, for the window to render
+ *  as Markdown (SI-8d).
+ */
+export type SessionRecordView = {
+	row: SessionRecordRow,
+	/**  `plane root`, or the workspace's name. */
+	place: string,
+	/**  The record after charter's frontmatter: its `# title` and its five sections. */
+	body: string,
+};
 
 /**  What a save is: the raw view's whole text, or a form's changes to the text it was read as. */
 export type SettingsChange = { kind: "raw"; text: string } | { kind: "edits"; edits: SettingsEdit[] };

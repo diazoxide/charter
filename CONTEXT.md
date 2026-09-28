@@ -137,6 +137,13 @@ action's never-sent prompt), and the tab closes when `charter session record` te
 record is saved — never on anything the chat printed.
 _Avoid_: save and close, archive
 
+**Resume** (of a session record):
+Starting a NEW chat from a session record, in the record's place, on its harness, given its
+conversation where the harness can still find it, and with the record quoted in its briefing.
+Where the conversation cannot be given it is a fresh chat with the record, and it says why. It
+never reopens the chat that wrote the record.
+_Avoid_: reopen, restore (a relaunch reopens the chats that were open)
+
 **Plane updated** (of a chat):
 A chat started before the plane's start-time instructions (`CLAUDE.md`, the harness settings
 and sub-agents, a persona's charter) changed on disk. It runs on what it read until it is

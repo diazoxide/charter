@@ -302,6 +302,7 @@ impl Chats {
                 // environment, which is rebuilt at every start, so a relaunch that did not
                 // carry it would silently blank a footer the operator had turned on.
                 show_footer: chat.show_footer,
+                resuming: None,
             },
             root,
         )?;
@@ -2714,6 +2715,7 @@ mod tests {
                 cwd: Some(root.clone()),
                 resume: None,
                 show_footer: false,
+                resuming: None,
             },
             &root,
         )

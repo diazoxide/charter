@@ -85,6 +85,7 @@ import { SessionPane } from "./SessionPane";
 import { Explorer, type Spot } from "./Explorer";
 import { BottomBar } from "./BottomBar";
 import { useWorkspaceState } from "./workspaceState";
+import { heardFrom, lostOnResume, usePlaneRootPanels, type Resuming } from "./sessions";
 import { useExtensionFacts } from "./extensionFacts";
 import { usePlaneChanged } from "./planeChanged";
 import { PlaneUpdatedMark, usePlaneUpdated, type PlaneUpdates } from "./PlaneUpdated";
@@ -857,6 +858,8 @@ export function PlaneView({
     [on, surveyedCommands],
   );
   const workspaceState = useWorkspaceState(plane, ofWorkspace, rereadWorkspace, changesOnDisk);
+  /** The plane root's own panels — its session records (SI-8d) — while it is focused. */
+  const rootPanels = usePlaneRootPanels(plane, focused === OUTSIDE, changesOnDisk);
   /** The badges and repo columns the extensions on here show (charter-app#340). */
   const facts = useExtensionFacts(plane, ofWorkspace);
   /** What `charter doctor` says about this project, run inside the app: the preflight when
@@ -2215,6 +2218,65 @@ export function PlaneView({
     [change, plane],
   );
 
+  /**
+   * The chats a Resume started (SI-8d), by session, until each has said whether its harness
+   * brought the conversation back: a ref, because what it holds decides a start and never a
+   * render.
+   */
+  const resuming = useRef(new Map<number, Resuming>());
+
+  /**
+   * **Resume a session from its record** (SI-8d): the core starts a NEW chat in the record's
+   * place, on its harness, given its conversation where it can be, and told the record in its
+   * briefing (`resume_session`). Its tab opens in front, and the note above the panes says which
+   * happened — *was resumed*, or *came back as a new chat: <why>* — from the same `reopened`
+   * list a relaunch's chats are said from.
+   *
+   * `afterFailure` is the second ask, for a chat whose harness could not bring the conversation
+   * back ({@link lostOnResume}): the same record, started fresh.
+   */
+  const resumeSession = useCallback(
+    async (path: string, afterFailure = false): Promise<Ran> => {
+      const name = String(now.current.named.tabs + 1);
+      const said = await commands
+        .resumeSession(plane, path, name, afterFailure, STARTING_SIZE.columns, STARTING_SIZE.rows)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      if (said.status === "error") return { ok: false, refused: said.error };
+      const chat = said.data;
+      resuming.current.set(chat.session, { path, afterFailure, heard: false });
+      setStartedIn((was) => ({ ...was, [chat.session]: filedFor(chat.cwd, focused) }));
+      setReopened((was) => [...was.filter((one) => one.session !== chat.session), chat]);
+      change((tabs) =>
+        openTab(tabs, chat.session, name, whoOf(chat.persona, chat.harness), chat.label),
+      );
+      return { ok: true };
+    },
+    [change, focused, plane],
+  );
+
+  // A resumed chat whose harness ended without a word — it could not find the conversation — is
+  // replaced by a fresh chat with the same record, once (SI-8d). Everything else a resumed chat
+  // does only marks it heard, and a heard chat is the operator's from then on.
+  useEffect(() => {
+    for (const [session, watched] of [...resuming.current]) {
+      const state = stateOf(states, session);
+      if (lostOnResume(watched, state)) {
+        resuming.current.delete(session);
+        const tab = now.current.order.find((id) =>
+          panesOf(now.current, id).some((pane) => pane.session === session),
+        );
+        if (tab !== undefined) change((tabs) => closeTab(tabs, tab, filedIn, isPinned));
+        void commands.closeSession(plane, session);
+        setReopened((was) => was.filter((one) => one.session !== session));
+        void resumeSession(watched.path, true);
+      } else if (state === "done" || state === "failed") {
+        resuming.current.delete(session);
+      } else {
+        resuming.current.set(session, heardFrom(watched, state));
+      }
+    }
+  }, [change, filedIn, isPinned, plane, resumeSession, states]);
+
   const doing = useMemo<Doing>(
     () => ({
       newChat: newTab,
@@ -2238,6 +2300,7 @@ export function PlaneView({
       // key (`charter_core::panel::Panel::key`), and it is written here because the catalogue
       // is not a reader of the panel list.
       openView: showView,
+      resumeSession: (path: string) => resumeSession(path),
       pickVault,
       createVault,
       ...edits.doing,
@@ -2289,6 +2352,7 @@ export function PlaneView({
       removeWorkspace,
       removeWorktree,
       renameWorkspace,
+      resumeSession,
       runAction,
       sendKey,
       showChat,
@@ -2375,6 +2439,9 @@ export function PlaneView({
   const personas = workspaceState.panels?.personas;
   /** The focused workspace's open todos, the same way: one close and one forget row each. */
   const todos = workspaceState.panels?.todos;
+  /** The session records the palette offers rows for: the place in front's (SI-8d). */
+  const sessionRecords =
+    focused === OUTSIDE ? rootPanels?.sessions : workspaceState.panels?.sessions;
   /** What the plane, its workspaces and its personas are offered to curate (ADR 0061), read
    *  again when those change and when the plane changes on disk. */
   const subjects = useMemo(
@@ -2413,6 +2480,7 @@ export function PlaneView({
             personas,
             vaults: vaultNames,
             todos,
+            sessions: sessionRecords,
             plane,
             projects,
             // Which window this is, for the rows that move a project between windows (charter#126).
@@ -2461,6 +2529,7 @@ export function PlaneView({
       tabs,
       vaultNames,
       todos,
+      sessionRecords,
       views,
       extensionCommands,
       worktree,
@@ -3114,6 +3183,7 @@ export function PlaneView({
               vaults={vaults}
               onAddTodo={edits.addTodo}
               atRoot={focused === OUTSIDE}
+              rootPanels={rootPanels?.contributed}
             />
           ),
           bottom: (

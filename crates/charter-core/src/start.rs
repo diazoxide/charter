@@ -48,6 +48,12 @@ pub struct Start {
     /// Default `false`, which is the app as it has always behaved. See [`FOOTER_ENV`] for
     /// what it does and ADR 0029 for why it is a chat's property and not a plane's.
     pub show_footer: bool,
+    /// The session record this chat resumes, by its plane-relative path — a chat the Sessions
+    /// panel's **Resume** starts (SI-8d). It reaches the chat as
+    /// [`crate::sessionrecord::RESUMING_ENV`], which its session-start briefing quotes the
+    /// record from. `None` for every other chat, and for a relaunch: the conversation carries
+    /// the record from then on.
+    pub resuming: Option<String>,
 }
 
 /// Where a chat is told to draw charter's footer rather than a blank line.
@@ -202,13 +208,26 @@ pub fn ready(start: &Start, root: &Path) -> Result<Ready, String> {
         .map_err(|gone| format!("{} Nothing was started.", gone.said()))?;
     let program = argv.remove(0);
     let standing = Standing::of(&here, root);
-    let env = environment(
+    let mut env = environment(
         profile,
         root,
         persona.as_deref(),
         start.show_footer,
         &standing,
     );
+    // Only a record's path: the briefing reads it through `sessionrecord::open`, which refuses
+    // anything else, and a profile cannot set a `CHARTER_` name to forge one.
+    if let Some(record) = start
+        .resuming
+        .as_deref()
+        .filter(|path| crate::sessionrecord::locate(path).is_ok())
+    {
+        env.push((
+            crate::sessionrecord::RESUMING_ENV.to_owned(),
+            record.to_owned(),
+        ));
+        env.sort();
+    }
     // Listed from the chat's OWN environment: a profile that points its harness at another
     // account's directory (`CLAUDE_CONFIG_DIR`) is listed against that account. A chat in a
     // workspace — by its directory, which is how the window files it under one — also takes
@@ -463,6 +482,12 @@ pub fn persona_for_a_new_chat(root: &Path) -> Option<String> {
         .ok()?
         .into_iter()
         .find(|have| *have == wanted)
+}
+
+/// Whether `who` is a persona a chat on this plane may adopt — [`startable_persona`]'s answer,
+/// without its sentence, for a caller choosing whether to ask for one (a Resume, SI-8d).
+pub fn persona_for(root: &Path, who: &str) -> bool {
+    startable_persona(who, root).is_ok()
 }
 
 /// `who`, if it is a persona a chat on this plane may adopt.

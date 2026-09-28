@@ -346,7 +346,16 @@ how it is cited and nothing here is renumbered.
     exception to decision 31 — and the tab closes only when the record is saved, never on
     anything the chat printed; with no record in about five minutes the tab goes back to normal
     and stays open. `charter session list|show` read them back, and charter's `smart-close`
-    skill is the procedure. **ADR 0064.**
+    skill is the procedure. **ADR 0064.** **The operator can always get an old session back**
+    (SI-8d): each workspace has a **Sessions** panel, and the plane root's tab one of the
+    plane's own, listing its records newest first; a row opens the record as a read-only view
+    tab, and **Resume** — on the row's menu, the record's tab and the palette — starts a NEW
+    chat in the record's place, on its harness, given its conversation through the relaunch's
+    one argument builder, as its persona where the plane still has it, with the record quoted
+    as data in its session-start briefing (`$CHARTER_RESUMING_RECORD`). A record with no
+    conversation, or on a harness no profile here runs, starts fresh with the record and says
+    why; a harness that can no longer find the conversation says so by its program failing
+    before it reported anything, and the same record is then started fresh, once, and says so.
 
 ## Limits (acceptance)
 

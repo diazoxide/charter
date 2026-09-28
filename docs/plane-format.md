@@ -1122,7 +1122,13 @@ excepted), and for a secret-shaped value, named by its kind.
 - **Written by:** `charter session record` alone (`sessionrecord::record`), with the body on
   standard input. The app never writes one.
 - **Read by:** `charter session list|show`, the session-start briefing (one line naming the
-  place's newest record), and the smart-close skill's successors.
+  place's newest record, or — for a chat the app's **Resume** started — the resumed record
+  quoted whole, up to a bound), the app's Sessions panel and record tab, and the smart-close
+  skill's successors. A record is named everywhere by its plane-relative path,
+  `sessions/<file>` or `workspaces/<ws>/sessions/<file>`, and `sessionrecord::locate` refuses
+  every other spelling. What a reader takes from the frontmatter is held to a shape on the way
+  in, because the file can be edited: a persona only as a persona name, a harness only as a
+  word, a conversation only as a session id.
 - **Git:** a workspace's follow the workspace — un-ignored by the LIVE block's `sessions` pair,
   kept on disk for a LOCAL one. The plane root's are ignored by `/sessions/` in the plane's
   `.gitignore`: kept on this machine, because the plane root has no LIVE switch (ADR 0064).

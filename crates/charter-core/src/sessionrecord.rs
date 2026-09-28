@@ -131,7 +131,41 @@ pub struct Listed {
     pub when: String,
     /// The file, plane-relative.
     pub shown: String,
+    /// The persona the chat ran as, where the record names one this plane could have: charter's
+    /// `none` is `None`.
+    pub persona: Option<String>,
+    /// The harness it ran on, by the word the plane calls it (`claude`, `codex`, `opencode`), or
+    /// `None` where the record says `unknown` or something that is not a word.
+    pub harness: Option<String>,
+    /// The harness's id for its conversation, where the record holds one that is a session
+    /// id's shape ([`crate::harness::SessionId::new`]) — so a value a hand edit left is never
+    /// handed to a harness as a flag.
+    pub conversation: Option<String>,
 }
+
+/// A record read back by its plane-relative path ([`open`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Opened {
+    /// The place it is a record of.
+    pub place: Place,
+    /// What a listing says of it.
+    pub listed: Listed,
+    /// Its whole text, frontmatter and all.
+    pub text: String,
+}
+
+impl Opened {
+    /// The record after charter's frontmatter: its `# title` and its five sections.
+    pub fn body(&self) -> &str {
+        after_frontmatter(&self.text)
+    }
+}
+
+/// The variable a chat started by the Sessions panel's **Resume** carries: the plane-relative
+/// path of the record it resumes from, which its session-start briefing quotes (SI-8d). Set by
+/// charter alone — a profile may not set a `CHARTER_` name — and read through [`open`], so a
+/// value that is not a record's path reads nothing.
+pub const RESUMING_ENV: &str = "CHARTER_RESUMING_RECORD";
 
 // ---- the shape ------------------------------------------------------------------------------
 
@@ -490,20 +524,55 @@ pub fn list(root: &Path, place: &Place) -> Vec<Listed> {
                 return None;
             }
             let text = crate::memstore::read_text(&path)?;
-            let title = crate::personas::frontmatter(&text)
-                .into_iter()
-                .find(|(key, _)| key == "title")
-                .map(|(_, value)| value)
-                .filter(|value| !value.is_empty())
-                .unwrap_or_else(|| file.clone());
-            Some(Listed {
-                when: when_of(&file),
-                shown: shown(place, &file),
-                title,
-                file,
-            })
+            Some(listed(place, file, &text))
         })
         .collect()
+}
+
+/// What a listing says of the record `file` of `place`, whose text is `text`.
+///
+/// **Every value is read back as untrusted**: the file is on disk, a hand edit or a pull of a
+/// LIVE workspace can change it, and only the title is ever drawn as it is. A persona is kept
+/// only as a name charter would read, a harness only as a short word, and a conversation only
+/// in a session id's shape.
+fn listed(place: &Place, file: String, text: &str) -> Listed {
+    let pairs = crate::personas::frontmatter(text);
+    let value = |key: &str| {
+        pairs
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.clone())
+            .filter(|v| !v.is_empty() && v != UNKNOWN)
+    };
+    let title = value("title").unwrap_or_else(|| file.clone());
+    let persona = value("persona").filter(|v| v != NO_PERSONA && crate::personas::valid_name(v));
+    let harness = value("harness").filter(|v| {
+        v.len() <= 40
+            && v.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    });
+    let conversation =
+        value("conversation").filter(|v| crate::harness::SessionId::new(v.as_str()).is_ok());
+    Listed {
+        when: when_of(&file),
+        shown: shown(place, &file),
+        title,
+        file,
+        persona,
+        harness,
+        conversation,
+    }
+}
+
+/// The text after a record's frontmatter, or the whole text where it has none.
+fn after_frontmatter(text: &str) -> &str {
+    let Some(rest) = text.strip_prefix("---\n") else {
+        return text;
+    };
+    match rest.find("\n---\n") {
+        Some(end) => rest[end + 5..].trim_start_matches('\n'),
+        None => text,
+    }
 }
 
 /// The newest record of `place`, or `None` where it has none.
@@ -606,6 +675,51 @@ pub fn show(root: &Path, place: &Place, file: &str) -> Result<String, String> {
         return Err(format!("no session record {}", shown(place, file)));
     }
     crate::memstore::read_text(&path).ok_or_else(|| format!("{} is not text", shown(place, file)))
+}
+
+/// The place and file name a plane-relative record path names: `sessions/<file>` for the plane
+/// root's, `workspaces/<ws>/sessions/<file>` for a workspace's — and nothing else.
+///
+/// **The one reading of a record's path**, for the command line, the window and the briefing
+/// alike. Every other spelling is refused, never normalised: no `..`, no `.`, no leading or
+/// trailing `/`, no backslash, no directory below `sessions/`, the index, and a workspace name
+/// charter would not read ([`crate::contain::workspace_name_ok`]). A file name has to be a
+/// record's ([`is_record_name`]), which holds no `/` and no `..`.
+pub fn locate(path: &str) -> Result<(Place, String), String> {
+    let refused = || {
+        format!(
+            "'{}' is not a session record's path (sessions/<file> or \
+             workspaces/<ws>/sessions/<file>)",
+            crate::shown::short(path)
+        )
+    };
+    if path.contains('\\') {
+        return Err(refused());
+    }
+    let parts: Vec<&str> = path.split('/').collect();
+    let (place, file) = match parts.as_slice() {
+        [DIR, file] => (Place::PlaneRoot, *file),
+        ["workspaces", ws, DIR, file] if crate::contain::workspace_name_ok(ws) => {
+            (Place::Workspace((*ws).to_owned()), *file)
+        }
+        _ => return Err(refused()),
+    };
+    if !is_record_name(file) {
+        return Err(refused());
+    }
+    Ok((place, file.to_owned()))
+}
+
+/// The record at the plane-relative `path` ([`locate`]), read as [`show`] reads one: gated, a
+/// regular file within the plane's bound, and text.
+pub fn open(root: &Path, path: &str) -> Result<Opened, String> {
+    let (place, file) = locate(path)?;
+    let text = show(root, &place, &file)?;
+    Ok(Opened {
+        listed: listed(&place, file, &text),
+        place,
+        text,
+    })
 }
 
 // ---- the chat, from the app's record of it -------------------------------------------------------
