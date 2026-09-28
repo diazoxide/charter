@@ -513,17 +513,54 @@ export function closeTab(
   id: number,
   filedIn: FiledIn,
   pinned: Pinned = nothingPinned,
+  background: Backgrounded = nothingBackgrounded,
 ): Tabs {
   if (!(id in tabs.byId)) return tabs;
-  const workspace = workspaceOf(tabs, id, filedIn);
-  const strip = tabsIn(tabs, workspace, filedIn, pinned);
-  const at = strip.indexOf(id);
   const order = tabs.order.filter((tab) => tab !== id);
   const byId = Object.fromEntries(order.map((tab) => [tab, tabs.byId[tab]]));
   if (tabs.inFront !== id) return { ...tabs, byId, order };
+  return { ...tabs, byId, order, inFront: frontWithout(tabs, id, filedIn, pinned, background) };
+}
+
+/**
+ * **Where the front goes when tab `id` leaves it** — closed, or put into the background by
+ * Smart close (SI-8f). One answer for both, because the operator's ruling is that a smart close
+ * sends the front exactly where a close would.
+ *
+ * The tab before it on its strip as the strip draws it without the background, or the first
+ * one after it when it was first, or nothing when it was the only one. A tab in the background
+ * is never where the front goes: it is leaving too.
+ */
+function frontWithout(
+  tabs: Tabs,
+  id: number,
+  filedIn: FiledIn,
+  pinned: Pinned,
+  background: Backgrounded,
+): number | undefined {
+  const strip = tabsIn(tabs, workspaceOf(tabs, id, filedIn), filedIn, pinned).filter(
+    (tab) => tab === id || !background(tab),
+  );
+  const at = strip.indexOf(id);
   const beside = strip.filter((tab) => tab !== id);
-  const inFront = at > 0 ? strip[at - 1] : beside[0];
-  return { ...tabs, byId, order, inFront };
+  return at > 0 ? strip[at - 1] : beside[0];
+}
+
+/**
+ * **Tab `id` put into the background**: its chat is wrapping up (Smart close, SI-8f), so the
+ * front goes where closing it would have sent it ({@link frontWithout}) and the tab stays, drawn
+ * as a chip at the strip's left edge ({@link tabsIn}). Nothing else changes — not `tabs.order`,
+ * which is where it goes back to if the smart close does not end in a record.
+ */
+export function sendToBackground(
+  tabs: Tabs,
+  id: number,
+  filedIn: FiledIn,
+  pinned: Pinned = nothingPinned,
+  background: Backgrounded = nothingBackgrounded,
+): Tabs {
+  if (!(id in tabs.byId) || tabs.inFront !== id) return tabs;
+  return { ...tabs, inFront: frontWithout(tabs, id, filedIn, pinned, background) };
 }
 
 /**
@@ -549,6 +586,16 @@ export type Pinned = (id: number) => boolean;
 export const nothingPinned: Pinned = () => false;
 
 /**
+ * Whether a tab is in the background: every pane of it is a chat that is wrapping up (Smart
+ * close, SI-8f). The core's answer, as `Pinned` is somebody else's — the window is told which
+ * chats are being smart-closed (`smartClose.ts`), and a copy on the tab would be a second one.
+ */
+export type Backgrounded = (id: number) => boolean;
+
+/** Nothing in the background. */
+export const nothingBackgrounded: Backgrounded = () => false;
+
+/**
  * The tabs on one workspace's strip, left to right — **pinned ones first** (ADR 0039).
  *
  * **This is not the strip re-ordering itself.** The rule ADR 0039 fixed is that a tab does not
@@ -566,15 +613,27 @@ export const nothingPinned: Pinned = () => false;
  * exemption of its own. An exemption — a tab held out of the scroller — would be a second
  * mechanism deciding what is on screen, and the one thing the strip owes is that nothing in
  * it is unreachable.
+ *
+ * **A tab in the background goes before the pinned ones** (SI-8f; ADR 0039, amended
+ * 2026-09-28). Its chat is wrapping up after the operator's own Smart close click, and that
+ * click is what moved it — the rule that nothing moves the operator did not move still holds.
+ * It is drawn here and nowhere else: `tabs.order` keeps its place, which is where it is drawn
+ * again when the smart close ends without a record.
  */
 export function tabsIn(
   tabs: Tabs,
   workspace: string | undefined,
   filedIn: FiledIn,
   pinned: Pinned = nothingPinned,
+  background: Backgrounded = nothingBackgrounded,
 ): number[] {
   const here = tabs.order.filter((id) => workspaceOf(tabs, id, filedIn) === workspace);
-  return [...here.filter(pinned), ...here.filter((id) => !pinned(id))];
+  const front = here.filter((id) => !background(id));
+  return [
+    ...here.filter(background),
+    ...front.filter(pinned),
+    ...front.filter((id) => !pinned(id)),
+  ];
 }
 
 /**
@@ -682,11 +741,12 @@ export function closeFocusedPane(
   tabs: Tabs,
   filedIn: FiledIn,
   pinned: Pinned = nothingPinned,
+  background: Backgrounded = nothingBackgrounded,
 ): Tabs {
   const tab = frontTab(tabs);
   if (!tab) return tabs;
   const left = without(tab.layout, tab.focused);
-  if (!left) return closeTab(tabs, tab.id, filedIn, pinned);
+  if (!left) return closeTab(tabs, tab.id, filedIn, pinned, background);
   const focused = panes(left)[0].pane;
   return { ...tabs, byId: { ...tabs.byId, [tab.id]: { ...tab, layout: left, focused } } };
 }
@@ -702,6 +762,7 @@ export function closeChat(
   session: number,
   filedIn: FiledIn,
   pinned: Pinned = nothingPinned,
+  background: Backgrounded = nothingBackgrounded,
 ): Tabs {
   const found = tabs.order
     .flatMap((id) => panesOf(tabs, id).map((one) => ({ id, ...one })))
@@ -710,7 +771,7 @@ export function closeChat(
   const { id, pane } = found;
   const tab = tabs.byId[id];
   const left = without(tab.layout, pane);
-  if (!left) return closeTab(tabs, id, filedIn, pinned);
+  if (!left) return closeTab(tabs, id, filedIn, pinned, background);
   const focused = tab.focused === pane ? panes(left)[0].pane : tab.focused;
   return { ...tabs, byId: { ...tabs.byId, [id]: { ...tab, layout: left, focused } } };
 }

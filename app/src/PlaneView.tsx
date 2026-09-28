@@ -47,6 +47,7 @@ import {
 import {
   catalogue,
   catalogued,
+  dismissId,
   ignoreId,
   needsYouRows,
   OUTSIDE,
@@ -54,6 +55,7 @@ import {
   perform,
   ROOT_TIP,
   showId,
+  stoppedRows,
   PASS_THROUGH_BYTES,
   PASS_THROUGH_KEY,
   RENAMES_ON_F2,
@@ -85,7 +87,14 @@ import { SessionPane } from "./SessionPane";
 import { Explorer, type Spot } from "./Explorer";
 import { BottomBar } from "./BottomBar";
 import { useWorkspaceState } from "./workspaceState";
-import { heardFrom, lostOnResume, usePlaneRootPanels, type Resuming } from "./sessions";
+import {
+  heardFrom,
+  lostOnResume,
+  sessionTitle,
+  sessionView,
+  usePlaneRootPanels,
+  type Resuming,
+} from "./sessions";
 import { useExtensionFacts } from "./extensionFacts";
 import { usePlaneChanged } from "./planeChanged";
 import { PlaneUpdatedMark, usePlaneUpdated, type PlaneUpdates } from "./PlaneUpdated";
@@ -133,13 +142,15 @@ import {
   type FiledIn,
   type LastMoved,
   type Layout,
+  sendToBackground,
+  type Backgrounded,
   type Pinned,
   type Tabs,
   type ViewRef,
 } from "./tabs";
-import { ChatMark, WRAPPING_UP, WrappingUp, type Asking } from "./NeedsYou";
+import { ChatMark, chipSays, WRAPPING_UP, WrappingUp, type Asking } from "./NeedsYou";
 import { EndingChat, type SmartAsk } from "./EndingChat";
-import { saidWhenItEnds, useSmartClosing } from "./smartClose";
+import { DID_NOT_START, saidWhenItEnds, stoppedWhy, useSmartClosing } from "./smartClose";
 import { Panels } from "./Panels";
 import { NewVault } from "./NewVault";
 import { OpenVault, useVaults } from "./Vaults";
@@ -155,6 +166,7 @@ import type {
   ExtensionView,
   PanelView,
   RowAction,
+  SavedRecord,
   SmartClosing,
 } from "./bindings";
 import { AskFirst, runExtensionAction } from "./ExtensionAction";
@@ -820,6 +832,87 @@ export function PlaneView({
   );
 
   /**
+   * **The chats whose Smart close the operator has just pressed**, until the core's first step
+   * about them arrives (SI-8f). The press is what puts the tab into the background, so it goes
+   * at once rather than a round trip later; a start the core refuses brings it back.
+   */
+  const [leaving, setLeaving] = useState<ReadonlySet<number>>(() => new Set());
+  /** Why each chat's smart close stopped without its record, for the title bar's needs-you
+   *  list (SI-8f) — until the operator goes to it or dismisses it, or the chat goes. */
+  const [stopped, setStopped] = useState<Readonly<Record<number, string>>>({});
+  /** The record the last smart close ended on, for the quiet "Session saved" notice. */
+  const [savedNotice, setSavedNotice] = useState<{ record: SavedRecord | null }>();
+  const settle = useCallback((session: number) => {
+    setLeaving((was) => {
+      if (!was.has(session)) return was;
+      const now = new Set(was);
+      now.delete(session);
+      return now;
+    });
+  }, []);
+  const stoppedFor = useCallback((session: number, why: string | undefined) => {
+    setStopped((was) => {
+      if (why === undefined) {
+        if (!(session in was)) return was;
+        return Object.fromEntries(Object.entries(was).filter(([one]) => Number(one) !== session));
+      }
+      return { ...was, [session]: why };
+    });
+  }, []);
+
+  /**
+   * **A smart close that has ended** (ADR 0064). The core closed the chat when its record
+   * landed, so the window takes its pane away — `closeChat`, and never `close_session`, which
+   * would end it a second time — and says so quietly, with the record a click away (SI-8f).
+   * Given up, or ended on its own: the tab comes back where it was and the window says why, in
+   * one sentence and in the needs-you list. Cancelled: the tab coming back says it all.
+   */
+  /** {@link isBackground} as of the last render, for the step handler below, which the set it
+   *  reads is made from and so cannot take it as a dependency. */
+  const inTheBackground = useRef<Backgrounded>(() => false);
+  const smartCloseEnded = useCallback(
+    (step: SmartClosing) => {
+      settle(step.session);
+      if (step.phase === "closed") {
+        change((tabs) => closeChat(tabs, step.session, filedIn, isPinned, inTheBackground.current));
+        stoppedFor(step.session, undefined);
+        setSavedNotice({ record: step.record });
+        return;
+      }
+      const tab = now.current.order.find((id) =>
+        panesOf(now.current, id).some((one) => one.session === step.session),
+      );
+      const name = tab === undefined ? `chat ${step.session}` : now.current.byId[tab].name;
+      const said = saidWhenItEnds(step.phase, name);
+      if (said !== undefined)
+        setReport({ from: `smartclose:${step.session}`, refused: true, words: said });
+      stoppedFor(step.session, stoppedWhy(step.phase));
+    },
+    [change, filedIn, isPinned, settle, stoppedFor],
+  );
+  /** The chats wrapping up, as the core tells it. */
+  const told = useSmartClosing(plane, smartCloseEnded);
+  /** …and the ones just pressed: their tabs, their explorer rows and their menus say so. */
+  const wrapping = useMemo<ReadonlySet<number>>(
+    () => (leaving.size === 0 ? told : new Set([...told, ...leaving])),
+    [leaving, told],
+  );
+  /** A tab in the background: every pane of it is a chat wrapping up (`tabs.tabsIn`). */
+  const isBackground = useCallback<Backgrounded>(
+    (id) => {
+      const all = contentsOf(tabs, id);
+      return (
+        all.length > 0 &&
+        all.every(({ content }) => content.kind === "session" && wrapping.has(content.session))
+      );
+    },
+    [tabs, wrapping],
+  );
+  useLayoutEffect(() => {
+    inTheBackground.current = isBackground;
+  }, [isBackground]);
+
+  /**
    * The workspace the strip DRAWS, and the one axis rule: **the tab in front is on it.**
    *
    * Derived rather than maintained. Until #133 this held because `bringToFront`,
@@ -1104,8 +1197,9 @@ export function PlaneView({
    * for the moment before the answer arrives.
    */
   const onStrip = useMemo(
-    () => (sidebar === undefined ? tabs.order : tabsIn(tabs, focused, filedIn, isPinned)),
-    [filedIn, focused, isPinned, sidebar, tabs],
+    () =>
+      sidebar === undefined ? tabs.order : tabsIn(tabs, focused, filedIn, isPinned, isBackground),
+    [filedIn, focused, isBackground, isPinned, sidebar, tabs],
   );
 
   /**
@@ -1425,17 +1519,17 @@ export function PlaneView({
     const tab =
       now.current.inFront === undefined ? undefined : now.current.byId[now.current.inFront];
     const going = tab && panesOf(now.current, tab.id).find((pane) => pane.pane === tab.focused);
-    change((tabs) => closeFocusedPane(tabs, filedIn, isPinned));
+    change((tabs) => closeFocusedPane(tabs, filedIn, isPinned, isBackground));
     if (going) void commands.closeSession(plane, going.session);
-  }, [change, filedIn, isPinned, plane]);
+  }, [change, filedIn, isBackground, isPinned, plane]);
 
   const close = useCallback(
     (id: number) => {
       const ending = panesOf(now.current, id);
-      change((tabs) => closeTab(tabs, id, filedIn, isPinned));
+      change((tabs) => closeTab(tabs, id, filedIn, isPinned, isBackground));
       for (const pane of ending) void commands.closeSession(plane, pane.session);
     },
-    [change, filedIn, isPinned, plane],
+    [change, filedIn, isBackground, isPinned, plane],
   );
 
   /**
@@ -1460,15 +1554,17 @@ export function PlaneView({
     [change, filedIn, sidebar],
   );
 
-  /** Brings the tab holding a chat to the front. The queue and the palette both use it. */
+  /** Brings the tab holding a chat to the front. The queue and the palette both use it. A chat
+   *  listed because its Smart close stopped (SI-8f) has been looked at, so it leaves the list. */
   const showChat = useCallback(
     (session: number) => {
       const tab = now.current.order.find((id) =>
         panesOf(now.current, id).some((pane) => pane.session === session),
       );
       if (tab !== undefined) bringToFront(tab);
+      stoppedFor(session, undefined);
     },
-    [bringToFront],
+    [bringToFront, stoppedFor],
   );
 
   /**
@@ -2034,7 +2130,17 @@ export function PlaneView({
    */
   const dragTab = useCallback(
     (moved: number, onto: number) => {
-      const made = afterDrop({ whole: onStrip, drawn: shown, moved, onto, isPinned });
+      // **A tab in the background is out of the arrangement** (SI-8f): it cannot be picked up,
+      // nothing is put down on it, and the tabs dragged past it leave its place in the order
+      // where it was — which is where it comes back if its smart close ends without a record.
+      const loose = (id: number) => !isBackground(id);
+      const made = afterDrop({
+        whole: onStrip.filter(loose),
+        drawn: shown.filter(loose),
+        moved,
+        onto,
+        isPinned,
+      });
       if (made === undefined) return;
       change((tabs) => ({ ...tabs, order: reslotted(tabs.order, made.order) }));
       if (made.pinned === undefined) return;
@@ -2042,7 +2148,7 @@ export function PlaneView({
         if (!ran.ok) setReport({ from: "tab.drag", refused: true, words: ran.refused });
       });
     },
-    [change, isPinned, onStrip, pinTab, shown],
+    [change, isBackground, isPinned, onStrip, pinTab, shown],
   );
 
   /**
@@ -2118,38 +2224,14 @@ export function PlaneView({
    */
   const ignoreNeedsYou = useCallback(
     async (session: number): Promise<Ran> => {
+      stoppedFor(session, undefined);
       const said = await commands
         .ignoreNeedsYou(plane, session)
         .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
       return said.status === "error" ? { ok: false, refused: said.error } : { ok: true };
     },
-    [plane],
+    [plane, stoppedFor],
   );
-
-  /**
-   * **A smart close that has ended** (ADR 0064). The core closed the chat when its record
-   * landed, so the window takes its pane away — `closeChat`, and never `close_session`, which
-   * would end it a second time. Given up, or ended on its own: the tab is back to normal and the
-   * window says why, in one sentence. Cancelled: the tab going back to normal says it all.
-   */
-  const smartCloseEnded = useCallback(
-    (step: SmartClosing) => {
-      if (step.phase === "closed") {
-        change((tabs) => closeChat(tabs, step.session, filedIn, isPinned));
-        return;
-      }
-      const tab = now.current.order.find((id) =>
-        panesOf(now.current, id).some((one) => one.session === step.session),
-      );
-      const name = tab === undefined ? `chat ${step.session}` : now.current.byId[tab].name;
-      const said = saidWhenItEnds(step.phase, name);
-      if (said !== undefined)
-        setReport({ from: `smartclose:${step.session}`, refused: true, words: said });
-    },
-    [change, filedIn, isPinned],
-  );
-  /** The chats wrapping up: their tabs, their explorer rows and their menus say so. */
-  const wrapping = useSmartClosing(plane, smartCloseEnded);
 
   /** Cancels a chat's smart close: its tab's menu row, or the palette's. */
   const cancelSmartClose = useCallback(
@@ -2340,6 +2422,7 @@ export function PlaneView({
       showChat,
       ignoreNeedsYou,
       cancelSmartClose,
+      dismissStopped: (session: number) => stoppedFor(session, undefined),
       // The verb still names a persona — that is what the catalogue row is about — and the
       // window turns it into the row it opens. `charter/personas` is charter's own panel's
       // key (`charter_core::panel::Panel::key`), and it is written here because the catalogue
@@ -2404,6 +2487,7 @@ export function PlaneView({
       showChat,
       showView,
       split,
+      stoppedFor,
       windowDoes,
     ],
   );
@@ -2552,6 +2636,7 @@ export function PlaneView({
             commands: extensionCommands,
             curations,
             wrappingUp: [...wrapping],
+            stopped,
           }),
     [
       clones,
@@ -2581,6 +2666,7 @@ export function PlaneView({
       extensionCommands,
       worktree,
       liveNames,
+      stopped,
       wrapping,
     ],
   );
@@ -2680,17 +2766,38 @@ export function PlaneView({
     [carryOut, plane, setEndingChat],
   );
 
-  /** Smart close pressed: the core sends the chat its prompt, now or when its turn ends, and the
-   *  tab wears its wrapping-up look from the step it tells (`useSmartClosing`). */
+  /**
+   * Smart close pressed: the core sends the chat its prompt, now or when its turn ends, and **the
+   * tab goes into the background at once** (SI-8f) — a chip at the strip's left edge, and the
+   * front where Close would have sent it (`tabs.sendToBackground`, which `closeTab` shares). A
+   * tab with another chat beside it in a split stays where it is, wearing the wrapping-up mark.
+   * A start the core refuses brings it back, says why, and lists it as needing the operator.
+   */
   const beginSmartClose = useCallback(
     async (session: number) => {
+      stoppedFor(session, undefined);
+      setLeaving((was) => new Set([...was, session]));
+      const tab = now.current.order.find((id) =>
+        panesOf(now.current, id).some((one) => one.session === session),
+      );
+      const goes =
+        tab !== undefined &&
+        contentsOf(now.current, tab).every(
+          ({ content }) =>
+            content.kind === "session" &&
+            (content.session === session || wrapping.has(content.session)),
+        );
+      if (goes) change((tabs) => sendToBackground(tabs, tab, filedIn, isPinned, isBackground));
       const began = await commands
         .smartClose(plane, session)
         .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
-      if (began.status === "error")
+      if (began.status === "error") {
+        settle(session);
+        stoppedFor(session, DID_NOT_START);
         setReport({ from: `smartclose:${session}`, refused: true, words: began.error });
+      }
     },
-    [plane],
+    [change, filedIn, isBackground, isPinned, plane, settle, stoppedFor, wrapping],
   );
 
   const press = useCallback(
@@ -2778,21 +2885,36 @@ export function PlaneView({
   // **This project's chats asking, for the title bar's list** (charter-app#249), which is the
   // window's and holds every project's. Their rows are the catalogue's own (`needsYouRows`),
   // asked on their own because the catalogue is built only for the project in front.
+  //
+  // **And the chats whose Smart close stopped without a record** (SI-8f): each says why, beside
+  // its name. One already in the queue is one item that says it; one that is not is an item of
+  // its own, whose ✕ dismisses it.
   const asking = useMemo<Asking[]>(() => {
     const reportsTo = (session: number) => states.reports[session] ?? [];
-    const rows = catalogued(needsYouRows(states.needsYou, nameOf, tabs, reportsTo));
-    return states.needsYou.map((session) => {
+    const rows = catalogued([
+      ...needsYouRows(states.needsYou, nameOf, tabs, reportsTo),
+      ...stoppedRows(stopped, states.needsYou, nameOf, tabs),
+    ]);
+    const item = (session: number, ignore: string): Asking => {
       const filed = filedIn(session);
       return {
         session,
         name: nameOf(session),
         reported: reportsTo(session),
+        why: stopped[session],
         workspace: filed === OUTSIDE ? OUTSIDE_TITLE : filed,
         go: rows.get(showId(session)),
-        ignore: rows.get(ignoreId(session)),
+        ignore: rows.get(ignore),
       };
-    });
-  }, [filedIn, nameOf, states.needsYou, states.reports, tabs]);
+    };
+    const alsoStopped = Object.keys(stopped)
+      .map(Number)
+      .filter((session) => rows.has(dismissId(session)));
+    return [
+      ...states.needsYou.map((session) => item(session, ignoreId(session))),
+      ...alsoStopped.map((session) => item(session, dismissId(session))),
+    ];
+  }, [filedIn, nameOf, states.needsYou, states.reports, stopped, tabs]);
 
   // What this project has open, told to the window: the quit warning lists every project's
   // chats, and this project's own tab says when one of them needs you.
@@ -3024,7 +3146,7 @@ export function PlaneView({
                 style={{ "--least": `${chatLeast}px` } as CSSProperties}
               >
                 {shown.map((id) => (
-                  <SortableTab key={id} id={String(id)}>
+                  <SortableTab key={id} id={String(id)} fixed={isBackground(id)}>
                     {({ sortable, style }) => (
                       /* Right-click is the third reader of the catalogue (`Menus.tsx`).
                          `asChild`, so the strip gains no wrapper element: the trigger IS the
@@ -3035,25 +3157,19 @@ export function PlaneView({
                          nothing to scroll a tab into and nothing measuring tabs through the
                          markup. */
                       <Menued on={{ on: "chat", tab: id }} offers={found} onPress={press}>
-                        <span
-                          className="tab"
-                          ref={sortable.setNodeRef}
-                          style={style}
-                          data-dragging={sortable.isDragging || undefined}
-                          // A chat being smart-closed wears the closing look (ADR 0064).
-                          data-wrapping-up={
-                            panesOf(tabs, id).some((one) => wrapping.has(one.session)) || undefined
-                          }
-                        >
-                          {renaming === id ? (
-                            // The name, open for editing in the tab's place (charter-app#254). Not
-                            // inside the tab's button: an input inside a button is two controls in one.
-                            <TabRename
-                              name={tabs.byId[id].name}
-                              onSave={(typed) => saveName(id, typed)}
-                              onDone={endRename}
-                            />
-                          ) : (
+                        {isBackground(id) ? (
+                          /* **In the background** (SI-8f): the chat is wrapping up, so its tab is a
+                             chip — the chat's icon and the breathing mark, its name in the tooltip —
+                             at the strip's left edge, and fixed: it is not dragged, and nothing is
+                             dropped on it. Pressed, it brings the chat forward to watch it work;
+                             it stays a chip while it wraps up. Its menu still has Cancel smart close. */
+                          <span
+                            className="tab chip"
+                            ref={sortable.setNodeRef}
+                            style={style}
+                            data-chip=""
+                            data-wrapping-up=""
+                          >
                             <RovingFocusGroup.Item
                               asChild
                               tabStopId={String(id)}
@@ -3062,57 +3178,106 @@ export function PlaneView({
                               <button
                                 role="tab"
                                 aria-selected={id === tabs.inFront}
-                                aria-describedby={sortable.attributes["aria-describedby"]}
-                                // Where a handed-off chat came from, by its parent's name (charter-app#258).
-                                title={
-                                  panesOf(tabs, id).some((one) => wrapping.has(one.session))
-                                    ? WRAPPING_UP
-                                    : handedFrom[chatOf(tabs, id) ?? -1]
+                                aria-label={chipSays(tabs.byId[id].name)}
+                                title={chipSays(tabs.byId[id].name)}
+                                onKeyDown={(event) =>
+                                  closeOnDelete(event, by(`tab.close:${id}`), press)
                                 }
-                                // F2 renames here rather than opening the palette (`RENAMES_ON_F2`), on a
-                                // tab that has a rename row — a chat's, and never a view's.
-                                {...(by(`tab.rename:${id}`) ? { [RENAMES_ON_F2]: "" } : {})}
-                                {...sortable.listeners}
-                                onKeyDown={(event) => {
-                                  // A tab that is up is being carried: its keys are the drag's.
-                                  keepsTheFocus(event, sortable.isDragging);
-                                  sortable.listeners?.onKeyDown?.(event);
-                                  if (sortable.isDragging) return;
-                                  closeOnDelete(event, by(`tab.close:${id}`), press);
-                                  renameOnF2(event, by(`tab.rename:${id}`), press);
-                                }}
-                                // The catalogue's row, not a second copy of it. The tab already in front
-                                // has a row that says so and cannot run — a tab is never disabled, because
-                                // the selected tab is the one a keyboard has to be able to land on.
                                 onClick={() => {
                                   const offer = by(`tab.select:${id}`);
                                   if (offer?.available) press(offer);
                                 }}
-                                // A double-click on the name renames it — the same row again.
-                                onDoubleClick={() => {
-                                  const offer = by(`tab.rename:${id}`);
-                                  if (offer?.available) press(offer);
-                                }}
                               >
-                                <TabMarks
-                                  tabs={tabs}
-                                  id={id}
-                                  states={states}
-                                  updates={planeUpdates}
-                                  shells={shells}
-                                  wrapping={wrapping}
-                                  pin={
-                                    <Pin
-                                      held={isPinned(id)}
-                                      what={chatOf(tabs, id) === undefined ? "tab" : "chat"}
-                                    />
-                                  }
+                                <SquareTerminal
+                                  className="tab-mark"
+                                  data-mark="chat"
+                                  aria-hidden="true"
                                 />
+                                <WrappingUp held />
                               </button>
                             </RovingFocusGroup.Item>
-                          )}
-                          <Closer offer={by(`tab.close:${id}`)} onPress={press} />
-                        </span>
+                          </span>
+                        ) : (
+                          <span
+                            className="tab"
+                            ref={sortable.setNodeRef}
+                            style={style}
+                            data-dragging={sortable.isDragging || undefined}
+                            // A chat being smart-closed wears the closing look (ADR 0064).
+                            data-wrapping-up={
+                              panesOf(tabs, id).some((one) => wrapping.has(one.session)) ||
+                              undefined
+                            }
+                          >
+                            {renaming === id ? (
+                              // The name, open for editing in the tab's place (charter-app#254). Not
+                              // inside the tab's button: an input inside a button is two controls in one.
+                              <TabRename
+                                name={tabs.byId[id].name}
+                                onSave={(typed) => saveName(id, typed)}
+                                onDone={endRename}
+                              />
+                            ) : (
+                              <RovingFocusGroup.Item
+                                asChild
+                                tabStopId={String(id)}
+                                active={id === tabs.inFront}
+                              >
+                                <button
+                                  role="tab"
+                                  aria-selected={id === tabs.inFront}
+                                  aria-describedby={sortable.attributes["aria-describedby"]}
+                                  // Where a handed-off chat came from, by its parent's name (charter-app#258).
+                                  title={
+                                    panesOf(tabs, id).some((one) => wrapping.has(one.session))
+                                      ? WRAPPING_UP
+                                      : handedFrom[chatOf(tabs, id) ?? -1]
+                                  }
+                                  // F2 renames here rather than opening the palette (`RENAMES_ON_F2`), on a
+                                  // tab that has a rename row — a chat's, and never a view's.
+                                  {...(by(`tab.rename:${id}`) ? { [RENAMES_ON_F2]: "" } : {})}
+                                  {...sortable.listeners}
+                                  onKeyDown={(event) => {
+                                    // A tab that is up is being carried: its keys are the drag's.
+                                    keepsTheFocus(event, sortable.isDragging);
+                                    sortable.listeners?.onKeyDown?.(event);
+                                    if (sortable.isDragging) return;
+                                    closeOnDelete(event, by(`tab.close:${id}`), press);
+                                    renameOnF2(event, by(`tab.rename:${id}`), press);
+                                  }}
+                                  // The catalogue's row, not a second copy of it. The tab already in front
+                                  // has a row that says so and cannot run — a tab is never disabled, because
+                                  // the selected tab is the one a keyboard has to be able to land on.
+                                  onClick={() => {
+                                    const offer = by(`tab.select:${id}`);
+                                    if (offer?.available) press(offer);
+                                  }}
+                                  // A double-click on the name renames it — the same row again.
+                                  onDoubleClick={() => {
+                                    const offer = by(`tab.rename:${id}`);
+                                    if (offer?.available) press(offer);
+                                  }}
+                                >
+                                  <TabMarks
+                                    tabs={tabs}
+                                    id={id}
+                                    states={states}
+                                    updates={planeUpdates}
+                                    shells={shells}
+                                    wrapping={wrapping}
+                                    pin={
+                                      <Pin
+                                        held={isPinned(id)}
+                                        what={chatOf(tabs, id) === undefined ? "tab" : "chat"}
+                                      />
+                                    }
+                                  />
+                                </button>
+                              </RovingFocusGroup.Item>
+                            )}
+                            <Closer offer={by(`tab.close:${id}`)} onPress={press} />
+                          </span>
+                        )}
                       </Menued>
                     )}
                   </SortableTab>
@@ -3229,6 +3394,37 @@ export function PlaneView({
           showed it would be offering a workspace the plane does not have, and a pin that
           vanished with no word is an arrangement the operator will make again and lose
           again. It is news rather than a fault, so it is not an alert. */}
+      {/* **A smart close that ended on its record** (SI-8f): its tab has gone, so this is where
+          the window says so — quietly, as news and not as a question, with the record one
+          press away in its own view tab (SI-8d). */}
+      {savedNotice && (
+        <p className="came-back" role="status">
+          Session saved{savedNotice.record ? ` — ${savedNotice.record.title}` : "."}{" "}
+          {savedNotice.record && (
+            <button
+              type="button"
+              className="dismiss"
+              tabIndex={0}
+              onClick={() => {
+                const record = savedNotice.record;
+                setSavedNotice(undefined);
+                if (record) showView(sessionView(record.path), sessionTitle(record.title));
+              }}
+            >
+              Open record
+            </button>
+          )}{" "}
+          <button
+            type="button"
+            className="dismiss"
+            tabIndex={0}
+            onClick={() => setSavedNotice(undefined)}
+          >
+            Dismiss
+          </button>
+        </p>
+      )}
+
       {danglingPins.length > 0 && (
         <p className="came-back" role="status">
           {danglingPins.length === 1
@@ -3327,7 +3523,7 @@ export function PlaneView({
                   onAsk={(pane) => change((tabs) => stopWaiting(tabs, pane))}
                   onVaultChanged={reloadVaults}
                 />
-              ) : tabs.order.length > 0 ? (
+              ) : tabs.order.some((id) => !isBackground(id)) ? (
                 // Chats are running — just not in the workspace being looked at. Saying
                 // "no sessions" here would be charter telling the operator that what it is
                 // still drawing on the strip above does not exist.

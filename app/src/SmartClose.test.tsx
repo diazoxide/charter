@@ -13,7 +13,8 @@ import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import App from "./App";
-import type { Phase, SmartCloseOffer } from "./bindings";
+import type { Phase, SavedRecord, SmartCloseOffer } from "./bindings";
+import { dragWithTheKeyboard, laidOutInARow } from "./test-strips";
 
 /**
  * **Smart close, as the window draws it** (ADR 0064, SI-8c): the close dialog's three answers,
@@ -36,6 +37,7 @@ const render = (ui: React.ReactElement) => renderBare(<StrictMode>{ui}</StrictMo
 afterEach(() => {
   cleanup();
   clearMocks();
+  vi.restoreAllMocks();
 });
 
 const PLANE = "/home/dev/plane";
@@ -108,14 +110,38 @@ async function openAChat() {
 }
 
 /** The core telling the window a step of chat `session`'s smart close. */
-async function step(session: number, phase: Phase, plane = PLANE) {
-  await act(() => emit("smart-close", { plane, session, phase }));
+async function step(
+  session: number,
+  phase: Phase,
+  plane = PLANE,
+  record: SavedRecord | null = null,
+) {
+  await act(() => emit("smart-close", { plane, session, phase, record }));
 }
 
 const tabOf = (name: string) =>
   within(screen.getByRole("tablist", { name: "Tabs" }))
     .queryAllByRole("tab")
     .find((tab) => tab.querySelector(".tab-name")?.textContent === name);
+
+/** The chip a tab called `name` shrinks to while it wraps up: no name on it, only its tooltip. */
+const chipOf = (name: string) =>
+  within(screen.getByRole("tablist", { name: "Tabs" }))
+    .queryAllByRole("tab")
+    .find((tab) => tab.getAttribute("aria-label") === `${name} — wrapping up`);
+
+/** The chip, which the test needs to be there. */
+function theChip(name: string): HTMLElement {
+  const chip = chipOf(name);
+  if (chip === undefined) throw new Error("no such chip");
+  return chip;
+}
+
+/** The chat strip as the operator reads it, left to right: a chip by its tooltip. */
+const strip = () =>
+  within(screen.getByRole("tablist", { name: "Tabs" }))
+    .getAllByRole("tab")
+    .map((tab) => tab.querySelector(".tab-name")?.textContent ?? tab.getAttribute("aria-label"));
 
 /** The tab called `name`, which the test needs to be there. */
 function theTab(name: string): HTMLElement {
@@ -188,7 +214,7 @@ describe("the close dialog's three answers", () => {
       expect(asked(log, "smart_close")).toEqual([{ plane: PLANE, session: 1 }]),
     );
     expect(asked(log, "close_session")).toEqual([]);
-    expect(tabOf("steward 1")).toBeDefined();
+    expect(chipOf("steward 1")).toBeDefined();
   });
 
   it("closes as it always did when Close is pressed", async () => {
@@ -206,17 +232,22 @@ describe("the close dialog's three answers", () => {
 });
 
 describe("a chat wrapping up", () => {
-  it("wears the closing look on its tab, and its tooltip says why", async () => {
+  it("shrinks to a chip: the chat's icon and the breathing mark, its name only in its tooltip", async () => {
     core();
     render(<App />);
     await openAChat();
 
     await step(1, "sent");
 
-    const tab = theTab("steward 1");
-    await waitFor(() => expect(tab.closest(".tab")).toHaveAttribute("data-wrapping-up"));
-    expect(tab).toHaveAttribute("title", expect.stringContaining("Wrapping up"));
-    expect(within(tab).getByRole("img", { name: "wrapping up" })).toBeInTheDocument();
+    await waitFor(() => expect(chipOf("steward 1")).toBeDefined());
+    const chip = theChip("steward 1");
+    expect(chip.closest(".tab")).toHaveAttribute("data-wrapping-up");
+    expect(chip.closest(".tab")).toHaveAttribute("data-chip");
+    expect(chip).toHaveAttribute("title", "steward 1 — wrapping up");
+    expect(chip.querySelector(".tab-name")).toBeNull();
+    expect(chip.querySelector('[data-mark="chat"]')).not.toBeNull();
+    expect(within(chip).getByRole("img", { name: "wrapping up" })).toHaveClass("breathing");
+    expect(tabOf("steward 1")).toBeUndefined();
   });
 
   it("offers Cancel smart close on its tab's menu, and cancelling asks the core", async () => {
@@ -224,11 +255,9 @@ describe("a chat wrapping up", () => {
     render(<App />);
     await openAChat();
     await step(1, "queued");
-    await waitFor(() =>
-      expect(theTab("steward 1").closest(".tab")).toHaveAttribute("data-wrapping-up"),
-    );
+    await waitFor(() => expect(chipOf("steward 1")).toBeDefined());
 
-    fireEvent.contextMenu(theTab("steward 1"));
+    fireEvent.contextMenu(theChip("steward 1"));
     await userEvent.click(
       await screen.findByRole("menuitem", { name: /Cancel smart close of steward 1/ }),
     );
@@ -244,9 +273,7 @@ describe("a chat wrapping up", () => {
     render(<App />);
     await openAChat();
     await step(1, "sent");
-    await waitFor(() =>
-      expect(theTab("steward 1").closest(".tab")).toHaveAttribute("data-wrapping-up"),
-    );
+    await waitFor(() => expect(chipOf("steward 1")).toBeDefined());
 
     await step(1, "cancelled");
 
@@ -306,5 +333,221 @@ describe("a chat wrapping up", () => {
     await step(1, "closed", "/somewhere/else");
 
     expect(tabOf("steward 1")).toBeDefined();
+  });
+});
+
+/** One chat as the core reports it at a launch, named exactly `name` on its tab. */
+function restored(session: number, name: string, { inFront = false, pinned = false } = {}) {
+  return {
+    session,
+    name,
+    cwd: `${PLANE}/workspaces/alpha`,
+    harness: null,
+    in_front: inFront,
+    resumed: null,
+    fresh: null,
+    profile: null,
+    persona: null,
+    unreported: null,
+    guessed: null,
+    pinned,
+  };
+}
+
+/** The core with `open` put back at the launch, `one` pinned; Smart close answers `began`. */
+function coreWith(
+  open = [
+    restored(1, "one", { pinned: true }),
+    restored(2, "two", { inFront: true }),
+    restored(3, "three"),
+  ],
+  began: () => unknown = () => "sent",
+): { asked: { cmd: string; args: unknown }[] } {
+  const asked: { cmd: string; args: unknown }[] = [];
+  mockIPC(
+    (cmd, args) => {
+      asked.push({ cmd, args });
+      if (cmd === "plane_at_launch") return { plane: PLANE, from: PLANE, why: null };
+      if (cmd === "plane_sidebar")
+        return { ...SIDEBAR, workspaces: [{ ...SIDEBAR.workspaces[0], chats: open }] };
+      if (cmd === "opened_chats") return open;
+      if (cmd === "running_sessions") return [];
+      if (cmd === "chat_states") return [];
+      if (cmd === "chats_that_would_not_start") return [];
+      if (cmd === "smart_close_offer") return OFFERED;
+      if (cmd === "smart_close") return began();
+      if (cmd === "smart_closing") return [];
+      return null;
+    },
+    { shouldMockEvents: true },
+  );
+  return { asked };
+}
+
+/** Smart close on the tab called `name`, answered through the close dialog. */
+async function smartClose(name: string) {
+  await userEvent.click(await screen.findByRole("button", { name: `End chat ${name}` }));
+  const asking = await screen.findByRole("alertdialog");
+  await userEvent.click(within(asking).getByRole("button", { name: "Smart close" }));
+}
+
+const selected = () =>
+  within(screen.getByRole("tablist", { name: "Tabs" }))
+    .getAllByRole("tab")
+    .find((tab) => tab.getAttribute("aria-selected") === "true");
+
+describe("a chat put into the background (SI-8f)", () => {
+  it("goes to the strip's left edge, before the pinned tabs", async () => {
+    coreWith();
+    render(<App />);
+    await waitFor(() => expect(strip()).toEqual(["one", "two", "three"]));
+
+    await step(3, "sent");
+
+    await waitFor(() => expect(strip()).toEqual(["three — wrapping up", "one", "two"]));
+  });
+
+  it("cannot be picked up and carried along the strip", async () => {
+    laidOutInARow();
+    const { asked: log } = coreWith();
+    render(<App />);
+    await waitFor(() => expect(strip()).toEqual(["one", "two", "three"]));
+    await step(3, "sent");
+    await waitFor(() => expect(chipOf("three")).toBeDefined());
+
+    const toldBefore = asked(log, "chat_order").length;
+
+    theChip("three").focus();
+    await dragWithTheKeyboard("{ArrowRight}");
+
+    expect(strip()).toEqual(["three — wrapping up", "one", "two"]);
+    expect(theChip("three")).not.toHaveAttribute("aria-describedby");
+    expect(asked(log, "chat_order")).toHaveLength(toldBefore);
+  });
+
+  it("sends the front exactly where Close would have: the tab before it", async () => {
+    coreWith();
+    render(<App />);
+    await waitFor(() => expect(selected()?.textContent).toContain("two"));
+
+    await smartClose("two");
+
+    await waitFor(() => expect(selected()?.querySelector(".tab-name")?.textContent).toBe("one"));
+    await waitFor(() => expect(chipOf("two")).toBeDefined());
+  });
+
+  it("leaves the workspace's empty state in front when it was the last chat", async () => {
+    coreWith([restored(1, "only", { inFront: true })]);
+    render(<App />);
+    await waitFor(() => expect(strip()).toEqual(["only"]));
+
+    await smartClose("only");
+
+    expect(await screen.findByTestId("empty-window")).toBeInTheDocument();
+    expect(strip()).toEqual(["only — wrapping up"]);
+  });
+
+  it("shows the chat working when the chip is clicked, and stays a chip", async () => {
+    coreWith();
+    render(<App />);
+    await smartClose("two");
+    await step(2, "sent");
+    await waitFor(() => expect(chipOf("two")).toBeDefined());
+
+    await userEvent.click(theChip("two"));
+
+    await waitFor(() => expect(theChip("two")).toHaveAttribute("aria-selected", "true"));
+    expect(screen.getByTestId("pane")).toHaveTextContent("session 2");
+    expect(strip()).toEqual(["two — wrapping up", "one", "three"]);
+  });
+
+  it("goes when its record lands, and a quiet notice offers to open the record", async () => {
+    coreWith();
+    render(<App />);
+    await waitFor(() => expect(strip()).toEqual(["one", "two", "three"]));
+    await step(2, "sent");
+    const record = {
+      path: "workspaces/alpha/sessions/20260928-160000-ship-it.md",
+      title: "Ship it",
+    };
+
+    await step(2, "closed", PLANE, record);
+
+    await waitFor(() => expect(chipOf("two")).toBeUndefined());
+    const notice = await screen.findByText(/^Session saved — Ship it/);
+    expect(notice.closest('[role="status"]')).not.toBeNull();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    await userEvent.click(within(notice).getByRole("button", { name: "Open record" }));
+    await waitFor(() => expect(tabOf("Session · Ship it")).toBeDefined());
+    expect(screen.queryByText(/^Session saved — Ship it/)).toBeNull();
+  });
+
+  it("comes back in its old place when no record arrives, and the needs-you menu says why", async () => {
+    coreWith();
+    render(<App />);
+    await waitFor(() => expect(strip()).toEqual(["one", "two", "three"]));
+    await step(2, "sent");
+    await waitFor(() => expect(strip()).toEqual(["two — wrapping up", "one", "three"]));
+
+    await step(2, "no_record");
+
+    await waitFor(() => expect(strip()).toEqual(["one", "two", "three"]));
+    expect(
+      screen.getByText(
+        "No session record arrived from two within five minutes, so it was left open.",
+      ),
+    ).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "1 chat needs you" }));
+    expect(
+      await screen.findByRole("menuitem", {
+        name: /^Go to two: smart close stopped — no session record arrived/,
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("comes back in its old place when the chat ends before its record, listed too", async () => {
+    coreWith();
+    render(<App />);
+    await waitFor(() => expect(strip()).toEqual(["one", "two", "three"]));
+    await step(1, "sent");
+    await waitFor(() => expect(strip()[0]).toBe("one — wrapping up"));
+
+    await step(1, "ended");
+
+    await waitFor(() => expect(strip()).toEqual(["one", "two", "three"]));
+    await userEvent.click(screen.getByRole("button", { name: "1 chat needs you" }));
+    expect(
+      await screen.findByRole("menuitem", { name: /^Go to one: smart close stopped — it ended/ }),
+    ).toBeInTheDocument();
+  });
+
+  it("comes back in its old place when Smart close could not start, listed too", async () => {
+    coreWith(undefined, () => {
+      throw "That chat is not open any more.";
+    });
+    render(<App />);
+    await waitFor(() => expect(strip()).toEqual(["one", "two", "three"]));
+
+    await smartClose("two");
+
+    expect(await screen.findByText("That chat is not open any more.")).toBeInTheDocument();
+    await waitFor(() => expect(strip()).toEqual(["one", "two", "three"]));
+    await userEvent.click(screen.getByRole("button", { name: "1 chat needs you" }));
+    expect(
+      await screen.findByRole("menuitem", { name: /^Go to two: smart close did not start/ }),
+    ).toBeInTheDocument();
+  });
+
+  it("comes back in its old place when cancelled, and nothing is listed", async () => {
+    coreWith();
+    render(<App />);
+    await waitFor(() => expect(strip()).toEqual(["one", "two", "three"]));
+    await step(3, "sent");
+    await waitFor(() => expect(strip()[0]).toBe("three — wrapping up"));
+
+    await step(3, "cancelled");
+
+    await waitFor(() => expect(strip()).toEqual(["one", "two", "three"]));
+    expect(screen.queryByRole("button", { name: /needs you/ })).toBeNull();
   });
 });

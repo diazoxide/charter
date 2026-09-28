@@ -223,7 +223,7 @@ approval. Its approval policy and sandbox are whole-session switches, and its ex
 `.rules` are files in `CODEX_HOME` or the project. So nothing is added (`harness` tests hold
 that). **The same sandbox refused the command's connect to the app's hook socket**
 (`Operation not permitted`), so on Codex the record is written but the tab doesn't close by
-itself: #517, waiting on a ruling.
+itself: #517, ruled and fixed below (SI-8f).
 
 **opencode is a documented gap.** Its default lets `bash` run without asking. It can be told
 `permission.bash` patterns for one session through `OPENCODE_CONFIG_CONTENT`, but there the more
@@ -274,3 +274,81 @@ The Resume button on a record's tab was the catalogue's `session.resume:<path>` 
 catalogue offered that row only for the records of the place in front, so a tab showing another
 place's record drew no Resume. Now the catalogue offers the row for every open record tab too,
 one row per record, and the button still is that row.
+
+## Smart close puts the chat into the background (SI-8f, amended 2026-09-28)
+
+The operator's ruling: *Smart close should feel like putting the chat into the background.*
+
+### The tab becomes a chip, and the front goes where Close would send it
+
+On the Smart close click the tab shrinks to a **chip**: the chat's icon and the breathing amber
+diamond (still under reduced motion), no name, and the tooltip `<name> — wrapping up`. It is
+drawn at the left edge of the chat strip, before the pinned tabs, and it is fixed: it cannot be
+dragged, and nothing is dropped on it (`tabs.tabsIn`, `reorder.ts`). ADR 0039 is amended for it:
+the operator's click moved it, and nothing reorders on its own.
+
+The front goes **exactly where Close would have sent it** — the tab before it on the strip, or
+the first after it, or the workspace's empty state when it was the last chat. That is one
+function, `tabs.frontWithout`, which `closeTab` and `sendToBackground` both call. A chip is never
+where the front goes when another tab closes. The click is what moves it, so it moves at once,
+before the core's first step arrives; a start the core refuses brings it back.
+
+Clicking the chip brings the chat forward to watch it work, and it stays a chip while it wraps
+up. **Cancel smart close** is still on its menu and in the palette, and typing into the chat
+still cancels it. A tab with a second chat beside it in a split does not become a chip — it
+would not close on the record — and keeps the wrapping-up mark.
+
+### How it ends
+
+- **Saved:** the chip goes, as before (`closeChat`, never `close_session`), and a quiet notice
+  says *Session saved — <title>* with **Open record**, which opens the record's view tab (SI-8d).
+  The `Closed` step now carries the record (`SmartClosing.record`: its plane-relative path and
+  its title), read through `sessionrecord::saved`, which reads the line's path only as a record
+  of this plane — a line naming anything else still closes the tab and names nothing.
+- **No record in five minutes, the chat ended, or the start refused:** the tab comes back **in
+  its old place**, because nothing ever moved it in `tabs.order` — the chip is drawn first, and
+  that is all. The one-sentence notice stays, and the chat is also listed in the title bar's ✋
+  needs-you menu with why (*smart close stopped — no session record arrived in five minutes*, *…
+  it ended before it wrote its record*, *smart close did not start*). A chat already in the queue
+  is one item that says why; one that is not is an item of its own, whose ✕ dismisses it. Going
+  to it takes it off the list.
+- **Cancelled:** the tab comes back in its old place, and nothing is listed.
+
+### A Stop hook passes on the line the sandbox refused (#517)
+
+**What was measured.** Codex 0.147.0's default `workspace-write` sandbox runs `charter session
+record` without asking and lets it write the record, and refuses its connect to the hook
+socket. Its hooks run outside that sandbox. Measured again for this change with the plane
+outside the sandbox's temporary roots (`exclude_slash_tmp` and `exclude_tmpdir_env_var`, since
+the scratch plane lived under `/tmp`): from a chat in `workspaces/alpha`, a command could write
+below `workspaces/alpha/` and could **not** write the plane's own `.charter/`. So the refused
+line cannot wait in the plane's `.charter/sessions/`, the place first suggested for it; it waits
+in the directory of the place the chat works, which is the chat's own.
+
+**The rule.** When `charter session record` had a socket and a chat to tell and the line did not
+get through, it leaves a marker, `<place>/.charter/sessions/<chat>.saved`
+(`docs/plane-format.md`): the chat, its conversation as the app recorded it, the record's path,
+and when. The place is the one the command files a record in when it is given no `-w`, which is
+where the hook looks too — one function, `Here::place`, answers both. The chat's next `Stop`
+hook — the end of the same turn — takes the marker (`sessionrecord::relay::take`): it removes
+it, whatever it holds, and sends the `SessionSaved` line only when the marker is this chat's,
+this conversation's where it names one, and at most `relay::PASSED_ON_WITHIN` old. That is five
+minutes, and the app's `GIVES_UP_AFTER` is now that constant, so the two waits are one number.
+
+**Why this is still one writer and still a command's signal.** The line the hook sends is the
+one the command would have sent, built from what the command wrote down. Nothing is read from
+what the harness printed. **It cannot close a tab twice**: the app closes on a `SessionSaved`
+only while that chat is being smart-closed (`smartclose::saved`), so the same line arriving a
+second time closes nothing (`planes` tests send it twice). **It cannot pass on an earlier
+session's line**: a chat's number is used again when a plane is opened again, so a marker from
+another chat, another conversation, a future time, or more than five minutes ago is removed
+unsent. On Claude Code the socket is reached, so no marker is left. If one is left anyway, the
+Stop's line is a harmless duplicate.
+
+**What would not have fixed it** is in #517: opening the sandbox's network, changing the
+approval policy, or writing an execpolicy rule into the operator's `CODEX_HOME`.
+
+**Verified live** against codex-cli 0.147.0 with a stand-in model server in a scratch
+`CODEX_HOME`: the chat ran the real `charter session record` in its sandbox, the connect was
+refused and the marker left, and the `Stop` hook sent the line the tab closes on.
+

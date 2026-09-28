@@ -899,6 +899,9 @@ fn a_hook_whose_app_has_gone_succeeds_anyway() {
 
     let out = Command::new(CHARTER)
         .args(["hook", "stop"])
+        // Somewhere that is no plane: a `Stop` looks for a saved-record line to pass on (#517),
+        // and this checkout may sit inside the operator's own plane.
+        .current_dir(dir.path())
         .env_clear()
         .env("PATH", std::env::var("PATH").unwrap_or_default())
         .env(SOCKET_ENV, &path)
@@ -936,6 +939,7 @@ fn a_hook_reading_a_payload_that_never_ends_still_gets_out_of_the_way() {
 
     let mut child = Command::new(CHARTER)
         .args(["hook", "stop"])
+        .current_dir(dir.path())
         .env_clear()
         .env("PATH", std::env::var("PATH").unwrap_or_default())
         .env(SOCKET_ENV, &path)

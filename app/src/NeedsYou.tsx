@@ -44,6 +44,12 @@ export function ChatMark({ state }: { state: State | undefined }) {
 export const WRAPPING_UP =
   "Wrapping up: writing its session record, then it closes. Typing into it, or Cancel smart close on its menu, stops this.";
 
+/** What a tab in the background says, as its tooltip and its name (SI-8f): the chip draws no
+ *  name of its own. */
+export function chipSays(name: string): string {
+  return `${name} — wrapping up`;
+}
+
 /**
  * **A chat wrapping up** — being smart-closed (ADR 0064): a mark that breathes, as a queued
  * pipeline's does, because the chat is doing its last turn and will go. `charter-breathe` reads
@@ -132,6 +138,11 @@ export type Asking = {
    * and Go still opens THIS chat, the one that asked, whose next turn is handed the report.
    */
   reported?: readonly string[];
+  /**
+   * Why the chat needs the operator when it is not that it asked: its Smart close stopped
+   * without a record (SI-8f). Its row then says `<name>: <why>`, and Go is still the chat.
+   */
+  why?: string;
   /** The catalogue's `needs.show:<session>`: the chat to the front, its workspace with it. */
   go?: Offer;
   /** The catalogue's `needs.ignore:<session>`. */
@@ -294,7 +305,7 @@ export function NeedsYouMenu({
                 const back =
                   item.reported && item.reported.length > 0
                     ? `${item.reported.join(", ")} reported back`
-                    : undefined;
+                    : item.why;
                 const where = `${back ? `${item.name}: ${back}` : item.name} · ${item.workspace} · ${item.project}`;
                 return (
                   <Menu.Group

@@ -25,6 +25,8 @@ use std::path::{Path, PathBuf};
 
 use crate::active::Place;
 
+pub mod relay;
+
 /// The directory a place's records live in, under the workspace or the plane root.
 pub const DIR: &str = "sessions";
 
@@ -797,6 +799,33 @@ pub fn open(root: &Path, path: &str) -> Result<Opened, String> {
         place,
         text,
     })
+}
+
+/// The record a saved-record line names (`SessionSaved::session_saved`), as a listing says it —
+/// or `None` for a path that is not one of this plane's records.
+///
+/// The line carries the path the command wrote, and the app may know the plane by another
+/// spelling of the same directory (a `/tmp` that is `/private/tmp`), so a path that is not below
+/// `root` as written is asked again with both resolved. Below the root it is read only as
+/// [`open`] reads a record's plane-relative path, which refuses every other spelling.
+pub fn saved(root: &Path, path: &Path) -> Option<Listed> {
+    let below = match path.strip_prefix(root) {
+        Ok(below) => below.to_path_buf(),
+        Err(_) => {
+            let (root, path) = (root.canonicalize().ok()?, path.canonicalize().ok()?);
+            path.strip_prefix(&root).ok()?.to_path_buf()
+        }
+    };
+    let parts = below
+        .components()
+        .map(|part| match part {
+            std::path::Component::Normal(name) => name.to_str(),
+            _ => None,
+        })
+        .collect::<Option<Vec<&str>>>()?;
+    open(root, &parts.join("/"))
+        .ok()
+        .map(|opened| opened.listed)
 }
 
 // ---- the chat, from the app's record of it -------------------------------------------------------

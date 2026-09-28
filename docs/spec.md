@@ -373,7 +373,15 @@ how it is cited and nothing here is renumbered.
     rule, `Bash(charter session record *)` as an `allow`, so a Smart close never stops to ask for
     the command that ends it; Codex's approval and sandbox are whole-session switches, so it
     carries none (ADR 0064's measurements). A record's tab resumes that record whichever place is
-    in front.
+    in front. **Smart close puts the chat into the background** (SI-8f): its tab shrinks to a
+    fixed chip — the chat's icon and the breathing mark, the name in its tooltip — at the chat
+    strip's left edge before the pinned tabs, and the front goes exactly where Close would send
+    it. The chip, clicked, shows the chat working. Saved, it goes and a quiet notice offers
+    **Open record**; given up, ended or refused, the tab comes back in its old place and the
+    title bar's needs-you list says why. A line the harness's sandbox kept from the hook socket
+    (Codex's default one) is left beside the chat and passed on by that chat's next `Stop` hook,
+    only for that chat, that conversation and within the five minutes the app waits
+    (`sessionrecord::relay`); the app closes on it once.
 
 ### Memory in the window — added 2026-09-28
 

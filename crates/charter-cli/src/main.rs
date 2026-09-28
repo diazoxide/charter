@@ -1247,8 +1247,9 @@ fn hook(name: &str, now: Option<&str>) -> ExitCode {
         }
         return ExitCode::SUCCESS;
     };
-    if let Some(report) = Report::read(event, &text, &|name| std::env::var(name).ok())
-        && let Err(why) = hookwire::send(std::path::Path::new(&socket), &report)
+    let report = Report::read(event, &text, &|name| std::env::var(name).ok());
+    if let Some(report) = &report
+        && let Err(why) = hookwire::send(std::path::Path::new(&socket), report)
     {
         // The app may have quit while this session was still running, which is the ordinary
         // way for this to fail and is not the harness's business — hence the exit 0 below.
@@ -1261,6 +1262,13 @@ fn hook(name: &str, now: Option<&str>) -> ExitCode {
             "charter: the app did not take this {} ({why})",
             event.word()
         );
+    }
+    // After the report, so the app has heard the turn end before it hears the record: a
+    // saved-record line the harness's sandbox kept from reaching the app (#517).
+    if event == Event::Stop
+        && let Some(report) = &report
+    {
+        session::pass_on_at_stop(std::path::Path::new(&socket), report);
     }
     ExitCode::SUCCESS
 }

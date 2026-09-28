@@ -45,8 +45,10 @@ use crate::planes::{Held, PlaneId, Planes};
 pub const PROMPT: &str =
     "Use charter's smart-close skill to write this session's record and close the chat.";
 
-/// How long after the prompt is sent a record may take before the tab goes back to normal.
-pub const GIVES_UP_AFTER: Duration = Duration::from_secs(5 * 60);
+/// How long after the prompt is sent a record may take before the tab goes back to normal. The
+/// core's, because a chat's `Stop` passes on a saved-record line only while this has not
+/// passed (`sessionrecord::relay`, #517): one wait, one number.
+pub const GIVES_UP_AFTER: Duration = charter_core::sessionrecord::relay::PASSED_ON_WITHIN;
 
 /// The event the window is told each step of a smart close on.
 pub const EVENT: &str = "smart-close";
@@ -87,6 +89,17 @@ pub struct SmartClosing {
     pub plane: PlaneId,
     pub session: u32,
     pub phase: Phase,
+    /// On [`Phase::Closed`], the record that closed it, for the window's "Session saved" notice
+    /// and its **Open record** — where the line named one of this plane's records.
+    pub record: Option<SavedRecord>,
+}
+
+/// The record a smart close ended on, as its view tab opens it (SI-8d).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct SavedRecord {
+    /// Plane-relative, as `session_record` reads it.
+    pub path: String,
+    pub title: String,
 }
 
 /// Told each step of every plane's smart closes.
@@ -409,7 +422,16 @@ pub fn saved(held: &Held, saved: &SessionSaved) {
             saved.chat
         );
     }
-    held.tell_smart_close(saved.chat, Phase::Closed);
+    // Read through the one reading of a record's path there is, so a line naming anything else
+    // still closes the tab and names nothing.
+    let record =
+        charter_core::sessionrecord::saved(held.root(), &saved.session_saved).map(|listed| {
+            SavedRecord {
+                path: listed.shown,
+                title: listed.title,
+            }
+        });
+    held.tell_smart_closed(saved.chat, record);
 }
 
 /// Gives up on smart close `number` of chat `session` if no record has arrived by then. On a
@@ -494,6 +516,7 @@ pub fn smart_closing(
             plane: plane.clone(),
             session,
             phase,
+            record: None,
         })
         .collect())
 }

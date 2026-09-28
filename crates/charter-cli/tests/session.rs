@@ -11,7 +11,7 @@ use std::process::{Command, Output, Stdio};
 use std::sync::{Mutex, mpsc};
 use std::time::Duration;
 
-use charter_core::hookwire::{CHAT_ENV, Listener, SOCKET_ENV, SessionSaved};
+use charter_core::hookwire::{self, CHAT_ENV, Listener, SOCKET_ENV, SessionSaved};
 
 const BODY: &str = "## Goal\n\nShip the record.\n\n## Done\n\n- wrote it\n\n## Decisions\n\n- one \
 file per record\n\n## Open\n\nNothing.\n\n## How to resume\n\nRead this, then run the tests.\n";
@@ -136,10 +136,103 @@ fn a_record_is_written_indexed_and_pointed_at_and_the_app_is_told_which_chat_sav
         saved.session_saved.canonicalize().unwrap(),
         path.canonicalize().unwrap()
     );
+    assert!(
+        !marker(&tmp, "3").exists(),
+        "a line the app heard was left for the Stop hook as well"
+    );
+}
+
+/// Where chat `chat`'s saved-record marker is for a chat in `alpha` (`docs/plane-format.md`).
+fn marker(tmp: &tempfile::TempDir, chat: &str) -> PathBuf {
+    root(tmp).join(format!("workspaces/alpha/.charter/sessions/{chat}.saved"))
+}
+
+/// `charter hook stop` in chat `chat`, as the harness runs it at the end of a turn.
+fn stop(tmp: &tempfile::TempDir, socket: &Path, chat: &str) -> Output {
+    charter(
+        tmp,
+        &["hook", "stop"],
+        &[
+            IN_ALPHA,
+            (SOCKET_ENV, socket.to_str().unwrap()),
+            (CHAT_ENV, chat),
+        ],
+        r#"{"session_id":"0f6c2a1e-aaaa-4bbb-8ccc-123456789abc","hook_event_name":"Stop"}"#,
+    )
+}
+
+/// A socket the app listens on from now, and the saved-record lines it hears. Reports are
+/// taken and dropped: a `Stop` hook sends one of those too.
+fn listening(
+    tmp: &tempfile::TempDir,
+    socket: &Path,
+) -> (hookwire::Reading, mpsc::Receiver<SessionSaved>) {
+    let (tx, rx) = mpsc::channel();
+    let tx = Mutex::new(tx);
+    let reading = Listener::bind(tmp.path(), socket)
+        .expect("a socket")
+        .each_answering_noticing_and_saving(
+            Box::new(|_| {}),
+            Box::new(|_, _| panic!("nothing here asks")),
+            Box::new(|_| panic!("no harness was started by hand")),
+            Box::new(move |saved| tx.lock().unwrap().send(saved).unwrap()),
+        );
+    (reading, rx)
 }
 
 #[test]
-fn with_no_app_to_tell_the_record_is_still_written_and_says_the_tab_will_not_close_by_itself() {
+fn a_line_the_socket_refused_is_passed_on_by_the_chats_next_stop_once() {
+    // Codex's sandbox refuses the command's connect and runs the hooks outside it (#517): here,
+    // the app is not listening yet when the record is written, and is when the turn ends.
+    let tmp = daily();
+    let socket = tmp.path().join("app").join("hooks.sock");
+    let ran = record(
+        &tmp,
+        "Sandboxed",
+        "2026-09-28T16:00:00",
+        &[
+            IN_ALPHA,
+            (SOCKET_ENV, socket.to_str().unwrap()),
+            (CHAT_ENV, "3"),
+        ],
+    );
+    assert!(ran.status.success(), "{}", err(&ran));
+    assert!(marker(&tmp, "3").is_file(), "no marker for the Stop hook");
+    assert!(
+        err(&ran).contains("when this turn ends"),
+        "the command does not say what happens next"
+    );
+
+    let (_reading, rx) = listening(&tmp, &socket);
+    // Another chat's Stop passes on nothing of chat 3's.
+    assert!(stop(&tmp, &socket, "4").status.success());
+    assert!(marker(&tmp, "3").is_file(), "chat 4 took chat 3's marker");
+
+    let stopped = stop(&tmp, &socket, "3");
+
+    assert!(stopped.status.success(), "{}", err(&stopped));
+    let saved = rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the line, passed on");
+    assert_eq!(saved.chat, 3);
+    assert_eq!(
+        saved.session_saved.canonicalize().unwrap(),
+        root(&tmp)
+            .join("workspaces/alpha/sessions/20260928-160000-sandboxed.md")
+            .canonicalize()
+            .unwrap()
+    );
+    assert!(!marker(&tmp, "3").exists(), "the marker outlived its Stop");
+    assert!(stop(&tmp, &socket, "3").status.success());
+    assert!(
+        rx.recv_timeout(Duration::from_millis(500)).is_err(),
+        "the next Stop sent the line again"
+    );
+}
+
+#[test]
+fn with_no_app_to_tell_the_record_is_still_written_and_the_operator_is_told_what_becomes_of_the_tab()
+ {
     let tmp = daily();
     let gone = tmp.path().join("gone.sock");
 
@@ -158,12 +251,16 @@ fn with_no_app_to_tell_the_record_is_still_written_and_says_the_tab_will_not_clo
         };
         let ran = record(&tmp, "Alone", now, &env);
         assert!(ran.status.success(), "{}", err(&ran));
-        assert!(
-            err(&ran).contains("will not close by itself"),
-            "{}",
-            err(&ran)
-        );
+        // With no socket at all this is no chat the app started; with one that did not answer,
+        // the line waits for the chat's Stop hook, and the operator is told either way.
+        let said = if env.len() == 1 {
+            "will not close by itself"
+        } else {
+            "close it yourself"
+        };
+        assert!(err(&ran).contains(said), "{}", err(&ran));
     }
+    assert!(marker(&tmp, "3").is_file(), "the refused line was not left");
     let listed = charter(&tmp, &["session", "list", "-w", "alpha"], &[], "");
     assert_eq!(out(&listed).lines().count(), 2, "{}", out(&listed));
 }
