@@ -40,7 +40,10 @@ function row(key: string, text: string, over: Partial<PanelRow> = {}): PanelRow 
 const EMPTY = { headline: "Nothing here", body: null, offer: null };
 
 /** The list, with the window's own open-row state around it — which is where it lives. */
-function draw(rows: PanelRow[], over: { page?: number; onRun?: (id: string) => void } = {}) {
+function draw(
+  rows: PanelRow[],
+  over: { page?: number; onRun?: (id: string, kept?: boolean) => void } = {},
+) {
   function Window() {
     const [open, setOpen] = useState<string>();
     return (
@@ -109,6 +112,15 @@ describe("a row is one line", () => {
     expect(shortened.querySelector(".row-text")).toHaveAttribute("title", long);
     expect(fits.querySelector(".row-text")).not.toHaveAttribute("title");
   });
+
+  it("carries no native title on a row that opens a tab, which holds the whole of it", () => {
+    // SI-9b (ADR 0065 Q4): a memory row opens the memory's own tab, and a tooltip over it
+    // would be a third place for the same words — and the one that covers the next row.
+    const long = `Land ${"the contract ".repeat(8)}`.trim();
+    draw([row("a", long, { runs: "memory.open:shared/a" })]);
+
+    expect(screen.getByRole("button").querySelector(".row-text")).not.toHaveAttribute("title");
+  });
 });
 
 describe("a row opens its card", () => {
@@ -132,20 +144,33 @@ describe("a row opens its card", () => {
     expect(screen.getByText("Inert")).toBeInTheDocument();
   });
 
-  it("runs the row's catalogue verb on the way open and never on the way shut", async () => {
+  it("runs the row's catalogue verb, and opens no card of its own, when it has one", async () => {
     // A persona row's `persona.show:<name>` is the same verb the palette and a context menu
-    // run (charter-app#174). Running it again on dismissal would re-open what was just closed.
+    // run (charter-app#174); a memory row's `memory.open:<key>` opens the memory's tab
+    // (SI-9b, ADR 0065 Q4). A card beside the row as well would be two surfaces for one thing
+    // — so a row that runs is a plain button, and its detail is only what the search reads.
     const ran: string[] = [];
-    draw([row("steward", "steward", { runs: "persona.show:steward" })], {
-      onRun: (id) => ran.push(id),
+    draw([row("m", "A memory", { runs: "memory.open:shared/m" })], {
+      onRun: (id, kept) => ran.push(`${id}${kept ? " kept" : ""}`),
     });
 
     await userEvent.click(screen.getByRole("button"));
-    await waitFor(() => screen.getByTestId("row-detail-steward"));
-    await userEvent.keyboard("{Escape}");
 
-    await waitFor(() => expect(screen.queryByTestId("row-detail-steward")).toBeNull());
-    expect(ran).toEqual(["persona.show:steward"]);
+    expect(screen.queryByTestId("row-detail-m")).toBeNull();
+    expect(ran).toEqual(["memory.open:shared/m"]);
+  });
+
+  it("runs the row's verb kept on a double-click, as a preview tab is kept", async () => {
+    // VS Code's model (ADR 0065 Q1): a single click previews, a double-click keeps. The first
+    // click of the two has already previewed; the double-click keeps what it showed.
+    const ran: string[] = [];
+    draw([row("m", "A memory", { runs: "memory.open:shared/m" })], {
+      onRun: (id, kept) => ran.push(`${id}${kept ? " kept" : ""}`),
+    });
+
+    await userEvent.dblClick(screen.getByRole("button"));
+
+    expect(ran.at(-1)).toBe("memory.open:shared/m kept");
   });
 });
 
@@ -195,20 +220,48 @@ describe("the search", () => {
     expect(screen.getByRole("searchbox")).toBeInTheDocument();
   });
 
-  it("filters on what a row says, which is what the reader can see", async () => {
-    // A match on something invisible reads as a bug, and there is nowhere on the row to show
-    // the reader why it matched.
+  it("filters on what a row says, and on its body", async () => {
+    // ADR 0065 Q11: a memory is found by what it says, not only by the sentence it is filed
+    // under. The match that is not on the row is shown under it (the next test), so the reader
+    // can see why it matched.
     const rows = [
       ...many(PAGE),
       row("hit", "Ship the contract", { note: "2026-09-23" }),
-      row("miss", "Something else", { detail: { kind: "text", text: "contract" } }),
+      row("body", "Something else", { detail: { kind: "text", text: "see the contract" } }),
+      row("miss", "Unrelated", { detail: { kind: "text", text: "nothing" } }),
     ];
     draw(rows);
 
     await userEvent.type(screen.getByRole("searchbox"), "contract");
 
     expect(screen.getByText("Ship the contract")).toBeInTheDocument();
-    expect(screen.queryByText("Something else")).toBeNull();
+    expect(screen.getByText("Something else")).toBeInTheDocument();
+    expect(screen.queryByText("Unrelated")).toBeNull();
+  });
+
+  it("shows the matching part of the body under a row while a search is typed", async () => {
+    const body = `${"Words before it. ".repeat(10)}Deploys freeze on Fridays. ${"Words after. ".repeat(10)}`;
+    draw([...many(PAGE), row("m", "A memory", { detail: { kind: "text", text: body } })]);
+
+    await userEvent.type(screen.getByRole("searchbox"), "freeze");
+
+    const snippet = screen.getByTestId("row-snippet-m");
+    expect(snippet).toHaveTextContent("Deploys freeze on Fridays");
+    // A short part and not the whole body: a list is still a list while it is searched.
+    expect((snippet.textContent ?? "").length).toBeLessThan(body.length / 2);
+    expect(snippet.querySelector("mark")).toHaveTextContent(/^freeze$/i);
+
+    await userEvent.clear(screen.getByRole("searchbox"));
+
+    expect(screen.queryByTestId("row-snippet-m")).toBeNull();
+  });
+
+  it("shows no snippet for a match the row's own words already show", async () => {
+    draw([...many(PAGE), row("m", "Deploys freeze on Fridays")]);
+
+    await userEvent.type(screen.getByRole("searchbox"), "freeze");
+
+    expect(screen.queryByTestId("row-snippet-m")).toBeNull();
   });
 
   it("matches a row's note as well as its words", async () => {

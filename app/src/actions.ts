@@ -31,10 +31,12 @@ import type {
   Curations,
   ExtensionCommand,
   ExtensionView,
+  MemoryScope,
   RowAction,
   SubjectCurations,
 } from "./bindings";
 import { MAIN } from "./here";
+import { DRAFT, MEMORY_VIEW, memoryKey, memoryRefOf, type MemoryRef } from "./memories";
 import { SESSION_VIEW, sessionTitle, sessionTitleOf, sessionView } from "./sessions";
 import { shellKeySaid } from "./shellKey";
 import { onAMac } from "./tabKeys";
@@ -203,6 +205,20 @@ export type Does =
    *  harness, given its conversation where it can be, and told the record in its briefing. It
    *  starts a chat, so it answers a `Ran` — the core can refuse. */
   | { verb: "resumeSession"; path: string }
+  /** Opens a memory's tab (SI-9b, ADR 0065): in the strip's preview tab, replacing what it
+   *  previewed — or, `keep`, as a tab of its own that nothing replaces (a double-click). */
+  | { verb: "openMemory"; ref: MemoryRef; title: string; keep: boolean }
+  /** Opens a memory's tab, kept, in edit mode: starting an edit keeps a preview (ADR 0065 Q1). */
+  | { verb: "editMemory"; ref: MemoryRef; title: string }
+  /** The window's Delete for a memory: it moves to its store's `archive/`, its tab closes, and
+   *  an Undo is offered for a few seconds (ADR 0065 Q8). Nothing asks first, because nothing
+   *  is lost: Undo, or `unarchive` on the command line, puts it back. */
+  | { verb: "archiveMemory"; ref: MemoryRef; title: string }
+  /** Opens a new memory's tab in edit mode, for the store `scope` (ADR 0065 Q9). Nothing is
+   *  written until it is saved. */
+  | { verb: "newMemory"; scope: MemoryScope }
+  /** Keeps a preview tab (SI-9b): the next single click previews in a tab of its own. */
+  | { verb: "keepTab"; tab: number }
   /** Runs an extension's action on nothing in particular — a palette command's (charter-app#341).
    *
    *  **It runs nothing by itself when the action asks first**: the window asks, and the core
@@ -523,6 +539,16 @@ export type Doing = {
   openView: (view: ViewRef, title: string) => void;
   /** Resumes a session from its record at `path`, in a tab of its own. */
   resumeSession: (path: string) => Promise<Ran>;
+  /** Opens a memory's tab: previewed, or kept when `keep` (SI-9b). */
+  openMemory: (ref: MemoryRef, title: string, keep: boolean) => void;
+  /** Opens a memory's tab, kept, with its editor open. */
+  editMemory: (ref: MemoryRef, title: string) => void;
+  /** Archives a memory, closes its tab and offers Undo. The core can refuse. */
+  archiveMemory: (ref: MemoryRef, title: string) => Promise<Ran>;
+  /** Opens a new memory's tab for `scope`, in edit mode. */
+  newMemory: (scope: MemoryScope) => void;
+  /** Keeps a preview tab. */
+  keepTab: (tab: number) => void;
   /** Runs an extension's action — asking first when it says to, and always when it deletes. It
    *  answers a `Ran`: the core can refuse, and what it saw change outside the extension's
    *  declared paths is a sentence the operator is owed. */
@@ -988,6 +1014,19 @@ export function catalogue(now: Now): Offer[] {
     offers.push(can(`tab.rename:${tab}`, `Rename chat ${name}…`, { verb: "renameTab", tab }, name));
   }
 
+  // **A preview tab can be kept** (SI-9b, ADR 0065 Q1): the next single click on a memory then
+  // previews in a tab of its own. A double-click on the tab runs this same row, as VS Code's
+  // does; a kept tab has nothing to keep, so it has no row.
+  for (const tab of now.tabs.order) {
+    const lead = contentsOf(now.tabs, tab)[0]?.content;
+    if (lead?.kind !== "view" || !lead.preview) continue;
+    const name = now.tabs.byId[tab].name;
+    offers.push({
+      ...can(`tab.keep:${tab}`, `Keep tab ${name} open`, { verb: "keepTab", tab }, name),
+      note: "The next memory you click opens in a tab of its own instead of replacing this one.",
+    });
+  }
+
   // **A tab wrapping up offers to stop** (ADR 0064): the chat was asked to write its record and
   // close. Cancelling ends nothing, so it is above the line, and first on the tab's menu.
   for (const tab of now.tabs.order) {
@@ -1278,6 +1317,21 @@ export function catalogue(now: Now): Offer[] {
       ),
     );
   }
+  // **Every open memory tab's own rows** (SI-9b): its heading's Edit and Delete are these, so
+  // they are about THAT memory whichever place is in front. A new memory's tab has nothing yet
+  // to edit or delete, and no rows.
+  const memories = new Set<string>();
+  for (const id of now.tabs.order) {
+    for (const { content } of contentsOf(now.tabs, id)) {
+      if (content.kind !== "view" || content.view.from !== null) continue;
+      if (content.view.view !== MEMORY_VIEW || memories.has(content.view.key)) continue;
+      const ref = memoryRefOf(content.view.key);
+      if (ref === undefined || ref.slug === DRAFT) continue;
+      memories.add(content.view.key);
+      offers.push(...memoryOffers(ref, now.tabs.byId[id]?.name ?? ref.slug));
+    }
+  }
+
   // **And every open record tab's own Resume, whichever place is in front** (SI-8e). A record's
   // tab draws this row as its heading's button, so it is about THAT record: a tab left open on
   // another place's record, or on one the place in front no longer lists, still resumes it.
@@ -1668,6 +1722,20 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
     case "openView":
       doing.openView(does.view, does.title);
       return DID;
+    case "openMemory":
+      doing.openMemory(does.ref, does.title, does.keep);
+      return DID;
+    case "editMemory":
+      doing.editMemory(does.ref, does.title);
+      return DID;
+    case "archiveMemory":
+      return doing.archiveMemory(does.ref, does.title);
+    case "newMemory":
+      doing.newMemory(does.scope);
+      return DID;
+    case "keepTab":
+      doing.keepTab(does.tab);
+      return DID;
     case "resumeSession":
       return doing.resumeSession(does.path);
     case "runAction":
@@ -1832,6 +1900,45 @@ export function dismissId(session: number): string {
 }
 
 /** The catalogue's id for a wrapping-up tab's Cancel smart close row (ADR 0064). */
+/**
+ * One memory's three rows (SI-9b, ADR 0065 Q12): Open, Edit and Delete, named for its store and
+ * slug (`memory.<verb>:<key>`). The catalogue carries them for every open memory tab; a list of
+ * memories adds them for its own rows, whose titles it has — a persona's tab, and SI-9c's
+ * workspace and shared lists.
+ */
+export function memoryOffers(ref: MemoryRef, title: string): Offer[] {
+  const key = memoryKey(ref);
+  return [
+    can(
+      `memory.open:${key}`,
+      `Open memory: ${title}`,
+      { verb: "openMemory", ref, title, keep: false },
+      title,
+    ),
+    can(`memory.edit:${key}`, `Edit memory: ${title}`, { verb: "editMemory", ref, title }, title),
+    {
+      ...can(
+        `memory.delete:${key}`,
+        `Delete memory: ${title}`,
+        { verb: "archiveMemory", ref, title },
+        title,
+      ),
+      note: "Moves it to the store's archive. Undo puts it back.",
+    },
+  ];
+}
+
+/**
+ * What a double-click on a row runs: the row a single click runs, **kept** where it opens a
+ * preview (SI-9b, ADR 0065 Q1), and the same row otherwise — a row with no preview is its own
+ * double-click.
+ */
+export function toKeep(offer: Offer): Offer {
+  return offer.does.verb === "openMemory" && !offer.does.keep
+    ? { ...offer, does: { ...offer.does, keep: true } }
+    : offer;
+}
+
 export function smartCloseCancelId(tab: number): string {
   return `tab.smartclose.cancel:${tab}`;
 }
@@ -2033,6 +2140,8 @@ export type MenuOn =
   | { on: "todo"; slug: string }
   /** One session record, by its plane-relative path — the Sessions panel's rows (SI-8d). */
   | { on: "session"; path: string }
+  /** One memory, by its tab's key (`memories.memoryKey`) — a persona's memory rows (SI-9b). */
+  | { on: "memory"; key: string }
   /** One clone of the focused workspace, by name — the explorer's clone heading and the bottom
    *  bar's repo row. The path is the catalogue's, so the menu does not carry it. */
   | { on: "clone"; repo: string }
@@ -2135,6 +2244,13 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
       return { above: [`todo.done:${what.slug}`], below: [`todo.forget:${what.slug}`] };
     case "session":
       return { above: [`session.open:${what.path}`, `session.resume:${what.path}`], below: [] };
+    case "memory":
+      // Open and Edit, and under the line Delete (ADR 0065 Q12) — an archive with an Undo, but
+      // it takes the memory out of every list, so it is drawn as the row that loses something.
+      return {
+        above: [`memory.open:${what.key}`, `memory.edit:${what.key}`],
+        below: [`memory.delete:${what.key}`],
+      };
     case "clone":
       // Where a chat can start, and nothing else: a clone is the operator's own checkout, and
       // nothing in this window writes to one (charter-app#174).

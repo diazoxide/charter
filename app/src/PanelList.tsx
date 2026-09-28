@@ -120,8 +120,9 @@ export function PanelList({
   /** What goes in an open row's card. The default is the row's own `detail`; a panel whose
    *  rows open something richer — the persona card — supplies it. */
   detailOf?: (row: PanelRow) => ReactNode;
-  /** Run the catalogue row this row names, if the catalogue still offers it. */
-  onRun?: (id: string) => void;
+  /** Run the catalogue row this row names, if the catalogue still offers it. `kept` is a
+   *  double-click: what a single click previews, kept (SI-9b, `actions.toKeep`). */
+  onRun?: (id: string, kept?: boolean) => void;
   /** Run one of the extension's own actions this row offers (charter-app#341). A list with no
    *  handler draws no action buttons: a button that does nothing is not drawn. */
   onAct?: (row: PanelRow, action: RowAction) => void;
@@ -134,16 +135,18 @@ export function PanelList({
   const [limit, setLimit] = useState(page);
 
   /**
-   * **The search is over what the row SAYS**, its words and its note, and not over the whole of
-   * its card. A reader typing into a box beside a list is looking for a row they can see; a
-   * match that lands on a row whose visible text does not hold the word reads as a bug, and
-   * there is nowhere on the row to show them why it matched.
+   * **The search is over what the row says and what its body says** (ADR 0065 Q11): a memory
+   * is found by the fact it holds, not only by the sentence it is filed under. A match the row
+   * cannot show would read as a bug, so while a search is typed a row that matched in its body
+   * shows the part that matched under it ({@link snippetOf}).
    */
+  const wanted = query.trim().toLowerCase();
   const matching = useMemo(() => {
-    const wanted = query.trim().toLowerCase();
     if (wanted === "") return rows;
-    return rows.filter((row) => `${row.text} ${row.note ?? ""}`.toLowerCase().includes(wanted));
-  }, [query, rows]);
+    return rows.filter((row) =>
+      `${row.text} ${row.note ?? ""} ${row.detail?.text ?? ""}`.toLowerCase().includes(wanted),
+    );
+  }, [wanted, rows]);
 
   const drawn = matching.slice(0, limit);
   const more = matching.length - drawn.length;
@@ -208,6 +211,7 @@ export function PanelList({
                 open={open === row.key}
                 onOpen={(opening) => onOpen(opening ? row.key : undefined)}
                 detail={detailOf?.(row) ?? defaultDetail(row)}
+                snippet={snippetOf(row, wanted)}
                 onRun={onRun}
                 onAct={onAct}
                 wrap={wrap}
@@ -257,6 +261,7 @@ function Row({
   open,
   onOpen,
   detail,
+  snippet,
   onRun,
   onAct,
   wrap,
@@ -265,16 +270,23 @@ function Row({
   open: boolean;
   onOpen: (opening: boolean) => void;
   detail: ReactNode;
-  onRun?: (id: string) => void;
+  /** The part of its body a search matched, while one is typed and the row's words do not
+   *  show the match themselves. */
+  snippet?: Snippet;
+  onRun?: (id: string, kept?: boolean) => void;
   onAct?: (row: PanelRow, action: RowAction) => void;
   wrap?: RowMenu;
 }) {
   const Mark = MARKS[row.mark] ?? Circle;
   const shortened = shorten(row.text);
+  // **A row that runs opens something that holds the whole of it** — a persona's tab, a
+  // memory's (SI-9b, ADR 0065 Q4) — so it carries no native tooltip repeating its words over
+  // the row below. A row whose card is a popover keeps one, for the reader who does not click.
+  const tooltip = row.runs === null && row.text !== shortened ? row.text : undefined;
   const body = (
     <>
       <Mark className="node-icon" />
-      <span className="row-text" title={row.text === shortened ? undefined : row.text}>
+      <span className="row-text" title={tooltip}>
         {shortened}
       </span>
       {row.note !== null && <span className="row-note">{` · ${row.note}`}</span>}
@@ -294,16 +306,21 @@ function Row({
   const inner =
     detail === null && row.runs === null ? (
       <span className="row">{body}</span>
-    ) : detail === null && row.runs !== null ? (
-      /* **A row that does something and opens nothing is a plain button that does it.** A
+    ) : row.runs !== null ? (
+      /* **A row that does something is a plain button that does it, and opens no card.** A
          persona's row opens that persona's tab (`persona.show:<name>`, the operator's ruling of
-         2026-09-23): a card beside the row as well would be two surfaces for one persona. */
+         2026-09-23), and a memory's opens the memory's (SI-9b, ADR 0065 Q4): a card beside the
+         row as well would be two surfaces for one thing. Its detail, where it has one, is what
+         the search reads. A double-click keeps what the first click previewed. */
       <RovingFocusGroup.Item asChild tabStopId={row.key}>
         <button
           type="button"
           className="row"
           onClick={() => {
             if (row.runs !== null) onRun?.(row.runs);
+          }}
+          onDoubleClick={() => {
+            if (row.runs !== null) onRun?.(row.runs, true);
           }}
         >
           {body}
@@ -359,9 +376,46 @@ function Row({
     <li className={clsx("panel-row", row.tone !== "plain" && `is-${row.tone}`)}>
       {inner}
       {acts}
+      {snippet !== undefined && (
+        <p className="row-snippet" data-testid={`row-snippet-${row.key}`}>
+          {snippet.before}
+          <mark>{snippet.match}</mark>
+          {snippet.after}
+        </p>
+      )}
     </li>
   );
   return <>{wrap ? wrap(row, item) : item}</>;
+}
+
+/** The part of a row's body a search matched: the match, and a little either side of it. */
+export type Snippet = { before: string; match: string; after: string };
+
+/** How many characters of body a snippet shows either side of the match. */
+export const SNIPPET_AROUND = 40;
+
+/**
+ * The part of `row`'s body that `wanted` (lower-cased) matched, for the line under the row —
+ * or nothing, when there is no search, when the body does not hold it, or when the row's own
+ * words already show it (a snippet then says what is already on screen).
+ *
+ * Cut to {@link SNIPPET_AROUND} characters either side, on one line, with an ellipsis where
+ * the body goes on: a list is still a list while it is searched.
+ */
+export function snippetOf(row: PanelRow, wanted: string): Snippet | undefined {
+  const body = row.detail?.text;
+  if (wanted === "" || body === undefined || body === row.text) return undefined;
+  if (`${row.text} ${row.note ?? ""}`.toLowerCase().includes(wanted)) return undefined;
+  const flat = body.replace(/\s+/g, " ");
+  const at = flat.toLowerCase().indexOf(wanted);
+  if (at < 0) return undefined;
+  const from = Math.max(0, at - SNIPPET_AROUND);
+  const to = Math.min(flat.length, at + wanted.length + SNIPPET_AROUND);
+  return {
+    before: `${from > 0 ? "…" : ""}${flat.slice(from, at)}`,
+    match: flat.slice(at, at + wanted.length),
+    after: `${flat.slice(at + wanted.length, to)}${to < flat.length ? "…" : ""}`,
+  };
 }
 
 /**

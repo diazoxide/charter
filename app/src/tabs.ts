@@ -142,6 +142,13 @@ export type Content =
        * program and ignore it.
        */
       waits?: boolean;
+      /**
+       * **The strip's preview tab** (SI-9b, ADR 0065 Q1), VS Code's model: what a single click
+       * on a memory row shows, replaced in place by the next single click. A double-click or
+       * starting an edit keeps it ({@link keepView}), and a kept tab is an ordinary tab. Drawn
+       * in italics on the strip, so the operator can tell which tab the next click reuses.
+       */
+      preview?: boolean;
     };
 
 export type Layout =
@@ -321,6 +328,87 @@ export function openView(tabs: Tabs, view: ViewRef, name: string, workspace: str
     };
   }
   return withTab(tabs, name, { kind: "view", view, workspace }, tabs.order.length);
+}
+
+/**
+ * Shows `view` in the strip's preview tab (SI-9b, ADR 0065 Q1) — **replacing what that tab
+ * previewed**, in its place on the strip — or opens a preview tab when the strip has none. A
+ * view already open anywhere is brought forward instead, as {@link openView} does, and a kept
+ * tab is never replaced: previewing is what a single click does, and it must not take away a
+ * tab the operator chose to keep.
+ *
+ * One per strip: `workspace` is the strip in front, and a preview on another strip is that
+ * strip's.
+ */
+export function openPreview(tabs: Tabs, view: ViewRef, name: string, workspace: string): Tabs {
+  if (findView(tabs, view)) return openView(tabs, view, name, workspace);
+  const reused = previewOf(tabs, workspace);
+  if (reused === undefined) {
+    return withTab(tabs, name, { kind: "view", view, workspace, preview: true }, tabs.order.length);
+  }
+  const tab = tabs.byId[reused];
+  const layout = replace(tab.layout, tab.focused, (found) => ({
+    ...found,
+    content: { kind: "view", view, workspace, preview: true },
+  }));
+  return {
+    ...tabs,
+    byId: { ...tabs.byId, [reused]: { ...tab, layout, name, defaultName: name } },
+    inFront: reused,
+  };
+}
+
+/**
+ * The strip's preview tab, where it has one: a tab showing one view and nothing else, marked
+ * as a preview. A tab split beside a chat is not one, because replacing it would replace the
+ * chat's tab.
+ */
+export function previewOf(tabs: Tabs, workspace: string): number | undefined {
+  return tabs.order.find((id) => {
+    const layout = tabs.byId[id].layout;
+    return (
+      layout.kind === "pane" &&
+      layout.content.kind === "view" &&
+      layout.content.preview === true &&
+      layout.content.workspace === workspace
+    );
+  });
+}
+
+/**
+ * Keeps the tab showing `view` (SI-9b): it stops being the preview, so the next single click
+ * previews in a tab of its own. A double-click on the row or the tab, and starting an edit,
+ * keep it. Answers `tabs` itself when nothing changed.
+ */
+export function keepView(tabs: Tabs, view: ViewRef): Tabs {
+  const open = findView(tabs, view);
+  if (!open) return tabs;
+  const tab = tabs.byId[open.tab];
+  let changed = false;
+  const layout = replace(tab.layout, open.pane, (found) => {
+    if (found.content.kind !== "view" || !found.content.preview) return found;
+    changed = true;
+    return { ...found, content: { ...found.content, preview: false } };
+  });
+  return changed ? { ...tabs, byId: { ...tabs.byId, [tab.id]: { ...tab, layout } } } : tabs;
+}
+
+/**
+ * The pane showing `from` shows `to` instead, and its tab is called `name` — a new memory's tab
+ * once it is saved (it shows the memory it made), and a memory's tab once it is retitled. The
+ * tab keeps its place and whether it is kept. Answers `tabs` itself when `from` is not shown.
+ */
+export function showInstead(tabs: Tabs, from: ViewRef, to: ViewRef, name: string): Tabs {
+  const open = findView(tabs, from);
+  if (!open) return tabs;
+  const tab = tabs.byId[open.tab];
+  const layout = replace(tab.layout, open.pane, (found) =>
+    found.content.kind === "view" ? { ...found, content: { ...found.content, view: to } } : found,
+  );
+  // The tab's name is its lead view's: a view on the far side of a split names nothing.
+  const leads = contents(tab.layout)[0]?.pane === open.pane;
+  const renamed = leads ? { name, defaultName: name } : {};
+  return { ...tabs, byId: { ...tabs.byId, [tab.id]: { ...tab, layout, ...renamed } } };
 }
 
 /**

@@ -4773,3 +4773,67 @@ h2.sidebar-title .node-icon {
   width: 0.9em;
   height: 0.9em;
 }
+
+/* **The strip's preview tab** (SI-9b, ADR 0065 Q1): in italics, as VS Code draws its own — the
+   tab the next single click on a memory replaces. A double-click keeps it, and it is upright. */
+.tab-name.is-preview {
+  font-style: italic;
+}
+
+/* The part of a row's body a search matched (ADR 0065 Q11), under the row while one is typed:
+   one quiet line, the match in the row's own weight. */
+.panel-row .row-snippet {
+  margin: 0 0 0.15rem 1.35rem;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.panel-row .row-snippet mark {
+  color: var(--text-primary);
+  background: none;
+  font-weight: 600;
+}
+
+/* **A memory's tab** (SI-9b, ADR 0065 Q2): where it is — its store as a badge, its stamp, its
+   file — under the heading that is its title, then its body as Markdown, or its editor. */
+.memory-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0 0 0.75rem;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.memory-meta code {
+  overflow-wrap: anywhere;
+}
+
+.memory-scope {
+  padding: 0 0.45rem;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+}
+
+.memory-body {
+  max-width: 60rem;
+}
+
+.memory-editor {
+  max-width: 60rem;
+}
+
+.memory-editor .settings-field input,
+.memory-editor .settings-field textarea {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.memory-stale {
+  margin: 0.5rem 0;
+}

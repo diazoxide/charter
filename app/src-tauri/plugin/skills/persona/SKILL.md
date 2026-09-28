@@ -92,9 +92,17 @@ Memory is kept up the same way a workspace's is:
 
 ```bash
 charter persona dedupe <name>                  # near-duplicate pairs, to forget one of
+charter persona edit-memory <name> <slug> [--title "<title>"] ["<body>" | -]   # rewrite in place
+charter persona archive-memory <name> <slug>   # out of every list, into memory/archive/
+charter persona unarchive-memory <name> <slug> [--as <slug>]   # back from the archive
 charter persona forget <name> <slug>           # delete one memory
 charter persona optimize                       # read-only curation report; --apply the safe ops
 ```
+
+Each of `edit-memory`, `archive-memory` and `unarchive-memory` takes `--shared` for the
+`_shared` store. An edit keeps the memory's slug and its date, so anything that names it still
+does; prefer it to forgetting a memory and writing it again. Archive is what the window's Delete
+does, and it can be undone; `forget` cannot.
 
 ## Creating one
 

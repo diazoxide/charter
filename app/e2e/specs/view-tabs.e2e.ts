@@ -209,6 +209,77 @@ describe("view tabs", function () {
     });
   });
 
+  describe("a memory's own tab (SI-9b, ADR 0065)", () => {
+    const MEMORY = "Cluster prod-1 lives in eu-west-1";
+    const FILE = join("personas", "devops", "memory", "cluster-prod-1-lives-in-eu-west-1.md");
+
+    after(async () => {
+      for (const name of [MEMORY, "devops"])
+        if ((await tabNames()).includes(name)) await closeTheTab(name);
+    });
+
+    it("opens from a persona's memory row as a preview, read off the plane", async () => {
+      await untilThePersonasAreListed();
+      await (await personaRow("devops")).click();
+      const persona = await theView("devops", MEMORY);
+
+      await (await persona.$(`button*=${MEMORY}`)).click();
+
+      const body = await $('[data-testid="memory-body"]');
+      await body.waitForExist({ timeout: 20_000 });
+      expect(await body.getText()).toContain(MEMORY);
+      expect(await $('[data-testid="memory-meta"]').getText()).toContain(
+        "personas/devops/memory/cluster-prod-1-lives-in-eu-west-1.md",
+      );
+      expect(await inFront()).toBe(MEMORY);
+      // The strip's preview tab: italic until it is kept.
+      expect(
+        await browser.execute(
+          () =>
+            document.querySelector(
+              '[role="tablist"][aria-label="Tabs"] [role="tab"][aria-selected="true"] .is-preview',
+            ) !== null,
+        ),
+      ).toBe(true);
+    });
+
+    it("archives it on Delete, closes its tab, and Undo puts the file back", async () => {
+      const plane = (await ask<string[]>("open_planes"))[0];
+      const file = join(plane, FILE);
+      const archived = join(plane, "personas", "devops", "memory", "archive");
+      expect(readFileSync(file, "utf8")).toContain(MEMORY);
+
+      await $(`button*=Delete memory`).click();
+
+      const undo = await $('[data-testid="memory-undo"]');
+      await undo.waitForExist({ timeout: 20_000 });
+      await browser.waitUntil(async () => !(await tabNames()).includes(MEMORY), {
+        timeout: 20_000,
+        timeoutMsg: "the memory's tab did not close on Delete",
+      });
+      expect(() => readFileSync(file, "utf8")).toThrow();
+      expect(
+        readFileSync(join(archived, "cluster-prod-1-lives-in-eu-west-1.md"), "utf8"),
+      ).toContain(MEMORY);
+
+      await (await undo.$("button=Undo")).click();
+
+      await browser.waitUntil(
+        async () => {
+          try {
+            return readFileSync(file, "utf8").includes(MEMORY);
+          } catch {
+            return false;
+          }
+        },
+        { timeout: 20_000, timeoutMsg: "Undo did not put the memory back under its own slug" },
+      );
+      expect(
+        readFileSync(join(plane, "personas", "devops", "memory", "MEMORY.md"), "utf8"),
+      ).toContain("(cluster-prod-1-lives-in-eu-west-1.md)");
+    });
+  });
+
   describe("view tabs a record names", () => {
     /** A project of this spec's own, whose record names one view tab and no chat. */
     const other = (() => {

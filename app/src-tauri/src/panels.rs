@@ -792,13 +792,25 @@ fn memory_rows(root: &Path, persona: &str) -> Result<Vec<panel::Row>, String> {
             tone: panel::Tone::Plain,
             // The whole of it, which is what the operator asked for: *"user will be able to
             // read all memories from ui"*. A memory's body is the durable fact; the title
-            // is the sentence it is filed under.
+            // is the sentence it is filed under. **A row that runs opens no card** (SI-9b):
+            // the body is here for the list's search and its snippet, and the memory's tab is
+            // where it is read.
             detail: Some(panel::Detail::Text(if memory.body.trim().is_empty() {
                 memory.title.clone()
             } else {
                 memory.body.clone()
             })),
-            runs: None,
+            // **Its own tab** (SI-9b, ADR 0065): the catalogue row named for the store and the
+            // slug, the name `memories::view_key` gives every memory's tab.
+            runs: Some(format!(
+                "memory.open:{}",
+                crate::memories::view_key(
+                    &crate::memories::MemoryScope::Persona {
+                        name: persona.to_owned()
+                    },
+                    &memory.slug
+                )
+            )),
             actions: Vec::new(),
         })
         .collect())
@@ -816,8 +828,8 @@ fn memory_rows(root: &Path, persona: &str) -> Result<Vec<panel::Row>, String> {
 ///
 /// What it holds, in order: the role, what the definition says (a facts block — label and
 /// value, the two columns the card used to draw), how many memories there are, and the
-/// memories themselves as a list — searched and paged by the list primitive, each row's card the
-/// whole memory.
+/// memories themselves as a list — searched and paged by the list primitive, each row opening
+/// the memory's own tab (SI-9b, ADR 0065).
 ///
 /// `None` is a persona the plane does not have (any more): the window draws that as a view
 /// whose source has gone, not as a failure. A definition charter will not read is a trouble
@@ -1247,7 +1259,12 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].text, "Charter defects go upstream");
         assert_eq!(rows[0].mark, "note");
-        assert_eq!(rows[0].runs, None);
+        // **It opens the memory's own tab** (SI-9b, ADR 0065), by the catalogue row named for
+        // the memory's store and slug — and the body still travels, for the list's search.
+        assert_eq!(
+            rows[0].runs.as_deref(),
+            Some("memory.open:persona/steward/charter-defects-go-upstream")
+        );
         assert_eq!(
             rows[0].detail,
             Some(PanelDetail::Text {

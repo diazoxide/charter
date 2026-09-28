@@ -1,4 +1,5 @@
-import type { RowAction } from "./bindings";
+import type { MemoryScope, RowAction } from "./bindings";
+import { memoryKey, memoryView, type MemoryRef } from "./memories";
 import { describe, expect, it, vi } from "vitest";
 import {
   aim,
@@ -10,8 +11,10 @@ import {
   KEEPS_THE_BRANCH,
   matches,
   menuOn,
+  memoryOffers,
   menuRows,
   narrow,
+  toKeep,
   OUTSIDE,
   perform,
   SHELL_KEY_SAID,
@@ -23,6 +26,7 @@ import {
 import {
   noTabs,
   openTab,
+  openPreview,
   openView,
   selectTab,
   splitFocusedPane,
@@ -151,6 +155,20 @@ function doing(): Doing & { calls: string[] } {
     switchLive: note("switchLive"),
     renameWorkspace: note("renameWorkspace"),
     openPreferences: note("openPreferences"),
+    openMemory: vi.fn((ref: MemoryRef, title: string, keep: boolean) => {
+      calls.push(`openMemory:${memoryKey(ref)},${title},${keep}`);
+    }),
+    editMemory: vi.fn((ref: MemoryRef, title: string) => {
+      calls.push(`editMemory:${memoryKey(ref)},${title}`);
+    }),
+    archiveMemory: vi.fn(async (ref: MemoryRef, title: string) => {
+      calls.push(`archiveMemory:${memoryKey(ref)},${title}`);
+      return { ok: true as const };
+    }),
+    newMemory: vi.fn((scope: MemoryScope) => {
+      calls.push(`newMemory:${JSON.stringify(scope)}`);
+    }),
+    keepTab: note("keepTab"),
     quit: note("quit"),
   };
 }
@@ -1765,5 +1783,90 @@ describe("curation actions (ADR 0061)", () => {
     expect(curateSubjectOf({ on: "root" })).toBe("plane");
     expect(curateSubjectOf({ on: "workspace", workspace: OUTSIDE })).toBeUndefined();
     expect(curateSubjectOf({ on: "chat", tab: 1 })).toBeUndefined();
+  });
+});
+
+describe("a memory's rows (SI-9b, ADR 0065)", () => {
+  const ref: MemoryRef = {
+    scope: { kind: "persona", name: "steward" },
+    slug: "defects-go-upstream",
+  };
+  const key = "persona/steward/defects-go-upstream";
+
+  it("are Open and Edit above the line and Delete below it, as the row's menu lists them", () => {
+    expect(menuOn({ on: "memory", key })).toEqual({
+      above: [`memory.open:${key}`, `memory.edit:${key}`],
+      below: [`memory.delete:${key}`],
+    });
+  });
+
+  it("open, edit and archive that memory, by its store and slug", async () => {
+    const hands = doing();
+    const offers = memoryOffers(ref, "Defects go upstream");
+
+    await run(offers, `memory.open:${key}`, hands);
+    await run(offers, `memory.edit:${key}`, hands);
+    await run(offers, `memory.delete:${key}`, hands);
+
+    expect(hands.calls).toEqual([
+      `openMemory:${key},Defects go upstream,false`,
+      `editMemory:${key},Defects go upstream`,
+      `archiveMemory:${key},Defects go upstream`,
+    ]);
+  });
+
+  it("open as a preview on a single click, and kept on a double-click", async () => {
+    const hands = doing();
+    const [open, edit] = memoryOffers(ref, "Defects go upstream");
+
+    await perform(toKeep(open), hands);
+
+    expect(hands.calls).toEqual([`openMemory:${key},Defects go upstream,true`]);
+    // Every other row is its own double-click.
+    expect(toKeep(edit)).toBe(edit);
+  });
+
+  it("say Delete archives it, and that Undo brings it back", () => {
+    const del = memoryOffers(ref, "Defects go upstream")[2];
+    expect(del.id).toBe(`memory.delete:${key}`);
+    expect(del.title).toBe("Delete memory: Defects go upstream");
+    expect(del.note).toMatch(/archive/i);
+    expect(del.note).toMatch(/undo/i);
+  });
+
+  it("are in the catalogue for every open memory tab, so its heading's Edit and Delete run", () => {
+    const tabs = openView(noTabs(), memoryView(ref), "Defects go upstream", "alpha");
+
+    const offers = catalogue(now({ tabs }));
+
+    expect(ids(offers)).toEqual(
+      expect.arrayContaining([`memory.open:${key}`, `memory.edit:${key}`, `memory.delete:${key}`]),
+    );
+    expect(by(offers, `memory.edit:${key}`)?.title).toBe("Edit memory: Defects go upstream");
+  });
+
+  it("are not offered for a new memory's tab, which has nothing yet to edit or delete", () => {
+    const tabs = openView(
+      noTabs(),
+      memoryView({ scope: { kind: "shared" }, slug: "+" }),
+      "New memory",
+      "alpha",
+    );
+
+    expect(ids(catalogue(now({ tabs }))).filter((id) => id.startsWith("memory."))).toEqual([]);
+  });
+
+  it("offer to keep a preview tab, and only a preview tab", async () => {
+    // In the palette and on a double-click of the tab, and not on the tab's menu: that menu is
+    // five rows a tab at fifty tabs (charter-app#174), and a keep is not worth a sixth.
+    const previewing = openPreview(noTabs(), memoryView(ref), "Defects go upstream", "alpha");
+    const kept = openView(noTabs(), memoryView(ref), "Defects go upstream", "alpha");
+    const hands = doing();
+
+    const offers = catalogue(now({ tabs: previewing }));
+    await run(offers, `tab.keep:${previewing.order[0]}`, hands);
+
+    expect(hands.calls).toEqual([`keepTab:${previewing.order[0]}`]);
+    expect(ids(catalogue(now({ tabs: kept })))).not.toContain(`tab.keep:${kept.order[0]}`);
   });
 });

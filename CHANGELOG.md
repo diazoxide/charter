@@ -13,6 +13,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A memory opens in a tab of its own, and can be edited and deleted from the window.** A
+  memory row on a persona's tab opens the memory as a preview tab — in italics, and replaced by
+  the next memory you click, as VS Code's preview is; a double-click on the tab, or starting an
+  edit, keeps it. The tab says which store the memory is in, when it was written and which file
+  it is, and renders its body as Markdown. **Edit** turns the same tab into a title field and
+  the raw body; a save over a change made on disk since you opened it is refused, with
+  **Reload** and **Overwrite**. **Delete** moves the memory to its store's archive and closes
+  its tab, with an **Undo** for a few seconds. A row's menu offers Open, Edit and Delete, and a
+  list's search now matches a memory's body too, with the matching words shown under the row.
+  On the command line, `charter workspace edit|archive|unarchive` and `charter persona
+  edit-memory|archive-memory|unarchive-memory [--shared]` do the same (ADR 0065).
 - **Session records, the core of Smart close.** `charter session record --title "…"`, with the
   record on standard input, files a summary of a chat's session — Goal, Done, Decisions, Open,
   How to resume — in its workspace's `sessions/` (the plane's own `sessions/` at the plane
