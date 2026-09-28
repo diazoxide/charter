@@ -11,22 +11,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Fixed
-
-- **A memory another memory's title mentions comes back to the index when it is unarchived.** A
-  title holding `(b.md)` counted as listing `b.md`, so unarchiving `b` added no index line for
-  it. The index now lists only the file each line links, as editing and deleting read it. And
-  `optimize --apply`'s index repair can no longer lose a line to an edit saved at the same
-  moment (ADR 0065).
-- **An older workspace's `notes.md` is indexed even when a memory's title mentions it.** A
-  title holding `(notes.md)` stood in for the memo's own index line, so the memo stayed
-  unindexed; and that line is now added under the same lock as every other, so an edit saved
-  at the same moment cannot drop it.
-- **The title bar's look at a plane no longer rewrites git's index.** Asking which files are
-  unmerged ran `git diff`, which refreshes `.git/index` under `index.lock` whenever a tracked
-  file has been touched without changing — so a save starting at that moment could fail on the
-  lock. It now asks `git diff-files`, which only reads.
-
 ## [0.4.1] - 2026-09-28
 
 0.4.1 is a chat that ends well and a memory you can look after from the window. Closing a chat
@@ -123,6 +107,19 @@ their own conversation at a relaunch.
 
 ### Fixed
 
+- **A memory another memory's title mentions comes back to the index when it is unarchived.** A
+  title holding `(b.md)` counted as listing `b.md`, so unarchiving `b` added no index line for
+  it. The index now lists only the file each line links, as editing and deleting read it. And
+  `optimize --apply`'s index repair can no longer lose a line to an edit saved at the same
+  moment (ADR 0065).
+- **An older workspace's `notes.md` is indexed even when a memory's title mentions it.** A
+  title holding `(notes.md)` stood in for the memo's own index line, so the memo stayed
+  unindexed; and that line is now added under the same lock as every other, so an edit saved
+  at the same moment cannot drop it.
+- **The title bar's look at a plane no longer rewrites git's index.** Asking which files are
+  unmerged ran `git diff`, which refreshes `.git/index` under `index.lock` whenever a tracked
+  file has been touched without changing — so a save starting at that moment could fail on the
+  lock. It now asks `git diff-files`, which only reads.
 - **Codex and opencode chats come back to their conversation at a relaunch, and a Claude Code
   chat comes back to the one it was in after `/clear`.** A chat's conversation was recorded
   only when it started, which only Claude Code has, so every Codex and opencode chat came back
