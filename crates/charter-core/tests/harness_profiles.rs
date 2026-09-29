@@ -264,8 +264,8 @@ fn a_section_other_than_harness_in_the_local_file_is_refused_by_name() {
     assert_eq!(
         why(&set, "frame"),
         "[frame] in charter.local.toml is not read — that file carries [harness], \
-         [extensions], [theme], [harness_plugins], [plane] and [repos] and nothing else, \
-         because an ignored file must not change plane policy with no trace in git. \
+         [extensions], [theme], [harness_plugins], [plane], [repos] and [chat_env] and \
+         nothing else, because an ignored file must not change plane policy with no trace in git. \
          Put [frame] in charter.toml."
     );
 }
@@ -280,6 +280,33 @@ fn extensions_in_the_local_file_is_not_refused_by_the_profiles_loader() {
     let set = profiles::derive(dir.path());
 
     assert!(set.refused.is_empty(), "{:?}", set.refused);
+}
+
+#[test]
+fn chat_env_in_the_local_file_is_not_refused_by_the_profiles_loader() {
+    charter_core::unsteered!();
+    // `[chat_env]` is which more of this machine's environment a chat is started with, read by
+    // `chatenv`, and not the loader's to refuse.
+    let dir = plane("", "[chat_env]\npass = [\"JAVA_HOME\", \"GO*\"]\n");
+
+    let set = profiles::derive(dir.path());
+
+    assert!(set.refused.is_empty(), "{:?}", set.refused);
+}
+
+#[test]
+fn a_chat_env_entry_that_is_not_a_name_is_refused_with_a_sentence() {
+    charter_core::unsteered!();
+    let dir = plane("", "[chat_env]\npass = [\"*\"]\n");
+
+    let set = profiles::derive(dir.path());
+
+    assert_eq!(set.refused.len(), 1, "{:?}", set.refused);
+    assert!(
+        why(&set, "chat_env").contains("not a variable's name"),
+        "{:?}",
+        set.refused
+    );
 }
 
 #[test]

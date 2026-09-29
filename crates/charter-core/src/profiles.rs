@@ -47,6 +47,13 @@ pub const COMMITTED_FILE: &str = "charter.toml";
 /// still export whatever it likes.
 const SECRET_WORDS: [&str; 4] = ["KEY", "TOKEN", "SECRET", "PASSWORD"];
 
+/// Whether an env `name` holds one of [`SECRET_WORDS`], case-insensitively: what a profile may
+/// not set, and what no built-in entry passes into a chat ([`crate::chatenv`]).
+pub fn named_like_a_credential(name: &str) -> bool {
+    let upper = name.to_uppercase();
+    SECRET_WORDS.iter().any(|word| upper.contains(word))
+}
+
 /// The prefix of charter's own variables, which charter sets itself (ruling 14).
 const CHARTER_PREFIX: &str = "CHARTER_";
 
@@ -343,7 +350,7 @@ pub fn derive_from(committed: Option<&str>, local: std::io::Result<Option<String
     }
 
     // 2. The local file: only `[harness]` is read here (`[extensions]`, `[theme]`,
-    //    `[harness_plugins]`, `[plane]` and `[repos]` are let through).
+    //    `[harness_plugins]`, `[plane]`, `[repos]` and `[chat_env]` are let through).
     let local = match local {
         Ok(Some(text)) => match text.parse::<toml::Table>() {
             Ok(table) => Some(table),
@@ -397,6 +404,22 @@ pub fn derive_from(committed: Option<&str>, local: std::io::Result<Option<String
         //
         // `[plane]` and `[repos]` are how far this machine's saves go (charter-app#292, ADR
         // 0051), read by `planesave`; every surface that shows one names this file.
+        //
+        // `[chat_env]` is which more of this machine's own environment a chat is started with
+        // (`chatenv`). It can only be this machine's: a committed list would let a teammate's
+        // push decide which of this machine's variables every chat is handed.
+        if key == crate::chatenv::TABLE {
+            if let Some(value) = top.get(key) {
+                for reason in crate::chatenv::refusals(value) {
+                    set.refused.push(Refused {
+                        name: crate::chatenv::TABLE.to_owned(),
+                        source: LOCAL_FILE.to_owned(),
+                        reason,
+                    });
+                }
+            }
+            continue;
+        }
         if key != "harness"
             && key != crate::extension::project::TABLE
             && key != crate::extension::project::theme::TABLE
@@ -408,8 +431,8 @@ pub fn derive_from(committed: Option<&str>, local: std::io::Result<Option<String
             set.refused.push(Refused {
                 reason: format!(
                     "[{name}] in charter.local.toml is not read — that file carries \
-                     [harness], [extensions], [theme], [harness_plugins], [plane] and [repos] \
-                     and nothing else, because an ignored file must not change plane policy \
+                     [harness], [extensions], [theme], [harness_plugins], [plane], [repos] and \
+                     [chat_env] and nothing else, because an ignored file must not change plane policy \
                      with no trace in git. Put [{name}] in charter.toml."
                 ),
                 name,
@@ -725,8 +748,7 @@ fn refusal(name: &str, table: &toml::Value) -> Option<String> {
         }
     }
     for var in &names {
-        let upper = var.to_uppercase();
-        if SECRET_WORDS.iter().any(|word| upper.contains(word)) {
+        if named_like_a_credential(var) {
             return Some(format!(
                 "profile '{shown_name}' sets {}, which is named like a credential — charter \
                  holds no credential in a profile, because anything set on the harness \

@@ -36,6 +36,12 @@ pub struct Opening {
     /// bound to a non-`OP_` variable (`--token-env PROD_1P_TOKEN`) leaks it to no chat either
     /// (#271 review, U6). Removed from both the set env and the inherited one.
     pub env_strip: Vec<String>,
+    /// The harness the chat runs, whose own declared variables it is also started with
+    /// ([`charter_core::harness::Harness::env_passed`]). None is a shell.
+    pub harness: Option<charter_core::harness::Harness>,
+    /// The operator's own additions to what a chat is started with, from the chat's plane
+    /// (`[chat_env] pass`, [`charter_core::chatenv::read`]).
+    pub env_pass: Vec<String>,
 }
 
 /// Told how each session ended, as it ends. An `Arc` so a session can hold it for as long as
@@ -59,26 +65,6 @@ pub struct Watching {
 #[derive(Debug, Clone)]
 pub struct Reporting {
     pub socket: PathBuf,
-}
-
-/// What a chat's program is started without, of the variables the app itself has (`inherited`).
-///
-/// - **A harness's identity**, whatever charter was launched from: only the harness this session
-///   starts may say which conversation and which process a hook belongs to.
-/// - **Every `OP_*` variable, and every identity variable a vault declares** (#237, and #271
-///   review U6). A 1Password service-account token in the app's environment would otherwise sit
-///   in every chat's shell, one `echo` from the model. A vault read through one reads it from the
-///   keyring once the vault's token has been put there. `strip` is the whole test — `OP_`
-///   case-insensitively, plus the plane's declared identity names.
-fn not_inherited(
-    inherited: impl Iterator<Item = std::ffi::OsString>,
-    strip: &impl Fn(&std::ffi::OsStr) -> bool,
-) -> Vec<std::ffi::OsString> {
-    charter_core::hookwire::NOT_INHERITED
-        .iter()
-        .map(Into::into)
-        .chain(inherited.filter(|name| strip(name)))
-        .collect()
 }
 
 /// Every session the app is running, by the id the UI calls it by.
@@ -170,13 +156,25 @@ impl Sessions {
                     .iter()
                     .any(|s| std::ffi::OsStr::new(s) == name)
         };
-        spec.env = opening
-            .env
-            .iter()
-            .filter(|(key, _)| !strip(std::ffi::OsStr::new(key)))
-            .map(|(key, value)| (key.into(), value.into()))
-            .collect();
-        spec.env_without = not_inherited(std::env::vars_os().map(|(name, _)| name), &strip);
+        // **A chat starts from an empty environment plus a keep-list**, not from the app's
+        // whole one minus what charter knows to remove: whatever the app inherited — from a
+        // terminal, `launchctl setenv`, a login item — is not the chat's unless
+        // `charter_core::chatenv` names it, the harness declares it, or the operator lists it
+        // for this plane. The chat's own come after, so a profile's value wins over the app's.
+        spec.env_clear = true;
+        spec.env = charter_core::chatenv::inherited(
+            std::env::vars_os(),
+            opening.harness,
+            &opening.env_pass,
+            &strip,
+        );
+        spec.env.extend(
+            opening
+                .env
+                .iter()
+                .filter(|(key, _)| !strip(std::ffi::OsStr::new(key)))
+                .map(|(key, value)| (key.into(), value.into())),
+        );
         // **The chat is what charter's per-session state is keyed on, and this is what says
         // so** — charter-app#63. Without it `active::session_id` falls to the harness's own
         // `$CLAUDE_CODE_SESSION_ID`, which names the CONVERSATION: `/clear` starts a new one
@@ -487,6 +485,8 @@ mod tests {
             size: SIZE,
             env: Vec::new(),
             env_strip: Vec::new(),
+            harness: None,
+            env_pass: Vec::new(),
         }
     }
 
@@ -890,6 +890,134 @@ mod tests {
         );
         assert!(out.status.success(), "{printed}");
         assert!(printed.contains("chat-env-checked"), "{printed}");
+    }
+
+    // --- a chat starts from a keep-list (charter_core::chatenv) ------------------------ //
+
+    /// Set in the child's environment only, so the parent knows it is the child.
+    const KEEP_LIST_CHILD: &str = "CHARTER_TEST_KEEP_LIST_CHILD";
+
+    /// The names in the environment of a chat opened as `opening`, as its own `env` lists them.
+    fn names_in_a_chat(sessions: &Sessions, mut opening: Opening) -> Vec<String> {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("names");
+        opening.args = vec![
+            "-c".to_owned(),
+            format!(
+                "env | cut -d= -f1 > '{0}.part' && mv '{0}.part' '{0}'; sleep 600",
+                out.display()
+            ),
+        ];
+        let _id = sessions
+            .open(None, &opening, &|_| {})
+            .expect("the session opens");
+        let deadline = Instant::now() + PATIENCE;
+        while !out.exists() {
+            assert!(Instant::now() < deadline, "the chat never wrote its names");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let mut names: Vec<String> = std::fs::read_to_string(&out)
+            .unwrap()
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// What `/bin/sh` sets for itself, whatever it was started with, and the session's `TERM`.
+    const THE_SHELLS_OWN: [&str; 5] = ["PWD", "OLDPWD", "SHLVL", "_", "TERM"];
+
+    /// The child half of the test below: an app process whose own environment carries
+    /// credentials and settings charter does not know, as one started from a terminal does.
+    #[test]
+    fn an_app_started_with_credentials_starts_chats_from_its_keep_list() {
+        if std::env::var_os(KEEP_LIST_CHILD).is_none() {
+            return;
+        }
+        let sessions = Sessions::new();
+        let credentials = ["GITHUB_TOKEN", "AWS_SECRET_ACCESS_KEY", "ANTHROPIC_API_KEY"];
+
+        // A shell chat: only what the keep-list names.
+        let names = names_in_a_chat(&sessions, opening(""));
+        let stray: Vec<&String> = names
+            .iter()
+            .filter(|name| {
+                !THE_SHELLS_OWN.contains(&name.as_str())
+                    && !charter_core::chatenv::PASSED.iter().any(|pattern| {
+                        match pattern.strip_suffix('*') {
+                            Some(prefix) => name.starts_with(prefix),
+                            None => *name == pattern,
+                        }
+                    })
+            })
+            .collect();
+        assert!(stray.is_empty(), "a chat inherited {stray:?}");
+        assert!(names.iter().any(|n| n == "HOME"), "{names:?}");
+        for name in credentials
+            .iter()
+            .chain(&["UNLISTED_SETTING", "CLAUDE_CONFIG_DIR"])
+        {
+            assert!(
+                !names.iter().any(|n| n == name),
+                "{name} reached a shell chat"
+            );
+        }
+
+        // A chat on a harness: its own declared names too, and still no credential.
+        let mut on_claude = opening("");
+        on_claude.harness = Some(charter_core::harness::Harness::ClaudeCode);
+        let names = names_in_a_chat(&sessions, on_claude);
+        assert!(names.iter().any(|n| n == "CLAUDE_CONFIG_DIR"), "{names:?}");
+        for name in credentials.iter().chain(&["CODEX_HOME"]) {
+            assert!(
+                !names.iter().any(|n| n == name),
+                "{name} reached a claude chat"
+            );
+        }
+
+        // The plane's own extension, which may name a credential by its exact name.
+        let mut extended = opening("");
+        extended.env_pass = vec!["UNLISTED_SETTING".into(), "GITHUB_TOKEN".into()];
+        let names = names_in_a_chat(&sessions, extended);
+        assert!(names.iter().any(|n| n == "UNLISTED_SETTING"), "{names:?}");
+        assert!(names.iter().any(|n| n == "GITHUB_TOKEN"), "{names:?}");
+        assert!(
+            !names.iter().any(|n| n == "AWS_SECRET_ACCESS_KEY"),
+            "{names:?}"
+        );
+        println!("keep-list-checked");
+    }
+
+    #[test]
+    fn a_chat_is_started_with_the_keep_list_and_not_the_apps_whole_environment() {
+        // Setting a variable in this process would need `unsafe`, so the app is this test
+        // binary run again with the variables in its environment.
+        let out = charter_core::forklock::output(
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "sessions::tests::an_app_started_with_credentials_starts_chats_from_its_keep_list",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(KEEP_LIST_CHILD, "1")
+                .env("GITHUB_TOKEN", "fixture-forge")
+                .env("AWS_SECRET_ACCESS_KEY", "fixture-cloud")
+                .env("ANTHROPIC_API_KEY", "fixture-model")
+                .env("UNLISTED_SETTING", "fixture-setting")
+                .env("CLAUDE_CONFIG_DIR", "/nowhere/claude")
+                .env("CODEX_HOME", "/nowhere/codex")
+                .stdin(std::process::Stdio::null()),
+        )
+        .unwrap();
+        let printed = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(out.status.success(), "{printed}");
+        assert!(printed.contains("keep-list-checked"), "{printed}");
     }
 
     // --- where the chat was started (SI-1) -------------------------------------------- //

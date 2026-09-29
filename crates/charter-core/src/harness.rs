@@ -131,6 +131,23 @@ impl Harness {
         }
     }
 
+    /// The variables of the app's own environment this harness reads for itself, passed to a
+    /// chat that runs it on top of [`crate::chatenv::PASSED`]. A trailing `*` is a prefix.
+    ///
+    /// Each harness's own configuration namespace, and nothing else: a name in it that reads
+    /// as a credential is still held back unless the operator lists it
+    /// ([`crate::chatenv::inherited`]), and a harness's identity is never passed at all.
+    pub fn env_passed(self) -> &'static [&'static str] {
+        match self {
+            // `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_*`.
+            Self::ClaudeCode => &["CLAUDE_*"],
+            // `CODEX_HOME`.
+            Self::Codex => &["CODEX_*"],
+            // `OPENCODE_CONFIG`, `OPENCODE_CONFIG_DIR`.
+            Self::Opencode => &["OPENCODE_*"],
+        }
+    }
+
     /// Whether charter chooses this harness's session id and hands it over at the start, so
     /// the link exists before the harness does.
     pub fn chooses_session_id(self) -> bool {
