@@ -1842,7 +1842,7 @@ is a string; "type" below is how charter interprets it.
 | `delegate-when` | prose (one line) | none; `lint` warns; `create` requires it unless `--extends` | Routing trigger; becomes the generated agent's description | stable | `charter/commands_persona.py:780`, `:806` |
 | `description` | string | absent | Agent description override (lower precedence than `agent-description`) | stable | `charter/commands_persona.py:869` |
 | `agent-description` | string | absent | Agent description override (wins) | stable | `charter/commands_persona.py:869` |
-| `tools` | CSV of program names | absent = none | Programs auto-approved by the PreToolUse gate while active; unioned along `extends` | stable | `charter/persona.py:1580`, `charter/toolgate.py:896` |
+| `tools` | CSV of program names | absent = none | Programs auto-approved by the PreToolUse gate while active; unioned along `extends`. **charter-app:** only as approved on this machine, since the grant is part of the plane-trust fingerprint (ADR 0035, *Grants*) with a digest of any `bin/` script a tool names; a grant that changed since prompts until the plane is approved again | stable | `charter/persona.py:1580`, `charter/toolgate.py:896` |
 | `agent-tools` | CSV of harness tool names | absent = sub-agent inherits every tool | Emitted as the agent's `tools:`; MCP grants appended | stable | `charter/commands_persona.py:879`-`:892` |
 | `disallowed-tools` | CSV | absent | Emitted as the agent's `disallowedTools:` (denylist) | stable | `charter/commands_persona.py:923` |
 | `skills` | CSV of `[plugin:]skill` | absent | Preloaded into the sub-agent; emitted as `skills:`; linted against installed skills | stable | `charter/persona.py:1957`, `charter/commands_persona.py:908` |
@@ -3347,6 +3347,12 @@ plane's `.gitignore` (`charter/commands.py:1096` in `_GITIGNORE_BASELINE`,
 - **Git:** gitignored
 - **Encoding:** `json.dumps(data, sort_keys=True)`, written with `replace_for` (atomic).
   Present-but-unparseable ⇒ **approve nothing** (`charter/toolgate.py:859`).
+- **Only narrows.** The gate grants what is in the live `tools:`, this ceiling **and** the
+  grant approved on this machine (ADR 0035, *Grants*), so a stale or stray ceiling cannot widen
+  anything.
+- **Collected (charter-app):** when the app opens a plane, a `<sid>.tools` and its `<sid>.gate`
+  last written more than 7 days earlier are removed, the ceiling first
+  (`personagate::sweep_ceilings`). A session that resumes takes a fresh one.
 
 ### `sessions/<sid>.gate` — "a ceiling was taken for this session"
 - **Format:** empty file; existence is the whole payload

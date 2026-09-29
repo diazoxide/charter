@@ -2233,6 +2233,12 @@ export type PlaneContribution = {
 	 *  operator's own profiles runs, and `profiletrust` gates what any of them runs.
 	 */
 	profiles: ([string, string])[],
+	/**
+	 *  One line per persona that grants tools: the persona, and its grant as the trust record
+	 *  keeps it — each tool it may run without a prompt, with the digest of the script it runs
+	 *  where the persona ships one. The persona tool gate smooths only what is approved here.
+	 */
+	grants: ([string, string])[],
 };
 
 /**

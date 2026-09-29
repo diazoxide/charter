@@ -75,6 +75,7 @@ type Opened = {
       env: [string, string][];
       starts: [string, string][];
       profiles: [string, string][];
+      grants: [string, string][];
     };
     changes: string[];
     first: boolean;

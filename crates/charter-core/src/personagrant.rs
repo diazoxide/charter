@@ -258,6 +258,83 @@ pub fn bin_scripts(root: &Path, name: &str) -> BTreeMap<String, PathBuf> {
     out
 }
 
+/// What `name` is granted, as the operator approves it: each tool it may run without a prompt,
+/// and which program that tool is.
+///
+/// A tool the persona ships no script for is the program of that name on `PATH`, and its value
+/// is empty. A tool its own `bin/` ships is that file, and its value is `sha256:` and the
+/// file's digest, so the approval is of those bytes and a changed script is a different grant.
+/// A script charter cannot read is left out: a program it cannot fingerprint is not one it can
+/// say was approved, so it is not granted.
+///
+/// **One answer, asked in two places**: the plane-trust fingerprint
+/// ([`crate::machine::Contribution`]) records it at approval, and the persona tool gate
+/// ([`crate::personagate::decide`]) compares the tool it is about to smooth against it.
+pub fn grant(root: &Path, name: &str) -> BTreeMap<String, String> {
+    let scripts = bin_scripts(root, name);
+    effective_tools(root, name)
+        .into_iter()
+        .filter_map(|tool| match scripts.get(&tool) {
+            None => Some((tool, String::new())),
+            Some(script) => digest_of(script).map(|digest| (tool, digest)),
+        })
+        .collect()
+}
+
+/// One tool of [`grant`], without reading the persona's other scripts: `None` when it is not
+/// granted at all.
+pub fn grant_of_tool(root: &Path, name: &str, tool: &str) -> Option<String> {
+    if !effective_tools(root, name).contains(tool) {
+        return None;
+    }
+    match bin_scripts(root, name).get(tool) {
+        None => Some(String::new()),
+        Some(script) => digest_of(script),
+    }
+}
+
+/// A grant as the one string the trust record keeps: compact JSON, keys sorted.
+pub fn grant_text(grant: &BTreeMap<String, String>) -> String {
+    serde_json::to_string(grant).unwrap_or_default()
+}
+
+/// [`grant_text`] read back. Anything that is not a map of strings grants nothing.
+pub fn grant_from_text(text: &str) -> BTreeMap<String, String> {
+    serde_json::from_str(text).unwrap_or_default()
+}
+
+/// `sha256:<hex>` of a file's bytes, or `None` when they cannot be read.
+///
+/// Opened without blocking and asked what it is through the descriptor, so a name swapped for
+/// a FIFO after [`bin_scripts`] listed it cannot hang the hook that asked.
+fn digest_of(path: &Path) -> Option<String> {
+    use sha2::Digest as _;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32);
+    }
+    let mut file = options.open(path).ok()?;
+    if !file.metadata().ok()?.is_file() {
+        return None;
+    }
+    let mut hasher = sha2::Sha256::new();
+    let mut chunk = [0u8; 64 * 1024];
+    loop {
+        let read = std::io::Read::read(&mut file, &mut chunk).ok()?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&chunk[..read]);
+    }
+    Some(format!(
+        "sha256:{}",
+        crate::extension::hex(&hasher.finalize())
+    ))
+}
+
 /// `f.is_file() and os.access(f, os.X_OK)`.
 pub fn is_executable_file(path: &Path) -> bool {
     let Ok(meta) = std::fs::metadata(path) else {

@@ -510,7 +510,7 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
                 path: "/home/dev/plane",
                 first: true,
                 changes: [],
-                contributes: { plugins: [], env: [], starts: [], profiles: [] },
+                contributes: { plugins: [], env: [], starts: [], profiles: [], grants: [] },
               }}
               onApprove={() => {}}
               onCancel={() => {}}

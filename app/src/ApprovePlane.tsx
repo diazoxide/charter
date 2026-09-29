@@ -12,10 +12,10 @@ import type { Ask } from "./bindings";
  * copied from the CLI's printed-command shape.
  *
  * What it shows is what charter can enumerate, and no more: the plugins the project's
- * committed settings enable, the environment they set, and the programs its reopen record
- * would start. It does not and cannot summarise the project's persona charters, its memory or
- * its todos, which are text a model will read and act on — charter has no model and makes no
- * judgements about the content of work. Said on screen, in the last line, rather than left for
+ * committed settings enable, the environment they set, the programs its reopen record would
+ * start, and the tools each persona may run without a prompt. It does not and cannot summarise
+ * the project's persona charters, its memory or its todos, which are text a model will read and
+ * act on — charter has no model and makes no judgements about the content of work. Said on screen, in the last line, rather than left for
  * whoever first assumes the dialog covered everything.
  *
  * A project that has changed what it contributes asks again, and the changes are charter's own
@@ -48,7 +48,8 @@ export function ApprovePlane({
     contributes.plugins.length === 0 &&
     contributes.env.length === 0 &&
     contributes.starts.length === 0 &&
-    contributes.profiles.length === 0;
+    contributes.profiles.length === 0 &&
+    contributes.grants.length === 0;
   // Cancel, focused by the dialog itself rather than by tab order: opening a project puts
   // what this lists in force, and it is never what a stray Return key finds.
   const cancel = useRef<HTMLButtonElement>(null);
@@ -97,8 +98,8 @@ export function ApprovePlane({
           <h3>{ask.first ? "What this project contributes" : "What it contributes now"}</h3>
           {nothing && (
             <p className="came-back">
-              Nothing charter can enumerate: it enables no plugins, sets no environment, and its
-              record names no chat to start.
+              Nothing charter can enumerate: it enables no plugins, sets no environment, grants no
+              persona a tool, and its record names no chat to start.
             </p>
           )}
           {contributes.plugins.length > 0 && (
@@ -125,6 +126,22 @@ export function ApprovePlane({
                     <code>
                       {name}={value}
                     </code>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+          {contributes.grants.length > 0 && (
+            <section>
+              {/* Each persona's grant as the trust record keeps it: the tools, and the digest
+                of any script of its own a tool runs. Only what is approved here runs without a
+                prompt, so a grant that changes later asks again. */}
+              <h4>Tools its personas may run without a prompt</h4>
+              <ul className="contributes">
+                {contributes.grants.map(([persona, grant]) => (
+                  <li key={persona}>
+                    <code>{persona}</code>
+                    <span className="value"> {grant}</span>
                   </li>
                 ))}
               </ul>

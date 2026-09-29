@@ -25,6 +25,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   secrets, not only memory and refs, and also catches a bare token by its forge's prefix. A hit
   names the path and line, never the value; a binary or over-10-MiB file outside memory and refs
   is named as not scanned.
+- **Plane trust covers persona tool grants.** Each persona's `tools:`, with a digest of any
+  `bin/` script a tool names, is part of the approval, and a grant that changed since asks again
+  before it runs without a prompt. Old per-session tool ceilings are removed when a plane opens
+  (ADR 0035).
 
 ## [0.4.1] - 2026-09-28
 

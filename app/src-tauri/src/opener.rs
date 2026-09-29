@@ -56,6 +56,10 @@ pub struct PlaneContribution {
     /// Drawn beside the rest and weighed differently: the record chooses which of the
     /// operator's own profiles runs, and `profiletrust` gates what any of them runs.
     pub profiles: Vec<(String, String)>,
+    /// One line per persona that grants tools: the persona, and its grant as the trust record
+    /// keeps it — each tool it may run without a prompt, with the digest of the script it runs
+    /// where the persona ships one. The persona tool gate smooths only what is approved here.
+    pub grants: Vec<(String, String)>,
 }
 
 impl PlaneContribution {
@@ -66,6 +70,7 @@ impl PlaneContribution {
             env: pairs(&what.env),
             starts: pairs(&what.starts),
             profiles: pairs(&what.profiles),
+            grants: pairs(&what.grants),
         }
     }
 
@@ -82,6 +87,7 @@ impl PlaneContribution {
             env: self.env.into_iter().collect(),
             starts: self.starts.into_iter().collect(),
             profiles: self.profiles.into_iter().collect(),
+            grants: self.grants.into_iter().collect(),
         }
     }
 }
@@ -997,6 +1003,9 @@ mod tests {
                 .into_iter()
                 .collect(),
             profiles: [("{\"profile\":\"work\"}".to_owned(), String::new())]
+                .into_iter()
+                .collect(),
+            grants: [("ops".to_owned(), "{\"gh\":\"\"}".to_owned())]
                 .into_iter()
                 .collect(),
         };

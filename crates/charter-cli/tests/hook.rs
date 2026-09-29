@@ -369,9 +369,21 @@ fn the_tool_guards_refuse_by_printing_and_exit_cleanly() {
     }
 }
 
+/// Approve `plane` as it stands, in the config home `run_hook` gives the hook (`$HOME/.config`).
+fn approve(plane: &std::path::Path) {
+    let root = std::fs::canonicalize(plane).expect("the plane resolves");
+    let config = plane.join(".config");
+    std::fs::create_dir_all(&config).expect("a config home");
+    charter_core::machine::update(&config, |store| {
+        store.approve(&root, 1, charter_core::machine::Contribution::of(&root));
+    })
+    .expect("the approval is kept");
+}
+
 #[test]
 fn the_active_personas_declared_tool_runs_without_a_prompt() {
     let plane = a_plane_with_a_persona();
+    approve(plane.path());
     let bash = |command: &str| {
         serde_json::json!({"session_id": "s-1", "cwd": ".", "tool_name": "Bash",
             "tool_input": {"command": command}})
@@ -392,6 +404,27 @@ fn the_active_personas_declared_tool_runs_without_a_prompt() {
     );
     assert!(
         stdout.contains(r#""permissionDecision": "deny""#),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn a_declared_tool_prompts_until_the_plane_is_approved_on_this_machine() {
+    let plane = a_plane_with_a_persona();
+    let bash = serde_json::json!({"session_id": "s-1", "cwd": ".", "tool_name": "Bash",
+        "tool_input": {"command": "gh pr list"}})
+    .to_string();
+    let (code, stdout, _) = run_hook(plane.path(), &["hook", "pretooluse"], &bash);
+    assert_eq!(code, 0);
+    assert!(
+        !stdout.contains(r#""permissionDecision": "allow""#),
+        "{stdout}"
+    );
+
+    approve(plane.path());
+    let (_, stdout, _) = run_hook(plane.path(), &["hook", "pretooluse"], &bash);
+    assert!(
+        stdout.contains(r#""permissionDecision": "allow""#),
         "{stdout}"
     );
 }

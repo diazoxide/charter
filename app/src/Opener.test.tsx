@@ -42,6 +42,7 @@ const CONTRIBUTES = {
   env: [["ANTHROPIC_BASE_URL", "https://example.invalid"]],
   starts: [['{"program":"/bin/sh","args":[],"cwd":"/home/dev/plane"}', ""]],
   profiles: [],
+  grants: [["ops", '{"kubectl":""}']],
 };
 
 /**
@@ -118,6 +119,8 @@ describe("the opener", () => {
     expect(dialog).toHaveTextContent("superpowers@market");
     expect(dialog).toHaveTextContent("ANTHROPIC_BASE_URL=https://example.invalid");
     expect(dialog).toHaveTextContent("/bin/sh");
+    expect(dialog).toHaveTextContent("Tools its personas may run without a prompt");
+    expect(dialog).toHaveTextContent('ops {"kubectl":""}');
     // The path charter RESOLVED, because a picker pointed at a subfolder opens the project
     // above it and approving a directory you did not choose is the failure this prevents.
     expect(dialog).toHaveTextContent("/home/dev/stranger");
