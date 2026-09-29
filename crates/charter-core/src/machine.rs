@@ -289,6 +289,35 @@ pub fn config_root_if_there() -> Option<PathBuf> {
     Some(found)
 }
 
+/// [`config_root_if_there`], with the environment asked through `env` rather than read off the
+/// process — for a hook, which is handed its environment as a lookup and is tested that way.
+pub fn config_root_in(env: &dyn Fn(&str) -> Option<String>) -> Option<PathBuf> {
+    let found = rooted(
+        env(HOME_VAR).map(Into::into),
+        env("XDG_CONFIG_HOME").map(Into::into),
+        dirs::home_dir(),
+    )?;
+    if !found.is_dir() {
+        return None;
+    }
+    crate::fence::hold(crate::fence::Act::Store, &found);
+    Some(found)
+}
+
+/// The plane as a machine store may have remembered it: as spelled, and as resolved.
+///
+/// The app remembers a plane under its resolved path; a caller may hold it as typed. Both are
+/// asked, and nothing else — a store is never searched for a path that merely resembles one.
+pub fn spellings_of(root: &Path) -> Vec<PathBuf> {
+    let mut planes = vec![root.to_path_buf()];
+    if let Ok(real) = std::fs::canonicalize(root)
+        && real != root
+    {
+        planes.push(real);
+    }
+    planes
+}
+
 /// [`config_root`]'s ladder, with the three answers handed in.
 ///
 /// Split out because the environment is the one thing this module's tests cannot drive:
@@ -344,7 +373,9 @@ pub(crate) fn supported() -> io::Result<()> {
 
 /// What opening `plane` would do to this machine — everything the approval is *of*.
 ///
-/// **Two sources, and the second is the bigger one.**
+/// **Three sources.** The first two are below; the third is each persona's tool grant
+/// ([`grants`](Self::grants)), because the persona tool gate lets a granted program run
+/// without a prompt and a grant is committed text that arrives with a pull.
 ///
 /// *The settings that travel.* `layer::WORKSPACE_KEYS` is `["enabledPlugins", "env"]`: those
 /// two keys travel out of a plane's own committed `.claude/settings.json` into the
@@ -392,6 +423,16 @@ pub struct Contribution {
     /// One key per recorded chat that names a harness **profile** instead: the JSON of the
     /// profile's name and the working directory.
     pub profiles: BTreeMap<String, String>,
+    /// One key per persona that grants anything: the tools the persona tool gate lets it run
+    /// without a prompt, and for each one it ships in its own `bin/`, the digest of that file
+    /// ([`crate::personagrant::grant`], as [`crate::personagrant::grant_text`] writes it).
+    ///
+    /// **A grant, and the gate answers from this record rather than from the file.** A
+    /// persona's `tools:` is committed text, so it arrives with a pull like everything else in
+    /// the plane; what [`crate::personagate::decide`] waves through is only what the operator
+    /// approved here, and a grant that differs from it meets the harness's own prompt until
+    /// the plane is approved again.
+    pub grants: BTreeMap<String, String>,
 }
 
 impl Contribution {
@@ -437,6 +478,13 @@ impl Contribution {
                 .and_then(serde_json::Value::as_object)
                 .map(|map| map.iter().map(|(k, v)| (k.clone(), word(v))).collect())
                 .unwrap_or_default();
+        }
+        for persona in crate::personagrant::list_personas(plane) {
+            let grant = crate::personagrant::grant(plane, &persona);
+            if !grant.is_empty() {
+                out.grants
+                    .insert(persona, crate::personagrant::grant_text(&grant));
+            }
         }
         // Through `reopen`, never by reading the file here: that read is already gated on the
         // exact path it opens, bounded, and refuses a FIFO — and a second reader of the same
@@ -512,6 +560,14 @@ impl Contribution {
             Change::ProfileAdded,
             Change::ProfileRemoved,
             Change::ProfileAdded,
+            &mut out,
+        );
+        diff(
+            &self.grants,
+            &now.grants,
+            Change::GrantAdded,
+            Change::GrantRemoved,
+            Change::GrantChanged,
             &mut out,
         );
         out
@@ -606,6 +662,12 @@ pub enum Change {
     /// A chat the reopen record would start on one of this machine's harness profiles.
     ProfileAdded(String),
     ProfileRemoved(String),
+    /// A persona that now grants tools, and one whose grant is not the approved one. Any
+    /// difference asks, a narrower grant included: the value is one fingerprint, and reading
+    /// which way it moved would be a second grammar of it.
+    GrantAdded(String),
+    GrantChanged(String),
+    GrantRemoved(String),
 }
 
 impl Change {
@@ -629,12 +691,15 @@ impl Change {
             | Self::PluginChanged(_)
             | Self::EnvAdded(_)
             | Self::EnvChanged(_)
-            | Self::StartsAdded(_) => true,
+            | Self::StartsAdded(_)
+            | Self::GrantAdded(_)
+            | Self::GrantChanged(_) => true,
             Self::PluginRemoved(_)
             | Self::EnvRemoved(_)
             | Self::StartsRemoved(_)
             | Self::ProfileAdded(_)
-            | Self::ProfileRemoved(_) => false,
+            | Self::ProfileRemoved(_)
+            | Self::GrantRemoved(_) => false,
         }
     }
 
@@ -650,7 +715,10 @@ impl Change {
             | Self::StartsAdded(name)
             | Self::StartsRemoved(name)
             | Self::ProfileAdded(name)
-            | Self::ProfileRemoved(name) => name,
+            | Self::ProfileRemoved(name)
+            | Self::GrantAdded(name)
+            | Self::GrantChanged(name)
+            | Self::GrantRemoved(name) => name,
         }
     }
 }
@@ -668,6 +736,9 @@ impl std::fmt::Display for Change {
             Self::StartsRemoved(_) => ("chat this plane would start", "is gone"),
             Self::ProfileAdded(_) => ("chat on one of your harness profiles", "is new"),
             Self::ProfileRemoved(_) => ("chat on one of your harness profiles", "is gone"),
+            Self::GrantAdded(_) => ("tool grant of persona", "is new"),
+            Self::GrantChanged(_) => ("tool grant of persona", "has changed"),
+            Self::GrantRemoved(_) => ("tool grant of persona", "is gone"),
         };
         write!(f, "the {what} {} {how}", self.name())
     }
@@ -681,8 +752,9 @@ pub enum Consent {
     /// It was approved, and it contributes exactly what was approved.
     Unchanged,
     /// It was approved, and it would now do **more** — a plugin, an environment variable, a
-    /// different value for one it already had, or a chat it would start on a program of its
-    /// own. Ask again, and say what is new.
+    /// different value for one it already had, a chat it would start on a program of its
+    /// own, or a persona tool grant that is new or not the one approved. Ask again, and say
+    /// what is new.
     Grew(Vec<Change>),
     /// It was approved, and what changed cannot make anything more run. Say so; do not ask.
     Noted(Vec<Change>),
@@ -1117,13 +1189,34 @@ impl Store {
     /// crash between them leaves a fingerprint that does not match the record on disk, which
     /// is one spurious question at the next launch. That is the direction that is safe, and it
     /// is the only one.
+    ///
+    /// **Only the record's half is refreshed.** charter writes the reopen record; it does not
+    /// write the plane's settings or its personas, which arrive with whatever is committed to
+    /// the plane. So [`Contribution::starts`] and [`Contribution::profiles`] are taken from
+    /// `contributed` and everything else stays as it was approved — a vouch that took the rest
+    /// too would approve a pulled change on the operator's next chat, which is a question
+    /// answered without being asked.
     pub fn vouch(&mut self, plane: &Path, contributed: Contribution, when: u64) {
         if let Some(entry) = self.recents.iter_mut().find(|e| e.plane == plane)
             && let Some(trust) = entry.trust.as_mut()
         {
             trust.approved = when;
-            trust.contributed = contributed;
+            trust.contributed.starts = contributed.starts;
+            trust.contributed.profiles = contributed.profiles;
         }
+    }
+
+    /// The grant the operator approved for `persona` in `plane`, as
+    /// [`crate::personagrant::grant_text`] wrote it — `None` when the plane was never
+    /// approved on this machine, or approved without that persona granting anything.
+    pub fn approved_grant(&self, plane: &Path, persona: &str) -> Option<&str> {
+        self.recent(plane)?
+            .trust
+            .as_ref()?
+            .contributed
+            .grants
+            .get(persona)
+            .map(String::as_str)
     }
 
     /// Drop `plane` from the list, and with it any approval.
@@ -1757,6 +1850,7 @@ fn trust_of(raw: &serde_json::Value) -> Option<Trust> {
             env: words(raw.get("env")),
             starts: words(raw.get("starts")),
             profiles: words(raw.get("profiles")),
+            grants: words(raw.get("grants")),
         },
     })
 }
@@ -1838,6 +1932,8 @@ struct TrustOnDisk {
     env: BTreeMap<String, String>,
     starts: BTreeMap<String, String>,
     profiles: BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    grants: BTreeMap<String, String>,
 }
 
 /// Whether a flag is at its default, so the file leaves it out. Spelled here rather than as
@@ -1898,6 +1994,7 @@ impl From<&Store> for OnDisk {
                             env: trust.contributed.env.clone(),
                             starts: trust.contributed.starts.clone(),
                             profiles: trust.contributed.profiles.clone(),
+                            grants: trust.contributed.grants.clone(),
                         }),
                     })
                 })
@@ -1980,6 +2077,9 @@ mod tests {
                     .into_iter()
                     .collect(),
                 profiles: [(r#"{"profile":"work"}"#.to_owned(), String::new())]
+                    .into_iter()
+                    .collect(),
+                grants: [("ops".to_owned(), r#"{"gh":""}"#.to_owned())]
                     .into_iter()
                     .collect(),
             },
@@ -2402,6 +2502,193 @@ mod tests {
         let plane = a_plane(&held.path().join("plane"));
 
         assert_eq!(Contribution::of(&plane), Contribution::default());
+    }
+
+    // ---------------------------------------------------------------- persona tool grants
+
+    /// A persona in `plane` declaring `tools`.
+    fn a_persona(plane: &Path, name: &str, tools: &str) {
+        let dir = plane.join("personas").join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("persona.md"),
+            format!("---\nrole: R\ntools: {tools}\n---\n"),
+        )
+        .unwrap();
+    }
+
+    /// A fingerprint of one persona's grant, as `Contribution::read` takes it.
+    fn granting(persona: &str, grant: &str) -> Contribution {
+        Contribution {
+            grants: [(persona.to_owned(), grant.to_owned())]
+                .into_iter()
+                .collect(),
+            ..Contribution::default()
+        }
+    }
+
+    #[test]
+    fn each_personas_tool_grant_is_part_of_what_a_plane_contributes() {
+        let held = machine();
+        let plane = a_plane(&held.path().join("plane"));
+        a_persona(&plane, "ops", "gh, kubectl");
+        a_persona(&plane, "writer", "");
+
+        let contributes = Contribution::of(&plane);
+
+        assert_eq!(
+            contributes.grants.keys().collect::<Vec<_>>(),
+            vec!["ops"],
+            "a persona that grants nothing contributes nothing"
+        );
+        assert_eq!(
+            crate::personagrant::grant_from_text(&contributes.grants["ops"]),
+            [
+                ("gh".to_owned(), String::new()),
+                ("kubectl".to_owned(), String::new())
+            ]
+            .into_iter()
+            .collect()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_persona_program_is_fingerprinted_by_its_bytes() {
+        use std::os::unix::fs::PermissionsExt;
+        let held = machine();
+        let plane = a_plane(&held.path().join("plane"));
+        a_persona(&plane, "ops", "deploy");
+        let bin = plane.join("personas/ops/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let script = bin.join("deploy");
+        std::fs::write(&script, "#!/bin/sh\necho one\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let before = Contribution::of(&plane);
+
+        std::fs::write(&script, "#!/bin/sh\necho two\n").unwrap();
+        let after = Contribution::of(&plane);
+
+        assert_ne!(before.grants, after.grants);
+        let mut store = Store::default();
+        let at = Path::new("/planes/known");
+        store.approve(at, 1, before);
+        assert_eq!(
+            store.consent(at, &after),
+            Consent::Grew(vec![Change::GrantChanged("ops".to_owned())])
+        );
+    }
+
+    #[test]
+    fn a_new_or_changed_tool_grant_asks_again_and_a_withdrawn_one_only_reports() {
+        let mut store = Store::default();
+        let plane = Path::new("/planes/known");
+        store.approve(plane, 1, granting("ops", r#"{"gh":""}"#));
+
+        assert_eq!(
+            store.consent(plane, &granting("ops", r#"{"gh":""}"#)),
+            Consent::Unchanged
+        );
+        let widened = store.consent(plane, &granting("ops", r#"{"gh":"","kubectl":""}"#));
+        assert_eq!(
+            widened,
+            Consent::Grew(vec![Change::GrantChanged("ops".to_owned())])
+        );
+        assert!(widened.must_ask());
+        let mut two = granting("ops", r#"{"gh":""}"#);
+        two.grants
+            .insert("new".to_owned(), r#"{"gh":""}"#.to_owned());
+        assert_eq!(
+            store.consent(plane, &two),
+            Consent::Grew(vec![Change::GrantAdded("new".to_owned())])
+        );
+        let gone = store.consent(plane, &Contribution::default());
+        assert_eq!(
+            gone,
+            Consent::Noted(vec![Change::GrantRemoved("ops".to_owned())])
+        );
+        assert!(!gone.must_ask());
+        assert_eq!(
+            Change::GrantChanged("ops".to_owned()).to_string(),
+            "the tool grant of persona ops has changed"
+        );
+    }
+
+    #[test]
+    fn an_approval_made_before_grants_were_fingerprinted_asks_once() {
+        // A store written by a charter that did not fingerprint grants has none recorded. The
+        // plane's grants then read as new, which asks: an approval that never showed a grant
+        // is not an approval of one.
+        let mut store = Store::default();
+        let plane = Path::new("/planes/known");
+        store.approve(plane, 1, Contribution::default());
+
+        assert!(
+            store
+                .consent(plane, &granting("ops", r#"{"gh":""}"#))
+                .must_ask()
+        );
+    }
+
+    #[test]
+    fn vouching_refreshes_the_record_charter_writes_and_nothing_it_does_not() {
+        // charter vouches for the reopen record, which it writes itself. Settings and persona
+        // grants are written by whoever commits to the plane, so a vouch that took them too
+        // would approve a pulled change on the operator's next chat.
+        let mut store = Store::default();
+        let plane = Path::new("/planes/known");
+        let approved = Contribution {
+            env: [("A".to_owned(), "1".to_owned())].into_iter().collect(),
+            plugins: [("p@m".to_owned(), "true".to_owned())]
+                .into_iter()
+                .collect(),
+            grants: [("ops".to_owned(), r#"{"gh":""}"#.to_owned())]
+                .into_iter()
+                .collect(),
+            ..Contribution::default()
+        };
+        store.approve(plane, 1, approved.clone());
+        let mut now = a_launch(&["/bin/zsh"]);
+        now.profiles = on_profiles(&["work"]).profiles;
+        now.env = [("A".to_owned(), "2".to_owned())].into_iter().collect();
+        now.plugins = [("q@m".to_owned(), "true".to_owned())]
+            .into_iter()
+            .collect();
+        now.grants = [("ops".to_owned(), r#"{"gh":"","sh":""}"#.to_owned())]
+            .into_iter()
+            .collect();
+
+        store.vouch(plane, now.clone(), 2);
+
+        let kept = &store
+            .recent(plane)
+            .unwrap()
+            .trust
+            .as_ref()
+            .unwrap()
+            .contributed;
+        assert_eq!(kept.starts, now.starts);
+        assert_eq!(kept.profiles, now.profiles);
+        assert_eq!(kept.env, approved.env);
+        assert_eq!(kept.plugins, approved.plugins);
+        assert_eq!(kept.grants, approved.grants);
+        assert!(store.consent(plane, &now).must_ask());
+    }
+
+    #[test]
+    fn the_grant_approved_for_a_persona_is_answered_by_the_plane_it_was_approved_under() {
+        let mut store = Store::default();
+        let plane = Path::new("/planes/known");
+        store.approve(plane, 1, granting("ops", r#"{"gh":""}"#));
+
+        assert_eq!(store.approved_grant(plane, "ops"), Some(r#"{"gh":""}"#));
+        assert_eq!(store.approved_grant(plane, "writer"), None);
+        assert_eq!(
+            store.approved_grant(Path::new("/planes/other"), "ops"),
+            None
+        );
+        store.remember(Path::new("/planes/seen"), 2);
+        assert_eq!(store.approved_grant(Path::new("/planes/seen"), "ops"), None);
     }
 
     #[cfg(unix)]

@@ -697,6 +697,8 @@ impl Planes {
         // Temps an older charter was killed in front of, which nothing writing today will
         // ever rename away (#440). Only its own old names, and only stale ones.
         charter_core::leftovers::sweep_plane(&root);
+        // And the persona tool gate's per-session ceilings, which nothing else removes.
+        charter_core::personagate::sweep_ceilings(&root, std::time::SystemTime::now());
         if let Some(config) = self.config.as_deref() {
             charter_core::leftovers::sweep_config(config);
         }

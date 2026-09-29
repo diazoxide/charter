@@ -278,6 +278,12 @@ impl Setup {
             "---\nrole: Operations\ntools: charter\n---\n\n# ops\n",
         )
         .expect("its charter");
+        // The grant runs without a prompt only as this machine approved it (ADR 0035).
+        let root = std::fs::canonicalize(&plane).expect("the plane resolves");
+        charter_core::machine::update(&self.config(), |store| {
+            store.approve(&root, 1, charter_core::machine::Contribution::of(&root));
+        })
+        .expect("the approval is kept");
         self
     }
 

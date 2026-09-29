@@ -62,7 +62,7 @@ function core(over: { answer?: unknown; refuses?: string } = {}) {
           plane: null,
           ask: {
             path: MADE,
-            contributes: { plugins: [], env: [], starts: [], profiles: [] },
+            contributes: { plugins: [], env: [], starts: [], profiles: [], grants: [] },
             changes: [],
             first: true,
           },

@@ -421,10 +421,23 @@ fn outside_a_plane_the_post_hooks_say_and_write_nothing() {
 
 // ---- the persona tool gate on Bash --------------------------------------------------------
 
+/// A config home beside the plane in which the operator approved it as it stands now.
+fn approved_in(p: &Plane) -> PathBuf {
+    let config = p.root.join(".config-home");
+    std::fs::create_dir_all(&config).unwrap();
+    crate::machine::update(&config, |store| {
+        store.approve(&p.root, 1, crate::machine::Contribution::of(&p.root));
+    })
+    .unwrap();
+    config
+}
+
 #[test]
 fn the_active_personas_declared_tool_is_allowed_and_nothing_else_is() {
     let p = Plane::new().with_env("CHARTER_PERSONA", "ops");
     p.persona("ops", "role: Ops\ntools: gh");
+    let config = approved_in(&p);
+    let p = p.with_env(crate::machine::HOME_VAR, &config.to_string_lossy());
     let bash = |command: &str| {
         serde_json::json!({"tool_name": "Bash", "session_id": "s-1", "cwd": p.cwd(),
             "tool_input": {"command": command}})
@@ -439,6 +452,26 @@ fn the_active_personas_declared_tool_is_allowed_and_nothing_else_is() {
     let outside = Plane::outside().with_env("CHARTER_PERSONA", "ops");
     outside.persona("ops", "tools: gh");
     assert_eq!(outside.ask(bash("gh pr list"), persona_allow), None);
+}
+
+#[test]
+fn a_declared_tool_in_a_plane_this_machine_never_approved_still_prompts() {
+    let p = Plane::new().with_env("CHARTER_PERSONA", "ops");
+    p.persona("ops", "role: Ops\ntools: gh");
+    let config = p.root.join(".config-home");
+    std::fs::create_dir_all(&config).unwrap();
+    let p = p.with_env(crate::machine::HOME_VAR, &config.to_string_lossy());
+    let bash = serde_json::json!({"tool_name": "Bash", "session_id": "s-1", "cwd": p.cwd(),
+        "tool_input": {"command": "gh pr list"}});
+    assert_eq!(p.ask(bash.clone(), persona_allow), None);
+    // Approved, then widened by a change to the persona: the approved tool still passes,
+    // the new one meets the prompt until the plane is approved again.
+    approved_in(&p);
+    p.persona("ops", "role: Ops\ntools: gh, glab");
+    assert!(p.ask(bash, persona_allow).is_some());
+    let glab = serde_json::json!({"tool_name": "Bash", "session_id": "s-2", "cwd": p.cwd(),
+        "tool_input": {"command": "glab mr list"}});
+    assert_eq!(p.ask(glab, persona_allow), None);
 }
 
 #[test]

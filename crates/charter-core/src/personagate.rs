@@ -37,6 +37,16 @@
 //! only what is in BOTH the live file and the snapshot: an edit can narrow a grant mid-session
 //! and never widen one.
 //!
+//! # And it is only what the operator approved
+//!
+//! The ceiling is taken from the plane as it stands when a session starts, and the plane is
+//! whatever was last committed to it. So the grant is also part of the plane-trust
+//! fingerprint (ADR 0035, [`crate::machine::Contribution::grants`]), and the last rule
+//! [`decide`] asks is whether the tool, and the program behind it, is the one approved on this
+//! machine. A grant that changed since then declines until the plane is approved again. The
+//! ceiling files can only narrow what that allows, so a stale or stray one cannot widen it;
+//! [`sweep_ceilings`] removes the old ones when the app opens a plane.
+//!
 //! # What is not ported
 //!
 //! `os.path.expanduser` and `expandvars` on a candidate: unreachable, because
@@ -682,6 +692,10 @@ pub struct Ask<'a> {
     pub command: &'a str,
     /// The payload's `cwd`, or the process's when the payload has none.
     pub cwd: &'a str,
+    /// The grant the operator approved for this persona in this plane
+    /// ([`crate::machine::Store::approved_grant`]), asked only once every other rule has let
+    /// the command through — it reads the machine store, and most commands never get that far.
+    pub approved: &'a dyn Fn() -> Option<String>,
 }
 
 /// `toolgate.decide`: `(persona, binary)` when the command may run without a prompt.
@@ -711,7 +725,81 @@ pub fn decide(ask: &Ask) -> Option<(String, String)> {
     if !runs_the_declared_program(ask.plane, name, &tokens, &binary, ask.cwd) {
         return None;
     }
+    if !approved(ask, name, &binary) {
+        return None;
+    }
     Some((name.to_string(), binary))
+}
+
+/// Whether the operator approved `binary` for `name` as the plane has it now: the same tool,
+/// and the same program behind it ([`personagrant::grant`]).
+///
+/// **The last rule, and the one a pull cannot move.** Every rule above reads the plane, and the
+/// plane is whatever was last committed to it; this one reads the approval, which is kept on
+/// this machine and changes only when the operator says yes to the plane again. A tool, or a
+/// persona script, that arrived after that yes is not one the operator was shown, so it
+/// declines — and a declined command meets the harness's ordinary prompt.
+fn approved(ask: &Ask, name: &str, binary: &str) -> bool {
+    let Some(now) = personagrant::grant_of_tool(ask.plane, name, binary) else {
+        return false;
+    };
+    (ask.approved)()
+        .is_some_and(|text| personagrant::grant_from_text(&text).get(binary) == Some(&now))
+}
+
+/// How long a session's ceiling is kept after it was taken. A session that is still going is
+/// asked about again when it resumes, which takes a fresh ceiling; this only bounds how many
+/// of them a plane accumulates.
+pub const CEILING_STALE_AFTER: std::time::Duration =
+    std::time::Duration::from_secs(7 * 24 * 60 * 60);
+
+/// Remove the session ceilings ([`ceiling_file`], [`marker_file`]) older than
+/// [`CEILING_STALE_AFTER`] at `now`; how many went.
+///
+/// Only a plain file (never a link) whose name is a session id and one of the two endings, and
+/// the ceiling before its marker, so a live session caught in between reads "taken and gone",
+/// which grants nothing, rather than "never taken". Swept when the app opens a plane.
+pub fn sweep_ceilings(plane: &Path, now: std::time::SystemTime) -> usize {
+    let state = State::of(plane);
+    let dir = state.sessions();
+    if crate::contain::no_link_on_the_way(state.trust(), &dir).is_err() {
+        return 0;
+    }
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return 0;
+    };
+    let mut stale: Vec<(u8, PathBuf)> = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let order = match name.rsplit_once('.') {
+            Some((sid, "tools")) if is_a_session_id(sid) => 0,
+            Some((sid, "gate")) if is_a_session_id(sid) => 1,
+            _ => continue,
+        };
+        if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+            continue;
+        }
+        let old = entry
+            .metadata()
+            .and_then(|found| found.modified())
+            .is_ok_and(|at| {
+                now.duration_since(at)
+                    .is_ok_and(|age| age >= CEILING_STALE_AFTER)
+            });
+        if old {
+            stale.push((order, entry.path()));
+        }
+    }
+    stale.sort();
+    stale
+        .iter()
+        .filter(|(_, path)| state.remove(path).is_ok())
+        .count()
+}
+
+/// A name [`crate::hookstate::safe`] could have made out of a session id.
+fn is_a_session_id(sid: &str) -> bool {
+    !sid.is_empty() && crate::hookstate::safe(sid) == sid
 }
 
 /// The JSON a `PreToolUse` hook prints for an allow — `hooks.py:pretooluse`'s, written the way
@@ -760,7 +848,14 @@ mod tests {
             session: None,
             command,
             cwd: &cwd,
+            approved: &|| approved_as_it_is(root),
         })
+    }
+
+    /// The operator's approval of `ops`'s grant as the plane has it now — every test that is
+    /// not about the approval itself is asked under one that matches.
+    fn approved_as_it_is(root: &Path) -> Option<String> {
+        Some(personagrant::grant_text(&personagrant::grant(root, "ops")))
     }
 
     #[test]
@@ -792,6 +887,7 @@ mod tests {
             session: None,
             command: "gh pr list",
             cwd: &cwd,
+            approved: &|| approved_as_it_is(&root),
         });
         assert_eq!(none, None);
     }
@@ -894,6 +990,7 @@ mod tests {
                 session: Some("s1"),
                 command,
                 cwd: &cwd,
+                approved: &|| approved_as_it_is(&root),
             })
         };
         // The session writes itself a wider grant; the ceiling holds.
@@ -943,6 +1040,7 @@ mod tests {
             session: Some("fresh"),
             command: "gh pr list",
             cwd: &cwd,
+            approved: &|| approved_as_it_is(&root),
         });
         assert!(got.is_some());
         assert!(root.join(".charter/sessions/fresh.tools").is_file());
@@ -1172,5 +1270,141 @@ mod tests {
                 (EXPECTED, "missing".as_ref()),
             ],
         );
+    }
+
+    // ---- the grant the operator approved ------------------------------------------------
+
+    fn asked_under(root: &Path, command: &str, approved: Option<&str>) -> Option<(String, String)> {
+        let cwd = root.to_string_lossy().into_owned();
+        let approved = approved.map(str::to_owned);
+        decide(&Ask {
+            plane: root,
+            persona: Some("ops"),
+            session: None,
+            command,
+            cwd: &cwd,
+            approved: &|| approved.clone(),
+        })
+    }
+
+    #[test]
+    fn a_grant_nobody_approved_is_not_smoothed() {
+        let (_d, root) = plane("gh");
+        assert_eq!(asked_under(&root, "gh pr list", None), None);
+        assert_eq!(asked_under(&root, "gh pr list", Some("not json")), None);
+        assert_eq!(
+            asked_under(&root, "gh pr list", Some(r#"{"gh":""}"#)),
+            Some(("ops".into(), "gh".into()))
+        );
+    }
+
+    #[test]
+    fn a_tool_added_after_the_approval_prompts_and_the_approved_ones_still_do_not() {
+        let (_d, root) = plane("gh, kubectl");
+        let approved = Some(r#"{"gh":""}"#);
+        assert_eq!(asked_under(&root, "kubectl get pods", approved), None);
+        assert!(asked_under(&root, "gh pr list", approved).is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_persona_program_whose_bytes_changed_since_the_approval_prompts() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_d, root) = plane("deploy");
+        let bin = root.join("personas/ops/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let script = bin.join("deploy");
+        std::fs::write(&script, "#!/bin/sh\necho approved\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let approved = approved_as_it_is(&root);
+        let run = "personas/ops/bin/deploy prod";
+        assert!(asked_under(&root, run, approved.as_deref()).is_some());
+
+        std::fs::write(&script, "#!/bin/sh\necho different\n").unwrap();
+
+        assert_eq!(asked_under(&root, run, approved.as_deref()), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_script_added_under_an_approved_path_programs_name_prompts() {
+        // `gh` was approved as the program on PATH. A persona script of the same name is a
+        // different program, and it was not what the operator was shown.
+        use std::os::unix::fs::PermissionsExt;
+        let (_d, root) = plane("gh");
+        let approved = approved_as_it_is(&root);
+        let bin = root.join("personas/ops/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join("gh"), "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(bin.join("gh"), std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert_eq!(
+            asked_under(&root, "personas/ops/bin/gh pr list", approved.as_deref()),
+            None
+        );
+    }
+
+    // ---- stale ceilings -------------------------------------------------------------------
+
+    fn aged(path: &Path, age: std::time::Duration) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, b"{}").unwrap();
+        let file = std::fs::File::options().write(true).open(path).unwrap();
+        file.set_modified(std::time::SystemTime::now() - age)
+            .unwrap();
+    }
+
+    #[test]
+    fn stale_session_ceilings_are_collected_and_everything_else_is_left() {
+        let (_d, root) = plane("gh");
+        let sessions = root.join(".charter/sessions");
+        let old = CEILING_STALE_AFTER + std::time::Duration::from_secs(60);
+        let young = std::time::Duration::from_secs(60);
+        aged(&sessions.join("gone.tools"), old);
+        aged(&sessions.join("gone.gate"), old);
+        aged(&sessions.join("live.tools"), young);
+        aged(&sessions.join("live.gate"), young);
+        aged(&sessions.join("gone.workspace"), old);
+        aged(&sessions.join("notes.txt"), old);
+        // Not a name charter makes out of a session id, so not charter's to remove.
+        aged(&sessions.join(".tools"), old);
+        aged(&sessions.join("a b.gate"), old);
+
+        assert_eq!(sweep_ceilings(&root, std::time::SystemTime::now()), 2);
+
+        assert!(!sessions.join("gone.tools").exists());
+        assert!(!sessions.join("gone.gate").exists());
+        for kept in [
+            "live.tools",
+            "live.gate",
+            "gone.workspace",
+            "notes.txt",
+            ".tools",
+            "a b.gate",
+        ] {
+            assert!(sessions.join(kept).exists(), "{kept} was removed");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_ceiling_that_is_a_link_is_not_followed_by_the_sweep() {
+        let (_d, root) = plane("gh");
+        let elsewhere = tempfile::tempdir().unwrap();
+        let theirs = elsewhere.path().join("keep.tools");
+        aged(&theirs, CEILING_STALE_AFTER * 2);
+        let sessions = root.join(".charter/sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::os::unix::fs::symlink(&theirs, sessions.join("x.tools")).unwrap();
+
+        assert_eq!(sweep_ceilings(&root, std::time::SystemTime::now()), 0);
+
+        assert!(theirs.exists());
+    }
+
+    #[test]
+    fn a_plane_with_no_sessions_sweeps_nothing() {
+        let (_d, root) = plane("gh");
+        assert_eq!(sweep_ceilings(&root, std::time::SystemTime::now()), 0);
     }
 }

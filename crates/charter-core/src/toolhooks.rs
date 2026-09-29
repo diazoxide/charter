@@ -428,12 +428,21 @@ pub fn persona_allow(hook: &Hook) -> Option<String> {
         "" => hook.cwd.to_string_lossy().into_owned(),
         given => given.to_string(),
     };
+    let approved = || {
+        let config = crate::machine::config_root_in(hook.env)?;
+        let store = crate::machine::read(&config).store;
+        let persona = persona.as_deref()?;
+        crate::machine::spellings_of(hook.root)
+            .iter()
+            .find_map(|plane| store.approved_grant(plane, persona).map(str::to_owned))
+    };
     let (name, binary) = personagate::decide(&personagate::Ask {
         plane: hook.root,
         persona: persona.as_deref(),
         session: session.as_deref(),
         command,
         cwd: &cwd,
+        approved: &approved,
     })?;
     Some(personagate::allowed(&name, &binary))
 }

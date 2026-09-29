@@ -68,6 +68,12 @@ So the exposure is narrower than "a stranger's plane runs whatever it likes on y
 is: a stranger's plane chooses your plugins, sets your environment, tightens your permissions, and
 — where a `.charter/` came along with the directory — names programs that a launch starts.
 
+**And its personas grant programs.** A persona's `tools:` is committed text, and the persona tool
+gate (`personagate.rs`) answers `allow` for a program a persona declares, so the harness does not
+prompt for it. A tool can also be a script the persona ships in its own `bin/`. That makes a
+persona's grant a contribution of the same kind as `enabledPlugins`: it decides what runs without
+anyone being asked. (Amended 2026-09-29, see *Grants* below.)
+
 ## The decision
 
 **A plane is untrusted until the operator has opened it once and approved it.** The first open of
@@ -78,8 +84,8 @@ is asked once per human per machine rather than once per window.
 **`profiletrust` is the pattern, and the pattern is a fingerprint, not a path.** That record stores
 each profile's `kind`, `command` and `env` as last launched and asks again when any of them
 differs. The plane record does the same: the approval names the plane's `enabledPlugins`, the
-names and values of its `env`, its restrictive rules, and the programs its reopen record would
-start. A plane that changes what it contributes asks again, and a path whose directory has been
+names and values of its `env`, its restrictive rules, the programs its reopen record would
+start, and each persona's tool grant. A plane that changes what it contributes asks again, and a path whose directory has been
 replaced by a different one does not inherit the old yes. Keyed on the path alone it would.
 
 **Every unreadable state means ask.** A missing entry, a malformed one, an entry that is not a
@@ -92,6 +98,36 @@ record that charter's consent is a second command because `util.py` has nothing 
 and blocking a hook on stdin hangs a turn. That constraint is about the CLI. The app has a window
 and a person looking at it, so here the prompt is the prompt. The CLI is unchanged and keeps the
 two-command shape where it needs it.
+
+## Grants
+
+*Amended 2026-09-29.* The approval covers each persona's tool grant: every tool it may run without
+a prompt, and for a tool that is a script in the persona's own `bin/`, a digest of that file's
+bytes (`personagrant::grant`). A grant that is new, or differs from the approved one in any way,
+asks again, exactly as a new plugin does. A persona that stops granting is reported, not asked
+about.
+
+**The gate answers from the approval, not from the file.** The approval is asked at plane open,
+but a plane that is already open keeps changing under it: a pull lands, a session edits a file.
+So the persona tool gate's last rule is that the tool, and the program behind it, is the one this
+machine approved for that persona in that plane. A tool that differs declines and meets the
+harness's ordinary prompt until the operator approves the plane again, which closing and reopening
+the project asks for. The per-session ceiling (charter#432) still applies beneath this: it can
+narrow the approved grant, never widen it.
+
+**charter vouches only for what it writes.** charter rewrites the reopen record and refreshes the
+fingerprint to match (`Store::vouch`). It does not write the plane's settings or its personas, so
+a vouch now refreshes only the record's half and keeps the rest as approved. Before this, a
+change to the settings made while the plane was open was taken into the approval at the next chat
+charter opened.
+
+**Where no approval can be kept, nothing is smoothed.** A plane this machine never approved, and a
+platform with no machine store (ADR 0031), have no approved grant, so every persona tool meets the
+harness's prompt there. That is the direction ADR 0031 asks for: a guard that cannot be expressed
+declines rather than guesses.
+
+A store written before this amendment has no grants in it, so the first open of each plane after
+it asks once.
 
 ## `charter init` on an existing repo adopts it, rather than colonising it
 
@@ -120,14 +156,16 @@ writes nothing into it.
 **Not a boundary.** `profiletrust.rs` says it at full volume about its own record and the same
 sentence applies here: a chat that can edit the plane can edit whatever charter reads from it.
 Once a plane is approved, everything in it is in force, and this record adds no guard inside an
-approved plane. What the ask closes is the accident and the stranger's directory — the plane
+approved plane — with the one exception *Grants* describes, where the tool gate compares against
+the approval rather than the file. What the ask closes is the accident and the stranger's directory — the plane
 opened to see what it was, the archive that came with a `.charter/`, the checkout borrowed for an
 afternoon. It is the difference between a plugin that was enabled unseen and one that was read out
 loud first. It is not a defence against an agent that set out to forge the fingerprint, and
 nothing here should be built as though it were.
 
 **Not a complete inventory of what a plane does.** The ask shows what charter can enumerate: the
-two `WORKSPACE_KEYS`, the restrictive rules, and the programs the reopen record names. It does not
+two `WORKSPACE_KEYS`, the restrictive rules, the programs the reopen record names, and the
+personas' tool grants. It does not
 and cannot summarise a plane's persona charters, its memory or its todos, which are text a model
 will read and act on. charter *"has no model and makes no judgements about the content of work"*
 (`CONTEXT.md`), and that is exactly the sentence that limits this ask. Named here rather than left
@@ -156,9 +194,12 @@ to be discovered by whoever first assumes the dialog covered everything.
 - The first open of every plane costs a dialog, including the operator's own plane on a new
   machine. Bought deliberately, and it is one dialog per plane per machine for the whole life of
   that plane.
-- An approved plane that changes its `env` or its `enabledPlugins` asks again, which will happen on
-  an ordinary `git pull` of a plane the team shares. That is the fingerprint working, and it will
-  read as noise until somebody reads the diff it is showing.
+- An approved plane that changes its `env`, its `enabledPlugins` or a persona's tool grant asks
+  again, which will happen on an ordinary `git pull` of a plane the team shares. That is the
+  fingerprint working, and it will read as noise until somebody reads the diff it is showing.
+- The operator's own edit to a persona's `tools:`, or to a script in its `bin/`, prompts until the
+  plane is approved again, the same as a teammate's. charter cannot tell the two apart, and a
+  rule that trusted "edits made on this machine" would trust every chat on it.
 - `charter init`'s new default is a **deliberate divergence from the Python oracle**. `init` is
   ported (`scaffold/mod.rs`) and spec decision 15 requires every ported command to give the same
   result as Python on the same input; this one now will not, and Python is frozen (decision 17), so

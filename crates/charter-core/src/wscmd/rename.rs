@@ -953,15 +953,9 @@ fn follow_in_reopen(root: &Path, moved: &Move, config: Option<&Path>) -> std::io
     .map(|_| ())
 }
 
-/// The plane as a machine store may have remembered it: as spelled, and as resolved.
+/// The plane as a machine store may have remembered it ([`crate::machine::spellings_of`]).
 fn spellings(root: &Path) -> Vec<PathBuf> {
-    let mut planes = vec![root.to_path_buf()];
-    if let Ok(real) = std::fs::canonicalize(root)
-        && real != root
-    {
-        planes.push(real);
-    }
-    planes
+    crate::machine::spellings_of(root)
 }
 
 /// This machine's pin on the workspace, moved to the new name — under the plane as it was
