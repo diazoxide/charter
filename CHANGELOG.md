@@ -11,6 +11,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+
+- **The release runs only the code it pinned.** Every GitHub Action in charter's workflows is
+  pinned to a commit rather than a tag, and the release jobs that hold the signing keys restore
+  no build cache (ADR 0042).
+
 ## [0.4.1] - 2026-09-28
 
 0.4.1 is a chat that ends well and a memory you can look after from the window. Closing a chat

@@ -102,7 +102,7 @@ jobs:
       skip: ${{ steps.plan.outputs.skip }}
       macos_signing: ${{ steps.plan.outputs.macos_signing }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
           persist-credentials: false
@@ -187,8 +187,10 @@ jobs:
       # `## [X.Y.Z]` section, or an empty one, is refused here, beside the check that the tag
       # agrees with Cargo.toml and before anything is built. The `changelog` crate is the one
       # the app reads the file with, so this refusal and the dialog cannot disagree.
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master, 2026-09-12
         if: steps.plan.outputs.channel == 'stable'
+        with:
+          toolchain: stable
       - name: A stable tag has its section in CHANGELOG.md
         if: steps.plan.outputs.channel == 'stable'
         env:
@@ -289,7 +291,7 @@ jobs:
       VERSION: ${{ needs.plan.outputs.version }}
       PUBLISH: ${{ needs.plan.outputs.publish }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.plan.outputs.sha }}
           persist-credentials: false
@@ -300,17 +302,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
 
-      - uses: dtolnay/rust-toolchain@stable
-      # A job that holds the signing secrets reads the cache `ci` wrote on main and never writes
-      # one: whatever it saved, the next signing run would restore and run.
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master, 2026-09-12
         with:
-          save-if: false
-      - uses: actions/setup-node@v7
+          toolchain: stable
+      # **No cache, restored or saved.** This job holds the signing keys, so it builds from its
+      # own checkout and the lockfiles alone: a cache is whatever the last job to save it left,
+      # and another workflow's job is not this one. It is a cold build, slower by design.
+      # `package-manager-cache: false` because setup-node caches on its own when package.json
+      # names npm, and leaving out `cache:` does not stop that. A test in
+      # `crates/release-manifest` holds every job here that has a secret or publishes to this.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
-          cache: npm
-          cache-dependency-path: app/package-lock.json
+          package-manager-cache: false
 
       - run: npm ci
         working-directory: app
@@ -635,7 +639,7 @@ jobs:
           fi
 
       - name: Upload
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ steps.names.outputs.artifact }}
           path: dist/
@@ -798,15 +802,17 @@ jobs:
       TAG: ${{ needs.plan.outputs.tag }}
       SHA: ${{ needs.plan.outputs.sha }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.plan.outputs.sha }}
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master, 2026-09-12
+        with:
+          toolchain: stable
       # No cache here: this job can write the release, so it builds from nothing but main's
       # own tree.
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: dist
           merge-multiple: true

@@ -7,68 +7,11 @@
 //! bundle unsigned. So the rule is checked on the file, the way it is written, rather than
 //! found out on the next release.
 //!
-//! A line reader rather than a YAML parser: the workflow's jobs are the two-space keys under
-//! `jobs:` and their settings the four-space keys below them, which is all this needs, and no
-//! YAML crate is in the workspace for one test.
+//! The workflow is read by `workflow/mod.rs`, which the pinning and cache tests share.
 
-use std::path::PathBuf;
+mod workflow;
 
-/// One job under `jobs:`: its key, and the lines of its body with comments dropped.
-struct Job {
-    name: String,
-    body: Vec<String>,
-}
-
-impl Job {
-    fn reads_a_secret(&self) -> bool {
-        self.body.iter().any(|l| l.contains("secrets."))
-    }
-
-    fn publishes(&self) -> bool {
-        self.body.iter().any(|l| {
-            l.contains("gh release create")
-                || l.contains("gh release edit")
-                || l.contains("replace-release-assets.sh")
-        })
-    }
-
-    /// The job's own `environment:` value, if it has one.
-    fn environment(&self) -> Option<&str> {
-        self.body
-            .iter()
-            .find_map(|l| l.strip_prefix("    environment:"))
-            .map(str::trim)
-    }
-}
-
-fn release_jobs() -> Vec<Job> {
-    let path =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.github/workflows/release.yml");
-    let text = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
-    let mut jobs: Vec<Job> = Vec::new();
-    let mut in_jobs = false;
-    for line in text.lines() {
-        if line == "jobs:" {
-            in_jobs = true;
-            continue;
-        }
-        if !in_jobs || line.trim_start().starts_with('#') {
-            continue;
-        }
-        let is_job =
-            line.starts_with("  ") && !line.starts_with("   ") && line.trim_end().ends_with(':');
-        if is_job {
-            jobs.push(Job {
-                name: line.trim().trim_end_matches(':').to_owned(),
-                body: Vec::new(),
-            });
-        } else if let Some(job) = jobs.last_mut() {
-            job.body.push(line.to_owned());
-        }
-    }
-    jobs
-}
+use workflow::{Job, release_jobs};
 
 /// What each guarded job's `environment:` says, exactly.
 ///

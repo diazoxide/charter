@@ -17,6 +17,11 @@ updates:
       # Types track the Node major in .nvmrc (24), not the newest Node.
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
+  # Every workflow pins its actions by commit SHA with the version as a comment; Dependabot
+  # moves the SHA and the comment together. `dtolnay/rust-toolchain` publishes no version tags
+  # for Dependabot to follow, so its pin is checked and moved by hand.
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: weekly }
+    groups:
+      actions: { patterns: ["*"] }
