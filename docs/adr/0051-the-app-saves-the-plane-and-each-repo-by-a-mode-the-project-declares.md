@@ -92,6 +92,13 @@ all call it, so the CLI follows `mode` too. What a save does:
   whose name is a credential's (`.env`, an SSH private key, `*.pem`, `credentials.json`, a
   `.npmrc` holding a token, and the like) and any staged text holding a private key block or a
   token with a forge's own prefix (charter-app#299).
+  **Amended 2026-09-29:** the plane's scan reads every staged file, not only memory and refs,
+  with the credential rules plus the forge-prefix token rule, and names each hit by path, line
+  and kind, never by value. A file outside memory and refs that git calls binary (a NUL in its
+  first 8000 bytes) or that is over 10 MiB is committed unscanned, and the save names it. A link
+  or a nested repository outside memory and refs is committed as what it is, since neither
+  carries text. There is no switch to turn the scan off; a vault reference is the documented
+  way to name a credential in a plane file.
 - **Commit message:** generated from what changed, grouped as `charter save` already prints it.
   A manual save may replace it.
 - **Signing:** `sign`, default `false`. A push refused for an unsigned commit tells the operator

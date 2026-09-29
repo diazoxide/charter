@@ -433,33 +433,218 @@ fn a_secret_shaped_value_in_a_memory_file_stops_the_save_and_is_never_echoed() {
 
     assert_eq!(code, 1, "{said}");
     assert!(said.contains("a secret-shaped value"), "{said}");
-    assert!(said.contains("(credential assignment)"), "{said}");
+    assert!(
+        said.contains("leak.md:3  (credential assignment)"),
+        "{said}"
+    );
     // The KIND, never the value.
     assert!(!said.contains(secret), "the refusal repeated the secret");
     assert_eq!(fixture.head_subject(), "one", "nothing was committed");
 }
 
-#[test]
-fn a_secret_outside_a_memory_or_ref_file_is_not_what_this_guard_is_for() {
-    // The guard is scoped to the two directories a save PUSHES to a shared repository. Widening
-    // it would make `save` refuse an operator's own fixture file and get switched off.
-    let fixture = Fixture::plane();
-    std::fs::write(
-        fixture.root.join("tests-fixture.md"),
-        "token: ghp_0123456789abcdefghij\n",
-    )
-    .unwrap();
+impl Fixture {
+    /// Write `text` at `path` in the plane and save without a push.
+    fn save_with(&self, path: &str, text: &[u8]) -> (u8, String) {
+        let file = self.root.join(path);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, text).unwrap();
+        self.save(Request {
+            root: &self.root,
+            message: Some("a save"),
+            sign: false,
+            no_push: true,
+            cwd: &self.root,
+        })
+    }
+}
 
-    let (code, said) = fixture.save(Request {
-        root: &fixture.root,
-        message: Some("a fixture"),
-        sign: false,
-        no_push: true,
-        cwd: &fixture.root,
-    });
+#[test]
+fn a_secret_in_any_staged_file_stops_the_save_and_names_its_path_and_line() {
+    // A save commits and pushes every file it stages, so every one of them is asked: a todo,
+    // a persona definition, a session record, the plane's own settings.
+    let pem = ["-----BEGIN OPENSSH ", "PRIVATE KEY-----\nb3BlbnNzaC1rZXk\n"].concat();
+    let token = ["ghp", "_0123456789abcdefABCDEFghij"].concat();
+    for (path, text, line, kind) in [
+        (
+            "workspaces/alpha/todos/0001-deploy.md",
+            format!("# deploy\n\nkey for the box:\n{pem}"),
+            4,
+            "private key (PEM)",
+        ),
+        (
+            "personas/devops/persona.md",
+            format!("---\nname: devops\n---\n\nUse {token} for the forge.\n"),
+            5,
+            "a token by its forge's prefix",
+        ),
+        (
+            "workspaces/alpha/sessions/20260929-deploy.md",
+            "# the deploy\n\npassword: hunter2is\n".to_owned(),
+            3,
+            "credential assignment",
+        ),
+        (
+            "charter.toml",
+            "[plane]\nname = \"fixture\"\napi_key = \"abcdef0123456789\"\n".to_owned(),
+            3,
+            "credential assignment",
+        ),
+    ] {
+        let fixture = Fixture::plane();
+        let (code, said) = fixture.save_with(path, text.as_bytes());
+
+        assert_eq!(code, 1, "{path}: {said}");
+        assert!(
+            said.contains("Refusing to save — a secret-shaped value in a staged file:"),
+            "{path}: {said}"
+        );
+        assert!(
+            said.contains(&format!("{path}:{line}  ({kind})")),
+            "{path}: {said}"
+        );
+        for value in [
+            token.as_str(),
+            "hunter2is",
+            "abcdef0123456789",
+            "b3BlbnNzaC1rZXk",
+        ] {
+            assert!(
+                !said.contains(value),
+                "{path}: the refusal repeated the secret"
+            );
+        }
+        assert_eq!(
+            fixture.head_subject(),
+            "one",
+            "{path}: nothing was committed"
+        );
+        assert_eq!(
+            standing(&fixture.root).blocked.as_deref(),
+            Some(SECRET_REFUSED),
+            "{path}: the standing says what the next save would refuse"
+        );
+    }
+}
+
+#[test]
+fn a_bare_token_in_a_memory_files_prose_stops_the_save() {
+    // No assignment names it, so only the prefix rule sees it.
+    let fixture = Fixture::plane();
+    let token = ["ghp", "_0123456789abcdefABCDEFghij"].concat();
+    let (code, said) = fixture.save_with(
+        "personas/steward/memory/deploy.md",
+        format!("# the deploy\n\nit uses {token} today\n").as_bytes(),
+    );
+
+    assert_eq!(code, 1, "{said}");
+    assert!(
+        said.contains("personas/steward/memory/deploy.md:3  (a token by its forge's prefix)"),
+        "{said}"
+    );
+    assert!(!said.contains(&token), "the refusal repeated the secret");
+}
+
+#[test]
+fn an_ordinary_file_is_saved_and_one_deleted_is_never_asked_about() {
+    let fixture = Fixture::plane();
+    let (code, said) = fixture.save_with(
+        "workspaces/alpha/todos/0002-docs.md",
+        b"# docs\n\nexplain where the deploy token lives (the vault)\n",
+    );
+    assert_eq!(code, 0, "{said}");
+    assert_eq!(fixture.head_subject(), "a save");
+
+    std::fs::remove_file(fixture.root.join("workspaces/alpha/todos/0002-docs.md")).unwrap();
+    let (code, said) = fixture.just_save();
+    assert_eq!(code, 0, "{said}");
+}
+
+#[test]
+fn a_binary_or_oversized_file_outside_memory_is_not_scanned_and_is_said_to_be_so() {
+    // The stated rule: a file git itself calls binary (a NUL in its first 8000 bytes) or one
+    // over the size cap is committed unscanned, and the save names it.
+    let fixture = Fixture::plane();
+    let token = ["ghp", "_0123456789abcdefABCDEFghij"].concat();
+    let mut binary = b"\x89PNG\0\0".to_vec();
+    binary.extend_from_slice(token.as_bytes());
+    let (code, said) = fixture.save_with("docs/diagram.png", &binary);
+    assert_eq!(code, 0, "{said}");
+    assert!(
+        said.contains("Not scanned for secrets") && said.contains("docs/diagram.png (binary)"),
+        "{said}"
+    );
+
+    let mut big = "x\n".repeat(SCAN_LIMIT / 2 + 1).into_bytes();
+    big.extend_from_slice(token.as_bytes());
+    let (code, said) = fixture.save_with("docs/export.txt", &big);
+    assert_eq!(code, 0, "{said}");
+    assert!(said.contains("docs/export.txt (over 10 MiB)"), "{said}");
+}
+
+#[test]
+fn a_link_or_a_nested_repository_outside_memory_is_committed_as_what_it_is() {
+    // A link's blob is its target's path and a gitlink is a commit id: neither is text to
+    // scan, and neither is a reason to refuse the save.
+    let fixture = Fixture::plane();
+    // One that leads out of the plane, which a memory link is refused for.
+    std::os::unix::fs::symlink("../elsewhere/notes.md", fixture.root.join("notes.md")).unwrap();
+    let nested = fixture.root.join("vendor/tool");
+    std::fs::create_dir_all(&nested).unwrap();
+    run(&nested, &["init", "-q", "-b", "main", "."]);
+    run(&nested, &["config", "user.name", "Fixture"]);
+    run(
+        &nested,
+        &["config", "user.email", "fixture@example.invalid"],
+    );
+    std::fs::write(nested.join("a.txt"), "a\n").unwrap();
+    run(&nested, &["add", "-A"]);
+    run(&nested, &["commit", "-q", "-m", "a"]);
+
+    let (code, said) = fixture.just_save();
 
     assert_eq!(code, 0, "{said}");
-    assert_eq!(fixture.head_subject(), "a fixture");
+    assert!(
+        ask(&fixture.root, &["ls-files", "-s", "vendor/tool"]).starts_with("160000"),
+        "the premise: the nested repository is staged as a gitlink"
+    );
+}
+
+#[test]
+fn among_many_staged_files_the_one_holding_a_secret_is_the_one_named() {
+    // The staged blobs are read side by side; what each is found to hold must stay with its
+    // own path.
+    let fixture = Fixture::plane();
+    for i in 0..41 {
+        let text = if i == 23 {
+            "# n\n\npassword: hunter2is\n".to_owned()
+        } else {
+            format!("# note {i}\n")
+        };
+        std::fs::create_dir_all(fixture.root.join("docs")).unwrap();
+        std::fs::write(fixture.root.join(format!("docs/n{i:02}.md")), text).unwrap();
+    }
+
+    let (code, said) = fixture.just_save();
+
+    assert_eq!(code, 1, "{said}");
+    assert!(
+        said.contains("docs/n23.md:3  (credential assignment)"),
+        "{said}"
+    );
+    assert_eq!(said.matches("(credential assignment)").count(), 1, "{said}");
+}
+
+#[test]
+fn a_memory_file_is_scanned_whatever_its_size_or_bytes() {
+    // Memory and ref files were scanned whole before every file was, and still are: the
+    // skip rule widens nothing away from them.
+    let fixture = Fixture::plane();
+    let (code, said) = fixture.save_with(
+        "personas/steward/memory/n.md",
+        b"# n\0\n\npassword: hunter2is\n",
+    );
+    assert_eq!(code, 1, "{said}");
+    assert!(said.contains("(credential assignment)"), "{said}");
 }
 
 #[test]
@@ -497,9 +682,11 @@ fn a_memory_file_that_is_a_link_is_refused_even_when_it_lands_back_inside_the_pl
     // scan of that blob would answer "no secret" about a file charter never read. The
     // containment check alone let this one through: the target is inside the plane.
     let fixture = Fixture::plane();
-    // Outside `/memory/`, so the guard judges the LINK and not its target: a target the
-    // guard also flagged would make this test pass for the wrong reason.
-    let target = fixture.root.join("personas/steward/real.md");
+    // Where no save stages it (`.charter/` is ignored), so the guard judges the LINK and not
+    // its target: a target the guard also flagged would make this test pass for the wrong
+    // reason.
+    std::fs::create_dir_all(fixture.root.join(".charter")).unwrap();
+    let target = fixture.root.join(".charter/real.md");
     std::fs::write(&target, "# k\n\npassword: hunter2is\n").unwrap();
     std::os::unix::fs::symlink(
         &target,

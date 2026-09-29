@@ -252,6 +252,12 @@ fn names_where_a_credential_lives(value: &str) -> bool {
 /// Every match of a rule that carries a value is asked whether that value merely NAMES where a
 /// credential lives, so one exempt assignment does not excuse the next one on the line below.
 pub fn secret_kind(text: &str) -> Option<&'static str> {
+    secret_at(text).map(|(label, _)| label)
+}
+
+/// [`secret_kind`], with the byte offset of the match that decided it — the one walk both
+/// answer from, so the kind and where it is can never disagree.
+fn secret_at(text: &str) -> Option<(&'static str, usize)> {
     for (label, rx, boundary) in compiled() {
         // `finditer`'s own walk, written out, because one position has to be REJECTED and
         // resumed from: a match whose leading word boundary is `regex`'s and not CPython's
@@ -283,7 +289,7 @@ pub fn secret_kind(text: &str) -> Option<&'static str> {
                     // empty and this can never fail to advance.
                     at = whole.end();
                 }
-                _ => return Some(label),
+                _ => return Some((label, whole.start())),
             }
         }
     }
@@ -299,13 +305,18 @@ pub fn secret_kind(text: &str) -> Option<&'static str> {
 /// sixteen token characters after it. A JWT is left out: test fixtures carry them by the
 /// hundred, and a signed token is not a key to anything by itself.
 pub fn token_kind(text: &str) -> Option<&'static str> {
+    token_at(text).map(|(label, _)| label)
+}
+
+/// [`token_kind`], with the byte offset of the match that decided it.
+fn token_at(text: &str) -> Option<(&'static str, usize)> {
     for (label, rx, _) in compiled() {
         if matches!(
             *label,
             "private key (PEM)" | "AWS access key" | "AgentMail key"
-        ) && rx.is_match(text)
+        ) && let Some(hit) = rx.find(text)
         {
-            return Some(label);
+            return Some((label, hit.start()));
         }
     }
     static TOKEN: OnceLock<Regex> = OnceLock::new();
@@ -314,15 +325,38 @@ pub fn token_kind(text: &str) -> Option<&'static str> {
             .iter()
             .map(|p| regex::escape(p))
             .collect();
+        // The token is its own group: the class in front of it consumes the character before
+        // it, which is the newline when a token opens its line.
         Regex::new(&format!(
-            r"(?:^|[^A-Za-z0-9_-])(?:{})[A-Za-z0-9_-]{{16,}}",
+            r"(?:^|[^A-Za-z0-9_-])(?P<token>(?:{})[A-Za-z0-9_-]{{16,}})",
             prefixes.join("|")
         ))
         .expect("a pattern this module wrote")
     });
     token
-        .is_match(text)
-        .then_some("a token by its forge's prefix")
+        .captures(text)
+        .and_then(|caps| caps.name("token"))
+        .map(|hit| ("a token by its forge's prefix", hit.start()))
+}
+
+/// A credential [`found`] in a text: its kind, and the 1-based line it starts on. Never the
+/// value, since every caller prints what it gets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Found {
+    pub kind: &'static str,
+    pub line: usize,
+}
+
+/// The widest question this module answers: [`secret_kind`]'s rules, then [`token_kind`]'s
+/// prefix rule for a bare token no assignment names. What a plane save refuses in any staged
+/// file, and what a report redacts a line for.
+pub fn found(text: &str) -> Option<Found> {
+    let (kind, at) = secret_at(text).or_else(|| token_at(text))?;
+    let line = 1 + text.as_bytes()[..at]
+        .iter()
+        .filter(|b| **b == b'\n')
+        .count();
+    Some(Found { kind, line })
 }
 
 #[cfg(test)]
@@ -530,6 +564,65 @@ mod token_tests {
             "api_key = os.environ['API_KEY']",
         ] {
             assert_eq!(token_kind(code), None, "{code}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod found_tests {
+    use super::{Found, found};
+
+    #[test]
+    fn a_bare_token_in_prose_is_found_by_its_prefix() {
+        let text = [
+            "# notes\n\nthe deploy uses ghp",
+            "_0123456789abcdefABCDEF now\n",
+        ]
+        .concat();
+        assert_eq!(
+            found(&text),
+            Some(Found {
+                kind: "a token by its forge's prefix",
+                line: 3
+            })
+        );
+    }
+
+    #[test]
+    fn the_line_is_where_the_value_starts_even_at_the_start_of_a_line() {
+        // The token rule's leading class consumes the newline before a token that opens its
+        // line; the line named is the token's, not the one above it.
+        let text = ["one\ntwo\nglpat", "-0123456789abcdefABCD\n"].concat();
+        assert_eq!(found(&text).map(|f| f.line), Some(3));
+        let text = "one\n\n\npassword: hunter2is\n";
+        assert_eq!(
+            found(text),
+            Some(Found {
+                kind: "credential assignment",
+                line: 4
+            })
+        );
+        let key = ["a\n-----BEGIN RSA ", "PRIVATE KEY-----\n"].concat();
+        assert_eq!(found(&key).map(|f| f.line), Some(2));
+    }
+
+    #[test]
+    fn the_broad_rules_are_asked_first_and_their_kind_is_the_one_named() {
+        // `secret_kind`'s answer wins where it has one, so a file both rules match is named
+        // the way every other refusal names it.
+        let text = ["token: ghp", "_0123456789abcdefABCDEF\n"].concat();
+        assert_eq!(found(&text).map(|f| f.kind), Some("credential assignment"));
+    }
+
+    #[test]
+    fn ordinary_text_and_a_vault_reference_are_not_found() {
+        for text in [
+            "a note about the deploy token, without one",
+            "token: vault:forge/gh",
+            "fn mask_ghp_prefix() {}",
+            "",
+        ] {
+            assert_eq!(found(text), None, "{text}");
         }
     }
 }

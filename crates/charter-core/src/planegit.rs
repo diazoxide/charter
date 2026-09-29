@@ -588,18 +588,12 @@ pub fn standing(root: &Path) -> Standing {
             .filter(|target| *target != here_branch)
             .map(|target| format!("this plane is on {here_branch}, and [plane] branch is {target}"))
     })
-    // A secret the next save would refuse: a changed memory or ref file that holds one now.
-    // Asked of the files as they are, so removing it clears the block at once.
+    // A secret the next save would refuse: a changed file that holds one now. Asked of the
+    // files as they are, so removing it clears the block at once.
     .or_else(|| {
         changed
             .iter()
-            .filter(|path| path.contains("/memory/") || path.contains("/refs/"))
-            .any(|path| {
-                std::fs::read_to_string(root.join(path))
-                    .ok()
-                    .and_then(|text| secretshape::secret_kind(&text))
-                    .is_some()
-            })
+            .any(|path| secret_on_disk(root, path))
             .then(|| SECRET_REFUSED.to_owned())
     });
     // Git stopped part-way through a merge or rebase, asked of the tree now (#433): named
@@ -1566,7 +1560,88 @@ impl Drop for Claim {
 }
 
 /// The journal's words for a save the secret scan refused — matched whole, never searched for.
-pub const SECRET_REFUSED: &str = "a secret-shaped value in a memory or ref file";
+pub const SECRET_REFUSED: &str = "a secret-shaped value in a staged file";
+
+/// The most bytes of a file outside memory and refs the secret guard reads. Larger ones are
+/// committed unscanned and named in the save's output.
+pub const SCAN_LIMIT: usize = 10 << 20;
+
+/// How far into a file git looks for a NUL before it calls the file binary, and so does the
+/// secret guard.
+const BINARY_PROBE: usize = 8000;
+
+/// A memory or ref file: scanned whole whatever its size or bytes, and refused when it is a
+/// link, as it was before every staged file was scanned.
+fn memory_or_ref(path: &str) -> bool {
+    path.contains("/memory/") || path.contains("/refs/")
+}
+
+/// Why the secret guard commits a file without reading it, or `None` when it reads it: a file
+/// outside memory and refs that git calls binary, or that is over [`SCAN_LIMIT`]. The one rule
+/// the save and the standing both ask.
+fn unscanned(path: &str, bytes: &[u8]) -> Option<&'static str> {
+    if memory_or_ref(path) {
+        None
+    } else if bytes.len() > SCAN_LIMIT {
+        Some("over 10 MiB")
+    } else if bytes.iter().take(BINARY_PROBE).any(|b| *b == 0) {
+        Some("binary")
+    } else {
+        None
+    }
+}
+
+/// Whether the working-tree file at `path` holds what the next save's guard would refuse.
+/// Outside memory and refs only a regular file within [`SCAN_LIMIT`] is read, so a link to a
+/// device or a huge export never stalls the standing.
+fn secret_on_disk(root: &Path, path: &str) -> bool {
+    let file = root.join(path);
+    if !memory_or_ref(path)
+        && !std::fs::symlink_metadata(&file).is_ok_and(|meta| {
+            meta.is_file() && usize::try_from(meta.len()).is_ok_and(|len| len <= SCAN_LIMIT)
+        })
+    {
+        return false;
+    }
+    std::fs::read(&file).is_ok_and(|bytes| {
+        unscanned(path, &bytes).is_none()
+            && secretshape::found(&String::from_utf8_lossy(&bytes)).is_some()
+    })
+}
+
+/// How many `git show`s the secret guard runs at once. Each is a process of its own, and a
+/// save that stages thousands of files spends its time starting them, not scanning.
+const READERS: usize = 8;
+
+/// What the index holds for each of `paths`, in their order: `None` for one git could not
+/// show. `:<path>` is the index's own blob for that path, resolved from the top of the tree,
+/// which is what `--name-only` printed and what `-C root` puts git in. Read-only, so the reads
+/// run side by side.
+fn staged_blobs(root: &Path, paths: &[&String]) -> Vec<Option<String>> {
+    let show = |path: &String| {
+        git::run(root, &["show", &format!(":{path}")], git::READ)
+            .ok()
+            .filter(git::Run::ok)
+            .map(|run| run.out)
+    };
+    let readers = std::thread::available_parallelism().map_or(1, |n| n.get().min(READERS));
+    let chunk = paths.len().div_ceil(readers).max(1);
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = paths
+            .chunks(chunk)
+            .map(|part| {
+                let reader = scope.spawn(move || part.iter().map(|p| show(p)).collect::<Vec<_>>());
+                (part.len(), reader)
+            })
+            .collect();
+        // A reader that panicked answers `None` for every path it held, so each of them is
+        // refused as unread rather than dropped from the list and never scanned.
+        handles
+            .into_iter()
+            .flat_map(|(len, reader)| reader.join().unwrap_or_else(|_| vec![None; len]))
+            .collect()
+    })
+}
 
 /// The sentence a save refused for [`Claim`] says.
 pub const ALREADY_SAVING: &str = "A save of this plane is already running — wait for it to finish.";
@@ -2103,9 +2178,9 @@ fn commit_push(
     attempt.files = staged.len();
     show_what_is_staged(root, &staged, say);
 
-    // The secret guard: refuse if a staged memory/ref file looks like it holds a secret. A
-    // memory is pushed to a shared repository, so a credential in one is disclosed the moment
-    // the save lands.
+    // The secret guard: refuse if any staged file looks like it holds a secret. Every file a
+    // save stages is committed and pushed to a shared repository, so a credential in any of
+    // them is disclosed the moment the save lands.
     //
     // **It reads the STAGED BLOB, which is the thing about to be committed** (M3). Reading
     // the working-tree file instead asked about bytes that need not be the bytes of the
@@ -2136,18 +2211,32 @@ fn commit_push(
             .collect()
     })
     .unwrap_or_default();
-    let mut flagged: Vec<(String, &'static str)> = Vec::new();
+    // Where each finding is: the line a credential starts on, or none for a file refused
+    // whole.
+    let mut flagged: Vec<(String, Option<usize>, &'static str)> = Vec::new();
+    let mut skipped: Vec<(String, &'static str)> = Vec::new();
+    let mut to_read: Vec<&String> = Vec::new();
     for path in &staged {
-        if !(path.contains("/memory/") || path.contains("/refs/")) || deleted.contains(path) {
+        if deleted.contains(path) {
             continue;
         }
         let file = root.join(path);
+        // What is committed for a link outside memory and refs is the link, a path and no
+        // text of its target, and a directory is a nested repository's gitlink, a commit id:
+        // neither has a blob of text to scan. A memory or ref link goes on to be refused.
+        if !memory_or_ref(path)
+            && std::fs::symlink_metadata(&file)
+                .is_ok_and(|found| found.file_type().is_symlink() || found.is_dir())
+        {
+            continue;
+        }
         // charter #442's shape, kept and asked first so its own sentence is the one a
         // committed `memory/x -> /etc/passwd` gets: charter will not read through a link
         // that leaves the plane, and a memory file it cannot read is not one it commits.
         if !crate::contain::within_plane(root, &file) {
             flagged.push((
                 path.clone(),
+                None,
                 "it leads out of the plane, so charter will not read it",
             ));
             continue;
@@ -2160,18 +2249,21 @@ fn commit_push(
         if std::fs::symlink_metadata(&file).is_ok_and(|found| found.file_type().is_symlink()) {
             flagged.push((
                 path.clone(),
+                None,
                 "it is a link, and what a save commits for one is the link rather than the \
                  text charter would have read",
             ));
             continue;
         }
-        // `:<path>` is the index's own blob for that path, resolved from the top of the
-        // tree — which is what `--name-only` printed, and what `-C root` puts git in.
-        let staged_blob = format!(":{path}");
-        match git::run(root, &["show", &staged_blob], git::READ) {
-            Ok(run) if run.ok() => {
-                if let Some(kind) = secretshape::secret_kind(&run.out) {
-                    flagged.push((path.clone(), kind));
+        to_read.push(path);
+    }
+    for (path, blob) in to_read.iter().zip(staged_blobs(root, &to_read)) {
+        match blob {
+            Some(text) => {
+                if let Some(why) = unscanned(path, text.as_bytes()) {
+                    skipped.push(((*path).clone(), why));
+                } else if let Some(found) = secretshape::found(&text) {
+                    flagged.push(((*path).clone(), Some(found.line), found.kind));
                 }
             }
             // A row charter could not read what is staged for is not one it commits
@@ -2190,20 +2282,33 @@ fn commit_push(
             // git gone from PATH mid-command. Deleting this arm therefore turns nothing
             // red, and the next person to mutate it should know that before they conclude
             // it is dead code.
-            _ => flagged.push((
-                path.clone(),
+            None => flagged.push((
+                (*path).clone(),
+                None,
                 "charter could not read what is staged for it, so it will not commit it \
                  unexamined",
             )),
         }
     }
+    if !skipped.is_empty() {
+        say(Say::Info(
+            "Not scanned for secrets — git calls it binary, or it is over 10 MiB:".into(),
+        ));
+        for (path, why) in &skipped {
+            say(Say::Info(format!(
+                "  {} ({why})",
+                shown::readable(path, shown::DISPLAY_LIMIT)
+            )));
+        }
+    }
     if !flagged.is_empty() {
         say(Say::Fail(
-            "Refusing to save — a secret-shaped value in a memory/ref file:".into(),
+            "Refusing to save — a secret-shaped value in a staged file:".into(),
         ));
-        for (path, kind) in &flagged {
+        for (path, line, kind) in &flagged {
+            let at = line.map(|line| format!(":{line}")).unwrap_or_default();
             say(Say::Fail(format!(
-                "  {}  ({kind})",
+                "  {}{at}  ({kind})",
                 shown::readable(path, shown::DISPLAY_LIMIT)
             )));
         }

@@ -21,6 +21,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `XDG_*`, `CHARTER_*` and the like), the variables its harness declares, and whatever the plane's
   `charter.local.toml` lists under `[chat_env] pass`. Cloud, forge and model-provider credentials
   pass only when listed by exact name.
+- **A plane save scans every file it commits.** `charter save` reads every staged file for
+  secrets, not only memory and refs, and also catches a bare token by its forge's prefix. A hit
+  names the path and line, never the value; a binary or over-10-MiB file outside memory and refs
+  is named as not scanned.
 
 ## [0.4.1] - 2026-09-28
 

@@ -251,7 +251,7 @@ mod tests {
 
     #[test]
     fn a_save_blocked_by_a_secret_is_said_at_once() {
-        let dir = blocked_plane("a secret-shaped value in a memory or ref file", now());
+        let dir = blocked_plane(charter_core::planegit::SECRET_REFUSED, now());
         let memory = dir.path().join("personas/steward/memory");
         std::fs::create_dir_all(&memory).unwrap();
         std::fs::write(
