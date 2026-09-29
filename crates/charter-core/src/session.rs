@@ -39,6 +39,9 @@ pub struct Spec {
     /// A variable that names a harness's own identity must not survive that: it would make
     /// the session look like the process that launched charter.
     pub env_without: Vec<OsString>,
+    /// Start from an empty environment, not the app's: the program gets `TERM` and [`Self::env`]
+    /// and nothing else. A chat is started this way, from what [`crate::chatenv`] keeps.
+    pub env_clear: bool,
     pub size: Size,
 }
 
@@ -50,6 +53,7 @@ impl Spec {
             cwd: None,
             env: Vec::new(),
             env_without: Vec::new(),
+            env_clear: false,
             size,
         }
     }
@@ -293,6 +297,9 @@ impl Session {
         let mut command = CommandBuilder::new(&spec.program);
         command.args(&spec.args);
         command.cwd(cwd);
+        if spec.env_clear {
+            command.env_clear();
+        }
         command.env("TERM", "xterm-256color");
         // Removed before anything is set, so a caller can always put back what it means to.
         for key in &spec.env_without {
@@ -978,6 +985,26 @@ mod tests {
             .expect("the session starts");
 
         screen_until(&session, shows("seen<>"));
+    }
+
+    #[test]
+    fn a_session_told_to_start_empty_has_only_what_it_is_given() {
+        // A chat starts from an empty environment plus what `chatenv` keeps (charter's keep-list):
+        // nothing the app inherited reaches it by default. `HOME` is always inherited, so its
+        // absence is the test; `TERM` is the session's own either way.
+        assert!(
+            std::env::var_os("HOME").is_some(),
+            "the test needs an inherited variable"
+        );
+        let mut spec = Spec::new("/bin/sh", SIZE)
+            .args(["-c", "echo \"seen<${HOME}|${GIVEN}|${TERM}>\"; sleep 30"]);
+        spec.env_clear = true;
+        spec.env = vec![("GIVEN".into(), "yes".into())];
+
+        let session = Session::spawn(spec, Box::new(AlacrittyEngine::new(SIZE, 1000)))
+            .expect("the session starts");
+
+        screen_until(&session, shows("seen<|yes|xterm-256color>"));
     }
 
     #[test]

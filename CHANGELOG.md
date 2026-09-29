@@ -16,6 +16,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **The release runs only the code it pinned.** Every GitHub Action in charter's workflows is
   pinned to a commit rather than a tag, and the release jobs that hold the signing keys restore
   no build cache (ADR 0042).
+- **A chat starts from an allowlisted environment.** A chat is no longer given the app's whole
+  environment minus a few names: it gets a keep-list (`PATH`, `HOME`, the locale, the proxies,
+  `XDG_*`, `CHARTER_*` and the like), the variables its harness declares, and whatever the plane's
+  `charter.local.toml` lists under `[chat_env] pass`. Cloud, forge and model-provider credentials
+  pass only when listed by exact name.
 
 ## [0.4.1] - 2026-09-28
 

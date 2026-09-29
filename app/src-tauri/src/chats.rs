@@ -50,6 +50,14 @@ fn declared_identity_vars(cwd: Option<&std::path::Path>) -> Vec<String> {
     names
 }
 
+/// What more of this machine's environment the operator lets a chat started in `cwd` have:
+/// the `[chat_env] pass` of that plane's `charter.local.toml`. A chat outside a plane has none.
+fn operator_env_pass(cwd: Option<&std::path::Path>) -> Vec<String> {
+    cwd.and_then(|c| charter_core::plane::find_root(c).ok())
+        .map(|root| charter_core::chatenv::read(&root))
+        .unwrap_or_default()
+}
+
 /// One chat the app has open, as the UI and the quit warning see it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Open {
@@ -427,6 +435,8 @@ impl Chats {
                     // reaches the chat even when it is not `OP_`-prefixed (#271 review, U6). Read
                     // from the plane the chat starts in; a chat outside a plane declares none.
                     env_strip: declared_identity_vars(chat.cwd.as_deref()),
+                    harness,
+                    env_pass: operator_env_pass(chat.cwd.as_deref()),
                 },
                 &|session| {
                     announced.store(session, std::sync::atomic::Ordering::SeqCst);

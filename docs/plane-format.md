@@ -481,14 +481,15 @@ key refuses.
   its `[theme]` by `crates/charter-core/src/extension/project/theme.rs` (charter-app#273), and
   its `[harness_plugins]` table by `crates/charter-core/src/harness_plugin.rs` as
   `charter.toml`'s is (charter-app#274), and its `[plane]` and `[repos.<name>]` tables by
-  `crates/charter-core/src/planesave.rs` as `charter.toml`'s are (charter-app#292).
+  `crates/charter-core/src/planesave.rs` as `charter.toml`'s are (charter-app#292), and its
+  `[chat_env]` table by `crates/charter-core/src/chatenv.rs` on every chat start.
 - **Git:** gitignored — the baseline writes `/charter.local.toml`
   (`charter/commands.py:1104`), and `reinit` backfills it
   (`charter/commands.py:1821`). If git *would* carry it (tracked, committable, or git cannot
   say), **every profile in it is refused** (`charter/profiles.py:518` `ignore_check`,
   `charter/profiles.py:456` `with_ignore_check`). In charter-app, **nothing in it is read**
-  then: its `[extensions]`, `[theme]`, `[harness_plugins]`, `[plane]` and `[repos.<name>]`
-  are left out too, and the other
+  then: its `[extensions]`, `[theme]`, `[harness_plugins]`, `[plane]`, `[repos.<name>]` and
+  `[chat_env]` are left out too, and the other
   layers decide (charter-app#308, ADR 0048). Every reader takes the file through
   `crates/charter-core/src/settings.rs` `layer_text`, which applies the same check.
 - **Encoding details:** only `[harness]` is read by the profiles loader, and — in charter-app
@@ -497,9 +498,10 @@ key refuses.
   `[harness_plugins]` by `harness_plugin` (ADR 0050), and, since charter-app#292, `[plane]`
   and `[repos.<name>]` by `planesave` (ADR 0051), which override `charter.toml`'s values
   **key by key** on ADR 0048's overlay, every surface that shows one naming the file that
-  decided it; any other top-level key is refused with a sentence (`charter/profiles.py:325`,
-  and in charter-app `crates/charter-core/src/profiles.rs` `derive_from`, whose sentence names
-  all six tables). A missing file declares nothing and is not a refusal
+  decided it, and `[chat_env]` by `chatenv` (ADR 0047, amendment of 2026-09-29), which has no
+  counterpart in `charter.toml`; any other top-level key is refused with a sentence
+  (`charter/profiles.py:325`, and in charter-app `crates/charter-core/src/profiles.rs`
+  `derive_from`, whose sentence names all seven tables). A missing file declares nothing and is not a refusal
   (`charter/profiles.py:241`). Profile `env` is stored **sorted by name**
   (`charter/profiles.py:363`), and `~` in `command[0]` and in every `env` value is expanded
   only at launch (`charter/profiles.py:474`, `charter/profiles.py:480`) — never in the file
@@ -517,6 +519,7 @@ key refuses.
 | `[extensions.<id>.settings].<key>` | bool or str | optional | **charter-app only.** Overrides `charter.toml`'s value for the same key, key by key; falls through to it (then to the declared default) when the extension would not accept this one. | stable | `crates/charter-core/src/extension/project.rs` `resolve` |
 | `[theme].use` | str | optional | **charter-app only** (charter-app#273, ADR 0048). This machine's pick of the project's theme, over `charter.toml`'s and over a workspace's `settings.theme.use` (charter-app#281). Same values and rules as there; falls through to the next layer's pick when it is none of the shapes. | stable | `crates/charter-core/src/extension/project/theme.rs` `resolve` |
 | `[plane].<key>`, `[repos.<name>].<key>` | as in `charter.toml` | optional | **charter-app only.** This machine's value, over `charter.toml`'s, key by key. Same shapes and refusals. | stable | ADR 0051; `crates/charter-core/src/planesave.rs` `Settings::from_text` |
+| `[chat_env].pass` | list[str] | optional, default `[]` | **charter-app only** (ADR 0047, amendment of 2026-09-29). More of this machine's own environment every chat started in this plane is given, beyond the built-in keep-list and what the chat's harness declares (`crates/charter-core/src/chatenv.rs` `PASSED`, `Harness::env_passed`). Each entry is a variable's name (letters, digits and `_`, not starting with a digit), or such a name ending in `*` for a prefix. A credential-class name (forge, cloud, model-provider or registry credential, or a name holding `KEY`/`TOKEN`/`SECRET`/`PASSWORD`) passes only by its exact name, never by a prefix. `OP_*`, a vault's declared identity variables, a harness's identity, `CHARTER_WORKSPACE`, `CHARTER_PLANE_ROOT_SESSION` and `TERM` are never passed, whatever is listed. An entry of another shape, a `pass` that is not a list, or another key in the table is refused with a sentence and passes nothing. No counterpart in `charter.toml`. | stable | `crates/charter-core/src/chatenv.rs` `from_text`, `refusals`, `inherited` |
 
 ---
 

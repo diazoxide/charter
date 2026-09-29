@@ -93,9 +93,31 @@ mark is honoured only in this machine's half: a committed `vaults.json` cannot t
 hand a keyring item to `op`. `vault list` and the tab say where each identity is from the mark,
 without reading the keyring.
 
-**No chat the app starts carries an `OP_*` variable** — not one the app inherited from the
-shell that started it, and not one a harness profile's `env` declares. The extension programs
-the app runs start from an empty environment and never had one.
+**A chat starts from an allowlisted environment, not the app's whole one.** Whatever the app
+inherited — from a terminal it was started in, `launchctl setenv`, a login item — reaches a chat
+only if it is on the keep-list: what any program needs (`PATH`, `HOME`, `USER`, `LOGNAME`,
+`SHELL`, `LANG`/`LC_*`, `TMPDIR`, `SSH_AUTH_SOCK`, `XDG_*`, the proxy variables, charter's own
+`CHARTER_*`), the variables the chat's harness declares for itself (`CLAUDE_*`, `CODEX_*`,
+`OPENCODE_*`), and the names you add for the plane in `charter.local.toml`:
+
+```toml
+[chat_env]
+pass = ["JAVA_HOME", "GO*"]   # a name, or a prefix ending in *
+```
+
+Cloud, forge and model-provider credentials (`GITHUB_TOKEN`, `GH_TOKEN`, `AWS_*`,
+`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `NPM_TOKEN` and the like), and any name holding `KEY`,
+`TOKEN`, `SECRET` or `PASSWORD`, are held back even when a built-in or harness prefix would admit
+them. One passes only when you list its exact name there; a prefix you write does not bring a
+credential with it. The table is read from `charter.local.toml` only, because a committed file
+would let a teammate's push decide what of your machine's environment every chat gets.
+
+Listing a credential there hands it to every chat in the plane, and so to the model's shell.
+`charter secret exec` is the way to give one command a credential.
+
+**No chat the app starts carries an `OP_*` variable, or an identity variable a vault declares**
+— not one the app inherited, not one a harness profile's `env` declares, and not one listed in
+`[chat_env]`. The extension programs the app runs start from an empty environment too.
 
 ### Where the registry lives
 
