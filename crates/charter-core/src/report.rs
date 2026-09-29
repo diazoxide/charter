@@ -176,9 +176,7 @@ impl Known {
             if i > 0 {
                 out.push('\n');
             }
-            match crate::secretshape::secret_kind(line)
-                .or_else(|| crate::secretshape::token_kind(line))
-            {
+            match crate::secretshape::found(line).map(|f| f.kind) {
                 Some(kind) => {
                     note("lines that look like a credential");
                     let _ = write!(out, "[redacted: a line that looks like {kind}]");
