@@ -63,11 +63,13 @@ pub fn staged(repo: &Path) -> Result<Vec<Finding>, String> {
             Some(_) => String::from_utf8_lossy(&run.err).trim().to_owned(),
         });
     }
-    Ok(in_diff(&String::from_utf8_lossy(&run.out)))
+    in_diff(&String::from_utf8_lossy(&run.out))
 }
 
-/// What [`staged`] finds in a unified diff's text.
-fn in_diff(diff: &str) -> Vec<Finding> {
+/// What [`staged`] finds in a unified diff's text, or why the text could not be read — which the
+/// caller refuses the commit on, since a file whose name could not be read is a file nobody
+/// scanned.
+fn in_diff(diff: &str) -> Result<Vec<Finding>, String> {
     let mut found = Vec::new();
     let mut path: Option<String> = None;
     let mut at = 0usize;
@@ -77,7 +79,7 @@ fn in_diff(diff: &str) -> Vec<Finding> {
             path = None;
             in_hunk = false;
         } else if !in_hunk && let Some(new) = line.strip_prefix("+++ ") {
-            path = new.strip_prefix("b/").map(str::to_owned);
+            path = new_path(new)?;
         } else if let Some(hunk) = line.strip_prefix("@@ ") {
             in_hunk = true;
             at = hunk
@@ -85,22 +87,77 @@ fn in_diff(diff: &str) -> Vec<Finding> {
                 .find_map(|part| part.strip_prefix('+'))
                 .and_then(|new| new.split(',').next())
                 .and_then(|start| start.parse().ok())
-                .unwrap_or(0);
+                .ok_or_else(|| format!("a hunk header git wrote could not be read: {line:?}"))?;
         } else if in_hunk && let Some(added) = line.strip_prefix('+') {
-            if let Some(path) = &path {
-                found.extend(secretshape::leaks(added).into_iter().map(|leak| Finding {
-                    path: path.clone(),
-                    line: at,
-                    kind: leak.kind,
-                    masked: secretshape::masked(&added[leak.span]),
-                }));
-            }
+            let Some(path) = &path else {
+                return Err("git showed added lines with no file named for them".to_owned());
+            };
+            found.extend(secretshape::leaks(added).into_iter().map(|leak| Finding {
+                path: path.clone(),
+                line: at,
+                kind: leak.kind,
+                masked: secretshape::masked(&added[leak.span]),
+            }));
             at += 1;
         } else if in_hunk && line.starts_with(' ') {
             at += 1;
         }
     }
-    found
+    Ok(found)
+}
+
+/// The file a `+++ ` header names: `b/<path>`, or git's C-quoted `"b/<path>"` for a name
+/// holding a quote, a backslash, a control character or (with `core.quotePath` off) nothing
+/// else; `None` for `/dev/null`, a deletion. Anything else is an error.
+fn new_path(header: &str) -> Result<Option<String>, String> {
+    if header == "/dev/null" {
+        return Ok(None);
+    }
+    let name = if header.starts_with('"') {
+        unquoted(header)
+            .ok_or_else(|| format!("a file name git quoted could not be read: {header:?}"))?
+    } else {
+        header.to_owned()
+    };
+    name.strip_prefix("b/")
+        .map(|path| Some(path.to_owned()))
+        .ok_or_else(|| format!("a file header git wrote could not be read: {header:?}"))
+}
+
+/// git's C-quoted name, unquoted (`quote.c`'s `unquote_c_style`): `\"`, `\\`, `\a` `\b` `\t`
+/// `\n` `\v` `\f` `\r`, and three octal digits for any other byte. `None` for anything that is
+/// not exactly one such quoted string.
+fn unquoted(quoted: &str) -> Option<String> {
+    let inner = quoted.strip_prefix('"')?.strip_suffix('"')?;
+    let mut bytes = Vec::with_capacity(inner.len());
+    let mut rest = inner.as_bytes().iter().copied();
+    while let Some(byte) = rest.next() {
+        match byte {
+            b'"' => return None,
+            b'\\' => {
+                let escaped = rest.next()?;
+                bytes.push(match escaped {
+                    b'"' => b'"',
+                    b'\\' => b'\\',
+                    b'a' => 0x07,
+                    b'b' => 0x08,
+                    b't' => b'\t',
+                    b'n' => b'\n',
+                    b'v' => 0x0b,
+                    b'f' => 0x0c,
+                    b'r' => b'\r',
+                    b'0'..=b'3' => {
+                        let (two, three) = (rest.next()?, rest.next()?);
+                        let digit = |d: u8| (b'0'..=b'7').contains(&d).then(|| d - b'0');
+                        (escaped - b'0') * 64 + digit(two)? * 8 + digit(three)?
+                    }
+                    _ => return None,
+                });
+            }
+            other => bytes.push(other),
+        }
+    }
+    Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 /// The most findings a refusal lists; the rest are counted.
@@ -119,7 +176,9 @@ pub fn refusal(found: &[Finding]) -> String {
     }
     out.push_str(
         "Take it out of the change and commit again. A credential belongs in a vault \
-         (`charter secret`), and personal data does not belong in a repository.\n",
+         (`charter secret`), and personal data does not belong in a repository. If this is not \
+         what it looks like, say so to the operator: allowlisting arrives with SQ-17. Do not use \
+         --no-verify; the operator has been told.\n",
     );
     out
 }
@@ -236,6 +295,39 @@ mod tests {
                 .map(|f| (f.path.as_str(), f.line))
                 .collect::<Vec<_>>(),
             vec![("new.env", 3)]
+        );
+    }
+
+    #[test]
+    fn a_file_whose_name_git_quotes_is_scanned_under_its_own_name() {
+        let (_dir, repo) = repo();
+        for name in ["say \"hi\".txt", "tab\there.txt", "back\\slash.txt"] {
+            std::fs::write(repo.join(name), format!("{}\n", key())).unwrap();
+        }
+        testgit::run(&repo, &["add", "."]);
+
+        let mut named: Vec<String> = staged(&repo).unwrap().into_iter().map(|f| f.path).collect();
+        named.sort();
+
+        assert_eq!(
+            named,
+            ["back\\slash.txt", "say \"hi\".txt", "tab\there.txt"]
+        );
+    }
+
+    #[test]
+    fn a_header_that_cannot_be_read_refuses_rather_than_skips() {
+        for diff in [
+            "diff --git a/x b/x\n+++ \"b/unterminated\n@@ -0,0 +1 @@\n+x\n",
+            "diff --git a/x b/x\n+++ elsewhere/x\n@@ -0,0 +1 @@\n+x\n",
+            "diff --git a/x b/x\n+++ b/x\n@@ nonsense @@\n+x\n",
+            "diff --git a/x b/x\n@@ -0,0 +1 @@\n+x\n",
+        ] {
+            assert!(in_diff(diff).is_err(), "{diff:?}");
+        }
+        assert_eq!(
+            unquoted(r#""b/a\"b\\c\td\303\251""#).as_deref(),
+            Some("b/a\"b\\c\tdé")
         );
     }
 }

@@ -667,15 +667,20 @@ pub struct SessionSaved {
 /// What hears a [`SessionSaved`].
 pub type Saved = Box<dyn Fn(SessionSaved) + Send + Sync + 'static>;
 
-/// An agent's commit was refused before it was made: charter's `pre-commit` found a secret or
-/// personal data in what it adds (SQ-16, [`crate::diffscan`]).
+/// An agent's commit was refused before it was made: charter's `pre-commit` or
+/// `pre-merge-commit` found a secret or personal data in what it adds (SQ-16, ADR 0074,
+/// [`crate::diffscan`]).
 ///
 /// **Neither a report nor an ask.** It does not move the chat's state — the turn goes on, and
 /// the agent has git's refusal in front of it — but it is a needs-you item of its own: the
 /// operator hears that a commit was stopped, and what for, masked.
 ///
-/// Anything that can write the socket can send one, which is the account that can already move
-/// a chat's state; the most it buys is an item in the queue the operator can ignore.
+/// **The guard is the chat's token**, as for every line: the listener hands this on only when
+/// the token beside it is the one [`ChatTokens`] issued for the chat `Line::chat()` names — here
+/// `chat`. So a line naming a chat is believed only from something holding that chat's token,
+/// which is what the chat's own process tree holds (ADR 0068 §5, the `chat` scope). What that
+/// buys a process in the chat is an item in its own chat's queue, which the operator can
+/// ignore.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CommitRefused {
     /// The app's number for the chat whose commit it was, from [`CHAT_ENV`].
@@ -686,6 +691,21 @@ pub struct CommitRefused {
 
 /// What hears a [`CommitRefused`].
 pub type Refused = Box<dyn Fn(CommitRefused) + Send + Sync + 'static>;
+
+/// Who hears each kind of line on the hook channel ([`Listener::hear`]): one field per kind, so
+/// a kind added later is a field every caller is made to answer.
+pub struct Hearing {
+    /// Every [`Report`].
+    pub each: Box<dyn Fn(Report) + Send + Sync + 'static>,
+    /// Every [`Ask`], whose [`Answer`] is written back on the connection it came on.
+    pub answer: Answerer,
+    /// Every [`StartedByHand`].
+    pub noticed: Noticed,
+    /// Every [`SessionSaved`].
+    pub saved: Saved,
+    /// Every [`CommitRefused`].
+    pub refused: Refused,
+}
 
 /// Sends one report to the socket at `path`. Answers whether the app took it.
 ///
@@ -951,35 +971,23 @@ impl Listener {
         noticed: Noticed,
         saved: Saved,
     ) -> Reading {
-        self.each_answering_noticing_saving_and_refusing(
+        self.hear(Hearing {
             each,
             answer,
             noticed,
             saved,
-            Box::new(|_| {}),
-        )
+            refused: Box::new(|_| {}),
+        })
     }
 
-    /// [`Listener::each_answering_noticing_and_saving`], and every [`CommitRefused`] handed to
-    /// `refused`.
-    pub fn each_answering_noticing_saving_and_refusing(
-        self,
-        each: Box<dyn Fn(Report) + Send + Sync + 'static>,
-        answer: Answerer,
-        noticed: Noticed,
-        saved: Saved,
-        refused: Refused,
-    ) -> Reading {
+    /// Hands every line to whoever `hearing` names for its kind, on a thread of its own, until
+    /// the listener is dropped. The other `each…` methods are this with the kinds they leave
+    /// out dropped.
+    pub fn hear(self, hearing: Hearing) -> Reading {
         let stopping = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let path = self.path.clone();
         let stopped = std::sync::Arc::clone(&stopping);
-        let hearing = std::sync::Arc::new(Hearing {
-            each,
-            answer,
-            noticed,
-            saved,
-            refused,
-        });
+        let hearing = std::sync::Arc::new(hearing);
         let tokens = std::sync::Arc::clone(&self.tokens);
         let reading = std::thread::spawn(move || {
             let mut dealt: u64 = 0;
@@ -1105,16 +1113,6 @@ const A_LINE_IS_AT_MOST: u64 = 6 * crate::handoff::FIRST_MESSAGE_MAX_BYTES as u6
 
 /// What an app with no answerer says to an ask, so an asker never waits on a silence.
 pub const NOTHING_ANSWERS: &str = "this app does not open chats on request";
-
-/// Who hears each kind of line, as the listener was handed them.
-#[cfg(unix)]
-struct Hearing {
-    each: Box<dyn Fn(Report) + Send + Sync + 'static>,
-    answer: Answerer,
-    noticed: Noticed,
-    saved: Saved,
-    refused: Refused,
-}
 
 /// Reads one connection to its end: each report handed to `each`, each ask answered on it.
 ///
@@ -2584,13 +2582,13 @@ mod tests {
         let token = listener.tokens().issue(4).expect("a token");
         let (tx, rx) = mpsc::channel();
         let tx = std::sync::Mutex::new(tx);
-        let _reading = listener.each_answering_noticing_saving_and_refusing(
-            Box::new(|_| panic!("no report was sent")),
-            Box::new(|_, _| panic!("no ask was sent")),
-            Box::new(|_| panic!("no harness was started by hand")),
-            Box::new(|_| panic!("no record was saved")),
-            Box::new(move |refused| tx.lock().unwrap().send(refused).unwrap()),
-        );
+        let _reading = listener.hear(Hearing {
+            each: Box::new(|_| panic!("no report was sent")),
+            answer: Box::new(|_, _| panic!("no ask was sent")),
+            noticed: Box::new(|_| panic!("no harness was started by hand")),
+            saved: Box::new(|_| panic!("no record was saved")),
+            refused: Box::new(move |refused| tx.lock().unwrap().send(refused).unwrap()),
+        });
         // Without the token it is dropped, as every line is.
         tell_refused(&path, None, &refused).expect("the line is written");
         tell_refused(&path, Some(&token), &refused).expect("the line is written");

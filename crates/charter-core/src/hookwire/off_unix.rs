@@ -8,7 +8,7 @@
 use std::io;
 
 use super::{
-    Answer, Answerer, Ask, ChatToken, ChatTokens, CommitRefused, Noticed, Refused, Report, Saved,
+    Answer, Answerer, Ask, ChatToken, ChatTokens, CommitRefused, Hearing, Noticed, Report, Saved,
     SessionSaved, StartedByHand,
 };
 
@@ -140,14 +140,7 @@ impl Listener {
     }
 
     /// Unreachable, for the same reason.
-    pub fn each_answering_noticing_saving_and_refusing(
-        self,
-        _each: Box<dyn Fn(Report) + Send + Sync + 'static>,
-        _answer: Answerer,
-        _noticed: Noticed,
-        _saved: Saved,
-        _refused: Refused,
-    ) -> Reading {
+    pub fn hear(self, _hearing: Hearing) -> Reading {
         match self {}
     }
 }

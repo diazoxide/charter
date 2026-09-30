@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use charter_core::hookwire::{
-    Answer, Ask, ChatTokens, Listener, NOTHING_ANSWERS, Reading, Report, SessionSaved,
+    Answer, Ask, ChatTokens, Hearing, Listener, NOTHING_ANSWERS, Reading, Report, SessionSaved,
     StartedByHand,
 };
 use charter_core::session::Exit;
@@ -300,14 +300,14 @@ impl Hooks {
         let following: Arc<Mutex<Option<Following>>> = Arc::new(Mutex::new(None));
         let all_reports: Arc<Mutex<Option<Heard>>> = Arc::new(Mutex::new(None));
         let saved: Arc<Mutex<Option<SavedHeard>>> = Arc::new(Mutex::new(None));
-        let refusing = Arc::clone(&moved);
-        let reading = listener.each_answering_noticing_saving_and_refusing(
-            {
+        let reading = listener.hear(Hearing {
+            each: {
                 let board = Arc::clone(&board);
                 let plane = plane.clone();
                 let heard = Arc::clone(&heard);
                 let following = Arc::clone(&following);
                 let all_reports = Arc::clone(&all_reports);
+                let moved = Arc::clone(&moved);
                 Box::new(move |report| {
                     let applied = apply(&board, &plane, &report);
                     // Before the window is told, so the record already names the conversation
@@ -343,7 +343,7 @@ impl Hooks {
                     }
                 })
             },
-            {
+            answer: {
                 let answering = Arc::clone(&answering);
                 Box::new(move |connection, ask| {
                     // Taken out of the lock before it runs: an open starts a program, and a
@@ -360,7 +360,7 @@ impl Hooks {
                     }
                 })
             },
-            {
+            noticed: {
                 let plane = plane.clone();
                 Box::new(move |notice| {
                     if let Some(told) = by_hand(&plane, notice) {
@@ -368,7 +368,7 @@ impl Hooks {
                     }
                 })
             },
-            {
+            saved: {
                 let saved = Arc::clone(&saved);
                 Box::new(move |record| {
                     let listener = saved.lock().unwrap_or_else(PoisonError::into_inner).clone();
@@ -382,7 +382,7 @@ impl Hooks {
                     }
                 })
             },
-            {
+            refused: {
                 // A refused commit (SQ-16): a needs-you item on the chat, built under the same
                 // hold as the change, as every other move is.
                 let board = Arc::clone(&board);
@@ -395,11 +395,11 @@ impl Hooks {
                             .then(|| seen_by(&guard, &plane, refused.chat))
                     };
                     if let Some(what) = what {
-                        refusing(what);
+                        moved(what);
                     }
                 })
             },
-        );
+        });
         Ok(Self {
             plane,
             board,

@@ -385,14 +385,14 @@ enum Command {
         args: Vec<std::ffi::OsString>,
     },
 
-    /// charter's check in a chat's git hooks (SQ-16): for `pre-commit`, scans what the commit
+    /// charter's check in a chat's git hooks (SQ-16): for `pre-commit` and `pre-merge-commit`, scans what the commit
     /// adds for secrets and personal data, and refuses it on a finding.
     ///
     /// Hidden: nobody types it. The hooks the app writes at every launch are its one caller,
     /// and they run the repository's own hook after it.
     #[command(name = "git-hook", hide = true)]
     GitHook {
-        /// The hook git is running: `pre-commit`.
+        /// The hook git is running: `pre-commit` or `pre-merge-commit`.
         name: String,
     },
 

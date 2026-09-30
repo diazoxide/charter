@@ -12,7 +12,7 @@ use std::sync::{Mutex, mpsc};
 use std::time::Duration;
 
 use charter_core::githooks::GitHooks;
-use charter_core::hookwire::{CHAT_ENV, CommitRefused, Listener, SOCKET_ENV, TOKEN_ENV};
+use charter_core::hookwire::{CHAT_ENV, CommitRefused, Hearing, Listener, SOCKET_ENV, TOKEN_ENV};
 
 const CHARTER: &str = env!("CARGO_BIN_EXE_charter");
 
@@ -27,7 +27,7 @@ fn key() -> String {
 struct Chat {
     _reading: charter_core::hookwire::Reading,
     heard: mpsc::Receiver<CommitRefused>,
-    env: Vec<(String, String)>,
+    env: Vec<(std::ffi::OsString, std::ffi::OsString)>,
     repo: PathBuf,
     dir: tempfile::TempDir,
 }
@@ -43,18 +43,17 @@ impl Chat {
         let token = listener.tokens().issue(7).expect("a token");
         let (tx, heard) = mpsc::channel();
         let tx = Mutex::new(tx);
-        let reading = listener.each_answering_noticing_saving_and_refusing(
-            Box::new(|_| {}),
-            Box::new(|_, _| panic!("no ask")),
-            Box::new(|_| {}),
-            Box::new(|_| {}),
-            Box::new(move |refused| tx.lock().unwrap().send(refused).unwrap()),
-        );
-        let mut env = hooks.env();
-        env.extend([
-            (SOCKET_ENV.to_owned(), socket.display().to_string()),
-            (CHAT_ENV.to_owned(), "7".to_owned()),
-            (TOKEN_ENV.to_owned(), token.expose().to_owned()),
+        let reading = listener.hear(Hearing {
+            each: Box::new(|_| {}),
+            answer: Box::new(|_, _| panic!("no ask")),
+            noticed: Box::new(|_| {}),
+            saved: Box::new(|_| {}),
+            refused: Box::new(move |refused| tx.lock().unwrap().send(refused).unwrap()),
+        });
+        let env = hooks.arm(vec![
+            (SOCKET_ENV.into(), socket.clone().into_os_string()),
+            (CHAT_ENV.into(), "7".into()),
+            (TOKEN_ENV.into(), token.expose().into()),
         ]);
         let repo = root.join("elsewhere").join("app");
         std::fs::create_dir_all(&repo).unwrap();

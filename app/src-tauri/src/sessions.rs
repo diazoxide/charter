@@ -194,6 +194,11 @@ impl SessionHost for Sessions {
                 .filter(|(key, _)| !strip(std::ffi::OsStr::new(key)))
                 .map(|(key, value)| (key.into(), value.into())),
         );
+        // charter's git hooks (SQ-16, ADR 0074), once everything else the chat is started with
+        // is settled: after the pairs it already has, not over them.
+        if let Some(hooks) = &opening.git_hooks {
+            spec.env = hooks.arm(std::mem::take(&mut spec.env));
+        }
         // **The chat is what charter's per-session state is keyed on, and this is what says
         // so** — charter-app#63. Without it `active::session_id` falls to the harness's own
         // `$CLAUDE_CODE_SESSION_ID`, which names the CONVERSATION: `/clear` starts a new one
@@ -519,6 +524,7 @@ mod tests {
             harness: None,
             env_pass: Vec::new(),
             operator_shell: false,
+            git_hooks: None,
         }
     }
 
@@ -870,6 +876,46 @@ mod tests {
         opening.program = Some("/definitely/not/a/program".to_owned());
 
         assert!(sessions.open(None, &opening, &|_| {}).is_err());
+    }
+
+    // --- a chat's git runs charter's hooks (SQ-16, ADR 0074) ------------------------------ //
+
+    #[test]
+    fn a_chats_git_is_armed_after_the_git_config_pair_its_profile_sets() {
+        let sessions = Sessions::new();
+        let mut opening = opening(
+            "printf 'git<%s|%s|%s|%s|%s>' \"$GIT_CONFIG_COUNT\" \"$GIT_CONFIG_KEY_0\" \
+             \"$GIT_CONFIG_VALUE_0\" \"$GIT_CONFIG_KEY_1\" \"$GIT_CONFIG_VALUE_1\"; sleep 600",
+        );
+        opening.env = vec![
+            ("GIT_CONFIG_COUNT".to_owned(), "1".to_owned()),
+            ("GIT_CONFIG_KEY_0".to_owned(), "user.signingKey".to_owned()),
+            ("GIT_CONFIG_VALUE_0".to_owned(), "ABC".to_owned()),
+        ];
+        opening.git_hooks = Some(charter_core::githooks::GitHooks::at("/app/data/git-hooks"));
+        let id = sessions
+            .open(None, &opening, &|_| {})
+            .expect("the session opens");
+        let (_view, seen) = watching(&sessions, id);
+        let deadline = Instant::now() + PATIENCE;
+        let said = loop {
+            let shown = lock(&seen).clone();
+            if let Some((_, rest)) = shown.split_once("git<")
+                && let Some((said, _)) = rest.split_once('>')
+            {
+                break said.to_owned();
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the chat never printed, only {shown:?}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        };
+
+        assert_eq!(
+            said,
+            "2|user.signingKey|ABC|core.hooksPath|/app/data/git-hooks"
+        );
     }
 
     // --- no chat carries a 1Password token (#237) ------------------------------------- //

@@ -55,6 +55,10 @@ pub struct Opening {
     /// start — every chat, every relaunch, every shell a record puts back — is refused while
     /// agents are stopped.
     pub operator_shell: bool,
+    /// charter's git hooks, for a chat that runs a harness (SQ-16, ADR 0074): the chat's git is
+    /// armed with them after every other variable is settled, so a `GIT_CONFIG_COUNT` the
+    /// operator passes or a profile sets keeps its pairs. None for a shell.
+    pub git_hooks: Option<charter_core::githooks::GitHooks>,
 }
 
 /// Where a view's text goes. It is called on the view's own thread, one batch at a time.

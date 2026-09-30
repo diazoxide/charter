@@ -113,27 +113,60 @@ const NOT_SPACE: &str = r"[^\s\x1c-\x1f]";
 /// exactly what `re.IGNORECASE` matches for `i`.
 const I_CLASS: &str = "[iıİ]";
 
-/// Whether a check's pattern needs CPython's word boundary in front of its match, which
-/// [`secret_kind`] asks rather than the engine. Only the keyword rule has one.
-type Check = (&'static str, String, bool);
+/// Which of [`checks`] a rule is, so a caller picks rules by what they are and not by how their
+/// label is spelled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Rule {
+    AgentMail,
+    Jwt,
+    PrivateKey,
+    AwsKey,
+    Assignment,
+}
+
+impl Rule {
+    /// A credential and nothing else: what a code repository's save and a commit's scan ask,
+    /// where the assignment rule would refuse `password: String` and a JWT is a test fixture.
+    fn is_a_key(self) -> bool {
+        matches!(self, Self::AgentMail | Self::PrivateKey | Self::AwsKey)
+    }
+}
+
+/// A rule, its label, its pattern, and whether the pattern needs CPython's word boundary in
+/// front of its match, which [`secret_kind`] asks rather than the engine. Only the keyword
+/// rule has one.
+type Check = (Rule, &'static str, String, bool);
 
 /// The kinds, in the order they are asked. Python's `_SECRET_CHECKS`: the label of the FIRST
 /// rule that hits anywhere in the text wins, not the earliest hit in the text.
 fn checks() -> [Check; 5] {
     [
-        ("AgentMail key", r"am_us_[A-Za-z0-9]{4,}".to_owned(), false),
         (
+            Rule::AgentMail,
+            "AgentMail key",
+            r"am_us_[A-Za-z0-9]{4,}".to_owned(),
+            false,
+        ),
+        (
+            Rule::Jwt,
             "JWT",
             r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}".to_owned(),
             false,
         ),
         (
+            Rule::PrivateKey,
             "private key (PEM)",
             r"-----BEGIN [A-Z ]*PRIVATE KEY-----".to_owned(),
             false,
         ),
-        ("AWS access key", r"AKIA[0-9A-Z]{12,}".to_owned(), false),
         (
+            Rule::AwsKey,
+            "AWS access key",
+            r"AKIA[0-9A-Z]{12,}".to_owned(),
+            false,
+        ),
+        (
+            Rule::Assignment,
             "credential assignment",
             // Built by concatenation, never with a line continuation: a raw string does not
             // process `\` at end of line, so a "continued" pattern carries a literal
@@ -151,13 +184,14 @@ fn checks() -> [Check; 5] {
     ]
 }
 
-fn compiled() -> &'static [(&'static str, Regex, bool)] {
-    static ONCE: OnceLock<Vec<(&'static str, Regex, bool)>> = OnceLock::new();
+fn compiled() -> &'static [(Rule, &'static str, Regex, bool)] {
+    static ONCE: OnceLock<Vec<(Rule, &'static str, Regex, bool)>> = OnceLock::new();
     ONCE.get_or_init(|| {
         checks()
             .into_iter()
-            .map(|(label, pattern, boundary)| {
+            .map(|(rule, label, pattern, boundary)| {
                 (
+                    rule,
                     label,
                     Regex::new(&pattern).expect("a pattern this module wrote"),
                     boundary,
@@ -258,7 +292,7 @@ pub fn secret_kind(text: &str) -> Option<&'static str> {
 /// [`secret_kind`], with the byte offset of the match that decided it — the one walk both
 /// answer from, so the kind and where it is can never disagree.
 fn secret_at(text: &str) -> Option<(&'static str, usize)> {
-    for (label, rx, boundary) in compiled() {
+    for (_, label, rx, boundary) in compiled() {
         // `finditer`'s own walk, written out, because one position has to be REJECTED and
         // resumed from: a match whose leading word boundary is `regex`'s and not CPython's
         // is not a match at all, and Python's search carries on from the next character —
@@ -310,11 +344,9 @@ pub fn token_kind(text: &str) -> Option<&'static str> {
 
 /// [`token_kind`], with the byte offset of the match that decided it.
 fn token_at(text: &str) -> Option<(&'static str, usize)> {
-    for (label, rx, _) in compiled() {
-        if matches!(
-            *label,
-            "private key (PEM)" | "AWS access key" | "AgentMail key"
-        ) && let Some(hit) = rx.find(text)
+    for (rule, label, rx, _) in compiled() {
+        if rule.is_a_key()
+            && let Some(hit) = rx.find(text)
         {
             return Some((label, hit.start()));
         }
@@ -446,8 +478,9 @@ fn prefixed_token() -> &'static Regex {
     })
 }
 
-/// An address that names nobody: a documentation domain (RFC 2606, RFC 6761), a no-reply
-/// sender, or `git@<host>`, which is an SSH remote and not a mailbox.
+/// An address that names nobody: a documentation or private-use domain (RFC 2606, RFC 6761,
+/// `.internal`, `.local`, `localhost.localdomain`), a no-reply sender, `git@<host>`, which is an
+/// SSH remote and not a mailbox, or an image's scale suffix (`logo@2x.png`).
 fn names_nobody(address: &str) -> bool {
     let (local, domain) = address.rsplit_once('@').unwrap_or(("", address));
     let (local, domain) = (local.to_ascii_lowercase(), domain.to_ascii_lowercase());
@@ -461,10 +494,25 @@ fn names_nobody(address: &str) -> bool {
     .any(|d| domain == *d || domain.ends_with(&format!(".{d}")));
     let tld = domain.rsplit('.').next().unwrap_or("");
     reserved
-        || matches!(tld, "test" | "invalid" | "localhost" | "example" | "local")
+        || matches!(
+            tld,
+            "test" | "invalid" | "localhost" | "localdomain" | "example" | "local" | "internal"
+        )
         || local.starts_with("noreply")
         || local.starts_with("no-reply")
         || local == "git"
+        || a_scale_suffix(&domain)
+}
+
+/// `2x.png`, `3x.webp`, `1.5x.jpg`: what follows the `@` in an image asset's name. Only an
+/// image's extension, so `ada@2x.dev` is still somebody's address.
+fn a_scale_suffix(domain: &str) -> bool {
+    static ONCE: OnceLock<Regex> = OnceLock::new();
+    ONCE.get_or_init(|| {
+        Regex::new(r"^[0-9]+(?:\.[0-9]+)?x\.(?:png|jpe?g|gif|webp|avif|svg|ico|bmp|tiff?|heic)$")
+            .expect("a pattern this module wrote")
+    })
+    .is_match(domain)
 }
 
 /// A card number: 13 to 19 digits under a known issuer prefix, passing the Luhn check.
@@ -513,11 +561,8 @@ fn an_ssn(candidate: &str) -> bool {
 /// save's rule ([`found`]): that one refuses `password: String`, which is ordinary code.
 pub fn leaks(line: &str) -> Vec<Leak> {
     let mut all: Vec<Leak> = Vec::new();
-    for (kind, rx, _) in compiled() {
-        if matches!(
-            *kind,
-            "private key (PEM)" | "AWS access key" | "AgentMail key"
-        ) {
+    for (rule, kind, rx, _) in compiled() {
+        if rule.is_a_key() {
             all.extend(rx.find_iter(line).map(|hit| Leak {
                 kind,
                 span: hit.range(),
@@ -942,6 +987,15 @@ mod leak_tests {
     }
 
     #[test]
+    fn a_real_domain_is_still_an_email_even_beside_a_placeholder() {
+        assert_eq!(
+            kinds("a@example.com and ada@lovelace.dev"),
+            vec!["an email address"]
+        );
+        assert_eq!(kinds("ada@2x.dev"), vec!["an email address"]);
+    }
+
+    #[test]
     fn a_placeholder_or_noreply_address_is_not_somebodys_email() {
         for line in [
             "user@example.com",
@@ -952,6 +1006,15 @@ mod leak_tests {
             "noreply@anthropic.com",
             "no-reply@github.com",
             "1234+someone@users.noreply.github.com",
+            "logo@2x.png",
+            "<img src=\"icon@3x.webp\">",
+            "hero@1.5x.jpg",
+            "admin@localhost.localdomain",
+            "svc@db.internal",
+            "me@printer.local",
+            "x@y.test",
+            "x@docs.example",
+            "x@nowhere.invalid",
         ] {
             assert_eq!(kinds(line), Vec::<&str>::new(), "{line}");
         }

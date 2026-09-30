@@ -58,14 +58,25 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   project asks for a repo the same way, and the two-folder form is under Advanced (#603).
 - **A chat's commits are scanned for secrets and personal data before they are made, in any
   repository.** Every chat the app starts on a harness commits through charter's own git
-  hooks. Before each commit, charter reads the lines it adds. A token or key in a vendor's
-  known shape (charter's forge-prefix rules plus gitleaks' vendor rules), an email address, a
-  card number or a US Social Security number refuses the commit. git prints where each one is
-  and what kind it is, with the value masked, and the chat joins the needs-you queue saying
-  why. This holds in a workspace repo, a piece, or a repository outside any plane. The
-  repository's own hooks (husky, pre-commit, git-lfs) still run after charter's check.
-  Documentation addresses (`example.com`, `.test`), no-reply addresses and `git@host` remotes
-  are not treated as anyone's email. There is no allowlist yet (#592).
+  hooks. Before each commit, including a merge commit, charter reads the lines the commit adds.
+  These refuse the commit:
+
+  - a token or key in a vendor's known shape (charter's forge-prefix rules plus gitleaks'
+    prefix-anchored vendor rules);
+  - an email address;
+  - a card number;
+  - a US Social Security number.
+
+  git prints where each one is and what kind it is, with the value masked, and the chat joins
+  the needs-you queue saying why. This holds in a workspace repo, a piece, or a repository
+  outside any plane. The repository's own hooks (husky, pre-commit, git-lfs) still run after
+  charter's check, except `post-index-change` and `reference-transaction`, which charter does
+  not forward. The guard also refuses `git commit --no-verify`, `-n`, and a
+  `core.hooksPath` or `GIT_CONFIG_*` set on the command line. These are not treated as anyone's
+  email: documentation and private-use domains (`example.com`, `.test`, `.internal`, `.local`),
+  no-reply addresses, `git@host` remotes, and image names like `logo@2x.png`. There is no
+  allowlist yet, so an author's email in a manifest is refused until SQ-17. Commits made by
+  `cherry-pick`, `rebase` and `am` are not scanned (#592, ADR 0074).
 
 ### Fixed
 

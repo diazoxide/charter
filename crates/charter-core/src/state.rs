@@ -226,6 +226,17 @@ impl Chat {
         &self.reports
     }
 
+    /// What a reader of this chat is shown, so a move can be told from no move by comparing
+    /// it before and after. [`Chat::asking`] and the turn count are not part of it.
+    fn seen(&self) -> (State, bool, usize, usize) {
+        (
+            self.state,
+            self.needs_you,
+            self.reports.len(),
+            self.refusals.len(),
+        )
+    }
+
     /// The commits of this chat that were refused and not yet seen, oldest first.
     pub fn refusals(&self) -> &[String] {
         &self.refusals
@@ -270,12 +281,7 @@ impl Chat {
         if self.ended {
             return false;
         }
-        let was = (
-            self.state,
-            self.needs_you,
-            self.reports.len(),
-            self.refusals.len(),
-        );
+        let was = self.seen();
         match event {
             // A fresh chat, and every chat a relaunch puts back, wants a first prompt. It
             // has asked for nothing, and a launch that filled the queue would empty the
@@ -339,12 +345,7 @@ impl Chat {
                 self.asking = false;
             }
         }
-        was != (
-            self.state,
-            self.needs_you,
-            self.reports.len(),
-            self.refusals.len(),
-        )
+        was != self.seen()
     }
 
     /// The operator dismissed this chat's request without answering it (charter-app#248).
@@ -374,12 +375,7 @@ impl Chat {
     /// program telling the app directly, which is not the harness OUTPUT that ADR 0018
     /// forbids reading.
     pub fn exited(&mut self, code: Option<i32>) -> bool {
-        let was = (
-            self.state,
-            self.needs_you,
-            self.reports.len(),
-            self.refusals.len(),
-        );
+        let was = self.seen();
         // No code at all is what a signal leaves behind, and that is not a clean end.
         self.state = if code == Some(0) {
             State::Done
@@ -392,12 +388,7 @@ impl Chat {
         // Nothing will prompt it again, so nothing it was waiting to read is an item any more.
         self.reports.clear();
         self.refusals.clear();
-        was != (
-            self.state,
-            self.needs_you,
-            self.reports.len(),
-            self.refusals.len(),
-        )
+        was != self.seen()
     }
 }
 

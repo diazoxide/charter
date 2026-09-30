@@ -469,11 +469,11 @@ impl Chats {
     /// in a workspace repo, a piece, or a repository outside any plane — is scanned before it
     /// is made. Nothing for a shell tab, which is the operator's own, and nothing when the app
     /// could not write the hooks.
-    pub(crate) fn git_hooks_env(&self, harness: Option<Harness>) -> Vec<(String, String)> {
-        match (&self.shipped.git_hooks, harness) {
-            (Some(hooks), Some(_)) => hooks.env(),
-            _ => Vec::new(),
-        }
+    pub(crate) fn git_hooks_for(
+        &self,
+        harness: Option<Harness>,
+    ) -> Option<charter_core::githooks::GitHooks> {
+        harness.and(self.shipped.git_hooks.clone())
     }
 
     /// The one place a session is opened and a chat is remembered.
@@ -511,7 +511,6 @@ impl Chats {
         };
         let mut env = env;
         env.extend(armed);
-        env.extend(self.git_hooks_env(harness));
         env.sort();
         // The app's own `charter` first, then the directories charter searched for the
         // harness — so a hook the plane spells as the bare word `charter`, or a skill's
@@ -539,6 +538,7 @@ impl Chats {
                     harness,
                     env_pass: operator_env_pass(chat.cwd.as_deref()),
                     operator_shell,
+                    git_hooks: self.git_hooks_for(harness),
                 },
                 &|session| {
                     announced.store(session, std::sync::atomic::Ordering::SeqCst);
@@ -3136,25 +3136,16 @@ mod tests {
 
     #[test]
     fn a_harness_chat_commits_through_charters_git_hooks() {
-        let env = armed_with_git_hooks().git_hooks_env(Some(Harness::ClaudeCode));
-
-        assert!(
-            env.contains(&("GIT_CONFIG_KEY_0".to_owned(), "core.hooksPath".to_owned())),
-            "{env:?}"
-        );
-        assert!(
-            env.contains(&(
-                "GIT_CONFIG_VALUE_0".to_owned(),
-                "/app/data/git-hooks".to_owned()
-            )),
-            "{env:?}"
+        assert_eq!(
+            armed_with_git_hooks().git_hooks_for(Some(Harness::ClaudeCode)),
+            Some(charter_core::githooks::GitHooks::at("/app/data/git-hooks"))
         );
     }
 
     #[test]
     fn a_shell_tab_and_an_app_without_git_hooks_arm_nothing() {
-        assert!(armed_with_git_hooks().git_hooks_env(None).is_empty());
-        assert!(Chats::new().git_hooks_env(Some(Harness::Codex)).is_empty());
+        assert_eq!(armed_with_git_hooks().git_hooks_for(None), None);
+        assert_eq!(Chats::new().git_hooks_for(Some(Harness::Codex)), None);
     }
 
     // --- a shell tab's shims (SI-5, ADR 0062) ---------------------------------------------- //
