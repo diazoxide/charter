@@ -197,6 +197,34 @@ The process that owns every chat's terminal on a device, one per OS user per dev
 `charter` binary run as `charter serve`. The app is its client (ADR 0068).
 _Avoid_: daemon, server (in UI text), backend
 
+**Audit**:
+The record of who did what, for whom, to what, and whether it was allowed, kept per device by
+the session host as **audit entries** in charter's data home, never in a project. Once AU-3
+lands, the entries are a device-signed hash chain. It is never sampled, and it is a separate
+system from telemetry (ADR 0075).
+_Avoid_: log (unqualified), history, `charter secret audit` (that is a vault health report)
+
+**Audit entry**:
+One line of the audit, written from one event: an action, its actor and whose behalf it acted
+on (both as keyed pseudonyms), what it acted on, its outcome, and typed metadata. Never a prompt,
+output, file contents, raw arguments or a secret value. An agent's entry says what charter could
+see of its run: its **coverage** (ADR 0075).
+_Avoid_: audit event (the event is what the entry is written from), log line
+
+**Coverage** (of an audit entry):
+What charter could see of the run an agent's audit entry is about, set by its harness level:
+the process only (level 1), the tool calls its hooks report (level 2), or every tool call its
+protocol reports (level 3). A level-2 run whose hooks never reported is **unarmed**, and a
+vendor-cloud chat charter only lists is **observed**. Shown beside the entry, so silence is never
+read as "did nothing" (ADR 0073, ADR 0075).
+_Avoid_: level (that is the run's), completeness
+
+**Telemetry**:
+What charter measures about how chats and charter itself perform: time, resources, tokens and
+cost, sent through OpenTelemetry to the user's own backend, plus the opt-in product telemetry and
+crash reports. It may be sampled, never names a person, and never reads the audit (ADR 0075).
+_Avoid_: audit, analytics, metrics (for the whole of it)
+
 ### The window
 
 **Split window**:
