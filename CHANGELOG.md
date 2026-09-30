@@ -11,6 +11,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-09-30
+
+0.4.2 is a hardening release: the release pipeline runs only the code it pinned, a chat starts from an allowlisted environment instead of the app's whole one, a plane save scans every file it commits for secrets, plane trust covers the tools a persona is granted, and hook calls are authenticated per chat.
+
 ### Security
 
 - **The release runs only the code it pinned.** Every GitHub Action in charter's workflows is
@@ -29,7 +33,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `bin/` script a tool names, is part of the approval, and a grant that changed since asks again
   before it runs without a prompt. Old per-session tool ceilings are removed when a plane opens
   (ADR 0035).
-- **Hook calls are authenticated per chat.**
+- **Hook calls are authenticated per chat.** Each chat gets its own token when it starts, and the
+  hook channel accepts a call only with that chat's token.
 
 ## [0.4.1] - 2026-09-28
 
@@ -1360,7 +1365,8 @@ and every settings group that it would have changed says so.
 - No program charter starts can hold a chat's terminal open after the chat ends.
   ([#105](https://github.com/diazoxide/charter/pull/105))
 
-[Unreleased]: https://github.com/diazoxide/charter/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/diazoxide/charter/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/diazoxide/charter/releases/tag/v0.4.2
 [0.4.1]: https://github.com/diazoxide/charter/releases/tag/v0.4.1
 [0.4.0]: https://github.com/diazoxide/charter/releases/tag/v0.4.0
 [0.3.0]: https://github.com/diazoxide/charter/releases/tag/v0.3.0
