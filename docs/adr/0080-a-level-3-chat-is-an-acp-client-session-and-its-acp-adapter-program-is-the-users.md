@@ -1,6 +1,6 @@
 # A level-3 chat is an ACP client session, and its ACP adapter program is the user's
 
-**Proposed 2026-10-01**, drafted for program-map ticket HP-1 (#668). It follows these of the
+**Accepted 2026-10-01** by the operator (ruling V28), drafted for program-map ticket HP-1 (#668). It follows these of the
 operator's rulings:
 
 - **Q6′:** *"Three harness levels (terminal-only, hooks/native, ACP). Harnesses are declared as
@@ -186,8 +186,8 @@ This record fixes the order and who may answer:
    written to the audit. ACP's answer carries only an option, so the agent learns *rejected*, not
    why; charter adds the reason in the response's metadata, which an agent may ignore.
 2. **Otherwise it is needs you.** The chat is waiting from the request until its answer. The
-   options are shown as the agent gave them, in its words, except as the third ruling question
-   below proposes for "allow always".
+   options are shown as the agent gave them, in its words, except for "allow always", which V28c
+   limits.
 3. **Only a human scope answers. Settled by V16:** *"an agent can never answer its own asks or
    approve its own secret requests"*. An answer comes from a `local-ui` or `approval` client
    (ADR 0068 §5), and later a paired device under LW-9. The agent's own stdio can ask and never
@@ -356,7 +356,7 @@ The code does not change with this record.
 - **charter as an ACP proxy or conductor**, injecting its tools into another client's session.
   It is standing in (ADR 0073 §4), and HP-7's MCP server, passed at `session/new`, reaches every
   ACP agent without it.
-- **Serving `fs/*` and `terminal/*`.** See §2 and the first ruling question.
+- **Serving `fs/*` and `terminal/*`.** See §2 and V28a.
 - **A shared agent process for several chats.** See §1.
 - **ACP over HTTP or WebSocket.** Work in progress in ACP, and a runner's own `charterd` makes it
   unnecessary.
@@ -364,35 +364,16 @@ The code does not change with this record.
 - **A charter-written ACP adapter program for Claude Code.** It would stand in for the harness's
   program, and it would break the operator's standing rule on languages.
 
-## For the operator's ruling
+## Ruled (V28, 2026-10-01)
 
-ADR 0073 and V24 settled HP-1's title and outcome line; these are the questions still open.
-
-1. **charter offers ACP agents no `fs` and no `terminal` client methods.** *Recommend yes.* Served
-   by `charterd`, they would run the chat's reads, writes and commands outside its sandbox, and
-   charter would own a second enforcement path to keep equal to ADR 0067's. The cost is that
-   charter never sees an edit before it lands. **That the built-in ACP adapter programs and
-   opencode work fully with both off is unverified until HP-2's test**; if one does not, that
-   harness's level 3 waits, rather than charter serving the methods.
-2. **Opening a level-3 chat in a tab shows its structured transcript as a view tab**, with its
-   asks and a prompt box, and does not switch it to its terminal. *Continue in terminal* is an
-   explicit action that starts a new run with cause `switch`. Where the harness lacks
-   `resumes_by_id`, *Continue in terminal* is disabled and the capability card names why.
-   **A chat created in a tab still starts in its terminal (V24a)**; this covers only a chat
-   started with no terminal shown (dispatched, headless, remote) and opened later. *Recommend
-   yes.* Such a chat should not lose its turn in flight to a silent switch.
+1. **charter offers ACP agents no `fs` and no `terminal` client methods.** A harness whose ACP
+   adapter program can't work without them waits for level 3 (V28a).
+2. **A level-3 chat opened in a tab shows its transcript as a view tab.** *Continue in terminal*
+   is an explicit `switch`, disabled with the reason shown when the harness lacks
+   `resumes_by_id`. New tab chats still start in their terminal (V24a) (V28b).
 3. **"Allow always" is shown only where the ACP adapter program keeps it for the session.** Where
-   the program persists it into the worktree's harness settings, charter hides it and offers the
-   once options, saying why. This is measured, not assumed: `claude-agent-acp`'s "always" options
-   write an allow rule with destination `localSettings`, which is the worktree's
-   `.claude/settings.local.json`, so one answer in a level-3 chat silently pre-approves that call
-   for every later Claude Code chat in the worktree, at level 2 as well. charter never edits the
-   harness's settings to undo it (ADR 0050: nothing written into a harness's config). HP-3 and
-   HP-4 check `codex-acp` and the app-server the same way; opencode's is checked in HP-2. A
-   policy that requires every tool call to be asked hides "always" everywhere (strictest wins,
-   C9). *Recommend yes.* The cost of showing it: each "allow always" widens what the guard never
-   sees, and where it persists, it widens it for chats the operator never answered in.
-4. **An ACP ask's deadline is null, and charter adds none.** *Recommend yes.* HP-5's "below the
-   hook timeout" has no bound to sit under at level 3. The ask stays in needs you until it is
-   answered, cancelled or stopped; a budget (N4) or Stop ends the wait, and a silent timeout that
-   rejects would read as the operator's refusal.
+   it persists into the worktree's harness settings, as `claude-agent-acp` does into
+   `.claude/settings.local.json`, charter hides it and offers allow-once only, saying why. A policy
+   can hide it everywhere (C9) (V28c).
+4. **An ACP ask has no deadline.** It stays in needs you until answered, cancelled or stopped
+   (V28d).
