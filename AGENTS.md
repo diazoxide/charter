@@ -17,7 +17,7 @@ in `diazoxide/charter-plane` as history (ADR 0044). A new decision is the next n
 
 - **The core never depends on Tauri or the UI.** `charter-core` is plain Rust. The app and the
   CLI call into it.
-- **Nothing parses harness output to decide anything.** A session's state comes from hooks only, or, for a chat at level 3, from its structured protocol (ADR 0073).
+- **Nothing parses harness output to decide anything.** A run's state moves only by a named cause (ADR 0076): its hooks, or, for a chat at level 3, its structured protocol (ADR 0073); its program's exit; an act of the host, the operator or a policy; or, for a remote chat, what its vendor reports.
 - **The plane on disk has the format `docs/plane-format.md` records.** Never change it here
   without that document changing first.
 - **A new store names its tier before it ships** (ADR 0069): Plane, Clone state, Machine
