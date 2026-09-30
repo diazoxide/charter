@@ -1510,6 +1510,7 @@ mod tests {
         }
         charter_core::hookwire::send(
             held.hooks().socket().expect("listening"),
+            Some(&held.hooks().token_for(curating.session)),
             &Report {
                 chat: curating.session,
                 event: Event::SessionStart,
@@ -1646,6 +1647,7 @@ mod tests {
         for event in [Event::SessionStart, Event::UserPromptSubmit] {
             charter_core::hookwire::send(
                 held.hooks().socket().expect("listening"),
+                Some(&held.hooks().token_for(curating.session)),
                 &Report {
                     chat: curating.session,
                     event,

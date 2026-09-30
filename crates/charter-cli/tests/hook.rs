@@ -8,7 +8,7 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
 
-use charter_core::hookwire::{CHAT_ENV, Conversation, Listener, Report, SOCKET_ENV};
+use charter_core::hookwire::{CHAT_ENV, Conversation, Listener, Report, SOCKET_ENV, TOKEN_ENV};
 use charter_core::state::{Detail, Event};
 
 const CHARTER: &str = env!("CARGO_BIN_EXE_charter");
@@ -40,11 +40,11 @@ fn a_hook_tells_the_app_what_the_harness_fired() {
     let dir = tempfile::tempdir().expect("a directory");
     let path = dir.path().join("hooks.sock");
     let (tx, rx) = mpsc::channel();
-    let _reading = Listener::bind(dir.path(), &path)
-        .expect("a socket")
-        .each(Box::new(move |report| {
-            let _ = tx.send(report);
-        }));
+    let listener = Listener::bind(dir.path(), &path).expect("a socket");
+    let token = listener.tokens().issue(7).expect("a token");
+    let _reading = listener.each(Box::new(move |report| {
+        let _ = tx.send(report);
+    }));
 
     let code = hook(
         "stop",
@@ -52,6 +52,7 @@ fn a_hook_tells_the_app_what_the_harness_fired() {
         &[
             (SOCKET_ENV, path.to_str().expect("a path")),
             (CHAT_ENV, "7"),
+            (TOKEN_ENV, token.expose()),
             // A Claude Code hook carries both, and they agree (ADR 0024, C7). The report
             // names a conversation only when they do.
             (
@@ -76,15 +77,53 @@ fn a_hook_tells_the_app_what_the_harness_fired() {
 }
 
 #[test]
+fn a_hook_without_its_chats_token_is_not_heard_and_the_turn_goes_on() {
+    let dir = tempfile::tempdir().expect("a directory");
+    let path = dir.path().join("hooks.sock");
+    let (tx, rx) = mpsc::channel();
+    let listener = Listener::bind(dir.path(), &path).expect("a socket");
+    let _seven = listener.tokens().issue(7).expect("a token");
+    let eight = listener.tokens().issue(8).expect("a token");
+    let _reading = listener.each(Box::new(move |report| {
+        let _ = tx.send(report);
+    }));
+    let socket = path.to_str().expect("a path");
+
+    // None, and another chat's.
+    let codes = [
+        hook(
+            "stop",
+            CLAUDE_STOP,
+            &[(SOCKET_ENV, socket), (CHAT_ENV, "7")],
+        ),
+        hook(
+            "stop",
+            CLAUDE_STOP,
+            &[
+                (SOCKET_ENV, socket),
+                (CHAT_ENV, "7"),
+                (TOKEN_ENV, eight.expose()),
+            ],
+        ),
+    ];
+
+    assert_eq!(codes, [0, 0], "a hook broke the turn");
+    assert!(
+        rx.recv_timeout(Duration::from_secs(2)).is_err(),
+        "a hook without its chat's token was heard"
+    );
+}
+
+#[test]
 fn every_state_event_reaches_the_app_under_the_word_the_plugin_uses() {
     let dir = tempfile::tempdir().expect("a directory");
     let path = dir.path().join("hooks.sock");
     let (tx, rx) = mpsc::channel();
-    let _reading = Listener::bind(dir.path(), &path)
-        .expect("a socket")
-        .each(Box::new(move |report| {
-            let _ = tx.send(report.event);
-        }));
+    let listener = Listener::bind(dir.path(), &path).expect("a socket");
+    let token = listener.tokens().issue(1).expect("a token");
+    let _reading = listener.each(Box::new(move |report| {
+        let _ = tx.send(report.event);
+    }));
 
     for event in [
         Event::SessionStart,
@@ -100,6 +139,7 @@ fn every_state_event_reaches_the_app_under_the_word_the_plugin_uses() {
             &[
                 (SOCKET_ENV, path.to_str().expect("a path")),
                 (CHAT_ENV, "1"),
+                (TOKEN_ENV, token.expose()),
             ],
         );
 
@@ -837,11 +877,11 @@ fn the_command_line_the_charter_plugin_actually_writes_is_answered() {
     let dir = tempfile::tempdir().expect("a directory");
     let path = dir.path().join("hooks.sock");
     let (tx, rx) = mpsc::channel();
-    let _reading = Listener::bind(dir.path(), &path)
-        .expect("a socket")
-        .each(Box::new(move |report| {
-            let _ = tx.send(report.event);
-        }));
+    let listener = Listener::bind(dir.path(), &path).expect("a socket");
+    let token = listener.tokens().issue(7).expect("a token");
+    let _reading = listener.each(Box::new(move |report| {
+        let _ = tx.send(report.event);
+    }));
 
     let mut child = Command::new(CHARTER)
         .args(["hook", "sessionstart", "--plugin-version", "0.62.1"])
@@ -850,6 +890,7 @@ fn the_command_line_the_charter_plugin_actually_writes_is_answered() {
         .env("PATH", std::env::var("PATH").unwrap_or_default())
         .env(SOCKET_ENV, &path)
         .env(CHAT_ENV, "7")
+        .env(TOKEN_ENV, token.expose())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -964,11 +1005,11 @@ fn a_hook_reading_a_payload_that_never_ends_still_gets_out_of_the_way() {
     let dir = tempfile::tempdir().expect("a directory");
     let path = dir.path().join("hooks.sock");
     let (tx, rx) = mpsc::channel();
-    let _reading = Listener::bind(dir.path(), &path)
-        .expect("a socket")
-        .each(Box::new(move |report| {
-            let _ = tx.send(report);
-        }));
+    let listener = Listener::bind(dir.path(), &path).expect("a socket");
+    let token = listener.tokens().issue(7).expect("a token");
+    let _reading = listener.each(Box::new(move |report| {
+        let _ = tx.send(report);
+    }));
 
     let mut child = Command::new(CHARTER)
         .args(["hook", "stop"])
@@ -977,6 +1018,7 @@ fn a_hook_reading_a_payload_that_never_ends_still_gets_out_of_the_way() {
         .env("PATH", std::env::var("PATH").unwrap_or_default())
         .env(SOCKET_ENV, &path)
         .env(CHAT_ENV, "7")
+        .env(TOKEN_ENV, token.expose())
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())

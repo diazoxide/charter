@@ -11,7 +11,7 @@ use std::process::{Command, Output, Stdio};
 use std::sync::{Mutex, mpsc};
 use std::time::Duration;
 
-use charter_core::hookwire::{self, CHAT_ENV, Listener, SOCKET_ENV, SessionSaved};
+use charter_core::hookwire::{self, CHAT_ENV, Listener, SOCKET_ENV, SessionSaved, TOKEN_ENV};
 
 const BODY: &str = "## Goal\n\nShip the record.\n\n## Done\n\n- wrote it\n\n## Decisions\n\n- one \
 file per record\n\n## Open\n\nNothing.\n\n## How to resume\n\nRead this, then run the tests.\n";
@@ -94,14 +94,14 @@ fn a_record_is_written_indexed_and_pointed_at_and_the_app_is_told_which_chat_sav
     let socket = tmp.path().join("app").join("hooks.sock");
     let (tx, rx) = mpsc::channel();
     let tx = Mutex::new(tx);
-    let _reading = Listener::bind(tmp.path(), &socket)
-        .expect("a socket")
-        .each_answering_noticing_and_saving(
-            Box::new(|_| panic!("a saved record is not a report")),
-            Box::new(|_, _| panic!("a saved record is not an ask")),
-            Box::new(|_| panic!("a saved record is not a harness started by hand")),
-            Box::new(move |saved| tx.lock().unwrap().send(saved).unwrap()),
-        );
+    let listener = Listener::bind(tmp.path(), &socket).expect("a socket");
+    let token = listener.tokens().issue(3).expect("a token");
+    let _reading = listener.each_answering_noticing_and_saving(
+        Box::new(|_| panic!("a saved record is not a report")),
+        Box::new(|_, _| panic!("a saved record is not an ask")),
+        Box::new(|_| panic!("a saved record is not a harness started by hand")),
+        Box::new(move |saved| tx.lock().unwrap().send(saved).unwrap()),
+    );
 
     let ran = record(
         &tmp,
@@ -111,6 +111,7 @@ fn a_record_is_written_indexed_and_pointed_at_and_the_app_is_told_which_chat_sav
             IN_ALPHA,
             (SOCKET_ENV, socket.to_str().unwrap()),
             (CHAT_ENV, "3"),
+            (TOKEN_ENV, token.expose()),
         ],
     );
 
@@ -147,8 +148,15 @@ fn marker(tmp: &tempfile::TempDir, chat: &str) -> PathBuf {
     root(tmp).join(format!("workspaces/alpha/.charter/sessions/{chat}.saved"))
 }
 
-/// `charter hook stop` in chat `chat`, as the harness runs it at the end of a turn.
-fn stop(tmp: &tempfile::TempDir, socket: &Path, chat: &str) -> Output {
+/// `charter hook stop` in chat `chat`, as the harness runs it at the end of a turn, with the
+/// token the app gave that chat.
+fn stop(
+    tmp: &tempfile::TempDir,
+    socket: &Path,
+    chat: &str,
+    tokens: &hookwire::ChatTokens,
+) -> Output {
+    let token = tokens.issue(chat.parse().unwrap()).expect("a token");
     charter(
         tmp,
         &["hook", "stop"],
@@ -156,6 +164,7 @@ fn stop(tmp: &tempfile::TempDir, socket: &Path, chat: &str) -> Output {
             IN_ALPHA,
             (SOCKET_ENV, socket.to_str().unwrap()),
             (CHAT_ENV, chat),
+            (TOKEN_ENV, token.expose()),
         ],
         r#"{"session_id":"0f6c2a1e-aaaa-4bbb-8ccc-123456789abc","hook_event_name":"Stop"}"#,
     )
@@ -166,18 +175,22 @@ fn stop(tmp: &tempfile::TempDir, socket: &Path, chat: &str) -> Output {
 fn listening(
     tmp: &tempfile::TempDir,
     socket: &Path,
-) -> (hookwire::Reading, mpsc::Receiver<SessionSaved>) {
+) -> (
+    hookwire::Reading,
+    mpsc::Receiver<SessionSaved>,
+    std::sync::Arc<hookwire::ChatTokens>,
+) {
     let (tx, rx) = mpsc::channel();
     let tx = Mutex::new(tx);
-    let reading = Listener::bind(tmp.path(), socket)
-        .expect("a socket")
-        .each_answering_noticing_and_saving(
-            Box::new(|_| {}),
-            Box::new(|_, _| panic!("nothing here asks")),
-            Box::new(|_| panic!("no harness was started by hand")),
-            Box::new(move |saved| tx.lock().unwrap().send(saved).unwrap()),
-        );
-    (reading, rx)
+    let listener = Listener::bind(tmp.path(), socket).expect("a socket");
+    let tokens = listener.tokens();
+    let reading = listener.each_answering_noticing_and_saving(
+        Box::new(|_| {}),
+        Box::new(|_, _| panic!("nothing here asks")),
+        Box::new(|_| panic!("no harness was started by hand")),
+        Box::new(move |saved| tx.lock().unwrap().send(saved).unwrap()),
+    );
+    (reading, rx, tokens)
 }
 
 #[test]
@@ -203,12 +216,12 @@ fn a_line_the_socket_refused_is_passed_on_by_the_chats_next_stop_once() {
         "the command does not say what happens next"
     );
 
-    let (_reading, rx) = listening(&tmp, &socket);
+    let (_reading, rx, tokens) = listening(&tmp, &socket);
     // Another chat's Stop passes on nothing of chat 3's.
-    assert!(stop(&tmp, &socket, "4").status.success());
+    assert!(stop(&tmp, &socket, "4", &tokens).status.success());
     assert!(marker(&tmp, "3").is_file(), "chat 4 took chat 3's marker");
 
-    let stopped = stop(&tmp, &socket, "3");
+    let stopped = stop(&tmp, &socket, "3", &tokens);
 
     assert!(stopped.status.success(), "{}", err(&stopped));
     let saved = rx
@@ -223,7 +236,7 @@ fn a_line_the_socket_refused_is_passed_on_by_the_chats_next_stop_once() {
             .unwrap()
     );
     assert!(!marker(&tmp, "3").exists(), "the marker outlived its Stop");
-    assert!(stop(&tmp, &socket, "3").status.success());
+    assert!(stop(&tmp, &socket, "3", &tokens).status.success());
     assert!(
         rx.recv_timeout(Duration::from_millis(500)).is_err(),
         "the next Stop sent the line again"

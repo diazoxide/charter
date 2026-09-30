@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use charter_core::engine::{AlacrittyEngine, Size};
-use charter_core::hookwire::{CHAT_ENV, SOCKET_ENV};
+use charter_core::hookwire::{CHAT_ENV, ChatTokens, SOCKET_ENV, TOKEN_ENV};
 use charter_core::secrets::identity::kept_from_chats;
 use charter_core::session::{Attachment, Exit, Session, Spec};
 
@@ -65,6 +65,9 @@ pub struct Watching {
 #[derive(Debug, Clone)]
 pub struct Reporting {
     pub socket: PathBuf,
+    /// The chats' tokens the socket checks every line against: each chat is issued its own
+    /// here as it starts, and it is forgotten when the chat closes.
+    pub tokens: Arc<ChatTokens>,
 }
 
 /// Every session the app is running, by the id the UI calls it by.
@@ -201,15 +204,28 @@ impl Sessions {
             charter_core::active::SESSION_ID_ENV.into(),
             id.to_string().into(),
         ));
+        // **And the chat's own token**, which every line its hooks and commands write on the
+        // socket carries, and which the socket checks before it believes the chat number the
+        // line names. A fresh one for every start, so a chat put back under the number it had
+        // gets a token of its own too. Kept in memory only: it is never logged, never written
+        // to the plane or to a record, and never shown.
         if let Some(reporting) = &self.reporting {
+            let token = reporting
+                .tokens
+                .issue(id)
+                .map_err(|err| format!("no token for the chat: {err}"))?;
             spec.env
                 .push((SOCKET_ENV.into(), reporting.socket.clone().into()));
             spec.env.push((CHAT_ENV.into(), id.to_string().into()));
+            spec.env.push((TOKEN_ENV.into(), token.expose().into()));
         }
         // Before the program exists, so its very first hook lands somewhere.
         announce(id);
         let engine = AlacrittyEngine::new(opening.size, SCROLLBACK as usize);
-        let session = Session::spawn(spec, Box::new(engine)).map_err(|err| err.to_string())?;
+        let session = Session::spawn(spec, Box::new(engine)).map_err(|err| {
+            self.forget_token(id);
+            err.to_string()
+        })?;
 
         // No hook reports a program dying, and none can — the process is gone. This is the
         // operating system telling the app, not charter reading a screen (ADR 0018).
@@ -275,12 +291,20 @@ impl Sessions {
         self.opened.load(Ordering::Relaxed)
     }
 
-    /// Ends a session and everything it started. Its views end with it.
+    /// Ends a session and everything it started. Its views end with it, and so does its token.
     pub fn close(&self, id: u32) -> Result<(), String> {
+        self.forget_token(id);
         lock(&self.running)
             .remove(&id)
             .map(|_| ())
             .ok_or_else(|| gone(id))
+    }
+
+    /// Forgets chat `id`'s token, so no line for it is read from now on.
+    fn forget_token(&self, id: u32) {
+        if let Some(reporting) = &self.reporting {
+            reporting.tokens.forget(id);
+        }
     }
 
     /// Sends what a pane typed to the program: bytes, written to its pty as they are. Text is
@@ -956,7 +980,7 @@ mod tests {
         assert!(names.iter().any(|n| n == "HOME"), "{names:?}");
         for name in credentials
             .iter()
-            .chain(&["UNLISTED_SETTING", "CLAUDE_CONFIG_DIR"])
+            .chain(&["UNLISTED_SETTING", "CLAUDE_CONFIG_DIR", TOKEN_ENV])
         {
             assert!(
                 !names.iter().any(|n| n == name),
@@ -978,10 +1002,17 @@ mod tests {
 
         // The plane's own extension, which may name a credential by its exact name.
         let mut extended = opening("");
-        extended.env_pass = vec!["UNLISTED_SETTING".into(), "GITHUB_TOKEN".into()];
+        extended.env_pass = vec![
+            "UNLISTED_SETTING".into(),
+            "GITHUB_TOKEN".into(),
+            TOKEN_ENV.into(),
+        ];
         let names = names_in_a_chat(&sessions, extended);
         assert!(names.iter().any(|n| n == "UNLISTED_SETTING"), "{names:?}");
         assert!(names.iter().any(|n| n == "GITHUB_TOKEN"), "{names:?}");
+        // The chat token of whatever chat the app was started from is never another chat's,
+        // whoever lists it.
+        assert!(!names.iter().any(|n| n == TOKEN_ENV), "{names:?}");
         assert!(
             !names.iter().any(|n| n == "AWS_SECRET_ACCESS_KEY"),
             "{names:?}"
@@ -1008,6 +1039,7 @@ mod tests {
                 .env("UNLISTED_SETTING", "fixture-setting")
                 .env("CLAUDE_CONFIG_DIR", "/nowhere/claude")
                 .env("CODEX_HOME", "/nowhere/codex")
+                .env(TOKEN_ENV, "the-launchers-own-token")
                 .stdin(std::process::Stdio::null()),
         )
         .unwrap();
@@ -1180,6 +1212,103 @@ mod tests {
             ids,
             env: None,
         })
+    }
+
+    // --- each chat's own token ----------------------------------------------------------- //
+
+    /// What `$CHARTER_CHAT_TOKEN` was in the environment of the program a chat started.
+    fn token_of_a_chat(sessions: &Sessions) -> (u32, String) {
+        let id = sessions
+            .open(
+                None,
+                &opening("printf 'token=<%s>' \"$CHARTER_CHAT_TOKEN\"; sleep 600"),
+                &|_| {},
+            )
+            .expect("the session opens");
+        let (_view, seen) = watching(sessions, id);
+        let deadline = Instant::now() + PATIENCE;
+        loop {
+            let shown = lock(&seen).clone();
+            if let Some((_, rest)) = shown.split_once("token=<")
+                && let Some((value, _)) = rest.split_once('>')
+            {
+                return (id, value.to_owned());
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the chat never printed its token, only {shown:?}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// Sessions reporting to a socket nothing listens on, with the tokens it would check.
+    fn reporting() -> (Sessions, Arc<ChatTokens>) {
+        let tokens = Arc::new(ChatTokens::default());
+        let sessions = Sessions::reporting_to(Some(Reporting {
+            socket: PathBuf::from("/nowhere/hooks.sock"),
+            tokens: Arc::clone(&tokens),
+        }));
+        (sessions, tokens)
+    }
+
+    #[test]
+    fn each_chat_is_started_with_a_token_of_its_own_that_the_channel_admits_for_it_alone() {
+        let (sessions, tokens) = reporting();
+
+        let (first, one) = token_of_a_chat(&sessions);
+        let (second, two) = token_of_a_chat(&sessions);
+
+        assert_eq!(one.len(), 64, "{one:?}");
+        assert_ne!(one, two, "two chats were given one token");
+        assert!(tokens.admits(first, Some(&one)));
+        assert!(tokens.admits(second, Some(&two)));
+        assert!(
+            !tokens.admits(first, Some(&two)),
+            "one chat's token spoke for another"
+        );
+        assert!(
+            !tokens.admits(second, Some(&one)),
+            "one chat's token spoke for another"
+        );
+    }
+
+    #[test]
+    fn a_closed_chats_token_is_no_longer_admitted() {
+        let (sessions, tokens) = reporting();
+        let (id, token) = token_of_a_chat(&sessions);
+
+        sessions.close(id).expect("it closes");
+
+        assert!(!tokens.admits(id, Some(&token)));
+    }
+
+    #[test]
+    fn a_chat_put_back_under_its_number_is_given_a_new_token() {
+        let (sessions, tokens) = reporting();
+        let (id, before) = token_of_a_chat(&sessions);
+        sessions.close(id).expect("it closes");
+
+        let again = sessions
+            .open(
+                Some(id),
+                &opening("printf 'token=<%s>' \"$CHARTER_CHAT_TOKEN\"; sleep 600"),
+                &|_| {},
+            )
+            .expect("the session opens");
+        let (_view, seen) = watching(&sessions, again);
+        until_seen(&seen, ">");
+        let shown = lock(&seen).clone();
+        let after = shown
+            .split_once("token=<")
+            .and_then(|(_, rest)| rest.split_once('>'))
+            .map(|(value, _)| value.to_owned())
+            .expect("the token");
+
+        assert_eq!(again, id);
+        assert_ne!(before, after);
+        assert!(tokens.admits(id, Some(&after)));
+        assert!(!tokens.admits(id, Some(&before)));
     }
 
     #[test]

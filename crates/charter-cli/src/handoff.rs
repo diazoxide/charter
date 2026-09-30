@@ -454,7 +454,7 @@ enum Ticketed {
 /// The first of the two lines every ask on the socket is (charter-app#204): a ticket for the
 /// chat this process runs in, which `$CHARTER_CHAT` names.
 fn ticketed() -> Ticketed {
-    use charter_core::hookwire::{Answer, Ask, Asking, CHAT_ENV, SOCKET_ENV};
+    use charter_core::hookwire::{Answer, Ask, Asking, CHAT_ENV, ChatToken, SOCKET_ENV};
 
     let Some(socket) = std::env::var_os(SOCKET_ENV).filter(|s| !s.is_empty()) else {
         return Ticketed::NoApp;
@@ -465,7 +465,7 @@ fn ticketed() -> Ticketed {
     else {
         return Ticketed::NoApp;
     };
-    let Ok(mut asking) = Asking::on(std::path::Path::new(&socket)) else {
+    let Ok(mut asking) = Asking::on(std::path::Path::new(&socket), ChatToken::from_env()) else {
         return Ticketed::NoApp;
     };
     match asking.ask(&Ask::Ticket { chat }, A_TICKET_TAKES_AT_MOST) {

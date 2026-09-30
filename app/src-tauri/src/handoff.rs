@@ -963,6 +963,7 @@ mod tests {
             .expect("the child was started under a conversation charter chose");
         charter_core::hookwire::send(
             held.hooks().socket().expect("the plane listens"),
+            Some(&held.hooks().token_for(child)),
             &charter_core::hookwire::Report {
                 chat: child,
                 event: charter_core::state::Event::UserPromptSubmit,

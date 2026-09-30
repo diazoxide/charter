@@ -7,14 +7,17 @@
 
 use std::io;
 
-use super::{Answer, Answerer, Ask, Noticed, Report, Saved, SessionSaved, StartedByHand};
+use super::{
+    Answer, Answerer, Ask, ChatToken, ChatTokens, Noticed, Report, Saved, SessionSaved,
+    StartedByHand,
+};
 
 /// [`Asking`]'s counterpart where there is no unix socket: it refuses, so a handoff there
 /// prints the command to run in a terminal, as it always has.
 pub enum Asking {}
 
 impl Asking {
-    pub fn on(_path: &std::path::Path) -> io::Result<Self> {
+    pub fn on(_path: &std::path::Path, _token: Option<ChatToken>) -> io::Result<Self> {
         Err(no_channel())
     }
 
@@ -29,19 +32,31 @@ impl Asking {
 /// `charter hook` drops the error on the floor — so a Windows hook costs its turn nothing.
 /// What it does NOT do is pretend: the error names the platform, so a `doctor` that asks
 /// gets an answer rather than a success that moved nothing.
-pub fn send(_path: &std::path::Path, _report: &Report) -> io::Result<()> {
+pub fn send(
+    _path: &std::path::Path,
+    _token: Option<&ChatToken>,
+    _report: &Report,
+) -> io::Result<()> {
     Err(no_channel())
 }
 
 /// [`send`]'s refusal, for a harness started by hand: a shell tab here has no shims, so
 /// nothing calls this, and it says why all the same.
-pub fn tell(_path: &std::path::Path, _notice: &StartedByHand) -> io::Result<()> {
+pub fn tell(
+    _path: &std::path::Path,
+    _token: Option<&ChatToken>,
+    _notice: &StartedByHand,
+) -> io::Result<()> {
     Err(no_channel())
 }
 
 /// [`send`]'s refusal, for a saved session record: the record is written all the same, and
 /// `charter session record` says the tab will not close by itself.
-pub fn tell_saved(_path: &std::path::Path, _saved: &SessionSaved) -> io::Result<()> {
+pub fn tell_saved(
+    _path: &std::path::Path,
+    _token: Option<&ChatToken>,
+    _saved: &SessionSaved,
+) -> io::Result<()> {
     Err(no_channel())
 }
 
@@ -71,6 +86,11 @@ impl Listener {
 
     /// Unreachable: no `Listener` is ever constructed on this platform.
     pub fn path(&self) -> &std::path::Path {
+        match *self {}
+    }
+
+    /// Unreachable, for the same reason.
+    pub fn tokens(&self) -> std::sync::Arc<ChatTokens> {
         match *self {}
     }
 
