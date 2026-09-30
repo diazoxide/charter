@@ -1,6 +1,6 @@
 # A run moves only by a named cause, and a chat's state is read from its runs
 
-**Proposed 2026-10-01**, drafted for program-map ticket FD-23 (#660). It follows these of the
+**Accepted 2026-10-01** by the operator (ruling V27), drafted for program-map ticket FD-23 (#660). It follows these of the
 operator's rulings:
 
 - **V1:** *"a **run** is one harness conversation segment inside a chat; a child agent is a run
@@ -27,7 +27,7 @@ It builds on [ADR 0066](0066-a-chat-is-a-ulid-a-run-is-a-stretch-of-its-conversa
 (chat, run and device identity), [ADR 0068](0068-a-chat-lives-in-charterd-and-the-app-is-its-client.md)
 (`charterd`, its grace period and crash recovery), [ADR 0071](0071-the-kill-switch-is-machine-state-the-command-line-stops-and-only-the-window-re-arms.md)
 (the kill switch), [ADR 0073](0073-a-harness-is-declared-as-data-and-a-chat-runs-it-at-one-of-three-levels.md)
-(harness levels and `fallback`), ADR 0074 (a refused commit, charter#770) and
+(harness levels and `fallback`), [ADR 0074](0074-a-chats-git-runs-charters-hooks-through-its-environment.md) (a refused commit) and
 [ADR 0075](0075-an-audit-entry-is-metadata-in-a-store-of-its-own-and-telemetry-never-reads-it.md)
 (audit entries). It **amends** ADR 0066,
 [ADR 0067](0067-a-chat-runs-in-a-sandbox-charter-compiles-for-its-harness.md), ADR 0068,
@@ -46,8 +46,8 @@ Its concept is **Chat** ([ADR 0072](0072-charter-has-five-concepts-and-every-oth
 `crates/charter-core/src/state.rs` holds a chat's state as one of five values: `Unknown`,
 `Running`, `Waiting`, `Done` and `Failed`. Hooks move it, and so does the program's exit. Beside
 the state, a `needs_you` flag says whether the chat is in the queue, with three kinds of item on
-top of it: an ask (`asking`), a report back (charter-app#259) and, once charter#770 lands, a
-refused commit (ADR 0074). `docs/spec.md` names the same five as the *session state*.
+top of it: an ask (`asking`), a report back (charter-app#259) and a refused
+commit (ADR 0074). `docs/spec.md` names the same five as the *session state*.
 
 That machine was built for one chat, one process and one conversation. The program map adds
 states without adding them to it, and each ticket would add its own flag:
@@ -271,7 +271,7 @@ the audit as `observed`, not `governed`"*).
   never counted toward a budget charter enforces.
 - **The kill switch does not reach them**, and the window says so beside **Stop all**. A read-only
   listing cannot stop anything. Q11's *"stoppable"* is met by a link to the vendor's own page for
-  the session. See the questions below.
+  the session. Ruled by V27.
 - Their audit coverage is `observed` (ADR 0075 §5), and their outcome goes into a session record,
   as W8 says.
 
@@ -356,7 +356,7 @@ the other classes.
   at a turn boundary (`ready` or `turn-ended`) becomes `hibernated` instead**, where its harness
   resumes natively, because nothing was lost: its conversation is whole and waiting for a prompt.
   Where the harness does not resume natively, it is `failed | host-crash`. A run that was
-  `asked` is `failed`, because the ask was lost. See the questions below.
+  `asked` is `failed`, because the ask was lost. Ruled by V27.
 - **The run journal holds each live run's state**, not only its conversation id: the chat and run
   ids, the state with its reason or hold, the state a paused run was paused from, the
   conversation, the harness and level. A hibernated run stays in it across a quit (§3). The host
@@ -374,7 +374,7 @@ the other classes.
   its output, with no code. **`run.ended` always records `exit_code: lost`**, so neither the event
   log nor the audit states a guess as a fact. The run ends `completed | exited` only when a
   `SessionEnd` for good came first, and `failed | exited` otherwise. That includes every level-1
-  run, which has no `SessionEnd`, so a lost code never reads as success. See the questions below.
+  run, which has no `SessionEnd`, so a lost code never reads as success. Ruled by V27.
 
 ## ADR 0071, amended
 
@@ -466,27 +466,18 @@ The code does not change with this record.
 - **Pausing only by refusing tool calls.** The model keeps generating, and spending, until the
   turn ends. There is no tool call at level 1 to refuse.
 
-## For the operator's ruling
+## Ruled (V27, 2026-10-01)
 
-The calls that V1, W8, W10, Q11, N4, N8, N9, X35, SC-20 and V26a already make are marked *Settled
-by* or quoted in the body. These are left open:
+The operator accepted all five questions as recommended:
 
-1. **After a host crash, a run that was idle at a turn boundary becomes `hibernated`, not
-   `failed`**, where its harness resumes natively. *Recommend yes.* Nothing was lost, and calling
-   it a failure teaches the operator to ignore failures.
-2. **A handed-over program whose exit code was lost ends `completed` only when a `SessionEnd` for
-   good came first, and `failed` otherwise, with `exit_code: lost` recorded either way.**
-   *Recommend yes.* The record never states a guess as fact. The cost: every level-1 chat that
-   exits cleanly after an upgrade reads `failed`, marked "exit code lost". That is a false alarm
-   the operator can see through, which is better than a false success.
-3. **A pause is `SIGSTOP` of the run's process group at every level**, with the guard refusing
-   tool calls as a backstop. Processes that `setsid` out of the group, such as daemons and some
-   MCP servers, keep running until the sandbox can hold them. *Recommend yes.* It is the only
-   lever that stops the harness's spending at once at level 1, and it is the terminal's own job
-   control. The gap is the one the kill switch already has.
-4. **Q11's "stoppable" does not reach a remote chat.** charter links to the vendor's own page to
-   stop it, and **Stop all** says it did not stop them. *Recommend yes.* W8 made remote chats
-   read-only, and a stop charter cannot carry out would be a promise it cannot keep.
-5. **Removing a workspace or a persona is refused while a live run is in it or has adopted it.**
-   *Recommend yes.* A rename already refuses, and a removal must not leave a program running in a
-   deleted directory.
+1. **V27a: after a host crash, a run that was idle at a turn boundary on a harness that resumes
+   natively becomes `hibernated`**, not `failed`.
+2. **V27b: when an upgrade hands a program over and its exit code is lost, the run is `completed`
+   only if a `SessionEnd` came first, and `failed` otherwise.** `exit_code: lost` is recorded
+   either way.
+3. **V27c: a pause is `SIGSTOP` of the run's process group at every level**, with the guard as a
+   backstop. Processes that `setsid` out of the group keep running until the sandbox can hold
+   them.
+4. **V27d: remote chats cannot be stopped from charter.** It links to the vendor's page, and
+   **Stop all** says so. **Removing a workspace or a persona is refused** while a live run is in
+   it or has adopted it.
