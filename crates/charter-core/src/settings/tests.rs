@@ -376,6 +376,36 @@ fn neither_file_may_turn_charters_own_plugin_off() {
 }
 
 #[test]
+fn the_shared_file_may_turn_the_sandbox_on_and_never_off() {
+    // ADR 0067: a committed file may restrict what a chat is confined to, never loosen it.
+    let dir = plane(COMMENTED);
+    assert_eq!(
+        refusals(dir.path(), Which::Shared, "[sandbox]\nmode = \"on\"\n"),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        refusals(dir.path(), Which::Shared, "[sandbox]\nmode = \"off\"\n"),
+        [
+            "sandbox.mode in charter.toml cannot be \"off\": a committed file may turn the \
+          sandbox on and never off — only a person turns it off, for one chat"
+        ]
+    );
+}
+
+#[test]
+fn the_local_file_says_nothing_about_the_sandbox() {
+    // An ignored file must not change plane policy with no trace in git, and a plane's
+    // sandbox is plane policy: it is refused there like any table that file does not carry.
+    let dir = plane(COMMENTED);
+    let why = refusals(dir.path(), Which::Local, "[sandbox]\nmode = \"on\"\n");
+    assert_eq!(why.len(), 1, "{why:?}");
+    assert!(
+        why[0].starts_with("[sandbox] in charter.local.toml is not read"),
+        "{why:?}"
+    );
+}
+
+#[test]
 fn a_local_file_that_does_not_exist_is_created_on_the_first_save() {
     let dir = plane(COMMENTED);
     let body = "[harness]\ndefault = \"claude\"\n";

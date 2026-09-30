@@ -976,3 +976,40 @@ fn a_chat_started_outside_the_plane_is_pinned_to_nothing() {
     assert_eq!(env_of(&ready, "CHARTER_WORKSPACE"), None);
     assert_eq!(env_of(&ready, "CHARTER_PLANE_ROOT_SESSION"), None);
 }
+
+// -------------------------------------------------------------------------------------
+// The sandbox (ADR 0067): a plane that turned it on starts every chat sandboxed, or not at all
+// -------------------------------------------------------------------------------------
+
+#[test]
+fn a_chat_in_a_plane_that_says_nothing_of_the_sandbox_starts_unsandboxed_as_before() {
+    charter_core::unsteered!();
+    let plane = Plane::new();
+    let bin = plane.harness();
+    plane.profile("claude", &bin, "");
+
+    let ready = start::ready(&plane.start("work"), plane.root()).expect("it starts");
+
+    assert_eq!(ready.sandbox, None);
+}
+
+#[test]
+fn a_codex_chat_in_a_sandboxed_plane_is_not_started_rather_than_started_unconfined() {
+    charter_core::unsteered!();
+    let plane = Plane::new();
+    fs::write(
+        plane.root().join("charter.toml"),
+        "[sandbox]\nmode = \"on\"\n",
+    )
+    .unwrap();
+    let bin = plane.harness_as("codex");
+    plane.profile("codex", &bin, "");
+
+    let refused = start::ready(&plane.start("work"), plane.root()).expect_err("not started");
+
+    assert!(
+        refused.contains("cannot sandbox a Codex chat yet"),
+        "{refused}"
+    );
+    assert!(!plane.root().join("ran").exists(), "the harness was run");
+}

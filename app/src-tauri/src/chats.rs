@@ -238,11 +238,15 @@ impl Chats {
     ///
     /// `plugins` is the harness's own plugins the project chose for this chat
     /// (`charter_core::start::Ready::plugins`, charter-app#274); empty for a chat on no profile.
+    ///
+    /// `sandbox` is the sandbox the core compiled for this chat
+    /// (`charter_core::start::Ready::sandbox`, ADR 0067); none for a chat on no profile.
     fn state_hooks(
         &self,
         harness: Option<Harness>,
         cwd: Option<&std::path::Path>,
         plugins: &charter_core::harness_plugin::Chosen,
+        sandbox: Option<&charter_core::sandbox::Applied>,
     ) -> (Vec<String>, Vec<(String, String)>) {
         let (Some(harness), Some(binary)) = (harness, self.shipped.binary.as_deref()) else {
             return (Vec::new(), Vec::new());
@@ -251,7 +255,7 @@ impl Chats {
             binary,
             plugin: self.shipped.plugin.as_deref(),
         };
-        match harness.state_hooks(kit, cwd, plugins) {
+        match harness.state_hooks_under(kit, cwd, plugins, sandbox) {
             StateHooks::ThisSessionOnly { args, env, .. } => (args, env),
             // Nothing is added to the command line, and nothing of the operator's is written
             // behind their back. The chat shows `unknown`.
@@ -280,6 +284,7 @@ impl Chats {
             ready.session.as_ref().map(ToString::to_string),
             ready.how.clone(),
             &ready.plugins,
+            ready.sandbox.as_ref(),
             size,
         )
     }
@@ -355,6 +360,8 @@ impl Chats {
             // A chat on no profile has no project choice to carry: it runs as it always did,
             // with the pins alone.
             &std::collections::BTreeMap::new(),
+            // Nor a sandbox: a chat on no profile is not readied by the core.
+            None,
             size,
         )
     }
@@ -409,13 +416,14 @@ impl Chats {
         conversation: Option<String>,
         how: charter_core::reopen::Reopened,
         plugins: &charter_core::harness_plugin::Chosen,
+        sandbox: Option<&charter_core::sandbox::Applied>,
         size: Size,
     ) -> Result<u32, String> {
         // The profile's own command first — a wrapper reads its own words before it hands the
         // rest on (M8.3) — then the state hooks, then charter's own words: a chat's recorded
         // arguments may end in a positional prompt that nothing may come after.
         // `charter_core::start::Ready::command_line` is the one place that order is decided.
-        let (hooks, armed) = self.state_hooks(harness, chat.cwd.as_deref(), plugins);
+        let (hooks, armed) = self.state_hooks(harness, chat.cwd.as_deref(), plugins, sandbox);
         let all = charter_core::start::Ready::line(command, hooks, args);
         let mut env = env;
         env.extend(armed);
@@ -2590,6 +2598,7 @@ mod tests {
                 charter_core::reopen::Fresh::NoConversationRecorded,
             ),
             plugins: std::collections::BTreeMap::new(),
+            sandbox: None,
         };
 
         let session = chats
@@ -2660,6 +2669,7 @@ mod tests {
                 charter_core::reopen::Fresh::NoConversationRecorded,
             ),
             plugins: std::collections::BTreeMap::new(),
+            sandbox: None,
         };
 
         let session = chats.start_ready(&chat, &ready, SIZE).unwrap();
@@ -2686,6 +2696,17 @@ mod tests {
         command: &[&str],
         shared: &str,
         profile: impl Fn(&std::path::Path) -> String,
+    ) -> (Vec<String>, String) {
+        argv_of_a_chat_under(command, shared, profile, None)
+    }
+
+    /// The same, for a chat the core readied under `sandbox`. Set here rather than by a
+    /// `[sandbox]` in `shared`, so the answer is not whether this machine can apply one.
+    fn argv_of_a_chat_under(
+        command: &[&str],
+        shared: &str,
+        profile: impl Fn(&std::path::Path) -> String,
+        sandbox: Option<charter_core::sandbox::Applied>,
     ) -> (Vec<String>, String) {
         let dir = tempfile::tempdir().expect("a directory");
         let root = dir.path().join("plane");
@@ -2739,6 +2760,7 @@ mod tests {
             &root,
         )
         .expect("the chat starts");
+        let ready = charter_core::start::Ready { sandbox, ..ready };
         let chat = Chat {
             program: ready.program.clone(),
             args: Vec::new(),
@@ -2815,6 +2837,27 @@ mod tests {
                 "figma@official": false,
             }),
             "{argv:?}"
+        );
+    }
+
+    #[test]
+    fn a_sandboxed_claude_code_chat_runs_with_its_sandbox_in_its_settings() {
+        // ADR 0067: what the core compiled reaches the program, on the one `--settings`.
+        let applied =
+            charter_core::sandbox::Applied::ClaudeCode(charter_core::sandbox::claude::Settings {
+                sandbox: serde_json::json!({"enabled": true, "failIfUnavailable": true}),
+                deny: vec!["Read(//p/v)".to_owned()],
+            });
+        let (argv, _) = argv_of_a_chat_under(&["claude"], "", |_| String::new(), Some(applied));
+        let settings: serde_json::Value = serde_json::from_str(&argv[3]).expect("JSON");
+        assert_eq!(
+            settings["sandbox"],
+            serde_json::json!({"enabled": true, "failIfUnavailable": true}),
+            "{argv:?}"
+        );
+        assert_eq!(
+            settings["permissions"]["deny"],
+            serde_json::json!(["Read(//p/v)"])
         );
     }
 

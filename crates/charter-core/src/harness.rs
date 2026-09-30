@@ -304,6 +304,25 @@ impl Harness {
         cwd: Option<&std::path::Path>,
         plugins: &crate::harness_plugin::Chosen,
     ) -> StateHooks {
+        self.state_hooks_under(kit, cwd, plugins, None)
+    }
+
+    /// [`Self::state_hooks`], for a chat that starts under `sandbox` — the sandbox
+    /// [`crate::sandbox::for_start`] compiled for this harness (ADR 0067), or none.
+    ///
+    /// Claude Code's rides in the same `--settings` as everything else charter hands it. No
+    /// other harness is ever handed one yet: `for_start` refuses to start them in a sandboxed
+    /// plane, so an [`crate::sandbox::Applied`] of theirs cannot exist.
+    pub fn state_hooks_under(
+        self,
+        kit: Kit<'_>,
+        cwd: Option<&std::path::Path>,
+        plugins: &crate::harness_plugin::Chosen,
+        sandbox: Option<&crate::sandbox::Applied>,
+    ) -> StateHooks {
+        let claude_sandbox = sandbox.map(|applied| match applied {
+            crate::sandbox::Applied::ClaudeCode(settings) => settings,
+        });
         match self {
             // **The bundled plugin, loaded for this session alone** (`crate::plugin` has the
             // measurements). Its `hooks.json` holds every hook — the six that report state and
@@ -328,6 +347,7 @@ impl Harness {
                             kit.binary,
                             crate::footerclaim::status_line(cwd).free(),
                             plugins,
+                            claude_sandbox,
                         ),
                     ]),
                     env: vec![(
@@ -659,6 +679,7 @@ fn claude_code_settings(
     binary: &std::path::Path,
     may_fill_the_footer: bool,
     plugins: &crate::harness_plugin::Chosen,
+    sandbox: Option<&crate::sandbox::claude::Settings>,
 ) -> String {
     let mut settings = serde_json::Map::new();
     // The project's own choice of Claude Code's plugins first (charter-app#274, ADR 0050): a
@@ -698,10 +719,17 @@ fn claude_code_settings(
     // the operator's own rules all still stand (measured on 2.1.283 in ADR 0064: a project
     // `deny` still refused, a user `allow` still allowed, and a compound command that holds the
     // record command beside another was still asked about).
-    settings.insert(
-        "permissions".to_owned(),
-        serde_json::json!({ "allow": [SMART_CLOSE_ALLOW] }),
-    );
+    let mut permissions = serde_json::json!({ "allow": [SMART_CLOSE_ALLOW] });
+    // **The sandbox, where the plane turned it on** (ADR 0067), and the deny rules that keep
+    // Claude Code's own Read and Edit tools out of what its sandbox denies a command
+    // ([`crate::sandbox::claude`]). A deny outranks the allow above, and they name different
+    // things. Absent otherwise, never `enabled: false`: an unsandboxed chat is left to the
+    // operator's own settings, as it was.
+    if let Some(sandbox) = sandbox {
+        settings.insert("sandbox".to_owned(), sandbox.sandbox.clone());
+        permissions["deny"] = serde_json::json!(sandbox.deny);
+    }
+    settings.insert("permissions".to_owned(), permissions);
     serde_json::Value::Object(settings).to_string()
 }
 
@@ -1143,6 +1171,46 @@ mod tests {
                 assert!(!arg.contains(loosened), "a Codex chat is handed {loosened}");
             }
         }
+    }
+
+    #[test]
+    fn a_sandboxed_claude_code_chat_carries_its_sandbox_in_the_same_settings() {
+        // One `--settings`: the sandbox and its deny rules beside the Smart close allow, which
+        // stays, because a deny outranks an allow and the two name different things.
+        let empty = tempfile::tempdir().expect("a directory");
+        let applied = crate::sandbox::Applied::ClaudeCode(crate::sandbox::claude::Settings {
+            sandbox: serde_json::json!({"enabled": true}),
+            deny: vec!["Read(//p/v)".to_owned()],
+        });
+        let StateHooks::ThisSessionOnly { args, .. } = Harness::ClaudeCode.state_hooks_under(
+            kit("/bin/charter"),
+            Some(empty.path()),
+            &BTreeMap::new(),
+            Some(&applied),
+        ) else {
+            panic!("armed per session");
+        };
+        let settings: serde_json::Value = serde_json::from_str(&args[3]).expect("JSON");
+
+        assert_eq!(settings["sandbox"], serde_json::json!({"enabled": true}));
+        assert_eq!(
+            settings["permissions"],
+            serde_json::json!({
+                "allow": ["Bash(charter session record *)"],
+                "deny": ["Read(//p/v)"],
+            })
+        );
+    }
+
+    #[test]
+    fn an_unsandboxed_claude_code_chat_carries_no_sandbox_key_at_all() {
+        // Absent, not `enabled: false`: the operator's own settings decide, as before.
+        let empty = tempfile::tempdir().expect("a directory");
+        let (args, _) = claude("/bin/charter", empty.path());
+        let settings: serde_json::Value = serde_json::from_str(&args[3]).expect("JSON");
+
+        assert!(settings.get("sandbox").is_none(), "{settings}");
+        assert!(settings["permissions"].get("deny").is_none(), "{settings}");
     }
 
     #[test]
