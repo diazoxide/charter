@@ -80,6 +80,18 @@ them. Asked each time the picker opens and never saved, because each engineer re
 ones.
 _Avoid_: discovered repos, the inventory
 
+**Forge account**:
+One sign-in to one forge host: a kind, a host and a login, held in the keyring or reached
+through `gh`'s or `glab`'s own login. Each repo is bound to one. Its token is the human's and
+never reaches a chat (ADR 0070, proposed).
+_Avoid_: forge login (for charter's own sign-in), connection, integration
+
+**Forge capability**:
+One thing a forge may or may not do for one repo, such as a merge queue, judged per forge, host
+and tier, and naming its fallback when it is missing. Unknown is never read as available
+(ADR 0070, proposed).
+_Avoid_: capability (unqualified, which is an extension's), feature flag
+
 **LIVE / LOCAL**:
 Whether a workspace's charter, memory and todos are published with the plane (LIVE) or stay on
 this machine (LOCAL, the default).
