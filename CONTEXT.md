@@ -85,6 +85,25 @@ Whether a workspace's charter, memory and todos are published with the plane (LI
 this machine (LOCAL, the default).
 _Avoid_: shared/private, public
 
+### Runs and devices
+
+**Run**:
+One stretch of a chat's conversation with a harness, over which its persona, harness, profile,
+model source, device and sandbox stay the same. A chat has one or more runs, one after another. A
+new one begins when the chat starts, on `/clear`, when the app reopens it, when it wakes, when it
+starts again without its conversation, or when any of those attributes changes. Compaction keeps
+the run. A **child run** is a sub-agent or teammate the harness spawns, with the run it came from
+as its parent. The run is who an action is attributed to (W8's "agent run"), and budgets add up
+over a chat's runs (ADR 0066).
+_Avoid_: session (that is the process), conversation (that is the harness's), turn
+
+**Device**:
+A machine charter runs on: a desktop, a runner, or later a viewer. Each has a random id kept in
+its machine store, which is how records, events and the audit say where something happened. Its
+hostname is a label, never a key. The operator on a device is its **local principal**
+(`local:<device>/<os-user>`), and charter never sends it anywhere without an account (ADR 0066).
+_Avoid_: host (that is `charterd`, the process), machine (in UI text), node
+
 ### The window
 
 **Split window**:
