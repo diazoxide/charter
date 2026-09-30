@@ -305,8 +305,18 @@ impl Harness {
         plugins: &crate::harness_plugin::Chosen,
         sandbox: Option<&crate::sandbox::Applied>,
     ) -> StateHooks {
-        let claude_sandbox = sandbox.map(|applied| match applied.form() {
-            crate::sandbox::Form::ClaudeCode(settings) => settings,
+        // A sandbox compiled for another harness arms nothing, so the chat is refused rather
+        // than started without it (the app refuses one it is handed, too).
+        if sandbox.is_some_and(|applied| applied.harness() != self) {
+            return StateHooks::None;
+        }
+        let claude_sandbox = sandbox.and_then(|applied| match applied.form() {
+            crate::sandbox::Form::ClaudeCode(settings) => Some(settings),
+            crate::sandbox::Form::Codex(_) => None,
+        });
+        let codex_sandbox = sandbox.and_then(|applied| match applied.form() {
+            crate::sandbox::Form::Codex(flags) => Some(flags),
+            crate::sandbox::Form::ClaudeCode(_) => None,
         });
         match self {
             // **The bundled plugin, loaded for this session alone** (`crate::plugin` has the
@@ -393,8 +403,19 @@ impl Harness {
             // directory for one session ([`Self::skills`]), so the chat is started with the
             // bundle's in [`crate::skills::LISTED_ENV`], which a Codex hook inherits, and the
             // briefing lists them.
+            //
+            // Its sandbox, where the plane turned it on, rides on `-c` flags of the same kind,
+            // after the hooks ([`crate::sandbox::codex`] has the measurements). Absent
+            // otherwise: an unsandboxed Codex chat keeps Codex's own settings, as it did.
             Self::Codex => StateHooks::ThisSessionOnly {
-                args: codex_session_flags(kit.binary),
+                args: codex_session_flags(kit.binary)
+                    .into_iter()
+                    .chain(
+                        codex_sandbox
+                            .into_iter()
+                            .flat_map(|flags| flags.args.clone()),
+                    )
+                    .collect(),
                 env: kit
                     .plugin
                     .and_then(crate::skills::in_bundle)
@@ -1142,19 +1163,101 @@ mod tests {
     }
 
     #[test]
-    fn a_codex_chat_is_handed_no_approval_or_sandbox_setting() {
+    fn an_unsandboxed_codex_chat_is_handed_no_approval_or_sandbox_setting() {
         // Codex has no per-session rule for one command: its approval policy and its sandbox
         // are whole-session switches, and loosening either would be far broader than the one
-        // command Smart close needs (SI-8e, ADR 0064's measurements).
+        // command Smart close needs (SI-8e, ADR 0064's measurements). Where the plane has not
+        // turned the sandbox on, Codex keeps its own settings, as it always has.
         let StateHooks::ThisSessionOnly { args, .. } =
             Harness::Codex.state_hooks(kit("/bin/charter"), None, &BTreeMap::new(), None)
         else {
             panic!("armed per session");
         };
         for arg in &args {
-            for loosened in ["approval", "sandbox", "network", "rules"] {
-                assert!(!arg.contains(loosened), "a Codex chat is handed {loosened}");
+            for setting in ["approval", "sandbox", "network", "rules", "permissions"] {
+                assert!(!arg.contains(setting), "a Codex chat is handed {setting}");
             }
+        }
+    }
+
+    /// A Codex chat in a sandboxed plane, and the flags its sandbox was compiled to.
+    fn sandboxed_codex() -> (Vec<String>, Vec<String>) {
+        let plane = tempfile::tempdir().expect("a plane");
+        std::fs::write(
+            plane.path().join("charter.toml"),
+            "[sandbox]\nmode = \"on\"\n",
+        )
+        .expect("charter.toml");
+        let machine = crate::sandbox::Machine {
+            env: crate::secrets::Env::of(&[]),
+            home: None,
+            os: crate::sandbox::Os::Linux,
+        };
+        let applied = crate::sandbox::for_start(Harness::Codex, plane.path(), &machine, &|_| true)
+            .expect("starts")
+            .expect("sandboxed");
+        let crate::sandbox::Form::Codex(compiled) = applied.form() else {
+            panic!("compiled for Codex");
+        };
+        let StateHooks::ThisSessionOnly { args, .. } = Harness::Codex.state_hooks(
+            kit("/bin/charter"),
+            Some(plane.path()),
+            &BTreeMap::new(),
+            Some(&applied),
+        ) else {
+            panic!("armed per session");
+        };
+        (args, compiled.args.clone())
+    }
+
+    #[test]
+    fn a_sandboxed_codex_chat_is_handed_its_sandbox_beside_its_hooks() {
+        let (args, compiled) = sandboxed_codex();
+        assert!(
+            args.windows(compiled.len())
+                .any(|run| run == compiled.as_slice()),
+            "{args:?}"
+        );
+        assert!(args.iter().any(|arg| arg.starts_with("hooks.")), "{args:?}");
+    }
+
+    #[test]
+    fn a_sandboxed_codex_chat_is_only_ever_tightened_never_loosened() {
+        // ADR 0067: charter may tighten Codex's sandbox and may never loosen it.
+        let (args, _) = sandboxed_codex();
+        for flag in [
+            "-s",
+            "--sandbox",
+            "--dangerously-bypass-approvals-and-sandbox",
+            "--yolo",
+            "--add-dir",
+            "-a",
+            "--ask-for-approval",
+            "--approve-for-me",
+            "--search",
+            "--disable",
+        ] {
+            assert!(!args.iter().any(|arg| arg == flag), "handed {flag}");
+        }
+        for loosened in [
+            "danger-full-access",
+            "sandbox_mode",
+            "network_access",
+            "writable_roots",
+            "dangerously",
+            "sandbox_approval=true",
+            "request_permissions=true",
+            "auto_review",
+            "guardian",
+            "\"live\"",
+            "\"cached\"",
+            "\"write\"",
+            "\"full\"",
+            "allow_local_binding=true",
+        ] {
+            let joined = args.join(" ").replace(' ', "");
+            let loosened = loosened.replace(' ', "");
+            assert!(!joined.contains(&loosened), "handed {loosened}: {args:?}");
         }
     }
 
@@ -1177,7 +1280,9 @@ mod tests {
             crate::sandbox::for_start(Harness::ClaudeCode, plane.path(), &machine, &|_| true)
                 .expect("starts")
                 .expect("sandboxed");
-        let crate::sandbox::Form::ClaudeCode(compiled) = applied.form();
+        let crate::sandbox::Form::ClaudeCode(compiled) = applied.form() else {
+            panic!("compiled for Claude Code");
+        };
         let StateHooks::ThisSessionOnly { args, .. } = Harness::ClaudeCode.state_hooks(
             kit("/bin/charter"),
             Some(plane.path()),

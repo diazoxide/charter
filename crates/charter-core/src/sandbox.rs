@@ -568,12 +568,31 @@ impl Applied {
     pub fn form(&self) -> &Form {
         &self.form
     }
+
+    /// Why a chat started with `command`, its own words, would not keep this sandbox — in one
+    /// sentence — or `None` when it would. Asked where a session opens, of every chat that
+    /// carries a sandbox, because a harness's own flag can outrank what charter hands it.
+    pub fn loosened_by(&self, command: &[String]) -> Option<String> {
+        let flag = match &self.form {
+            // Not asked of Claude Code's flags yet: its sandbox rides in the `--settings`
+            // charter hands it, which a project's settings cannot loosen (ADR 0067 §2).
+            Form::ClaudeCode(_) => None,
+            Form::Codex(_) => codex::loosened_by(command),
+        }?;
+        Some(format!(
+            "this plane runs every chat sandboxed, and this chat's command names {flag}, which \
+             would run {} outside the sandbox charter compiled for it, so nothing was started. \
+             Take it out of the profile's command.",
+            self.harness.title()
+        ))
+    }
 }
 
 /// Each harness's own form of the policy, one variant per compiler.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Form {
     ClaudeCode(claude::Settings),
+    Codex(codex::Flags),
 }
 
 /// A harness's compiler.
@@ -584,7 +603,22 @@ pub type Compiler = fn(&Compiled) -> Result<Form, Uncompilable>;
 pub fn compiler(harness: Harness) -> Option<Compiler> {
     match harness {
         Harness::ClaudeCode => Some(|compiled| claude::settings(compiled).map(Form::ClaudeCode)),
-        Harness::Codex | Harness::Opencode => None,
+        Harness::Codex => Some(|compiled| codex::flags(compiled).map(Form::Codex)),
+        Harness::Opencode => None,
+    }
+}
+
+/// The harnesses charter can sandbox, as a sentence names them: `Claude Code or Codex`.
+fn sandboxed_harnesses() -> String {
+    let titles: Vec<&str> = Harness::ALL
+        .into_iter()
+        .filter(|harness| compiler(*harness).is_some())
+        .map(Harness::title)
+        .collect();
+    match titles.split_last() {
+        Some((last, [])) => (*last).to_owned(),
+        Some((last, rest)) => format!("{} or {last}", rest.join(", ")),
+        None => String::new(),
     }
 }
 
@@ -606,8 +640,9 @@ impl fmt::Display for NotStarted {
             Self::NoCompiler(harness) => write!(
                 f,
                 "{lead}, and charter cannot sandbox a {} chat yet, so it was not started. Start \
-                 this chat on a Claude Code profile.",
-                harness.title()
+                 this chat on a {} profile.",
+                harness.title(),
+                sandboxed_harnesses()
             ),
             Self::NoBackend(missing) => write!(
                 f,
@@ -661,6 +696,7 @@ pub fn for_start(
 
 pub mod backend;
 pub mod claude;
+pub mod codex;
 
 #[cfg(test)]
 mod tests;

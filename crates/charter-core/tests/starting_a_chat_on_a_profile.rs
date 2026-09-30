@@ -994,7 +994,7 @@ fn a_chat_in_a_plane_that_says_nothing_of_the_sandbox_starts_unsandboxed_as_befo
 }
 
 #[test]
-fn a_codex_chat_in_a_sandboxed_plane_is_not_started_rather_than_started_unconfined() {
+fn an_opencode_chat_in_a_sandboxed_plane_is_not_started_rather_than_started_unconfined() {
     charter_core::unsteered!();
     let plane = Plane::new();
     fs::write(
@@ -1002,13 +1002,13 @@ fn a_codex_chat_in_a_sandboxed_plane_is_not_started_rather_than_started_unconfin
         "[sandbox]\nmode = \"on\"\n",
     )
     .unwrap();
-    let bin = plane.harness_as("codex");
-    plane.profile("codex", &bin, "");
+    let bin = plane.harness_as("opencode");
+    plane.profile("opencode", &bin, "");
 
     let refused = start::ready(&plane.start("work"), plane.root()).expect_err("not started");
 
     assert!(
-        refused.contains("cannot sandbox a Codex chat yet"),
+        refused.contains("cannot sandbox a opencode chat yet"),
         "{refused}"
     );
     assert!(!plane.root().join("ran").exists(), "the harness was run");
