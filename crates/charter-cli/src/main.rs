@@ -318,6 +318,18 @@ enum Command {
         now: Option<String>,
     },
 
+    /// The kill switch: stop every chat and shell charter started, in every project and window
+    /// the app holds, and start no chat until you re-arm it in the app's title bar.
+    ///
+    /// It leaves one line in the kill switch's journal. There is no command to re-arm: an agent
+    /// can run any command, and letting agents start again is the operator's to decide
+    /// (ADR 0071). Agents charter did not start, headless ones among them, are not reached.
+    Stop {
+        /// Every agent. Required: it is the only scope there is.
+        #[arg(long, required = true)]
+        all: bool,
+    },
+
     /// What each version of the app brought: its CHANGELOG.md, newest first.
     News(NewsCommand),
 
@@ -539,6 +551,43 @@ fn say_lines(said: &[charter_core::scaffold::Say]) {
 fn say(outcome: &charter_core::scaffold::Outcome) -> ExitCode {
     say_lines(&outcome.said);
     ExitCode::from(outcome.code)
+}
+
+/// `charter stop --all`: throws the kill switch the app's title bar throws (OV-1, ADR 0071).
+///
+/// It needs no plane and no app. The app acts on the switch within seconds when it is running,
+/// and a launch that finds it thrown starts nothing, so the stop holds either way. A stop that
+/// could not be written is a failure, said as one: no app would hear it.
+fn stop_every_agent() -> ExitCode {
+    use charter_core::halt;
+    let Some(config) = charter_core::machine::config_root() else {
+        voice::err("Agents were NOT stopped: there is no config home to keep the stop in.");
+        return ExitCode::FAILURE;
+    };
+    match halt::stop(&config, halt::Actor::Cli, halt::now()) {
+        Ok(()) => {
+            voice::ok(
+                "Stopping every chat and shell charter started, in every project and window: \
+                 the app ends them within seconds.",
+            );
+            voice::info(
+                "Nothing starts again until you re-arm it from the charter app's title bar.",
+            );
+            ExitCode::SUCCESS
+        }
+        Err(not_kept) if not_kept.journaled => {
+            voice::warn(&format!(
+                "The stop is kept, but not as it should be: {not_kept}. A running app still \
+                 hears it; re-arm from its title bar."
+            ));
+            ExitCode::FAILURE
+        }
+        Err(not_kept) => {
+            voice::err(&format!("Agents were NOT stopped: {not_kept}."));
+            voice::info("Use Stop all on the charter app's title bar instead.");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 /// stdout first, then stderr, then the status — the order the two streams are written in
@@ -2131,6 +2180,7 @@ fn run(command: Command) -> Result<u8, String> {
         | Command::Init(_)
         | Command::Reinit
         | Command::News(_)
+        | Command::Stop { .. }
         | Command::Update { .. }
         | Command::Version { .. }
         | Command::Discover { .. }
@@ -2768,6 +2818,7 @@ fn main() -> ExitCode {
                 }
             });
         }
+        Command::Stop { .. } => return stop_every_agent(),
         // `news` and `update` say several lines of their own on both streams and choose their
         // own exit status, exactly as `init` does.
         Command::News(news) => {

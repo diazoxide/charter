@@ -74,6 +74,13 @@ that it happened so that an operator who unpins everything is not pinned again.
 It passes this record's test. Deleting it costs one re-pinning at the next open, and every plane
 still opens with everything it had.
 
+**Amended by [ADR 0071](0071-the-kill-switch-is-machine-state-the-command-line-stops-and-only-the-window-re-arms.md)
+(2026-09-30): whether this machine's agents are stopped, and the journal of that kill switch.**
+It qualifies on this record's test — it is about the machine, since the switch spans every
+plane, and false inside any one of them — and it is kept in two files of its own beside this
+store rather than in it, because `charter stop --all` writes it and it must be read without a
+parse or a lock.
+
 **And never plane content.** No workspace names, no todos, no memory, no chat names, no persona,
 nothing a plane's own files already say. The test to apply to any field somebody wants to add:
 *deleting this file must cost the operator their arrangement and their approvals and nothing

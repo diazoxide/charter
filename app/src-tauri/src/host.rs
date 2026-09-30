@@ -50,6 +50,11 @@ pub struct Opening {
     /// The operator's own additions to what a chat is started with, from the chat's plane
     /// (`[chat_env] pass`, [`charter_core::chatenv::read`]).
     pub env_pass: Vec<String>,
+    /// Whether this is a shell the operator opened from the window, which the kill switch lets
+    /// through: looking at what the agents did is a human act (OV-1, ADR 0071). Every other
+    /// start — every chat, every relaunch, every shell a record puts back — is refused while
+    /// agents are stopped.
+    pub operator_shell: bool,
 }
 
 /// Where a view's text goes. It is called on the view's own thread, one batch at a time.
@@ -133,6 +138,24 @@ pub trait SessionHost: Send + Sync {
     /// Ends every session, and does not return until their programs are gone. This is what
     /// quitting calls: the process is about to end, and a thread would not be waited for.
     fn end_all(&self);
+
+    /// Interrupts and ends every session's program, and everything each started, all at once,
+    /// and does not return until they are gone. The sessions stay, with their last screens, as
+    /// they do when a program ends on its own: this is the kill switch (OV-1), not a close.
+    /// Answers how many it asked.
+    fn stop_every_program(&self) -> usize;
+
+    /// Refuses every start but the operator's own shell while `switch` is thrown (OV-1, ADR
+    /// 0071). Every way a chat starts — the operator, a relaunch, a handoff, a curation
+    /// action — comes through [`Self::open`], so that is the one place the refusal has to be.
+    fn stopped_by(&mut self, switch: Arc<crate::killswitch::KillSwitch>);
+
+    /// The operating system's id for a session's program, while it runs, where the host can
+    /// say. Only the tests ask, to see a stopped program is gone.
+    #[cfg(test)]
+    fn process_id(&self, _id: u32) -> Option<u32> {
+        None
+    }
 
     /// Calls `tell` as each session's program ends, with the id and how it ended.
     ///
@@ -296,6 +319,10 @@ pub(crate) mod pretend {
         fn end_all(&self) {
             lock(&self.seen.running).clear();
         }
+        fn stop_every_program(&self) -> usize {
+            lock(&self.seen.running).len()
+        }
+        fn stopped_by(&mut self, _switch: Arc<crate::killswitch::KillSwitch>) {}
         fn when_one_ends(&self, tell: Ends) {
             *lock(&self.seen.ends) = Some(tell);
         }

@@ -22,6 +22,7 @@ mod host;
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod instance;
 mod ipc;
+mod killswitch;
 mod lifecycle;
 mod live;
 mod memories;
@@ -992,6 +993,7 @@ fn open_session(
     columns: u16,
     rows: u16,
 ) -> Result<u32, String> {
+    let program_named = program.is_some();
     let chat = Chat {
         program: program.unwrap_or_else(sessions::shell),
         args,
@@ -1018,10 +1020,16 @@ fn open_session(
     };
     // The board already knows about it: `Chats` announces a chat BEFORE its program starts,
     // so its very first hook lands somewhere. Registering it here would be too late.
-    planes
-        .held(&plane)?
-        .chats()
-        .start(&chat, Size { columns, rows })
+    let chats = planes.held(&plane)?;
+    let size = Size { columns, rows };
+    // **The operator's own shell — no program named — is the one start the kill switch lets
+    // through** (OV-1, ADR 0071). A program named here is anything at all, a harness included,
+    // so it is refused while agents are stopped like every other chat.
+    if program_named {
+        chats.chats().start(&chat, size)
+    } else {
+        chats.chats().start_operator_shell(&chat, size)
+    }
 }
 
 /// Ends a session and everything it started. It is no longer a chat a quit would record.
@@ -1770,6 +1778,8 @@ pub fn run() {
             ));
             app.manage(launch);
             reached("the record is back");
+            // `charter stop --all` in a terminal is heard here (OV-1).
+            killswitch::hear(app.handle());
 
             // Last, and never fatal. A tray is somewhere to put the window; the sessions
             // are the work. A desktop with no system tray at all — some Linux sessions, and

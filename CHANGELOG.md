@@ -13,6 +13,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A kill switch that stops every chat and shell charter started.** Stop all on the title bar,
+  or `charter stop --all` in any terminal, interrupts and ends every chat's and shell's program in
+  every project and every window within seconds. No chat starts again, not even from a relaunch,
+  until you re-arm it from the title bar; you can still open a shell to look around. The stopped
+  chats stay as tabs to reopen. Each stop, re-arm and tamper is one line in `kill-switch.jsonl`
+  in charter's config directory (ADR 0071).
+
 - **A plane can run every Claude Code chat in a sandbox.** Add `[sandbox]` with `mode = "on"`
   to `charter.toml`, and every Claude Code chat charter starts there runs inside Claude Code's
   own sandbox, which charter compiles from one policy. It can reach only the hosts of the

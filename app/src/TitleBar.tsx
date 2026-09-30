@@ -5,6 +5,7 @@ import { AboutCharter } from "./About";
 import { type Ending } from "./QuitWarning";
 import { UpdateItem, type Updates } from "./Updates";
 import { NeedsYouMenu, type Needing, type Quiet } from "./NeedsYou";
+import { KillSwitch } from "./KillSwitch";
 import type { Offer } from "./actions";
 
 /**
@@ -159,6 +160,8 @@ export function TitleBar({
         {/* Then the project in front's unsaved work: about the project, not the app, and the
             one thing on the bar the operator acts on as often as a chat that asks. */}
         {save && <SaveIndicator {...save} />}
+        {/* The kill switch (OV-1): about every chat in every window, so it is here. */}
+        <KillSwitch />
         <AboutCharter />
         {updates && <UpdateItem updates={updates} chats={chats} />}
       </span>

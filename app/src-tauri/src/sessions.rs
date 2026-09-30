@@ -24,6 +24,10 @@ pub const SCROLLBACK: u32 = 5_000;
 /// does not look like one that might. A pane whose own view closed writes it and is gone.
 const ENDED: &str = "\r\n\x1b[2m— the program has ended —\x1b[0m\r\n";
 
+/// Why a start was refused while the kill switch is thrown (OV-1).
+pub const STOPPED: &str = "Every chat charter started is stopped. Re-arm from the title bar to \
+                           start chats again; a new shell still opens.";
+
 /// What a session is told, so a hook running inside it can find its way back.
 ///
 /// A hook is a descendant of the session's own program, so it inherits this and has to look
@@ -52,6 +56,8 @@ pub struct Sessions {
     reporting: Option<Reporting>,
     /// Told how each session ended, as it ends.
     ended: Mutex<Option<Ends>>,
+    /// The kill switch (OV-1): while it is thrown no chat opens, whatever asked.
+    kill_switch: Arc<crate::killswitch::KillSwitch>,
 }
 
 struct Running {
@@ -76,6 +82,7 @@ impl Sessions {
             opened: AtomicU32::new(0),
             reporting,
             ended: Mutex::new(None),
+            kill_switch: crate::killswitch::KillSwitch::unthrown(),
         }
     }
 
@@ -119,6 +126,16 @@ impl Sessions {
             .flatten()
     }
 
+    /// Ends one session's program and keeps the session, on a thread of its own.
+    fn stop_program(&self, id: u32) {
+        let Ok(stopper) = self.with(id, |running| Ok(running.session.stopper())) else {
+            return;
+        };
+        let _ = std::thread::Builder::new()
+            .name("charter-stopping".into())
+            .spawn(move || stopper.stop());
+    }
+
     fn with<T>(
         &self,
         id: u32,
@@ -137,6 +154,11 @@ impl SessionHost for Sessions {
         opening: &Opening,
         announce: &dyn Fn(u32),
     ) -> Result<u32, String> {
+        // Before the number is dealt and before anything is announced: a refused start is no
+        // chat at all.
+        if !opening.operator_shell && self.kill_switch.is_stopped() {
+            return Err(STOPPED.to_owned());
+        }
         let program = opening.program.clone().unwrap_or_else(shell);
         let mut spec = Spec::new(program, opening.size).args(&opening.args);
         spec.cwd = opening.cwd.as_ref().map(Into::into);
@@ -234,6 +256,12 @@ impl SessionHost for Sessions {
                 watched: 0,
             },
         );
+        // **Asked again once it is in the table.** A stop that landed while this program was
+        // being spawned collected the table before it was there, so it would outlive the
+        // switch. Either the stop sees it in the table or this sees the switch thrown.
+        if !opening.operator_shell && self.kill_switch.is_stopped() {
+            self.stop_program(id);
+        }
         Ok(id)
     }
 
@@ -293,22 +321,37 @@ impl SessionHost for Sessions {
     fn end_all(&self) {
         let ending: Vec<Running> = lock(&self.running).drain().map(|(_, one)| one).collect();
         // All at once: fifty programs each given the same moment to leave on their own.
-        let ends: Vec<_> = ending
-            .into_iter()
-            .filter_map(|one| {
-                std::thread::Builder::new()
-                    .name("charter-ending".into())
-                    .spawn(move || one.session.end())
-                    .ok()
-            })
+        all_at_once(
+            "charter-ending",
+            ending.into_iter().map(|one| move || one.session.end()),
+        );
+    }
+
+    /// The table is only read under its lock; the ending happens outside it, so a pane asking
+    /// about its session is never held up by fifty programs being given their second.
+    fn stop_every_program(&self) -> usize {
+        let stoppers: Vec<_> = lock(&self.running)
+            .values()
+            .map(|one| one.session.stopper())
             .collect();
-        for end in ends {
-            let _ = end.join();
-        }
+        all_at_once(
+            "charter-stopping",
+            stoppers.into_iter().map(|stopper| move || stopper.stop()),
+        )
+        .len()
     }
 
     fn when_one_ends(&self, tell: Ends) {
         *lock(&self.ended) = Some(tell);
+    }
+
+    fn stopped_by(&mut self, switch: Arc<crate::killswitch::KillSwitch>) {
+        self.kill_switch = switch;
+    }
+
+    #[cfg(test)]
+    fn process_id(&self, id: u32) -> Option<u32> {
+        Sessions::process_id(self, id)
     }
 
     fn running(&self) -> Vec<u32> {
@@ -400,6 +443,52 @@ impl Utf8Stream {
     }
 }
 
+/// Runs every job on a thread of its own, all at once, and answers with what each returned once
+/// all of them have. A job whose thread could not be started runs here instead, so none is
+/// skipped. Named for what the threads are called in a sample or a crash report.
+pub(crate) fn all_at_once<T: Send + 'static, J: FnOnce() -> T + Send + 'static>(
+    name: &str,
+    jobs: impl IntoIterator<Item = J>,
+) -> Vec<T> {
+    let mut done = Vec::new();
+    let mut running = Vec::new();
+    for job in jobs {
+        let job = std::sync::Arc::new(Mutex::new(Some(job)));
+        let theirs = std::sync::Arc::clone(&job);
+        let started = std::thread::Builder::new()
+            .name(name.to_owned())
+            .spawn(move || lock(&theirs).take().map(|job| job()));
+        match started {
+            Ok(thread) => running.push(thread),
+            Err(_) => done.extend(lock(&job).take().map(|job| job())),
+        }
+    }
+    done.extend(
+        running
+            .into_iter()
+            .filter_map(|thread| thread.join().ok().flatten()),
+    );
+    done
+}
+
+/// Whether a process is still there and not a zombie, as the operating system sees it.
+#[cfg(test)]
+pub(crate) fn alive(pid: u32) -> bool {
+    charter_core::forklock::output(std::process::Command::new("ps").args([
+        "-o",
+        "stat=",
+        "-p",
+        &pid.to_string(),
+    ]))
+    .map(|out| {
+        out.status.success()
+            && !String::from_utf8_lossy(&out.stdout)
+                .trim_start()
+                .starts_with('Z')
+    })
+    .unwrap_or(false)
+}
+
 /// A poisoned lock only means another thread panicked while holding it; what is inside is
 /// still the sessions that are running.
 fn lock<T: ?Sized>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -429,6 +518,7 @@ mod tests {
             env_strip: Vec::new(),
             harness: None,
             env_pass: Vec::new(),
+            operator_shell: false,
         }
     }
 
@@ -576,6 +666,85 @@ mod tests {
         until_seen(&seen, "the program has ended");
     }
 
+    fn a_stopped_switch() -> Arc<crate::killswitch::KillSwitch> {
+        let switch = crate::killswitch::KillSwitch::unthrown();
+        // No config home to keep it in, which the stop says; it holds all the same.
+        let _ = switch.stop(charter_core::halt::Actor::Window);
+        switch
+    }
+
+    #[test]
+    fn no_chat_opens_while_every_agent_is_stopped_and_one_does_once_re_armed() {
+        let switch = a_stopped_switch();
+        let mut sessions = Sessions::new();
+        sessions.stopped_by(Arc::clone(&switch));
+        let announced = Mutex::new(Vec::new());
+
+        let refused = sessions.open(None, &opening("sleep 600"), &|id| {
+            announced.lock().unwrap().push(id);
+        });
+
+        assert!(refused.is_err(), "a session started while stopped");
+        assert!(
+            announced.lock().unwrap().is_empty(),
+            "a refused start was announced as a chat"
+        );
+        assert_eq!(sessions.running(), Vec::<u32>::new());
+
+        switch.rearm().expect("re-armed");
+        sessions
+            .open(None, &opening("sleep 600"), &|_| {})
+            .expect("a session opens once re-armed");
+    }
+
+    #[test]
+    fn a_shell_the_operator_opens_while_every_agent_is_stopped_opens_and_stays_open() {
+        let mut sessions = Sessions::new();
+        sessions.stopped_by(a_stopped_switch());
+
+        let id = sessions
+            .open(
+                None,
+                &Opening {
+                    operator_shell: true,
+                    ..opening("echo looking-around; sleep 600")
+                },
+                &|_| {},
+            )
+            .expect("the operator's shell opens");
+
+        let (_view, seen) = watching(&sessions, id);
+        until_seen(&seen, "looking-around");
+        assert!(alive(sessions.process_id(id).expect("a pid")));
+    }
+
+    #[test]
+    fn stopping_every_program_ends_them_and_keeps_their_sessions() {
+        // The tab stays, reading as a chat whose program ended; the record keeps the chat, so
+        // re-arming loses nothing the operator had open.
+        let sessions = Sessions::new();
+        let mut pids = Vec::new();
+        for _ in 0..3 {
+            let id = sessions
+                .open(
+                    None,
+                    &opening("trap '' HUP; echo guarded; while :; do sleep 600; done"),
+                    &|_| {},
+                )
+                .expect("the session opens");
+            let (_view, seen) = watching(&sessions, id);
+            until_seen(&seen, "guarded");
+            pids.push(sessions.process_id(id).expect("a pid"));
+        }
+
+        assert_eq!(sessions.stop_every_program(), 3);
+
+        for pid in pids {
+            assert!(!alive(pid), "process {pid} outlived the stop");
+        }
+        assert_eq!(sessions.running().len(), 3, "a stop is not a close");
+    }
+
     #[test]
     fn ending_every_session_ends_their_programs_before_it_returns() {
         let sessions = Sessions::new();
@@ -602,23 +771,6 @@ mod tests {
             assert!(!alive(pid), "process {pid} outlived the app");
         }
         assert_eq!(sessions.running(), Vec::<u32>::new());
-    }
-
-    /// Whether a process is still there, as the operating system sees it.
-    fn alive(pid: u32) -> bool {
-        charter_core::forklock::output(std::process::Command::new("ps").args([
-            "-o",
-            "stat=",
-            "-p",
-            &pid.to_string(),
-        ]))
-        .map(|out| {
-            out.status.success()
-                && !String::from_utf8_lossy(&out.stdout)
-                    .trim_start()
-                    .starts_with('Z')
-        })
-        .unwrap_or(false)
     }
 
     #[test]

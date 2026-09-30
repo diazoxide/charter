@@ -3475,6 +3475,42 @@ h2.sidebar-title .node-icon {
   border-color: var(--accent-base);
 }
 
+/* The kill switch (OV-1), in the same chrome as About beside it, and in the danger colours
+   once it is thrown, so a stopped app is never mistaken for an idle one. */
+.title-kill-switch {
+  display: flex;
+  gap: 0.3rem;
+  align-items: center;
+  color: var(--text-secondary);
+  background: var(--control-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 0.05rem 0.4rem;
+  font: inherit;
+  cursor: pointer;
+}
+
+.title-kill-switch:hover {
+  border-color: var(--danger-base);
+}
+
+.title-kill-switch[data-stopped="yes"] {
+  color: var(--danger-text);
+  background: var(--danger-surface);
+  border-color: var(--danger-base);
+}
+
+/* A stop that did not go as asked, said on the bar itself: the next launch may not know about
+   it. Capped like the save indicator's words, and read in full from its `title`. */
+.title-kill-switch-trouble {
+  max-width: 16rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--danger-text);
+}
+
+.title-kill-switch:focus-visible,
 .title-about:focus-visible,
 .title-bar .status-update:focus-visible {
   outline: 2px solid var(--focus-ring);

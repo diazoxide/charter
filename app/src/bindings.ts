@@ -364,6 +364,19 @@ export const commands = {
 	quit: () => __TAURI_INVOKE<void>("quit"),
 	/**  The window's answer to being asked to quit: not now. The next ask warns again. */
 	quitCancelled: () => __TAURI_INVOKE<void>("quit_cancelled"),
+	/**  Whether every agent is stopped, for a window drawing its title bar. */
+	agentsStopped: () => __TAURI_INVOKE<boolean>("agents_stopped"),
+	/**
+	 *  The title bar's stop: every chat and shell charter started, in every project and window,
+	 *  ended, and no chat started until re-armed. Answers how many it stopped, or the sentence
+	 *  saying the stop holds here but was not kept on disk.
+	 * 
+	 *  On a blocking thread, because ending takes about a second and the window must go on drawing
+	 *  while it does. Every window is told the switch's state once it is done, whichever way.
+	 */
+	stopEveryAgent: () => typedError<number, string>(__TAURI_INVOKE("stop_every_agent")),
+	/**  The title bar's re-arm: chats may start again. Nothing that was stopped is restarted. */
+	rearmAgents: () => typedError<null, string>(__TAURI_INVOKE("rearm_agents")),
 	/**  Hides the window, which is what its close button does. Every session keeps running. */
 	hideWindow: () => __TAURI_INVOKE<void>("hide_window"),
 	/**  Whether the window is on screen. The scenario tests ask; nothing in the UI does. */

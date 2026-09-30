@@ -435,6 +435,16 @@ impl Session {
         end(&child);
     }
 
+    /// What ends this session's program, and everything it started, WITHOUT ending the
+    /// session: its terminal and its last screen stay, as they do for a program that ended on
+    /// its own. The kill switch (OV-1) is what asks, for every session at once, which is why
+    /// it is a value that can be taken out from under a lock and handed to a thread.
+    pub fn stopper(&self) -> Stopper {
+        Stopper {
+            child: Arc::clone(&self.child),
+        }
+    }
+
     /// Calls `tell` once, with how the program ended, on a thread of its own.
     ///
     /// The thread is blocked on a channel for the whole of the session's life and costs
@@ -517,6 +527,57 @@ impl Session {
         }
     }
 }
+
+/// Ends one session's program, and everything it started, without ending the session
+/// ([`Session::stopper`]).
+pub struct Stopper {
+    child: Arc<Mutex<Box<dyn Child + Send + Sync>>>,
+}
+
+impl Stopper {
+    /// Interrupts the program's whole process group, as Ctrl-C would, and gives it
+    /// [`INTERRUPT_GRACE`] to leave; then ends it as a close does, a hangup and then a kill.
+    /// Returns once it is gone. A program that has already ended is left as it is.
+    ///
+    /// The interrupt first because a harness cleans up on one (OV-1: "interrupt and end"). The
+    /// whole is under a second and a half, so fifty chats stopped at once are gone well inside
+    /// the kill switch's five seconds.
+    pub fn stop(self) {
+        interrupt(&self.child);
+        end(&self.child);
+    }
+}
+
+/// How long an interrupted program is given to leave before it is hung up on.
+const INTERRUPT_GRACE: Duration = Duration::from_millis(300);
+
+/// Sends the program's process group an interrupt and waits up to [`INTERRUPT_GRACE`] for it
+/// to go.
+#[cfg(unix)]
+fn interrupt(child: &Mutex<Box<dyn Child + Send + Sync>>) {
+    use rustix::process::{Pid, Signal, kill_process_group};
+
+    let group = {
+        let mut child = lock(child);
+        if !matches!(child.try_wait(), Ok(None)) {
+            return;
+        }
+        child.process_id().and_then(|pid| Pid::from_raw(pid as i32))
+    };
+    let Some(group) = group else { return };
+    let _ = kill_process_group(group, Signal::INT);
+    let deadline = Instant::now() + INTERRUPT_GRACE;
+    while Instant::now() < deadline {
+        if !matches!(lock(child).try_wait(), Ok(None)) {
+            return;
+        }
+        thread::sleep(POLL);
+    }
+}
+
+/// No process group to interrupt here: `end` alone ends the program.
+#[cfg(not(unix))]
+fn interrupt(_: &Mutex<Box<dyn Child + Send + Sync>>) {}
 
 impl Drop for Session {
     /// Returns at once. Ending and reaping the program happens on a thread of its own, so
@@ -1437,6 +1498,43 @@ mod tests {
         session.end();
 
         assert!(!alive(pid), "process {pid} outlived the session it was in");
+    }
+
+    #[test]
+    fn a_stop_interrupts_the_program_before_it_hangs_up_on_it() {
+        // "Interrupt and end" (OV-1): a harness that cleans up on Ctrl-C gets the chance to.
+        let session = sh(
+            "trap 'echo interrupted-first; exit 0' INT; trap 'echo hung-up-first; exit 0' HUP; \
+             echo ready; while :; do sleep 600 & wait; done",
+        );
+        screen_until(&session, shows("ready"));
+
+        session.stopper().stop();
+
+        screen_until(&session, shows("interrupted-first"));
+        assert!(
+            !session
+                .screen()
+                .lines
+                .iter()
+                .any(|line| line.contains("hung-up-first")),
+            "the hangup came first"
+        );
+    }
+
+    #[test]
+    fn a_stopped_session_s_program_is_gone_and_its_last_screen_stays() {
+        // The kill switch (OV-1) ends the program and keeps the tab: the chat reads as one
+        // whose program ended, with what it last printed still there to read.
+        let session = sh("trap '' HUP; echo guarded; while :; do sleep 600; done");
+        screen_until(&session, shows("guarded"));
+        let pid = session.process_id().expect("a running program has a pid");
+
+        session.stopper().stop();
+
+        assert!(!alive(pid), "process {pid} outlived the stop");
+        let view = session.attach();
+        view_until(&view, "guarded");
     }
 
     #[test]
