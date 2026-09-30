@@ -428,6 +428,21 @@ fn a_codex_chat_reaches_the_presets_hosts_through_codexs_own_proxy_and_nothing_e
 }
 
 #[test]
+fn a_codex_chat_has_the_features_that_may_reach_past_the_proxy_turned_off() {
+    // Stable in 0.147.0 and unmeasured against the sandbox: off until measured. A Codex that
+    // does not know one of them refuses to start (measured), so this fails closed too.
+    let flags = codex::flags_named(&compiled(Denied::default(), Os::MacOs), "charter-sandbox-1")
+        .expect("compiles");
+    let disabled: Vec<&str> = flags
+        .args
+        .windows(2)
+        .filter(|pair| pair[0] == "--disable")
+        .map(|pair| pair[1].as_str())
+        .collect();
+    assert_eq!(disabled, ["browser_use", "computer_use", "in_app_browser"]);
+}
+
+#[test]
 fn codex_denies_a_read_denied_path_outright_and_leaves_a_write_denied_one_readable() {
     let denied = Denied {
         paths: vec![

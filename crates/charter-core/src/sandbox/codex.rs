@@ -49,7 +49,9 @@
 //! - **Resume.** `codex resume` of a conversation that ran unsandboxed runs under the profile
 //!   it is handed now (measured).
 //! - **The chat's own words** can outrank what charter hands it: a flag of Codex's own, or a
-//!   `-c` key. [`loosened_by`] names each one that can, and the chat is refused. `--full-auto`
+//!   `-c` key. [`loosened_by`] names each one that can, and the chat is refused.
+//! - **Features that may reach past the proxy** — the browser and computer-use features, stable
+//!   and unmeasured against the sandbox — are turned off with `--disable` until measured. `--full-auto`
 //!   is not among them: 0.147.0 refuses it as an unknown argument (measured).
 
 use super::{Compiled, Uncompilable};
@@ -111,6 +113,10 @@ pub(super) fn flags_named(compiled: &Compiled, name: &str) -> Result<Flags, Unco
     };
 
     let mut args = vec!["--enable".to_owned(), PROXY_FEATURE.to_owned()];
+    for feature in UNMEASURED_FEATURES {
+        args.push("--disable".to_owned());
+        args.push(feature.to_owned());
+    }
     let mut set = |key: &str, value: toml::Value| {
         args.push("-c".to_owned());
         args.push(format!("{key}={value}"));
@@ -125,6 +131,13 @@ pub(super) fn flags_named(compiled: &Compiled, name: &str) -> Result<Flags, Unco
 
 /// The feature whose proxy holds the egress.
 const PROXY_FEATURE: &str = "network_proxy";
+
+/// Features that are stable in 0.147.0 and may reach the network from Codex's own process,
+/// past the proxy: unmeasured against the sandbox, so off in a sandboxed chat until they are.
+/// `--disable` fails closed as `--enable` does: a Codex that does not know a feature refuses
+/// to start, and one that has since removed it still starts (measured, with a feature 0.147.0
+/// lists as removed).
+const UNMEASURED_FEATURES: [&str; 3] = ["browser_use", "computer_use", "in_app_browser"];
 
 /// Flags of Codex's own that drop or widen the sandbox charter hands it, each measured on
 /// codex-cli 0.147.0 or read from its source: `-s` of any value and the bypass put Codex back

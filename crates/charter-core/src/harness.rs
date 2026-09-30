@@ -1228,13 +1228,18 @@ mod tests {
             "--ask-for-approval",
             "--approve-for-me",
             "--search",
-            "--disable",
         ] {
             assert!(!args.iter().any(|arg| arg == flag), "handed {flag}");
         }
         assert!(
             args.windows(2)
                 .all(|pair| pair[0] != "--enable" || pair[1] == "network_proxy"),
+            "{args:?}"
+        );
+        // Only features turned off, never the proxy.
+        assert!(
+            args.windows(2)
+                .all(|pair| pair[0] != "--disable" || pair[1] != "network_proxy"),
             "{args:?}"
         );
         for loosened in [
