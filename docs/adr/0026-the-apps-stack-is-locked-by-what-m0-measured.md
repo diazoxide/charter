@@ -166,7 +166,9 @@ The spec left open "the scrollback cap that the idle-session limit is measured a
 **5000 lines**, `SCROLLBACK` in the app, and it is measured: a hidden session holding 5000
 lines at 150 columns costs **20.2 MB**, against a 50 MB limit. Fifty of them add about 1.01 GB
 to the app's process, which is the number to weigh before raising the cap — the limit is per
-session, and the product's scale is fifty.
+session, and the product's scale is fifty. *(Amended by [ADR 0082](0082-charter-serves-one-persons-agents-first-and-its-scale-is-a-hot-chat-count-per-ram-class.md):
+the scale is a target of 200 open chats per device and a hot-chat target per RAM class, fifty at
+the top class.)*
 
 ## What would reopen this
 

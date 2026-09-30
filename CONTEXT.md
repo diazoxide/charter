@@ -172,15 +172,16 @@ A chat's state is its current run's (ADR 0076).
 _Avoid_: status, session state (the old five), done (for completed), idle (for a state)
 
 **Hot chat**:
-A chat whose current run has a process: starting, working, waiting for you or paused. An
-**open** chat is any chat whose current run is live, hot or not; a hibernated one is open and
-not hot. charter's scale is counted in these per human: 200 open, and a hot count per **RAM
-class** (ADR 0082).
+A chat whose current run has a process: `starting`, `working`, `input-required` or `paused`.
+An **open** chat is any chat whose current run is live, hot or not; a hibernated one is open and
+not hot. charter's scale is counted in these per device: a target of 200 open, and a hot target
+per **RAM class** (ADR 0082).
 _Avoid_: active chat, live chat (live is a run state's), running chat (in UI text)
 
 **RAM class**:
-A device's physical memory rounded down to 8, 16, 32 or 64 GB, which sets how many hot chats it
-is budgeted for. A budget, never a cap: charter warns past it and refuses nothing (ADR 0082).
+A device's physical memory, as the largest of 8, 16, 32 and 64 GB it reaches, which sets how
+many hot chats the device targets; a device under 8 GB targets one. A property of the device, so
+it belongs to Project. A budget, never a cap: charter warns past it and refuses nothing (ADR 0082).
 _Avoid_: tier (that is a store's), machine size, profile
 
 **Remote chat**:
