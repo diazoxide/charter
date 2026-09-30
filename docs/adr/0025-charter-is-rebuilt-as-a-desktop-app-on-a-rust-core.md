@@ -129,10 +129,9 @@ decide anything.** It draws the terminal, and it learns a session's state (runni
 for you, done) only from the harness's hooks. A harness with no such hook shows "unknown",
 labelled as unknown, not guessed.
 
-## "No daemons", amendment proposed 2026-09-30
+## Amendment, 2026-09-30: one session host (proposed, not yet ruled)
 
-[ADR 0068](0068-a-chat-lives-in-charterd-and-the-app-is-its-client.md) (proposed, FD-2, from the
-operator's ruling Q2) moves every session into `charterd`, a session host the app starts and
-supervises. If it is accepted, the "No daemons" bullet above is replaced by the one ADR 0068 gives:
-quitting still ends every chat by default, and an update or a crash of the app ends none of them.
-The rest of this record stands.
+[ADR 0068](0068-a-chat-lives-in-charterd-and-the-app-is-its-client.md) (FD-2, from the operator's
+ruling Q2) proposes replacing the "No daemons" bullet above with its section 2, which says when the
+chats end now that `charterd`, a session host the app starts, holds them. Until it is ruled, the
+bullet above stands. The rest of this record stands either way.
