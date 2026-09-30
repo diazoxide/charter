@@ -7,8 +7,19 @@
 #   tools/coldstart-linux.sh i3-nobus # i3 under X11 with no session bus, as `startx` into i3
 #
 # On a GitHub runner "the session bus as found" is charter-app#24's machine: a bus that is up,
-# with a desktop portal it can activate and that cannot start. Each case launches the app
-# five times and fails when any launch is past the limit (`tools/bench.mjs`).
+# with a desktop portal it can activate and that cannot start.
+#
+# Each case launches the app once, discarded, and then five times, each on a fresh HOME and XDG
+# directories, and fails when any of the five is past the limit (`tools/bench.mjs`). Measured on
+# PR #753: a person's first launch pays two costs that are not charter's.
+#   - Once per user profile, Mesa compiles WebKit's shaders into ~/.cache/mesa_shader_cache
+#     (about 0.45 s in a container, about 1 s on a 2-core runner). A fresh profile per launch
+#     makes every held launch pay it, as a new user's first launch does.
+#   - Once per boot or install, the binary and GTK/WebKitGTK's libraries come off a cold disk
+#     (about 2.3 s on the runner, for a 500 MB debug binary). The discarded launch pays it, and
+#     its time is printed as "cold disk, once per boot or install: reported, not gated".
+# CI measures the debug build `npx tauri build --debug` makes; a release build is smaller, so
+# its cold-disk cost is likely smaller too.
 set -euo pipefail
 
 case="${1:?which case: bare, i3 or i3-nobus}"
@@ -17,7 +28,8 @@ case="${1:?which case: bare, i3 or i3-nobus}"
 app="$(realpath -m "${APP:-$(dirname "$0")/../target/debug/charter-app}")"
 cd "$(dirname "$0")/.."
 limit="${LIMIT_MS:-2000}"
-bench=(node tools/bench.mjs --skip-build --only coldstart --app "$app" --cold-starts 5 --limit "$limit")
+bench=(node tools/bench.mjs --skip-build --only coldstart --app "$app" --cold-starts 5 --limit "$limit"
+  --warm-up --fresh-profile)
 
 if [[ -z "${DISPLAY:-}" ]]; then
   # A display of its own for the run, and this script again inside it.

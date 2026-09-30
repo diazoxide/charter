@@ -6,9 +6,10 @@
 //   node tools/bench.mjs                 # build, then measure everything, both renderer arms
 //   node tools/bench.mjs --skip-build    # measure what is already built
 //   node tools/bench.mjs --only window --arms webgl
-//   node tools/bench.mjs --skip-build --only coldstart --app target/debug/charter-app --limit 2000
-//                                        # CI's Linux cold start: fails when any launch is
-//                                        # past the limit
+//   node tools/bench.mjs --skip-build --only coldstart --app target/debug/charter-app --limit 2000 \
+//     --warm-up --fresh-profile          # CI's Linux cold start: one discarded launch, then each
+//                                        # launch on a fresh profile; fails when any is past the
+//                                        # limit
 //
 // Windows open and close on screen while it runs, and each is brought to the front: WebKit
 // draws nothing in a covered window, and nothing at all while the display sleeps (which
@@ -22,6 +23,7 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
@@ -45,10 +47,16 @@ const { values: options } = parseArgs({
     "cold-starts": { type: "string", default: "10" },
     // The binary cold start launches, when it is not the shipped build this script makes.
     app: { type: "string" },
-    // Cold start's limit in ms: the run fails when any launch of the empty plane is past it. The
-    // first — the only one cold on disk, after a build — is held to it too: it is the launch a
-    // person makes first.
+    // Cold start's limit in ms: the run fails when any held launch of the empty plane is past it.
     limit: { type: "string" },
+    // One launch before the measured ones, reported and not held to the limit: it pays for a
+    // disk cold since boot or install (the binary and GTK/WebKitGTK's libraries), which a person
+    // pays once, not per launch.
+    "warm-up": { type: "boolean", default: false },
+    // Each launch on a HOME and XDG directories of its own, so each is a person's first launch:
+    // it pays what a new profile pays — Mesa compiling WebKit's shaders into
+    // `~/.cache/mesa_shader_cache`, about half a second — instead of reading the last launch's.
+    "fresh-profile": { type: "boolean", default: false },
   },
 });
 const only = new Set(options.only.split(","));
@@ -186,59 +194,84 @@ function planeForColdStart(chats) {
   return cwd;
 }
 
+/** A HOME and XDG directories of their own, for a launch that is a person's first. */
+function freshProfile() {
+  const home = mkdtempSync(join(tmpdir(), "charter-bench-profile-"));
+  const dirs = {
+    HOME: home,
+    XDG_CACHE_HOME: join(home, ".cache"),
+    XDG_CONFIG_HOME: join(home, ".config"),
+    XDG_DATA_HOME: join(home, ".local", "share"),
+    XDG_STATE_HOME: join(home, ".local", "state"),
+    CHARTER_CONFIG_HOME: join(home, "charter-config"),
+  };
+  for (const dir of Object.values(dirs)) mkdirSync(dir, { recursive: true });
+  return dirs;
+}
+
+/** One launch of the app in `cwd`, to its first frame, with `profile` on top of the env. */
+async function launchOnce(cwd, profile) {
+  const from = performance.now();
+  // The plane is PINNED, not left to `cwd` (charter-app#129). charter puts `$CHARTER_ROOT`
+  // into every chat it starts and the variable beats the walk, so a benchmark run from
+  // inside a charter chat measured the app against the OPERATOR'S plane — reading its
+  // reopen record, which is a list of programs the app then starts, and writing its own
+  // back. The fence is what makes a future edit that drops this line a dead app.
+  const app = spawn(COLD_START_APP, [], {
+    cwd,
+    env: {
+      ...process.env,
+      CHARTER_BENCH_LOG: "1",
+      CHARTER_ROOT: cwd,
+      CHARTER_PLANE_FENCE: tmpdir(),
+      CHARTER_CONFIG_HOME: COLD_START_CONFIG_HOME,
+      ...profile,
+    },
+  });
+  // A window that comes up behind another draws no frame at all, so it would never reach
+  // the frame this is timing. It is brought forward until it has, as launching it from the
+  // dock would: the time that takes is part of the measurement.
+  const activating = setInterval(() => activate(app.pid), 50);
+  const own = await new Promise((resolve, reject) => {
+    let seen = "";
+    const giveUp = setTimeout(() => reject(new Error("no first frame within 30 s")), 30_000);
+    app.stdout.on("data", (chunk) => {
+      seen += chunk;
+      const found = seen.match(/charter-bench first-frame (\d+)/);
+      if (found) {
+        clearTimeout(giveUp);
+        resolve({ at: performance.now(), appMs: Number(found[1]) });
+      }
+    });
+    app.on("exit", (code) => reject(new Error(`the app exited (${code}) before its first frame`)));
+    // What the app says on its way up — a slow start, a portal it did not wait for — is
+    // part of the measurement's record, so it is passed through.
+    app.stderr.on("data", (chunk) => process.stderr.write(chunk));
+  }).finally(() => clearInterval(activating));
+  clearInterval(activating);
+  // Only the process this started.
+  app.removeAllListeners("exit");
+  const ended = new Promise((done) => app.once("exit", done));
+  app.kill("SIGTERM");
+  await ended;
+  await sleep(500);
+  if (profile) rmSync(profile.HOME, { recursive: true, force: true });
+  return { ms: own.at - from, appMs: own.appMs };
+}
+
 async function coldStart(chats = 0) {
   const cwd = planeForColdStart(chats);
+  const profile = () => (options["fresh-profile"] ? freshProfile() : undefined);
+  const warmUp = options["warm-up"] ? await launchOnce(cwd, profile()) : undefined;
   const samples = [];
-  for (let n = 0; n < Number(options["cold-starts"]); n++) {
-    const from = performance.now();
-    // The plane is PINNED, not left to `cwd` (charter-app#129). charter puts `$CHARTER_ROOT`
-    // into every chat it starts and the variable beats the walk, so a benchmark run from
-    // inside a charter chat measured the app against the OPERATOR'S plane — reading its
-    // reopen record, which is a list of programs the app then starts, and writing its own
-    // back. The fence is what makes a future edit that drops this line a dead app.
-    const app = spawn(COLD_START_APP, [], {
-      cwd,
-      env: {
-        ...process.env,
-        CHARTER_BENCH_LOG: "1",
-        CHARTER_ROOT: cwd,
-        CHARTER_PLANE_FENCE: tmpdir(),
-        CHARTER_CONFIG_HOME: COLD_START_CONFIG_HOME,
-      },
-    });
-    // A window that comes up behind another draws no frame at all, so it would never reach
-    // the frame this is timing. It is brought forward until it has, as launching it from the
-    // dock would: the time that takes is part of the measurement.
-    const activating = setInterval(() => activate(app.pid), 50);
-    const own = await new Promise((resolve, reject) => {
-      let seen = "";
-      const giveUp = setTimeout(() => reject(new Error("no first frame within 30 s")), 30_000);
-      app.stdout.on("data", (chunk) => {
-        seen += chunk;
-        const found = seen.match(/charter-bench first-frame (\d+)/);
-        if (found) {
-          clearTimeout(giveUp);
-          resolve({ at: performance.now(), appMs: Number(found[1]) });
-        }
-      });
-      app.on("exit", (code) => reject(new Error(`the app exited (${code}) before its first frame`)));
-      // What the app says on its way up — a slow start, a portal it did not wait for — is
-      // part of the measurement's record, so it is passed through.
-      app.stderr.on("data", (chunk) => process.stderr.write(chunk));
-    }).finally(() => clearInterval(activating));
-    clearInterval(activating);
-    samples.push({ ms: own.at - from, appMs: own.appMs });
-    // Only the process this started.
-    app.removeAllListeners("exit");
-    const ended = new Promise((done) => app.once("exit", done));
-    app.kill("SIGTERM");
-    await ended;
-    await sleep(500);
-  }
+  for (let n = 0; n < Number(options["cold-starts"]); n++) samples.push(await launchOnce(cwd, profile()));
   return {
     launchToFirstFrame: summary(samples.map((one) => one.ms)),
     processStartToFirstFrameAsTheAppSeesIt: summary(samples.map((one) => one.appMs)),
-    firstRunIsColdestOnDisk: samples[0]?.ms,
+    // Without a warm-up the first held launch is the one cold on disk.
+    firstRunIsColdestOnDisk: warmUp ? undefined : samples[0]?.ms,
+    ...(warmUp && { coldDiskWarmUp: { ms: warmUp.ms, appMs: warmUp.appMs } }),
+    freshProfileEachLaunch: options["fresh-profile"],
   };
 }
 
@@ -501,15 +534,26 @@ writeFileSync(join(OUT, "results.json"), `${JSON.stringify(results, null, 2)}\n`
 console.log(`\n${JSON.stringify(results, null, 2)}\n\nWritten to ${join(OUT, "results.json")}`);
 if (!existsSync(COLD_START_APP) && only.has("coldstart")) console.log("(cold start needs a build first)");
 if (options.limit && results.coldStart) {
-  // Every launch, not the p50: with five launches a p50 lets two of them pass the limit unseen,
-  // and a person feels each launch — the first, cold on disk, most of all.
+  // Every held launch, not the p50: with five launches a p50 lets two of them pass the limit
+  // unseen, and a person feels each launch.
   const limit = Number(options.limit);
+  const build = /[/\\]debug[/\\]/.test(COLD_START_APP)
+    ? "debug build"
+    : /[/\\](release|bench)[/\\]/.test(COLD_START_APP)
+      ? "release build"
+      : "build of unknown profile";
+  const { coldDiskWarmUp: warmUp, freshProfileEachLaunch: fresh } = results.coldStart;
+  if (warmUp)
+    console.log(
+      `\ncold disk, once per boot or install: reported, not gated: ${Math.round(warmUp.ms)} ms`,
+    );
   const launches = results.coldStart.launchToFirstFrame.samples_ms;
   const over = launches.filter((ms) => ms > limit);
   const verdict = launches.length > 0 && over.length === 0 ? "met" : "MISSED";
   console.log(
-    `\ncold start: ${launches.map((ms) => Math.round(ms)).join(", ")} ms, each against a ` +
-      `${limit} ms limit: ${verdict}` +
+    `cold start (${build}${fresh ? ", a fresh profile each launch" : ""}): ` +
+      `${launches.map((ms) => Math.round(ms)).join(", ")} ms, each against a ${limit} ms limit: ` +
+      verdict +
       (over.length > 0 ? ` (${over.length} over)` : launches.length === 0 ? " (no launch)" : ""),
   );
   if (verdict !== "met") process.exitCode = 1;

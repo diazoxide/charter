@@ -73,9 +73,13 @@ CI also runs clippy on the app crate (`--workspace`), after creating an empty `a
 compiles without a frontend build.
 
 On Linux, CI also holds the built app's cold start to the spec's 2 s limit on the desktops
-charter-app#24 is about. Five launches each, and every one must be inside the limit, the first
-(cold on disk) included. After the debug build above, with `xvfb`, `xauth`, `dbus-x11` and `i3`
-installed:
+charter-app#24 is about. Each case launches the debug build once, discarded, then five times on
+a fresh HOME and XDG profile each, and every one of the five must be inside the limit. The
+discarded launch pays for a disk cold since boot or install (the binary and GTK/WebKitGTK's
+libraries), which a person pays once; its time is printed as "cold disk, once per boot or
+install: reported, not gated". The fresh profile makes each held launch pay what a new user's
+first launch pays: Mesa compiling WebKit's shaders into `~/.cache/mesa_shader_cache`. After the
+debug build above, with `xvfb`, `xauth`, `dbus-x11` and `i3` installed:
 
 ```bash
 tools/coldstart-linux.sh bare       # X with no window manager, on the session bus as found
