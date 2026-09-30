@@ -13,6 +13,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Every build file a release publishes carries signed build provenance.** Each installer and
+  updater archive now has a SLSA build provenance attestation, so you can check that a download
+  came out of charter's own release workflow with `gh attestation verify`. `SECURITY.md` has
+  the command (#583). The update manifest (`latest.json`, `dev.json`) is not attested; the
+  updater checks each build's own minisign signature, as before.
+
 - **A kill switch that stops every chat and shell charter started.** Stop all on the title bar,
   or `charter stop --all` in any terminal, interrupts and ends every chat's and shell's program in
   every project and every window within seconds. No chat starts again, not even from a relaunch,

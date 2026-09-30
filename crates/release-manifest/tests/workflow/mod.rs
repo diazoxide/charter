@@ -57,6 +57,56 @@ impl Job {
             .map(str::trim)
     }
 
+    /// The job's own `if:` condition, if it has one written on that line.
+    pub fn condition(&self) -> Option<&str> {
+        self.body
+            .iter()
+            .find_map(|l| l.strip_prefix("    if:"))
+            .map(str::trim)
+    }
+
+    /// The jobs this one `needs:`, from a one-line `needs: x` or `needs: [x, y]`.
+    pub fn needs(&self) -> Vec<String> {
+        self.body
+            .iter()
+            .find_map(|l| l.strip_prefix("    needs:"))
+            .map(|v| {
+                v.trim()
+                    .trim_start_matches('[')
+                    .trim_end_matches(']')
+                    .split(',')
+                    .map(|n| n.trim().to_owned())
+                    .filter(|n| !n.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// The job's own `permissions:` block as `(scope, access)` pairs, sorted, or `None` when the
+    /// job sets none and so takes the workflow's.
+    pub fn permissions(&self) -> Option<Vec<(String, String)>> {
+        let start = self
+            .body
+            .iter()
+            .position(|l| l.trim_end() == "    permissions:")?;
+        let mut pairs: Vec<(String, String)> = self.body[start + 1..]
+            .iter()
+            .filter(|l| !l.trim().is_empty())
+            .take_while(|l| l.starts_with("      ") && !l.starts_with("       "))
+            .filter_map(|l| l.trim().split_once(':'))
+            .map(|(k, v)| (k.trim().to_owned(), v.trim().to_owned()))
+            .collect();
+        pairs.sort();
+        Some(pairs)
+    }
+
+    /// Whether the job may mint an OIDC token (`id-token: write`), which is what Sigstore signs
+    /// build provenance with.
+    pub fn can_mint_an_oidc_token(&self) -> bool {
+        self.permissions()
+            .is_some_and(|p| p.iter().any(|(k, v)| k == "id-token" && v == "write"))
+    }
+
     /// The job's steps, each as its lines: the `- ` line and every more-indented one after it.
     pub fn steps(&self) -> Vec<Vec<String>> {
         let mut steps: Vec<Vec<String>> = Vec::new();
@@ -117,6 +167,21 @@ pub fn jobs(text: &str) -> Vec<Job> {
         }
     }
     jobs
+}
+
+/// The workflow-level `permissions:` block as `(scope, access)` pairs, sorted: what every job
+/// that sets none of its own gets.
+pub fn workflow_permissions(text: &str) -> Vec<(String, String)> {
+    let mut pairs: Vec<(String, String)> = text
+        .lines()
+        .skip_while(|l| *l != "permissions:")
+        .skip(1)
+        .take_while(|l| l.starts_with("  "))
+        .filter_map(|l| l.trim().split_once(':'))
+        .map(|(k, v)| (k.trim().to_owned(), v.trim().to_owned()))
+        .collect();
+    pairs.sort();
+    pairs
 }
 
 pub fn release_jobs() -> Vec<Job> {
