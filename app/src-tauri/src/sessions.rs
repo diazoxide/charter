@@ -22,6 +22,9 @@ pub const SCROLLBACK: u32 = 5_000;
 /// does not look like one that might. A pane whose own view closed writes it and is gone.
 const ENDED: &str = "\r\n\x1b[2m— the program has ended —\x1b[0m\r\n";
 
+/// Why a start was refused while the kill switch is thrown (OV-1).
+pub const STOPPED: &str = "Every agent is stopped. Re-arm from the title bar to start chats again.";
+
 /// What to run in a new session. No program is the operator's shell.
 #[derive(Debug, Clone)]
 pub struct Opening {
@@ -86,6 +89,8 @@ pub struct Sessions {
     reporting: Option<Reporting>,
     /// Told how each session ended, as it ends.
     ended: Mutex<Option<Ended>>,
+    /// The kill switch (OV-1): while it is thrown no session opens, whatever asked.
+    halt: Arc<crate::killswitch::Halt>,
 }
 
 struct Running {
@@ -110,7 +115,15 @@ impl Sessions {
             opened: AtomicU32::new(0),
             reporting,
             ended: Mutex::new(None),
+            halt: crate::killswitch::Halt::never(),
         }
+    }
+
+    /// Refuses every start while `halt` is thrown. Every way a chat or a shell starts — the
+    /// operator, a relaunch, a handoff, a curation action — comes through [`Self::open`], so
+    /// this is the one place the refusal has to be.
+    pub fn stopped_by(&mut self, halt: Arc<crate::killswitch::Halt>) {
+        self.halt = halt;
     }
 
     /// Calls `tell` as each session's program ends, with the id and how it ended.
@@ -143,6 +156,11 @@ impl Sessions {
         opening: &Opening,
         announce: &dyn Fn(u32),
     ) -> Result<u32, String> {
+        // Before the number is dealt and before anything is announced: a refused start is no
+        // chat at all.
+        if self.halt.is_thrown() {
+            return Err(STOPPED.to_owned());
+        }
         let program = opening.program.clone().unwrap_or_else(shell);
         let mut spec = Spec::new(program, opening.size).args(&opening.args);
         spec.cwd = opening.cwd.as_ref().map(Into::into);
@@ -240,6 +258,12 @@ impl Sessions {
                 watched: 0,
             },
         );
+        // **Asked again once it is in the table.** A stop that landed while this program was
+        // being spawned collected the table before it was there, so it would outlive the
+        // switch. Either the stop sees it in the table or this sees the switch thrown.
+        if self.halt.is_thrown() {
+            self.stop_program(id);
+        }
         Ok(id)
     }
 
@@ -393,6 +417,44 @@ impl Sessions {
         for end in ends {
             let _ = end.join();
         }
+    }
+
+    /// Ends every session's program, and everything each started, all at once, and does not
+    /// return until they are gone. The sessions stay, with their last screens, as they do when
+    /// a program ends on its own: this is the kill switch (OV-1), not a close. Answers how many
+    /// it asked.
+    ///
+    /// The table is only read under its lock; the ending happens outside it, so a pane asking
+    /// about its session is never held up by fifty programs being given their half second.
+    pub fn stop_every_program(&self) -> usize {
+        let stoppers: Vec<_> = lock(&self.running)
+            .values()
+            .map(|one| one.session.stopper())
+            .collect();
+        let asked = stoppers.len();
+        let stops: Vec<_> = stoppers
+            .into_iter()
+            .filter_map(|stopper| {
+                std::thread::Builder::new()
+                    .name("charter-stopping".into())
+                    .spawn(move || stopper.stop())
+                    .ok()
+            })
+            .collect();
+        for stop in stops {
+            let _ = stop.join();
+        }
+        asked
+    }
+
+    /// Ends one session's program and keeps the session, on a thread of its own.
+    fn stop_program(&self, id: u32) {
+        let Ok(stopper) = self.with(id, |running| Ok(running.session.stopper())) else {
+            return;
+        };
+        let _ = std::thread::Builder::new()
+            .name("charter-stopping".into())
+            .spawn(move || stopper.stop());
     }
 
     /// The operating system's id for a session's program, while it runs. Only the tests ask;
@@ -656,6 +718,58 @@ mod tests {
 
         until_seen(&seen, "the last thing it printed");
         until_seen(&seen, "the program has ended");
+    }
+
+    #[test]
+    fn no_session_opens_while_every_agent_is_stopped_and_one_does_once_re_armed() {
+        let halt = crate::killswitch::Halt::never();
+        let mut sessions = Sessions::new();
+        sessions.stopped_by(std::sync::Arc::clone(&halt));
+        halt.throw(charter_core::halt::By::Window).expect("thrown");
+        let announced = Mutex::new(Vec::new());
+
+        let refused = sessions.open(None, &opening("sleep 600"), &|id| {
+            announced.lock().unwrap().push(id);
+        });
+
+        assert!(refused.is_err(), "a session started while stopped");
+        assert!(
+            announced.lock().unwrap().is_empty(),
+            "a refused start was announced as a chat"
+        );
+        assert_eq!(sessions.running(), Vec::<u32>::new());
+
+        halt.rearm().expect("re-armed");
+        sessions
+            .open(None, &opening("sleep 600"), &|_| {})
+            .expect("a session opens once re-armed");
+    }
+
+    #[test]
+    fn stopping_every_program_ends_them_and_keeps_their_sessions() {
+        // The tab stays, reading as a chat whose program ended; the record keeps the chat, so
+        // re-arming loses nothing the operator had open.
+        let sessions = Sessions::new();
+        let mut pids = Vec::new();
+        for _ in 0..3 {
+            let id = sessions
+                .open(
+                    None,
+                    &opening("trap '' HUP; echo guarded; while :; do sleep 600; done"),
+                    &|_| {},
+                )
+                .expect("the session opens");
+            let (_view, seen) = watching(&sessions, id);
+            until_seen(&seen, "guarded");
+            pids.push(sessions.process_id(id).expect("a pid"));
+        }
+
+        assert_eq!(sessions.stop_every_program(), 3);
+
+        for pid in pids {
+            assert!(!alive(pid), "process {pid} outlived the stop");
+        }
+        assert_eq!(sessions.running().len(), 3, "a stop is not a close");
     }
 
     #[test]

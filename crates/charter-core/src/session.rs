@@ -435,6 +435,16 @@ impl Session {
         end(&child);
     }
 
+    /// What ends this session's program, and everything it started, WITHOUT ending the
+    /// session: its terminal and its last screen stay, as they do for a program that ended on
+    /// its own. The kill switch (OV-1) is what asks, for every session at once, which is why
+    /// it is a value that can be taken out from under a lock and handed to a thread.
+    pub fn stopper(&self) -> Stopper {
+        Stopper {
+            child: Arc::clone(&self.child),
+        }
+    }
+
     /// Calls `tell` once, with how the program ended, on a thread of its own.
     ///
     /// The thread is blocked on a channel for the whole of the session's life and costs
@@ -515,6 +525,20 @@ impl Session {
         {
             None
         }
+    }
+}
+
+/// Ends one session's program, and everything it started, without ending the session
+/// ([`Session::stopper`]).
+pub struct Stopper {
+    child: Arc<Mutex<Box<dyn Child + Send + Sync>>>,
+}
+
+impl Stopper {
+    /// A hangup to the program's whole process group, then a kill; returns once it is gone.
+    /// A program that has already ended is left as it is.
+    pub fn stop(self) {
+        end(&self.child);
     }
 }
 
@@ -1437,6 +1461,21 @@ mod tests {
         session.end();
 
         assert!(!alive(pid), "process {pid} outlived the session it was in");
+    }
+
+    #[test]
+    fn a_stopped_session_s_program_is_gone_and_its_last_screen_stays() {
+        // The kill switch (OV-1) ends the program and keeps the tab: the chat reads as one
+        // whose program ended, with what it last printed still there to read.
+        let session = sh("trap '' HUP; echo guarded; while :; do sleep 600; done");
+        screen_until(&session, shows("guarded"));
+        let pid = session.process_id().expect("a running program has a pid");
+
+        session.stopper().stop();
+
+        assert!(!alive(pid), "process {pid} outlived the stop");
+        let view = session.attach();
+        view_until(&view, "guarded");
     }
 
     #[test]

@@ -318,6 +318,17 @@ enum Command {
         now: Option<String>,
     },
 
+    /// The kill switch: stop every agent on this machine — every chat in every project the app
+    /// holds, in every window — and start none until you re-arm it in the app's title bar.
+    ///
+    /// It leaves one line in the kill switch's journal. There is no command to re-arm: an agent
+    /// can run any command, and letting agents start again is the operator's to decide.
+    Stop {
+        /// Every agent. Required: it is the only scope there is.
+        #[arg(long, required = true)]
+        all: bool,
+    },
+
     /// What each version of the app brought: its CHANGELOG.md, newest first.
     News(NewsCommand),
 
@@ -539,6 +550,31 @@ fn say_lines(said: &[charter_core::scaffold::Say]) {
 fn say(outcome: &charter_core::scaffold::Outcome) -> ExitCode {
     say_lines(&outcome.said);
     ExitCode::from(outcome.code)
+}
+
+/// `charter stop --all`: throws the kill switch the app's title bar throws (OV-1).
+///
+/// It needs no plane and no app. The app acts on the switch within seconds when it is running,
+/// and a launch that finds it thrown starts nothing, so the stop holds either way.
+fn stop_every_agent() -> ExitCode {
+    let Some(config) = charter_core::machine::config_root() else {
+        voice::err("There is no config home to keep the stop in, so nothing was stopped.");
+        return ExitCode::FAILURE;
+    };
+    let at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs());
+    if let Err(why) = charter_core::halt::stop(&config, charter_core::halt::By::Cli, at) {
+        voice::err(&format!(
+            "The stop was not written, so nothing was stopped: {why}"
+        ));
+        return ExitCode::FAILURE;
+    }
+    voice::ok(
+        "Every agent is stopping: the app ends every chat, in every project, within seconds.",
+    );
+    voice::info("Nothing starts again until you re-arm it from the title bar of the charter app.");
+    ExitCode::SUCCESS
 }
 
 /// stdout first, then stderr, then the status — the order the two streams are written in
@@ -2131,6 +2167,7 @@ fn run(command: Command) -> Result<u8, String> {
         | Command::Init(_)
         | Command::Reinit
         | Command::News(_)
+        | Command::Stop { .. }
         | Command::Update { .. }
         | Command::Version { .. }
         | Command::Discover { .. }
@@ -2768,6 +2805,7 @@ fn main() -> ExitCode {
                 }
             });
         }
+        Command::Stop { .. } => return stop_every_agent(),
         // `news` and `update` say several lines of their own on both streams and choose their
         // own exit status, exactly as `init` does.
         Command::News(news) => {

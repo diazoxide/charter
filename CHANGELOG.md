@@ -11,6 +11,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **A kill switch that stops every chat and shell charter started.** Stop all on the title bar,
+  or `charter stop --all` in any terminal, interrupts and ends every chat's and shell's program in
+  every project and every window within seconds. No chat starts again, not even from a relaunch,
+  until you re-arm it from the title bar; you can still open a shell to look around. The stopped
+  chats stay as tabs to reopen. Each stop, re-arm and tamper is one line in `kill-switch.jsonl`
+  in charter's config directory (ADR 0069).
+
 ### Fixed
 
 - **Linux no longer waits half a minute for a desktop portal that cannot start.** Before GTK

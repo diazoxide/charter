@@ -4024,6 +4024,16 @@ semantics below.
   (`charter/report.py:462`, `charter/report.py:465`, granted `charter/report.py:475`).
   **stable** (operator-visible, deleted by hand to withdraw), per *machine*, not per plane:
   one consent covers every plane the machine works on.
+* **charter-app only** (OV-1): `charter/halted`, under the same config home, whose
+  **existence** means every agent on this machine is stopped. Written by the title bar's Stop
+  all and by `charter stop --all`, 0600, one JSON line (`at`, `event`, `by`) that nothing reads;
+  removed only by the title bar's re-arm. While it is there the app starts no session, a relaunch
+  puts no chat back, and a running app ends every session's program within seconds of it
+  appearing. **stable** (a second process reads it). Beside it, `charter/kill-switch.jsonl`:
+  JSON Lines, 0600, one object per stop and per re-arm — `at` (epoch seconds), `event`
+  (`stop` or `rearm`), `by` (`window` or `cli`) — capped at the newest 1000 lines, written by
+  `crates/charter-core/src/halt.rs`. **internal**: the audit of the switch, read by nothing in
+  charter yet.
 * No other **state** in this area is written outside the plane, though charter does write
   elsewhere: a news probe writes `$TMPDIR/charter-probe-<pid>` (`charter/news.py:1329`).
   Harness-side files

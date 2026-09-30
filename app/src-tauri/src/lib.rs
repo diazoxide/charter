@@ -21,6 +21,7 @@ mod hooks;
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod instance;
 mod ipc;
+mod killswitch;
 mod lifecycle;
 mod live;
 mod memories;
@@ -1769,6 +1770,8 @@ pub fn run() {
             ));
             app.manage(launch);
             reached("the record is back");
+            // `charter stop --all` in a terminal is heard here (OV-1).
+            killswitch::hear(app.handle());
 
             // Last, and never fatal. A tray is somewhere to put the window; the sessions
             // are the work. A desktop with no system tray at all — some Linux sessions, and

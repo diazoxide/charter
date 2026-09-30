@@ -207,6 +207,11 @@ impl Chats {
         *lock(&self.never_started) = Some(tell);
     }
 
+    /// Refuses every start while `halt` is thrown (OV-1), at the sessions every start reaches.
+    pub fn stopped_by(&mut self, halt: std::sync::Arc<crate::killswitch::Halt>) {
+        self.sessions.stopped_by(halt);
+    }
+
     /// The sessions underneath, for everything that is about a terminal and not about a chat.
     pub fn sessions(&self) -> &Sessions {
         &self.sessions

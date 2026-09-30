@@ -34,6 +34,7 @@ pub mod glrefresh;
 pub mod glstate;
 pub mod guardcmd;
 pub mod guest;
+pub mod halt;
 pub mod handback;
 pub mod handed;
 pub mod handoff;

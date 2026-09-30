@@ -290,8 +290,10 @@ describe("the window's tab order", () => {
       "tab plane2",
       "button Open a project…",
       "button New project…",
-      // …then the right-hand end: the needs-you button (charter-app#249), then the app's own two.
+      // …then the right-hand end: the needs-you button (charter-app#249), the kill switch (OV-1),
+      // then the app's own two.
       "button 2 chats need you",
+      "button Stop every agent: every chat in every project and window",
       "button About Charter — what this version brought",
       "button Updates — … channel, nothing new known",
       // The workspace strip.
