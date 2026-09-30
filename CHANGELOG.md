@@ -123,6 +123,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **The guard that stops a live substitution in `charter change create` or `drop` no longer
   says `charter change` is missing.** It has shipped since 0.4.0; what is not in this version
   yet is `charter change push`, which will write the `why` into request bodies (#571).
+- **A heredoc `cat` reads inside a quoted command substitution is read as data.** `x="$(cat <<'EOF' …
+  EOF)"` no longer has `charter handoff` in its body refused as a handoff a shell runs. The
+  guard now reads the program that opens a heredoc inside `"$( … )"` as the command in the
+  substitution, not the one around it, so a body `bash` or an unnamed program runs is still
+  refused (#488).
 
 ## [0.4.2] - 2026-09-30
 

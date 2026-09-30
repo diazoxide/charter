@@ -819,13 +819,19 @@ pub fn heredoc_opener_words(line: &Line, start: usize) -> Option<Vec<String>> {
         // OPENING backtick of a pair inside `"…"` as quoted and its closing partner as not —
         // correct for that map, and half a pair here. Seeing one half toggled `btick` the wrong
         // way and left `cmd` past the closing backtick.
-        if chars[i] != '`' && line.quoted(i) {
+        // A `$(` inside `"…"` opens a command too (#488). The quote map marks its `$` and `(`
+        // as quoted, since they stand in the string, and what follows them as NOT quoted, since
+        // that is the substitution's command. So the `$(` is asked about before the
+        // quoted-skip, and only where the map shows it opened a command context: inside `'…'`
+        // or `$'…'` it is literal, and the text after it stays quoted.
+        let opens_command = line.starts_with(i, "$(") && !line.quoted(i + 2);
+        if chars[i] != '`' && !opens_command && line.quoted(i) {
             i += 1;
             continue;
         }
         // `${…}` needs no case of its own: `{` saves the command start and `}` restores it, so a
         // parameter expansion leaves it exactly where it was.
-        if line.starts_with(i, "$(") {
+        if opens_command {
             stack.push(cmd);
             cmd = i + 2;
             i += 2;

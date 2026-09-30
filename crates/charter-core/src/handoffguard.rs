@@ -918,9 +918,57 @@ mod tests {
             "git commit -m 'fix the guard\n\ncharter handoff beta now asks first'",
             "python3 -c \"\nimport sys\ncharter handoff beta\n\"",
             "cat > f <<'EOF'\nx\nEOF\necho 'one\ncharter handoff beta'",
+            // #488: a quoted heredoc a reader takes inside a substitution whose value is only
+            // assigned. Every shell reads the body as `cat`'s stdin, so it is data.
+            "x=\"$(cat <<'EOF'\ncharter handoff beta\nEOF\n)\"",
         ] {
             assert_eq!(refusal(cmd), None, "{cmd:?} is text, not a handoff");
         }
+    }
+
+    /// #488's other side: reading the program inside `"$( … )"` must not hide a handoff. A
+    /// body that program RUNS, a program nobody can name, a shell downstream of it, and a
+    /// handoff on a line after the heredoc are all still refused.
+    #[test]
+    fn a_handoff_is_still_caught_around_a_quoted_substitution() {
+        for (cmd, want) in [
+            (
+                "x=\"$(bash <<'EOF'\ncharter handoff beta\nEOF\n)\"",
+                REASON_SHELL_STRING,
+            ),
+            (
+                "x=\"$(python3 - <<'EOF'\ncharter handoff beta\nEOF\n)\"",
+                REASON_SHELL_STRING,
+            ),
+            (
+                "x=\"$($RUNNER <<'EOF'\ncharter handoff beta\nEOF\n)\"",
+                REASON_SHELL_STRING,
+            ),
+            (
+                "x=\"$(cat <<'EOF' | sh\ncharter handoff beta\nEOF\n)\"",
+                REASON_SHELL_STRING,
+            ),
+            (
+                "x=\"$(cat <<'EOF'\nhello\nEOF\n)\"\ncharter handoff beta",
+                REASON_BRIEF_SOURCE,
+            ),
+        ] {
+            assert_eq!(reason(cmd), Some(want), "{cmd:?}");
+        }
+        // And a sub-agent is refused for a real one, while the data shape stays data.
+        let sub = Caller {
+            agent_id: Some("a1"),
+            harness: Some("claude-code"),
+            permission_mode: None,
+        };
+        assert_eq!(
+            handoff_refusal("x=\"$(bash <<'EOF'\ncharter handoff beta\nEOF\n)\"", sub).map(|r| r.0),
+            Some(REASON_SUBAGENT)
+        );
+        assert_eq!(
+            handoff_refusal("x=\"$(cat <<'EOF'\ncharter handoff beta\nEOF\n)\"", sub),
+            None
+        );
     }
 
     #[test]
