@@ -4242,7 +4242,7 @@ semantics below.
   `charter/halted`, an **empty** 0600 file whose **existence** means every agent charter
   started on this machine is stopped; and `charter/kill-switch.jsonl`, JSON Lines, 0600, one
   object per event — `at` (epoch seconds), `event` (`stop`, `rearm` or `tamper`), `by`
-  (`window`, `cli` or `app`) — capped at the newest 1000 lines. Written by
+  (`window`, `cli` or `app`; on a runner also `link`, **decided, not yet written**, ADR 0078) — capped at the newest 1000 lines. Written by
   `crates/charter-core/src/halt.rs`. The machine is stopped when the marker is there **or**
   the journal's last event is not a `rearm`, so removing the marker alone re-arms nothing; a
   running app puts a removed marker back and journals a `tamper`. Only the app's window writes
@@ -4264,7 +4264,8 @@ identifier `dev.charter.app`. The keyring rows are the operating system's store 
 `<data>` is charter's data home (ADR 0075, amending ADR 0069): `$CHARTER_DATA_HOME`, else
 `$XDG_DATA_HOME/charter`, else the OS data directory's `charter/` (`~/Library/Application
 Support/charter` on macOS, `~/.local/share/charter` on Linux). Its rows are **decided, not yet
-written**: AU-3 writes them, and no code does yet. Their writer refuses a `<data>` under a plane
+written**: AU-3 writes the audit's and RR-16 a runner's bare repos (ADR 0078), and no code
+does yet. Their writer refuses a `<data>` under a plane
 or inside any git work tree.
 
 | Path | Tier | What it holds | Written by |
@@ -4274,7 +4275,7 @@ or inside any git work tree.
 | `<config>/layout.json` | Machine, syncable | the window's arrangement of regions | `windowprefs::write_layout`, `adopt_layout` (which moves the legacy `charter.layout` localStorage key into it once) |
 | `<config>/theme.json` | Machine, syncable | the operator's own theme; charter only reads it | the operator, by hand |
 | `<config>/halted` | Machine, device-bound | the kill switch's marker (ADR 0071): an empty file whose existence means every agent charter started on this machine is stopped | `halt::stop`, from the window's Stop all and `charter stop --all`; only the window's re-arm removes it |
-| `<config>/kill-switch.jsonl` | Machine, device-bound | the kill switch's journal (ADR 0071): one line per stop, re-arm or tamper, the newest 1000 | `halt.rs`, from the app and `charter stop --all` |
+| `<config>/kill-switch.jsonl` | Machine, device-bound | the kill switch's journal (ADR 0071): one line per stop, re-arm or tamper, the newest 1000. On a runner, `by` may also be `link`: a stop or re-arm sent from a paired desktop (**decided, not yet written**, ADR 0078) | `halt.rs`, from the app and `charter stop --all` |
 | `<config>/restarted-to-update` | Machine, device-bound, transient | an empty file: the last quit was **Restart to update** | `reopen::mark_restart_to_update`; the next launch removes it |
 | `<config>/runs/journal.json` | Machine, device-bound | **decided, not yet written** (ADR 0068, ADR 0076; its contents pre-empt FD-29). The run journal: each live run's chat and run ids, its state with its reason or hold, the state a paused run was paused from, its conversation, harness and level; a run hibernated by a quit stays in it. Replaced whole at every move; read at the host's start to account for a crash. Kept out of `<config>/charterd/`, which is transient. Chats are denied it. Backed up by FR-10 | `charterd`, its only writer (FD-29) |
 | `<config>/extensions.json` | Machine, device-bound | each installed extension: its absolute path, the fingerprint the operator approved, and whether it is on | `extension::install`, `approve`, `set_on`, `forget` |
@@ -4292,6 +4293,11 @@ or inside any git work tree.
 | `<data>/audit/retention.json` | Machine, syncable | **decided, not yet written** (ADR 0075). The audit's retention and disk cap (defaults one year and 2 GiB); every change is itself an audit entry | `charterd`, from the viewer's setting (AU-8) |
 | keyring item for a human's audit pseudonym key | Keyring | **decided, not yet written** (ADR 0075). One key per human principal on this device, which turns that person's principal into the pseudonyms the audit stores. Deleting it is erasure. Its item name is AU-18's | AU-18 |
 | keyring item for the device key | Keyring | **decided, not yet written** (ADR 0066, ADR 0075). The key that signs this device's audit chain; on a headless host, an age-encrypted file stands in for it. Its item name is AU-3's | AU-3 |
+| `<config>/runners.json` | Machine, device-bound | **decided, not yet written** (ADR 0078). The runners this machine uses: each one's name, connector (an argument vector, never a shell string), preset, provider if any, the runner's device id and its pinned public link key. Written only from a human scope, and denied to chats. A project names a runner and never defines one | `charter runner add` and `remove`, and the window (RR-1) |
+| `<config>/peers.json` | Machine, device-bound | **decided, not yet written** (ADR 0078). On a runner: the devices paired with it, each one's device id, pinned public link key and when it was paired. Its host refuses a link from any other key. Denied to chats | the runner's `charterd`, at pairing; `charter runner peers` (RR-1) |
+| `<config>/server/<ver>/` | Machine, device-bound, rebuildable | **decided, not yet written** (ADR 0068, ADR 0078). On a runner: the verified `charter` binary of each host version, side by side while an old one drains. Denied to chats | the desktop's bootstrap, through the connector (RR-14) |
+| `<data>/repos/<workspace>/<repo>.git` | Machine, device-bound, rebuildable | **decided, not yet written** (ADR 0078). On a runner, in charter's data home: one bare repo per workspace repo, which the desktop pushes to over the link and fetches from. The desktop's clone is the truth. Denied to chats | the runner's `charterd` (RR-16) |
+| keyring item for the link key | Keyring | **decided, not yet written** (ADR 0078). This device's static X25519 key for the Noise handshake of a runner link; on a headless runner, the device key's headless form stands in for it. Denied to chats | `charter runner add`, or the runner's `charterd` at pairing (RR-1) |
 
 ### Environment variables that move or key this state
 

@@ -210,6 +210,27 @@ The process that owns every chat's terminal on a device, one per OS user per dev
 `charter` binary run as `charter serve`. The app is its client (ADR 0068).
 _Avoid_: daemon, server (in UI text), backend
 
+**Runner**:
+A device, other than the one the window is on, whose own session host runs a workspace's chats.
+The desktop's session host reaches it through a **connector** and talks to it over a **link**.
+It keeps its own device id, event log, audit chain and kill switch, and it needs no server
+charter runs (ADR 0078).
+_Avoid_: remote (unqualified), agent host, worker, server (in UI text)
+
+**Connector**:
+The command whose stdin and stdout reach a runner's session host: `ssh <alias>`,
+`gh codespace ssh`, `coder ssh`, `docker exec -i`, `kubectl exec -i`, and later the relay. Held
+as an argument vector on the machine that uses it, never committed in a project. It gives
+reachability, never identity (ADR 0078).
+_Avoid_: transport (that is FD-4's framing), tunnel, provider (that creates the machine)
+
+**Link**:
+The encrypted, mutually authenticated stream between the desktop's session host and a runner's,
+carried by a connector. Each end proves itself with its device's link key, pinned when the runner
+was added. The desktop always opens it (ADR 0078).
+_Avoid_: connection (unqualified), session (that is the process), pairing (that is how the keys
+were pinned)
+
 **Audit**:
 The record of who did what, for whom, to what, and whether it was allowed, kept per device by
 the session host as **audit entries** in charter's data home, never in a project. Once AU-3
