@@ -70,8 +70,10 @@ a second machine and a deletion do to it
   `charter.local.toml`, a LOCAL workspace's files. Not derived from anything, so FR-10's backup
   carries it.
 - **Machine** — outside every plane: the machine store (ADR 0034's directory,
-  `$CHARTER_CONFIG_HOME`, else `$XDG_CONFIG_HOME`, else `~/.config`, then `charter/`), the app's
-  OS directories, and the lines charter writes into a harness's global config. Each one is
+  `$CHARTER_CONFIG_HOME`, else `$XDG_CONFIG_HOME`, else `~/.config`, then `charter/`), charter's
+  data home (`<data>`: `$CHARTER_DATA_HOME`, else `$XDG_DATA_HOME/charter`, else the OS data
+  directory's `charter/`; **decided, not yet written**, ADR 0075), the app's OS directories, and
+  the lines charter writes into a harness's global config. Each one is
   **syncable** (a preference of the operator's that could follow them to another machine) or
   **device-bound** (true of this machine only: an absolute path, a consent, an identity).
 - **Keyring** — the operating system's credential store. It holds secret values, and nothing
@@ -4259,6 +4261,11 @@ store's directory: `$CHARTER_CONFIG_HOME`, else `$XDG_CONFIG_HOME`, else `~/.con
 `charter/`, `0700`, and every file in it `0600` (`crates/charter-core/src/machine.rs`). On a
 platform that is not unix none of it is written (ADR 0031). The Tauri directories are the app's,
 identifier `dev.charter.app`. The keyring rows are the operating system's store (ADR 0047).
+`<data>` is charter's data home (ADR 0075, amending ADR 0069): `$CHARTER_DATA_HOME`, else
+`$XDG_DATA_HOME/charter`, else the OS data directory's `charter/` (`~/Library/Application
+Support/charter` on macOS, `~/.local/share/charter` on Linux). Its rows are **decided, not yet
+written**: AU-3 writes them, and no code does yet. Their writer refuses a `<data>` under a plane
+or inside any git work tree.
 
 | Path | Tier | What it holds | Written by |
 |---|---|---|---|
@@ -4277,6 +4284,12 @@ identifier `dev.charter.app`. The keyring rows are the operating system's store 
 | `<extension dir>/<state>/facts.json` | None | an extension's footer facts, written by the extension's own program wherever the operator installed it; charter only reads it | the extension |
 | keyring `charter/<vault>/<8 hex>`, account = the key | Keyring | a keyring vault's values. The random service name is recorded only in `.charter/vaults/<name>.keys.json` | `secrets::keyring` |
 | keyring `charter/@identity/<16 hex>`, account = the variable's name | Keyring | a vault provider's identity, such as a 1Password service-account token | `secrets::identity` |
+| `<data>/audit/<device>/active.jsonl` | Machine, device-bound | **decided, not yet written** (ADR 0075). The audit segment being written: one JSON line per audit entry, metadata only, people as keyed pseudonyms. Chats are denied it. Backed up by FR-10 | `charterd`, its only writer (AU-3) |
+| `<data>/audit/<device>/<first>-<last>.jsonl.zst` | Machine, device-bound | **decided, not yet written** (ADR 0075). A sealed audit segment, zstd, named by its first and last entry numbers; pruned only whole, oldest first, and only once a checkpoint covers it. Backed up by FR-10 | `charterd` (AU-3) |
+| `<data>/audit/<device>/checkpoints/` | Machine, device-bound | **decided, not yet written** (ADR 0075). The audit chain's signed checkpoints. Backed up by FR-10 | `charterd` (AU-7) |
+| `<data>/audit/retention.json` | Machine, syncable | **decided, not yet written** (ADR 0075). The audit's retention and disk cap (defaults one year and 2 GiB); every change is itself an audit entry | `charterd`, from the viewer's setting (AU-8) |
+| keyring item for a human's audit pseudonym key | Keyring | **decided, not yet written** (ADR 0075). One key per human principal on this device, which turns that person's principal into the pseudonyms the audit stores. Deleting it is erasure. Its item name is AU-18's | AU-18 |
+| keyring item for the device key | Keyring | **decided, not yet written** (ADR 0066, ADR 0075). The key that signs this device's audit chain; on a headless host, an age-encrypted file stands in for it. Its item name is AU-3's | AU-3 |
 
 ### Environment variables that move or key this state
 
@@ -4297,6 +4310,7 @@ identifier `dev.charter.app`. The keyring rows are the operating system's store 
 | `CLAUDE_PLUGIN_ROOT` | Decides `guard-seen.json`'s `source` field (`plugin` vs `settings`) | `charter/guardseen.py:55` |
 | `CLAUDE_PID` | Adopting a harness pid into `frame/<chat>/harness.pid` | `charter/hooks.py:6084` |
 | `CHARTER_CONFIG_HOME` / `XDG_CONFIG_HOME` | Move `reporting-consent` | `charter/report.py:462` |
+| `CHARTER_DATA_HOME` / `XDG_DATA_HOME` | **Decided, not yet written** (ADR 0075). Move `<data>`, charter's data home, and the audit in it. A value under a plane or inside a git work tree is refused | ADR 0075 |
 | `EDM_HOME` / `EDM_WORKSPACE` / `EDM_PERSONA` | Legacy names, warned about only | `charter/legacyenv.py:39` |
 
 ---
