@@ -21,7 +21,7 @@
 
 use serde_json::{Value, json};
 
-use super::{Access, Compiled, Service, Uncompilable};
+use super::{Access, Compiled, Uncompilable};
 use crate::harness::Harness;
 
 /// Claude Code's own tools that reach the network from its process rather than through its
@@ -43,16 +43,7 @@ pub struct Settings {
 /// denies it, and whether its sandbox keeps a command away from it anyway has been measured on
 /// none.
 pub fn settings(compiled: &Compiled) -> Result<Settings, Uncompilable> {
-    if let Some(service) = compiled.denied.services.first() {
-        match service {
-            Service::CredentialStore => {
-                return Err(Uncompilable {
-                    harness: Harness::ClaudeCode,
-                    service: *service,
-                });
-            }
-        }
-    }
+    compiled.holds_every_service(Harness::ClaudeCode)?;
     let mut deny_read = Vec::new();
     let mut deny_write = Vec::new();
     let mut read_rules = Vec::new();

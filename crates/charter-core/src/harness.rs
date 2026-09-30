@@ -310,14 +310,7 @@ impl Harness {
         if sandbox.is_some_and(|applied| applied.harness() != self) {
             return StateHooks::None;
         }
-        let claude_sandbox = sandbox.and_then(|applied| match applied.form() {
-            crate::sandbox::Form::ClaudeCode(settings) => Some(settings),
-            crate::sandbox::Form::Codex(_) => None,
-        });
-        let codex_sandbox = sandbox.and_then(|applied| match applied.form() {
-            crate::sandbox::Form::Codex(flags) => Some(flags),
-            crate::sandbox::Form::ClaudeCode(_) => None,
-        });
+        let claude_sandbox = sandbox.and_then(crate::sandbox::Applied::claude_settings);
         match self {
             // **The bundled plugin, loaded for this session alone** (`crate::plugin` has the
             // measurements). Its `hooks.json` holds every hook — the six that report state and
@@ -404,18 +397,12 @@ impl Harness {
             // bundle's in [`crate::skills::LISTED_ENV`], which a Codex hook inherits, and the
             // briefing lists them.
             //
-            // Its sandbox, where the plane turned it on, rides on `-c` flags of the same kind,
-            // after the hooks ([`crate::sandbox::codex`] has the measurements). Absent
-            // otherwise: an unsandboxed Codex chat keeps Codex's own settings, as it did.
+            // Its sandbox, where the plane turned it on, is not here: it rides on flags that go
+            // last among the flags on the chat's line ([`crate::sandbox::Applied::line`], and
+            // [`crate::sandbox::codex`] has the measurements). An unsandboxed Codex chat keeps
+            // Codex's own settings, as it did.
             Self::Codex => StateHooks::ThisSessionOnly {
-                args: codex_session_flags(kit.binary)
-                    .into_iter()
-                    .chain(
-                        codex_sandbox
-                            .into_iter()
-                            .flat_map(|flags| flags.args.clone()),
-                    )
-                    .collect(),
+                args: codex_session_flags(kit.binary),
                 env: kit
                     .plugin
                     .and_then(crate::skills::in_bundle)
@@ -1180,8 +1167,9 @@ mod tests {
         }
     }
 
-    /// A Codex chat in a sandboxed plane, and the flags its sandbox was compiled to.
-    fn sandboxed_codex() -> (Vec<String>, Vec<String>) {
+    /// The whole line of a Codex chat in a sandboxed plane — its hooks, then `charters` — and
+    /// the flags its sandbox was compiled to.
+    fn sandboxed_codex(charters: &[&str]) -> (Vec<String>, Vec<String>) {
         let plane = tempfile::tempdir().expect("a plane");
         std::fs::write(
             plane.path().join("charter.toml"),
@@ -1207,24 +1195,29 @@ mod tests {
         ) else {
             panic!("armed per session");
         };
-        (args, compiled.args.clone())
+        let charters = charters.iter().map(|word| (*word).to_owned()).collect();
+        let line = applied.line(Vec::new(), args, charters).expect("starts");
+        (line, compiled.args.clone())
     }
 
     #[test]
-    fn a_sandboxed_codex_chat_is_handed_its_sandbox_beside_its_hooks() {
-        let (args, compiled) = sandboxed_codex();
+    fn a_sandboxed_codex_chat_is_handed_its_sandbox_after_its_hooks() {
+        let (line, compiled) = sandboxed_codex(&["resume", "0199"]);
+        let at = line
+            .windows(compiled.len())
+            .position(|run| run == compiled.as_slice())
+            .unwrap_or_else(|| panic!("{line:?}"));
         assert!(
-            args.windows(compiled.len())
-                .any(|run| run == compiled.as_slice()),
-            "{args:?}"
+            line[..at].iter().any(|arg| arg.starts_with("hooks.")),
+            "{line:?}"
         );
-        assert!(args.iter().any(|arg| arg.starts_with("hooks.")), "{args:?}");
+        assert_eq!(line[at + compiled.len()..], ["resume", "0199"]);
     }
 
     #[test]
     fn a_sandboxed_codex_chat_is_only_ever_tightened_never_loosened() {
         // ADR 0067: charter may tighten Codex's sandbox and may never loosen it.
-        let (args, _) = sandboxed_codex();
+        let (args, _) = sandboxed_codex(&[]);
         for flag in [
             "-s",
             "--sandbox",
@@ -1239,6 +1232,11 @@ mod tests {
         ] {
             assert!(!args.iter().any(|arg| arg == flag), "handed {flag}");
         }
+        assert!(
+            args.windows(2)
+                .all(|pair| pair[0] != "--enable" || pair[1] == "network_proxy"),
+            "{args:?}"
+        );
         for loosened in [
             "danger-full-access",
             "sandbox_mode",

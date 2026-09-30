@@ -1008,7 +1008,7 @@ fn an_opencode_chat_in_a_sandboxed_plane_is_not_started_rather_than_started_unco
     let refused = start::ready(&plane.start("work"), plane.root()).expect_err("not started");
 
     assert!(
-        refused.contains("cannot sandbox a opencode chat yet"),
+        refused.contains("cannot sandbox an opencode chat yet"),
         "{refused}"
     );
     assert!(!plane.root().join("ran").exists(), "the harness was run");

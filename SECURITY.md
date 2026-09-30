@@ -31,6 +31,8 @@ cannot be given all of this does not start. A plane can turn the sandbox on, but
 - **What a person does inside a chat.** A harness's own screen can offer the person at it a
   way to widen its sandbox, such as Codex's `/permissions` picker, which offers full access.
   Charter neither sees nor records that choice.
+- **Codex on Linux.** Codex's sandbox has been measured holding the policy on macOS only.
+  On Linux charter compiles the same profile, and it has not been measured there yet.
 - **Codex's temp directories.** A sandboxed Codex chat can also write the system's shared
   temp directories, as Codex's own workspace-write sandbox allows.
 - **The `PreToolUse` guard.** It is a guard against mistakes, not against an attacker with

@@ -470,14 +470,13 @@ impl Chats {
         // arguments may end in a positional prompt that nothing may come after.
         // `charter_core::start::Ready::command_line` is the one place that order is decided.
         let (hooks, armed) = self.state_hooks(harness, chat.cwd.as_deref(), plugins, sandbox)?;
-        // A flag of the harness's own, in the chat's own words, can outrank the sandbox it is
-        // handed (ADR 0067): such a chat is refused here, where every chat opens.
-        if let Some(why) = sandbox.and_then(|applied| {
-            applied.loosened_by(&[command.as_slice(), args.as_slice()].concat())
-        }) {
-            return Err(why);
-        }
-        let all = charter_core::start::Ready::line(command, hooks, args);
+        // Under a sandbox, the sandbox decides the line: a flag of the harness's own in the
+        // chat's own words can outrank it, so such a chat is refused here, where every chat
+        // opens, and flags it rides on go last among the flags (ADR 0067).
+        let all = match sandbox {
+            Some(applied) => applied.line(command, hooks, args)?,
+            None => charter_core::start::Ready::line(command, hooks, args),
+        };
         let mut env = env;
         env.extend(armed);
         env.sort();
@@ -1542,7 +1541,7 @@ mod tests {
             .expect_err("not started");
 
         assert!(
-            refused.contains("cannot sandbox a opencode chat yet"),
+            refused.contains("cannot sandbox an opencode chat yet"),
             "{refused}"
         );
         assert!(chats.in_order().is_empty(), "a chat was opened");
@@ -1673,6 +1672,36 @@ mod tests {
             .expect_err("not started");
 
         assert!(refused.contains("names `-s`"), "{refused}");
+        assert!(chats.in_order().is_empty(), "a chat was opened");
+    }
+
+    #[test]
+    fn a_sandboxed_codex_chat_whose_own_arguments_would_drop_the_sandbox_is_refused() {
+        // The same, from the words that follow the command: a chat on no profile keeps its
+        // own there.
+        let plane = a_sandboxed_plane();
+        let mut chats = Chats::new();
+        chats.arming_with(crate::Shipped {
+            binary: Some(plane.path().join("charter")),
+            plugin: Some(plane.path().join("plugin")),
+            shims: None,
+        });
+        let ready = charter_core::start::Ready {
+            args: vec![
+                "-c".to_owned(),
+                "sandbox_mode=\"danger-full-access\"".to_owned(),
+            ],
+            ..ready_under(Harness::Codex, a_sandbox_for(Harness::Codex, plane.path()))
+        };
+
+        let refused = chats
+            .start_ready(&chat("/bin/sh", "c", None), &ready, SIZE)
+            .expect_err("not started");
+
+        assert!(
+            refused.contains("the chat's own arguments name `-c sandbox_mode`"),
+            "{refused}"
+        );
         assert!(chats.in_order().is_empty(), "a chat was opened");
     }
 
