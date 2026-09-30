@@ -453,7 +453,7 @@ _Avoid_: wrapper, driver, plugin (that is the harness's)
 A program the user installs that speaks ACP for a harness that does not, such as
 `claude-agent-acp` or `codex-acp`. charter spawns it as a level-3 chat's program, found by name
 on `PATH`, and never ships, downloads or updates one. It is not a harness adapter, which is
-charter's code (ADRs 0073, 0080).
+charter's code (ADRs 0073, 0080, proposed).
 _Avoid_: ACP adapter (on its own), harness adapter (for this), bridge
 
 **Wrap**:
