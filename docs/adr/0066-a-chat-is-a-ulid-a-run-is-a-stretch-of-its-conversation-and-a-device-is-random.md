@@ -1,7 +1,7 @@
 # A chat is a ULID, a run is a stretch of its conversation, and a device is random
 
-**Proposed 2026-09-30**, drafted for program-map ticket FD-22 from the operator's ruling V1
-(phase-2 critique, accepted 2026-09-30). An agent drafted it and the operator rules it (W7). It
+**Accepted 2026-09-30** by the operator (ruling V21), drafted for program-map ticket FD-22 from the
+operator's ruling V1 (phase-2 critique, accepted 2026-09-30). It
 lands before FD-9's event log and AU-1's audit schema, and both build on it.
 
 Today a chat's identity is a `u32`. `Sessions` deals it, and `reopen.json`'s `dealt` makes sure
@@ -321,14 +321,12 @@ tickets after it, change:
 - **Chat and run lifecycle states in this record.** They are FD-23's, which lands after this one
   and can only be written once a run exists.
 
-## For the operator's ruling
+## Ruled (V21, 2026-09-30)
 
-Three calls in this draft go beyond the words of V1, and are worth a yes or a no:
+The three calls that went beyond the words of V1 were each ruled yes:
 
-1. **`chat` in the envelope** (above). The alternative is exactly V1's seven fields, with the chat
-   in the body of chat-level events.
-2. **The device id is committed in session records**, as a random pseudonym, while the principal
-   never is. The alternative keeps the device id out of the plane too. Then FD-25's per-host log
-   names and a record's `device` key could not use it, and the hostname would stay.
-3. **A mid-chat persona adoption starts a new run.** The alternative lets persona vary within a
-   run, and makes audit read the persona from a timeline at the time of each act.
+1. **`chat` is in the envelope**, beside V1's seven fields: chat-level events have no run.
+2. **The device id is committed in session records** as a random pseudonym; the principal never
+   is. "Never leaves the machine" means charter never sends it to a service.
+3. **A mid-chat persona adoption or model switch starts a new run**, and `charter persona use`
+   tells the host on the hook channel.
