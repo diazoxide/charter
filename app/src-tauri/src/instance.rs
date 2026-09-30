@@ -25,14 +25,66 @@ pub enum NotHeld {
 }
 
 /// Where the lock lives: `$XDG_RUNTIME_DIR`, which is per user, per machine and cleared at
-/// logout, and otherwise `fallback` — the app's own per-user data directory.
+/// logout, and otherwise `fallback` — the app's own per-user data directory, or the temporary
+/// directory when even that cannot be named.
 ///
 /// Keyed by the app's identifier, as the single-instance name is, so a scenario build
-/// (`dev.charter.app.e2e`) and the operator's charter do not refuse each other.
-pub fn path_for(identifier: &str, runtime_dir: Option<&Path>, fallback: &Path) -> PathBuf {
+/// (`dev.charter.app.e2e`) and the operator's charter do not refuse each other; and in the
+/// fallback by `user` too, because the temporary directory is every user's.
+pub fn path_for(
+    identifier: &str,
+    user: u32,
+    runtime_dir: Option<&Path>,
+    fallback: &Path,
+) -> PathBuf {
     match runtime_dir.filter(|dir| dir.is_absolute() && dir.is_dir()) {
         Some(dir) => dir.join(format!("{identifier}.lock")),
-        None => fallback.join("instance.lock"),
+        None => fallback.join(format!("{identifier}-{user}.lock")),
+    }
+}
+
+/// One charter per user: takes the lock for `app`, holds it for the app's life, and ends a
+/// launch that finds it taken. Called at the top of `setup`, after the single-instance plugin
+/// has already handed an ordinary second launch over; a lock that cannot be taken at all is
+/// said, and the launch goes on without the guarantee.
+#[cfg(target_os = "linux")]
+pub fn one_per_user(app: &tauri::App) {
+    use tauri::Manager;
+
+    let fallback = app
+        .path()
+        .app_local_data_dir()
+        .unwrap_or_else(|_| std::env::temp_dir());
+    let runtime = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from);
+    let lock = path_for(
+        &app.config().identifier,
+        rustix::process::getuid().as_raw(),
+        runtime.as_deref(),
+        &fallback,
+    );
+    match hold(&lock) {
+        Ok(held) => {
+            app.manage(Instance::holding(held));
+        }
+        Err(NotHeld::Taken) => {
+            eprintln!("{ALREADY_RUNNING}");
+            app.handle().cleanup_before_exit();
+            std::process::exit(0);
+        }
+        Err(NotHeld::Failed(why)) => eprintln!(
+            "charter: could not take {} ({why}); going on without the guard against a second \
+             charter",
+            lock.display()
+        ),
+    }
+}
+
+/// Lets go of the lock at `Exit`, first, so a restart finds it free.
+pub fn let_go_at_exit(app: &tauri::AppHandle) {
+    use tauri::Manager;
+
+    if let Some(instance) = app.try_state::<Instance>() {
+        instance.let_go();
     }
 }
 
@@ -116,30 +168,46 @@ mod tests {
     #[test]
     fn the_lock_lives_in_the_runtime_directory_and_is_keyed_by_the_identifier() {
         let runtime = tempfile::tempdir().expect("a directory");
-        let fallback = Path::new("/home/someone/.local/share/dev.charter.app");
+        let fallback = Path::new("/tmp");
 
         assert_eq!(
-            path_for("dev.charter.app", Some(runtime.path()), fallback),
+            path_for("dev.charter.app", 1000, Some(runtime.path()), fallback),
             runtime.path().join("dev.charter.app.lock")
         );
         assert_ne!(
-            path_for("dev.charter.app", Some(runtime.path()), fallback),
-            path_for("dev.charter.app.e2e", Some(runtime.path()), fallback),
+            path_for("dev.charter.app", 1000, Some(runtime.path()), fallback),
+            path_for("dev.charter.app.e2e", 1000, Some(runtime.path()), fallback),
             "a scenario build and the operator's charter would refuse each other"
         );
     }
 
+    /// The fallback can be a directory every user shares — the temporary directory, when the
+    /// app's own cannot be named — so the name says whose charter and which one it is.
     #[test]
-    fn with_no_usable_runtime_directory_the_lock_lives_in_the_apps_own_directory() {
-        let fallback = Path::new("/home/someone/.local/share/dev.charter.app");
+    fn with_no_usable_runtime_directory_the_lock_is_keyed_by_the_user_and_the_identifier() {
+        let fallback = Path::new("/tmp");
 
         assert_eq!(
-            path_for("dev.charter.app", None, fallback),
-            fallback.join("instance.lock")
+            path_for("dev.charter.app", 1000, None, fallback),
+            fallback.join("dev.charter.app-1000.lock")
         );
         assert_eq!(
-            path_for("dev.charter.app", Some(Path::new("relative")), fallback),
-            fallback.join("instance.lock")
+            path_for(
+                "dev.charter.app",
+                1000,
+                Some(Path::new("relative")),
+                fallback
+            ),
+            fallback.join("dev.charter.app-1000.lock")
+        );
+        assert_ne!(
+            path_for("dev.charter.app", 1000, None, fallback),
+            path_for("dev.charter.app", 1001, None, fallback),
+            "two users on one machine would refuse each other"
+        );
+        assert_ne!(
+            path_for("dev.charter.app", 1000, None, fallback),
+            path_for("dev.charter.app.e2e", 1000, None, fallback),
         );
     }
 }

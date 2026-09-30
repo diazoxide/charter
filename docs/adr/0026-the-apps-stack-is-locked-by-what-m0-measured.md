@@ -324,3 +324,21 @@ What remains to fix later: a portal that answers the question and then stalls is
 and on a machine where the bus is silent, a second launch is refused instead of being handed
 over. `charterd` (FD-5) removes the second cost, because the hook socket is no longer the
 app's.
+
+**Addendum, 2026-09-30 (charter#746): X11 without a bus starts on the display's bus.** The
+addendum above pinned the address to nothing when no bus was named, on the reasoning that GIO's
+autolaunched bus would make the portal activatable again. Measured in a container (Ubuntu
+24.04, Xvfb, i3, `xdg-desktop-portal` and its GTK backend installed, no systemd user session),
+that bus does not hang: `dbus-launch --autolaunch` answered in 11 ms and the portal it activated
+came up in 114–202 ms. The pin cost a notification daemon started from the window manager's
+config, which lives on that same bus. So the app now does what GIO does, `dbus-launch
+--autolaunch=<machine id>`, asks the portal there within the same 300 ms, and starts again on
+that bus when it answers. zbus, which the tray, notifications and single-instance use, never
+autolaunches, so starting again with the address named is what lets them reach it. Only when
+there is no bus to be had, or its portal is silent too, does the app start without one.
+
+Two more things changed with it. Chats get the bus the app was given, not the dead address
+(`SESSION_BUS_KEPT`, `charter_core::chatenv`), because the bus is healthy and only the portal
+is silent. And a run without the bus says so in the window, asks the bus once more a few
+seconds after the launch, and offers a restart onto it if the portal answers by then. It never
+restarts on its own, because a restart ends every chat.

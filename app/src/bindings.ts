@@ -16,6 +16,20 @@ export const commands = {
 	 *  `CHARTER_BENCH_LOG` — which only `tools/bench.mjs` sets — also prints the number here.
 	 */
 	firstFrame: () => __TAURI_INVOKE<string | null>("first_frame"),
+	/**  What the window says about this launch and the session bus: nothing, on a launch with it. */
+	sessionBus: () => __TAURI_INVOKE<{
+	/**  The line it draws: why there is no bus, and what is off for the run. */
+	says: string,
+	/**  Whether the bus answers now, so a restart onto it is worth offering. */
+	can_restart: boolean,
+} | null>("session_bus"),
+	/**
+	 *  Quit, and start again on the session bus, now that it answers. The operator's choice,
+	 *  from the window's notice: charter never does this by itself, because a restart ends every
+	 *  chat. It goes the way a quit goes — every plane writes what was open, so the launch after
+	 *  it offers them back — and the new launch is started last, at `Exit` ([`restart_if_asked`]).
+	 */
+	restartOnTheSessionBus: () => typedError<null, string>(__TAURI_INVOKE("restart_on_the_session_bus")),
 	/**
 	 *  Where charter's title bar may start.
 	 * 
@@ -3120,6 +3134,14 @@ export type WindowTabs = {
 	 *  operator is not looking at, or holding none at all.
 	 */
 	active: number | null,
+};
+
+/**  What the window is told about a launch without the session bus. */
+export type WithoutTheBus = {
+	/**  The line it draws: why there is no bus, and what is off for the run. */
+	says: string,
+	/**  Whether the bus answers now, so a restart onto it is worth offering. */
+	can_restart: boolean,
 };
 
 /**

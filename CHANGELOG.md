@@ -18,8 +18,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   still silent, charter restarts itself without the session bus, and the window comes up in
   under 2 s where it used to take 26–31 s. For that run there is no tray icon and no desktop
   notifications, and a second launch is refused rather than handed over. A per-user lock keeps
-  that refusal in place without the bus. i3 and other X11 sessions with no session bus no longer
-  get one autolaunched. Cold start is now measured in CI on X and on i3 (#24).
+  that refusal in place without the bus. Cold start is now measured in CI on X and on i3, and
+  every launch after the first is held to the limit (#24).
+- **A run without the session bus says so in the window, and chats keep the bus.** The line at
+  the top names what is off (the tray icon, notifications, handing a second launch over). A
+  little after the launch charter asks the bus again, and if the portal answers by then the line
+  offers **Restart with the full desktop integration**; charter never restarts by itself. Chats
+  get the session bus charter was given rather than the one it turned off, so a keyring that git
+  or a CLI uses through D-Bus keeps working. On i3 and other X11 sessions with no session bus,
+  charter now starts on the bus the X display holds, as GTK would, so notifications reach a
+  notification daemon started from the window manager's config (#746).
 
 ## [0.4.2] - 2026-09-30
 

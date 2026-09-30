@@ -72,6 +72,19 @@ npm run e2e:relaunch          # in app/, with the app already built with the `e2
 CI also runs clippy on the app crate (`--workspace`), after creating an empty `app/dist` so it
 compiles without a frontend build.
 
+On Linux, CI also holds the built app's cold start to the spec's 2 s limit on the desktops
+charter-app#24 is about. Five launches each; every launch after the first (the warm-up, cold on
+disk) must be inside the limit. From the repository root, after the debug build above, with
+`xvfb`, `xauth`, `dbus-x11` and `i3` installed:
+
+```bash
+tools/coldstart-linux.sh bare       # X with no window manager, on the session bus as found
+tools/coldstart-linux.sh i3         # i3 under X11, on the session bus as found
+tools/coldstart-linux.sh i3-nobus   # i3 under X11 with no session bus, as `startx` into i3
+```
+
+`APP` names another binary and `LIMIT_MS` another limit.
+
 CI runs a `windows` job too, and it is **evidence, not a gate**: `continue-on-error`, not one
 of the eight required checks, and it reports the whole `cargo check` error list rather than
 stopping at the first line. Nothing has been ported to Windows, so it is expected to be red —

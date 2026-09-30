@@ -62,6 +62,9 @@ notify-debouncer-full = "0.7"
 # nothing new is in the tree.
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = "5.19"
+# Whose charter the instance lock is (`instance.rs`), by user id. The version charter-core
+# already uses.
+rustix = { version = "1", features = ["process"] }
 
 [lints]
 workspace = true

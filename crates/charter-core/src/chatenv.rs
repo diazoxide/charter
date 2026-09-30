@@ -23,6 +23,9 @@
 //! **Some are never passed, whoever lists them**: a harness's identity and where the launcher's
 //! chat was ([`crate::hookwire::NOT_INHERITED`]), every `OP_*` and every identity variable a
 //! vault declares (the caller's `strip`), and `TERM`, which is always the chat's own.
+//!
+//! **One is replaced**: an app that started itself without the session bus hands its chats the
+//! bus it was given ([`SESSION_BUS_KEPT`]) as `DBUS_SESSION_BUS_ADDRESS`, not the dead one.
 
 use std::ffi::{OsStr, OsString};
 use std::path::Path;
@@ -96,6 +99,18 @@ pub const PASSED: &[&str] = &[
     "NUMBER_OF_PROCESSORS",
     "PROCESSOR_ARCHITECTURE",
 ];
+
+/// The session bus the app was given, kept aside when the app started itself again without
+/// it (charter-app `portal.rs`, charter-app#24). Empty when it was given none.
+///
+/// The app points its own `DBUS_SESSION_BUS_ADDRESS` at nothing when the desktop portal is
+/// silent, because GTK would otherwise wait 25 s on it. The bus itself is healthy, so a chat
+/// gets the address kept here instead of the dead one ([`inherited`]), and this name itself
+/// is never a chat's.
+pub const SESSION_BUS_KEPT: &str = "CHARTER_SESSION_BUS_KEPT";
+
+/// The variable [`SESSION_BUS_KEPT`] stands in for.
+const SESSION_BUS: &str = "DBUS_SESSION_BUS_ADDRESS";
 
 /// Credential variables no built-in entry passes, matched case-insensitively. A trailing `*`
 /// is a prefix.
@@ -194,14 +209,29 @@ fn passes(name: &str, harness: Option<Harness>, operator: &[String]) -> bool {
 /// variable a vault declares. A harness's identity ([`crate::hookwire::NOT_INHERITED`]) and
 /// `TERM` are held back here. A name that is not text is never passed: nothing here could say
 /// what it is.
+///
+/// An app that started itself without the session bus holds the bus it was given in
+/// [`SESSION_BUS_KEPT`], and a chat gets that as its `DBUS_SESSION_BUS_ADDRESS` — or none,
+/// when it was given none — never the address the app points at nothing.
 pub fn inherited(
     inherited: impl IntoIterator<Item = (OsString, OsString)>,
     harness: Option<Harness>,
     operator: &[String],
     strip: &dyn Fn(&OsStr) -> bool,
 ) -> Vec<(OsString, OsString)> {
-    inherited
+    let inherited: Vec<(OsString, OsString)> = inherited.into_iter().collect();
+    let kept = inherited
+        .iter()
+        .find(|(name, _)| name == SESSION_BUS_KEPT)
+        .map(|(_, value)| value.clone());
+    let inherited = inherited
         .into_iter()
+        .filter(|(name, _)| name != SESSION_BUS_KEPT)
+        .filter_map(|(name, value)| match &kept {
+            Some(kept) if name == SESSION_BUS => (!kept.is_empty()).then(|| (name, kept.clone())),
+            _ => Some((name, value)),
+        });
+    inherited
         .filter(|(name, _)| {
             let Some(text) = name.to_str() else {
                 return false;
@@ -516,6 +546,68 @@ mod tests {
             ),
             Vec::<String>::new()
         );
+    }
+
+    fn value_of(kept: &[(OsString, OsString)], name: &str) -> Option<String> {
+        kept.iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.to_string_lossy().into_owned())
+    }
+
+    /// The app restarted itself without the session bus because the desktop portal was silent
+    /// (charter-app#24). The bus is healthy, so a chat's own D-Bus use — a Secret Service
+    /// keyring behind git or a CLI — goes to the address the app was given, not the dead one.
+    #[test]
+    fn a_chat_of_an_app_started_without_the_bus_gets_the_bus_the_app_was_given() {
+        let app = [
+            (
+                OsString::from("DBUS_SESSION_BUS_ADDRESS"),
+                OsString::from("unix:path=/dev/null/charter-started-without-the-session-bus"),
+            ),
+            (
+                OsString::from(SESSION_BUS_KEPT),
+                OsString::from("unix:path=/run/user/1000/bus"),
+            ),
+            (OsString::from("HOME"), OsString::from("/home/someone")),
+        ];
+
+        let kept = inherited(app, None, &[], &nothing);
+
+        assert_eq!(
+            value_of(&kept, "DBUS_SESSION_BUS_ADDRESS").as_deref(),
+            Some("unix:path=/run/user/1000/bus")
+        );
+        assert_eq!(value_of(&kept, SESSION_BUS_KEPT), None, "{kept:?}");
+        assert_eq!(kept.len(), 2, "{kept:?}");
+    }
+
+    /// With no bus at all, the app was given no address; neither is its chat, which is then
+    /// free to find or start one the way any program in the operator's terminal would.
+    #[test]
+    fn a_chat_of_an_app_that_had_no_bus_to_keep_gets_no_address() {
+        let app = [
+            (
+                OsString::from("DBUS_SESSION_BUS_ADDRESS"),
+                OsString::from("unix:path=/dev/null/charter-started-without-the-session-bus"),
+            ),
+            (OsString::from(SESSION_BUS_KEPT), OsString::new()),
+        ];
+
+        let kept = inherited(app, None, &[], &nothing);
+
+        assert_eq!(kept, Vec::new());
+    }
+
+    #[test]
+    fn a_kept_bus_is_never_passed_under_its_own_name_even_when_listed() {
+        let app = [(
+            OsString::from(SESSION_BUS_KEPT),
+            OsString::from("unix:path=/run/user/1000/bus"),
+        )];
+
+        let kept = inherited(app, None, &[SESSION_BUS_KEPT.to_owned()], &nothing);
+
+        assert_eq!(kept, Vec::new());
     }
 
     #[test]

@@ -26,6 +26,8 @@ macro_rules! app_commands {
         $then! {
             value_free: [
                 first_frame,
+                portal::session_bus,
+                portal::restart_on_the_session_bus,
                 title_bar_room,
                 plane_at_launch,
                 open_planes,
