@@ -1,27 +1,15 @@
 # charter
 
-A desktop app for running many harness sessions against one **plane**, and always knowing which
-of them needs you. This file is the glossary: the words, not how they are built.
+A desktop app for running many agent chats across your projects, and always knowing which of
+them needs you. This file is the glossary: the words, not how they are built.
 
 ## Language
+
+### The five concepts
 
 charter has five concepts: **Project**, **Workspace**, **Chat**, **Persona** and **Memory**.
 Every other word here is a part, a view or a setting of one of them, and the first hour's
 screens say only those five plus **Save** and **branch** (ADR 0072).
-
-### The plane and what lives in it
-
-**Plane**:
-The git repo a project's charter lives in: its settings, personas, memory, todos and
-workspaces. It is the project's database, and a change counts once it reaches the plane's
-remote. It is the word of the code and the plane format; the window, `charter --help` and the
-user docs say **project** (ADR 0072).
-_Avoid_: plane (in UI text), control plane, config repo, charter repo
-
-**charter-plane**:
-The charter project's own plane: the one charter is developed from, public as an example of a
-plane. It is not the product. The product, the app and its core, is **charter**.
-_Avoid_: charter (for the plane), the charter repo
 
 **Project**:
 One of the five concepts: the git repo that holds a team's workspaces, personas, memory and
@@ -50,14 +38,32 @@ _Avoid_: agent, sub-agent (that is the harness's form of it), bot, role (as the 
 
 **Memory**:
 One of the five concepts: what charter keeps so the next chat starts knowing what earlier ones
-learned: a workspace's memory, a persona's, shared memory (`personas/_shared/memory/`) and
-session records. `charter recall` searches it as one, and a chat's briefing is drawn from it.
+learned. Each memory has an **owner**: a workspace, a persona, everyone (shared memory, in
+`personas/_shared/memory/`) or **me**, one person's own, kept in a personal overlay plane on
+their own private remote. It also has an **audience**: this machine, me on all my machines, or
+the team. Approval follows the audience: memory the team will read waits for approval, so
+nothing reaches a teammate's briefing unreviewed. Session records are memory too. `charter recall`
+searches it as one, and a chat's briefing is drawn from it (ADR 0072).
 _Avoid_: knowledge, rules, notes (for the whole of it), context
+
+### The plane and what lives in it
+
+**Plane**:
+The git repo a project's charter lives in: its settings, personas, memory, todos and
+workspaces. It is the project's database, and a change counts once it reaches the plane's
+remote. It is the word of the code and the plane format; the window, `charter --help` and the
+user docs say **project** (ADR 0072).
+_Avoid_: control plane, config repo, charter repo
+
+**charter-plane**:
+The charter project's own plane: the one charter is developed from, public as an example of a
+plane. It is not the product. The product, the app and its core, is **charter**.
+_Avoid_: charter (for the plane), the charter repo
 
 **Work item**:
 One piece of work a tracker holds: a forge issue, epic or sub-issue, or a todo (the plane's own
 tracker). A chat links to at most one; a work item may have many chats. It is part of a
-Workspace, shown in its Work section, and never a sixth concept (FW-5, V3).
+Workspace, shown in its Work section, and never a sixth concept (ADR 0072).
 _Avoid_: task, ticket (in UI text), card (that is how a board draws one)
 
 **Plane root**:
@@ -81,7 +87,7 @@ cannot: that charter cut it (`claimed`), and whether its worker declared it `don
 failure.
 On screen a piece is shown as its **branch**; "piece" stays in the plane format, the code and
 `charter worktree` (ADR 0072).
-_Avoid_: task, slot, branch (for the directory), piece (in UI text)
+_Avoid_: task, slot, branch (for the directory)
 
 **Branch** (of a chat):
 What the window shows for a piece: one row per repo a chat works in, reading *`<branch>` in
@@ -222,8 +228,10 @@ _Avoid_: sync (that word is `charter sync`'s), commit (a save may be more than o
 
 **Sync**:
 Fetching every clone in a workspace and fast-forwarding the ones that hold no work:
-`charter sync`, and *Sync repos* in the window. Nothing else is called Sync (ADR 0072).
-_Avoid_: sync (for a save, a version move, writing persona agents, or any state between devices)
+`charter sync`, and *Sync repos* in the window. Nothing else is called Sync: not a save, not
+moving a project to its pinned version, not writing persona sub-agents, and not any state kept
+between devices (ADR 0072).
+_Avoid_: pull, refresh, update (for this)
 
 **Mode**:
 How far a save goes: `off`, `commit`, `push`, `pr` or `pr-merge`. Each value includes the

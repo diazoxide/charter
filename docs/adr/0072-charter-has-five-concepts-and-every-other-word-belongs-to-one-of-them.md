@@ -1,4 +1,4 @@
-# Charter has five concepts, and every other word belongs to one of them
+# charter has five concepts, and every other word belongs to one of them
 
 **Proposed 2026-09-30.** An agent drafted it for program-map ticket FR-2 (#601), and the
 operator rules it (W7: an ADR merges only after the operator's ruling). It follows the
@@ -7,7 +7,8 @@ Memory. Vault is a setting under Project. Every new ruling must name which conce
 to."*), **G5** (the core concepts cut to five), **W10**'s surface budget and **V6**, which
 amended it: *"W10's first-hour words become the five concepts plus 'Save' and 'branch' ('Sync'
 already means `charter sync`); FR-2's ADR fixes the exact piece ↔ branch wording; CONTEXT.md
-gets Chat, Persona and Memory entries."*
+gets Chat, Persona and Memory entries."*, and **V4**, which gives memory its owners and
+audiences.
 
 ## Where charter is today
 
@@ -46,7 +47,7 @@ anything for them.
 
 ## The decision
 
-**Charter has five concepts: Project, Workspace, Chat, Persona and Memory. Every other word in
+**charter has five concepts: Project, Workspace, Chat, Persona and Memory. Every other word in
 charter is a part, a view or a setting of exactly one of them. The first hour shows the five
 plus "Save" and "branch", and no other charter noun. "Sync" means only what `charter sync`
 does. A chat's piece is shown as its branch, one per repo.**
@@ -59,13 +60,13 @@ does. A chat's piece is shown as its branch, one per repo.**
 | **Workspace** | A named piece of work inside a project, with its own charter (`workspace.md`), memory, todos and repos. | `workspaces/<ws>/` |
 | **Chat** | One conversation with an agent, in a tab, in one workspace or at the project root. It is where work happens, and what "needs you". | the session host and `reopen.json`; its identity is ADR 0066's |
 | **Persona** | A role a chat can take: its own charter (`persona.md`), memory and vault, handed to the harness as a sub-agent. | `personas/<name>/` |
-| **Memory** | What charter keeps so that the next chat starts knowing what the last ones learned: a workspace's memory, a persona's, shared memory, and session records. | the `memory/` and `sessions/` directories |
+| **Memory** | What charter keeps so that the next chat starts knowing what the last ones learned. Each memory has an **owner**: a workspace, a persona, everyone (shared) or **me**, one person's own. It also has an **audience**: this machine, me on all my machines, or the team. Approval follows the audience (V4). Session records are memory too (open question 3). | the `memory/` and `sessions/` directories; *me* in a personal overlay plane on the person's own private remote (V4) |
 
-**"Project" stays** (open question 1 recommends keeping it). The word the plane format and the
-code use for a project's repo stays **plane**; it leaves every surface a user reads: the
-window, `charter --help`, and the user docs (FR-3 does the renaming). `docs/plane-format.md`
-keeps its name, because it is the format's specification and is read by the people who write
-code against it.
+**"Project" stays** (open question 1 recommends keeping it). **Settled by X22 and FR-3:**
+"plane" leaves every surface a user reads (the window, `charter --help` and the user docs), and
+FR-3 does the renaming. **Proposed here** (open question 2): the code, the plane format,
+`docs/plane-format.md` and the `charter-plane` repo keep the word, because they are read by
+people who write code against the format.
 
 First-run copy that explains it, shown once beside the first project's tab:
 
@@ -83,11 +84,12 @@ inside its concept; a view shows it; a setting changes how it behaves.
 | **Workspace** | repos, pieces (as branches, §4), changes, members and requests, todos and work items (FW-5, V3, FI5) | the explorer, the bottom bar, the workspace's Work section | LIVE / LOCAL, a repo's own save mode |
 | **Chat** | runs and child runs (ADR 0066), its branches (§4), its link to a work item | the chat strip, split windows, the transcript, the context gauge | its harness, profile and model, its persona, its sandbox opt-out |
 | **Persona** | curation actions, the persona's sub-agent file, its dispatch and skill logs | the persona card, persona statistics | its vault (a named vault from the project's), its skills, delegate-when |
-| **Memory** | workspace memory, persona memory, shared memory, session records, the archive | the memory tab, recall's results, the briefing a chat starts with | what a persona's memory shares (`[memory] share`) |
+| **Memory** | its four owners' memories (workspace, persona, shared, me), session records, the archive, the personal overlay plane | the memory tab, recall's results, the briefing a chat starts with, the approval queue for memory bound for a wider audience | each memory's audience (this machine, me on all my machines, team, V4); LIVE / LOCAL for a workspace's memory; what a persona's memory shares (`[memory] share`) |
 
-**Machine-wide things belong to Project.** The device, the machine store, app preferences and
-updates hold for every project on this machine, and the program map already files them under
-Project. This keeps X22's rule, *every ruling names its concept*, without a sixth answer.
+**Machine-wide things belong to Project. Settled by X22 and ST6.** The device, the machine
+store, app preferences and updates hold for every project on this machine. ST6 puts the settings
+that hold beyond one workspace on the Project page, and the program map already files these
+items under Project.
 
 **Handoff and Smart close belong to Chat**: each is something one chat does. **Resume** starts a
 chat from a session record: it is a Chat action that reads Memory.
@@ -113,8 +115,17 @@ GitHub, GitLab).
 The first-hour surfaces say **none of**: plane, piece, worktree, run, device, vault, mode,
 harness, profile, extension, capability, curation, change, member, inventory, strip,
 show-more, LIVE or LOCAL. Each of those is still used where it belongs: in Settings, in a view
-tab, in the CLI, in the docs. The new-chat picker names the harness by its product name, and
-its label is a verb (*Start with*), never "Harness" (open question 5).
+tab, in the CLI, in the docs. **Settled by V6**, since "harness" and "profile" are outside its
+budget: the new-chat picker names the harness by its product name, under a verb label
+(*Start with*), and never says "Harness" or "Profile".
+
+**The capability card W10 rules stays, in the budget's words.** W10 puts a harness capability
+card in the picker, the chat header and disabled controls' tooltips. It appears in all three.
+Its label is *What <product> can do here* (for example, *What Codex can do here*), and each line
+says what the user will or will not see in plain words and the budget's nouns: *Codex does not
+tell charter when it is waiting, so this chat will not show needs you.* The word "capability"
+stays in the card's code and in Settings, not on the card. A disabled control's tooltip is one
+such line, followed by the card's label as a link.
 
 FR-3 enforces the budget with a UI-string test over the first-hour components' copy: a listed
 word in any of their strings fails the build. DS-8's UX audit checks what the test cannot, such
@@ -122,7 +133,8 @@ as a word inside an image.
 
 ### 4. A chat's piece is shown as its branch, one row per repo
 
-A piece is still a git worktree, and `charter worktree` still says so. On screen:
+A piece is still a git worktree, and `charter worktree` still says so. On screen (open
+question 5):
 
 - **A chat is shown with its branches, one row per repo it works in.** A row reads
   *`fix-login` in api*: the branch, then the repo. A chat that works in one repo, which GL-1
@@ -154,8 +166,9 @@ other operation, on screen or on the command line, is called Sync.
 - **The window.** When the window offers `charter sync`, it is labelled *Sync repos*. The plane's
   own commit-and-push is **Save**, and the commits it has not fetched yet are **Incoming**, as
   `CONTEXT.md` has them.
-- **The command line.** FR-3 renames the three other uses, and keeps each old spelling as an
-  alias for one release (FR-3's rule):
+- **The command line. Settled by V6 and FR-3's alias rule:** V6 makes "Sync" mean one
+  operation, and FR-3 keeps each renamed spelling as an alias for one release. The new names
+  are proposed here, and FR-3 may pick better ones:
 
   | Today | Becomes | Why |
   |---|---|---|
@@ -166,7 +179,7 @@ other operation, on screen or on the command line, is called Sync.
 - **Later features pick another word.** U10's device-state feature, a relay's catch-up and a
   vendor-memory import do not say Sync. Each names what moves and where to.
 
-**The test (FR-2's acceptance, and FR-3's):** a UI-string test reads every user-visible string
+**The test (FR-3's acceptance):** a UI-string test reads every user-visible string
 in `app/src` (text nodes, `aria-label`, `title`, placeholder, and copy constants) and fails on
 the word "sync" in any case, except the label bound to the `charter sync` command. A CLI
 counterpart checks `charter --help`'s command and flag names the same way, and allows the
@@ -180,7 +193,7 @@ wrong.
 
 | charter | GitHub | GitLab | Claude Code | Cursor | Codex, Zed, Amp | Conductor | Risk |
 |---|---|---|---|---|---|---|---|
-| **Project** | *Projects*: a board or table of issues and pull requests; a view over work, holding no code | *project*: one repository, with its issues and CI | *Projects* (beta): a coordinating conversation that starts threads, with instructions and memory | *Projects* | the folder an editor opens (Zed's project) | — | **High.** On GitLab a code repo is a project. charter's UI never calls a code repo a project, on any forge: it is always a **repo** |
+| **Project** | *Projects*: a board or table of issues and pull requests; a view over work, holding no code | *project*: one repository, with its issues and CI | *Projects* (beta): a coordinating conversation that starts threads, with instructions and memory | *Projects* | the folder an editor opens (Zed's project) | — | **High.** On GitLab a code repo is a project. charter's UI never calls a code repo a project, on any forge: it is always a **repo** (open question 4) |
 | **Workspace** | — (a Codespace is an environment) | *Workspaces*: a remote development environment | — | — | Amp's *workspace* is the team | *workspace*: one task's branch, files and terminal, which is charter's **piece** | **Medium.** A Conductor user reads a charter workspace as one branch. First-run copy says a workspace holds repos, chats and their memory |
 | **Chat** | a Copilot coding agent's *session* | — | *session*, *conversation* | *agent*, *chat* | *thread* | a workspace's chat | **Low.** "Session" stays out of UI text (it is the process, ADR 0066) |
 | **Persona** | *custom agent* | — | *subagent* | — | — | — | **Low.** opencode calls the same thing an *agent*. A persona is handed to the harness *as* a sub-agent, and the persona card says so |
@@ -196,7 +209,7 @@ DS-8 audits the budget.
 
 | Where | What changes |
 |---|---|
-| `CONTEXT.md` | Gains **Chat**, **Persona**, **Memory**, **Work item**, **Branch** and **Sync** entries, and an opening paragraph that names the five. **Project** and **Plane** say which is the user's word. **Piece** and **Save** point at the branch and Sync wording. Run and Device already have entries (ADR 0066). The wholesale renaming of `CONTEXT.md` is FR-3's |
+| `CONTEXT.md` | Gains **Chat**, **Persona**, **Memory**, **Work item**, **Branch** and **Sync** entries, and a new first section, "The five concepts", that holds the five entries. **Project** and **Plane** say which is the user's word. **Piece** and **Save** point at the branch and Sync wording. Run and Device already have entries (ADR 0066). The wholesale renaming of `CONTEXT.md` is FR-3's |
 | The window's copy (`app/src`) | FR-3: "plane" becomes "project" in every user-visible string; "piece" becomes the branch wording (§4); the first-hour budget holds (§3); the UI-string tests (§3, §5) |
 | `charter --help` | FR-3: the three `sync` renames with aliases; "plane" becomes "project" in summaries |
 | Recorded behaviour (`tests/fixtures/recorded/behaviour.jsonl`) | The `persona-sync-agents-…` scenarios keep passing through the alias. A scenario that records a renamed word moves only with the sentence ADR 0046 requires |
@@ -237,28 +250,22 @@ DS-8 audits the budget.
 
 ## For the operator's ruling
 
-Each of these goes beyond the words of X22, W10 and V6. Each has a recommendation.
+Each of these is a decision X22, W10, V4 and V6 leave open. Each has a recommendation. The
+calls those rulings already make are marked *Settled by* in the body.
 
 1. **Keep "Project"**, with the first-run line in §1, rather than rename it. *Recommend keep.*
    The window already says `New project…` and `Open a project…`, editors use the word for the
    thing you open, and every candidate (Space, Hub, Home, Team, Charter) collides as badly or
    says less.
-2. **A code repo is always a "repo" in charter's UI, on GitLab too**, never a "project".
+2. **"Plane" stays in the code, the plane format, `docs/plane-format.md` and the name
+   `charter-plane`.** *Recommend yes.* Renaming them touches every module and every plane's
+   instructions for no change a user sees.
+3. **Session records are part of Memory, not of Chat.** *Recommend Memory.* They outlive the
+   chat, the next chat's briefing and Resume read them, and V4's approval by audience already
+   covers them.
+4. **A code repo is always a "repo" in charter's UI, on GitLab too**, never a "project".
    *Recommend yes.* It is the one rule that makes keeping "Project" safe for GitLab users.
-3. **"Plane" leaves the window, `charter --help` and the user docs, and stays in code, the
-   plane format and `charter-plane`'s name.** *Recommend yes.* Users gain one word; renaming the
-   code buys nothing a user sees.
-4. **Session records are part of Memory, not of Chat.** *Recommend Memory.* They outlive the
-   chat, the next chat's briefing reads them, and Resume reads them as memory.
-5. **The first hour never says "harness" or "profile"**: the picker names the product (Claude
-   Code, Codex, opencode) under the label *Start with*. *Recommend yes.* Both are charter nouns
-   outside the budget, and the product name is what the user installed.
-6. **The piece ↔ branch wording in §4**: one row per repo reading *`<branch>` in `<repo>`*,
+5. **The piece ↔ branch wording in §4**: one row per repo reading *`<branch>` in `<repo>`*,
    *· shared* for a clone's checked-out branch, **New branch** to cut a piece, **Remove folder**
    to remove it, and "piece" gone from the window. *Recommend yes.* It is true for every case the
-   critique listed, and it uses only "branch".
-7. **The three CLI renames in §5** (`--no-save`, `version apply`, `persona write-agents`), each
-   with a one-release alias. *Recommend yes.* V6 makes "Sync" mean one operation; the flag
-   already means a save.
-8. **Machine-wide things (device, preferences, updates) belong to Project.** *Recommend yes.* The
-   program map already files them there, and a sixth "the app" answer would break X22's rule.
+   phase-2 critique listed, and it uses only "branch".
