@@ -18,7 +18,7 @@ minisign-verify = "0.2"
 [dev-dependencies]
 # Signing, for the tests only: each run makes a keypair in memory and throws it away, so no
 # key and nothing derived from one is ever committed to this repository.
-minisign = "0.9"
+minisign = "0.10"
 
 [lints]
 workspace = true
