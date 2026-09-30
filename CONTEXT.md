@@ -156,12 +156,12 @@ _Avoid_: app data (for the Machine tier as a whole), cache (for clone state), lo
 
 **Run**:
 One stretch of a chat's conversation with a harness, over which its persona, harness, profile,
-model source, device and sandbox stay the same. A chat has one or more runs, one after another. A
-new one begins when the chat starts, on `/clear`, when the app reopens it, when it wakes, when it
-starts again without its conversation, or when any of those attributes changes. Compaction keeps
-the run. A **child run** is a sub-agent or teammate the harness spawns, with the run it came from
-as its parent. The run is who an action is attributed to (W8's "agent run"), and budgets add up
-over a chat's runs (ADR 0066).
+model source, device, sandbox and harness level stay the same. A chat has one or more runs, one
+after another. A new one begins when the chat starts, on `/clear`, when the app reopens it, when
+it wakes, when it starts again without its conversation, or when any of those attributes
+changes. Compaction keeps the run. A **child run** is a sub-agent or teammate the harness
+spawns, with the run it came from as its parent. The run is who an action is attributed to (W8's
+"agent run"), and budgets add up over a chat's runs (ADRs 0066, 0073).
 _Avoid_: session (that is the process), conversation (that is the harness's), turn
 
 **Device**:
@@ -170,6 +170,27 @@ its machine store, which is how records, events and the audit say where somethin
 hostname is a label, never a key. The operator on a device is its **local principal**
 (`local:<device>/<os-user>`), and charter never sends it anywhere without an account (ADR 0066).
 _Avoid_: host (that is `charterd`, the process), machine (in UI text), node
+
+**Harness declaration**:
+Data that says how to start one harness, how to name and resume its sessions, which levels it
+offers and what it can do. The ones for Claude Code, Codex and opencode ship with charter; a
+project may declare more, which each machine approves before they run, and never replaces a
+built-in's (ADR 0073).
+_Avoid_: harness definition, harness config (that is the harness's own), profile (that is which
+program runs on this machine)
+
+**Harness level**:
+How much charter learns from a chat's harness, set when a run starts and fixed for it: **1**,
+the terminal alone; **2**, the terminal with the harness's own hooks reporting to charter; **3**,
+a structured protocol, ACP or the harness's own. A fall back to a lower level starts a new run.
+Never shown on a first-hour surface (ADR 0073).
+_Avoid_: tier (that is a store's), mode, integration level
+
+**Harness capability**:
+One thing a harness does or does not do for a chat, such as report that it is waiting: yes, no
+with the fallback charter uses, or unknown, which reads as no. The capability card shows the
+*no*s in plain words (ADR 0073).
+_Avoid_: capability (unqualified, which is an extension's), feature, support
 
 **Session host** (`charterd`):
 The process that owns every chat's terminal on a device, one per OS user per device: the
@@ -377,6 +398,19 @@ _Avoid_: shim, redirect
 The plane-relative paths an extension declares it writes. charter hands them resolved with
 each request and reports a change outside them; it does not stop one.
 _Avoid_: sandbox, allowed paths, scope (as if enforced)
+
+**Harness adapter**:
+charter code that arms one harness through its own mechanism for one chat, with nothing written
+into the harness's config: what level 2 and a harness's own protocol need. It never stands in for
+the harness's program (ADRs 0050, 0073).
+_Avoid_: wrapper, driver, plugin (that is the harness's)
+
+**Wrap**:
+To run a chat's unmodified harness inside a sandbox profile or backend charter generates (ADR
+0067). Never to **stand in** for the harness: putting charter's own program where the harness's
+is expected and changing what it or its model sees, which charter never does. X34's *"wraps a
+harness binary"* means standing in (ADR 0073).
+_Avoid_: wrap (for a stand-in, a shim or an adapter)
 
 **Harness plugin**:
 A Claude Code, Codex or opencode plugin, chosen per project. "Plugin" on its own always means
