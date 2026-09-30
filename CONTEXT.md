@@ -140,6 +140,13 @@ shims** stand first on its `PATH`: the harness still starts, after one line sayi
 tab shows a banner offering to open it as a chat instead (ADR 0062).
 _Avoid_: terminal (for the tab), console, plain chat
 
+**Session host** (`charterd`):
+The process that owns every chat's terminal on a device: the `charter` binary run as
+`charter serve`, one per user, started and supervised by the app. The window is its client, so an
+update or a crash of the window ends no chat. Quitting still ends them, unless a trigger or a
+paired device keeps the host running in the tray (ADR 0068).
+_Avoid_: daemon, server (in UI text), backend
+
 **Session record**:
 A summary a chat writes of its own session when it closes through **Smart close** — its goal,
 what it did, what it decided, what is still open and how to pick it up — filed as one file in
