@@ -85,6 +85,14 @@ Whether a workspace's charter, memory and todos are published with the plane (LI
 this machine (LOCAL, the default).
 _Avoid_: shared/private, public
 
+**Tier** (of a store):
+Where a file charter keeps lives, and so what a backup, a second machine and a deletion do to
+it. **Plane** is committed. **Clone state** is per clone and never committed: `.charter/`,
+`charter.local.toml` and a LOCAL workspace's files. **Machine** is outside every plane, and each
+store there is syncable or device-bound. **Keyring** is the operating system's credential store.
+A derived store is also marked rebuildable (ADR 0069).
+_Avoid_: app data (for the Machine tier as a whole), cache (for clone state), local state
+
 ### Runs and devices
 
 **Run**:
