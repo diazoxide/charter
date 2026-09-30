@@ -300,12 +300,20 @@ mod tests {
     /// window waits on is the debounce, not the look.
     const LOOK_EVERY: Duration = Duration::from_millis(50);
 
-    /// A watch on `root` and the channel it tells. Anything done to the plane from here on is
-    /// told, and nothing done before it is.
+    /// A watch on `root` fed by the tests' [`Source`], and the channel it tells. Anything done
+    /// to the plane from here on is told. Nothing done before it is — a promise of the poller
+    /// and of inotify, NOT of FSEvents, which the app runs on macOS (see [`Source`]).
     fn watching(root: &Path) -> (Watch<Source>, mpsc::Receiver<PlaneId>) {
+        watching_on::<Source>(root)
+    }
+
+    /// [`watching`] on a watcher of the test's choosing.
+    fn watching_on<W: notify::Watcher + Send + 'static>(
+        root: &Path,
+    ) -> (Watch<W>, mpsc::Receiver<PlaneId>) {
         let (tx, rx) = mpsc::channel();
         let tx = Mutex::new(tx);
-        let watch = Watch::<Source>::start_with(
+        let watch = Watch::<W>::start_with(
             id(root),
             root,
             Arc::new(move |plane| {
@@ -319,9 +327,24 @@ mod tests {
 
     #[test]
     fn a_todo_file_removed_under_a_watched_plane_is_told_within_the_second() {
+        a_removed_todo_is_told_within_the_second_on::<Source>();
+    }
+
+    /// The same on the watcher the app runs on macOS. Ignored because FSEvents gives no bound
+    /// on when it delivers, so on a busy Mac this fails however long it waits; until #756 the
+    /// "about a second" of #264 is checked on Linux's inotify only.
+    /// `cargo test -p charter-app planewatch -- --ignored` runs it.
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "FSEvents has no delivery bound on a busy Mac (#577, #756)"]
+    fn on_fsevents_a_todo_file_removed_under_a_watched_plane_is_told_within_the_second() {
+        a_removed_todo_is_told_within_the_second_on::<notify::RecommendedWatcher>();
+    }
+
+    fn a_removed_todo_is_told_within_the_second_on<W: notify::Watcher + Send + 'static>() {
         let plane = plane_with_todos(&["m8-1", "m8-2"]);
         let root = plane.path().canonicalize().expect("canonical");
-        let (_watch, told) = watching(&root);
+        let (_watch, told) = watching_on::<W>(&root);
 
         let slugs = || {
             let read = crate::panels::of(&root, "alpha").expect("the panels read");
@@ -388,9 +411,8 @@ mod tests {
         std::fs::create_dir_all(root.join("workspaces/beta/todos")).expect("a new workspace");
         told.recv_timeout(PATIENCE)
             .expect("told about the workspace");
-        // Settle, then drain whatever the creation's tail produced.
-        std::thread::sleep(QUIET_FOR * 2);
-        while told.try_recv().is_ok() {}
+        // The batch that told it also followed `beta/` and `beta/todos/`, before telling; a
+        // directory is watched from its own contents onward, so nothing else is pending here.
 
         std::fs::write(root.join("workspaces/beta/todos/new.md"), "# new\n").expect("a todo");
         told.recv_timeout(PATIENCE)
@@ -402,9 +424,23 @@ mod tests {
         // What the tests used to sleep for: FSEvents hands a stream the writes that made the
         // plane BEFORE the stream began, as late as its daemon gets to them. A watch that reports
         // only what moved after it started is one a test can act against at once.
+        a_plane_nobody_touches_is_quiet_on::<Source>();
+    }
+
+    /// The same on the watcher the app runs on macOS, where it does NOT hold: FSEvents told
+    /// a stream about the plane's making seconds after it began. Ignored until #756 decides
+    /// what the app does about slow file events. `-- --ignored` runs it.
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "FSEvents replays the plane's making late on a busy Mac (#577, #756)"]
+    fn on_fsevents_a_plane_nobody_touches_is_never_told_about_its_own_making() {
+        a_plane_nobody_touches_is_quiet_on::<notify::RecommendedWatcher>();
+    }
+
+    fn a_plane_nobody_touches_is_quiet_on<W: notify::Watcher + Send + 'static>() {
         let plane = plane_with_todos(&["m8-1", "m8-2"]);
         let root = plane.path().canonicalize().expect("canonical");
-        let (_watch, told) = watching(&root);
+        let (_watch, told) = watching_on::<W>(&root);
         assert!(told.recv_timeout(QUIET_FOR * 8).is_err());
     }
 
