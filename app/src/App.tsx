@@ -67,6 +67,7 @@ import {
   Pin,
   PlaneView,
   ShowMore,
+  type FirstChat,
   type PlaneReport,
   type WindowDoing,
 } from "./PlaneView";
@@ -174,6 +175,29 @@ function App() {
    * machine's, so any project's strip will do, and the one the operator is looking at is it.
    */
   const [preferencesAsk, setPreferencesAsk] = useState<{ plane: PlaneId; at: number }>();
+  /**
+   * The first chat a repo opened into the local project asks for (FR-4): the workspace named
+   * after the repo, the clone the chat starts in, and a count, the shape `settingsAsk` has.
+   * `plane` is the project once it is open; until the trust question about it is answered it
+   * is `null` and `asking` names the path that question is about. The project's own
+   * `PlaneView` starts the chat, because the picker and the tabs are its own.
+   */
+  const [firstChat, setFirstChat] = useState<
+    FirstChat & { plane: PlaneId | null; asking: string | null }
+  >();
+  /**
+   * A shell tab asked for with a command already typed in it — `gh auth login`, from the first
+   * run's "Sign in to GitHub" (FR-4, W10) — in the same two stages as `firstChat`.
+   */
+  const [shellAsk, setShellAsk] = useState<{
+    plane: PlaneId | null;
+    asking: string | null;
+    typed: string;
+    at: number;
+  }>();
+  /** Whether a repo is being opened right now, and why the last one opened nothing. */
+  const [openingRepo, setOpeningRepo] = useState(false);
+  const [repoTrouble, setRepoTrouble] = useState<string>();
   /** Preferences asked for with no project in front: drawn where the opener is, because there
    *  is no strip to open a tab on and a text size is still worth changing. */
   const [preferencesAlone, setPreferencesAlone] = useState(false);
@@ -406,6 +430,13 @@ function App() {
     const plane = answer.data;
     setPlanes((was) => (was.includes(plane) ? was : [...was, plane]));
     setShowing({ at: "plane", plane });
+    // A repo opened into this project was waiting on this yes for its first chat.
+    setFirstChat((was) =>
+      was?.asking === ask.path ? { ...was, plane, asking: null, at: was.at + 1 } : was,
+    );
+    setShellAsk((was) =>
+      was?.asking === ask.path ? { ...was, plane, asking: null, at: was.at + 1 } : was,
+    );
   }, []);
 
   /** Lets go of one project. Its chats end, its record is written into it, and its tab goes.
@@ -532,6 +563,71 @@ function App() {
     const opened = answer.data.plane;
     setPlanes((was) => (was.includes(opened) ? was : [...was, opened]));
     setShowing({ at: "plane", plane: opened });
+  }, []);
+
+  /**
+   * Opens a repo into this machine's local project and asks for the first chat in it
+   * (FR-4, #603). Nothing asks where the project goes: the core makes it in charter's own
+   * directory when there is none, clones the repo into a workspace named after it, and
+   * answers as `create_project` does — a project, or the trust question to ask first.
+   *
+   * Answers why nothing was opened, or `undefined` when something was, so the first run and the
+   * New project dialog can each keep the refusal where the operator is standing.
+   */
+  const openRepo = useCallback(async (path: string): Promise<string | undefined> => {
+    setOpeningRepo(true);
+    const answer = await commands
+      .openRepo(path)
+      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+    setOpeningRepo(false);
+    if (answer.status === "error") return answer.error;
+    const { opened, workspace, cwd, harness } = answer.data;
+    const plane = opened.plane;
+    const ask = opened.ask;
+    setFirstChat((was) => ({
+      workspace,
+      cwd,
+      harness,
+      plane,
+      asking: plane === null ? (ask?.path ?? null) : null,
+      at: (was?.at ?? 0) + 1,
+    }));
+    if (plane === null) {
+      if (ask)
+        setApproving((queue) => (queue.some((q) => q.path === ask.path) ? queue : [...queue, ask]));
+      return undefined;
+    }
+    setPlanes((was) => (was.includes(plane) ? was : [...was, plane]));
+    setShowing({ at: "plane", plane });
+    return undefined;
+  }, []);
+
+  /**
+   * "Sign in to GitHub" on the first run (FR-4, W10's "detected and offered"): the local
+   * project is opened — made first when there is none, and through the trust gate — and
+   * `gh auth login` is typed into a shell tab at its root. `gh`'s own login, in a tab the
+   * operator can leave; nothing here asks anything.
+   */
+  const signInToGitHub = useCallback(async (): Promise<string | undefined> => {
+    const answer = await commands
+      .openLocalProject()
+      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+    if (answer.status === "error") return answer.error;
+    const { plane, ask } = answer.data;
+    setShellAsk((was) => ({
+      plane,
+      asking: plane === null ? (ask?.path ?? null) : null,
+      typed: "gh auth login",
+      at: (was?.at ?? 0) + 1,
+    }));
+    if (plane === null) {
+      if (ask)
+        setApproving((queue) => (queue.some((q) => q.path === ask.path) ? queue : [...queue, ask]));
+      return undefined;
+    }
+    setPlanes((was) => (was.includes(plane) ? was : [...was, plane]));
+    setShowing({ at: "plane", plane });
+    return undefined;
   }, []);
 
   const onReport = useCallback((plane: PlaneId, mine: PlaneReport) => {
@@ -1484,6 +1580,8 @@ function App() {
           settingsAsked={settingsAsk?.plane === plane ? settingsAsk.at : undefined}
           savingAsked={savingAsk?.plane === plane ? savingAsk.at : undefined}
           preferencesAsked={preferencesAsk?.plane === plane ? preferencesAsk.at : undefined}
+          firstChatAsked={firstChat?.plane === plane ? firstChat : undefined}
+          shellAsked={shellAsk?.plane === plane ? shellAsk : undefined}
         />
       ))}
 
@@ -1527,6 +1625,22 @@ function App() {
                 adding={planes.length > 0}
                 onOpen={(path) => void openInto(path, true)}
                 trouble={openTrouble}
+                // The first run is for a window that has never held a project: one whose last
+                // project was closed is somebody who has had one, and gets the opener.
+                onOpenRepo={
+                  heldSomething
+                    ? undefined
+                    : (path) => {
+                        setRepoTrouble(undefined);
+                        void openRepo(path).then(setRepoTrouble);
+                      }
+                }
+                onSignInToGitHub={() => {
+                  setRepoTrouble(undefined);
+                  void signInToGitHub().then(setRepoTrouble);
+                }}
+                openingRepo={openingRepo}
+                repoTrouble={repoTrouble}
               />
             )}
           </div>
@@ -1556,6 +1670,14 @@ function App() {
           onCreate={(path, planeIsThisRepo, adopt) =>
             void makeProject(path, planeIsThisRepo, adopt)
           }
+          onOpenRepo={(path) => {
+            setCreateTrouble(undefined);
+            void openRepo(path).then((refused) => {
+              if (refused === undefined) setCreating(false);
+              else setCreateTrouble(refused);
+            });
+          }}
+          opening={openingRepo}
           onCancel={() => {
             setCreating(false);
             setCreateTrouble(undefined);

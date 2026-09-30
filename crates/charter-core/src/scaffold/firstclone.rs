@@ -56,30 +56,46 @@ pub(super) fn into_first_workspace(
         planefile::Read::Config(cfg) => planefile::default_workspace(&cfg),
         _ => "default".to_owned(),
     };
-    let author = crate::wscmd::ensure::author();
-    let ws_dir = match crate::wscmd::ensure::ensure(root, &ws, now, &author) {
-        Ok(_) => root.join("workspaces").join(&ws),
+    match into_workspace(run, root, source, &ws, &name, now) {
+        Ok(_) => 0,
         Err(why) => {
             run.err(why);
-            return 1;
+            1
         }
+    }
+}
+
+/// Clone `source` into `workspaces/<ws>/<name>`, making the workspace first when it is not
+/// there. [`into_first_workspace`] with the workspace and the clone's name handed in, so the
+/// first run can name the workspace after the repository (FR-4). Answers the clone's path,
+/// whether it was cloned now or before, or what went wrong — said by the caller, after
+/// everything this said through `run`.
+pub(super) fn into_workspace(
+    run: &mut Run,
+    root: &Path,
+    source: &Path,
+    ws: &str,
+    name: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<std::path::PathBuf, String> {
+    let author = crate::wscmd::ensure::author();
+    let ws_dir = match crate::wscmd::ensure::ensure(root, ws, now, &author) {
+        Ok(_) => root.join("workspaces").join(ws),
+        Err(why) => return Err(why),
     };
     // The exact path created is gated as itself, not as its parent: `name` comes off an
     // `origin` URL, which is a string somebody else chose. `repocmd::clone` gates its
     // destination the same way and for the same reason, so a first clone is held to the rule
     // every later clone is.
-    let dest = match crate::repocmd::clone::destination(root, &ws, &ws_dir, &name) {
+    let dest = match crate::repocmd::clone::destination(root, ws, &ws_dir, name) {
         Ok(dest) => dest,
-        Err(why) => {
-            run.err(format!("{name}: not cloned — {why}."));
-            return 1;
-        }
+        Err(why) => return Err(format!("{name}: not cloned — {why}.")),
     };
     if dest.exists() {
         run.info(format!(
             "{name}: already cloned in '{ws}' — left exactly as it is."
         ));
-        return 0;
+        return Ok(dest);
     }
 
     run.info(format!("Cloning {name} into workspace '{ws}' …"));
@@ -99,21 +115,14 @@ pub(super) fn into_first_workspace(
         Err(why) => Some(why.to_string()),
     };
     if let Some(said) = failed {
-        run.err(format!(
+        return Err(format!(
             "could not clone {} into {} — nothing else was changed.\n{said}",
             source.display(),
             dest.display()
         ));
-        return 1;
     }
 
-    match crate::planegit::origin_https(source).or_else(|| {
-        git::run(source, &["remote", "get-url", "origin"], git::READ)
-            .ok()
-            .filter(git::Run::ok)
-            .map(|r| r.line().to_owned())
-            .filter(|url| !url.is_empty())
-    }) {
+    match own_upstream(source) {
         Some(upstream) => {
             let _ = git::run(
                 &dest,
@@ -147,11 +156,38 @@ pub(super) fn into_first_workspace(
         .display()
         .to_string();
     run.ok(format!("{name} → {rel}"));
-    hint_docs(run, &dest, &name);
+    hint_docs(run, &dest, name);
     run.info(format!(
         "  work there: cd {rel}   (being in that directory IS this workspace)"
     ));
-    0
+    Ok(dest)
+}
+
+/// The source's own origin, rewritten to HTTPS by its forge's rule when it has one: what a
+/// clone's `origin` is repointed at. `None` when the source has no origin.
+fn own_upstream(source: &Path) -> Option<String> {
+    crate::planegit::origin_https(source).or_else(|| {
+        git::run(source, &["remote", "get-url", "origin"], git::READ)
+            .ok()
+            .filter(git::Run::ok)
+            .map(|r| r.line().to_owned())
+            .filter(|url| !url.is_empty())
+    })
+}
+
+/// What the `origin` of a clone of `source` made by [`into_workspace`] is: the source's own
+/// upstream, or — when it has none — the directory it was cloned from, which is what `git
+/// clone` leaves there. Two sources with the same answer are the same repo to charter.
+pub(super) fn upstream_of(source: &Path) -> String {
+    own_upstream(source).unwrap_or_else(|| source.display().to_string())
+}
+
+/// The `origin` a clone has now, or `None` when it has none or is not a repo.
+pub(super) fn origin_of(clone: &Path) -> Option<String> {
+    git::run(clone, &["remote", "get-url", "origin"], git::READ)
+        .ok()
+        .filter(git::Run::ok)
+        .map(|r| r.line().to_owned())
 }
 
 /// `  ↳ <name> ships its own <file>` for the first of the three a clone has. Python's

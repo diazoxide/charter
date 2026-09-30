@@ -92,6 +92,25 @@ pub enum Say {
     Err(String),
 }
 
+impl Say {
+    /// The line with the mark `charter init` prints in front of it, which is how a window
+    /// shows it too: an operator reading `init` in the app reads what a terminal would have
+    /// shown them.
+    pub fn marked(&self) -> String {
+        match self {
+            Say::Info(text) => format!("• {text}"),
+            Say::Ok(text) => format!("✓ {text}"),
+            Say::Warn(text) => format!("! {text}"),
+            Say::Err(text) => format!("✗ {text}"),
+        }
+    }
+
+    /// Every line, [`Say::marked`], one per line: a refusal shown **verbatim, and all of it**.
+    pub fn in_full(lines: &[Say]) -> String {
+        lines.iter().map(Say::marked).collect::<Vec<_>>().join("\n")
+    }
+}
+
 /// Everything a command said, in order, and its exit status.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Outcome {
@@ -130,6 +149,31 @@ pub struct InitArgs {
     pub now: Option<chrono::DateTime<chrono::Utc>>,
     /// The front-door persona to scaffold, or `None` for `--no-front-door`.
     pub front_door: Option<String>,
+}
+
+impl InitArgs {
+    /// What the app scaffolds a plane with — the New project dialog's Advanced form and the
+    /// first run's local project (FR-4) — given the one decision and the one repo the dialog
+    /// asks for.
+    pub fn for_the_app(plane_is_this_repo: bool, adopt: Option<PathBuf>) -> Self {
+        Self {
+            // What `charter init` defaults to, and the same defaults the CLI hands it: the
+            // forge and owner are edited in `charter.toml` afterwards, and `init` says so
+            // itself when no owner was given.
+            forge: "github".to_owned(),
+            owner: String::new(),
+            host: None,
+            // Never from the app: it is `adopt` with the source fixed to the plane's own
+            // directory, and the dialog asks for the source as a directory of its own.
+            clone_this_repo: false,
+            plane_is_this_repo,
+            adopt,
+            // The wall clock: a window has no `--now`, and the first workspace's manifest is
+            // stamped with when the operator actually made it.
+            now: None,
+            front_door: Some("steward".to_owned()),
+        }
+    }
 }
 
 /// The `.gitignore` a fresh plane gets (`commands._GITIGNORE_BASELINE`).
@@ -3258,4 +3302,76 @@ mod report_ask_tests {
             outcome.said
         );
     }
+}
+
+/// `repo` cloned into a workspace of the plane at `root` named after it (FR-4): the workspace's
+/// name and the clone's path, or why nothing was cloned. The words are the window's (ADR 0072:
+/// a code repo is a "repo", and the plane is a "project").
+///
+/// The steps `init --adopt` takes (`firstclone`), with the workspace named after the repo
+/// instead of the plane's default one. The repo is read, and only read.
+///
+/// - **A repo already taken in answers with what is there**: a workspace `<name>` (or
+///   `<name>-2`, …) whose clone came from the same place — the same origin, or the same
+///   directory when there is none.
+/// - **A different repo with the same name gets the next free suffix**, `svc-2`, never the
+///   first one's workspace.
+/// - **A repo that already IS a clone in this plane's workspaces** is that workspace, and
+///   nothing is cloned.
+pub fn adopt_as_workspace(
+    root: &Path,
+    repo: &Path,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<(String, PathBuf), String> {
+    let unread = |p: &Path, why: std::io::Error| {
+        format!(
+            "charter cannot read {} ({why}), so nothing was copied.",
+            p.display()
+        )
+    };
+    let source = repo.canonicalize().map_err(|why| unread(repo, why))?;
+    let root = root.canonicalize().map_err(|why| unread(root, why))?;
+    if !is_repo_top_level(&source) {
+        return Err(format!(
+            "{} is not the top level of a git repo, so there is nothing to open. Pick the \
+             folder a repo was cloned into.",
+            source.display()
+        ));
+    }
+    if let Ok(inside) = source.strip_prefix(root.join("workspaces"))
+        && let Some(ws) = inside.components().next()
+    {
+        return Ok((ws.as_os_str().to_string_lossy().into_owned(), source));
+    }
+    if root.starts_with(&source) {
+        return Err(format!(
+            "{} holds this project, so copying it would write into the repo it came from. Pick \
+             another repo.",
+            source.display()
+        ));
+    }
+    let Some(base) = crate::contain::workspace_name(&first_clone_name(&source)) else {
+        return Err(format!(
+            "charter cannot make a workspace name out of {}. Rename the folder, or use New \
+             project → Advanced.",
+            source.display()
+        ));
+    };
+    let from = firstclone::upstream_of(&source);
+    let name = (1..)
+        .map(|n| {
+            if n == 1 {
+                base.clone()
+            } else {
+                format!("{base}-{n}")
+            }
+        })
+        .find(|name| {
+            let clone = root.join("workspaces").join(name).join(name);
+            !clone.exists() || firstclone::origin_of(&clone).as_deref() == Some(from.as_str())
+        })
+        .expect("an unbounded range always has a free name");
+    let mut run = Run::default();
+    firstclone::into_workspace(&mut run, &root, &source, &name, &name, now)
+        .map(|clone| (name, clone))
 }

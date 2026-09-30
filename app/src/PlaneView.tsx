@@ -246,6 +246,8 @@ export function PlaneView({
   settingsAsked,
   savingAsked,
   preferencesAsked,
+  firstChatAsked,
+  shellAsked,
 }: {
   plane: PlaneId;
   /** Whether this is the project the operator is looking at. */
@@ -283,6 +285,13 @@ export function PlaneView({
   /** The same, for the Preferences tab (`WindowDoing.openPreferences`, charter-app#283): a
    *  count that goes up each time the window asks for it on THIS project's strip. */
   preferencesAsked?: number;
+  /** The first chat a repository opened into this project asks for (FR-4): started in that
+   *  repository's clone, on the workspace named after it. `at` counts the asks, so each is
+   *  answered once. */
+  firstChatAsked?: FirstChat;
+  /** A shell tab at the project root with a command typed into it — `gh auth login` from the
+   *  first run (FR-4) — asked for once per `at`. */
+  shellAsked?: { typed: string; at: number };
 }) {
   const [tabs, setTabs] = useState<Tabs>(noTabs);
   /** What every chat is doing, in THIS project. Pushed from the core; nothing here polls.
@@ -1326,7 +1335,7 @@ export function PlaneView({
    * from the record reads the same: a chat's name is what its tab is drawn from at a relaunch.
    */
   const openShell = useCallback(
-    (cwd: string | null, filed: string) => {
+    (cwd: string | null, filed: string, typed?: string) => {
       const name = `shell ${now.current.named.tabs + 1}`;
       void commands
         .openSession(plane, null, [], cwd, name, STARTING_SIZE.columns, STARTING_SIZE.rows)
@@ -1339,11 +1348,28 @@ export function PlaneView({
           setShells((was) => new Set(was).add(session));
           setStartedIn((was) => ({ ...was, [session]: filed }));
           change((tabs) => openTab(tabs, session, name));
+          // A command typed in for the operator, run as if they had typed it: the shell reads
+          // it once it is up, and the tab is theirs to leave.
+          if (typed !== undefined) void commands.sendInput(plane, session, `${typed}\n`);
         })
         .catch((err: unknown) => setTrouble(String(err)));
     },
     [change, plane],
   );
+
+  /**
+   * A shell tab at the project root with `shellAsked`'s command typed in (FR-4: `gh auth
+   * login`, from the first run's "Sign in to GitHub"). Once the plane is read, so the root is
+   * known, and once per ask.
+   */
+  const shellHandled = useRef<number | undefined>(undefined);
+  const root = sidebar?.root;
+  useEffect(() => {
+    if (shellAsked === undefined || root === undefined) return;
+    if (shellHandled.current === shellAsked.at) return;
+    shellHandled.current = shellAsked.at;
+    openShell(root, OUTSIDE, shellAsked.typed);
+  }, [openShell, root, shellAsked]);
 
   /** A shell tab where a new chat would start — or in `workspace`'s own directory, filed under
    *  it, when a row names one. */
@@ -1428,13 +1454,22 @@ export function PlaneView({
     [ask, byHand, startIn],
   );
 
-  /** A row was picked: the chat starts on that profile, with that persona, either drawing
-   *  charter's footer in its pane or leaving it blank (ADR 0029), and under the name typed in
-   *  the picker, if one was (charter-app#254). */
-  const startPicked = useCallback(
-    async (profile: string, persona: string | null, showFooter: boolean, label: string | null) => {
-      const where = picking?.where;
-      if (where === undefined) return;
+  /**
+   * Starts a chat on `profile` at `where`: the picker's Start, and the first chat of a repo
+   * opened into this project when there was nothing to pick (FR-4). Answers the core's refusal,
+   * or `undefined` once the chat is on a tab. `filedIn` names the strip the tab goes on when the
+   * caller has just focused one this render cannot see yet.
+   */
+  const startOn = useCallback(
+    async (
+      where: Where,
+      kind: string | undefined,
+      profile: string,
+      persona: string | null,
+      showFooter: boolean,
+      label: string | null,
+      filedIn?: string,
+    ): Promise<string | undefined> => {
       // A tab asked for in one directory starts there; everything else starts where the
       // explorer's pick says (charter-app#174).
       const cwd = ("in" in where ? where.in : undefined) ?? startIn;
@@ -1462,25 +1497,17 @@ export function PlaneView({
           STARTING_SIZE.rows,
         )
         .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
-      if (started.status === "error") {
-        // In the picker, not behind it: the operator is still choosing, and a refusal they
-        // cannot see beside the rows is one they cannot act on.
-        setPickerTrouble(started.error);
-        return;
-      }
-      setPicking(undefined);
-      setPickerTrouble(undefined);
+      if (started.status === "error") return started.error;
       const session = started.data.session;
       // Where charter put it, written down before the tab is drawn: the plane will say the
       // same thing a tick later, and until it does this is what keeps the tab on the strip
       // the operator is looking at.
-      const filed = filedFor(cwd, focused);
+      const filed = filedIn ?? filedFor(cwd, focused);
       setStartedIn((was) => ({ ...was, [session]: filed }));
       if ("tab" in where) {
-        const kind = picking?.options.profiles.find((one) => one.name === profile)?.kind;
         const held = started.data.label ?? null;
         change((tabs) => openTab(tabs, session, name, whoOf(persona, kind), held));
-        return;
+        return undefined;
       }
       const before = now.current;
       // The tab that was to be split can have closed while the picker was open. Nothing
@@ -1488,8 +1515,29 @@ export function PlaneView({
       if (change((tabs) => splitFocusedPane(tabs, where.split, session, name)) === before) {
         void commands.closeSession(plane, session);
       }
+      return undefined;
     },
-    [change, focused, picking, plane, startIn],
+    [change, focused, plane, startIn],
+  );
+
+  /** A row was picked: the chat starts on that profile, with that persona, either drawing
+   *  charter's footer in its pane or leaving it blank (ADR 0029), and under the name typed in
+   *  the picker, if one was (charter-app#254). */
+  const startPicked = useCallback(
+    async (profile: string, persona: string | null, showFooter: boolean, label: string | null) => {
+      if (picking === undefined) return;
+      const kind = picking.options.profiles.find((one) => one.name === profile)?.kind;
+      const refused = await startOn(picking.where, kind, profile, persona, showFooter, label);
+      if (refused !== undefined) {
+        // In the picker, not behind it: the operator is still choosing, and a refusal they
+        // cannot see beside the rows is one they cannot act on.
+        setPickerTrouble(refused);
+        return;
+      }
+      setPicking(undefined);
+      setPickerTrouble(undefined);
+    },
+    [picking, startOn],
   );
 
   /** The approval IS this click. After it, the whole chain of checks runs again from the
@@ -1692,6 +1740,57 @@ export function PlaneView({
     },
     [change, filedIn, isPinned, plane],
   );
+
+  /**
+   * The first chat in a repository just opened into this project (FR-4, #603): its workspace
+   * is focused and the picker is asked for, to start in the repository's clone. Only once the
+   * plane has been read and lists that workspace, since focusing a workspace the strip has not
+   * heard of would focus nothing. The picker still asks which harness (ADR 0022).
+   */
+  const firstChatHandled = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (firstChatAsked === undefined || firstChatHandled.current === firstChatAsked.at) return;
+    if (!sidebar?.workspaces.some((ws) => ws.name === firstChatAsked.workspace)) return;
+    firstChatHandled.current = firstChatAsked.at;
+    const { workspace, cwd, harness } = firstChatAsked;
+    const where: Where = { tab: true, in: cwd };
+    // `ask`'s steps, written out so the state is set in the command's callback: the
+    // `react-hooks/set-state-in-effect` rule reads a call in an effect body as synchronous
+    // however far the setState is from it (`Extensions.tsx` says the same).
+    void commands
+      .startOptions(plane)
+      .then(async (options) => {
+        if (options.status === "error") {
+          setTrouble(options.error);
+          return;
+        }
+        focusWorkspace(workspace);
+        // **Nothing to pick, so nothing is asked** (FR-4, W10's interrupt budget): one
+        // harness signed in on this machine, and a profile of it that needs no approval. The
+        // picker still comes up whenever there is a choice or a command to approve (ADR 0022).
+        const ofIt = options.data.profiles.filter((row) => row.kind === harness);
+        const only = ofIt.find((row) => row.is_default) ?? ofIt[0];
+        if (harness !== null && only !== undefined && only.approval === null) {
+          const persona =
+            options.data.persona !== null && options.data.personas.includes(options.data.persona)
+              ? options.data.persona
+              : null;
+          const refused = await startOn(
+            where,
+            only.kind,
+            only.name,
+            persona,
+            false,
+            null,
+            workspace,
+          );
+          if (refused === undefined) return;
+          setPickerTrouble(refused);
+        } else setPickerTrouble(undefined);
+        setPicking({ options: options.data, where });
+      })
+      .catch((err: unknown) => setTrouble(String(err)));
+  }, [firstChatAsked, focusWorkspace, plane, sidebar, startOn]);
 
   /** What a chat is called here: the tab holding it, or its session number. */
   const nameOf = useCallback(
@@ -3798,6 +3897,19 @@ function followTheme(changed: () => void): () => void {
 function colourWithHue(colour: string | null | undefined): string | null {
   return hueOf(colour) === undefined ? null : (colour ?? null);
 }
+
+/** A first chat asked for in a repository opened into a project (FR-4). */
+export type FirstChat = {
+  /** The workspace named after the repository. */
+  workspace: string;
+  /** The repo's clone in it, where the chat starts. */
+  cwd: string;
+  /** The one harness signed in on this machine, which the chat starts on without the picker;
+   *  `null` when there is a choice to make. */
+  harness: string | null;
+  /** Which ask this is, so each is answered once. */
+  at: number;
+};
 
 export type PlaneReport = {
   /** Every chat it has open, with what each one is doing — what a quit would end. */
