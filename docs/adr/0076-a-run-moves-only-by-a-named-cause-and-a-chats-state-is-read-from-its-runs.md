@@ -129,18 +129,19 @@ record's causes say why a run *moved*. The two lists share no word.
 | `input-required (ready or turn-ended)` | `hibernated` | `idle` | the host's own act: idle past the threshold, on a harness that resumes natively (§5) |
 | `input-required (ready or turn-ended)` | `hibernated` | `quit` | the app let go of the project, for a run idle at a turn boundary on a harness that resumes natively (§3) |
 | any live state | `completed` | `superseded` | the chat's next run began: the `succeeded` row above, or a `reopen`, `fresh`, `switch` or `wake` (a hibernated run ends this way when its chat wakes) |
-| `starting`, `working`, `input-required` | `completed` | `exited` | the program exited with code 0, and the host had not stopped it |
+| `starting`, `working`, `input-required`, `paused` | `completed` | `exited` | the program exited with code 0, and the host had not stopped it |
 | `starting`, `working`, `input-required`, `paused` | `failed` | `exited` | the program exited non-zero or on a signal the host did not send |
 | `queued`, `starting` | `failed` | `spawn-failed` | the program could not be started: not found, not executable, or its sandbox could not be compiled |
 | `working`, `input-required` | `failed` | `channel-lost` | level 3: the protocol channel ended or reported an error charter cannot continue past, while the chat carries on at a lower level. The next run begins with ADR 0073's `fallback` |
-| `working`, `paused` | `failed` | `host-crash` | the next host found the run in its journal, and its program gone (FD-29, ADR 0068 §3) |
+| `starting`, `working`, `paused` | `failed` | `host-crash` | the next host found the run in its journal, and its program gone (FD-29, ADR 0068 §3) |
 | `input-required (ready or turn-ended)` | `hibernated` | `host-crash` | the same, for a run idle at a turn boundary on a harness that resumes natively (ADR 0068, amended) |
 | `input-required` | `failed` | `host-crash` | the same, for any other `input-required` run |
 | any live state | `stopped` | `closed` | the operator closed the chat: its tab (Smart close included, ADR 0064), or **Start fresh** at the launch question, which drops it from the reopen record |
 | any live state | `stopped` | `operator` | the operator stopped this run and kept its tab (Q11) |
 | any live state | `stopped` | `killed` | the kill switch was thrown (ADR 0071), from the window, the command line or a policy (N9) |
-| any live state | `stopped` | `quit` | the app let go of the project, a quit or the project closed, and the reopen record keeps the chat. A run idle at a turn boundary on a harness that resumes natively is hibernated instead (row above) |
-| any live state | `stopped` | `grace` | the app crashed and did not come back within ADR 0068's grace period. As with `quit`, an idle run on a harness that resumes natively becomes `hibernated \| grace` instead |
+| any live state but `hibernated` | `stopped` | `quit` | the app let go of the project, a quit or the project closed, and the reopen record keeps the chat. A run idle at a turn boundary on a harness that resumes natively is hibernated instead (row above), and a run already `hibernated` stays so |
+| `input-required (ready or turn-ended)` | `hibernated` | `grace` | the same as `hibernated \| quit`, when ADR 0068's grace period passes |
+| any live state but `hibernated` | `stopped` | `grace` | the app crashed and did not come back within ADR 0068's grace period. As with `quit`, an idle run on a harness that resumes natively is hibernated instead, and a hibernated run stays so |
 | `input-required` | `stopped` | `drained` | an upgrade fell back to drain and resume (ADR 0068 §7). The chat comes back with a `reopen` run |
 
 A hibernated or queued run has no process to lose, so a host crash leaves it as it is.
@@ -188,8 +189,8 @@ the `ended` flag to the state. Hooks still move the four states in the middle, b
 **A relaunch follows SC-20 in these states.** When the app lets go of a project (a quit, the
 project closed, the grace period passing), each live run that is idle at a turn boundary, on a
 harness that resumes natively, becomes `hibernated | quit` rather than `stopped | quit`. Nothing
-is lost: the program ends, as ADR 0068 §2 says, and the conversation is kept. Every other live run
-ends `stopped | quit`. At the next launch, once the launch question is answered:
+is lost: the program ends, as ADR 0068 §2 says, and the conversation is kept. A run already
+`hibernated` stays so. Every other live run ends `stopped | quit`. At the next launch, once the launch question is answered:
 
 - visible, needs-you and mid-turn chats get a new run (ADR 0066's `reopen`), `queued` with the
   `stagger` hold, and restart first;
