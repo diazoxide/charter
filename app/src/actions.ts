@@ -500,6 +500,8 @@ export type Now = {
   /** The chats that reported back to a chat in the queue, by name (charter-app#259), so its row
    *  says what the operator is being asked to look at. */
   reportsTo?: (session: number) => readonly string[];
+  /** What a chat in the queue had its commits refused for (SQ-16), so its row says so. */
+  refusedIn?: (session: number) => readonly string[];
   /**
    * What the plane's workspaces, personas and the plane itself are offered to curate
    * (`curation_offers`, ADR 0061) — the core's answer, one row per action and one disabled row
@@ -974,7 +976,7 @@ export function catalogue(now: Now): Offer[] {
       ? cannot("needs.next", "Show the chat that needs you", nothingSaidSoFar(now.quiet ?? []))
       : can("needs.next", "Show the chat that needs you", { verb: "showChat", session: oldest }),
   );
-  offers.push(...needsYouRows(now.needsYou, now.nameOf, now.tabs, now.reportsTo));
+  offers.push(...needsYouRows(now.needsYou, now.nameOf, now.tabs, now.reportsTo, now.refusedIn));
   offers.push(...stoppedRows(now.stopped ?? {}, now.needsYou, now.nameOf, now.tabs));
 
   const pinned = now.pinned ?? { chats: [], workspaces: [], projects: [] };
@@ -1890,14 +1892,19 @@ export function needsYouRows(
   tabs: Tabs,
   /** The chats that reported back to each chat asking (charter-app#259), so its row says so. */
   reportsTo: (session: number) => readonly string[] = () => [],
+  /** What a chat's commits were refused for (SQ-16), so its row says the latest. */
+  refusedIn: (session: number) => readonly string[] = () => [],
 ): Offer[] {
   return needsYou.flatMap((session) => {
     const name = nameOf(session);
     const reported = reportsTo(session);
+    const refused = refusedIn(session);
     const title =
       reported.length > 0
         ? `Show ${name}: ${reported.join(", ")} reported back`
-        : `Show ${name}, which needs you`;
+        : refused.length > 0
+          ? `Show ${name}: ${refused[refused.length - 1]}`
+          : `Show ${name}, which needs you`;
     return [
       tabHolding(tabs, session) === undefined
         ? cannot(showId(session), title, "That chat has no tab in this window.", name)

@@ -37,6 +37,7 @@ pub const CORE_WORDS: [&str; 37] = [
     "discover",
     "docs",
     "doctor",
+    "git-hook",
     "git-policy",
     "gl-refresh",
     "guard",

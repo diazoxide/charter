@@ -1893,6 +1893,12 @@ export type Moved = {
 	 */
 	reports: string[],
 	/**
+	 *  The commits of this chat charter's `pre-commit` refused and the operator has not seen,
+	 *  each as the one masked line its item says, oldest first (SQ-16). Emptied by the chat's
+	 *  next prompt, or by Ignore.
+	 */
+	refusals: string[],
+	/**
 	 *  Which snapshot of the board this is — bigger was taken later (charter-app#248).
 	 * 
 	 *  **What lets the window put its events back in order.** Every `Moved` is built under the

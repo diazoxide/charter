@@ -496,6 +496,38 @@ pub fn run_as_session(
     Ok(wait_raw(spawn_with(dir, args, &extra)?, timeout)?)
 }
 
+/// The variables git hands a hook to say WHICH repository and which index it is working on.
+///
+/// `git commit -a`, `git commit <paths>` and `git commit --only` stage into a temporary index
+/// and name it in `GIT_INDEX_FILE`; a linked worktree or `git --git-dir` names the repository in
+/// `GIT_DIR`. A hook that asked git about "the staged diff" without them would be asked about
+/// a different index than the one being committed.
+pub const HOOK_REPOSITORY_ENV: [&str; 6] = [
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_COMMON_DIR",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+];
+
+/// Run `git -C <dir> <args>` with a deadline, from inside a git hook: [`run`]'s hardening plus
+/// [`HOOK_REPOSITORY_ENV`] and [`CONFIG_LOCATION_ENV`], so it reads the index and the config
+/// the command that ran the hook reads. Read-only callers only.
+pub fn run_in_hook(dir: &Path, args: &[&str], timeout: Duration) -> Result<RawRun, GitUnavailable> {
+    let mut pass = config_location_env(|name| std::env::var_os(name));
+    pass.extend(
+        HOOK_REPOSITORY_ENV
+            .iter()
+            .filter_map(|name| std::env::var_os(name).map(|value| ((*name).to_owned(), value))),
+    );
+    let extra = Extra {
+        pass,
+        ..Extra::default()
+    };
+    Ok(wait_raw(spawn_with(dir, args, &extra)?, timeout)?)
+}
+
 /// Run `git -C <dir> <args>` across a network, under the one-credential rule.
 ///
 /// `helper` is the credential helper the forge's own CLI provides — `!'/abs/gh' auth

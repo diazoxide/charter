@@ -169,6 +169,10 @@ pub struct Chat {
     /// kind — `<child> reported back` — and the report itself reaches this chat's next turn as
     /// context, which is why the next prompt is what clears them.
     reports: Vec<String>,
+    /// The commits of this chat charter's `pre-commit` refused since it was last prompted, each
+    /// as the one masked line the item says (SQ-16, [`crate::diffscan`]). A needs-you item of
+    /// its own kind, like a report back, and the next prompt clears them the same way.
+    refusals: Vec<String>,
     /// Whether the chat stopped in the middle of a turn to ask the operator something — a
     /// permission or a question — and the turn has not ended since (Smart close, ADR 0064).
     ///
@@ -190,6 +194,7 @@ impl Chat {
             needs_you: false,
             ended: false,
             reports: Vec::new(),
+            refusals: Vec::new(),
             asking: false,
             turns: 0,
         }
@@ -221,6 +226,24 @@ impl Chat {
         &self.reports
     }
 
+    /// The commits of this chat that were refused and not yet seen, oldest first.
+    pub fn refusals(&self) -> &[String] {
+        &self.refusals
+    }
+
+    /// charter's `pre-commit` refused a commit this chat made (SQ-16): `what` is the masked
+    /// line the item says. It needs the operator whatever it is doing, and its state is not
+    /// touched — the agent has git's refusal in front of it and its turn goes on. Answers
+    /// whether anything a reader can see changed.
+    pub fn commit_refused(&mut self, what: &str) -> bool {
+        if self.ended {
+            return false;
+        }
+        self.refusals.push(what.to_owned());
+        self.needs_you = true;
+        true
+    }
+
     /// A chat this one handed work to, `from`, has reported back (charter-app#259). It needs
     /// the operator whatever it is doing: the report waits for its next turn, and the queue is
     /// how the operator learns there is one. Answers whether anything a reader can see changed.
@@ -247,7 +270,12 @@ impl Chat {
         if self.ended {
             return false;
         }
-        let was = (self.state, self.needs_you, self.reports.len());
+        let was = (
+            self.state,
+            self.needs_you,
+            self.reports.len(),
+            self.refusals.len(),
+        );
         match event {
             // A fresh chat, and every chat a relaunch puts back, wants a first prompt. It
             // has asked for nothing, and a launch that filled the queue would empty the
@@ -270,6 +298,7 @@ impl Chat {
                 self.state = State::Running;
                 self.needs_you = false;
                 self.reports.clear();
+                self.refusals.clear();
                 self.asking = false;
                 self.turns = self.turns.saturating_add(1);
             }
@@ -310,7 +339,12 @@ impl Chat {
                 self.asking = false;
             }
         }
-        was != (self.state, self.needs_you, self.reports.len())
+        was != (
+            self.state,
+            self.needs_you,
+            self.reports.len(),
+            self.refusals.len(),
+        )
     }
 
     /// The operator dismissed this chat's request without answering it (charter-app#248).
@@ -328,8 +362,9 @@ impl Chat {
     /// leaves the queue. The report itself still reaches the chat's next turn — ignoring the
     /// item is not unreading what another chat said.
     pub fn ignored(&mut self) -> bool {
-        let had_reports = !self.reports.is_empty();
+        let had_reports = !self.reports.is_empty() || !self.refusals.is_empty();
         self.reports.clear();
+        self.refusals.clear();
         std::mem::replace(&mut self.needs_you, false) || had_reports
     }
 
@@ -339,7 +374,12 @@ impl Chat {
     /// program telling the app directly, which is not the harness OUTPUT that ADR 0018
     /// forbids reading.
     pub fn exited(&mut self, code: Option<i32>) -> bool {
-        let was = (self.state, self.needs_you, self.reports.len());
+        let was = (
+            self.state,
+            self.needs_you,
+            self.reports.len(),
+            self.refusals.len(),
+        );
         // No code at all is what a signal leaves behind, and that is not a clean end.
         self.state = if code == Some(0) {
             State::Done
@@ -351,7 +391,13 @@ impl Chat {
         self.ended = true;
         // Nothing will prompt it again, so nothing it was waiting to read is an item any more.
         self.reports.clear();
-        was != (self.state, self.needs_you, self.reports.len())
+        self.refusals.clear();
+        was != (
+            self.state,
+            self.needs_you,
+            self.reports.len(),
+            self.refusals.len(),
+        )
     }
 }
 
@@ -750,6 +796,25 @@ impl Board {
             .get_mut(&number)
             .is_some_and(|tracked| tracked.chat.reported_back(from));
         self.stamp(number, changed)
+    }
+
+    /// charter's `pre-commit` refused a commit chat `number` made (SQ-16). Answers whether
+    /// anything a reader can see changed: nothing does for a chat the board does not have, or
+    /// one whose program is gone.
+    pub fn commit_refused(&mut self, number: u32, what: &str) -> bool {
+        let changed = self
+            .chats
+            .get_mut(&number)
+            .is_some_and(|tracked| tracked.chat.commit_refused(what));
+        self.stamp(number, changed)
+    }
+
+    /// The refused commits of chat `number` not yet seen, oldest first.
+    pub fn refusals(&self, number: u32) -> Vec<String> {
+        self.chats
+            .get(&number)
+            .map(|tracked| tracked.chat.refusals().to_vec())
+            .unwrap_or_default()
     }
 
     /// The chats that reported back to `number` and have not been read, oldest first.
@@ -1866,6 +1931,49 @@ mod tests {
         let board = Board::new();
 
         assert_eq!(board.moved_at(7), 0);
+    }
+
+    // ----- a refused commit (SQ-16) ----------------------------------------------------------
+
+    #[test]
+    fn a_refused_commit_puts_the_chat_in_the_queue_with_what_it_was_refused_for() {
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+
+        assert!(board.commit_refused(7, "commit refused in app: a.py:2  an email address  ad**"));
+
+        assert_eq!(board.state(7), State::Running, "the turn goes on");
+        assert_eq!(board.needs_you(), vec![7]);
+        assert_eq!(
+            board.refusals(7),
+            vec!["commit refused in app: a.py:2  an email address  ad**".to_owned()]
+        );
+    }
+
+    #[test]
+    fn the_next_prompt_or_an_ignore_takes_a_refused_commit_away() {
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.commit_refused(7, "one");
+        assert!(board.reported(&report(7, Event::UserPromptSubmit, Some(A))));
+        assert!(board.refusals(7).is_empty());
+        assert!(board.needs_you().is_empty());
+
+        board.commit_refused(7, "two");
+        assert!(board.ignored(7));
+        assert!(board.refusals(7).is_empty());
+        assert!(board.needs_you().is_empty());
+    }
+
+    #[test]
+    fn a_refused_commit_in_a_chat_whose_program_has_gone_changes_nothing() {
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.exited(7, Some(0));
+        assert!(!board.commit_refused(7, "one"));
+        assert!(!board.commit_refused(8, "one"));
+        assert!(board.refusals(7).is_empty());
     }
 
     // ----- a report back (charter-app#259) --------------------------------------------------

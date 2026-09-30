@@ -463,6 +463,22 @@ describe("the one list of actions", () => {
     expect(by(offers, "needs.show:7")?.title).toBe("Show steward 3: drop commons reported back");
   });
 
+  it("says what a chat in the queue had its commit refused for (SQ-16)", () => {
+    const tabs = openTab(noTabs(), 7, "one");
+    const offers = catalogue(
+      now({
+        tabs,
+        needsYou: [7],
+        nameOf: () => "steward 3",
+        refusedIn: () => ["commit refused in app: a.py:2  an email address  ad**"],
+      }),
+    );
+
+    expect(by(offers, "needs.show:7")?.title).toBe(
+      "Show steward 3: commit refused in app: a.py:2  an email address  ad**",
+    );
+  });
+
   it("ignores a chat in the queue until it asks again, one row for each (charter-app#248)", async () => {
     const hands = doing();
     const offers = catalogue(now({ needsYou: [8, 7], nameOf: (s) => (s === 7 ? "one" : "two") }));

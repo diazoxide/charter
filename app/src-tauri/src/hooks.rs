@@ -54,6 +54,10 @@ pub struct Moved {
     /// says `<child> reported back` rather than only this chat's name. Empty for nearly every
     /// chat, and emptied by this chat's next prompt, which is the turn the reports are handed.
     pub reports: Vec<String>,
+    /// The commits of this chat charter's `pre-commit` refused and the operator has not seen,
+    /// each as the one masked line its item says, oldest first (SQ-16). Emptied by the chat's
+    /// next prompt, or by Ignore.
+    pub refusals: Vec<String>,
     /// Which snapshot of the board this is — bigger was taken later (charter-app#248).
     ///
     /// **What lets the window put its events back in order.** Every `Moved` is built under the
@@ -296,7 +300,8 @@ impl Hooks {
         let following: Arc<Mutex<Option<Following>>> = Arc::new(Mutex::new(None));
         let all_reports: Arc<Mutex<Option<Heard>>> = Arc::new(Mutex::new(None));
         let saved: Arc<Mutex<Option<SavedHeard>>> = Arc::new(Mutex::new(None));
-        let reading = listener.each_answering_noticing_and_saving(
+        let refusing = Arc::clone(&moved);
+        let reading = listener.each_answering_noticing_saving_and_refusing(
             {
                 let board = Arc::clone(&board);
                 let plane = plane.clone();
@@ -374,6 +379,23 @@ impl Hooks {
                              hear it, so nothing was closed",
                             record.chat
                         ),
+                    }
+                })
+            },
+            {
+                // A refused commit (SQ-16): a needs-you item on the chat, built under the same
+                // hold as the change, as every other move is.
+                let board = Arc::clone(&board);
+                let plane = plane.clone();
+                Box::new(move |refused| {
+                    let what = {
+                        let mut guard = held_board(&board);
+                        guard
+                            .commit_refused(refused.chat, &refused.commit_refused)
+                            .then(|| seen_by(&guard, &plane, refused.chat))
+                    };
+                    if let Some(what) = what {
+                        refusing(what);
                     }
                 })
             },
@@ -555,6 +577,7 @@ fn seen_by(board: &Board, plane: &PlaneId, session: u32) -> Moved {
         queue,
         moved_at: board.moved_at(session),
         reports: board.reports(session),
+        refusals: board.refusals(session),
     }
 }
 
@@ -829,6 +852,45 @@ mod tests {
                 cwd: Some("/work/alpha".to_owned()),
             })
         );
+    }
+
+    #[test]
+    fn a_refused_commit_puts_the_chat_in_the_queue_saying_why() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let at = Where {
+            within: dir.path().to_path_buf(),
+            socket: dir.path().join("app").join("hooks.sock"),
+        };
+        let plane: PlaneId = serde_json::from_str("\"/plane\"").expect("a plane id");
+        let (tx, rx) = std::sync::mpsc::channel();
+        let tx = Mutex::new(tx);
+        let hooks = Hooks::listening_on(
+            plane,
+            &at,
+            Arc::new(move |moved| tx.lock().unwrap().send(moved).unwrap()),
+            Arc::new(|_| panic!("a refused commit is not a harness started by hand")),
+        )
+        .expect("listening");
+        hooks.board().opened(3, Some(Harness::ClaudeCode), None);
+        let said = "commit refused in app: a.py:2  an email address  ad**";
+
+        charter_core::hookwire::tell_refused(
+            hooks.socket().expect("a socket"),
+            Some(&hooks.token_for(3)),
+            &charter_core::hookwire::CommitRefused {
+                chat: 3,
+                commit_refused: said.to_owned(),
+            },
+        )
+        .expect("told");
+
+        let moved = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the window is told");
+        assert_eq!(moved.session, 3);
+        assert!(moved.needs_you);
+        assert_eq!(moved.queue, vec![3]);
+        assert_eq!(moved.refusals, vec![said.to_owned()]);
     }
 
     #[test]

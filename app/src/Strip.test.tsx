@@ -179,6 +179,7 @@ function moving(session: number, at: number): Moved {
     // The board numbers a snapshot at least as late as the move it reports.
     sequence: at,
     reports: [],
+    refusals: [],
   };
 }
 

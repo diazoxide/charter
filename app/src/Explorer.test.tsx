@@ -253,6 +253,7 @@ describe("the explorer", () => {
       queue: [1],
       moved_at: 1,
       reports: [],
+      refusals: [],
       sequence: 1,
     });
     draw({ chats: [chat(1, "shell 1", `${CUT}/one`, { harness: null, profile: null })], states });

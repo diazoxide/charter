@@ -319,20 +319,7 @@ fn token_at(text: &str) -> Option<(&'static str, usize)> {
             return Some((label, hit.start()));
         }
     }
-    static TOKEN: OnceLock<Regex> = OnceLock::new();
-    let token = TOKEN.get_or_init(|| {
-        let prefixes: Vec<String> = CREDENTIAL_PREFIXES
-            .iter()
-            .map(|p| regex::escape(p))
-            .collect();
-        // The token is its own group: the class in front of it consumes the character before
-        // it, which is the newline when a token opens its line.
-        Regex::new(&format!(
-            r"(?:^|[^A-Za-z0-9_-])(?P<token>(?:{})[A-Za-z0-9_-]{{16,}})",
-            prefixes.join("|")
-        ))
-        .expect("a pattern this module wrote")
-    });
+    let token = prefixed_token();
     token
         .captures(text)
         .and_then(|caps| caps.name("token"))
@@ -357,6 +344,243 @@ pub fn found(text: &str) -> Option<Found> {
         .filter(|b| **b == b'\n')
         .count();
     Some(Found { kind, line })
+}
+
+/// One thing a commit's added line would publish: its kind, and where on the line it is.
+///
+/// The span is for the caller to MASK ([`masked`]) and never to print as it is: every caller
+/// shows what it gets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Leak {
+    pub kind: &'static str,
+    pub span: std::ops::Range<usize>,
+}
+
+/// Credential shapes from gitleaks' default rules that neither [`CREDENTIAL_PREFIXES`] nor the
+/// PEM, AWS and AgentMail rules already cover. Each is anchored on a vendor's own prefix, so
+/// ordinary code does not match one; gitleaks' generic and entropy-only rules are left out for
+/// the reason [`token_kind`] leaves the credential-assignment rule out.
+const GITLEAKS: [(&str, &str); 9] = [
+    (
+        "Slack webhook",
+        r"\bhooks\.slack\.com/(?:services|workflows|triggers)/[A-Za-z0-9+/]{43,56}",
+    ),
+    ("SendGrid key", r"\bSG\.[A-Za-z0-9=_.-]{66}"),
+    ("DigitalOcean token", r"\bdo[por]_v1_[a-f0-9]{64}"),
+    ("Shopify token", r"\bshp(?:at|ca|pa|ss)_[a-fA-F0-9]{32}"),
+    ("Linear key", r"\blin_api_[A-Za-z0-9]{40}"),
+    ("Postman key", r"\bPMAK-[a-fA-F0-9]{24}-[a-fA-F0-9]{34}"),
+    ("Doppler token", r"\bdp\.pt\.[A-Za-z0-9]{43}"),
+    ("Databricks token", r"\bdapi[a-f0-9]{32}"),
+    (
+        "Grafana token",
+        r"\b(?:glc_[A-Za-z0-9+/]{32,400}={0,2}|glsa_[A-Za-z0-9]{32}_[A-Fa-f0-9]{8})",
+    ),
+];
+
+/// How a PII rule's candidate is checked beyond its pattern.
+#[derive(Clone, Copy)]
+enum Personal {
+    Email,
+    Card,
+    Ssn,
+}
+
+fn pii() -> &'static [(&'static str, Regex, Personal)] {
+    static ONCE: OnceLock<Vec<(&'static str, Regex, Personal)>> = OnceLock::new();
+    ONCE.get_or_init(|| {
+        [
+            (
+                "an email address",
+                r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b",
+                Personal::Email,
+            ),
+            ("a card number", r"\b(?:\d[ -]?){12,18}\d\b", Personal::Card),
+            (
+                "an ID number (US SSN)",
+                r"\b\d{3}-\d{2}-\d{4}\b",
+                Personal::Ssn,
+            ),
+        ]
+        .into_iter()
+        .map(|(kind, pattern, check)| {
+            (
+                kind,
+                Regex::new(pattern).expect("a pattern this module wrote"),
+                check,
+            )
+        })
+        .collect()
+    })
+}
+
+fn gitleaks() -> &'static [(&'static str, Regex)] {
+    static ONCE: OnceLock<Vec<(&'static str, Regex)>> = OnceLock::new();
+    ONCE.get_or_init(|| {
+        GITLEAKS
+            .iter()
+            .map(|(kind, pattern)| {
+                (
+                    *kind,
+                    Regex::new(pattern).expect("a pattern this module wrote"),
+                )
+            })
+            .collect()
+    })
+}
+
+fn prefixed_token() -> &'static Regex {
+    static TOKEN: OnceLock<Regex> = OnceLock::new();
+    TOKEN.get_or_init(|| {
+        let prefixes: Vec<String> = CREDENTIAL_PREFIXES
+            .iter()
+            .map(|p| regex::escape(p))
+            .collect();
+        // The token is its own group: the class in front of it consumes the character before
+        // it, which is the newline when a token opens its line.
+        Regex::new(&format!(
+            r"(?:^|[^A-Za-z0-9_-])(?P<token>(?:{})[A-Za-z0-9_-]{{16,}})",
+            prefixes.join("|")
+        ))
+        .expect("a pattern this module wrote")
+    })
+}
+
+/// An address that names nobody: a documentation domain (RFC 2606, RFC 6761), a no-reply
+/// sender, or `git@<host>`, which is an SSH remote and not a mailbox.
+fn names_nobody(address: &str) -> bool {
+    let (local, domain) = address.rsplit_once('@').unwrap_or(("", address));
+    let (local, domain) = (local.to_ascii_lowercase(), domain.to_ascii_lowercase());
+    let reserved = [
+        "example.com",
+        "example.net",
+        "example.org",
+        "noreply.github.com",
+    ]
+    .iter()
+    .any(|d| domain == *d || domain.ends_with(&format!(".{d}")));
+    let tld = domain.rsplit('.').next().unwrap_or("");
+    reserved
+        || matches!(tld, "test" | "invalid" | "localhost" | "example" | "local")
+        || local.starts_with("noreply")
+        || local.starts_with("no-reply")
+        || local == "git"
+}
+
+/// A card number: 13 to 19 digits under a known issuer prefix, passing the Luhn check.
+fn a_card(candidate: &str) -> bool {
+    let digits: Vec<u32> = candidate.chars().filter_map(|c| c.to_digit(10)).collect();
+    let n = digits.len();
+    let head = |k: usize| digits.iter().take(k).fold(0, |acc, d| acc * 10 + d);
+    let issuer = match digits.first() {
+        Some(4) => matches!(n, 13 | 16 | 19),
+        Some(3) => n == 15 && matches!(head(2), 34 | 37),
+        Some(5) => n == 16 && (51..=55).contains(&head(2)),
+        Some(2) => n == 16 && (2221..=2720).contains(&head(4)),
+        Some(6) => (16..=19).contains(&n) && (head(4) == 6011 || head(2) == 65),
+        _ => false,
+    };
+    let luhn = digits
+        .iter()
+        .rev()
+        .enumerate()
+        .map(|(i, d)| match (i % 2, d * 2) {
+            (0, _) => *d,
+            (_, doubled) if doubled > 9 => doubled - 9,
+            (_, doubled) => doubled,
+        })
+        .sum::<u32>()
+        % 10
+        == 0;
+    issuer && luhn
+}
+
+/// A US SSN the Social Security Administration could have issued: no area 000, 666 or 9xx, no
+/// group 00, no serial 0000.
+fn an_ssn(candidate: &str) -> bool {
+    let mut parts = candidate.split('-');
+    let (Some(area), Some(group), Some(serial)) = (parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    area != "000" && area != "666" && !area.starts_with('9') && group != "00" && serial != "0000"
+}
+
+/// Everything on one line a commit would publish: [`token_kind`]'s shapes, gitleaks' vendor
+/// shapes ([`GITLEAKS`]), and personal data — an email address, a card number, an ID number.
+/// In the order they sit on the line; where two overlap, the earlier one is kept.
+///
+/// What an agent's diff is checked with before it is committed (SQ-16). **Not** the plane
+/// save's rule ([`found`]): that one refuses `password: String`, which is ordinary code.
+pub fn leaks(line: &str) -> Vec<Leak> {
+    let mut all: Vec<Leak> = Vec::new();
+    for (kind, rx, _) in compiled() {
+        if matches!(
+            *kind,
+            "private key (PEM)" | "AWS access key" | "AgentMail key"
+        ) {
+            all.extend(rx.find_iter(line).map(|hit| Leak {
+                kind,
+                span: hit.range(),
+            }));
+        }
+    }
+    all.extend(
+        prefixed_token()
+            .captures_iter(line)
+            .filter_map(|caps| caps.name("token"))
+            .map(|hit| Leak {
+                kind: "a token by its forge's prefix",
+                span: hit.range(),
+            }),
+    );
+    for (kind, rx) in gitleaks() {
+        all.extend(rx.find_iter(line).map(|hit| Leak {
+            kind,
+            span: hit.range(),
+        }));
+    }
+    for (kind, rx, check) in pii() {
+        all.extend(
+            rx.find_iter(line)
+                .filter(|hit| match check {
+                    Personal::Email => !names_nobody(hit.as_str()),
+                    Personal::Card => a_card(hit.as_str()),
+                    Personal::Ssn => an_ssn(hit.as_str()),
+                })
+                .map(|hit| Leak {
+                    kind,
+                    span: hit.range(),
+                }),
+        );
+    }
+    all.sort_by_key(|leak| (leak.span.start, std::cmp::Reverse(leak.span.end)));
+    let mut kept: Vec<Leak> = Vec::new();
+    for leak in all {
+        if kept
+            .last()
+            .is_none_or(|last| leak.span.start >= last.span.end)
+        {
+            kept.push(leak);
+        }
+    }
+    kept
+}
+
+/// The most characters of a masked value drawn; a longer one says its length instead.
+const MASK_WIDTH: usize = 32;
+
+/// `value` with all but a short head replaced by `*`, for a caller that has to say WHICH
+/// value it refused without saying what it is. A value under twelve characters keeps nothing.
+pub fn masked(value: &str) -> String {
+    let n = value.chars().count();
+    let keep = if n < 12 { 0 } else { (n / 6).min(4) };
+    let shown = n.min(MASK_WIDTH);
+    let mut out: String = value.chars().take(keep).collect();
+    out.push_str(&"*".repeat(shown - keep));
+    if n > MASK_WIDTH {
+        out.push_str(&format!("… ({n} characters)"));
+    }
+    out
 }
 
 #[cfg(test)]
@@ -624,5 +848,142 @@ mod found_tests {
         ] {
             assert_eq!(found(text), None, "{text}");
         }
+    }
+}
+
+#[cfg(test)]
+mod leak_tests {
+    use super::{leaks, masked};
+
+    /// Each line's kinds, in the order they sit on the line.
+    fn kinds(line: &str) -> Vec<&'static str> {
+        leaks(line).into_iter().map(|leak| leak.kind).collect()
+    }
+
+    #[test]
+    fn a_key_and_an_email_on_an_added_line_are_each_named_with_where_they_are() {
+        let line = [
+            "let k = \"ghp",
+            "_0123456789abcdefABCDEF\"; // ada@lovelace.dev",
+        ]
+        .concat();
+        let found = leaks(&line);
+        assert_eq!(
+            found.iter().map(|l| l.kind).collect::<Vec<_>>(),
+            vec!["a token by its forge's prefix", "an email address"]
+        );
+        assert_eq!(
+            &line[found[0].span.clone()],
+            ["ghp", "_0123456789abcdefABCDEF"].concat()
+        );
+        assert_eq!(&line[found[1].span.clone()], "ada@lovelace.dev");
+    }
+
+    #[test]
+    fn the_gitleaks_shapes_a_forge_prefix_does_not_cover_are_found() {
+        for (line, kind) in [
+            (
+                [
+                    "https://hooks.slack.com/services/T0000000",
+                    "0/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX",
+                ]
+                .concat(),
+                "Slack webhook",
+            ),
+            (
+                [
+                    "SG.abcdefghijklmnopqrstuv",
+                    ".abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG",
+                ]
+                .concat(),
+                "SendGrid key",
+            ),
+            (["dop_v1_", &"a1".repeat(32)].concat(), "DigitalOcean token"),
+            (["shpat_", &"a1".repeat(16)].concat(), "Shopify token"),
+            (["lin_api_", &"A".repeat(40)].concat(), "Linear key"),
+            (
+                ["PMAK-", &"a".repeat(24), "-", &"b".repeat(34)].concat(),
+                "Postman key",
+            ),
+            (
+                ["-----BEGIN RSA ", "PRIVATE KEY-----"].concat(),
+                "private key (PEM)",
+            ),
+            (["AKIA", "IOSFODNN7EXAMPLE"].concat(), "AWS access key"),
+        ] {
+            assert_eq!(kinds(&line), vec![kind], "{line}");
+        }
+    }
+
+    #[test]
+    fn a_card_number_is_found_only_when_it_passes_luhn() {
+        assert_eq!(kinds("card 4111 1111 1111 1111 ok"), vec!["a card number"]);
+        assert_eq!(kinds("card 5500-0000-0000-0004"), vec!["a card number"]);
+        assert_eq!(kinds("card 4111 1111 1111 1112"), Vec::<&str>::new());
+        // A timestamp or an id is digits and nothing else.
+        assert_eq!(
+            kinds("at 1727712000123 ms, id 9876543210123456"),
+            Vec::<&str>::new()
+        );
+    }
+
+    #[test]
+    fn a_social_security_number_is_found_and_an_impossible_one_is_not() {
+        assert_eq!(kinds("ssn: 123-45-6789"), vec!["an ID number (US SSN)"]);
+        for line in [
+            "000-12-3456",
+            "666-12-3456",
+            "900-12-3456",
+            "123-00-4567",
+            "123-45-0000",
+        ] {
+            assert_eq!(kinds(line), Vec::<&str>::new(), "{line}");
+        }
+    }
+
+    #[test]
+    fn a_placeholder_or_noreply_address_is_not_somebodys_email() {
+        for line in [
+            "user@example.com",
+            "a@b.example.org",
+            "x@service.test",
+            "x@host.invalid",
+            "root@localhost",
+            "noreply@anthropic.com",
+            "no-reply@github.com",
+            "1234+someone@users.noreply.github.com",
+        ] {
+            assert_eq!(kinds(line), Vec::<&str>::new(), "{line}");
+        }
+    }
+
+    #[test]
+    fn ordinary_code_is_not_a_leak() {
+        for line in [
+            "struct Login { password: String, token: Option<String> }",
+            "api_key = os.environ['API_KEY']",
+            "let version = \"1.2.3-4\";",
+            "@media (max-width: 600px) {",
+            "import foo from '@scope/pkg@1.2.3';",
+            "git clone git@github.com:acme/app.git",
+        ] {
+            assert_eq!(kinds(line), Vec::<&str>::new(), "{line}");
+        }
+    }
+
+    #[test]
+    fn a_masked_value_keeps_a_short_head_and_hides_the_rest() {
+        assert_eq!(masked("ada@lovelace.dev"), "ad**************");
+        assert_eq!(
+            masked(&["ghp", "_0123456789abcdefABCDEF"].concat()),
+            "ghp_**********************"
+        );
+        assert_eq!(masked("abc"), "***");
+        // A long value keeps its head and says how long it was rather than drawing every star.
+        let long = "x".repeat(200);
+        assert_eq!(
+            masked(&long),
+            format!("xxxx{}… (200 characters)", "*".repeat(28))
+        );
     }
 }

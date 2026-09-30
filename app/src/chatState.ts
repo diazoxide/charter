@@ -50,6 +50,12 @@ export type ChatStates = {
    * snapshots change it, under `heardAt`'s rule, and its next prompt empties it.
    */
   readonly reports: Readonly<Record<number, readonly string[]>>;
+  /**
+   * What each chat's refused commits were refused for, one masked line each (SQ-16). A chat
+   * with any is a needs-you item that says so. Under `heardAt`'s rule, like `reports`, and its
+   * next prompt empties it.
+   */
+  readonly refusals: Readonly<Record<number, readonly string[]>>;
 };
 
 export const nothingKnown: ChatStates = {
@@ -59,6 +65,7 @@ export const nothingKnown: ChatStates = {
   queueFrom: 0,
   heardAt: {},
   reports: {},
+  refusals: {},
 };
 
 /** The state of one chat, which is `unknown` until something says otherwise. */
@@ -100,6 +107,11 @@ export function movedAt(states: ChatStates, session: number): number {
 /** The chats that reported back to `session` and have not been read yet, oldest first. */
 export function reportsTo(states: ChatStates, session: number): readonly string[] {
   return states.reports[session] ?? [];
+}
+
+/** What `session`'s refused commits were refused for, oldest first. */
+export function refusalsOf(states: ChatStates, session: number): readonly string[] {
+  return states.refusals[session] ?? [];
 }
 
 /**
@@ -150,6 +162,7 @@ export function moved(states: ChatStates, move: Moved): ChatStates {
     queueFrom: newerQueue ? move.sequence : states.queueFrom,
     heardAt: newerChat ? { ...states.heardAt, [move.session]: move.sequence } : states.heardAt,
     reports: newerChat ? { ...states.reports, [move.session]: move.reports } : states.reports,
+    refusals: newerChat ? { ...states.refusals, [move.session]: move.refusals } : states.refusals,
   };
 }
 

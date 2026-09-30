@@ -464,6 +464,18 @@ impl Chats {
         (all, start.env)
     }
 
+    /// What arms a chat's git with charter's hooks (SQ-16): `core.hooksPath` pointed at the
+    /// app's hooks directory, for a chat running a harness, so every commit its agent makes —
+    /// in a workspace repo, a piece, or a repository outside any plane — is scanned before it
+    /// is made. Nothing for a shell tab, which is the operator's own, and nothing when the app
+    /// could not write the hooks.
+    pub(crate) fn git_hooks_env(&self, harness: Option<Harness>) -> Vec<(String, String)> {
+        match (&self.shipped.git_hooks, harness) {
+            (Some(hooks), Some(_)) => hooks.env(),
+            _ => Vec::new(),
+        }
+    }
+
     /// The one place a session is opened and a chat is remembered.
     ///
     /// Everything that differs between a profile chat and a shell chat is decided by the
@@ -499,6 +511,7 @@ impl Chats {
         };
         let mut env = env;
         env.extend(armed);
+        env.extend(self.git_hooks_env(harness));
         env.sort();
         // The app's own `charter` first, then the directories charter searched for the
         // harness — so a hook the plane spells as the bare word `charter`, or a skill's
@@ -1644,6 +1657,7 @@ mod tests {
             binary: Some(plane.path().join("charter")),
             plugin: None,
             shims: None,
+            git_hooks: None,
         });
         let ready = ready_under(Harness::ClaudeCode, a_claude_sandbox(plane.path()));
 
@@ -1662,6 +1676,7 @@ mod tests {
             binary: Some(plane.path().join("charter")),
             plugin: Some(plane.path().join("plugin")),
             shims: None,
+            git_hooks: None,
         });
         let ready = ready_under(Harness::Codex, a_claude_sandbox(plane.path()));
 
@@ -3005,6 +3020,7 @@ mod tests {
             binary: Some(root.join("charter")),
             plugin: Some(plugin.clone()),
             shims: None,
+            git_hooks: None,
         });
         let ready = charter_core::start::ready(
             &charter_core::start::Start {
@@ -3107,6 +3123,40 @@ mod tests {
         assert_eq!(argv[6..], ["--name", "ide.7"], "{argv:?}");
     }
 
+    // --- charter's git hooks in a chat (SQ-16) ----------------------------------------------- //
+
+    fn armed_with_git_hooks() -> Chats {
+        let mut chats = Chats::new();
+        chats.arming_with(crate::Shipped {
+            git_hooks: Some(charter_core::githooks::GitHooks::at("/app/data/git-hooks")),
+            ..crate::Shipped::default()
+        });
+        chats
+    }
+
+    #[test]
+    fn a_harness_chat_commits_through_charters_git_hooks() {
+        let env = armed_with_git_hooks().git_hooks_env(Some(Harness::ClaudeCode));
+
+        assert!(
+            env.contains(&("GIT_CONFIG_KEY_0".to_owned(), "core.hooksPath".to_owned())),
+            "{env:?}"
+        );
+        assert!(
+            env.contains(&(
+                "GIT_CONFIG_VALUE_0".to_owned(),
+                "/app/data/git-hooks".to_owned()
+            )),
+            "{env:?}"
+        );
+    }
+
+    #[test]
+    fn a_shell_tab_and_an_app_without_git_hooks_arm_nothing() {
+        assert!(armed_with_git_hooks().git_hooks_env(None).is_empty());
+        assert!(Chats::new().git_hooks_env(Some(Harness::Codex)).is_empty());
+    }
+
     // --- a shell tab's shims (SI-5, ADR 0062) ---------------------------------------------- //
 
     fn armed_with_shims() -> Chats {
@@ -3115,6 +3165,7 @@ mod tests {
             binary: None,
             plugin: None,
             shims: Some(charter_core::shellguard::Shims::at("/app/data/shims")),
+            git_hooks: None,
         });
         chats
     }

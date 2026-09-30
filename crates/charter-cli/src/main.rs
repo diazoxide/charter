@@ -38,6 +38,7 @@ mod change;
 mod curation;
 mod extcmd;
 mod extensions;
+mod githook;
 mod guard;
 mod handoff;
 mod hooks;
@@ -382,6 +383,17 @@ enum Command {
         /// Its arguments, exactly as typed, after `--`.
         #[arg(last = true, allow_hyphen_values = true)]
         args: Vec<std::ffi::OsString>,
+    },
+
+    /// charter's check in a chat's git hooks (SQ-16): for `pre-commit`, scans what the commit
+    /// adds for secrets and personal data, and refuses it on a finding.
+    ///
+    /// Hidden: nobody types it. The hooks the app writes at every launch are its one caller,
+    /// and they run the repository's own hook after it.
+    #[command(name = "git-hook", hide = true)]
+    GitHook {
+        /// The hook git is running: `pre-commit`.
+        name: String,
     },
 
     /// Open a chat in a workspace you name, already working on a brief you pass as a quoted
@@ -2195,6 +2207,7 @@ fn run(command: Command) -> Result<u8, String> {
         | Command::Handoff { .. }
         | Command::Report(_)
         | Command::ShellGuard { .. }
+        | Command::GitHook { .. }
         | Command::Workspace(WorkspaceCommand::Remove { .. })
         | Command::Workspace(WorkspaceCommand::Rename { .. })
         | Command::Workspace(WorkspaceCommand::Live { .. })
@@ -2688,6 +2701,10 @@ fn main() -> ExitCode {
     } = &cli.command
     {
         return shellguard::run(shims, harness, args);
+    }
+    // Needs no plane: it runs in whatever repository a chat commits to.
+    if let Command::GitHook { name } = &cli.command {
+        return githook::run(name);
     }
     // The three internal words the Python charter's plugin wires beside its hooks. Answered —
     // exit 0, nothing printed, nothing read — so a plugin that still names them can never fail

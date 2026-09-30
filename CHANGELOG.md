@@ -56,6 +56,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is signed in, the chat starts on it without asking. The screen shows what is installed and
   signed in, and offers **Sign in to GitHub**, which runs `gh auth login` in a shell tab. New
   project asks for a repo the same way, and the two-folder form is under Advanced (#603).
+- **A chat's commits are scanned for secrets and personal data before they are made, in any
+  repository.** Every chat the app starts on a harness commits through charter's own git
+  hooks. Before each commit, charter reads the lines it adds. A token or key in a vendor's
+  known shape (charter's forge-prefix rules plus gitleaks' vendor rules), an email address, a
+  card number or a US Social Security number refuses the commit. git prints where each one is
+  and what kind it is, with the value masked, and the chat joins the needs-you queue saying
+  why. This holds in a workspace repo, a piece, or a repository outside any plane. The
+  repository's own hooks (husky, pre-commit, git-lfs) still run after charter's check.
+  Documentation addresses (`example.com`, `.test`), no-reply addresses and `git@host` remotes
+  are not treated as anyone's email. There is no allowlist yet (#592).
 
 ### Fixed
 
