@@ -362,6 +362,324 @@ fn claude_code_cannot_hold_the_credential_store_on_any_system_so_the_chat_does_n
 }
 
 // -------------------------------------------------------------------------------------
+// Codex: `-c` flags that select a permissions profile charter names for this start alone
+// -------------------------------------------------------------------------------------
+
+/// Each `-c key=value` a Codex chat is handed, the value read back as the TOML Codex parses.
+fn codex_config(flags: &codex::Flags) -> Vec<(String, toml::Value)> {
+    let mut pairs = flags.args.chunks(2);
+    let mut out = Vec::new();
+    for pair in &mut pairs {
+        if pair[0] != "-c" {
+            continue;
+        }
+        let (key, value) = pair[1].split_once('=').expect("key=value");
+        let value: toml::Table = toml::from_str(&format!("v = {value}")).expect("TOML");
+        out.push((key.to_owned(), value["v"].clone()));
+    }
+    out
+}
+
+fn codex_value(flags: &codex::Flags, key: &str) -> toml::Value {
+    codex_config(flags)
+        .into_iter()
+        .find(|(it, _)| it == key)
+        .unwrap_or_else(|| panic!("{key} is not handed: {:?}", flags.args))
+        .1
+}
+
+#[test]
+fn a_codex_chat_runs_under_a_workspace_write_profile_that_charter_selects_explicitly() {
+    let flags = codex::flags_named(&compiled(Denied::default(), Os::MacOs), "charter-sandbox-1")
+        .expect("compiles");
+    assert_eq!(
+        codex_value(&flags, "default_permissions"),
+        toml::Value::from("charter-sandbox-1")
+    );
+    assert_eq!(
+        codex_value(&flags, "permissions.charter-sandbox-1")["extends"],
+        toml::Value::from(":workspace")
+    );
+}
+
+#[test]
+fn a_codex_chat_reaches_the_presets_hosts_through_codexs_own_proxy_and_nothing_else() {
+    let flags = codex::flags_named(&compiled(Denied::default(), Os::MacOs), "charter-sandbox-1")
+        .expect("compiles");
+    let profile = codex_value(&flags, "permissions.charter-sandbox-1");
+    assert_eq!(
+        profile["network"],
+        toml::toml! { enabled = true
+        [domains]
+        "github.com" = "allow" }
+        .into()
+    );
+    // Without the proxy, a profile's `network.enabled` opens the network whole (measured).
+    // `--enable` rather than `-c`: Codex refuses to start on a feature it does not have, so a
+    // Codex without the proxy never runs this profile (measured).
+    assert!(
+        flags
+            .args
+            .windows(2)
+            .any(|pair| pair == ["--enable", "network_proxy"]),
+        "{:?}",
+        flags.args
+    );
+}
+
+#[test]
+fn a_codex_chat_has_the_features_that_may_reach_past_the_proxy_turned_off() {
+    // Stable in 0.147.0 and unmeasured against the sandbox: off until measured. A Codex that
+    // does not know one of them refuses to start (measured), so this fails closed too.
+    let flags = codex::flags_named(&compiled(Denied::default(), Os::MacOs), "charter-sandbox-1")
+        .expect("compiles");
+    let disabled: Vec<&str> = flags
+        .args
+        .windows(2)
+        .filter(|pair| pair[0] == "--disable")
+        .map(|pair| pair[1].as_str())
+        .collect();
+    assert_eq!(disabled, ["browser_use", "computer_use", "in_app_browser"]);
+}
+
+#[test]
+fn codex_denies_a_read_denied_path_outright_and_leaves_a_write_denied_one_readable() {
+    let denied = Denied {
+        paths: vec![
+            one(Class::Vaults, "/p/.charter/vaults", Access::ReadWrite),
+            one(Class::Integrity, "/p/.charter/app", Access::Write),
+        ],
+        services: vec![],
+    };
+    let flags =
+        codex::flags_named(&compiled(denied, Os::Linux), "charter-sandbox-1").expect("compiles");
+    let profile = codex_value(&flags, "permissions.charter-sandbox-1");
+    assert_eq!(
+        profile["filesystem"],
+        toml::toml! {
+            "/p/.charter/vaults" = "deny"
+            "/p/.charter/app" = "read"
+        }
+        .into()
+    );
+}
+
+#[test]
+fn a_codex_chat_cannot_be_escalated_out_of_its_sandbox_or_search_the_web() {
+    let flags = codex::flags_named(&compiled(Denied::default(), Os::MacOs), "charter-sandbox-1")
+        .expect("compiles");
+    // Every request to run a command outside the sandbox, or with more than it allows, is
+    // rejected rather than shown; the prompts that do not widen it stay.
+    assert_eq!(
+        codex_value(&flags, "approval_policy"),
+        toml::toml! { [granular]
+        sandbox_approval = false
+        request_permissions = false
+        skill_approval = false
+        rules = true
+        mcp_elicitations = true }
+        .into()
+    );
+    // A person decides what is still asked, never a reviewing model.
+    assert_eq!(
+        codex_value(&flags, "approvals_reviewer"),
+        toml::Value::from("user")
+    );
+    assert_eq!(
+        codex_value(&flags, "web_search"),
+        toml::Value::from("disabled")
+    );
+}
+
+#[test]
+fn codex_cannot_hold_the_credential_store_on_any_system_so_the_chat_does_not_start() {
+    // Measured on macOS, codex-cli 0.147.0: with the network on, a command in its sandbox
+    // still reached the keychain. Unmeasured on Linux.
+    for os in [Os::MacOs, Os::Linux] {
+        let denied = Denied {
+            paths: vec![],
+            services: vec![Service::CredentialStore],
+        };
+        let refused = codex::flags_named(&compiled(denied, os), "n").expect_err("refused");
+        assert_eq!(refused.harness, Harness::Codex, "{os:?}");
+        assert_eq!(refused.class(), Class::Vaults, "{os:?}");
+    }
+}
+
+#[test]
+fn each_codex_start_names_a_profile_no_config_file_can_have_named_before_it() {
+    // A config layer that names the profile merges hosts into it (measured), so the name is
+    // new at every start.
+    let compiled = compiled(Denied::default(), Os::MacOs);
+    let one = codex::flags(&compiled).expect("compiles");
+    let two = codex::flags(&compiled).expect("compiles");
+    let name = |flags: &codex::Flags| {
+        codex_value(flags, "default_permissions")
+            .as_str()
+            .expect("a name")
+            .to_owned()
+    };
+    assert!(name(&one).starts_with("charter-sandbox-"), "{}", name(&one));
+    assert_ne!(name(&one), name(&two));
+}
+
+fn words(line: &str) -> Vec<String> {
+    line.split(' ').map(str::to_owned).collect()
+}
+
+#[test]
+fn a_codex_command_that_would_drop_or_widen_the_sandbox_is_named() {
+    // Each measured on codex-cli 0.147.0 or read from its source: `-s` of any value and the
+    // bypass drop the profile whole, `--add-dir` and `--cd` move what is writable, `-a` and
+    // `--approve-for-me` outrank the approval policy, `--search` turns the web search back on,
+    // and a feature flag's effect on the sandbox is unmeasured, one feature at a time.
+    for (line, flag) in [
+        ("codex -s danger-full-access", "-s"),
+        ("codex -s read-only", "-s"),
+        ("codex --sandbox=workspace-write", "--sandbox"),
+        ("codex -sdanger-full-access", "-s"),
+        (
+            "codex --dangerously-bypass-approvals-and-sandbox",
+            "--dangerously-bypass-approvals-and-sandbox",
+        ),
+        ("codex --yolo", "--yolo"),
+        ("codex --add-dir /home/op", "--add-dir"),
+        ("codex -C /home/op", "-C"),
+        ("codex --cd=/home/op", "--cd"),
+        ("codex -a on-request", "-a"),
+        ("codex --ask-for-approval untrusted", "--ask-for-approval"),
+        ("codex --approve-for-me", "--approve-for-me"),
+        ("codex --not-so-yolo", "--not-so-yolo"),
+        ("codex --search", "--search"),
+        ("codex --disable network_proxy", "--disable"),
+        ("codex --disable=network_proxy", "--disable"),
+        ("codex --enable browser_use", "--enable"),
+        ("codex --enable=respect_system_proxy", "--enable"),
+    ] {
+        let why = codex::loosened_by(&words(line)).unwrap_or_else(|| panic!("{line}"));
+        assert!(why.contains(&format!("`{flag}`")), "{line}: {why}");
+    }
+}
+
+#[test]
+fn a_codex_config_override_outside_the_few_that_cannot_touch_the_sandbox_is_named() {
+    // Each class a `-c` could reach the sandbox through, in each spelling Codex takes.
+    for key in [
+        "sandbox_mode=\"danger-full-access\"",
+        "sandbox_workspace_write.network_access=true",
+        "profile=\"loose\"",
+        "default_permissions=\":danger-full-access\"",
+        "permissions.mine.network.enabled=true",
+        "features.network_proxy=false",
+        "tools.web_search=true",
+        "approval_policy=\"on-request\"",
+        "approvals_reviewer=\"auto_review\"",
+        "web_search=\"live\"",
+        "network.enabled=true",
+        "hooks.Stop=[]",
+        "mcp_servers.x.command=\"sh\"",
+        "shell_environment_policy.inherit=\"all\"",
+    ] {
+        let name = key.split('=').next().expect("a key");
+        for line in [
+            format!("codex -c {key}"),
+            format!("codex --config {key}"),
+            format!("codex --config={key}"),
+            format!("codex -c{key}"),
+        ] {
+            let why = codex::loosened_by(&words(&line)).unwrap_or_else(|| panic!("{line}"));
+            assert!(why.contains(&format!("`-c {name}`")), "{line}: {why}");
+        }
+    }
+}
+
+#[test]
+fn a_codex_command_that_only_tightens_or_does_not_touch_the_sandbox_is_not_named() {
+    for line in [
+        "codex",
+        "codex -a never",
+        "codex --ask-for-approval=never",
+        // Measured: a `-p` profile's `sandbox_mode`, `default_permissions`,
+        // `sandbox_workspace_write`, approval policy, web search and proxy feature all lose to
+        // charter's flags.
+        "codex -m gpt-5 -p work",
+        "codex resume 0199",
+        "codex -c model=\"o3\"",
+        "codex --config model_reasoning_effort=\"high\"",
+        "codex -c model_providers.local.base_url=\"http://localhost:1234/v1\"",
+    ] {
+        assert_eq!(codex::loosened_by(&words(line)), None, "{line}");
+    }
+    // A first message is not a flag, even one that starts with a dash.
+    assert_eq!(codex::loosened_by(&["-a quick fix".to_owned()]), None);
+}
+
+fn codex_sandbox_in(plane: &tempfile::TempDir) -> Applied {
+    for_start(Harness::Codex, plane.path(), &machine(Os::MacOs), &|_| true)
+        .expect("starts")
+        .expect("sandboxed")
+}
+
+#[test]
+fn a_codex_line_puts_the_sandbox_last_among_the_flags_and_before_a_first_message() {
+    let plane = plane_saying(ON);
+    let applied = codex_sandbox_in(&plane);
+    let Form::Codex(flags) = applied.form() else {
+        panic!("compiled for Codex");
+    };
+    let sandbox = flags.args.clone();
+
+    let line = applied
+        .line(
+            words("work"),
+            words("-c hooks.Stop=[]"),
+            vec!["-m".to_owned(), "o3".to_owned(), "fix the bug".to_owned()],
+        )
+        .expect("starts");
+    let want: Vec<String> = [words("work -c hooks.Stop=[] -m o3"), sandbox.clone()]
+        .concat()
+        .into_iter()
+        .chain(["fix the bug".to_owned()])
+        .collect();
+    assert_eq!(line, want);
+
+    // A resume is a subcommand and its id: the flags go in front of both, where the hooks'
+    // own `-c` flags already stand.
+    let line = applied
+        .line(Vec::new(), Vec::new(), words("resume 0199"))
+        .expect("starts");
+    assert_eq!(line, [sandbox, words("resume 0199")].concat());
+}
+
+#[test]
+fn a_sandbox_is_refused_a_line_that_would_drop_it_and_says_where_the_flag_came_from() {
+    let plane = plane_saying(ON);
+    let applied = codex_sandbox_in(&plane);
+    assert_eq!(
+        applied.line(words("-s danger-full-access"), Vec::new(), Vec::new()),
+        Err(
+            "this plane runs every chat sandboxed, and the profile's command names `-s`, which \
+             would run Codex outside the sandbox charter compiled for it, so nothing was \
+             started. Take it out of the profile's command."
+                .to_owned()
+        )
+    );
+    assert_eq!(
+        applied.line(
+            Vec::new(),
+            Vec::new(),
+            words("-c sandbox_mode=\"danger-full-access\"")
+        ),
+        Err(
+            "this plane runs every chat sandboxed, and the chat's own arguments name \
+             `-c sandbox_mode`, which would run Codex outside the sandbox charter compiled for \
+             it, so nothing was started. Start it without that argument."
+                .to_owned()
+        )
+    );
+}
+
+// -------------------------------------------------------------------------------------
 // The start: sandboxed, or not started (fail closed)
 // -------------------------------------------------------------------------------------
 
@@ -402,24 +720,57 @@ fn a_claude_code_chat_in_a_sandboxed_plane_starts_sandboxed_for_claude_code() {
     .expect("starts")
     .expect("sandboxed");
     assert_eq!(applied.harness(), Harness::ClaudeCode);
-    let Form::ClaudeCode(settings) = applied.form();
+    let Form::ClaudeCode(settings) = applied.form() else {
+        panic!("compiled for Claude Code: {:?}", applied.form());
+    };
     assert_eq!(settings.sandbox["enabled"], true);
+}
+
+#[test]
+fn a_codex_chat_in_a_sandboxed_plane_starts_sandboxed_for_codex() {
+    let plane = plane_saying(ON);
+    let applied = for_start(Harness::Codex, plane.path(), &machine(Os::MacOs), &|_| true)
+        .expect("starts")
+        .expect("sandboxed");
+    assert_eq!(applied.harness(), Harness::Codex);
+    let Form::Codex(flags) = applied.form() else {
+        panic!("compiled for Codex: {:?}", applied.form());
+    };
+    assert!(
+        codex_value(flags, "default_permissions")
+            .as_str()
+            .is_some_and(|name| name.starts_with(codex::PROFILE_PREFIX)),
+        "{flags:?}"
+    );
 }
 
 #[test]
 fn a_harness_charter_has_no_compiler_for_does_not_start_in_a_sandboxed_plane() {
     let plane = plane_saying(ON);
-    for harness in [Harness::Codex, Harness::Opencode] {
-        let refused = for_start(harness, plane.path(), &machine(Os::Linux), &|_| true);
-        assert_eq!(refused, Err(NotStarted::NoCompiler(harness)));
-    }
+    let refused = for_start(
+        Harness::Opencode,
+        plane.path(),
+        &machine(Os::Linux),
+        &|_| true,
+    );
+    assert_eq!(refused, Err(NotStarted::NoCompiler(Harness::Opencode)));
+    assert_eq!(
+        refused.expect_err("refused").to_string(),
+        "this plane runs every chat sandboxed, and charter cannot sandbox an opencode chat yet, \
+         so it was not started. Start this chat on a Claude Code or Codex profile."
+    );
 }
 
 #[test]
 fn a_mistyped_mode_does_not_start_a_chat_unsandboxed() {
     let plane = plane_saying("[sandbox]\nmode = \"of\"\n");
-    let refused = for_start(Harness::Codex, plane.path(), &machine(Os::Linux), &|_| true);
-    assert_eq!(refused, Err(NotStarted::NoCompiler(Harness::Codex)));
+    let refused = for_start(
+        Harness::Opencode,
+        plane.path(),
+        &machine(Os::Linux),
+        &|_| true,
+    );
+    assert_eq!(refused, Err(NotStarted::NoCompiler(Harness::Opencode)));
 }
 
 #[test]

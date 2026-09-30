@@ -524,6 +524,19 @@ pub struct Compiled {
 }
 
 impl Compiled {
+    /// Whether `harness`'s compiler can hold every class a service holds here. No compiler can
+    /// yet: the credential store is refused for each harness, because no harness's settings
+    /// deny it and each one's sandbox was measured reaching it or not measured at all.
+    fn holds_every_service(&self, harness: Harness) -> Result<(), Uncompilable> {
+        match self.denied.services.first() {
+            Some(service) => Err(Uncompilable {
+                harness,
+                service: *service,
+            }),
+            None => Ok(()),
+        }
+    }
+
     /// `policy`, for a chat in `plane` at `root`, on `machine`.
     pub fn of(policy: &Policy, plane: &Plane, root: &Path, machine: &Machine) -> Self {
         Self {
@@ -568,12 +581,69 @@ impl Applied {
     pub fn form(&self) -> &Form {
         &self.form
     }
+
+    /// The settings a Claude Code chat carries it in, or `None` for a harness that carries it
+    /// on its line ([`Self::line`]).
+    pub fn claude_settings(&self) -> Option<&claude::Settings> {
+        match &self.form {
+            Form::ClaudeCode(settings) => Some(settings),
+            Form::Codex(_) => None,
+        }
+    }
+
+    /// The chat's whole line under this sandbox — the profile's `command`, then `armed`, the
+    /// arguments that arm the harness, then `charters`, charter's own words — or the one
+    /// sentence saying why it may not start.
+    ///
+    /// **Fail closed** (ADR 0067). A flag of the harness's own, in the chat's own words, can
+    /// outrank the sandbox it is handed, so such a chat is refused, naming where the flag is.
+    /// A harness that carries its sandbox as flags has them last among the flags, where they
+    /// win, and in front of the subcommand, session id and first message that end the line.
+    pub fn line(
+        &self,
+        command: Vec<String>,
+        armed: Vec<String>,
+        charters: Vec<String>,
+    ) -> Result<Vec<String>, String> {
+        let flags = match &self.form {
+            // Not asked of Claude Code's flags yet: its sandbox rides in the `--settings`
+            // charter hands it (in `armed`), which a project's settings cannot loosen
+            // (ADR 0067 §2).
+            Form::ClaudeCode(_) => return Ok([command, armed, charters].concat()),
+            Form::Codex(flags) => flags,
+        };
+        for (words, named, fix) in [
+            (
+                &command,
+                "the profile's command names",
+                "Take it out of the profile's command.",
+            ),
+            (
+                &charters,
+                "the chat's own arguments name",
+                "Start it without that argument.",
+            ),
+        ] {
+            if let Some(flag) = codex::loosened_by(words) {
+                return Err(format!(
+                    "this plane runs every chat sandboxed, and {named} {flag}, which would run \
+                     {} outside the sandbox charter compiled for it, so nothing was started. \
+                     {fix}",
+                    self.harness.title()
+                ));
+            }
+        }
+        let mut charters = charters;
+        let tail = charters.split_off(charters.len() - codex::positional_tail(&charters));
+        Ok([command, armed, charters, flags.args.clone(), tail].concat())
+    }
 }
 
 /// Each harness's own form of the policy, one variant per compiler.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Form {
     ClaudeCode(claude::Settings),
+    Codex(codex::Flags),
 }
 
 /// A harness's compiler.
@@ -584,7 +654,31 @@ pub type Compiler = fn(&Compiled) -> Result<Form, Uncompilable>;
 pub fn compiler(harness: Harness) -> Option<Compiler> {
     match harness {
         Harness::ClaudeCode => Some(|compiled| claude::settings(compiled).map(Form::ClaudeCode)),
-        Harness::Codex | Harness::Opencode => None,
+        Harness::Codex => Some(|compiled| codex::flags(compiled).map(Form::Codex)),
+        Harness::Opencode => None,
+    }
+}
+
+/// The indefinite article a sentence puts before `word`.
+fn article(word: &str) -> &'static str {
+    if word.starts_with(['a', 'e', 'i', 'o', 'u', 'A', 'E', 'I', 'O', 'U']) {
+        "an"
+    } else {
+        "a"
+    }
+}
+
+/// The harnesses charter can sandbox, as a sentence names them: `Claude Code or Codex`.
+fn sandboxed_harnesses() -> String {
+    let titles: Vec<&str> = Harness::ALL
+        .into_iter()
+        .filter(|harness| compiler(*harness).is_some())
+        .map(Harness::title)
+        .collect();
+    match titles.split_last() {
+        Some((last, [])) => (*last).to_owned(),
+        Some((last, rest)) => format!("{} or {last}", rest.join(", ")),
+        None => String::new(),
     }
 }
 
@@ -605,9 +699,11 @@ impl fmt::Display for NotStarted {
         match self {
             Self::NoCompiler(harness) => write!(
                 f,
-                "{lead}, and charter cannot sandbox a {} chat yet, so it was not started. Start \
-                 this chat on a Claude Code profile.",
-                harness.title()
+                "{lead}, and charter cannot sandbox {} {} chat yet, so it was not started. \
+                 Start this chat on a {} profile.",
+                article(harness.title()),
+                harness.title(),
+                sandboxed_harnesses()
             ),
             Self::NoBackend(missing) => write!(
                 f,
@@ -661,6 +757,7 @@ pub fn for_start(
 
 pub mod backend;
 pub mod claude;
+pub mod codex;
 
 #[cfg(test)]
 mod tests;

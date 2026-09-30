@@ -36,7 +36,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     the default vault provider, so on most machines this release can sandbox only a plane with
     no keyring vault. That lifts when charter can wrap the harness, or resolve secrets for the
     chat.
-  - Codex and opencode chats are not started in a sandboxed plane yet.
+  - opencode chats are not started in a sandboxed plane yet.
+
+- **Codex chats run in the sandbox too.** In a plane with `mode = "on"`, every Codex chat
+  charter starts runs in Codex's own workspace-write sandbox, which charter selects explicitly
+  and compiles from the same policy. It reaches only the plane's egress hosts, through Codex's
+  own proxy, and never reads a vault's storage or writes charter's own state. Codex never asks
+  to run a command outside the sandbox, and its web search is off. A Codex chat whose command
+  would drop or widen the sandbox is refused, and the refusal names the flag and where it is.
+  That covers `-s`, `--add-dir`, `--cd`, `--enable`, `--disable`, an approval flag other than
+  `-a never`, and a `-c` for anything but the model and how it is shown. A Codex without the
+  proxy feature starts no sandboxed chat. As with Claude Code, a plane with a keyring vault
+  starts no sandboxed Codex chat yet (#695).
 
 ### Fixed
 

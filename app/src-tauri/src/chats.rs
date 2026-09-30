@@ -490,7 +490,13 @@ impl Chats {
         // arguments may end in a positional prompt that nothing may come after.
         // `charter_core::start::Ready::command_line` is the one place that order is decided.
         let (hooks, armed) = self.state_hooks(harness, chat.cwd.as_deref(), plugins, sandbox)?;
-        let all = charter_core::start::Ready::line(command, hooks, args);
+        // Under a sandbox, the sandbox decides the line: a flag of the harness's own in the
+        // chat's own words can outrank it, so such a chat is refused here, where every chat
+        // opens, and flags it rides on go last among the flags (ADR 0067).
+        let all = match sandbox {
+            Some(applied) => applied.line(command, hooks, args)?,
+            None => charter_core::start::Ready::line(command, hooks, args),
+        };
         let mut env = env;
         env.extend(armed);
         env.sort();
@@ -1552,11 +1558,11 @@ mod tests {
         let chats = Chats::new();
 
         let refused = chats
-            .start(&a_chat_in(plane.path(), "/nowhere/codex"), SIZE)
+            .start(&a_chat_in(plane.path(), "/nowhere/opencode"), SIZE)
             .expect_err("not started");
 
         assert!(
-            refused.contains("cannot sandbox a Codex chat yet"),
+            refused.contains("cannot sandbox an opencode chat yet"),
             "{refused}"
         );
         assert!(chats.in_order().is_empty(), "a chat was opened");
@@ -1566,12 +1572,12 @@ mod tests {
     fn a_recorded_harness_chat_on_no_profile_is_not_put_back_unconfined() {
         let plane = a_sandboxed_plane();
         // A program that would run, so only the sandbox decision can keep it from starting.
-        let codex = stand_in::program(plane.path(), "codex", "#!/bin/sh\nsleep 600\n");
+        let opencode = stand_in::program(plane.path(), "opencode", "#!/bin/sh\nsleep 600\n");
         let chats = Chats::new();
 
         let open = chats.put_back(
             &Record {
-                chats: vec![a_chat_in(plane.path(), &codex.display().to_string())],
+                chats: vec![a_chat_in(plane.path(), &opencode.display().to_string())],
                 ..Default::default()
             },
             plane.path(),
@@ -1593,17 +1599,21 @@ mod tests {
         let _ = chats.close(session);
     }
 
-    /// The sandbox the core compiles for a Claude Code chat in `plane`, on a machine that has
+    /// The sandbox the core compiles for a `harness` chat in `plane`, on a machine that has
     /// every backend program — so the answer does not depend on the machine the test runs on.
-    fn a_claude_sandbox(plane: &std::path::Path) -> charter_core::sandbox::Applied {
+    fn a_sandbox_for(harness: Harness, plane: &std::path::Path) -> charter_core::sandbox::Applied {
         let machine = charter_core::sandbox::Machine {
             env: charter_core::secrets::Env::of(&[]),
             home: None,
             os: charter_core::sandbox::Os::Linux,
         };
-        charter_core::sandbox::for_start(Harness::ClaudeCode, plane, &machine, &|_| true)
+        charter_core::sandbox::for_start(harness, plane, &machine, &|_| true)
             .expect("compiles")
             .expect("sandboxed")
+    }
+
+    fn a_claude_sandbox(plane: &std::path::Path) -> charter_core::sandbox::Applied {
+        a_sandbox_for(Harness::ClaudeCode, plane)
     }
 
     fn ready_under(
@@ -1660,6 +1670,61 @@ mod tests {
             .expect_err("not started");
 
         assert!(refused.contains("cannot hand the sandbox"), "{refused}");
+    }
+
+    #[test]
+    fn a_sandboxed_codex_chat_whose_command_would_drop_the_sandbox_is_refused() {
+        // `-s` puts Codex back on a sandbox that reads no profile (measured on 0.147.0), so the
+        // denied paths and the egress proxy would go with it.
+        let plane = a_sandboxed_plane();
+        let mut chats = Chats::new();
+        chats.arming_with(crate::Shipped {
+            binary: Some(plane.path().join("charter")),
+            plugin: Some(plane.path().join("plugin")),
+            shims: None,
+        });
+        let ready = charter_core::start::Ready {
+            command: vec!["-s".to_owned(), "danger-full-access".to_owned()],
+            ..ready_under(Harness::Codex, a_sandbox_for(Harness::Codex, plane.path()))
+        };
+
+        let refused = chats
+            .start_ready(&chat("/bin/sh", "c", None), &ready, SIZE)
+            .expect_err("not started");
+
+        assert!(refused.contains("names `-s`"), "{refused}");
+        assert!(chats.in_order().is_empty(), "a chat was opened");
+    }
+
+    #[test]
+    fn a_sandboxed_codex_chat_whose_own_arguments_would_drop_the_sandbox_is_refused() {
+        // The same, from the words that follow the command: a chat on no profile keeps its
+        // own there.
+        let plane = a_sandboxed_plane();
+        let mut chats = Chats::new();
+        chats.arming_with(crate::Shipped {
+            binary: Some(plane.path().join("charter")),
+            plugin: Some(plane.path().join("plugin")),
+            shims: None,
+        });
+        let ready = charter_core::start::Ready {
+            command: Vec::new(),
+            args: vec![
+                "-c".to_owned(),
+                "sandbox_mode=\"danger-full-access\"".to_owned(),
+            ],
+            ..ready_under(Harness::Codex, a_sandbox_for(Harness::Codex, plane.path()))
+        };
+
+        let refused = chats
+            .start_ready(&chat("/bin/sh", "c", None), &ready, SIZE)
+            .expect_err("not started");
+
+        assert!(
+            refused.contains("the chat's own arguments name `-c sandbox_mode`"),
+            "{refused}"
+        );
+        assert!(chats.in_order().is_empty(), "a chat was opened");
     }
 
     #[test]
