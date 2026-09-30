@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use charter_core::hookwire::{
-    Answer, Ask, CHAT_ENV, Listener, OpenChat, Reading, SOCKET_ENV, Tickets,
+    Answer, Ask, CHAT_ENV, ChatToken, Listener, OpenChat, Reading, SOCKET_ENV, TOKEN_ENV, Tickets,
 };
 
 const BRIEF: &str =
@@ -54,19 +54,55 @@ fn root(tmp: &tempfile::TempDir) -> PathBuf {
     tmp.path().join("plane")
 }
 
+/// What an app put in a chat's environment: the socket, and the chat's token where the app
+/// gave it one. A bare path is a socket with no token behind it.
+trait AppEnv {
+    fn socket(&self) -> &Path;
+    fn token(&self) -> Option<&ChatToken>;
+}
+
+impl AppEnv for PathBuf {
+    fn socket(&self) -> &Path {
+        self
+    }
+    fn token(&self) -> Option<&ChatToken> {
+        None
+    }
+}
+
+/// A stand-in app's socket, and the token it gave chat [`ASKING`].
+struct App {
+    socket: PathBuf,
+    token: ChatToken,
+}
+
+impl AppEnv for App {
+    fn socket(&self) -> &Path {
+        &self.socket
+    }
+    fn token(&self) -> Option<&ChatToken> {
+        Some(&self.token)
+    }
+}
+
 /// `charter handoff alpha` with the brief on a pipe, as a chat numbered [`ASKING`] runs it,
 /// with `app` naming the socket an app would have put in its environment.
-fn handoff(root: &Path, app: Option<&Path>) -> Output {
+fn handoff(root: &Path, app: Option<&dyn AppEnv>) -> Output {
     charter(root, app, &["handoff", "alpha"])
 }
 
 /// `charter <args>` with the brief on a pipe, as a chat numbered [`ASKING`] runs it.
-fn charter(root: &Path, app: Option<&Path>, args: &[&str]) -> Output {
+fn charter(root: &Path, app: Option<&dyn AppEnv>, args: &[&str]) -> Output {
     charter_with(root, app, args, &[])
 }
 
 /// [`charter`], with `env` set on top.
-fn charter_with(root: &Path, app: Option<&Path>, args: &[&str], env: &[(&str, &str)]) -> Output {
+fn charter_with(
+    root: &Path,
+    app: Option<&dyn AppEnv>,
+    args: &[&str],
+    env: &[(&str, &str)],
+) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_charter"));
     command
         .args(args)
@@ -93,13 +129,17 @@ fn charter_with(root: &Path, app: Option<&Path>, args: &[&str], env: &[(&str, &s
         "SSH_TTY",
         SOCKET_ENV,
         CHAT_ENV,
+        TOKEN_ENV,
     ] {
         command.env_remove(name);
     }
-    if let Some(socket) = app {
+    if let Some(app) = app {
         command
-            .env(SOCKET_ENV, socket)
+            .env(SOCKET_ENV, app.socket())
             .env(CHAT_ENV, ASKING.to_string());
+        if let Some(token) = app.token() {
+            command.env(TOKEN_ENV, token.expose());
+        }
     }
     for (name, value) in env {
         command.env(name, value);
@@ -166,11 +206,12 @@ type Asked = Arc<Mutex<Vec<(u64, Ask)>>>;
 fn an_app(
     tmp: &tempfile::TempDir,
     answer: impl Fn(&Tickets, u64, Ask) -> Answer + Send + Sync + 'static,
-) -> (PathBuf, Reading, Asked) {
+) -> (App, Reading, Asked) {
     let within = tmp.path().join("app");
     std::fs::create_dir_all(&within).expect("a directory");
     let socket = within.join("s").join("hooks.sock");
     let listener = Listener::bind(&within, &socket).expect("a socket");
+    let token = listener.tokens().issue(ASKING).expect("a token");
     let asked = Arc::new(Mutex::new(Vec::new()));
     let tickets = Tickets::default();
     let reading = listener.each_answering(Box::new(|_| {}), {
@@ -180,7 +221,7 @@ fn an_app(
             answer(&tickets, connection, ask)
         })
     });
-    (socket, reading, asked)
+    (App { socket, token }, reading, asked)
 }
 
 /// `app/src-tauri/src/handoff.rs`'s ticket half, and an open that always succeeds as chat 9.

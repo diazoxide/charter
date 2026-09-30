@@ -30,7 +30,6 @@ use charter_core::reopen::Choice;
 
 use crate::chats::Chats;
 use crate::hooks::{self, Hooks, Moved};
-use crate::sessions::Reporting;
 
 /// Which plane something is acting for.
 ///
@@ -1276,9 +1275,7 @@ impl Planes {
             );
             Hooks::deaf(id.clone())
         });
-        let reporting = hooks.socket().map(|socket| Reporting {
-            socket: socket.to_path_buf(),
-        });
+        let reporting = hooks.reporting();
 
         let records = Arc::new(Records {
             root: root.clone(),
@@ -3980,6 +3977,7 @@ mod tests {
     fn a_stop_from(held: &Held, session: u32) {
         charter_core::hookwire::send(
             held.hooks().socket().expect("the plane is listening"),
+            Some(&held.hooks().token_for(session)),
             &charter_core::hookwire::Report {
                 chat: session,
                 event: charter_core::state::Event::Stop,
@@ -3995,6 +3993,7 @@ mod tests {
     fn a_prompt_to(held: &Held, session: u32) {
         charter_core::hookwire::send(
             held.hooks().socket().expect("the plane is listening"),
+            Some(&held.hooks().token_for(session)),
             &charter_core::hookwire::Report {
                 chat: session,
                 event: charter_core::state::Event::UserPromptSubmit,
@@ -4010,6 +4009,7 @@ mod tests {
     fn a_report_from(held: &Held, session: u32, event: charter_core::state::Event) {
         charter_core::hookwire::send(
             held.hooks().socket().expect("the plane is listening"),
+            Some(&held.hooks().token_for(session)),
             &charter_core::hookwire::Report {
                 chat: session,
                 event,
@@ -4366,6 +4366,7 @@ mod tests {
     fn a_record_saved_by(held: &Held, session: u32) {
         charter_core::hookwire::tell_saved(
             held.hooks().socket().expect("the plane is listening"),
+            Some(&held.hooks().token_for(session)),
             &charter_core::hookwire::SessionSaved {
                 chat: session,
                 session_saved: PathBuf::from("/plane/workspaces/alpha/sessions/record.md"),
@@ -4569,8 +4570,9 @@ mod tests {
             .to_owned();
 
         // The command's own line, and the same line passed on by the chat's Stop (#517).
-        charter_core::hookwire::tell_saved(&socket, &line).expect("the line");
-        charter_core::hookwire::tell_saved(&socket, &line).expect("the line again");
+        let token = held.hooks().token_for(session);
+        charter_core::hookwire::tell_saved(&socket, Some(&token), &line).expect("the line");
+        charter_core::hookwire::tell_saved(&socket, Some(&token), &line).expect("the line again");
 
         assert!(becomes(|| !is_open(&held, session)), "the chat stayed open");
         std::thread::sleep(std::time::Duration::from_millis(300));
@@ -5251,6 +5253,67 @@ mod tests {
         assert!(asked.queue.is_empty() && !asked.needs_you, "{asked:?}");
     }
 
+    /// Every file under `dir`, read as bytes, with its path.
+    fn every_file_under(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+        let mut found = Vec::new();
+        for entry in std::fs::read_dir(dir).expect("a directory").flatten() {
+            let path = entry.path();
+            let kind = entry.file_type().expect("a file type");
+            if kind.is_dir() {
+                found.extend(every_file_under(&path));
+            } else if kind.is_file() {
+                found.push((path.clone(), std::fs::read(&path).expect("it reads")));
+            }
+        }
+        found
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_chats_token_reaches_its_program_and_nothing_the_plane_or_its_record_holds() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let config = dir.path().join("config");
+        let root = a_plane(&dir.path().join("plane"));
+        a_record_naming(&root, "/bin/cat");
+        let planes = planes_keeping(&config);
+        let shown = asking(planes.open_if_approved(&root).expect("it is a plane")).contributes;
+        let plane = planes.approve_and_open(&root, &shown).expect("yes");
+        let held = planes.held(&plane).expect("it is held");
+        let seen = dir.path().join("token");
+        let mut chat = one_chat_on("/bin/sh").chats.remove(0);
+        chat.args = vec![
+            "-c".to_owned(),
+            format!(
+                "printf %s \"$CHARTER_CHAT_TOKEN\" > '{0}.part' && mv '{0}.part' '{0}'; sleep 600",
+                seen.display()
+            ),
+        ];
+
+        let session = held
+            .chats()
+            .start(&chat, STARTING)
+            .expect("the chat starts");
+
+        assert!(becomes(|| seen.exists()), "the chat never wrote its token");
+        let token = std::fs::read_to_string(&seen).expect("the token");
+        assert_eq!(token.len(), 64, "{token:?}");
+        assert!(
+            becomes(|| {
+                reopen::read_or_refusal(&root)
+                    .ok()
+                    .is_some_and(|record| record.chats.iter().any(|c| c.program == "/bin/sh"))
+            }),
+            "the record never named the chat, so nothing below is evidence"
+        );
+        for (path, bytes) in every_file_under(&root) {
+            assert!(
+                !String::from_utf8_lossy(&bytes).contains(&token),
+                "{} holds chat {session}'s token",
+                path.display()
+            );
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_chat_is_marked_when_the_instructions_it_started_on_change_under_it() {
@@ -5333,6 +5396,7 @@ mod tests {
     ) {
         charter_core::hookwire::send(
             held.hooks().socket().expect("the plane is listening"),
+            Some(&held.hooks().token_for(session)),
             &charter_core::hookwire::Report {
                 chat: session,
                 event,

@@ -11,7 +11,7 @@ use std::process::{Command, Output, Stdio};
 use std::sync::{Mutex, mpsc};
 use std::time::Duration;
 
-use charter_core::hookwire::{CHAT_ENV, Listener, SOCKET_ENV, StartedByHand};
+use charter_core::hookwire::{CHAT_ENV, Listener, SOCKET_ENV, StartedByHand, TOKEN_ENV};
 
 const CHARTER: &str = env!("CARGO_BIN_EXE_charter");
 
@@ -134,18 +134,22 @@ fn a_harness_started_in_a_chats_shell_tells_the_app_where_it_was_started() {
     let socket = tab.dir.path().join("app").join("hooks.sock");
     let (tx, rx) = mpsc::channel();
     let tx = Mutex::new(tx);
-    let _reading = Listener::bind(tab.dir.path(), &socket)
-        .expect("a socket")
-        .each_answering_and_noticing(
-            Box::new(|_| panic!("a harness started by hand is not a report")),
-            Box::new(|_, _| panic!("a harness started by hand is not an ask")),
-            Box::new(move |notice| tx.lock().unwrap().send(notice).unwrap()),
-        );
+    let listener = Listener::bind(tab.dir.path(), &socket).expect("a socket");
+    let token = listener.tokens().issue(12).expect("a token");
+    let _reading = listener.each_answering_and_noticing(
+        Box::new(|_| panic!("a harness started by hand is not a report")),
+        Box::new(|_, _| panic!("a harness started by hand is not an ask")),
+        Box::new(move |notice| tx.lock().unwrap().send(notice).unwrap()),
+    );
 
     let ran = tab.guard(
         "claude",
         &[],
-        &[(SOCKET_ENV, socket.to_str().unwrap()), (CHAT_ENV, "12")],
+        &[
+            (SOCKET_ENV, socket.to_str().unwrap()),
+            (CHAT_ENV, "12"),
+            (TOKEN_ENV, token.expose()),
+        ],
     );
 
     assert!(ran.status.success(), "{ran:?}");

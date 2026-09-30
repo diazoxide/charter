@@ -35,6 +35,13 @@ pub const SOCKET_ENV: &str = "CHARTER_HOOK_SOCKET";
 /// in; nothing has to be worked out from a payload.
 pub const CHAT_ENV: &str = "CHARTER_CHAT";
 
+/// The chat's own token, in the same environment: what the hook channel checks every line
+/// against before it believes the chat number the line names ([`ChatTokens`]).
+///
+/// The app mints one per chat at the `exec` and keeps it in memory only. It is never passed on
+/// to a chat another chat starts ([`NOT_INHERITED`]): a chat the app starts gets its own.
+pub const TOKEN_ENV: &str = "CHARTER_CHAT_TOKEN";
+
 /// Where Claude Code puts the conversation a hook is running in.
 ///
 /// ADR 0024, C7, measured again on claude 2.1.276: it always equals the payload's
@@ -69,12 +76,16 @@ pub const CLAUDE_PID_ENV: &str = "CLAUDE_PID";
 /// (`start::ready`). An app launched from a chat pinned to `alpha` would otherwise hand
 /// `alpha` to every chat it starts at the plane root, where the pin outranks the root. They are
 /// removed before the chat's own are set, so a chat in a workspace still gets its own.
+///
+/// **Nor the launcher's chat token** ([`TOKEN_ENV`]): each chat gets its own at the `exec`,
+/// and one the app inherited is never another chat's, whoever lists it.
 pub const NOT_INHERITED: &[&str] = &[
     CLAUDE_CONVERSATION_ENV,
     CLAUDE_PID_ENV,
     "CLAUDECODE",
     crate::active::WORKSPACE_ENV,
     crate::active::PLANE_ROOT_ENV,
+    TOKEN_ENV,
 ];
 
 /// Which conversation a report is of, and how well that is known.
@@ -212,6 +223,121 @@ fn conversation(
         (Some(said), None) => Conversation::Named(said),
         (None, None) => Conversation::Unknown,
     }
+}
+
+// ----------------------------------------------------------------------------------------
+// each chat's token: what the channel checks a line's chat number against
+// ----------------------------------------------------------------------------------------
+
+/// One chat's token, as a hook or a `charter` command inside that chat carries it.
+///
+/// **Its `Debug` never shows the value**, so a line that prints one by mistake prints nothing
+/// of it. The value leaves this type in two places only: into the chat's environment at the
+/// `exec` ([`ChatToken::expose`]) and onto the wire, beside the line it vouches for.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ChatToken(String);
+
+impl ChatToken {
+    /// The token in `env`'s [`TOKEN_ENV`], where there is one.
+    pub fn read(env: &dyn Fn(&str) -> Option<String>) -> Option<Self> {
+        env(TOKEN_ENV).filter(|value| !value.is_empty()).map(Self)
+    }
+
+    /// The token in this process's own environment, where there is one.
+    pub fn from_env() -> Option<Self> {
+        Self::read(&|name| std::env::var(name).ok())
+    }
+
+    /// The value, for the one caller that must write it down: the chat's environment.
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<&str> for ChatToken {
+    fn from(value: &str) -> Self {
+        Self(value.to_owned())
+    }
+}
+
+impl std::fmt::Debug for ChatToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ChatToken(..)")
+    }
+}
+
+/// How many random bytes a chat's token is: 256 bits from the operating system's generator.
+const A_TOKEN_IS: usize = 32;
+
+/// The token each chat the app started was given, by the chat's number. In memory only.
+///
+/// **The hook channel reads no line without it.** Every line names a chat, and the listener
+/// hands a line on only when it carries that chat's token ([`ChatTokens::admits`]); anything
+/// else is dropped without a word on the connection, as a line that will not parse is.
+#[derive(Debug, Default)]
+pub struct ChatTokens {
+    held: std::sync::Mutex<std::collections::HashMap<u32, ChatToken>>,
+}
+
+impl ChatTokens {
+    /// A fresh token for `chat`, replacing any it had: 32 bytes from the operating system's
+    /// generator, written as hex.
+    pub fn issue(&self, chat: u32) -> std::io::Result<ChatToken> {
+        let mut bytes = [0u8; A_TOKEN_IS];
+        getrandom::fill(&mut bytes).map_err(std::io::Error::other)?;
+        let token = ChatToken(bytes.iter().map(|byte| format!("{byte:02x}")).collect());
+        self.held().insert(chat, token.clone());
+        Ok(token)
+    }
+
+    /// Forgets `chat`'s token: a line for it is dropped from now on.
+    pub fn forget(&self, chat: u32) {
+        self.held().remove(&chat);
+    }
+
+    /// Whether `token` is the one `chat` was given. No token, and a chat with none, are no.
+    ///
+    /// Compared in constant time, so how long a wrong token takes to refuse says nothing about
+    /// how much of it was right.
+    pub fn admits(&self, chat: u32, token: Option<&str>) -> bool {
+        use subtle::ConstantTimeEq;
+
+        let Some(token) = token else { return false };
+        self.held()
+            .get(&chat)
+            .is_some_and(|held| bool::from(held.0.as_bytes().ct_eq(token.as_bytes())))
+    }
+
+    fn held(&self) -> std::sync::MutexGuard<'_, std::collections::HashMap<u32, ChatToken>> {
+        self.held
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+/// The line `what` is on the wire: its JSON with `token` beside it, and a newline.
+fn line_with(token: Option<&ChatToken>, what: &impl serde::Serialize) -> std::io::Result<Vec<u8>> {
+    let mut value = serde_json::to_value(what).map_err(std::io::Error::other)?;
+    if let (Some(token), Some(fields)) = (token, value.as_object_mut()) {
+        fields.insert(TOKEN.to_owned(), serde_json::Value::String(token.0.clone()));
+    }
+    let mut line = serde_json::to_vec(&value).map_err(std::io::Error::other)?;
+    line.push(b'\n');
+    Ok(line)
+}
+
+/// The field a line's token travels in.
+const TOKEN: &str = "token";
+
+/// A line off the socket, read, and the token it carried taken off it — so nothing past the
+/// listener ever holds one.
+fn read_line(line: &str) -> Option<(Line, Option<String>)> {
+    let mut value = serde_json::from_str::<serde_json::Value>(line).ok()?;
+    let token = match value.as_object_mut()?.remove(TOKEN) {
+        Some(serde_json::Value::String(token)) => Some(token),
+        _ => None,
+    };
+    Some((serde_json::from_value(value).ok()?, token))
 }
 
 // ----------------------------------------------------------------------------------------
@@ -457,11 +583,11 @@ pub const NO_TICKET: &str =
 
 /// One line read off the socket, whichever kind it is.
 ///
-/// **Untagged, and the report comes first**, so a `charter` older than this ask — a plane
-/// that has not been updated, a hook left in a settings file — writes exactly the bytes it
-/// always did and is read exactly as it always was. A [`Report`] requires both `chat` and
-/// `event`, and no [`Ask`] carries an `event`, so the two can never be mistaken for each
-/// other.
+/// **Untagged, and the report comes first.** A [`Report`] requires both `chat` and `event`,
+/// and no [`Ask`] carries an `event`, so the two can never be mistaken for each other.
+///
+/// Every kind is read with the chat's token taken off it first ([`read_line`]), so none of
+/// them carries one past the listener.
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(untagged)]
 enum Line {
@@ -473,6 +599,20 @@ enum Line {
     /// After every other kind, for the same reason: it requires `session_saved`, which none of
     /// them carries, so no line an older `charter` writes ever reads as one.
     Saved(SessionSaved),
+}
+
+impl Line {
+    /// The chat this line says it comes from, which its token has to be the token of.
+    fn chat(&self) -> u32 {
+        match self {
+            Self::Report(report) => report.chat,
+            Self::Ask(Ask::Ticket { chat }) => *chat,
+            Self::Ask(Ask::Open(open)) => open.chat,
+            Self::Ask(Ask::Report(back)) => back.chat,
+            Self::ByHand(notice) => notice.chat,
+            Self::Saved(saved) => saved.chat,
+        }
+    }
 }
 
 /// A harness the operator started by hand, in a shell tab's own shell (SI-5).
@@ -530,15 +670,13 @@ pub type Saved = Box<dyn Fn(SessionSaved) + Send + Sync + 'static>;
 /// line, and a hook that waited for an answer would be spending a harness's turn on a
 /// spinner.
 #[cfg(unix)]
-pub fn send(path: &std::path::Path, report: &Report) -> io::Result<()> {
+pub fn send(path: &std::path::Path, token: Option<&ChatToken>, report: &Report) -> io::Result<()> {
     use std::io::Write;
 
     // A path that is not there, and a socket file whose app has gone, both refuse at once
     // — `ENOENT` and `ECONNREFUSED`. Neither can hang, so no timeout is armed for them.
     let mut socket = std::os::unix::net::UnixStream::connect(path)?;
-    let mut line = serde_json::to_vec(report).map_err(io::Error::other)?;
-    line.push(b'\n');
-    socket.write_all(&line)?;
+    socket.write_all(&line_with(token, report)?)?;
     socket.flush()
 }
 
@@ -548,8 +686,12 @@ pub fn send(path: &std::path::Path, report: &Report) -> io::Result<()> {
 /// what calls it is a harness the operator is waiting to see start, and it is started whether
 /// or not this got through.
 #[cfg(unix)]
-pub fn tell(path: &std::path::Path, notice: &StartedByHand) -> io::Result<()> {
-    one_line_with_a_deadline(path, notice)
+pub fn tell(
+    path: &std::path::Path,
+    token: Option<&ChatToken>,
+    notice: &StartedByHand,
+) -> io::Result<()> {
+    one_line_with_a_deadline(path, token, notice)
 }
 
 /// Tells the app at `path` a chat's session record is saved. Answers whether the app took it.
@@ -557,23 +699,26 @@ pub fn tell(path: &std::path::Path, notice: &StartedByHand) -> io::Result<()> {
 /// [`tell`]'s shape and deadline: the record is on disk whether or not the app hears this, and
 /// the command that sends it must not hang on an app that stopped reading.
 #[cfg(unix)]
-pub fn tell_saved(path: &std::path::Path, saved: &SessionSaved) -> io::Result<()> {
-    one_line_with_a_deadline(path, saved)
+pub fn tell_saved(
+    path: &std::path::Path,
+    token: Option<&ChatToken>,
+    saved: &SessionSaved,
+) -> io::Result<()> {
+    one_line_with_a_deadline(path, token, saved)
 }
 
 /// One connection, one line, closed, and at most [`A_NOTICE_TAKES_AT_MOST`] spent writing it.
 #[cfg(unix)]
 fn one_line_with_a_deadline(
     path: &std::path::Path,
+    token: Option<&ChatToken>,
     line: &impl serde::Serialize,
 ) -> io::Result<()> {
     use std::io::Write;
 
     let mut socket = std::os::unix::net::UnixStream::connect(path)?;
     socket.set_write_timeout(Some(A_NOTICE_TAKES_AT_MOST))?;
-    let mut bytes = serde_json::to_vec(line).map_err(io::Error::other)?;
-    bytes.push(b'\n');
-    socket.write_all(&bytes)?;
+    socket.write_all(&line_with(token, line)?)?;
     socket.flush()
 }
 
@@ -590,6 +735,7 @@ const A_NOTICE_TAKES_AT_MOST: std::time::Duration = std::time::Duration::from_mi
 #[cfg(unix)]
 pub struct Asking {
     stream: std::io::BufReader<std::os::unix::net::UnixStream>,
+    token: Option<ChatToken>,
 }
 
 #[cfg(unix)]
@@ -599,10 +745,13 @@ impl Asking {
     /// A path that is not there, and a socket whose app has gone, both refuse at once —
     /// `ENOENT` and `ECONNREFUSED` — so connecting cannot hang. What can is an app that
     /// takes the line and never answers, which is what [`Asking::ask`]'s deadline is for.
-    pub fn on(path: &std::path::Path) -> io::Result<Self> {
+    ///
+    /// `token` is the asking chat's own, carried on every line this writes.
+    pub fn on(path: &std::path::Path, token: Option<ChatToken>) -> io::Result<Self> {
         let stream = std::os::unix::net::UnixStream::connect(path)?;
         Ok(Self {
             stream: std::io::BufReader::new(stream),
+            token,
         })
     }
 
@@ -614,11 +763,10 @@ impl Asking {
     pub fn ask(&mut self, ask: &Ask, within: std::time::Duration) -> io::Result<Answer> {
         use std::io::{BufRead, Read, Write};
 
+        let line = line_with(self.token.as_ref(), ask)?;
         let socket = self.stream.get_mut();
         socket.set_write_timeout(Some(within))?;
         socket.set_read_timeout(Some(within))?;
-        let mut line = serde_json::to_vec(ask).map_err(io::Error::other)?;
-        line.push(b'\n');
         socket.write_all(&line)?;
         socket.flush()?;
         let mut said = String::new();
@@ -656,6 +804,7 @@ pub type Answerer = Box<dyn Fn(u64, Ask) -> Answer + Send + Sync + 'static>;
 pub struct Listener {
     socket: std::os::unix::net::UnixListener,
     path: std::path::PathBuf,
+    tokens: std::sync::Arc<ChatTokens>,
 }
 
 #[cfg(unix)]
@@ -705,12 +854,19 @@ impl Listener {
         Ok(Self {
             socket,
             path: path.to_path_buf(),
+            tokens: std::sync::Arc::default(),
         })
     }
 
     /// The path a hook writes to.
     pub fn path(&self) -> &std::path::Path {
         &self.path
+    }
+
+    /// The chats' tokens this listener checks every line against. It starts with none, so
+    /// it reads no line until the app issues a chat its token ([`ChatTokens::issue`]).
+    pub fn tokens(&self) -> std::sync::Arc<ChatTokens> {
+        std::sync::Arc::clone(&self.tokens)
     }
 
     /// Hands every report to `each`, on a thread of its own, until the listener is dropped.
@@ -766,6 +922,7 @@ impl Listener {
         let noticed: std::sync::Arc<dyn Fn(StartedByHand) + Send + Sync> =
             std::sync::Arc::from(noticed);
         let saved: std::sync::Arc<dyn Fn(SessionSaved) + Send + Sync> = std::sync::Arc::from(saved);
+        let tokens = std::sync::Arc::clone(&self.tokens);
         let reading = std::thread::spawn(move || {
             let mut dealt: u64 = 0;
             for connection in self.socket.incoming() {
@@ -794,11 +951,16 @@ impl Listener {
                 let answer = std::sync::Arc::clone(&answer);
                 let noticed = std::sync::Arc::clone(&noticed);
                 let saved = std::sync::Arc::clone(&saved);
+                let tokens = std::sync::Arc::clone(&tokens);
                 dealt += 1;
                 let this = dealt;
                 let started = std::thread::Builder::new()
                     .name("charter-hook-report".into())
-                    .spawn(move || serve(connection, this, &*each, &*answer, &*noticed, &*saved));
+                    .spawn(move || {
+                        serve(
+                            connection, this, &tokens, &*each, &*answer, &*noticed, &*saved,
+                        );
+                    });
                 // A thread that will not start costs this one report. Refusing the rest of
                 // the channel over it would cost every report after it too.
                 let _ = started;
@@ -899,6 +1061,7 @@ pub const NOTHING_ANSWERS: &str = "this app does not open chats on request";
 fn serve(
     connection: std::os::unix::net::UnixStream,
     this: u64,
+    tokens: &ChatTokens,
     each: &(dyn Fn(Report) + Send + Sync),
     answer: &(dyn Fn(u64, Ask) -> Answer + Send + Sync),
     noticed: &(dyn Fn(StartedByHand) + Send + Sync),
@@ -922,9 +1085,25 @@ fn serve(
             Ok(0) | Err(_) => return,
             Ok(_) => {}
         }
-        match serde_json::from_str::<Line>(&line) {
-            Ok(Line::Report(report)) => each(report),
-            Ok(Line::Ask(ask)) => {
+        let Some((line, token)) = read_line(&line) else {
+            // A line that is none of them is the end of this connection, never of the channel.
+            return;
+        };
+        // Every line is checked against the token of the chat it names, and one that does not
+        // carry it ends the connection unread, as a line that will not parse does: hook calls
+        // never break a turn, so nothing is written back. The chat's number is said on the
+        // app's standard error; the token is not.
+        let chat = line.chat();
+        if !tokens.admits(chat, token.as_deref()) {
+            eprintln!(
+                "charter: a line on the hook channel for chat {chat} did not carry that chat's \
+                 token, so it was dropped"
+            );
+            return;
+        }
+        match line {
+            Line::Report(report) => each(report),
+            Line::Ask(ask) => {
                 let Ok(mut said) = serde_json::to_vec(&answer(this, ask)) else {
                     return;
                 };
@@ -933,10 +1112,8 @@ fn serve(
                     return;
                 }
             }
-            Ok(Line::ByHand(notice)) => noticed(notice),
-            Ok(Line::Saved(record)) => saved(record),
-            // A line that is neither is the end of this connection, never of the channel.
-            Err(_) => return,
+            Line::ByHand(notice) => noticed(notice),
+            Line::Saved(record) => saved(record),
         }
     }
 }
@@ -1181,6 +1358,8 @@ mod tests {
         // Nor where the chat that launched the app was pinned (SI-1).
         assert!(NOT_INHERITED.contains(&crate::active::WORKSPACE_ENV));
         assert!(NOT_INHERITED.contains(&crate::active::PLANE_ROOT_ENV));
+        // Nor the launcher's own chat token: a chat is given its own at the `exec`.
+        assert!(NOT_INHERITED.contains(&TOKEN_ENV));
         // charter's own two are set per session, after these are removed, so they are not
         // here — removing them would remove what the app just put in.
         assert!(!NOT_INHERITED.contains(&SOCKET_ENV));
@@ -1212,6 +1391,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let path = dir.path().join("hooks.sock");
         let listener = Listener::bind(dir.path(), &path).expect("a socket");
+        let token = listener.tokens().issue(7).expect("a token");
         let (tx, rx) = mpsc::channel();
         let _reading = listener.each(Box::new(move |report| {
             let _ = tx.send(report);
@@ -1224,7 +1404,7 @@ mod tests {
             pid: Some(99),
             detail: Detail::default(),
         };
-        send(&path, &sent).expect("the app took it");
+        send(&path, Some(&token), &sent).expect("the app took it");
 
         assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(5)), Ok(sent));
     }
@@ -1236,6 +1416,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let path = dir.path().join("hooks.sock");
         let listener = Listener::bind(dir.path(), &path).expect("a socket");
+        let tokens = listener.tokens();
         let (tx, rx) = mpsc::channel();
         let _reading = listener.each(Box::new(move |report| {
             let _ = tx.send(report.chat);
@@ -1245,9 +1426,11 @@ mod tests {
         let senders: Vec<_> = (0..50u32)
             .map(|chat| {
                 let path = Arc::clone(&path);
+                let token = tokens.issue(chat).expect("a token");
                 std::thread::spawn(move || {
                     send(
                         &path,
+                        Some(&token),
                         &Report {
                             chat,
                             event: Event::Stop,
@@ -1284,6 +1467,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let path = dir.path().join("hooks.sock");
         let listener = Listener::bind(dir.path(), &path).expect("a socket");
+        let token = listener.tokens().issue(7).expect("a token");
         let (tx, rx) = mpsc::channel();
         let _reading = listener.each(Box::new(move |report| {
             let _ = tx.send(report);
@@ -1309,7 +1493,7 @@ mod tests {
             pid: None,
             detail: Detail::default(),
         };
-        send(&path, &good).expect("the app took it");
+        send(&path, Some(&token), &good).expect("the app took it");
 
         assert_eq!(
             rx.recv_timeout(std::time::Duration::from_secs(5)),
@@ -1329,11 +1513,11 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let path = dir.path().join("hooks.sock");
         let (tx, rx) = mpsc::channel();
-        let _reading = Listener::bind(dir.path(), &path)
-            .expect("a socket")
-            .each(Box::new(move |report| {
-                let _ = tx.send(report);
-            }));
+        let listener = Listener::bind(dir.path(), &path).expect("a socket");
+        let token = listener.tokens().issue(7).expect("a token");
+        let _reading = listener.each(Box::new(move |report| {
+            let _ = tx.send(report);
+        }));
 
         // Connected, never written to, and held open for the rest of the test.
         let silent = std::os::unix::net::UnixStream::connect(&path).expect("a connection");
@@ -1348,7 +1532,7 @@ mod tests {
             pid: None,
             detail: Detail::default(),
         };
-        send(&path, &good).expect("the app took it");
+        send(&path, Some(&token), &good).expect("the app took it");
 
         // Well inside the deadline the silent connection will eventually hit: the point is
         // that the good report does not WAIT for it. One reader for every connection would
@@ -1409,11 +1593,11 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let path = dir.path().join("hooks.sock");
         let (tx, rx) = mpsc::channel();
-        let _reading = Listener::bind(dir.path(), &path)
-            .expect("a socket")
-            .each(Box::new(move |report| {
-                let _ = tx.send(report);
-            }));
+        let listener = Listener::bind(dir.path(), &path).expect("a socket");
+        let token = listener.tokens().issue(7).expect("a token");
+        let _reading = listener.each(Box::new(move |report| {
+            let _ = tx.send(report);
+        }));
 
         let mut flood = std::os::unix::net::UnixStream::connect(&path).expect("a connection");
         // Set before anything is written, while the connection is certainly healthy.
@@ -1455,7 +1639,7 @@ mod tests {
             pid: None,
             detail: Detail::default(),
         };
-        send(&path, &good).expect("the app took it");
+        send(&path, Some(&token), &good).expect("the app took it");
         assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(5)), Ok(good));
     }
 
@@ -1677,6 +1861,7 @@ mod tests {
         let began = std::time::Instant::now();
         let sent = send(
             &path,
+            None,
             &Report {
                 chat: 1,
                 event: Event::Stop,
@@ -1706,8 +1891,7 @@ mod tests {
             pid: None,
             detail: Detail::default(),
         };
-        let mut wire = serde_json::to_vec(&report).expect("it serialises");
-        wire.push(b'\n');
+        let wire = line_with(Some(&ChatToken::from("t")), &report).expect("it serialises");
 
         assert_eq!(wire.last(), Some(&b'\n'));
         assert_eq!(wire.iter().filter(|byte| **byte == b'\n').count(), 1);
@@ -1955,10 +2139,12 @@ mod tests {
         path: &std::path::Path,
         within: &std::path::Path,
         answer: Answer,
-    ) -> Reading {
-        Listener::bind(within, path)
-            .expect("a socket")
-            .each_answering(Box::new(|_| {}), Box::new(move |_, _| answer.clone()))
+    ) -> (Reading, ChatToken) {
+        let listener = Listener::bind(within, path).expect("a socket");
+        let token = listener.tokens().issue(3).expect("a token");
+        let reading =
+            listener.each_answering(Box::new(|_| {}), Box::new(move |_, _| answer.clone()));
+        (reading, token)
     }
 
     #[test]
@@ -1977,8 +2163,8 @@ mod tests {
             why: "w".repeat(cap - frame),
         };
         let path = dir.path().join("whole.sock");
-        let _reading = an_app_answering(&path, dir.path(), whole.clone());
-        let got = Asking::on(&path)
+        let (_reading, token) = an_app_answering(&path, dir.path(), whole.clone());
+        let got = Asking::on(&path, Some(token))
             .expect("connected")
             .ask(&Ask::Ticket { chat: 3 }, within)
             .expect("an answer exactly at the cap");
@@ -1988,9 +2174,9 @@ mod tests {
             why: "w".repeat(cap - frame + 2),
         };
         let path = dir.path().join("over.sock");
-        let _reading = an_app_answering(&path, dir.path(), over);
+        let (_reading, token) = an_app_answering(&path, dir.path(), over);
         assert!(
-            Asking::on(&path)
+            Asking::on(&path, Some(token))
                 .expect("connected")
                 .ask(&Ask::Ticket { chat: 3 }, within)
                 .is_err(),
@@ -2002,12 +2188,12 @@ mod tests {
     fn an_open_carrying_the_largest_first_message_arrives_and_a_longer_line_does_not() {
         let dir = tempfile::tempdir().expect("a directory");
         let path = dir.path().join("hooks.sock");
-        let _reading = an_app_at(&path, dir.path());
+        let (_reading, token) = an_app_at(&path, dir.path());
         let within = std::time::Duration::from_secs(5);
 
         // The worst case the cap was sized for: a whole first message of a character JSON
         // writes as six bytes.
-        let mut asking = Asking::on(&path).expect("connected");
+        let mut asking = Asking::on(&path, Some(token.clone())).expect("connected");
         let ticket = ticket_from(&mut asking);
         let Ask::Open(mut open) = an_open(3, &ticket) else {
             unreachable!()
@@ -2021,7 +2207,7 @@ mod tests {
         );
 
         // A line longer than the cap is cut, and a cut line is no ask: the connection ends.
-        let mut asking = Asking::on(&path).expect("connected");
+        let mut asking = Asking::on(&path, Some(token.clone())).expect("connected");
         let ticket = ticket_from(&mut asking);
         let Ask::Open(mut open) = an_open(3, &ticket) else {
             unreachable!()
@@ -2035,10 +2221,11 @@ mod tests {
 
     /// A listener at `path` whose answers are the ticket half and an open that always
     /// succeeds as chat 9.
-    fn an_app_at(path: &std::path::Path, within: &std::path::Path) -> Reading {
+    fn an_app_at(path: &std::path::Path, within: &std::path::Path) -> (Reading, ChatToken) {
         let listener = Listener::bind(within, path).expect("a socket");
+        let token = listener.tokens().issue(3).expect("a token");
         let tickets = Tickets::default();
-        listener.each_answering(
+        let reading = listener.each_answering(
             Box::new(|_| {}),
             Box::new(move |connection, ask| {
                 let now = std::time::Instant::now();
@@ -2058,7 +2245,8 @@ mod tests {
                     },
                 }
             }),
-        )
+        );
+        (reading, token)
     }
 
     fn ticket_from(asking: &mut Asking) -> String {
@@ -2075,9 +2263,9 @@ mod tests {
     fn a_mint_and_a_spend_on_one_connection_open_a_chat() {
         let dir = tempfile::tempdir().expect("a directory");
         let path = dir.path().join("hooks.sock");
-        let _reading = an_app_at(&path, dir.path());
+        let (_reading, token) = an_app_at(&path, dir.path());
 
-        let mut asking = Asking::on(&path).expect("connected");
+        let mut asking = Asking::on(&path, Some(token.clone())).expect("connected");
         let ticket = ticket_from(&mut asking);
 
         assert_eq!(
@@ -2092,12 +2280,12 @@ mod tests {
     fn the_same_open_on_a_connection_of_its_own_opens_nothing_and_spends_the_ticket() {
         let dir = tempfile::tempdir().expect("a directory");
         let path = dir.path().join("hooks.sock");
-        let _reading = an_app_at(&path, dir.path());
+        let (_reading, token) = an_app_at(&path, dir.path());
         let within = std::time::Duration::from_secs(2);
 
-        let mut asking = Asking::on(&path).expect("connected");
+        let mut asking = Asking::on(&path, Some(token.clone())).expect("connected");
         let ticket = ticket_from(&mut asking);
-        let mut elsewhere = Asking::on(&path).expect("connected");
+        let mut elsewhere = Asking::on(&path, Some(token)).expect("connected");
 
         let refused = Answer::No {
             why: NO_TICKET.to_owned(),
@@ -2120,9 +2308,10 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let path = dir.path().join("hooks.sock");
         let listener = Listener::bind(dir.path(), &path).expect("a socket");
+        let token = listener.tokens().issue(3).expect("a token");
         let _reading = listener.each(Box::new(|_| {}));
 
-        let answer = Asking::on(&path)
+        let answer = Asking::on(&path, Some(token))
             .expect("connected")
             .ask(&Ask::Ticket { chat: 3 }, std::time::Duration::from_secs(2))
             .expect("an answer");
@@ -2136,14 +2325,15 @@ mod tests {
     }
 
     #[test]
-    fn a_report_written_as_it_always_was_is_still_a_report_on_a_listener_that_answers() {
-        // An older `charter`, or a hook in a settings file nobody updated, writes exactly
-        // these bytes. The ask must not have taken the report's place.
+    fn a_report_written_by_hand_is_still_a_report_on_a_listener_that_answers() {
+        // The bytes a hook writes, with its chat's token beside them. The ask must not have
+        // taken the report's place.
         use std::io::Write;
 
         let dir = tempfile::tempdir().expect("a directory");
         let path = dir.path().join("hooks.sock");
         let listener = Listener::bind(dir.path(), &path).expect("a socket");
+        let token = listener.tokens().issue(7).expect("a token");
         let (tx, rx) = mpsc::channel();
         let tx = std::sync::Mutex::new(tx);
         let _reading = listener.each_answering(
@@ -2153,7 +2343,13 @@ mod tests {
 
         let mut socket = std::os::unix::net::UnixStream::connect(&path).expect("connected");
         socket
-            .write_all(b"{\"chat\":7,\"event\":\"stop\"}\n")
+            .write_all(
+                format!(
+                    "{{\"chat\":7,\"event\":\"stop\",\"token\":\"{}\"}}\n",
+                    token.expose()
+                )
+                .as_bytes(),
+            )
             .expect("written");
         drop(socket);
 
@@ -2169,7 +2365,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let started = std::time::Instant::now();
 
-        assert!(Asking::on(&dir.path().join("gone.sock")).is_err());
+        assert!(Asking::on(&dir.path().join("gone.sock"), None).is_err());
         assert!(started.elapsed() < std::time::Duration::from_secs(1));
     }
 
@@ -2190,6 +2386,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let path = dir.path().join("hooks.sock");
         let listener = Listener::bind(dir.path(), &path).expect("a socket");
+        let token = listener.tokens().issue(4).expect("a token");
         let (tx, rx) = mpsc::channel();
         let tx = std::sync::Mutex::new(tx);
         let _reading = listener.each_answering_and_noticing(
@@ -2198,7 +2395,7 @@ mod tests {
             Box::new(move |notice| tx.lock().unwrap().send(notice).unwrap()),
         );
 
-        tell(&path, &by_hand()).expect("the app took it");
+        tell(&path, Some(&token), &by_hand()).expect("the app took it");
 
         assert_eq!(
             rx.recv_timeout(std::time::Duration::from_secs(5)),
@@ -2233,7 +2430,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let started = std::time::Instant::now();
 
-        assert!(tell(&dir.path().join("gone.sock"), &by_hand()).is_err());
+        assert!(tell(&dir.path().join("gone.sock"), None, &by_hand()).is_err());
         assert!(started.elapsed() < std::time::Duration::from_secs(1));
     }
     // ------------------------------------------------------------------------------------
@@ -2254,6 +2451,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let path = dir.path().join("hooks.sock");
         let listener = Listener::bind(dir.path(), &path).expect("a socket");
+        let token = listener.tokens().issue(4).expect("a token");
         let (tx, rx) = mpsc::channel();
         let tx = std::sync::Mutex::new(tx);
         let _reading = listener.each_answering_noticing_and_saving(
@@ -2263,7 +2461,7 @@ mod tests {
             Box::new(move |saved| tx.lock().unwrap().send(saved).unwrap()),
         );
 
-        tell_saved(&path, &saved()).expect("the app took it");
+        tell_saved(&path, Some(&token), &saved()).expect("the app took it");
 
         assert_eq!(
             rx.recv_timeout(std::time::Duration::from_secs(5)),
@@ -2307,6 +2505,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let path = dir.path().join("hooks.sock");
         let listener = Listener::bind(dir.path(), &path).expect("a socket");
+        let saving = listener.tokens().issue(4).expect("a token");
+        let reporting = listener.tokens().issue(9).expect("a token");
         let (tx, rx) = mpsc::channel();
         let tx = std::sync::Mutex::new(tx);
         // What the app calls today: no listener for a saved record at all.
@@ -2316,9 +2516,10 @@ mod tests {
             Box::new(|_| panic!("no harness was started by hand")),
         );
 
-        tell_saved(&path, &saved()).expect("the app took it");
+        tell_saved(&path, Some(&saving), &saved()).expect("the app took it");
         send(
             &path,
+            Some(&reporting),
             &Report {
                 chat: 9,
                 event: Event::Stop,
@@ -2337,7 +2538,216 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let started = std::time::Instant::now();
 
-        assert!(tell_saved(&dir.path().join("gone.sock"), &saved()).is_err());
+        assert!(tell_saved(&dir.path().join("gone.sock"), None, &saved()).is_err());
         assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    }
+
+    // ------------------------------------------------------------------------------------
+    // each chat's token: the channel checks it on every line
+    // ------------------------------------------------------------------------------------
+
+    fn a_stop(chat: u32) -> Report {
+        Report {
+            chat,
+            event: Event::Stop,
+            conversation: Conversation::Unknown,
+            pid: None,
+            detail: Detail::default(),
+        }
+    }
+
+    #[test]
+    fn a_line_carrying_its_chats_token_is_read_and_the_token_goes_no_further() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let path = dir.path().join("hooks.sock");
+        let listener = Listener::bind(dir.path(), &path).expect("a socket");
+        let token = listener.tokens().issue(7).expect("a token");
+        let (tx, rx) = mpsc::channel();
+        let _reading = listener.each(Box::new(move |report| {
+            let _ = tx.send(report);
+        }));
+
+        send(&path, Some(&token), &a_stop(7)).expect("the app took it");
+
+        let heard = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the report arrives");
+        assert_eq!(heard, a_stop(7));
+        // What the app is handed holds no token, however it is written out.
+        let written = serde_json::to_string(&heard).unwrap();
+        assert!(!written.contains(token.expose()), "{written}");
+        assert!(!format!("{heard:?}").contains(token.expose()));
+    }
+
+    #[test]
+    fn a_report_with_no_token_a_wrong_one_or_another_chats_is_dropped() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let path = dir.path().join("hooks.sock");
+        let listener = Listener::bind(dir.path(), &path).expect("a socket");
+        let seven = listener.tokens().issue(7).expect("a token");
+        let eight = listener.tokens().issue(8).expect("a token");
+        let (tx, rx) = mpsc::channel();
+        let _reading = listener.each(Box::new(move |report| {
+            let _ = tx.send(report.chat);
+        }));
+
+        let wrong = ChatToken::from("0".repeat(seven.expose().len()).as_str());
+        for token in [None, Some(&wrong), Some(&eight)] {
+            send(&path, token, &a_stop(7)).expect("written");
+        }
+        // And one line with the token of a chat that has none of its own.
+        send(&path, Some(&seven), &a_stop(9)).expect("written");
+
+        assert_eq!(
+            rx.recv_timeout(std::time::Duration::from_secs(2)),
+            Err(mpsc::RecvTimeoutError::Timeout),
+            "a line without its chat's token was read"
+        );
+        // The channel is still open to the chat's own.
+        send(&path, Some(&eight), &a_stop(8)).expect("written");
+        assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(5)), Ok(8));
+    }
+
+    #[test]
+    fn an_ask_without_its_chats_token_is_not_answered_and_ends_at_once() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let path = dir.path().join("hooks.sock");
+        let listener = Listener::bind(dir.path(), &path).expect("a socket");
+        let three = listener.tokens().issue(3).expect("a token");
+        let four = listener.tokens().issue(4).expect("a token");
+        let asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = Arc::clone(&asked);
+        let _reading = listener.each_answering(
+            Box::new(|_| {}),
+            Box::new(move |_, _| {
+                counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Answer::Ticket {
+                    ticket: "t".to_owned(),
+                }
+            }),
+        );
+        let within = std::time::Duration::from_secs(5);
+
+        for token in [None, Some(ChatToken::from("nope")), Some(four)] {
+            let began = std::time::Instant::now();
+            let answered = Asking::on(&path, token)
+                .expect("connected")
+                .ask(&Ask::Ticket { chat: 3 }, within);
+            assert!(answered.is_err(), "answered {answered:?}");
+            assert!(began.elapsed() < within / 2, "it waited for a deadline");
+        }
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+        let answered = Asking::on(&path, Some(three))
+            .expect("connected")
+            .ask(&Ask::Ticket { chat: 3 }, within);
+        assert!(
+            matches!(answered, Ok(Answer::Ticket { .. })),
+            "{answered:?}"
+        );
+    }
+
+    #[test]
+    fn a_notice_or_a_saved_record_without_its_chats_token_is_dropped() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let path = dir.path().join("hooks.sock");
+        let listener = Listener::bind(dir.path(), &path).expect("a socket");
+        let four = listener.tokens().issue(4).expect("a token");
+        let other = listener.tokens().issue(5).expect("a token");
+        let (tx, rx) = mpsc::channel();
+        let noticed = std::sync::Mutex::new(tx.clone());
+        let saving = std::sync::Mutex::new(tx);
+        let _reading = listener.each_answering_noticing_and_saving(
+            Box::new(|_| {}),
+            Box::new(|_, _| Answer::No { why: String::new() }),
+            Box::new(move |_| noticed.lock().unwrap().send("notice").unwrap()),
+            Box::new(move |_| saving.lock().unwrap().send("saved").unwrap()),
+        );
+
+        for token in [None, Some(&other)] {
+            tell(&path, token, &by_hand()).expect("written");
+            tell_saved(&path, token, &saved()).expect("written");
+        }
+        assert_eq!(
+            rx.recv_timeout(std::time::Duration::from_secs(2)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        );
+
+        tell(&path, Some(&four), &by_hand()).expect("written");
+        assert_eq!(
+            rx.recv_timeout(std::time::Duration::from_secs(5)),
+            Ok("notice")
+        );
+    }
+
+    #[test]
+    fn each_chat_is_issued_a_token_of_its_own_and_only_its_latest_counts() {
+        let tokens = ChatTokens::default();
+        let one = tokens.issue(1).expect("a token");
+        let two = tokens.issue(2).expect("a token");
+
+        assert_ne!(one, two);
+        for token in [&one, &two] {
+            // 32 bytes from the generator, as hex.
+            assert_eq!(token.expose().len(), 64);
+            assert!(token.expose().bytes().all(|b| b.is_ascii_hexdigit()));
+        }
+        assert!(tokens.admits(1, Some(one.expose())));
+        assert!(!tokens.admits(1, Some(two.expose())));
+        assert!(!tokens.admits(1, None));
+        assert!(
+            !tokens.admits(3, Some(one.expose())),
+            "a chat with no token"
+        );
+        // A prefix, and the right length with one byte wrong.
+        assert!(!tokens.admits(1, Some(&one.expose()[..63])));
+        let mut near = one.expose().to_owned().into_bytes();
+        near[63] = if near[63] == b'0' { b'1' } else { b'0' };
+        assert!(!tokens.admits(1, Some(std::str::from_utf8(&near).unwrap())));
+
+        let again = tokens.issue(1).expect("a token");
+        assert!(
+            !tokens.admits(1, Some(one.expose())),
+            "the old one still counts"
+        );
+        assert!(tokens.admits(1, Some(again.expose())));
+
+        tokens.forget(1);
+        assert!(!tokens.admits(1, Some(again.expose())));
+    }
+
+    #[test]
+    fn a_token_is_never_written_out_by_debug() {
+        let tokens = ChatTokens::default();
+        let token = tokens.issue(1).expect("a token");
+
+        assert!(!format!("{token:?}").contains(token.expose()));
+        assert!(!format!("{tokens:?}").contains(token.expose()));
+    }
+
+    #[test]
+    fn a_token_is_read_from_its_own_variable_and_an_empty_one_is_none() {
+        assert_eq!(
+            ChatToken::read(&env_of(&[(TOKEN_ENV, "abc")])),
+            Some(ChatToken::from("abc"))
+        );
+        assert_eq!(ChatToken::read(&env_of(&[(TOKEN_ENV, "")])), None);
+        assert_eq!(ChatToken::read(&env_of(&[(CHAT_ENV, "7")])), None);
+    }
+
+    #[test]
+    fn a_token_travels_beside_the_line_and_is_taken_off_before_it_is_read() {
+        let token = ChatToken::from("abc");
+        let wire = line_with(Some(&token), &Ask::Ticket { chat: 3 }).unwrap();
+        let text = std::str::from_utf8(&wire).unwrap();
+
+        let (line, carried) = read_line(text).expect("a line");
+        assert!(matches!(line, Line::Ask(Ask::Ticket { chat: 3 })));
+        assert_eq!(carried.as_deref(), Some("abc"));
+
+        let bare = line_with(None, &a_stop(7)).unwrap();
+        let (line, carried) = read_line(std::str::from_utf8(&bare).unwrap()).expect("a line");
+        assert_eq!(line.chat(), 7);
+        assert_eq!(carried, None);
     }
 }

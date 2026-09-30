@@ -1249,7 +1249,11 @@ fn hook(name: &str, now: Option<&str>) -> ExitCode {
     };
     let report = Report::read(event, &text, &|name| std::env::var(name).ok());
     if let Some(report) = &report
-        && let Err(why) = hookwire::send(std::path::Path::new(&socket), report)
+        && let Err(why) = hookwire::send(
+            std::path::Path::new(&socket),
+            hookwire::ChatToken::from_env().as_ref(),
+            report,
+        )
     {
         // The app may have quit while this session was still running, which is the ordinary
         // way for this to fail and is not the harness's business — hence the exit 0 below.

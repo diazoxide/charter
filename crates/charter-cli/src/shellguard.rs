@@ -25,7 +25,7 @@ pub fn run(shims: &Path, word: &str, args: &[OsString]) -> ExitCode {
     // Dropped whatever it answers: an app that is not there, or not reading, costs the banner
     // on the tab and nothing else.
     if let Some((socket, notice)) = &plan.tell {
-        let _ = hookwire::tell(socket, notice);
+        let _ = hookwire::tell(socket, hookwire::ChatToken::from_env().as_ref(), notice);
     }
     let Some(program) = plan.program else {
         eprintln!("charter: no {word} on PATH outside charter's shell-tab shims");

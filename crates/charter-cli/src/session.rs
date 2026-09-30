@@ -247,7 +247,8 @@ fn tell_the_app(here: &Here, chat: Option<u32>, conversation: Option<String>, pa
         chat,
         session_saved: path.to_path_buf(),
     };
-    let Err(e) = hookwire::tell_saved(Path::new(&socket), &saved) else {
+    let token = hookwire::ChatToken::from_env();
+    let Err(e) = hookwire::tell_saved(Path::new(&socket), token.as_ref(), &saved) else {
         voice::info("Told the app: a Smart close waiting on this record closes the tab.");
         return;
     };
@@ -284,7 +285,8 @@ pub fn pass_on_at_stop(socket: &Path, report: &Report) {
     ) else {
         return;
     };
-    if let Err(why) = hookwire::tell_saved(socket, &saved) {
+    if let Err(why) = hookwire::tell_saved(socket, hookwire::ChatToken::from_env().as_ref(), &saved)
+    {
         // Where a reporting hook's failures go: the harness's own log (`main::hook`).
         eprintln!("charter: the app did not take this chat's saved session record ({why})");
     }

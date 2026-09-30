@@ -9,7 +9,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use charter_core::hookwire::{
-    Answer, Ask, Listener, NOTHING_ANSWERS, Reading, Report, SessionSaved, StartedByHand,
+    Answer, Ask, ChatTokens, Listener, NOTHING_ANSWERS, Reading, Report, SessionSaved,
+    StartedByHand,
 };
 use charter_core::session::Exit;
 use charter_core::state::{Board, State};
@@ -114,6 +115,9 @@ pub struct Hooks {
     /// while they are still looking at the app.
     reading: Mutex<Option<Reading>>,
     socket: Option<PathBuf>,
+    /// The chats' tokens the socket checks every line against, issued as each chat starts
+    /// (`crate::sessions::Reporting`).
+    tokens: Option<Arc<ChatTokens>>,
     /// Who answers an ask on this socket, once there is someone to (charter-app#204).
     ///
     /// A slot filled after the fact, because the answer needs the plane's chats and the
@@ -262,6 +266,7 @@ impl Hooks {
             board: Arc::new(Mutex::new(Board::new())),
             reading: Mutex::new(None),
             socket: None,
+            tokens: None,
             answering: Arc::new(Mutex::new(None)),
             heard: Arc::new(Mutex::new(None)),
             following: Arc::new(Mutex::new(None)),
@@ -283,6 +288,7 @@ impl Hooks {
     ) -> std::io::Result<Self> {
         let listener = Listener::bind(&at.within, &at.socket)?;
         let socket = listener.path().to_path_buf();
+        let tokens = listener.tokens();
         let board = Arc::new(Mutex::new(Board::new()));
         let answering: Arc<Mutex<Option<Answering>>> = Arc::new(Mutex::new(None));
         let heard: Arc<Mutex<Option<Heard>>> = Arc::new(Mutex::new(None));
@@ -376,6 +382,7 @@ impl Hooks {
             board,
             reading: Mutex::new(Some(reading)),
             socket: Some(socket),
+            tokens: Some(tokens),
             answering,
             heard,
             following,
@@ -462,8 +469,30 @@ impl Hooks {
             .then(|| seen_by(&board, &self.plane, session))
     }
 
+    /// Where this listens. Only a test asks: a chat is told through [`Hooks::reporting`].
+    #[cfg(test)]
     pub fn socket(&self) -> Option<&Path> {
         self.socket.as_deref()
+    }
+
+    /// What a chat started in this plane is told to report to: the socket and the tokens it
+    /// checks, or nothing when this is not listening.
+    pub fn reporting(&self) -> Option<crate::sessions::Reporting> {
+        Some(crate::sessions::Reporting {
+            socket: self.socket.clone()?,
+            tokens: Arc::clone(self.tokens.as_ref()?),
+        })
+    }
+
+    /// A fresh token for chat `chat`, as the app issues one when the chat starts: what a test
+    /// standing in for that chat's hook sends with.
+    #[cfg(test)]
+    pub fn token_for(&self, chat: u32) -> charter_core::hookwire::ChatToken {
+        self.tokens
+            .as_ref()
+            .expect("the plane is listening")
+            .issue(chat)
+            .expect("a token")
     }
 
     pub fn board(&self) -> MutexGuard<'_, Board> {
@@ -782,6 +811,7 @@ mod tests {
 
         charter_core::hookwire::tell(
             hooks.socket().expect("a socket"),
+            Some(&hooks.token_for(3)),
             &StartedByHand {
                 chat: 3,
                 started_by_hand: "codex".to_owned(),

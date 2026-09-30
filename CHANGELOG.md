@@ -29,6 +29,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `bin/` script a tool names, is part of the approval, and a grant that changed since asks again
   before it runs without a prompt. Old per-session tool ceilings are removed when a plane opens
   (ADR 0035).
+- **Hook calls are authenticated per chat.**
 
 ## [0.4.1] - 2026-09-28
 

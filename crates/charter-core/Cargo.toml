@@ -47,6 +47,10 @@ hmac = "0.13"
 # feature is the one-entry API charter needs and picks the platform's store itself.
 keyring = "4"
 getrandom = "0.4"
+# The hook channel compares a line's chat token with the one the chat was given in constant
+# time (`hookwire::ChatTokens`). Already in this workspace's lockfile through `hmac`'s `digest`,
+# so it adds no crate to the tree.
+subtle = "2"
 # `secret exec --file`/`--dotenv`: a 0600 temp file, created with a random name that cannot
 # collide or be pre-planted. Already a dev-dependency here and in the lockfile.
 tempfile.workspace = true
