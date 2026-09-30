@@ -292,6 +292,18 @@ cost, sent through OpenTelemetry to the user's own backend, plus the opt-in prod
 crash reports. It may be sampled, never names a person, and never reads the audit (ADR 0075).
 _Avoid_: audit, analytics, metrics (for the whole of it)
 
+**Search index**:
+A derived SQLite full-text index that search, `recall` and the briefing read, kept so they need
+not scan every file. Each project clone has one over its memory, session records and todos, in
+`.charter/`; each machine has one over the transcript archive, in charter's data home. The
+session host is its only writer, and a chat searches only its own clone's. It is never the
+truth: deleting it costs a rebuild. It holds the words of what it indexes, with their positions
+and after redaction, but not the text as written. A deleted item stops answering at once and
+leaves the file at the next merge and checkpoint; an unlinked old copy is not overwritten. It
+never answers a reader with anything the files would not (ADR 0079).
+_Avoid_: index (unqualified: `memory/index.md` and `sessions/index.md` are lists for people),
+cache, database
+
 ### The window
 
 **Split window**:
