@@ -1,8 +1,7 @@
 # A chat lives in `charterd`, and the app is its client
 
-**Proposed 2026-09-30.** An agent drafted it for program-map ticket FD-2 (this record), and the
-operator rules it (W7: an ADR merges only after the operator's ruling). It follows five of the
-operator's rulings:
+**Accepted 2026-09-30** by the operator (ruling V22a), drafted for program-map ticket FD-2. It
+follows five of the operator's rulings:
 
 - **Q2:** a `charterd` session host, always on and supervised by the app, with per-connection
   authentication from day one.
@@ -110,7 +109,7 @@ record reads that ruling against the three ways the app can go away, because the
 |---|---|
 | **quits** (the operator chose Quit) | Ends every session, as today, and exits. `reopen.json` is written first, exactly as `let_go_of_every_plane` writes it now. ADR 0025's promise is kept: quitting ends the agents |
 | **restarts to update** | Keeps every session. The app tells the host it is restarting before it goes, and the new app reattaches. **Reopen all** stops being the answer for an app update, since nothing ended (FD-7) |
-| **crashes**, or is killed | Keeps every session for a **grace period** (proposed: 10 minutes). An app that starts within it reattaches, and nothing is lost. When the grace period passes with no app, `charterd` ends the sessions as a quit would, writing `reopen.json` first, and exits. Agents never keep running unseen for longer than that |
+| **crashes**, or is killed | Keeps every session for a **grace period** (ruled, V22a: 10 minutes). An app that starts within it reattaches, and nothing is lost. When the grace period passes with no app, `charterd` ends the sessions as a quit would, writing `reopen.json` first, and exits. Agents never keep running unseen for longer than that |
 
 When the user has a trigger or a paired device (FD-17), none of the three ends the sessions: the
 host keeps running as a login item and shows in the tray, where one click stops it. **Stop** from
@@ -151,8 +150,7 @@ own restart policy and its own restart limit. Charter writes no supervisor for t
 
 When a breaker trips, whichever one it is, the app says the host is failing, shows the last lines of
 its log (FD-8: `tracing` to a rotating file), and offers **Try again**. Until the host starts, the
-app draws the plane but runs no chat. Whether it should offer to run chats in its own process
-instead is for the operator's ruling (item 3).
+app draws the plane but runs no chat, and says why. There is no in-process fallback (V22a).
 
 **What a crash of the host costs.** When `charterd` dies, its PTY masters close, and the kernel
 hangs up every chat's terminal. The harnesses end. That is the honest cost of one host process, and
@@ -269,8 +267,7 @@ tree holds the chat's token and can report as the chat. It can never write or re
 chat's lines. Lines it removes before a later one are a gap the drain detects; lines removed from
 the end, before the drain, are not detected. Once drained and sealed, a line is out of the chat's
 reach. FD-30's acceptance line *"a chat cannot write the spool"* becomes *"a chat cannot write
-another chat's spool, and a gap in its own is recorded"*. That amendment is for the operator's
-ruling (item 5).
+another chat's spool, and a gap in its own is recorded"* (V22a).
 
 ### 7. An upgrade hands the terminals over, and drains only when it must (V7; FD-28: upgrade without losing agents)
 
@@ -347,7 +344,8 @@ inside the stream, not by anything the transport provides.
   --user` unit with linger on Linux, a LaunchAgent on macOS, and `charter serve --foreground` in a
   container, where the container's own runtime is the supervisor.
 - **A runner never hands off. It drains** (RR-14: runner bootstrap and version skew). Its versions
-  sit side by side under `~/.charter/server/<ver>/`. A new version takes the new chats, and the old
+  sit side by side under the machine store, at `<config>/server/<ver>/` (V22a, from ADR 0069), as
+  an AppImage's copy does. A new version takes the new chats, and the old
   one keeps its chats until each ends and is never killed. That is the one time a device has two
   hosts. The new host is then the device's only event-log writer, and the old one sends its events
   to the new one as a client, so ADR 0066's single writer still holds.
@@ -445,39 +443,20 @@ The code does not change with this record. Each row is what the tickets after it
 - **How soon a security release forces the upgrade.** FD-28 asks for a deadline. The handoff loses
   nothing, so the length only matters where the fallback is the only path. FD-28 proposes it.
 
-## For the operator's ruling
+## Ruled (V22, 2026-09-30)
 
-These calls go beyond the words of Q2, V7, V9, V16 and X24, and each is worth a yes or a no:
-
-1. **One host per OS user per device, serving every plane** (section 1). The alternative is one per
-   plane, rejected above.
-2. **A crash of the app keeps the agents for a 10-minute grace period**, then ends them as a quit
-   would (section 2). X24 says the host "exits with the app" when there is no trigger or device, and
-   does not say what happens when the app did not choose to exit. The alternatives: end them at once,
-   as a quit would (a crash of the window then still ends every agent), or keep them until the next
-   launch with no limit (agents then run unseen for as long as nobody opens charter).
-3. **When the host will not start, the app runs no chat** (section 3). The alternative is an
-   in-process fallback: the app runs FD-3's host in its own process for that launch, which is charter
-   as it is today. It keeps the operator working, and it costs a second way to run a chat in the
-   shipped app. That path has no handoff (an update ends its chats, as today), no client scopes (the
-   window is the only client, so `charter attach`, the fleet MCP and `charter inbox` do not work),
-   and no host to resolve secrets, so the vault view and the approval gate would need an in-process
-   copy of section 1's single path. This draft recommends no fallback: one enforced path is worth
-   more than a degraded one that rarely runs.
-4. **A sixth scope, `chat`**, is named for the hook channel, beside FD-27's five, and a chat's
-   sandbox denies it `charterd.sock` altogether (section 5). This makes the hook socket ADR 0067's
-   "its socket", and puts every human scope on a socket a chat cannot open.
-5. **The hook spool is per chat, verified and sealed by the host as it drains** (section 6), and
-   FD-30's acceptance line becomes *"a chat cannot write another chat's spool, and a gap in its own
-   is recorded"*. The alternative, a spool no chat can write, would leave Codex and opencode hooks,
-   which run inside charter's wrap, with nowhere to go while the host restarts.
-6. **Clients reconnect across an upgrade**, and a handed-over program's exit code is lost (section
-   7).
-7. **Under launchd, an upgrade hands off twice** through a transient host (section 7), because
-   launchd cannot adopt a new process for a job. The alternative is the drain-and-resume fallback
-   for every upgrade on a macOS login item, which costs each chat its turn in flight.
-8. **The host code moves into a new crate, `charter-host`** (*What changes where*), rather than into
-   `charter-core`, which would then own threads, sockets and a server loop.
-9. **The line between the app and the host** (section 1). Plane reads and settings writes stay in
-   the app. Every read of a vault's values moves to the host, including the vault view's reveal and
-   copy, so there is one enforced path to a secret.
+1. **One host per OS user per device**, serving every plane.
+2. **After an app crash, agents keep a 10-minute grace period**, then end as a quit would.
+3. **If the host will not start, the app runs no chats and says why.** There is no in-process
+   fallback.
+4. **A sixth client scope, `chat`**, and chats are denied `charterd.sock`.
+5. **The hook spool is one per chat**, verified and sealed into the audit chain on drain. FD-30's
+   acceptance becomes *"a chat cannot write another chat's spool, and a gap in its own is
+   recorded"*.
+6. **Clients reconnect across an upgrade**, and a handed-over program's exit code is lost.
+7. **Under launchd an upgrade hands off twice**, through a transient host.
+8. **The host code goes in a new `charter-host` crate.**
+9. **The app keeps plane reads and settings writes; every vault-value read goes through the
+   host.** The operator's own CLI reads vaults directly for now.
+10. **A runner's host versions live under the machine store** (`<config>/server/<ver>/`), from
+    ADR 0069's item 9.
