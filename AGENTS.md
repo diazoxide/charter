@@ -20,6 +20,12 @@ in `diazoxide/charter-plane` as history (ADR 0044). A new decision is the next n
 - **Nothing parses harness output to decide anything.** A session's state comes from hooks only.
 - **The plane on disk has the format `docs/plane-format.md` records.** Never change it here
   without that document changing first.
+- **A new store names its tier before it ships** (ADR 0069): Plane, Clone state, Machine
+  (syncable or device-bound) or Keyring, and rebuildable when it is derived. It goes in
+  `docs/plane-format.md`, under its own heading or as a row of a table of paths, with a
+  `**Tier:**` line, and
+  `crates/charter-core/tests/every_store_the_plane_format_names_has_a_tier.rs` fails until it
+  has one. This is part of every feature's definition of done.
 - **Nothing depends on the Python charter, shipped or not.** No message, doc page or code path in
   the app or the `charter` binary tells anyone to install or run it, and nothing in CI or the
   tests installs it or contacts `diazoxide/charter-plane`: its answers are frozen into recorded

@@ -17,6 +17,7 @@ mod handoff;
 mod harness_plugins;
 mod heard;
 mod hooks;
+mod host;
 // Called on Linux alone, where the session bus can be missing; its tests run everywhere.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod instance;
@@ -1338,7 +1339,7 @@ fn chat_states(planes: tauri::State<'_, Planes>, plane: PlaneId) -> Result<Vec<M
         .chats()
         .open_now()
         .into_iter()
-        .map(|open| held.hooks().now(open.session))
+        .map(|open| held.board().now(open.session))
         .collect())
 }
 

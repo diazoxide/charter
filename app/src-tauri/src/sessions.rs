@@ -12,7 +12,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use charter_core::engine::{AlacrittyEngine, Size};
 use charter_core::hookwire::{CHAT_ENV, ChatTokens, SOCKET_ENV, TOKEN_ENV};
 use charter_core::secrets::identity::kept_from_chats;
-use charter_core::session::{Attachment, Exit, Session, Spec};
+use charter_core::session::{Attachment, Session, Spec};
+
+use crate::host::{Ends, Opening, Readiness, SessionHost, Sink, Watching};
 
 /// How many lines of history each session keeps. The pane showing it is told, so its own
 /// terminal keeps the same.
@@ -25,47 +27,6 @@ const ENDED: &str = "\r\n\x1b[2m— the program has ended —\x1b[0m\r\n";
 /// Why a start was refused while the kill switch is thrown (OV-1).
 pub const STOPPED: &str = "Every chat charter started is stopped. Re-arm from the title bar to \
                            start chats again; a new shell still opens.";
-
-/// What to run in a new session. No program is the operator's shell.
-#[derive(Debug, Clone)]
-pub struct Opening {
-    pub program: Option<String>,
-    pub args: Vec<String>,
-    pub cwd: Option<String>,
-    pub size: Size,
-    /// Set in the program's environment, on top of what the app itself was started with.
-    pub env: Vec<(String, String)>,
-    /// Extra variable names kept out of this chat, beyond the `OP_*` prefix: every identity
-    /// source and target a vault of this plane declares (`registry::identity_vars`), so a vault
-    /// bound to a non-`OP_` variable (`--token-env PROD_1P_TOKEN`) leaks it to no chat either
-    /// (#271 review, U6). Removed from both the set env and the inherited one.
-    pub env_strip: Vec<String>,
-    /// The harness the chat runs, whose own declared variables it is also started with
-    /// ([`charter_core::harness::Harness::env_passed`]). None is a shell.
-    pub harness: Option<charter_core::harness::Harness>,
-    /// The operator's own additions to what a chat is started with, from the chat's plane
-    /// (`[chat_env] pass`, [`charter_core::chatenv::read`]).
-    pub env_pass: Vec<String>,
-    /// Whether this is a shell the operator opened from the window, which the kill switch lets
-    /// through: looking at what the agents did is a human act (OV-1, ADR 0071). Every other
-    /// start — every chat, every relaunch, every shell a record puts back — is refused while
-    /// agents are stopped.
-    pub operator_shell: bool,
-}
-
-/// Told how each session ended, as it ends. An `Arc` so a session can hold it for as long as
-/// its program runs without borrowing from `Sessions`.
-type Ended = Arc<dyn Fn(u32, Exit) + Send + Sync>;
-
-/// Where a view's text goes. It is called on the view's own thread, one batch at a time.
-pub type Sink = Box<dyn FnMut(String) + Send>;
-
-/// A view the UI has open, and the size the screen it opened on was drawn for.
-#[derive(Debug, Clone, Copy)]
-pub struct Watching {
-    pub view: u32,
-    pub size: Size,
-}
 
 /// What a session is told, so a hook running inside it can find its way back.
 ///
@@ -94,7 +55,7 @@ pub struct Sessions {
     /// could not open its channel: every chat then shows `unknown`, which is honest.
     reporting: Option<Reporting>,
     /// Told how each session ended, as it ends.
-    ended: Mutex<Option<Ended>>,
+    ended: Mutex<Option<Ends>>,
     /// The kill switch (OV-1): while it is thrown no chat opens, whatever asked.
     kill_switch: Arc<crate::killswitch::KillSwitch>,
 }
@@ -125,38 +86,69 @@ impl Sessions {
         }
     }
 
-    /// Refuses every chat start while `switch` is thrown. Every way a chat starts — the
-    /// operator, a relaunch, a handoff, a curation action — comes through [`Self::open`], so
-    /// this is the one place the refusal has to be.
-    pub fn stopped_by(&mut self, switch: Arc<crate::killswitch::KillSwitch>) {
-        self.kill_switch = switch;
+    /// The number a session opens under: `wanted` where it can still be had, else the next.
+    ///
+    /// The counter is raised past whatever is chosen, under the same lock that answers
+    /// whether `wanted` is free — two chats starting at once would otherwise both read the
+    /// counter, both add one, and both get the same number.
+    ///
+    /// **Two callers asking for the SAME `wanted` at the same moment would still collide**,
+    /// because a session is only in `running` once its program has been spawned. Nothing
+    /// does that: a `wanted` comes from the record and `Chats::put_back` walks it one chat
+    /// at a time, and every chat the operator starts asks for no number at all. Written down
+    /// rather than guarded, because the guard would be a second copy of `running` kept in
+    /// step with it for a caller that does not exist.
+    fn number_for(&self, wanted: Option<u32>) -> u32 {
+        let running = lock(&self.running);
+        // Zero is no chat's number: `active::session_id` reads the value as a path
+        // component, and a record that says zero is one that says nothing.
+        let id = match wanted {
+            Some(wanted) if wanted > 0 && !running.contains_key(&wanted) => wanted,
+            _ => self.opened.load(Ordering::Relaxed) + 1,
+        };
+        self.opened.fetch_max(id, Ordering::Relaxed);
+        id
     }
 
-    /// Calls `tell` as each session's program ends, with the id and how it ended.
-    pub fn when_one_ends(&self, tell: Box<dyn Fn(u32, Exit) + Send + Sync>) {
-        *lock(&self.ended) = Some(Arc::from(tell));
+    /// Forgets chat `id`'s token, so no line for it is read from now on.
+    fn forget_token(&self, id: u32) {
+        if let Some(reporting) = &self.reporting {
+            reporting.tokens.forget(id);
+        }
     }
 
-    /// Starts a session, and answers with the id it is called by from now on.
-    ///
-    /// `announce` is called with that id BEFORE the program starts. A harness fires
-    /// `SessionStart` at its own exec, and anything that learned the chat's number afterwards
-    /// would miss it — for a chat that is then idle, waiting for a first prompt, no second
-    /// event ever comes and it reads `unknown` for the rest of the run. A review found that
-    /// on the relaunch path, where a whole record's worth of chats start at once.
-    ///
-    /// `wanted` is the number this chat ALREADY answers to, where it has one. A relaunch
-    /// hands the number the record kept for each chat, so the chat comes back on its own
-    /// `.charter/sessions/<sid>.workspace` and `<sid>.lock` rather than on whichever the
-    /// order of the record would have dealt it (charter-app#90). `None` is a chat that has
-    /// no number yet, which is every chat the operator starts.
-    ///
-    /// A number a session is **already running under** is refused and a fresh one taken
-    /// instead: a record that names one twice — hand-edited, or two records concatenated —
-    /// would otherwise give two live chats one key, which is this same defect pointed the
-    /// other way. Whichever number is chosen, the counter is raised past it, so nothing
-    /// dealt later can land on it either.
-    pub fn open(
+    /// The operating system's id for a session's program, while it runs. Only the tests ask;
+    /// the UI has no use for it yet.
+    #[cfg(test)]
+    pub fn process_id(&self, id: u32) -> Option<u32> {
+        self.with(id, |running| Ok(running.session.process_id()))
+            .ok()
+            .flatten()
+    }
+
+    /// Ends one session's program and keeps the session, on a thread of its own.
+    fn stop_program(&self, id: u32) {
+        let Ok(stopper) = self.with(id, |running| Ok(running.session.stopper())) else {
+            return;
+        };
+        let _ = std::thread::Builder::new()
+            .name("charter-stopping".into())
+            .spawn(move || stopper.stop());
+    }
+
+    fn with<T>(
+        &self,
+        id: u32,
+        act: impl FnOnce(&mut Running) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let mut running = lock(&self.running);
+        act(running.get_mut(&id).ok_or_else(|| gone(id))?)
+    }
+}
+
+/// Each call is documented once, on [`SessionHost`].
+impl SessionHost for Sessions {
+    fn open(
         &self,
         wanted: Option<u32>,
         opening: &Opening,
@@ -273,106 +265,19 @@ impl Sessions {
         Ok(id)
     }
 
-    /// The number a session opens under: `wanted` where it can still be had, else the next.
-    ///
-    /// The counter is raised past whatever is chosen, under the same lock that answers
-    /// whether `wanted` is free — two chats starting at once would otherwise both read the
-    /// counter, both add one, and both get the same number.
-    ///
-    /// **Two callers asking for the SAME `wanted` at the same moment would still collide**,
-    /// because a session is only in `running` once its program has been spawned. Nothing
-    /// does that: a `wanted` comes from the record and `Chats::put_back` walks it one chat
-    /// at a time, and every chat the operator starts asks for no number at all. Written down
-    /// rather than guarded, because the guard would be a second copy of `running` kept in
-    /// step with it for a caller that does not exist.
-    fn number_for(&self, wanted: Option<u32>) -> u32 {
-        let running = lock(&self.running);
-        // Zero is no chat's number: `active::session_id` reads the value as a path
-        // component, and a record that says zero is one that says nothing.
-        let id = match wanted {
-            Some(wanted) if wanted > 0 && !running.contains_key(&wanted) => wanted,
-            _ => self.opened.load(Ordering::Relaxed) + 1,
-        };
-        self.opened.fetch_max(id, Ordering::Relaxed);
-        id
-    }
-
-    /// Says `dealt` numbers have already gone out in this plane, so none of them is dealt
-    /// again — charter-app#90.
-    ///
-    /// A launch calls this with what the record kept, BEFORE putting any chat back. The
-    /// numbers above what is in the record are the ones that matter: a chat that was closed
-    /// before the quit is not in the record at all, and its `.charter/sessions/<n>.workspace`
-    /// and `<n>.lock` are still on disk for the 30 days `wscmd::select`'s prune leaves them.
-    pub fn already_dealt(&self, dealt: u32) {
-        self.opened.fetch_max(dealt, Ordering::Relaxed);
-    }
-
-    /// A number no chat in this plane has had, taken now for a chat about to be started with
-    /// it — for a caller that has to NAME the chat by its number before it starts: a handed-off
-    /// chat with no task name is `<persona> <N>` (charter-app#258). Passed to [`Self::open`] as
-    /// the number wanted, it is the one the chat gets, because nothing else can be dealt it.
-    pub fn deal(&self) -> u32 {
-        self.opened.fetch_add(1, Ordering::Relaxed) + 1
-    }
-
-    /// The highest number this plane has dealt, for the record to keep.
-    pub fn dealt(&self) -> u32 {
-        self.opened.load(Ordering::Relaxed)
-    }
-
-    /// Ends a session and everything it started. Its views end with it, and so does its token.
-    pub fn close(&self, id: u32) -> Result<(), String> {
-        self.forget_token(id);
-        lock(&self.running)
-            .remove(&id)
-            .map(|_| ())
-            .ok_or_else(|| gone(id))
-    }
-
-    /// Forgets chat `id`'s token, so no line for it is read from now on.
-    fn forget_token(&self, id: u32) {
-        if let Some(reporting) = &self.reporting {
-            reporting.tokens.forget(id);
-        }
-    }
-
-    /// Sends what a pane typed to the program: bytes, written to its pty as they are. Text is
-    /// its UTF-8; a mouse report in the default encoding is bytes that are not text at all
-    /// (charter#493).
-    pub fn input(&self, id: u32, bytes: impl AsRef<[u8]>) -> Result<(), String> {
+    fn input(&self, id: u32, bytes: &[u8]) -> Result<(), String> {
         self.with(id, |running| {
-            running
-                .session
-                .write(bytes.as_ref())
-                .map_err(|err| err.to_string())
+            running.session.write(bytes).map_err(|err| err.to_string())
         })
     }
 
-    /// Whether a session's terminal is still in the kernel's line editing rather than handing
-    /// keys to its program (`charter_core::session::Session::edits_lines`), or none where the
-    /// platform cannot say. Refused for a session that is gone.
-    pub fn edits_lines(&self, id: u32) -> Result<Option<bool>, String> {
-        self.with(id, |running| Ok(running.session.edits_lines()))
-    }
-
-    /// How long a session's program has written nothing
-    /// (`charter_core::session::Session::quiet_for`): when bytes last arrived, never what they
-    /// were.
-    pub fn quiet_for(&self, id: u32) -> Result<std::time::Duration, String> {
-        self.with(id, |running| Ok(running.session.quiet_for()))
-    }
-
-    pub fn resize(&self, id: u32, size: Size) -> Result<(), String> {
+    fn resize(&self, id: u32, size: Size) -> Result<(), String> {
         self.with(id, |running| {
             running.session.resize(size).map_err(|err| err.to_string())
         })
     }
 
-    /// Opens a view of a session: `sink` is sent the screen as it already is and then the
-    /// session's output, as text, until the view is closed. The answer says which view that
-    /// is, and the size its screen was drawn for.
-    pub fn watch(&self, id: u32, mut sink: Sink) -> Result<Watching, String> {
+    fn watch(&self, id: u32, mut sink: Sink) -> Result<Watching, String> {
         self.with(id, |running| {
             let (open, size, output) = running.session.attach().into_parts();
             // A thread of its own reads the view, so nothing the UI does runs on the
@@ -395,8 +300,7 @@ impl Sessions {
         })
     }
 
-    /// Closes a view. Its session keeps running, with its terminal, for the next pane.
-    pub fn unwatch(&self, id: u32, view: u32) -> Result<(), String> {
+    fn unwatch(&self, id: u32, view: u32) -> Result<(), String> {
         self.with(id, |running| {
             running
                 .views
@@ -406,9 +310,15 @@ impl Sessions {
         })
     }
 
-    /// Ends every session, and does not return until their programs are gone. This is what
-    /// quitting calls: the process is about to end, and a thread would not be waited for.
-    pub fn end_all(&self) {
+    fn close(&self, id: u32) -> Result<(), String> {
+        self.forget_token(id);
+        lock(&self.running)
+            .remove(&id)
+            .map(|_| ())
+            .ok_or_else(|| gone(id))
+    }
+
+    fn end_all(&self) {
         let ending: Vec<Running> = lock(&self.running).drain().map(|(_, one)| one).collect();
         // All at once: fifty programs each given the same moment to leave on their own.
         all_at_once(
@@ -417,14 +327,9 @@ impl Sessions {
         );
     }
 
-    /// Interrupts and ends every session's program, and everything each started, all at once,
-    /// and does not return until they are gone. The sessions stay, with their last screens, as
-    /// they do when a program ends on its own: this is the kill switch (OV-1), not a close.
-    /// Answers how many it asked.
-    ///
     /// The table is only read under its lock; the ending happens outside it, so a pane asking
     /// about its session is never held up by fifty programs being given their second.
-    pub fn stop_every_program(&self) -> usize {
+    fn stop_every_program(&self) -> usize {
         let stoppers: Vec<_> = lock(&self.running)
             .values()
             .map(|one| one.session.stopper())
@@ -436,39 +341,44 @@ impl Sessions {
         .len()
     }
 
-    /// Ends one session's program and keeps the session, on a thread of its own.
-    fn stop_program(&self, id: u32) {
-        let Ok(stopper) = self.with(id, |running| Ok(running.session.stopper())) else {
-            return;
-        };
-        let _ = std::thread::Builder::new()
-            .name("charter-stopping".into())
-            .spawn(move || stopper.stop());
+    fn when_one_ends(&self, tell: Ends) {
+        *lock(&self.ended) = Some(tell);
     }
 
-    /// The operating system's id for a session's program, while it runs. Only the tests ask;
-    /// the UI has no use for it yet.
+    fn stopped_by(&mut self, switch: Arc<crate::killswitch::KillSwitch>) {
+        self.kill_switch = switch;
+    }
+
     #[cfg(test)]
-    pub fn process_id(&self, id: u32) -> Option<u32> {
-        self.with(id, |running| Ok(running.session.process_id()))
-            .ok()
-            .flatten()
+    fn process_id(&self, id: u32) -> Option<u32> {
+        Sessions::process_id(self, id)
     }
 
-    /// The sessions that are running, in the order they were opened.
-    pub fn running(&self) -> Vec<u32> {
+    fn running(&self) -> Vec<u32> {
         let mut ids: Vec<u32> = lock(&self.running).keys().copied().collect();
         ids.sort_unstable();
         ids
     }
 
-    fn with<T>(
-        &self,
-        id: u32,
-        act: impl FnOnce(&mut Running) -> Result<T, String>,
-    ) -> Result<T, String> {
-        let mut running = lock(&self.running);
-        act(running.get_mut(&id).ok_or_else(|| gone(id))?)
+    fn readiness(&self, id: u32) -> Result<Readiness, String> {
+        self.with(id, |running| {
+            Ok(Readiness {
+                edits_lines: running.session.edits_lines(),
+                quiet_for: running.session.quiet_for(),
+            })
+        })
+    }
+
+    fn deal(&self) -> u32 {
+        self.opened.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    fn dealt(&self) -> u32 {
+        self.opened.load(Ordering::Relaxed)
+    }
+
+    fn already_dealt(&self, dealt: u32) {
+        self.opened.fetch_max(dealt, Ordering::Relaxed);
     }
 }
 
@@ -665,7 +575,7 @@ mod tests {
             .expect("the session opens");
         let (_view, seen) = watching(&sessions, id);
 
-        sessions.input(id, "hello\r").expect("the input is taken");
+        sessions.input(id, b"hello\r").expect("the input is taken");
 
         until_seen(&seen, "you typed hello");
     }
@@ -686,7 +596,7 @@ mod tests {
         // A default-encoding mouse report's column past 95 is one byte above 127, which is no
         // UTF-8 character on its own (charter#493).
         sessions
-            .input(id, [0xb7_u8, b'!', b'$'])
+            .input(id, &[0xb7_u8, b'!', b'$'])
             .expect("the input is taken");
 
         until_seen(&seen, "b7 21 24");
@@ -705,7 +615,7 @@ mod tests {
         let (view, seen) = watching(&sessions, id);
 
         sessions.unwatch(id, view).expect("the view closes");
-        sessions.input(id, "\r").unwrap();
+        sessions.input(id, b"\r").unwrap();
         std::thread::sleep(Duration::from_millis(200));
 
         assert!(
@@ -747,7 +657,7 @@ mod tests {
             )
             .expect("the session opens");
         let (_first, first_seen) = watching(&sessions, id);
-        sessions.input(id, "\r").unwrap();
+        sessions.input(id, b"\r").unwrap();
         until_seen(&first_seen, "the program has ended");
 
         let (_second, seen) = watching(&sessions, id);
@@ -880,7 +790,7 @@ mod tests {
                 },
             )
             .expect("the resize is taken");
-        sessions.input(id, "\r").unwrap();
+        sessions.input(id, b"\r").unwrap();
 
         until_seen(&seen, "30 100");
     }
@@ -946,7 +856,7 @@ mod tests {
     fn a_session_that_is_not_running_is_an_error_and_not_a_panic() {
         let sessions = Sessions::new();
 
-        assert!(sessions.input(7, "hi").is_err());
+        assert!(sessions.input(7, b"hi").is_err());
         assert!(sessions.resize(7, SIZE).is_err());
         assert!(sessions.close(7).is_err());
         assert!(sessions.watch(7, Box::new(|_| {})).is_err());

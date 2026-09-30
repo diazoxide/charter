@@ -16,7 +16,7 @@
 //! started by hand in a shell (ADR 0062), and leaving those running would stop only the agents
 //! charter happened to know about. **What it refuses until re-armed is every chat and harness
 //! start**, from whatever asks — the operator's new chat, a relaunch putting a record back, a
-//! handoff, a curation action — at [`crate::sessions::Sessions::open`]. **A shell the operator
+//! handoff, a curation action — at [`crate::host::SessionHost::open`]. **A shell the operator
 //! opens from the window is let through**: looking at what the agents did is a human act, and
 //! the switch is there to stop agents, not to lock the operator out of their own machine.
 

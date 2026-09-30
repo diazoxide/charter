@@ -88,6 +88,7 @@ pub mod repos;
 pub mod reposave;
 pub mod rewrite;
 pub mod roster;
+pub mod sandbox;
 pub mod scaffold;
 pub mod secrets;
 pub mod secretshape;
