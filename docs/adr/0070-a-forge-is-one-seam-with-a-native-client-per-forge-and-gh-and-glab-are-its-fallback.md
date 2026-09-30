@@ -1,8 +1,7 @@
 # A forge is one seam with a native client per forge, and `gh` and `glab` are its fallback
 
-**Proposed 2026-09-30.** An agent drafted it for program-map ticket FG-1 (#710). The operator
-rules it (W7: an ADR merges only after the operator's ruling). It follows these of the
-operator's rulings:
+**Accepted 2026-09-30** by the operator (ruling V22c), drafted for program-map ticket FG-1 (#710).
+It follows these of the operator's rulings:
 
 - **The forge amendment:** GitHub and GitLab are both first-class now. Every feature that
   touches a forge ships for both, behind one forge seam.
@@ -28,7 +27,8 @@ It builds on [ADR 0055](0055-a-workspaces-repos-are-picked-from-what-your-own-fo
 (the repo picker asks as the operator's own login) and
 [ADR 0047](0047-a-vault-lives-in-the-system-keyring-by-default.md) (the keyring). It keeps to
 [ADR 0067](0067-a-chat-runs-in-a-sandbox-charter-compiles-for-its-harness.md) (the chat
-sandbox) and to the proposed ADR 0068 (`charterd`, the session host, and its client scopes).
+sandbox) and to [ADR 0068](0068-a-chat-lives-in-charterd-and-the-app-is-its-client.md) (`charterd`,
+the session host, and its client scopes).
 The tickets that build on it are the native clients (FW-2a and FW-2b), sign-in (FW-1, FW-3a and
 FW-3b), the parity audit (FG-3), the test harness (FG-4 and FW-15), capability detection and its
 card (FG-2 and FG-16), the budget (FW-4), the cache (FW-7), audited writes (FW-14), per-agent
@@ -446,37 +446,17 @@ Nothing changes in code with this ADR. Its tickets make these changes:
 - **The window alone runs the native client until FD-2 lands.** That puts a network client in the
   app process. ADR 0068 moves it to `charterd`.
 
-## For the operator's ruling
+## Ruled (V22, 2026-09-30)
 
-These calls go beyond the words of FI1 to FI14, X10, V13 and V16c, and each is worth a yes or a
-no:
-
-1. **An import makes that CLI login the human's, and chats lose it** (section 4). This draft
-   recommends it: from the import on, a chat on that host gets SD-7a/b's credential or none (SD-7b's
-   Free mode: pushes and requests by the human's click), and SD-2 denies the chat the CLI's stored
-   login. The alternative is to **refuse imports until SD-7a/b land**, which keeps chats pushing as
-   today at the cost of FI2's import being unavailable until then.
-2. **The CLI fallback is a transport, not a backend** (section 5).
-3. **The native clients live in `charter-core/src/forge/`** (section 3). The alternative is a
-   `charter-forge` crate that the core depends on, which would make PE-30a/b's move a crate move,
-   at the cost of one more crate now.
-4. **`ureq` plus the `gitlab` crate's endpoints over charter's transport, `graphql_client` on both
-   forges, and charter's own `serde` types for GitHub REST** (section 3). The alternative is going
-   async (question 10), which would make `octocrab` usable as a tower stack.
-5. **The `charter` binary never reads a forge token, and uses the CLI transport until
-   `charterd`'s human scope exists** (section 4). The alternative lets a `charter` run outside a
-   chat use the keyring token. charter cannot tell those two runs apart before FD-27, which is why
-   this draft says no.
-6. **No charter git credential helper now.** SD-7a/b own a chat's push identity, and #752 owns
-   charter's own helper after FD-27.
-7. **Fallback is chosen at resolution and never on failure** (section 5), even for a read.
-8. **`Unknown` takes the fallback** (section 2), so a self-managed host charter cannot probe
-   behaves as its lowest tier until the probe answers.
-9. **Forgejo is refused as a kind until FG-13**, rather than accepted with a backend that answers
-   `Unavailable` to everything (section 1).
-10. **The traits are synchronous, on `ureq`** (section 3). The alternative is async traits that
-    `charterd` drives on its runtime, with the core's blocking callers going through `block_on`.
-    That opens `octocrab` and `reqwest-middleware`, at the cost of a runtime in `charter-core` and
-    every CLI path.
-11. **The transport's ETag store is separate from FW-7's item cache** (section 3): per account, in
-    the machine tier, keyed by URL. FW-7 holds neutral items and no ETags.
+1. **An imported CLI login becomes the human's, and chats lose it.**
+2. **The CLI fallback is a transport**, not a backend.
+3. **The native clients live in `charter-core`.**
+4. **`ureq`, the `gitlab` crate's endpoints, `graphql_client`, and charter's own serde types for
+   GitHub.**
+5. **The `charter` binary uses the CLI transport until the host's human scope exists.**
+6. **No charter git credential helper yet** ([#752](https://github.com/diazoxide/charter/issues/752)).
+7. **The transport is chosen at account resolution**, and never switched after a failure.
+8. **An `Unknown` capability takes its fallback.**
+9. **Forgejo is refused as a kind until FG-13.**
+10. **The traits are synchronous.**
+11. **The transport's ETag store is separate from FW-7's item cache.**

@@ -82,12 +82,12 @@ _Avoid_: discovered repos, the inventory
 
 **Forge account**:
 One sign-in to one forge host: a kind, a host and a login, held in the keyring or reached
-through `gh`'s or `glab`'s own login. Each repo is bound to one (ADR 0070, proposed).
+through `gh`'s or `glab`'s own login. Each repo is bound to one (ADR 0070).
 _Avoid_: forge login (for charter's own sign-in), connection, integration
 
 **Forge capability**:
 One thing a forge may or may not do for one repo, such as a merge queue, judged per forge, host
-and tier, with the fallback charter uses where it is unavailable (ADR 0070, proposed).
+and tier, with the fallback charter uses where it is unavailable (ADR 0070).
 _Avoid_: capability (unqualified, which is an extension's), feature flag
 
 **LIVE / LOCAL**:
