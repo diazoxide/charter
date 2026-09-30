@@ -175,7 +175,7 @@ _Avoid_: status, session state (the old five), done (for completed), idle (for a
 A vendor-cloud session charter lists read-only, with its state, pull request and cost: a chat of
 kind **observed**, which charter never pauses, stops or counts toward a budget. Every chat
 charter starts is **governed** (W8, ADR 0076).
-_Avoid_: cloud chat, external agent, remote runner (that is a host running `charterd`)
+_Avoid_: cloud chat, external agent, remote runner (that is a **Runner**)
 
 **Device**:
 A machine charter runs on: a desktop, a runner, or later a viewer. Each has a random id kept in
@@ -209,6 +209,30 @@ _Avoid_: capability (unqualified, which is an extension's), feature, support
 The process that owns every chat's terminal on a device, one per OS user per device: the
 `charter` binary run as `charter serve`. The app is its client (ADR 0068).
 _Avoid_: daemon, server (in UI text), backend
+
+**Runner**:
+A device, other than the one the window is on, whose own session host runs a workspace's chats.
+The desktop's session host reaches it through a **connector** and talks to it over a **link**.
+It keeps its own device id, event log, audit chain and kill switch, and it needs no server
+charter runs. A runner is a device, so it belongs to **Project**; which runner a workspace's
+chats run on is a **Workspace** setting (ADR 0072 §2, ADR 0078).
+_Avoid_: remote (unqualified), agent host, worker, server (in UI text)
+
+**Connector**:
+The command whose stdin and stdout reach a runner's session host: `ssh <alias>`,
+`gh codespace ssh`, `coder ssh`, `docker exec -i`, `kubectl exec -i`, and later the relay. Held
+as an argument vector on the machine that uses it, never committed in a project. It gives
+reachability, never identity. It belongs to **Project**, with the device it reaches (ADR 0072
+§2, ADR 0078).
+_Avoid_: transport (that is FD-4's framing), tunnel, provider (that creates the machine)
+
+**Link**:
+The encrypted, mutually authenticated stream between the desktop's session host and a runner's,
+carried by a connector. Each end proves itself with its device's link key, pinned when the runner
+was added, in a Noise `XX` handshake. The desktop always opens it. It belongs to **Project**,
+with the two devices it joins (ADR 0072 §2, ADR 0078).
+_Avoid_: connection (unqualified), session (that is the process), pairing (that is how the keys
+were pinned)
 
 **Audit**:
 The record of who did what, for whom, to what, and whether it was allowed, kept per device by
