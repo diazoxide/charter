@@ -165,11 +165,10 @@ spawns, with the run it came from as its parent. The run is who an action is att
 _Avoid_: session (that is the process), conversation (that is the harness's), turn
 
 **Run state**:
-Where a run is: `queued`, `starting`, `working`, `input-required`, `paused` or `hibernated`
-while it lives, then `completed`, `failed` or `stopped`, once and for good. It moves only by a
-named cause from a hook, the protocol, the exit, the host, the operator or a policy, and it ends
-only on a fact the chat cannot forge. A stop charter caused is `stopped`, never `failed`. A chat
-stores no state of its own: the window draws its current run's (ADR 0076).
+Where a run is. While it lives: `queued`, `starting`, `working`, `input-required`, `paused` or
+`hibernated`. Then, once and for good: `completed`, `failed` or `stopped`. **Stopped** is an end
+someone chose (the operator, a policy, the kill switch, the host); **failed** is one nobody chose.
+A chat's state is its current run's (ADR 0076).
 _Avoid_: status, session state (the old five), done (for completed), idle (for a state)
 
 **Remote chat**:
