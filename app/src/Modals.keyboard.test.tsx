@@ -664,11 +664,25 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
     // The two `Browse…` buttons carry `aria-label`s naming the box each one fills, which is
     // what stops a screen reader announcing the same three words for two different pickers —
     // and it is also why this walk can tell them apart in its answer.
-    render(<NewProject making={false} onCreate={() => {}} onCancel={() => {}} />);
+    //
+    // FR-4 put the repository first and the two-directory form under Advanced, a `<details>`
+    // whose summary is in the walk; opened, its controls are too.
+    render(
+      <NewProject
+        making={false}
+        onCreate={() => {}}
+        onOpenRepo={() => {}}
+        opening={false}
+        onCancel={() => {}}
+      />,
+    );
     // Answered first: both dialogs disable their create button until they have been, and a
     // disabled control is out of the tab sequence everywhere and rightly so. The state worth
     // measuring is the one where the answer can be given.
+    await userEvent.type(screen.getByLabelText("Repository"), "/where/the/repo/is");
+    await userEvent.click(screen.getByText("Advanced"));
     await userEvent.type(screen.getByLabelText("Folder"), "/where/it/goes");
+    // The walk starts where the keyboard is, the folder box, and comes round to it.
     expect(await reachableByKeyboard()).toEqual([
       'input "Folder"',
       'button "Browse for the folder"',
@@ -676,7 +690,11 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
       'button "Browse for the repository to adopt"',
       'checkbox "Make this repo itself the plane"',
       'button "Create project"',
+      'input "Repository"',
+      'button "Browse for the repository"',
+      'button "Open repository"',
       'button "Cancel"',
+      'summary "Advanced"',
     ]);
     cleanup();
 

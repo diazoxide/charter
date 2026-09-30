@@ -56,12 +56,28 @@ pub(super) fn into_first_workspace(
         planefile::Read::Config(cfg) => planefile::default_workspace(&cfg),
         _ => "default".to_owned(),
     };
+    into_workspace(run, root, source, &ws, &name, now).0
+}
+
+/// Clone `source` into `workspaces/<ws>/<name>`, making the workspace first when it is not
+/// there. [`into_first_workspace`] with the workspace and the clone's name handed in, so the
+/// first run can name the workspace after the repository (FR-4). Returns the exit status and
+/// the clone's path, which is there after a `0` whether it was cloned now or before.
+pub(super) fn into_workspace(
+    run: &mut Run,
+    root: &Path,
+    source: &Path,
+    ws: &str,
+    name: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> (u8, Option<std::path::PathBuf>) {
+    let (ws, name) = (ws.to_owned(), name.to_owned());
     let author = crate::wscmd::ensure::author();
     let ws_dir = match crate::wscmd::ensure::ensure(root, &ws, now, &author) {
         Ok(_) => root.join("workspaces").join(&ws),
         Err(why) => {
             run.err(why);
-            return 1;
+            return (1, None);
         }
     };
     // The exact path created is gated as itself, not as its parent: `name` comes off an
@@ -72,14 +88,14 @@ pub(super) fn into_first_workspace(
         Ok(dest) => dest,
         Err(why) => {
             run.err(format!("{name}: not cloned — {why}."));
-            return 1;
+            return (1, None);
         }
     };
     if dest.exists() {
         run.info(format!(
             "{name}: already cloned in '{ws}' — left exactly as it is."
         ));
-        return 0;
+        return (0, Some(dest));
     }
 
     run.info(format!("Cloning {name} into workspace '{ws}' …"));
@@ -104,7 +120,7 @@ pub(super) fn into_first_workspace(
             source.display(),
             dest.display()
         ));
-        return 1;
+        return (1, None);
     }
 
     match crate::planegit::origin_https(source).or_else(|| {
@@ -151,7 +167,7 @@ pub(super) fn into_first_workspace(
     run.info(format!(
         "  work there: cd {rel}   (being in that directory IS this workspace)"
     ));
-    0
+    (0, Some(dest))
 }
 
 /// `  ↳ <name> ships its own <file>` for the first of the three a clone has. Python's

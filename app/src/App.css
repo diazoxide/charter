@@ -2586,6 +2586,31 @@ h2.sidebar-title .node-icon {
   white-space: nowrap;
 }
 
+/* The first run's list of what this machine has (FR-4): statuses, not controls. */
+.first-run-found {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.first-run-found li {
+  padding: 0.35rem 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* New project's two-directory form, under Advanced (FR-4). Closed by default, and a summary
+   that looks pressable, as the refused profiles' is. */
+.advanced {
+  margin-top: 1.25rem;
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 0.75rem;
+}
+
+.advanced summary {
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
 /* What opening a project puts in force. Read before it is answered, so it is a list and not
    a paragraph — and every entry is `code`, because these are names and values and not prose. */
 .warning h3 {

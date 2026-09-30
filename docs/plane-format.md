@@ -4247,6 +4247,7 @@ semantics below.
   a `rearm`. While stopped, the app starts no chat and a relaunch puts no chat back. **stable**
   (a second process reads both). A process running as the operator can still edit both files
   (ADR 0071's residual).
+
 * No other **state** in this area is written outside the plane, though charter does write
   elsewhere: a news probe writes `$TMPDIR/charter-probe-<pid>` (`charter/news.py:1329`).
   Harness-side files
@@ -4270,6 +4271,7 @@ identifier `dev.charter.app`. The keyring rows are the operating system's store 
 | `<config>/restarted-to-update` | Machine, device-bound, transient | an empty file: the last quit was **Restart to update** | `reopen::mark_restart_to_update`; the next launch removes it |
 | `<config>/extensions.json` | Machine, device-bound | each installed extension: its absolute path, the fingerprint the operator approved, and whether it is on | `extension::install`, `approve`, `set_on`, `forget` |
 | `<config>/plugin/` | Machine, device-bound, rebuildable | the copy of the bundled plugin that chats started outside the app load (ADR 0057). Its hooks name this binary by absolute path | `plugin_install`, refreshed at launch |
+| `<config>/local-plane/` | Plane | the **local project** the first run makes on a machine that has none (FR-4, #603), so nobody is asked where it goes. An ordinary plane in every respect this document records — its own `charter.toml`, its own git — opened through the same trust gate as any other; only its location is fixed. It has **no remote**, so the Plane tier's backup (the remote) does not exist for it until the operator shares it: **FR-10 must cover it** or it has no backup at all. A repo opened from the first run or from New project is cloned into its `workspaces/<name>/<name>/`, `<name>` being the repo's, with `-2`, `-3`… when a different repo already holds that name | `firstrun::ensure_local_plane`, `firstrun::take_in` (`crates/charter-core/src/firstrun.rs`) |
 | `<app data>/shims/` | Machine, device-bound, rebuildable | the `PATH` shims that warn when a harness is started by hand in a shell tab (ADR 0062) | `shellguard`, rewritten at every launch |
 | `<app log>/panics.log` | Machine, device-bound, transient | panic records: thread, place, message, backtrace, version. `$CHARTER_PANIC_LOG` moves it | `app/src-tauri/src/panics.rs`; `charter report` reads it |
 | `<extension dir>/<state>/facts.json` | None | an extension's footer facts, written by the extension's own program wherever the operator installed it; charter only reads it | the extension |

@@ -246,6 +246,7 @@ export function PlaneView({
   settingsAsked,
   savingAsked,
   preferencesAsked,
+  firstChatAsked,
 }: {
   plane: PlaneId;
   /** Whether this is the project the operator is looking at. */
@@ -283,6 +284,10 @@ export function PlaneView({
   /** The same, for the Preferences tab (`WindowDoing.openPreferences`, charter-app#283): a
    *  count that goes up each time the window asks for it on THIS project's strip. */
   preferencesAsked?: number;
+  /** The first chat a repository opened into this project asks for (FR-4): started in that
+   *  repository's clone, on the workspace named after it. `at` counts the asks, so each is
+   *  answered once. */
+  firstChatAsked?: FirstChat;
 }) {
   const [tabs, setTabs] = useState<Tabs>(noTabs);
   /** What every chat is doing, in THIS project. Pushed from the core; nothing here polls.
@@ -1692,6 +1697,36 @@ export function PlaneView({
     },
     [change, filedIn, isPinned, plane],
   );
+
+  /**
+   * The first chat in a repository just opened into this project (FR-4, #603): its workspace
+   * is focused and the picker is asked for, to start in the repository's clone. Only once the
+   * plane has been read and lists that workspace, since focusing a workspace the strip has not
+   * heard of would focus nothing. The picker still asks which harness (ADR 0022).
+   */
+  const firstChatHandled = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (firstChatAsked === undefined || firstChatHandled.current === firstChatAsked.at) return;
+    if (!sidebar?.workspaces.some((ws) => ws.name === firstChatAsked.workspace)) return;
+    firstChatHandled.current = firstChatAsked.at;
+    const { workspace, cwd } = firstChatAsked;
+    // `ask`'s steps, written out so the state is set in the command's callback: the
+    // `react-hooks/set-state-in-effect` rule reads a call in an effect body as synchronous
+    // however far the setState is from it (`Extensions.tsx` says the same). The tab is filed
+    // on the strip in focus when Start is pressed, which is after both.
+    void commands
+      .startOptions(plane)
+      .then((options) => {
+        if (options.status === "error") {
+          setTrouble(options.error);
+          return;
+        }
+        setPickerTrouble(undefined);
+        setPicking({ options: options.data, where: { tab: true, in: cwd } });
+        focusWorkspace(workspace);
+      })
+      .catch((err: unknown) => setTrouble(String(err)));
+  }, [firstChatAsked, focusWorkspace, plane, sidebar]);
 
   /** What a chat is called here: the tab holding it, or its session number. */
   const nameOf = useCallback(
@@ -3798,6 +3833,16 @@ function followTheme(changed: () => void): () => void {
 function colourWithHue(colour: string | null | undefined): string | null {
   return hueOf(colour) === undefined ? null : (colour ?? null);
 }
+
+/** A first chat asked for in a repository opened into a project (FR-4). */
+export type FirstChat = {
+  /** The workspace named after the repository. */
+  workspace: string;
+  /** The repository's clone in it, where the chat starts. */
+  cwd: string;
+  /** Which ask this is, so each is answered once. */
+  at: number;
+};
 
 export type PlaneReport = {
   /** Every chat it has open, with what each one is doing — what a quit would end. */

@@ -13,6 +13,7 @@ mod clipath;
 mod curation;
 mod doctor;
 mod extensions;
+mod firstrun;
 mod handoff;
 mod harness_plugins;
 mod heard;

@@ -3259,3 +3259,52 @@ mod report_ask_tests {
         );
     }
 }
+
+/// `repo` cloned into a workspace of the plane at `root` named after it (FR-4): the workspace's
+/// name and the clone's path, or why nothing was cloned.
+///
+/// The steps `init --adopt` takes (`firstclone`), with the workspace named after the repository
+/// instead of the plane's default one, and with the refusals said for a window rather than a
+/// flag. The repository is read, and only read. One already taken in answers with what is there.
+pub fn adopt_as_workspace(
+    root: &Path,
+    repo: &Path,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<(String, PathBuf), String> {
+    let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    let source = canon(repo);
+    if !is_repo_top_level(&source) {
+        return Err(format!(
+            "{} is not the top level of a git working tree, so there is no repository to open. \
+             Pick the folder a repository was cloned into.",
+            source.display()
+        ));
+    }
+    if canon(root).starts_with(&source) {
+        return Err(format!(
+            "{} holds this project's plane, so cloning it would write into the repository it \
+             came from. Pick another repository.",
+            source.display()
+        ));
+    }
+    let Some(name) = crate::firstrun::workspace_name(&first_clone_name(&source)) else {
+        return Err(format!(
+            "charter cannot make a workspace name out of {}. Rename the folder, or make the \
+             workspace yourself under New project → Advanced.",
+            source.display()
+        ));
+    };
+    let mut run = Run::default();
+    match firstclone::into_workspace(&mut run, root, &source, &name, &name, now) {
+        (0, Some(clone)) => Ok((name, clone)),
+        _ => Err(run
+            .said
+            .iter()
+            .filter_map(|line| match line {
+                Say::Err(text) => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")),
+    }
+}

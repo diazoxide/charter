@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { commands, type Recents } from "./bindings";
+import { FirstRun } from "./FirstRun";
 
 /**
  * The screen a window with no project open draws.
@@ -20,6 +21,12 @@ import { commands, type Recents } from "./bindings";
  *
  * Neither is an alert. What both offer is the same: a folder to pick, a path to type, and the
  * projects this machine remembers.
+ *
+ * **A machine that remembers no project gets the first run instead** (FR-4, #603): a launch
+ * with nothing to go on, on a machine whose recent list is empty, is somebody who has never
+ * had a project, and "a project is a directory with a `charter.toml` in it" is a concept they
+ * should not need before their first chat. `FirstRun` asks for a repository and nothing else,
+ * and this screen stays one press behind it.
  */
 export function Opener({
   here,
@@ -27,6 +34,9 @@ export function Opener({
   adding,
   onOpen,
   trouble,
+  onOpenRepo,
+  openingRepo,
+  repoTrouble,
 }: {
   /** Whether the launch had a directory to go on at all. */
   here: boolean;
@@ -44,8 +54,20 @@ export function Opener({
   onOpen: (path: string) => void;
   /** Why the last attempt opened nothing. */
   trouble?: string;
+  /** Opens a repository into the local project, for the first run. Left out, the first run is
+   *  never drawn: the window passes it only until it has held a project. */
+  onOpenRepo?: (path: string) => void;
+  /** Whether that is happening right now. */
+  openingRepo?: boolean;
+  /** Why the last repository opened nothing. */
+  repoTrouble?: string;
 }) {
   const [recents, setRecents] = useState<Recents>();
+  /** Whether the recent list has answered at all, so the first run is never drawn over a
+   *  machine whose list simply has not arrived yet, and never over one that could not say. */
+  const [heard, setHeard] = useState(false);
+  /** The operator asked for this screen rather than the first run. */
+  const [passed, setPassed] = useState(false);
   const [typed, setTyped] = useState("");
 
   // The list is read when the opener appears and re-read whenever an attempt did not open
@@ -58,10 +80,13 @@ export function Opener({
       .recentPlanes()
       .then((answer) => {
         if (!gone && answer.status === "ok") setRecents(answer.data ?? undefined);
+        if (!gone) setHeard(true);
       })
       // A window that cannot ask simply offers no list. The picker and the path box still
       // work, which is the whole of what this screen has to do.
-      .catch(() => undefined);
+      .catch(() => {
+        if (!gone) setHeard(true);
+      });
     return () => {
       gone = true;
     };
@@ -76,6 +101,27 @@ export function Opener({
       })
       .catch(() => undefined);
   }, [onOpen]);
+
+  // The first run is for a launch with nothing to go on, on a machine that remembers nothing.
+  // Until the list has answered, a launch like that draws nothing rather than the wrong screen.
+  const firstRun = onOpenRepo !== undefined && !adding && !here && !passed;
+  if (firstRun && !heard) return null;
+  // "Remembers nothing" is all of it: no row, no row dropped for having moved, and a store to
+  // remember in — a machine that keeps none cannot hold the local project either.
+  const remembersNothing =
+    recents !== undefined &&
+    (recents.planes?.length ?? 0) === 0 &&
+    (recents.dropped?.length ?? 0) === 0 &&
+    !recents.forgetful;
+  if (firstRun && remembersNothing)
+    return (
+      <FirstRun
+        onOpenRepo={onOpenRepo}
+        onOpenProject={() => setPassed(true)}
+        opening={openingRepo ?? false}
+        trouble={repoTrouble}
+      />
+    );
 
   return (
     <section className="opener" aria-labelledby="opener-heading">

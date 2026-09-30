@@ -251,6 +251,21 @@ export const commands = {
 	 */
 	createProject: (path: string, planeIsThisRepo: boolean, adopt: string | null) => typedError<Opened, string>(__TAURI_INVOKE("create_project", { path, planeIsThisRepo, adopt })),
 	/**
+	 *  Which harnesses are installed and signed in, and whether `gh` is logged in.
+	 * 
+	 *  **On a blocking thread**: `gh auth status` is a subprocess with a timeout, and the screen
+	 *  that asked is drawn while it runs. Nothing here signs anybody in.
+	 */
+	firstRunFound: () => typedError<FirstRunFound, string>(__TAURI_INVOKE("first_run_found")),
+	/**
+	 *  Opens `path`, a repository, into this machine's local plane: the plane is made when there is
+	 *  none, the repository is cloned into a workspace named after it, and the plane is opened
+	 *  **through the trust gate**, exactly as `create_project` opens a plane it has just made.
+	 * 
+	 *  Nothing asks where the plane goes (W10). The repository is read and never written to.
+	 */
+	openRepo: (path: string) => typedError<OpenedRepo, string>(__TAURI_INVOKE("open_repo", { path })),
+	/**
 	 *  Starts a session, and remembers it as a chat so a quit can write it down. No program is
 	 *  the operator's shell.
 	 */
@@ -1543,6 +1558,21 @@ export type FactColumn = {
 	cells: FactCell[],
 };
 
+/**  What the first-run screen shows about this machine. */
+export type FirstRunFound = {
+	harnesses: HarnessRow[],
+	forge: ForgeRow,
+};
+
+/**  The forge CLI, as the first-run screen lists it. */
+export type ForgeRow = {
+	/**  The program (`gh`). */
+	cli: string,
+	installed: boolean,
+	/**  Whether it is logged in to its default host. */
+	signed_in: boolean,
+};
+
 /**  How a number reads, as the window colours it — `charter_core::usage::Tone`. */
 export type GaugeTone = "ok" | "warn" | "bad";
 
@@ -1608,6 +1638,21 @@ export type HarnessPlugins = {
 	 *  `Choices::local_left_out`, asked for this harness.
 	 */
 	local_left_out: string | null,
+};
+
+/**  One harness, as the first-run screen lists it. */
+export type HarnessRow = {
+	/**  The word the plane calls it by (`claude`, `codex`, `opencode`). */
+	name: string,
+	/**  What the screen calls it. */
+	title: string,
+	/**  Whether its program is installed where charter looks. */
+	installed: boolean,
+	/**
+	 *  Whether a sign-in was found. `false` is not a refusal: the harness asks for its own
+	 *  login when its chat starts.
+	 */
+	signed_in: boolean,
 };
 
 /**  Where one of a vault's identity variables is read from now (#237). */
@@ -1909,6 +1954,19 @@ export type Opened = {
 	plane: PlaneId | null,
 	/**  What to ask them. Null when the plane is open. */
 	ask: Ask | null,
+};
+
+/**
+ *  What opening a repository made: the plane, opened or asked about, and where the first chat
+ *  starts.
+ */
+export type OpenedRepo = {
+	/**  The local plane: open, or the trust question to ask first. */
+	opened: Opened,
+	/**  The workspace, named after the repository. */
+	workspace: string,
+	/**  The repository's clone in it, where the first chat starts. */
+	cwd: string,
 };
 
 /**  One part of a panel's body. */

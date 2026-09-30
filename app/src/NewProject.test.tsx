@@ -43,7 +43,7 @@ const NOT_INTO_A_REPO = [
 ].join("\n");
 
 /** The core, with a plane open and a `create_project` that answers as charter's does. */
-function core(over: { answer?: unknown; refuses?: string } = {}) {
+function core(over: { answer?: unknown; refuses?: string; repoRefuses?: string } = {}) {
   const asked: { cmd: string; args: Record<string, unknown> }[] = [];
   mockIPC((cmd, args) => {
     const got = (args ?? {}) as Record<string, unknown>;
@@ -55,6 +55,10 @@ function core(over: { answer?: unknown; refuses?: string } = {}) {
     if (cmd === "chat_states") return [];
     if (cmd === "plane_sidebar")
       return { root: PLANE, personas: [], persona: null, unfiled: [], workspaces: [] };
+    if (cmd === "open_repo") {
+      if (over.repoRefuses !== undefined) throw over.repoRefuses;
+      return { opened: { plane: PLANE, ask: null }, workspace: "widget", cwd: `${PLANE}/w` };
+    }
     if (cmd === "create_project") {
       if (over.refuses !== undefined) throw over.refuses;
       return (
@@ -134,6 +138,36 @@ describe("making a project", () => {
 
     await userEvent.click(controls[1]);
     expect(await screen.findByRole("dialog", { name: "New project" })).toBeInTheDocument();
+  });
+
+  it("opens a repository into the local project by default, asking nothing about where", async () => {
+    // FR-4: the default is one directory, the repository. The two-directory form is under
+    // Advanced, closed.
+    const { calls } = core();
+    render(<App />);
+    const dialog = await askForOne();
+
+    const advanced = within(dialog).getByText("Advanced").closest("details");
+    expect(advanced).not.toHaveAttribute("open");
+    expect(advanced).toContainElement(within(dialog).getByLabelText("Folder"));
+
+    await userEvent.type(within(dialog).getByLabelText("Repository"), REPO);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Open repository" }));
+
+    expect(calls("open_repo").map((one) => one.args)).toEqual([{ path: REPO }]);
+    expect(calls("create_project")).toEqual([]);
+  });
+
+  it("keeps a refused repository's words in the dialog", async () => {
+    const refusal = "/home/dev/widget is not the top level of a git working tree.";
+    core({ repoRefuses: refusal });
+    render(<App />);
+    const dialog = await askForOne();
+
+    await userEvent.type(within(dialog).getByLabelText("Repository"), REPO);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Open repository" }));
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(refusal);
   });
 
   it("sends the folder that was typed, and does not make the repo the plane", async () => {

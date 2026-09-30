@@ -682,8 +682,10 @@ describe("the cold launch putting the last quit's projects back", () => {
 
     render(<App />);
 
+    // This machine remembers no project, so the screen with no project on it is the first run
+    // (FR-4).
     expect(await screen.findByRole("heading", { level: 1 })).toHaveTextContent(
-      "You have not opened a project yet",
+      "Open a repository to start",
     );
     expect(screen.queryByRole("tablist", { name: "Projects" })).not.toBeInTheDocument();
   });

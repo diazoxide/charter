@@ -38,6 +38,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     chat.
   - Codex and opencode chats are not started in a sandboxed plane yet.
 
+- **A first run that goes straight to a chat.** On a machine with no project, charter asks for
+  one thing, the repository to work on. It keeps a local project for you in its own directory
+  (`~/.config/charter/local-plane`, with no remote), clones the repository into a workspace
+  named after it, and opens the first chat there. It shows which harnesses are installed and
+  signed in, and whether `gh` is logged in, without asking about any of them. New project now
+  asks for a repository the same way, and the two-directory form is under Advanced (#603).
+
 ### Fixed
 
 - **Linux no longer waits half a minute for a desktop portal that cannot start.** Before GTK

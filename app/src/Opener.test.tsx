@@ -59,7 +59,14 @@ function core(answers: (cmd: string, args: Record<string, unknown>) => unknown) 
     const answer = answers(cmd, given);
     if (answer !== undefined) return answer;
     if (cmd === "plane_at_launch") return { plane: null, from: null, why: null };
-    if (cmd === "recent_planes") return { planes: [], dropped: [], forgetful: null };
+    // A machine that remembers a project, so the launch comes up on the opener rather than
+    // the first run (FR-4), which is `FirstRun.test.tsx`'s.
+    if (cmd === "recent_planes")
+      return {
+        planes: [{ path: "/home/dev/elsewhere", name: "elsewhere", approved: true }],
+        dropped: [],
+        forgetful: null,
+      };
     if (cmd === "plane_sidebar") return SIDEBAR;
     if (cmd === "opened_chats") return [];
     if (cmd === "chat_states") return [];

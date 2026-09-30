@@ -66,6 +66,7 @@ import {
   Pin,
   PlaneView,
   ShowMore,
+  type FirstChat,
   type PlaneReport,
   type WindowDoing,
 } from "./PlaneView";
@@ -173,6 +174,19 @@ function App() {
    * machine's, so any project's strip will do, and the one the operator is looking at is it.
    */
   const [preferencesAsk, setPreferencesAsk] = useState<{ plane: PlaneId; at: number }>();
+  /**
+   * The first chat a repository opened into the local project asks for (FR-4): which project,
+   * the workspace named after the repository, the clone the chat starts in, and a count, the
+   * shape `settingsAsk` has. The project's own `PlaneView` asks for the chat, because the
+   * picker and the tabs are its own.
+   */
+  const [firstChatAsk, setFirstChatAsk] = useState<{ plane: PlaneId } & FirstChat>();
+  /** The same, for a repository whose project had to be approved first: kept by the path the
+   *  trust question is about, and asked for once the operator has said yes. */
+  const firstChatAfterApproval = useRef(new Map<string, FirstChat>());
+  /** Whether a repository is being opened right now, and why the last one opened nothing. */
+  const [openingRepo, setOpeningRepo] = useState(false);
+  const [repoTrouble, setRepoTrouble] = useState<string>();
   /** Preferences asked for with no project in front: drawn where the opener is, because there
    *  is no strip to open a tab on and a text size is still worth changing. */
   const [preferencesAlone, setPreferencesAlone] = useState(false);
@@ -405,6 +419,12 @@ function App() {
     const plane = answer.data;
     setPlanes((was) => (was.includes(plane) ? was : [...was, plane]));
     setShowing({ at: "plane", plane });
+    // A repository opened into this project was waiting on this yes for its first chat.
+    const first = firstChatAfterApproval.current.get(ask.path);
+    if (first !== undefined) {
+      firstChatAfterApproval.current.delete(ask.path);
+      setFirstChatAsk((was) => ({ plane, ...first, at: (was?.at ?? 0) + 1 }));
+    }
   }, []);
 
   /** Lets go of one project. Its chats end, its record is written into it, and its tab goes.
@@ -531,6 +551,39 @@ function App() {
     const opened = answer.data.plane;
     setPlanes((was) => (was.includes(opened) ? was : [...was, opened]));
     setShowing({ at: "plane", plane: opened });
+  }, []);
+
+  /**
+   * Opens a repository into this machine's local project and asks for the first chat in it
+   * (FR-4, #603). Nothing asks where the project goes: the core makes it in charter's own
+   * directory when there is none, clones the repository into a workspace named after it, and
+   * answers as `create_project` does — a project, or the trust question to ask first.
+   *
+   * Answers why nothing was opened, or `undefined` when something was, so the first run and the
+   * New project dialog can each keep the refusal where the operator is standing.
+   */
+  const openRepo = useCallback(async (path: string): Promise<string | undefined> => {
+    setOpeningRepo(true);
+    const answer = await commands
+      .openRepo(path)
+      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+    setOpeningRepo(false);
+    if (answer.status === "error") return answer.error;
+    const { opened, workspace, cwd } = answer.data;
+    const first: FirstChat = { workspace, cwd, at: 0 };
+    if (opened.plane === null) {
+      const ask = opened.ask;
+      if (ask) {
+        firstChatAfterApproval.current.set(ask.path, first);
+        setApproving((queue) => (queue.some((q) => q.path === ask.path) ? queue : [...queue, ask]));
+      }
+      return undefined;
+    }
+    const plane = opened.plane;
+    setPlanes((was) => (was.includes(plane) ? was : [...was, plane]));
+    setShowing({ at: "plane", plane });
+    setFirstChatAsk((was) => ({ plane, ...first, at: (was?.at ?? 0) + 1 }));
+    return undefined;
   }, []);
 
   const onReport = useCallback((plane: PlaneId, mine: PlaneReport) => {
@@ -1480,6 +1533,7 @@ function App() {
           settingsAsked={settingsAsk?.plane === plane ? settingsAsk.at : undefined}
           savingAsked={savingAsk?.plane === plane ? savingAsk.at : undefined}
           preferencesAsked={preferencesAsk?.plane === plane ? preferencesAsk.at : undefined}
+          firstChatAsked={firstChatAsk?.plane === plane ? firstChatAsk : undefined}
         />
       ))}
 
@@ -1523,6 +1577,18 @@ function App() {
                 adding={planes.length > 0}
                 onOpen={(path) => void openInto(path, true)}
                 trouble={openTrouble}
+                // The first run is for a window that has never held a project: one whose last
+                // project was closed is somebody who has had one, and gets the opener.
+                onOpenRepo={
+                  heldSomething
+                    ? undefined
+                    : (path) => {
+                        setRepoTrouble(undefined);
+                        void openRepo(path).then(setRepoTrouble);
+                      }
+                }
+                openingRepo={openingRepo}
+                repoTrouble={repoTrouble}
               />
             )}
           </div>
@@ -1552,6 +1618,14 @@ function App() {
           onCreate={(path, planeIsThisRepo, adopt) =>
             void makeProject(path, planeIsThisRepo, adopt)
           }
+          onOpenRepo={(path) => {
+            setCreateTrouble(undefined);
+            void openRepo(path).then((refused) => {
+              if (refused === undefined) setCreating(false);
+              else setCreateTrouble(refused);
+            });
+          }}
+          opening={openingRepo}
           onCancel={() => {
             setCreating(false);
             setCreateTrouble(undefined);

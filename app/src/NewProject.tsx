@@ -38,6 +38,12 @@ import { commands } from "./bindings";
  * Whatever is scaffolded is then opened **through the trust gate** — see `create_project`. A
  * plane charter has just made is still a plane this machine has approved nothing about, so the
  * ordinary end of this dialog is the approval dialog, on the same path a recents row takes.
+ *
+ * **All of the above is under Advanced now** (FR-4, #603, ruling W10). The default asks one
+ * thing, the repository, and opens it into this machine's local project in a workspace named
+ * after it — the first run's own path, so nobody is asked where a plane goes before they have a
+ * reason to care. The two-directory form is a `<details>`, closed, because the browser has a
+ * collapsible (`docs/ui-primitives.md`).
  */
 export function NewProject({
   /** Why the last attempt made nothing — **the core's lines, unchanged and all of them**. */
@@ -45,13 +51,21 @@ export function NewProject({
   /** Whether charter is making it right now, so the answer cannot be given twice. */
   making,
   onCreate,
+  onOpenRepo,
+  opening,
   onCancel,
 }: {
   trouble?: string;
   making: boolean;
   onCreate: (path: string, planeIsThisRepo: boolean, adopt: string) => void;
+  /** Opens a repository into this machine's local project (FR-4). */
+  onOpenRepo: (path: string) => void;
+  /** Whether that is happening right now. */
+  opening: boolean;
   onCancel: () => void;
 }) {
+  const [repo, setRepo] = useState("");
+  const repoAt = useId();
   const [path, setPath] = useState("");
   const [adopt, setAdopt] = useState("");
   const [planeIsThisRepo, setPlaneIsThisRepo] = useState(false);
@@ -59,6 +73,7 @@ export function NewProject({
   const adoptId = useId();
   const repoId = useId();
   const box = useRef<HTMLInputElement>(null);
+  const first = useRef<HTMLInputElement>(null);
   const ready = path.trim() !== "" && !making;
 
   // One picker, told where to put its answer. Both fields ask the same question of the same
@@ -89,38 +104,90 @@ export function NewProject({
           onInteractOutside={(e) => e.preventDefault()}
           onOpenAutoFocus={(e) => {
             e.preventDefault();
-            box.current?.focus();
+            first.current?.focus();
           }}
         >
           <Dialog.Title id="new-project">New project</Dialog.Title>
           <p className="came-back">
-            A project is a control plane: a directory of its own, holding workspaces, personas and
-            the clones work happens in.
+            Pick a repository. charter opens it in a workspace of its own, in the project it keeps
+            on this machine. Nothing is written into the repository.
           </p>
 
           <form
             className="asks"
             onSubmit={(event) => {
               event.preventDefault();
-              // The box and the adopt field are two answers to one question — which
-              // repository this plane starts from — so a ticked box sends no repo, rather
-              // than sending both and letting the core rank them.
-              if (ready)
-                onCreate(path.trim(), planeIsThisRepo, planeIsThisRepo ? "" : adopt.trim());
+              if (repo.trim() !== "" && !opening) onOpenRepo(repo.trim());
             }}
           >
-            <label htmlFor={pathId}>Folder</label>
+            <label htmlFor={repoAt}>Repository</label>
             <div className="picking">
               <input
-                id={pathId}
-                ref={box}
-                value={path}
+                id={repoAt}
+                ref={first}
+                value={repo}
                 autoComplete="off"
                 spellCheck={false}
-                placeholder="/where/it/goes"
-                onChange={(event) => setPath(event.target.value)}
+                placeholder="/where/the/repo/is"
+                onChange={(event) => setRepo(event.target.value)}
               />
-              {/* `tabIndex={0}`, per `docs/ui-primitives.md` (charter-app#186): WebKit leaves
+              {/* `tabIndex={0}`, per `docs/ui-primitives.md` (charter-app#186). */}
+              <button
+                type="button"
+                tabIndex={0}
+                aria-label="Browse for the repository"
+                onClick={() => pick(setRepo)}
+              >
+                Browse…
+              </button>
+            </div>
+            {/* The core's refusal, all of it, for whichever form was sent last. */}
+            {trouble && (
+              <p className="trouble said-in-full" role="alert">
+                {trouble}
+              </p>
+            )}
+            <div className="doing">
+              <button type="submit" tabIndex={0} disabled={repo.trim() === "" || opening}>
+                Open repository
+              </button>
+              <button type="button" tabIndex={0} onClick={onCancel}>
+                Cancel
+              </button>
+            </div>
+          </form>
+
+          {/* The two-directory form (ADR 0035), for a project of its own somewhere the operator
+              chooses. Closed until asked for. */}
+          <details className="advanced">
+            <summary tabIndex={0}>Advanced</summary>
+            <p className="came-back">
+              A project of its own: a control plane in a directory you choose, holding workspaces,
+              personas and the clones work happens in.
+            </p>
+            <form
+              className="asks"
+              onSubmit={(event) => {
+                event.preventDefault();
+                // The box and the adopt field are two answers to one question — which
+                // repository this plane starts from — so a ticked box sends no repo, rather
+                // than sending both and letting the core rank them.
+                if (ready)
+                  onCreate(path.trim(), planeIsThisRepo, planeIsThisRepo ? "" : adopt.trim());
+              }}
+            >
+              <label htmlFor={pathId}>Folder</label>
+              <div className="picking">
+                <input
+                  id={pathId}
+                  ref={box}
+                  value={path}
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder="/where/it/goes"
+                  onChange={(event) => setPath(event.target.value)}
+                />
+                {/* `tabIndex={0}`, per `docs/ui-primitives.md` (charter-app#186): WebKit leaves
                   a `<button>` out of the tab sequence unless its `tabindex` is written down,
                   and the folder box beside this one is the scope's first edge, so nothing
                   reached this at all.
@@ -129,104 +196,97 @@ export function NewProject({
                   buttons reading `Browse…` announce identically and pick different
                   directories, which is a question a screen reader cannot answer and a sighted
                   operator answers only from where the button sits. */}
-              <button
-                type="button"
-                tabIndex={0}
-                aria-label="Browse for the folder"
-                onClick={() => pick(setPath)}
-              >
-                Browse…
-              </button>
-            </div>
-            <p className="came-back">
-              It does not have to exist yet. charter makes it, and writes the plane into it.
-            </p>
+                <button
+                  type="button"
+                  tabIndex={0}
+                  aria-label="Browse for the folder"
+                  onClick={() => pick(setPath)}
+                >
+                  Browse…
+                </button>
+              </div>
+              <p className="came-back">
+                It does not have to exist yet. charter makes it, and writes the plane into it.
+              </p>
 
-            {/* ADR 0035's default, as a second directory rather than a refusal about one. */}
-            <label htmlFor={adoptId}>Repository to adopt</label>
-            <div className="picking">
-              <input
-                id={adoptId}
-                value={adopt}
-                autoComplete="off"
-                spellCheck={false}
-                disabled={planeIsThisRepo}
-                placeholder="/where/the/repo/is (optional)"
-                onChange={(event) => setAdopt(event.target.value)}
-              />
-              {/* `tabIndex={0}` here too, and it was missing — this button was written after
+              {/* ADR 0035's default, as a second directory rather than a refusal about one. */}
+              <label htmlFor={adoptId}>Repository to adopt</label>
+              <div className="picking">
+                <input
+                  id={adoptId}
+                  value={adopt}
+                  autoComplete="off"
+                  spellCheck={false}
+                  disabled={planeIsThisRepo}
+                  placeholder="/where/the/repo/is (optional)"
+                  onChange={(event) => setAdopt(event.target.value)}
+                />
+                {/* `tabIndex={0}` here too, and it was missing — this button was written after
                   the sweep that put the attribute on every other one (charter-app#186), which
                   is exactly how a fixed class of defect comes back. Without it the engine
                   skips this picker and there is no way to reach it by keyboard at all. */}
-              <button
-                type="button"
-                tabIndex={0}
-                aria-label="Browse for the repository to adopt"
-                disabled={planeIsThisRepo}
-                onClick={() => pick(setAdopt)}
-              >
-                Browse…
-              </button>
-            </div>
-            <p className="came-back">
-              Optional, and the way ADR 0035 means a project to start: the plane goes in the folder
-              above and this repository becomes its first clone, in <code>workspaces/</code>.
-              Nothing is written into the repository — it is read, and only read. Leave it empty for
-              a plane with no clones yet.
-            </p>
+                <button
+                  type="button"
+                  tabIndex={0}
+                  aria-label="Browse for the repository to adopt"
+                  disabled={planeIsThisRepo}
+                  onClick={() => pick(setAdopt)}
+                >
+                  Browse…
+                </button>
+              </div>
+              <p className="came-back">
+                Optional, and the way ADR 0035 means a project to start: the plane goes in the
+                folder above and this repository becomes its first clone, in{" "}
+                <code>workspaces/</code>. Nothing is written into the repository — it is read, and
+                only read. Leave it empty for a plane with no clones yet.
+              </p>
 
-            {/* The one decision, and it is the operator's. Radix's checkbox, per
+              {/* The one decision, and it is the operator's. Radix's checkbox, per
                 `docs/ui-primitives.md`; the label is `htmlFor` the control, which is native
                 HTML doing what it already does. */}
-            <div className="choice">
-              <Checkbox.Root
-                id={repoId}
-                className="box"
-                checked={planeIsThisRepo}
-                onCheckedChange={(next) => setPlaneIsThisRepo(next === true)}
-                // In the tab sequence, said out loud (`docs/ui-primitives.md`,
-                // charter-app#186). Radix's checkbox is a `<button>`, and this is the one
-                // decision on this dialog that writes into a repository the operator already
-                // has — it is not a control to leave off the keyboard's route.
-                tabIndex={0}
-              >
-                <Checkbox.Indicator className="box-mark">✓</Checkbox.Indicator>
-              </Checkbox.Root>
-              <label className="who" htmlFor={repoId}>
-                Make this repo itself the plane
-              </label>
-            </div>
-            <p className="came-back">
-              Only for a folder that is the top of a git repository, and only when you mean it: it
-              writes <code>charter.toml</code>, <code>personas/</code>, <code>workspaces/</code> and
-              charter&rsquo;s rules into that repository&rsquo;s tracked <code>.gitignore</code>.
-              charter&rsquo;s own plane is one of these. Left unticked, charter writes nothing into
-              a repository and says how to make a plane beside it.
-            </p>
-
-            {/* Verbatim, and all of it. `init`'s refusal in a repository is four lines — what
-                it will not do, the commands that make a plane beside the repo, what asking for
-                the old shape would write, and where the decision is recorded — and an operator
-                shown a summary of that can follow none of it. */}
-            {trouble && (
-              <p className="trouble said-in-full" role="alert">
-                {trouble}
+              <div className="choice">
+                <Checkbox.Root
+                  id={repoId}
+                  className="box"
+                  checked={planeIsThisRepo}
+                  onCheckedChange={(next) => setPlaneIsThisRepo(next === true)}
+                  // In the tab sequence, said out loud (`docs/ui-primitives.md`,
+                  // charter-app#186). Radix's checkbox is a `<button>`, and this is the one
+                  // decision on this dialog that writes into a repository the operator already
+                  // has — it is not a control to leave off the keyboard's route.
+                  tabIndex={0}
+                >
+                  <Checkbox.Indicator className="box-mark">✓</Checkbox.Indicator>
+                </Checkbox.Root>
+                <label className="who" htmlFor={repoId}>
+                  Make this repo itself the plane
+                </label>
+              </div>
+              <p className="came-back">
+                Only for a folder that is the top of a git repository, and only when you mean it: it
+                writes <code>charter.toml</code>, <code>personas/</code>, <code>workspaces/</code>{" "}
+                and charter&rsquo;s rules into that repository&rsquo;s tracked{" "}
+                <code>.gitignore</code>. charter&rsquo;s own plane is one of these. Left unticked,
+                charter writes nothing into a repository and says how to make a plane beside it.
               </p>
-            )}
 
-            {/* `tabIndex={0}` on both, per `docs/ui-primitives.md` (charter-app#186). Only the
+              {/* `init`'s refusal in a repository is four lines — what it will not do, the
+                commands that make a plane beside the repo, what asking for the old shape would
+                write, and where the decision is recorded — and it is drawn in full above, where
+                every refusal this dialog is given goes. */}
+
+              {/* `tabIndex={0}` on both, per `docs/ui-primitives.md` (charter-app#186). Only the
                 folder box was in WebKit's tab sequence here: it is this scope's first edge and
                 `Cancel` is its last, so `Browse…`, the checkbox and `Create project` were all
                 in the middle, where neither the engine nor Radix reaches. */}
-            <div className="doing">
-              <button type="submit" tabIndex={0} disabled={!ready}>
-                Create project
-              </button>
-              <button type="button" tabIndex={0} onClick={onCancel}>
-                Cancel
-              </button>
-            </div>
-          </form>
+              <div className="doing">
+                <button type="submit" tabIndex={0} disabled={!ready}>
+                  Create project
+                </button>
+              </div>
+            </form>
+          </details>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

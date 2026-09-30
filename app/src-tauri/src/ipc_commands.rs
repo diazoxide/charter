@@ -43,6 +43,8 @@ macro_rules! app_commands {
                 windows::charter_windows,
                 windows::show_window_holding,
                 opener::create_project,
+                firstrun::first_run_found,
+                firstrun::open_repo,
                 open_session,
                 close_session,
                 ignore_needs_you,
