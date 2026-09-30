@@ -724,6 +724,7 @@ dependencies = [
  "tauri-specta",
  "tempfile",
  "tokio",
+ "zbus",
 ]
 
 [[package]]

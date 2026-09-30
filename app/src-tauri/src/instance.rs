@@ -1,0 +1,145 @@
+//! One charter per user, whether or not there is a session bus.
+//!
+//! On Linux, `tauri-plugin-single-instance` is a name on the D-Bus session bus, and it is what
+//! `hookwire` relies on to remove a stale hook socket safely: "there is no second live app
+//! whose socket this could be". A launch that starts without the bus — because the desktop
+//! portal is silent (`portal.rs`, charter-app#24), or because there is no bus at all — has no
+//! name to hold, and before this nothing stopped a second app on the same plane.
+//!
+//! So the app also holds an advisory lock on a file of its own, with `flock` through
+//! [`std::fs::File::try_lock`] — the standard way a Unix program says "one of me". The kernel
+//! lets go of it when the process ends however it ends, so a killed app leaves nothing stale
+//! behind. It is taken in `setup`, after the plugin has already handed an ordinary second
+//! launch to the running app, so what reaches it is only a launch the bus could not hand over.
+
+use std::fs::{File, OpenOptions, TryLockError};
+use std::path::{Path, PathBuf};
+
+/// Why this launch does not hold the lock.
+#[derive(Debug)]
+pub enum NotHeld {
+    /// Another charter holds it.
+    Taken,
+    /// The file could not be opened or locked; the launch goes on without the guarantee.
+    Failed(std::io::Error),
+}
+
+/// Where the lock lives: `$XDG_RUNTIME_DIR`, which is per user, per machine and cleared at
+/// logout, and otherwise `fallback` — the app's own per-user data directory.
+///
+/// Keyed by the app's identifier, as the single-instance name is, so a scenario build
+/// (`dev.charter.app.e2e`) and the operator's charter do not refuse each other.
+pub fn path_for(identifier: &str, runtime_dir: Option<&Path>, fallback: &Path) -> PathBuf {
+    match runtime_dir.filter(|dir| dir.is_absolute() && dir.is_dir()) {
+        Some(dir) => dir.join(format!("{identifier}.lock")),
+        None => fallback.join("instance.lock"),
+    }
+}
+
+/// Takes the lock at `path`, for as long as the returned file is open.
+pub fn hold(path: &Path) -> Result<File, NotHeld> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(NotHeld::Failed)?;
+    }
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+        .map_err(NotHeld::Failed)?;
+    match file.try_lock() {
+        Ok(()) => Ok(file),
+        Err(TryLockError::WouldBlock) => Err(NotHeld::Taken),
+        Err(TryLockError::Error(err)) => Err(NotHeld::Failed(err)),
+    }
+}
+
+/// The lock, held for the app's life and let go of at `Exit` — before Tauri's restart to
+/// update starts the new process, which would otherwise find it taken.
+pub struct Instance(std::sync::Mutex<Option<File>>);
+
+impl Instance {
+    pub fn holding(file: File) -> Self {
+        Self(std::sync::Mutex::new(Some(file)))
+    }
+
+    pub fn let_go(&self) {
+        if let Ok(mut held) = self.0.lock() {
+            held.take();
+        }
+    }
+}
+
+/// What a launch that found another charter running says before it ends.
+pub const ALREADY_RUNNING: &str = "charter: charter is already running for this user, and \
+     without a session bus this launch cannot be handed to it — switch to its window. \
+     charter-app#24.";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_first_launch_holds_the_lock_and_a_second_is_refused() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let path = dir.path().join("charter.lock");
+
+        let _first = hold(&path).expect("the first launch holds it");
+
+        assert!(
+            matches!(hold(&path), Err(NotHeld::Taken)),
+            "a second launch was let in beside the first"
+        );
+    }
+
+    #[test]
+    fn the_lock_is_free_again_once_the_app_that_held_it_lets_go() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let path = dir.path().join("charter.lock");
+        let instance = Instance::holding(hold(&path).expect("held"));
+
+        instance.let_go();
+
+        hold(&path).expect("the next launch holds it");
+    }
+
+    #[test]
+    fn a_lock_file_left_behind_by_an_app_that_is_gone_is_no_obstacle() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let path = dir.path().join("charter.lock");
+        std::fs::write(&path, "").expect("a stale file");
+
+        hold(&path).expect("a file with no lock on it is free");
+    }
+
+    #[test]
+    fn the_lock_lives_in_the_runtime_directory_and_is_keyed_by_the_identifier() {
+        let runtime = tempfile::tempdir().expect("a directory");
+        let fallback = Path::new("/home/someone/.local/share/dev.charter.app");
+
+        assert_eq!(
+            path_for("dev.charter.app", Some(runtime.path()), fallback),
+            runtime.path().join("dev.charter.app.lock")
+        );
+        assert_ne!(
+            path_for("dev.charter.app", Some(runtime.path()), fallback),
+            path_for("dev.charter.app.e2e", Some(runtime.path()), fallback),
+            "a scenario build and the operator's charter would refuse each other"
+        );
+    }
+
+    #[test]
+    fn with_no_usable_runtime_directory_the_lock_lives_in_the_apps_own_directory() {
+        let fallback = Path::new("/home/someone/.local/share/dev.charter.app");
+
+        assert_eq!(
+            path_for("dev.charter.app", None, fallback),
+            fallback.join("instance.lock")
+        );
+        assert_eq!(
+            path_for("dev.charter.app", Some(Path::new("relative")), fallback),
+            fallback.join("instance.lock")
+        );
+    }
+}

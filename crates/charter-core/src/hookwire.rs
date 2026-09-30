@@ -838,7 +838,9 @@ impl Listener {
         // `bind` refuses an address already in use, and a socket file outlives the process
         // that made it — so an app that was killed would stop the next one from listening at
         // all. Removing it first is the standard answer, and the single-instance plugin is
-        // what makes it safe: there is no second live app whose socket this could be.
+        // what makes it safe: there is no second live app whose socket this could be. On
+        // Linux the app also holds a per-user lock (`instance.rs` in charter-app), because a
+        // launch without a session bus has no single-instance name to hold.
         match std::fs::remove_file(path) {
             Ok(()) => {}
             Err(err) if err.kind() == io::ErrorKind::NotFound => {}

@@ -69,7 +69,7 @@ with a reason rather than reporting zeros.
 | **Keystroke to screen ≤ 50 ms while 49 others stream** | worst 26 ms with 49 streaming at ~1 MB/s each, worst 26 ms with 49 flat out (30 samples each) | met |
 | **Tab or pane switch ≤ 100 ms** | back to a light tab worst 39 ms; to a tab whose session holds all 5000 lines of history worst 48 ms; back to the typed tab under the 49-session load worst 41 ms (10 samples each) | met |
 | **Hook call ≤ 50 ms** | `charter hook pretooluse` through Python charter: **p50 107.6 ms**, worst 114 ms (30 samples) | **missed here; met in M1.3** |
-| **Cold start ≤ 2 s** | p50 370 ms to the first frame on screen; worst 510 ms, the first launch after the build and the only one cold on disk | met on macOS; **missed on a Linux whose desktop portal cannot start** (26–31 s) — see the amendment below |
+| **Cold start ≤ 2 s** | p50 370 ms to the first frame on screen; worst 510 ms, the first launch after the build and the only one cold on disk | met on macOS; met on a Linux whose desktop portal cannot start since the 2026-09-30 addendum below, which starts without the session bus there (it was 26–31 s) |
 | **Idle hidden session ≤ 50 MB at the shipped scrollback cap** | **20.2 MB** each: fifty sessions holding 5000 lines at 150 columns took the app's process from 118.9 MB to 1129.7 MB | met |
 | **`?2026` animation ≥ 30 fps** | **52.4 draws/s** for a 3 KB repaint written whole, **52.0** for a 10 KB full-screen repaint written whole, both against a 60 fps display; **1.0 draws/s** when the writer pauses inside an open update | met, with a hazard recorded below |
 | tmux, as a reference | 26.0 MB/s at 2 MB, 26.1 MB/s at 13 MB, in a 150×42 window with a client attached through a pseudo-terminal | the app is above it |
@@ -277,3 +277,50 @@ a cold disk.
 
 This changes the caveat, not the row: **cold start is still missed** in this configuration. An
 operator who is told why they are waiting is still waiting.
+
+**Addendum, 2026-09-30: met, by starting without the bus when the portal is silent.** The
+trade above was refused for one reason: the single-instance name was what made it safe for
+`hookwire` to remove a stale hook socket, and a launch with no bus has no name. That reason is
+now answered on its own terms, and the trade is taken (charter-app#24, program map FR-8).
+
+- **Ask first, for 300 ms.** Before `tauri::Builder::build()`, the app asks the session bus to
+  start `org.freedesktop.portal.Desktop` (`StartServiceByName`, the call GTK's proxy makes). A
+  running portal gets "already running" at once, and one that nothing can start gets
+  `ServiceUnknown` at once. Only a portal the bus is still trying to start gets no answer, and
+  that is the 25 s wait. After 300 ms of silence the app `exec`s itself, with the same
+  process, binary and arguments, and with `DBUS_SESSION_BUS_ADDRESS` pointing at nothing. It
+  says on standard error what the run loses: the tray, notifications, and handing a second
+  launch to this one (`portal.rs`).
+- **One charter per user, with or without the bus.** On Linux the app also holds an `flock`
+  on `$XDG_RUNTIME_DIR/<identifier>.lock` from the start of `setup`. The single-instance
+  plugin has already handed an ordinary second launch over by then, so only a launch the bus
+  could not hand over reaches the lock, and that launch is refused. The lock is released at
+  `Exit`, before a restart to update starts the new process (`instance.rs`). This makes
+  `hookwire`'s promise true on every Linux launch. Before, it was not true on a machine with
+  no bus at all.
+- **X11 with no session bus is the same case.** With no address and no
+  `$XDG_RUNTIME_DIR/bus`, GIO autolaunches a bus of its own through `dbus-launch`, and on that
+  bus the portal can be activated again. The app pins the address to nothing there as well.
+  There is no bus for it to lose, since the plugins find none by the standard lookup.
+
+Measured in a Linux container (Ubuntu 24.04, debug build, Xvfb). The session bus there had an
+activatable portal whose service never takes its name, which is the issue's machine in
+miniature. Five launches each, to the first frame:
+
+| Build and case | Launch to first frame |
+| --- | --- |
+| before (`main` at `dd60d3d`), X without a window manager | no first frame within 30 s |
+| after, X without a window manager | p50 775 ms, worst 1244 ms |
+| after, i3 under X11, on the same bus | p50 654 ms, worst 877 ms |
+| after, i3 under X11, no session bus | p50 385 ms, worst 481 ms |
+
+CI now runs the same three cases on the GitHub runner, whose own bus is the machine the issue
+was traced on, and fails when a p50 passes 2 s (`tools/coldstart-linux.sh`, in the `app` job).
+GNOME Wayland and KDE are not measured there, because a hosted runner has neither. On a full
+desktop the portal is already running and answers at once. That follows from the trace and is
+still not measured.
+
+What remains to fix later: a portal that answers the question and then stalls is not caught,
+and on a machine where the bus is silent, a second launch is refused instead of being handed
+over. `charterd` (FD-5) removes the second cost, because the hook socket is no longer the
+app's.
