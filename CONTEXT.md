@@ -449,6 +449,13 @@ into the harness's config: what level 2 and a harness's own protocol need. It ne
 the harness's program (ADRs 0050, 0073).
 _Avoid_: wrapper, driver, plugin (that is the harness's)
 
+**ACP adapter program**:
+A program the user installs that speaks ACP for a harness that does not, such as
+`claude-agent-acp` or `codex-acp`. charter spawns it as a level-3 chat's program, found by name
+on `PATH`, and never ships, downloads or updates one. It is not a harness adapter, which is
+charter's code (ADRs 0073, 0080).
+_Avoid_: ACP adapter (on its own), harness adapter (for this), bridge
+
 **Wrap**:
 To run a chat's unmodified harness inside a sandbox profile or backend charter generates (ADR
 0067). Never to **stand in** for the harness: putting charter's own program where the harness's
