@@ -1411,7 +1411,7 @@ impl Planes {
         Ok(())
     }
 
-    /// The kill switch (OV-1, ADR 0069): interrupts and ends every chat and shell in every
+    /// The kill switch (OV-1, ADR 0071): interrupts and ends every chat and shell in every
     /// plane this process holds, in every window, and starts no chat until [`Self::rearm`].
     /// Answers how many it stopped.
     ///

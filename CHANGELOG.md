@@ -18,7 +18,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   every project and every window within seconds. No chat starts again, not even from a relaunch,
   until you re-arm it from the title bar; you can still open a shell to look around. The stopped
   chats stay as tabs to reopen. Each stop, re-arm and tamper is one line in `kill-switch.jsonl`
-  in charter's config directory (ADR 0069).
+  in charter's config directory (ADR 0071).
 
 ### Fixed
 

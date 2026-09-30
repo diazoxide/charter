@@ -4024,7 +4024,7 @@ semantics below.
   (`charter/report.py:462`, `charter/report.py:465`, granted `charter/report.py:475`).
   **stable** (operator-visible, deleted by hand to withdraw), per *machine*, not per plane:
   one consent covers every plane the machine works on.
-* **The kill switch** (OV-1, ADR 0069), written by the app **and** by `charter stop --all`:
+* **The kill switch** (OV-1, ADR 0071), written by the app **and** by `charter stop --all`:
   `charter/halted`, an **empty** 0600 file whose **existence** means every agent charter
   started on this machine is stopped; and `charter/kill-switch.jsonl`, JSON Lines, 0600, one
   object per event — `at` (epoch seconds), `event` (`stop`, `rearm` or `tamper`), `by`
@@ -4034,7 +4034,7 @@ semantics below.
   running app puts a removed marker back and journals a `tamper`. Only the app's window writes
   a `rearm`. While stopped, the app starts no chat and a relaunch puts no chat back. **stable**
   (a second process reads both). A process running as the operator can still edit both files
-  (ADR 0069's residual).
+  (ADR 0071's residual).
 * No other **state** in this area is written outside the plane, though charter does write
   elsewhere: a news probe writes `$TMPDIR/charter-probe-<pid>` (`charter/news.py:1329`).
   Harness-side files

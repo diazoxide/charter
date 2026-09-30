@@ -340,7 +340,7 @@ impl Chats {
     }
 
     /// [`Self::start`], for the shell the operator opens from the window: the one start the
-    /// kill switch lets through while agents are stopped (OV-1, ADR 0069).
+    /// kill switch lets through while agents are stopped (OV-1, ADR 0071).
     pub fn start_operator_shell(&self, chat: &Chat, size: Size) -> Result<u32, String> {
         self.start_as(chat, size, true)
     }

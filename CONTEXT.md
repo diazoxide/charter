@@ -138,7 +138,7 @@ Stop all on the title bar, or `charter stop --all`: every chat's and shell's pro
 started, in every project and window, is interrupted and ended, and no chat starts until the
 operator **re-arms** it from the title bar. It is a stop, not a close: the tabs stay, each
 reading as a chat whose program ended. A new shell still opens, so the operator can look around.
-Nothing on the command line re-arms (ADR 0069).
+Nothing on the command line re-arms (ADR 0071).
 _Avoid_: panic button, pause (nothing is resumed on re-arm)
 
 **Shell tab**:

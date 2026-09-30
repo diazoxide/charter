@@ -47,7 +47,7 @@ pub struct Opening {
     /// (`[chat_env] pass`, [`charter_core::chatenv::read`]).
     pub env_pass: Vec<String>,
     /// Whether this is a shell the operator opened from the window, which the kill switch lets
-    /// through: looking at what the agents did is a human act (OV-1, ADR 0069). Every other
+    /// through: looking at what the agents did is a human act (OV-1, ADR 0071). Every other
     /// start — every chat, every relaunch, every shell a record puts back — is refused while
     /// agents are stopped.
     pub operator_shell: bool,

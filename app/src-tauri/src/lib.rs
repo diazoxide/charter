@@ -1022,7 +1022,7 @@ fn open_session(
     let chats = planes.held(&plane)?;
     let size = Size { columns, rows };
     // **The operator's own shell — no program named — is the one start the kill switch lets
-    // through** (OV-1, ADR 0069). A program named here is anything at all, a harness included,
+    // through** (OV-1, ADR 0071). A program named here is anything at all, a harness included,
     // so it is refused while agents are stopped like every other chat.
     if program_named {
         chats.chats().start(&chat, size)

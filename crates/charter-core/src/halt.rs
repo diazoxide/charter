@@ -1,4 +1,4 @@
-//! The kill switch's state on disk (OV-1, ADR 0069): whether this machine's agents are
+//! The kill switch's state on disk (OV-1, ADR 0071): whether this machine's agents are
 //! stopped, and the journal of every stop, re-arm and tamper.
 //!
 //! **Two files in charter's config directory** ([`crate::machine::dir`]), beside
@@ -18,7 +18,7 @@
 //! any process running as that user — an agent among them — can edit both. A running app
 //! notices a marker taken away and puts it back (the app's `killswitch` module), and journals
 //! that as a [`Event::Tamper`]; it cannot stop a process that rewrites the journal as well.
-//! What closes that is in ADR 0069, and is not in this module's power.
+//! What closes that is in ADR 0071, and is not in this module's power.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -153,7 +153,7 @@ pub fn stop(config_root: &Path, by: Actor, at: u64) -> Result<(), NotKept> {
     }
 }
 
-/// Lets agents start again. **The window's alone** (ADR 0069): nothing on the command line
+/// Lets agents start again. **The window's alone** (ADR 0071): nothing on the command line
 /// calls it, because any agent can run a command.
 ///
 /// The marker goes first and the journal line after. A journal line that cannot be written puts

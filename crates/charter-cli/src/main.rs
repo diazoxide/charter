@@ -323,7 +323,7 @@ enum Command {
     ///
     /// It leaves one line in the kill switch's journal. There is no command to re-arm: an agent
     /// can run any command, and letting agents start again is the operator's to decide
-    /// (ADR 0069). Agents charter did not start, headless ones among them, are not reached.
+    /// (ADR 0071). Agents charter did not start, headless ones among them, are not reached.
     Stop {
         /// Every agent. Required: it is the only scope there is.
         #[arg(long, required = true)]
@@ -553,7 +553,7 @@ fn say(outcome: &charter_core::scaffold::Outcome) -> ExitCode {
     ExitCode::from(outcome.code)
 }
 
-/// `charter stop --all`: throws the kill switch the app's title bar throws (OV-1, ADR 0069).
+/// `charter stop --all`: throws the kill switch the app's title bar throws (OV-1, ADR 0071).
 ///
 /// It needs no plane and no app. The app acts on the switch within seconds when it is running,
 /// and a launch that finds it thrown starts nothing, so the stop holds either way. A stop that

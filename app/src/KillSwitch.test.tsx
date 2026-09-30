@@ -6,7 +6,7 @@ import { emit } from "@tauri-apps/api/event";
 import { TitleBar } from "./TitleBar";
 
 /**
- * **The kill switch on the title bar** (OV-1, ADR 0069): one control that stops every chat and
+ * **The kill switch on the title bar** (OV-1, ADR 0071): one control that stops every chat and
  * shell charter started, in every project and window, and, once thrown, the one that re-arms.
  * What stopping does is the core's and is tested there (`planes.rs`, `killswitch.rs`); this is
  * that the bar sends it, draws what the CORE says the switch is — never what it hoped — says a

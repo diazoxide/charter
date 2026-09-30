@@ -1,4 +1,4 @@
-//! The kill switch as the app holds it (OV-1, ADR 0069): one switch for every plane and every
+//! The kill switch as the app holds it (OV-1, ADR 0071): one switch for every plane and every
 //! window this process has, and the watch that hears `charter stop --all` throw it.
 //!
 //! **While the app runs, the switch in its memory is the authority.** The files on disk
@@ -10,7 +10,7 @@
 //!
 //! **The residual.** A process running as the operator's user can rewrite both files, and
 //! one that forges a re-arm in the journal and removes the marker while the app is not running
-//! is believed at the next launch. ADR 0069 says what closes that and where.
+//! is believed at the next launch. ADR 0071 says what closes that and where.
 //!
 //! **What it stops is every session charter started**, shell tabs included: a harness can be
 //! started by hand in a shell (ADR 0062), and leaving those running would stop only the agents

@@ -4,7 +4,7 @@ import { commands } from "./bindings";
 import { listen } from "./here";
 
 /**
- * **The kill switch** (OV-1, ADR 0069): stop every chat and shell charter started — in every
+ * **The kill switch** (OV-1, ADR 0071): stop every chat and shell charter started — in every
  * project and window — and start no chat until the operator re-arms it. Agents charter did not
  * start, headless ones among them, are not reached (OV-2).
  *
