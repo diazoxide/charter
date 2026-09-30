@@ -171,6 +171,27 @@ hostname is a label, never a key. The operator on a device is its **local princi
 (`local:<device>/<os-user>`), and charter never sends it anywhere without an account (ADR 0066).
 _Avoid_: host (that is `charterd`, the process), machine (in UI text), node
 
+**Harness declaration**:
+Data that says how to start one harness, how to name and resume its sessions, which levels it
+offers and what it can do. The ones for Claude Code, Codex and opencode ship with charter; a
+project may declare more, which each machine approves before they run, and never replaces a
+built-in's (ADR 0073, proposed).
+_Avoid_: harness definition, harness config (that is the harness's own), profile (that is which
+program runs on this machine)
+
+**Harness level**:
+How much charter learns from a chat's harness, set when a run starts and fixed for it: **1**,
+the terminal alone; **2**, the terminal with the harness's own hooks reporting to charter; **3**,
+a structured protocol, ACP or the harness's own. A fall back to a lower level starts a new run.
+Never shown on a first-hour surface (ADR 0073, proposed).
+_Avoid_: tier (that is a store's), mode, integration level
+
+**Harness capability**:
+One thing a harness does or does not do for a chat, such as report that it is waiting: yes, no
+with the fallback charter uses, or unknown, which reads as no. The capability card shows the
+*no*s in plain words (ADR 0073, proposed).
+_Avoid_: capability (unqualified, which is an extension's), feature, support
+
 **Session host** (`charterd`):
 The process that owns every chat's terminal on a device, one per OS user per device: the
 `charter` binary run as `charter serve`. The app is its client (ADR 0068).
@@ -378,31 +399,18 @@ The plane-relative paths an extension declares it writes. charter hands them res
 each request and reports a change outside them; it does not stop one.
 _Avoid_: sandbox, allowed paths, scope (as if enforced)
 
-**Harness declaration**:
-Data that says how to start one harness, how to name and resume its sessions, which levels it
-offers and what it can do. The ones for Claude Code, Codex and opencode ship with charter; a
-project may declare more, which each machine approves before they run, and never replaces a
-built-in's (ADR 0073, proposed).
-_Avoid_: harness definition, harness config (that is the harness's own), profile (that is which
-program runs on this machine)
-
-**Harness level**:
-How much charter learns from a chat's harness, fixed for the run: **1**, the terminal alone;
-**2**, the terminal with the harness's own hooks reporting to charter; **3**, a structured
-protocol, ACP or the harness's own. Never shown on a first-hour surface (ADR 0073, proposed).
-_Avoid_: tier (that is a store's), mode, integration level
-
 **Harness adapter**:
 charter code that arms one harness through its own mechanism for one chat, with nothing written
-into the harness's config: what level 2 and a harness's own protocol need. Never a copy, patch or
-wrapper of the harness's program (ADRs 0050, 0073).
+into the harness's config: what level 2 and a harness's own protocol need. It never stands in for
+the harness's program (ADRs 0050, 0073).
 _Avoid_: wrapper, driver, plugin (that is the harness's)
 
-**Harness capability**:
-One thing a harness does or does not do for a chat, such as report that it is waiting: yes, no
-with the fallback charter uses, or unknown, which reads as no. The capability card shows the
-*no*s in plain words (ADR 0073, proposed).
-_Avoid_: capability (unqualified, which is an extension's), feature, support
+**Wrap**:
+To run a chat's unmodified harness inside a sandbox profile or backend charter generates (ADR
+0067). Never to **stand in** for the harness: putting charter's own program where the harness's
+is expected and changing what it or its model sees, which charter never does. X34's *"wraps a
+harness binary"* means standing in (ADR 0073).
+_Avoid_: wrap (for a stand-in, a shim or an adapter)
 
 **Harness plugin**:
 A Claude Code, Codex or opencode plugin, chosen per project. "Plugin" on its own always means
