@@ -11,6 +11,26 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **A plane can run every Claude Code chat in a sandbox.** Add `[sandbox]` with `mode = "on"`
+  to `charter.toml`, and every Claude Code chat charter starts there runs inside Claude Code's
+  own sandbox, which charter compiles from one policy. It can reach only the hosts of the
+  plane's egress presets. Claude Code's web tools are turned off, because the host list does
+  not hold them. The chat can never read a vault's storage or write charter's own state. A
+  plane can turn the sandbox on but never off, and a mistyped `mode` turns it on. If the
+  sandbox cannot be applied, the chat does not start, and charter says what is missing and how
+  to install it. `SECURITY.md` says what the sandbox covers and what it does not. Planes that
+  say nothing run as before (#695).
+
+  **What this cannot do yet:**
+
+  - A plane with a keyring vault starts no Claude Code chat while the sandbox is on. Keyring is
+    the default vault provider, so on most machines this release can sandbox only a plane with
+    no keyring vault. That lifts when charter can wrap the harness, or resolve secrets for the
+    chat.
+  - Codex and opencode chats are not started in a sandboxed plane yet.
+
 ### Fixed
 
 - **Linux no longer waits half a minute for a desktop portal that cannot start.** Before GTK

@@ -16,7 +16,9 @@
 //! 4. [`crate::wiring::refusal`] — the kind is startable, the file is not one git would
 //!    carry, and the operator approved the command. Nothing is installed: the app arms the
 //!    chat itself ([`crate::plugin`]);
-//! 5. only then are the arguments and the environment built.
+//! 5. [`crate::sandbox::for_start`] — where the plane turned the sandbox on, it is compiled for
+//!    the harness, or the chat does not start (ADR 0067);
+//! 6. only then are the arguments and the environment built.
 //!
 //! **The harness comes from the DECLARED kind**, never from the program's name.
 //! [`crate::harness::Harness::of_command`] cannot tell a shell from a harness charter has
@@ -113,6 +115,10 @@ pub struct Ready {
     /// a harness whose adapter cannot apply per chat. It reaches the harness through
     /// [`crate::harness::Harness::state_hooks`].
     pub plugins: crate::harness_plugin::Chosen,
+    /// The sandbox this chat starts under, compiled for its harness, where the plane turned it
+    /// on ([`crate::sandbox::for_start`], ADR 0067). It reaches the harness through
+    /// [`crate::harness::Harness::state_hooks_under`].
+    pub sandbox: Option<crate::sandbox::Applied>,
 }
 
 impl Ready {
@@ -198,6 +204,19 @@ pub fn ready(start: &Start, root: &Path) -> Result<Ready, String> {
     }
 
     let harness = Harness::of_kind(&profile.kind);
+    // The sandbox, or no chat (ADR 0067 §1): asked before anything is resolved or run, so a
+    // chat that cannot be confined never reaches the program. A kind with no harness is
+    // refused by the gate above, so there is always one to ask about here.
+    let sandbox = match harness {
+        Some(harness) => crate::sandbox::for_start(
+            harness,
+            root,
+            &crate::sandbox::Machine::this(),
+            &crate::sandbox::backend::installed,
+        )
+        .map_err(|refused| refused.to_string())?,
+        None => None,
+    };
     let (added, session, how) = arguments(harness, profile, start);
     let home = profiles::home().unwrap_or_else(|| PathBuf::from("~"));
     // Resolved HERE, in charter's own process, and the absolute path is what the terminal is
@@ -260,6 +279,7 @@ pub fn ready(start: &Start, root: &Path) -> Result<Ready, String> {
         session,
         how,
         plugins,
+        sandbox,
     })
 }
 
