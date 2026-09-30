@@ -56,7 +56,7 @@ use std::path::Path;
 
 use crate::forge::Forge;
 use crate::handoffguard::{self, Caller};
-use crate::{credguard, floorguard, leakguard, planeroot, proseguard, pyjson};
+use crate::{commitguard, credguard, floorguard, leakguard, planeroot, proseguard, pyjson};
 
 /// What to do when a guard is WRONG about your case (charter#370) — `_OVERRIDE_NOTE`.
 ///
@@ -84,6 +84,8 @@ pub const REASON_RELEASE_FLOOR: &str = "release-floor";
 pub const REASON_FORGE_SUBSTITUTION: &str = "forge-substitution";
 /// See [`REASON_SINGLE_CREDENTIAL`].
 pub const REASON_CHARTER_SUBSTITUTION: &str = "charter-substitution";
+/// See [`REASON_SINGLE_CREDENTIAL`]. charter's own, with no Python counterpart (SQ-16).
+pub const REASON_GIT_HOOK_SKIP: &str = "git-hook-skip";
 
 /// How much of a leak denial becomes its trace reason — Python's `reason=leak[:70]`.
 ///
@@ -246,6 +248,16 @@ pub fn verdict(call: &Call<'_>, plane: Option<&Plane<'_>>) -> Option<Verdict> {
         // its brief, and keeping every field of that line out of the tally is simpler to hold
         // than deciding which part of it is safe. Nothing here holds a command anyway.
         return Some(Verdict::new(reason, None, why));
+    }
+    // A8: a commit that would skip the hooks a chat's git runs charter's scan in (SQ-16, ADR
+    // 0074). UNGATED: a chat commits in repositories outside any plane. charter's own, after
+    // every arm the Python had, so no recorded answer moves.
+    if let Some((spelling, why)) = commitguard::hook_skip_hit(cmd) {
+        return Some(Verdict::new(
+            REASON_GIT_HOOK_SKIP,
+            Some(spelling.to_owned()),
+            why,
+        ));
     }
     // Everything below this line in the Python is a WRITE or the persona tool-gate's ALLOW,
     // and neither is ported. See the module header.

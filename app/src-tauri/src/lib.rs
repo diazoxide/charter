@@ -109,6 +109,29 @@ fn shell_tab_shims<R: tauri::Runtime>(
     }
 }
 
+/// The git hooks a harness chat commits through (SQ-16), written under the app's data directory
+/// to run `binary`. None where they cannot be: a chat's commits are then not scanned, and the
+/// reason is said unless it is the platform's.
+fn chat_git_hooks<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    binary: &std::path::Path,
+) -> Option<charter_core::githooks::GitHooks> {
+    let dir = app.path().app_data_dir().ok()?.join("git-hooks");
+    let hooks = charter_core::githooks::GitHooks::at(&dir);
+    match hooks.write(binary) {
+        Ok(()) => Some(hooks),
+        Err(why) if why.kind() == std::io::ErrorKind::Unsupported => None,
+        Err(why) => {
+            eprintln!(
+                "charter: no git hooks at {} ({why}); a chat's commits will not be scanned \
+                 for secrets",
+                dir.display()
+            );
+            None
+        }
+    }
+}
+
 /// What the app ships that a chat is armed with, found once at launch.
 ///
 /// A property of this build and not of a project, so every plane arms with the same one.
@@ -121,6 +144,9 @@ pub(crate) struct Shipped {
     /// The shims a shell tab finds first on its `PATH` (ADR 0062), written at launch under the
     /// app's data directory — none where they could not be written, or off unix.
     pub shims: Option<charter_core::shellguard::Shims>,
+    /// The git hooks every harness chat commits through (SQ-16), written at launch under the
+    /// app's data directory — none where they could not be written, or off unix.
+    pub git_hooks: Option<charter_core::githooks::GitHooks>,
 }
 
 /// Re-run `charter plugin install` for each harness whose installed copy runs this app's
@@ -1661,6 +1687,11 @@ pub fn run() {
             let shims = binary
                 .as_deref()
                 .and_then(|binary| shell_tab_shims(app.handle(), binary));
+            // The git hooks every harness chat commits through (SQ-16), written at every launch
+            // for the same reason as the shims.
+            let git_hooks = binary
+                .as_deref()
+                .and_then(|binary| chat_git_hooks(app.handle(), binary));
             // The copy `charter plugin install` made for chats started outside the app, brought
             // up to date with this build (#449). Off the main thread: it reads and writes a few
             // files, and nothing on screen waits for it.
@@ -1680,6 +1711,7 @@ pub fn run() {
                         binary,
                         plugin,
                         shims,
+                        git_hooks,
                     },
                     // Resolved once, here, like the plane: it is an environment ladder, and a
                     // second reader of it is a second answer to where this machine's store is.

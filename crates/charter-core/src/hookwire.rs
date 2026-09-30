@@ -599,6 +599,8 @@ enum Line {
     /// After every other kind, for the same reason: it requires `session_saved`, which none of
     /// them carries, so no line an older `charter` writes ever reads as one.
     Saved(SessionSaved),
+    /// After every other kind: it requires `commit_refused`, which none of them carries.
+    Refused(CommitRefused),
 }
 
 impl Line {
@@ -611,6 +613,7 @@ impl Line {
             Self::Ask(Ask::Report(back)) => back.chat,
             Self::ByHand(notice) => notice.chat,
             Self::Saved(saved) => saved.chat,
+            Self::Refused(refused) => refused.chat,
         }
     }
 }
@@ -664,6 +667,46 @@ pub struct SessionSaved {
 /// What hears a [`SessionSaved`].
 pub type Saved = Box<dyn Fn(SessionSaved) + Send + Sync + 'static>;
 
+/// An agent's commit was refused before it was made: charter's `pre-commit` or
+/// `pre-merge-commit` found a secret or personal data in what it adds (SQ-16, ADR 0074,
+/// [`crate::diffscan`]).
+///
+/// **Neither a report nor an ask.** It does not move the chat's state — the turn goes on, and
+/// the agent has git's refusal in front of it — but it is a needs-you item of its own: the
+/// operator hears that a commit was stopped, and what for, masked.
+///
+/// **The guard is the chat's token**, as for every line: the listener hands this on only when
+/// the token beside it is the one [`ChatTokens`] issued for the chat `Line::chat()` names — here
+/// `chat`. So a line naming a chat is believed only from something holding that chat's token,
+/// which is what the chat's own process tree holds (ADR 0068 §5, the `chat` scope). What that
+/// buys a process in the chat is an item in its own chat's queue, which the operator can
+/// ignore.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CommitRefused {
+    /// The app's number for the chat whose commit it was, from [`CHAT_ENV`].
+    pub chat: u32,
+    /// What the queue item says: the repository and the first finding, masked. Never a value.
+    pub commit_refused: String,
+}
+
+/// What hears a [`CommitRefused`].
+pub type Refused = Box<dyn Fn(CommitRefused) + Send + Sync + 'static>;
+
+/// Who hears each kind of line on the hook channel ([`Listener::hear`]): one field per kind, so
+/// a kind added later is a field every caller is made to answer.
+pub struct Hearing {
+    /// Every [`Report`].
+    pub each: Box<dyn Fn(Report) + Send + Sync + 'static>,
+    /// Every [`Ask`], whose [`Answer`] is written back on the connection it came on.
+    pub answer: Answerer,
+    /// Every [`StartedByHand`].
+    pub noticed: Noticed,
+    /// Every [`SessionSaved`].
+    pub saved: Saved,
+    /// Every [`CommitRefused`].
+    pub refused: Refused,
+}
+
 /// Sends one report to the socket at `path`. Answers whether the app took it.
 ///
 /// One connection is one report, written and closed. Nothing is waited for: the app has the
@@ -705,6 +748,17 @@ pub fn tell_saved(
     saved: &SessionSaved,
 ) -> io::Result<()> {
     one_line_with_a_deadline(path, token, saved)
+}
+
+/// Tells the app at `path` a chat's commit was refused. [`tell`]'s shape and deadline: the
+/// commit is refused whether or not the app hears this.
+#[cfg(unix)]
+pub fn tell_refused(
+    path: &std::path::Path,
+    token: Option<&ChatToken>,
+    refused: &CommitRefused,
+) -> io::Result<()> {
+    one_line_with_a_deadline(path, token, refused)
 }
 
 /// One connection, one line, closed, and at most [`A_NOTICE_TAKES_AT_MOST`] spent writing it.
@@ -790,7 +844,7 @@ impl Asking {
 #[cfg(not(unix))]
 mod off_unix;
 #[cfg(not(unix))]
-pub use off_unix::{Asking, Listener, Reading, send, tell, tell_saved};
+pub use off_unix::{Asking, Listener, Reading, send, tell, tell_refused, tell_saved};
 
 /// What the app answers an ask with, told which connection it came on.
 ///
@@ -908,6 +962,8 @@ impl Listener {
     }
 
     /// [`Listener::each_answering_and_noticing`], and every [`SessionSaved`] handed to `saved`.
+    ///
+    /// A [`CommitRefused`] is heard and dropped.
     pub fn each_answering_noticing_and_saving(
         self,
         each: Box<dyn Fn(Report) + Send + Sync + 'static>,
@@ -915,15 +971,23 @@ impl Listener {
         noticed: Noticed,
         saved: Saved,
     ) -> Reading {
+        self.hear(Hearing {
+            each,
+            answer,
+            noticed,
+            saved,
+            refused: Box::new(|_| {}),
+        })
+    }
+
+    /// Hands every line to whoever `hearing` names for its kind, on a thread of its own, until
+    /// the listener is dropped. The other `each…` methods are this with the kinds they leave
+    /// out dropped.
+    pub fn hear(self, hearing: Hearing) -> Reading {
         let stopping = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let path = self.path.clone();
         let stopped = std::sync::Arc::clone(&stopping);
-        let each: std::sync::Arc<dyn Fn(Report) + Send + Sync> = std::sync::Arc::from(each);
-        let answer: std::sync::Arc<dyn Fn(u64, Ask) -> Answer + Send + Sync> =
-            std::sync::Arc::from(answer);
-        let noticed: std::sync::Arc<dyn Fn(StartedByHand) + Send + Sync> =
-            std::sync::Arc::from(noticed);
-        let saved: std::sync::Arc<dyn Fn(SessionSaved) + Send + Sync> = std::sync::Arc::from(saved);
+        let hearing = std::sync::Arc::new(hearing);
         let tokens = std::sync::Arc::clone(&self.tokens);
         let reading = std::thread::spawn(move || {
             let mut dealt: u64 = 0;
@@ -949,19 +1013,14 @@ impl Listener {
                 // A report is a few dozen bytes and the thread lives for as long as one
                 // takes to arrive, so this is not fifty threads; it is however many hooks
                 // are mid-write, which is almost always none.
-                let each = std::sync::Arc::clone(&each);
-                let answer = std::sync::Arc::clone(&answer);
-                let noticed = std::sync::Arc::clone(&noticed);
-                let saved = std::sync::Arc::clone(&saved);
+                let hearing = std::sync::Arc::clone(&hearing);
                 let tokens = std::sync::Arc::clone(&tokens);
                 dealt += 1;
                 let this = dealt;
                 let started = std::thread::Builder::new()
                     .name("charter-hook-report".into())
                     .spawn(move || {
-                        serve(
-                            connection, this, &tokens, &*each, &*answer, &*noticed, &*saved,
-                        );
+                        serve(connection, this, &tokens, &hearing);
                     });
                 // A thread that will not start costs this one report. Refusing the rest of
                 // the channel over it would cost every report after it too.
@@ -1064,10 +1123,7 @@ fn serve(
     connection: std::os::unix::net::UnixStream,
     this: u64,
     tokens: &ChatTokens,
-    each: &(dyn Fn(Report) + Send + Sync),
-    answer: &(dyn Fn(u64, Ask) -> Answer + Send + Sync),
-    noticed: &(dyn Fn(StartedByHand) + Send + Sync),
-    saved: &(dyn Fn(SessionSaved) + Send + Sync),
+    hearing: &Hearing,
 ) {
     use std::io::{BufRead, Read, Write};
 
@@ -1104,9 +1160,9 @@ fn serve(
             return;
         }
         match line {
-            Line::Report(report) => each(report),
+            Line::Report(report) => (hearing.each)(report),
             Line::Ask(ask) => {
-                let Ok(mut said) = serde_json::to_vec(&answer(this, ask)) else {
+                let Ok(mut said) = serde_json::to_vec(&(hearing.answer)(this, ask)) else {
                     return;
                 };
                 said.push(b'\n');
@@ -1114,8 +1170,9 @@ fn serve(
                     return;
                 }
             }
-            Line::ByHand(notice) => noticed(notice),
-            Line::Saved(record) => saved(record),
+            Line::ByHand(notice) => (hearing.noticed)(notice),
+            Line::Saved(record) => (hearing.saved)(record),
+            Line::Refused(refused) => (hearing.refused)(refused),
         }
     }
 }
@@ -2500,6 +2557,49 @@ mod tests {
             serde_json::from_str::<Line>(&line),
             Ok(Line::Saved(_))
         ));
+    }
+
+    #[test]
+    fn a_refused_commit_is_its_own_line_and_is_handed_to_the_app_with_its_chats_token() {
+        let refused = CommitRefused {
+            chat: 4,
+            commit_refused: "app: app.py:2  an email address  ad****".to_owned(),
+        };
+        let line = serde_json::to_string(&refused).unwrap();
+        assert!(matches!(
+            serde_json::from_str::<Line>(&line),
+            Ok(Line::Refused(_))
+        ));
+        let line = serde_json::to_string(&saved()).unwrap();
+        assert!(matches!(
+            serde_json::from_str::<Line>(&line),
+            Ok(Line::Saved(_))
+        ));
+
+        let dir = tempfile::tempdir().expect("a directory");
+        let path = dir.path().join("hooks.sock");
+        let listener = Listener::bind(dir.path(), &path).expect("a socket");
+        let token = listener.tokens().issue(4).expect("a token");
+        let (tx, rx) = mpsc::channel();
+        let tx = std::sync::Mutex::new(tx);
+        let _reading = listener.hear(Hearing {
+            each: Box::new(|_| panic!("no report was sent")),
+            answer: Box::new(|_, _| panic!("no ask was sent")),
+            noticed: Box::new(|_| panic!("no harness was started by hand")),
+            saved: Box::new(|_| panic!("no record was saved")),
+            refused: Box::new(move |refused| tx.lock().unwrap().send(refused).unwrap()),
+        });
+        // Without the token it is dropped, as every line is.
+        tell_refused(&path, None, &refused).expect("the line is written");
+        tell_refused(&path, Some(&token), &refused).expect("the line is written");
+        assert_eq!(
+            rx.recv_timeout(std::time::Duration::from_secs(5)),
+            Ok(refused)
+        );
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_millis(200))
+                .is_err()
+        );
     }
 
     #[test]

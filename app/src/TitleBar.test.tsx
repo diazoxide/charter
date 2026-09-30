@@ -470,6 +470,7 @@ describe("the title bar in the window, which holds the project strip (ADR 0054)"
           moved_at: sequence,
           sequence,
           reports: [],
+          refusals: [],
         };
         for (const handler of listeners.get("chat-moved") ?? [])
           window.__TAURI_INTERNALS__.runCallback(handler, {

@@ -162,6 +162,7 @@ function asking(plane: string, session: number, queue: number[], sequence: numbe
     moved_at: sequence,
     sequence,
     reports: [],
+    refusals: [],
   };
 }
 

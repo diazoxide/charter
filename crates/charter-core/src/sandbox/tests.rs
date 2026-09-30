@@ -154,6 +154,28 @@ fn a_chat_never_reads_or_writes_a_vaults_storage() {
 }
 
 #[test]
+fn a_sandboxed_chat_may_read_and_run_charters_git_hooks_and_never_rewrite_them() {
+    // SQ-16, ADR 0074: git treats a hook it cannot read or run as absent and commits unscanned,
+    // so nothing a chat is denied may cover the directory. The directory is the app's data
+    // directory on macOS (Tauri's, under the bundle's identifier) — outside the chat's own
+    // directory, which is all Claude Code's sandbox lets a command write — so a chat reads and
+    // runs it and cannot rewrite it.
+    let (_plane, denied) = denied_with(None, Os::MacOs);
+    let hooks =
+        std::path::PathBuf::from("/home/op/Library/Application Support/dev.charter.app/git-hooks");
+    for denial in &denied.paths {
+        assert!(
+            denial.access == Access::Write || !hooks.starts_with(&denial.path),
+            "{} is denied to a chat's reads and holds charter's git hooks",
+            denial.path.display()
+        );
+    }
+    let settings = claude::settings(&compiled(denied, Os::MacOs)).expect("compiles");
+    let deny_read = settings.sandbox["filesystem"]["denyRead"].to_string();
+    assert!(!deny_read.contains("Library"), "{deny_read}");
+}
+
+#[test]
 fn a_chat_may_read_the_registry_that_names_vaults_but_never_rewrite_it() {
     let (plane, denied) = denied_with(None, Os::Linux);
     let root = plane.path();

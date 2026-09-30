@@ -8,8 +8,8 @@
 use std::io;
 
 use super::{
-    Answer, Answerer, Ask, ChatToken, ChatTokens, Noticed, Report, Saved, SessionSaved,
-    StartedByHand,
+    Answer, Answerer, Ask, ChatToken, ChatTokens, CommitRefused, Hearing, Noticed, Report, Saved,
+    SessionSaved, StartedByHand,
 };
 
 /// [`Asking`]'s counterpart where there is no unix socket: it refuses, so a handoff there
@@ -46,6 +46,16 @@ pub fn tell(
     _path: &std::path::Path,
     _token: Option<&ChatToken>,
     _notice: &StartedByHand,
+) -> io::Result<()> {
+    Err(no_channel())
+}
+
+/// [`send`]'s refusal, for a refused commit: no chat here is armed with charter's git hooks,
+/// so nothing calls this, and it says why all the same.
+pub fn tell_refused(
+    _path: &std::path::Path,
+    _token: Option<&ChatToken>,
+    _refused: &CommitRefused,
 ) -> io::Result<()> {
     Err(no_channel())
 }
@@ -126,6 +136,11 @@ impl Listener {
         _noticed: Noticed,
         _saved: Saved,
     ) -> Reading {
+        match self {}
+    }
+
+    /// Unreachable, for the same reason.
+    pub fn hear(self, _hearing: Hearing) -> Reading {
         match self {}
     }
 }

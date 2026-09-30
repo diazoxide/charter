@@ -5,6 +5,7 @@ import {
   movedAt,
   nothingKnown,
   quietOnes,
+  refusalsOf,
   reportsTo,
   stateOf,
   underneath,
@@ -28,6 +29,7 @@ function doing(
   queue: number[] = [],
   movedAt = 0,
   reports: string[] = [],
+  refusals: string[] = [],
 ): Moved {
   taken += 1;
   return {
@@ -39,6 +41,7 @@ function doing(
     moved_at: movedAt,
     sequence: taken,
     reports,
+    refusals,
   };
 }
 
@@ -234,5 +237,17 @@ describe("when each chat last moved", () => {
 
     expect(movedAt(after, 7)).toBe(9);
     expect(movedAt(after, 8)).toBe(3);
+  });
+});
+
+describe("a refused commit (SQ-16)", () => {
+  it("knows what a chat's commits were refused for, and forgets it with its next snapshot", () => {
+    const said = "commit refused in app: a.py:2  an email address  ad**";
+    const refused = moved(nothingKnown, doing(3, "running", [3], 0, [], [said]));
+    expect(refusalsOf(refused, 3)).toEqual([said]);
+    expect(refusalsOf(refused, 4)).toEqual([]);
+
+    const prompted = moved(refused, doing(3, "running", [], 0, [], []));
+    expect(refusalsOf(prompted, 3)).toEqual([]);
   });
 });

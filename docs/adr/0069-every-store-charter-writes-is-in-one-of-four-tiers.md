@@ -30,7 +30,7 @@ charter keeps its files in three places, and none of them has a name that says w
 - **Outside every plane.** ADR 0034 allowed a machine store for facts about the operator or the
   machine. It holds `machine.json`, and it now also holds `layout.json`, `theme.json`,
   `extensions.json`, the plugin copy and the restart marker. Beside it are the app's OS
-  directories (the shell-tab shims, the panic log), the lines charter writes into Claude Code's,
+  directories (the shell-tab shims, the git hooks, the panic log), the lines charter writes into Claude Code's,
   Codex's and opencode's global config, and two kinds of keyring item.
 
 Three questions have no answer until each store has a tier. What does a backup carry (FR-10)?
@@ -56,7 +56,8 @@ directory. `machine.rs` then moved it to the config home (`$CHARTER_CONFIG_HOME`
 directory. ADR 0034 is amended to say so plainly. This record calls the tier **Machine** and
 says where each store in it is. It does
 not move any store. The Tauri application-data and log directories are Machine too. They hold
-only the shims, which are rebuilt at every launch, and the panic log.
+only the shims and the git hooks (ADR 0074), which are rebuilt at every launch, and the panic
+log.
 
 A path `docs/plane-format.md` records that is **not charter's store** gets the tier **None**:
 the operator's checkout and its worktrees, a harness's own files, a vendor CLI's output, an
@@ -269,6 +270,7 @@ relative to the plane root unless they start with `<config>` (the machine store)
 | 70 | the forge-item cache (FI7) | Machine, rebuildable | device-bound | no | yes |
 | 71 | review drafts (R5), private memory (KN-7) | Machine | syncable | yes | no |
 | 72 | a guest checkout, its worktrees, an extension's workspace folder or state directory, a vendor's `.playwright*` files, Claude Code's own files | None | — | no | — |
+| 73 | `<app data>/git-hooks/` (ADR 0074, added 2026-09-30) | Machine, rebuildable | device-bound | no | yes |
 
 ## Where V2's tiers do not fit cleanly
 

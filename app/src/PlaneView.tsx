@@ -2744,6 +2744,7 @@ export function PlaneView({
             quiet,
             nameOf,
             reportsTo: (session) => states.reports[session] ?? [],
+            refusedIn: (session) => states.refusals[session] ?? [],
             // The projects' pins are the WINDOW's, and travel down with the projects: a
             // project that is not in front draws nothing, so its pin cannot be held here.
             pinned: {
@@ -2776,6 +2777,7 @@ export function PlaneView({
       report,
       spot?.path,
       states.needsYou,
+      states.refusals,
       states.reports,
       strips,
       tabs,
@@ -3011,8 +3013,9 @@ export function PlaneView({
   // its own, whose ✕ dismisses it.
   const asking = useMemo<Asking[]>(() => {
     const reportsTo = (session: number) => states.reports[session] ?? [];
+    const refusedIn = (session: number) => states.refusals[session] ?? [];
     const rows = catalogued([
-      ...needsYouRows(states.needsYou, nameOf, tabs, reportsTo),
+      ...needsYouRows(states.needsYou, nameOf, tabs, reportsTo, refusedIn),
       ...stoppedRows(stopped, states.needsYou, nameOf, tabs),
     ]);
     const item = (session: number, ignore: string): Asking => {
@@ -3021,7 +3024,8 @@ export function PlaneView({
         session,
         name: nameOf(session),
         reported: reportsTo(session),
-        why: stopped[session],
+        // A Smart close that stopped says so first; a refused commit (SQ-16) says its latest.
+        why: stopped[session] ?? refusedIn(session)[refusedIn(session).length - 1],
         workspace: filed === OUTSIDE ? OUTSIDE_TITLE : filed,
         go: rows.get(showId(session)),
         ignore: rows.get(ignore),
@@ -3034,7 +3038,7 @@ export function PlaneView({
       ...states.needsYou.map((session) => item(session, ignoreId(session))),
       ...alsoStopped.map((session) => item(session, dismissId(session))),
     ];
-  }, [filedIn, nameOf, states.needsYou, states.reports, stopped, tabs]);
+  }, [filedIn, nameOf, states.needsYou, states.refusals, states.reports, stopped, tabs]);
 
   // What this project has open, told to the window: the quit warning lists every project's
   // chats, and this project's own tab says when one of them needs you.

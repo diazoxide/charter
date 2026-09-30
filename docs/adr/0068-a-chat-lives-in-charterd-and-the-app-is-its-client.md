@@ -203,7 +203,7 @@ anonymous scope, not even for listing.
 
 | Scope | Who connects | Where | Its credential | What it may do |
 |---|---|---|---|---|
-| `chat` | a hook, or a `charter` command, inside one chat | that plane's hook socket | the chat's own token (#535), minted at the `exec` | report, ask for a ticket and open or report back (as today), ask for a secret to be resolved into a command (the gate decides), and tell the host of a run change (ADR 0066's `charter persona use`) |
+| `chat` | a hook, or a `charter` command, inside one chat | that plane's hook socket | the chat's own token (#535), minted at the `exec` | report, ask for a ticket and open or report back (as today), ask for a secret to be resolved into a command (the gate decides), tell the host of a run change (ADR 0066's `charter persona use`), and tell it a commit was refused (`CommitRefused`, ADR 0074) |
 | `local-ui` | the app's window | `charterd.sock` | the `local-ui` credential | the whole session protocol and UI RPC, **vault values** (section 1), and the settings the host acts on |
 | `terminal` | `charter attach` and `charter ls` from the operator's shell (FD-21) | `charterd.sock` | the `terminal` credential | the session protocol on the operator's chats |
 | `fleet-mcp` | the fleet MCP server (HP-20) | `charterd.sock` | the `fleet-mcp` credential | the capability set FD-27 gives it |
@@ -268,6 +268,11 @@ chat's lines. Lines it removes before a later one are a gap the drain detects; l
 the end, before the drain, are not detected. Once drained and sealed, a line is out of the chat's
 reach. FD-30's acceptance line *"a chat cannot write the spool"* becomes *"a chat cannot write
 another chat's spool, and a gap in its own is recorded"* (V22a).
+
+**Note, 2026-09-30 (ADR 0074):** `CommitRefused` is a `chat`-scope line like a report, and
+spools like one when the socket refuses it. Until FD-30 lands (charter#667), no hook spools:
+`charter git-hook` drops the line on a refused socket, as every hook does today, and the
+commit is refused all the same. FD-30 covers this line with the rest.
 
 ### 7. An upgrade hands the terminals over, and drains only when it must (V7; FD-28: upgrade without losing agents)
 
