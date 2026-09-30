@@ -24,8 +24,9 @@ use crate::shellwrap::{self, base_lower};
 
 /// What every refusal of this arm ends with.
 const FIX: &str = "That would skip charter's scan of the commit for secrets and personal data. \
-     Fix what the scan found and commit again; if it is not what it looks like, tell the \
-     operator (allowlisting arrives with SQ-17). Do not use --no-verify.";
+     Fix what the scan found and commit again. If a finding is not what it looks like, \
+     `charter scan --explain` names the entry that would let it through; tell the operator, \
+     who commits it to .charter-scan-allow.toml. Do not use --no-verify.";
 
 /// The variables that replace a chat's git config pair when a command sets them.
 fn replaces_the_chats_config(assignment: &str) -> bool {
@@ -194,6 +195,6 @@ mod tests {
     fn the_refusal_says_what_to_do_instead() {
         let (_, why) = hook_skip_hit("git commit --no-verify").unwrap();
         assert!(why.contains("Do not use --no-verify"), "{why}");
-        assert!(why.contains("SQ-17"), "{why}");
+        assert!(why.contains("charter scan --explain"), "{why}");
     }
 }

@@ -8,7 +8,7 @@
 use std::path::Path;
 use std::process::ExitCode;
 
-use charter_core::githooks::CHECKED;
+use charter_core::githooks::{CHECKED, PRE_COMMIT};
 use charter_core::{diffscan, hookwire};
 
 /// Runs charter's check for hook `name` in the repository git ran it in: this process's
@@ -21,25 +21,42 @@ pub fn run(name: &str) -> ExitCode {
         eprintln!("charter: this commit could not be scanned for secrets (no working directory)");
         return ExitCode::FAILURE;
     };
-    match diffscan::staged(&repo) {
-        Ok(found) if found.is_empty() => ExitCode::SUCCESS,
-        Ok(found) => {
-            eprint!("{}", diffscan::refusal(&found));
-            tell_the_app(&repo, &found);
-            ExitCode::FAILURE
-        }
+    let scan = match diffscan::checked(&repo) {
+        Ok(scan) => scan,
         Err(why) => {
             eprintln!("charter: this commit could not be scanned for secrets ({why})");
-            ExitCode::FAILURE
+            return ExitCode::FAILURE;
         }
+    };
+    // A merge brings the allowlist as it was committed on the other side, by whoever committed
+    // it there; only a commit a chat makes itself may not change it (SQ-17).
+    if name == PRE_COMMIT && scan.changes_the_allowlist {
+        eprint!("{}", diffscan::ALLOWLIST_REFUSAL);
+        tell_the_app(format!(
+            "commit refused in {}: it changes the scan's allowlist",
+            repo.file_name().map_or_else(
+                || repo.display().to_string(),
+                |n| n.to_string_lossy().into_owned()
+            )
+        ));
+        return ExitCode::FAILURE;
     }
+    if scan.refused.is_empty() {
+        return ExitCode::SUCCESS;
+    }
+    eprint!("{}", diffscan::refusal(&scan.refused));
+    for problem in &scan.problems {
+        eprintln!("  (and {problem})");
+    }
+    tell_the_app(diffscan::summary(&repo, &scan.refused));
+    ExitCode::FAILURE
 }
 
 /// The app's needs-you item for this refusal. Dropped whatever it answers: the commit is
 /// refused whether or not an app hears about it, and a chat outside the app has none. ADR 0068
 /// §6 has a refused line spooled instead; no hook spools until FD-30 (charter#667), and this
 /// one spools with the rest when it does.
-fn tell_the_app(repo: &Path, found: &[diffscan::Finding]) {
+fn tell_the_app(why: String) {
     let env = |name: &str| std::env::var(name).ok();
     let (Some(socket), Some(chat)) = (
         env(hookwire::SOCKET_ENV),
@@ -52,7 +69,7 @@ fn tell_the_app(repo: &Path, found: &[diffscan::Finding]) {
         hookwire::ChatToken::from_env().as_ref(),
         &hookwire::CommitRefused {
             chat,
-            commit_refused: diffscan::summary(repo, found),
+            commit_refused: why,
         },
     );
 }

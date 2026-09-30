@@ -1690,6 +1690,29 @@ and an archived one is where `memstore.archive` would have put it (ADR 0065).
     all of them, and a line is never *added* over an untracked file of the operator's in a
     sibling tree (`charter/workspace.py:3718`–`3734`).
 
+### `.charter-scan-allow.toml` — the commit scan's allowlist (any repository)
+
+- **Format:** TOML at the top of a repository, a list of `[[allow]]` tables. Each has a
+  `reason` (required) and either a `rule`, an id `charter scan --explain` prints (`email`,
+  `forge-token`, …), with optional `paths` (globs from the repository's top: `*` stays in one
+  directory, `**` crosses them; none is every path), or a `fingerprint`, `sha256:` and the hex
+  SHA-256 of one value. An entry that cannot be read, or that names neither a rule nor a
+  fingerprint, allows nothing, and the scan says so.
+- **Status:** **stable** (SQ-17, ADR 0074 as amended).
+- **Tier:** Plane — committed, when the repository is a plane. In any other repository it is
+  committed to that repository and reviewed like its code; the repository as a whole stays
+  tier None.
+- **Written by:** the operator, by hand, in a commit made outside a chat. charter writes it
+  never. `charter scan --explain` prints the entry that would let a finding through.
+- **Read by:** `charter_core::diffscan::checked` and `charter scan`, **as it is at `HEAD`**
+  (`git show HEAD:.charter-scan-allow.toml`), never from the working tree or the index.
+- **Git:** committed. A chat's `pre-commit` refuses a commit that changes it, so an agent
+  cannot allow its own finding (V16); a merge may bring it as committed elsewhere.
+- **Beside it:** charter's own entries, the same in every repository: an `email` in
+  `Cargo.toml`, `package.json`, `.mailmap`, `AUTHORS*`, `CONTRIBUTORS*` and `CHANGELOG*`,
+  anywhere in the tree, and in a plane (a `charter.toml` at the top at `HEAD`) an `email` in
+  `memory/**`, `workspaces/*/memory/**` and `personas/*/memory/**`.
+
 ### `workspaces/<ws>/.worktrees/<repo>/<piece>/` — pieces
 
 - **Format:** git linked worktrees.

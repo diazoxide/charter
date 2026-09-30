@@ -86,9 +86,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   not forward. The guard also refuses `git commit --no-verify`, `-n`, and a
   `core.hooksPath` or `GIT_CONFIG_*` set on the command line. These are not treated as anyone's
   email: documentation and private-use domains (`example.com`, `.test`, `.internal`, `.local`),
-  no-reply addresses, `git@host` remotes, and image names like `logo@2x.png`. There is no
-  allowlist yet, so an author's email in a manifest is refused until SQ-17. Commits made by
-  `cherry-pick`, `rebase` and `am` are not scanned (#592, ADR 0074).
+  no-reply addresses, `git@host` remotes, and image names like `logo@2x.png`. The allowlist
+  below lets any other false positive through. Commits made by `cherry-pick`, `rebase` and
+  `am` are not scanned (#592, ADR 0074).
+
+- **An allowlist for the commit scan.** A repository's `.charter-scan-allow.toml` lets a finding
+  through by its rule and paths, or by one value's fingerprint. Every entry gives its reason, and
+  the file is reviewed like code. `charter scan --explain` names a finding's rule and prints the
+  entry that would let it through. The file is read as committed, and a chat's own commit may not
+  change it, so an agent cannot allow its own finding. The operator commits the entry. An author's
+  email in `Cargo.toml`, `package.json`, `.mailmap`, `AUTHORS`, `CONTRIBUTORS` or a changelog, and
+  an email in a plane's memory, pass with no entry at all (#593).
 
 ### Fixed
 

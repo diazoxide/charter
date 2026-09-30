@@ -384,8 +384,41 @@ pub fn found(text: &str) -> Option<Found> {
 /// shows what it gets.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Leak {
+    /// The rule's stable id, what an allowlist entry names (`email`, `forge-token`, …).
+    pub rule: &'static str,
+    /// What it looks like, in words.
     pub kind: &'static str,
     pub span: std::ops::Range<usize>,
+}
+
+/// Every rule [`leaks`] asks, by the id an allowlist entry names it with and the words a
+/// refusal uses for it. `charter scan --explain` prints this.
+pub const LEAK_RULES: [(&str, &str); 16] = [
+    ("agentmail-key", "AgentMail key"),
+    ("private-key", "private key (PEM)"),
+    ("aws-access-key", "AWS access key"),
+    ("forge-token", "a token by its forge's prefix"),
+    ("slack-webhook", "Slack webhook"),
+    ("sendgrid-key", "SendGrid key"),
+    ("digitalocean-token", "DigitalOcean token"),
+    ("shopify-token", "Shopify token"),
+    ("linear-key", "Linear key"),
+    ("postman-key", "Postman key"),
+    ("doppler-token", "Doppler token"),
+    ("databricks-token", "Databricks token"),
+    ("grafana-token", "Grafana token"),
+    ("email", "an email address"),
+    ("card-number", "a card number"),
+    ("us-ssn", "an ID number (US SSN)"),
+];
+
+/// The id of the rule a leak of `kind` was found by.
+fn rule_of(kind: &str) -> &'static str {
+    LEAK_RULES
+        .iter()
+        .find(|(_, words)| *words == kind)
+        .map(|(id, _)| *id)
+        .expect("every kind leaks() names is in LEAK_RULES")
 }
 
 /// Credential shapes from gitleaks' default rules that neither [`CREDENTIAL_PREFIXES`] nor the
@@ -564,6 +597,7 @@ pub fn leaks(line: &str) -> Vec<Leak> {
     for (rule, kind, rx, _) in compiled() {
         if rule.is_a_key() {
             all.extend(rx.find_iter(line).map(|hit| Leak {
+                rule: rule_of(kind),
                 kind,
                 span: hit.range(),
             }));
@@ -574,12 +608,14 @@ pub fn leaks(line: &str) -> Vec<Leak> {
             .captures_iter(line)
             .filter_map(|caps| caps.name("token"))
             .map(|hit| Leak {
+                rule: "forge-token",
                 kind: "a token by its forge's prefix",
                 span: hit.range(),
             }),
     );
     for (kind, rx) in gitleaks() {
         all.extend(rx.find_iter(line).map(|hit| Leak {
+            rule: rule_of(kind),
             kind,
             span: hit.range(),
         }));
@@ -593,6 +629,7 @@ pub fn leaks(line: &str) -> Vec<Leak> {
                     Personal::Ssn => an_ssn(hit.as_str()),
                 })
                 .map(|hit| Leak {
+                    rule: rule_of(kind),
                     kind,
                     span: hit.range(),
                 }),
@@ -958,6 +995,22 @@ mod leak_tests {
         ] {
             assert_eq!(kinds(&line), vec![kind], "{line}");
         }
+    }
+
+    #[test]
+    fn every_leak_names_the_rule_an_allowlist_entry_would_name() {
+        let line = [
+            "let k = \"ghp",
+            "_0123456789abcdefABCDEF\"; // ada@lovelace.dev",
+        ]
+        .concat();
+        let rules: Vec<&str> = leaks(&line).into_iter().map(|l| l.rule).collect();
+        assert_eq!(rules, ["forge-token", "email"]);
+        let ids: Vec<&str> = super::LEAK_RULES.iter().map(|(id, _)| *id).collect();
+        let mut unique = ids.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(ids.len(), unique.len(), "every rule id is its own");
     }
 
     #[test]

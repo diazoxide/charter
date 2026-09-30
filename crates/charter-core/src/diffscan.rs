@@ -13,13 +13,15 @@
 //! **What is shown is masked** ([`crate::secretshape::masked`]): the kind, where it is, and a
 //! short head of the value. Never the value.
 //!
-//! # The seam SQ-17 fills
+//! # What is let through (SQ-17)
 //!
-//! There is no allowlist and no way to mark a finding as a false positive here. SQ-17 adds a
-//! per-repo allowlist as a filter over what [`staged`] answers; nothing else changes.
+//! [`checked`] is [`staged`] filtered through the allowlist ([`crate::scanallow`]): charter's
+//! own entries, and the repository's file as it is at `HEAD`. It also says whether the commit
+//! changes that file, which a chat's commit may not.
 
 use std::path::Path;
 
+use crate::scanallow::{self, Allowlist, Entry, Seen};
 use crate::secretshape;
 use crate::worktree::git;
 
@@ -30,10 +32,75 @@ pub struct Finding {
     pub path: String,
     /// The 1-based line in the new version of the file.
     pub line: usize,
+    /// The rule that found it, by the id an allowlist entry names it with.
+    pub rule: &'static str,
     /// What it looks like.
     pub kind: &'static str,
     /// The value, masked.
     pub masked: String,
+    /// The value's fingerprint ([`scanallow::fingerprint`]), which an entry can name it by.
+    pub fingerprint: String,
+}
+
+/// A staged commit, scanned and filtered through its allowlist.
+#[derive(Debug, Clone, Default)]
+pub struct Scan {
+    /// What the commit is refused for.
+    pub refused: Vec<Finding>,
+    /// What an entry let through, and the entry.
+    pub allowed: Vec<(Finding, Entry)>,
+    /// Entries of the repository's allowlist that allow nothing, and why.
+    pub problems: Vec<String>,
+    /// Whether the commit changes the allowlist file itself, which only a commit made outside a
+    /// chat may.
+    pub changes_the_allowlist: bool,
+}
+
+/// [`staged`], filtered through charter's own entries and the repository's allowlist as it is at
+/// `HEAD` — never the working tree's or the index's, so an entry written and not yet committed
+/// allows nothing ([`crate::scanallow`]).
+pub fn checked(repo: &Path) -> Result<Scan, String> {
+    let found = staged(repo)?;
+    let at_head = |args: &[&str]| git::run_in_hook(repo, args, git::READ).ok();
+    let plane =
+        at_head(&["cat-file", "-e", "HEAD:charter.toml"]).is_some_and(|run| run.code == Some(0));
+    let file = at_head(&["show", &format!("HEAD:{}", scanallow::FILE)])
+        .filter(|run| run.code == Some(0))
+        .map(|run| Allowlist::parse(&String::from_utf8_lossy(&run.out)))
+        .unwrap_or_default();
+    let allowlist = Allowlist::builtin(plane).with(file);
+    let changed = at_head(&[
+        "-c",
+        "core.quotePath=false",
+        "diff",
+        "--cached",
+        "--name-only",
+        "-z",
+    ])
+    .filter(|run| run.code == Some(0))
+    .ok_or("git could not name the files the commit changes")?;
+    let mut scan = Scan {
+        problems: allowlist.problems.clone(),
+        changes_the_allowlist: String::from_utf8_lossy(&changed.out)
+            .split('\0')
+            .any(scanallow::is_the_file),
+        ..Scan::default()
+    };
+    for finding in found {
+        let seen = Seen {
+            rule: finding.rule,
+            path: &finding.path,
+            fingerprint: &finding.fingerprint,
+        };
+        match allowlist.allowing(seen) {
+            Some(entry) => {
+                let entry = entry.clone();
+                scan.allowed.push((finding, entry));
+            }
+            None => scan.refused.push(finding),
+        }
+    }
+    Ok(scan)
 }
 
 /// Everything the staged diff in `repo` adds that looks like a secret or personal data, in the
@@ -95,8 +162,10 @@ fn in_diff(diff: &str) -> Result<Vec<Finding>, String> {
             found.extend(secretshape::leaks(added).into_iter().map(|leak| Finding {
                 path: path.clone(),
                 line: at,
+                rule: leak.rule,
                 kind: leak.kind,
-                masked: secretshape::masked(&added[leak.span]),
+                masked: secretshape::masked(&added[leak.span.clone()]),
+                fingerprint: scanallow::fingerprint(&added[leak.span]),
             }));
             at += 1;
         } else if in_hunk && line.starts_with(' ') {
@@ -164,6 +233,12 @@ fn unquoted(quoted: &str) -> Option<String> {
     Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
+/// What a chat's commit that changes the allowlist is refused with.
+pub const ALLOWLIST_REFUSAL: &str = "charter: commit refused — it changes .charter-scan-allow.toml, the \
+     scan's allowlist, which only a commit made outside a chat may change. Take the file out of \
+     the commit (`git restore --staged .charter-scan-allow.toml`); the operator reviews and \
+     commits an entry. Do not use --no-verify; the operator has been told.\n";
+
 /// The most findings a refusal lists; the rest are counted.
 const LISTED: usize = 20;
 
@@ -180,9 +255,10 @@ pub fn refusal(found: &[Finding]) -> String {
     }
     out.push_str(
         "Take it out of the change and commit again. A credential belongs in a vault \
-         (`charter secret`), and personal data does not belong in a repository. If this is not \
-         what it looks like, say so to the operator: allowlisting arrives with SQ-17. Do not use \
-         --no-verify; the operator has been told.\n",
+         (`charter secret`), and personal data does not belong in a repository. If a finding is \
+         not what it looks like, `charter scan --explain` names its rule and the entry that \
+         would let it through; tell the operator, who adds it to .charter-scan-allow.toml in a \
+         commit of their own. Do not use --no-verify; the operator has been told.\n",
     );
     out
 }
@@ -250,14 +326,18 @@ mod tests {
                 Finding {
                     path: "app.py".into(),
                     line: 2,
+                    rule: "forge-token",
                     kind: "a token by its forge's prefix",
                     masked: "ghp_**********************".into(),
+                    fingerprint: scanallow::fingerprint(&key()),
                 },
                 Finding {
                     path: "app.py".into(),
                     line: 3,
+                    rule: "email",
                     kind: "an email address",
                     masked: "ad**************".into(),
+                    fingerprint: scanallow::fingerprint("ada@lovelace.dev"),
                 },
             ]
         );
@@ -343,5 +423,93 @@ mod tests {
             unquoted(r#""b/a\"b\\c\td\303\251""#).as_deref(),
             Some("b/a\"b\\c\tdé")
         );
+    }
+
+    /// Commits `.charter-scan-allow.toml` with `text` at `HEAD`, as the operator would.
+    fn allowlist_at_head(repo: &std::path::Path, text: &str) {
+        std::fs::write(repo.join(scanallow::FILE), text).unwrap();
+        testgit::run(repo, &["add", scanallow::FILE]);
+        testgit::run(repo, &["commit", "-q", "-m", "allowlist"]);
+    }
+
+    const DOCS_EMAIL: &str = "[[allow]]\nrule = \"email\"\npaths = [\"docs/**\"]\nreason = \"the docs name their authors\"\n";
+
+    #[test]
+    fn an_allowlisted_fixture_passes_and_says_which_entry_let_it() {
+        let (_dir, repo) = repo();
+        allowlist_at_head(&repo, DOCS_EMAIL);
+        std::fs::create_dir(repo.join("docs")).unwrap();
+        std::fs::write(repo.join("docs/intro.md"), "Written by ada@lovelace.dev\n").unwrap();
+        testgit::run(&repo, &["add", "docs/intro.md"]);
+
+        let scan = checked(&repo).unwrap();
+
+        assert!(scan.refused.is_empty(), "{:?}", scan.refused);
+        assert_eq!(scan.allowed.len(), 1);
+        assert_eq!(scan.allowed[0].1.origin, scanallow::Origin::File(1));
+        assert!(!scan.changes_the_allowlist);
+    }
+
+    #[test]
+    fn an_entry_written_and_not_committed_allows_nothing() {
+        let (_dir, repo) = repo();
+        std::fs::write(repo.join("README.md"), "one\n").unwrap();
+        testgit::run(&repo, &["add", "README.md"]);
+        testgit::run(&repo, &["commit", "-q", "-m", "one"]);
+        // In the working tree only: what an agent could write and not commit.
+        std::fs::write(repo.join(scanallow::FILE), DOCS_EMAIL).unwrap();
+        std::fs::create_dir(repo.join("docs")).unwrap();
+        std::fs::write(repo.join("docs/intro.md"), "ada@lovelace.dev\n").unwrap();
+        testgit::run(&repo, &["add", "docs/intro.md"]);
+
+        let scan = checked(&repo).unwrap();
+
+        assert_eq!(scan.refused.len(), 1);
+        // And staging it is the change a chat's commit may not make.
+        testgit::run(&repo, &["add", scanallow::FILE]);
+        assert!(checked(&repo).unwrap().changes_the_allowlist);
+    }
+
+    #[test]
+    fn an_author_in_a_manifest_is_let_through_with_no_allowlist_at_all() {
+        let (_dir, repo) = repo();
+        std::fs::write(
+            repo.join("Cargo.toml"),
+            "[package]\nauthors = [\"Ada <ada@lovelace.dev>\"]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            repo.join("src.rs"),
+            format!("// ada@lovelace.dev {}\n", key()),
+        )
+        .unwrap();
+        testgit::run(&repo, &["add", "."]);
+
+        let scan = checked(&repo).unwrap();
+
+        assert_eq!(
+            scan.allowed
+                .iter()
+                .map(|(f, _)| f.path.as_str())
+                .collect::<Vec<_>>(),
+            ["Cargo.toml"]
+        );
+        assert_eq!(
+            scan.refused.iter().map(|f| f.rule).collect::<Vec<_>>(),
+            ["email", "forge-token"]
+        );
+    }
+
+    #[test]
+    fn a_broken_allowlist_says_so_and_allows_nothing() {
+        let (_dir, repo) = repo();
+        allowlist_at_head(&repo, "[[allow]]\nrule = \"email\"\n");
+        std::fs::write(repo.join("notes.md"), "ada@lovelace.dev\n").unwrap();
+        testgit::run(&repo, &["add", "notes.md"]);
+
+        let scan = checked(&repo).unwrap();
+
+        assert_eq!(scan.refused.len(), 1);
+        assert!(scan.problems[0].contains("reason"), "{:?}", scan.problems);
     }
 }
