@@ -45,7 +45,7 @@ use std::time::Duration;
 use charter_core::workspaces::Plane;
 use notify::event::{MetadataKind, ModifyKind};
 use notify::{EventKind, RecursiveMode};
-use notify_debouncer_full::{DebounceEventResult, Debouncer, RecommendedCache, new_debouncer};
+use notify_debouncer_full::{DebounceEventResult, Debouncer, RecommendedCache, new_debouncer_opt};
 
 use crate::planes::PlaneId;
 
@@ -66,30 +66,47 @@ pub type Changed = Arc<dyn Fn(PlaneId) + Send + Sync + 'static>;
 /// panel within the second #264 asks for; long enough that a `git pull` is one read, not ten.
 const QUIET_FOR: Duration = Duration::from_millis(250);
 
-type Watcher = Debouncer<notify::RecommendedWatcher, RecommendedCache>;
-
 /// The watcher and the directories it is watching, behind one lock: the set is re-read on the
 /// watcher's own thread after every batch.
-struct Inner {
-    debouncer: Option<Watcher>,
+struct Inner<W: notify::Watcher> {
+    debouncer: Option<Debouncer<W, RecommendedCache>>,
     watched: HashSet<PathBuf>,
 }
 
 /// One plane's watch. Dropping it stops it.
-pub struct Watch {
-    inner: Arc<Mutex<Inner>>,
+///
+/// `W` is where the changes come from: the platform's own watcher (FSEvents, inotify) in the
+/// app. The tests on macOS choose notify's poller instead, because FSEvents gives no bound on
+/// when it delivers (#577): its one daemon serves the whole machine, and on a Mac busy writing
+/// build trees it was measured handing a stream a change 4 to 15 seconds late, and a stream
+/// nothing at all for minutes. What this module decides — fold a burst, follow a new workspace,
+/// fall silent when dropped — is the same whichever watcher feeds it.
+pub struct Watch<W: notify::Watcher = notify::RecommendedWatcher> {
+    inner: Arc<Mutex<Inner<W>>>,
 }
 
 impl Watch {
     /// Starts watching `root` and tells `changed` about `plane` whenever it moves.
     pub fn start(plane: PlaneId, root: &Path, changed: Changed) -> notify::Result<Self> {
+        Self::start_with(plane, root, changed, notify::Config::default())
+    }
+}
+
+impl<W: notify::Watcher + Send + 'static> Watch<W> {
+    /// [`Watch::start`] on a watcher of the caller's choosing, configured by `config`.
+    fn start_with(
+        plane: PlaneId,
+        root: &Path,
+        changed: Changed,
+        config: notify::Config,
+    ) -> notify::Result<Self> {
         let inner = Arc::new(Mutex::new(Inner {
             debouncer: None,
             watched: HashSet::new(),
         }));
-        let handle: Weak<Mutex<Inner>> = Arc::downgrade(&inner);
+        let handle: Weak<Mutex<Inner<W>>> = Arc::downgrade(&inner);
         let at = root.to_path_buf();
-        let debouncer = new_debouncer(QUIET_FOR, None, move |batch: DebounceEventResult| {
+        let tell = move |batch: DebounceEventResult| {
             let Ok(events) = batch else { return };
             let events: Vec<_> = events.iter().filter(|event| matters(&event.kind)).collect();
             if events.is_empty() {
@@ -122,7 +139,8 @@ impl Watch {
                 inner.follow(&at);
             }
             changed(plane.clone());
-        })?;
+        };
+        let debouncer = new_debouncer_opt(QUIET_FOR, None, tell, RecommendedCache::new(), config)?;
         {
             let mut held = inner.lock().unwrap_or_else(PoisonError::into_inner);
             held.debouncer = Some(debouncer);
@@ -132,7 +150,7 @@ impl Watch {
     }
 }
 
-impl Drop for Watch {
+impl<W: notify::Watcher> Drop for Watch<W> {
     fn drop(&mut self) {
         // Taken out under the lock and dropped outside it, so the watcher's thread, which takes
         // the same lock, never waits on a drop. An empty slot is also what tells a batch
@@ -147,7 +165,7 @@ impl Drop for Watch {
     }
 }
 
-impl Inner {
+impl<W: notify::Watcher> Inner<W> {
     /// Watches what the plane has now, and stops watching what it no longer has.
     fn follow(&mut self, root: &Path) {
         let Some(debouncer) = self.debouncer.as_mut() else {
@@ -248,8 +266,8 @@ mod tests {
     use std::sync::mpsc;
     use std::time::Instant;
 
-    /// Long enough for a loaded CI runner; the acceptance is "about a second" and a pass
-    /// comes back in a quarter of one.
+    /// How long a test waits to be told before it fails. Only a failure waits this long; a
+    /// pass comes back in a quarter of a second.
     const PATIENCE: Duration = Duration::from_secs(10);
 
     fn plane_with_todos(todos: &[&str]) -> tempfile::TempDir {
@@ -267,30 +285,66 @@ mod tests {
         serde_json::from_value(serde_json::json!(root.display().to_string())).expect("an id")
     }
 
-    /// A watch on `root` and the channel it tells.
-    fn watching(root: &Path) -> (Watch, mpsc::Receiver<PlaneId>) {
+    /// Where the tests' changes come from (#577). On macOS, notify's poller: FSEvents has no
+    /// bound on when it delivers. On a busy Mac it handed a stream a change seconds to minutes
+    /// late, and handed it the writes that made the plane seconds after the stream began, so
+    /// no deadline made these tests pass there; a longer one only waited longer for the same
+    /// flake. Elsewhere the platform's own watcher, as the app runs it: inotify is where an
+    /// access used to loop.
+    #[cfg(target_os = "macos")]
+    type Source = notify::PollWatcher;
+    #[cfg(not(target_os = "macos"))]
+    type Source = notify::RecommendedWatcher;
+
+    /// How often the poller looks; inotify ignores it. Well inside [`QUIET_FOR`], so what the
+    /// window waits on is the debounce, not the look.
+    const LOOK_EVERY: Duration = Duration::from_millis(50);
+
+    /// A watch on `root` fed by the tests' [`Source`], and the channel it tells. Anything done
+    /// to the plane from here on is told. Nothing done before it is — a promise of the poller
+    /// and of inotify, NOT of FSEvents, which the app runs on macOS (see [`Source`]).
+    fn watching(root: &Path) -> (Watch<Source>, mpsc::Receiver<PlaneId>) {
+        watching_on::<Source>(root)
+    }
+
+    /// [`watching`] on a watcher of the test's choosing.
+    fn watching_on<W: notify::Watcher + Send + 'static>(
+        root: &Path,
+    ) -> (Watch<W>, mpsc::Receiver<PlaneId>) {
         let (tx, rx) = mpsc::channel();
         let tx = Mutex::new(tx);
-        let watch = Watch::start(
+        let watch = Watch::<W>::start_with(
             id(root),
             root,
             Arc::new(move |plane| {
                 let _ = tx.lock().expect("sender").send(plane);
             }),
+            notify::Config::default().with_poll_interval(LOOK_EVERY),
         )
         .expect("a watch");
-        // FSEvents reports what happened a moment BEFORE the stream started, on some
-        // machines; a test that changed the plane at once could be told about its own setup.
-        std::thread::sleep(Duration::from_millis(300));
-        while rx.try_recv().is_ok() {}
         (watch, rx)
     }
 
     #[test]
     fn a_todo_file_removed_under_a_watched_plane_is_told_within_the_second() {
+        a_removed_todo_is_told_within_the_second_on::<Source>();
+    }
+
+    /// The same on the watcher the app runs on macOS. Ignored because FSEvents gives no bound
+    /// on when it delivers, so on a busy Mac this fails however long it waits; until #756 the
+    /// "about a second" of #264 is checked on Linux's inotify only.
+    /// `cargo test -p charter-app planewatch -- --ignored` runs it.
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "FSEvents has no delivery bound on a busy Mac (#577, #756)"]
+    fn on_fsevents_a_todo_file_removed_under_a_watched_plane_is_told_within_the_second() {
+        a_removed_todo_is_told_within_the_second_on::<notify::RecommendedWatcher>();
+    }
+
+    fn a_removed_todo_is_told_within_the_second_on<W: notify::Watcher + Send + 'static>() {
         let plane = plane_with_todos(&["m8-1", "m8-2"]);
         let root = plane.path().canonicalize().expect("canonical");
-        let (_watch, told) = watching(&root);
+        let (_watch, told) = watching_on::<W>(&root);
 
         let slugs = || {
             let read = crate::panels::of(&root, "alpha").expect("the panels read");
@@ -357,13 +411,37 @@ mod tests {
         std::fs::create_dir_all(root.join("workspaces/beta/todos")).expect("a new workspace");
         told.recv_timeout(PATIENCE)
             .expect("told about the workspace");
-        // Settle, then drain whatever the creation's tail produced.
-        std::thread::sleep(QUIET_FOR * 2);
-        while told.try_recv().is_ok() {}
+        // The batch that told it also followed `beta/` and `beta/todos/`, before telling; a
+        // directory is watched from its own contents onward, so nothing else is pending here.
 
         std::fs::write(root.join("workspaces/beta/todos/new.md"), "# new\n").expect("a todo");
         told.recv_timeout(PATIENCE)
             .expect("told about a todo in the new workspace");
+    }
+
+    #[test]
+    fn a_plane_nobody_touches_is_never_told_about_its_own_making() {
+        // What the tests used to sleep for: FSEvents hands a stream the writes that made the
+        // plane BEFORE the stream began, as late as its daemon gets to them. A watch that reports
+        // only what moved after it started is one a test can act against at once.
+        a_plane_nobody_touches_is_quiet_on::<Source>();
+    }
+
+    /// The same on the watcher the app runs on macOS, where it does NOT hold: FSEvents told
+    /// a stream about the plane's making seconds after it began. Ignored until #756 decides
+    /// what the app does about slow file events. `-- --ignored` runs it.
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "FSEvents replays the plane's making late on a busy Mac (#577, #756)"]
+    fn on_fsevents_a_plane_nobody_touches_is_never_told_about_its_own_making() {
+        a_plane_nobody_touches_is_quiet_on::<notify::RecommendedWatcher>();
+    }
+
+    fn a_plane_nobody_touches_is_quiet_on<W: notify::Watcher + Send + 'static>() {
+        let plane = plane_with_todos(&["m8-1", "m8-2"]);
+        let root = plane.path().canonicalize().expect("canonical");
+        let (_watch, told) = watching_on::<W>(&root);
+        assert!(told.recv_timeout(QUIET_FOR * 8).is_err());
     }
 
     #[test]
