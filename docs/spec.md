@@ -20,6 +20,11 @@ and repos, and always knows which one needs them. It is one lightweight app on m
 and Windows, with no daemon, carrying every charter concept: the plane, workspaces, personas,
 todos, memory, vaults, guards.
 
+> **Superseded in part by [ADR 0082](adr/0082-charter-serves-one-persons-agents-first-and-its-scale-is-a-hot-chat-count-per-ram-class.md)**
+> (FD-1): one person's agents first, then teams with the same per-person budgets; "dozens" is
+> 200 open chats and a hot-chat count per RAM class, 50 at the top class. "No daemon" was
+> already replaced by ADR 0068.
+
 ## Priorities, in order
 
 1. **Development experience.** A change is quick to make, quick to check and pleasant to work on.
@@ -405,7 +410,8 @@ Only what a person would notice. Measured on the operator's machine, in the scen
 
 | | Limit |
 | --- | --- |
-| Live sessions | **50**. This is the product's scale, not a speed target |
+| Open chats | **200**, in every RAM class. This is the product's scale, not a speed target ([ADR 0082](adr/0082-charter-serves-one-persons-agents-first-and-its-scale-is-a-hot-chat-count-per-ram-class.md), which supersedes "Live sessions: 50") |
+| Hot chats | per RAM class (ADR 0082 §3): **50** at the top class. The limits below hold at the device's hot count |
 | 2 MB and 13 MB output bursts | the UI never freezes; input and other panes stay responsive |
 | Keystroke to screen | ≤ 50 ms while 49 other sessions stream |
 | Tab or pane switch | ≤ 100 ms |
