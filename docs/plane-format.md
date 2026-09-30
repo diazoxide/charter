@@ -1220,6 +1220,11 @@ and an archived one is where `memstore.archive` would have put it (ADR 0065).
   workspace: <ws | plane root>
   cwd: <the directory the chat ran in, plane-relative (. for the plane root) | unknown>
   piece: <repo>/<piece> @ <branch | (detached)>      (zero or more lines)
+  chat-id: <the chat's ULID | unknown>                (decided, ADR 0066; not yet written)
+  device: <the chat's origin device id | unknown>     (decided, ADR 0066; not yet written)
+  run: <the ULID of the run that wrote it | unknown>  (decided, ADR 0066; not yet written)
+  handed-from: <the parent chat's ULID | none>        (decided, ADR 0066; not yet written)
+  resumed-from: <the ULID of the chat whose record it resumed | none>   (decided, ADR 0066; not yet written)
   ---
 
   # <title>
@@ -1243,7 +1248,19 @@ and an archived one is where `memstore.archive` would have put it (ADR 0065).
   `profile` and `cwd` for that chat (added 2026-09-28, SI-8e): the profile by its name, never
   its command, and the directory as a path below the plane root — a chat whose directory is
   outside the plane is `unknown`. A record written before them has neither key, and reads as
-  `unknown` for both. `piece`
+  `unknown` for both.
+
+  **Identity keys, decided and not yet written** ([ADR
+  0066](adr/0066-a-chat-is-a-ulid-a-run-is-a-stretch-of-its-conversation-and-a-device-is-random.md),
+  FD-22). `chat:` is the app's display number, which is unique only in one plane on one machine:
+  two machines both write `chat: 7`. So a record will also name the chat by its ULID
+  (`chat-id`), the device that created it (`device`, a random id from the machine store, never a
+  hostname), the run that wrote the record (`run`), and its lineage by id (`handed-from`,
+  `resumed-from`), each read from the app's `reopen.json` like `conversation`. Every key is
+  written, as `unknown` or `none` when not known. A record never carries the local principal or
+  the OS user. Records written before these keys are never rewritten: a reader reads each absent
+  key as `unknown`, and a reader that needs a key for such a record uses its plane-relative path.
+  `piece`
   lines are the piece the command ran in and each `--piece`, with the branch `git worktree
   list` reports; a `--piece` git does not report is refused. The body is exactly the five
   `## ` sections above, in that order, each non-empty, with nothing before the first (a heading
@@ -3662,6 +3679,12 @@ down rather than read off the code.
 | `chats[].label` | str | default `""` (absent) | the name the operator gave the chat (charter-app#254), which its tab says instead of the default `<persona> <N>`. Charter's label only: `name` is still what the harness was started with and is resumed under. Written only when one was given, so a plane that never renamed a chat writes the record it always wrote. Held on the way in to the rule a rename is: trimmed, at most 64 characters, and no control or invisible formatting character (`charter_core::panel::undrawable`); a value that breaks it reads as absent and the chat comes back under its default |
 | `chats[].from` | object | absent | the chat a handoff opened this one from (charter-app#258, #259): `{"chat": <n>, "name": "<str>", "workspace": "<str>", "report": "owed" \| "sent"}`. `chat` is the app's number for that chat, the key its reports are left under; `name` is the name it was shown under when it handed off (a copy, so the note still reads once it has closed); `workspace` is where it handed off from, where a report goes once it is gone — a workspace's name, or `plane root` for a chat that handed off from the plane root (SI-1b); `report` is absent for a fire-and-forget handoff, `"owed"` for a `--report` one whose report has not been sent, and `"sent"` after it, for good: a handoff gets one report. Written only for a handed-off chat, so a plane that never handed off writes the record it always wrote. Held on the way in: a `chat` of `0`, a `name` the label rule refuses or a `workspace` that is neither a workspace's name nor `plane root` reads as the whole key absent — the note is not drawn and no report is owed |
 | `chats[].renamed_from` | str | default `""` (absent) | the workspace `charter workspace rename` moved this chat away from, where the rename left it with no conversation its harness can find (charter#367, D10). Claude Code keeps a conversation under the folder it ran in, so the rename clears such a chat's `resume` and writes this instead; a Codex or opencode chat keeps its `resume`. The next start is a new conversation whose pane says why, and the chat is written without this key from then on. Held to the workspace-name rule on the way in; anything else reads as absent |
+| `chats[].number` | int | default `0` (not known) | the chat's display number in this plane (charter-app#90): what `$CHARTER_CHAT` and `$CHARTER_SESSION_ID` carry, and what `.charter/sessions/<n>.*` and `handbacks/chat-<n>/` are keyed on. `0` is a record written before the field, whose chats are dealt numbers in order at the next launch. Unique in this plane on this machine only, and so never what a committed file or an event names a chat by ([ADR 0066](adr/0066-a-chat-is-a-ulid-a-run-is-a-stretch-of-its-conversation-and-a-device-is-random.md)) |
+| `dealt` | int | default `0` | the highest number this plane has dealt, open or closed, so none is dealt twice. Held at or above every `number` the record names, both ways. "Start fresh" keeps it |
+| `chats[].id` | str | absent: **decided, not yet written** (ADR 0066) | the chat's id, a ULID minted once when the chat was created and never changed. What a session record, an event, the audit and OTel name the chat by. Absent in a record written before it, and then minted at the launch that reads it, as `number` was |
+| `chats[].device` | str | absent: **decided, not yet written** (ADR 0066) | the chat's origin device: the device id, from the machine store, of the machine that created it. Never a hostname |
+| `chats[].run` | str | absent: **decided, not yet written** (ADR 0066) | the ULID of the chat's current run: the stretch of its conversation it is in now. It changes on `/clear`, a reopen, a wake, a fresh start or a change of harness, profile, model, persona or sandbox. What a session record names in `run:` |
+| `chats[].resumed_from` | str | absent: **decided, not yet written** (ADR 0066) | the id of the chat whose session record **Resume** started this one from, taken from that record's `chat-id`. Absent for every other chat. `from` (above) gains an `id` key the same way: the parent's chat id, next to the `chat` number reports are still left under |
 | `relaunch_after_update` | bool | default `false`; written only when `true` | the quit that wrote this restarted charter to install an update (charter-app#251, **Restart to update**, the only writer of `true`), so the launch after it says why it is asking ("Reopen all" is the answer in front either way). Every later write is an ordinary one and drops it. **It counts only at the launch that follows the restart**: the restart also leaves an empty `restarted-to-update` file beside the machine store (`$CHARTER_CONFIG_HOME`, else `$XDG_CONFIG_HOME`, else `~/.config`, then `charter/`), and the next launch removes it whatever it opens. A plane that launch did not open keeps the flag, and it says nothing at any later launch |
 
 Which harness a chat runs is **not** recorded: it is read from `program`'s file name, so a
