@@ -57,6 +57,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   X11 sessions with no session bus, charter now starts on the bus the X display holds, as GTK
   would, so notifications reach a notification daemon started from the window manager's config
   (#746).
+- **The guard that stops a live substitution in `charter change create` or `drop` no longer
+  says `charter change` is missing.** It has shipped since 0.4.0; what is not in this version
+  yet is `charter change push`, which will write the `why` into request bodies (#571).
 
 ## [0.4.2] - 2026-09-30
 
