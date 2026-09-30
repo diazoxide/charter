@@ -30,12 +30,22 @@ fi
 # What this run made, and the window manager it started: gone however the run ends.
 scratch="$(mktemp -d)"
 wm=""
+# The run's verdict is the script's: the cleanup keeps the status it was called with, and what it
+# cannot remove is said, never failed on.
 cleanup() {
+  local status=$?
   if [[ -n "$wm" ]]; then
     kill "$wm" 2>/dev/null || true
     wait "$wm" 2>/dev/null || true
   fi
-  rm -rf "$scratch"
+  # In the no-bus case the app starts on the X display's bus, whose document portal mounts FUSE
+  # at $XDG_RUNTIME_DIR/doc — a directory `rm` cannot remove while it is mounted (#746, CI).
+  local doc="$scratch/runtime/doc"
+  if [[ -d "$doc" ]]; then
+    fusermount3 -uz "$doc" 2>/dev/null || fusermount -uz "$doc" 2>/dev/null || true
+  fi
+  rm -rf "$scratch" 2>/dev/null || echo "coldstart-linux.sh: could not remove $scratch" >&2
+  exit "$status"
 }
 trap cleanup EXIT
 
