@@ -20,7 +20,7 @@ operator's rulings:
   Code, a Codex and an opencode ask."*
 - **W10:** *"New FR \"no harness found\" (official installers in a shell tab, the harness's own
   login, local model fallback)."*
-- **V27** (ADR 0076, charter#777): *"V27a After a host crash, a run that was idle at a turn
+- **V27** (ADR 0076): *"V27a After a host crash, a run that was idle at a turn
   boundary on a harness that resumes natively becomes `hibernated`, not `failed`."* *"V27b When an
   upgrade hands a program over and its exit code is lost, the run is `completed` only if a
   `SessionEnd` came first, and `failed` otherwise."* *"V27c A pause is `SIGSTOP` of the run's
@@ -36,7 +36,7 @@ sandbox), [ADR 0068](0068-a-chat-lives-in-charterd-and-the-app-is-its-client.md)
 its scopes), [ADR 0071](0071-the-kill-switch-is-machine-state-the-command-line-stops-and-only-the-window-re-arms.md)
 (the kill switch), [ADR 0074](0074-a-chats-git-runs-charters-hooks-through-its-environment.md)
 (a chat's git hooks), [ADR 0075](0075-an-audit-entry-is-metadata-in-a-store-of-its-own-and-telemetry-never-reads-it.md)
-(the audit) and ADR 0076 (the run lifecycle, proposed in charter#777 and ruled V27). It **amends**
+(the audit) and [ADR 0076](0076-a-run-moves-only-by-a-named-cause-and-a-chats-state-is-read-from-its-runs.md) (the run lifecycle). It **amends**
 ADR 0067, ADR 0068 and ADR 0073, each in a section of its own below. HP-2 (the ACP client), HP-3
 (Codex), HP-4 (Claude Code), HP-5 and HP-16 (the normalised Ask, answered over ACP) and HP-14
 (registry agents) build on it. Its concept is **Chat**.
