@@ -1,7 +1,7 @@
 # A runner is `charterd` behind a connector, and charter's own keys say who is on the link
 
-**Proposed 2026-10-01**, drafted for program-map ticket RR-13 (#722), for the operator's ruling.
-It follows these of the operator's rulings:
+**Accepted 2026-10-01** by the operator (ruling V29), drafted for program-map ticket RR-13 (#722). It
+follows these of the operator's rulings:
 
 - **V9:** *"A runner is any host running `charterd`, reached through a **connector command**
   (`ssh`, `gh cs ssh`, `coder ssh`, `docker exec`/devcontainer, `kubectl exec`; the relay
@@ -152,8 +152,7 @@ stream"*, not by the transport. This section says how.
 
 - **Every device has a link key**, a static X25519 key pair, minted with the device's first
   runner or first pairing. It is apart from AU-3's audit signing key, and it is the per-device
-  X25519 key that LW-1 and LW-2 build on, so the relay adds no third key (question 1 of *For the
-  operator's ruling*). Its private half is in the Keyring tier. On a headless runner it is held
+  X25519 key that LW-1 and LW-2 build on, so the relay adds no third key (V29a). Its private half is in the Keyring tier. On a headless runner it is held
   in the same age-encrypted form V1 gives the device key. Rotating it keeps the device id and
   needs a new pairing (ADR 0066, amended).
 - **The handshake is Noise `XX`, and both static keys are checked against the pinned records.**
@@ -229,7 +228,7 @@ asks and requests. The desktop's host decides what to do with each.
 - **A re-arm and a sandbox opt-out come from the window only.** They restore or widen power, so
   they travel only when the operator acts in the window, through `local-ui`. The re-arm is an
   amendment to V22d's *"only the window re-arms"*, since a runner has no window of its own
-  (question 2 of *For the operator's ruling*).
+  (V29b).
 - **Why an agent on the desktop cannot act on a runner.** Three things hold it, not one:
   - the `chat` scope has no command that reaches a link;
   - the human scopes' credentials are denied to a chat's sandbox, and `charterd` refuses those
@@ -328,8 +327,7 @@ switch (ADR 0071's watch) and sends a stop down every open link at once. Each ru
 throws its own switch: its own `halted` and journal, with `by: link`. While the desktop is
 stopped, a stop is the first thing any link carries when it opens, so a runner that was asleep
 is stopped as soon as it is reached. A runner that cannot be reached keeps its agents running
-until it is, and the window names it as *not reached* (question 3 of *For the operator's
-ruling*). On the runner itself, `charter stop --all` from a shell stops it as on any machine.
+until it is, and the window names it as *not reached* (V29c). On the runner itself, `charter stop --all` from a shell stops it as on any machine.
 
 **The window's re-arm re-arms this machine and every runner the same stop reached**, and lists
 them before it does. A runner stopped from its own command line, or one the re-arm cannot reach,
@@ -479,8 +477,8 @@ The classes stay classes, and SD-2 and RR-5 turn them into rules and tests.
 - **On a runner, the journal's `by` gains `link`.** A `link` stop comes from any scope on the
   desktop, and a `link` re-arm only from the desktop's window (ADR 0078 §4). A runner has no
   window, so a `link` re-arm is how it re-arms. This amends V22d's *"only the window re-arms"*
-  to *"only a window re-arms: this machine's, or, for a runner, its desktop's"* (question 2 of
-  *For the operator's ruling*). A `cli` line on the runner still only stops.
+  to *"only a window re-arms: this machine's, or, for a runner, its desktop's"*. **Ruled by
+  V29b, which amends V22d.** A `cli` line on the runner still only stops.
 - **The window's re-arm lists the runners it will re-arm.** It re-arms those the same stop
   reached. A runner stopped by its own command line is re-armed from its own row.
 - *"Not in scope: chats a `charterd` hosts are OV-2"* stands for triggered and headless chats. A
@@ -528,7 +526,7 @@ The code does not change with this record.
 | RR-22 | The runner's chain, and the actor rules of §10 |
 | RR-26 | Mostly decided by §3: one OS user is one person, the peers are that person's devices, a foreign key is refused and recorded, and doctor names every peer |
 | OV-1 and OV-2 | The kill switch on the link (ADR 0071, amended) |
-| LW-1, LW-2 | Build on the link key and Noise `XX` of §3, and produce the same two pinned records (questions 1 and 4 of *For the operator's ruling*) |
+| LW-1, LW-2 | Build on the link key and Noise `XX` of §3, and produce the same two pinned records (V29a, V29d) |
 | `docs/spec.md` | *"Remote sessions are not in v1"* changes when RR-1 ships, not here |
 
 ## What this costs
@@ -584,29 +582,17 @@ The code does not change with this record.
 - **Mosh, Eternal Terminal or a UDP transport.** The host owns the sessions, so a reconnect with
   a snapshot gives the same result.
 
-## For the operator's ruling
+## Ruled (V29, 2026-10-01)
 
-1. **A link key of its own, or the device key?** RR-13's row says *"device-key auth inside the
-   stream"*. This record gives each device a separate X25519 link key beside AU-3's signing key.
-   The two keys have different algorithms and different jobs, and they rotate for different
-   reasons. A key that only authenticates links can be re-paired without touching the audit
-   chain. The link key is also the per-device X25519 key LW-2 names, so the relay adds no third
-   key. **Recommended: a separate link key**, in the same tier and backend as the device key,
-   and the one LW-1 and LW-2 build on.
-2. **May a runner be re-armed over the link?** V22d rules that only the window re-arms. A runner
-   has no window. **Recommended: yes, and only from the desktop's window through `local-ui`**,
-   which amends V22d to *"only a window re-arms: this machine's, or, for a runner, its
-   desktop's"*. The act still starts in a window, and neither `terminal`, `fleet-mcp` nor a
-   command line can send it.
-3. **A stop that cannot reach a runner.** A runner's agents keep running until its link returns.
-   The alternative is a runner that stops its own agents when it has not heard from any peer for
-   a set time, which would stop every unattended runner V9 exists for. **Recommended: no stop
-   by silence.** The window names every runner a stop has not reached, keeps trying, and points
-   at `charter stop --all` on the runner. An org policy may choose a timeout later.
-4. **Merge this before LW-1 exists?** RR-13's row says it is *"reviewed with LW-1 and LW-19"*.
-   Neither is written, and LW-19 is *PWA code integrity*, which pins a bundle hash at pairing and
-   does not pair devices. The pairing through the relay is LW-1's and RR-2's. **Recommended:
-   merge this on its own now, and put "produce the same two pinned records as ADR 0078 §3, over
-   the same Noise `XX` link" in the acceptance of LW-1 and RR-2**, and "pins its bundle hash
-   beside, never instead of, those records" in LW-19's, so each is reviewed against this record
-   when it is written.
+The operator accepted all four questions as recommended:
+
+1. **V29a: the link uses a separate X25519 link key per device**, held in the same tier and
+   backend as AU-3's key. LW-1 and LW-2 build on it, so there is no third key.
+2. **V29b: a runner may be re-armed over the link, from the desktop's window (`local-ui`) only.**
+   It amends V22d, which now reads *"only a window re-arms: this machine's, or, for a runner, its
+   desktop's"*.
+3. **V29c: a runner never stops itself after a silence.** The window names every runner a stop
+   has not reached and keeps trying, and `charter stop --all` on the runner is the fallback.
+4. **V29d: this record merges before LW-1 and LW-19 exist.** LW-1 and RR-2 must reuse the same
+   two pinned records over the same Noise `XX` link, and LW-19 must pin its bundle hash beside
+   them.
