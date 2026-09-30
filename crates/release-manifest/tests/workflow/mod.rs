@@ -100,13 +100,11 @@ impl Job {
         Some(pairs)
     }
 
-    /// Whether the job is granted the identity that signs build provenance: an OIDC token
-    /// (`id-token`) or the power to store attestations (`attestations`).
-    pub fn holds_a_signing_identity(&self) -> bool {
-        self.permissions().is_some_and(|p| {
-            p.iter()
-                .any(|(scope, _)| scope == "id-token" || scope == "attestations")
-        })
+    /// Whether the job may mint an OIDC token (`id-token: write`), which is what Sigstore signs
+    /// build provenance with.
+    pub fn can_mint_an_oidc_token(&self) -> bool {
+        self.permissions()
+            .is_some_and(|p| p.iter().any(|(k, v)| k == "id-token" && v == "write"))
     }
 
     /// The job's steps, each as its lines: the `- ` line and every more-indented one after it.
@@ -169,6 +167,21 @@ pub fn jobs(text: &str) -> Vec<Job> {
         }
     }
     jobs
+}
+
+/// The workflow-level `permissions:` block as `(scope, access)` pairs, sorted: what every job
+/// that sets none of its own gets.
+pub fn workflow_permissions(text: &str) -> Vec<(String, String)> {
+    let mut pairs: Vec<(String, String)> = text
+        .lines()
+        .skip_while(|l| *l != "permissions:")
+        .skip(1)
+        .take_while(|l| l.starts_with("  "))
+        .filter_map(|l| l.trim().split_once(':'))
+        .map(|(k, v)| (k.trim().to_owned(), v.trim().to_owned()))
+        .collect();
+    pairs.sort();
+    pairs
 }
 
 pub fn release_jobs() -> Vec<Job> {

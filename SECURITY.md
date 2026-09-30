@@ -8,25 +8,28 @@ and not in a public issue.
 
 ## Checking that a download is a real charter build
 
-Every file a release publishes, on the stable channel and the `dev` prerelease alike, carries
-a signed [SLSA build provenance](https://slsa.dev/spec/v1.0/provenance) attestation. It says
-the file came out of this repository's `release.yml` on a GitHub-hosted runner, and names the
-commit the workflow ran at. With the [GitHub CLI](https://cli.github.com/) installed:
+Every build file a release publishes (the `.dmg`, `.app.zip`, `.deb`, AppImage, and the
+updater archives with their `.sig` files), on the stable channel and the `dev` prerelease
+alike, carries a signed [SLSA build provenance](https://slsa.dev/spec/v1.0/provenance)
+attestation. It says the file came out of this repository's `release.yml` on a GitHub-hosted
+runner, and names the commit the workflow ran at. With the [GitHub CLI](https://cli.github.com/)
+installed, for a stable release tagged `<tag>`:
 
 ```sh
 gh attestation verify charter-macos-arm64.dmg \
   --repo diazoxide/charter \
   --signer-workflow diazoxide/charter/.github/workflows/release.yml \
+  --source-ref refs/tags/<tag> \
   --deny-self-hosted-runners
 ```
 
-It works the same for the `.deb`, the AppImage, the `.app.zip` and the updater archives. A pass
-prints the workflow and the commit. A file that was changed after it was built, or built
-anywhere else, fails. To pin a stable release to its tag, add
-`--source-ref refs/tags/vX.Y.Z`.
+For a `dev` build, leave out `--source-ref`, or give `refs/heads/main`. A pass prints the
+workflow and the commit. A file that was changed after it was built, or built anywhere else,
+fails.
 
-- **This is not what the updater checks.** The installed app trusts an update because the
-  operator's minisign key signed it
+- **The update manifest is not attested.** `latest.json` and `dev.json` carry no provenance.
+  The installed app does not need it to: it checks each build's own minisign signature, made
+  by the operator's key, before it installs anything
   ([ADR 0042](docs/adr/0042-charter-updates-itself-and-nothing-it-cannot-verify-reaches-it.md)).
   Provenance answers a different question: which build made this file.
 - **A dev build names the workflow's commit.** A dev build runs after `ci` passes on `main`, so

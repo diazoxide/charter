@@ -814,27 +814,38 @@ jobs:
       id-token: write
       attestations: write
     steps:
+      # The build jobs' artifacts by name (`charter-<platform>-<version>`, see `build`), and
+      # nothing else a run might hold.
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: dist
+          pattern: charter-*
           merge-multiple: true
 
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: dist/*
 
-      # What a person installing it runs, run here first. An attestation that does not verify
-      # against this repository and this workflow is not one, and a release should not go out
-      # on it.
-      - name: Each file verifies the way SECURITY.md says it will
+      # What a person installing it runs, run here first, and pinned to THIS run: this
+      # repository, this workflow file at this workflow commit, this source commit, a
+      # GitHub-hosted runner, and on the stable channel this tag. An attestation that does not
+      # verify is not one, and a release should not go out on it. `publish` runs the same check
+      # again on the bytes it uploads.
+      - name: Each file verifies against this run
         env:
           GH_TOKEN: ${{ github.token }}
+          CHANNEL: ${{ needs.plan.outputs.channel }}
         run: |
           set -euo pipefail
+          ref=()
+          if [ "$CHANNEL" = stable ]; then ref=(--source-ref "$GITHUB_REF"); fi
           for f in dist/*; do
             gh attestation verify "$f" --repo "$GITHUB_REPOSITORY" \
               --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
-              --deny-self-hosted-runners
+              --signer-digest "$GITHUB_WORKFLOW_SHA" \
+              --source-digest "$GITHUB_SHA" \
+              --deny-self-hosted-runners \
+              "${ref[@]}"
           done
 
   publish:
@@ -846,8 +857,11 @@ jobs:
     # environment's rules: `main` and `v*` tags only, and a required reviewer if one is set.
     environment: release
     # The only job that can write to the repository, and what it writes is release assets.
+    # `attestations: read` is for checking provenance before it uploads; it holds no
+    # `id-token`, so it can read an attestation and never make one.
     permissions:
       contents: write
+      attestations: read
     env:
       GH_TOKEN: ${{ github.token }}
       CHANNEL: ${{ needs.plan.outputs.channel }}
@@ -865,10 +879,33 @@ jobs:
       # No cache here: this job can write the release, so it builds from nothing but main's
       # own tree.
 
+      # The build jobs' artifacts by name, the same set `provenance` attested.
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: dist
+          pattern: charter-*
           merge-multiple: true
+
+      # The bytes about to be uploaded are the bytes `provenance` attested in this run. The
+      # same run-pinned check, over what this job downloaded, before anything is uploaded.
+      # (The manifest this job writes next is not attested: attesting it here would put an
+      # OIDC token beside `contents: write`. The updater checks each build's own minisign
+      # signature, which the manifest carries.)
+      - name: Every file to upload verifies against this run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ref=()
+          if [ "$CHANNEL" = stable ]; then ref=(--source-ref "$GITHUB_REF"); fi
+          for f in dist/*; do
+            gh attestation verify "$f" --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+              --signer-digest "$GITHUB_WORKFLOW_SHA" \
+              --source-digest "$GITHUB_SHA" \
+              --deny-self-hosted-runners \
+              "${ref[@]}"
+          done
 
       # Every guard is in `crates/release-manifest`, with tests: a signature present, made by
       # the key tauri.conf.json carries, over these exact bytes, for this exact version, for

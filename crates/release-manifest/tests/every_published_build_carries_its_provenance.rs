@@ -1,22 +1,72 @@
-//! Every build `release.yml` publishes carries a signed SLSA build provenance attestation, made
-//! before anything is published (#583).
+//! Every build file `release.yml` publishes carries a signed SLSA build provenance
+//! attestation, made before anything is published and checked again on the bytes `publish`
+//! uploads (#583).
 //!
 //! The attestation is what `gh attestation verify` checks: that a file came out of this
 //! repository's `release.yml`, at a named commit. Signing it takes an OIDC token
-//! (`id-token: write`) and storing it takes `attestations: write`. Those two are a signing
-//! identity, so exactly one job holds them, it holds nothing else, and no job that holds a
-//! release key or can write the release gets them too.
+//! (`id-token: write`) and storing it takes `attestations: write`. So exactly one job holds
+//! them, it holds nothing else, and the jobs that hold a release key or can write the release
+//! never get them. `publish` only READS attestations, to prove that what it is about to upload
+//! is what was attested in this very run.
 //!
 //! The workflow is read by `workflow/mod.rs`, which the pinning and environment tests share.
 
 mod workflow;
 
-use workflow::{Job, release_jobs, step_uses};
+use workflow::{Job, release_jobs, step_uses, workflow_permissions};
 
 fn job<'a>(jobs: &'a [Job], name: &str) -> &'a Job {
     jobs.iter()
         .find(|j| j.name == name)
         .unwrap_or_else(|| panic!("release.yml has no `{name}` job"))
+}
+
+fn pairs(list: &[(&str, &str)]) -> Vec<(String, String)> {
+    list.iter()
+        .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+        .collect()
+}
+
+/// Every flag a verification needs to be pinned to THIS run of THIS workflow, not merely to
+/// "something this repository once built".
+const RUN_PINNED: [&str; 6] = [
+    r#"--repo "$GITHUB_REPOSITORY""#,
+    r#"--signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml""#,
+    r#"--signer-digest "$GITHUB_WORKFLOW_SHA""#,
+    r#"--source-digest "$GITHUB_SHA""#,
+    "--deny-self-hosted-runners",
+    // On the stable channel only, and appended through this array.
+    r#"ref=(--source-ref "$GITHUB_REF")"#,
+];
+
+/// The index of the job's step that runs `gh attestation verify`, after checking that it
+/// carries every run-pinning flag and verifies every file in `dist/`.
+fn run_pinned_verification(job: &Job) -> usize {
+    let steps = job.steps();
+    let (index, step) = steps
+        .iter()
+        .enumerate()
+        .find(|(_, s)| s.iter().any(|l| l.contains("gh attestation verify")))
+        .unwrap_or_else(|| panic!("job `{}` runs no `gh attestation verify`", job.name));
+    let text = step.join("\n");
+    assert!(
+        text.contains("for f in dist/*; do"),
+        "job `{}` verifies every file in dist/:\n{text}",
+        job.name
+    );
+    for flag in RUN_PINNED {
+        assert!(
+            text.contains(flag),
+            "job `{}`'s verification lacks `{flag}`:\n{text}",
+            job.name
+        );
+    }
+    assert!(
+        text.contains(r#"[ "$CHANNEL" = stable ]"#) && text.contains(r#""${ref[@]}""#),
+        "job `{}` pins the source ref on the stable channel:\n{text}",
+        job.name
+    );
+    index
 }
 
 #[test]
@@ -36,9 +86,10 @@ fn the_provenance_job_attests_what_the_build_made_whenever_the_run_publishes() {
     );
 
     let steps = provenance.steps();
-    let attest = steps
+    let (attest_at, attest) = steps
         .iter()
-        .find(|s| step_uses(s).is_some_and(|u| u.starts_with("actions/attest@")))
+        .enumerate()
+        .find(|(_, s)| step_uses(s).is_some_and(|u| u.starts_with("actions/attest@")))
         .expect("the provenance job runs actions/attest");
     assert!(
         attest.iter().any(|l| l.trim() == "subject-path: dist/*"),
@@ -46,17 +97,11 @@ fn the_provenance_job_attests_what_the_build_made_whenever_the_run_publishes() {
     );
     // Proved on the spot, the way a person installing it would: an attestation that does not
     // verify is not one.
-    assert!(
-        steps
-            .iter()
-            .flatten()
-            .any(|l| l.contains("gh attestation verify")),
-        "the provenance job verifies what it attested"
-    );
+    assert!(run_pinned_verification(provenance) > attest_at);
 }
 
 #[test]
-fn nothing_is_published_before_it_is_attested() {
+fn publish_downloads_only_the_builds_and_verifies_them_before_it_uploads_anything() {
     let jobs = release_jobs();
     let publish = job(&jobs, "publish");
     assert!(
@@ -64,42 +109,73 @@ fn nothing_is_published_before_it_is_attested() {
         "publish needs {:?}; it must wait for `provenance`",
         publish.needs()
     );
+
+    let steps = publish.steps();
+    let download = steps
+        .iter()
+        .find(|s| step_uses(s).is_some_and(|u| u.starts_with("actions/download-artifact@")))
+        .expect("publish downloads the builds");
+    assert!(
+        download.iter().any(|l| l.trim() == "pattern: charter-*"),
+        "publish downloads the build artifacts by name, not every artifact of the run: \
+         {download:#?}"
+    );
+
+    let verify_at = run_pinned_verification(publish);
+    let first_upload = steps
+        .iter()
+        .position(|s| {
+            s.iter().any(|l| {
+                l.contains("gh release create")
+                    || l.contains("gh release edit")
+                    || l.contains("replace-release-assets.sh")
+            })
+        })
+        .expect("publish uploads something");
+    assert!(
+        verify_at < first_upload,
+        "publish verifies the provenance of what it uploads BEFORE it uploads it"
+    );
 }
 
 #[test]
-fn only_the_provenance_job_holds_a_signing_identity_and_it_holds_nothing_else() {
+fn only_the_provenance_job_can_sign_and_publish_can_only_read() {
     let jobs = release_jobs();
     let provenance = job(&jobs, "provenance");
     assert_eq!(
         provenance.permissions(),
-        Some(vec![
-            ("attestations".to_owned(), "write".to_owned()),
-            ("id-token".to_owned(), "write".to_owned()),
-        ]),
+        Some(pairs(&[("attestations", "write"), ("id-token", "write")])),
         "the provenance job checks nothing out and writes nothing but the attestation"
     );
     assert!(
         !provenance.reads_a_secret() && !provenance.publishes(),
         "the job that signs provenance holds no release key and cannot publish"
     );
+    assert_eq!(
+        job(&jobs, "publish").permissions(),
+        Some(pairs(&[("attestations", "read"), ("contents", "write")])),
+        "publish writes the release and only reads attestations"
+    );
 
-    let holders: Vec<&str> = jobs
+    let signers: Vec<&str> = jobs
         .iter()
-        .filter(|j| j.holds_a_signing_identity())
+        .filter(|j| j.can_mint_an_oidc_token())
         .map(|j| j.name.as_str())
         .collect();
-    assert_eq!(holders, ["provenance"], "{holders:?}");
+    assert_eq!(signers, ["provenance"], "{signers:?}");
+    let attesters: Vec<&str> = jobs
+        .iter()
+        .filter(|j| {
+            j.permissions()
+                .is_some_and(|p| p.iter().any(|(k, v)| k == "attestations" && v == "write"))
+        })
+        .map(|j| j.name.as_str())
+        .collect();
+    assert_eq!(attesters, ["provenance"], "{attesters:?}");
 }
 
 #[test]
 fn the_workflow_default_stays_read_only() {
     let text = workflow::read(&workflow::workflows_dir().join("release.yml"));
-    let top: Vec<&str> = text
-        .lines()
-        .skip_while(|l| *l != "permissions:")
-        .skip(1)
-        .take_while(|l| l.starts_with("  "))
-        .map(str::trim)
-        .collect();
-    assert_eq!(top, ["contents: read"]);
+    assert_eq!(workflow_permissions(&text), pairs(&[("contents", "read")]));
 }

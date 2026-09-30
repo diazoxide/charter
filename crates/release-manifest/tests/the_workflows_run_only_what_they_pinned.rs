@@ -130,12 +130,12 @@ fn every_action_every_workflow_runs_is_pinned_by_commit() {
 }
 
 /// A job that holds what a release is made with: a secret, the `release` environment, the
-/// power to publish, or the identity that signs its provenance (#583).
+/// power to publish, or the OIDC token that signs its provenance (#583).
 fn is_privileged(job: &Job) -> bool {
     job.reads_a_secret()
         || job.publishes()
         || job.environment().is_some()
-        || job.holds_a_signing_identity()
+        || job.can_mint_an_oidc_token()
 }
 
 /// Why this step restores or saves a cache, or `None`.
