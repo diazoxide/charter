@@ -1,6 +1,6 @@
 # A chat runs in a sandbox charter compiles for its harness, and it shows when one does not
 
-**Proposed 2026-09-30, for the operator's ruling** (program map SD-1; rulings Q10, C9, W8, V16
+**Accepted 2026-09-30** by the operator (ruling V21; program map SD-1; rulings Q10, C9, W8, V16
 and X18). It re-opens [ADR 0028](0028-containment-checks-a-path-and-does-not-hold-it.md), whose
 own re-opening clause this decision triggers.
 
@@ -186,17 +186,14 @@ no OS sandbox, by the ruling of 2026-09-22. Sandboxing extensions would be a sep
   sandbox is what enforces it.
 - Describing the denial classes in more detail than this record gives, in public docs.
 
-## Open questions for the operator
+## Ruled (V21, 2026-09-30)
 
-1. **Existing planes:** do they get a one-time offer to turn the sandbox on (recommended), or does
-   it flip on at the upgrade?
-2. **ADR 0028's rewrite:** does SD-2 ship with the residual stated (recommended), or wait for the
-   `openat` rewrite and its external review?
-3. **Windows:** a new plane on Windows has no backend yet, so under `failIfUnavailable` every chat
-   there would start at the opt-out. Should Windows keep the default (recommended, per ADR 0031's
-   "guards or no charter"), or default off until a backend exists?
-4. **Wrapping a harness that has its own sandbox:** Seatbelt profiles may not nest. If measurement
-   shows they do not, may charter turn Codex's own sandbox off *only* when charter's wrap is
-   measured to be strictly stricter (recommended), or must Codex fail closed?
-5. **A new plane's default egress:** `model-providers`, `forge` and `toolchains` (recommended),
-   or `model-providers` only, with everything else asked for?
+1. **Existing planes** get a one-time offer to turn the sandbox on; it never flips on at the
+   upgrade.
+2. **SD-2 ships with ADR 0028's residual stated** as a known gap, until the `openat` rewrite and
+   its external review.
+3. **Windows keeps the default on** (ADR 0031): chats there start at the visible opt-out until a
+   backend exists.
+4. **charter may turn Codex's own sandbox off only when its wrap is measured strictly stricter**;
+   otherwise Codex keeps its own.
+5. **A new plane's default egress** is `model-providers`, `forge` and `toolchains`.
