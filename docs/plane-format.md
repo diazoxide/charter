@@ -79,13 +79,24 @@ a second machine and a deletion do to it
 - **None** — a path this document records that is not charter's store: the operator's
   checkout, a harness's own file, a vendor's output.
 
+A workspace's files are in two tiers at once, and say so: **Plane when LIVE, Clone state when
+LOCAL**. The same path is committed while the workspace is LIVE and stays in this clone while
+it is LOCAL, so a backup reads the LIVE block to know which.
+
 After the tier come the marks that apply: **rebuildable** (derived: deleting it costs a rebuild
 and nothing else, and a backup skips it), **transient** (it lives for a session, a turn or one
-operation, and a backup skips it), **legacy** (only the retired Python charter creates it, and charter-app at most keeps it consistent) and,
-for a workspace's files, **Clone state when LOCAL**. Clone state or Machine with none of the
-first three marks is what FR-10 backs up. A new file lands in this document with its tier, and
+operation, and a backup skips it) and **legacy** (only the retired Python charter creates it,
+and charter-app at most keeps it consistent). Clone state or Machine with none of the three
+marks is what FR-10 backs up.
+
+A tier line is `**Tier:** <tier>[, <mark>…]`, optionally followed by ` — ` and a reason. The tier
+and marks carry no punctuation of their own: a line with no reason has no full stop. A new
+store lands in this document with its tier, under its own heading or as a row of a table whose
+first column is `Path`.
 `crates/charter-core/tests/every_store_the_plane_format_names_has_a_tier.rs` fails until it
-has one.
+has one, and it fails on any new heading in the file sections that has no tier and is not
+listed in the test as something other than a store. It does not see a store named only in the
+prose under another heading, which is why every store gets a heading or a row.
 
 ## Contents
 
@@ -865,7 +876,7 @@ Two rules hold for the whole area and are not repeated per file:
 - **Format:** directory.
 - **Status:** stable — the operator's clones live here, and the plane's `.gitignore` names
   it literally.
-- **Tier:** Plane, Clone state when LOCAL — `workspaces/.gitkeep` is committed; what is inside follows each workspace's LIVE or LOCAL.
+- **Tier:** Plane when LIVE, Clone state when LOCAL — `workspaces/.gitkeep` is committed; what is inside follows each workspace's LIVE or LOCAL.
 - **Written by:** `charter init` (`charter/commands.py:1091` writes `/workspaces/*/*` and
   `!/workspaces/.gitkeep` into `.gitignore`); the directory itself by
   `workspace.ensure` → `wd.mkdir(parents=True)` (`charter/workspace.py:1313`).
@@ -904,7 +915,7 @@ Two rules hold for the whole area and are not repeated per file:
 
 - **Format:** directory.
 - **Status:** stable — it *is* the workspace.
-- **Tier:** Plane, Clone state when LOCAL — a LIVE workspace's charter, memory, todos, sessions and changes are committed; a LOCAL one's stay in this clone and are backed up as clone state (FR-10).
+- **Tier:** Plane when LIVE, Clone state when LOCAL — a LIVE workspace's charter, memory, todos, sessions and changes are committed; a LOCAL one's stay in this clone and are backed up as clone state (FR-10).
 - **Written by:** `workspace.ensure` (`charter/workspace.py:1313`), which then calls
   `scaffold` best-effort (`charter/workspace.py:1315`). Reached from `workspace create`,
   `workspace use`, `charter clone` (`charter/commands.py:385`), `restore`, `fork`, and every
@@ -922,7 +933,7 @@ Two rules hold for the whole area and are not repeated per file:
 - **Format:** Markdown; charter parses and rewrites `## ` sections, no frontmatter.
 - **Status:** stable — hand-edited, committed for a LIVE workspace, read by the SessionStart
   digest, the status line/tab strip (vision cell) and `handoff`.
-- **Tier:** Plane, Clone state when LOCAL.
+- **Tier:** Plane when LIVE, Clone state when LOCAL
 - **Written by:** `workspace.scaffold_charter` (`charter/workspace.py:4360`, template at
   `charter/workspace.py:4295`) and `workspace.set_vision` (`charter/workspace.py:4370`);
   commands `workspace create --vision`, `workspace vision "…"`
@@ -963,7 +974,7 @@ Two rules hold for the whole area and are not repeated per file:
 - **Format:** JSON object, `json.dumps(doc, indent=2) + "\n"` (`charter/workspace.py:1612`).
 - **Status:** stable — committed for LIVE workspaces, restored on other machines, and
   hand-editable (`manifest_owner` exists precisely to tell charter's copy from a hand's).
-- **Tier:** Plane, Clone state when LOCAL.
+- **Tier:** Plane when LIVE, Clone state when LOCAL
 - **Written by:** `workspace._write_manifest` (`charter/workspace.py:1589`) via
   `write_manifest` (`charter/workspace.py:1577`, the deliberate writer: `snapshot`, `fork`,
   `rename`), `scaffold_manifest` (`charter/workspace.py:1652`, birth) and `record_members`
@@ -1067,7 +1078,7 @@ excepted), and for a secret-shaped value, named by its kind.
 - **Format:** directory of Markdown files plus a `MEMORY.md` index.
 - **Status:** stable — committed for LIVE workspaces, hand-editable, read by the SessionStart
   briefing, `charter recall`, `doctor` and `curate`.
-- **Tier:** Plane, Clone state when LOCAL.
+- **Tier:** Plane when LIVE, Clone state when LOCAL
 - **Written by:** `workspace.scaffold_memory` (`charter/workspace.py:1817`) →
   `memstore.ensure_index` (`charter/memstore.py:86`); `workspace.remember`
   (`charter/workspace.py:4231`) → `memstore.write` (`charter/memstore.py:101`);
@@ -1089,7 +1100,7 @@ excepted), and for a secret-shaped value, named by its kind.
 
 #### `workspaces/<ws>/memory/MEMORY.md`
 
-- **Tier:** Plane, Clone state when LOCAL.
+- **Tier:** Plane when LIVE, Clone state when LOCAL
 - **Encoding details:** created once, `config.create_for`, with the header at
   `charter/workspace.py:1802` formatted with the workspace name, and a trailing `\n`
   guaranteed (`charter/memstore.py:97`). Entries are **appended** as
@@ -1120,7 +1131,7 @@ excepted), and for a secret-shaped value, named by its kind.
 
 #### `workspaces/<ws>/memory/<YYYYMMDD-HHMMSS>-<slug>.md`
 
-- **Tier:** Plane, Clone state when LOCAL.
+- **Tier:** Plane when LIVE, Clone state when LOCAL
 - **Encoding details:**
   - Filename: `now.strftime("%Y%m%d-%H%M%S-")` + `slug(title)` + `.md`
     (`charter/memstore.py:119`–`121`). **The stamp is LOCAL time** — `datetime.datetime.now()`
@@ -1193,7 +1204,7 @@ and an archived one is where `memstore.archive` would have put it (ADR 0065).
   `MEMORY.md`.
 - **Status:** stable — committed for LIVE workspaces, listed by `ws todo`, counted by the
   status line and by `workspace remove`'s warning, and inherited by `fork`.
-- **Tier:** Plane, Clone state when LOCAL.
+- **Tier:** Plane when LIVE, Clone state when LOCAL
 - **Written by:** `todos.scaffold` (`charter/todos.py:73`), `todos.add`
   (`charter/todos.py:93`); commands `charter ws todo "<text>"`
   (`charter/commands_workspace.py:1462`), `ws todo done|forget <slug>` (deletes —
@@ -1239,7 +1250,7 @@ and an archived one is where `memstore.archive` would have put it (ADR 0065).
 - **Format:** a directory of Markdown files, one per **session record**, plus `index.md`.
 - **Status:** stable — **charter-app only** (SI-8, ADR 0064); the Python charter never wrote
   one. Written when a chat closes through Smart close, and read by the next chat's briefing.
-- **Tier:** Plane, Clone state when LOCAL — the plane root's `sessions/` is always committed.
+- **Tier:** Plane when LIVE, Clone state when LOCAL — the plane root's `sessions/` is always committed.
 - **Where:** `workspaces/<ws>/sessions/` for a chat in a workspace; `sessions/` at the plane
   root for a chat at the plane root, which is in no workspace. Not `.charter/sessions/`, which
   holds per-chat pointers (below) and has nothing to do with these.
@@ -1376,7 +1387,7 @@ and an archived one is where `memstore.archive` would have put it (ADR 0065).
 - **Format:** JSON object; `json.dumps(ordered, indent=2) + "\n"` (`charter/change.py:781`).
 - **Status:** stable — committed for LIVE workspaces, hand-editable, an untrusted input
   validated on read and write.
-- **Tier:** Plane, Clone state when LOCAL.
+- **Tier:** Plane when LIVE, Clone state when LOCAL
 - **Written by:** `change.write` (`charter/change.py:420`, through `contain.writable` +
   `config.write_for`); commands `charter change create|add|drop|…`
   (`charter/commands_change.py:175`). Removed by `change.forget`
@@ -2738,7 +2749,7 @@ Legacy spellings `op_vault` / `op_item` are still read (`charter/secrets/onepass
 - **Status:** **stable** — the default home for plain-file and reference vault files, named
   by `config.VAULTS_DIR` (`charter/config.py:799`) and by the guard
   (`charter/hooks.py:553`).
-- **Tier:** Clone state.
+- **Tier:** Clone state
 - **Modes:** created 0700, **every level charter itself creates** chmod'ed to 0700
   (`charter/secrets/base.py:61` → `charter/config.py:190` `private_mkdir`). A directory
   that already exists is left as found and merely *reported*
@@ -2758,7 +2769,7 @@ Live-plane check (names and modes only, no contents): the real plane has
 
 - **Format:** flat JSON object, `key → secret value` (values may be multi-line).
 - **Status:** **stable** — the operator may hand-author it, and the file is the vault.
-- **Tier:** Clone state — **it holds values**, so FR-10 does not copy it: a backup carries no secret values.
+- **Tier:** Clone state — at its default path, `.charter/vaults/<name>.json`. A vault added with `--file` can be anywhere, inside the plane or outside it, and it is Clone state only when it is inside `.charter/`. **It holds values**, so FR-10 never copies it, wherever it is. A restore brings back the vault's registry entry, marks the vault **file missing**, and names it to the operator; it never drops the entry silently.
 - **Written by:** `charter/secrets/plain_file.py:97` (`_save`) →
   `charter/secrets/plain_file.py:42` (`_write_private`). Commands: `charter secret set`,
   `charter secret rm`.
@@ -2797,7 +2808,7 @@ Shape with placeholder values:
 - **Format:** JSON object `key → {"set_at": "YYYY-MM-DD"}`.
 - **Status:** **stable** — read by `charter secret audit` in a later process; holds no
   values, only key names and dates.
-- **Tier:** Clone state.
+- **Tier:** Clone state
 - **Written by:** `charter/secrets/plain_file.py:148` (`set`) and `:158` (`delete`) via the
   same `_write_private` (`charter/secrets/plain_file.py:177`).
 - **Read by:** `charter/secrets/plain_file.py:167` (`_load_meta`), `:182` (`ages`) →
@@ -3227,7 +3238,7 @@ generated or mirrored** (`charter/harness/base.py:245`-`249`,
 - **Format:** Markdown with YAML frontmatter (`description:`), body embeds
   `` !`echo '{}' | charter statusline` ``.
 - **Status:** **stable** — opencode reads it as the `/charter` command.
-- **Tier:** Machine, device-bound, rebuildable.
+- **Tier:** Machine, device-bound, rebuildable
 - **Written by:** `charter/harness/opencode.py:984` (`wire`), **create-only** (never
   refreshed). Constant: `charter/harness/opencode.py:225` (`COMMAND`), path
   `charter/harness/opencode.py:221`.
@@ -3239,7 +3250,7 @@ generated or mirrored** (`charter/harness/base.py:245`-`249`,
 - **Format:** Markdown; an HTML comment header then `hooks.context_block(None)`.
 - **Status:** **stable** — opencode reads it (it is named in `instructions`), and it is the
   substitute for a SessionStart hook.
-- **Tier:** Machine, device-bound, rebuildable.
+- **Tier:** Machine, device-bound, rebuildable
 - **Written by:** `charter/harness/opencode.py:642` (`write_context`) — **always
   overwritten**, the one generated file charter repairs; called from `wire`
   (`charter/harness/opencode.py:986`).
@@ -3372,7 +3383,7 @@ winning while it exists (`charter/harness/claude_code.py:221`).
 - **Status:** **internal** — written and read only by `charter/wiring.py` for the profile
   selector; deleting it costs one extra probe per profile (the selector re-probes on a
   miss, `charter/wiring.py:844`). A launch never reads it (`charter/wiring.py:849`).
-- **Tier:** Clone state, rebuildable, legacy.
+- **Tier:** Clone state, rebuildable, legacy
 - **Written by:** `charter/wiring.py:870` (`remember`) →
   `config.write_for(path, json.dumps(doc, indent=2) + "\n")` (`charter/wiring.py:890`),
   under `config.private_mkdir` (`:889`). Only `wired`/`unwired` are stored.
@@ -3462,7 +3473,7 @@ plane's `.gitignore` (`charter/commands.py:1096` in `_GITIGNORE_BASELINE`,
 - **Status:** **stable** — written by `charter ws use` / the reconcile path, read by every
   other charter process (status line, hooks, frame panels) to answer "which workspace is
   this session on".
-- **Tier:** Clone state, transient.
+- **Tier:** Clone state, transient
 - **Written by:** `charter/workspace.py:823` (`set_active`), `charter/workspace.py:851`
   (`reconcile`, seeding from the terminal pointer); commands: `charter workspace use|ws use`
   (`charter/commands_workspace.py:220`), `charter workspace reconcile`
@@ -3480,7 +3491,7 @@ plane's `.gitignore` (`charter/commands.py:1096` in `_GITIGNORE_BASELINE`,
 - **Format:** plain text, workspace name + `\n`
 - **Status:** **stable** — a second process (any later `charter ws use`, the frame) reads it
   to refuse an unforced switch.
-- **Tier:** Clone state, transient.
+- **Tier:** Clone state, transient
 - **Written by:** `charter/workspace.py:824` (`set_active` — "confirming = locking")
 - **Read by:** `charter/workspace.py:766` (`is_locked`), removed by `unlock`
   (`charter/workspace.py:781`)
@@ -3523,7 +3534,7 @@ plane's `.gitignore` (`charter/commands.py:1096` in `_GITIGNORE_BASELINE`,
 - **Status:** **stable** — written by `charter statusline` (fed Claude Code's per-turn
   payload) and read by the frame's panels in another process
   (`recorded_context_gauge`, `charter/statusline.py:735`); `ctx` exists **only** here.
-- **Tier:** Clone state, transient.
+- **Tier:** Clone state, transient
 - **Written by:** `charter/statusline.py:414` (`_record_turn`), via
   `statusline.record_usage` (`charter/statusline.py:643`)
 - **Read by:** `charter/statusline.py:459` (`_usage_rows`), `charter/statusline.py:467`,
@@ -3539,7 +3550,7 @@ plane's `.gitignore` (`charter/commands.py:1096` in `_GITIGNORE_BASELINE`,
 - **Format:** plain text, a decimal integer, no newline
 - **Status:** **internal** — a counter written and read only by `hooks` (PostToolUse). Deleted
   ⇒ the memory-cadence nudge restarts its count at 0; nothing else changes.
-- **Tier:** Clone state, transient.
+- **Tier:** Clone state, transient
 - **Written by:** `charter/hooks.py:7689` (`_memnudge_set`), bumped `charter/hooks.py:7698`
 - **Read by:** `charter/hooks.py:7680`
 - **Git:** gitignored
@@ -3552,7 +3563,7 @@ plane's `.gitignore` (`charter/commands.py:1096` in `_GITIGNORE_BASELINE`,
   `.claude/settings.json`, `.claude/agents/*.md` or a `personas/*/persona.md` changed after it
   started, from what it read of them at the chat's start, and keeps that in memory
   (charter#369).
-- **Tier:** Clone state, transient, legacy.
+- **Tier:** Clone state, transient, legacy
 - **Written by:** `charter/hooks.py:7875` (`_write_configver`)
 - **Read by:** `charter/hooks.py:7891`
 - **Git:** gitignored
@@ -3563,7 +3574,7 @@ plane's `.gitignore` (`charter/commands.py:1096` in `_GITIGNORE_BASELINE`,
 - **Status:** **internal** — written by one hook event and taken by another in the same
   chat, purely to trace "the operator approved the thing we asked about". Deleted ⇒ the
   approval is not traced; no behaviour changes.
-- **Tier:** Clone state, transient, legacy.
+- **Tier:** Clone state, transient, legacy
 - **Written by:** `charter/hooks.py:285` (`_ask_mark_set`)
 - **Read/removed by:** `charter/hooks.py:314` (`_ask_mark_take`)
 - **Git:** gitignored
@@ -3580,7 +3591,7 @@ plane's `.gitignore` (`charter/commands.py:1096` in `_GITIGNORE_BASELINE`,
 - **Status:** **internal**, Python only — set by one hook event and taken by the next in the
   same process family. Deleted ⇒ the routing suggestion is forgotten. charter-app neither
   writes nor reads it: `routing:` is retired (charter#369).
-- **Tier:** Clone state, transient, legacy.
+- **Tier:** Clone state, transient, legacy
 - **Written by:** `charter/hooks.py:8366` (`_route_mark_set`)
 - **Read by:** `charter/hooks.py:8377` (`_route_mark_take`), cleared `charter/hooks.py:8388`
 - **Git:** gitignored
@@ -3589,7 +3600,7 @@ plane's `.gitignore` (`charter/commands.py:1096` in `_GITIGNORE_BASELINE`,
 - **Format:** plain text, persona name + `\n` (personas area — listed because it lives here)
 - **Status:** **stable** — written by `charter persona use`, read by the guard, the status
   line and the frame.
-- **Tier:** Clone state, transient.
+- **Tier:** Clone state, transient
 - **Written by:** `charter/persona.py:1528` (`set_active`)
 - **Read by:** `charter/persona.py:1238` (`for_session`), `charter/persona.py:1219`
 - **Git:** gitignored
@@ -3601,13 +3612,13 @@ plane's `.gitignore` (`charter/commands.py:1096` in `_GITIGNORE_BASELINE`,
 
 ### `terminals/` — per-pane pointers
 
-**Tier:** Clone state, transient.
+**Tier:** Clone state, transient
 
 ### `terminals/<tid>.workspace`, `terminals/<tid>.persona`
 - **Format:** plain text, one name + `\n`
 - **Status:** **stable** — survives closing/reopening the harness in the same pane and is
   read by every later process in that pane.
-- **Tier:** Clone state, transient.
+- **Tier:** Clone state, transient
 - **Written by:** `charter/workspace.py:819` (`set_active`), `charter/persona.py:1528`
 - **Read by:** `charter/workspace.py:192` + `charter/workspace.py:674`,
   `charter/persona.py:1196`
@@ -3641,7 +3652,7 @@ a **chat id** `<workspace-prefix>.<n>` (`charter/frame/state.py:316`, prefix rul
 - **Format:** JSON object `{"<prefix>": <highest ordinal used>}`, `sort_keys=True`, trailing `\n`
 - **Status:** **stable** — the high-water mark that stops a reused chat id; read and raised
   by every process that mints a chat.
-- **Tier:** Clone state, legacy.
+- **Tier:** Clone state, legacy
 - **Written by:** `charter/frame/state.py:383` (`_raise_mark`, `replace_for`, under the lock)
 - **Read by:** `charter/frame/state.py:363` (`_read_mark`), `highest_ordinal`
   (`charter/frame/state.py:463`)
@@ -3654,7 +3665,7 @@ a **chat id** `<workspace-prefix>.<n>` (`charter/frame/state.py:316`, prefix rul
 - **Format:** empty file used with `flock(LOCK_EX)`
 - **Status:** **stable** — the cross-process mutex for id allocation; the app must take the
   same lock to mint an id.
-- **Tier:** Clone state, legacy.
+- **Tier:** Clone state, legacy
 - **Written by / locked by:** `charter/frame/state.py:349` (`_locked`, opened `"a"`)
 - **Git:** gitignored
 - **Deleted?** recreated on demand, but deleting it while another process holds it defeats
@@ -3662,7 +3673,7 @@ a **chat id** `<workspace-prefix>.<n>` (`charter/frame/state.py:316`, prefix rul
 
 ### `frame/<chat>/` — one directory per chat
 
-**Tier:** Clone state, legacy.
+**Tier:** Clone state, legacy
 
 Claimed with `claim_private_dir` (`charter/frame/state.py:318`) so a claim is a race-free
 `mkdir`. Every file below is one value; unless said otherwise the writer is
@@ -3728,7 +3739,7 @@ rather than empty (`charter/frame/gather.py:487`).
 - **Format:** JSON, `indent=2`, `sort_keys=True`, trailing `\n`
 - **Status:** **stable** — written by a quit or by the recorder and read by a *later*
   `charter reopen`; it is the plane's session manifest.
-- **Tier:** Clone state, legacy.
+- **Tier:** Clone state, legacy
 - **Written by:** `charter/frame/reopen.py:320` (`write`), called from
   `charter/commands_frame.py:11128`
 - **Read by:** `charter/frame/reopen.py:344` (`read`), also scanned for ordinals
@@ -3765,7 +3776,7 @@ Unknown keys are dropped on read; non-string values become `""`
 ### `frame/<chat>.transcript`
 - **Format:** plain text — the tmux `capture-pane` output of the chat's pane
 - **Status:** **stable** — written at quit, read later by a pager and by `charter reopen`
-- **Tier:** Clone state, legacy.
+- **Tier:** Clone state, legacy
 - **Written by:** `charter/commands_frame.py:10656` (`_capture_transcript`, via
   `capture-pane -p -e -N -S -2000`, `charter/commands_frame.py:10603`/`:10616`); trimmed
   from the **end in bytes** (512 KB cap)
@@ -3775,7 +3786,7 @@ Unknown keys are dropped on read; non-string values become `""`
 
 ### `frame/<frame-id>/` for a non-chat frame (e.g. the live plane's `probe-1`)
 
-**Tier:** Clone state, legacy.
+**Tier:** Clone state, legacy
 
 Same directory shape, name minted by `frame_id(workspace, pid)`
 (`charter/frame/state.py:121`). Only `gather.json` + `version` are typically present.
@@ -3876,7 +3887,7 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
 - **Format:** empty file; **the mtime is the value**
 - **Status:** **stable** — written by the hooks (Python) on every tool call and read by the
   frame panel to animate "this chat is working". The canonical hook-writes/frame-reads pair.
-- **Tier:** Clone state, transient, legacy.
+- **Tier:** Clone state, transient, legacy
 - **Written by:** `charter/inflight.py:507` (`turn_begin`, `touch_for`),
   `charter/inflight.py:527` (`turn_bump`, `os.utime`), removed `charter/inflight.py:543`;
   callers `charter/hooks.py:5971`, `charter/hooks.py:6177`, `charter/hooks.py:8699`
@@ -3892,7 +3903,7 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
 - **Format:** JSON `{"agent": str, "kind": str, "ts": float}`, no newline
 - **Status:** **stable** — written by the dispatch hook, read by the status line and the
   frame panels in other processes.
-- **Tier:** Clone state, transient.
+- **Tier:** Clone state, transient
 - **Written by:** `charter/inflight.py:246` (`start`, `tempfile.mkstemp` + `json.dump`);
   caller `charter/hooks.py:7954`. Also `kind="clone"` (`charter/commands.py:606`),
   `"gl-refresh"` (`charter/commands.py:1027`), `"action"`
@@ -3921,7 +3932,7 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
 - **Format:** empty file, used with `flock(LOCK_EX)`
 - **Status:** **stable** — a cross-process mutex around committing the dispatch record; any
   process that commits plane memory must take it.
-- **Tier:** Clone state, transient, legacy.
+- **Tier:** Clone state, transient, legacy
 - **Written/locked by:** `charter/hooks.py:8209`
 - **Git:** gitignored; deleted ⇒ recreated, but concurrent committers stop serialising.
 
@@ -3962,7 +3973,7 @@ Only the **latest** sighting is kept (whole-file overwrite).
 - **Format:** JSON object `{"<agent id>": "<persona>"}`, `sort_keys=True`, no newline
 - **Status:** **stable** — written by one hook event (dispatch) and read by a later one to
   attribute a sub-agent's tools to a persona; it crosses processes.
-- **Tier:** Clone state, transient.
+- **Tier:** Clone state, transient
 - **Written by:** `charter/hooks.py:8098` (`_agent_map_remember`)
 - **Read by:** `charter/hooks.py:8105` (`_agent_map_lookup`)
 - **Git:** gitignored
@@ -4051,7 +4062,7 @@ about. The next save or fetch settles a `pr-open` record by asking the forge whe
 - **Format:** one byte, `1`
 - **Status:** **internal** — "this session was already nudged about this workspace". Deleted
   ⇒ one extra nudge. Written and read only by `hooks`.
-- **Tier:** Clone state, transient.
+- **Tier:** Clone state, transient
 - **Written by:** `charter/hooks.py:7656`; existence checked `charter/hooks.py:7654`
 - **Git:** gitignored
 - **Encoding:** key is `f"{session}-{ws}"` with every char outside `[A-Za-z0-9._-]`
@@ -4062,7 +4073,7 @@ about. The next save or fetch settles a `pr-open` record by asking the forge whe
 - **Format:** plain text, `str(time.time())`, no newline; the mtime is what is actually read
 - **Status:** **internal** — a 90-second debounce for the Stop-hook auto-save. Deleted ⇒ at
   most one extra commit attempt.
-- **Tier:** Clone state, transient, legacy.
+- **Tier:** Clone state, transient, legacy
 - **Written by:** `charter/commands_workspace.py:1179` (marker path
   `charter/commands_workspace.py:1171`)
 - **Read by:** `charter/commands_workspace.py:1173` (mtime only)
@@ -4084,7 +4095,7 @@ about. The next save or fetch settles a `pr-open` record by asking the forge whe
 - **Format:** empty file; existence is the payload
 - **Status:** **stable** — one process records the arrival, another (the frame/status line)
   reads and clears it.
-- **Tier:** Clone state, transient, legacy.
+- **Tier:** Clone state, transient, legacy
 - **Written by:** `charter/workspace.py:1163` (`record_arrival`, `touch_for`)
 - **Read by:** `charter/workspace.py:1198` (`arrivals`), cleared `charter/workspace.py:1224`,
   all forgotten `charter/workspace.py:1238`
@@ -4094,7 +4105,7 @@ about. The next save or fetch settles a `pr-open` record by asking the forge whe
 - **Format:** JSON `{"errno": "<errno name or number>", "says": "<strerror>"}` + `\n`
 - **Status:** **stable** — written by the snapshot path and read by a later command/status
   render to explain why a tree could not be recorded.
-- **Tier:** Clone state, rebuildable.
+- **Tier:** Clone state, rebuildable
 - **Written by:** `charter/workspace.py:2977` (`_note_unrecorded`, atomic); removed when the
   write succeeds (`charter/workspace.py:2974`)
 - **Read by:** `charter/workspace.py:2988` (`unrecorded_reason`)
@@ -4105,7 +4116,7 @@ about. The next save or fetch settles a `pr-open` record by asking the forge whe
 ### `locks/harness-wiring-<digest16>.lock`
 - **Format:** empty file, `flock(LOCK_EX)`
 - **Status:** **stable** — serialises harness wiring across processes.
-- **Tier:** Clone state, transient, legacy.
+- **Tier:** Clone state, transient, legacy
 - **Written/locked by:** `charter/wiring.py:963` (path `charter/wiring.py:959`)
 - **Git:** gitignored
 - **Encoding:** digest = first 16 hex of `sha256(json.dumps({**profiletrust.fingerprint(p),
@@ -4115,7 +4126,7 @@ about. The next save or fetch settles a `pr-open` record by asking the forge whe
 - **Format:** plain text
 - **Status:** **internal/dead** — derived (`charter/config.py:804`) and read by nothing in
   this tree; kept so old files do not error. Deleting it changes nothing.
-- **Tier:** Clone state, legacy.
+- **Tier:** Clone state, legacy
 
 ### `active-persona`
 - **Format:** plain text, persona name + `\n`
@@ -4141,7 +4152,7 @@ semantics below.
   bool, "ahead": int, "behind": int, "ts": float}`; one line, no trailing newline
 - **Status:** **internal** — a 5-second TTL cache of `git status --porcelain=v1 --branch`
   (`_STATE_TTL`, `charter/statusline.py:817`). Deleted ⇒ the next render shells out to git.
-- **Tier:** Clone state, rebuildable, legacy.
+- **Tier:** Clone state, rebuildable, legacy
 - **Written by:** `charter/statusline.py:844` (`_repo_states`)
 - **Read by:** `charter/statusline.py:825`; the whole file is rewritten on any change
 - **Git:** gitignored. Values: `charter/statusline.py:902`
@@ -4152,7 +4163,7 @@ semantics below.
 - **Status:** **internal** — forge (CI / open change) cache. Served for up to 2 h
   (`DISPLAY_TTL`, `charter/glstate.py:21`), refreshed after 5 min (`REFRESH_TTL`,
   `charter/glstate.py:22`). Deleted ⇒ the CI column is blank until a refresher runs.
-- **Tier:** Clone state, rebuildable.
+- **Tier:** Clone state, rebuildable
 - **Written by:** `charter/glstate.py:150` (`_save`), from the detached
   `charter gl-refresh` (`charter/glstate.py:288`)
 - **Read by:** `charter/glstate.py:141` (`load`), `charter/glstate.py:171` (`read_for`),
@@ -4164,7 +4175,7 @@ semantics below.
 - **Format:** plain text, the refresher's pid (or empty when done)
 - **Status:** **internal** — spawn lock; **mtime carries the age**. Deleted ⇒ at worst a
   duplicate refresher.
-- **Tier:** Clone state, transient.
+- **Tier:** Clone state, transient
 - **Written by:** `charter/glstate.py:88` (`_write_lock`), cleared `charter/glstate.py:136`
 - **Read by:** `charter/glstate.py:106` (`_read_lock`), liveness via `os.kill(pid, 0)`
   (`charter/glstate.py:119`)
@@ -4174,7 +4185,7 @@ semantics below.
   `update.checking` — empty file whose **mtime** is the spawn cooldown
 - **Status:** **internal** — deleted ⇒ one more version check. `latest` is the newest
   released version, `head` the upstream dev sha (dev channel only).
-- **Tier:** Clone state, rebuildable, legacy.
+- **Tier:** Clone state, rebuildable, legacy
 - **Written by:** `charter/update.py:467` (`fetch_and_store`), lock touched
   `charter/update.py:506`
 - **Read by:** `charter/update.py:119` (`load`), `charter/update.py:331` (`newer_head`),
@@ -4197,7 +4208,7 @@ semantics below.
 - **Format:** JSON object keyed by vault name → `{"ok": bool, "detail": str, "ts": float}`
 - **Status:** **internal** — 60-second TTL (`_VAULT_TTL`, `charter/statusline.py:1650`).
   Deleted ⇒ the next render asks the provider again.
-- **Tier:** Clone state, rebuildable, legacy.
+- **Tier:** Clone state, rebuildable, legacy
 - **Written by:** `charter/statusline.py:1691`
 - **Read by:** `charter/statusline.py:1677`
 - **Git:** gitignored. **`detail` is provider text and can name paths/accounts** — it is the
@@ -4210,7 +4221,7 @@ semantics below.
 - **Status:** **internal** — remembered wiring verdict; 24 h TTL (`MAX_AGE`,
   `charter/wiring.py:89`) **and** invalidated when any stamped file changed
   (`charter/wiring.py:861`). Deleted ⇒ the selector re-checks (slower, correct).
-- **Tier:** Clone state, rebuildable, legacy.
+- **Tier:** Clone state, rebuildable, legacy
 - **Written by:** `charter/wiring.py:890` (`remember`)
 - **Read by:** `charter/wiring.py:838` (`_read_cache`), `charter/wiring.py:853` (`cached`)
 - **Git:** gitignored; key = `sha256(json.dumps({**profiletrust.fingerprint(p), "name":
@@ -4256,7 +4267,7 @@ identifier `dev.charter.app`. The keyring rows are the operating system's store 
 
 | Variable | Effect | Source |
 |---|---|---|
-| `CHARTER_HOME` | **Replaces the state directory outright** — every file in this section moves, verbatim, no migration | `charter/config.py:42`, `charter/config.py:110` |
+| `CHARTER_HOME` | **In the Python charter, replaces the state directory outright**: every file in this section moves, verbatim, with no migration. **In charter-app only part of it moves** ([#750](https://github.com/diazoxide/charter/issues/750)). The local vault registry, `vaults/`, `fingerprint.key`, the push and save journals, the gate files (`sessions/<sid>.tools`, `.gate`, `commit-gate/`), `sessions/<sid>.memnudge`, `dispatch-inflight/`, `ws-edit-nudge/`, `agent-personas.json`, `mcp-approved.json` and `unrecorded/` move, because their writers call `plane::state_dir`. The session and terminal pointers, `active-persona`, `sessions/<sid>.usage`, `sessions/<chat>.saved`, `persona-state/`, `handbacks/`, `cache/glstate.json`, `harness-profiles-launched.json`, `app/` and `workspace-rename.json` stay in `<plane>/.charter`, because their writers join `.charter` to the root themselves | `charter/config.py:42`, `charter/config.py:110`; `crates/charter-core/src/plane.rs` (`state_dir`) |
 | `CHARTER_ROOT` | Picks the plane (hence `<root>/.charter`); a bad value raises rather than falling back | `charter/root.py:20` |
 | `CHARTER_SESSION_ID` | Names `sessions/<sid>.*`, `commit-gate/<sid>`, `ws-edit-nudge/<sid>-…`, the trace bucket, and inside a frame it is the **chat id** that names `frame/<chat>/` and `chat-turns/<chat>` | `charter/session.py:65`, shadowing explained `charter/session.py:46` |
 | `CLAUDE_CODE_SESSION_ID` | Fallback for the above | `charter/session.py:66` |

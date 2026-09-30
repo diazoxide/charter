@@ -7,12 +7,13 @@ state (`.charter/`, per clone, not derived: vault registry, `fingerprint.key`, `
 save/push journals, gate files), Machine (app data), Keyring. Every file in plane-format.md gets a
 tier. OQ-10 is amended; FR-10's backup includes clone state."*
 
-It amends **OQ-10** and extends [ADR 0034](0034-charter-keeps-a-little-state-outside-every-plane.md)
-(the machine store). It gives a tier to the stores that three proposed records add:
-[ADR 0066](0066-a-chat-is-a-ulid-a-run-is-a-stretch-of-its-conversation-and-a-device-is-random.md)
-(chat, run and device identity), [ADR 0067](0067-a-chat-runs-in-a-sandbox-charter-compiles-for-its-harness.md)
-(the chat sandbox) and [ADR 0068](0068-a-chat-lives-in-charterd-and-the-app-is-its-client.md)
-(`charterd`). FR-10 (#608, backups) is built on it. So are LW-27, KN-26, KN-28, KN-29, KN-31
+It amends **OQ-10** and [ADR 0034](0034-charter-keeps-a-little-state-outside-every-plane.md)
+(the machine store: see its amendment of 2026-09-30). It gives a tier to the stores that three
+records add: [ADR 0066](0066-a-chat-is-a-ulid-a-run-is-a-stretch-of-its-conversation-and-a-device-is-random.md)
+(chat, run and device identity, accepted), and the proposed
+[ADR 0067](0067-a-chat-runs-in-a-sandbox-charter-compiles-for-its-harness.md) (the chat sandbox)
+and [ADR 0068](0068-a-chat-lives-in-charterd-and-the-app-is-its-client.md) (`charterd`), which
+merge before this one. FR-10 (#608, backups) is built on it. So are LW-27, KN-26, KN-28, KN-29, KN-31
 (#717) and FW-7 (#735), which each add a store.
 
 ## Where charter is today
@@ -53,7 +54,8 @@ registry.
 directory.** V2 says "Machine (app data)", and ADR 0034 put the store under the application-data
 directory. `machine.rs` then moved it to the config home (`$CHARTER_CONFIG_HOME`, else
 `$XDG_CONFIG_HOME`, else `~/.config`, then `charter/`), so that a machine has one `charter/`
-directory. This record calls the tier **Machine** and says where each store in it is. It does
+directory. ADR 0034 is amended to say so plainly. This record calls the tier **Machine** and
+says where each store in it is. It does
 not move any store. The Tauri application-data and log directories are Machine too. They hold
 only the shims, which are rebuilt at every launch, and the panic log.
 
@@ -97,11 +99,15 @@ which the app binds and no document mentioned, and the keys that `charter plugin
 writes into `~/.claude/settings.json`. The document said charter never writes that file, and
 that is still true of the Python charter.
 
-`crates/charter-core/tests/every_store_the_plane_format_names_has_a_tier.rs` reads the document.
-It fails when a heading that names a path has no tier, when a table of paths has no Tier column,
-and when a tier or mark is not one this record defines. A backticked heading that names a key or
-a group rather than a store is listed in the test with its reason, so that exemption is made in
-a diff somebody reads.
+`crates/charter-core/tests/every_store_the_plane_format_names_has_a_tier.rs` reads the document's
+file sections, from "Finding the plane" to the appendix, and fails when:
+
+- a `###` or `####` heading has no tier and is not listed in the test as something other than
+  a store (a key, a group, a rule), with the reason;
+- a table whose first column is `Path` has no Tier column;
+- a tier or mark is not one this record defines, including a tier line with stray punctuation;
+- either boundary heading is missing, so that a renamed heading cannot make it pass while
+  checking nothing.
 
 **Naming the tier of a new store joins the definition of done** (ST9). It is written into
 `AGENTS.md`'s rules, and the test enforces it for the document. The test cannot see a store that
@@ -124,13 +130,27 @@ words *"in .charter/"* give way to this.
 FR-10 backs up clone state and the Machine stores that §2 selects, to a folder the operator
 chooses. Two rules follow from the tiers:
 
-- **A device-bound store is restored as the same device, or not at all.** `machine.json` will
-  carry the device id (ADR 0066). Restoring it onto a second machine that is still in use would
-  give two devices one id, and the event log and audit chain would then name one device for
-  both. So a restore onto a machine that already has a device id keeps that id. A restore onto a
-  clean machine takes the backed-up id only when the operator says this machine replaces the old
-  one. Otherwise the restored `machine.json` gets a new id minted, as ADR 0066 does for a
-  deleted store.
+- **A device-bound store is restored as the same device, or not at all.** When FR-10 restores
+  onto a machine, it asks one question: **does this machine replace the one the backup came
+  from?**
+  - **Yes:** the device-bound stores come back as they were. That is the device id
+    (ADR 0066), the approvals and recent planes in `machine.json`, `extensions.json`, the
+    event log and the audit chain. So are the clone-state consent records:
+    `harness-profiles-launched.json` and `mcp-approved.json`.
+  - **No, or a machine that already has a device id:** none of that comes back as live
+    state. The device id is minted fresh, as ADR 0066 does for a deleted store, so two
+    machines never share one. Every approval and consent is dropped, because it was given on
+    another machine, for absolute paths that may name something else here, and the operator
+    is asked again the first time each one matters. The event log and audit chain are kept
+    as the old device's records, under its id, and never appended to.
+
+  Syncable stores (`layout.json`, `theme.json`, review drafts, private memory) come back
+  either way.
+- **A plain-file vault's registry entry comes back, and its file does not.** FR-10 carries no
+  secret values (§2). A restore restores the entry in `.charter/vaults.json`, marks the vault
+  **file missing**, and names it in the restore's summary, so the operator knows which values
+  to put back. It never drops the entry silently. Its file may also be outside the plane
+  (`charter vault add --file`), and it is Clone state only while it is inside `.charter/`.
 - **A restore brings back what a clone held, not what a harness held.** `reopen.json` names each
   chat's harness conversation. That conversation lives in the harness's own store, which is not
   charter's. A restored chat whose conversation is not on the new machine starts fresh and says
@@ -148,7 +168,7 @@ start from it.
 | the local audit chain (AU-1..AU-3) | ADR 0066, 0067 | Machine, device-bound. It is backed up, and `charter audit verify` passes after a restore (FR-10) |
 | the device key (AU-3) | ADR 0066 | Keyring. On a headless host, V1's age-encrypted file stands in for it |
 | the human scopes' credentials, `<config>/charterd/` | ADR 0068 | Machine, device-bound, transient. Minted at each start of `charterd` |
-| `charterd.sock` | ADR 0068 | Machine, device-bound, transient |
+| `charterd.sock`, in `$XDG_RUNTIME_DIR/charter/` on Linux or the per-user `TMPDIR` on macOS, not in the machine store | ADR 0068 | Machine, device-bound, transient |
 | the per-chat hook spool, beside the chat's files in `.charter/` | ADR 0068 | Clone state, transient. See the ruling list |
 | the run journal `charterd` resumes from (FD-29) | ADR 0068 | Machine, device-bound |
 | `charterd`'s copy of itself for an AppImage, under the machine store | ADR 0068 | Machine, device-bound, rebuildable |
@@ -159,9 +179,17 @@ start from it.
 
 ADR 0067 adds no store of its own. Its denial classes are the set of stores a chat may not
 touch, and they follow the tiers: the Keyring, the plain-file vaults, the audit chain, the device
-key, the hook spool and `<config>/charterd/`.
+key and `<config>/charterd/`. **The hook spool is the exception, and ADR 0068 is the rule for
+it.** A chat's hooks may append to **that chat's own spool**, and never to another chat's. The
+host verifies each line's MAC and sequence as it drains the spool, and records a gap in its own
+spool as a gap. ADR 0067's wording, *"denies the hook spool"*, needs the same correction, and
+that is made in ADR 0067, not here.
 
 ## Every store, by tier
+
+**This table is a snapshot, taken on 2026-09-30.** `docs/plane-format.md` is the record of each
+store's tier, and it is the document the test checks. When the two disagree, the format document
+is right, and this table is not updated.
 
 Each row gives the store, its tier, whether it is syncable or device-bound, whether FR-10 backs
 it up and whether it is rebuildable. The writer of each is in `docs/plane-format.md`. Paths are
@@ -184,7 +212,7 @@ relative to the plane root unless they start with `<config>` (the machine store)
 | 12 | a workspace's `workspace.md`, `workspace.json`, `memory/`, `todos/`, `sessions/`, `changes/<slug>.json` | Plane when LIVE, Clone state when LOCAL | — | remote, or yes | no |
 | 13 | `charter.local.toml` | Clone state | — | yes | no |
 | 14 | `.charter/vaults.json` (the local registry) | Clone state | — | yes | no |
-| 15 | `.charter/vaults/<name>.json`, a plain-file vault | Clone state | — | **no: it holds values** | no |
+| 15 | `.charter/vaults/<name>.json`, a plain-file vault (Clone state only inside `.charter/`) | Clone state | — | **no: it holds values**. Its registry entry is restored and marked file missing (§5) | no |
 | 16 | `.charter/vaults/<name>.json` (a reference vault), `<name>.meta.json` | Clone state | — | yes | no |
 | 17 | `.charter/vaults/<name>.keys.json` | Clone state | — | yes | no |
 | 18 | `.charter/fingerprint.key` | Clone state | — | yes | no |
@@ -235,7 +263,7 @@ relative to the plane root unless they start with `<config>` (the machine store)
 | 63 | the event log (FD-9) | Machine | device-bound | yes | no |
 | 64 | the audit chain (AU-1..AU-3) | Machine | device-bound | yes | no |
 | 65 | the device key (AU-3) | Keyring | — | no | no |
-| 66 | `<config>/charterd/` credentials, `charterd.sock` (ADR 0068) | Machine, transient | device-bound | no | no |
+| 66 | `<config>/charterd/` credentials, and `charterd.sock` in `$XDG_RUNTIME_DIR/charter/` or the per-user `TMPDIR` (ADR 0068) | Machine, transient | device-bound | no | no |
 | 67 | the per-chat hook spool (ADR 0068) | Clone state, transient | — | no | no |
 | 68 | the run journal (FD-29) | Machine | device-bound | yes | no |
 | 69 | `charterd`'s copies of itself: an AppImage's, and a runner's `~/.charter/server/<ver>/` | Machine, rebuildable | device-bound | no | yes |
@@ -250,11 +278,12 @@ the ruling list.
 
 1. **A workspace's files are in two tiers.** The same path is Plane when the workspace is LIVE
    and Clone state when it is LOCAL. The tier line says both
-   (`Plane, Clone state when LOCAL`), so a backup has to read the LIVE block to know which.
+   (`Plane when LIVE, Clone state when LOCAL`), so a backup has to read the LIVE block to know which.
 2. **A plain-file vault is secret values in Clone state.** V2 keeps values in the Keyring.
    ADR 0047 made the keyring the default, but a plain-file vault is still a supported provider,
-   and its file sits beside the registry that FR-10 backs up. This record keeps it in Clone
-   state and has FR-10 skip it.
+   and its file sits beside the registry that FR-10 backs up, or anywhere else `--file` put it.
+   This record keeps it in Clone state while it is inside `.charter/`, has FR-10 skip it, and
+   has a restore mark its entry file missing (§5).
 3. **`machine.json` holds syncable preferences and device-bound facts in one file.** Pins and
    the update channel are preferences. The approvals, the window set and the recent planes are
    keyed by absolute path, and the device id is about to join them. So the file is
@@ -267,6 +296,8 @@ the ruling list.
    follow it. The session pointers, `reopen.json`, usage, the trace, handbacks, the forge cache,
    profile trust and the rename journal are always under `<plane>/.charter`. With the variable
    set, "per clone" is false for the first group, and FR-10 has to back up both directories.
+   This is a defect, filed as [#750](https://github.com/diazoxide/charter/issues/750), and
+   `docs/plane-format.md`'s row for `CHARTER_HOME` now says what moves and what does not.
 5. **Harness config that charter co-writes is Machine, but it is not in the machine store.**
    charter owns a few keys in `~/.claude/settings.json`, one hook in `~/.codex/config.toml` and
    three opencode files. The tier applies to charter's lines, which are rebuilt by
@@ -274,7 +305,8 @@ the ruling list.
 6. **The hook spool is transient, but it carries audit events.** ADR 0068 has `charterd` drain
    each chat's spool and seal it into the audit chain. A spool that was never drained, because
    the machine died first, holds events nothing else has. Marking it transient means a backup
-   does not save them.
+   does not save them. A chat may write its own spool and never another chat's (ADR 0068), so
+   the spool is not denied to the chat that owns it.
 7. **A runner's host versions live in a third place.** ADR 0068 puts them under
    `~/.charter/server/<ver>/`, which is neither the machine store nor an OS application
    directory.
@@ -289,8 +321,9 @@ the ruling list.
 
 | Where | Change |
 |---|---|
-| `docs/plane-format.md` | A section defining the tiers and marks. A `**Tier:**` line on every store entry (136 of them), a Tier column in the pointers table, a table of what charter-app keeps outside the plane, an entry for `.charter/app/hooks.sock`, and a correction to "Claude Code's own files", which `charter plugin install` does write into |
-| `crates/charter-core/tests/every_store_the_plane_format_names_has_a_tier.rs` | New. It fails when a store lands in the document without a tier it can read |
+| `docs/adr/0034-…` | An amendment: the machine store is in the config home, not the application-data directory |
+| `docs/plane-format.md` | A section defining the tiers and marks. A `**Tier:**` line on every store entry (136 of them), a Tier column in the pointers table, a table of what charter-app keeps outside the plane, an entry for `.charter/app/hooks.sock`, a correction to "Claude Code's own files", which `charter plugin install` does write into, and a correction to the `CHARTER_HOME` row (#750) |
+| `crates/charter-core/tests/every_store_the_plane_format_names_has_a_tier.rs` | New. In the file sections, it fails on a heading with no tier unless the test lists it as not a store, on a table of paths with no Tier column, on a tier it cannot read, and when the section it checks cannot be found. It does not see a store named only in the prose under another heading |
 | `AGENTS.md` (`CLAUDE.md`) | The rule that a new store names its tier, as part of the definition of done |
 | `CONTEXT.md` | **Tier** (of a store) |
 | FR-10 (#608) | Built from §2 and §5 |
@@ -300,10 +333,12 @@ the ruling list.
 
 - **A tier line on every entry.** The document gets longer, and any new entry must choose a
   tier. That choice is the point of the record.
-- **The test reads prose.** It relies on the document's convention that a store's heading names
-  its path in backticks. A store recorded under a heading with no backticks is not checked.
-  That is a gap a reviewer can see, and a stricter parser would have to rewrite the document's
-  headings.
+- **The test reads structure, not prose.** Every heading in the file sections must carry a tier
+  or be listed in the test as not a store, and every table of paths must have a Tier column. A
+  store named only in a paragraph under some other heading is not checked. The document's
+  convention of one heading or one table row per store is what closes that gap, and review
+  holds it. The test walks lines rather than using a Markdown parser, because the document is
+  line-shaped and a parser would be a new dependency for one doc test.
 - **Legacy entries stay.** Python-only files keep their entries, marked legacy, because a plane
   that Python charter ran on still has them on disk. They go when the plane format drops them.
 
@@ -341,12 +376,14 @@ Each of these calls goes beyond the words of V2. Each has a recommendation.
    splits them out. *Recommend yes.*
 4. **A plain-file vault stays in Clone state, and FR-10 does not back it up.** *Recommend yes.*
    The other option is to require the Keyring, which would remove a supported provider.
-5. **A restore onto a clean machine mints a new device id** unless the operator says that this
-   machine replaces the old one (§5). *Recommend yes.* Otherwise, one backup restored onto two
-   machines gives them the same identity in every event.
-6. **`$CHARTER_HOME` should move all clone state or none of it.** *Recommend filing a ticket*
-   to make every `.charter/` writer use `plane::state_dir`, or to say which stores it
-   deliberately leaves behind. Until then, FR-10 backs up both directories.
+5. **A restore keeps device-bound state only when the operator says this machine replaces the
+   old one** (§5). Otherwise the device id is minted fresh, and every approval and consent is
+   dropped and asked again. *Recommend yes.* Otherwise one backup restored onto two machines
+   gives them the same identity in every event, and approvals given for one machine's paths
+   would count on another's.
+6. **`$CHARTER_HOME` should move all clone state or none of it.** Filed as
+   [#750](https://github.com/diazoxide/charter/issues/750) (M13). *Recommend* that it route
+   every `.charter/` writer through one helper. Until then, FR-10 backs up both directories.
 7. **Review drafts and private memory are Machine and syncable**, and R5's "in `.charter/`"
    gives way to OQ-10. *Recommend yes.*
 8. **The hook spool is transient.** *Recommend yes, with one condition.* FD-30 must drain the
@@ -355,5 +392,7 @@ Each of these calls goes beyond the words of V2. Each has a recommendation.
 9. **A runner's `~/.charter/server/<ver>/` is Machine.** *Recommend* that ADR 0068 move it under
    the machine store (`<config>/server/<ver>/`), as it already does for an AppImage's copy, or
    say why a runner needs a separate place.
-10. **The test checks the document and not the code.** *Recommend accepting this*, and making
-    "names its tier in plane-format.md" a review question on every PR that adds a store.
+10. **The test checks the document and not the code**, and within the document it checks
+    headings and tables of paths, not prose. *Recommend accepting this*, and making "names its
+    tier in plane-format.md, under its own heading or in a table row" a review question on
+    every PR that adds a store.
