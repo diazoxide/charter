@@ -6,6 +6,8 @@
 //   node tools/bench.mjs                 # build, then measure everything, both renderer arms
 //   node tools/bench.mjs --skip-build    # measure what is already built
 //   node tools/bench.mjs --only window --arms webgl
+//   node tools/bench.mjs --skip-build --only coldstart --app target/debug/charter-app --limit 2000
+//                                        # CI's Linux cold start: fails past the limit (p50)
 //
 // Windows open and close on screen while it runs, and each is brought to the front: WebKit
 // draws nothing in a covered window, and nothing at all while the display sleeps (which
@@ -37,9 +39,13 @@ const CORPUS_BYTES = readFileSync(CORPUS).length;
 const { values: options } = parseArgs({
   options: {
     "skip-build": { type: "boolean", default: false },
-    only: { type: "string", default: "coldstart,hook,tmux,window" },
+    only: { type: "string", default: "coldstart,coldstart50,hook,tmux,window" },
     arms: { type: "string", default: "dom,webgl" },
     "cold-starts": { type: "string", default: "10" },
+    // The binary cold start launches, when it is not the shipped build this script makes.
+    app: { type: "string" },
+    // Cold start's limit in ms: the run fails when the empty plane's p50 is past it.
+    limit: { type: "string" },
   },
 });
 const only = new Set(options.only.split(","));
@@ -75,6 +81,7 @@ function summary(samples) {
 // release, because a debug build's numbers say nothing about what a person would feel.
 
 const SHIPPED = join(ROOT, "target", "bench", "charter-app-shipped");
+const COLD_START_APP = options.app ? resolve(options.app) : SHIPPED;
 
 if (!options["skip-build"]) {
   run("cargo", ["build", "--release", "-p", "fake-harness", "-p", "charter-cli"], { cwd: ROOT });
@@ -186,7 +193,7 @@ async function coldStart(chats = 0) {
     // inside a charter chat measured the app against the OPERATOR'S plane — reading its
     // reopen record, which is a list of programs the app then starts, and writing its own
     // back. The fence is what makes a future edit that drops this line a dead app.
-    const app = spawn(SHIPPED, [], {
+    const app = spawn(COLD_START_APP, [], {
       cwd,
       env: {
         ...process.env,
@@ -212,6 +219,9 @@ async function coldStart(chats = 0) {
         }
       });
       app.on("exit", (code) => reject(new Error(`the app exited (${code}) before its first frame`)));
+      // What the app says on its way up — a slow start, a portal it did not wait for — is
+      // part of the measurement's record, so it is passed through.
+      app.stderr.on("data", (chunk) => process.stderr.write(chunk));
     }).finally(() => clearInterval(activating));
     clearInterval(activating);
     samples.push({ ms: own.at - from, appMs: own.appMs });
@@ -460,13 +470,11 @@ function windowArm(arm) {
 
 // ---------------------------------------------------------------------------------------------
 
-if (only.has("coldstart")) {
-  results.coldStart = await coldStart();
-  // The same launch with a record to put back: the app starts one program per chat in
-  // `setup`, before the window, so reopening lands inside what a person experiences as the
-  // launch. The spec's scale is fifty live sessions.
-  results.coldStartReopening50 = await coldStart(50);
-}
+if (only.has("coldstart")) results.coldStart = await coldStart();
+// The same launch with a record to put back: the app starts one program per chat in
+// `setup`, before the window, so reopening lands inside what a person experiences as the
+// launch. The spec's scale is fifty live sessions.
+if (only.has("coldstart50")) results.coldStartReopening50 = await coldStart(50);
 
 if (only.has("hook")) {
   results.hookCall = hookCall();
@@ -488,4 +496,10 @@ if (only.has("window")) {
 
 writeFileSync(join(OUT, "results.json"), `${JSON.stringify(results, null, 2)}\n`);
 console.log(`\n${JSON.stringify(results, null, 2)}\n\nWritten to ${join(OUT, "results.json")}`);
-if (!existsSync(SHIPPED) && only.has("coldstart")) console.log("(cold start needs a build first)");
+if (!existsSync(COLD_START_APP) && only.has("coldstart")) console.log("(cold start needs a build first)");
+if (options.limit && results.coldStart) {
+  const { p50 } = results.coldStart.launchToFirstFrame;
+  const verdict = p50 <= Number(options.limit) ? "met" : "MISSED";
+  console.log(`\ncold start p50 ${Math.round(p50)} ms against a ${options.limit} ms limit: ${verdict}`);
+  if (verdict !== "met") process.exitCode = 1;
+}

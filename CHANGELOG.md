@@ -11,6 +11,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Linux no longer waits half a minute for a desktop portal that cannot start.** Before GTK
+  starts, charter asks the session bus to start the portal and gives it 300 ms. If the bus is
+  still silent, charter restarts itself without the session bus, and the window comes up in
+  under 2 s where it used to take 26–31 s. For that run there is no tray icon and no desktop
+  notifications, and a second launch is refused rather than handed over. A per-user lock keeps
+  that refusal in place without the bus. i3 and other X11 sessions with no session bus no longer
+  get one autolaunched. Cold start is now measured in CI on X and on i3 (#24).
+
 ## [0.4.2] - 2026-09-30
 
 0.4.2 is a hardening release: the release pipeline runs only the code it pinned, a chat starts from an allowlisted environment instead of the app's whole one, a plane save scans every file it commits for secrets, plane trust covers the tools a persona is granted, and hook calls are authenticated per chat.

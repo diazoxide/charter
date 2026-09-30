@@ -57,6 +57,12 @@ sha2 = "0.11"
 notify = "8.2"
 notify-debouncer-full = "0.7"
 
+# The desktop portal, asked on the session bus before GTK asks it (charter-app#24,
+# `portal.rs`). The version `tauri-plugin-single-instance` already brings in on Linux, so
+# nothing new is in the tree.
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = "5.19"
+
 [lints]
 workspace = true
 
