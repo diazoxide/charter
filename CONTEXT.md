@@ -134,10 +134,11 @@ and each is counted in red on its tab and on any show-more hiding it.
 _Avoid_: notification, alert (alerts are a separate drawer)
 
 **Kill switch**:
-Stop all on the title bar, or `charter stop --all`: every session's program in every project and
-window is ended, and nothing starts until the operator **re-arms** it from the title bar. It is a
-stop, not a close: the tabs stay, each reading as a chat whose program ended. Nothing on the
-command line re-arms.
+Stop all on the title bar, or `charter stop --all`: every chat's and shell's program that charter
+started, in every project and window, is interrupted and ended, and no chat starts until the
+operator **re-arms** it from the title bar. It is a stop, not a close: the tabs stay, each
+reading as a chat whose program ended. A new shell still opens, so the operator can look around.
+Nothing on the command line re-arms (ADR 0069).
 _Avoid_: panic button, pause (nothing is resumed on re-arm)
 
 **Shell tab**:

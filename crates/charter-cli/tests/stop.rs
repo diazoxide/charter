@@ -36,17 +36,43 @@ fn stop_all_halts_every_agent_on_the_machine_from_anywhere_and_journals_it() {
     let said = charter(dir.path(), &config, &["stop", "--all"]);
 
     assert!(said.status.success(), "{said:?}");
-    assert!(charter_core::halt::halted(&config), "no stop was written");
+    assert!(
+        charter_core::halt::stopped_on_disk(&config),
+        "no stop was written"
+    );
     let journal = charter_core::halt::journal(&config);
     assert_eq!(journal.len(), 1, "{journal:?}");
-    assert_eq!(journal[0]["event"], "stop");
-    assert_eq!(journal[0]["by"], "cli");
+    assert_eq!(journal[0].event, charter_core::halt::Event::Stop);
+    assert_eq!(journal[0].by, charter_core::halt::Actor::Cli);
     let told =
         String::from_utf8_lossy(&said.stdout).into_owned() + &String::from_utf8_lossy(&said.stderr);
     assert!(
         told.contains("re-arm"),
         "the operator is not told how to undo it: {told}"
     );
+    assert!(
+        told.contains("every chat and shell charter started"),
+        "the stop claims more or less than it does: {told}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_stop_that_cannot_be_written_fails_loudly_rather_than_stopping_nothing_quietly() {
+    // A directory made read-only in advance is how a stop from a terminal is defeated: the app
+    // never hears it. The command must not say it stopped anything.
+    use std::os::unix::fs::PermissionsExt;
+    let (dir, config) = outside_any_plane();
+    let charter_dir = charter_core::machine::dir(&config);
+    std::fs::create_dir_all(&charter_dir).expect("charter's directory");
+    std::fs::set_permissions(&charter_dir, std::fs::Permissions::from_mode(0o500)).expect("chmod");
+
+    let said = charter(dir.path(), &config, &["stop", "--all"]);
+
+    std::fs::set_permissions(&charter_dir, std::fs::Permissions::from_mode(0o700)).expect("chmod");
+    assert!(!said.status.success(), "{said:?}");
+    let err = String::from_utf8_lossy(&said.stderr);
+    assert!(err.contains("NOT stopped"), "{err}");
 }
 
 #[test]
@@ -58,5 +84,5 @@ fn stop_without_all_is_refused_and_stops_nothing() {
     let said = charter(dir.path(), &config, &["stop"]);
 
     assert!(!said.status.success(), "{said:?}");
-    assert!(!charter_core::halt::halted(&config));
+    assert!(!charter_core::halt::stopped_on_disk(&config));
 }

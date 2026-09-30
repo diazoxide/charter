@@ -535,12 +535,49 @@ pub struct Stopper {
 }
 
 impl Stopper {
-    /// A hangup to the program's whole process group, then a kill; returns once it is gone.
-    /// A program that has already ended is left as it is.
+    /// Interrupts the program's whole process group, as Ctrl-C would, and gives it
+    /// [`INTERRUPT_GRACE`] to leave; then ends it as a close does, a hangup and then a kill.
+    /// Returns once it is gone. A program that has already ended is left as it is.
+    ///
+    /// The interrupt first because a harness cleans up on one (OV-1: "interrupt and end"). The
+    /// whole is under a second and a half, so fifty chats stopped at once are gone well inside
+    /// the kill switch's five seconds.
     pub fn stop(self) {
+        interrupt(&self.child);
         end(&self.child);
     }
 }
+
+/// How long an interrupted program is given to leave before it is hung up on.
+const INTERRUPT_GRACE: Duration = Duration::from_millis(300);
+
+/// Sends the program's process group an interrupt and waits up to [`INTERRUPT_GRACE`] for it
+/// to go.
+#[cfg(unix)]
+fn interrupt(child: &Mutex<Box<dyn Child + Send + Sync>>) {
+    use rustix::process::{Pid, Signal, kill_process_group};
+
+    let group = {
+        let mut child = lock(child);
+        if !matches!(child.try_wait(), Ok(None)) {
+            return;
+        }
+        child.process_id().and_then(|pid| Pid::from_raw(pid as i32))
+    };
+    let Some(group) = group else { return };
+    let _ = kill_process_group(group, Signal::INT);
+    let deadline = Instant::now() + INTERRUPT_GRACE;
+    while Instant::now() < deadline {
+        if !matches!(lock(child).try_wait(), Ok(None)) {
+            return;
+        }
+        thread::sleep(POLL);
+    }
+}
+
+/// No process group to interrupt here: `end` alone ends the program.
+#[cfg(not(unix))]
+fn interrupt(_: &Mutex<Box<dyn Child + Send + Sync>>) {}
 
 impl Drop for Session {
     /// Returns at once. Ending and reaping the program happens on a thread of its own, so
@@ -1461,6 +1498,28 @@ mod tests {
         session.end();
 
         assert!(!alive(pid), "process {pid} outlived the session it was in");
+    }
+
+    #[test]
+    fn a_stop_interrupts_the_program_before_it_hangs_up_on_it() {
+        // "Interrupt and end" (OV-1): a harness that cleans up on Ctrl-C gets the chance to.
+        let session = sh(
+            "trap 'echo interrupted-first; exit 0' INT; trap 'echo hung-up-first; exit 0' HUP; \
+             echo ready; while :; do sleep 600 & wait; done",
+        );
+        screen_until(&session, shows("ready"));
+
+        session.stopper().stop();
+
+        screen_until(&session, shows("interrupted-first"));
+        assert!(
+            !session
+                .screen()
+                .lines
+                .iter()
+                .any(|line| line.contains("hung-up-first")),
+            "the hangup came first"
+        );
     }
 
     #[test]

@@ -3500,6 +3500,16 @@ h2.sidebar-title .node-icon {
   border-color: var(--danger-base);
 }
 
+/* A stop that did not go as asked, said on the bar itself: the next launch may not know about
+   it. Capped like the save indicator's words, and read in full from its `title`. */
+.title-kill-switch-trouble {
+  max-width: 16rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--danger-text);
+}
+
 .title-kill-switch:focus-visible,
 .title-about:focus-visible,
 .title-bar .status-update:focus-visible {

@@ -367,12 +367,12 @@ export const commands = {
 	/**  Whether every agent is stopped, for a window drawing its title bar. */
 	agentsStopped: () => __TAURI_INVOKE<boolean>("agents_stopped"),
 	/**
-	 *  The title bar's stop: every chat in every project, in every window, ended, and none started
-	 *  until re-armed. Answers how many chats it stopped.
+	 *  The title bar's stop: every chat and shell charter started, in every project and window,
+	 *  ended, and no chat started until re-armed. Answers how many it stopped, or the sentence
+	 *  saying the stop holds here but was not kept on disk.
 	 * 
-	 *  On a blocking thread, because ending takes up to half a second and the window must go on
-	 *  drawing while it does. Every window is told once it is done; the window that pressed says
-	 *  so at once without waiting.
+	 *  On a blocking thread, because ending takes about a second and the window must go on drawing
+	 *  while it does. Every window is told the switch's state once it is done, whichever way.
 	 */
 	stopEveryAgent: () => typedError<number, string>(__TAURI_INVOKE("stop_every_agent")),
 	/**  The title bar's re-arm: chats may start again. Nothing that was stopped is restarted. */

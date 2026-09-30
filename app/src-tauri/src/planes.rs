@@ -564,7 +564,7 @@ pub struct Planes {
     relaunching: Mutex<Relaunching>,
     /// The kill switch (OV-1): one for every plane this process holds, so a plane opened after
     /// a stop starts nothing either.
-    halt: Arc<crate::killswitch::Halt>,
+    kill_switch: Arc<crate::killswitch::KillSwitch>,
 }
 
 /// Where the launch's question stands (charter-app#250): what it holds back until the
@@ -616,7 +616,7 @@ impl Planes {
         Self {
             tell,
             shipped,
-            halt: crate::killswitch::Halt::kept_in(config.clone()),
+            kill_switch: crate::killswitch::KillSwitch::kept_in(config.clone()),
             config,
             open: Mutex::new(HashMap::new()),
             // Nobody to tell yet. A registry with no window still opens a handed-off chat;
@@ -1292,7 +1292,7 @@ impl Planes {
             reporting,
         );
         chats.arming_with(self.shipped.clone());
-        chats.stopped_by(Arc::clone(&self.halt));
+        chats.stopped_by(Arc::clone(&self.kill_switch));
 
         // **Before a single session is started, because putting the record back starts them.**
         // A harness fires `SessionStart` at its own exec, and a board that learned the chat's
@@ -1411,21 +1411,18 @@ impl Planes {
         Ok(())
     }
 
-    /// The kill switch (OV-1): stops every agent in every plane this process holds, in every
-    /// window, and starts none until [`Self::rearm`]. Answers how many chats it stopped.
+    /// The kill switch (OV-1, ADR 0069): interrupts and ends every chat and shell in every
+    /// plane this process holds, in every window, and starts no chat until [`Self::rearm`].
+    /// Answers how many it stopped.
     ///
     /// The switch is thrown BEFORE a single program is ended, so nothing can start in the
-    /// half second the ending takes; see [`crate::sessions::Sessions::open`] for the start that
-    /// was already under way. A switch that could not be written to the machine still stops
-    /// everything here, and the error says it will not outlive this process.
-    pub fn stop_every_agent(&self, by: charter_core::halt::By) -> Result<usize, String> {
-        let written = self.halt.throw(by);
+    /// second the ending takes; see [`crate::sessions::Sessions::open`] for the start that was
+    /// already under way. A switch that could not be kept on disk still stops everything here,
+    /// and the error is the sentence saying so.
+    pub fn stop_every_agent(&self, by: charter_core::halt::Actor) -> Result<usize, String> {
+        let kept = self.kill_switch.stop(by);
         let stopped = self.end_every_chat();
-        written.map(|()| stopped).map_err(|why| {
-            format!(
-                "every agent here was stopped, but the stop was not kept for the next launch: {why}"
-            )
-        })
+        kept.map(|()| stopped)
     }
 
     /// Ends every program in every plane at once, and returns when they are gone: what the
@@ -1435,34 +1432,29 @@ impl Planes {
         // The registry's lock is let go of before anything ends: an ending tells the board,
         // which tells the window, which may ask this registry something.
         let held: Vec<Arc<Held>> = self.map().values().map(Arc::clone).collect();
-        let ends: Vec<_> = held
-            .into_iter()
-            .filter_map(|held| {
-                std::thread::Builder::new()
-                    .name("charter-stopping-plane".into())
-                    .spawn(move || held.chats().sessions().stop_every_program())
-                    .ok()
-            })
-            .collect();
-        ends.into_iter().filter_map(|end| end.join().ok()).sum()
+        crate::sessions::all_at_once(
+            "charter-stopping-plane",
+            held.into_iter()
+                .map(|held| move || held.chats().sessions().stop_every_program()),
+        )
+        .into_iter()
+        .sum()
     }
 
     /// Whether every agent is stopped, by the window or by `charter stop --all`.
     pub fn is_stopped(&self) -> bool {
-        self.halt.is_thrown()
+        self.kill_switch.is_stopped()
     }
 
-    /// Lets chats start again. Nothing that was stopped is restarted: the operator reopens what
-    /// they want. Answers whether the switch had been thrown.
+    /// Lets chats start again: the window's alone. Nothing that was stopped is restarted; the
+    /// operator reopens what they want. Answers whether agents had been stopped.
     pub fn rearm(&self) -> Result<bool, String> {
-        self.halt
-            .rearm()
-            .map_err(|why| format!("the stop could not be taken away: {why}"))
+        self.kill_switch.rearm()
     }
 
     /// The switch itself, for the watch that hears another process throw it.
-    pub fn halt(&self) -> Arc<crate::killswitch::Halt> {
-        Arc::clone(&self.halt)
+    pub fn kill_switch(&self) -> Arc<crate::killswitch::KillSwitch> {
+        Arc::clone(&self.kill_switch)
     }
 
     /// The plane a command is acting for, or the one sentence saying it is not open.
@@ -2743,13 +2735,16 @@ mod tests {
 
     // ----- the kill switch (OV-1) -----
 
-    /// A chat whose program ignores a hangup, so only the kill after it can end it.
+    use crate::sessions::alive;
+    use charter_core::halt::Actor;
+
+    /// A chat whose program ignores an interrupt and a hangup, so only the kill can end it.
     #[cfg(unix)]
-    fn an_agent_that_ignores_a_hangup() -> reopen::Chat {
+    fn an_agent_that_will_not_go_quietly() -> reopen::Chat {
         let mut chat = one_chat_on("/bin/sh").chats.remove(0);
         chat.args = vec![
             "-c".to_owned(),
-            "trap '' HUP; while :; do sleep 600; done".to_owned(),
+            "trap '' INT HUP; while :; do sleep 600; done".to_owned(),
         ];
         chat.name = "agent".to_owned();
         chat
@@ -2760,134 +2755,187 @@ mod tests {
         rows: 24,
     };
 
-    /// Whether a process is still there and not a zombie, as the operating system sees it.
-    #[cfg(unix)]
-    fn alive(pid: u32) -> bool {
-        charter_core::forklock::output(std::process::Command::new("ps").args([
-            "-o",
-            "stat=",
-            "-p",
-            &pid.to_string(),
-        ]))
-        .map(|out| {
-            out.status.success()
-                && !String::from_utf8_lossy(&out.stdout)
-                    .trim_start()
-                    .starts_with('Z')
-        })
-        .unwrap_or(false)
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn one_stop_ends_twenty_chats_across_three_projects_within_five_seconds_and_none_restarts_until_re_armed()
-     {
-        let dir = tempfile::tempdir().expect("a directory");
-        let config = dir.path().join("config-home");
+    /// A registry keeping its machine state in `dir`, and the config home it keeps it in.
+    fn planes_with_a_config_home(dir: &Path) -> (Planes, PathBuf) {
+        let config = dir.join("config-home");
         std::fs::create_dir_all(&config).expect("a config home");
         let planes = Planes::telling(
             Arc::new(|_: Moved| {}),
             crate::Shipped::default(),
             Some(config.clone()),
         );
+        (planes, config)
+    }
+
+    /// `count` chats started across `projects` in turn, and each one's program.
+    #[cfg(unix)]
+    fn agents_across(planes: &Planes, projects: &[PlaneId], count: usize) -> Vec<u32> {
+        (0..count)
+            .map(|n| {
+                let held = planes.held(&projects[n % projects.len()]).expect("held");
+                let session = held
+                    .chats()
+                    .start(&an_agent_that_will_not_go_quietly(), A_PANE)
+                    .expect("the chat starts");
+                held.chats().sessions().process_id(session).expect("a pid")
+            })
+            .collect()
+    }
+
+    /// Three projects, twenty agents across them, and the registry holding them.
+    #[cfg(unix)]
+    fn twenty_agents_in_three_projects(dir: &Path) -> (Planes, PathBuf, Vec<PlaneId>, Vec<u32>) {
+        let (planes, config) = planes_with_a_config_home(dir);
         let projects: Vec<PlaneId> = ["one", "two", "three"]
             .iter()
-            .map(|name| planes.open(&a_plane(&dir.path().join(name))))
+            .map(|name| planes.open(&a_plane(&dir.join(name))))
             .collect();
-        let mut programs = Vec::new();
-        for n in 0..20 {
-            let held = planes.held(&projects[n % 3]).expect("held");
-            let session = held
-                .chats()
-                .start(&an_agent_that_ignores_a_hangup(), A_PANE)
-                .expect("the chat starts");
-            programs.push(held.chats().sessions().process_id(session).expect("a pid"));
-        }
+        let programs = agents_across(&planes, &projects, 20);
         assert!(programs.iter().all(|pid| alive(*pid)));
+        (planes, config, projects, programs)
+    }
+
+    fn outlived(programs: &[u32]) -> Vec<u32> {
+        programs.iter().copied().filter(|pid| alive(*pid)).collect()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn one_stop_ends_twenty_chats_across_three_projects_within_five_seconds() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let (planes, config, projects, programs) = twenty_agents_in_three_projects(dir.path());
 
         let from = std::time::Instant::now();
-        let stopped = planes
-            .stop_every_agent(charter_core::halt::By::Window)
-            .expect("the stop is written");
+        let stopped = planes.stop_every_agent(Actor::Window).expect("kept");
         let took = from.elapsed();
 
         assert_eq!(stopped, 20);
         assert!(took < std::time::Duration::from_secs(5), "took {took:?}");
-        let outlived: Vec<_> = programs.iter().filter(|pid| alive(**pid)).collect();
-        assert!(outlived.is_empty(), "outlived the stop: {outlived:?}");
+        assert_eq!(outlived(&programs), Vec::<u32>::new());
+        assert_eq!(charter_core::halt::journal(&config).len(), 1, "one entry");
         // Stopped, not closed: every tab is still there to read and to reopen once re-armed.
         let still_open: usize = projects
             .iter()
             .map(|id| planes.held(id).expect("held").chats().open_now().len())
             .sum();
         assert_eq!(still_open, 20);
-        assert_eq!(charter_core::halt::journal(&config).len(), 1, "one entry");
+    }
 
-        // Nothing starts again: not a chat in a project that was stopped, not one in a project
-        // opened after the stop, and not a record put back by a relaunch.
-        for id in &projects {
+    #[cfg(unix)]
+    #[test]
+    fn after_a_stop_no_chat_starts_in_any_project_not_even_one_opened_later() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let (planes, _config) = planes_with_a_config_home(dir.path());
+        let before = planes.open(&a_plane(&dir.path().join("one")));
+        planes.stop_every_agent(Actor::Window).expect("kept");
+        let later = planes.open(&a_plane(&dir.path().join("two")));
+
+        for id in [&before, &later] {
             let held = planes.held(id).expect("held");
             assert!(
                 held.chats()
-                    .start(&an_agent_that_ignores_a_hangup(), A_PANE)
+                    .start(&an_agent_that_will_not_go_quietly(), A_PANE)
                     .is_err(),
                 "a chat started while every agent was stopped"
             );
         }
-        let later = planes.open(&a_plane(&dir.path().join("four")));
-        let later = planes.held(&later).expect("held");
-        let put_back = later.chats().put_back(
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn after_a_stop_a_relaunch_puts_no_chat_back_and_keeps_it_to_reopen() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let (planes, _config) = planes_with_a_config_home(dir.path());
+        planes.stop_every_agent(Actor::Window).expect("kept");
+        let id = planes.open(&a_plane(&dir.path().join("one")));
+        let held = planes.held(&id).expect("held");
+
+        let put_back = held.chats().put_back(
             &reopen::Record {
-                chats: vec![an_agent_that_ignores_a_hangup()],
+                chats: vec![an_agent_that_will_not_go_quietly()],
                 ..one_chat_on("/bin/sh")
             },
-            later.root(),
+            held.root(),
             A_PANE,
         );
+
         assert!(
             put_back.is_empty(),
             "a relaunch restarted a chat: {put_back:?}"
         );
-        assert_eq!(
-            later.chats().would_not_start().len(),
-            1,
-            "and kept it to reopen"
-        );
+        assert_eq!(held.chats().would_not_start().len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn after_a_stop_the_operator_can_still_open_a_shell_to_look_around() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let (planes, _config) = planes_with_a_config_home(dir.path());
+        let id = planes.open(&a_plane(&dir.path().join("one")));
+        planes.stop_every_agent(Actor::Window).expect("kept");
+        let held = planes.held(&id).expect("held");
+
+        let shell = held
+            .chats()
+            .start_operator_shell(&one_chat_on("/bin/sh").chats.remove(0), A_PANE)
+            .expect("the operator's shell opens");
+
+        let pid = held.chats().sessions().process_id(shell).expect("a pid");
+        assert!(alive(pid));
+        planes.let_go_of_all();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_re_arm_lets_chats_start_again() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let (planes, _config) = planes_with_a_config_home(dir.path());
+        let id = planes.open(&a_plane(&dir.path().join("one")));
+        planes.stop_every_agent(Actor::Window).expect("kept");
 
         assert!(planes.rearm().expect("re-armed"));
-        let session = later
+
+        let held = planes.held(&id).expect("held");
+        let session = held
             .chats()
-            .start(&an_agent_that_ignores_a_hangup(), A_PANE)
+            .start(&an_agent_that_will_not_go_quietly(), A_PANE)
             .expect("a chat starts once re-armed");
-        let pid = later.chats().sessions().process_id(session).expect("a pid");
+        let pid = held.chats().sessions().process_id(session).expect("a pid");
         planes.let_go_of_all();
         assert!(!alive(pid));
     }
 
     #[cfg(unix)]
     #[test]
-    fn a_stop_charter_stop_all_wrote_ends_every_chat_once_the_app_hears_it() {
+    fn charter_stop_all_ends_every_chat_in_every_project_through_the_watch() {
+        // The command line's path end to end, short of the window: a stop written by another
+        // process, heard by the app's watch, and every chat ended by what it calls.
         let dir = tempfile::tempdir().expect("a directory");
-        let config = dir.path().join("config-home");
-        std::fs::create_dir_all(&config).expect("a config home");
-        let planes = Planes::telling(
-            Arc::new(|_: Moved| {}),
-            crate::Shipped::default(),
-            Some(config.clone()),
-        );
-        let id = planes.open(&a_plane(&dir.path().join("one")));
-        let held = planes.held(&id).expect("held");
-        let session = held
-            .chats()
-            .start(&an_agent_that_ignores_a_hangup(), A_PANE)
-            .expect("the chat starts");
-        let pid = held.chats().sessions().process_id(session).expect("a pid");
+        let (planes, config) = planes_with_a_config_home(dir.path());
+        let planes = Arc::new(planes);
+        let projects: Vec<PlaneId> = ["one", "two"]
+            .iter()
+            .map(|name| planes.open(&a_plane(&dir.path().join(name))))
+            .collect();
+        let programs = agents_across(&planes, &projects, 4);
+        let (ended, heard) = std::sync::mpsc::channel();
+        let hearing = Arc::clone(&planes);
+        let _watch = crate::killswitch::watch(planes.kill_switch(), move |moved| {
+            if moved == crate::killswitch::Moved::Stopped {
+                let _ = ended.send(hearing.end_every_chat());
+            }
+        })
+        .expect("a directory to watch")
+        .expect("watching");
 
-        charter_core::halt::stop(&config, charter_core::halt::By::Cli, 1).expect("stopped");
+        charter_core::halt::stop(&config, Actor::Cli, 1).expect("stopped from a terminal");
+
+        let stopped = heard
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the app never heard the stop");
+        assert_eq!(stopped, 4);
+        assert_eq!(outlived(&programs), Vec::<u32>::new());
         assert!(planes.is_stopped());
-        assert_eq!(planes.end_every_chat(), 1);
-
-        assert!(!alive(pid));
         assert_eq!(
             charter_core::halt::journal(&config).len(),
             1,

@@ -207,9 +207,10 @@ impl Chats {
         *lock(&self.never_started) = Some(tell);
     }
 
-    /// Refuses every start while `halt` is thrown (OV-1), at the sessions every start reaches.
-    pub fn stopped_by(&mut self, halt: std::sync::Arc<crate::killswitch::Halt>) {
-        self.sessions.stopped_by(halt);
+    /// Refuses every chat start while `switch` is thrown (OV-1), at the sessions every start
+    /// reaches.
+    pub fn stopped_by(&mut self, switch: std::sync::Arc<crate::killswitch::KillSwitch>) {
+        self.sessions.stopped_by(switch);
     }
 
     /// The sessions underneath, for everything that is about a terminal and not about a chat.
@@ -278,6 +279,8 @@ impl Chats {
             ready.how.clone(),
             &ready.plugins,
             size,
+            // A chat on a profile is an agent, never the operator's shell.
+            false,
         )
     }
 
@@ -333,6 +336,16 @@ impl Chats {
     /// For a chat that is NOT on a profile — the operator's shell — where what runs is
     /// decided from the record alone.
     pub fn start(&self, chat: &Chat, size: Size) -> Result<u32, String> {
+        self.start_as(chat, size, false)
+    }
+
+    /// [`Self::start`], for the shell the operator opens from the window: the one start the
+    /// kill switch lets through while agents are stopped (OV-1, ADR 0069).
+    pub fn start_operator_shell(&self, chat: &Chat, size: Size) -> Result<u32, String> {
+        self.start_as(chat, size, true)
+    }
+
+    fn start_as(&self, chat: &Chat, size: Size, operator_shell: bool) -> Result<u32, String> {
         let launch = chat.launch();
         // A shell tab's shims, and the start files that keep them first. Never recorded: they
         // are this build's, and worked out again at every start.
@@ -353,6 +366,7 @@ impl Chats {
             // with the pins alone.
             &std::collections::BTreeMap::new(),
             size,
+            operator_shell,
         )
     }
 
@@ -407,6 +421,7 @@ impl Chats {
         how: charter_core::reopen::Reopened,
         plugins: &charter_core::harness_plugin::Chosen,
         size: Size,
+        operator_shell: bool,
     ) -> Result<u32, String> {
         // The profile's own command first — a wrapper reads its own words before it hands the
         // rest on (M8.3) — then the state hooks, then charter's own words: a chat's recorded
@@ -442,6 +457,7 @@ impl Chats {
                     env_strip: declared_identity_vars(chat.cwd.as_deref()),
                     harness,
                     env_pass: operator_env_pass(chat.cwd.as_deref()),
+                    operator_shell,
                 },
                 &|session| {
                     announced.store(session, std::sync::atomic::Ordering::SeqCst);
