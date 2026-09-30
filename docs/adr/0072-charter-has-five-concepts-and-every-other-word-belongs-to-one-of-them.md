@@ -1,10 +1,9 @@
 # charter has five concepts, and every other word belongs to one of them
 
-**Proposed 2026-09-30.** An agent drafted it for program-map ticket FR-2 (#601), and the
-operator rules it (W7: an ADR merges only after the operator's ruling). It follows the
-operator's rulings **X22** (*"The five core concepts are Project, Workspace, Chat, Persona,
-Memory. Vault is a setting under Project. Every new ruling must name which concept it belongs
-to."*), **G5** (the core concepts cut to five), **W10**'s surface budget and **V6**, which
+**Accepted 2026-09-30** by the operator (ruling V23), drafted for program-map ticket FR-2
+(#601). It follows the operator's rulings **X22** (*"The five core concepts are Project,
+Workspace, Chat, Persona, Memory. Vault is a setting under Project. Every new ruling must
+name which concept it belongs to."*), **G5** (the core concepts cut to five), **W10**'s surface budget and **V6**, which
 amended it: *"W10's first-hour words become the five concepts plus 'Save' and 'branch' ('Sync'
 already means `charter sync`); FR-2's ADR fixes the exact piece ↔ branch wording; CONTEXT.md
 gets Chat, Persona and Memory entries."*, and **V4**, which gives memory its owners and
@@ -56,17 +55,35 @@ does. A chat's piece is shown as its branch, one per repo.**
 
 | Concept | What it is | Where it lives |
 |---|---|---|
-| **Project** | The git repo that holds a team's (or one person's) workspaces, personas, memory and settings, and the tab the app shows it in. Called the *plane* in code and in the plane format. | a directory with `charter.toml` |
+| **Project** | The git repo that holds a team's (or one person's) workspaces, personas, memory and settings, and the tab the app shows it in. Called the *plane* until the rename in §1 lands. | a directory with `charter.toml` |
 | **Workspace** | A named piece of work inside a project, with its own charter (`workspace.md`), memory, todos and repos. | `workspaces/<ws>/` |
 | **Chat** | One conversation with an agent, in a tab, in one workspace or at the project root. It is where work happens, and what "needs you". | the session host and `reopen.json`; its identity is ADR 0066's |
 | **Persona** | A role a chat can take: its own charter (`persona.md`), memory and vault, handed to the harness as a sub-agent. | `personas/<name>/` |
-| **Memory** | What charter keeps so that the next chat starts knowing what the last ones learned. Each memory has an **owner**: a workspace, a persona, everyone (shared) or **me**, one person's own. It also has an **audience**: this machine, me on all my machines, or the team. Approval follows the audience (V4). Session records are memory too (open question 3). | the `memory/` and `sessions/` directories; *me* in a personal overlay plane on the person's own private remote (V4) |
+| **Memory** | What charter keeps so that the next chat starts knowing what the last ones learned. Each memory has an **owner**: a workspace, a persona, everyone (shared) or **me**, one person's own. It also has an **audience**: this machine, me on all my machines, or the team. Approval follows the audience (V4). Session records are memory too (V23c). | the `memory/` and `sessions/` directories; *me* in a personal overlay project on the person's own private remote (V4) |
 
-**"Project" stays** (open question 1 recommends keeping it). **Settled by X22 and FR-3:**
-"plane" leaves every surface a user reads (the window, `charter --help` and the user docs), and
-FR-3 does the renaming. **Proposed here** (open question 2): the code, the plane format,
-`docs/plane-format.md` and the `charter-plane` repo keep the word, because they are read by
-people who write code against the format.
+**"Project" stays (V23a), and "plane" is retired everywhere (V23b).** The word leaves every
+surface a user reads (the window, `charter --help` and the user docs, which FR-3 renames), and
+also the code, the plane format, `docs/plane-format.md` and the name of the `charter-plane`
+repo. Project is the one word for the thing, in every place.
+
+**The rename is follow-up work, not part of this record.** It has four parts:
+
+- **A mechanical code rename.** Types, modules, functions and identifiers that say `plane` say
+  `project`. Where the app already has a `project` that holds a `plane` (the window's project
+  tab carries `project.plane`), the pair becomes one project with its root.
+- **A project-format migration.** Every file, key, directory and environment variable named for
+  the plane gets a project name (for example `CHARTER_PLANE_FENCE` and
+  `CHARTER_PLANE_ROOT_SESSION`). For a compat window of at least one release, charter still
+  reads the old names, writes only the new ones, and says so once when it reads an old one.
+- **A docs rename.** `docs/plane-format.md` becomes the project format's specification, and
+  every ADR and doc written from now on says project. Accepted ADRs keep their words, since
+  they are records.
+- **Renaming the `charter-plane` GitHub repo.** The operator does this, at the time of their
+  choosing, and names the new repo. GitHub's redirect keeps old clones working.
+
+**Nothing else is called a project.** A code repo is a **repo** (§6). Claude Code's own *project
+settings* (its repo-level `.claude/settings.json`) are always named with Claude Code's name
+beside them, so that they are never read as a charter project's settings.
 
 First-run copy that explains it, shown once beside the first project's tab:
 
@@ -84,7 +101,7 @@ inside its concept; a view shows it; a setting changes how it behaves.
 | **Workspace** | repos, pieces (as branches, §4), changes, members and requests, todos and work items (FW-5, V3, FI5) | the explorer, the bottom bar, the workspace's Work section | LIVE / LOCAL, a repo's own save mode |
 | **Chat** | runs and child runs (ADR 0066), its branches (§4), its link to a work item | the chat strip, split windows, the transcript, the context gauge | its harness, profile and model, its persona, its sandbox opt-out |
 | **Persona** | curation actions, the persona's sub-agent file, its dispatch and skill logs | the persona card, persona statistics | its vault (a named vault from the project's), its skills, delegate-when |
-| **Memory** | its four owners' memories (workspace, persona, shared, me), session records, the archive, the personal overlay plane | the memory tab, recall's results, the briefing a chat starts with, the approval queue for memory bound for a wider audience | each memory's audience (this machine, me on all my machines, team, V4); LIVE / LOCAL for a workspace's memory; what a persona's memory shares (`[memory] share`) |
+| **Memory** | its four owners' memories (workspace, persona, shared, me), session records, the archive, the personal overlay project | the memory tab, recall's results, the briefing a chat starts with, the approval queue for memory bound for a wider audience | each memory's audience (this machine, me on all my machines, team, V4); LIVE / LOCAL for a workspace's memory; what a persona's memory shares (`[memory] share`) |
 
 **Machine-wide things belong to Project. Settled by X22 and ST6.** The device, the machine
 store, app preferences and updates hold for every project on this machine. ST6 puts the settings
@@ -133,8 +150,7 @@ as a word inside an image.
 
 ### 4. A chat's piece is shown as its branch, one row per repo
 
-A piece is still a git worktree, and `charter worktree` still says so. On screen (open
-question 5):
+A piece is still a git worktree, and `charter worktree` still says so. On screen (V23d):
 
 - **A chat is shown with its branches, one row per repo it works in.** A row reads
   *`fix-login` in api*: the branch, then the repo. A chat that works in one repo, which GL-1
@@ -154,7 +170,7 @@ question 5):
 - **The chat header and the session record** list the same rows, from the same `Touched` list,
   so what a chat said it worked on and what the window shows are one list.
 
-"Piece" leaves the window and `charter --help`'s summaries. It stays in the plane format, the
+"Piece" leaves the window and `charter --help`'s summaries. It stays in the project format, the
 piece log, the code and `charter worktree`'s own help, where the difference between a
 directory and a branch is the point.
 
@@ -163,7 +179,7 @@ directory and a branch is the point.
 **Sync is: fetch every clone in a workspace, and fast-forward the ones that hold no work.** No
 other operation, on screen or on the command line, is called Sync.
 
-- **The window.** When the window offers `charter sync`, it is labelled *Sync repos*. The plane's
+- **The window.** When the window offers `charter sync`, it is labelled *Sync repos*. The project's
   own commit-and-push is **Save**, and the commits it has not fetched yet are **Incoming**, as
   `CONTEXT.md` has them.
 - **The command line. Settled by V6 and FR-3's alias rule:** V6 makes "Sync" mean one
@@ -193,7 +209,7 @@ wrong.
 
 | charter | GitHub | GitLab | Claude Code | Cursor | Codex, Zed, Amp | Conductor | Risk |
 |---|---|---|---|---|---|---|---|
-| **Project** | *Projects*: a board or table of issues and pull requests; a view over work, holding no code | *project*: one repository, with its issues and CI | *Projects* (beta): a coordinating conversation that starts threads, with instructions and memory | *Projects* | the folder an editor opens (Zed's project) | — | **High.** On GitLab a code repo is a project. charter's UI never calls a code repo a project, on any forge: it is always a **repo** (open question 4) |
+| **Project** | *Projects*: a board or table of issues and pull requests; a view over work, holding no code | *project*: one repository, with its issues and CI | *Projects* (beta): a coordinating conversation that starts threads, with instructions and memory | *Projects* | the folder an editor opens (Zed's project) | — | **High.** On GitLab a code repo is a project. charter's UI never calls a code repo a project, on any forge: it is always a **repo** (V23a) |
 | **Workspace** | — (a Codespace is an environment) | *Workspaces*: a remote development environment | — | — | Amp's *workspace* is the team | *workspace*: one task's branch, files and terminal, which is charter's **piece** | **Medium.** A Conductor user reads a charter workspace as one branch. First-run copy says a workspace holds repos, chats and their memory |
 | **Chat** | a Copilot coding agent's *session* | — | *session*, *conversation* | *agent*, *chat* | *thread* | a workspace's chat | **Low.** "Session" stays out of UI text (it is the process, ADR 0066) |
 | **Persona** | *custom agent* | — | *subagent* | — | — | — | **Low.** opencode calls the same thing an *agent*. A persona is handed to the harness *as* a sub-agent, and the persona card says so |
@@ -209,24 +225,24 @@ DS-8 audits the budget.
 
 | Where | What changes |
 |---|---|
-| `CONTEXT.md` | Gains **Chat**, **Persona**, **Memory**, **Work item**, **Branch** and **Sync** entries, and a new first section, "The five concepts", that holds the five entries. **Project** and **Plane** say which is the user's word. **Piece** and **Save** point at the branch and Sync wording. Run and Device already have entries (ADR 0066). The wholesale renaming of `CONTEXT.md` is FR-3's |
+| `CONTEXT.md` | Gains **Chat**, **Persona**, **Memory**, **Work item**, **Branch** and **Sync** entries, and a new first section, "The five concepts", that holds the five entries. **Project** is the one word, and **Plane** says it is being retired. **Piece** and **Save** point at the branch and Sync wording. Run and Device already have entries (ADR 0066). The wholesale renaming of `CONTEXT.md` is FR-3's |
 | The window's copy (`app/src`) | FR-3: "plane" becomes "project" in every user-visible string; "piece" becomes the branch wording (§4); the first-hour budget holds (§3); the UI-string tests (§3, §5) |
 | `charter --help` | FR-3: the three `sync` renames with aliases; "plane" becomes "project" in summaries |
 | Recorded behaviour (`tests/fixtures/recorded/behaviour.jsonl`) | The `persona-sync-agents-…` scenarios keep passing through the alias. A scenario that records a renamed word moves only with the sentence ADR 0046 requires |
-| `docs/plane-format.md` | Keeps its name; its introduction says a plane is a project's repo |
+| Code, the plane format, `docs/plane-format.md`, the `charter-plane` repo | The follow-up rename in §1: code, a format migration with a compat window for the old names, docs, and the repo rename the operator does |
 | Tickets and rulings | Each names its concept (X22). ST9's definition of done already carries it |
 
 ## What this costs
 
-- **Two words for one thing.** Code and the plane format say *plane*; users read *project*. The
-  split is the same as ADR 0066's number and id: one word for the people who use it, one for the
-  code that stores it, and a rule that keeps them apart.
+- **A rename across everything.** Retiring "plane" touches most modules, every plane's files
+  and instructions, and a public repo's name. The compat window keeps old projects opening
+  while it lands, and the rename is mechanical, so it is large but not hard.
 - **"Project" collides with GitLab's project and GitHub's Projects.** The first-run line and the
   rule "a code repo is always a repo" are what pays for keeping it. A GitLab user will still
   read it wrong once.
 - **The branch rows are more than a word.** §4 is a view, not a rename: the chat header lists
   rows it does not list today. GL-1 and FR-3 build it.
-- **Three CLI renames**, each with a deprecation release, and a plane's instructions that name
+- **Three CLI renames**, each with a deprecation release, and a project's instructions that name
   the old spelling keep working only for that release.
 - **Advanced users see the old words in advanced places.** "Piece" and "vault" stay where they
   are precise. The budget covers the first hour, not the whole product.
@@ -244,28 +260,15 @@ DS-8 audits the budget.
   knows from git.
 - **"The chat's branch", singular.** It is wrong for a cross-repo change, for a chat with no
   piece and for any chat before GL-1.
-- **Renaming "plane" in the code and the format.** It would touch every module and every plane's
-  instructions for no change a user can see, and `charter-plane` is already public under that
-  name.
+- **Keeping "plane" in the code and the format** (the draft's recommendation). The operator
+  ruled for one word everywhere (V23b).
 
-## For the operator's ruling
+## Ruled (V23, 2026-09-30)
 
-Each of these is a decision X22, W10, V4 and V6 leave open. Each has a recommendation. The
-calls those rulings already make are marked *Settled by* in the body.
-
-1. **Keep "Project"**, with the first-run line in §1, rather than rename it. *Recommend keep.*
-   The window already says `New project…` and `Open a project…`, editors use the word for the
-   thing you open, and every candidate (Space, Hub, Home, Team, Charter) collides as badly or
-   says less.
-2. **"Plane" stays in the code, the plane format, `docs/plane-format.md` and the name
-   `charter-plane`.** *Recommend yes.* Renaming them touches every module and every plane's
-   instructions for no change a user sees.
-3. **Session records are part of Memory, not of Chat.** *Recommend Memory.* They outlive the
-   chat, the next chat's briefing and Resume read them, and V4's approval by audience already
-   covers them.
-4. **A code repo is always a "repo" in charter's UI, on GitLab too**, never a "project".
-   *Recommend yes.* It is the one rule that makes keeping "Project" safe for GitLab users.
-5. **The piece ↔ branch wording in §4**: one row per repo reading *`<branch>` in `<repo>`*,
-   *· shared* for a clone's checked-out branch, **New branch** to cut a piece, **Remove folder**
-   to remove it, and "piece" gone from the window. *Recommend yes.* It is true for every case the
-   phase-2 critique listed, and it uses only "branch".
+1. **Keep "Project"**, with the first-run line in §1. A code repo is always a "repo" in the UI,
+   on GitLab too (V23a).
+2. **"Plane" is renamed everywhere**: the code, the plane format, `docs/plane-format.md` and
+   the `charter-plane` repo name, not only the UI. The rename is follow-up work; the repo rename
+   is the operator's (V23b).
+3. **Session records belong to Memory** (V23c).
+4. **"Piece" leaves the window, and the piece ↔ branch wording is §4 as drafted** (V23d).

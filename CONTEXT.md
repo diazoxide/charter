@@ -51,8 +51,9 @@ _Avoid_: knowledge, rules, notes (for the whole of it), context
 **Plane**:
 The git repo a project's charter lives in: its settings, personas, memory, todos and
 workspaces. It is the project's database, and a change counts once it reaches the plane's
-remote. It is the word of the code and the plane format; the window, `charter --help` and the
-user docs say **project** (ADR 0072).
+remote. **The word is being retired**, everywhere: the new term is **Project**, in the window,
+`charter --help`, the docs, the code and the format. Until the rename lands, the code and the
+format still say plane, and charter reads the old names for a compat window (ADR 0072).
 _Avoid_: control plane, config repo, charter repo
 
 **charter-plane**:
