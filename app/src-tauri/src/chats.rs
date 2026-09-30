@@ -1687,6 +1687,7 @@ mod tests {
             shims: None,
         });
         let ready = charter_core::start::Ready {
+            command: Vec::new(),
             args: vec![
                 "-c".to_owned(),
                 "sandbox_mode=\"danger-full-access\"".to_owned(),
