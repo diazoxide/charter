@@ -1,22 +1,60 @@
 version: 2
+
+# Tauri ships as a pair: the Rust crates (`tauri`, `tauri-build`, `tauri-plugin-*`) and the npm
+# packages (`@tauri-apps/api`, `@tauri-apps/cli`, `@tauri-apps/plugin-*`). `tauri build` refuses
+# to run when the crate and its package sit on different minors. That is how #536 failed: it
+# moved `tauri` to 2.12 and `tauri-plugin-opener` to 2.6 while npm held 2.11 and 2.5.
+# `groups` cannot cross ecosystems, and `ignore` cannot say "unless the other one moves", so
+# both halves belong to one multi-ecosystem group: one PR moves the crates and the packages
+# together. The ordinary cargo and npm entries below ignore Tauri, so only this group moves it.
+multi-ecosystem-groups:
+  tauri:
+    target-branch: main
+    schedule: { interval: weekly }
+
 updates:
   - package-ecosystem: cargo
     directory: /
+    # Needed so this entry and the Tauri entry below count as distinct blocks for one directory.
+    target-branch: main
     schedule: { interval: weekly }
     groups:
       rust: { patterns: ["*"] }
+    ignore:
+      # Moved only by the `tauri` multi-ecosystem group, together with its npm half.
+      - dependency-name: tauri
+      - dependency-name: "tauri-*"
+      # release-manifest must verify with the minisign-verify tauri-plugin-updater uses, so what
+      # it refuses at release time is exactly what an installed app refuses. It moves when the
+      # updater moves; a 0.x minor is a breaking bump.
+      - dependency-name: minisign-verify
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
   - package-ecosystem: npm
     directory: /app
+    target-branch: main
     schedule: { interval: weekly }
     groups:
       web: { patterns: ["*"] }
     ignore:
+      # Moved only by the `tauri` multi-ecosystem group, together with its crate half.
+      - dependency-name: "@tauri-apps/*"
       # typescript-eslint 8 declares typescript <7 as its peer range; move both together.
       - dependency-name: typescript
         update-types: ["version-update:semver-major"]
       # Types track the Node major in .nvmrc (24), not the newest Node.
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
+
+  # The Tauri pair, one PR across both ecosystems (see the note at the top).
+  - package-ecosystem: cargo
+    directory: /
+    multi-ecosystem-group: tauri
+    patterns: ["tauri", "tauri-*"]
+  - package-ecosystem: npm
+    directory: /app
+    multi-ecosystem-group: tauri
+    patterns: ["@tauri-apps/*"]
+
   # Every workflow pins its actions by commit SHA with the version as a comment; Dependabot
   # moves the SHA and the comment together. `dtolnay/rust-toolchain` publishes no version tags
   # for Dependabot to follow, so its pin is checked and moved by hand.
