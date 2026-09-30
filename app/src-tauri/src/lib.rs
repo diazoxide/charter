@@ -1460,6 +1460,9 @@ fn commands() -> Builder<tauri::Wry> {
         .typ::<hooks::ByHand>()
         // What `smart-close` carries (ADR 0064).
         .typ::<smartclose::SmartClosing>()
+        // The event a launch without the session bus is told the bus answers on (`portal.rs`),
+        // named once for both sides.
+        .constant("SESSION_BUS_ANSWERS", portal::ANSWERS)
 }
 
 /// Where the generated TypeScript lives.

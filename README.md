@@ -73,9 +73,9 @@ CI also runs clippy on the app crate (`--workspace`), after creating an empty `a
 compiles without a frontend build.
 
 On Linux, CI also holds the built app's cold start to the spec's 2 s limit on the desktops
-charter-app#24 is about. Five launches each; every launch after the first (the warm-up, cold on
-disk) must be inside the limit. From the repository root, after the debug build above, with
-`xvfb`, `xauth`, `dbus-x11` and `i3` installed:
+charter-app#24 is about. Five launches each, and every one must be inside the limit, the first
+(cold on disk) included. After the debug build above, with `xvfb`, `xauth`, `dbus-x11` and `i3`
+installed:
 
 ```bash
 tools/coldstart-linux.sh bare       # X with no window manager, on the session bus as found

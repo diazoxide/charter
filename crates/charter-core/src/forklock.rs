@@ -33,6 +33,16 @@
 //! [`output`] and [`status`] here are the allowed way, and they are the only place the
 //! disallowed methods are called.
 //!
+//! # The gate's second step: the session bus
+//!
+//! Because every program charter starts comes through here, this is also the one place a rule
+//! about what EVERY such program gets can hold without a call site forgetting it. There is one:
+//! [`spawn`] first calls [`on_the_apps_session_bus`], in the open, before it takes the lock. In
+//! an app that started without the session bus (charter#746) it gives the program the bus the
+//! app was given, or no address — never the one the app points at nothing. Anywhere else it
+//! changes nothing. It is a step of its own, named and documented, so the lock stays about the
+//! lock.
+//!
 //! The narrower fix belongs upstream: `openpty` could make both ends close-on-exec as they are
 //! created (on Linux, by opening `/dev/ptmx` and the slave with `O_CLOEXEC` rather than calling
 //! `openpty(3)`), and then no lock would be needed at all.
@@ -77,18 +87,28 @@ pub fn while_descriptors_are_made<T>(make: impl FnOnce() -> T) -> T {
     make()
 }
 
-/// Starts `command`, as [`Command::spawn`] does, without a terminal half-open anywhere.
-///
-/// It is also where a program the app starts is put back on the session bus the app was given
-/// when the app runs without it ([`crate::chatenv::onto_the_kept_bus`], charter#746).
+/// Starts `command`, as [`Command::spawn`] does, in two steps: **on the app's session bus**
+/// ([`on_the_apps_session_bus`], which changes `command`'s environment only in an app running
+/// without the bus), then **without a terminal half-open anywhere** (the fork lock).
+/// [`output`] and [`status`] start their programs here, so they take both steps too.
 #[allow(clippy::disallowed_methods, reason = "this is the one allowed fork")]
 pub fn spawn(command: &mut Command) -> io::Result<Child> {
-    crate::chatenv::onto_the_kept_bus(
-        command,
-        std::env::var_os(crate::chatenv::SESSION_BUS_KEPT).as_deref(),
-    );
+    on_the_apps_session_bus(command);
     let _held = FORKING.read().unwrap_or_else(PoisonError::into_inner);
     command.spawn()
+}
+
+/// Puts `command` on the session bus this process was given, when it is an app running without
+/// it: [`crate::chatenv::onto_the_kept_bus`], with this process's own
+/// `DBUS_SESSION_BUS_ADDRESS` and `CHARTER_SESSION_BUS_KEPT`. On a process with its bus, which
+/// is every `charter` and every app that found its portal, it leaves `command` as it was.
+pub fn on_the_apps_session_bus(command: &mut Command) -> &mut Command {
+    crate::chatenv::onto_the_kept_bus(
+        command,
+        std::env::var_os(crate::chatenv::SESSION_BUS).as_deref(),
+        std::env::var_os(crate::chatenv::SESSION_BUS_KEPT).as_deref(),
+    );
+    command
 }
 
 /// Runs `command` to the end and collects what it wrote, as [`Command::output`] does.

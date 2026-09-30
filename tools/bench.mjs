@@ -7,8 +7,8 @@
 //   node tools/bench.mjs --skip-build    # measure what is already built
 //   node tools/bench.mjs --only window --arms webgl
 //   node tools/bench.mjs --skip-build --only coldstart --app target/debug/charter-app --limit 2000
-//                                        # CI's Linux cold start: fails when any launch after
-//                                        # the first is past the limit
+//                                        # CI's Linux cold start: fails when any launch is
+//                                        # past the limit
 //
 // Windows open and close on screen while it runs, and each is brought to the front: WebKit
 // draws nothing in a covered window, and nothing at all while the display sleeps (which
@@ -45,9 +45,9 @@ const { values: options } = parseArgs({
     "cold-starts": { type: "string", default: "10" },
     // The binary cold start launches, when it is not the shipped build this script makes.
     app: { type: "string" },
-    // Cold start's limit in ms: the run fails when any launch of the empty plane after the first
-    // is past it. The first is the warm-up — the only one cold on disk, after a build — and is
-    // reported, not held to the limit.
+    // Cold start's limit in ms: the run fails when any launch of the empty plane is past it. The
+    // first — the only one cold on disk, after a build — is held to it too: it is the launch a
+    // person makes first.
     limit: { type: "string" },
   },
 });
@@ -501,16 +501,16 @@ writeFileSync(join(OUT, "results.json"), `${JSON.stringify(results, null, 2)}\n`
 console.log(`\n${JSON.stringify(results, null, 2)}\n\nWritten to ${join(OUT, "results.json")}`);
 if (!existsSync(COLD_START_APP) && only.has("coldstart")) console.log("(cold start needs a build first)");
 if (options.limit && results.coldStart) {
-  // Every launch after the warm-up, not the p50: with five launches a p50 lets two of them pass
-  // the limit unseen, and a person feels each launch, not the median of five.
+  // Every launch, not the p50: with five launches a p50 lets two of them pass the limit unseen,
+  // and a person feels each launch — the first, cold on disk, most of all.
   const limit = Number(options.limit);
-  const [warmUp, ...held] = results.coldStart.launchToFirstFrame.samples_ms;
-  const over = held.filter((ms) => ms > limit);
-  const verdict = held.length > 0 && over.length === 0 ? "met" : "MISSED";
+  const launches = results.coldStart.launchToFirstFrame.samples_ms;
+  const over = launches.filter((ms) => ms > limit);
+  const verdict = launches.length > 0 && over.length === 0 ? "met" : "MISSED";
   console.log(
-    `\ncold start: ${held.map(Math.round).join(", ")} ms after a ${Math.round(warmUp)} ms warm-up, ` +
-      `each against a ${limit} ms limit: ${verdict}` +
-      (over.length > 0 ? ` (${over.length} over)` : held.length === 0 ? " (no launch after the warm-up)" : ""),
+    `\ncold start: ${launches.map((ms) => Math.round(ms)).join(", ")} ms, each against a ` +
+      `${limit} ms limit: ${verdict}` +
+      (over.length > 0 ? ` (${over.length} over)` : launches.length === 0 ? " (no launch)" : ""),
   );
   if (verdict !== "met") process.exitCode = 1;
 }

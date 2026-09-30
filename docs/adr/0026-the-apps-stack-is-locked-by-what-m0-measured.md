@@ -325,7 +325,8 @@ and on a machine where the bus is silent, a second launch is refused instead of 
 over. `charterd` (FD-5) removes the second cost, because the hook socket is no longer the
 app's.
 
-**Addendum, 2026-09-30 (charter#746): X11 without a bus starts on the display's bus.** The
+**Addendum, 2026-09-30 (charter#746), superseding the addendum above's ruling to pin the
+address when no bus is named: X11 without a bus starts on the display's bus.** The
 addendum above pinned the address to nothing when no bus was named, on the reasoning that GIO's
 autolaunched bus would make the portal activatable again. Measured in a container (Ubuntu
 24.04, Xvfb, i3, `xdg-desktop-portal` and its GTK backend installed, no systemd user session),

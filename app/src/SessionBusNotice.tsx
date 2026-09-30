@@ -1,9 +1,8 @@
 import { useEffect, useState } from "react";
 import { listen } from "./here";
 
-import { commands, type BusNotice } from "./bindings";
-import { mightBeMidTurn, type Ending } from "./QuitWarning";
-import { MidTurn } from "./Updates";
+import { commands, SESSION_BUS_ANSWERS, type BusNotice } from "./bindings";
+import { MidTurn, mightBeMidTurn, type Ending } from "./QuitWarning";
 
 /**
  * The line a launch without the session bus puts at the top of the window (charter#746).
@@ -15,7 +14,7 @@ import { MidTurn } from "./Updates";
  * too, but an operator who clicked an icon has none, so it is said here, where they can see it.
  *
  * After the launch the core asks the bus again, backing off, until it answers. When the portal
- * answers — it was only slow — the core says so on `session-bus://answers` and the line offers
+ * answers — it was only slow — the core says so on `SESSION_BUS_ANSWERS` and the line offers
  * to restart on the bus, **coming back if it was dismissed**, since that is news. The restart is
  * the operator's choice, never an automatic one: it ends every chat, so a chat that could be
  * mid-turn is named and asked about first, with Restart to update's question (`MidTurn`), and the
@@ -39,7 +38,7 @@ export function SessionBusNotice({ chats = [] }: { chats?: readonly Ending[] }) 
         if (!gone && now) setNotice((was) => was ?? now);
       })
       .catch(() => undefined);
-    const listening = listen<BusNotice>("session-bus://answers", (event) => {
+    const listening = listen<BusNotice>(SESSION_BUS_ANSWERS, (event) => {
       if (gone) return;
       setNotice(event.payload);
       setDismissed(false);

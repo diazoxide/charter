@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import * as AlertDialog from "@radix-ui/react-alert-dialog";
 import * as Dialog from "@radix-ui/react-dialog";
 import * as RadioGroup from "@radix-ui/react-radio-group";
 import { listen } from "./here";
 import { ArrowUpCircle, LoaderCircle, Pin } from "lucide-react";
 import { commands, type Offer, type PinReport, type PlaneId } from "./bindings";
-import { EndingList, MidTurnSaid, mightBeMidTurn, type Ending } from "./QuitWarning";
+import { MidTurn, mightBeMidTurn, type Ending } from "./QuitWarning";
 import { ReleaseNotes } from "./ReleaseNotes";
 
 /**
@@ -369,72 +368,6 @@ export function UpdateItem({
         />
       )}
     </>
-  );
-}
-
-/**
- * What a restart asks when a chat could be mid-turn: restart now, or wait. Restart to update
- * asks it, and so does the restart onto the session bus (`SessionBusNotice.tsx`).
- *
- * The quit warning's rows and sentences (`QuitWarning.tsx`), because it is the same act for
- * those chats — they are ended — with one difference the words carry: the restart offers them
- * back. A chat that reports no state is asked about too, for the quit warning's reason: it could
- * be mid-turn and charter would never know.
- *
- * **Radix's `AlertDialog`**, per `docs/ui-primitives.md`: it arrives because of what the
- * operator pressed, a click outside answers nothing, and its `Cancel` — **Wait** — is first and
- * has the keyboard, so the answer a stray Return or Escape finds interrupts nothing. **Restart
- * now is a plain button, not the primitive's `Action`**, for `RelaunchAsk`'s reason: an `Action`
- * also closes the dialog, and closing is this dialog's Wait. The list is live: a chat that
- * finishes its turn while this is up leaves it.
- */
-export function MidTurn({
-  chats,
-  onWait,
-  onRestart,
-  title = "Restart to update",
-}: {
-  chats: readonly Ending[];
-  onWait: () => void;
-  onRestart: () => void;
-  /** Which restart it is: to update, or onto the session bus (`SessionBusNotice.tsx`). */
-  title?: string;
-}) {
-  return (
-    <AlertDialog.Root
-      open
-      onOpenChange={(open) => {
-        if (!open) onWait();
-      }}
-    >
-      <AlertDialog.Portal>
-        <AlertDialog.Overlay className="asking" />
-        <AlertDialog.Content className="warning" aria-describedby="restart-mid-turn-said">
-          <AlertDialog.Title>{title}</AlertDialog.Title>
-          <EndingList chats={chats} />
-          <AlertDialog.Description asChild>
-            <div id="restart-mid-turn-said">
-              <MidTurnSaid chats={chats} />
-              <p className="honest">
-                Every chat is offered back when charter starts again. Wait to let a turn finish, or
-                restart now.
-              </p>
-            </div>
-          </AlertDialog.Description>
-          {/* `tabIndex={0}` on both, per `docs/ui-primitives.md` (charter-app#186). */}
-          <div className="answer">
-            <AlertDialog.Cancel asChild>
-              <button type="button" tabIndex={0}>
-                Wait
-              </button>
-            </AlertDialog.Cancel>
-            <button type="button" className="ends-it" tabIndex={0} onClick={onRestart}>
-              Restart now
-            </button>
-          </div>
-        </AlertDialog.Content>
-      </AlertDialog.Portal>
-    </AlertDialog.Root>
   );
 }
 

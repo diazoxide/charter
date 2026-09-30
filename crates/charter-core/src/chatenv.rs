@@ -225,10 +225,17 @@ pub fn inherited(
     strip: &dyn Fn(&OsStr) -> bool,
 ) -> Vec<(OsString, OsString)> {
     let inherited: Vec<(OsString, OsString)> = inherited.into_iter().collect();
-    let kept = inherited
-        .iter()
-        .find(|(name, _)| name == SESSION_BUS_KEPT)
-        .map(|(_, value)| value.clone());
+    let value_of = |wanted: &str| {
+        inherited
+            .iter()
+            .find(|(name, _)| name == wanted)
+            .map(|(_, value)| value.clone())
+    };
+    let kept = the_bus_kept(
+        value_of(SESSION_BUS).as_deref(),
+        value_of(SESSION_BUS_KEPT).as_deref(),
+    )
+    .map(OsStr::to_owned);
     let inherited = inherited
         .into_iter()
         .filter(|(name, _)| name != SESSION_BUS_KEPT)
@@ -247,7 +254,8 @@ pub fn inherited(
 }
 
 /// Puts a program the app starts on the session bus the app was given, when the app is running
-/// without it: `kept` is [`SESSION_BUS_KEPT`] as the app has it, `None` on a launch with the bus.
+/// without it: `address` and `kept` are [`SESSION_BUS`] and [`SESSION_BUS_KEPT`] as the app has
+/// them ([`the_bus_kept`]).
 ///
 /// Every program the app starts goes through [`crate::forklock::spawn`], which calls this, so
 /// the app's own `git`, `gh` and `charter` reach the keyring over D-Bus as a chat does
@@ -258,8 +266,12 @@ pub fn inherited(
 /// A program started from an empty environment is not told apart from one that inherits: the
 /// standard library does not say which a [`std::process::Command`] is. Such a program is handed
 /// the kept address too, which is where the operator's own session would have found it.
-pub fn onto_the_kept_bus(command: &mut std::process::Command, kept: Option<&OsStr>) {
-    let Some(kept) = kept else {
+pub fn onto_the_kept_bus(
+    command: &mut std::process::Command,
+    address: Option<&OsStr>,
+    kept: Option<&OsStr>,
+) {
+    let Some(kept) = the_bus_kept(address, kept) else {
         return;
     };
     command.env_remove(SESSION_BUS_KEPT);
@@ -280,6 +292,14 @@ pub fn onto_the_kept_bus(command: &mut std::process::Command, kept: Option<&OsSt
     } else {
         command.env(SESSION_BUS, kept);
     }
+}
+
+/// The bus an app running without it hands on, from its own [`SESSION_BUS`] (`address`) and
+/// [`SESSION_BUS_KEPT`] (`kept`): the kept one, or empty — none — for an app pointed at
+/// [`NO_SESSION_BUS`] by hand, as slowstart's hint says, which kept nothing. `None` is an app on
+/// its bus, whose address is handed on as it is.
+fn the_bus_kept<'a>(address: Option<&OsStr>, kept: Option<&'a OsStr>) -> Option<&'a OsStr> {
+    kept.or_else(|| (address == Some(OsStr::new(NO_SESSION_BUS))).then_some(OsStr::new("")))
 }
 
 /// `variable` as a chat gets it: the app's bus address swapped for `kept` — dropped when that
@@ -693,7 +713,11 @@ mod tests {
                 git.env(SESSION_BUS, NO_SESSION_BUS);
             }
 
-            onto_the_kept_bus(&mut git, Some(OsStr::new(REAL_BUS)));
+            onto_the_kept_bus(
+                &mut git,
+                Some(OsStr::new(NO_SESSION_BUS)),
+                Some(OsStr::new(REAL_BUS)),
+            );
             let out = crate::forklock::output(&mut git).expect("git runs");
 
             assert!(out.status.success(), "{out:?}");
@@ -709,7 +733,11 @@ mod tests {
     fn a_program_the_app_starts_never_carries_the_kept_name() {
         let mut program = std::process::Command::new("true");
 
-        onto_the_kept_bus(&mut program, Some(OsStr::new(REAL_BUS)));
+        onto_the_kept_bus(
+            &mut program,
+            Some(OsStr::new(NO_SESSION_BUS)),
+            Some(OsStr::new(REAL_BUS)),
+        );
 
         assert_eq!(
             bus_of(&program),
@@ -725,7 +753,11 @@ mod tests {
         let mut program = std::process::Command::new("true");
         program.env(SESSION_BUS, NO_SESSION_BUS);
 
-        onto_the_kept_bus(&mut program, Some(OsStr::new("")));
+        onto_the_kept_bus(
+            &mut program,
+            Some(OsStr::new(NO_SESSION_BUS)),
+            Some(OsStr::new("")),
+        );
 
         assert_eq!(
             bus_of(&program),
@@ -743,8 +775,16 @@ mod tests {
         let mut removed = std::process::Command::new("true");
         removed.env_remove(SESSION_BUS);
 
-        onto_the_kept_bus(&mut named, Some(OsStr::new(REAL_BUS)));
-        onto_the_kept_bus(&mut removed, Some(OsStr::new(REAL_BUS)));
+        onto_the_kept_bus(
+            &mut named,
+            Some(OsStr::new(NO_SESSION_BUS)),
+            Some(OsStr::new(REAL_BUS)),
+        );
+        onto_the_kept_bus(
+            &mut removed,
+            Some(OsStr::new(NO_SESSION_BUS)),
+            Some(OsStr::new(REAL_BUS)),
+        );
 
         assert!(bus_of(&named).contains(&(
             SESSION_BUS.to_owned(),
@@ -757,9 +797,37 @@ mod tests {
     fn an_app_on_its_bus_starts_programs_as_they_were() {
         let mut program = std::process::Command::new("true");
 
-        onto_the_kept_bus(&mut program, None);
+        onto_the_kept_bus(&mut program, Some(OsStr::new(REAL_BUS)), None);
 
         assert_eq!(bus_of(&program), []);
+    }
+
+    /// `DBUS_SESSION_BUS_ADDRESS=<NO_SESSION_BUS> charter`, as slowstart's hint says: the app has
+    /// no bus and kept none, and its chats and programs are not handed the dead address.
+    #[test]
+    fn a_launch_by_hand_without_the_bus_hands_on_no_address() {
+        let app = [
+            (OsString::from(SESSION_BUS), OsString::from(NO_SESSION_BUS)),
+            (OsString::from("HOME"), OsString::from("/home/someone")),
+        ];
+
+        let kept = inherited(app, None, &[], &nothing);
+
+        assert_eq!(value_of(&kept, SESSION_BUS), None, "{kept:?}");
+
+        let mut inherits = std::process::Command::new("true");
+        let mut named = std::process::Command::new("true");
+        named.env(SESSION_BUS, NO_SESSION_BUS);
+        for program in [&mut inherits, &mut named] {
+            onto_the_kept_bus(program, Some(OsStr::new(NO_SESSION_BUS)), None);
+            assert_eq!(
+                bus_of(program),
+                [
+                    (SESSION_BUS_KEPT.to_owned(), None),
+                    (SESSION_BUS.to_owned(), None)
+                ]
+            );
+        }
     }
 
     #[test]

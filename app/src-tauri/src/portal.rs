@@ -153,13 +153,23 @@ pub fn autolaunched_address(printed: &str) -> Option<String> {
     })
 }
 
-/// Runs `ask` on a thread of its own and gives it `within`. `None` is no answer in time; the
-/// thread still waiting is left behind, and ends with the process.
+/// What came of asking something on a thread of its own, within a budget ([`in_time`]).
 #[cfg(target_os = "linux")]
-fn within<T: Send + 'static>(
-    within: Duration,
+enum Asked<T> {
+    /// It answered in time.
+    Answered(T),
+    /// No answer in time. The thread still waiting is left behind, and ends with the process.
+    OutOfTime,
+    /// There was no thread to ask on, or it ended without answering.
+    NoThread,
+}
+
+/// Runs `ask` on a thread of its own and gives it `budget`.
+#[cfg(target_os = "linux")]
+fn in_time<T: Send + 'static>(
+    budget: Duration,
     ask: impl FnOnce() -> T + Send + 'static,
-) -> Option<Result<T, ()>> {
+) -> Asked<T> {
     use std::sync::mpsc::{self, RecvTimeoutError};
 
     let (said, heard) = mpsc::channel();
@@ -169,18 +179,17 @@ fn within<T: Send + 'static>(
             let _ = said.send(ask());
         });
     if asking.is_err() {
-        // No thread to ask on.
-        return Some(Err(()));
+        return Asked::NoThread;
     }
-    match heard.recv_timeout(within) {
-        Ok(answer) => Some(Ok(answer)),
-        Err(RecvTimeoutError::Timeout) => None,
-        Err(RecvTimeoutError::Disconnected) => Some(Err(())),
+    match heard.recv_timeout(budget) {
+        Ok(answer) => Asked::Answered(answer),
+        Err(RecvTimeoutError::Timeout) => Asked::OutOfTime,
+        Err(RecvTimeoutError::Disconnected) => Asked::NoThread,
     }
 }
 
 /// Asks the session bus to start the portal — the bus at `address`, or the one this process
-/// would find by the standard lookup when `None` — and says what came back within `within`.
+/// would find by the standard lookup when `None` — and says what came back within `budget`.
 ///
 /// It is the call GTK's proxy makes, so it waits on exactly what GTK would. The budget covers
 /// reaching the bus as well: a bus that does not even accept a connection in time is as silent
@@ -188,11 +197,11 @@ fn within<T: Send + 'static>(
 #[cfg(target_os = "linux")]
 pub fn listen(address: Option<&str>, budget: Duration) -> Heard {
     let address = address.map(str::to_owned);
-    match within(budget, move || start_the_portal(address.as_deref())) {
-        Some(Ok(heard)) => heard,
-        None => Heard::Silence,
+    match in_time(budget, move || start_the_portal(address.as_deref())) {
+        Asked::Answered(heard) => heard,
+        Asked::OutOfTime => Heard::Silence,
         // No thread to ask on: go on as if it answered, which is what every launch did before.
-        Some(Err(())) => Heard::Answer,
+        Asked::NoThread => Heard::Answer,
     }
 }
 
@@ -242,17 +251,19 @@ fn the_x_sessions_bus() -> Option<(String, Heard)> {
         std::path::Path::new("/etc/machine-id"),
         std::path::Path::new("/var/lib/dbus/machine-id"),
     ])?;
-    let printed = within(BUDGET, move || {
+    let Asked::Answered(Ok(printed)) = in_time(BUDGET, move || {
         charter_core::forklock::output(
             std::process::Command::new("dbus-launch")
                 .arg(format!("--autolaunch={machine}"))
                 .args(["--sh-syntax", "--close-stderr"])
                 .stdin(std::process::Stdio::null()),
         )
-    })?
-    .ok()?
-    .ok()
-    .filter(|out| out.status.success())?;
+    }) else {
+        return None;
+    };
+    if !printed.status.success() {
+        return None;
+    }
     let bus = autolaunched_address(&String::from_utf8_lossy(&printed.stdout))?;
     let heard = listen(Some(&bus), BUDGET);
     Some((bus, heard))

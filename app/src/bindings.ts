@@ -1124,6 +1124,9 @@ export const commands = {
 	vaultSecretCopy: (plane: PlaneId, vault: string, key: string) => typedError<null, string>(__TAURI_INVOKE("vault_secret_copy", { plane, vault, key })),
 };
 
+/* Constants */
+export const SESSION_BUS_ANSWERS = "session-bus://answers" as const;
+
 /* Types */
 /**  What charter says about itself. */
 export type About = {

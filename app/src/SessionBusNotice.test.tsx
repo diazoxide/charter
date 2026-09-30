@@ -4,7 +4,7 @@ import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
-import type { BusNotice } from "./bindings";
+import { SESSION_BUS_ANSWERS, type BusNotice } from "./bindings";
 import type { Ending } from "./QuitWarning";
 import { SessionBusNotice } from "./SessionBusNotice";
 
@@ -48,7 +48,7 @@ function core(notice: BusNotice | null): { asked: string[] } {
 }
 
 /** The core saying the kept bus answers now. */
-const busAnswers = () => act(() => emit("session-bus://answers", ANSWERS));
+const busAnswers = () => act(() => emit(SESSION_BUS_ANSWERS, ANSWERS));
 
 afterEach(() => {
   cleanup();
