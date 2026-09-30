@@ -723,10 +723,20 @@ impl InPlane {
 
 impl Waiting for InPlane {
     fn edits_lines(&self) -> Result<Option<bool>, String> {
-        self.held()?.chats().sessions().edits_lines(self.session)
+        Ok(self
+            .held()?
+            .chats()
+            .sessions()
+            .readiness(self.session)?
+            .edits_lines)
     }
     fn quiet_for(&self) -> Result<Duration, String> {
-        self.held()?.chats().sessions().quiet_for(self.session)
+        Ok(self
+            .held()?
+            .chats()
+            .sessions()
+            .readiness(self.session)?
+            .quiet_for)
     }
     fn still_held(&self) -> bool {
         self.held()
@@ -735,7 +745,7 @@ impl Waiting for InPlane {
     fn type_now(&self) {
         if let Ok(held) = self.held() {
             held.typed().type_now(self.session, |text| {
-                held.chats().sessions().input(self.session, text)
+                held.chats().sessions().input(self.session, text.as_bytes())
             });
         }
     }

@@ -18,7 +18,8 @@ use charter_core::reopen::{Chat, Record, Reopened, View};
 
 use charter_core::harness::StateHooks;
 
-use crate::sessions::{Opening, Reporting, Sessions};
+use crate::host::{Opening, SessionHost};
+use crate::sessions::{Reporting, Sessions};
 
 /// Every identity variable a vault of the plane at `cwd` declares — both halves of each `env`
 /// binding — so a chat is started without any of them (#271 review, U6). A `cwd` outside a
@@ -118,7 +119,9 @@ struct Running {
 
 /// Every chat the app has open, and which of them is in front.
 pub struct Chats {
-    sessions: Sessions,
+    /// Whatever runs the sessions (FD-3). A trait object, so nothing here can reach past
+    /// [`SessionHost`] to a pty: a chat layer that did would not compile against another host.
+    sessions: Box<dyn SessionHost>,
     /// Told as each chat starts, before its program does.
     starting: Mutex<Option<Starting>>,
     /// Told when a chat that was announced turned out not to start.
@@ -171,8 +174,13 @@ impl Chats {
 
     /// The same, with sessions that report what their harness does to `reporting`'s socket.
     pub fn recorded_by_reporting_to(record_it: Recorder, reporting: Option<Reporting>) -> Self {
+        Self::on_host(record_it, Box::new(Sessions::reporting_to(reporting)))
+    }
+
+    /// The same, on `host` — whatever runs the sessions, which is [`Sessions`] in the app.
+    pub fn on_host(record_it: Recorder, host: Box<dyn SessionHost>) -> Self {
         Self {
-            sessions: Sessions::reporting_to(reporting),
+            sessions: host,
             starting: Mutex::new(None),
             never_started: Mutex::new(None),
             shipped: crate::Shipped::default(),
@@ -208,8 +216,8 @@ impl Chats {
     }
 
     /// The sessions underneath, for everything that is about a terminal and not about a chat.
-    pub fn sessions(&self) -> &Sessions {
-        &self.sessions
+    pub fn sessions(&self) -> &dyn SessionHost {
+        self.sessions.as_ref()
     }
 
     /// What the app ships that a chat is armed with: the `charter` binary a hook runs and the
@@ -1096,6 +1104,7 @@ mod tests {
     use charter_core::reopen::Fresh;
 
     use super::*;
+    use crate::host::pretend::Pretend;
 
     const SIZE: Size = Size {
         columns: 80,
@@ -2891,5 +2900,41 @@ mod tests {
 
         assert!(args.is_empty());
         assert!(env.is_empty(), "{env:?}");
+    }
+
+    // --- the session host is a seam (FD-3) ------------------------------------------- //
+
+    #[test]
+    fn a_chat_runs_on_whichever_session_host_the_chats_were_given() {
+        let host = Pretend::default();
+        host.already_dealt(6);
+        let chats = Chats::on_host(Box::new(|_| {}), Box::new(host.clone()));
+
+        let session = chats
+            .start(
+                &chat("/nowhere/a-program-nothing-runs", "hosted", None),
+                SIZE,
+            )
+            .expect("the host opens it");
+
+        assert_eq!(session, 7, "the number is the host's to deal");
+        assert_eq!(
+            host.asked(),
+            vec![(7, "/nowhere/a-program-nothing-runs".to_owned())]
+        );
+        assert_eq!(
+            chats
+                .open_now()
+                .iter()
+                .map(|one| one.session)
+                .collect::<Vec<_>>(),
+            vec![7]
+        );
+        assert_eq!(chats.record().dealt, 7);
+
+        chats.close(session).expect("the host ends it");
+
+        assert_eq!(host.running(), Vec::<u32>::new());
+        assert!(chats.open_now().is_empty());
     }
 }

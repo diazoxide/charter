@@ -15,6 +15,7 @@ use charter_core::hookwire::{
 use charter_core::session::Exit;
 use charter_core::state::{Board, State};
 
+use crate::host::{ChatBoard, Glance};
 use crate::planes::{PlaneId, Teller};
 
 /// The event the window listens for. One chat, its state, whether it is asking for you.
@@ -458,17 +459,6 @@ impl Hooks {
             .unwrap_or_else(PoisonError::into_inner) = Some(following);
     }
 
-    /// A chat `session` handed work to, shown as `from`, has reported back to it
-    /// (charter-app#259): it is a needs-you item now. Answers what the window must be told, or
-    /// nothing when no reader would see a difference; built under the same hold as the change,
-    /// for [`apply`]'s reason.
-    pub fn reported_back(&self, session: u32, from: &str) -> Option<Moved> {
-        let mut board = self.board();
-        board
-            .reported_back(session, from)
-            .then(|| seen_by(&board, &self.plane, session))
-    }
-
     /// Where this listens. Only a test asks: a chat is told through [`Hooks::reporting`].
     #[cfg(test)]
     pub fn socket(&self) -> Option<&Path> {
@@ -504,34 +494,44 @@ impl Hooks {
     pub fn shared_board(&self) -> Arc<Mutex<Board>> {
         Arc::clone(&self.board)
     }
+}
 
-    /// Takes a chat off the board — closed, not merely ended — and answers with what the
-    /// window must now be told: a queue without it.
-    ///
-    /// Answered under the same hold as the removal, for the reason [`apply`] gives: the queue
-    /// it carries is the board's as of the removal, never one read a moment before it.
-    pub fn closed(&self, session: u32) -> Moved {
+/// The in-process host's board. Each call is documented once, on [`ChatBoard`].
+impl ChatBoard for Hooks {
+    fn glance(&self, session: u32) -> Glance {
+        let board = self.board();
+        Glance {
+            state: board.state(session),
+            asking: board.asking(session),
+            turns: board.turns(session),
+        }
+    }
+
+    fn conversation(&self, session: u32) -> Option<String> {
+        self.board().conversation(session).map(str::to_owned)
+    }
+
+    fn now(&self, session: u32) -> Moved {
+        now(&self.board, self.plane.clone(), session)
+    }
+
+    fn closed(&self, session: u32) -> Moved {
         let mut board = self.board();
         board.closed(session);
         seen_by(&board, &self.plane, session)
     }
 
-    /// Drops a chat's request without answering it — the operator's Ignore — and answers
-    /// with what the window must now be told: a queue without it (charter-app#248).
-    ///
-    /// Answered whether or not the board changed, and under the same hold as the change, for
-    /// the reason [`Hooks::closed`] gives: a window that asked to ignore a chat believes it is
-    /// asking, and the board's answer is the one to leave it with either way.
-    pub fn ignored(&self, session: u32) -> Moved {
+    fn ignored(&self, session: u32) -> Moved {
         let mut board = self.board();
         board.ignored(session);
         seen_by(&board, &self.plane, session)
     }
 
-    /// What the window is told when something other than a hook moves a chat: a chat opening,
-    /// or a program that has died. A chat closing is [`Hooks::closed`].
-    pub fn now(&self, session: u32) -> Moved {
-        now(&self.board, self.plane.clone(), session)
+    fn reported_back(&self, session: u32, from: &str) -> Option<Moved> {
+        let mut board = self.board();
+        board
+            .reported_back(session, from)
+            .then(|| seen_by(&board, &self.plane, session))
     }
 }
 

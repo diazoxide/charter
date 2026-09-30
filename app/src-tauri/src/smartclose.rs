@@ -307,11 +307,11 @@ fn facts_of(held: &Held, session: u32) -> Result<Facts, String> {
         .into_iter()
         .find(|open| open.session == session)
         .ok_or_else(|| "That chat is not open any more.".to_owned())?;
-    let board = held.hooks().board();
+    let board = held.board().glance(session);
     Ok(Facts {
-        state: board.state(session),
-        asking: board.asking(session),
-        turns: board.turns(session),
+        state: board.state,
+        asking: board.asking,
+        turns: board.turns,
         resumed: matches!(open.how, Reopened::Resumed(_)),
         shell: open.harness.is_none() && open.profile.is_none(),
     })
@@ -344,7 +344,9 @@ pub fn begin(held: &Arc<Held>, session: u32) -> Result<Phase, String> {
     }
     let number = closing.dealt.fetch_add(1, Ordering::SeqCst);
     let phase = if facts.state == State::Waiting {
-        held.chats().sessions().input(session, sent_as())?;
+        held.chats()
+            .sessions()
+            .input(session, sent_as().as_bytes())?;
         chats.insert(session, Entry { sent: true, number });
         Phase::Sent
     } else {
@@ -377,7 +379,7 @@ pub fn cancel(held: &Held, session: u32) {
 /// and asking nothing — is sent its prompt.
 pub fn reported(held: &Arc<Held>, report: &Report) {
     reported_sending(held, report, |chat, prompt| {
-        held.chats().sessions().input(chat, prompt)
+        held.chats().sessions().input(chat, prompt.as_bytes())
     });
 }
 
@@ -397,8 +399,8 @@ pub(crate) fn reported_sending(
         return;
     }
     let ready = {
-        let board = held.hooks().board();
-        board.state(report.chat) == State::Waiting && !board.asking(report.chat)
+        let board = held.board().glance(report.chat);
+        board.state == State::Waiting && !board.asking
     };
     if !ready {
         return;
