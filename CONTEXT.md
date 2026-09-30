@@ -80,6 +80,16 @@ them. Asked each time the picker opens and never saved, because each engineer re
 ones.
 _Avoid_: discovered repos, the inventory
 
+**Forge account**:
+One sign-in to one forge host: a kind, a host and a login, held in the keyring or reached
+through `gh`'s or `glab`'s own login. Each repo is bound to one (ADR 0070).
+_Avoid_: forge login (for charter's own sign-in), connection, integration
+
+**Forge capability**:
+One thing a forge may or may not do for one repo, such as a merge queue, judged per forge, host
+and tier, with the fallback charter uses where it is unavailable (ADR 0070).
+_Avoid_: capability (unqualified, which is an extension's), feature flag
+
 **LIVE / LOCAL**:
 Whether a workspace's charter, memory and todos are published with the plane (LIVE) or stay on
 this machine (LOCAL, the default).
@@ -329,5 +339,7 @@ _Avoid_: secret store, keychain (as the name of the concept)
 
 **Forge extension**:
 An extension about a code host's pull requests, merge requests or issues, which reaches the
-forge through `gh` or `glab`'s own login and never through a secret charter hands it.
+forge through `gh` or `glab`'s own login and never through a secret charter hands it. Once
+PE-29 opens the forge seam to extensions, it asks charter to make the call instead (ADR 0070,
+proposed).
 _Avoid_: forge plugin, GitHub integration
