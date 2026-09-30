@@ -56,7 +56,7 @@ fn still_starting(limit: Duration, os: &str) -> String {
     );
     if let Some(cause) = the_known_cause(os) {
         said.push(' ');
-        said.push_str(cause);
+        said.push_str(&cause);
     }
     said
 }
@@ -74,7 +74,7 @@ pub fn why(took: Duration, os: &str) -> Option<String> {
     );
     if let Some(cause) = the_known_cause(os) {
         said.push(' ');
-        said.push_str(cause);
+        said.push_str(&cause);
     }
     Some(said)
 }
@@ -85,15 +85,18 @@ pub fn why(took: Duration, os: &str) -> Option<String> {
 /// a loaded machine), and a sentence that named the portal as a fact would be charter telling
 /// an operator something it has not checked. What it has is the one cause that has been
 /// traced, and the issue that holds the trace.
-fn the_known_cause(os: &str) -> Option<&'static str> {
-    (os == "linux").then_some(
-        "The cause charter has measured on Linux is a desktop portal that cannot start: GTK \
-         asks the session bus for org.freedesktop.portal.Desktop and D-Bus gives up after 25 \
-         s, then WebKitGTK asks it for the colour scheme and gives up after 5 more. charter \
-         asks the bus first and starts without it when the portal is silent, but a portal \
-         that answers and then stalls gets past that. To start without the session bus: \
-         DBUS_SESSION_BUS_ADDRESS=unix:path=/dev/null charter — charter-app#24.",
-    )
+fn the_known_cause(os: &str) -> Option<String> {
+    (os == "linux").then(|| {
+        format!(
+            "The cause charter has measured on Linux is a desktop portal that cannot start: GTK \
+             asks the session bus for org.freedesktop.portal.Desktop and D-Bus gives up after \
+             25 s, then WebKitGTK asks it for the colour scheme and gives up after 5 more. \
+             charter asks the bus first and starts without it when the portal is silent, but a \
+             portal that answers and then stalls gets past that. To start without the session \
+             bus: DBUS_SESSION_BUS_ADDRESS={} charter — charter-app#24.",
+            crate::portal::NO_SESSION_BUS
+        )
+    })
 }
 
 /// A duration the way a person says one: `2 s`, `31.4 s`, `450 ms`.
@@ -173,8 +176,13 @@ mod tests {
 
         assert!(linux.contains("portal"), "{linux}");
         assert!(linux.contains("charter-app#24"), "{linux}");
+        // The address the app itself starts on without the bus, so a launch by hand is one the
+        // app knows for what it is, and tells the window about (`portal.rs`).
         assert!(
-            linux.contains("DBUS_SESSION_BUS_ADDRESS=unix:path=/dev/null charter"),
+            linux.contains(&format!(
+                "DBUS_SESSION_BUS_ADDRESS={} charter",
+                crate::portal::NO_SESSION_BUS
+            )),
             "the operator is not told the way around it: {linux}"
         );
         assert!(

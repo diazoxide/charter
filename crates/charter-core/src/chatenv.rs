@@ -23,6 +23,9 @@
 //! **Some are never passed, whoever lists them**: a harness's identity and where the launcher's
 //! chat was ([`crate::hookwire::NOT_INHERITED`]), every `OP_*` and every identity variable a
 //! vault declares (the caller's `strip`), and `TERM`, which is always the chat's own.
+//!
+//! **One is replaced**: an app that started itself without the session bus hands its chats the
+//! bus it was given ([`SESSION_BUS_KEPT`]) as `DBUS_SESSION_BUS_ADDRESS`, not the dead one.
 
 use std::ffi::{OsStr, OsString};
 use std::path::Path;
@@ -96,6 +99,23 @@ pub const PASSED: &[&str] = &[
     "NUMBER_OF_PROCESSORS",
     "PROCESSOR_ARCHITECTURE",
 ];
+
+/// The session bus the app was given, kept aside when the app started itself again without
+/// it (charter-app `portal.rs`, charter-app#24). Empty when it was given none.
+///
+/// The app points its own `DBUS_SESSION_BUS_ADDRESS` at nothing when the desktop portal is
+/// silent, because GTK would otherwise wait 25 s on it. The bus itself is healthy, so a chat
+/// gets the address kept here instead of the dead one ([`inherited`]), and this name itself
+/// is never a chat's.
+pub const SESSION_BUS_KEPT: &str = "CHARTER_SESSION_BUS_KEPT";
+
+/// The variable [`SESSION_BUS_KEPT`] stands in for: where a D-Bus client finds the session bus.
+pub const SESSION_BUS: &str = "DBUS_SESSION_BUS_ADDRESS";
+
+/// Where the app points [`SESSION_BUS`] when it starts without the bus. Nothing can listen at a
+/// path below `/dev/null`, so every bus call fails at once, and the name says what happened to
+/// anyone who reads `/proc/<pid>/environ`.
+pub const NO_SESSION_BUS: &str = "unix:path=/dev/null/charter-started-without-the-session-bus";
 
 /// Credential variables no built-in entry passes, matched case-insensitively. A trailing `*`
 /// is a prefix.
@@ -194,14 +214,33 @@ fn passes(name: &str, harness: Option<Harness>, operator: &[String]) -> bool {
 /// variable a vault declares. A harness's identity ([`crate::hookwire::NOT_INHERITED`]) and
 /// `TERM` are held back here. A name that is not text is never passed: nothing here could say
 /// what it is.
+///
+/// An app that started itself without the session bus holds the bus it was given in
+/// [`SESSION_BUS_KEPT`], and a chat gets that as its `DBUS_SESSION_BUS_ADDRESS` — or none,
+/// when it was given none — never the address the app points at nothing.
 pub fn inherited(
     inherited: impl IntoIterator<Item = (OsString, OsString)>,
     harness: Option<Harness>,
     operator: &[String],
     strip: &dyn Fn(&OsStr) -> bool,
 ) -> Vec<(OsString, OsString)> {
-    inherited
+    let inherited: Vec<(OsString, OsString)> = inherited.into_iter().collect();
+    let value_of = |wanted: &str| {
+        inherited
+            .iter()
+            .find(|(name, _)| name == wanted)
+            .map(|(_, value)| value.clone())
+    };
+    let kept = the_bus_kept(
+        value_of(SESSION_BUS).as_deref(),
+        value_of(SESSION_BUS_KEPT).as_deref(),
+    )
+    .map(OsStr::to_owned);
+    let inherited = inherited
         .into_iter()
+        .filter(|(name, _)| name != SESSION_BUS_KEPT)
+        .filter_map(|variable| on_the_kept_bus(variable, kept.as_deref()));
+    inherited
         .filter(|(name, _)| {
             let Some(text) = name.to_str() else {
                 return false;
@@ -212,6 +251,67 @@ pub fn inherited(
                 && passes(text, harness, operator)
         })
         .collect()
+}
+
+/// Puts a program the app starts on the session bus the app was given, when the app is running
+/// without it: `address` and `kept` are [`SESSION_BUS`] and [`SESSION_BUS_KEPT`] as the app has
+/// them ([`the_bus_kept`]).
+///
+/// Every program the app starts goes through [`crate::forklock::spawn`], which calls this, so
+/// the app's own `git`, `gh` and `charter` reach the keyring over D-Bus as a chat does
+/// ([`inherited`]). A program that would inherit the app's address, or is handed the dead one by
+/// name, gets the kept one instead — or none, when none was kept. One given a bus of its own is
+/// left with it. The kept name itself is never passed on.
+///
+/// A program started from an empty environment is not told apart from one that inherits: the
+/// standard library does not say which a [`std::process::Command`] is. Such a program is handed
+/// the kept address too, which is where the operator's own session would have found it.
+pub fn onto_the_kept_bus(
+    command: &mut std::process::Command,
+    address: Option<&OsStr>,
+    kept: Option<&OsStr>,
+) {
+    let Some(kept) = the_bus_kept(address, kept) else {
+        return;
+    };
+    command.env_remove(SESSION_BUS_KEPT);
+    let named = command
+        .get_envs()
+        .find(|(name, _)| *name == SESSION_BUS)
+        .map(|(_, value)| value.map(OsStr::to_owned));
+    let inherits_or_is_dead = match named {
+        None => true,
+        Some(Some(address)) => address == NO_SESSION_BUS,
+        Some(None) => false,
+    };
+    if !inherits_or_is_dead {
+        return;
+    }
+    if kept.is_empty() {
+        command.env_remove(SESSION_BUS);
+    } else {
+        command.env(SESSION_BUS, kept);
+    }
+}
+
+/// The bus an app running without it hands on, from its own [`SESSION_BUS`] (`address`) and
+/// [`SESSION_BUS_KEPT`] (`kept`): the kept one, or empty — none — for an app pointed at
+/// [`NO_SESSION_BUS`] by hand, as slowstart's hint says, which kept nothing. `None` is an app on
+/// its bus, whose address is handed on as it is.
+fn the_bus_kept<'a>(address: Option<&OsStr>, kept: Option<&'a OsStr>) -> Option<&'a OsStr> {
+    kept.or_else(|| (address == Some(OsStr::new(NO_SESSION_BUS))).then_some(OsStr::new("")))
+}
+
+/// `variable` as a chat gets it: the app's bus address swapped for `kept` — dropped when that
+/// is empty — and anything else as it was. `kept` is `None` on a launch with the bus.
+fn on_the_kept_bus(
+    (name, value): (OsString, OsString),
+    kept: Option<&OsStr>,
+) -> Option<(OsString, OsString)> {
+    match kept {
+        Some(kept) if name == SESSION_BUS => (!kept.is_empty()).then(|| (name, kept.to_owned())),
+        _ => Some((name, value)),
+    }
 }
 
 /// Whether `entry` is one the operator may list: a variable's name — letters, digits and `_`,
@@ -516,6 +616,218 @@ mod tests {
             ),
             Vec::<String>::new()
         );
+    }
+
+    fn value_of(kept: &[(OsString, OsString)], name: &str) -> Option<String> {
+        kept.iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.to_string_lossy().into_owned())
+    }
+
+    /// The app restarted itself without the session bus because the desktop portal was silent
+    /// (charter-app#24). The bus is healthy, so a chat's own D-Bus use — a Secret Service
+    /// keyring behind git or a CLI — goes to the address the app was given, not the dead one.
+    #[test]
+    fn a_chat_of_an_app_started_without_the_bus_gets_the_bus_the_app_was_given() {
+        let app = [
+            (
+                OsString::from("DBUS_SESSION_BUS_ADDRESS"),
+                OsString::from("unix:path=/dev/null/charter-started-without-the-session-bus"),
+            ),
+            (
+                OsString::from(SESSION_BUS_KEPT),
+                OsString::from("unix:path=/run/user/1000/bus"),
+            ),
+            (OsString::from("HOME"), OsString::from("/home/someone")),
+        ];
+
+        let kept = inherited(app, None, &[], &nothing);
+
+        assert_eq!(
+            value_of(&kept, "DBUS_SESSION_BUS_ADDRESS").as_deref(),
+            Some("unix:path=/run/user/1000/bus")
+        );
+        assert_eq!(value_of(&kept, SESSION_BUS_KEPT), None, "{kept:?}");
+        assert_eq!(kept.len(), 2, "{kept:?}");
+    }
+
+    /// With no bus at all, the app was given no address; neither is its chat, which is then
+    /// free to find or start one the way any program in the operator's terminal would.
+    #[test]
+    fn a_chat_of_an_app_that_had_no_bus_to_keep_gets_no_address() {
+        let app = [
+            (
+                OsString::from("DBUS_SESSION_BUS_ADDRESS"),
+                OsString::from("unix:path=/dev/null/charter-started-without-the-session-bus"),
+            ),
+            (OsString::from(SESSION_BUS_KEPT), OsString::new()),
+        ];
+
+        let kept = inherited(app, None, &[], &nothing);
+
+        assert_eq!(kept, Vec::new());
+    }
+
+    #[test]
+    fn a_kept_bus_is_never_passed_under_its_own_name_even_when_listed() {
+        let app = [(
+            OsString::from(SESSION_BUS_KEPT),
+            OsString::from("unix:path=/run/user/1000/bus"),
+        )];
+
+        let kept = inherited(app, None, &[SESSION_BUS_KEPT.to_owned()], &nothing);
+
+        assert_eq!(kept, Vec::new());
+    }
+
+    /// What `command` says about the bus: each of the two names, set, removed, or not named.
+    fn bus_of(command: &std::process::Command) -> Vec<(String, Option<String>)> {
+        let mut said: Vec<(String, Option<String>)> = command
+            .get_envs()
+            .filter(|(name, _)| *name == SESSION_BUS || *name == SESSION_BUS_KEPT)
+            .map(|(name, value)| {
+                (
+                    name.to_string_lossy().into_owned(),
+                    value.map(|v| v.to_string_lossy().into_owned()),
+                )
+            })
+            .collect();
+        said.sort();
+        said
+    }
+
+    const REAL_BUS: &str = "unix:path=/run/user/1000/bus";
+
+    /// The app's own `git` — a worktree, a save, a `gh` call git's credential helper makes —
+    /// reaches the keyring over the session bus as a chat does. `worktree::git` hands it the
+    /// app's address by name, which in a run without the bus is the dead one.
+    #[test]
+    fn an_app_spawned_git_gets_the_bus_the_app_was_given() {
+        let print_the_bus = "alias.bus=!printf %s \"$DBUS_SESSION_BUS_ADDRESS\"";
+        for named in [true, false] {
+            let mut git = std::process::Command::new("git");
+            git.args(["-c", print_the_bus, "bus"])
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null");
+            if named {
+                git.env(SESSION_BUS, NO_SESSION_BUS);
+            }
+
+            onto_the_kept_bus(
+                &mut git,
+                Some(OsStr::new(NO_SESSION_BUS)),
+                Some(OsStr::new(REAL_BUS)),
+            );
+            let out = crate::forklock::output(&mut git).expect("git runs");
+
+            assert!(out.status.success(), "{out:?}");
+            assert_eq!(
+                String::from_utf8_lossy(&out.stdout),
+                REAL_BUS,
+                "named: {named}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_program_the_app_starts_never_carries_the_kept_name() {
+        let mut program = std::process::Command::new("true");
+
+        onto_the_kept_bus(
+            &mut program,
+            Some(OsStr::new(NO_SESSION_BUS)),
+            Some(OsStr::new(REAL_BUS)),
+        );
+
+        assert_eq!(
+            bus_of(&program),
+            [
+                (SESSION_BUS_KEPT.to_owned(), None),
+                (SESSION_BUS.to_owned(), Some(REAL_BUS.to_owned())),
+            ]
+        );
+    }
+
+    #[test]
+    fn with_no_bus_kept_a_program_the_app_starts_gets_no_address() {
+        let mut program = std::process::Command::new("true");
+        program.env(SESSION_BUS, NO_SESSION_BUS);
+
+        onto_the_kept_bus(
+            &mut program,
+            Some(OsStr::new(NO_SESSION_BUS)),
+            Some(OsStr::new("")),
+        );
+
+        assert_eq!(
+            bus_of(&program),
+            [
+                (SESSION_BUS_KEPT.to_owned(), None),
+                (SESSION_BUS.to_owned(), None)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_program_given_a_bus_of_its_own_keeps_it() {
+        let mut named = std::process::Command::new("true");
+        named.env(SESSION_BUS, "unix:path=/elsewhere");
+        let mut removed = std::process::Command::new("true");
+        removed.env_remove(SESSION_BUS);
+
+        onto_the_kept_bus(
+            &mut named,
+            Some(OsStr::new(NO_SESSION_BUS)),
+            Some(OsStr::new(REAL_BUS)),
+        );
+        onto_the_kept_bus(
+            &mut removed,
+            Some(OsStr::new(NO_SESSION_BUS)),
+            Some(OsStr::new(REAL_BUS)),
+        );
+
+        assert!(bus_of(&named).contains(&(
+            SESSION_BUS.to_owned(),
+            Some("unix:path=/elsewhere".to_owned())
+        )));
+        assert!(bus_of(&removed).contains(&(SESSION_BUS.to_owned(), None)));
+    }
+
+    #[test]
+    fn an_app_on_its_bus_starts_programs_as_they_were() {
+        let mut program = std::process::Command::new("true");
+
+        onto_the_kept_bus(&mut program, Some(OsStr::new(REAL_BUS)), None);
+
+        assert_eq!(bus_of(&program), []);
+    }
+
+    /// `DBUS_SESSION_BUS_ADDRESS=<NO_SESSION_BUS> charter`, as slowstart's hint says: the app has
+    /// no bus and kept none, and its chats and programs are not handed the dead address.
+    #[test]
+    fn a_launch_by_hand_without_the_bus_hands_on_no_address() {
+        let app = [
+            (OsString::from(SESSION_BUS), OsString::from(NO_SESSION_BUS)),
+            (OsString::from("HOME"), OsString::from("/home/someone")),
+        ];
+
+        let kept = inherited(app, None, &[], &nothing);
+
+        assert_eq!(value_of(&kept, SESSION_BUS), None, "{kept:?}");
+
+        let mut inherits = std::process::Command::new("true");
+        let mut named = std::process::Command::new("true");
+        named.env(SESSION_BUS, NO_SESSION_BUS);
+        for program in [&mut inherits, &mut named] {
+            onto_the_kept_bus(program, Some(OsStr::new(NO_SESSION_BUS)), None);
+            assert_eq!(
+                bus_of(program),
+                [
+                    (SESSION_BUS_KEPT.to_owned(), None),
+                    (SESSION_BUS.to_owned(), None)
+                ]
+            );
+        }
     }
 
     #[test]

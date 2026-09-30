@@ -1469,6 +1469,9 @@ fn commands() -> Builder<tauri::Wry> {
         .typ::<hooks::ByHand>()
         // What `smart-close` carries (ADR 0064).
         .typ::<smartclose::SmartClosing>()
+        // The event a launch without the session bus is told the bus answers on (`portal.rs`),
+        // named once for both sides.
+        .constant("SESSION_BUS_ANSWERS", portal::ANSWERS)
 }
 
 /// Where the generated TypeScript lives.
@@ -1579,30 +1582,18 @@ pub fn run() {
             // before the window and before any plane, whose hook socket `hookwire` removes
             // when it is stale on the promise that no second app is running.
             #[cfg(target_os = "linux")]
-            {
-                let fallback = app
-                    .path()
-                    .app_local_data_dir()
-                    .unwrap_or_else(|_| std::env::temp_dir());
-                let runtime = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from);
-                let lock =
-                    instance::path_for(&app.config().identifier, runtime.as_deref(), &fallback);
-                match instance::hold(&lock) {
-                    Ok(held) => {
-                        app.manage(instance::Instance::holding(held));
-                    }
-                    Err(instance::NotHeld::Taken) => {
-                        eprintln!("{}", instance::ALREADY_RUNNING);
-                        app.handle().cleanup_before_exit();
-                        std::process::exit(0);
-                    }
-                    Err(instance::NotHeld::Failed(why)) => eprintln!(
-                        "charter: could not take {} ({why}); going on without the guard \
-                         against a second charter",
-                        lock.display()
-                    ),
-                }
-            }
+            instance::one_per_user(app);
+            // How this launch stands with the session bus, for the window's notice
+            // (`portal.rs`): nothing to say on one that has it.
+            app.manage(portal::SessionBus::of(
+                std::env::var(portal::SESSION_BUS).ok().as_deref(),
+                std::env::var(portal::SESSION_BUS_KEPT).ok().as_deref(),
+                std::env::var_os("XDG_RUNTIME_DIR")
+                    .map(PathBuf::from)
+                    .as_deref(),
+            ));
+            #[cfg(target_os = "linux")]
+            portal::listen_again(app.handle());
             // **The window, built here rather than by Tauri from the config, so it can be
             // handed the operator's layout and theme as it is created** (`windowprefs.rs`). Its
             // entry in `tauri.conf.json` says `"create": false` and is still the one source of
@@ -1808,10 +1799,8 @@ pub fn run() {
         // system, and one that ignores a hangup outlives the app that started it.
         .run(|app, event| {
             if matches!(event, tauri::RunEvent::Exit) {
-                // First, so a restart to update finds the lock free (`instance.rs`).
-                if let Some(instance) = app.try_state::<instance::Instance>() {
-                    instance.let_go();
-                }
+                // First, so a restart finds the lock free (`instance.rs`).
+                instance::let_go_at_exit(app);
                 // An extension's program still answering is killed with its whole process
                 // group, so that nothing an extension was asked to run outlives the window
                 // that asked (`charter_core::executor`).
@@ -1826,6 +1815,11 @@ pub fn run() {
                 // A secret a vault's Copy put on the clipboard does not outlive the app: its
                 // clear was waiting on a timer that ends here.
                 app.state::<vaults::SystemClipboard>().clear_at_exit();
+                // Last, once everything above has let go: the launch on the session bus the
+                // operator asked for from the window's notice, if they did (`portal.rs`).
+                if let Some(bus) = app.try_state::<portal::SessionBus>() {
+                    portal::restart_if_asked(&bus);
+                }
             }
         });
 }

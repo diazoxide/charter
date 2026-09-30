@@ -324,3 +324,34 @@ What remains to fix later: a portal that answers the question and then stalls is
 and on a machine where the bus is silent, a second launch is refused instead of being handed
 over. `charterd` (FD-5) removes the second cost, because the hook socket is no longer the
 app's.
+
+**Addendum, 2026-09-30 (charter#746), superseding the addendum above's ruling to pin the
+address when no bus is named: X11 without a bus starts on the display's bus.** The
+addendum above pinned the address to nothing when no bus was named, on the reasoning that GIO's
+autolaunched bus would make the portal activatable again. Measured in a container (Ubuntu
+24.04, Xvfb, i3, `xdg-desktop-portal` and its GTK backend installed, no systemd user session),
+that bus does not hang: `dbus-launch --autolaunch` answered in 11 ms and the portal it activated
+came up in 114–202 ms. The pin cost a notification daemon started from the window manager's
+config, which lives on that same bus. So the app now does what GIO does, `dbus-launch
+--autolaunch=<machine id>`, asks the portal there, and starts again on that bus when it
+answers. zbus, which the tray, notifications and single-instance use, never autolaunches, so
+starting again with the address named is what lets them reach it. Only when there is no bus to
+be had, or its portal is silent too, does the app start without one.
+
+The bound is two budgets, not one: `dbus-launch` gets 300 ms and the portal on its bus another
+300 ms, so a launch with no bus named spends at most about 600 ms here before it goes on. Each
+wait runs on a thread of its own with a timeout, so neither can hang the launch. When the
+portal on the autolaunched bus is silent too, the `dbus-daemon` that `dbus-launch` started stays
+running after the app starts without it, as GIO leaves it; it belongs to the X display and ends
+with it.
+
+Two more things changed with it. The bus is healthy and only the portal is silent, so
+everything the app starts gets the bus the app was given, not the dead address
+(`SESSION_BUS_KEPT`): chats through `charter_core::chatenv::inherited`, and the app's own
+`git`, `gh` and `charter` through `forklock::spawn`, which every program the app starts goes
+through. The app's own process cannot be given it back without setting its environment, so a
+keyring vault's reveal and copy from the window do not work for that run, and the window says
+so. And a run without the bus says so in the window, asks the bus again after 5, 15 and 45 s
+until it answers, and offers a restart onto it when the portal does. It never restarts on its
+own, because a restart ends every chat: a chat that could be mid-turn is named and asked about
+first, as Restart to update does.

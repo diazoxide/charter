@@ -1831,10 +1831,12 @@ h2.sidebar-title .node-icon {
   opacity: 0.7;
 }
 
-/* Puts away a line about something that has already finished — today, only the notice about
-   a launch that took longer than the limit (charter-app#24). Inline, in the line's own
-   colour, so it reads as part of the sentence rather than as an action. */
-.came-back .dismiss {
+/* Puts away a line about something that has already finished — the notice about a launch
+   that took longer than the limit, or one without the session bus (charter-app#24) — and
+   offers that one's restart. Inline, in the line's own colour, so each reads as part of the
+   sentence rather than as an action. */
+.came-back .dismiss,
+.came-back .offer {
   margin-left: 0.4rem;
   padding: 0;
   font: inherit;
