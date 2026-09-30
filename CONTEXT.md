@@ -164,6 +164,20 @@ spawns, with the run it came from as its parent. The run is who an action is att
 "agent run"), and budgets add up over a chat's runs (ADRs 0066, 0073).
 _Avoid_: session (that is the process), conversation (that is the harness's), turn
 
+**Run state**:
+Where a run is: `queued`, `starting`, `working`, `input-required`, `paused` or `hibernated`
+while it lives, then `completed`, `failed` or `stopped`, once and for good. It moves only by a
+named cause from a hook, the protocol, the exit, the host, the operator or a policy, and it ends
+only on a fact the chat cannot forge. A stop charter caused is `stopped`, never `failed`. A chat
+stores no state of its own: the window draws its current run's (ADR 0076).
+_Avoid_: status, session state (the old five), done (for completed), idle (for a state)
+
+**Remote chat**:
+A vendor-cloud session charter lists read-only, with its state, pull request and cost: a chat of
+kind **observed**, which charter never pauses, stops or counts toward a budget. Every chat
+charter starts is **governed** (W8, ADR 0076).
+_Avoid_: cloud chat, external agent, remote runner (that is a host running `charterd`)
+
 **Device**:
 A machine charter runs on: a desktop, a runner, or later a viewer. Each has a random id kept in
 its machine store, which is how records, events and the audit say where something happened. Its
@@ -250,9 +264,12 @@ with the needs-you count of everything it hides.
 _Avoid_: overflow (in UI text), more tabs
 
 **Needs you**:
-A chat that is waiting on the operator. Every project's are listed in the title bar's ✋ menu,
-and each is counted in red on its tab and on any show-more hiding it.
-_Avoid_: notification, alert (alerts are a separate drawer)
+A chat that is waiting on the operator: a view, computed from its current run (an ask, a turn
+that ended, a budget or policy pause) and its own items (a report back, a refused commit, a
+secret waiting for approval), and never a state of its own. Every project's are listed in the
+title bar's ✋ menu, and each is counted in red on its tab and on any show-more hiding it.
+**Ignore** clears a chat's items until the next one arrives (ADR 0076).
+_Avoid_: notification, alert (alerts are a separate drawer), waiting (for the state)
 
 **Kill switch**:
 Stop all on the title bar, or `charter stop --all`: every chat's and shell's program that charter
