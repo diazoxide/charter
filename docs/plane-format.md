@@ -4265,6 +4265,8 @@ identifier `dev.charter.app`. The keyring rows are the operating system's store 
 | `<config>/machine.json.lock` | Machine, device-bound, transient | the `flock` that makes a read-modify-write of `machine.json` one act | `machine::update` |
 | `<config>/layout.json` | Machine, syncable | the window's arrangement of regions | `windowprefs::write_layout`, `adopt_layout` (which moves the legacy `charter.layout` localStorage key into it once) |
 | `<config>/theme.json` | Machine, syncable | the operator's own theme; charter only reads it | the operator, by hand |
+| `<config>/halted` | Machine, device-bound | the kill switch's marker (ADR 0071): an empty file whose existence means every agent charter started on this machine is stopped | `halt::stop`, from the window's Stop all and `charter stop --all`; only the window's re-arm removes it |
+| `<config>/kill-switch.jsonl` | Machine, device-bound | the kill switch's journal (ADR 0071): one line per stop, re-arm or tamper, the newest 1000 | `halt.rs`, from the app and `charter stop --all` |
 | `<config>/restarted-to-update` | Machine, device-bound, transient | an empty file: the last quit was **Restart to update** | `reopen::mark_restart_to_update`; the next launch removes it |
 | `<config>/extensions.json` | Machine, device-bound | each installed extension: its absolute path, the fingerprint the operator approved, and whether it is on | `extension::install`, `approve`, `set_on`, `forget` |
 | `<config>/plugin/` | Machine, device-bound, rebuildable | the copy of the bundled plugin that chats started outside the app load (ADR 0057). Its hooks name this binary by absolute path | `plugin_install`, refreshed at launch |

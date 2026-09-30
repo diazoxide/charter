@@ -1,7 +1,8 @@
 # The kill switch is machine state: the command line stops, and only the window re-arms
 
-**Proposed 2026-09-30** for program-map ticket OV-1 (charter#639), from the `/code-review` of
-charter#747. It amends [ADR 0034](0034-charter-keeps-a-little-state-outside-every-plane.md).
+**Accepted 2026-09-30** by the operator (ruling V22d), drafted for program-map ticket OV-1
+(charter#639) from the `/code-review` of charter#747. It amends
+[ADR 0034](0034-charter-keeps-a-little-state-outside-every-plane.md).
 
 The kill switch stops every chat and shell charter started, in every project and every window,
 and starts no chat until the operator re-arms it. It is thrown from two places: **Stop all** on
@@ -73,3 +74,12 @@ directory (V16). That is follow-up work, not this record's.
 
 Headless agents, triggered chats, and chats a `charterd` hosts are OV-2. Revoking tokens on
 a stop is OV-4. A policy that throws the switch is OV-5.
+
+## Ruled (V22, 2026-09-30)
+
+1. **The CLI stops, and only the window re-arms.**
+2. **Tampering is journaled and never re-arms.**
+3. **The operator may open a new shell while stopped.**
+4. **The stop state is its own file**, not a field in `machine.json`.
+5. **Stop asks for no confirmation.**
+6. **Re-arming restarts nothing.**
