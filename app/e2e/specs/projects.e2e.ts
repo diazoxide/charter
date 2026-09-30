@@ -303,11 +303,14 @@ describe("a window holding more than one project", function () {
     const dialog = await $('[role="dialog"]');
     await dialog.waitForDisplayed({ timeout: 20_000 });
     await expect(dialog).toHaveText("New project", { containing: true });
+    // The folder is under Advanced since FR-4: the dialog's default asks for a repo, and the
+    // two-directory form is a closed `<details>`, opened by its summary.
+    await $('[role="dialog"] details.advanced > summary').click();
     // Typed rather than picked: Browse… opens the system's own folder dialog, which is not a
-    // thing a driver inside the webview can answer. The first box in the dialog is the folder
+    // thing a driver inside the webview can answer. The first box under Advanced is the folder
     // — React owns the id, so the element is taken by position, as `workspace-lifecycle.e2e.ts`
     // takes the workspace name out of its sibling dialog.
-    await $('[role="dialog"] input').setValue(made);
+    await $('[role="dialog"] details.advanced input').setValue(made);
     await $("button=Create project").click();
 
     // **A plane charter made a second ago is still one this machine has approved nothing
