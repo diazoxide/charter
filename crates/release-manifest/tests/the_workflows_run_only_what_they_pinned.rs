@@ -129,10 +129,13 @@ fn every_action_every_workflow_runs_is_pinned_by_commit() {
     );
 }
 
-/// A job that holds what a release is made with: a secret, the `release` environment, or the
-/// power to publish.
+/// A job that holds what a release is made with: a secret, the `release` environment, the
+/// power to publish, or the identity that signs its provenance (#583).
 fn is_privileged(job: &Job) -> bool {
-    job.reads_a_secret() || job.publishes() || job.environment().is_some()
+    job.reads_a_secret()
+        || job.publishes()
+        || job.environment().is_some()
+        || job.holds_a_signing_identity()
 }
 
 /// Why this step restores or saves a cache, or `None`.
@@ -205,7 +208,11 @@ fn no_release_job_that_holds_a_key_or_publishes_restores_a_cache() {
     let privileged: Vec<&Job> = jobs.iter().filter(|job| is_privileged(job)).collect();
     // Found by what they hold, so a new job with a secret is held to this without being named.
     let names: Vec<&str> = privileged.iter().map(|job| job.name.as_str()).collect();
-    assert_eq!(names, ["plan", "build", "publish"], "{names:?}");
+    assert_eq!(
+        names,
+        ["plan", "build", "provenance", "publish"],
+        "{names:?}"
+    );
 
     let mut problems = Vec::new();
     for job in privileged {

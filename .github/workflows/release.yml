@@ -45,6 +45,9 @@ name: release
 # **Apple notarization is declined** (ADR 0042), so no APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID
 # / APPLE_API_* is passed anywhere, and a first install from a browser meets Gatekeeper. The
 # job summary says what that looks like and what to do about it.
+#
+# **Every published file also carries SLSA build provenance** (#583), attested by the
+# `provenance` job before `publish` runs. See that job.
 
 on:
   workflow_dispatch:
@@ -784,9 +787,59 @@ jobs:
             || { echo "FAIL: the sidecar IS the app — every hook would launch the GUI"; exit 1; }
           "$dir/charter" --version
 
+  # **SLSA build provenance for every file a publish ships** (#583). One signed attestation
+  # names each file's sha256 and says it came out of this workflow, in this repository, at this
+  # run's commit, on a GitHub-hosted runner. Anyone can check it with `gh attestation verify`
+  # (SECURITY.md says how). It is a third signature beside minisign and codesign, and it answers
+  # a different question: not "may the updater install this" but "which build made this".
+  #
+  # A job of its own, so the OIDC token that signs provenance is never in the same job as the
+  # updater key (`build`) or the power to write the release (`publish`), and `publish` waits for
+  # it, so nothing is published unattested. It attests the run's uploaded artifacts, the exact
+  # bytes `publish` downloads and uploads next. `actions/attest` rather than
+  # `actions/attest-build-provenance`: since v4 the latter is a thin wrapper over the former,
+  # and its README sends new workflows to `actions/attest`. With no predicate input it writes
+  # the same SLSA v1 build provenance.
+  #
+  # A hand-started build publishes nothing, so it is not attested.
+  provenance:
+    name: build provenance
+    needs: [plan, build]
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    # `id-token` mints the token Sigstore signs with; `attestations` stores the result. Nothing
+    # else: this job checks nothing out, and `download-artifact` reads this run's own
+    # artifacts without a token scope.
+    permissions:
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist
+          merge-multiple: true
+
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/*
+
+      # What a person installing it runs, run here first. An attestation that does not verify
+      # against this repository and this workflow is not one, and a release should not go out
+      # on it.
+      - name: Each file verifies the way SECURITY.md says it will
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for f in dist/*; do
+            gh attestation verify "$f" --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+              --deny-self-hosted-runners
+          done
+
   publish:
     name: publish to the ${{ needs.plan.outputs.channel }} channel
-    needs: [plan, build]
+    needs: [plan, build, provenance]
     if: needs.plan.outputs.publish == 'true'
     runs-on: ubuntu-24.04
     # It holds no signing key, but it is what a release IS, so it runs under the same

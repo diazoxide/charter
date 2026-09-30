@@ -20,5 +20,9 @@ checks the release key's signature, and installs it in place. Nothing needs the 
 On macOS, **Install `charter` command in PATH** in the command palette puts that command on your
 terminal's `PATH`.
 
+**Checking a download:** every file here carries a signed build provenance attestation.
+[`SECURITY.md`](https://github.com/diazoxide/charter/blob/__TAG__/SECURITY.md#checking-that-a-download-is-a-real-charter-build)
+gives the `gh attestation verify` command.
+
 ---
 

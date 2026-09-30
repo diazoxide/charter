@@ -6,6 +6,35 @@ Please report a vulnerability privately, through GitHub's
 [private vulnerability reporting](https://github.com/diazoxide/charter/security/advisories/new),
 and not in a public issue.
 
+## Checking that a download is a real charter build
+
+Every file a release publishes, on the stable channel and the `dev` prerelease alike, carries
+a signed [SLSA build provenance](https://slsa.dev/spec/v1.0/provenance) attestation. It says
+the file came out of this repository's `release.yml` on a GitHub-hosted runner, and names the
+commit the workflow ran at. With the [GitHub CLI](https://cli.github.com/) installed:
+
+```sh
+gh attestation verify charter-macos-arm64.dmg \
+  --repo diazoxide/charter \
+  --signer-workflow diazoxide/charter/.github/workflows/release.yml \
+  --deny-self-hosted-runners
+```
+
+It works the same for the `.deb`, the AppImage, the `.app.zip` and the updater archives. A pass
+prints the workflow and the commit. A file that was changed after it was built, or built
+anywhere else, fails. To pin a stable release to its tag, add
+`--source-ref refs/tags/vX.Y.Z`.
+
+- **This is not what the updater checks.** The installed app trusts an update because the
+  operator's minisign key signed it
+  ([ADR 0042](docs/adr/0042-charter-updates-itself-and-nothing-it-cannot-verify-reaches-it.md)).
+  Provenance answers a different question: which build made this file.
+- **A dev build names the workflow's commit.** A dev build runs after `ci` passes on `main`, so
+  the commit in its attestation is `main`'s head when that run started. The commit it was built
+  from is in the `dev` release's notes. The two differ only when something merged in between.
+- **A build started by hand is not attested.** It is published nowhere.
+- **Releases made before provenance was added have none.**
+
 ## What charter's chat sandbox is, and what it is not
 
 A plane can put every chat charter starts in a sandbox ([ADR 0067](docs/adr/0067-a-chat-runs-in-a-sandbox-charter-compiles-for-its-harness.md)):
