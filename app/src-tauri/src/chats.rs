@@ -1697,6 +1697,7 @@ mod tests {
             binary: Some(plane.path().join("charter")),
             plugin: Some(plane.path().join("plugin")),
             shims: None,
+            git_hooks: None,
         });
         let ready = charter_core::start::Ready {
             command: vec!["-s".to_owned(), "danger-full-access".to_owned()],
@@ -1721,6 +1722,7 @@ mod tests {
             binary: Some(plane.path().join("charter")),
             plugin: Some(plane.path().join("plugin")),
             shims: None,
+            git_hooks: None,
         });
         let ready = charter_core::start::Ready {
             command: Vec::new(),
