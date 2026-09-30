@@ -7,6 +7,12 @@ import { ExternalLink, ReleaseNotes } from "./ReleaseNotes";
 /** Where every version's notes are, the same text this dialog shows for one of them. */
 const RELEASES = "https://github.com/diazoxide/charter/releases";
 
+/** The community channels (FR-14, #609). `SUPPORT.md` says what each one is for and how soon
+ *  someone answers; security reports go where `SECURITY.md` says, never to these. */
+const DISCUSSIONS = "https://github.com/diazoxide/charter/discussions";
+const NEW_ISSUE = "https://github.com/diazoxide/charter/issues/new/choose";
+const SUPPORT = "https://github.com/diazoxide/charter/blob/main/SUPPORT.md";
+
 /**
  * **About Charter**: which version of the app this is, and what that version brought.
  *
@@ -96,6 +102,13 @@ export function AboutCharter() {
             ) : (
               <Said about={about} />
             )}
+            {/* Outside the answer, so a dialog whose changelog could not be read still says
+                where to get help. */}
+            <p className="honest">
+              Questions and ideas go to <ExternalLink href={DISCUSSIONS}>Discussions</ExternalLink>,
+              or you can <ExternalLink href={NEW_ISSUE}>report a bug</ExternalLink>. See{" "}
+              <ExternalLink href={SUPPORT}>how to get help</ExternalLink>.
+            </p>
           </div>
           {/* `tabIndex={0}` on the one control, per `docs/ui-primitives.md`. */}
           <div className="answer">

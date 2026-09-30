@@ -13,6 +13,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Where to get help, in the app and the repository.** About Charter now links to Discussions
+  for questions and ideas, to the bug report form, and to `SUPPORT.md`, which says where each
+  kind of question goes and how soon it gets a first response. The repository gains a Code of
+  Conduct (Contributor Covenant 2.1), a `CONTRIBUTING.md` with DCO sign-off, issue and
+  discussion forms, and a pull request template (#609).
+
 - **Every build file a release publishes carries signed build provenance.** Each installer and
   updater archive now has a SLSA build provenance attestation, so you can check that a download
   came out of charter's own release workflow with `gh attestation verify`. `SECURITY.md` has

@@ -1,0 +1,63 @@
+name: Bug report
+description: Something in charter is broken or does not do what it says.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting it. Everything here is public: leave out tokens, passwords,
+        vault contents and anything else you would not publish. A security vulnerability goes
+        to [SECURITY.md](https://github.com/diazoxide/charter/blob/main/SECURITY.md), not here.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what charter did instead.
+      placeholder: |
+        1. I opened a project and started a Claude Code chat in a workspace.
+        2. I expected …
+        3. Instead …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: charter version
+      description: About Charter on the title bar shows it, and so does `charter version`.
+      placeholder: 0.4.2
+    validations:
+      required: true
+  - type: dropdown
+    id: system
+    attributes:
+      label: System
+      options:
+        - macOS
+        - Linux
+        - Windows
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: system-details
+    attributes:
+      label: System details
+      description: The system's version, and on Linux the desktop (GNOME, KDE, i3 …).
+      placeholder: macOS 26.1 on Apple silicon
+  - type: input
+    id: harness
+    attributes:
+      label: Harness
+      description: The harness the chat ran, with its version, if the bug is about a chat.
+      placeholder: Claude Code 2.3.1
+  - type: textarea
+    id: doctor
+    attributes:
+      label: charter doctor
+      description: The output of `charter doctor`, if the bug is about a project, a workspace or a repo.
+      render: text
+  - type: textarea
+    id: more
+    attributes:
+      label: Anything else
+      description: Logs, screenshots, or how often it happens.
