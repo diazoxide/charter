@@ -250,3 +250,11 @@ named trigger with a date on it, and the trigger is a sandbox rather than a plug
 - **The `openat` rewrite is still the fix when it comes**, on the terms the section above sets: the
   whole core at once, with the external review decision 16 requires, and not one call site at a
   time.
+
+## Re-opened, 2026-09-30: a sandbox is proposed
+
+[ADR 0066](0066-a-chat-runs-in-a-sandbox-charter-compiles-for-its-harness.md) (proposed, SD-1)
+puts every chat in a new plane in a sandbox. That is the trigger the amendment above names. If it
+is accepted, the condition this record rests on is false for a sandboxed chat, and the `openat`
+rewrite stops being optional. ADR 0066 records the new answer, and this record keeps the
+measurements.
