@@ -4297,7 +4297,7 @@ or inside any git work tree.
 | `<config>/peers.json` | Machine, device-bound | **decided, not yet written** (ADR 0078). On a runner: the devices paired with it, each one's device id, pinned public link key and when it was paired. Its host refuses a link from any other key. Denied to chats | the runner's `charterd`, at pairing; `charter runner peers` (RR-1) |
 | `<config>/server/<ver>/` | Machine, device-bound, rebuildable | **decided, not yet written** (ADR 0068, ADR 0078). On a runner: the verified `charter` binary of each host version, side by side while an old one drains. Denied to chats | the desktop's bootstrap, through the connector (RR-14) |
 | `<data>/repos/<workspace>/<repo>.git` | Machine, device-bound, rebuildable | **decided, not yet written** (ADR 0078). On a runner, in charter's data home: one bare repo per workspace repo, which the desktop pushes to over the link and fetches from. The desktop's clone is the truth. Denied to chats | the runner's `charterd` (RR-16) |
-| keyring item for the link key | Keyring | **decided, not yet written** (ADR 0078). This device's static X25519 key for the Noise handshake of a runner link; on a headless runner, the device key's headless form stands in for it. Denied to chats | `charter runner add`, or the runner's `charterd` at pairing (RR-1) |
+| keyring item for the link key | Keyring | **decided, not yet written** (ADR 0078). This device's static X25519 key for the Noise `XX` handshake of a runner link, apart from the device key. On a headless runner the link key is held in the same age-encrypted form as the device key. Denied to chats | `charter runner add`, or the runner's `charterd` at pairing (RR-1) |
 
 ### Environment variables that move or key this state
 
