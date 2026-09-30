@@ -320,7 +320,12 @@ mod tests {
 
         assert_eq!(
             named,
-            ["back\\slash.txt", "say \"hi\".txt", "tab\there.txt"]
+            [
+                "back\\slash.txt",
+                "plain space.txt",
+                "say \"hi\".txt",
+                "tab\there.txt"
+            ]
         );
     }
 
