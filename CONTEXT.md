@@ -175,7 +175,7 @@ _Avoid_: host (that is `charterd`, the process), machine (in UI text), node
 Data that says how to start one harness, how to name and resume its sessions, which levels it
 offers and what it can do. The ones for Claude Code, Codex and opencode ship with charter; a
 project may declare more, which each machine approves before they run, and never replaces a
-built-in's (ADR 0073, proposed).
+built-in's (ADR 0073).
 _Avoid_: harness definition, harness config (that is the harness's own), profile (that is which
 program runs on this machine)
 
@@ -183,13 +183,13 @@ program runs on this machine)
 How much charter learns from a chat's harness, set when a run starts and fixed for it: **1**,
 the terminal alone; **2**, the terminal with the harness's own hooks reporting to charter; **3**,
 a structured protocol, ACP or the harness's own. A fall back to a lower level starts a new run.
-Never shown on a first-hour surface (ADR 0073, proposed).
+Never shown on a first-hour surface (ADR 0073).
 _Avoid_: tier (that is a store's), mode, integration level
 
 **Harness capability**:
 One thing a harness does or does not do for a chat, such as report that it is waiting: yes, no
 with the fallback charter uses, or unknown, which reads as no. The capability card shows the
-*no*s in plain words (ADR 0073, proposed).
+*no*s in plain words (ADR 0073).
 _Avoid_: capability (unqualified, which is an extension's), feature, support
 
 **Session host** (`charterd`):

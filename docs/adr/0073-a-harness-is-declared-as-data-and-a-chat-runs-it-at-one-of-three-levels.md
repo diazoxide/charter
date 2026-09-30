@@ -1,6 +1,6 @@
 # A harness is declared as data, and a chat runs it at one of three levels
 
-**Proposed 2026-09-30**, drafted for program-map ticket FD-12 (#652). It follows these of the
+**Accepted 2026-09-30** by the operator (ruling V24), drafted for program-map ticket FD-12 (#652). It follows these of the
 operator's rulings:
 
 - **Q6′:** *"Three harness levels (terminal-only, hooks/native, ACP). Harnesses are declared as
@@ -105,7 +105,9 @@ opencode's server are the same: charter reaches the host process, not the TUI al
 and charter picks one for each run. A level-2 chat is a terminal with hooks. A level-3 chat has
 no harness terminal of its own. The one way one chat has both is a harness host that serves its
 own TUI and charter at once, which is FD-20 (W8: *"charterd attaches to it instead of owning the
-PTY"*). Which level a chat in a tab starts at is ruling question 1. A chat with no terminal shown
+PTY"*). **A chat in a tab starts in its terminal (V24a)**: level 2, or level 1 without an
+adapter, even when its harness offers level 3, and FD-20's Codex half moves to Next ★ so that a
+Codex tab chat gets both. A chat with no terminal shown
 (dispatched, headless, remote) starts at the highest level its harness offers on this machine,
 as Q-6(c) recommended.
 
@@ -212,7 +214,8 @@ names, and the facts in `[terminal]`. Everything level 3 over ACP needs is the A
 has, plus the command that starts the agent. So a new harness at level 1, or at level 3 over
 ACP, is **a declaration and no release of charter** (FD-14's acceptance, HP-14). Level 2 is code:
 each harness's hooks differ in where they are registered, what they report and how one chat is
-armed alone, and each of today's three took an ADR of its own (ruling question 3).
+armed alone, and each of today's three took an ADR of its own. **Level 2 always needs charter code**, in core or in an
+extension after PE-29, and declarations get no hook templates for now (V24c).
 
 ### 5. Who may declare a harness: the minimum this record needs
 
@@ -225,7 +228,7 @@ A declaration names a program, and ADR 0022's reason holds: a program runs on a 
 - **`charter.local.toml` may declare a harness, or replace a built-in's declaration**, as a
   local profile may replace a built-in profile today.
 - **This machine approves a project's declaration once before its program first runs, and again
-  when the declaration changes** (ruling question 2). The approval is a **new store**,
+  when the declaration changes** (V24b). The approval is a **new store**,
   `.charter/harness-declarations-approved.json`, keyed by declaration name and holding the digest
   of what was approved. `harness-profiles-launched.json` is keyed by profile and records a
   profile's command, which a declaration does not have, so the two are kept apart.
@@ -303,8 +306,7 @@ changes two things and keeps the reason:
   a path or a shell string, and it cannot replace a built-in.
 - **ADR 0022's ask-once is extended to declarations.** A project declaration's program runs on
   this machine only after the operator approves it, and again after any change to it, recorded in
-  §5's store. This is the gate that answers 0022's concern for committed data, and it is ruling
-  question 2.
+  §5's store. This is the gate that answers 0022's concern for committed data (V24b).
 - **`charter.local.toml` carries harness declarations** as well as `[harness]`, for a harness on
   this machine alone or a local replacement of a built-in's declaration.
 
@@ -387,30 +389,14 @@ The code does not change with this record.
 - **Shipping the ACP adapter programs with charter.** X34 rules it out, and they are Node or Rust
   programs that trail their harnesses.
 
-## For the operator's ruling
+## Ruled (V24, 2026-09-30)
 
-Each of these is left open by Q6′, X34, W8 and W10. Each has a recommendation. What those
-rulings already settle is marked *Settled by* in the body.
-
-1. **A chat in a tab starts in its terminal (level 2, or level 1 without an adapter), even when
-   its harness offers level 3; and FD-20's Codex half moves from Later to Next ★, ahead of GM-2.**
-   *Recommend yes to both.* A level-3 chat has no harness terminal (§2), so defaulting a tab to it
-   means charter draws the conversation itself, a second product the map has no ticket for.
-   **The cost is real.** Codex's hooks never say when it stops for an approval, so an everyday
-   Codex chat in a tab cannot show needs you. FD-20 is on the Later horizon. GM-2 and V14 require
-   Codex and opencode at parity, and W1 makes HP-3, HP-8 and HP-16 blockers of LW-5 (*a Claude
-   Code, a Codex and an opencode ask are each answered on machine B*). Without FD-20, LW-5's Codex
-   ask is met only by Codex chats started at level 3, which have no terminal, and that is not the
-   daily chat. So the proposal pulls FD-20's Codex-daemon half (charter attaching to Codex's own
-   host, which serves the Codex TUI and charter at once) into Next ★ before GM-2, starting with a
-   measurement that Codex's host serves both on the installed version. Claude Code's Remote Control
-   half stays Later.
-2. **ADR 0022's ask-once extends to project declarations**: a committed declaration's program
-   runs on this machine only after the operator approves it there, and again after any change to
-   it, recorded in `.charter/harness-declarations-approved.json` (§5, ADR 0022 amended). *Recommend
-   yes.* Q6′, FD-14 and HP-14 already require a committed declaration to run a harness alone; this
-   gate is what answers ADR 0022's concern about committed commands, and it is the mechanism 0022
-   already uses for a changed profile.
-3. **Level 2 always needs charter code (core, or an extension after PE-29)**: no hook templates in
-   a declaration for now. *Recommend yes.* The three hook mechanisms share no shape, and a
-   templated arming that half works would miss asks while claiming level 2.
+1. **A chat in a tab starts in its terminal**: level 2, or level 1 without an adapter, even when
+   level 3 is offered. FD-20's Codex-daemon half moves from Later to Next ★, ahead of GM-2,
+   starting with a measurement that Codex's own host serves both its TUI and charter; Claude
+   Code's Remote Control half stays Later (V24a).
+2. **ADR 0022's ask-once extends to committed harness declarations**: the operator approves the
+   program per machine, and again after any change, recorded in
+   `.charter/harness-declarations-approved.json` (Clone state) (V24b).
+3. **Level 2 always needs charter code** (core, or an extension after PE-29): no hook templates in
+   declarations for now (V24c).
