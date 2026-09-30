@@ -1307,6 +1307,10 @@ and every settings group that it would have changed says so.
   [#34](https://github.com/diazoxide/charter/pull/34),
   [#172](https://github.com/diazoxide/charter/pull/172),
   [#192](https://github.com/diazoxide/charter/pull/192))
+
+  *Erratum:* 0.1.0 could remove a worktree from the window but not cut one, and no later
+  version can yet. Cut one with `charter worktree add` (since 0.4.0); cutting from the window
+  is [#701](https://github.com/diazoxide/charter/issues/701).
 - A command palette and right-click menus reach every action the bars have.
   ([#45](https://github.com/diazoxide/charter/pull/45),
   [#172](https://github.com/diazoxide/charter/pull/172),
