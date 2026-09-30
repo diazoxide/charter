@@ -1,8 +1,7 @@
 # Every store charter writes is in one of four tiers
 
-**Proposed 2026-09-30.** An agent drafted it for program-map ticket FR-30 (#623), and the
-operator rules it (W7: an ADR merges only after the operator's ruling). It follows the
-operator's ruling **V2** (phase-2 critique): *"An ADR names four tiers: Plane (committed), Clone
+**Accepted 2026-09-30** by the operator (ruling V22b), drafted for program-map ticket FR-30
+(#623). It follows the operator's ruling **V2** (phase-2 critique): *"An ADR names four tiers: Plane (committed), Clone
 state (`.charter/`, per clone, not derived: vault registry, `fingerprint.key`, `reopen.json`,
 save/push journals, gate files), Machine (app data), Keyring. Every file in plane-format.md gets a
 tier. OQ-10 is amended; FR-10's backup includes clone state."*
@@ -10,10 +9,10 @@ tier. OQ-10 is amended; FR-10's backup includes clone state."*
 It amends **OQ-10** and [ADR 0034](0034-charter-keeps-a-little-state-outside-every-plane.md)
 (the machine store: see its amendment of 2026-09-30). It gives a tier to the stores that three
 records add: [ADR 0066](0066-a-chat-is-a-ulid-a-run-is-a-stretch-of-its-conversation-and-a-device-is-random.md)
-(chat, run and device identity, accepted), and the proposed
+(chat, run and device identity),
 [ADR 0067](0067-a-chat-runs-in-a-sandbox-charter-compiles-for-its-harness.md) (the chat sandbox)
-and [ADR 0068](0068-a-chat-lives-in-charterd-and-the-app-is-its-client.md) (`charterd`), which
-merge before this one. FR-10 (#608, backups) is built on it. So are LW-27, KN-26, KN-28, KN-29, KN-31
+and [ADR 0068](0068-a-chat-lives-in-charterd-and-the-app-is-its-client.md) (`charterd`), all
+accepted. FR-10 (#608, backups) is built on it. So are LW-27, KN-26, KN-28, KN-29, KN-31
 (#717) and FW-7 (#735), which each add a store.
 
 ## Where charter is today
@@ -111,7 +110,7 @@ file sections, from "Finding the plane" to the appendix, and fails when:
 
 **Naming the tier of a new store joins the definition of done** (ST9). It is written into
 `AGENTS.md`'s rules, and the test enforces it for the document. The test cannot see a store that
-code writes and no document mentions, and review is what catches that (see the ruling list).
+code writes and no document mentions, and review is what catches that (see the rulings).
 
 ### 4. OQ-10, amended
 
@@ -169,10 +168,10 @@ start from it.
 | the device key (AU-3) | ADR 0066 | Keyring. On a headless host, V1's age-encrypted file stands in for it |
 | the human scopes' credentials, `<config>/charterd/` | ADR 0068 | Machine, device-bound, transient. Minted at each start of `charterd` |
 | `charterd.sock`, in `$XDG_RUNTIME_DIR/charter/` on Linux or the per-user `TMPDIR` on macOS, not in the machine store | ADR 0068 | Machine, device-bound, transient |
-| the per-chat hook spool, beside the chat's files in `.charter/` | ADR 0068 | Clone state, transient. See the ruling list |
+| the per-chat hook spool, beside the chat's files in `.charter/` | ADR 0068 | Clone state, transient. See the rulings |
 | the run journal `charterd` resumes from (FD-29) | ADR 0068 | Machine, device-bound |
 | `charterd`'s copy of itself for an AppImage, under the machine store | ADR 0068 | Machine, device-bound, rebuildable |
-| a runner's host versions, `~/.charter/server/<ver>/` | ADR 0068 | Machine, device-bound, rebuildable. See the ruling list |
+| a runner's host versions, under the machine store at `<config>/server/<ver>/` | ADR 0068 | Machine, device-bound, rebuildable |
 | a runner's resident secret store (age-encrypted, V9) | V9 | Keyring, in its headless form |
 | the forge-item cache (FI7) | FI7 | Machine, device-bound, rebuildable |
 | review drafts (R5) and private memory (KN-7) | OQ-10 | Machine, syncable |
@@ -182,8 +181,8 @@ touch, and they follow the tiers: the Keyring, the plain-file vaults, the audit 
 key and `<config>/charterd/`. **The hook spool is the exception, and ADR 0068 is the rule for
 it.** A chat's hooks may append to **that chat's own spool**, and never to another chat's. The
 host verifies each line's MAC and sequence as it drains the spool, and records a gap in its own
-spool as a gap. ADR 0067's wording, *"denies the hook spool"*, needs the same correction, and
-that is made in ADR 0067, not here.
+spool as a gap. ADR 0067's wording, *"denies the hook spool"*, was corrected to the same rule in
+ADR 0067 itself (V22).
 
 ## Every store, by tier
 
@@ -266,7 +265,7 @@ relative to the plane root unless they start with `<config>` (the machine store)
 | 66 | `<config>/charterd/` credentials, and `charterd.sock` in `$XDG_RUNTIME_DIR/charter/` or the per-user `TMPDIR` (ADR 0068) | Machine, transient | device-bound | no | no |
 | 67 | the per-chat hook spool (ADR 0068) | Clone state, transient | — | no | no |
 | 68 | the run journal (FD-29) | Machine | device-bound | yes | no |
-| 69 | `charterd`'s copies of itself: an AppImage's, and a runner's `~/.charter/server/<ver>/` | Machine, rebuildable | device-bound | no | yes |
+| 69 | `charterd`'s copies of itself: an AppImage's, and a runner's `<config>/server/<ver>/` | Machine, rebuildable | device-bound | no | yes |
 | 70 | the forge-item cache (FI7) | Machine, rebuildable | device-bound | no | yes |
 | 71 | review drafts (R5), private memory (KN-7) | Machine | syncable | yes | no |
 | 72 | a guest checkout, its worktrees, an extension's workspace folder or state directory, a vendor's `.playwright*` files, Claude Code's own files | None | — | no | — |
@@ -274,7 +273,7 @@ relative to the plane root unless they start with `<config>` (the machine store)
 ## Where V2's tiers do not fit cleanly
 
 Each of these is recorded in `docs/plane-format.md` where the store is, and the choices are in
-the ruling list.
+the rulings.
 
 1. **A workspace's files are in two tiers.** The same path is Plane when the workspace is LIVE
    and Clone state when it is LOCAL. The tier line says both
@@ -307,9 +306,9 @@ the ruling list.
    the machine died first, holds events nothing else has. Marking it transient means a backup
    does not save them. A chat may write its own spool and never another chat's (ADR 0068), so
    the spool is not denied to the chat that owns it.
-7. **A runner's host versions live in a third place.** ADR 0068 puts them under
+7. **A runner's host versions lived in a third place.** ADR 0068's draft put them under
    `~/.charter/server/<ver>/`, which is neither the machine store nor an OS application
-   directory.
+   directory. Ruled (V22a, V22b): they live under the machine store, at `<config>/server/<ver>/`.
 8. **The Keyring has a headless form.** V1's device key and V9's resident secret store use an
    age-encrypted file where there is no keyring. It sits in the Keyring tier because of what it
    holds, even though it is a file on disk.
@@ -361,38 +360,17 @@ the ruling list.
   stores that are not there. The document test is exact about the document, and review covers
   the code.
 
-## For the operator's ruling
+## Ruled (V22, 2026-09-30)
 
-Each of these calls goes beyond the words of V2. Each has a recommendation.
-
-1. **A fifth answer, `None`, for paths charter records but does not own.** These are the
-   operator's checkouts and worktrees, harness files and vendor output. *Recommend yes.*
-   Without it, the document has to give a tier to files that charter neither backs up nor
-   rebuilds.
-2. **The marks `transient` and `legacy`, beside V2's `rebuildable`.** FR-10 backs up Clone state
-   and Machine stores that carry none of the three. Gate files are Clone state and transient,
-   so they are not backed up. *Recommend yes.* FR-10's own list already leaves them out.
-3. **`machine.json` is device-bound as a whole**, pins and channel included, until a sync ticket
-   splits them out. *Recommend yes.*
-4. **A plain-file vault stays in Clone state, and FR-10 does not back it up.** *Recommend yes.*
-   The other option is to require the Keyring, which would remove a supported provider.
-5. **A restore keeps device-bound state only when the operator says this machine replaces the
-   old one** (§5). Otherwise the device id is minted fresh, and every approval and consent is
-   dropped and asked again. *Recommend yes.* Otherwise one backup restored onto two machines
-   gives them the same identity in every event, and approvals given for one machine's paths
-   would count on another's.
-6. **`$CHARTER_HOME` should move all clone state or none of it.** Filed as
-   [#750](https://github.com/diazoxide/charter/issues/750) (M13). *Recommend* that it route
-   every `.charter/` writer through one helper. Until then, FR-10 backs up both directories.
-7. **Review drafts and private memory are Machine and syncable**, and R5's "in `.charter/`"
-   gives way to OQ-10. *Recommend yes.*
-8. **The hook spool is transient.** *Recommend yes, with one condition.* FD-30 must drain the
-   spool before FR-10 takes a backup, so that the audit chain has sealed every line before the
-   backup is taken. Without that condition, the spool would have to be backed up as well.
-9. **A runner's `~/.charter/server/<ver>/` is Machine.** *Recommend* that ADR 0068 move it under
-   the machine store (`<config>/server/<ver>/`), as it already does for an AppImage's copy, or
-   say why a runner needs a separate place.
-10. **The test checks the document and not the code**, and within the document it checks
-    headings and tables of paths, not prose. *Recommend accepting this*, and making "names its
-    tier in plane-format.md, under its own heading or in a table row" a review question on
-    every PR that adds a store.
+1. **A fifth answer, `None`**, for paths charter records but does not own.
+2. **The marks `transient` and `legacy`**, beside V2's `rebuildable`.
+3. **`machine.json` is device-bound as a whole.**
+4. **A plain-file vault is Clone state and is not backed up**; a restore marks it "file missing".
+5. **A restore keeps device-bound state only when the operator says this machine replaces the old
+   one.**
+6. **`$CHARTER_HOME` moves all clone state or none** ([#750](https://github.com/diazoxide/charter/issues/750)).
+7. **Review drafts and private memory are Machine and syncable.**
+8. **The hook spool is transient**, and is drained before any backup.
+9. **Runner binaries live under the machine store**, at `<config>/server/<ver>/`.
+10. **The tier test checks the document**, and "names its tier" is a review question on every PR
+    that adds a store.
