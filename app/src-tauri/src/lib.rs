@@ -1574,7 +1574,7 @@ pub fn run() {
             // How this launch stands with the session bus, for the window's notice
             // (`portal.rs`): nothing to say on one that has it.
             app.manage(portal::SessionBus::of(
-                std::env::var("DBUS_SESSION_BUS_ADDRESS").ok().as_deref(),
+                std::env::var(portal::SESSION_BUS).ok().as_deref(),
                 std::env::var(portal::SESSION_BUS_KEPT).ok().as_deref(),
                 std::env::var_os("XDG_RUNTIME_DIR")
                     .map(PathBuf::from)

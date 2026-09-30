@@ -18,11 +18,12 @@
 //! `DBUS_SESSION_BUS_ADDRESS` pointing at nothing. A machine with no session bus starts in
 //! under 0.6 s, because every bus call fails at once. The bus itself is healthy, so the
 //! address it had is kept in [`SESSION_BUS_KEPT`] and every chat gets that one
-//! (`charter_core::chatenv`). What the run loses — the tray, notifications, and handing a
+//! (`charter_core::chatenv`), as does every program the app starts (`forklock::spawn`). What
+//! the run loses — the tray, notifications, a keyring vault from the window, and handing a
 //! second launch over — is said on standard error and in the window ([`SessionBus`]);
-//! `instance.rs` is what keeps two apps off one plane without the bus. A little after the
-//! launch the kept bus is asked again (`listen_again`), and when the portal answers by
-//! then, the window offers to start again on it. It never does so by itself.
+//! `instance.rs` is what keeps two apps off one plane without the bus. After the launch the
+//! kept bus is asked again, backing off, until it answers (`listen_again`), and then the
+//! window offers to start again on it. It never does so by itself.
 //!
 //! **X11 without a session bus.** With no `DBUS_SESSION_BUS_ADDRESS` and no
 //! `$XDG_RUNTIME_DIR/bus` — `startx` into i3, say — GIO does not give up: it runs
@@ -32,27 +33,29 @@
 //! so the launch looks for it the way GIO does, asks the portal there, and starts again on it
 //! ([`Start::OnTheBus`]). Measured in a container (Ubuntu 24.04, i3 on Xvfb,
 //! `xdg-desktop-portal` and its GTK backend installed): `dbus-launch` answered in 11 ms, and
-//! the portal it could activate there came up in 114–202 ms. Only when there is no bus to be
-//! had, or its portal is silent too, does the launch start without one.
+//! the portal it could activate there came up in 114–202 ms. Each gets [`BUDGET`], so this path
+//! costs at most about 600 ms and never hangs. Only when there is no bus to be had, or its
+//! portal is silent too, does the launch start without one; the `dbus-daemon` `dbus-launch`
+//! started then stays with the X display, as GIO leaves it.
 
 use std::time::Duration;
 
-pub use charter_core::chatenv::SESSION_BUS_KEPT;
+pub use charter_core::chatenv::{NO_SESSION_BUS, SESSION_BUS, SESSION_BUS_KEPT};
 
 /// How long the bus is given to answer. For a running portal it answers in milliseconds;
 /// the ticket (FR-8) and ADR 0026's 2 s cold-start limit leave room for this much and no more.
 pub const BUDGET: Duration = Duration::from_millis(300);
 
-/// How long after the launch the kept bus is asked again, and how long it is given then: a
-/// portal that was slow at the launch — right after login, on a cold disk — has come up by
-/// now, and one that has not in this long is the one the launch was right not to wait for.
-pub const ASKED_AGAIN_AFTER: Duration = Duration::from_secs(5);
+/// How long after the launch — and after each ask that went unanswered — the kept bus is asked
+/// again, and how long it is given each time. A portal that was slow at the launch (right after
+/// login, a cold disk) has come up by the first; one still silent after the last is the one the
+/// launch was right not to wait for, and it is left alone.
+pub const ASKED_AGAIN_AFTER: [Duration; 3] = [
+    Duration::from_secs(5),
+    Duration::from_secs(15),
+    Duration::from_secs(45),
+];
 pub const ASKED_AGAIN_FOR: Duration = Duration::from_secs(5);
-
-/// Where the app points the session bus when it starts without one. Nothing can listen at a
-/// path below `/dev/null`, so every bus call fails at once — which is the fast case the issue
-/// measured — and the name says what happened to anyone who reads `/proc/<pid>/environ`.
-pub const NO_SESSION_BUS: &str = "unix:path=/dev/null/charter-started-without-the-session-bus";
 
 /// The name GTK and WebKitGTK ask for.
 const PORTAL: &str = "org.freedesktop.portal.Desktop";
@@ -84,8 +87,13 @@ pub enum Start {
 }
 
 /// What a launch without the bus loses, in the words the window and standard error both use.
+///
+/// The keyring is named because the window's own reveal and copy of a keyring vault go through
+/// the Secret Service on the session bus, in this process, which has none; a chat, and every
+/// program the app starts, is given the bus and still reaches it.
 const WHAT_IS_OFF: &str = "For this run there is no tray icon and no desktop notifications, \
-     and a second launch is refused instead of being handed to this one — charter-app#24.";
+     a keyring vault cannot be opened from the window (chats still reach the keyring), and a \
+     second launch is refused instead of being handed to this one — charter-app#24.";
 
 /// What a launch does about what it heard.
 ///
@@ -138,7 +146,8 @@ fn silent(kept: &str) -> Start {
 pub fn autolaunched_address(printed: &str) -> Option<String> {
     printed.lines().find_map(|line| {
         let value = line
-            .strip_prefix("DBUS_SESSION_BUS_ADDRESS='")?
+            .strip_prefix(SESSION_BUS)?
+            .strip_prefix("='")?
             .strip_suffix("';")?;
         (!value.is_empty()).then(|| value.to_owned())
     })
@@ -259,7 +268,7 @@ fn the_x_sessions_bus() -> Option<(String, Heard)> {
 pub fn start_clear_of_a_silent_portal() {
     use std::os::unix::process::CommandExt;
 
-    let address = std::env::var("DBUS_SESSION_BUS_ADDRESS").ok();
+    let address = std::env::var(SESSION_BUS).ok();
     if address.as_deref() == Some(NO_SESSION_BUS) {
         return;
     }
@@ -287,10 +296,26 @@ pub fn start_clear_of_a_silent_portal() {
 pub enum Bus {
     /// This one; nothing kept aside.
     At(String),
-    /// Whichever the standard lookup finds: no address named, nothing kept aside.
-    Found,
+    /// The default one, which the standard lookup finds at `$XDG_RUNTIME_DIR/bus`: no address
+    /// named, nothing kept aside.
+    Default,
     /// None, with `kept` kept aside for the chats.
     Without { kept: String },
+}
+
+impl Bus {
+    /// The address to ask this bus's portal at: `runtime` is `$XDG_RUNTIME_DIR`, where the
+    /// default one is looked for. `None` for no bus, and for a default one that is not there.
+    pub fn where_to_ask(&self, runtime: Option<&std::path::Path>) -> Option<String> {
+        match self {
+            Self::At(address) => Some(address.clone()),
+            Self::Default => runtime
+                .map(|dir| dir.join("bus"))
+                .filter(|bus| bus.exists())
+                .map(|bus| format!("unix:path={}", bus.display())),
+            Self::Without { .. } => None,
+        }
+    }
 }
 
 /// This binary with this launch's arguments, on `bus`.
@@ -317,18 +342,14 @@ fn launch_on(
     again.args(args);
     match bus {
         Bus::At(address) => {
-            again
-                .env("DBUS_SESSION_BUS_ADDRESS", address)
-                .env_remove(SESSION_BUS_KEPT);
+            again.env(SESSION_BUS, address).env_remove(SESSION_BUS_KEPT);
         }
-        Bus::Found => {
-            again
-                .env_remove("DBUS_SESSION_BUS_ADDRESS")
-                .env_remove(SESSION_BUS_KEPT);
+        Bus::Default => {
+            again.env_remove(SESSION_BUS).env_remove(SESSION_BUS_KEPT);
         }
         Bus::Without { kept } => {
             again
-                .env("DBUS_SESSION_BUS_ADDRESS", NO_SESSION_BUS)
+                .env(SESSION_BUS, NO_SESSION_BUS)
                 .env(SESSION_BUS_KEPT, kept);
         }
     }
@@ -337,7 +358,7 @@ fn launch_on(
 
 /// What the window is told about a launch without the session bus.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
-pub struct WithoutTheBus {
+pub struct BusNotice {
     /// The line it draws: why there is no bus, and what is off for the run.
     pub says: String,
     /// Whether the bus answers now, so a restart onto it is worth offering.
@@ -350,9 +371,11 @@ pub struct WithoutTheBus {
 pub struct SessionBus {
     /// The line the window draws, when the launch is without the bus.
     says: Option<String>,
-    /// The bus to ask again and to go back onto: `At` the kept address, or `Found` by the
-    /// standard lookup at this path. `None` when there is nothing to go back onto.
-    back: Option<(Bus, String)>,
+    /// The bus to ask again and to go back onto: `At` the kept address, or the `Default` one.
+    /// `None` when there is nothing to go back onto.
+    back: Option<Bus>,
+    /// `$XDG_RUNTIME_DIR`, where the default bus is asked.
+    runtime: Option<std::path::PathBuf>,
     /// Whether it answered when it was asked again.
     answers: std::sync::atomic::AtomicBool,
     /// The bus the operator asked to start again on, once they have.
@@ -371,18 +394,16 @@ impl SessionBus {
             return Self {
                 says: None,
                 back: None,
+                runtime: None,
                 answers: false.into(),
                 restart: std::sync::Mutex::default(),
             };
         }
         let kept = kept.unwrap_or_default();
         let back = if kept.is_empty() {
-            runtime
-                .map(|dir| dir.join("bus"))
-                .filter(|bus| bus.exists())
-                .map(|bus| (Bus::Found, format!("unix:path={}", bus.display())))
+            Some(Bus::Default).filter(|bus| bus.where_to_ask(runtime).is_some())
         } else {
-            Some((Bus::At(kept.to_owned()), kept.to_owned()))
+            Some(Bus::At(kept.to_owned()))
         };
         let why = if back.is_some() {
             format!(
@@ -396,14 +417,15 @@ impl SessionBus {
         Self {
             says: Some(format!("{why} {WHAT_IS_OFF}")),
             back,
+            runtime: runtime.map(std::path::Path::to_path_buf),
             answers: false.into(),
             restart: std::sync::Mutex::default(),
         }
     }
 
     /// What the window draws: nothing on a launch with the bus.
-    pub fn now(&self) -> Option<WithoutTheBus> {
-        self.says.as_ref().map(|says| WithoutTheBus {
+    pub fn now(&self) -> Option<BusNotice> {
+        self.says.as_ref().map(|says| BusNotice {
             says: says.clone(),
             can_restart: self.back_onto().is_some(),
         })
@@ -411,7 +433,9 @@ impl SessionBus {
 
     /// The address to ask again after the launch, when there is a bus to go back onto.
     pub fn where_to_ask_again(&self) -> Option<String> {
-        self.back.as_ref().map(|(_, address)| address.clone())
+        self.back
+            .as_ref()
+            .and_then(|bus| bus.where_to_ask(self.runtime.as_deref()))
     }
 
     /// The bus answered when it was asked again.
@@ -423,9 +447,8 @@ impl SessionBus {
     /// The bus a restart goes back onto: only one that has answered.
     pub fn back_onto(&self) -> Option<Bus> {
         self.back
-            .as_ref()
+            .clone()
             .filter(|_| self.answers.load(std::sync::atomic::Ordering::SeqCst))
-            .map(|(bus, _)| bus.clone())
     }
 
     /// The operator asked to start again on the bus: refused unless it has answered.
@@ -454,9 +477,10 @@ impl SessionBus {
 /// The event the window hears when the kept bus answers after the launch.
 pub const ANSWERS: &str = "session-bus://answers";
 
-/// Asks the kept bus once more, off the main thread, a little after the launch: a portal that
-/// was only slow — right after login, a cold disk — has come up by now. When it answers the
-/// window is told, and offers the restart; nothing restarts by itself.
+/// Asks the kept bus again, off the main thread, after each of [`ASKED_AGAIN_AFTER`]'s waits
+/// until it answers: a portal that was only slow — right after login, a cold disk — has come up
+/// by then. When it answers the window is told, and offers the restart; nothing restarts by
+/// itself.
 #[cfg(target_os = "linux")]
 pub fn listen_again(app: &tauri::AppHandle) {
     use tauri::{Emitter, Manager};
@@ -468,8 +492,11 @@ pub fn listen_again(app: &tauri::AppHandle) {
     let _ = std::thread::Builder::new()
         .name("charter-portal-asked-again".into())
         .spawn(move || {
-            std::thread::sleep(ASKED_AGAIN_AFTER);
-            if listen(Some(&address), ASKED_AGAIN_FOR) != Heard::Answer {
+            let answered =
+                ask_until_answered(&ASKED_AGAIN_AFTER, &mut std::thread::sleep, &mut || {
+                    listen(Some(&address), ASKED_AGAIN_FOR)
+                });
+            if !answered {
                 return;
             }
             eprintln!(
@@ -487,7 +514,7 @@ pub fn listen_again(app: &tauri::AppHandle) {
 /// What the window says about this launch and the session bus: nothing, on a launch with it.
 #[tauri::command]
 #[specta::specta]
-pub fn session_bus(bus: tauri::State<'_, SessionBus>) -> Option<WithoutTheBus> {
+pub fn session_bus(bus: tauri::State<'_, SessionBus>) -> Option<BusNotice> {
     bus.now()
 }
 
@@ -506,14 +533,32 @@ pub fn restart_on_the_session_bus(
     Ok(())
 }
 
+/// Waits each of `waits` in turn and asks after it, until an ask is answered. Whether one was.
+pub fn ask_until_answered(
+    waits: &[Duration],
+    wait: &mut dyn FnMut(Duration),
+    ask: &mut dyn FnMut() -> Heard,
+) -> bool {
+    waits.iter().any(|&after| {
+        wait(after);
+        ask() == Heard::Answer
+    })
+}
+
 /// At `Exit`, after everything else has let go: the launch the operator asked for, if any.
 pub fn restart_if_asked(bus: &SessionBus) {
+    restart_if_asked_with(bus, &mut |onto| {
+        this_launch_again(onto)
+            .and_then(|mut again| charter_core::forklock::spawn(&mut again).map(drop))
+    });
+}
+
+/// [`restart_if_asked`], with the start handed in so a test can watch it.
+fn restart_if_asked_with(bus: &SessionBus, start: &mut dyn FnMut(&Bus) -> std::io::Result<()>) {
     let Some(onto) = bus.restart_wanted() else {
         return;
     };
-    let started = this_launch_again(&onto)
-        .and_then(|mut again| charter_core::forklock::spawn(&mut again).map(drop));
-    if let Err(why) = started {
+    if let Err(why) = start(&onto) {
         eprintln!("charter: could not start again on the session bus ({why}); start charter again");
     }
 }
@@ -670,10 +715,7 @@ mod tests {
             bus_of(&without),
             [
                 (SESSION_BUS_KEPT.to_owned(), Some(RUN_USER_BUS.to_owned())),
-                (
-                    "DBUS_SESSION_BUS_ADDRESS".to_owned(),
-                    Some(NO_SESSION_BUS.to_owned())
-                ),
+                (SESSION_BUS.to_owned(), Some(NO_SESSION_BUS.to_owned())),
             ]
         );
         assert_eq!(
@@ -689,17 +731,14 @@ mod tests {
             bus_of(&again(&Bus::At(AUTOLAUNCHED.to_owned()))),
             [
                 (SESSION_BUS_KEPT.to_owned(), None),
-                (
-                    "DBUS_SESSION_BUS_ADDRESS".to_owned(),
-                    Some(AUTOLAUNCHED.to_owned())
-                ),
+                (SESSION_BUS.to_owned(), Some(AUTOLAUNCHED.to_owned())),
             ]
         );
         assert_eq!(
-            bus_of(&again(&Bus::Found)),
+            bus_of(&again(&Bus::Default)),
             [
                 (SESSION_BUS_KEPT.to_owned(), None),
-                ("DBUS_SESSION_BUS_ADDRESS".to_owned(), None),
+                (SESSION_BUS.to_owned(), None),
             ]
         );
     }
@@ -723,7 +762,7 @@ mod tests {
             told.says.contains("desktop portal did not answer"),
             "{told:?}"
         );
-        for off in ["tray icon", "notifications", "second launch"] {
+        for off in ["tray icon", "notifications", "second launch", "keyring"] {
             assert!(told.says.contains(off), "{off} is not named: {told:?}");
         }
         assert!(!told.can_restart, "{told:?}");
@@ -773,7 +812,7 @@ mod tests {
             ))
         );
         found.answered();
-        assert_eq!(found.back_onto(), Some(Bus::Found));
+        assert_eq!(found.back_onto(), Some(Bus::Default));
 
         let nowhere = tempfile::tempdir().expect("a directory");
         let none = SessionBus::of(Some(NO_SESSION_BUS), Some(""), Some(nowhere.path()));
@@ -796,6 +835,92 @@ mod tests {
             Some("c157283747a2ad020fa749a86abd2fb4")
         );
         assert_eq!(machine_id(&[&etc, &dir.path().join("none")]), None);
+    }
+
+    #[test]
+    fn the_bus_is_asked_again_with_growing_waits_until_it_answers() {
+        let mut waited = Vec::new();
+        let mut heard = [Heard::Silence, Heard::Answer].into_iter();
+
+        let answered = ask_until_answered(
+            &ASKED_AGAIN_AFTER,
+            &mut |wait| waited.push(wait),
+            &mut || heard.next().expect("asked once too often"),
+        );
+
+        assert!(answered);
+        assert_eq!(waited, ASKED_AGAIN_AFTER[..2]);
+    }
+
+    #[test]
+    fn a_bus_that_never_answers_is_asked_each_time_and_then_left_alone() {
+        let mut asked = 0;
+
+        let answered = ask_until_answered(&ASKED_AGAIN_AFTER, &mut |_| {}, &mut || {
+            asked += 1;
+            Heard::Silence
+        });
+
+        assert!(!answered);
+        assert_eq!(asked, ASKED_AGAIN_AFTER.len());
+        assert!(ASKED_AGAIN_AFTER.len() > 1, "only one ask after the launch");
+        assert!(
+            ASKED_AGAIN_AFTER.windows(2).all(|w| w[0] < w[1]),
+            "the waits do not back off"
+        );
+    }
+
+    #[test]
+    fn at_exit_the_launch_on_the_bus_is_started_only_when_the_operator_asked() {
+        let bus = SessionBus::of(Some(NO_SESSION_BUS), Some(RUN_USER_BUS), None);
+        let mut started = Vec::new();
+
+        restart_if_asked_with(&bus, &mut |onto| {
+            started.push(onto.clone());
+            Ok(())
+        });
+        bus.answered();
+        restart_if_asked_with(&bus, &mut |onto| {
+            started.push(onto.clone());
+            Ok(())
+        });
+        assert_eq!(started, [], "started without the operator asking");
+
+        bus.restart_asked().expect("the operator's restart");
+        restart_if_asked_with(&bus, &mut |onto| {
+            started.push(onto.clone());
+            Ok(())
+        });
+
+        assert_eq!(started, [Bus::At(RUN_USER_BUS.to_owned())]);
+    }
+
+    #[test]
+    fn each_bus_says_where_it_is_asked() {
+        let runtime = tempfile::tempdir().expect("a directory");
+        std::fs::write(runtime.path().join("bus"), "").expect("a socket's stand-in");
+        let nowhere = tempfile::tempdir().expect("a directory");
+
+        assert_eq!(
+            Bus::At(RUN_USER_BUS.to_owned()).where_to_ask(None),
+            Some(RUN_USER_BUS.to_owned())
+        );
+        assert_eq!(
+            Bus::Default.where_to_ask(Some(runtime.path())),
+            Some(format!(
+                "unix:path={}",
+                runtime.path().join("bus").display()
+            ))
+        );
+        assert_eq!(Bus::Default.where_to_ask(Some(nowhere.path())), None);
+        assert_eq!(Bus::Default.where_to_ask(None), None);
+        assert_eq!(
+            Bus::Without {
+                kept: RUN_USER_BUS.to_owned()
+            }
+            .where_to_ask(None),
+            None
+        );
     }
 
     #[test]

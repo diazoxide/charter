@@ -28,7 +28,7 @@ import {
   type RelaunchQuestion,
 } from "./bindings";
 import { UnsavedMark } from "./SavingView";
-import { SessionBusNotice } from "./WithoutTheBus";
+import { SessionBusNotice } from "./SessionBusNotice";
 import { tellSaved, useRepoSaving } from "./saving";
 import {
   catalogue,
@@ -1454,7 +1454,7 @@ function App() {
       )}
 
       {/* A launch without the session bus, and what that run has not got (charter#746). */}
-      <SessionBusNotice />
+      <SessionBusNotice chats={ending} />
 
       {/* A project the last quit had open that charter would not take back. A line, never an
           error dialog: the record is a convenience and the project is the truth (ADR 0033).

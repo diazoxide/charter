@@ -373,7 +373,8 @@ export function UpdateItem({
 }
 
 /**
- * What Restart to update asks when a chat could be mid-turn: restart now, or wait.
+ * What a restart asks when a chat could be mid-turn: restart now, or wait. Restart to update
+ * asks it, and so does the restart onto the session bus (`SessionBusNotice.tsx`).
  *
  * The quit warning's rows and sentences (`QuitWarning.tsx`), because it is the same act for
  * those chats — they are ended — with one difference the words carry: the restart offers them
@@ -387,14 +388,17 @@ export function UpdateItem({
  * also closes the dialog, and closing is this dialog's Wait. The list is live: a chat that
  * finishes its turn while this is up leaves it.
  */
-function MidTurn({
+export function MidTurn({
   chats,
   onWait,
   onRestart,
+  title = "Restart to update",
 }: {
   chats: readonly Ending[];
   onWait: () => void;
   onRestart: () => void;
+  /** Which restart it is: to update, or onto the session bus (`SessionBusNotice.tsx`). */
+  title?: string;
 }) {
   return (
     <AlertDialog.Root
@@ -406,7 +410,7 @@ function MidTurn({
       <AlertDialog.Portal>
         <AlertDialog.Overlay className="asking" />
         <AlertDialog.Content className="warning" aria-describedby="restart-mid-turn-said">
-          <AlertDialog.Title>Restart to update</AlertDialog.Title>
+          <AlertDialog.Title>{title}</AlertDialog.Title>
           <EndingList chats={chats} />
           <AlertDialog.Description asChild>
             <div id="restart-mid-turn-said">

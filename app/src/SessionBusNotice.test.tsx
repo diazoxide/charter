@@ -4,8 +4,9 @@ import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
-import type { WithoutTheBus } from "./bindings";
-import { SessionBusNotice } from "./WithoutTheBus";
+import type { BusNotice } from "./bindings";
+import type { Ending } from "./QuitWarning";
+import { SessionBusNotice } from "./SessionBusNotice";
 
 /**
  * **A launch without the session bus says so in the window** (charter#746).
@@ -16,29 +17,38 @@ import { SessionBusNotice } from "./WithoutTheBus";
  * clicked an icon never sees.
  */
 
-const SILENT: WithoutTheBus = {
-  says:
-    "charter started without the session bus: the desktop portal did not answer on it within " +
-    "300 ms. For this run there is no tray icon and no desktop notifications, and a second " +
-    "launch is refused instead of being handed to this one — charter-app#24.",
+/** What the core says; the tests below look for keywords, never the whole sentence. */
+const SILENT: BusNotice = {
+  says: "No tray icon, no notifications, and a second launch is refused.",
   can_restart: false,
 };
+const ANSWERS: BusNotice = { ...SILENT, can_restart: true };
 
 const RESTART = "Restart with the full desktop integration";
 
-function core(notice: WithoutTheBus | null): { asked: string[] } {
+const MID_TURN: Ending = {
+  key: "p:1",
+  name: "refactor",
+  harness: "claude-code",
+  cwd: null,
+  state: "running",
+};
+
+function core(notice: BusNotice | null): { asked: string[] } {
   const asked: string[] = [];
   mockIPC(
     (cmd) => {
       asked.push(cmd);
       if (cmd === "session_bus") return notice;
-      if (cmd === "restart_on_the_session_bus") return null;
       return null;
     },
     { shouldMockEvents: true },
   );
   return { asked };
 }
+
+/** The core saying the kept bus answers now. */
+const busAnswers = () => act(() => emit("session-bus://answers", ANSWERS));
 
 afterEach(() => {
   cleanup();
@@ -65,9 +75,8 @@ describe("the notice about a launch without the session bus", () => {
     render(<SessionBusNotice />);
 
     const notice = await screen.findByRole("status");
-    expect(notice.textContent).toContain("no tray icon");
+    expect(notice.textContent).toContain("tray icon");
     expect(notice.textContent).toContain("notifications");
-    expect(notice.textContent).toContain("second launch");
     expect(screen.queryByRole("button", { name: RESTART })).toBeNull();
   });
 
@@ -76,11 +85,30 @@ describe("the notice about a launch without the session bus", () => {
     render(<SessionBusNotice />);
     await screen.findByRole("status");
 
-    await act(() => emit("session-bus://answers", { ...SILENT, can_restart: true }));
+    await busAnswers();
 
     const restart = await screen.findByRole("button", { name: RESTART });
     expect(asked).not.toContain("restart_on_the_session_bus");
     await userEvent.click(restart);
+    await waitFor(() => expect(asked).toContain("restart_on_the_session_bus"));
+  });
+
+  it("asks first when a chat could be mid-turn, and waiting restarts nothing", async () => {
+    const { asked } = core(SILENT);
+    render(<SessionBusNotice chats={[MID_TURN]} />);
+    await screen.findByRole("status");
+    await busAnswers();
+
+    await userEvent.click(await screen.findByRole("button", { name: RESTART }));
+
+    const ask = await screen.findByRole("alertdialog");
+    expect(ask.textContent).toContain("refactor");
+    await userEvent.click(screen.getByRole("button", { name: "Wait" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(asked).not.toContain("restart_on_the_session_bus");
+
+    await userEvent.click(screen.getByRole("button", { name: RESTART }));
+    await userEvent.click(await screen.findByRole("button", { name: "Restart now" }));
     await waitFor(() => expect(asked).toContain("restart_on_the_session_bus"));
   });
 
@@ -92,5 +120,24 @@ describe("the notice about a launch without the session bus", () => {
     await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
 
     expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("comes back with the offer when the bus answers after it was dismissed", async () => {
+    core(SILENT);
+    render(<SessionBusNotice />);
+    await screen.findByRole("status");
+    await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+
+    await busAnswers();
+
+    expect(await screen.findByRole("button", { name: RESTART })).toBeTruthy();
+  });
+
+  it("puts both of its buttons in the tab order", async () => {
+    core(ANSWERS);
+    render(<SessionBusNotice />);
+
+    for (const name of [RESTART, "Dismiss"])
+      expect((await screen.findByRole("button", { name })).getAttribute("tabindex")).toBe("0");
   });
 });

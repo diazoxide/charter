@@ -78,8 +78,15 @@ pub fn while_descriptors_are_made<T>(make: impl FnOnce() -> T) -> T {
 }
 
 /// Starts `command`, as [`Command::spawn`] does, without a terminal half-open anywhere.
+///
+/// It is also where a program the app starts is put back on the session bus the app was given
+/// when the app runs without it ([`crate::chatenv::onto_the_kept_bus`], charter#746).
 #[allow(clippy::disallowed_methods, reason = "this is the one allowed fork")]
 pub fn spawn(command: &mut Command) -> io::Result<Child> {
+    crate::chatenv::onto_the_kept_bus(
+        command,
+        std::env::var_os(crate::chatenv::SESSION_BUS_KEPT).as_deref(),
+    );
     let _held = FORKING.read().unwrap_or_else(PoisonError::into_inner);
     command.spawn()
 }

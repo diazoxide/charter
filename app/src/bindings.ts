@@ -1222,6 +1222,14 @@ export type Build =
 /**  A version with no section and no prerelease suffix. A local build of `main` is one. */
 { kind: "unlisted" };
 
+/**  What the window is told about a launch without the session bus. */
+export type BusNotice = {
+	/**  The line it draws: why there is no bus, and what is off for the run. */
+	says: string,
+	/**  Whether the bus answers now, so a restart onto it is worth offering. */
+	can_restart: boolean,
+};
+
 /**
  *  A harness the operator started by hand in a shell tab, as the window draws its banner.
  * 
@@ -3134,14 +3142,6 @@ export type WindowTabs = {
 	 *  operator is not looking at, or holding none at all.
 	 */
 	active: number | null,
-};
-
-/**  What the window is told about a launch without the session bus. */
-export type WithoutTheBus = {
-	/**  The line it draws: why there is no bus, and what is off for the run. */
-	says: string,
-	/**  Whether the bus answers now, so a restart onto it is worth offering. */
-	can_restart: boolean,
 };
 
 /**
