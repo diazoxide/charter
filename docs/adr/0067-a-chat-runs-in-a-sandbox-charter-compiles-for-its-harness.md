@@ -120,9 +120,12 @@ opt-out in section 7 lifts them, and the audit records when it does.
    secret and hands it to the command it runs, so the approval gate that V15 sets (SD-37..SD-39)
    is enforced rather than advisory (SD-9). The `PreToolUse` guard stays, because it can explain
    a refusal and the sandbox cannot (gap G13).
-2. **Charter's integrity state is denied to chats:** the audit directory, the device key and the
-   hook spool. `charterd` is the only writer of each. A chat that could change them could change
-   the record of what it did.
+2. **Charter's integrity state is denied to chats:** the audit directory and the device key, and
+   every chat's hook spool but its own. `charterd` is the only writer of the first two. A chat's
+   hooks may append only to that chat's own spool, never to another chat's, and the host verifies
+   and seals each spool as it drains it ([ADR 0068](0068-a-chat-lives-in-charterd-and-the-app-is-its-client.md)
+   §6, corrected 2026-09-30 by ruling V22). A chat that could change them could change the record
+   of what it did.
 3. **Human powers are unreachable from a chat.** The credentials behind the terminal,
    fleet-MCP and approval client scopes are unreadable inside the sandbox. `charterd` also
    refuses those scopes to any connection from a chat's process tree, so an agent can never

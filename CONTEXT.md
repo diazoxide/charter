@@ -104,6 +104,11 @@ hostname is a label, never a key. The operator on a device is its **local princi
 (`local:<device>/<os-user>`), and charter never sends it anywhere without an account (ADR 0066).
 _Avoid_: host (that is `charterd`, the process), machine (in UI text), node
 
+**Session host** (`charterd`):
+The process that owns every chat's terminal on a device, one per OS user per device: the
+`charter` binary run as `charter serve`. The app is its client (ADR 0068).
+_Avoid_: daemon, server (in UI text), backend
+
 ### The window
 
 **Split window**:

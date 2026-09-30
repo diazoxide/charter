@@ -128,3 +128,10 @@ ADR 0018's core refusal carries over unchanged: **charter never parses a harness
 decide anything.** It draws the terminal, and it learns a session's state (running, waiting
 for you, done) only from the harness's hooks. A harness with no such hook shows "unknown",
 labelled as unknown, not guessed.
+
+## Amendment, 2026-09-30: one session host (accepted 2026-09-30)
+
+[ADR 0068](0068-a-chat-lives-in-charterd-and-the-app-is-its-client.md) (FD-2, from the operator's
+ruling Q2, accepted in ruling V22a) replaces the "No daemons" bullet above with its section 2,
+which says when the chats end now that `charterd`, a session host the app starts, holds them. The
+rest of this record stands.
