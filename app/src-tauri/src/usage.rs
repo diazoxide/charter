@@ -106,12 +106,7 @@ pub fn chat_usage(
 ) -> Result<Option<ChatUsage>, String> {
     let held = planes.held(&plane)?;
     // Copied out, so the board is not held across a file read.
-    let Some(conversation) = held
-        .hooks()
-        .board()
-        .conversation(session)
-        .map(str::to_owned)
-    else {
+    let Some(conversation) = held.board().conversation(session) else {
         return Ok(None);
     };
     Ok(of(held.root(), &conversation))

@@ -307,11 +307,11 @@ fn facts_of(held: &Held, session: u32) -> Result<Facts, String> {
         .into_iter()
         .find(|open| open.session == session)
         .ok_or_else(|| "That chat is not open any more.".to_owned())?;
-    let board = held.hooks().board();
+    let board = held.board().glance(session);
     Ok(Facts {
-        state: board.state(session),
-        asking: board.asking(session),
-        turns: board.turns(session),
+        state: board.state,
+        asking: board.asking,
+        turns: board.turns,
         resumed: matches!(open.how, Reopened::Resumed(_)),
         shell: open.harness.is_none() && open.profile.is_none(),
     })
@@ -399,8 +399,8 @@ pub(crate) fn reported_sending(
         return;
     }
     let ready = {
-        let board = held.hooks().board();
-        board.state(report.chat) == State::Waiting && !board.asking(report.chat)
+        let board = held.board().glance(report.chat);
+        board.state == State::Waiting && !board.asking
     };
     if !ready {
         return;

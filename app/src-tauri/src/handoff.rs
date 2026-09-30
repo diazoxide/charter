@@ -190,7 +190,7 @@ fn report_it(held: &Held, chat: u32, summary: &str) -> Result<Answer, String> {
     // next chat to start will read it, as it does for a parent that has closed.
     let parent_open = chats.iter().any(|open| open.session == from.chat)
         && !matches!(
-            held.hooks().board().state(from.chat),
+            held.board().glance(from.chat).state,
             charter_core::state::State::Done | charter_core::state::State::Failed
         );
     let to = if parent_open {

@@ -30,6 +30,8 @@ use charter_core::reopen::Choice;
 
 use crate::chats::Chats;
 use crate::hooks::{self, Hooks, Moved};
+use crate::host::{ChatBoard, SessionHost};
+use crate::sessions::{Reporting, Sessions};
 
 /// Which plane something is acting for.
 ///
@@ -225,7 +227,16 @@ impl Held {
         &self.root
     }
 
+    /// The plane's hook channel itself. Only a test asks: the app reads a chat's hook state
+    /// through [`Self::board`], and nothing else of the channel is its business.
+    #[cfg(test)]
     pub fn hooks(&self) -> &Hooks {
+        &self.hooks
+    }
+
+    /// What the host's board says about each chat (FD-3): the one way the app reads a chat's
+    /// hook state, or moves it.
+    pub fn board(&self) -> &dyn ChatBoard {
         &self.hooks
     }
 
@@ -282,7 +293,7 @@ impl Held {
         }
         if self
             .closing
-            .operator_typed(session, bytes, || self.hooks.board().asking(session))
+            .operator_typed(session, bytes, || self.board().glance(session).asking)
         {
             self.tell_smart_close(session, crate::smartclose::Phase::Cancelled);
         }
@@ -395,7 +406,7 @@ impl Held {
     /// asking. And off and told even when the session had already gone: either way the chat
     /// is gone from the app, and a window left believing otherwise is the defect.
     pub fn close_chat(&self, session: u32) -> Result<(), String> {
-        let gone = self.hooks.closed(session);
+        let gone = self.board().closed(session);
         lock_started(&self.started_on).remove(&session);
         self.typed.forget(session);
         // Closed by the operator's Close, or by its own record: either way nothing is owed.
@@ -411,7 +422,7 @@ impl Held {
     /// A chat `session` handed work to, shown as `from`, has reported back to it — a needs-you
     /// item now — and the window is told (charter-app#259). Nothing is typed into the chat.
     pub fn reported_back(&self, session: u32, from: &str) {
-        if let Some(moved) = self.hooks.reported_back(session, from) {
+        if let Some(moved) = self.board().reported_back(session, from) {
             (self.tell)(moved);
         }
     }
@@ -424,10 +435,10 @@ impl Held {
     /// window would be undone by the next move of any chat. On the board it lasts exactly as
     /// long as the request does: the chat's next `Stop` or `Notification` asks again.
     ///
-    /// The snapshot is built under the board's hold (`Hooks::ignored`), and numbered there,
+    /// The snapshot is built under the board's hold (`ChatBoard::ignored`), and numbered there,
     /// so a report racing it is put in order by the window rather than by which thread won.
     pub fn ignore_needs_you(&self, session: u32) {
-        (self.tell)(self.hooks.ignored(session));
+        (self.tell)(self.board().ignored(session));
     }
 
     /// Writes the record, ends every session, and stops listening — everything a plane holds
@@ -478,7 +489,6 @@ impl Held {
     /// a chat that is plainly in another workspace is left out.
     pub fn mid_turn_in(&self, workspace: &str) -> Vec<String> {
         let on_disk = charter_core::workspaces::Plane::open(&self.root);
-        let board = self.hooks.shared_board();
         self.chats
             .open_now()
             .into_iter()
@@ -489,7 +499,7 @@ impl Held {
                     .is_none_or(|there| there == workspace)
             })
             .filter(|open| {
-                hooks::held_board(&board).state(open.session) == charter_core::state::State::Running
+                self.board().glance(open.session).state == charter_core::state::State::Running
             })
             .map(|open| open.label.clone().unwrap_or(open.name))
             .collect()
@@ -562,7 +572,13 @@ pub struct Planes {
     smart: crate::smartclose::Teller,
     /// The launch's question and its answer — see [`Relaunching`].
     relaunching: Mutex<Relaunching>,
+    /// Makes each plane's session host (FD-3): [`Sessions`] in the app, told where its chats
+    /// report.
+    hosting: Hosting,
 }
+
+/// Makes a plane's session host, given where its chats are to report.
+pub type Hosting = Arc<dyn Fn(Option<Reporting>) -> Box<dyn SessionHost> + Send + Sync>;
 
 /// Where the launch's question stands (charter-app#250): what it holds back until the
 /// operator answers, and what the answer was.
@@ -623,7 +639,15 @@ impl Planes {
             by_hand: Arc::new(|_| {}),
             smart: Arc::new(|_| {}),
             relaunching: Mutex::new(Relaunching::default()),
+            hosting: Arc::new(|reporting| Box::new(Sessions::reporting_to(reporting))),
         }
+    }
+
+    /// Runs every plane's sessions on the hosts `hosting` makes, rather than in this process.
+    #[cfg(test)]
+    pub fn running_sessions_on(mut self, hosting: Hosting) -> Self {
+        self.hosting = hosting;
+        self
     }
 
     /// Tells `arrivals` whenever a handoff opens a chat, so the window can put it on a strip.
@@ -710,7 +734,7 @@ impl Planes {
         // A handoff from one of this plane's chats is answered by this plane, which is the
         // only one holding the asking chat's record. A `Weak`, because the plane holds the
         // socket that holds this answer: a strong handle would keep a closed plane alive.
-        held.hooks().answer_with({
+        held.hooks.answer_with({
             let held = Arc::downgrade(&held);
             let plane = id.clone();
             let tickets = charter_core::hookwire::Tickets::default();
@@ -726,7 +750,7 @@ impl Planes {
         });
         // A curation chat's prompt is typed when its harness reports its start (ADR 0061), and
         // the socket's thread is where that report arrives. Weak for the handoff's reason.
-        held.hooks().when_heard({
+        held.hooks.when_heard({
             let held = Arc::downgrade(&held);
             Arc::new(move |report| {
                 let Some(strong) = held.upgrade() else { return };
@@ -737,7 +761,7 @@ impl Planes {
         });
         // A smart close queued for its chat's turn to end is sent then, and one whose record is
         // saved closes its tab (ADR 0064). Weak for the handoff's reason.
-        held.hooks().when_reported({
+        held.hooks.when_reported({
             let held = Arc::downgrade(&held);
             Arc::new(move |report| {
                 if let Some(held) = held.upgrade() {
@@ -745,7 +769,7 @@ impl Planes {
                 }
             })
         });
-        held.hooks().when_saved({
+        held.hooks.when_saved({
             let held = Arc::downgrade(&held);
             Arc::new(move |saved| {
                 if let Some(held) = held.upgrade() {
@@ -756,7 +780,7 @@ impl Planes {
         // The conversation a chat's own harness moves it onto — the first one Codex or
         // opencode names, a Claude Code `/clear` — is the one the record resumes it by (Q10).
         // Weak for the handoff's reason.
-        held.hooks().when_it_follows({
+        held.hooks.when_it_follows({
             let held = Arc::downgrade(&held);
             Arc::new(move |session, id| {
                 if let Some(held) = held.upgrade() {
@@ -1283,9 +1307,9 @@ impl Planes {
             allowed: AtomicBool::new(false),
         });
         let writes = Arc::clone(&records);
-        let mut chats = Chats::recorded_by_reporting_to(
+        let mut chats = Chats::on_host(
             Box::new(move |record| writes.write(record)),
-            reporting,
+            (self.hosting)(reporting),
         );
         chats.arming_with(self.shipped.clone());
 
@@ -1339,7 +1363,7 @@ impl Planes {
             let smart = Arc::clone(&self.smart);
             chats
                 .sessions()
-                .when_one_ends(Box::new(move |session, exit| {
+                .when_one_ends(Arc::new(move |session, exit| {
                     // A curation prompt still waiting is for a chat that is gone: never typed.
                     typed.forget(session);
                     // A chat that ended on its own while it wrapped up wrote no record, and the
@@ -2060,7 +2084,10 @@ fn resolving_with(
 
 #[cfg(test)]
 mod tests {
+    use charter_core::state::State;
+
     use super::*;
+    use crate::host::pretend::Pretend;
 
     fn planes() -> Planes {
         Planes::telling(Arc::new(|_: Moved| {}), crate::Shipped::default(), None)
@@ -5141,6 +5168,48 @@ mod tests {
             Vec::<u32>::new(),
             "the chat's program has ended and the window still shows it needing you"
         );
+    }
+
+    // --- the plane on a session host of its own (FD-3) --------------------------------- //
+
+    /// Planes whose every session runs on `host`, which runs nothing.
+    fn planes_on(host: &Pretend) -> (Planes, Arc<Mutex<Vec<Moved>>>) {
+        let (planes, told) = planes_telling();
+        let host = host.clone();
+        let planes = planes.running_sessions_on(Arc::new(move |_| Box::new(host.clone())));
+        (planes, told)
+    }
+
+    #[test]
+    fn a_program_the_host_says_has_failed_is_failed_on_the_board_and_the_window_is_told() {
+        // No pty anywhere: the exit arrives only through `SessionHost::when_one_ends`, and the
+        // state is read only through `ChatBoard`. That is the seam charterd will sit behind.
+        let dir = tempfile::tempdir().expect("a directory");
+        let host = Pretend::default();
+        let (planes, told) = planes_on(&host);
+        let plane = planes.open(&a_plane(&dir.path().join("plane")));
+        let held = planes.held(&plane).expect("it is held");
+        let session = held
+            .chats()
+            .start(&one_chat_on("/nowhere/a-harness").chats[0], STARTING)
+            .expect("the host starts it");
+        assert_eq!(
+            host.asked(),
+            vec![(session, "/nowhere/a-harness".to_owned())]
+        );
+        assert_ne!(held.board().glance(session).state, State::Failed);
+
+        host.program_ends(session, charter_core::session::Exit::Code(3));
+
+        assert_eq!(held.board().glance(session).state, State::Failed);
+        let last = told
+            .lock()
+            .expect("the log")
+            .iter()
+            .rfind(|moved| moved.session == session)
+            .cloned()
+            .expect("the window was told");
+        assert_eq!(last.state, "failed");
     }
 
     #[cfg(unix)]

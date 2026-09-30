@@ -1331,7 +1331,7 @@ fn chat_states(planes: tauri::State<'_, Planes>, plane: PlaneId) -> Result<Vec<M
         .chats()
         .open_now()
         .into_iter()
-        .map(|open| held.hooks().now(open.session))
+        .map(|open| held.board().now(open.session))
         .collect())
 }
 
