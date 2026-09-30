@@ -80,11 +80,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Tauri's Linux build dependencies
+      - name: Tauri's Linux build dependencies, and an X server and i3 to start it in
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xvfb xauth dbus-x11 i3
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master, 2026-09-12
         with:
           toolchain: stable
@@ -98,6 +98,20 @@ jobs:
         working-directory: app
       - run: npx tauri build --debug --no-bundle
         working-directory: app
+      # Cold start against the spec's 2 s limit on Linux (charter-app#24, program map FR-8).
+      # This runner IS the issue's machine: its session bus is up and can activate a desktop
+      # portal that cannot start, which cost 26-31 s before the app asked the portal first
+      # (`portal.rs`). A debug build on a shared runner, so the numbers are an upper bound on
+      # what a release build does; five launches each, and the p50 is held to the limit.
+      - name: Cold start on X, on the runner's own session bus (charter-app#24's machine)
+        if: runner.os == 'Linux'
+        run: tools/coldstart-linux.sh bare
+      - name: Cold start on i3 under X11, on the runner's own session bus
+        if: runner.os == 'Linux'
+        run: tools/coldstart-linux.sh i3
+      - name: Cold start on i3 under X11 with no session bus, as startx into i3
+        if: runner.os == 'Linux'
+        run: tools/coldstart-linux.sh i3-nobus
 
   # What the Python charter answered, frozen: every scenario the old differential ran, and the
   # generated cases of the shell reader and the plane-root guards, replayed against this build
@@ -208,10 +222,9 @@ jobs:
       # `dbus-run-session` because a Linux desktop has a WORKING session bus and this runner
       # does not. The runner has one — that was the wrong description, and charter-app#24's
       # own title was wrong the same way — but its desktop portal is activatable and cannot
-      # start, so `Builder::build()` waits out D-Bus's 25 s and then WebKitGTK's 5 before the
-      # app ever reaches its chats. (A machine with NO session bus starts in under 0.6 s:
-      # every call fails at once.) That cost is real, it is filed separately, and it is not
-      # what this test is for.
+      # start. The app now notices that in 300 ms and starts without the bus (`portal.rs`),
+      # which takes single-instance with it; this test is about a relaunch on a desktop whose
+      # bus works, so it gets one.
       - name: Reopening what was open, across a real relaunch
         run: dbus-run-session -- xvfb-run -a npm run e2e:relaunch
         if: runner.os == 'Linux'

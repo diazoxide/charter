@@ -9,12 +9,13 @@
 //! gives up after its default 25 s. WebKitGTK then asks the same portal for the colour
 //! scheme and gives up after its own 5 s.
 //!
-//! **charter makes neither call**, and the one lever it has is process-wide — start with no
-//! session bus — which would take single-instance, the tray and notifications with it. ADR
-//! 0026's amendment records that trade and hands the fix to M4.
+//! **charter makes neither call.** What it does now is ask the bus first (`portal.rs`): a
+//! portal still silent after 300 ms starts the launch again without the session bus, which
+//! comes up in under a second. So a Linux launch that still passes the limit is one whose
+//! portal answered that question and stalled later, or one slow for some other reason.
 //!
-//! What is left is the part charter owes the operator either way: **do not make them sit in
-//! front of nothing.** So a launch that passes the limit says so, twice, on the only two
+//! Either way charter owes the operator one thing: **do not make them sit in front of
+//! nothing.** So a launch that passes the limit says so, twice, on the only two
 //! channels that exist:
 //!
 //! - on standard error while it is still waiting, which is what a terminal launch, a `.desktop`
@@ -89,7 +90,9 @@ fn the_known_cause(os: &str) -> Option<&'static str> {
         "The cause charter has measured on Linux is a desktop portal that cannot start: GTK \
          asks the session bus for org.freedesktop.portal.Desktop and D-Bus gives up after 25 \
          s, then WebKitGTK asks it for the colour scheme and gives up after 5 more. charter \
-         makes neither call — charter-app#24.",
+         asks the bus first and starts without it when the portal is silent, but a portal \
+         that answers and then stalls gets past that. To start without the session bus: \
+         DBUS_SESSION_BUS_ADDRESS=unix:path=/dev/null charter — charter-app#24.",
     )
 }
 
@@ -170,6 +173,10 @@ mod tests {
 
         assert!(linux.contains("portal"), "{linux}");
         assert!(linux.contains("charter-app#24"), "{linux}");
+        assert!(
+            linux.contains("DBUS_SESSION_BUS_ADDRESS=unix:path=/dev/null charter"),
+            "the operator is not told the way around it: {linux}"
+        );
         assert!(
             !mac.contains("portal"),
             "macOS was told about a wait it cannot have: {mac}"

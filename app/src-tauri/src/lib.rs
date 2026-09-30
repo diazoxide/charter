@@ -17,6 +17,9 @@ mod handoff;
 mod harness_plugins;
 mod heard;
 mod hooks;
+// Called on Linux alone, where the session bus can be missing; its tests run everywhere.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+mod instance;
 mod ipc;
 mod lifecycle;
 mod live;
@@ -28,6 +31,8 @@ mod personas;
 mod pin;
 mod planes;
 mod planewatch;
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+mod portal;
 mod saving;
 mod sessions;
 mod settings;
@@ -1480,6 +1485,12 @@ pub fn run() {
     // out, where one that went to a standard error nobody reads was lost (charter-app#16).
     panics::record();
     reached("run() entered");
+    // Before anything touches GTK: a desktop portal the session bus is still trying to start
+    // costs GTK 25 s and WebKitGTK 5 more (charter-app#24). Asked here for 300 ms; when it is
+    // silent this does not return — the launch starts again in place without the bus.
+    #[cfg(target_os = "linux")]
+    portal::start_clear_of_a_silent_portal();
+    reached("the desktop portal is asked");
     let commands = commands();
 
     #[cfg(debug_assertions)]
@@ -1554,6 +1565,35 @@ pub fn run() {
         })
         .setup(|app| {
             reached("setup");
+            // One charter per user even without a session bus (`instance.rs`). After the
+            // single-instance plugin, which has already handed an ordinary second launch over;
+            // before the window and before any plane, whose hook socket `hookwire` removes
+            // when it is stale on the promise that no second app is running.
+            #[cfg(target_os = "linux")]
+            {
+                let fallback = app
+                    .path()
+                    .app_local_data_dir()
+                    .unwrap_or_else(|_| std::env::temp_dir());
+                let runtime = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from);
+                let lock =
+                    instance::path_for(&app.config().identifier, runtime.as_deref(), &fallback);
+                match instance::hold(&lock) {
+                    Ok(held) => {
+                        app.manage(instance::Instance::holding(held));
+                    }
+                    Err(instance::NotHeld::Taken) => {
+                        eprintln!("{}", instance::ALREADY_RUNNING);
+                        app.handle().cleanup_before_exit();
+                        std::process::exit(0);
+                    }
+                    Err(instance::NotHeld::Failed(why)) => eprintln!(
+                        "charter: could not take {} ({why}); going on without the guard \
+                         against a second charter",
+                        lock.display()
+                    ),
+                }
+            }
             // **The window, built here rather than by Tauri from the config, so it can be
             // handed the operator's layout and theme as it is created** (`windowprefs.rs`). Its
             // entry in `tauri.conf.json` says `"create": false` and is still the one source of
@@ -1757,6 +1797,10 @@ pub fn run() {
         // system, and one that ignores a hangup outlives the app that started it.
         .run(|app, event| {
             if matches!(event, tauri::RunEvent::Exit) {
+                // First, so a restart to update finds the lock free (`instance.rs`).
+                if let Some(instance) = app.try_state::<instance::Instance>() {
+                    instance.let_go();
+                }
                 // An extension's program still answering is killed with its whole process
                 // group, so that nothing an extension was asked to run outlives the window
                 // that asked (`charter_core::executor`).
