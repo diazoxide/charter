@@ -230,6 +230,25 @@ pub fn workspace_name_ok(name: &str) -> bool {
     segment_ok(name) && alphabet_ok(name)
 }
 
+/// `name` — a repo's, say (FR-4) — as a workspace name charter will mint: every character outside
+/// `[A-Za-z0-9._-]` becomes `-`, and whatever does not start with a letter or digit is cut
+/// from the front. `None` when nothing is left.
+pub fn workspace_name(name: &str) -> Option<String> {
+    let kept: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let trimmed = kept.trim_start_matches(|c: char| !c.is_ascii_alphanumeric());
+    let trimmed = trimmed.trim_end_matches(['.', '-']);
+    (!trimmed.is_empty() && workspace_name_ok(trimmed)).then(|| trimmed.to_owned())
+}
+
 /// The one name under `personas/` that is not a persona: the store every persona reads.
 pub const SHARED_PERSONA: &str = "_shared";
 
@@ -274,6 +293,15 @@ fn lowercase_alphabet_ok(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_repository_name_becomes_a_workspace_name_charter_will_mint() {
+        assert_eq!(workspace_name("svc").as_deref(), Some("svc"));
+        assert_eq!(workspace_name("My Repo").as_deref(), Some("My-Repo"));
+        assert_eq!(workspace_name(".dotfiles").as_deref(), Some("dotfiles"));
+        assert_eq!(workspace_name("émoji").as_deref(), Some("moji"));
+        assert_eq!(workspace_name("..."), None);
+    }
 
     #[test]
     fn an_ordinary_name_is_one_entry() {

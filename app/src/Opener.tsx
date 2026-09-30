@@ -35,6 +35,7 @@ export function Opener({
   onOpen,
   trouble,
   onOpenRepo,
+  onSignInToGitHub,
   openingRepo,
   repoTrouble,
 }: {
@@ -57,6 +58,8 @@ export function Opener({
   /** Opens a repository into the local project, for the first run. Left out, the first run is
    *  never drawn: the window passes it only until it has held a project. */
   onOpenRepo?: (path: string) => void;
+  /** Opens the local project with `gh auth login` in a shell tab, for the first run. */
+  onSignInToGitHub?: () => void;
   /** Whether that is happening right now. */
   openingRepo?: boolean;
   /** Why the last repository opened nothing. */
@@ -118,6 +121,7 @@ export function Opener({
       <FirstRun
         onOpenRepo={onOpenRepo}
         onOpenProject={() => setPassed(true)}
+        onSignInToGitHub={onSignInToGitHub ?? (() => undefined)}
         opening={openingRepo ?? false}
         trouble={repoTrouble}
       />

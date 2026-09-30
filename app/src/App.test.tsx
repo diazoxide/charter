@@ -191,9 +191,9 @@ describe("App", () => {
     render(<App />);
 
     // A machine that remembers no project gets the first run (FR-4), which asks for a
-    // repository and nothing else.
+    // repo and nothing else.
     expect(await screen.findByRole("heading", { level: 1 })).toHaveTextContent(
-      "Open a repository to start",
+      "Open a repo to start",
     );
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });

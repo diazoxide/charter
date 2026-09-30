@@ -175,16 +175,26 @@ function App() {
    */
   const [preferencesAsk, setPreferencesAsk] = useState<{ plane: PlaneId; at: number }>();
   /**
-   * The first chat a repository opened into the local project asks for (FR-4): which project,
-   * the workspace named after the repository, the clone the chat starts in, and a count, the
-   * shape `settingsAsk` has. The project's own `PlaneView` asks for the chat, because the
-   * picker and the tabs are its own.
+   * The first chat a repo opened into the local project asks for (FR-4): the workspace named
+   * after the repo, the clone the chat starts in, and a count, the shape `settingsAsk` has.
+   * `plane` is the project once it is open; until the trust question about it is answered it
+   * is `null` and `asking` names the path that question is about. The project's own
+   * `PlaneView` starts the chat, because the picker and the tabs are its own.
    */
-  const [firstChatAsk, setFirstChatAsk] = useState<{ plane: PlaneId } & FirstChat>();
-  /** The same, for a repository whose project had to be approved first: kept by the path the
-   *  trust question is about, and asked for once the operator has said yes. */
-  const firstChatAfterApproval = useRef(new Map<string, FirstChat>());
-  /** Whether a repository is being opened right now, and why the last one opened nothing. */
+  const [firstChat, setFirstChat] = useState<
+    FirstChat & { plane: PlaneId | null; asking: string | null }
+  >();
+  /**
+   * A shell tab asked for with a command already typed in it — `gh auth login`, from the first
+   * run's "Sign in to GitHub" (FR-4, W10) — in the same two stages as `firstChat`.
+   */
+  const [shellAsk, setShellAsk] = useState<{
+    plane: PlaneId | null;
+    asking: string | null;
+    typed: string;
+    at: number;
+  }>();
+  /** Whether a repo is being opened right now, and why the last one opened nothing. */
   const [openingRepo, setOpeningRepo] = useState(false);
   const [repoTrouble, setRepoTrouble] = useState<string>();
   /** Preferences asked for with no project in front: drawn where the opener is, because there
@@ -419,12 +429,13 @@ function App() {
     const plane = answer.data;
     setPlanes((was) => (was.includes(plane) ? was : [...was, plane]));
     setShowing({ at: "plane", plane });
-    // A repository opened into this project was waiting on this yes for its first chat.
-    const first = firstChatAfterApproval.current.get(ask.path);
-    if (first !== undefined) {
-      firstChatAfterApproval.current.delete(ask.path);
-      setFirstChatAsk((was) => ({ plane, ...first, at: (was?.at ?? 0) + 1 }));
-    }
+    // A repo opened into this project was waiting on this yes for its first chat.
+    setFirstChat((was) =>
+      was?.asking === ask.path ? { ...was, plane, asking: null, at: was.at + 1 } : was,
+    );
+    setShellAsk((was) =>
+      was?.asking === ask.path ? { ...was, plane, asking: null, at: was.at + 1 } : was,
+    );
   }, []);
 
   /** Lets go of one project. Its chats end, its record is written into it, and its tab goes.
@@ -554,9 +565,9 @@ function App() {
   }, []);
 
   /**
-   * Opens a repository into this machine's local project and asks for the first chat in it
+   * Opens a repo into this machine's local project and asks for the first chat in it
    * (FR-4, #603). Nothing asks where the project goes: the core makes it in charter's own
-   * directory when there is none, clones the repository into a workspace named after it, and
+   * directory when there is none, clones the repo into a workspace named after it, and
    * answers as `create_project` does — a project, or the trust question to ask first.
    *
    * Answers why nothing was opened, or `undefined` when something was, so the first run and the
@@ -569,20 +580,52 @@ function App() {
       .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
     setOpeningRepo(false);
     if (answer.status === "error") return answer.error;
-    const { opened, workspace, cwd } = answer.data;
-    const first: FirstChat = { workspace, cwd, at: 0 };
-    if (opened.plane === null) {
-      const ask = opened.ask;
-      if (ask) {
-        firstChatAfterApproval.current.set(ask.path, first);
+    const { opened, workspace, cwd, harness } = answer.data;
+    const plane = opened.plane;
+    const ask = opened.ask;
+    setFirstChat((was) => ({
+      workspace,
+      cwd,
+      harness,
+      plane,
+      asking: plane === null ? (ask?.path ?? null) : null,
+      at: (was?.at ?? 0) + 1,
+    }));
+    if (plane === null) {
+      if (ask)
         setApproving((queue) => (queue.some((q) => q.path === ask.path) ? queue : [...queue, ask]));
-      }
       return undefined;
     }
-    const plane = opened.plane;
     setPlanes((was) => (was.includes(plane) ? was : [...was, plane]));
     setShowing({ at: "plane", plane });
-    setFirstChatAsk((was) => ({ plane, ...first, at: (was?.at ?? 0) + 1 }));
+    return undefined;
+  }, []);
+
+  /**
+   * "Sign in to GitHub" on the first run (FR-4, W10's "detected and offered"): the local
+   * project is opened — made first when there is none, and through the trust gate — and
+   * `gh auth login` is typed into a shell tab at its root. `gh`'s own login, in a tab the
+   * operator can leave; nothing here asks anything.
+   */
+  const signInToGitHub = useCallback(async (): Promise<string | undefined> => {
+    const answer = await commands
+      .openLocalProject()
+      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+    if (answer.status === "error") return answer.error;
+    const { plane, ask } = answer.data;
+    setShellAsk((was) => ({
+      plane,
+      asking: plane === null ? (ask?.path ?? null) : null,
+      typed: "gh auth login",
+      at: (was?.at ?? 0) + 1,
+    }));
+    if (plane === null) {
+      if (ask)
+        setApproving((queue) => (queue.some((q) => q.path === ask.path) ? queue : [...queue, ask]));
+      return undefined;
+    }
+    setPlanes((was) => (was.includes(plane) ? was : [...was, plane]));
+    setShowing({ at: "plane", plane });
     return undefined;
   }, []);
 
@@ -1533,7 +1576,8 @@ function App() {
           settingsAsked={settingsAsk?.plane === plane ? settingsAsk.at : undefined}
           savingAsked={savingAsk?.plane === plane ? savingAsk.at : undefined}
           preferencesAsked={preferencesAsk?.plane === plane ? preferencesAsk.at : undefined}
-          firstChatAsked={firstChatAsk?.plane === plane ? firstChatAsk : undefined}
+          firstChatAsked={firstChat?.plane === plane ? firstChat : undefined}
+          shellAsked={shellAsk?.plane === plane ? shellAsk : undefined}
         />
       ))}
 
@@ -1587,6 +1631,10 @@ function App() {
                         void openRepo(path).then(setRepoTrouble);
                       }
                 }
+                onSignInToGitHub={() => {
+                  setRepoTrouble(undefined);
+                  void signInToGitHub().then(setRepoTrouble);
+                }}
                 openingRepo={openingRepo}
                 repoTrouble={repoTrouble}
               />

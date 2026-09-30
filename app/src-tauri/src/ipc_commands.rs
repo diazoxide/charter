@@ -45,6 +45,7 @@ macro_rules! app_commands {
                 opener::create_project,
                 firstrun::first_run_found,
                 firstrun::open_repo,
+                firstrun::open_local_project,
                 open_session,
                 close_session,
                 ignore_needs_you,

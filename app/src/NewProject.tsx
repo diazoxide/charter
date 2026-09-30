@@ -58,7 +58,7 @@ export function NewProject({
   trouble?: string;
   making: boolean;
   onCreate: (path: string, planeIsThisRepo: boolean, adopt: string) => void;
-  /** Opens a repository into this machine's local project (FR-4). */
+  /** Opens a repo into this machine's local project (FR-4). */
   onOpenRepo: (path: string) => void;
   /** Whether that is happening right now. */
   opening: boolean;
@@ -109,8 +109,8 @@ export function NewProject({
         >
           <Dialog.Title id="new-project">New project</Dialog.Title>
           <p className="came-back">
-            Pick a repository. charter opens it in a workspace of its own, in the project it keeps
-            on this machine. Nothing is written into the repository.
+            Pick a repo. charter opens it in a workspace of its own, in the project it keeps on this
+            machine. Nothing is written into your repo.
           </p>
 
           <form
@@ -120,7 +120,7 @@ export function NewProject({
               if (repo.trim() !== "" && !opening) onOpenRepo(repo.trim());
             }}
           >
-            <label htmlFor={repoAt}>Repository</label>
+            <label htmlFor={repoAt}>Repo</label>
             <div className="picking">
               <input
                 id={repoAt}
@@ -135,7 +135,7 @@ export function NewProject({
               <button
                 type="button"
                 tabIndex={0}
-                aria-label="Browse for the repository"
+                aria-label="Browse for the repo"
                 onClick={() => pick(setRepo)}
               >
                 Browse…
@@ -149,7 +149,7 @@ export function NewProject({
             )}
             <div className="doing">
               <button type="submit" tabIndex={0} disabled={repo.trim() === "" || opening}>
-                Open repository
+                Open repo
               </button>
               <button type="button" tabIndex={0} onClick={onCancel}>
                 Cancel
@@ -162,8 +162,8 @@ export function NewProject({
           <details className="advanced">
             <summary tabIndex={0}>Advanced</summary>
             <p className="came-back">
-              A project of its own: a control plane in a directory you choose, holding workspaces,
-              personas and the clones work happens in.
+              A project of its own, in a folder you choose, holding workspaces, personas and the
+              repos work happens in.
             </p>
             <form
               className="asks"

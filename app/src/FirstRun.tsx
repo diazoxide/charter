@@ -5,14 +5,20 @@ import { commands, type FirstRunFound, type ForgeRow, type HarnessRow } from "./
  * What a machine that has never opened a project sees (FR-4, #603).
  *
  * **One question, and it is not where the plane goes** (W10). charter keeps a local project in
- * its own directory, with no remote, and the operator is asked only for the repository to work
- * on. That repository becomes a workspace named after it, and the first chat starts in its
- * clone. Sharing the project with a team comes later, and nothing here mentions accounts, cloud
+ * its own directory, with no remote, and the operator is asked only for the repo to work on.
+ * That repo becomes a workspace named after it, and the first chat starts in its clone. The
+ * copy is ADR 0072's: a code repo is a "repo", the plane is a "project", and the line that
+ * says what a project is is the ADR's own. Sharing the project with a team comes later, and nothing here mentions accounts, cloud
  * or telemetry: none of them stands between a new machine and a working chat (G5, C2, B2).
  *
  * **What the machine has is shown, never asked about.** Which harnesses are installed and
  * signed in, and whether `gh` is: a harness that is not signed in still starts, and asks for
  * its own login in its own first screen, which is where that question belongs.
+ *
+ * **Signing in to GitHub is offered, not asked** (W10: "forge CLI auth detected and offered").
+ * A button beside `gh`'s row, when it is installed and not signed in, opens the local project
+ * and runs `gh auth login` in a shell tab there — `gh`'s own login, in a tab the operator can
+ * leave, so it adds nothing to the interrupt budget.
  *
  * The path box is there for the opener's reason: a native folder dialog cannot be driven by
  * the scenario tests, and an operator who knows the path types it faster than they click.
@@ -20,13 +26,16 @@ import { commands, type FirstRunFound, type ForgeRow, type HarnessRow } from "./
 export function FirstRun({
   onOpenRepo,
   onOpenProject,
+  onSignInToGitHub,
   opening,
   trouble,
 }: {
-  /** Asks the core to open this repository into the local project. */
+  /** Asks the core to open this repo into the local project. */
   onOpenRepo: (path: string) => void;
   /** Shows the ordinary opener, for a project that already exists. */
   onOpenProject: () => void;
+  /** Opens the local project with `gh auth login` running in a shell tab. */
+  onSignInToGitHub: () => void;
   /** Whether the core is cloning it right now, so it is not asked twice. */
   opening: boolean;
   /** Why the last attempt opened nothing — the core's words, all of them. */
@@ -42,7 +51,7 @@ export function FirstRun({
       .then((answer) => {
         if (!gone && answer.status === "ok") setFound(answer.data);
       })
-      // A machine charter could not look at still opens a repository.
+      // A machine charter could not look at still opens a repo.
       .catch(() => undefined);
     return () => {
       gone = true;
@@ -60,16 +69,17 @@ export function FirstRun({
 
   return (
     <section className="opener first-run" aria-labelledby="first-run-heading">
-      <h1 id="first-run-heading">Open a repository to start</h1>
+      <h1 id="first-run-heading">Open a repo to start</h1>
       <p className="came-back">
-        charter keeps a project for you on this machine and opens the repository in a workspace of
-        its own. Nothing is written into the repository.
+        charter has nothing saved on this machine yet. A project is where charter keeps your
+        workspaces, personas and memory: charter makes one for you, on this machine only, and opens
+        your repo in a workspace of its own. Nothing is written into your repo.
       </p>
 
       {/* `tabIndex={0}` on every button, per `docs/ui-primitives.md` (charter-app#189). */}
       <div className="doing">
         <button type="button" tabIndex={0} disabled={opening} onClick={pick}>
-          Open a repository…
+          Open a repo…
         </button>
       </div>
 
@@ -80,14 +90,14 @@ export function FirstRun({
           if (typed.trim() && !opening) onOpenRepo(typed.trim());
         }}
       >
-        <label htmlFor="first-run-path">Or type the repository&apos;s path</label>
+        <label htmlFor="first-run-path">Or type the repo&apos;s path</label>
         <input
           id="first-run-path"
           type="text"
           value={typed}
           autoComplete="off"
           spellCheck={false}
-          placeholder="/path/to/repository"
+          placeholder="/path/to/repo"
           onChange={(event) => setTyped(event.target.value)}
         />
         <button type="submit" tabIndex={0} disabled={!typed.trim() || opening}>
@@ -97,7 +107,7 @@ export function FirstRun({
 
       {opening && (
         <p className="came-back" role="status">
-          Cloning the repository into its workspace…
+          Copying your repo into its workspace…
         </p>
       )}
 
@@ -119,6 +129,14 @@ export function FirstRun({
             ))}
             <li>
               <span className="tab-name">{found.forge.cli}</span>: {forgeSays(found.forge)}
+              {found.forge.installed && !found.forge.signed_in && (
+                <>
+                  {" "}
+                  <button type="button" tabIndex={0} onClick={onSignInToGitHub}>
+                    Sign in to GitHub
+                  </button>
+                </>
+              )}
             </li>
           </ul>
         </>

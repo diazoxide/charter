@@ -39,11 +39,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - Codex and opencode chats are not started in a sandboxed plane yet.
 
 - **A first run that goes straight to a chat.** On a machine with no project, charter asks for
-  one thing, the repository to work on. It keeps a local project for you in its own directory
-  (`~/.config/charter/local-plane`, with no remote), clones the repository into a workspace
-  named after it, and opens the first chat there. It shows which harnesses are installed and
-  signed in, and whether `gh` is logged in, without asking about any of them. New project now
-  asks for a repository the same way, and the two-directory form is under Advanced (#603).
+  one thing: the repo to work on. It makes a project for you on this machine only
+  (`~/.config/charter/local-plane`, with no remote), copies your repo into a workspace named
+  after it, and opens the first chat there. When exactly one of Claude Code, Codex and opencode
+  is signed in, the chat starts on it without asking. The screen shows what is installed and
+  signed in, and offers **Sign in to GitHub**, which runs `gh auth login` in a shell tab. New
+  project asks for a repo the same way, and the two-folder form is under Advanced (#603).
 
 ### Fixed
 

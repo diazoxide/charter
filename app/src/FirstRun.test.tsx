@@ -9,8 +9,8 @@ import App from "./App";
  * The first run (FR-4, #603): a new machine reaches a working chat with no prompt about
  * accounts, cloud or telemetry.
  *
- * What the core does with the repository — the local plane in charter's own directory, the
- * workspace named after the repository, nothing written into it — is `charter_core::firstrun`'s
+ * What the core does with the repo — the local plane in charter's own directory, the
+ * workspace named after the repo, nothing written into it — is `charter_core::firstrun`'s
  * and is tested there against real directories. This is about the window: what it asks, what
  * it does not, and that the first chat starts in that workspace's clone.
  */
@@ -88,7 +88,12 @@ function core(answers: (cmd: string, args: Record<string, unknown>) => unknown =
     if (cmd === "recent_planes") return { planes: [], dropped: [], forgetful: null };
     if (cmd === "first_run_found") return FOUND;
     if (cmd === "open_repo")
-      return { opened: { plane: LOCAL, ask: null }, workspace: "widget", cwd: CLONE };
+      return {
+        opened: { plane: LOCAL, ask: null },
+        workspace: "widget",
+        cwd: CLONE,
+        harness: null,
+      };
     if (cmd === "plane_sidebar") return SIDEBAR;
     if (cmd === "start_options") return START_OPTIONS;
     if (cmd === "start_chat") return { session: 1, label: null };
@@ -103,24 +108,29 @@ function core(answers: (cmd: string, args: Record<string, unknown>) => unknown =
 
 async function openRepoByPath(path: string) {
   const person = userEvent.setup();
-  await person.type(await screen.findByLabelText("Or type the repository's path"), path);
+  await person.type(await screen.findByLabelText("Or type the repo's path"), path);
   await person.click(screen.getByRole("button", { name: "Open" }));
   return person;
 }
 
 describe("the first run", () => {
-  it("asks for a repository and nothing about where the project goes", async () => {
+  it("asks for a repo, says what a project is, and nothing about where it goes", async () => {
     core();
     render(<App />);
 
     expect(await screen.findByRole("heading", { level: 1 })).toHaveTextContent(
-      "Open a repository to start",
+      "Open a repo to start",
     );
-    expect(screen.getByRole("button", { name: "Open a repository…" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open a repo…" })).toBeInTheDocument();
     // The plane is charter's to place (W10): no folder for it, and no word of accounts, cloud
     // or telemetry on the way to a chat.
     expect(screen.queryByLabelText("Folder")).not.toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(/account|cloud|telemetry|sign up/i);
+    // ADR 0072's words: what a project is, and no "plane" or "repository" on the way in.
+    expect(
+      screen.getByText(/A project is where charter keeps your workspaces, personas and memory/),
+    ).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/plane|repository/i);
   });
 
   it("says which harnesses are installed and signed in, and whether gh is", async () => {
@@ -136,11 +146,11 @@ describe("the first run", () => {
       "Claude Code: ready",
       "Codex: installed; it asks you to sign in when its chat starts",
       "opencode: not installed",
-      "gh: installed, not signed in; only needed to work with GitHub",
+      "gh: installed, not signed in; only needed to work with GitHub Sign in to GitHub",
     ]);
   });
 
-  it("opens the repository into the local project and starts the first chat in its clone", async () => {
+  it("opens the repo into the local project and starts the first chat in its clone", async () => {
     const { calls } = core();
     render(<App />);
 
@@ -153,14 +163,19 @@ describe("the first run", () => {
 
     await vi.waitFor(() => expect(calls("start_chat")).toHaveLength(1));
     expect(calls("start_chat")[0].args).toMatchObject({ plane: LOCAL, cwd: CLONE });
-    // In the workspace named after the repository, not the plane root.
+    // In the workspace named after the repo, not the project's root.
     expect(calls("workspace_focused").map((one) => one.args.workspace)).toContain("widget");
   });
 
   it("asks the trust question first when the local project needs it, then starts the chat", async () => {
     const { calls } = core((cmd) => {
       if (cmd === "open_repo")
-        return { opened: { plane: null, ask: ASK }, workspace: "widget", cwd: CLONE };
+        return {
+          opened: { plane: null, ask: ASK },
+          workspace: "widget",
+          cwd: CLONE,
+          harness: null,
+        };
       if (cmd === "approve_plane") return LOCAL;
       return undefined;
     });
@@ -178,7 +193,7 @@ describe("the first run", () => {
 
   it("shows the core's refusal in full and stays on the first run", async () => {
     const refusal =
-      "/home/dev/papers is not the top level of a git working tree, so there is no repository to open.";
+      "/home/dev/papers is not the top level of a git repo, so there is nothing to open.";
     core((cmd) => {
       if (cmd === "open_repo") throw refusal;
       return undefined;
@@ -188,9 +203,7 @@ describe("the first run", () => {
     await openRepoByPath("/home/dev/papers");
 
     expect(await screen.findByRole("alert")).toHaveTextContent(refusal);
-    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
-      "Open a repository to start",
-    );
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Open a repo to start");
   });
 
   it("still opens a project that exists, one press away", async () => {
@@ -222,5 +235,79 @@ describe("the first run", () => {
     expect(await screen.findByRole("heading", { level: 1 })).toHaveTextContent(
       "You have not opened a project yet",
     );
+  });
+
+  it("starts the first chat without the picker when exactly one harness is signed in", async () => {
+    // W10's interrupt budget: nothing to pick, so nothing is asked (ADR 0022 still shows the
+    // picker whenever there is a choice or a command to approve).
+    const { calls } = core((cmd) => {
+      if (cmd === "open_repo")
+        return {
+          opened: { plane: LOCAL, ask: null },
+          workspace: "widget",
+          cwd: CLONE,
+          harness: "claude",
+        };
+      return undefined;
+    });
+    render(<App />);
+
+    await openRepoByPath(REPO);
+
+    await vi.waitFor(() => expect(calls("start_chat")).toHaveLength(1));
+    expect(calls("start_chat")[0].args).toMatchObject({
+      plane: LOCAL,
+      cwd: CLONE,
+      profile: "claude",
+    });
+    expect(screen.queryByRole("dialog", { name: "Start a chat" })).not.toBeInTheDocument();
+  });
+
+  it("still asks when the one signed-in harness's command has to be approved first", async () => {
+    const { calls } = core((cmd) => {
+      if (cmd === "open_repo")
+        return {
+          opened: { plane: LOCAL, ask: null },
+          workspace: "widget",
+          cwd: CLONE,
+          harness: "claude",
+        };
+      if (cmd === "start_options")
+        return {
+          ...START_OPTIONS,
+          profiles: [{ ...START_OPTIONS.profiles[0], approval: "new" }],
+        };
+      return undefined;
+    });
+    render(<App />);
+
+    await openRepoByPath(REPO);
+
+    expect(await screen.findByRole("dialog", { name: "Start a chat" })).toBeInTheDocument();
+    expect(calls("start_chat")).toHaveLength(0);
+  });
+
+  it("offers GitHub's own sign-in in a shell tab, and asks nothing", async () => {
+    const { calls } = core((cmd) => {
+      if (cmd === "open_local_project") return { plane: LOCAL, ask: null };
+      if (cmd === "open_session") return 7;
+      return undefined;
+    });
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Sign in to GitHub" }));
+
+    await vi.waitFor(() => expect(calls("send_input")).toHaveLength(1));
+    expect(calls("open_session")[0].args).toMatchObject({
+      plane: LOCAL,
+      program: null,
+      cwd: LOCAL,
+    });
+    expect(calls("send_input")[0].args).toEqual({
+      plane: LOCAL,
+      session: 7,
+      text: "gh auth login\n",
+    });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 });

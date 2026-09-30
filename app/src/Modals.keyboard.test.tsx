@@ -679,7 +679,7 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
     // Answered first: both dialogs disable their create button until they have been, and a
     // disabled control is out of the tab sequence everywhere and rightly so. The state worth
     // measuring is the one where the answer can be given.
-    await userEvent.type(screen.getByLabelText("Repository"), "/where/the/repo/is");
+    await userEvent.type(screen.getByLabelText("Repo"), "/where/the/repo/is");
     await userEvent.click(screen.getByText("Advanced"));
     await userEvent.type(screen.getByLabelText("Folder"), "/where/it/goes");
     // The walk starts where the keyboard is, the folder box, and comes round to it.
@@ -690,9 +690,9 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
       'button "Browse for the repository to adopt"',
       'checkbox "Make this repo itself the plane"',
       'button "Create project"',
-      'input "Repository"',
-      'button "Browse for the repository"',
-      'button "Open repository"',
+      'input "Repo"',
+      'button "Browse for the repo"',
+      'button "Open repo"',
       'button "Cancel"',
       'summary "Advanced"',
     ]);

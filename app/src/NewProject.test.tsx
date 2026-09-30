@@ -151,21 +151,21 @@ describe("making a project", () => {
     expect(advanced).not.toHaveAttribute("open");
     expect(advanced).toContainElement(within(dialog).getByLabelText("Folder"));
 
-    await userEvent.type(within(dialog).getByLabelText("Repository"), REPO);
-    await userEvent.click(within(dialog).getByRole("button", { name: "Open repository" }));
+    await userEvent.type(within(dialog).getByLabelText("Repo"), REPO);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Open repo" }));
 
     expect(calls("open_repo").map((one) => one.args)).toEqual([{ path: REPO }]);
     expect(calls("create_project")).toEqual([]);
   });
 
   it("keeps a refused repository's words in the dialog", async () => {
-    const refusal = "/home/dev/widget is not the top level of a git working tree.";
+    const refusal = "/home/dev/widget is not the top level of a git repo.";
     core({ repoRefuses: refusal });
     render(<App />);
     const dialog = await askForOne();
 
-    await userEvent.type(within(dialog).getByLabelText("Repository"), REPO);
-    await userEvent.click(within(dialog).getByRole("button", { name: "Open repository" }));
+    await userEvent.type(within(dialog).getByLabelText("Repo"), REPO);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Open repo" }));
 
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(refusal);
   });

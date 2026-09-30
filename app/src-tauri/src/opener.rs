@@ -626,56 +626,23 @@ fn scaffold_at(
     };
     let outcome = charter_core::scaffold::init(
         &place,
-        &charter_core::scaffold::InitArgs {
-            // What `charter init` defaults to, and the same defaults the CLI hands it: the
-            // forge and owner are edited in `charter.toml` afterwards, and `init` says so
-            // itself when no owner was given.
-            forge: "github".to_owned(),
-            owner: String::new(),
-            host: None,
-            // Never from here: it is `adopt` with the source fixed to the plane's own
-            // directory, and this dialog asks for the source as a directory of its own.
-            clone_this_repo: false,
+        &charter_core::scaffold::InitArgs::for_the_app(
             plane_is_this_repo,
-            adopt: adopt
+            adopt
                 .as_deref()
                 .map(str::trim)
                 .filter(|repo| !repo.is_empty())
                 .map(std::path::PathBuf::from),
-            // The wall clock: a window has no `--now`, and the first workspace's manifest is
-            // stamped with when the operator actually made it.
-            now: None,
-            front_door: Some("steward".to_owned()),
-        },
+        ),
     );
     if outcome.code != 0 {
         // **Verbatim, and all of it.** `init`'s refusal in a repository is four lines: what it
         // will not do, the three commands that make a plane beside the repo, what asking for
         // the old shape by name would write, and where the decision is recorded. An operator
         // shown a summary of that can follow none of it.
-        return Err(outcome
-            .said
-            .iter()
-            .map(marked)
-            .collect::<Vec<_>>()
-            .join("\n"));
+        return Err(charter_core::scaffold::Say::in_full(&outcome.said));
     }
     Ok(root)
-}
-
-/// One line `init` said, with the mark `charter init` prints in front of it.
-///
-/// `scaffold::Say` carries no `Display` of its own — the CLI's `voice` module is where its
-/// marks live — so the four are spelled here, in the same glyphs, because an operator reading
-/// this refusal in the window must be reading what a terminal would have shown them.
-fn marked(line: &charter_core::scaffold::Say) -> String {
-    use charter_core::scaffold::Say;
-    match line {
-        Say::Info(text) => format!("• {text}"),
-        Say::Ok(text) => format!("✓ {text}"),
-        Say::Warn(text) => format!("! {text}"),
-        Say::Err(text) => format!("✗ {text}"),
-    }
 }
 
 #[cfg(test)]

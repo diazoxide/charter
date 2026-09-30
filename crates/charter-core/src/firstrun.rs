@@ -3,13 +3,13 @@
 //! Decision G5 asks for a first run that reaches a working chat in five minutes, and W10 says
 //! how: **never ask where the plane goes.** A machine with no project gets a local plane in
 //! charter's own directory, with no remote. Sharing it with a team comes later. The one thing
-//! the first run asks for is the repository to work on, and that repository becomes a
+//! the first run asks for is the repo to work on, and that repo becomes a
 //! workspace named after it, so the first chat starts there and not at the plane root.
 //!
 //! Three pieces, each a seam of its own:
 //!
 //! - [`local_plane`] and [`ensure_local_plane`]: where the plane lives, and making it.
-//! - [`take_in`]: a repository cloned into a workspace of its own name.
+//! - [`take_in`]: a repo cloned into a workspace of its own name.
 //! - [`harnesses`]: which harnesses are installed and whether each has been signed in to.
 //!
 //! # Where the local plane lives
@@ -17,15 +17,21 @@
 //! In charter's directory in the config home, beside the machine store
 //! (`$CHARTER_CONFIG_HOME`, else `$XDG_CONFIG_HOME`, else `~/.config`, then `charter/`), which
 //! is the rule `machine.rs` keeps and ADR 0034's amendment records. The ticket says "app
-//! data"; ADR 0069 (proposed) is the record that gives every store a tier, and it names the
-//! config home as the Machine tier's home rather than the OS application-data directory. The
-//! plane itself is still a plane: its files are in its own git.
+//! data"; ADR 0069 §1 names the config home as the Machine tier's home rather than the OS
+//! application-data directory. The plane itself is in the **Plane** tier: its files are in its
+//! own git. With no remote, that tier's usual backup does not exist for it, which is FR-10's
+//! to cover (`docs/plane-format.md`).
 //!
-//! # Nothing here signs anybody in
+//! # Nothing here signs anybody in, and no credential is read
 //!
-//! [`harnesses`] reads whether a sign-in is there. It never starts one, never reads a secret's
-//! value and never runs the harness. A harness that is installed and not signed in still
-//! starts: its own login is in its own first screen, which is where W10 puts it.
+//! [`harnesses`] asks whether a sign-in is there. It never starts one and never runs the
+//! harness. **A credential file is asked about by its size alone**, never opened: a harness's
+//! `auth.json` or `.credentials.json` is a secret. An API key in the environment is asked
+//! whether it is set, not what it says. The one file that is read is Claude Code's
+//! `~/.claude.json`, which is its settings and not a credential (on macOS the credential is in
+//! the keychain): charter parses it only to see whether an `oauthAccount` object is there. A
+//! harness that is installed and not signed in still starts: its own login is in its own first
+//! screen, which is where W10 puts it.
 
 use std::path::{Path, PathBuf};
 
@@ -42,13 +48,15 @@ pub fn local_plane(config_root: &Path) -> PathBuf {
 /// The local plane under `config_root`, made first when it is not there yet.
 ///
 /// A plane already there is left exactly as it is. The plane is scaffolded the way the app's
-/// New project dialog scaffolds one, with no repository adopted and no remote: `git remote`
+/// New project dialog scaffolds one, with no repo adopted and no remote: `git remote`
 /// is empty until the operator shares it.
 pub fn ensure_local_plane(config_root: &Path) -> Result<PathBuf, String> {
     let at = local_plane(config_root);
     std::fs::create_dir_all(&at)
         .map_err(|why| format!("charter could not make {} ({why}).", at.display()))?;
-    let root = at.canonicalize().unwrap_or(at);
+    let root = at
+        .canonicalize()
+        .map_err(|why| format!("charter cannot read {} ({why}).", at.display()))?;
     if root.join(crate::plane::MANIFEST).is_file() {
         return Ok(root);
     }
@@ -57,19 +65,10 @@ pub fn ensure_local_plane(config_root: &Path) -> Result<PathBuf, String> {
             root: root.clone(),
             is_plane: false,
         },
-        &crate::scaffold::InitArgs {
-            forge: "github".to_owned(),
-            owner: String::new(),
-            host: None,
-            clone_this_repo: false,
-            plane_is_this_repo: false,
-            adopt: None,
-            now: None,
-            front_door: Some("steward".to_owned()),
-        },
+        &crate::scaffold::InitArgs::for_the_app(false, None),
     );
     if outcome.code != 0 {
-        return Err(said(&outcome.said));
+        return Err(crate::scaffold::Say::in_full(&outcome.said));
     }
     Ok(root)
 }
@@ -77,40 +76,21 @@ pub fn ensure_local_plane(config_root: &Path) -> Result<PathBuf, String> {
 /// What [`take_in`] made: the workspace and the clone the first chat starts in.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TakenIn {
-    /// The workspace, named after the repository.
+    /// The workspace, named after the repo.
     pub workspace: String,
-    /// The repository's clone inside it, which is where a chat about it works.
+    /// The repo's clone inside it, which is where a chat about it works.
     pub clone: PathBuf,
 }
 
 /// Clones `repo` into a workspace of the plane at `root` named after it.
 ///
-/// The name is the one `init --adopt` gives the clone: the tail of the repository's `origin`,
-/// else its directory's name, made into a workspace name. The repository is read and never
-/// written to. Taking in a repository that is already there answers with what is there, so
-/// opening the same repository twice is the same workspace both times.
+/// The name is the one `init --adopt` gives the clone: the tail of the repo's `origin`,
+/// else its directory's name, made into a workspace name. The repo is read and never
+/// written to. Taking in a repo that is already there answers with what is there, so
+/// opening the same repo twice is the same workspace both times.
 pub fn take_in(root: &Path, repo: &Path) -> Result<TakenIn, String> {
     crate::scaffold::adopt_as_workspace(root, repo, chrono::Utc::now())
         .map(|(workspace, clone)| TakenIn { workspace, clone })
-}
-
-/// `name` as a workspace name charter will mint: every character outside
-/// `[A-Za-z0-9._-]` becomes `-`, and whatever does not start with a letter or digit is cut
-/// from the front. `None` when nothing is left.
-pub fn workspace_name(name: &str) -> Option<String> {
-    let kept: String = name
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
-                c
-            } else {
-                '-'
-            }
-        })
-        .collect();
-    let trimmed = kept.trim_start_matches(|c: char| !c.is_ascii_alphanumeric());
-    let trimmed = trimmed.trim_end_matches(['.', '-']);
-    (!trimmed.is_empty() && crate::contain::workspace_name_ok(trimmed)).then(|| trimmed.to_owned())
 }
 
 /// One harness as the first run found it.
@@ -145,6 +125,19 @@ pub fn harnesses(look: &Looking<'_>) -> Vec<HarnessFound> {
             signed_in: signed_in(harness, look),
         })
         .collect()
+}
+
+/// The one harness that is both installed and signed in, when exactly one is: the first chat
+/// starts on it without asking which (FR-4, W10's interrupt budget). `None` when there is a
+/// choice to make, or nothing ready to start.
+pub fn only_ready(found: &[HarnessFound]) -> Option<Harness> {
+    let mut ready = found
+        .iter()
+        .filter(|one| one.program.is_some() && one.signed_in);
+    match (ready.next(), ready.next()) {
+        (Some(one), None) => Some(one.harness),
+        _ => None,
+    }
 }
 
 /// [`harnesses`] for this process: its environment, its home and its search path.
@@ -186,22 +179,28 @@ fn signed_in(harness: Harness, look: &Looking<'_>) -> bool {
             set("OPENAI_API_KEY")
                 || dir("CODEX_HOME", ".codex").is_some_and(|d| nonempty_file(&d.join("auth.json")))
         }
+        // Its `auth.json` is `{}` until a provider is added, and a provider's entry is longer
+        // than any spelling of an empty object, so the size says which without opening it.
         Harness::Opencode => dir("XDG_DATA_HOME", ".local/share")
-            .is_some_and(|d| has_entries(&d.join("opencode").join("auth.json"))),
+            .is_some_and(|d| longer_than(&d.join("opencode").join("auth.json"), EMPTY_OBJECT)),
     }
 }
 
+/// The longest an empty JSON object is likely to be written: `{}`, with whitespace and a
+/// newline around it. A provider's entry is well past it.
+const EMPTY_OBJECT: u64 = 8;
+
 fn nonempty_file(path: &Path) -> bool {
-    std::fs::metadata(path).is_ok_and(|meta| meta.is_file() && meta.len() > 0)
+    longer_than(path, 0)
 }
 
-/// A JSON object at `path` with at least one key: opencode's `auth.json` is `{}` until a
-/// provider is added.
-fn has_entries(path: &Path) -> bool {
-    read_object(path).is_some_and(|object| !object.is_empty())
+/// A file at `path` longer than `bytes`, asked of its metadata: nothing in it is read.
+fn longer_than(path: &Path, bytes: u64) -> bool {
+    std::fs::metadata(path).is_ok_and(|meta| meta.is_file() && meta.len() > bytes)
 }
 
-/// Claude Code's `~/.claude.json` records `oauthAccount` once somebody has logged in.
+/// Claude Code's `~/.claude.json` — its settings, not a credential — records `oauthAccount`
+/// once somebody has logged in. The one file here that is parsed; see the module note.
 fn names_an_account(path: &Path) -> bool {
     read_object(path).is_some_and(|object| {
         object
@@ -211,23 +210,12 @@ fn names_an_account(path: &Path) -> bool {
 }
 
 fn read_object(path: &Path) -> Option<serde_json::Map<String, serde_json::Value>> {
+    // Only ever `~/.claude.json`; every credential file is asked about by its size.
     let text = std::fs::read_to_string(path).ok()?;
     match serde_json::from_str(&text).ok()? {
         serde_json::Value::Object(object) => Some(object),
         _ => None,
     }
-}
-
-/// `init`'s lines, one per line, without the marks a terminal prints.
-fn said(lines: &[crate::scaffold::Say]) -> String {
-    use crate::scaffold::Say;
-    lines
-        .iter()
-        .map(|line| match line {
-            Say::Info(text) | Say::Ok(text) | Say::Warn(text) | Say::Err(text) => text.as_str(),
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 #[cfg(test)]
@@ -388,19 +376,10 @@ mod tests {
         assert!(root.join("mine.txt").is_file());
     }
 
-    #[test]
-    fn a_repository_name_becomes_a_workspace_name_charter_will_mint() {
-        assert_eq!(workspace_name("svc").as_deref(), Some("svc"));
-        assert_eq!(workspace_name("My Repo").as_deref(), Some("My-Repo"));
-        assert_eq!(workspace_name(".dotfiles").as_deref(), Some("dotfiles"));
-        assert_eq!(workspace_name("émoji").as_deref(), Some("moji"));
-        assert_eq!(workspace_name("..."), None);
-    }
-
-    /// A repository with one commit, made through `testgit` so it never asks the developer's
+    /// A repo with one commit, made through `testgit` so it never asks the developer's
     /// signer (charter-app#191).
     fn a_repo(at: &Path) -> PathBuf {
-        std::fs::create_dir_all(at).expect("the repository's directory");
+        std::fs::create_dir_all(at).expect("the repo's directory");
         for argv in [
             vec!["init", "-q", "-b", "main", "."],
             vec!["config", "user.email", "t@e.invalid"],
@@ -413,26 +392,26 @@ mod tests {
     }
 
     #[test]
-    fn a_repository_is_taken_in_as_a_workspace_named_after_it_and_not_written_into() {
+    fn a_repo_is_taken_in_as_a_workspace_named_after_it_and_not_written_into() {
         let dir = tempfile::tempdir().expect("a directory");
         let root = ensure_local_plane(&dir.path().join("cfg")).expect("the local plane");
         let repo = a_repo(&dir.path().join("svc"));
-        let before = std::fs::read_dir(&repo).expect("the repository").count();
+        let before = std::fs::read_dir(&repo).expect("the repo").count();
 
-        let taken = take_in(&root, &repo).expect("a repository is taken in");
+        let taken = take_in(&root, &repo).expect("a repo is taken in");
 
         assert_eq!(taken.workspace, "svc");
         assert_eq!(taken.clone, root.join("workspaces/svc/svc"));
         assert!(taken.clone.join(".git").exists(), "nothing was cloned");
         assert_eq!(
-            std::fs::read_dir(&repo).expect("the repository").count(),
+            std::fs::read_dir(&repo).expect("the repo").count(),
             before,
-            "something was written into the repository"
+            "something was written into the repo"
         );
     }
 
     #[test]
-    fn taking_in_the_same_repository_twice_answers_with_the_same_workspace() {
+    fn taking_in_the_same_repo_twice_answers_with_the_same_workspace() {
         let dir = tempfile::tempdir().expect("a directory");
         let root = ensure_local_plane(&dir.path().join("cfg")).expect("the local plane");
         let repo = a_repo(&dir.path().join("svc"));
@@ -444,18 +423,90 @@ mod tests {
     }
 
     #[test]
-    fn a_directory_that_is_not_a_repository_is_refused_and_no_workspace_is_made() {
+    fn a_directory_that_is_not_a_repo_is_refused_and_no_workspace_is_made() {
         let dir = tempfile::tempdir().expect("a directory");
         let root = ensure_local_plane(&dir.path().join("cfg")).expect("the local plane");
         let papers = dir.path().join("papers");
-        std::fs::create_dir_all(&papers).expect("not a repository");
+        std::fs::create_dir_all(&papers).expect("not a repo");
 
-        let refused = take_in(&root, &papers).expect_err("only a repository is taken in");
+        let refused = take_in(&root, &papers).expect_err("only a repo is taken in");
 
         assert!(
-            refused.contains("is not the top level of a git working tree"),
+            refused.contains("is not the top level of a git repo"),
             "{refused}"
         );
         assert!(!root.join("workspaces/papers").exists());
+    }
+
+    #[test]
+    fn a_different_repo_with_the_same_name_gets_a_workspace_of_its_own() {
+        // Two repos called `svc` from different places: the second must never be handed the
+        // first one's clone, which would start the chat in the wrong repo.
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = ensure_local_plane(&dir.path().join("cfg")).expect("the local plane");
+        let one = a_repo(&dir.path().join("a/svc"));
+        let other = a_repo(&dir.path().join("b/svc"));
+
+        let first = take_in(&root, &one).expect("the first svc");
+        let second = take_in(&root, &other).expect("the second svc");
+        let again = take_in(&root, &other).expect("the second svc, opened again");
+
+        assert_eq!(first.workspace, "svc");
+        assert_eq!(second.workspace, "svc-2");
+        assert_eq!(second.clone, root.join("workspaces/svc-2/svc-2"));
+        assert_eq!(
+            again, second,
+            "reopening the second svc is its own workspace again"
+        );
+    }
+
+    #[test]
+    fn a_clone_already_in_the_projects_workspaces_is_that_workspace_and_is_not_copied_again() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = ensure_local_plane(&dir.path().join("cfg")).expect("the local plane");
+        let taken = take_in(&root, &a_repo(&dir.path().join("svc"))).expect("taken in");
+
+        let picked = take_in(&root, &taken.clone).expect("its clone, picked");
+
+        assert_eq!(picked, taken);
+        assert!(
+            !root.join("workspaces/svc-2").exists(),
+            "the clone was copied again"
+        );
+    }
+
+    #[test]
+    fn a_path_that_cannot_be_read_is_refused_rather_than_taken_as_typed() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = ensure_local_plane(&dir.path().join("cfg")).expect("the local plane");
+
+        let refused = take_in(&root, &dir.path().join("not-there")).expect_err("refused");
+
+        assert!(refused.contains("cannot read"), "{refused}");
+    }
+
+    fn ready(harness: Harness, installed: bool, signed_in: bool) -> HarnessFound {
+        HarnessFound {
+            harness,
+            program: installed.then(|| PathBuf::from("/bin/x")),
+            signed_in,
+        }
+    }
+
+    #[test]
+    fn the_first_chat_skips_the_picker_only_when_exactly_one_harness_is_ready() {
+        let one = [
+            ready(Harness::ClaudeCode, true, true),
+            ready(Harness::Codex, true, false),
+            ready(Harness::Opencode, false, true),
+        ];
+        assert_eq!(only_ready(&one), Some(Harness::ClaudeCode));
+
+        let two = [
+            ready(Harness::ClaudeCode, true, true),
+            ready(Harness::Codex, true, true),
+        ];
+        assert_eq!(only_ready(&two), None);
+        assert_eq!(only_ready(&[ready(Harness::Codex, true, false)]), None);
     }
 }

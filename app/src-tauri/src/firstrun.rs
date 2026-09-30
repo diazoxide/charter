@@ -44,16 +44,20 @@ pub struct FirstRunFound {
     pub forge: ForgeRow,
 }
 
-/// What opening a repository made: the plane, opened or asked about, and where the first chat
+/// What opening a repo made: the plane, opened or asked about, and where the first chat
 /// starts.
 #[derive(Debug, Clone, serde::Serialize, specta::Type)]
 pub struct OpenedRepo {
     /// The local plane: open, or the trust question to ask first.
     pub opened: Opened,
-    /// The workspace, named after the repository.
+    /// The workspace, named after the repo.
     pub workspace: String,
-    /// The repository's clone in it, where the first chat starts.
+    /// The repo's clone in it, where the first chat starts.
     pub cwd: String,
+    /// The one harness installed and signed in on this machine, when exactly one is: the
+    /// first chat starts on it without the picker (W10's interrupt budget). `null` when there
+    /// is a choice to make.
+    pub harness: Option<String>,
 }
 
 /// Which harnesses are installed and signed in, and whether `gh` is logged in.
@@ -89,33 +93,53 @@ pub async fn first_run_found() -> Result<FirstRunFound, String> {
     .map_err(|err| format!("charter could not look at this machine: {err}"))
 }
 
-/// Opens `path`, a repository, into this machine's local plane: the plane is made when there is
-/// none, the repository is cloned into a workspace named after it, and the plane is opened
+/// Opens `path`, a repo, into this machine's local plane: the plane is made when there is
+/// none, the repo is cloned into a workspace named after it, and the plane is opened
 /// **through the trust gate**, exactly as `create_project` opens a plane it has just made.
 ///
-/// Nothing asks where the plane goes (W10). The repository is read and never written to.
+/// Nothing asks where the plane goes (W10). The repo is read and never written to.
 #[tauri::command]
 #[specta::specta]
 pub async fn open_repo(
     planes: tauri::State<'_, Planes>,
     path: String,
 ) -> Result<OpenedRepo, String> {
-    let Some(config) = planes.config().map(Path::to_path_buf) else {
-        return Err(
-            "charter keeps no store on this machine, so it has nowhere to make a local \
-             project. Open a project, or make one under New project → Advanced."
-                .to_owned(),
-        );
-    };
-    let (root, taken) =
-        tauri::async_runtime::spawn_blocking(move || taken_in(&config, Path::new(&path)))
-            .await
-            .map_err(|err| format!("charter could not open the repository: {err}"))??;
+    let config = config_of(&planes)?;
+    let (root, taken, harness) = tauri::async_runtime::spawn_blocking(move || {
+        let (root, taken) = taken_in(&config, Path::new(&path))?;
+        let harness = firstrun::only_ready(&firstrun::harnesses_here());
+        Ok::<_, String>((root, taken, harness))
+    })
+    .await
+    .map_err(|err| format!("charter could not open the repo: {err}"))??;
     let opened = planes.open_if_approved(&root).map(Opened::from)?;
     Ok(OpenedRepo {
         opened,
         workspace: taken.workspace,
         cwd: taken.clone.display().to_string(),
+        harness: harness.map(|one| one.name().to_owned()),
+    })
+}
+
+/// Opens this machine's local project with no repo in it, made first when there is none, and
+/// through the trust gate: what "Sign in to GitHub" on the first run opens, so the sign-in has
+/// a shell tab to run in (W10).
+#[tauri::command]
+#[specta::specta]
+pub async fn open_local_project(planes: tauri::State<'_, Planes>) -> Result<Opened, String> {
+    let config = config_of(&planes)?;
+    let root = tauri::async_runtime::spawn_blocking(move || firstrun::ensure_local_plane(&config))
+        .await
+        .map_err(|err| format!("charter could not open its project: {err}"))??;
+    planes.open_if_approved(&root).map(Opened::from)
+}
+
+/// Where the local project goes, or why this machine has nowhere to keep it.
+fn config_of(planes: &Planes) -> Result<PathBuf, String> {
+    planes.config().map(Path::to_path_buf).ok_or_else(|| {
+        "charter has nowhere to keep a project on this machine. Open a project, or make one \
+         under New project → Advanced."
+            .to_owned()
     })
 }
 
@@ -137,20 +161,42 @@ fn taken_in(config: &Path, repo: &Path) -> Result<(PathBuf, firstrun::TakenIn), 
 mod tests {
     use super::*;
 
+    /// A repo with one commit, made from charter-core's git template so it never asks the
+    /// developer's signer (charter-app#191) — `testgit`'s rule, which `extensions.rs`'s
+    /// `test_plane` follows the same way from this crate.
     fn a_repo(at: &Path) -> PathBuf {
-        std::fs::create_dir_all(at).expect("the repository's directory");
+        let template = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../crates/charter-core/tests/support/git-template"
+        );
+        std::fs::create_dir_all(at).expect("the repo's directory");
         for argv in [
-            vec!["init", "-q", "-b", "main", "."],
-            vec!["config", "user.email", "t@e.invalid"],
-            vec!["config", "user.name", "t"],
+            vec![
+                "init".to_owned(),
+                "-q".to_owned(),
+                "-b".to_owned(),
+                "main".to_owned(),
+                format!("--template={template}"),
+                ".".to_owned(),
+            ],
+            vec!["config".into(), "user.email".into(), "t@e.invalid".into()],
+            vec!["config".into(), "user.name".into(), "t".into()],
+            vec![
+                "commit".into(),
+                "-q".into(),
+                "--allow-empty".into(),
+                "-m".into(),
+                "first".into(),
+            ],
         ] {
-            charter_core::forklock::output(
+            let done = charter_core::forklock::output(
                 std::process::Command::new("git")
                     .arg("-C")
                     .arg(at)
                     .args(&argv),
             )
             .expect("git runs in a test");
+            assert!(done.status.success(), "git {argv:?}");
         }
         at.to_path_buf()
     }
