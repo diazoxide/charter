@@ -213,7 +213,8 @@ pub fn ready(start: &Start, root: &Path) -> Result<Ready, String> {
             root,
             &crate::sandbox::Machine::this(),
             &crate::sandbox::backend::installed,
-        )?,
+        )
+        .map_err(|refused| refused.to_string())?,
         None => None,
     };
     let (added, session, how) = arguments(harness, profile, start);

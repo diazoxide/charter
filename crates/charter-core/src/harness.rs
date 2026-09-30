@@ -303,25 +303,10 @@ impl Harness {
         kit: Kit<'_>,
         cwd: Option<&std::path::Path>,
         plugins: &crate::harness_plugin::Chosen,
-    ) -> StateHooks {
-        self.state_hooks_under(kit, cwd, plugins, None)
-    }
-
-    /// [`Self::state_hooks`], for a chat that starts under `sandbox` — the sandbox
-    /// [`crate::sandbox::for_start`] compiled for this harness (ADR 0067), or none.
-    ///
-    /// Claude Code's rides in the same `--settings` as everything else charter hands it. No
-    /// other harness is ever handed one yet: `for_start` refuses to start them in a sandboxed
-    /// plane, so an [`crate::sandbox::Applied`] of theirs cannot exist.
-    pub fn state_hooks_under(
-        self,
-        kit: Kit<'_>,
-        cwd: Option<&std::path::Path>,
-        plugins: &crate::harness_plugin::Chosen,
         sandbox: Option<&crate::sandbox::Applied>,
     ) -> StateHooks {
-        let claude_sandbox = sandbox.map(|applied| match applied {
-            crate::sandbox::Applied::ClaudeCode(settings) => settings,
+        let claude_sandbox = sandbox.map(|applied| match applied.form() {
+            crate::sandbox::Form::ClaudeCode(settings) => settings,
         });
         match self {
             // **The bundled plugin, loaded for this session alone** (`crate::plugin` has the
@@ -1045,7 +1030,7 @@ mod tests {
         cwd: &std::path::Path,
         plugins: &BTreeMap<String, bool>,
     ) -> (Vec<String>, Vec<(String, String)>) {
-        match Harness::ClaudeCode.state_hooks(kit(binary), Some(cwd), plugins) {
+        match Harness::ClaudeCode.state_hooks(kit(binary), Some(cwd), plugins, None) {
             StateHooks::ThisSessionOnly {
                 args,
                 env,
@@ -1132,7 +1117,7 @@ mod tests {
         // so nothing is added: its adapter says "not supported yet" instead.
         let chosen = BTreeMap::from([("charter@charter".to_owned(), false)]);
         let StateHooks::ThisSessionOnly { args, .. } =
-            Harness::Codex.state_hooks(kit("/bin/charter"), None, &chosen)
+            Harness::Codex.state_hooks(kit("/bin/charter"), None, &chosen, None)
         else {
             panic!("armed per session");
         };
@@ -1162,7 +1147,7 @@ mod tests {
         // are whole-session switches, and loosening either would be far broader than the one
         // command Smart close needs (SI-8e, ADR 0064's measurements).
         let StateHooks::ThisSessionOnly { args, .. } =
-            Harness::Codex.state_hooks(kit("/bin/charter"), None, &BTreeMap::new())
+            Harness::Codex.state_hooks(kit("/bin/charter"), None, &BTreeMap::new(), None)
         else {
             panic!("armed per session");
         };
@@ -1177,14 +1162,25 @@ mod tests {
     fn a_sandboxed_claude_code_chat_carries_its_sandbox_in_the_same_settings() {
         // One `--settings`: the sandbox and its deny rules beside the Smart close allow, which
         // stays, because a deny outranks an allow and the two name different things.
-        let empty = tempfile::tempdir().expect("a directory");
-        let applied = crate::sandbox::Applied::ClaudeCode(crate::sandbox::claude::Settings {
-            sandbox: serde_json::json!({"enabled": true}),
-            deny: vec!["Read(//p/v)".to_owned()],
-        });
-        let StateHooks::ThisSessionOnly { args, .. } = Harness::ClaudeCode.state_hooks_under(
+        let plane = tempfile::tempdir().expect("a plane");
+        std::fs::write(
+            plane.path().join("charter.toml"),
+            "[sandbox]\nmode = \"on\"\n",
+        )
+        .expect("charter.toml");
+        let machine = crate::sandbox::Machine {
+            env: crate::secrets::Env::of(&[]),
+            home: None,
+            os: crate::sandbox::Os::Linux,
+        };
+        let applied =
+            crate::sandbox::for_start(Harness::ClaudeCode, plane.path(), &machine, &|_| true)
+                .expect("starts")
+                .expect("sandboxed");
+        let crate::sandbox::Form::ClaudeCode(compiled) = applied.form();
+        let StateHooks::ThisSessionOnly { args, .. } = Harness::ClaudeCode.state_hooks(
             kit("/bin/charter"),
-            Some(empty.path()),
+            Some(plane.path()),
             &BTreeMap::new(),
             Some(&applied),
         ) else {
@@ -1192,13 +1188,14 @@ mod tests {
         };
         let settings: serde_json::Value = serde_json::from_str(&args[3]).expect("JSON");
 
-        assert_eq!(settings["sandbox"], serde_json::json!({"enabled": true}));
+        assert_eq!(settings["sandbox"], compiled.sandbox);
         assert_eq!(
-            settings["permissions"],
-            serde_json::json!({
-                "allow": ["Bash(charter session record *)"],
-                "deny": ["Read(//p/v)"],
-            })
+            settings["permissions"]["allow"],
+            serde_json::json!(["Bash(charter session record *)"])
+        );
+        assert_eq!(
+            settings["permissions"]["deny"],
+            serde_json::json!(compiled.deny)
         );
     }
 
@@ -1234,6 +1231,7 @@ mod tests {
             },
             None,
             &BTreeMap::new(),
+            None,
         );
         assert_eq!(hooks, StateHooks::None);
     }
@@ -1322,7 +1320,7 @@ mod tests {
     /// Codex's `-c` pairs as (dotted key, parsed TOML value), failing on anything else.
     fn codex_flags(binary: &str) -> Vec<(String, toml::Value)> {
         let StateHooks::ThisSessionOnly { args, env, .. } =
-            Harness::Codex.state_hooks(kit(binary), None, &BTreeMap::new())
+            Harness::Codex.state_hooks(kit(binary), None, &BTreeMap::new(), None)
         else {
             panic!("Codex's hooks are armed per session");
         };
@@ -1403,7 +1401,7 @@ mod tests {
     fn a_codex_chat_says_it_cannot_report_a_question_asked_mid_turn() {
         // Codex has no `Notification`. It fires `PermissionRequest` when it asks for an
         // approval — measured — but that hook decides a permission, and nothing arms it.
-        let hooks = Harness::Codex.state_hooks(kit("/bin/charter"), None, &BTreeMap::new());
+        let hooks = Harness::Codex.state_hooks(kit("/bin/charter"), None, &BTreeMap::new(), None);
 
         let StateHooks::ThisSessionOnly { cannot_report, .. } = hooks else {
             panic!("armed per session");
@@ -1582,6 +1580,7 @@ mod tests {
             },
             None,
             &BTreeMap::from([("some-plugin".to_owned(), false)]),
+            None,
         );
         (plugin, hooks)
     }
@@ -1645,6 +1644,7 @@ mod tests {
             },
             None,
             &BTreeMap::new(),
+            None,
         ));
         assert_eq!(
             env.get(crate::skills::LISTED_ENV),
@@ -1662,7 +1662,7 @@ mod tests {
             plugin: Some(&plugin),
         };
         for harness in [Harness::ClaudeCode, Harness::Opencode] {
-            let env = env_of(harness.state_hooks(kit, None, &BTreeMap::new()));
+            let env = env_of(harness.state_hooks(kit, None, &BTreeMap::new(), None));
             assert!(!env.contains_key(crate::skills::LISTED_ENV), "{harness:?}");
         }
     }
@@ -1677,6 +1677,7 @@ mod tests {
             },
             None,
             &BTreeMap::new(),
+            None,
         ));
         let config: serde_json::Value =
             serde_json::from_str(&env["OPENCODE_CONFIG_CONTENT"]).expect("JSON");
@@ -1701,6 +1702,7 @@ mod tests {
             },
             None,
             &BTreeMap::new(),
+            None,
         );
         assert_eq!(hooks, StateHooks::None);
     }

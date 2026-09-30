@@ -1,6 +1,14 @@
 //! The sandbox a chat runs in (ADR 0067): one harness-agnostic policy, compiled per harness.
+//!
+//! [`Plane`] reads a plane's `charter.toml` once; [`Said`] is what it says about the sandbox;
+//! [`Denied`] resolves the denial classes to this machine; [`Compiled`] is the neutral answer
+//! every harness's compiler reads; and [`for_start`] is the one place a chat is sandboxed or
+//! refused. Each harness has one compiler, chosen in one match ([`compiler`]).
 
+use std::fmt;
 use std::path::{Path, PathBuf};
+
+use crate::harness::Harness;
 
 /// The table in `charter.toml` that holds the policy.
 pub const TABLE: &str = "sandbox";
@@ -10,7 +18,7 @@ pub const TABLE: &str = "sandbox";
 pub const FILE: &str = "charter.toml";
 
 /// A named set of hosts a sandboxed chat may reach (ADR 0067 §3). What each holds is
-/// [`Preset::hosts`]; SD-4 and SD-31 add to the set.
+/// [`hosts`]; SD-4 and SD-31 add to the set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Preset {
     ModelProviders,
@@ -37,6 +45,11 @@ impl Preset {
     fn of_word(word: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|preset| preset.word() == word)
     }
+
+    /// Every preset's word, as a refusal lists them. The one place that list is written.
+    fn listed() -> String {
+        Self::ALL.map(Self::word).join(", ")
+    }
 }
 
 /// A plane's sandbox policy, where it has turned the sandbox on.
@@ -49,68 +62,151 @@ pub struct Policy {
     pub egress: Vec<Preset>,
 }
 
-/// What a plane's `charter.toml` says about the sandbox: the policy where it turned it on, and
-/// a sentence for each thing it said that charter does not honour.
+/// A plane's `charter.toml`, read and parsed once for everything the sandbox asks of it: the
+/// policy, the refusals and the forge hosts.
+#[derive(Debug, Clone, Default)]
+pub struct Plane {
+    top: Option<toml::Table>,
+}
+
+impl Plane {
+    /// The plane at `root`. No file, or one that is not TOML, says nothing: the doctor's row
+    /// already reports a file that cannot be read.
+    pub fn read(root: &Path) -> Self {
+        Self::of(std::fs::read_to_string(root.join(FILE)).ok().as_deref())
+    }
+
+    /// `text`, the whole of a `charter.toml`.
+    pub fn of(text: Option<&str>) -> Self {
+        Self {
+            top: text.and_then(|text| text.parse::<toml::Table>().ok()),
+        }
+    }
+
+    /// What it says about the sandbox.
+    pub fn said(&self) -> Said {
+        Said::of(self.top.as_ref())
+    }
+
+    /// The hosts of its `[[forge]]` blocks, without a port: a sandbox allows a host. A host that
+    /// is not one ([`crate::forge::host_ok`]) is never added.
+    fn forge_hosts(&self) -> Vec<String> {
+        let Some(forges) = self
+            .top
+            .as_ref()
+            .and_then(|top| top.get("forge"))
+            .and_then(toml::Value::as_array)
+        else {
+            return Vec::new();
+        };
+        forges
+            .iter()
+            .filter_map(|forge| forge.get("host")?.as_str())
+            .filter(|host| crate::forge::host_ok(host))
+            .map(|host| host.split(':').next().unwrap_or(host).to_owned())
+            .collect()
+    }
+}
+
+/// One thing a plane's `[sandbox]` says that charter does not honour as written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Refusal {
+    /// `sandbox` is not a table.
+    NotATable,
+    /// A key the schema does not have.
+    UnknownKey(String),
+    /// `mode = "off"`, which a plane can never carry.
+    ModeOff,
+    /// A `mode` that is not `"on"` or `"off"`.
+    ModeUnknown,
+    /// `egress` that is not a list.
+    EgressNotAList,
+    /// A word in `egress` that is not a preset, as written.
+    EgressUnknown(String),
+}
+
+impl fmt::Display for Refusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let on = "so the sandbox is on";
+        match self {
+            Self::NotATable => write!(
+                f,
+                "{TABLE} in {FILE} is not a table — [{TABLE}] holds mode and egress; {on}"
+            ),
+            Self::UnknownKey(key) => write!(
+                f,
+                "{TABLE}.{key} in {FILE} is not a key charter reads — [{TABLE}] holds mode and \
+                 egress"
+            ),
+            Self::ModeOff => write!(
+                f,
+                "{TABLE}.mode in {FILE} cannot be \"off\": a committed file may turn the sandbox \
+                 on and never off — only a person turns it off, for one chat; {on}"
+            ),
+            Self::ModeUnknown => write!(
+                f,
+                "{TABLE}.mode in {FILE} is not \"on\" — the one value a plane may give it; {on}"
+            ),
+            Self::EgressNotAList => write!(
+                f,
+                "{TABLE}.egress in {FILE} is not a list of presets — one or more of: {}; the \
+                 default is used",
+                Preset::listed()
+            ),
+            Self::EgressUnknown(word) => write!(
+                f,
+                "{TABLE}.egress in {FILE} names {word}, which is not a preset — one of: {}",
+                Preset::listed()
+            ),
+        }
+    }
+}
+
+/// What a plane's `charter.toml` says about the sandbox: the policy where it is on, and each
+/// thing it said that charter does not honour as written.
 ///
-/// **Absent is not "off".** A plane that says nothing runs its chats as it did before the
-/// sandbox existed, until the operator takes the one-time offer (ruling V21, 1). A plane that
-/// says `off` is refused, because a committed file can never loosen what a chat is confined to.
+/// **Absent is not "off".** A plane that has no `[sandbox]`, or no `mode` in it, runs its chats
+/// as it did before the sandbox existed, until the operator takes the one-time offer (ruling
+/// V21, 1). **Anything else that is not `"on"` is read as `"on"`**, with a refusal: a committed
+/// file can never loosen what a chat is confined to, and a typo must not do it by accident.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Said {
     pub policy: Option<Policy>,
-    pub refused: Vec<String>,
+    pub refused: Vec<Refusal>,
 }
 
 impl Said {
-    /// What `text`, the whole of a `charter.toml`, says. No file, or one that is not TOML, says
-    /// nothing: the doctor's row already reports a file that cannot be read.
-    pub fn of(text: Option<&str>) -> Self {
-        let Some(top) = text.and_then(|text| text.parse::<toml::Table>().ok()) else {
-            return Self::default();
-        };
-        let Some(table) = top.get(TABLE) else {
+    /// What `top`, a parsed `charter.toml`, says.
+    pub fn of(top: Option<&toml::Table>) -> Self {
+        let Some(table) = top.and_then(|top| top.get(TABLE)) else {
             return Self::default();
         };
         let Some(table) = table.as_table() else {
             return Self {
-                policy: None,
-                refused: vec![format!(
-                    "{TABLE} in {FILE} is not a table — [{TABLE}] holds mode and egress"
-                )],
+                policy: Some(Policy {
+                    egress: Preset::DEFAULT.to_vec(),
+                }),
+                refused: vec![Refusal::NotATable],
             };
         };
         let mut refused = Vec::new();
-        for key in table.keys() {
-            if key != "mode" && key != "egress" {
-                refused.push(format!(
-                    "{TABLE}.{key} in {FILE} is not a key charter reads — [{TABLE}] holds mode \
-                     and egress"
-                ));
-            }
-        }
         let on = match table.get("mode") {
             None => false,
             Some(toml::Value::String(word)) if word == "on" => true,
             Some(toml::Value::String(word)) if word == "off" => {
-                refused.insert(
-                    0,
-                    format!(
-                        "{TABLE}.mode in {FILE} cannot be \"off\": a committed file may turn \
-                         the sandbox on and never off — only a person turns it off, for one chat"
-                    ),
-                );
-                false
+                refused.push(Refusal::ModeOff);
+                true
             }
             Some(_) => {
-                refused.insert(
-                    0,
-                    format!(
-                        "{TABLE}.mode in {FILE} is not \"on\" — the one value a plane may give it"
-                    ),
-                );
-                false
+                refused.push(Refusal::ModeUnknown);
+                true
             }
         };
+        for key in table.keys() {
+            if key != "mode" && key != "egress" {
+                refused.push(Refusal::UnknownKey(key.clone()));
+            }
+        }
         let egress = match table.get("egress") {
             None => Preset::DEFAULT.to_vec(),
             Some(toml::Value::Array(words)) => {
@@ -119,21 +215,13 @@ impl Said {
                     match word.as_str().and_then(Preset::of_word) {
                         Some(preset) if !egress.contains(&preset) => egress.push(preset),
                         Some(_) => {}
-                        None => refused.push(format!(
-                            "{TABLE}.egress in {FILE} names {}, which is not a preset — one \
-                             of: {}",
-                            word,
-                            Preset::ALL.map(Preset::word).join(", ")
-                        )),
+                        None => refused.push(Refusal::EgressUnknown(word.to_string())),
                     }
                 }
                 egress
             }
             Some(_) => {
-                refused.push(format!(
-                    "{TABLE}.egress in {FILE} is not a list of presets — one or more of: {}",
-                    Preset::ALL.map(Preset::word).join(", ")
-                ));
+                refused.push(Refusal::EgressNotAList);
                 Preset::DEFAULT.to_vec()
             }
         };
@@ -142,21 +230,22 @@ impl Said {
             refused,
         }
     }
-
-    /// What the plane at `root` says.
-    pub fn read(root: &Path) -> Self {
-        Self::of(std::fs::read_to_string(root.join(FILE)).ok().as_deref())
-    }
 }
 
-/// Everything in `text`'s `[sandbox]` that charter would not honour, as `file` holds it — for
-/// the Project settings tab's save, which refuses to write it. Only the committed file is read
-/// for it; `charter.local.toml` already refuses every table it does not carry.
+/// Everything in `text`'s `[sandbox]` that charter would not honour as written, as `file`
+/// holds it — for the Project settings tab's save, which refuses to write it. Only the
+/// committed file is read for it; `charter.local.toml` already refuses every table it does not
+/// carry.
 pub fn refusals(text: &str, file: &str) -> Vec<String> {
     if file != FILE {
         return Vec::new();
     }
-    Said::of(Some(text)).refused
+    Plane::of(Some(text))
+        .said()
+        .refused
+        .iter()
+        .map(ToString::to_string)
+        .collect()
 }
 
 /// What a chat's sandbox always denies (ADR 0067 §5). Classes, not a list of paths: each is
@@ -225,13 +314,6 @@ impl Service {
             Self::CredentialStore => Class::Vaults,
         }
     }
-
-    /// What it is, in a refusal.
-    pub fn said(self) -> &'static str {
-        match self {
-            Self::CredentialStore => "the operating system's credential store (a keyring vault)",
-        }
-    }
 }
 
 /// The operating system a chat runs on, which decides the backend and what it can express.
@@ -281,10 +363,8 @@ impl Machine {
 
 /// Everything a chat in one plane is denied, resolved to this machine.
 ///
-/// **Only what exists today is resolved.** The audit directory, the device key and the hook
-/// spool (class 2), the client scopes behind the terminal, fleet-MCP and approvals (class 3)
-/// and a runner's install (class 4) are not on disk yet; each is added here in the change that
-/// puts it there, and its class's test names it.
+/// Each class is resolved to the state charter keeps for it on this machine, and a change that
+/// adds state to a class adds it here, with its class's test naming it.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Denied {
     pub paths: Vec<Denial>,
@@ -304,9 +384,7 @@ impl Denied {
             })
         };
 
-        // 1. Vaults. The state directory's vault files (plain-file defaults, a keyring vault's
-        // index) and the key the fingerprints are keyed with, then every plain-file vault's own
-        // file wherever it is configured, then each resolver CLI's local session.
+        // 1. Vaults: every provider's storage and local session, wherever it is configured.
         deny(Class::Vaults, ctx.vaults_dir(), Access::ReadWrite);
         deny(
             Class::Vaults,
@@ -341,17 +419,14 @@ impl Denied {
             deny(Class::Vaults, home.join(".op"), Access::ReadWrite);
             deny(Class::Vaults, home.join(".vault-token"), Access::ReadWrite);
         }
-        // The registry names where each vault's secrets are read from: readable, never
-        // rewritten, or a chat could point a vault at a file of its own.
+        // The registry that names the vaults: readable, never rewritten.
         deny(Class::Vaults, ctx.shared_registry(), Access::Write);
         deny(Class::Vaults, ctx.local_registry(), Access::Write);
 
-        // 2. Integrity. The app's record holds the command lines the next launch runs, beside
-        // the hook socket.
+        // 2. Integrity: charter's own records, which only charter writes.
         deny(Class::Integrity, root.join(".charter/app"), Access::Write);
 
-        // 3. Human powers. The machine store holds the approvals a person gave: which planes
-        // may run which commands without asking.
+        // 3. Human powers: the approvals a person gave on this machine.
         let config_root = crate::machine::rooted(
             machine.env.get(crate::machine::HOME_VAR).map(Into::into),
             machine.env.get("XDG_CONFIG_HOME").map(Into::into),
@@ -376,13 +451,13 @@ impl Denied {
     }
 }
 
-/// The hosts `presets` let a chat reach, for a plane whose `charter.toml` is `plane`: each
-/// preset's own, and for [`Preset::Forge`] the self-managed hosts the plane's `[[forge]]` blocks
-/// name. A host that is not one ([`crate::forge::host_ok`]) is never added.
+/// The hosts `presets` let a chat reach in `plane`: each preset's own, and for
+/// [`Preset::Forge`] the hosts of the plane's `[[forge]]` blocks — the forges its logins are
+/// checked against (ADR 0055).
 ///
 /// A first cut, and SD-4 owns what each preset holds; what a preset does not list is refused
 /// rather than let through.
-pub fn hosts(presets: &[Preset], plane: Option<&str>) -> Vec<String> {
+pub fn hosts(presets: &[Preset], plane: &Plane) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut add = |host: &str| {
         if !out.iter().any(|it| it == host) {
@@ -431,7 +506,7 @@ pub fn hosts(presets: &[Preset], plane: Option<&str>) -> Vec<String> {
             add(host);
         }
         if *preset == Preset::Forge {
-            for host in forge_hosts(plane) {
+            for host in plane.forge_hosts() {
                 add(&host);
             }
         }
@@ -439,24 +514,8 @@ pub fn hosts(presets: &[Preset], plane: Option<&str>) -> Vec<String> {
     out
 }
 
-/// The hosts of `plane`'s `[[forge]]` blocks, without a port: a sandbox allows a host.
-fn forge_hosts(plane: Option<&str>) -> Vec<String> {
-    let Some(top) = plane.and_then(|text| text.parse::<toml::Table>().ok()) else {
-        return Vec::new();
-    };
-    let Some(forges) = top.get("forge").and_then(toml::Value::as_array) else {
-        return Vec::new();
-    };
-    forges
-        .iter()
-        .filter_map(|forge| forge.get("host")?.as_str())
-        .filter(|host| crate::forge::host_ok(host))
-        .map(|host| host.split(':').next().unwrap_or(host).to_owned())
-        .collect()
-}
-
 /// The policy for one chat, resolved to this machine and ready for a harness's compiler: the
-/// neutral answer every adapter reads, and the only one.
+/// neutral answer every compiler reads, and the only one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Compiled {
     pub denied: Denied,
@@ -465,71 +524,139 @@ pub struct Compiled {
 }
 
 impl Compiled {
-    /// `policy`, for a chat in the plane at `root`, on `machine`.
-    pub fn of(policy: &Policy, root: &Path, machine: &Machine) -> Self {
-        let plane = std::fs::read_to_string(root.join(FILE)).ok();
+    /// `policy`, for a chat in `plane` at `root`, on `machine`.
+    pub fn of(policy: &Policy, plane: &Plane, root: &Path, machine: &Machine) -> Self {
         Self {
             denied: Denied::of(root, machine),
-            hosts: hosts(&policy.egress, plane.as_deref()),
+            hosts: hosts(&policy.egress, plane),
             os: machine.os,
         }
     }
 }
 
-/// Why a harness cannot hold a class on this machine, so the chat does not start.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A class a harness's compiler cannot hold on this machine, so the chat does not start.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Uncompilable {
-    pub class: Class,
-    pub why: String,
+    pub harness: Harness,
+    pub service: Service,
 }
 
-/// The sandbox a chat starts under, compiled for its harness.
+impl Uncompilable {
+    pub fn class(self) -> Class {
+        self.service.class()
+    }
+}
+
+/// The sandbox a chat starts under, compiled for its harness by that harness's compiler.
+///
+/// Made only by [`for_start`], for the harness it was asked about, and it says which
+/// ([`Self::harness`]): the one place a session opens refuses one handed to a chat of another
+/// harness, so a form compiled for one harness never reaches another.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Applied {
+pub struct Applied {
+    harness: Harness,
+    form: Form,
+}
+
+impl Applied {
+    /// The harness it was compiled for.
+    pub fn harness(&self) -> Harness {
+        self.harness
+    }
+
+    /// What that harness is handed.
+    pub fn form(&self) -> &Form {
+        &self.form
+    }
+}
+
+/// Each harness's own form of the policy, one variant per compiler.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Form {
     ClaudeCode(claude::Settings),
 }
 
+/// A harness's compiler.
+pub type Compiler = fn(&Compiled) -> Result<Form, Uncompilable>;
+
+/// The compiler for `harness`, or none where charter has not written one yet. **The one match
+/// on the harness**: a harness gains a sandbox by gaining an arm here and a [`Form`] variant.
+pub fn compiler(harness: Harness) -> Option<Compiler> {
+    match harness {
+        Harness::ClaudeCode => Some(|compiled| claude::settings(compiled).map(Form::ClaudeCode)),
+        Harness::Codex | Harness::Opencode => None,
+    }
+}
+
+/// Why a chat did not start in a sandboxed plane.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NotStarted {
+    /// Charter has no compiler for the harness yet.
+    NoCompiler(Harness),
+    /// This machine cannot apply a sandbox.
+    NoBackend(backend::Missing),
+    /// The harness's compiler cannot hold a class here.
+    Uncompilable(Uncompilable),
+}
+
+impl fmt::Display for NotStarted {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let lead = "this plane runs every chat sandboxed";
+        match self {
+            Self::NoCompiler(harness) => write!(
+                f,
+                "{lead}, and charter cannot sandbox a {} chat yet, so it was not started. Start \
+                 this chat on a Claude Code profile.",
+                harness.title()
+            ),
+            Self::NoBackend(missing) => write!(
+                f,
+                "{lead}, and this machine cannot apply the sandbox: {missing}. Nothing was \
+                 started."
+            ),
+            Self::Uncompilable(it) => match it.service {
+                Service::CredentialStore => write!(
+                    f,
+                    "{lead}, and {} cannot keep a chat away from the operating system's \
+                     credential store, where this plane's keyring vaults are kept, so the \
+                     vaults class cannot be held. Until charter can wrap the harness or \
+                     resolve secrets for it, a sandboxed plane with a keyring vault starts no \
+                     {} chat. Nothing was started.",
+                    it.harness.title(),
+                    it.harness.title()
+                ),
+            },
+        }
+    }
+}
+
 /// What a chat of `harness` in the plane at `root` starts under on `machine`: `None` where the
-/// plane has not turned the sandbox on, the compiled sandbox where it has — or the one sentence
-/// saying why the chat does not start. `has` answers whether a program the backend needs is
-/// installed ([`backend::installed`]).
+/// plane has not turned the sandbox on, the compiled sandbox where it has — or why the chat
+/// does not start. `has` answers whether a program the backend needs is installed
+/// ([`backend::installed`]).
 ///
-/// **Fail closed** (ADR 0067 §1). A harness charter does not compile the policy for, a machine
-/// the policy cannot be applied on, and a class the harness cannot hold here each refuse the
-/// chat; none of them starts it unsandboxed.
+/// **Fail closed** (ADR 0067 §1). A harness charter has no compiler for, a machine the policy
+/// cannot be applied on, and a class the harness cannot hold here each refuse the chat; none
+/// of them starts it unsandboxed.
 pub fn for_start(
-    harness: crate::harness::Harness,
+    harness: Harness,
     root: &Path,
     machine: &Machine,
     has: &dyn Fn(&str) -> bool,
-) -> Result<Option<Applied>, String> {
-    use crate::harness::Harness;
-    let Some(policy) = Said::read(root).policy else {
+) -> Result<Option<Applied>, NotStarted> {
+    let plane = Plane::read(root);
+    let Some(policy) = plane.said().policy else {
         return Ok(None);
     };
-    let lead = "this plane runs every chat sandboxed";
-    if harness != Harness::ClaudeCode {
-        return Err(format!(
-            "{lead}, and charter cannot sandbox a {} chat yet, so it was not started. Start \
-             this chat on a Claude Code profile.",
-            harness.title()
-        ));
-    }
+    let Some(compile) = compiler(harness) else {
+        return Err(NotStarted::NoCompiler(harness));
+    };
     if let Some(missing) = backend::missing(machine.os, has) {
-        return Err(format!(
-            "{lead}, and this machine cannot apply the sandbox: {missing}. Nothing was started."
-        ));
+        return Err(NotStarted::NoBackend(missing));
     }
-    let compiled = Compiled::of(&policy, root, machine);
-    claude::settings(&compiled)
-        .map(|settings| Some(Applied::ClaudeCode(settings)))
-        .map_err(|refused| {
-            format!(
-                "{lead}, and {}, which the {} class needs denied. Nothing was started.",
-                refused.why,
-                refused.class.word()
-            )
-        })
+    let form =
+        compile(&Compiled::of(&policy, &plane, root, machine)).map_err(NotStarted::Uncompilable)?;
+    Ok(Some(Applied { harness, form }))
 }
 
 pub mod backend;

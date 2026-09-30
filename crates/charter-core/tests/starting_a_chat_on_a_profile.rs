@@ -397,7 +397,7 @@ fn an_opencode_chat_is_armed_through_its_environment_and_nothing_on_its_line() {
         plugin: Some(&plugin),
     };
     let charter_core::harness::StateHooks::ThisSessionOnly { args, env, .. } =
-        Harness::Opencode.state_hooks(kit, Some(plane.root()), &ready.plugins)
+        Harness::Opencode.state_hooks(kit, Some(plane.root()), &ready.plugins, None)
     else {
         panic!("opencode is armed");
     };
@@ -576,7 +576,7 @@ fn armed_with(
         binary: &binary,
         plugin: Some(&plugin),
     };
-    match harness.state_hooks(kit, Some(root), plugins) {
+    match harness.state_hooks(kit, Some(root), plugins, None) {
         charter_core::harness::StateHooks::ThisSessionOnly { args, .. } => args,
         charter_core::harness::StateHooks::None => panic!("{harness:?} is armed"),
     }

@@ -3,47 +3,65 @@
 
 use super::*;
 
+fn said(text: &str) -> Said {
+    Plane::of(Some(text)).said()
+}
+
+fn default_policy() -> Option<Policy> {
+    Some(Policy {
+        egress: vec![Preset::ModelProviders, Preset::Forge, Preset::Toolchains],
+    })
+}
+
 // -------------------------------------------------------------------------------------
 // The schema: `[sandbox]` in `charter.toml`
 // -------------------------------------------------------------------------------------
 
 #[test]
 fn a_plane_that_says_nothing_runs_its_chats_as_it_always_has() {
-    let said = Said::of(Some("schema = 1\n"));
+    let said = said("schema = 1\n");
     assert_eq!(said.policy, None);
     assert!(said.refused.is_empty(), "{:?}", said.refused);
 }
 
 #[test]
 fn a_plane_that_turns_the_sandbox_on_gets_the_default_egress() {
-    let said = Said::of(Some("[sandbox]\nmode = \"on\"\n"));
-    assert_eq!(
-        said.policy,
-        Some(Policy {
-            egress: vec![Preset::ModelProviders, Preset::Forge, Preset::Toolchains]
-        })
-    );
+    let said = said("[sandbox]\nmode = \"on\"\n");
+    assert_eq!(said.policy, default_policy());
     assert!(said.refused.is_empty(), "{:?}", said.refused);
 }
 
 #[test]
-fn a_plane_can_never_carry_off() {
-    let said = Said::of(Some("[sandbox]\nmode = \"off\"\n"));
-    assert_eq!(said.policy, None);
+fn a_plane_can_never_carry_off_and_saying_it_leaves_the_sandbox_on() {
+    let said = said("[sandbox]\nmode = \"off\"\n");
+    assert_eq!(said.policy, default_policy());
+    assert_eq!(said.refused, [Refusal::ModeOff]);
     assert_eq!(
-        said.refused,
-        [
-            "sandbox.mode in charter.toml cannot be \"off\": a committed file may turn the sandbox \
-          on and never off — only a person turns it off, for one chat"
-        ]
+        said.refused[0].to_string(),
+        "sandbox.mode in charter.toml cannot be \"off\": a committed file may turn the sandbox \
+         on and never off — only a person turns it off, for one chat; so the sandbox is on"
     );
 }
 
 #[test]
+fn a_mistyped_mode_turns_the_sandbox_on_rather_than_leaving_it_off() {
+    for mode in ["\"onn\"", "\"On\"", "true", "0"] {
+        let said = said(&format!("[sandbox]\nmode = {mode}\n"));
+        assert_eq!(said.policy, default_policy(), "{mode}");
+        assert_eq!(said.refused, [Refusal::ModeUnknown], "{mode}");
+    }
+}
+
+#[test]
+fn a_sandbox_that_is_not_a_table_turns_it_on() {
+    let said = said("sandbox = \"off\"\n");
+    assert_eq!(said.policy, default_policy());
+    assert_eq!(said.refused, [Refusal::NotATable]);
+}
+
+#[test]
 fn a_plane_names_its_egress_by_preset_and_an_unknown_preset_is_refused() {
-    let said = Said::of(Some(
-        "[sandbox]\nmode = \"on\"\negress = [\"forge\", \"everywhere\"]\n",
-    ));
+    let said = said("[sandbox]\nmode = \"on\"\negress = [\"forge\", \"everywhere\"]\n");
     assert_eq!(
         said.policy,
         Some(Policy {
@@ -51,7 +69,10 @@ fn a_plane_names_its_egress_by_preset_and_an_unknown_preset_is_refused() {
         })
     );
     assert_eq!(
-        said.refused,
+        said.refused
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
         [
             "sandbox.egress in charter.toml names \"everywhere\", which is not a preset — one of: \
           model-providers, forge, toolchains"
@@ -61,50 +82,35 @@ fn a_plane_names_its_egress_by_preset_and_an_unknown_preset_is_refused() {
 
 #[test]
 fn an_empty_egress_list_is_the_strictest_answer_and_is_kept() {
-    let said = Said::of(Some("[sandbox]\nmode = \"on\"\negress = []\n"));
+    let said = said("[sandbox]\nmode = \"on\"\negress = []\n");
     assert_eq!(said.policy, Some(Policy { egress: vec![] }));
 }
 
 #[test]
 fn a_key_the_schema_does_not_have_is_refused() {
-    let said = Said::of(Some("[sandbox]\nmode = \"on\"\nwritable = [\"/\"]\n"));
-    assert_eq!(
-        said.refused,
-        [
-            "sandbox.writable in charter.toml is not a key charter reads — [sandbox] holds mode \
-          and egress"
-        ]
-    );
+    let said = said("[sandbox]\nmode = \"on\"\nwritable = [\"/\"]\n");
+    assert_eq!(said.refused, [Refusal::UnknownKey("writable".to_owned())]);
     assert!(said.policy.is_some());
 }
 
 #[test]
-fn a_mode_that_is_not_a_word_charter_knows_leaves_the_plane_as_it_was() {
-    let said = Said::of(Some("[sandbox]\nmode = true\n"));
-    assert_eq!(said.policy, None);
-    assert_eq!(
-        said.refused,
-        ["sandbox.mode in charter.toml is not \"on\" — the one value a plane may give it"]
-    );
+fn only_the_committed_file_is_asked_for_sandbox_refusals() {
+    let off = "[sandbox]\nmode = \"off\"\n";
+    assert_eq!(refusals(off, "charter.toml").len(), 1);
+    assert_eq!(refusals(off, "charter.local.toml"), Vec::<String>::new());
 }
 
 // -------------------------------------------------------------------------------------
 // The denial classes (ADR 0067 §5): each one on its own, and none a plane can remove
 // -------------------------------------------------------------------------------------
 
-/// A plane at `/plane` on a machine whose home is `/home/op`, with `vaults` as its committed
-/// registry.
+/// A plane on a machine whose home is `/home/op`, with `vaults` as its committed registry.
 fn denied_with(vaults: Option<&str>, os: Os) -> (tempfile::TempDir, Denied) {
     let plane = tempfile::tempdir().expect("a plane");
     if let Some(vaults) = vaults {
         std::fs::write(plane.path().join("vaults.json"), vaults).expect("the registry");
     }
-    let machine = Machine {
-        env: crate::secrets::Env::of(&[]),
-        home: Some(std::path::PathBuf::from("/home/op")),
-        os,
-    };
-    let denied = Denied::of(plane.path(), &machine);
+    let denied = Denied::of(plane.path(), &machine(os));
     (plane, denied)
 }
 
@@ -202,6 +208,9 @@ fn a_chat_never_writes_the_approvals_a_person_gave() {
 
 #[test]
 fn off_a_runner_there_are_no_runner_internals_to_deny() {
+    // A placeholder for class 4, kept because ADR 0067 fixes the classes: charter has no
+    // runner yet (RR-5), so there is nothing of one to deny. The runner slice replaces this
+    // with the paths it installs, denied on a runner.
     let (_plane, denied) = denied_with(None, Os::Linux);
     assert!(
         denied
@@ -215,9 +224,13 @@ fn off_a_runner_there_are_no_runner_internals_to_deny() {
 // Egress: named presets, and the plane's own forge hosts
 // -------------------------------------------------------------------------------------
 
+fn hosts_of(presets: &[Preset], plane: Option<&str>) -> Vec<String> {
+    hosts(presets, &Plane::of(plane))
+}
+
 #[test]
 fn the_forge_preset_adds_the_self_managed_hosts_the_plane_tracks() {
-    let hosts = hosts(
+    let hosts = hosts_of(
         &[Preset::Forge],
         Some("[[forge]]\nkind = \"gitlab\"\nhost = \"git.example.org:8443\"\n"),
     );
@@ -232,18 +245,18 @@ fn the_forge_preset_adds_the_self_managed_hosts_the_plane_tracks() {
 
 #[test]
 fn a_forge_host_that_is_not_a_host_is_never_let_through() {
-    let hosts = hosts(&[Preset::Forge], Some("[[forge]]\nhost = \"*\"\n"));
+    let hosts = hosts_of(&[Preset::Forge], Some("[[forge]]\nhost = \"*\"\n"));
     assert!(!hosts.contains(&"*".to_owned()), "{hosts:?}");
 }
 
 #[test]
 fn no_preset_is_no_host() {
-    assert_eq!(hosts(&[], None), Vec::<String>::new());
+    assert_eq!(hosts_of(&[], None), Vec::<String>::new());
 }
 
 #[test]
 fn the_model_provider_preset_reaches_the_three_harnesses_providers() {
-    let hosts = hosts(&[Preset::ModelProviders], None);
+    let hosts = hosts_of(&[Preset::ModelProviders], None);
     for host in ["api.anthropic.com", "api.openai.com", "opencode.ai"] {
         assert!(hosts.contains(&host.to_owned()), "{host}: {hosts:?}");
     }
@@ -287,6 +300,12 @@ fn a_claude_code_chat_reaches_only_the_presets_hosts_and_is_never_asked_to_widen
 }
 
 #[test]
+fn claude_codes_web_tools_are_denied_because_the_allowed_hosts_do_not_hold_them() {
+    let settings = claude::settings(&compiled(Denied::default(), Os::MacOs)).expect("compiles");
+    assert_eq!(settings.deny, ["WebFetch", "WebSearch"]);
+}
+
+#[test]
 fn a_path_denied_to_read_is_denied_to_the_sandbox_and_to_claude_codes_own_tools() {
     let denied = Denied {
         paths: vec![one(Class::Vaults, "/p/.charter/vaults", Access::ReadWrite)],
@@ -301,7 +320,7 @@ fn a_path_denied_to_read_is_denied_to_the_sandbox_and_to_claude_codes_own_tools(
         })
     );
     assert_eq!(
-        settings.deny,
+        settings.deny[2..],
         [
             "Read(//p/.charter/vaults)",
             "Read(//p/.charter/vaults/**)",
@@ -323,37 +342,28 @@ fn a_path_denied_to_write_stays_readable() {
         serde_json::json!({"denyRead": [], "denyWrite": ["/p/.charter/app"]})
     );
     assert_eq!(
-        settings.deny,
+        settings.deny[2..],
         ["Edit(//p/.charter/app)", "Edit(//p/.charter/app/**)"]
     );
 }
 
 #[test]
-fn on_macos_claude_code_cannot_deny_the_credential_store_so_the_chat_does_not_start() {
-    // No key in its settings denies it there (its schema, 2.1.285).
-    let denied = Denied {
-        paths: vec![],
-        services: vec![Service::CredentialStore],
-    };
-    let refused = claude::settings(&compiled(denied, Os::MacOs)).expect_err("refused");
-    assert_eq!(refused.class, Class::Vaults);
-}
-
-#[test]
-fn on_linux_claude_codes_sandbox_already_cuts_the_credential_store_off() {
-    // Its sandbox there already keeps a command away from the credential store.
-    let denied = Denied {
-        paths: vec![],
-        services: vec![Service::CredentialStore],
-    };
-    assert!(claude::settings(&compiled(denied, Os::Linux)).is_ok());
+fn claude_code_cannot_hold_the_credential_store_on_any_system_so_the_chat_does_not_start() {
+    // No key in its settings denies it (its schema, 2.1.285), and no system's sandbox has been
+    // measured keeping a command away from it without one.
+    for os in [Os::MacOs, Os::Linux] {
+        let denied = Denied {
+            paths: vec![],
+            services: vec![Service::CredentialStore],
+        };
+        let refused = claude::settings(&compiled(denied, os)).expect_err("refused");
+        assert_eq!(refused.class(), Class::Vaults, "{os:?}");
+    }
 }
 
 // -------------------------------------------------------------------------------------
 // The start: sandboxed, or not started (fail closed)
 // -------------------------------------------------------------------------------------
-
-use crate::harness::Harness;
 
 fn plane_saying(toml: &str) -> tempfile::TempDir {
     let plane = tempfile::tempdir().expect("a plane");
@@ -381,39 +391,39 @@ fn a_chat_in_a_plane_that_says_nothing_starts_as_it_always_has() {
 }
 
 #[test]
-fn a_claude_code_chat_in_a_sandboxed_plane_starts_sandboxed() {
+fn a_claude_code_chat_in_a_sandboxed_plane_starts_sandboxed_for_claude_code() {
     let plane = plane_saying(ON);
-    let started = for_start(
+    let applied = for_start(
         Harness::ClaudeCode,
         plane.path(),
         &machine(Os::Linux),
         &|_| true,
     )
-    .expect("starts");
-    let Some(Applied::ClaudeCode(settings)) = started else {
-        panic!("not sandboxed: {started:?}");
-    };
+    .expect("starts")
+    .expect("sandboxed");
+    assert_eq!(applied.harness(), Harness::ClaudeCode);
+    let Form::ClaudeCode(settings) = applied.form();
     assert_eq!(settings.sandbox["enabled"], true);
 }
 
 #[test]
-fn a_harness_charter_does_not_compile_for_yet_does_not_start_in_a_sandboxed_plane() {
+fn a_harness_charter_has_no_compiler_for_does_not_start_in_a_sandboxed_plane() {
     let plane = plane_saying(ON);
-    for (harness, title) in [(Harness::Codex, "Codex"), (Harness::Opencode, "opencode")] {
-        let refused =
-            for_start(harness, plane.path(), &machine(Os::Linux), &|_| true).expect_err("refused");
-        assert!(
-            refused.starts_with(&format!(
-                "this plane runs every chat sandboxed, and charter cannot sandbox a {title} \
-                 chat yet"
-            )),
-            "{refused}"
-        );
+    for harness in [Harness::Codex, Harness::Opencode] {
+        let refused = for_start(harness, plane.path(), &machine(Os::Linux), &|_| true);
+        assert_eq!(refused, Err(NotStarted::NoCompiler(harness)));
     }
 }
 
 #[test]
-fn a_machine_without_the_sandboxs_programs_does_not_start_the_chat_and_names_them() {
+fn a_mistyped_mode_does_not_start_a_chat_unsandboxed() {
+    let plane = plane_saying("[sandbox]\nmode = \"of\"\n");
+    let refused = for_start(Harness::Codex, plane.path(), &machine(Os::Linux), &|_| true);
+    assert_eq!(refused, Err(NotStarted::NoCompiler(Harness::Codex)));
+}
+
+#[test]
+fn a_linux_machine_without_socat_is_told_which_program_and_how_to_install_it() {
     let plane = plane_saying(ON);
     let refused = for_start(
         Harness::ClaudeCode,
@@ -422,8 +432,22 @@ fn a_machine_without_the_sandboxs_programs_does_not_start_the_chat_and_names_the
         &|program| program == "bwrap",
     )
     .expect_err("refused");
-    assert!(refused.contains("socat"), "{refused}");
-    assert!(!refused.contains("bwrap,"), "{refused}");
+    assert_eq!(
+        refused.to_string(),
+        "this plane runs every chat sandboxed, and this machine cannot apply the sandbox: socat \
+         is not installed — install it with `sudo apt install socat` or `sudo dnf install \
+         socat`. Nothing was started."
+    );
+}
+
+#[test]
+fn bwrap_is_installed_as_the_bubblewrap_package() {
+    let missing = backend::missing(Os::Linux, &|_| false).expect("missing");
+    assert_eq!(
+        missing.to_string(),
+        "bwrap and socat are not installed — install them with `sudo apt install bubblewrap socat` \
+         or `sudo dnf install bubblewrap socat`"
+    );
 }
 
 #[test]
@@ -434,13 +458,17 @@ fn on_windows_a_sandboxed_plane_starts_no_chat_until_a_backend_exists() {
         plane.path(),
         &machine(Os::Windows),
         &|_| true,
-    )
-    .expect_err("refused");
-    assert!(refused.contains("Windows"), "{refused}");
+    );
+    assert_eq!(
+        refused,
+        Err(NotStarted::NoBackend(backend::Missing::NoBackend(
+            Os::Windows
+        )))
+    );
 }
 
 #[test]
-fn a_class_the_harness_cannot_hold_here_is_named_in_the_refusal() {
+fn a_keyring_vault_in_a_sandboxed_plane_is_named_in_the_refusal() {
     let plane = plane_saying(ON);
     std::fs::write(
         plane.path().join("vaults.json"),
@@ -454,6 +482,12 @@ fn a_class_the_harness_cannot_hold_here_is_named_in_the_refusal() {
         &|_| true,
     )
     .expect_err("refused");
-    assert!(refused.contains("vaults"), "{refused}");
-    assert!(refused.contains("credential store"), "{refused}");
+    assert_eq!(
+        refused.to_string(),
+        "this plane runs every chat sandboxed, and Claude Code cannot keep a chat away from the \
+         operating system's credential store, where this plane's keyring vaults are kept, so \
+         the vaults class cannot be held. Until charter can wrap the harness or resolve secrets \
+         for it, a sandboxed plane with a keyring vault starts no Claude Code chat. Nothing was \
+         started."
+    );
 }

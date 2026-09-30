@@ -162,6 +162,9 @@ pub struct Chats {
     putting_back: AtomicBool,
 }
 
+/// The arguments and the environment that arm a chat's harness for that chat alone.
+type Armed = (Vec<String>, Vec<(String, String)>);
+
 impl Chats {
     /// Chats whose record is written by `record_it` every time what is open changes.
     ///
@@ -239,28 +242,70 @@ impl Chats {
     /// `plugins` is the harness's own plugins the project chose for this chat
     /// (`charter_core::start::Ready::plugins`, charter-app#274); empty for a chat on no profile.
     ///
-    /// `sandbox` is the sandbox the core compiled for this chat
-    /// (`charter_core::start::Ready::sandbox`, ADR 0067); none for a chat on no profile.
+    /// `sandbox` is the sandbox the core compiled for this chat (ADR 0067), or none.
+    ///
+    /// **Fail closed.** A sandbox compiled for another harness, or one the harness is not armed
+    /// to carry here (the app shipped without its plugin or its binary), refuses the chat rather
+    /// than starting it without the sandbox.
     fn state_hooks(
         &self,
         harness: Option<Harness>,
         cwd: Option<&std::path::Path>,
         plugins: &charter_core::harness_plugin::Chosen,
         sandbox: Option<&charter_core::sandbox::Applied>,
-    ) -> (Vec<String>, Vec<(String, String)>) {
+    ) -> Result<Armed, String> {
+        let not_carried = "this plane runs every chat sandboxed, and this app cannot hand the \
+                           sandbox to this chat's harness, so nothing was started";
+        if let Some(applied) = sandbox
+            && harness != Some(applied.harness())
+        {
+            return Err(format!("{not_carried}."));
+        }
         let (Some(harness), Some(binary)) = (harness, self.shipped.binary.as_deref()) else {
-            return (Vec::new(), Vec::new());
+            return match sandbox {
+                Some(_) => Err(format!(
+                    "{not_carried}: charter's own binary was not found."
+                )),
+                None => Ok((Vec::new(), Vec::new())),
+            };
         };
         let kit = charter_core::harness::Kit {
             binary,
             plugin: self.shipped.plugin.as_deref(),
         };
-        match harness.state_hooks_under(kit, cwd, plugins, sandbox) {
-            StateHooks::ThisSessionOnly { args, env, .. } => (args, env),
+        match harness.state_hooks(kit, cwd, plugins, sandbox) {
+            StateHooks::ThisSessionOnly { args, env, .. } => Ok((args, env)),
+            StateHooks::None if sandbox.is_some() => Err(format!(
+                "{not_carried}: charter's plugin, which carries it, was not found."
+            )),
             // Nothing is added to the command line, and nothing of the operator's is written
             // behind their back. The chat shows `unknown`.
-            StateHooks::None => (Vec::new(), Vec::new()),
+            StateHooks::None => Ok((Vec::new(), Vec::new())),
         }
+    }
+
+    /// The sandbox a chat that is not on a profile starts under: the same decision
+    /// `charter_core::start::ready` makes for one that is (ADR 0067). A chat whose program is a
+    /// harness, in a plane that turned the sandbox on, is sandboxed or refused. A shell, or a
+    /// chat outside any plane, is the operator's own and is left as it was.
+    fn sandbox_off_profile(chat: &Chat) -> Result<Option<charter_core::sandbox::Applied>, String> {
+        let Some(harness) = chat.harness() else {
+            return Ok(None);
+        };
+        let Some(root) = chat
+            .cwd
+            .as_deref()
+            .and_then(|cwd| charter_core::plane::find_root(cwd).ok())
+        else {
+            return Ok(None);
+        };
+        charter_core::sandbox::for_start(
+            harness,
+            &root,
+            &charter_core::sandbox::Machine::this(),
+            &charter_core::sandbox::backend::installed,
+        )
+        .map_err(|refused| refused.to_string())
     }
 
     /// Starts a chat the core has already worked out the launch for — a chat on a profile.
@@ -341,6 +386,8 @@ impl Chats {
     /// For a chat that is NOT on a profile — the operator's shell — where what runs is
     /// decided from the record alone.
     pub fn start(&self, chat: &Chat, size: Size) -> Result<u32, String> {
+        // Before anything is resolved or run, as for a chat on a profile.
+        let sandbox = Self::sandbox_off_profile(chat)?;
         let launch = chat.launch();
         // A shell tab's shims, and the start files that keep them first. Never recorded: they
         // are this build's, and worked out again at every start.
@@ -360,8 +407,7 @@ impl Chats {
             // A chat on no profile has no project choice to carry: it runs as it always did,
             // with the pins alone.
             &std::collections::BTreeMap::new(),
-            // Nor a sandbox: a chat on no profile is not readied by the core.
-            None,
+            sandbox.as_ref(),
             size,
         )
     }
@@ -423,7 +469,7 @@ impl Chats {
         // rest on (M8.3) — then the state hooks, then charter's own words: a chat's recorded
         // arguments may end in a positional prompt that nothing may come after.
         // `charter_core::start::Ready::command_line` is the one place that order is decided.
-        let (hooks, armed) = self.state_hooks(harness, chat.cwd.as_deref(), plugins, sandbox);
+        let (hooks, armed) = self.state_hooks(harness, chat.cwd.as_deref(), plugins, sandbox)?;
         let all = charter_core::start::Ready::line(command, hooks, args);
         let mut env = env;
         env.extend(armed);
@@ -1455,6 +1501,144 @@ mod tests {
 
         let last = lock(&wrote).last().cloned().expect("a record was written");
         assert_eq!(names_in(&last), ["b", "a", "c"]);
+    }
+
+    // --- the sandbox (ADR 0067): a chat on no profile goes through the same decision ------- //
+
+    /// A plane that turned the sandbox on.
+    fn a_sandboxed_plane() -> tempfile::TempDir {
+        let plane = tempfile::tempdir().expect("a plane");
+        std::fs::write(
+            plane.path().join(charter_core::plane::MANIFEST),
+            "[sandbox]\nmode = \"on\"\n",
+        )
+        .expect("charter.toml");
+        plane
+    }
+
+    /// A chat on no profile whose program is `program`, standing in `plane`.
+    fn a_chat_in(plane: &std::path::Path, program: &str) -> Chat {
+        Chat {
+            cwd: Some(plane.to_path_buf()),
+            ..chat(program, "off-profile", None)
+        }
+    }
+
+    #[test]
+    fn a_harness_opened_on_no_profile_in_a_sandboxed_plane_is_refused_not_run_unconfined() {
+        // `open_session` with a harness as its program: no profile, and still a harness.
+        let plane = a_sandboxed_plane();
+        let chats = Chats::new();
+
+        let refused = chats
+            .start(&a_chat_in(plane.path(), "/nowhere/codex"), SIZE)
+            .expect_err("not started");
+
+        assert!(
+            refused.contains("cannot sandbox a Codex chat yet"),
+            "{refused}"
+        );
+        assert!(chats.in_order().is_empty(), "a chat was opened");
+    }
+
+    #[test]
+    fn a_recorded_harness_chat_on_no_profile_is_not_put_back_unconfined() {
+        let plane = a_sandboxed_plane();
+        // A program that would run, so only the sandbox decision can keep it from starting.
+        let codex = stand_in::program(plane.path(), "codex", "#!/bin/sh\nsleep 600\n");
+        let chats = Chats::new();
+
+        let open = chats.put_back(
+            &Record {
+                chats: vec![a_chat_in(plane.path(), &codex.display().to_string())],
+                ..Default::default()
+            },
+            plane.path(),
+            SIZE,
+        );
+
+        assert!(open.is_empty(), "it was put back");
+    }
+
+    #[test]
+    fn a_shell_in_a_sandboxed_plane_is_still_the_operators_own() {
+        let plane = a_sandboxed_plane();
+        let chats = Chats::new();
+
+        let session = chats
+            .start(&a_chat_in(plane.path(), "/bin/sh"), SIZE)
+            .expect("a shell starts");
+
+        let _ = chats.close(session);
+    }
+
+    /// The sandbox the core compiles for a Claude Code chat in `plane`, on a machine that has
+    /// every backend program — so the answer does not depend on the machine the test runs on.
+    fn a_claude_sandbox(plane: &std::path::Path) -> charter_core::sandbox::Applied {
+        let machine = charter_core::sandbox::Machine {
+            env: charter_core::secrets::Env::of(&[]),
+            home: None,
+            os: charter_core::sandbox::Os::Linux,
+        };
+        charter_core::sandbox::for_start(Harness::ClaudeCode, plane, &machine, &|_| true)
+            .expect("compiles")
+            .expect("sandboxed")
+    }
+
+    fn ready_under(
+        harness: Harness,
+        sandbox: charter_core::sandbox::Applied,
+    ) -> charter_core::start::Ready {
+        charter_core::start::Ready {
+            program: "/bin/sh".to_owned(),
+            command: vec!["-c".to_owned(), "sleep 30".to_owned()],
+            args: Vec::new(),
+            env: Vec::new(),
+            cwd: None,
+            harness: Some(harness),
+            session: None,
+            how: charter_core::reopen::Reopened::Fresh(Fresh::NoConversationRecorded),
+            plugins: std::collections::BTreeMap::new(),
+            sandbox: Some(sandbox),
+        }
+    }
+
+    #[test]
+    fn a_sandbox_the_app_is_not_armed_to_hand_over_refuses_the_chat() {
+        // No plugin shipped: Claude Code is armed with nothing, so the sandbox would be
+        // dropped. The chat is refused instead.
+        let plane = a_sandboxed_plane();
+        let mut chats = Chats::new();
+        chats.arming_with(crate::Shipped {
+            binary: Some(plane.path().join("charter")),
+            plugin: None,
+            shims: None,
+        });
+        let ready = ready_under(Harness::ClaudeCode, a_claude_sandbox(plane.path()));
+
+        let refused = chats
+            .start_ready(&chat("/bin/sh", "c", None), &ready, SIZE)
+            .expect_err("not started");
+
+        assert!(refused.contains("charter's plugin"), "{refused}");
+    }
+
+    #[test]
+    fn a_sandbox_compiled_for_one_harness_never_reaches_another() {
+        let plane = a_sandboxed_plane();
+        let mut chats = Chats::new();
+        chats.arming_with(crate::Shipped {
+            binary: Some(plane.path().join("charter")),
+            plugin: Some(plane.path().join("plugin")),
+            shims: None,
+        });
+        let ready = ready_under(Harness::Codex, a_claude_sandbox(plane.path()));
+
+        let refused = chats
+            .start_ready(&chat("/bin/sh", "c", None), &ready, SIZE)
+            .expect_err("not started");
+
+        assert!(refused.contains("cannot hand the sandbox"), "{refused}");
     }
 
     #[test]
@@ -2697,17 +2881,6 @@ mod tests {
         shared: &str,
         profile: impl Fn(&std::path::Path) -> String,
     ) -> (Vec<String>, String) {
-        argv_of_a_chat_under(command, shared, profile, None)
-    }
-
-    /// The same, for a chat the core readied under `sandbox`. Set here rather than by a
-    /// `[sandbox]` in `shared`, so the answer is not whether this machine can apply one.
-    fn argv_of_a_chat_under(
-        command: &[&str],
-        shared: &str,
-        profile: impl Fn(&std::path::Path) -> String,
-        sandbox: Option<charter_core::sandbox::Applied>,
-    ) -> (Vec<String>, String) {
         let dir = tempfile::tempdir().expect("a directory");
         let root = dir.path().join("plane");
         std::fs::create_dir_all(&root).expect("the plane");
@@ -2760,7 +2933,6 @@ mod tests {
             &root,
         )
         .expect("the chat starts");
-        let ready = charter_core::start::Ready { sandbox, ..ready };
         let chat = Chat {
             program: ready.program.clone(),
             args: Vec::new(),
@@ -2837,27 +3009,6 @@ mod tests {
                 "figma@official": false,
             }),
             "{argv:?}"
-        );
-    }
-
-    #[test]
-    fn a_sandboxed_claude_code_chat_runs_with_its_sandbox_in_its_settings() {
-        // ADR 0067: what the core compiled reaches the program, on the one `--settings`.
-        let applied =
-            charter_core::sandbox::Applied::ClaudeCode(charter_core::sandbox::claude::Settings {
-                sandbox: serde_json::json!({"enabled": true, "failIfUnavailable": true}),
-                deny: vec!["Read(//p/v)".to_owned()],
-            });
-        let (argv, _) = argv_of_a_chat_under(&["claude"], "", |_| String::new(), Some(applied));
-        let settings: serde_json::Value = serde_json::from_str(&argv[3]).expect("JSON");
-        assert_eq!(
-            settings["sandbox"],
-            serde_json::json!({"enabled": true, "failIfUnavailable": true}),
-            "{argv:?}"
-        );
-        assert_eq!(
-            settings["permissions"]["deny"],
-            serde_json::json!(["Read(//p/v)"])
         );
     }
 

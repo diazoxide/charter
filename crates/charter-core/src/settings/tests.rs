@@ -387,7 +387,8 @@ fn the_shared_file_may_turn_the_sandbox_on_and_never_off() {
         refusals(dir.path(), Which::Shared, "[sandbox]\nmode = \"off\"\n"),
         [
             "sandbox.mode in charter.toml cannot be \"off\": a committed file may turn the \
-          sandbox on and never off — only a person turns it off, for one chat"
+          sandbox on and never off — only a person turns it off, for one chat; so the \
+          sandbox is on"
         ]
     );
 }
