@@ -5,13 +5,18 @@ of them needs you. This file is the glossary: the words, not how they are built.
 
 ## Language
 
+charter has five concepts: **Project**, **Workspace**, **Chat**, **Persona** and **Memory**.
+Every other word here is a part, a view or a setting of one of them, and the first hour's
+screens say only those five plus **Save** and **branch** (ADR 0072).
+
 ### The plane and what lives in it
 
 **Plane**:
 The git repo a project's charter lives in: its settings, personas, memory, todos and
 workspaces. It is the project's database, and a change counts once it reaches the plane's
-remote.
-_Avoid_: control plane (in UI text), config repo, charter repo
+remote. It is the word of the code and the plane format; the window, `charter --help` and the
+user docs say **project** (ADR 0072).
+_Avoid_: plane (in UI text), control plane, config repo, charter repo
 
 **charter-plane**:
 The charter project's own plane: the one charter is developed from, public as an example of a
@@ -19,13 +24,41 @@ plane. It is not the product. The product, the app and its core, is **charter**.
 _Avoid_: charter (for the plane), the charter repo
 
 **Project**:
-One plane as the app has it open. The app can hold several.
-_Avoid_: instance
+One of the five concepts: the git repo that holds a team's workspaces, personas, memory and
+settings, and the tab the app shows it in. The app can hold several. Vaults, save modes,
+extensions and everything that holds for the whole machine are its settings. A code repo is
+never a project, on any forge: it is a **repo** (ADR 0072).
+_Avoid_: instance, plane (in UI text), project (for a GitLab repo)
 
 **Workspace**:
-A named piece of work inside a plane, with its own charter (`workspace.md`), memory, todos and
-repos.
+One of the five concepts: a named piece of work inside a plane, with its own charter
+(`workspace.md`), memory, todos and repos.
 _Avoid_: task, context
+
+**Chat**:
+One of the five concepts: one conversation with an agent, in a tab, in one workspace or at the
+plane root. It is where work happens and what needs you. It has a number the window shows
+(`steward 3`) and an id that never changes, has one or more **runs**, and shows its
+**branches**, one per repo it works in (ADR 0066, ADR 0072).
+_Avoid_: session (that is the process), thread, agent, conversation (that is the harness's)
+
+**Persona**:
+One of the five concepts: a role a chat can take, with its own charter (`persona.md`), memory
+and vault, handed to the harness as a sub-agent. Its curation actions and its logs are parts of
+it.
+_Avoid_: agent, sub-agent (that is the harness's form of it), bot, role (as the name)
+
+**Memory**:
+One of the five concepts: what charter keeps so the next chat starts knowing what earlier ones
+learned: a workspace's memory, a persona's, shared memory (`personas/_shared/memory/`) and
+session records. `charter recall` searches it as one, and a chat's briefing is drawn from it.
+_Avoid_: knowledge, rules, notes (for the whole of it), context
+
+**Work item**:
+One piece of work a tracker holds: a forge issue, epic or sub-issue, or a todo (the plane's own
+tracker). A chat links to at most one; a work item may have many chats. It is part of a
+Workspace, shown in its Work section, and never a sixth concept (FW-5, V3).
+_Avoid_: task, ticket (in UI text), card (that is how a board draws one)
 
 **Plane root**:
 The plane's own directory, as a place a chat works — and anywhere else in the plane that is no
@@ -46,7 +79,16 @@ one chat works on its own branch. Git says which pieces exist. The piece log say
 cannot: that charter cut it (`claimed`), and whether its worker declared it `done` or
 `abandoned`. A piece that declared nothing is **silent**, reported as an age and never as a
 failure.
-_Avoid_: task, slot, branch (for the directory)
+On screen a piece is shown as its **branch**; "piece" stays in the plane format, the code and
+`charter worktree` (ADR 0072).
+_Avoid_: task, slot, branch (for the directory), piece (in UI text)
+
+**Branch** (of a chat):
+What the window shows for a piece: one row per repo a chat works in, reading *`<branch>` in
+`<repo>`*. A chat working in a repo's shared clone shows the branch the clone has checked out,
+marked *shared*. **New branch** cuts a piece; **Remove folder** removes the worktree and keeps
+the branch (ADR 0072).
+_Avoid_: the chat's branch (singular: a chat may work in several repos), piece, worktree (in UI text)
 
 **Change** (cross-repo):
 One piece of work across several of a workspace's repos, recorded as intent only in
@@ -176,7 +218,12 @@ _Avoid_: stale, behind, outdated, Incoming (that is the remote's commits)
 
 **Save**:
 Taking what changed in the plane or a repo as far as its mode allows: commit, push, PR, merge.
-_Avoid_: sync (that word is for fetching repos), commit (a save may be more than one), publish
+_Avoid_: sync (that word is `charter sync`'s), commit (a save may be more than one), publish
+
+**Sync**:
+Fetching every clone in a workspace and fast-forwarding the ones that hold no work:
+`charter sync`, and *Sync repos* in the window. Nothing else is called Sync (ADR 0072).
+_Avoid_: sync (for a save, a version move, writing persona agents, or any state between devices)
 
 **Mode**:
 How far a save goes: `off`, `commit`, `push`, `pr` or `pr-merge`. Each value includes the
