@@ -1,6 +1,6 @@
 # A chat's git runs charter's hooks through its environment
 
-**Proposed 2026-09-30**, drafted for program-map ticket SQ-16 (charter#592) from the
+**Accepted 2026-10-01** by the operator (ruling V26), drafted for program-map ticket SQ-16 (charter#592) from the
 `/code-review` of charter#770. It adds a line to
 [ADR 0051](0051-the-app-saves-the-plane-and-each-repo-by-a-mode-the-project-declares.md)'s checks
 and relies on [ADR 0067](0067-a-chat-runs-in-a-sandbox-charter-compiles-for-its-harness.md) for
@@ -110,13 +110,13 @@ waits on keystroke by keystroke.
 | the app's `Opening::git_hooks` | which chats are armed: every chat on a harness, no shell |
 | `docs/plane-format.md` | `<app data>/git-hooks/`, Machine, device-bound, rebuildable |
 
-## For the operator's ruling
+## Ruled (V26, 2026-10-01)
 
-1. **Should a refused commit's needs-you item survive the chat's next prompt?** Today it clears
-   the way a report back does. The agent has git's refusal in front of it, so the next prompt is
-   the operator engaging with the chat. *Recommendation:* keep it as it is. The audit chain
-   (AU-1) is where a refusal should outlive the queue, once that exists.
-2. **Should `git cherry-pick`, `git rebase` and `git am` also be scanned** (in `post-rewrite`,
-   after the fact, as a warning and not a block)? *Recommendation:* not now. They mostly replay
-   commits that were already scanned, and a warning that cannot block adds noise without adding
-   a guarantee.
+The operator accepted both recommendations:
+
+1. **V26a: a refused commit's needs-you item clears on the chat's next prompt,** the way a
+   report back does. The audit chain (AU-1, ADR 0075) is the lasting record of a refusal, not
+   the queue.
+2. **V26b: `git cherry-pick`, `git rebase` and `git am` are not scanned for now.** This is a
+   recorded gap: they mostly replay commits that were already scanned, and a check that could
+   only warn after the fact adds noise without a guarantee.
