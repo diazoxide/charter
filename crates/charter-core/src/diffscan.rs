@@ -109,7 +109,11 @@ fn in_diff(diff: &str) -> Result<Vec<Finding>, String> {
 /// The file a `+++ ` header names: `b/<path>`, or git's C-quoted `"b/<path>"` for a name
 /// holding a quote, a backslash, a control character or (with `core.quotePath` off) nothing
 /// else; `None` for `/dev/null`, a deletion. Anything else is an error.
+///
+/// git ends a name that holds a space with a tab (`diff.c`, so `patch` can find where the name
+/// stops); that one tab is not part of the name.
 fn new_path(header: &str) -> Result<Option<String>, String> {
+    let header = header.strip_suffix('\t').unwrap_or(header);
     if header == "/dev/null" {
         return Ok(None);
     }
@@ -301,7 +305,12 @@ mod tests {
     #[test]
     fn a_file_whose_name_git_quotes_is_scanned_under_its_own_name() {
         let (_dir, repo) = repo();
-        for name in ["say \"hi\".txt", "tab\there.txt", "back\\slash.txt"] {
+        for name in [
+            "say \"hi\".txt",
+            "tab\there.txt",
+            "back\\slash.txt",
+            "plain space.txt",
+        ] {
             std::fs::write(repo.join(name), format!("{}\n", key())).unwrap();
         }
         testgit::run(&repo, &["add", "."]);
