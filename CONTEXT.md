@@ -156,12 +156,12 @@ _Avoid_: app data (for the Machine tier as a whole), cache (for clone state), lo
 
 **Run**:
 One stretch of a chat's conversation with a harness, over which its persona, harness, profile,
-model source, device and sandbox stay the same. A chat has one or more runs, one after another. A
-new one begins when the chat starts, on `/clear`, when the app reopens it, when it wakes, when it
-starts again without its conversation, or when any of those attributes changes. Compaction keeps
-the run. A **child run** is a sub-agent or teammate the harness spawns, with the run it came from
-as its parent. The run is who an action is attributed to (W8's "agent run"), and budgets add up
-over a chat's runs (ADR 0066).
+model source, device, sandbox and harness level stay the same. A chat has one or more runs, one
+after another. A new one begins when the chat starts, on `/clear`, when the app reopens it, when
+it wakes, when it starts again without its conversation, or when any of those attributes
+changes. Compaction keeps the run. A **child run** is a sub-agent or teammate the harness
+spawns, with the run it came from as its parent. The run is who an action is attributed to (W8's
+"agent run"), and budgets add up over a chat's runs (ADRs 0066, 0073).
 _Avoid_: session (that is the process), conversation (that is the harness's), turn
 
 **Device**:
@@ -377,6 +377,32 @@ _Avoid_: shim, redirect
 The plane-relative paths an extension declares it writes. charter hands them resolved with
 each request and reports a change outside them; it does not stop one.
 _Avoid_: sandbox, allowed paths, scope (as if enforced)
+
+**Harness declaration**:
+Data that says how to start one harness, how to name and resume its sessions, which levels it
+offers and what it can do. The ones for Claude Code, Codex and opencode ship with charter; a
+project may declare more, which each machine approves before they run, and never replaces a
+built-in's (ADR 0073, proposed).
+_Avoid_: harness definition, harness config (that is the harness's own), profile (that is which
+program runs on this machine)
+
+**Harness level**:
+How much charter learns from a chat's harness, fixed for the run: **1**, the terminal alone;
+**2**, the terminal with the harness's own hooks reporting to charter; **3**, a structured
+protocol, ACP or the harness's own. Never shown on a first-hour surface (ADR 0073, proposed).
+_Avoid_: tier (that is a store's), mode, integration level
+
+**Harness adapter**:
+charter code that arms one harness through its own mechanism for one chat, with nothing written
+into the harness's config: what level 2 and a harness's own protocol need. Never a copy, patch or
+wrapper of the harness's program (ADRs 0050, 0073).
+_Avoid_: wrapper, driver, plugin (that is the harness's)
+
+**Harness capability**:
+One thing a harness does or does not do for a chat, such as report that it is waiting: yes, no
+with the fallback charter uses, or unknown, which reads as no. The capability card shows the
+*no*s in plain words (ADR 0073, proposed).
+_Avoid_: capability (unqualified, which is an extension's), feature, support
 
 **Harness plugin**:
 A Claude Code, Codex or opencode plugin, chosen per project. "Plugin" on its own always means
