@@ -735,7 +735,7 @@ impl Waiting for InPlane {
     fn type_now(&self) {
         if let Ok(held) = self.held() {
             held.typed().type_now(self.session, |text| {
-                held.chats().sessions().input(self.session, text)
+                held.chats().sessions().input(self.session, text.as_bytes())
             });
         }
     }

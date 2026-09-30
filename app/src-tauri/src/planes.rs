@@ -5133,7 +5133,7 @@ mod tests {
         // End of input: `cat` exits 0 on its own, as a harness does on `/exit`.
         held.chats()
             .sessions()
-            .input(session, "\u{4}")
+            .input(session, b"\x04")
             .expect("the chat takes input");
 
         assert_eq!(

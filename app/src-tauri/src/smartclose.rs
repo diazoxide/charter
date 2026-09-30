@@ -344,7 +344,9 @@ pub fn begin(held: &Arc<Held>, session: u32) -> Result<Phase, String> {
     }
     let number = closing.dealt.fetch_add(1, Ordering::SeqCst);
     let phase = if facts.state == State::Waiting {
-        held.chats().sessions().input(session, sent_as())?;
+        held.chats()
+            .sessions()
+            .input(session, sent_as().as_bytes())?;
         chats.insert(session, Entry { sent: true, number });
         Phase::Sent
     } else {
@@ -377,7 +379,7 @@ pub fn cancel(held: &Held, session: u32) {
 /// and asking nothing — is sent its prompt.
 pub fn reported(held: &Arc<Held>, report: &Report) {
     reported_sending(held, report, |chat, prompt| {
-        held.chats().sessions().input(chat, prompt)
+        held.chats().sessions().input(chat, prompt.as_bytes())
     });
 }
 

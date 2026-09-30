@@ -18,7 +18,8 @@ use charter_core::reopen::{Chat, Record, Reopened, View};
 
 use charter_core::harness::StateHooks;
 
-use crate::sessions::{Opening, Reporting, Sessions};
+use crate::host::{Opening, SessionHost};
+use crate::sessions::{Reporting, Sessions};
 
 /// Every identity variable a vault of the plane at `cwd` declares — both halves of each `env`
 /// binding — so a chat is started without any of them (#271 review, U6). A `cwd` outside a
@@ -118,7 +119,8 @@ struct Running {
 
 /// Every chat the app has open, and which of them is in front.
 pub struct Chats {
-    sessions: Sessions,
+    /// Whatever runs the sessions (FD-3): everything here reaches a session through it.
+    sessions: Box<dyn SessionHost>,
     /// Told as each chat starts, before its program does.
     starting: Mutex<Option<Starting>>,
     /// Told when a chat that was announced turned out not to start.
@@ -171,8 +173,13 @@ impl Chats {
 
     /// The same, with sessions that report what their harness does to `reporting`'s socket.
     pub fn recorded_by_reporting_to(record_it: Recorder, reporting: Option<Reporting>) -> Self {
+        Self::on_host(record_it, Box::new(Sessions::reporting_to(reporting)))
+    }
+
+    /// The same, on `host` — whatever runs the sessions, which is [`Sessions`] in the app.
+    pub fn on_host(record_it: Recorder, host: Box<dyn SessionHost>) -> Self {
         Self {
-            sessions: Sessions::reporting_to(reporting),
+            sessions: host,
             starting: Mutex::new(None),
             never_started: Mutex::new(None),
             shipped: crate::Shipped::default(),
@@ -208,8 +215,8 @@ impl Chats {
     }
 
     /// The sessions underneath, for everything that is about a terminal and not about a chat.
-    pub fn sessions(&self) -> &Sessions {
-        &self.sessions
+    pub fn sessions(&self) -> &dyn SessionHost {
+        self.sessions.as_ref()
     }
 
     /// What the app ships that a chat is armed with: the `charter` binary a hook runs and the
@@ -2891,5 +2898,125 @@ mod tests {
 
         assert!(args.is_empty());
         assert!(env.is_empty(), "{env:?}");
+    }
+
+    // --- the session host is a seam (FD-3) ------------------------------------------- //
+
+    /// A session host that runs nothing: it deals numbers, remembers what it was asked to run,
+    /// and says what is running. What `Chats` needs of a host and nothing more, so a chat layer
+    /// that reached past [`SessionHost`] to a pty would not compile against it.
+    #[derive(Default)]
+    struct Pretend {
+        asked: Mutex<Vec<(u32, String)>>,
+        running: Mutex<Vec<u32>>,
+        dealt: std::sync::atomic::AtomicU32,
+    }
+
+    impl SessionHost for std::sync::Arc<Pretend> {
+        fn open(
+            &self,
+            wanted: Option<u32>,
+            opening: &crate::host::Opening,
+            announce: &dyn Fn(u32),
+        ) -> Result<u32, String> {
+            let id = wanted.unwrap_or_else(|| self.deal());
+            self.dealt.fetch_max(id, Ordering::SeqCst);
+            announce(id);
+            let program = opening.program.clone().unwrap_or_default();
+            lock(&self.asked).push((id, program));
+            lock(&self.running).push(id);
+            Ok(id)
+        }
+        fn input(&self, id: u32, _bytes: &[u8]) -> Result<(), String> {
+            self.here(id)
+        }
+        fn resize(&self, id: u32, _size: Size) -> Result<(), String> {
+            self.here(id)
+        }
+        fn watch(
+            &self,
+            id: u32,
+            _sink: crate::host::Sink,
+        ) -> Result<crate::host::Watching, String> {
+            self.here(id)?;
+            Ok(crate::host::Watching {
+                view: 1,
+                size: SIZE,
+            })
+        }
+        fn unwatch(&self, id: u32, _view: u32) -> Result<(), String> {
+            self.here(id)
+        }
+        fn close(&self, id: u32) -> Result<(), String> {
+            self.here(id)?;
+            lock(&self.running).retain(|one| *one != id);
+            Ok(())
+        }
+        fn end_all(&self) {
+            lock(&self.running).clear();
+        }
+        fn when_one_ends(&self, _tell: crate::host::Ends) {}
+        fn running(&self) -> Vec<u32> {
+            lock(&self.running).clone()
+        }
+        fn edits_lines(&self, id: u32) -> Result<Option<bool>, String> {
+            self.here(id).map(|()| None)
+        }
+        fn quiet_for(&self, id: u32) -> Result<std::time::Duration, String> {
+            self.here(id).map(|()| std::time::Duration::ZERO)
+        }
+        fn deal(&self) -> u32 {
+            self.dealt.fetch_add(1, Ordering::SeqCst) + 1
+        }
+        fn dealt(&self) -> u32 {
+            self.dealt.load(Ordering::SeqCst)
+        }
+        fn already_dealt(&self, dealt: u32) {
+            self.dealt.fetch_max(dealt, Ordering::SeqCst);
+        }
+    }
+
+    impl Pretend {
+        fn here(&self, id: u32) -> Result<(), String> {
+            if lock(&self.running).contains(&id) {
+                Ok(())
+            } else {
+                Err(format!("session {id} is not running"))
+            }
+        }
+    }
+
+    #[test]
+    fn a_chat_runs_on_whichever_session_host_the_chats_were_given() {
+        let host = std::sync::Arc::new(Pretend::default());
+        host.already_dealt(6);
+        let chats = Chats::on_host(Box::new(|_| {}), Box::new(std::sync::Arc::clone(&host)));
+
+        let session = chats
+            .start(
+                &chat("/nowhere/a-program-nothing-runs", "hosted", None),
+                SIZE,
+            )
+            .expect("the host opens it");
+
+        assert_eq!(session, 7, "the number is the host's to deal");
+        assert_eq!(
+            *lock(&host.asked),
+            vec![(7, "/nowhere/a-program-nothing-runs".to_owned())]
+        );
+        assert_eq!(
+            chats
+                .open_now()
+                .iter()
+                .map(|one| one.session)
+                .collect::<Vec<_>>(),
+            vec![7]
+        );
+        assert_eq!(chats.record().dealt, 7);
+
+        chats.close(session).expect("the host ends it");
+
+        assert_eq!(host.running(), Vec::<u32>::new());
+        assert!(chats.open_now().is_empty());
     }
 }

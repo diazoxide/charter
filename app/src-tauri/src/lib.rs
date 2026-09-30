@@ -17,6 +17,7 @@ mod handoff;
 mod harness_plugins;
 mod heard;
 mod hooks;
+mod host;
 // Called on Linux alone, where the session bus can be missing; its tests run everywhere.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod instance;
