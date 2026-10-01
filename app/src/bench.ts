@@ -139,6 +139,9 @@ function button(name: string): HTMLElement {
  *  project tabs landed is a project. */
 const TABS = '[role="tablist"][aria-label="Tabs"]';
 
+/** The project tabs, in the title bar (ADR 0054). */
+const PROJECTS = '[role="tablist"][aria-label="Projects"]';
+
 /** The name of the tab in front. */
 function selectedTab(): string | undefined {
   return (
@@ -193,6 +196,20 @@ function sleep(ms: number): Promise<void> {
   return new Promise((done) => setTimeout(done, ms));
 }
 
+/** Resolves with what `find` finds, checked every frame, or fails after ten seconds. */
+function until<T>(find: () => T | null | undefined): Promise<T> {
+  return new Promise((found, failed) => {
+    const gaveUp = performance.now() + 10_000;
+    const look = () => {
+      const it = find();
+      if (it) found(it);
+      else if (performance.now() > gaveUp) failed(new Error("never appeared"));
+      else requestAnimationFrame(look);
+    };
+    look();
+  });
+}
+
 /** The jobs the benchmark can ask for. Each answers with numbers, never with an element. */
 export type Plan =
   /** The next pane to open is what the jobs below measure. Then press `press`, if given. */
@@ -210,6 +227,13 @@ export type Plan =
   | { kind: "select tab"; tab: string }
   /** Split the pane in front, and measure until the new pane has painted. */
   | { kind: "split"; direction: "Split right" | "Split down"; sentinel: string }
+  /**
+   * Switch to the project at `plane` through the project switcher (FR-27), and measure from
+   * the press of its row until that project is in front (`shownMs`) and until the pane of the
+   * chat in front over there has painted `sentinel` (`ms`). The switcher is opened first, by
+   * the title bar's button, and that is not timed: it is getting to the row, not the switch.
+   */
+  | { kind: "project switch"; plane: string; sentinel: string }
   /** How many times the pane's terminal draws, over `ms`. */
   | { kind: "draw rate"; ms: number; session?: number };
 
@@ -285,6 +309,39 @@ async function work(plan: Plan): Promise<unknown> {
       const session = await Promise.race([opened, sleep(30_000).then(() => undefined)]);
       if (session === undefined) throw new Error(`tab ${plan.tab} showed no pane`);
       return { session, ms: performance.now() - from };
+    }
+
+    case "project switch": {
+      button("Switch project…").click();
+      const row = await until(() =>
+        document.getElementById(`palette-row-project.select:${plan.plane}`),
+      );
+      // Every pane on screen is the project in front's, and every one of them goes: so the
+      // pane being timed is the first to open after the press, whatever its session.
+      const opened = new Promise<number>((found) => {
+        awaited = (session) => {
+          awaited = undefined;
+          subject = session;
+          found(session);
+        };
+      });
+      const from = performance.now();
+      row.click();
+      const shown = await until(() =>
+        document.querySelector(
+          `${PROJECTS} [role="tab"][aria-selected="true"][title="${CSS.escape(plan.plane)}"]`,
+        ),
+      ).then(
+        () => new Promise<number>((done) => requestAnimationFrame(() => done(performance.now()))),
+      );
+      const session = await Promise.race([opened, sleep(30_000).then(() => undefined)]);
+      if (session === undefined) throw new Error(`project ${plan.plane} showed no pane`);
+      const at = await Promise.race([
+        painted(session, plan.sentinel),
+        sleep(30_000).then(() => undefined),
+      ]);
+      if (at === undefined) throw new Error(`the pane never painted ${plan.sentinel}`);
+      return { session, shownMs: shown - from, ms: at - from };
     }
 
     case "switch":

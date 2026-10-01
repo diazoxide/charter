@@ -430,6 +430,7 @@ job measures it ([ADR 0086](adr/0086-every-performance-budget-names-the-job-that
 | 2 MB and 13 MB output bursts | the UI never freezes; input and other panes stay responsive |
 | Keystroke to screen | ≤ 50 ms while the device's hot target minus one other chats stream: 49 at the top class (ADR 0082) |
 | Tab or pane switch | ≤ 100 ms |
+| Project switch, among 10 open projects | ≤ 200 ms (FR-27) |
 | Hook call (`charter hook …`) | ≤ 50 ms |
 | Cold start | ≤ 2 s |
 | Idle hidden session | ≤ 50 MB, with scrollback at the shipped cap |
@@ -484,6 +485,7 @@ confirm it (D-0082b). A row is added in the pull request that adds its job.
 | L6 | cold start to the first frame, no chats | ≤ 2 s | CI absolute on Linux (`app builds`, median of five, ceiling 2.5 s); release absolute on macOS | FR-8 | 370 ms macOS |
 | L7 | reattach with `charterd` up: first paint of the focused pane | ≤ 1 s | CI relative (`bench`); release absolute | FD-5, FD-7 | — |
 | L8 | relaunch with the hot target's chats to put back: interactive | ≤ 3 s | CI relative (`bench`); release absolute | SC-20 | — |
+| L9 | project switch among 10 open projects, one chat each: the press of the switcher's row to the paint of that project's chat | ≤ 200 ms | release absolute (`bench`'s `projects.bench.ts`); CI relative (`bench`); recorded on every scenario run (`project-switch.e2e.ts`) | FR-27 | — |
 | T1 | event log throughput | ≥ 1,000 events/s sustained, L5 inside its budget | CI absolute (`stress`) | FD-9 | — |
 | T2 | audit throughput and group commit | 1,000 entries/s; ≤ 100 ms between commits (ADR 0075) | CI absolute (`stress`) | AU-3 | — |
 | G1 | git standing at 300,000 files: git processes in one repo at once while the pollers read it; eight reads against one | 1 at a time; eight reads cost no more git processes than one standing | CI absolute (`stress`, *shared standing at 300,000 files*) | FD-11 | — |

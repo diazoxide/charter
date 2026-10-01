@@ -768,6 +768,12 @@ so `Ctrl+Shift+T` is no byte, and plain `Ctrl+T` still reaches the shell as tran
 It is a capture listener on the window, held by the project in front, and it presses the
 catalogue's own `shell.new` row.
 
+**The project switcher's key takes nothing either** (FR-27, `switcherKey.opensTheSwitcher`): `⌘P`
+on a Mac and `Ctrl+Shift+P` elsewhere. xterm.js 6.0.0 sends nothing for `⌘P`, and `Ctrl+Shift+P`
+is no byte for the new-shell key's reason, so plain `Ctrl+P` still reaches the shell as
+previous-history. It is the palette's own capture listener on the window, because the switcher
+is the palette listing only the projects; a further press while it is up moves down one row.
+
 **Find in a pane is `⌘F` on a Mac and `Ctrl+Shift+F` elsewhere, and takes nothing either** (SI-4,
 `SessionPane.opensFind`). xterm.js 6.0.0 sends nothing for `⌘F`. It would send `\x06` for
 `Ctrl+F` — readline's forward-char — so off a Mac the chord adds `Shift`, as GNOME Terminal and
