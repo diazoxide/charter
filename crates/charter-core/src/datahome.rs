@@ -15,8 +15,13 @@ use std::path::{Path, PathBuf};
 pub const HOME_VAR: &str = "CHARTER_DATA_HOME";
 
 /// `<data>`, from this process's environment.
+///
+/// A fenced build is held here (charter-app#129): a test run that pins no data home of its own
+/// would append its throwaway chats' events to the operator's own log.
 pub fn root() -> Option<PathBuf> {
-    root_in(&|name| std::env::var(name).ok())
+    let found = root_in(&|name| std::env::var(name).ok())?;
+    crate::fence::hold(crate::fence::Act::Store, &found);
+    Some(found)
 }
 
 /// `<data>` as the environment `env` answers it. An empty value names nothing.
@@ -26,15 +31,49 @@ pub fn root_in(env: &dyn Fn(&str) -> Option<String>) -> Option<PathBuf> {
             .filter(|value| !value.is_empty())
             .map(PathBuf::from)
     };
-    named(HOME_VAR)
+    let found = named(HOME_VAR)
         .or_else(|| named("XDG_DATA_HOME").map(|xdg| xdg.join("charter")))
-        .or_else(|| dirs::data_dir().map(|dir| dir.join("charter")))
+        .or_else(|| dirs::data_dir().map(|dir| dir.join("charter")))?;
+    // A relative value is taken from the directory charter was started in, so the answer is
+    // always an absolute path.
+    std::path::absolute(found).ok()
+}
+
+/// `dir` as the operating system would reach it.
+fn resolved(dir: &Path) -> PathBuf {
+    let dir = std::path::absolute(dir).unwrap_or_else(|_| dir.to_path_buf());
+    let mut existing = dir.as_path();
+    let mut rest = Vec::new();
+    while !existing.exists() {
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name.to_owned());
+                existing = parent;
+            }
+            // `..` at the end of a path that does not exist, or the root itself.
+            _ => break,
+        }
+    }
+    let mut out = std::fs::canonicalize(existing).unwrap_or_else(|_| existing.to_path_buf());
+    for part in rest.into_iter().rev() {
+        if part == ".." {
+            out.pop();
+        } else if part != "." {
+            out.push(part);
+        }
+    }
+    out
 }
 
 /// Why `dir` cannot be `<data>`, or `None` when it can: it, or a directory above it, is a git
-/// work tree or a plane.
+/// work tree or a project.
+///
+/// Asked of the directory as the operating system resolves it, not as it is spelled: the
+/// deepest part that exists is canonicalized (links followed, `..` taken), and the rest is
+/// joined on with any `..` in it taken lexically. So neither a link nor a `..` can walk a
+/// `<data>` into a repository unseen.
 pub fn refusal(dir: &Path) -> Option<String> {
-    dir.ancestors().find_map(|above| {
+    resolved(dir).ancestors().find_map(|above| {
         if above.join(".git").exists() {
             Some(format!(
                 "{} is inside the git work tree at {}, and charter's data home is never \
@@ -44,7 +83,7 @@ pub fn refusal(dir: &Path) -> Option<String> {
             ))
         } else if above.join(crate::plane::MANIFEST).is_file() {
             Some(format!(
-                "{} is inside the plane at {}, and charter's data home is never in a plane",
+                "{} is inside the project at {}, and charter's data home is never in a project",
                 dir.display(),
                 above.display()
             ))
@@ -99,5 +138,28 @@ mod tests {
         );
         assert!(refusal(&plane.join("deep").join("data")).is_some());
         assert_eq!(refusal(&dir.path().join("elsewhere")), None);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_data_home_reached_through_a_link_into_a_repository_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        let link = dir.path().join("looks-elsewhere");
+        std::os::unix::fs::symlink(&repo, &link).unwrap();
+
+        assert!(
+            refusal(&link.join("deep").join("data")).is_some(),
+            "the link resolves into the repository"
+        );
+    }
+
+    #[test]
+    fn a_relative_data_home_is_taken_from_where_charter_was_started() {
+        let root = root_in(&env(&[(HOME_VAR, "rel/data")])).unwrap();
+
+        assert!(root.is_absolute(), "{}", root.display());
+        assert!(root.ends_with("rel/data"));
     }
 }

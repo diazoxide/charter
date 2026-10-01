@@ -125,7 +125,10 @@ fn a_guard_that_crashed_tells_the_host_it_refused() {
 
 #[test]
 fn a_tool_hook_word_this_binary_does_not_answer_tells_the_host_it_refused() {
-    let (code, _, heard) = hook("pretooluse-nonesuch", &serde_json::json!({"tool_name": "Bash"}));
+    let (code, _, heard) = hook(
+        "pretooluse-nonesuch",
+        &serde_json::json!({"tool_name": "Bash"}),
+    );
 
     assert_eq!(code, 2);
     let heard = heard.expect("the host heard the refusal");
@@ -136,7 +139,10 @@ fn a_tool_hook_word_this_binary_does_not_answer_tells_the_host_it_refused() {
 
 #[test]
 fn a_hook_an_older_plugin_still_wires_is_still_one_call_the_host_hears() {
-    let (code, _, heard) = hook("posttooluse-bash", &serde_json::json!({"tool_name": "Bash"}));
+    let (code, _, heard) = hook(
+        "posttooluse-bash",
+        &serde_json::json!({"tool_name": "Bash"}),
+    );
 
     assert_eq!(code, 0);
     let heard = heard.expect("the host heard it");
@@ -148,9 +154,17 @@ fn a_hook_an_older_plugin_still_wires_is_still_one_call_the_host_hears() {
 fn a_sub_agents_call_names_its_agent_only_on_a_harness_where_that_was_measured() {
     let payload = serde_json::json!({"tool_name": "Read", "agent_id": "agent-7", "tool_input": {}});
 
-    let (_, _, measured) = hook_with("posttooluse", &payload, &[("CHARTER_HARNESS", "claude-code")]);
+    let (_, _, measured) = hook_with(
+        "posttooluse",
+        &payload,
+        &[("CHARTER_HARNESS", "claude-code")],
+    );
     let (_, _, unmeasured) = hook_with("posttooluse", &payload, &[("CHARTER_HARNESS", "opencode")]);
 
     assert_eq!(measured.unwrap().agent.as_deref(), Some("agent-7"));
-    assert_eq!(unmeasured.unwrap().agent, None, "ADR 0066: opencode has no child runs");
+    assert_eq!(
+        unmeasured.unwrap().agent,
+        None,
+        "ADR 0066: opencode has no child runs"
+    );
 }

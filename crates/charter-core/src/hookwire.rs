@@ -197,7 +197,9 @@ pub fn sub_agent(agent_id: Option<&str>, env: &dyn Fn(&str) -> Option<String>) -
         harness: harness.as_deref(),
         permission_mode: None,
     };
-    caller.from_a_subagent().then(|| agent_id.unwrap_or_default().to_owned())
+    caller
+        .from_a_subagent()
+        .then(|| agent_id.unwrap_or_default().to_owned())
 }
 
 /// The harness a chat runs, as charter put it into the chat's environment.
@@ -1092,6 +1094,7 @@ impl Listener {
         let stopped = std::sync::Arc::clone(&stopping);
         let hearing = std::sync::Arc::new(hearing);
         let tokens = std::sync::Arc::clone(&self.tokens);
+        let turns = std::sync::Arc::new(InTurn::new());
         let reading = std::thread::spawn(move || {
             let mut dealt: u64 = 0;
             for connection in self.socket.incoming() {
@@ -1118,12 +1121,13 @@ impl Listener {
                 // are mid-write, which is almost always none.
                 let hearing = std::sync::Arc::clone(&hearing);
                 let tokens = std::sync::Arc::clone(&tokens);
+                let turns = std::sync::Arc::clone(&turns);
                 dealt += 1;
                 let this = dealt;
                 let started = std::thread::Builder::new()
                     .name("charter-hook-report".into())
                     .spawn(move || {
-                        serve(connection, this, &tokens, &hearing);
+                        serve(connection, this, &tokens, &hearing, &turns);
                     });
                 // A thread that will not start costs this one report. Refusing the rest of
                 // the channel over it would cost every report after it too.
@@ -1227,7 +1231,13 @@ fn serve(
     this: u64,
     tokens: &ChatTokens,
     hearing: &Hearing,
+    turns: &InTurn,
 ) {
+    let mut turn = Turn {
+        turns,
+        this,
+        done: false,
+    };
     use std::io::{BufRead, Read, Write};
 
     // Both directions: a client that connects and neither writes nor closes must not hold
@@ -1262,6 +1272,11 @@ fn serve(
             );
             return;
         }
+        // The first line waits for the connections that arrived before this one (FD-9).
+        if !turn.done {
+            turns.wait(this);
+        }
+        let first = !turn.done;
         match line {
             Line::Report(report) => (hearing.each)(report),
             Line::Ask(ask) => {
@@ -1278,8 +1293,104 @@ fn serve(
             Line::Refused(refused) => (hearing.refused)(refused),
             Line::Tool(call) => (hearing.tool)(call),
         }
+        if first {
+            turn.finish();
+        }
     }
 }
+
+/// The order connections arrived in, which their first lines are handed on in (FD-9).
+///
+/// **A thread per connection reads lines in whatever order the threads are scheduled**, and
+/// the host's event log needs the order the hooks ran in: a tool call's post hook must never
+/// be recorded before its pre hook, which connected first. Each connection is dealt a number
+/// as it is accepted, in the order the hooks connected, and hands on its first line only once
+/// every earlier connection has handed on its own or gone. A connection that says nothing
+/// holds the ones after it for [`A_TURN_IS_WAITED_AT_MOST`] at most, so the channel is never
+/// held hostage by one.
+#[cfg(unix)]
+struct InTurn {
+    /// The lowest number not yet done, and the numbers above it that are.
+    state: std::sync::Mutex<(u64, std::collections::BTreeSet<u64>)>,
+    turned: std::sync::Condvar,
+}
+
+#[cfg(unix)]
+impl InTurn {
+    fn new() -> Self {
+        Self {
+            state: std::sync::Mutex::new((1, std::collections::BTreeSet::new())),
+            turned: std::sync::Condvar::new(),
+        }
+    }
+
+    /// Waits until every connection before `this` is done, or the wait has gone on too long.
+    fn wait(&self, this: u64) {
+        let until = std::time::Instant::now() + A_TURN_IS_WAITED_AT_MOST;
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        while state.0 < this {
+            let left = until.saturating_duration_since(std::time::Instant::now());
+            if left.is_zero() {
+                return;
+            }
+            state = self
+                .turned
+                .wait_timeout(state, left)
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .0;
+        }
+    }
+
+    /// Marks `this` done: its first line is handed on, or it never had one.
+    fn done(&self, this: u64) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.1.insert(this);
+        loop {
+            let next = state.0;
+            if !state.1.remove(&next) {
+                break;
+            }
+            state.0 += 1;
+        }
+        drop(state);
+        self.turned.notify_all();
+    }
+}
+
+/// Marks a connection done however its serving ends.
+#[cfg(unix)]
+struct Turn<'a> {
+    turns: &'a InTurn,
+    this: u64,
+    done: bool,
+}
+
+#[cfg(unix)]
+impl Turn<'_> {
+    fn finish(&mut self) {
+        if !self.done {
+            self.done = true;
+            self.turns.done(self.this);
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for Turn<'_> {
+    fn drop(&mut self) {
+        self.finish();
+    }
+}
+
+/// How long a line waits for the lines whose connections arrived before it.
+#[cfg(unix)]
+const A_TURN_IS_WAITED_AT_MOST: std::time::Duration = std::time::Duration::from_millis(50);
 
 /// A listener being read on its own thread. Dropping it stops the reading.
 #[cfg(unix)]
@@ -2670,6 +2781,43 @@ mod tests {
             serde_json::from_str::<Line>(&line),
             Ok(Line::Saved(_))
         ));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_line_is_handed_on_after_every_line_whose_connection_arrived_before_it() {
+        let turns = std::sync::Arc::new(InTurn::new());
+        let (tx, rx) = mpsc::channel();
+        let second = {
+            let turns = std::sync::Arc::clone(&turns);
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                turns.wait(2);
+                tx.send(2).unwrap();
+                turns.done(2);
+            })
+        };
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        tx.send(1).unwrap();
+        turns.done(1);
+        second.join().unwrap();
+
+        assert_eq!(rx.try_iter().collect::<Vec<_>>(), vec![1, 2]);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_connection_that_never_says_anything_holds_the_next_one_only_so_long() {
+        let turns = InTurn::new();
+        let began = std::time::Instant::now();
+
+        turns.wait(2);
+
+        assert!(
+            began.elapsed() < A_TURN_IS_WAITED_AT_MOST * 4,
+            "{:?}",
+            began.elapsed()
+        );
     }
 
     #[test]

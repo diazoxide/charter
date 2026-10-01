@@ -140,7 +140,7 @@ pub(crate) fn report(root: &std::path::Path, full: bool) -> DoctorReport {
             .into_iter()
             .map(DoctorRow::from)
             .collect(),
-        app_rows: vec![chat_footer(root)],
+        app_rows: vec![chat_footer(root), event_log(crate::EVENT_LOG.get())],
         full,
         path: std::env::var_os("PATH").map(|p| p.to_string_lossy().into_owned()),
     }
@@ -158,6 +158,45 @@ pub(crate) fn report(root: &std::path::Path, full: bool) -> DoctorReport {
 /// **It answers for the plane's own directory**, which is where a chat started in the plane
 /// reads its project settings; a chat started in a workspace or a worktree reads that
 /// directory's, and the row says so rather than implying it asked for every chat.
+/// `event log`: is this app recording its chats' hook calls (FD-9), and if not, why not?
+///
+/// **The app's own row**, for `chat_footer`'s reason: the log is opened by the app, and only the
+/// app knows whether that worked. `opened` is what this process's open answered; `None` is a
+/// process that never tried, which is not health either.
+fn event_log(opened: Option<&Result<std::path::PathBuf, String>>) -> DoctorRow {
+    let row = |status: DoctorStatus, detail: String, hint: String| DoctorRow {
+        name: "event log".to_owned(),
+        status,
+        detail,
+        hint,
+        checked: true,
+    };
+    match opened {
+        Some(Ok(dir)) => row(
+            DoctorStatus::Ok,
+            format!(
+                "every hook call a chat makes is recorded in {}",
+                dir.display()
+            ),
+            "the log stays on this machine; a tool call's arguments are never written, only a \
+             digest keyed to this device"
+                .to_owned(),
+        ),
+        Some(Err(why)) => row(
+            DoctorStatus::Warn,
+            format!("hook calls are not recorded ({why})"),
+            "set CHARTER_DATA_HOME to a directory outside any project or repository, and \
+             start charter again; every chat works meanwhile"
+                .to_owned(),
+        ),
+        None => row(
+            DoctorStatus::Warn,
+            "not checked (this app has not opened its event log)".to_owned(),
+            "start charter again; the log is opened as the app starts".to_owned(),
+        ),
+    }
+}
+
 fn chat_footer(root: &std::path::Path) -> DoctorRow {
     use charter_core::footerclaim::{Claim, UNSEEN, status_line};
 
@@ -279,6 +318,39 @@ mod tests {
             assert_eq!(serde_json::json!(row.detail), json["detail"]);
             assert_eq!(serde_json::json!(row.hint), json["hint"]);
         }
+    }
+
+    #[test]
+    fn the_apps_own_row_says_where_hook_calls_are_recorded_or_why_they_are_not() {
+        let kept = event_log(Some(&Ok(std::path::PathBuf::from("/data/events/DEVICE"))));
+        let refused = event_log(Some(&Err(
+            "/repo/data is inside the git work tree at /repo".to_owned(),
+        )));
+        let never = event_log(None);
+
+        assert_eq!(kept.name, "event log");
+        assert_eq!(kept.status, DoctorStatus::Ok);
+        assert!(
+            kept.detail.contains("/data/events/DEVICE"),
+            "{}",
+            kept.detail
+        );
+        assert_eq!(refused.status, DoctorStatus::Warn);
+        assert!(
+            refused.detail.contains("inside the git work tree"),
+            "{}",
+            refused.detail
+        );
+        assert!(
+            refused.hint.contains("CHARTER_DATA_HOME"),
+            "{}",
+            refused.hint
+        );
+        assert_eq!(
+            never.status,
+            DoctorStatus::Warn,
+            "an absent answer is not health"
+        );
     }
 
     #[test]

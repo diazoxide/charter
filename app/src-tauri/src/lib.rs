@@ -203,7 +203,12 @@ fn refresh_installed_plugin(binary: PathBuf, plugin: PathBuf) {
 /// one whose data home is refused, runs without it and says why: every chat still works, and
 /// only the record of its hook calls is missing.
 fn events() -> Option<hooks::Events> {
-    match charter_core::eventlog::Recorder::open() {
+    let opened = charter_core::eventlog::Recorder::open();
+    let _ = EVENT_LOG.set(match &opened {
+        Ok(recorder) => Ok(recorder.dir().to_path_buf()),
+        Err(why) => Err(why.to_string()),
+    });
+    match opened {
         Ok(recorder) => Some(std::sync::Arc::new(std::sync::Mutex::new(recorder))),
         Err(why) => {
             tracing::warn!("charter: no event log ({why}); hook calls are not recorded");
@@ -211,6 +216,11 @@ fn events() -> Option<hooks::Events> {
         }
     }
 }
+
+/// What opening the event log answered: its directory, or why there is none. The doctor's
+/// `event log` row reads it.
+pub(crate) static EVENT_LOG: std::sync::OnceLock<Result<std::path::PathBuf, String>> =
+    std::sync::OnceLock::new();
 
 /// Where the bundled plugin is, or none when this build has none.
 ///

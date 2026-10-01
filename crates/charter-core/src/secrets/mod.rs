@@ -559,7 +559,11 @@ pub fn key_file(trust: &Path, path: &Path, len: usize) -> std::io::Result<Vec<u8
     // ever stands where a key goes.
     let mut key = Vec::with_capacity(len + 8);
     while key.len() < len {
-        key.extend(getrandom::u64().map_err(std::io::Error::other)?.to_le_bytes());
+        key.extend(
+            getrandom::u64()
+                .map_err(std::io::Error::other)?
+                .to_le_bytes(),
+        );
     }
     key.truncate(len);
     crate::rewrite::replace(trust, path, &key, crate::rewrite::Mode::Secret)?;

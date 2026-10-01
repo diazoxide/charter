@@ -647,12 +647,12 @@ struct Applied {
 
 impl Applied {
     /// What the board did with the chat's conversation, as the event log reads a new run.
-    fn followed(&self) -> charter_core::eventlog::Followed<'_> {
+    fn followed(&self) -> charter_core::eventlog::Followed {
         use charter_core::eventlog::Followed;
         match (&self.followed, &self.was) {
             (None, _) => Followed::No,
             (Some(_), None) => Followed::FirstNamed,
-            (Some(_), Some(was)) => Followed::From(was),
+            (Some(_), Some(_)) => Followed::Moved,
         }
     }
 }
@@ -1071,9 +1071,9 @@ mod tests {
         hooks: &Hooks,
         conversation: Conversation,
         pid: Option<u32>,
-        agent: None,
     ) -> Option<String> {
         let report = Report {
+            agent: None,
             chat: 7,
             event: charter_core::state::Event::UserPromptSubmit,
             conversation,

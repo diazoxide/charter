@@ -5745,12 +5745,12 @@ mod tests {
         event: charter_core::state::Event,
         conversation: charter_core::hookwire::Conversation,
         pid: Option<u32>,
-        agent: None,
     ) {
         charter_core::hookwire::send(
             held.hooks().socket().expect("the plane is listening"),
             Some(&held.hooks().token_for(session)),
             &charter_core::hookwire::Report {
+                agent: None,
                 chat: session,
                 event,
                 conversation,

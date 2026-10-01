@@ -260,7 +260,6 @@ pub fn args_hash(args: &serde_json::Value) -> String {
     crate::extension::hex(&sha2::Sha256::digest(&text))
 }
 
-
 /// What the board did with a report's conversation, which is how the host tells a new run
 /// (ADR 0066, "A run is a stretch…").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -311,7 +310,11 @@ pub fn phase(word: &str) -> Option<Phase> {
     let event = crate::hookreg::find(word)
         .filter(|handler| handler.matcher.is_some())
         .map(|handler| handler.event)
-        .or_else(|| crate::hookreg::NO_OPS.contains(&word).then_some("PostToolUse"))?;
+        .or_else(|| {
+            crate::hookreg::NO_OPS
+                .contains(&word)
+                .then_some("PostToolUse")
+        })?;
     match event {
         "PreToolUse" => Some(Phase::Pre),
         "PostToolUse" => Some(Phase::Post),
@@ -354,6 +357,8 @@ struct Under {
 /// - A sub-agent's calls are a child run (`cause: child`) of the run that was current when it
 ///   first appeared, until its `SubagentStop` (ADR 0066, "A child agent…").
 pub struct Recorder {
+    /// The device's directory under `<data>/events/`, where it is known.
+    dir: PathBuf,
     log: Log,
     key: ArgsKey,
     /// By plane and number: a number means nothing outside the plane that dealt it.
@@ -382,10 +387,9 @@ impl Recorder {
         }
         let device = crate::machine::device_id(config)?;
         let dir = data.join(EVENTS).join(&device);
-        Ok(Recorder::new(
-            Log::open(&dir, &device)?,
-            ArgsKey::open(&dir)?,
-        ))
+        let mut recorder = Recorder::new(Log::open(&dir, &device)?, ArgsKey::open(&dir)?);
+        recorder.dir = dir;
+        Ok(recorder)
     }
 
     /// [`Recorder::open_in`] for this process: the machine store's and `<data>`'s own homes.
@@ -399,12 +403,18 @@ impl Recorder {
 
     pub fn new(log: Log, key: ArgsKey) -> Recorder {
         Recorder {
+            dir: PathBuf::new(),
             log,
             key,
             chats: HashMap::new(),
             children: HashMap::new(),
             calls: HashMap::new(),
         }
+    }
+
+    /// The device's directory the log is in, as [`Recorder::open_in`] found it.
+    pub fn dir(&self) -> &Path {
+        &self.dir
     }
 
     /// The event for one state hook: `hook.<word>`, after a `run.started` when the report
@@ -472,8 +482,9 @@ impl Recorder {
             let key = (under.run.clone(), id.clone());
             match phase {
                 Some(Phase::Pre) => {
-                    self.calls
-                        .retain(|_, began| now.saturating_duration_since(*began) <= CALL_IS_OPEN_AT_MOST);
+                    self.calls.retain(|_, began| {
+                        now.saturating_duration_since(*began) <= CALL_IS_OPEN_AT_MOST
+                    });
                     // The first pre hook of a call is its start; a second one for the same
                     // call (`pretooluse` and `pretooluse-read`) is not a later start.
                     self.calls.entry(key).or_insert(now);

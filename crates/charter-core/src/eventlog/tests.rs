@@ -40,14 +40,26 @@ fn a_log_opened_again_carries_on_from_its_last_number() {
     {
         let mut log = Log::open(dir.path(), DEVICE).unwrap();
         for _ in 0..3 {
-            log.append(Some("CHAT"), None, None, "chat.opened", serde_json::json!({}))
-                .unwrap();
+            log.append(
+                Some("CHAT"),
+                None,
+                None,
+                "chat.opened",
+                serde_json::json!({}),
+            )
+            .unwrap();
         }
     }
 
     let mut log = Log::open(dir.path(), DEVICE).unwrap();
     let next = log
-        .append(Some("CHAT"), None, None, "chat.opened", serde_json::json!({}))
+        .append(
+            Some("CHAT"),
+            None,
+            None,
+            "chat.opened",
+            serde_json::json!({}),
+        )
         .unwrap();
 
     assert_eq!(next.seq, 4, "a seq is never reused");
@@ -130,12 +142,8 @@ fn events_of_two_runs_in_one_chat_group_under_that_chat() {
         .unwrap();
     host.report(plane, &report(7, Stop), Followed::No).unwrap();
     // `/clear`: the board follows the chat onto another conversation, which is a new run.
-    host.report(
-        plane,
-        &report(7, SessionStart),
-        Followed::Moved,
-    )
-    .unwrap();
+    host.report(plane, &report(7, SessionStart), Followed::Moved)
+        .unwrap();
     host.report(plane, &report(7, UserPromptSubmit), Followed::No)
         .unwrap();
 
@@ -310,8 +318,14 @@ fn a_line_torn_by_a_crash_is_cut_off_and_the_next_event_is_whole() {
     let dir = tempfile::tempdir().unwrap();
     {
         let mut log = Log::open(dir.path(), DEVICE).unwrap();
-        log.append(Some("CHAT"), None, None, "chat.opened", serde_json::json!({}))
-            .unwrap();
+        log.append(
+            Some("CHAT"),
+            None,
+            None,
+            "chat.opened",
+            serde_json::json!({}),
+        )
+        .unwrap();
     }
     // The machine died in the middle of the second line.
     let mut file = std::fs::OpenOptions::new()
@@ -323,11 +337,21 @@ fn a_line_torn_by_a_crash_is_cut_off_and_the_next_event_is_whole() {
 
     let mut log = Log::open(dir.path(), DEVICE).unwrap();
     let next = log
-        .append(Some("CHAT"), None, None, "chat.opened", serde_json::json!({}))
+        .append(
+            Some("CHAT"),
+            None,
+            None,
+            "chat.opened",
+            serde_json::json!({}),
+        )
         .unwrap();
 
     let events = read(dir.path()).unwrap();
-    assert_eq!(events.len(), 2, "the torn line went, the new one is whole: {events:#?}");
+    assert_eq!(
+        events.len(),
+        2,
+        "the torn line went, the new one is whole: {events:#?}"
+    );
     assert_eq!(events[0].seq, 1);
     assert_eq!(next.seq, 2);
     assert_eq!(events[1], next);
@@ -340,7 +364,10 @@ fn a_log_with_lines_but_no_number_in_them_is_refused_rather_than_counted_from_on
 
     let refused = Log::open(dir.path(), DEVICE);
 
-    assert!(refused.is_err(), "a seq is never reused, so a log it cannot read is not restarted");
+    assert!(
+        refused.is_err(),
+        "a seq is never reused, so a log it cannot read is not restarted"
+    );
 }
 
 #[test]
@@ -374,11 +401,15 @@ fn a_chat_the_host_has_not_seen_begins_with_start_even_when_its_first_line_is_a_
     let dir = tempfile::tempdir().unwrap();
     let mut host = recorder(dir.path());
 
-    host.report(Path::new("/p"), &report(2, SessionStart), Followed::Moved).unwrap();
+    host.report(Path::new("/p"), &report(2, SessionStart), Followed::Moved)
+        .unwrap();
 
     let events = read(dir.path()).unwrap();
     assert_eq!(events[0].kind, "run.started");
-    assert_eq!(events[0].body["cause"], "start", "there was no run to clear: {events:#?}");
+    assert_eq!(
+        events[0].body["cause"], "start",
+        "there was no run to clear: {events:#?}"
+    );
 }
 
 #[test]
@@ -389,7 +420,11 @@ fn a_sub_agents_calls_are_a_child_run_of_the_run_that_was_current_until_its_stop
     let plane = Path::new("/p");
     let mut host = recorder(dir.path());
     let parent = host
-        .report(plane, &report(5, crate::state::Event::UserPromptSubmit), Followed::No)
+        .report(
+            plane,
+            &report(5, crate::state::Event::UserPromptSubmit),
+            Followed::No,
+        )
         .unwrap()
         .run
         .unwrap();
@@ -406,9 +441,15 @@ fn a_sub_agents_calls_are_a_child_run_of_the_run_that_was_current_until_its_stop
     let child = first.run.clone().unwrap();
     assert_ne!(child, parent, "a sub-agent is a run of its own");
     assert_eq!(first.parent_run.as_deref(), Some(parent.as_str()));
-    assert_eq!(second.run, first.run, "the same agent is the same child run");
+    assert_eq!(
+        second.run, first.run,
+        "the same agent is the same child run"
+    );
     assert_eq!(stopped.run, first.run, "its stop is its own");
-    assert_ne!(after.run, first.run, "the child run ended at its SubagentStop");
+    assert_ne!(
+        after.run, first.run,
+        "the child run ended at its SubagentStop"
+    );
     let started: Vec<_> = read(dir.path())
         .unwrap()
         .into_iter()
@@ -432,7 +473,10 @@ fn a_tool_hook_word_charter_does_not_answer_is_recorded_under_one_kind() {
         )
         .unwrap();
 
-    assert_eq!(forged.kind, "hook.unknown", "no line can mint a kind of its own");
+    assert_eq!(
+        forged.kind, "hook.unknown",
+        "no line can mint a kind of its own"
+    );
     assert_eq!(forged.body["word"], "chat.closed");
 }
 
@@ -445,24 +489,40 @@ fn a_tool_calls_duration_is_taken_once_and_a_call_left_open_is_let_go_by_age() {
     let mut host = recorder(dir.path());
     let at = Instant::now();
 
-    host.tool(plane, &tool_call(1, "pretooluse", Decision::None), at).unwrap();
+    host.tool(plane, &tool_call(1, "pretooluse", Decision::None), at)
+        .unwrap();
     let post = host
-        .tool(plane, &tool_call(1, "posttooluse", Decision::None), at + Duration::from_millis(5))
+        .tool(
+            plane,
+            &tool_call(1, "posttooluse", Decision::None),
+            at + Duration::from_millis(5),
+        )
         .unwrap();
     let again = host
-        .tool(plane, &tool_call(1, "posttooluse-skill", Decision::None), at + Duration::from_millis(9))
+        .tool(
+            plane,
+            &tool_call(1, "posttooluse-skill", Decision::None),
+            at + Duration::from_millis(9),
+        )
         .unwrap();
     assert_eq!(post.body["tool_ms"], 5);
-    assert!(again.body.get("tool_ms").is_none(), "a call's duration is taken once");
+    assert!(
+        again.body.get("tool_ms").is_none(),
+        "a call's duration is taken once"
+    );
 
     let mut stale = tool_call(1, "pretooluse", Decision::None);
     stale.call = Some("toolu_old".to_owned());
     host.tool(plane, &stale, at).unwrap();
     // Long after: the pre hook's entry is older than a call is ever left open.
     let late = at + CALL_IS_OPEN_AT_MOST + Duration::from_secs(1);
-    host.tool(plane, &tool_call(1, "pretooluse", Decision::None), late).unwrap();
+    host.tool(plane, &tool_call(1, "pretooluse", Decision::None), late)
+        .unwrap();
     let mut stale_post = tool_call(1, "posttooluse", Decision::None);
     stale_post.call = Some("toolu_old".to_owned());
     let stale_post = host.tool(plane, &stale_post, late).unwrap();
-    assert!(stale_post.body.get("tool_ms").is_none(), "the open call was let go by age");
+    assert!(
+        stale_post.body.get("tool_ms").is_none(),
+        "the open call was let go by age"
+    );
 }
