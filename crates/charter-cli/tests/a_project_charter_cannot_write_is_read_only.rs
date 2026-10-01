@@ -42,12 +42,19 @@ impl Project {
     }
 
     fn run(&self, args: &[&str]) -> Output {
+        self.run_with(args, &[])
+    }
+
+    /// [`Project::run`] in an environment of its own: nothing the shell that started the
+    /// suite has set (a chat's `CHARTER_WORKSPACE`, its session) reaches the binary, only
+    /// `env`.
+    fn run_with(&self, args: &[&str], env: &[(&str, &str)]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_charter"))
             .args(args)
             .current_dir(&self.root)
+            .env_clear()
+            .envs(env.iter().copied())
             .env("CHARTER_PLANE_FENCE", &self.fence)
-            .env_remove("CHARTER_ROOT")
-            .env_remove("CLAUDE_CONFIG_DIR")
             .env("XDG_CONFIG_HOME", self.home.join(".config"))
             .env("HOME", &self.home)
             .env("PATH", "/usr/bin:/bin")
@@ -341,9 +348,14 @@ fn a_command_that_only_reads_still_runs_on_a_read_only_project_and_says_so() {
 /// One read command on [`Project::lived_in`]: it runs, says once that the project is read-only,
 /// and leaves every file in the project exactly as it was (#833).
 fn only_reads(args: &[&str]) {
+    only_reads_with(args, &[]);
+}
+
+/// [`only_reads`], with `env` set for the command.
+fn only_reads_with(args: &[&str], env: &[(&str, &str)]) {
     let project = Project::lived_in();
     let before = project.tree();
-    let out = project.run(args);
+    let out = project.run_with(args, env);
     let said = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "{args:?} must still read: {said}");
     assert!(
@@ -406,5 +418,5 @@ fn workspace_recall_with_a_query_only_reads_a_read_only_project() {
 /// Already on FR-24's list (#827), and proven the same way here: it had no test of its own.
 #[test]
 fn workspace_current_only_reads_a_read_only_project() {
-    only_reads(&["workspace", "current"]);
+    only_reads_with(&["workspace", "current"], &[("CHARTER_WORKSPACE", "alpha")]);
 }
