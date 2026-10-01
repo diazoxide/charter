@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   appendFileSync,
   copyFileSync,
@@ -11,6 +11,17 @@ import {
 import { homedir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
+import {
+  HARNESS,
+  PROGRAM_COLUMNS,
+  PS_COLUMNS,
+  type ProcessRow,
+  harnessMemory,
+  parseFootprints,
+  parseProcesses,
+  runs,
+  webContent,
+} from "./memory.js";
 
 /**
  * The app under test and the harnesses it runs, as the operating system sees them — and what
@@ -44,14 +55,21 @@ function ps(args: string[]): string {
   }
 }
 
-/** How many fake harnesses this machine is running, asked of the operating system. */
+/** Every process on this machine, with the program each one runs. */
+function processes(): ProcessRow[] {
+  return parseProcesses(ps(["-A", "-o", PS_COLUMNS]), ps(["-A", "-o", PROGRAM_COLUMNS]));
+}
+
+/**
+ * How many fake harnesses this machine is running, asked of the operating system.
+ *
+ * By the program each process RUNS, not any command line that mentions the name: a Claude
+ * Code session whose prompt discussed `fake-harness` was once counted three times, and this
+ * test failed at 53 of an expected 50 with nothing wrong. `runs` is the one matcher, shared
+ * with `harnessMemory`.
+ */
 export function harnessesRunning(): number {
-  const listed = ps(["-A", "-o", "command="]);
-  // The program a line RUNS, not any line that mentions the name, and one line is not one
-  // process: a command line containing newlines is several lines of `ps` output. Both
-  // mattered — a Claude Code session whose prompt discussed `fake-harness` was counted three
-  // times, and this test failed at 53 of an expected 50 with nothing wrong.
-  return listed.split("\n").filter((line) => /^\S*\/fake-harness(\s|$)/.test(line)).length;
+  return processes().filter((row) => runs(row.program, HARNESS)).length;
 }
 
 /** The processes running `binary`, by pid. The app under test is one of them. */
@@ -133,6 +151,82 @@ function descriptorsOnMacos(pid: number): number | null {
     const stdout = (err as { stdout?: string }).stdout;
     return stdout ? descriptorsListed(stdout) : null;
   }
+}
+
+/**
+ * The web content process's memory and the harnesses', for `stress.jsonl` (SC-1, #679). Each
+ * field feeds a row of ADR 0086's performance budgets:
+ *
+ * - `webContentKb`, `webContentProcesses`: the web content processes' resident memory, and how
+ *   many there are. **M2 on Linux**, and with the app's own `rssKb` M1 there.
+ * - `webContentFootprintKb`, `webContentFootprintPeakKb`: the same processes by `footprint`, on
+ *   macOS only: their `phys_footprint` summed, and the `phys_footprint_peak` of the largest.
+ *   **M2 on macOS is the peak**, the number ADR 0082's 1,529 MB was. Resident memory reads far
+ *   low there. So each system is its own baseline: M2 on macOS and M2 on Linux are not one
+ *   series. `null` on Linux.
+ * - `footprintError`: why `footprint` gave no reading for some process, in its own words, or
+ *   `null`. A missing reading is never a silent `null`.
+ * - `harnessKb`, `harnessLargestKb`: the harnesses' memory with their child runs, together and
+ *   the largest one. F1's measure. In CI the harness is the fake one, so these say what the
+ *   harness side of charter's tree costs, and the real harnesses' F1 values come from the
+ *   release scale run (#814), which takes them the same way.
+ *
+ * Two `ps` calls and, on macOS, one `footprint` call for every web content process together.
+ */
+export interface WebAndHarnessMemory {
+  webContentKb: number;
+  webContentProcesses: number;
+  webContentFootprintKb: number | null;
+  webContentFootprintPeakKb: number | null;
+  footprintError: string | null;
+  harnessKb: number;
+  harnessLargestKb: number;
+}
+
+/** One `footprint` call for every pid in `pids`, as text: what it printed, both streams. */
+function footprint(pids: number[]): string {
+  const answered = spawnSync(
+    "footprint",
+    pids.flatMap((pid) => ["-p", String(pid)]),
+    {
+      encoding: "utf8",
+      timeout: 20_000,
+    },
+  );
+  if (answered.error !== undefined) return `footprint: ${answered.error.message}`;
+  return `${answered.stderr ?? ""}\n${answered.stdout ?? ""}`;
+}
+
+/** The web content process's and the harnesses' memory, for the app at `pid`. */
+export function webAndHarnessMemory(pid: number): WebAndHarnessMemory {
+  const rows = processes();
+  const web = webContent(rows, pid, process.platform);
+  let webContentFootprintKb: number | null = null;
+  let webContentFootprintPeakKb: number | null = null;
+  let footprintError: string | null = null;
+  if (process.platform === "darwin") {
+    if (web.pids.length === 0) {
+      footprintError = "no web content process was found to ask footprint about";
+    } else {
+      const read = parseFootprints(footprint(web.pids), web.pids);
+      const each = Object.values(read.byPid);
+      footprintError = read.error;
+      if (each.length > 0) {
+        webContentFootprintKb = each.reduce((sum, one) => sum + one.footprintKb, 0);
+        webContentFootprintPeakKb = each.reduce((most, one) => Math.max(most, one.peakKb), 0);
+      }
+    }
+  }
+  const harness = harnessMemory(rows, pid);
+  return {
+    webContentKb: web.rssKb,
+    webContentProcesses: web.pids.length,
+    webContentFootprintKb,
+    webContentFootprintPeakKb,
+    footprintError,
+    harnessKb: harness.rssKb,
+    harnessLargestKb: harness.largestKb,
+  };
 }
 
 /** Adds one line of JSON to a file in `logs/`, for a run to be read back afterwards. */
