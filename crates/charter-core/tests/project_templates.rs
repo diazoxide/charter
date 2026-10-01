@@ -108,7 +108,7 @@ fn a_template_lays_out_its_personas_and_its_review_checklist_in_the_project() {
     let (_dir, root) = new_project();
     let rust = template::named("rust").expect("the Rust template");
 
-    template::apply(&root, rust).expect("laid out");
+    template::apply(&root, rust, None).expect("laid out");
 
     let engineer = read(&root.join("personas/rust-engineer/persona.md"));
     assert!(
@@ -153,7 +153,7 @@ fn a_templates_guard_defaults_are_ask_rules_in_every_harness_that_holds_them() {
     charter_core::unsteered!();
     let (_dir, root) = new_project();
 
-    template::apply(&root, template::named("python").expect("Python")).expect("laid out");
+    template::apply(&root, template::named("python").expect("Python"), None).expect("laid out");
 
     let asks = json(&root.join(".claude/settings.json"))["permissions"]["ask"].clone();
     for rule in [
@@ -185,7 +185,8 @@ fn a_persona_the_project_already_has_is_left_whole() {
     )
     .expect("ours");
 
-    let applied = template::apply(&root, template::named("go").expect("Go")).expect("laid out");
+    let applied =
+        template::apply(&root, template::named("go").expect("Go"), None).expect("laid out");
 
     assert_eq!(
         read(&ours.join("persona.md")),
@@ -209,10 +210,10 @@ fn applying_a_template_twice_is_applying_it_once() {
     charter_core::unsteered!();
     let (_dir, root) = new_project();
     let ts = template::named("typescript").expect("TypeScript");
-    let first = template::apply(&root, ts).expect("laid out");
+    let first = template::apply(&root, ts, None).expect("laid out");
     let settings = read(&root.join(".claude/settings.json"));
 
-    let again = template::apply(&root, ts).expect("laid out again");
+    let again = template::apply(&root, ts, None).expect("laid out again");
 
     assert!(
         !first.written.is_empty() && !first.asked.is_empty(),
@@ -331,7 +332,7 @@ fn a_project_made_from_each_template_starts_a_chat_in_its_repo_under_each_of_its
         let repo = repo_with(dir.path(), "widget", marker);
         a_profile(&root);
 
-        let taken = firstrun::take_in_from(&root, &repo, &Choice::Detect).expect("opened");
+        let taken = firstrun::take_in_from(&root, &repo, &Choice::Fits).expect("opened");
 
         assert_eq!(taken.template.as_deref(), Some(id), "{marker}");
         let personas = charter_core::workspaces::Plane::open(&root)
@@ -370,7 +371,7 @@ fn a_project_opened_with_no_template_gets_none() {
     let root = firstrun::ensure_local_plane(&dir.path().join("config")).expect("a project");
     let repo = repo_with(dir.path(), "widget", "Cargo.toml");
 
-    let taken = firstrun::take_in_from(&root, &repo, &Choice::Blank).expect("opened");
+    let taken = firstrun::take_in_from(&root, &repo, &Choice::None).expect("opened");
 
     assert_eq!(taken.template, None);
     assert!(!root.join("personas/rust-engineer").exists());
@@ -418,6 +419,7 @@ fn digest(one: &template::Template) -> String {
     use sha2::Digest as _;
     let mut hash = sha2::Sha256::new();
     let said = [
+        format!("{:?}", one.kind),
         one.title.clone(),
         one.summary.clone(),
         one.detect.join("\n"),
@@ -436,53 +438,221 @@ fn digest(one: &template::Template) -> String {
     hash.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// **A template's version names its files.** A project made from `rust` version 1 got these
-/// files and no others, so a change to any of them is a new version: bump `version` in the
-/// template's `template.toml` and put the new version and digest here, in the same commit.
-#[test]
-fn a_templates_files_change_only_with_its_version() {
-    charter_core::unsteered!();
-    let published: [(&str, u32, &str); 6] = [
-        (
-            "docs",
-            1,
-            "6f92ee1afc213d2e4f03f6cadd9635f3121774eb75d4d03c1ba867a592589ad8",
-        ),
-        (
-            "go",
-            1,
-            "f2bdcf8405841e286b0873dbc364169b1e0413778308310ed8a0c4b4c53897f3",
-        ),
-        (
-            "monorepo",
-            1,
-            "676bf89cd7f1d898bf42cb6183d92f2c45c05da7b6d2be7e4c7e713c228900e5",
-        ),
-        (
-            "python",
-            1,
-            "e25d238ce449260fa58117357b3a924ed679c20f329f9c7382dbdb8e8d2cdd43",
-        ),
-        (
-            "rust",
-            1,
-            "92fc0b456a6c9fda90405b93f6cee4f5ba54744f15ec1135be528ce5ed65ce59",
-        ),
-        (
-            "typescript",
-            1,
-            "30e796f733f0c2f36360091ab2b95ddd3d5a96974ce19f88be35fc4724d5a6c7",
-        ),
-    ];
-    let now: Vec<(String, u32, String)> = template::all()
-        .iter()
-        .map(|one| (one.id.clone(), one.version, digest(one)))
-        .collect();
+/// Every version of every template charter has published, with the digest of its files and
+/// manifest. **A row is never edited and never removed.** A project made from `rust` version 1
+/// got exactly the files that row names, so a change to any of them is version 2: bump
+/// `version` in the template's `template.toml` and add the new row below the old one.
+const PUBLISHED: &[(&str, u32, &str)] = &[
+    (
+        "docs",
+        1,
+        "8bd2a0aa7d53f576638d8b2414fc55e85fdad45cd584a85901a44de4f92299d2",
+    ),
+    (
+        "go",
+        1,
+        "79c5d42f57be5ffb3ad7afaca77e8419d05455512b3e87fa09a4305bc591227a",
+    ),
+    (
+        "monorepo",
+        1,
+        "d198a336c66bfa6089a2cb3aa97c5b332f012fb8bb77231c774b1bb46f9f0224",
+    ),
+    (
+        "python",
+        1,
+        "7d7062de4335df3c0656aaf6a478706d54a80ddb9f680f9b165cb5e949f1a803",
+    ),
+    (
+        "rust",
+        1,
+        "06d59b47e2ffd6b903cf50e84e88762c4d89f82053a81b14172770480b8c0f62",
+    ),
+    (
+        "typescript",
+        1,
+        "6377d824518eda64c706db056d31ed2101ccf859a6b76b2fec83b7b69ddcec75",
+    ),
+];
 
-    assert_eq!(
-        now,
-        published.map(|(id, version, digest)| (id.to_owned(), version, digest.to_owned())),
-        "a template's files changed without its version: bump `version` in its template.toml, \
-         and record the new version and digest here"
+#[test]
+fn a_published_template_version_never_changes() {
+    charter_core::unsteered!();
+    for one in template::all() {
+        let now = digest(one);
+        let rows: Vec<&(&str, u32, &str)> = PUBLISHED
+            .iter()
+            .filter(|(id, _, _)| *id == one.id)
+            .collect();
+        match rows.iter().find(|(_, version, _)| *version == one.version) {
+            Some((_, version, was)) => assert_eq!(
+                *was,
+                now,
+                "{} version {version} was published with other files. A published version \
+                 never changes: put this change in version {} of {}'s template.toml, and add \
+                 that version's row to PUBLISHED below this one, which stays as it is",
+                one.id,
+                version + 1,
+                one.id
+            ),
+            None => panic!(
+                "{} version {} has no row in PUBLISHED. Add (\"{}\", {}, \"{now}\") after its \
+                 last row",
+                one.id, one.version, one.id, one.version
+            ),
+        }
+        let newest = rows.iter().map(|(_, version, _)| *version).max();
+        assert_eq!(
+            newest,
+            Some(one.version),
+            "{}'s template.toml says version {}, and PUBLISHED records a newer one: a version \
+             never goes back",
+            one.id,
+            one.version
+        );
+    }
+    for (id, _, _) in PUBLISHED {
+        assert!(
+            template::named(id).is_some(),
+            "PUBLISHED names {id}, which charter no longer ships"
+        );
+    }
+}
+
+#[test]
+fn a_monorepo_asks_about_every_command_any_stack_in_it_asks_about() {
+    charter_core::unsteered!();
+    let monorepo = template::named("monorepo").expect("Monorepo");
+    for stack in template::all()
+        .iter()
+        .filter(|one| one.kind == template::Kind::Stack)
+    {
+        for rule in &stack.ask {
+            assert!(
+                monorepo.ask.contains(rule),
+                "{} asks about {rule}",
+                stack.id
+            );
+        }
+    }
+    assert!(
+        monorepo.ask.contains(&"changeset publish *".to_owned()),
+        "and its own"
     );
+}
+
+#[test]
+fn every_docs_site_charter_detects_has_its_deploy_asked_about() {
+    charter_core::unsteered!();
+    let docs = template::named("docs").expect("Docs only");
+
+    assert!(docs.ask.contains(&"mkdocs gh-deploy *".to_owned()));
+    assert!(
+        docs.ask.contains(&"docusaurus deploy *".to_owned()),
+        "{:?}",
+        docs.ask
+    );
+    assert_eq!(
+        detected(&["antora.yml"]),
+        None,
+        "no Antora deploy to ask about, so not offered"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_marker_that_is_a_link_does_not_count() {
+    charter_core::unsteered!();
+    let repo = tempfile::tempdir().expect("a directory");
+    let elsewhere = tempfile::tempdir().expect("a directory");
+    std::fs::write(elsewhere.path().join("Cargo.toml"), "").expect("a file");
+    std::os::unix::fs::symlink(
+        elsewhere.path().join("Cargo.toml"),
+        repo.path().join("Cargo.toml"),
+    )
+    .expect("a link");
+
+    assert_eq!(template::detect(repo.path()), None);
+}
+
+/// The `- ` lines of `text` under `## <header>`, in order.
+fn bullets(text: &str, header: &str) -> Vec<String> {
+    charter_core::mdsection::section_body(text, header)
+        .lines()
+        .filter_map(|line| line.strip_prefix("- "))
+        .map(str::to_owned)
+        .collect()
+}
+
+#[test]
+fn a_workspace_is_told_the_same_checks_its_templates_engineer_runs() {
+    charter_core::unsteered!();
+    for one in template::all() {
+        let file = |rel: &str| {
+            one.files
+                .iter()
+                .find(|(path, _)| path == rel)
+                .map(|(_, text)| *text)
+                .unwrap_or_else(|| panic!("{} has no {rel}", one.id))
+        };
+        let engineer = one
+            .files
+            .iter()
+            .find(|(path, text)| {
+                path.ends_with("/persona.md") && !path.contains("-reviewer/") && !text.is_empty()
+            })
+            .map(|(_, text)| *text)
+            .unwrap_or_else(|| panic!("{} has no engineer", one.id));
+
+        let runs = bullets(engineer, "How a change is checked");
+        assert!(!runs.is_empty(), "{}", one.id);
+        assert_eq!(
+            bullets(file("workspace.md"), "Context & decisions"),
+            runs,
+            "{}",
+            one.id
+        );
+    }
+}
+
+#[test]
+fn a_template_a_harness_file_refuses_stops_the_open_before_anything_is_copied() {
+    charter_core::unsteered!();
+    let dir = tempfile::tempdir().expect("a directory");
+    let root = firstrun::ensure_local_plane(&dir.path().join("config")).expect("a project");
+    let repo = repo_with(dir.path(), "widget", "Cargo.toml");
+    std::fs::write(root.join("opencode.json"), "[]")
+        .expect("an opencode.json charter cannot extend");
+    let settings = read(&root.join(".claude/settings.json"));
+
+    let refused = firstrun::take_in_from(&root, &repo, &Choice::Fits).expect_err("refused");
+
+    assert!(refused.contains("opencode.json"), "{refused}");
+    assert!(
+        !root.join("workspaces/widget").exists(),
+        "nothing was copied"
+    );
+    assert!(!root.join("personas/rust-engineer").exists());
+    assert_eq!(read(&root.join(".claude/settings.json")), settings);
+}
+
+#[test]
+fn a_template_that_fails_part_way_is_taken_back_whole() {
+    charter_core::unsteered!();
+    let dir = tempfile::tempdir().expect("a directory");
+    let root = firstrun::ensure_local_plane(&dir.path().join("config")).expect("a project");
+    let repo = repo_with(dir.path(), "widget", "Cargo.toml");
+    // A workspace.md charter cannot read, so the last step, the workspace's starter, fails.
+    std::fs::create_dir_all(root.join("workspaces/widget/workspace.md")).expect("in the way");
+    let settings = read(&root.join(".claude/settings.json"));
+    let opencode = read(&root.join("opencode.json"));
+
+    let refused = firstrun::take_in_from(&root, &repo, &Choice::Fits).expect_err("refused");
+
+    assert!(refused.contains("workspace.md"), "{refused}");
+    assert!(!root.join("personas/rust-engineer").exists(), "{refused}");
+    assert!(!root.join("personas/rust-reviewer").exists());
+    assert!(!root.join(".claude/agents/rust-engineer.md").exists());
+    assert_eq!(read(&root.join(".claude/settings.json")), settings);
+    assert_eq!(read(&root.join("opencode.json")), opencode);
 }

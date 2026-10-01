@@ -68,9 +68,9 @@ pub struct FirstRunFound {
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum TemplateChoice {
     /// The one that fits the repo, or none when none does. What the screen starts on.
-    Detect,
-    /// None.
-    Blank,
+    Fits,
+    /// No template.
+    None,
     /// This one.
     Named { id: String },
 }
@@ -78,8 +78,8 @@ pub enum TemplateChoice {
 impl From<TemplateChoice> for firstrun::Choice {
     fn from(choice: TemplateChoice) -> Self {
         match choice {
-            TemplateChoice::Detect => Self::Detect,
-            TemplateChoice::Blank => Self::Blank,
+            TemplateChoice::Fits => Self::Fits,
+            TemplateChoice::None => Self::None,
             TemplateChoice::Named { id } => Self::Named(id),
         }
     }
@@ -235,6 +235,25 @@ pub async fn open_repo(
         instructions,
         template: taken.template,
     })
+}
+
+/// The project template that fits the repo at `path`, by id, or `null` when none does or `path`
+/// is not a full path to a directory: what the first run's "Fits the repo" says it will pick
+/// (FR-17). It asks only whether files are there, and reads nothing.
+#[tauri::command]
+#[specta::specta]
+pub async fn template_that_fits(path: String) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || fits(&path))
+        .await
+        .map_err(|err| format!("charter could not look at the repo: {err}"))
+}
+
+fn fits(path: &str) -> Option<String> {
+    let repo = Path::new(path);
+    if !repo.is_absolute() || !repo.is_dir() {
+        return None;
+    }
+    charter_core::template::detect(repo).map(|one| one.id.clone())
 }
 
 /// How many of workspace `ws`'s instruction files can be added to its memory. A workspace
@@ -442,12 +461,29 @@ mod tests {
             )
         };
 
-        assert_eq!(said(r#"{"kind":"detect"}"#), firstrun::Choice::Detect);
-        assert_eq!(said(r#"{"kind":"blank"}"#), firstrun::Choice::Blank);
+        assert_eq!(said(r#"{"kind":"fits"}"#), firstrun::Choice::Fits);
+        assert_eq!(said(r#"{"kind":"none"}"#), firstrun::Choice::None);
         assert_eq!(
             said(r#"{"kind":"named","id":"rust"}"#),
             firstrun::Choice::Named("rust".to_owned())
         );
+    }
+
+    #[test]
+    fn the_first_run_names_the_template_that_fits_a_typed_path() {
+        let dir = tempfile::tempdir().expect("a directory");
+        std::fs::write(dir.path().join("go.mod"), "").expect("a marker");
+
+        assert_eq!(
+            fits(&dir.path().display().to_string()).as_deref(),
+            Some("go")
+        );
+        assert_eq!(
+            fits("widget"),
+            None,
+            "a path that is not a full one names nothing"
+        );
+        assert_eq!(fits(&dir.path().join("gone").display().to_string()), None);
     }
 
     #[test]
@@ -480,7 +516,7 @@ mod tests {
         let repo = a_repo(&dir.path().join("widget"));
 
         let (root, taken) =
-            taken_in(&config, &repo, &firstrun::Choice::Detect).expect("the repository is opened");
+            taken_in(&config, &repo, &firstrun::Choice::Fits).expect("the repository is opened");
 
         assert_eq!(
             root,
@@ -497,14 +533,14 @@ mod tests {
         let (first, _) = taken_in(
             &config,
             &a_repo(&dir.path().join("one")),
-            &firstrun::Choice::Detect,
+            &firstrun::Choice::Fits,
         )
         .expect("the first repository");
 
         let (second, taken) = taken_in(
             &config,
             &a_repo(&dir.path().join("two")),
-            &firstrun::Choice::Detect,
+            &firstrun::Choice::Fits,
         )
         .expect("the second repository");
 
@@ -519,7 +555,7 @@ mod tests {
         let config = dir.path().join("config");
 
         let refused =
-            taken_in(&config, Path::new("widget"), &firstrun::Choice::Detect).expect_err("refused");
+            taken_in(&config, Path::new("widget"), &firstrun::Choice::Fits).expect_err("refused");
 
         assert!(refused.contains("is not a full path"), "{refused}");
         assert!(!firstrun::local_plane(&config).exists());
@@ -544,7 +580,7 @@ mod tests {
             .expect("git runs in a test");
             assert!(done.status.success(), "git {argv:?}");
         }
-        let (root, taken) = taken_in(&config, &repo, &firstrun::Choice::Detect).expect("opened");
+        let (root, taken) = taken_in(&config, &repo, &firstrun::Choice::Fits).expect("opened");
 
         assert_eq!(offered(&root, &taken.workspace), 1);
         let files = instruction_files(&root, &taken.workspace).expect("read");

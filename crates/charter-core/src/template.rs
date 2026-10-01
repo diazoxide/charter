@@ -19,20 +19,35 @@ mod data {
 /// The file in each template's directory that describes it rather than being copied.
 const MANIFEST: &str = "template.toml";
 
+/// What a template is for, which is what [`detect`] picks it by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Kind {
+    /// One code stack: Rust, Go, …
+    Stack,
+    /// Several stacks in one repo. Its ask rules are its own and every stack's, so a repo that
+    /// holds a Go module and a Python package is asked about both.
+    Monorepo,
+    /// Documentation with no code beside it.
+    Docs,
+}
+
 /// One project template.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Template {
     /// Its directory's name: `rust`, `docs`.
     pub id: String,
+    pub kind: Kind,
     /// What the window calls it.
     pub title: String,
     /// One line on what it is for.
     pub summary: String,
-    /// Up by one whenever any of its files changes.
+    /// A published version's files never change: a change is the next version.
     pub version: u32,
-    /// A repo is this stack when one of these files is at its top level.
+    /// A repo is this template's when one of these files is at its top level.
     pub detect: Vec<String>,
-    /// Commands every harness asks the operator about before a chat runs them.
+    /// Commands every harness with command permissions asks the operator about before a chat
+    /// runs them.
     pub ask: Vec<String>,
     /// Every file it lays out, by its path in the project, with its text.
     pub files: Vec<(String, &'static str)>,
@@ -41,6 +56,7 @@ pub struct Template {
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Manifest {
+    kind: Kind,
     title: String,
     summary: String,
     version: u32,
@@ -64,39 +80,54 @@ struct Guard {
 pub fn all() -> &'static [Template] {
     static ALL: OnceLock<Vec<Template>> = OnceLock::new();
     ALL.get_or_init(|| {
-        let mut found: Vec<Template> = Vec::new();
+        // Each directory's files, by its id, in the order `build.rs` sorted them.
+        let mut dirs: Vec<(&str, Vec<(String, &'static str)>)> = Vec::new();
         for (key, text) in data::FILES {
             let Some((id, rel)) = key.split_once('/') else {
                 continue;
             };
-            let at = match found.iter().position(|one| one.id == id) {
-                Some(at) => at,
-                None => {
-                    found.push(Template {
-                        id: id.to_owned(),
-                        title: String::new(),
-                        summary: String::new(),
-                        version: 0,
-                        detect: Vec::new(),
-                        ask: Vec::new(),
-                        files: Vec::new(),
-                    });
-                    found.len() - 1
-                }
-            };
-            let one = &mut found[at];
-            if rel == MANIFEST {
+            match dirs.iter_mut().find(|(have, _)| *have == id) {
+                Some((_, files)) => files.push((rel.to_owned(), *text)),
+                None => dirs.push((id, vec![(rel.to_owned(), *text)])),
+            }
+        }
+        let mut found: Vec<Template> = dirs
+            .into_iter()
+            .map(|(id, mut files)| {
+                let at = files
+                    .iter()
+                    .position(|(rel, _)| rel == MANIFEST)
+                    .unwrap_or_else(|| panic!("templates/{id} has no {MANIFEST}"));
+                let (_, text) = files.remove(at);
                 // Compiled in, and every one is read by this crate's tests: a template that
                 // does not parse is a defect of the build, never something a user can cause.
-                let manifest: Manifest = toml::from_str(text)
-                    .unwrap_or_else(|why| panic!("templates/{key} does not parse: {why}"));
-                one.title = manifest.title;
-                one.summary = manifest.summary;
-                one.version = manifest.version;
-                one.detect = manifest.detect.files;
-                one.ask = manifest.guard.ask;
-            } else {
-                one.files.push((rel.to_owned(), *text));
+                let manifest: Manifest = toml::from_str(text).unwrap_or_else(|why| {
+                    panic!("templates/{id}/{MANIFEST} does not parse: {why}")
+                });
+                Template {
+                    id: id.to_owned(),
+                    kind: manifest.kind,
+                    title: manifest.title,
+                    summary: manifest.summary,
+                    version: manifest.version,
+                    detect: manifest.detect.files,
+                    ask: manifest.guard.ask,
+                    files,
+                }
+            })
+            .collect();
+        // A monorepo is asked about whatever any stack in it would be, derived here so the two
+        // lists cannot drift apart.
+        let stacks: Vec<String> = found
+            .iter()
+            .filter(|one| one.kind == Kind::Stack)
+            .flat_map(|one| one.ask.iter().cloned())
+            .collect();
+        for one in found.iter_mut().filter(|one| one.kind == Kind::Monorepo) {
+            for rule in &stacks {
+                if !one.ask.contains(rule) {
+                    one.ask.push(rule.clone());
+                }
             }
         }
         found.sort_by(|a, b| a.id.cmp(&b.id));
@@ -109,31 +140,28 @@ pub fn named(id: &str) -> Option<&'static Template> {
     all().iter().find(|one| one.id == id)
 }
 
-/// The template for several stacks in one repo, and the one detected when two stacks are.
-pub const MONOREPO: &str = "monorepo";
-
-/// The template for a repo of documentation, detected only when no code stack is.
-pub const DOCS: &str = "docs";
-
 /// The template that fits the repo at `repo`, by the files at its top level, or `None` when
-/// none does. It asks only whether each file is there: nothing in the repo is read.
+/// none does. It asks only whether each file is there, as a file and not a link to one:
+/// nothing in the repo is read, and nothing outside it is asked about.
 ///
-/// One code stack is that stack's template. Two of them, or a workspace file (`MONOREPO`'s own
-/// `detect`), are a monorepo. A docs site is `DOCS` only when there is no code beside it: a
-/// Go module with an `mkdocs.yml` is a Go repo that has docs.
+/// One code stack is that stack's template. Two of them, or a monorepo's own workspace file
+/// (`pnpm-workspace.yaml`, `go.work`, …), are a monorepo. A docs site is docs only when there
+/// is no code beside it: a Go module with an `mkdocs.yml` is a Go repo that has docs.
 pub fn detect(repo: &std::path::Path) -> Option<&'static Template> {
-    let has = |one: &Template| one.detect.iter().any(|file| repo.join(file).is_file());
-    let stacks: Vec<&Template> = all()
-        .iter()
-        .filter(|one| one.id != MONOREPO && one.id != DOCS)
-        .filter(|one| has(one))
-        .collect();
-    let workspace_file = named(MONOREPO).is_some_and(has);
+    let has = |one: &Template| {
+        one.detect.iter().any(|file| {
+            std::fs::symlink_metadata(repo.join(file)).is_ok_and(|meta| meta.file_type().is_file())
+        })
+    };
+    let of = |kind: Kind| all().iter().filter(move |one| one.kind == kind);
+    let stacks: Vec<&Template> = of(Kind::Stack).filter(|one| has(one)).collect();
+    if let Some(monorepo) = of(Kind::Monorepo).find(|one| has(one)) {
+        return Some(monorepo);
+    }
     match stacks.as_slice() {
-        _ if workspace_file => named(MONOREPO),
         [one] => Some(one),
-        [] => named(DOCS).filter(|one| has(one)),
-        _ => named(MONOREPO),
+        [] => of(Kind::Docs).find(|one| has(one)),
+        _ => of(Kind::Monorepo).next(),
     }
 }
 
@@ -145,21 +173,152 @@ const WORKSPACE_STARTER: &str = "workspace.md";
 pub struct Applied {
     /// The files written, by their path in the project.
     pub written: Vec<String>,
-    /// The ask rules added, as Claude Code spells them.
+    /// The ask rules added in at least one harness, as Claude Code spells them.
     pub asked: Vec<String>,
+    /// The ask rules at least one harness already denies, and was left denying: a template's
+    /// rule never makes a denied command one the operator can answer.
+    pub denied: Vec<String>,
+}
+
+/// Whether every harness file `template` writes a rule into can take it, asked with nothing
+/// written: the reason it cannot, in the words [`apply`] would refuse with.
+pub fn check(root: &std::path::Path, template: &Template) -> Result<(), String> {
+    for pattern in &template.ask {
+        let rule = crate::guardcmd::as_rule(pattern)?;
+        refused(
+            template,
+            &rule,
+            &crate::guardcmd::check(root, &rule, ASK, false),
+        )?;
+    }
+    Ok(())
+}
+
+const ASK: crate::guardcmd::Bucket = crate::guardcmd::Bucket::Ask;
+
+/// `Err` naming every harness whose file would not take `rule`.
+fn refused(
+    template: &Template,
+    rule: &str,
+    answers: &[(&str, crate::guardcmd::Answer)],
+) -> Result<(), String> {
+    let refused: Vec<String> = answers
+        .iter()
+        .filter_map(|(harness, answer)| match answer {
+            crate::guardcmd::Answer::Malformed(why) | crate::guardcmd::Answer::Unwritable(why) => {
+                Some(format!("{harness}: {why}"))
+            }
+            _ => None,
+        })
+        .collect();
+    if refused.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "charter could not add the {} template's ask rule {rule}: {}. Nothing from the template \
+         was written. Fix that file, or open the repo with no template.",
+        template.title,
+        refused.join("; ")
+    ))
 }
 
 /// Lays `template` into the project at `root`: its personas, each with the `memory/` and
-/// `refs/` every persona has, and its ask rules in every harness that holds one.
+/// `refs/` every persona has and its sub-agent; the starter of `workspace`, when one is named
+/// ([`seed_workspace`]); and its ask rules in every harness that holds command permissions
+/// (Claude Code and opencode; Codex has none, so charter's own guard is what applies there).
 ///
 /// **Additive, as `charter init` is.** A persona whose directory is already there is left whole,
 /// so a template never writes into a role somebody already has; any other file that is there is
-/// left as it is; an ask rule already in force stays as it was. Applying a template twice is
-/// applying it once. Nothing is written through a link.
+/// left as it is; an ask rule already in force stays as it was, and one a harness already
+/// denies stays denied ([`Applied::denied`]). Applying a template twice is applying it once.
+/// Nothing is written through a link.
 ///
-/// The rules go through `charter guard ask`'s writer, so they reach every harness or none, and
-/// every workspace layer that exists is rewritten to carry them.
-pub fn apply(root: &std::path::Path, template: &Template) -> Result<Applied, String> {
+/// **Whole, or not at all.** Every harness file is asked first ([`check`]). When a step fails
+/// after that, everything this call wrote is taken back — the personas it made, their
+/// sub-agents, and the harness files and `workspace.md` as they were — and the reason is the
+/// answer. Only when it all landed is every workspace layer rewritten to carry the rules.
+pub fn apply(
+    root: &std::path::Path,
+    template: &Template,
+    workspace: Option<&str>,
+) -> Result<Applied, String> {
+    check(root, template)?;
+    let mut kept = vec![
+        root.join(crate::scaffold::settings::SETTINGS),
+        root.join(crate::scaffold::settings::OPENCODE),
+    ];
+    if let Some(ws) = workspace {
+        kept.push(root.join("workspaces").join(ws).join("workspace.md"));
+    }
+    let before: Vec<(std::path::PathBuf, Option<Vec<u8>>)> = kept
+        .into_iter()
+        .map(|path| {
+            let was = std::fs::read(&path).ok();
+            (path, was)
+        })
+        .collect();
+    let mut made = Made::default();
+    match lay(root, template, workspace, &mut made) {
+        Ok(applied) => {
+            if !applied.asked.is_empty() {
+                crate::guardcmd::mirror(root);
+            }
+            Ok(applied)
+        }
+        Err(why) => {
+            made.take_back(root);
+            for (path, was) in before {
+                let _ = match was {
+                    Some(bytes) => {
+                        crate::rewrite::replace(root, &path, &bytes, crate::rewrite::Mode::Kept)
+                    }
+                    None => std::fs::remove_file(&path).or_else(|e| {
+                        if e.kind() == std::io::ErrorKind::NotFound {
+                            Ok(())
+                        } else {
+                            Err(e)
+                        }
+                    }),
+                };
+            }
+            Err(why)
+        }
+    }
+}
+
+/// What [`apply`] made that was not there before it ran, so a failure can take it back.
+#[derive(Default)]
+struct Made {
+    /// Persona directories it created: everything in them is its own.
+    personas: Vec<std::path::PathBuf>,
+    /// Sub-agents it generated.
+    agents: Vec<std::path::PathBuf>,
+}
+
+impl Made {
+    fn take_back(&self, root: &std::path::Path) {
+        for agent in &self.agents {
+            let _ = std::fs::remove_file(agent);
+        }
+        for dir in &self.personas {
+            // Only a real directory under the project: never through a link that appeared
+            // since.
+            let real = std::fs::symlink_metadata(dir).is_ok_and(|meta| meta.is_dir())
+                && crate::contain::no_link_on_the_way(root, dir).is_ok();
+            if real {
+                let _ = std::fs::remove_dir_all(dir);
+            }
+        }
+    }
+}
+
+/// [`apply`]'s steps, in order, recording in `made` what each one created.
+fn lay(
+    root: &std::path::Path,
+    template: &Template,
+    workspace: Option<&str>,
+    made: &mut Made,
+) -> Result<Applied, String> {
     let mut applied = Applied::default();
     // The personas this run makes: those whose directory is not there yet, anything at all
     // there (a dangling link included) counting as there.
@@ -170,6 +329,13 @@ pub fn apply(root: &std::path::Path, template: &Template) -> Result<Applied, Str
         .filter(|persona| std::fs::symlink_metadata(root.join("personas").join(persona)).is_err())
         .collect();
     personas.dedup();
+    for persona in &personas {
+        let dir = root.join("personas").join(persona);
+        crate::contain::no_link_on_the_way(root, &dir)
+            .and_then(|()| std::fs::create_dir_all(&dir))
+            .map_err(|why| format!("charter could not make {} ({why}).", dir.display()))?;
+        made.personas.push(dir);
+    }
     for (rel, text) in &template.files {
         let laid = match persona_of(rel) {
             Some(persona) => personas.contains(&persona),
@@ -193,38 +359,31 @@ pub fn apply(root: &std::path::Path, template: &Template) -> Result<Applied, Str
         if crate::personaverbs::agents::write_agent(root, &state, persona, &mut quiet)
             == crate::personaverbs::agents::Outcome::Written
         {
-            applied.written.push(format!(".claude/agents/{persona}.md"));
+            let rel = format!(".claude/agents/{persona}.md");
+            made.agents.push(root.join(&rel));
+            applied.written.push(rel);
         }
+    }
+    if let Some(ws) = workspace
+        && seed_workspace(root, ws, template)?
+    {
+        applied
+            .written
+            .push(format!("workspaces/{ws}/workspace.md"));
     }
     for pattern in &template.ask {
         let rule = crate::guardcmd::as_rule(pattern)?;
-        let (answers, blocked) =
-            crate::guardcmd::apply(root, &rule, crate::guardcmd::Bucket::Ask, false);
-        let refused: Vec<String> = answers
-            .iter()
-            .filter_map(|(harness, answer)| match answer {
-                crate::guardcmd::Answer::Malformed(why)
-                | crate::guardcmd::Answer::Unwritable(why) => Some(format!("{harness}: {why}")),
-                _ => None,
-            })
-            .collect();
-        if blocked || !refused.is_empty() {
-            return Err(format!(
-                "charter could not add the {} template's ask rule {rule}: {}. Fix that file, or \
-                 start without a template.",
-                template.title,
-                refused.join("; ")
-            ));
+        let (answers, _) = crate::guardcmd::apply(root, &rule, ASK, false);
+        refused(template, &rule, &answers)?;
+        let any = |wanted: fn(&crate::guardcmd::Answer) -> bool| {
+            answers.iter().any(|(_, answer)| wanted(answer))
+        };
+        if any(|answer| matches!(answer, crate::guardcmd::Answer::Denied(_))) {
+            applied.denied.push(rule.clone());
         }
-        if answers
-            .iter()
-            .any(|(_, answer)| matches!(answer, crate::guardcmd::Answer::Added(_)))
-        {
+        if any(|answer| matches!(answer, crate::guardcmd::Answer::Added(_))) {
             applied.asked.push(rule);
         }
-    }
-    if !applied.asked.is_empty() {
-        crate::guardcmd::mirror(root);
     }
     Ok(applied)
 }

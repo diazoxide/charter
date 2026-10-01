@@ -424,7 +424,10 @@ pub fn init(place: &Place, args: &InitArgs) -> Outcome {
     if settings_ok {
         match settings::ensure_env(root, "CHARTER_HARNESS", "claude-code") {
             Wrote::Created => run.created.push(".claude/settings.json (env)".to_owned()),
-            Wrote::Present => run.present.push(".claude/settings.json (env)".to_owned()),
+            // Only an ask or allow rule can meet a deny; an `env` key never does.
+            Wrote::Present | Wrote::Denied => {
+                run.present.push(".claude/settings.json (env)".to_owned())
+            }
             Wrote::Malformed(_) => {}
             Wrote::Blocked(dir) => run.blocked.push((".claude".to_owned(), dir)),
             Wrote::Failed(path, e) => write_failed(&mut run, &path, &e),
@@ -446,7 +449,7 @@ pub fn init(place: &Place, args: &InitArgs) -> Outcome {
             Wrote::Created => run
                 .created
                 .push(".claude/settings.json (plane-root guard)".to_owned()),
-            Wrote::Present => run
+            Wrote::Present | Wrote::Denied => run
                 .present
                 .push(".claude/settings.json (plane-root guard already wired)".to_owned()),
             Wrote::Malformed(_) => {
@@ -573,7 +576,7 @@ pub fn reinit(place: &Place) -> Outcome {
             Wrote::Created => run
                 .created
                 .push(".claude/settings.json (plane-root guard)".to_owned()),
-            Wrote::Present => run
+            Wrote::Present | Wrote::Denied => run
                 .present
                 .push(".claude/settings.json (plane-root guard already wired)".to_owned()),
             Wrote::Malformed(_) => {
@@ -1060,8 +1063,11 @@ fn ask_gate(run: &mut Run, root: &Path, settings_ok: bool, ask: &AskRule, comman
                 added = true;
                 run.created.push(format!("{rel} (ask: {})", ask.label));
             }
-            Wrote::Present if command == "reinit" => {}
+            Wrote::Present | Wrote::Denied if command == "reinit" => {}
             Wrote::Present => run.present.push(format!("{rel} (ask: {})", ask.label)),
+            Wrote::Denied => run
+                .present
+                .push(format!("{rel} (denies {}, left so)", ask.label)),
             Wrote::Failed(path, e) => {
                 run.err(format!(
                     "{name}: could not write {} ({}) — left untouched.",

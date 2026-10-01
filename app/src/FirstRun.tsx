@@ -6,6 +6,7 @@ import {
   type ForgeRow,
   type HarnessRow,
   type TemplateChoice,
+  type TemplateRow,
 } from "./bindings";
 
 /** The radio values that are not a template's id. Ids are lower-case words, so neither clashes. */
@@ -13,8 +14,8 @@ const FITS = ":fits";
 const NONE = ":none";
 
 function choiceOf(value: string): TemplateChoice {
-  if (value === FITS) return { kind: "detect" };
-  if (value === NONE) return { kind: "blank" };
+  if (value === FITS) return { kind: "fits" };
+  if (value === NONE) return { kind: "none" };
   return { kind: "named", id: value };
 }
 
@@ -69,6 +70,26 @@ export function FirstRun({
   const [typed, setTyped] = useState("");
   const [template, setTemplate] = useState(FITS);
   const templateId = useId();
+  // The template that fits a typed path, by id, with the path it was asked about: `null` when
+  // none fits. A folder picked in the dialog opens at once, so this is the typed path's alone,
+  // and an answer about a path no longer typed is not shown.
+  const [fitting, setFitting] = useState<{ path: string; id: string | null }>();
+  const path = typed.trim();
+  const fits = fitting !== undefined && fitting.path === path ? fitting.id : undefined;
+
+  useEffect(() => {
+    if (path === "") return;
+    let gone = false;
+    void commands
+      .templateThatFits(path)
+      .then((answer) => {
+        if (!gone && answer.status === "ok") setFitting({ path, id: answer.data });
+      })
+      .catch(() => undefined);
+    return () => {
+      gone = true;
+    };
+  }, [path]);
 
   useEffect(() => {
     let gone = false;
@@ -147,7 +168,7 @@ export function FirstRun({
             disabled={opening}
           >
             {[
-              { id: FITS, title: "Fits the repo", summary: "charter picks by the repo's files." },
+              { id: FITS, title: "Fits the repo", summary: fitsSays(fits, found.templates) },
               ...found.templates,
               { id: NONE, title: "None", summary: "Only the steward persona." },
             ].map((one) => (
@@ -218,6 +239,14 @@ export function FirstRun({
       </div>
     </section>
   );
+}
+
+/** What "Fits the repo" says it will pick: the template, once there is a path to look at. */
+function fitsSays(fits: string | null | undefined, templates: TemplateRow[]): string {
+  if (fits === undefined) return "charter picks by the files at the repo's top level.";
+  if (fits === null) return "None fits this repo, so it opens with no template.";
+  const title = templates.find((one) => one.id === fits)?.title ?? fits;
+  return `${title}, by the files at the repo's top level.`;
 }
 
 function harnessSays(row: HarnessRow): string {

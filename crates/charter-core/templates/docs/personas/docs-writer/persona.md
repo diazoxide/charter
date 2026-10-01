@@ -17,8 +17,8 @@ workspace's `workspace.md` for what is already decided.
 - every link the change adds resolves
 - a spell check, when the repo configures one
 
-Write the failing test first when the change is a behaviour, and see it fail for the right
-reason before you make it pass.
+Check each claim you write against the thing it describes, and build the page before you
+call it done.
 
 ## Before you hand it back
 

@@ -104,6 +104,8 @@ pub enum Answer {
     Added(PathBuf),
     /// Already so in this file.
     Present(PathBuf),
+    /// This file already denies exactly this, and it was left so: stricter than the rule asked.
+    Denied(PathBuf),
     /// The harness has nowhere to put this rule, and never will: said, not resolved.
     Unsupported(String),
     /// A file charter cannot read the way the harness reads it; nothing was written anywhere.
@@ -116,6 +118,7 @@ fn answer(wrote: Wrote, path: &Path) -> Answer {
     match wrote {
         Wrote::Created => Answer::Added(path.to_path_buf()),
         Wrote::Present => Answer::Present(path.to_path_buf()),
+        Wrote::Denied => Answer::Denied(path.to_path_buf()),
         Wrote::Malformed(what) => Answer::Malformed(what),
         Wrote::Blocked(dir) => Answer::Unwritable(format!("{} is not a directory", dir.display())),
         Wrote::Failed(path, e) => Answer::Unwritable(format!("{} ({e})", path.display())),
@@ -194,6 +197,16 @@ fn write(
 /// The harnesses a rule is written for, in charter's registry order.
 pub const HARNESSES: [&str; 3] = ["claude-code", "opencode", "codex"];
 
+/// What each harness would answer to `rule`, with nothing written: [`apply`]'s first half, for
+/// a caller that has to know every file takes the rule before it writes anything else
+/// (a project template, FR-17).
+pub fn check(root: &Path, rule: &str, bucket: Bucket, local: bool) -> Vec<(&'static str, Answer)> {
+    HARNESSES
+        .iter()
+        .map(|h| (*h, write(h, root, rule, bucket, local, true)))
+        .collect()
+}
+
 /// `commands._guard_apply`: give `rule` to every harness that can hold it, or to none.
 /// Returns each harness's answer, and whether nothing was written because one refused.
 pub fn apply(
@@ -202,10 +215,7 @@ pub fn apply(
     bucket: Bucket,
     local: bool,
 ) -> (Vec<(&'static str, Answer)>, bool) {
-    let checked: Vec<(&'static str, Answer)> = HARNESSES
-        .iter()
-        .map(|h| (*h, write(h, root, rule, bucket, local, true)))
-        .collect();
+    let checked = check(root, rule, bucket, local);
     if checked
         .iter()
         .any(|(_, a)| matches!(a, Answer::Malformed(_)))
@@ -276,6 +286,12 @@ pub fn report(root: &Path, rule: &str, bucket: Bucket, local: bool) -> (String, 
             Answer::Present(_) => {
                 wrote = true;
                 out.push_str(&format!("\u{2713} {h}: already {verb} {rule}.\n"));
+            }
+            Answer::Denied(_) => {
+                wrote = true;
+                out.push_str(&format!(
+                    "\u{2713} {h}: already denies {rule}, which is stricter — left as it is.\n"
+                ));
             }
             Answer::Unsupported(why) => out.push_str(&format!("  {h}: {why}.\n")),
             // Passed the check, and changed under the command before the write.

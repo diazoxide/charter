@@ -47,6 +47,7 @@ macro_rules! app_commands {
                 opener::create_project,
                 firstrun::first_run_found,
                 firstrun::open_repo,
+                firstrun::template_that_fits,
                 firstrun::open_local_project,
                 firstrun::repo_instructions,
                 firstrun::import_instructions,

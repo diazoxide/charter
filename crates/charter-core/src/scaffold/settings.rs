@@ -67,6 +67,10 @@ pub enum Wrote {
     Created,
     /// Already there; nothing written.
     Present,
+    /// The harness already denies exactly this; nothing written. A rule charter adds never
+    /// takes a command a deny holds back and makes it something the operator can answer
+    /// (FR-17's review, B1).
+    Denied,
     /// The file is not one charter can read and write back; nothing written. The string is
     /// what Python puts in its message: the path, and for a wrong-typed key, which one.
     Malformed(String),
@@ -207,6 +211,16 @@ pub fn ensure_rule(path: &Path, bucket: &str, rule: &str, dry_run: bool) -> Wrot
     if entries.iter().any(|e| e.as_str() == Some(rule)) {
         return Wrote::Present;
     }
+    // Claude Code weighs `deny` before `ask` and `allow` whatever the order, so a rule added
+    // here never outranks a broader deny; an exact one is said, and nothing is added beside it.
+    if bucket != "deny"
+        && perms
+            .get("deny")
+            .and_then(Value::as_array)
+            .is_some_and(|denied| denied.iter().any(|e| e.as_str() == Some(rule)))
+    {
+        return Wrote::Denied;
+    }
     entries.push(Value::String(rule.to_owned()));
     perms.insert(bucket.to_owned(), Value::Array(entries));
     map.insert("permissions".to_owned(), Value::Object(perms));
@@ -234,6 +248,17 @@ pub fn ensure_opencode_ask(root: &Path, glob: &str, dry_run: bool) -> Wrote {
 
 /// [`ensure_opencode_ask`] for either decision: `permission.bash[glob] = decision`, where the
 /// check is "is the decision already this one".
+///
+/// **Never weaker than a deny that is there.** opencode decides a command by the last rule in
+/// `permission.bash` that matches it (opencode.ai/docs/permissions: "the last matching rule
+/// winning"), so where Python appends, this:
+///
+/// - leaves an exact `deny` for `glob` as it is, and answers [`Wrote::Denied`];
+/// - puts a new `glob` **before the first `deny`**, so every deny that matches the same
+///   command still comes after it and still decides. `"*": "deny"` stays the last word on
+///   `cargo publish`, and an ask with no deny over it is in force as before.
+///
+/// An existing entry for `glob` keeps its place: its decision changes and its order does not.
 pub fn ensure_opencode_rule(root: &Path, glob: &str, decision: &str, dry_run: bool) -> Wrote {
     let path = root.join(OPENCODE);
     let mut map = if path.exists() {
@@ -267,10 +292,31 @@ pub fn ensure_opencode_rule(root: &Path, glob: &str, decision: &str, dry_run: bo
         }
         None => Map::new(),
     };
-    if block.get(glob).and_then(Value::as_str) == Some(decision) {
+    let had = block.get(glob).and_then(Value::as_str);
+    if had == Some(decision) {
         return Wrote::Present;
     }
-    block.insert(glob.to_owned(), Value::String(decision.to_owned()));
+    if had == Some("deny") {
+        return Wrote::Denied;
+    }
+    let first_deny = block
+        .values()
+        .position(|value| value.as_str() == Some("deny"));
+    match first_deny {
+        Some(at) if had.is_none() && decision != "deny" => {
+            let mut placed = Map::new();
+            for (i, (key, value)) in std::mem::take(&mut block).into_iter().enumerate() {
+                if i == at {
+                    placed.insert(glob.to_owned(), Value::String(decision.to_owned()));
+                }
+                placed.insert(key, value);
+            }
+            block = placed;
+        }
+        _ => {
+            block.insert(glob.to_owned(), Value::String(decision.to_owned()));
+        }
+    }
     perms.insert("bash".to_owned(), Value::Object(block));
     map.insert("permission".to_owned(), Value::Object(perms));
     let text = pyjson::dumps_indent2(&Value::Object(map));

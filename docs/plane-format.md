@@ -3198,10 +3198,13 @@ arguments raises `UnexpressibleRule` and nothing is written.
 `Bash(charter report *--yes*)`. The second is new in charter-app (ADR 0059, amended
 2026-09-26), and `reinit` adds it to a plane that predates it. `opencode.json` gets the same
 two globs. A **project template** (FR-17) adds its stack's guard defaults the same way,
-through `charter guard ask`'s writer (every harness or none, then every workspace layer):
+through `charter guard ask`'s writer (every harness with command permissions or none, then
+every workspace layer; Codex has no command permissions, so it gets none and charter's own
+guard is what applies there):
 the commands that publish or deploy, such as `Bash(cargo publish *)` for Rust or
 `Bash(twine upload *)` for Python. The list is each template's `[guard] ask` in
-`crates/charter-core/templates/<stack>/template.toml`.
+`crates/charter-core/templates/<stack>/template.toml`, and a monorepo's is its own and every
+stack's.
 
 Measured after `init` + `guard ask 'terraform apply *'`:
 
@@ -3250,6 +3253,15 @@ Measured after `init` + `guard ask 'terraform apply *'`:
   (`<server>_<tool>`, `*`); `Tool(pattern)`/`tool(pattern)` → (`<opencode tool id>`,
   `pattern`) using `TOOL_NAMES` (`charter/harness/opencode.py:47`); anything else →
   (`bash`, pattern).
+- **Never weaker than a deny (charter-app, FR-17's review).** opencode decides a command by
+  the **last** rule in `permission.bash` that matches it ("Rules are evaluated by pattern
+  match, with the last matching rule winning", opencode.ai/docs/permissions), so where Python
+  appends, `crates/charter-core/src/scaffold/settings.rs` `ensure_opencode_rule` leaves an exact
+  `"deny"` for the glob as it is (answered `denied`, said by `charter guard ask`, and listed in
+  a template's `denied`), and puts a **new** glob before the first `"deny"` entry, so every deny
+  that matches the same command still comes after it and still decides. An entry already there
+  keeps its place. Claude Code weighs `deny` before `ask` and `allow` whatever the order, so its
+  writer only says an exact deny and adds nothing beside it.
 - Fixture: `{"permission": {"bash": {"charter handoff *": "ask", "terraform apply *": "ask"}}}`.
 
 ### `<plane>/.gitignore` (the lines charter owns)

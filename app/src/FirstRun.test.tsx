@@ -135,6 +135,20 @@ describe("the first run's project template (FR-17)", () => {
     expect(within(group).getByText("A Cargo crate or workspace.")).toBeInTheDocument();
   });
 
+  it("says which template fits the repo whose path is typed", async () => {
+    const { calls } = core((cmd, args) =>
+      cmd === "template_that_fits" ? (args.path === REPO ? "rust" : null) : undefined,
+    );
+    render(<App />);
+
+    const group = await screen.findByRole("radiogroup", { name: "Project template" });
+    await userEvent.setup().type(screen.getByLabelText("Or type the repo's path"), REPO);
+
+    const fits = within(group).getByRole("radio", { name: "Fits the repo" });
+    await waitFor(() => expect(fits).toHaveAccessibleDescription(/Rust/));
+    expect(calls("template_that_fits").at(-1)?.args).toEqual({ path: REPO });
+  });
+
   it("opens the repo with the template the operator picked", async () => {
     const { calls } = core();
     render(<App />);
@@ -160,7 +174,7 @@ describe("the first run's project template (FR-17)", () => {
 
     await vi.waitFor(() =>
       expect(calls("open_repo").map((one) => one.args)).toEqual([
-        { path: REPO, template: { kind: "blank" } },
+        { path: REPO, template: { kind: "none" } },
       ]),
     );
   });
@@ -211,7 +225,7 @@ describe("the first run", () => {
     const person = await openRepoByPath(REPO);
 
     expect(calls("open_repo").map((one) => one.args)).toEqual([
-      { path: REPO, template: { kind: "detect" } },
+      { path: REPO, template: { kind: "fits" } },
     ]);
     // The first chat is asked for by itself: the harness picker, which ADR 0022 keeps.
     const picker = await screen.findByRole("dialog", { name: "Start a chat" });
