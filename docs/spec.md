@@ -49,8 +49,13 @@ When two choices conflict, the higher priority wins.
 - **Session**: one harness process in one PTY, owned by the core. **Chat**: a session as the
   UI shows it: its tab, its workspace, its state. **Shell tab**: a chat running the operator's
   own shell, with no harness and no profile (ADR 0062).
-- **Session state**: `running`, `waiting` (on you), `done`, `failed`, `unknown`. Set only by
-  harness hooks, never by reading output. A shell tab draws no state mark until a harness in it
+- **Run state** (ADR 0076): `queued`, `starting`, `working`, `input-required`, `paused` and
+  `hibernated` while a run lives, then `completed`, `failed` or `stopped`, once and for good.
+  Every move names one cause: a hook, the harness's protocol, the program's exit, or an act of
+  the host, the operator or a policy, and never harness output (`state::run`). A chat's state is
+  its current run's, and needs you is a view over its runs and its items. Until the board moves
+  onto runs, the sidebar still draws each chat as `running`, `waiting` (on you), `done`,
+  `failed` or `unknown` (`state::State`; the move is #791). A shell tab draws no state mark until a harness in it
   reports one: its terminal mark says what it is, and `unknown` there read as a spinner.
 - **Python charter**: the current implementation, frozen, and the reference for differential
   tests until it is retired.

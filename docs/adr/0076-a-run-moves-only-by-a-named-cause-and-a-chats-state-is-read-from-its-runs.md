@@ -188,9 +188,11 @@ the `ended` flag to the state. Hooks still move the four states in the middle, b
 
 **A relaunch follows SC-20 in these states.** When the app lets go of a project (a quit, the
 project closed, the grace period passing), each live run that is idle at a turn boundary, on a
-harness that resumes natively, becomes `hibernated | quit` rather than `stopped | quit`. Nothing
-is lost: the program ends, as ADR 0068 §2 says, and the conversation is kept. A run already
-`hibernated` stays so. Every other live run ends `stopped | quit`. At the next launch, once the launch question is answered:
+harness that resumes natively, becomes `hibernated | quit` (or `hibernated | grace`, when the
+grace period passed) rather than `stopped`. Nothing is lost: the program ends, as ADR 0068 §2
+says, and the conversation is kept. A run already `hibernated` stays so. Every other live run
+ends `stopped | quit` (or `stopped | grace`). At the next launch, once the launch question is
+answered:
 
 - visible, needs-you and mid-turn chats get a new run (ADR 0066's `reopen`), `queued` with the
   `stagger` hold, and restart first;
@@ -482,3 +484,9 @@ The operator accepted all five questions as recommended:
 4. **V27d: remote chats cannot be stopped from charter.** It links to the vendor's page, and
    **Stop all** says so. **Removing a workspace or a persona is refused** while a live run is in
    it or has adopted it.
+
+Clarified 2026-10-01 in #777's final commit: four §2 rows tightened to match §3 and V27; no ruling
+changed. Three follow from §3 and V27a (a hibernated run stays so at a quit or a lapsed grace
+period, an explicit `hibernated | grace` row, and a `starting` run failing on a host crash). The
+fourth, **a paused run's clean exit completing it**, was decided in implementation: a paused
+program that exits 0 ended cleanly, and nothing else in the table says otherwise.

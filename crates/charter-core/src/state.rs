@@ -3,6 +3,10 @@
 //! Nothing here reads a harness's output (ADR 0018, spec decision 3). A state changes for
 //! exactly two reasons: a harness hook reported an [`Event`], or the session's own program
 //! exited — which is the process telling the app, not a screen charter read.
+//!
+//! [`run`] is where a RUN's state lives (ADR 0076): nine states, each move naming one cause.
+
+pub mod run;
 
 use crate::hookwire::Conversation;
 
