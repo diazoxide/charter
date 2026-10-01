@@ -31,8 +31,10 @@
 //!   amends ADR 0034 for it: a random ULID minted at the first launch that finds none, so an
 //!   event, a record or the audit can say which device it happened on without a hostname.
 //!
-//! **The fourth was three until ADR 0040, and the fifth is newer still; the count is
-//! load-bearing.** Those records are the amendments: the operator ruled on 2026-09-22 that a
+//! **The fourth was three until ADR 0040, and the fifth and sixth are newer still; the count
+//! is load-bearing.** ADR 0040 and ADR 0066 are the amendments: ADR 0066 argues the sixth (a
+//! device needs one id that every event and record names it by, and no plane can hold it,
+//! because one machine holds many planes). For the fourth, the operator ruled on 2026-09-22 that a
 //! pin is how one operator likes their window rather than a fact about the plane, so it
 //! cannot be committed to `charter.toml`, where it would arrive with every clone and put
 //! somebody else's workspace first on a strip its operator never arranged. The whole value of
