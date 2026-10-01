@@ -20,6 +20,11 @@ and repos, and always knows which one needs them. It is one lightweight app on m
 and Windows, with no daemon, carrying every charter concept: the plane, workspaces, personas,
 todos, memory, vaults, guards.
 
+> **Amended by [ADR 0082](adr/0082-charter-serves-one-persons-agents-first-and-its-scale-is-a-hot-chat-count-per-ram-class.md)** (FD-1): one person's
+> agents first, then teams with the same per-person budgets. "Dozens" becomes targets, not
+> measurements: 200 open chats per device and a hot-chat target per RAM class, 50 at the top
+> class. "No daemon" was already replaced by ADR 0068.
+
 ## Priorities, in order
 
 1. **Development experience.** A change is quick to make, quick to check and pleasant to work on.
@@ -405,9 +410,10 @@ Only what a person would notice. Measured on the operator's machine, in the scen
 
 | | Limit |
 | --- | --- |
-| Live sessions | **50**. This is the product's scale, not a speed target |
+| Open chats | **Target, not measured:** 200 per device, in every RAM class. This is the product's scale, not a speed target ([ADR 0082](adr/0082-charter-serves-one-persons-agents-first-and-its-scale-is-a-hot-chat-count-per-ram-class.md), which amends "Live sessions: 50") |
+| Hot chats | **Target, not measured:** per RAM class (ADR 0082 §3), **50** at the top class. The limits below hold at the device's hot target |
 | 2 MB and 13 MB output bursts | the UI never freezes; input and other panes stay responsive |
-| Keystroke to screen | ≤ 50 ms while 49 other sessions stream |
+| Keystroke to screen | ≤ 50 ms while the device's hot target minus one other chats stream: 49 at the top class (ADR 0082) |
 | Tab or pane switch | ≤ 100 ms |
 | Hook call (`charter hook …`) | ≤ 50 ms |
 | Cold start | ≤ 2 s |
