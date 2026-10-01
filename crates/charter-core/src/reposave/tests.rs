@@ -876,3 +876,62 @@ fn a_repo_save_leaves_the_index_carrying_gits_untracked_cache() {
         "no untracked cache in the index"
     );
 }
+
+#[test]
+fn an_operators_untracked_cache_setting_is_never_overridden_by_any_read_or_save() {
+    // Every call site that may ask for the cache — the plane's status and its save's `add`, a
+    // clone's status and its save's `add` — through the real paths, with the operator's
+    // `false` in both repos. Asserted on what git was handed, because git's own commit drops
+    // the cache under `false` again, so the index alone could not tell a hard-coded `-c`.
+    let fx = Fixture::new("[plane]\nmode = \"commit\"\n[repos.widget]\nmode = \"commit\"\n");
+    for argv in [
+        &["init", "-q", "-b", "main", "."][..],
+        &["config", "user.name", "Fixture"],
+        &["config", "user.email", "fixture@example.invalid"],
+        &["config", "core.untrackedCache", "false"],
+        &["add", "charter.toml"],
+        &["commit", "-q", "-m", "one"],
+    ] {
+        run(&fx.plane, argv);
+    }
+    run(&fx.clone, &["config", "core.untrackedCache", "false"]);
+    std::fs::write(fx.plane.join("note.md"), "n\n").unwrap();
+    std::fs::write(fx.clone.join("README.md"), "two\n").unwrap();
+
+    planegit::standing(&fx.plane);
+    let mut said = String::new();
+    let code = planegit::save(
+        &planegit::Request {
+            root: &fx.plane,
+            message: Some("a save"),
+            sign: false,
+            no_push: true,
+            cwd: &fx.plane,
+        },
+        &mut |line: Say| said.push_str(&format!("{line}\n")),
+    );
+    assert_eq!(code, 0, "{said}");
+    fx.standing();
+    let (code, said) = fx.save();
+    assert_eq!(code, 0, "{said}");
+
+    for dir in [&fx.plane, &fx.clone] {
+        let asked = crate::worktree::git::tally::asked(dir);
+        assert!(
+            asked.iter().any(|argv| argv.iter().any(|a| a == "add")),
+            "nothing was saved in {}",
+            dir.display()
+        );
+        let forced: Vec<_> = asked
+            .iter()
+            .filter(|argv| {
+                argv.iter()
+                    .any(|a| a == crate::worktree::git::UNTRACKED_CACHE)
+            })
+            .collect();
+        assert!(
+            forced.is_empty(),
+            "the operator's false was overridden: {forced:?}"
+        );
+    }
+}

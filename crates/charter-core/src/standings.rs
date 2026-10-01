@@ -192,7 +192,8 @@ impl<V> Drop for Done<'_, V> {
 /// - `.gitignore` at the repo's top and `info/exclude`.
 ///
 /// **Not in it, and left to the store's `max_age`:** a change in the working tree nothing
-/// reported, an ignore file below the top, and a global excludes file or config.
+/// reported, an ignore file below the top, a global excludes file or config, and a linked
+/// worktree's own refs (`refs/bisect`, `refs/worktree` under its private directory).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Stamp(Vec<Option<Seen>>);
 
@@ -225,7 +226,9 @@ impl Stamp {
             "REVERT_HEAD",
             "rebase-merge",
             "rebase-apply",
-            "config",
+            // A linked worktree's own config; the shared `config` is the common directory's,
+            // below, which in a plain repo is this same directory.
+            "config.worktree",
         ]
         .iter()
         .map(|name| git.join(name))

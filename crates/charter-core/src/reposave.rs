@@ -291,10 +291,7 @@ fn commit_push(
     // As the plane's save: the add's exit status decides, never the probe after it.
     // Untimed, as the plane's: an `add` killed at a deadline leaves `index.lock` behind.
     // The write that adds git's untracked cache to the index (FD-11, `git::UNTRACKED_CACHE`).
-    let added = match git::untracked_cache(clone) {
-        Some(cache) => git::run_untimed(clone, &["-c", cache, "add", "-A"]),
-        None => git::run_untimed(clone, &["add", "-A"]),
-    };
+    let added = git::run_untimed(clone, &git::with_untracked_cache(clone, &["add", "-A"]));
     if !added.as_ref().is_ok_and(git::Run::ok) {
         let said = added.map_or_else(|e| e.to_string(), |run| planegit::tail(&run));
         say(Say::Fail(format!(
@@ -882,8 +879,8 @@ static CLONES: std::sync::LazyLock<crate::standings::Shared<Standing>> =
 
 /// [`standing`], **shared by every caller in this process** (FD-11, #651): auto-save's look at
 /// the repos it saves and the Saving tab's rows read this, and git runs once for both — one
-/// computation at a time per clone, again only when the clone's git files move, [`touch_within`]
-/// says something under it changed, or [`planegit::SHARED_FOR`] has passed. A save decides from
+/// computation at a time per clone, again only when the clone's git files move,
+/// [`planegit::touch`] says something under it changed, or [`planegit::SHARED_FOR`] has passed. A save decides from
 /// [`standing`] itself.
 pub fn shared_standing(plane: &Path, workspace: &str, repo: &repos::Repo) -> Standing {
     CLONES.get(&repo.path, || standing(plane, workspace, repo))

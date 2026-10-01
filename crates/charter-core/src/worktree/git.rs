@@ -461,13 +461,23 @@ pub fn untracked_cache(dir: &Path) -> Option<&'static str> {
     (asked.code == Some(1)).then_some(UNTRACKED_CACHE)
 }
 
+/// `args`, led by `-c` [`UNTRACKED_CACHE`] when [`untracked_cache`] says the operator's config
+/// leaves it to charter: what a standing's `status` and a save's `add` run (FD-11).
+pub fn with_untracked_cache<'a>(dir: &Path, args: &[&'a str]) -> Vec<&'a str> {
+    let mut out: Vec<&'a str> = untracked_cache(dir)
+        .map(|cache| vec!["-c", cache])
+        .unwrap_or_default();
+    out.extend_from_slice(args);
+    out
+}
+
 /// `run`, counted in the test build's [`tally`]: one git process in `dir` from before it is
 /// spawned until it has been waited for. In the shipped build it is `run` itself.
-fn counted<T>(dir: &Path, run: impl FnOnce() -> T) -> T {
+fn counted<T>(dir: &Path, args: &[&str], run: impl FnOnce() -> T) -> T {
     #[cfg(test)]
-    let _running = tally::Running::start(dir);
+    let _running = tally::Running::start(dir, args);
     #[cfg(not(test))]
-    let _ = dir;
+    let _ = (dir, args);
     run()
 }
 
@@ -490,6 +500,20 @@ pub(crate) mod tally {
     static TALLIES: LazyLock<Mutex<HashMap<PathBuf, (Tally, u64)>>> =
         LazyLock::new(Default::default);
 
+    /// Every argument list the runner was handed for each directory, in order.
+    static ASKED: LazyLock<Mutex<HashMap<PathBuf, Vec<Vec<String>>>>> =
+        LazyLock::new(Default::default);
+
+    /// The argument lists the runner ran git with in `dir`, oldest first.
+    pub fn asked(dir: &Path) -> Vec<Vec<String>> {
+        ASKED
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(dir)
+            .cloned()
+            .unwrap_or_default()
+    }
+
     /// [`Tally`] for `dir`, as it was handed to the runner.
     pub fn of(dir: &Path) -> Tally {
         TALLIES
@@ -503,7 +527,13 @@ pub(crate) mod tally {
     pub(super) struct Running(PathBuf);
 
     impl Running {
-        pub(super) fn start(dir: &Path) -> Self {
+        pub(super) fn start(dir: &Path, args: &[&str]) -> Self {
+            ASKED
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .entry(dir.to_path_buf())
+                .or_default()
+                .push(args.iter().map(|arg| (*arg).to_owned()).collect());
             let mut all = TALLIES.lock().unwrap_or_else(PoisonError::into_inner);
             let (tally, now) = all.entry(dir.to_path_buf()).or_default();
             *now += 1;
@@ -528,7 +558,7 @@ pub(crate) use tally::of as tally;
 
 /// Run `git -C <dir> <args>` with no deadline — for a call that checks out a tree.
 pub fn run_untimed(dir: &Path, args: &[&str]) -> Result<Run, GitUnavailable> {
-    counted(dir, || {
+    counted(dir, args, || {
         let child = spawn(dir, args)?;
         // `wait_with_output` reads both pipes as it waits, so it cannot deadlock on them.
         let out = child.wait_with_output()?;
@@ -547,7 +577,7 @@ pub fn run_untimed(dir: &Path, args: &[&str]) -> Result<Run, GitUnavailable> {
 /// 64 KiB, which `status --porcelain` in a large dirty clone passes easily — and the symptom
 /// is a timeout that looks like a slow machine.
 pub fn run(dir: &Path, args: &[&str], timeout: Duration) -> Result<Run, GitUnavailable> {
-    counted(dir, || Ok(wait(spawn(dir, args)?, timeout)?))
+    counted(dir, args, || Ok(wait(spawn(dir, args)?, timeout)?))
 }
 
 /// What one git call answered, as the BYTES it wrote. `code` is `None` when the deadline passed.
@@ -577,7 +607,7 @@ pub fn run_as_session(
         pass: config_location_env(|name| std::env::var_os(name)),
         ..Extra::default()
     };
-    counted(dir, || {
+    counted(dir, args, || {
         Ok(wait_raw(spawn_with(dir, args, &extra)?, timeout)?)
     })
 }
@@ -611,7 +641,7 @@ pub fn run_in_hook(dir: &Path, args: &[&str], timeout: Duration) -> Result<RawRu
         pass,
         ..Extra::default()
     };
-    counted(dir, || {
+    counted(dir, args, || {
         Ok(wait_raw(spawn_with(dir, args, &extra)?, timeout)?)
     })
 }
@@ -635,7 +665,9 @@ pub fn run_network(dir: &Path, helper: Option<&str>, args: &[&str]) -> Result<Ru
         credentials: true,
         ..Extra::default()
     };
-    counted(dir, || Ok(wait(spawn_with(dir, args, &extra)?, NETWORK)?))
+    counted(dir, args, || {
+        Ok(wait(spawn_with(dir, args, &extra)?, NETWORK)?)
+    })
 }
 
 /// Wait for `child` with a deadline, draining both pipes as it runs.

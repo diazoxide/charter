@@ -928,18 +928,16 @@ pub(crate) fn changed_paths(root: &Path) -> Vec<String> {
         // `--no-optional-locks`, as `profiles.rs` and `guest.rs` ask: a plain `status`
         // refreshes the index and takes `index.lock`, and the title bar asks this every ten
         // seconds — a save's `git add -A` landing inside that window failed on the lock.
-        &git::untracked_cache(root)
-            .map(|cache| ["-c", cache])
-            .into_iter()
-            .flatten()
-            .chain([
+        &git::with_untracked_cache(
+            root,
+            &[
                 "--no-optional-locks",
                 "status",
                 "--porcelain=v1",
                 "-z",
                 "--untracked-files=all",
-            ])
-            .collect::<Vec<_>>(),
+            ],
+        ),
         git::READ,
     ) else {
         return Vec::new();
@@ -2106,13 +2104,7 @@ fn commit_push(
     // stage anything" and "there was nothing to stage" the same value.
     // The write that adds git's untracked cache to the index, for the read-only status of
     // every standing after it (FD-11, [`git::UNTRACKED_CACHE`]).
-    let cached: Vec<&str> = git::untracked_cache(root)
-        .map(|cache| ["-c", cache])
-        .into_iter()
-        .flatten()
-        .chain(add_cmd.iter().copied())
-        .collect();
-    let added = match git::run_untimed(root, &cached) {
+    let added = match git::run_untimed(root, &git::with_untracked_cache(root, add_cmd)) {
         Ok(run) => run,
         Err(unavailable) => {
             return refuse_unreadable(
