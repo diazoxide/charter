@@ -251,6 +251,11 @@ const KEY_BYTES: usize = 32;
 /// from outside, and still lets two calls on this device be seen to have had the same
 /// arguments. The key is made once and kept, as `fingerprint.key` is for a project's `fp:`
 /// values, so a digest compares with yesterday's; AU-19 may move it into the keyring.
+///
+/// **Who can read it:** anything running as the same OS user, and whoever holds a backup that
+/// carries it (FR-10 backs it up with the log). The key keeps the digests from everyone else.
+/// The hook sends the host the arguments' *unkeyed* SHA-256, on the chat's own hook channel,
+/// which only the same user can reach.
 pub struct ArgsKey(Vec<u8>);
 
 impl ArgsKey {

@@ -26,8 +26,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is one line in the event log in charter's data home (`~/Library/Application Support/charter`
   on macOS, `~/.local/share/charter` on Linux, or `CHARTER_DATA_HOME`). A line records the chat
   and the run it happened in, the tool, what charter's guard answered and how long it took. A
-  tool call's arguments are never written, only a digest keyed to this machine. The log stays
-  on this machine. The coming timeline, audit and fleet views are built from it (#649).
+  tool call's arguments are never written, only a digest keyed to this machine. The log is
+  never committed or sent anywhere; a backup of charter's data carries it, and anything running
+  as your user can read it. The coming timeline, audit and fleet views are built from it (#649).
 
 - **The first run offers your repo's agent instructions to its workspace's memory.** When the
   repo you open has a `CLAUDE.md`, an `AGENTS.md` or Cursor rules in `.cursor/rules`, a *Memory
