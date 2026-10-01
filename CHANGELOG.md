@@ -90,13 +90,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   below lets any other false positive through. Commits made by `cherry-pick`, `rebase` and
   `am` are not scanned (#592, ADR 0074).
 
-- **An allowlist for the commit scan.** A repository's `.charter-scan-allow.toml` lets a finding
-  through by its rule and paths, or by one value's fingerprint. Every entry gives its reason, and
-  the file is reviewed like code. `charter scan --explain` names a finding's rule and prints the
-  entry that would let it through. The file is read as committed, and a chat's own commit may not
-  change it, so an agent cannot allow its own finding. The operator commits the entry. An author's
-  email in `Cargo.toml`, `package.json`, `.mailmap`, `AUTHORS`, `CONTRIBUTORS` or a changelog, and
-  an email in a plane's memory, pass with no entry at all (#593).
+- **An allowlist for the commit scan.** A repository's `.charter-scan-allow.toml` lets a
+  finding through by its rule and paths. A key can also be let through by its fingerprint;
+  personal data never is. Every entry gives its reason, and the file is reviewed like code.
+  `charter scan --explain` names a finding's rule and prints the entry that would let it
+  through. The file is read as committed. A chat's own commit may not change it, and neither may
+  its `git revert` or `git merge --ff-only`, so the operator is the one who commits an entry.
+  This is a guard against mistakes; the sandbox is where it becomes a boundary (#784). An
+  author's email in `Cargo.toml`, `package.json`, `.mailmap`, `AUTHORS`, `CONTRIBUTORS` or a
+  `CHANGELOG` passes with no entry at all, unless `[builtin] enabled = false` turns that off
+  (#593).
 
 ### Fixed
 

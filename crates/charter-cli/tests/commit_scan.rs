@@ -273,6 +273,9 @@ fn charter_scan_explain_names_the_rule_and_the_entry_that_would_let_it_through()
         said.contains("[[allow]]") && said.contains("paths = [\"notes.md\"]"),
         "{said}"
     );
-    assert!(said.contains("fingerprint = \"sha256:"), "{said}");
+    assert!(
+        !said.contains("fingerprint = \"sha256:"),
+        "an email is let through by path only: {said}"
+    );
     assert!(!said.contains("ada@lovelace.dev"), "{said}");
 }

@@ -11,7 +11,7 @@ use std::process::ExitCode;
 
 use charter_core::diffscan::{self, Finding};
 use charter_core::scanallow::{self, Origin};
-use charter_core::secretshape::LEAK_RULES;
+use charter_core::secretshape::{is_personal, leak_rules};
 use charter_core::worktree::git;
 
 /// Runs the scan in the repository this process stands in.
@@ -64,7 +64,7 @@ pub fn run(explain: bool) -> ExitCode {
     }
     if explain {
         println!("\nThe rules, by the id an entry names:");
-        for (id, words) in LEAK_RULES {
+        for (id, words) in leak_rules() {
             println!("  {id:<20} {words}");
         }
     }
@@ -85,10 +85,14 @@ fn explained(finding: &Finding) {
     for line in scanallow::suggested(finding.rule, &finding.path).lines() {
         println!("      {line}");
     }
-    println!("    Or, for this one value only:");
-    println!("      [[allow]]");
-    println!("      fingerprint = \"{}\"", finding.fingerprint);
-    println!("      reason = \"<why this is not a leak>\"");
+    // Personal data is let through by path only: a hash of it can be reversed by guessing, and
+    // the allowlist is committed.
+    if !is_personal(finding.rule) {
+        println!("    Or, for this one key only:");
+        println!("      [[allow]]");
+        println!("      fingerprint = \"{}\"", finding.fingerprint);
+        println!("      reason = \"<why this is not a leak>\"");
+    }
 }
 
 /// The top of the work tree this process stands in.

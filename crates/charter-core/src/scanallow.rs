@@ -4,23 +4,26 @@
 //! # Where an entry comes from
 //!
 //! - **charter's own**, the same in every repository ([`Allowlist::builtin`]): an email address
-//!   in a manifest's author field (`Cargo.toml`, `package.json`), `.mailmap`, `AUTHORS`,
-//!   `CONTRIBUTORS` and a changelog, which publish names on purpose; and, in a plane, an email
-//!   address in a memory file, which the plane's own save already scans by its rules.
+//!   in a file named `Cargo.toml`, `package.json`, `.mailmap`, `AUTHORS`, `CONTRIBUTORS` or
+//!   `CHANGELOG` (the last three also as `.md` and `.txt`), which publish names on purpose. A
+//!   repository turns them off with `[builtin] enabled = false` in its [`FILE`].
 //! - **The repository's [`FILE`]**, committed and reviewed like code. Each entry names a rule
-//!   (by its id, [`crate::secretshape::LEAK_RULES`]) and the paths it covers, or one value by its
+//!   (by its id, [`crate::secretshape::leak_rules`]) and the paths it covers, or one key by its
 //!   fingerprint ([`fingerprint`]), and always says why.
 //!
-//! # An agent cannot allow its own finding (V16)
+//! # An agent's own finding: a mistake guard, not a boundary
 //!
 //! **The file is read as it is at `HEAD`**, never from the working tree or the index, so an
-//! entry a chat writes and has not committed allows nothing. And **a chat cannot commit it**:
-//! charter's `pre-commit` refuses a commit that changes [`FILE`] ([`crate::diffscan`]). The
-//! operator's own terminal is not armed, so a change to the allowlist is a commit the operator
-//! makes. An agent may write an entry for the operator to read and commit; it takes effect only
-//! when the operator does.
-
-use std::path::Path;
+//! entry a chat has written and not committed allows nothing. **A chat's `pre-commit` refuses a
+//! commit that changes it** ([`crate::diffscan`]), and the Bash guard refuses the two ways past
+//! `pre-commit` it can see cheaply (`commitguard`). The operator's own terminal is not armed,
+//! so the ordinary way an entry takes effect is the operator's commit.
+//!
+//! **That holds against a mistake, not against an agent that means to get round it.** git moves
+//! `HEAD` without a `pre-commit` in several ways: a fast-forward to a commit made elsewhere, a
+//! revert, a reset or checkout to another commit, `commit-tree` with `update-ref`, and `am`,
+//! which ADR 0074's V26b already records. Holding a chat to the allowlist its operator committed
+//! is the sandbox's work (ADR 0067), and a follow-up there.
 
 use sha2::{Digest, Sha256};
 
@@ -36,15 +39,16 @@ pub enum Origin {
     File(usize),
 }
 
-/// One entry: a rule in some paths, or one value, and why.
+/// One entry: a rule in some paths, or one key, and why.
 #[derive(Debug, Clone)]
 pub struct Entry {
-    /// The rule id it covers, or `None` for a fingerprint entry, which covers one value under
-    /// whatever rule found it.
+    /// The rule id it covers, or `None` for a fingerprint entry, which covers one key under
+    /// whatever key rule found it.
     pub rule: Option<String>,
-    /// The paths it covers, from the top of the repository; empty is every path.
+    /// The paths it covers, from the top of the repository. A rule entry always has at least
+    /// one; a fingerprint entry may have none, which is every path.
     pub paths: Vec<glob::Pattern>,
-    /// One value, by [`fingerprint`].
+    /// One key, by [`fingerprint`].
     pub fingerprint: Option<String>,
     /// Why, in the words of whoever wrote it.
     pub reason: String,
@@ -60,16 +64,32 @@ pub struct Seen<'a> {
 }
 
 /// The entries a repository's scan lets through, and what was wrong with its file.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Allowlist {
     pub entries: Vec<Entry>,
     /// Each entry of [`FILE`] that was left out, and why. An entry that cannot be read allows
     /// nothing, so what it was meant to allow is still refused.
     pub problems: Vec<String>,
+    /// Whether charter's own entries apply: `[builtin] enabled`, true unless the file says not.
+    pub builtin: bool,
 }
 
-/// A value's fingerprint, as an entry names it: `sha256:` and the hex of its SHA-256. The value
-/// itself is never written down.
+impl Default for Allowlist {
+    fn default() -> Self {
+        Self {
+            entries: Vec::new(),
+            problems: Vec::new(),
+            builtin: true,
+        }
+    }
+}
+
+/// A value's fingerprint, as an entry names a key: `sha256:` and the hex of its SHA-256.
+///
+/// **Only a key is named this way.** A key is a long random run, and its SHA-256 says nothing
+/// about it. Personal data is not: an email address or a card number can be recovered from its
+/// hash by guessing, and an allowlist is committed, so a personal rule is let through by path,
+/// never by fingerprint ([`crate::secretshape::is_personal`]).
 pub fn fingerprint(value: &str) -> String {
     let digest = Sha256::digest(value.as_bytes());
     let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
@@ -88,62 +108,52 @@ fn options() -> glob::MatchOptions {
     }
 }
 
-/// Whether `glob` names `path`. `*` stays within one directory and `**` crosses them, so
-/// `CHANGELOG*` covers `CHANGELOG.md` at the top and `**/Cargo.toml` a manifest anywhere.
+/// Whether `glob` names `path`. `*` stays within one directory and `**` crosses them.
 fn covers(glob: &glob::Pattern, path: &str) -> bool {
     glob.matches_with(path, options())
 }
 
+/// The file names charter's own entry covers, at any depth.
+pub const BUILTIN_NAMES: [&str; 11] = [
+    "Cargo.toml",
+    "package.json",
+    ".mailmap",
+    "AUTHORS",
+    "AUTHORS.md",
+    "AUTHORS.txt",
+    "CONTRIBUTORS",
+    "CONTRIBUTORS.md",
+    "CONTRIBUTORS.txt",
+    "CHANGELOG",
+    "CHANGELOG.md",
+];
+
 impl Allowlist {
-    /// charter's own entries. `plane` is whether the repository is a charter plane (a
-    /// `charter.toml` at its top), whose memory files are allowed email addresses.
-    pub fn builtin(plane: bool) -> Self {
-        let manifests = [
-            "Cargo.toml",
-            "**/Cargo.toml",
-            "package.json",
-            "**/package.json",
-            ".mailmap",
-            "AUTHORS*",
-            "**/AUTHORS*",
-            "CONTRIBUTORS*",
-            "**/CONTRIBUTORS*",
-            "CHANGELOG*",
-            "**/CHANGELOG*",
-        ];
-        let mut entries = vec![Entry {
-            rule: Some("email".to_owned()),
-            paths: manifests.iter().filter_map(|g| pattern(g)).collect(),
-            fingerprint: None,
-            reason: "authors and changelogs publish names and addresses on purpose".to_owned(),
-            origin: Origin::Builtin,
-        }];
-        if plane {
-            entries.push(Entry {
-                rule: Some("email".to_owned()),
-                paths: [
-                    "workspaces/*/memory/**",
-                    "personas/*/memory/**",
-                    "memory/**",
-                ]
-                .iter()
-                .filter_map(|g| pattern(g))
-                .collect(),
-                fingerprint: None,
-                reason: "a plane's memory is scanned by the plane's own save, by its rules"
-                    .to_owned(),
-                origin: Origin::Builtin,
-            });
-        }
+    /// charter's own entry: an email address in a file named one of [`BUILTIN_NAMES`], at the
+    /// top or in any directory. Never a key.
+    pub fn builtin() -> Self {
+        let paths = BUILTIN_NAMES
+            .iter()
+            .flat_map(|name| [(*name).to_owned(), format!("**/{name}")])
+            .filter_map(|glob| pattern(&glob))
+            .collect();
         Self {
-            entries,
-            problems: Vec::new(),
+            entries: vec![Entry {
+                rule: Some("email".to_owned()),
+                paths,
+                fingerprint: None,
+                reason: "authors and changelogs publish names and addresses on purpose".to_owned(),
+                origin: Origin::Builtin,
+            }],
+            ..Self::default()
         }
     }
 
-    /// The entries of a [`FILE`]'s text. An entry with no `reason`, with neither a `rule` nor a
-    /// `fingerprint`, naming a rule charter does not have, or with a path that is not a glob,
-    /// is left out and said in [`Allowlist::problems`].
+    /// The entries of a [`FILE`]'s text. An entry is left out, and said in
+    /// [`Allowlist::problems`], when it has no `reason`; when it names neither a `rule` nor a
+    /// `fingerprint`; when it names a rule charter does not have; when it has a `rule` and no
+    /// `paths` (a repository-wide entry writes `paths = ["**"]`, which a reviewer sees); when it
+    /// names a personal rule by fingerprint; or when a path is not a glob.
     pub fn parse(text: &str) -> Self {
         let mut out = Self::default();
         let table: toml::Table = match text.parse() {
@@ -154,6 +164,19 @@ impl Allowlist {
                 return out;
             }
         };
+        for key in table.keys() {
+            if !["allow", "builtin"].contains(&key.as_str()) {
+                out.problems
+                    .push(format!("{FILE}: `{key}` is not a table charter reads"));
+            }
+        }
+        match table.get("builtin").map(|b| b.get("enabled")) {
+            None => {}
+            Some(Some(toml::Value::Boolean(enabled))) => out.builtin = *enabled,
+            Some(_) => out.problems.push(format!(
+                "{FILE}: `[builtin]` holds one key, `enabled = true|false`"
+            )),
+        }
         let Some(allow) = table.get("allow") else {
             return out;
         };
@@ -174,23 +197,31 @@ impl Allowlist {
         out
     }
 
-    /// charter's own entries and the repository's file together.
-    pub fn with(mut self, other: Allowlist) -> Self {
-        self.entries.extend(other.entries);
-        self.problems.extend(other.problems);
-        self
+    /// A repository's allowlist: its file's entries, after charter's own unless the file turns
+    /// them off.
+    pub fn of(file: Allowlist) -> Self {
+        if !file.builtin {
+            return file;
+        }
+        let mut out = Self::builtin();
+        out.entries.extend(file.entries);
+        out.problems.extend(file.problems);
+        out
     }
 
-    /// The entry that lets `seen` through, or `None`.
+    /// The entry that lets `seen` through, or `None`. A fingerprint entry never lets a
+    /// personal rule through, whatever its fingerprint.
     pub fn allowing(&self, seen: Seen<'_>) -> Option<&Entry> {
         self.entries.iter().find(|entry| {
             let rule = entry.rule.as_deref().is_none_or(|rule| rule == seen.rule);
             let path =
                 entry.paths.is_empty() || entry.paths.iter().any(|glob| covers(glob, seen.path));
-            let value = entry
-                .fingerprint
-                .as_deref()
-                .is_none_or(|print| print == seen.fingerprint);
+            let value = match entry.fingerprint.as_deref() {
+                None => true,
+                Some(print) => {
+                    print == seen.fingerprint && !crate::secretshape::is_personal(seen.rule)
+                }
+            };
             rule && path && value
         })
     }
@@ -220,7 +251,7 @@ fn entry(item: &toml::Value, n: usize) -> Result<Entry, String> {
         return Err("it names neither a `rule` nor a `fingerprint`".to_owned());
     }
     if let Some(rule) = &rule
-        && !crate::secretshape::LEAK_RULES
+        && !crate::secretshape::leak_rules()
             .iter()
             .any(|(id, _)| id == rule)
     {
@@ -228,12 +259,21 @@ fn entry(item: &toml::Value, n: usize) -> Result<Entry, String> {
             "`{rule}` is not a rule charter has (`charter scan --explain` names them)"
         ));
     }
-    if let Some(print) = &fingerprint
-        && !(print.starts_with("sha256:") && print.len() == 7 + 64)
-    {
-        return Err("`fingerprint` is not one `charter scan --explain` printed".to_owned());
+    if let Some(print) = &fingerprint {
+        if !(print.starts_with("sha256:") && print.len() == 7 + 64) {
+            return Err("`fingerprint` is not one `charter scan --explain` printed".to_owned());
+        }
+        if let Some(rule) = rule
+            .as_deref()
+            .filter(|r| crate::secretshape::is_personal(r))
+        {
+            return Err(format!(
+                "`{rule}` is personal data, which is let through by `paths`, never by \
+                 fingerprint: a hash of it can be reversed by guessing"
+            ));
+        }
     }
-    let paths = match table.get("paths") {
+    let paths: Vec<glob::Pattern> = match table.get("paths") {
         None => Vec::new(),
         Some(toml::Value::Array(globs)) => globs
             .iter()
@@ -245,6 +285,12 @@ fn entry(item: &toml::Value, n: usize) -> Result<Entry, String> {
             .collect::<Result<_, _>>()?,
         Some(_) => return Err("`paths` is not a list".to_owned()),
     };
+    if rule.is_some() && paths.is_empty() {
+        return Err(
+            "a `rule` entry names its `paths`; for the whole repository, write `paths = [\"**\"]`"
+                .to_owned(),
+        );
+    }
     Ok(Entry {
         rule,
         paths,
@@ -256,7 +302,7 @@ fn entry(item: &toml::Value, n: usize) -> Result<Entry, String> {
 
 /// Whether `path`, a file at the top of a repository, is the allowlist.
 pub fn is_the_file(path: &str) -> bool {
-    Path::new(path) == Path::new(FILE)
+    path == FILE
 }
 
 /// The entry `charter scan --explain` offers for a finding: its rule in its file.
@@ -283,7 +329,7 @@ mod tests {
 
     #[test]
     fn an_author_email_in_a_manifest_mailmap_or_changelog_is_allowed_anywhere() {
-        let builtin = Allowlist::builtin(false);
+        let builtin = Allowlist::builtin();
         for path in [
             "Cargo.toml",
             "crates/core/Cargo.toml",
@@ -293,17 +339,13 @@ mod tests {
             "CHANGELOG.md",
             "docs/CHANGELOG",
             "AUTHORS",
+            "CONTRIBUTORS.txt",
         ] {
             assert!(
                 builtin.allowing(seen("email", path, "x")).is_some(),
                 "{path}"
             );
         }
-        assert!(
-            builtin
-                .allowing(seen("email", "src/main.rs", "x"))
-                .is_none()
-        );
         assert!(
             builtin
                 .allowing(seen("forge-token", "Cargo.toml", "x"))
@@ -313,28 +355,41 @@ mod tests {
     }
 
     #[test]
-    fn a_planes_memory_is_allowed_an_email_and_any_other_repositorys_is_not() {
-        let path = "workspaces/alpha/memory/20260930-note.md";
+    fn the_builtin_names_are_exact_so_a_file_that_only_starts_like_one_is_not_covered() {
+        let builtin = Allowlist::builtin();
+        for path in [
+            "src/main.rs",
+            "CHANGELOG-draft.rs",
+            "AUTHORSHIP.md",
+            "Cargo.toml.bak",
+            "workspaces/alpha/memory/note.md",
+        ] {
+            assert!(
+                builtin.allowing(seen("email", path, "x")).is_none(),
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_repository_can_turn_charters_own_entries_off() {
+        let file = Allowlist::parse("[builtin]\nenabled = false\n");
+        assert!(file.problems.is_empty(), "{:?}", file.problems);
         assert!(
-            Allowlist::builtin(true)
-                .allowing(seen("email", path, "x"))
+            Allowlist::of(file)
+                .allowing(seen("email", "Cargo.toml", "x"))
+                .is_none()
+        );
+        assert!(
+            Allowlist::of(Allowlist::parse(""))
+                .allowing(seen("email", "Cargo.toml", "x"))
                 .is_some()
-        );
-        assert!(
-            Allowlist::builtin(false)
-                .allowing(seen("email", path, "x"))
-                .is_none()
-        );
-        assert!(
-            Allowlist::builtin(true)
-                .allowing(seen("forge-token", path, "x"))
-                .is_none()
         );
     }
 
     #[test]
-    fn a_file_entry_allows_its_rule_in_its_paths_or_one_value_by_its_fingerprint() {
-        let print = fingerprint("ada@lovelace.dev");
+    fn a_file_entry_allows_its_rule_in_its_paths_or_one_key_by_its_fingerprint() {
+        let print = fingerprint("ghp_0123456789abcdefABCDEF");
         let file = Allowlist::parse(&format!(
             r#"
 [[allow]]
@@ -344,7 +399,7 @@ reason = "the docs name their authors"
 
 [[allow]]
 fingerprint = "{print}"
-reason = "a published test card"
+reason = "a revoked token in a fixture"
 "#
         ));
         assert!(file.problems.is_empty(), "{:?}", file.problems);
@@ -354,8 +409,32 @@ reason = "a published test card"
             file.allowing(seen("email", "src/lib.rs", "other"))
                 .is_none()
         );
-        let by_value = file.allowing(seen("card-number", "src/lib.rs", &print));
+        let by_value = file.allowing(seen("forge-token", "src/lib.rs", &print));
         assert_eq!(by_value.map(|e| &e.origin), Some(&Origin::File(2)));
+    }
+
+    #[test]
+    fn personal_data_is_never_let_through_by_fingerprint() {
+        let print = fingerprint("4111 1111 1111 1111");
+        let file = Allowlist::parse(&format!(
+            "[[allow]]\nfingerprint = \"{print}\"\nreason = \"a test card\"\n"
+        ));
+        assert!(file.problems.is_empty(), "{:?}", file.problems);
+        for rule in ["card-number", "email", "us-ssn"] {
+            assert!(
+                file.allowing(seen(rule, "src/lib.rs", &print)).is_none(),
+                "{rule}"
+            );
+        }
+        let named = Allowlist::parse(&format!(
+            "[[allow]]\nrule = \"card-number\"\nfingerprint = \"{print}\"\nreason = \"x\"\n"
+        ));
+        assert!(named.entries.is_empty());
+        assert!(
+            named.problems[0].contains("personal data"),
+            "{:?}",
+            named.problems
+        );
     }
 
     #[test]
@@ -368,9 +447,11 @@ reason = "everything"
 
 [[allow]]
 rule = "email"
+paths = ["**"]
 
 [[allow]]
 rule = "no-such-rule"
+paths = ["**"]
 reason = "x"
 
 [[allow]]
@@ -379,12 +460,18 @@ reason = "x"
 
 [[allow]]
 rule = "email"
+paths = ["**"]
 reason = "x"
 secret = true
+
+[[allow]]
+rule = "private-key"
+reason = "a key rule with no paths"
 "#,
         );
         assert!(file.entries.is_empty(), "{:?}", file.entries);
-        assert_eq!(file.problems.len(), 5, "{:?}", file.problems);
+        assert_eq!(file.problems.len(), 6, "{:?}", file.problems);
+        assert!(file.problems[5].contains("paths"), "{:?}", file.problems);
         assert!(
             Allowlist::parse("not = [toml")
                 .problems
@@ -394,7 +481,7 @@ secret = true
     }
 
     #[test]
-    fn a_fingerprint_names_a_value_without_holding_it() {
+    fn a_fingerprint_is_the_sha256_of_the_value() {
         let print = fingerprint("ghp_0123456789abcdefABCDEF");
         assert!(print.starts_with("sha256:") && print.len() == 71);
         assert!(!print.contains("0123456789abcdefABCDEF"));

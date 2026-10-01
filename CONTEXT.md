@@ -410,6 +410,17 @@ _Avoid_: failed, error, stuck
 Commits on the remote that this machine doesn't have yet.
 _Avoid_: behind (in UI text)
 
+**Commit scan**:
+The check a chat's own commit passes before git makes it: the lines it adds, scanned for keys
+and personal data, and refused with each finding masked. `charter scan` runs it on what is
+staged. Part of Workspace, as a check on a repo's save (ADR 0074).
+_Avoid_: secret scan (that is the plane save's), leak check
+
+**Allowlist** (of the commit scan):
+A repo's `.charter-scan-allow.toml`: the findings the commit scan lets through, each entry with
+its reason, committed by the operator and read as it is at `HEAD`. A setting of a repo.
+_Avoid_: ignore list, exceptions, whitelist
+
 **Shared / Local** (settings):
 Where a setting's value comes from: `charter.toml` (committed, the team's) or
 `charter.local.toml` (this machine's). A Local value overrides the Shared one key by key.

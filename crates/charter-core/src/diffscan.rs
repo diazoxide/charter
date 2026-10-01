@@ -62,18 +62,17 @@ pub struct Scan {
 pub fn checked(repo: &Path) -> Result<Scan, String> {
     let found = staged(repo)?;
     let at_head = |args: &[&str]| git::run_in_hook(repo, args, git::READ).ok();
-    let plane =
-        at_head(&["cat-file", "-e", "HEAD:charter.toml"]).is_some_and(|run| run.code == Some(0));
     let file = at_head(&["show", &format!("HEAD:{}", scanallow::FILE)])
         .filter(|run| run.code == Some(0))
         .map(|run| Allowlist::parse(&String::from_utf8_lossy(&run.out)))
         .unwrap_or_default();
-    let allowlist = Allowlist::builtin(plane).with(file);
+    let allowlist = Allowlist::of(file);
     let changed = at_head(&[
         "-c",
         "core.quotePath=false",
         "diff",
         "--cached",
+        "--no-renames",
         "--name-only",
         "-z",
     ])
@@ -511,5 +510,14 @@ mod tests {
 
         assert_eq!(scan.refused.len(), 1);
         assert!(scan.problems[0].contains("reason"), "{:?}", scan.problems);
+    }
+
+    #[test]
+    fn moving_the_allowlist_away_is_a_change_to_it() {
+        let (_dir, repo) = repo();
+        allowlist_at_head(&repo, DOCS_EMAIL);
+        testgit::run(&repo, &["mv", scanallow::FILE, "elsewhere.toml"]);
+
+        assert!(checked(&repo).unwrap().changes_the_allowlist);
     }
 }

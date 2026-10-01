@@ -125,6 +125,17 @@ enum Rule {
 }
 
 impl Rule {
+    /// The rule's stable id, what an allowlist entry names.
+    fn id(self) -> &'static str {
+        match self {
+            Self::AgentMail => "agentmail-key",
+            Self::Jwt => "jwt",
+            Self::PrivateKey => "private-key",
+            Self::AwsKey => "aws-access-key",
+            Self::Assignment => "credential-assignment",
+        }
+    }
+
     /// A credential and nothing else: what a code repository's save and a commit's scan ask,
     /// where the assignment rule would refuse `password: String` and a JWT is a test fixture.
     fn is_a_key(self) -> bool {
@@ -355,7 +366,7 @@ fn token_at(text: &str) -> Option<(&'static str, usize)> {
     token
         .captures(text)
         .and_then(|caps| caps.name("token"))
-        .map(|hit| ("a token by its forge's prefix", hit.start()))
+        .map(|hit| (FORGE_TOKEN.1, hit.start()))
 }
 
 /// A credential [`found`] in a text: its kind, and the 1-based line it starts on. Never the
@@ -391,53 +402,69 @@ pub struct Leak {
     pub span: std::ops::Range<usize>,
 }
 
-/// Every rule [`leaks`] asks, by the id an allowlist entry names it with and the words a
-/// refusal uses for it. `charter scan --explain` prints this.
-pub const LEAK_RULES: [(&str, &str); 16] = [
-    ("agentmail-key", "AgentMail key"),
-    ("private-key", "private key (PEM)"),
-    ("aws-access-key", "AWS access key"),
-    ("forge-token", "a token by its forge's prefix"),
-    ("slack-webhook", "Slack webhook"),
-    ("sendgrid-key", "SendGrid key"),
-    ("digitalocean-token", "DigitalOcean token"),
-    ("shopify-token", "Shopify token"),
-    ("linear-key", "Linear key"),
-    ("postman-key", "Postman key"),
-    ("doppler-token", "Doppler token"),
-    ("databricks-token", "Databricks token"),
-    ("grafana-token", "Grafana token"),
-    ("email", "an email address"),
-    ("card-number", "a card number"),
-    ("us-ssn", "an ID number (US SSN)"),
-];
+/// The forge-prefix rule, by its id and its words.
+const FORGE_TOKEN: (&str, &str) = ("forge-token", "a token by its forge's prefix");
 
-/// The id of the rule a leak of `kind` was found by.
-fn rule_of(kind: &str) -> &'static str {
-    LEAK_RULES
+/// Every rule [`leaks`] asks, by the id an allowlist entry names it with and the words a
+/// refusal uses for it, in the order they are asked. `charter scan --explain` prints this.
+pub fn leak_rules() -> Vec<(&'static str, &'static str)> {
+    let keys = compiled()
         .iter()
-        .find(|(_, words)| *words == kind)
-        .map(|(id, _)| *id)
-        .expect("every kind leaks() names is in LEAK_RULES")
+        .filter(|(rule, ..)| rule.is_a_key())
+        .map(|(rule, kind, ..)| (rule.id(), *kind));
+    let vendors = gitleaks().iter().map(|(id, kind, _)| (*id, *kind));
+    let personal = pii().iter().map(|(id, kind, ..)| (*id, *kind));
+    keys.chain(std::iter::once(FORGE_TOKEN))
+        .chain(vendors)
+        .chain(personal)
+        .collect()
+}
+
+/// Whether rule `id` finds personal data — a value a hash of it can be reversed from by
+/// guessing, so an allowlist never names one by its fingerprint.
+pub fn is_personal(id: &str) -> bool {
+    pii().iter().any(|(rule, ..)| *rule == id)
 }
 
 /// Credential shapes from gitleaks' default rules that neither [`CREDENTIAL_PREFIXES`] nor the
 /// PEM, AWS and AgentMail rules already cover. Each is anchored on a vendor's own prefix, so
 /// ordinary code does not match one; gitleaks' generic and entropy-only rules are left out for
 /// the reason [`token_kind`] leaves the credential-assignment rule out.
-const GITLEAKS: [(&str, &str); 9] = [
+const GITLEAKS: [(&str, &str, &str); 9] = [
     (
+        "slack-webhook",
         "Slack webhook",
         r"\bhooks\.slack\.com/(?:services|workflows|triggers)/[A-Za-z0-9+/]{43,56}",
     ),
-    ("SendGrid key", r"\bSG\.[A-Za-z0-9=_.-]{66}"),
-    ("DigitalOcean token", r"\bdo[por]_v1_[a-f0-9]{64}"),
-    ("Shopify token", r"\bshp(?:at|ca|pa|ss)_[a-fA-F0-9]{32}"),
-    ("Linear key", r"\blin_api_[A-Za-z0-9]{40}"),
-    ("Postman key", r"\bPMAK-[a-fA-F0-9]{24}-[a-fA-F0-9]{34}"),
-    ("Doppler token", r"\bdp\.pt\.[A-Za-z0-9]{43}"),
-    ("Databricks token", r"\bdapi[a-f0-9]{32}"),
+    ("sendgrid-key", "SendGrid key", r"\bSG\.[A-Za-z0-9=_.-]{66}"),
     (
+        "digitalocean-token",
+        "DigitalOcean token",
+        r"\bdo[por]_v1_[a-f0-9]{64}",
+    ),
+    (
+        "shopify-token",
+        "Shopify token",
+        r"\bshp(?:at|ca|pa|ss)_[a-fA-F0-9]{32}",
+    ),
+    ("linear-key", "Linear key", r"\blin_api_[A-Za-z0-9]{40}"),
+    (
+        "postman-key",
+        "Postman key",
+        r"\bPMAK-[a-fA-F0-9]{24}-[a-fA-F0-9]{34}",
+    ),
+    (
+        "doppler-token",
+        "Doppler token",
+        r"\bdp\.pt\.[A-Za-z0-9]{43}",
+    ),
+    (
+        "databricks-token",
+        "Databricks token",
+        r"\bdapi[a-f0-9]{32}",
+    ),
+    (
+        "grafana-token",
         "Grafana token",
         r"\b(?:glc_[A-Za-z0-9+/]{32,400}={0,2}|glsa_[A-Za-z0-9]{32}_[A-Fa-f0-9]{8})",
     ),
@@ -451,25 +478,35 @@ enum Personal {
     Ssn,
 }
 
-fn pii() -> &'static [(&'static str, Regex, Personal)] {
-    static ONCE: OnceLock<Vec<(&'static str, Regex, Personal)>> = OnceLock::new();
+type PiiRule = (&'static str, &'static str, Regex, Personal);
+
+fn pii() -> &'static [PiiRule] {
+    static ONCE: OnceLock<Vec<PiiRule>> = OnceLock::new();
     ONCE.get_or_init(|| {
         [
             (
+                "email",
                 "an email address",
                 r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b",
                 Personal::Email,
             ),
-            ("a card number", r"\b(?:\d[ -]?){12,18}\d\b", Personal::Card),
             (
+                "card-number",
+                "a card number",
+                r"\b(?:\d[ -]?){12,18}\d\b",
+                Personal::Card,
+            ),
+            (
+                "us-ssn",
                 "an ID number (US SSN)",
                 r"\b\d{3}-\d{2}-\d{4}\b",
                 Personal::Ssn,
             ),
         ]
         .into_iter()
-        .map(|(kind, pattern, check)| {
+        .map(|(id, kind, pattern, check)| {
             (
+                id,
                 kind,
                 Regex::new(pattern).expect("a pattern this module wrote"),
                 check,
@@ -479,13 +516,14 @@ fn pii() -> &'static [(&'static str, Regex, Personal)] {
     })
 }
 
-fn gitleaks() -> &'static [(&'static str, Regex)] {
-    static ONCE: OnceLock<Vec<(&'static str, Regex)>> = OnceLock::new();
+fn gitleaks() -> &'static [(&'static str, &'static str, Regex)] {
+    static ONCE: OnceLock<Vec<(&'static str, &'static str, Regex)>> = OnceLock::new();
     ONCE.get_or_init(|| {
         GITLEAKS
             .iter()
-            .map(|(kind, pattern)| {
+            .map(|(id, kind, pattern)| {
                 (
+                    *id,
                     *kind,
                     Regex::new(pattern).expect("a pattern this module wrote"),
                 )
@@ -597,7 +635,7 @@ pub fn leaks(line: &str) -> Vec<Leak> {
     for (rule, kind, rx, _) in compiled() {
         if rule.is_a_key() {
             all.extend(rx.find_iter(line).map(|hit| Leak {
-                rule: rule_of(kind),
+                rule: rule.id(),
                 kind,
                 span: hit.range(),
             }));
@@ -608,19 +646,19 @@ pub fn leaks(line: &str) -> Vec<Leak> {
             .captures_iter(line)
             .filter_map(|caps| caps.name("token"))
             .map(|hit| Leak {
-                rule: "forge-token",
-                kind: "a token by its forge's prefix",
+                rule: FORGE_TOKEN.0,
+                kind: FORGE_TOKEN.1,
                 span: hit.range(),
             }),
     );
-    for (kind, rx) in gitleaks() {
+    for (id, kind, rx) in gitleaks() {
         all.extend(rx.find_iter(line).map(|hit| Leak {
-            rule: rule_of(kind),
+            rule: id,
             kind,
             span: hit.range(),
         }));
     }
-    for (kind, rx, check) in pii() {
+    for (id, kind, rx, check) in pii() {
         all.extend(
             rx.find_iter(line)
                 .filter(|hit| match check {
@@ -629,7 +667,7 @@ pub fn leaks(line: &str) -> Vec<Leak> {
                     Personal::Ssn => an_ssn(hit.as_str()),
                 })
                 .map(|hit| Leak {
-                    rule: rule_of(kind),
+                    rule: id,
                     kind,
                     span: hit.range(),
                 }),
@@ -1006,7 +1044,8 @@ mod leak_tests {
         .concat();
         let rules: Vec<&str> = leaks(&line).into_iter().map(|l| l.rule).collect();
         assert_eq!(rules, ["forge-token", "email"]);
-        let ids: Vec<&str> = super::LEAK_RULES.iter().map(|(id, _)| *id).collect();
+        let ids: Vec<&str> = super::leak_rules().iter().map(|(id, _)| *id).collect();
+        assert_eq!(ids.len(), 16);
         let mut unique = ids.clone();
         unique.sort_unstable();
         unique.dedup();

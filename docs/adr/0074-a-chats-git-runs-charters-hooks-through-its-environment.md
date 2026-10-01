@@ -92,29 +92,63 @@ hooks and cannot rewrite them. A test pins that no denied path covers the direct
 
 A finding that is not a leak is let through by an entry. Entries come from two places:
 
-- **charter's own, the same in every repository:** an email address in `Cargo.toml`,
-  `package.json`, `.mailmap`, `AUTHORS*`, `CONTRIBUTORS*` or `CHANGELOG*`, anywhere in the
-  tree. These files publish names and addresses on purpose. In a plane, an email address in a
-  memory file is also let through, because the plane's own save scans memory by its own rules.
-- **The repository's `.charter-scan-allow.toml`**, committed and reviewed like code. Each
-  entry names a rule by its id and the paths it covers, or names one value by its SHA-256
-  fingerprint, and always gives a reason. `docs/plane-format.md` has the format.
-  `charter scan --explain` names a finding's rule and prints the entry that would let it
-  through.
+- **charter's own, the same in every repository:** an email address in a file named
+  `Cargo.toml`, `package.json`, `.mailmap`, `AUTHORS`, `CONTRIBUTORS` or `CHANGELOG` (the last
+  three also as `.md` and `.txt`), at the top or in any directory. These files publish names and
+  addresses on purpose. Only those exact names are covered, and only the `email` rule. A
+  repository turns them off with `[builtin] enabled = false` in its allowlist.
+- **The repository's `.charter-scan-allow.toml`**, committed and reviewed like code. An entry
+  either names a rule by its id together with the `paths` it covers, or names one key by the
+  SHA-256 fingerprint of its value. Every entry gives a `reason`. `docs/plane-format.md` has
+  the format.
+  - Every rule entry must name its paths. A repository-wide entry writes `paths = ["**"]`, so a
+    reviewer sees how wide it is.
+  - A fingerprint entry never lets personal data through (`email`, `card-number`, `us-ssn`).
+    Those values can be recovered from their hash by guessing, and the file is committed, so
+    they are allowed by path only.
+  - `charter scan --explain` names a finding's rule and prints the entry that would let it
+    through. For a key it also prints the fingerprint entry.
 
-**An agent cannot allow its own finding (V16), and the operator is the one who approves.** The
-file is read as it is at `HEAD`, never from the working tree or the index, so an entry a chat
-has written and not committed allows nothing. A chat's `pre-commit` also refuses any commit
-that changes the file. The operator's own terminal is not armed, so a change to the allowlist
-is a commit the operator makes, which means reviewing the entry. An agent can write the entry
-and ask; it takes effect only once the operator commits it. A merge may bring the file as it
-was committed on the other side.
+**Plane memory has no entry of its own.** Some planes are public, and whether a repository is a
+plane is something an agent can change. The operator of a private plane commits an entry for
+its memory.
+
+**The operator is the one who approves an entry.** The file is read as it is at `HEAD`, never
+from the working tree or the index, so an entry a chat has written and not committed allows
+nothing. A chat's `pre-commit` refuses any commit that changes the file, including one that
+moves it away. The Bash guard also refuses two commands, because they reach a changed file
+without a `pre-commit` and the command line names them cheaply:
+
+- a `git revert` of a commit that changed the file;
+- a `git merge --ff-only` to a commit whose file differs from `HEAD`'s.
+
+The operator's own terminal is not armed, so the ordinary way an entry takes effect is a commit
+the operator makes. An agent can write the entry and ask. A merge commit may bring the file in
+as it was committed on the other side.
+
+**This is a mistake guard, not a boundary.** git moves `HEAD` without a `pre-commit` in more ways
+than the guard can name:
+
+- a fast-forward to a commit made elsewhere, spelled in ways the guard does not read (for
+  example, through the stash);
+- a `reset`, `checkout` or `switch` to a commit with a wider file;
+- `commit-tree` with `update-ref`;
+- `am`, which V26b already records as not scanned.
+
+An agent that means to widen its own allowlist can do it through any of these. Holding a chat to
+the allowlist its operator committed is the sandbox's work (ADR 0067), and charter#784 is the
+follow-up there.
+
+**Concept homes (ADR 0072 §2):** the commit scan, `charter scan` and its report are part of
+**Workspace**, as checks on a repo's save, beside a repo's own save mode. The allowlist is a
+setting of a repo, in the repo itself.
 
 **Tier:** Plane when the repository is a plane. Elsewhere it is committed to the operator's
 repository, which as a whole is tier None (ADR 0069, row 74).
 
-**Audit:** when AU-5 lands, a change to the allowlist becomes an audit entry. Until then, the
-repository's history is the record.
+**Audit:** #593's acceptance asks that an allowlist change appear in the audit log once AU-5
+lands. Until then, the repository's git history is the record. The note is filed on the audit
+epic (charter#552).
 
 ## What it costs
 
