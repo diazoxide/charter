@@ -4335,7 +4335,8 @@ identifier `dev.charter.app`. The keyring rows are the operating system's store 
 `$XDG_DATA_HOME/charter`, else the OS data directory's `charter/` (`~/Library/Application
 Support/charter` on macOS, `~/.local/share/charter` on Linux). Its rows are **decided, not yet
 written**: AU-3 writes the audit's, RR-16 a runner's bare repos (ADR 0078), KN-32 the
-search index's (ADR 0079) and RC-7 the reviews (ADR 0084), and no code does yet. Their writer refuses a `<data>` under a plane
+search index's (ADR 0079), RC-7 the reviews (ADR 0084) and OB-2 the telemetry store (ADR 0083),
+and no code does yet. Their writer refuses a `<data>` under a plane
 or inside any git work tree.
 
 | Path | Tier | What it holds | Written by |
@@ -4375,6 +4376,10 @@ or inside any git work tree.
 | `<config>/server/<ver>/` | Machine, device-bound, rebuildable | **decided, not yet written** (ADR 0068, ADR 0078). On a runner: the verified `charter` binary of each host version, side by side while an old one drains. Denied to chats | the desktop's bootstrap, through the connector (RR-14) |
 | `<data>/repos/<workspace>/<repo>.git` | Machine, device-bound, rebuildable | **decided, not yet written** (ADR 0078). On a runner, in charter's data home: one bare repo per workspace repo, which the desktop pushes to over the link and fetches from. The desktop's clone is the truth. Denied to chats | the runner's `charterd` (RR-16) |
 | keyring item for the link key | Keyring | **decided, not yet written** (ADR 0078). This device's static X25519 key for the Noise `XX` handshake of a runner link, apart from the device key. On a headless runner the link key is held in the same age-encrypted form as the device key. Denied to chats | `charter runner add`, or the runner's `charterd` at pairing (RR-1) |
+| `<data>/telemetry/` | Machine, device-bound | **decided, not yet written** (ADR 0083). The telemetry store: OTel records from the harnesses, charter's own spans, the host's counters and logs derived from the event log, after people and gated content are removed; rolling segments and an index the views read. 30 days and 1 GiB by default, oldest segment deleted first. Never the audit. Not backed up, as a named exception to ADR 0069 §2: losing it costs past charts. Denied to chats (ADR 0067 §5 class 2) | `charterd`'s telemetry receiver, its only writer (OB-2) |
+| `<data>/telemetry/cursors.json` | Machine, device-bound, rebuildable | **decided, not yet written** (ADR 0083). Each export destination's place in the telemetry store; a lost cursor restarts that destination at the oldest record | `charterd` (OB-9) |
+| `<config>/telemetry.json` | Machine, device-bound | **decided, not yet written** (ADR 0083). Whether telemetry is collected, its retention and cap, each project's open content gates, and the export destinations: each one's name, OTLP/HTTP URL, signals and a pointer to its auth header in the keyring. No project file opens a gate or names a destination. Device-bound because of those pointers and consents. Denied to chats (ADR 0067 §5 class 2). Backed up by FR-10 | a `local-ui` caller only (the window, or `charter` on that scope), through `charterd` (OB-2, OB-9) |
+| keyring item for a telemetry export destination's auth header | Keyring | **decided, not yet written** (ADR 0083). The header value an export destination sends, such as a backend's API key. Denied to chats | OB-9 |
 
 ### Environment variables that move or key this state
 
