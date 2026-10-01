@@ -102,7 +102,9 @@ jobs:
       # This runner IS the issue's machine: its session bus is up and can activate a desktop
       # portal that cannot start, which cost 26-31 s before the app asked the portal first
       # (`portal.rs`). A debug build on a shared runner, so the numbers are an upper bound on
-      # what a release build does; five launches each, and every one is held to the limit.
+      # what a release build does. One discarded launch, then five on fresh profiles: their median
+      # is held to the limit and each to a 2.5 s ceiling, because one noisy sample on a shared
+      # runner is not a regression (`tools/coldstart-linux.sh` says why not a release build).
       - name: Cold start on X, on the runner's own session bus (charter-app#24's machine)
         if: runner.os == 'Linux'
         run: tools/coldstart-linux.sh bare

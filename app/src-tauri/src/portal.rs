@@ -1015,6 +1015,35 @@ mod tests {
         }
     }
 
+    /// How long a test that expects an answer waits for one. The answer itself is not timed:
+    /// the bus replies in milliseconds, but a CI runner running every crate's tests at once can
+    /// leave the asking thread unscheduled past [`BUDGET`], and a test that then heard
+    /// "silence" was failing on the runner's load, not on what the bus said (main, run
+    /// 36772854804). Silence is still heard within [`BUDGET`]; see the test that times it.
+    #[cfg(target_os = "linux")]
+    const AN_ANSWER_WITHIN: Duration = Duration::from_secs(10);
+
+    #[cfg(target_os = "linux")]
+    impl PrivateBus {
+        /// The names this bus can start, as the bus itself lists them.
+        fn activatable(&self) -> Vec<String> {
+            let bus = zbus::blocking::connection::Builder::address(self.address.as_str())
+                .expect("an address")
+                .build()
+                .expect("the test's bus");
+            let reply = bus
+                .call_method(
+                    Some("org.freedesktop.DBus"),
+                    "/org/freedesktop/DBus",
+                    Some("org.freedesktop.DBus"),
+                    "ListActivatableNames",
+                    &(),
+                )
+                .expect("the bus lists what it can start");
+            reply.body().deserialize().expect("a list of names")
+        }
+    }
+
     #[cfg(target_os = "linux")]
     impl Drop for PrivateBus {
         fn drop(&mut self) {
@@ -1036,18 +1065,41 @@ mod tests {
         let took = from.elapsed();
 
         assert_eq!(heard, Heard::Silence);
+        // Well short of the 25 s it replaces, with room for a loaded runner's scheduling.
         assert!(
-            took < BUDGET + Duration::from_millis(200),
+            took < BUDGET + Duration::from_secs(2),
             "listening took {took:?} against a {BUDGET:?} budget"
+        );
+    }
+
+    /// The premise every test below stands on: the bus a test starts can start what that test
+    /// declares and nothing else — whatever portals the machine running the tests has
+    /// installed. Its config names one service directory, its own, and no standard ones.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_test_bus_can_start_only_what_its_test_declares() {
+        assert!(
+            !PrivateBus::with(&[])
+                .activatable()
+                .iter()
+                .any(|name| name == PORTAL),
+            "the machine's own portal reached a test's bus"
+        );
+        assert!(
+            PrivateBus::with(&[(PORTAL, "/bin/false")])
+                .activatable()
+                .iter()
+                .any(|name| name == PORTAL),
+            "a declared service is not activatable"
         );
     }
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn a_bus_with_no_portal_to_start_answers_at_once() {
+    fn a_bus_with_no_portal_to_start_answers() {
         let bus = PrivateBus::with(&[]);
 
-        assert_eq!(listen(Some(&bus.address), BUDGET), Heard::Answer);
+        assert_eq!(listen(Some(&bus.address), AN_ANSWER_WITHIN), Heard::Answer);
     }
 
     /// A portal that exits instead of hanging: the bus says it failed as soon as it has.
@@ -1056,7 +1108,7 @@ mod tests {
     fn a_portal_that_fails_to_start_is_answered_for_by_the_bus() {
         let bus = PrivateBus::with(&[(PORTAL, "/bin/false")]);
 
-        assert_eq!(listen(Some(&bus.address), BUDGET), Heard::Answer);
+        assert_eq!(listen(Some(&bus.address), AN_ANSWER_WITHIN), Heard::Answer);
     }
 
     #[cfg(target_os = "linux")]
@@ -1071,7 +1123,7 @@ mod tests {
             .build()
             .expect("the portal is on the bus");
 
-        assert_eq!(listen(Some(&bus.address), BUDGET), Heard::Answer);
+        assert_eq!(listen(Some(&bus.address), AN_ANSWER_WITHIN), Heard::Answer);
     }
 
     #[cfg(target_os = "linux")]

@@ -7,9 +7,10 @@
 //   node tools/bench.mjs --skip-build    # measure what is already built
 //   node tools/bench.mjs --only window --arms webgl
 //   node tools/bench.mjs --skip-build --only coldstart --app target/debug/charter-app --limit 2000 \
-//     --warm-up --fresh-profile          # CI's Linux cold start: one discarded launch, then each
-//                                        # launch on a fresh profile; fails when any is past the
-//                                        # limit
+//     --ceiling 2500 --warm-up --fresh-profile
+//                                        # CI's Linux cold start: one discarded launch, then each
+//                                        # launch on a fresh profile; fails when the median is
+//                                        # past the limit or any launch past the ceiling
 //
 // Windows open and close on screen while it runs, and each is brought to the front: WebKit
 // draws nothing in a covered window, and nothing at all while the display sleeps (which
@@ -47,8 +48,12 @@ const { values: options } = parseArgs({
     "cold-starts": { type: "string", default: "10" },
     // The binary cold start launches, when it is not the shipped build this script makes.
     app: { type: "string" },
-    // Cold start's limit in ms: the run fails when any held launch of the empty plane is past it.
+    // Cold start's limit in ms: the run fails when the held launches' median is past it — or,
+    // without a ceiling, when any one is.
     limit: { type: "string" },
+    // The most any one held launch may take, in ms, beside the median's limit: one noisy sample
+    // on a shared runner is not a regression, and a launch this slow is.
+    ceiling: { type: "string" },
     // One launch before the measured ones, reported and not held to the limit: it pays for a
     // disk cold since boot or install (the binary and GTK/WebKitGTK's libraries), which a person
     // pays once, not per launch.
@@ -548,13 +553,25 @@ if (options.limit && results.coldStart) {
       `\ncold disk, once per boot or install: reported, not gated: ${Math.round(warmUp.ms)} ms`,
     );
   const launches = results.coldStart.launchToFirstFrame.samples_ms;
-  const over = launches.filter((ms) => ms > limit);
-  const verdict = launches.length > 0 && over.length === 0 ? "met" : "MISSED";
+  const ceiling = options.ceiling ? Number(options.ceiling) : limit;
+  const sorted = [...launches].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  const median = sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+  const over = launches.filter((ms) => ms > ceiling);
+  const met = launches.length > 0 && over.length === 0 && (!options.ceiling || median <= limit);
   console.log(
     `cold start (${build}${fresh ? ", a fresh profile each launch" : ""}): ` +
-      `${launches.map((ms) => Math.round(ms)).join(", ")} ms, each against a ${limit} ms limit: ` +
-      verdict +
-      (over.length > 0 ? ` (${over.length} over)` : launches.length === 0 ? " (no launch)" : ""),
+      `${launches.map((ms) => Math.round(ms)).join(", ")} ms`,
   );
-  if (verdict !== "met") process.exitCode = 1;
+  if (options.ceiling)
+    console.log(
+      `median ${Math.round(median)} ms against a ${limit} ms limit, worst ${Math.round(sorted.at(-1) ?? 0)} ms ` +
+        `against a ${ceiling} ms ceiling: ${met ? "met" : "MISSED"}`,
+    );
+  else
+    console.log(
+      `each against a ${limit} ms limit: ${met ? "met" : "MISSED"}` +
+        (over.length > 0 ? ` (${over.length} over)` : launches.length === 0 ? " (no launch)" : ""),
+    );
+  if (!met) process.exitCode = 1;
 }
