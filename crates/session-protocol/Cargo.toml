@@ -22,7 +22,7 @@ yamux = "0.14"
 
 [dev-dependencies]
 tempfile.workspace = true
-tokio = { version = "1", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "sync", "test-util", "time"] }
 
 [lints]
 workspace = true

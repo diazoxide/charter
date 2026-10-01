@@ -26,6 +26,9 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 /// What every message of the negotiation opens with.
 pub const MAGIC: &[u8; 8] = b"\x89CSP\r\n\x1a\n";
 
+/// How long either end waits for the other's half of the handshake.
+pub const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// The longest hello or answer either end reads. A real one is a few dozen bytes.
 pub const MOST_HELLO_BYTES: usize = 4096;
 
@@ -80,6 +83,9 @@ pub enum Refused {
     /// A message that is not the shape this version reads.
     #[error("a negotiation message that cannot be read: {0}")]
     Malformed(String),
+    /// The other end did not finish its half of the handshake within [`HANDSHAKE_TIMEOUT`].
+    #[error("the other end did not finish the handshake within {HANDSHAKE_TIMEOUT:?}")]
+    TimedOut,
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
@@ -97,7 +103,33 @@ enum Answer {
 }
 
 /// The client's side: offer what `speaks` names, and return the version the host agreed to.
+/// A host that has not answered within [`HANDSHAKE_TIMEOUT`] is refused.
 pub async fn offer<S: AsyncRead + AsyncWrite + Unpin>(
+    io: &mut S,
+    speaks: &Speaks,
+) -> Result<Version, Refused> {
+    within_the_deadline(offer_now(io, speaks)).await
+}
+
+/// The host's side: read a client's hello, and agree to the highest major both speak or
+/// refuse it. A client that has not sent its whole hello within [`HANDSHAKE_TIMEOUT`] is
+/// refused.
+pub async fn answer<S: AsyncRead + AsyncWrite + Unpin>(
+    io: &mut S,
+    speaks: &Speaks,
+) -> Result<Version, Refused> {
+    within_the_deadline(answer_now(io, speaks)).await
+}
+
+async fn within_the_deadline<T>(
+    handshake: impl Future<Output = Result<T, Refused>>,
+) -> Result<T, Refused> {
+    tokio::time::timeout(HANDSHAKE_TIMEOUT, handshake)
+        .await
+        .unwrap_or(Err(Refused::TimedOut))
+}
+
+async fn offer_now<S: AsyncRead + AsyncWrite + Unpin>(
     io: &mut S,
     speaks: &Speaks,
 ) -> Result<Version, Refused> {
@@ -123,9 +155,7 @@ pub async fn offer<S: AsyncRead + AsyncWrite + Unpin>(
     }
 }
 
-/// The host's side: read a client's hello, and agree to the highest major both speak or
-/// refuse it.
-pub async fn answer<S: AsyncRead + AsyncWrite + Unpin>(
+async fn answer_now<S: AsyncRead + AsyncWrite + Unpin>(
     io: &mut S,
     speaks: &Speaks,
 ) -> Result<Version, Refused> {

@@ -57,6 +57,9 @@ pub enum LinkError {
     NoControlLane,
     #[error("the link is closed")]
     Closed,
+    /// The client did not open the control lane within the handshake's deadline.
+    #[error("the client did not open the control lane within {:?}", crate::version::HANDSHAKE_TIMEOUT)]
+    TimedOut,
     #[error(transparent)]
     Mux(#[from] yamux::ConnectionError),
     #[error(transparent)]
@@ -202,10 +205,15 @@ pub async fn serve<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
 ) -> Result<Link, LinkError> {
     let version = version::answer(&mut io, &speaks).await?;
     let (open, mut inbound) = drive(io, yamux::Mode::Server);
-    let mut lane = inbound.recv().await.ok_or(LinkError::Closed)?.compat();
-    if lane.read_u8().await? != CONTROL_LANE {
-        return Err(LinkError::NoControlLane);
-    }
+    let lane = tokio::time::timeout(version::HANDSHAKE_TIMEOUT, async {
+        let mut lane = inbound.recv().await.ok_or(LinkError::Closed)?.compat();
+        if lane.read_u8().await? != CONTROL_LANE {
+            return Err(LinkError::NoControlLane);
+        }
+        Ok(lane)
+    })
+    .await
+    .unwrap_or(Err(LinkError::TimedOut))?;
     Ok(Link {
         version,
         control: lane_framed(lane),
