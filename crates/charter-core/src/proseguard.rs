@@ -158,15 +158,15 @@ pub const CHARTER_PROSE_ROWS: [(&str, &str, &str, Option<&str>); 11] = [
     (
         "change",
         "create",
-        "the change record's `why`, which would be written into every request body on the \
-         forge (`charter change push` is not in this version yet)",
+        "the change record's `why`, which `charter change push` writes into the description \
+         of every member's request on the forge",
         None,
     ),
     (
         "change",
         "drop",
-        "the exclusion's `why`, which would be written into every request body on the forge \
-         (`charter change push` is not in this version yet)",
+        "the exclusion's `why`, which the change record keeps and `charter change show` \
+         prints back",
         None,
     ),
     (

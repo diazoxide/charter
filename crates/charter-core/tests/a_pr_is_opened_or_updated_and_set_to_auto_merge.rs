@@ -422,6 +422,101 @@ mod prs {
     }
 
     #[test]
+    fn a_github_description_is_read_whole_and_written_as_one_literal_field() {
+        charter_core::unsteered!();
+        if !in_child() {
+            return;
+        }
+        let scene = Scene::new("pr-body.test");
+        let read = scene.gh_api(
+            "repos/acme/widget/pulls/12",
+            0,
+            r#"{"number": 12, "body": null}"#,
+            "",
+        );
+        // A description is somebody's text: `-f`, never `-F`, so a leading `@` is not a file
+        // to upload (charter #323), and nothing but the body is sent.
+        let wrote = scene.answers(
+            "gh",
+            &[
+                "api",
+                "--hostname",
+                "pr-body.test",
+                "-X",
+                "PATCH",
+                "repos/acme/widget/pulls/12",
+                "-f",
+                "body=@not-a-file\nmore",
+            ],
+            0,
+            r#"{"number": 12}"#,
+            "",
+        );
+        let repo = repo(&scene, "github", "acme/widget");
+        let pr = Pr {
+            number: 12,
+            url: String::new(),
+        };
+        let backend = repo.backend();
+        assert_eq!(
+            backend.body(&Caller::command(), &repo.path, &pr),
+            Ok(String::new()),
+            "a null body is empty"
+        );
+        assert_eq!(
+            backend.set_body(&Caller::command(), &repo.path, &pr, "@not-a-file\nmore"),
+            Ok(())
+        );
+        assert!(was_asked(&read) && was_asked(&wrote));
+    }
+
+    #[test]
+    fn a_gitlab_description_is_read_whole_and_written_as_one_literal_field() {
+        charter_core::unsteered!();
+        if !in_child() {
+            return;
+        }
+        let scene = Scene::new("mr-body.test");
+        let read = scene.glab_api(
+            "projects/acme%2Fplat%2Fwidget/merge_requests/4",
+            0,
+            r#"{"iid": 4, "description": "theirs"}"#,
+            "",
+        );
+        let wrote = scene.answers(
+            "glab",
+            &[
+                "--hostname",
+                "mr-body.test",
+                "api",
+                "-X",
+                "PUT",
+                "projects/acme%2Fplat%2Fwidget/merge_requests/4",
+                "-f",
+                "description=@not-a-file",
+            ],
+            0,
+            r#"{"iid": 4}"#,
+            "",
+        );
+        let repo = repo(&scene, "gitlab", "acme/plat/widget");
+        let pr = Pr {
+            number: 4,
+            url: String::new(),
+        };
+        let backend = repo.backend();
+        assert_eq!(
+            backend.body(&Caller::command(), &repo.path, &pr),
+            Ok("theirs".to_string())
+        );
+        assert_eq!(
+            backend.set_body(&Caller::command(), &repo.path, &pr, "@not-a-file"),
+            Ok(())
+        );
+        assert!(was_asked(&read) && was_asked(&wrote));
+    }
+
+    #[test]
     fn a_gitlab_mr_from_a_fork_with_the_same_branch_name_is_never_adopted() {
         charter_core::unsteered!();
         if !in_child() {

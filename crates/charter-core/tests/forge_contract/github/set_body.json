@@ -1,0 +1,28 @@
+{
+  "source": "GitHub REST API version 2022-11-28, docs.github.com/en/rest, pulls: Update a pull request (body)",
+  "exchanges": [
+    {
+      "call": {
+        "endpoint": {
+          "rest": {
+            "method": "PATCH",
+            "path": "repos/acme/api/pulls/12"
+          }
+        },
+        "fields": [
+          {
+            "text": [
+              "body",
+              "Why this change.\n\n<!-- END charter change -->"
+            ]
+          }
+        ]
+      },
+      "reply": {
+        "code": 0,
+        "out": "{\"number\": 12, \"html_url\": \"https://github.com/acme/api/pull/12\", \"body\": \"Why this change.\\n\\n<!-- END charter change -->\"}",
+        "err": ""
+      }
+    }
+  ]
+}

@@ -78,13 +78,41 @@ by `tests/a_forge_cli_is_asked_exactly_what_python_asked.rs` and
 | `Repos::owned` | `charter discover` | `GET orgs/{owner}/repos`, then `users/{owner}/repos` on a 404 | `GET groups/{owner}/projects?include_subgroups=true&archived=false` | strict | **gaps 1, 2** (#803, #804) |
 | `Repos::reachable` | the repo picker (ADR 0055) | `GET user/repos?affiliation=owner,collaborator,organization_member` | `GET projects?membership=true&archived=false` | strict | same |
 | `Repos::top_level` | `discover`'s stack probe | `GET repos/{o}/{r}/git/trees/{ref}` (ref, else default branch, else `HEAD`) | `GET projects/{id}/repository/tree` (ref, else the default branch) | strict | same |
-| `Requests::open_or_update` | a PR-mode save (ADR 0051) | `GET pulls?state=open&head={o}:{b}&base=…`, then `PATCH` or `POST pulls` | `GET merge_requests?state=opened&source_branch=…&target_branch=…`, own project only, then `PUT` or `POST` | strict | same |
+| `Requests::open_or_update` | a PR-mode save (ADR 0051), `charter change push` | `GET pulls?state=open&head={o}:{b}&base=…`, then `PATCH` or `POST pulls` | `GET merge_requests?state=opened&source_branch=…&target_branch=…`, own project only, then `PUT` or `POST` | strict | same |
 | `Requests::state` | a PR-mode save | `GET pulls/{n}`: `closed` + `merged` is merged, at `merge_commit_sha` | `GET merge_requests/{iid}`: `merged`, at `squash_commit_sha` else `merge_commit_sha` | strict | same |
-| `Requests::by_head` | `charter change show` (ADR 0060) | `GET pulls?state=all&head={o}:{b}`, checked against `head.repo.full_name` | `GET merge_requests?source_branch=…&state=all`, own project only | strict | same |
+| `Requests::by_head` | `charter change show` and `push` (ADR 0060) | `GET pulls?state=all&head={o}:{b}`, checked against `head.repo.full_name` | `GET merge_requests?source_branch=…&state=all`, own project only | strict | same |
+| `Requests::body` | `charter change push` (ADR 0060) | `GET pulls/{n}`, its `body` (`null` is empty) | `GET merge_requests/{iid}`, its `description` (`null` is empty) | strict | same |
+| `Requests::set_body` | `charter change push` | `PATCH pulls/{n}` with `body` alone | `PUT merge_requests/{iid}` with `description` alone | strict | same |
 | `Requests::request_auto_merge` | a PR-merge save | GraphQL `enablePullRequestAutoMerge` with `expectedHeadOid` | `PUT merge_requests/{iid}/merge` with `merge_when_pipeline_succeeds` and `sha`, only while a pipeline runs | strict | **gap 3** (#805) |
 | `Requests::checks_at` | `charter change show` | check runs **and** commit statuses at the sha, each read whole | the request's pipelines at the sha; the newest decides | strict, `UNKNOWN` on failure | same, by design |
 | `Requests::open_on_branch` | `gl-refresh` | `GET pulls?state=open&head={o}:{b}&per_page=1` | `GET merge_requests?state=opened&source_branch=…&per_page=100`, own project only | permissive | same (fixed here) |
 | `Requests::ci_word` | `gl-refresh` | GraphQL `statusCheckRollup.state` (5 values) | `GET pipelines?ref=…&per_page=1`, its `status` (13 values) | permissive | same |
+
+### `charter change push`
+
+`charter change push <slug>` is the first change verb that writes to a forge (ADR 0060, #471).
+For each member it reads the forge, the repository path and the HTTPS push URL from the
+member's own repo's `origin`, and prints every repo, branch and destination before it pushes
+anything. Each push is `git push <https-url> refs/heads/<branch>:refs/heads/<branch>`, through
+the forge CLI's credential helper and nothing else: no `+`, no `--force` of any spelling, so it
+can only create the branch or fast-forward it. The push's own command line turns off tags,
+push options and submodules, and a repo whose git config rewrites where pushes go is refused,
+so the destination printed is the one git uses. It commits nothing, and it pushes a repo whose
+`[repos.<name>] mode` is `off` too (ADR 0051, amended by ADR 0060 D4).
+
+Then `by_head` finds the member's request in any state. When there is none, `open_or_update`
+opens one into the repo's default branch, titled `<slug>: <repo>`, with the change's `why` and
+an empty cross-link block as its description. Last, every request's description is read
+(`body`) and the block between charter's two markers is replaced with one that names every
+member's request, `—` for a member charter could not reach. A description that is already
+current is not written (`set_body`), so a second run asks the forge nothing new. Charter writes
+only between its markers: a description without exactly one pair of them outside a code fence
+(a fence closes only on its own kind) is left alone and named, and everything outside the block
+keeps its line endings. The markers are the Python charter's, to the byte.
+
+One member's failure costs only that member. A member that is not a repo in the workspace is
+refused by name. The exit is 1 when any member was not pushed, opened or written, as the Python
+charter answered, and 2 only when the whole command is refused.
 
 **Not behind the seam, and why:**
 

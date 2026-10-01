@@ -376,6 +376,29 @@ impl Requests for GitHub {
         state_of(&record, &doing)
     }
 
+    fn body(&self, caller: &Caller, path: &str, pr: &Pr) -> Result<String, ForgeError> {
+        let (owner, name) = owner_name(path);
+        let api = format!("repos/{}/{}/pulls/{}", quote(owner), quote(name), pr.number);
+        let doing = format!(
+            "reading pull request #{}'s description in {path}",
+            pr.number
+        );
+        let record = self.0.ask(caller, &Call::get(&api, LIST_TIMEOUT), &doing)?;
+        // GitHub answers `"body": null` for a pull request opened with none.
+        Ok(record["body"].as_str().unwrap_or_default().to_string())
+    }
+
+    fn set_body(&self, caller: &Caller, path: &str, pr: &Pr, body: &str) -> Result<(), ForgeError> {
+        let (owner, name) = owner_name(path);
+        let api = format!("repos/{}/{}/pulls/{}", quote(owner), quote(name), pr.number);
+        let doing = format!(
+            "writing pull request #{}'s description in {path}",
+            pr.number
+        );
+        let call = Call::write(Method::Patch, api, vec![Field::text("body", body)]);
+        self.0.ask(caller, &call, &doing).map(|_| ())
+    }
+
     fn by_head(
         &self,
         caller: &Caller,

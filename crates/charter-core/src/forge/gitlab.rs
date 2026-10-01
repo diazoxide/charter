@@ -237,6 +237,30 @@ impl Requests for GitLab {
         state_of(&record, &doing)
     }
 
+    fn body(&self, caller: &Caller, path: &str, pr: &Pr) -> Result<String, ForgeError> {
+        let api = format!("projects/{}/merge_requests/{}", quote(path), pr.number);
+        let doing = format!(
+            "reading merge request !{}'s description in {path}",
+            pr.number
+        );
+        let record = self.0.ask(caller, &Call::get(&api, LIST_TIMEOUT), &doing)?;
+        // GitLab answers `"description": null` for a merge request opened with none.
+        Ok(record["description"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string())
+    }
+
+    fn set_body(&self, caller: &Caller, path: &str, pr: &Pr, body: &str) -> Result<(), ForgeError> {
+        let api = format!("projects/{}/merge_requests/{}", quote(path), pr.number);
+        let doing = format!(
+            "writing merge request !{}'s description in {path}",
+            pr.number
+        );
+        let call = Call::write(Method::Put, api, vec![Field::text("description", body)]);
+        self.0.ask(caller, &call, &doing).map(|_| ())
+    }
+
     fn by_head(
         &self,
         caller: &Caller,
