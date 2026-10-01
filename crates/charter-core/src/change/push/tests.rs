@@ -44,9 +44,15 @@ impl World {
         }
     }
 
-    /// A clone `alpha/<repo>` whose `main` is on its bare remote, with the change's branch
-    /// one commit ahead of it and not pushed.
+    /// A clone `alpha/<repo>` of `github.com/acme/<repo>`: [`World::clone_on`].
     fn clone(&self, repo: &str) -> PathBuf {
+        self.clone_on("github.com", "acme", repo)
+    }
+
+    /// A clone `alpha/<repo>` whose origin is `<repo>` under `namespace` on `host`, in the SSH
+    /// form, and whose `main` is on its bare remote, with the change's branch one commit ahead
+    /// of it and not pushed.
+    fn clone_on(&self, host: &str, namespace: &str, repo: &str) -> PathBuf {
         let clone = self.plane.join("workspaces/alpha").join(repo);
         std::fs::create_dir_all(&clone).unwrap();
         run(&clone, &["init", "-q", "-b", "main", "."]);
@@ -55,10 +61,10 @@ impl World {
         std::fs::write(clone.join("README.md"), "one\n").unwrap();
         run(&clone, &["add", "-A"]);
         run(&clone, &["commit", "-q", "-m", "one"]);
-        let bare = self.bare(repo);
+        let bare = self.bare_in(namespace, repo);
         std::fs::create_dir_all(&bare).unwrap();
         run(&bare, &["init", "-q", "--bare", "-b", "main", "."]);
-        let ssh = format!("git@github.com:acme/{repo}.git");
+        let ssh = format!("git@{host}:{namespace}/{repo}.git");
         run(&clone, &["remote", "add", "origin", &ssh]);
         let base = format!("file://{}/", bare.parent().unwrap().display());
         run(
@@ -66,7 +72,7 @@ impl World {
             &[
                 "config",
                 &format!("url.{base}.insteadOf"),
-                "https://github.com/acme/",
+                &format!("https://{host}/{namespace}/"),
             ],
         );
         let at = bare.display().to_string();
@@ -93,13 +99,23 @@ impl World {
     }
 
     fn bare(&self, repo: &str) -> PathBuf {
-        self.top.join(format!("forge/acme/{repo}.git"))
+        self.bare_in("acme", repo)
+    }
+
+    /// The bare remote of `<repo>` under `namespace`.
+    fn bare_in(&self, namespace: &str, repo: &str) -> PathBuf {
+        self.top.join(format!("forge/{namespace}/{repo}.git"))
     }
 
     /// The commit the bare remote's `branch` is at, if it has one.
     fn remote_has(&self, repo: &str, branch: &str) -> Option<String> {
+        self.remote_in_has("acme", repo, branch)
+    }
+
+    /// [`World::remote_has`] of `<repo>` under `namespace`.
+    fn remote_in_has(&self, namespace: &str, repo: &str, branch: &str) -> Option<String> {
         let found = crate::testgit::run(
-            &self.bare(repo),
+            &self.bare_in(namespace, repo),
             &["rev-parse", &format!("refs/heads/{branch}")],
         );
         found.ok().then(|| found.out.trim().to_string())
@@ -503,7 +519,7 @@ fn a_why_cannot_add_a_row_or_a_column_to_the_block() {
         branch: BRANCH.into(),
         needs: vec![],
     });
-    let block = block(&record, &|_| None);
+    let block = block(&record, &|_| None, "github.com");
     assert!(block.contains("— a \\| b"), "{block}");
     assert_eq!(block.lines().count(), 7, "{block}");
 }
@@ -653,7 +669,7 @@ fn a_why_carrying_charters_marker_cannot_lock_the_block() {
         needs: vec![],
     });
     let body = new_body(&record);
-    let spliced = splice(&body, &block(&record, &|_| None));
+    let spliced = splice(&body, &block(&record, &|_| None, "github.com"));
     assert_eq!(spliced.as_deref(), Some(body.as_str()), "{body}");
     assert!(!body.contains("see <!--"), "{body}");
 }
@@ -686,3 +702,5 @@ fn the_descriptions_line_endings_and_trailing_newline_are_kept_outside_the_block
     let current = format!("a\r\n{BLOCK_BEGIN}\r\nnew\r\n{BLOCK_END}\r\n");
     assert_eq!(splice(&current, &block).as_deref(), Some(current.as_str()));
 }
+
+mod gitlab;

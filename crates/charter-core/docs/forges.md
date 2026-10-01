@@ -110,6 +110,20 @@ only between its markers: a description without exactly one pair of them outside
 (a fence closes only on its own kind) is left alone and named, and everything outside the block
 keeps its line endings. The markers are the Python charter's, to the byte.
 
+A row names its request the way the forge rendering the description resolves it: a reference
+(`acme/widget#7` on GitHub, `acme/plat/widget!7` on GitLab, the full group path) for a request on
+the description's own host, and the request's URL for one on another host. A reference is
+looked up by the forge that renders it, so `acme/widget#7` in a GitLab description is GitLab's
+issue 7 of a GitLab project `acme/widget`, and a self-managed GitLab beside gitlab.com is a
+different host too.
+
+**On GitLab** (GL-3b), the same steps are GitLab's merge request calls in the table above. A
+merge request in any state from the project's own branch is adopted, a draft included: only
+its `description` is written, so it stays a draft and keeps its title. One from a fork with the
+same branch name is never adopted, written or merged; charter opens the project's own. A
+`"description": null` holds no block, and is named like any description without one. A
+self-managed GitLab is pushed to and asked at the host `charter.toml` declares for it.
+
 One member's failure costs only that member. A member that is not a repo in the workspace is
 refused by name. The exit is 1 when any member was not pushed, opened or written, as the Python
 charter answered, and 2 only when the whole command is refused.

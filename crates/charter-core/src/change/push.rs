@@ -24,6 +24,10 @@
 //! for is a `—` row of the block, never a missing one, because a table without it says the
 //! change has fewer members than it has.
 //!
+//! **A reference only where it resolves.** A row names a request on the description's own
+//! host by reference (`acme/widget#7`, `acme/plat/widget!7`), and one on any other host by its
+//! URL, so each member's description gets a block written for its own host.
+//!
 //! **The block is charter's; the rest of the description is not.** Charter writes only
 //! between [`BLOCK_BEGIN`] and [`BLOCK_END`]. A request whose description lacks exactly one
 //! pair of them, outside any code fence, is left exactly as it is and named.
@@ -85,11 +89,34 @@ pub struct Reached {
     pub path: String,
     /// `#` on GitHub, `!` on GitLab: per member, since one workspace can hold both.
     pub sigil: &'static str,
+    /// The forge's host: `github.com`, `gitlab.com`, or a self-managed one.
+    pub host: String,
+    /// The request's web page, as its forge gave it.
+    pub url: String,
 }
 
-/// The block charter writes into every member's request: the change, why, and one row per
-/// member with its request, or `—` for a member `reached` has no request for.
-pub fn block<'r>(record: &Record, reached: &dyn Fn(&str) -> Option<&'r Reached>) -> String {
+impl Reached {
+    /// How a description on `host` names this request. A reference (`acme/widget#7`,
+    /// `acme/plat/widget!7`) is resolved by the forge that renders it, against its own
+    /// projects, so it is written only into a description on the request's own host. On any
+    /// other host it would name somebody else's issue or nothing at all, and the request's
+    /// URL is written instead.
+    fn named_on(&self, host: &str) -> String {
+        if self.host.eq_ignore_ascii_case(host) {
+            format!("{}{}{}", cell(&self.path), self.sigil, self.number)
+        } else {
+            cell(&self.url)
+        }
+    }
+}
+
+/// The block charter writes into a request on `host`: the change, why, and one row per member
+/// with its request, or `—` for a member `reached` has no request for.
+pub fn block<'r>(
+    record: &Record,
+    reached: &dyn Fn(&str) -> Option<&'r Reached>,
+    host: &str,
+) -> String {
     let mut lines = vec![
         BLOCK_BEGIN.to_string(),
         format!(
@@ -102,10 +129,7 @@ pub fn block<'r>(record: &Record, reached: &dyn Fn(&str) -> Option<&'r Reached>)
         "|---|---|---|".to_string(),
     ];
     for m in &record.members {
-        let at = reached(&m.repo).map_or_else(
-            || "—".to_string(),
-            |r| format!("{}{}{}", cell(&r.path), r.sigil, r.number),
-        );
+        let at = reached(&m.repo).map_or_else(|| "—".to_string(), |r| r.named_on(host));
         let needs = if m.needs.is_empty() {
             "—".to_string()
         } else {
@@ -174,7 +198,7 @@ pub fn splice(body: &str, block: &str) -> Option<String> {
 /// The description charter writes when it opens a request: the change's `why`, and its block
 /// with no request in it yet, so the splice that follows has its markers to find.
 fn new_body(record: &Record) -> String {
-    format!("{}\n\n{}", cell(&record.why), block(record, &|_| None))
+    format!("{}\n\n{}", cell(&record.why), block(record, &|_| None, ""))
 }
 
 /// Where one member goes, resolved from its repo before anything is pushed.
@@ -420,14 +444,18 @@ pub fn push_with(
             number: pr.number,
             path: p.on.path.clone(),
             sigil,
+            host: p.on.forge.host.clone(),
+            url: pr.url.clone(),
         };
         reached.insert(p.repo.clone(), (at, pr, backend));
     }
 
-    let block = block(&record, &|repo| reached.get(repo).map(|(at, _, _)| at));
+    let reached_at = |repo: &str| reached.get(repo).map(|(at, _, _)| at);
     let (mut written, mut current) = (0usize, 0usize);
     for (repo, (at, pr, backend)) in &reached {
         let (path, sigil) = (&at.path, at.sigil);
+        // Per request: a member on another host is named by its URL there (`Reached::named_on`).
+        let block = block(&record, &reached_at, &at.host);
         let body = match backend.body(&caller, path, pr) {
             Ok(body) => body,
             Err(why) => {
