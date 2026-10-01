@@ -101,7 +101,13 @@ pub async fn offer<S: AsyncRead + AsyncWrite + Unpin>(
     io: &mut S,
     speaks: &Speaks,
 ) -> Result<Version, Refused> {
-    send(io, &Hello { versions: speaks.0.clone() }).await?;
+    send(
+        io,
+        &Hello {
+            versions: speaks.0.clone(),
+        },
+    )
+    .await?;
     match receive::<_, Answer>(io).await? {
         Answer::Accept(version) => match speaks.minor_of(version.major) {
             Some(minor) if version.minor <= minor => Ok(version),
@@ -109,7 +115,9 @@ pub async fn offer<S: AsyncRead + AsyncWrite + Unpin>(
                 "the host agreed to minor {} of major {}, past this client's",
                 version.minor, version.major
             ))),
-            None => Err(Refused::NotOffered { major: version.major }),
+            None => Err(Refused::NotOffered {
+                major: version.major,
+            }),
         },
         Answer::Refuse { speaks } => Err(Refused::ByPeer { speaks }),
     }
@@ -135,8 +143,17 @@ pub async fn answer<S: AsyncRead + AsyncWrite + Unpin>(
             Ok(version)
         }
         None => {
-            send(io, &Answer::Refuse { speaks: speaks.majors() }).await?;
-            Err(Refused::NoSharedMajor { ours: speaks.majors(), theirs: theirs.majors() })
+            send(
+                io,
+                &Answer::Refuse {
+                    speaks: speaks.majors(),
+                },
+            )
+            .await?;
+            Err(Refused::NoSharedMajor {
+                ours: speaks.majors(),
+                theirs: theirs.majors(),
+            })
         }
     }
 }
@@ -156,12 +173,16 @@ async fn send<S: AsyncWrite + Unpin, T: Serialize>(io: &mut S, message: &T) -> R
     Ok(())
 }
 
-async fn receive<S: AsyncRead + Unpin, T: for<'de> Deserialize<'de>>(io: &mut S) -> Result<T, Refused> {
+async fn receive<S: AsyncRead + Unpin, T: for<'de> Deserialize<'de>>(
+    io: &mut S,
+) -> Result<T, Refused> {
     let mut magic = [0u8; MAGIC.len()];
     match io.read_exact(&mut magic).await {
         Ok(_) if &magic == MAGIC => {}
         Ok(_) => return Err(Refused::NotThisProtocol),
-        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Err(Refused::NotThisProtocol),
+        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+            return Err(Refused::NotThisProtocol);
+        }
         Err(e) => return Err(e.into()),
     }
     let length = usize::from(io.read_u16().await?);

@@ -23,7 +23,11 @@ const HIGH: usize = 16 * 1024;
 const CHUNK: usize = 4 * 1024;
 
 fn limits() -> Limits {
-    Limits { most_queued_bytes: QUEUE, high_watermark: HIGH, low_watermark: 4 * 1024 }
+    Limits {
+        most_queued_bytes: QUEUE,
+        high_watermark: HIGH,
+        low_watermark: 4 * 1024,
+    }
 }
 
 /// Push until the view falls behind; return how many bytes were accepted.
@@ -31,8 +35,14 @@ fn push_until_behind(feed: &view::Feed) -> usize {
     let mut accepted = 0;
     while feed.push(Bytes::from(vec![b'y'; CHUNK])).is_ok() {
         accepted += CHUNK;
-        assert!(feed.queued_bytes() <= QUEUE, "the queue never holds more than its bound");
-        assert!(accepted <= 4 * QUEUE, "a view that never draws must fall behind");
+        assert!(
+            feed.queued_bytes() <= QUEUE,
+            "the queue never holds more than its bound"
+        );
+        assert!(
+            accepted <= 4 * QUEUE,
+            "a view that never draws must fall behind"
+        );
     }
     accepted
 }
@@ -46,9 +56,19 @@ async fn a_view_that_never_draws_falls_behind_at_its_bound_and_holds_nothing_aft
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     let accepted = push_until_behind(&feed);
-    assert!(accepted <= QUEUE + HIGH + CHUNK, "behind after {accepted} bytes, past its bound");
-    assert_eq!(feed.queued_bytes(), 0, "a dropped view lets go of what it queued");
-    assert!(feed.push(Bytes::from_static(b"more")).is_err(), "and stays dropped");
+    assert!(
+        accepted <= QUEUE + HIGH + CHUNK,
+        "behind after {accepted} bytes, past its bound"
+    );
+    assert_eq!(
+        feed.queued_bytes(),
+        0,
+        "a dropped view lets go of what it queued"
+    );
+    assert!(
+        feed.push(Bytes::from_static(b"more")).is_err(),
+        "and stays dropped"
+    );
 
     // The client's stream ends; it does not wait forever on a view the host gave up.
     let ended = timeout(Duration::from_secs(5), async {
@@ -86,5 +106,8 @@ async fn the_view_comes_back_with_a_fresh_snapshot_and_a_higher_epoch() {
         }
     }
     assert_eq!(snapshot, fresh);
-    assert_eq!(reader.next().await.unwrap().unwrap(), Chunk::Live(Bytes::from_static(b"!")));
+    assert_eq!(
+        reader.next().await.unwrap().unwrap(),
+        Chunk::Live(Bytes::from_static(b"!"))
+    );
 }

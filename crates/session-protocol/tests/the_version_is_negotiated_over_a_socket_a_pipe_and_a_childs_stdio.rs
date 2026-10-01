@@ -3,6 +3,9 @@
 //! which is how a connector such as `ssh` reaches a runner (ADR 0078 §2). #643's first
 //! acceptance line.
 
+// Unix sockets and pipes. Windows is not ported yet (ADR 0068, *Later decisions*).
+#![cfg(unix)]
+
 use std::process::Stdio;
 
 use charter_session_protocol::version::{Refused, Speaks, Version, answer, offer};
@@ -25,7 +28,10 @@ async fn over_a_unix_socket() {
         answer(&mut stream, &v1()).await.unwrap()
     });
     let mut stream = UnixStream::connect(&path).await.unwrap();
-    assert_eq!(offer(&mut stream, &v1()).await.unwrap(), Version { major: 1, minor: 0 });
+    assert_eq!(
+        offer(&mut stream, &v1()).await.unwrap(),
+        Version { major: 1, minor: 0 }
+    );
     assert_eq!(host.await.unwrap(), Version { major: 1, minor: 0 });
 }
 
@@ -45,7 +51,10 @@ async fn over_a_pair_of_pipes() {
     let mut host_end = join(host_reads, host_writes);
     let mut client_end = join(client_reads, client_writes);
     let speaks = v1();
-    let (client, host) = tokio::join!(offer(&mut client_end, &speaks), answer(&mut host_end, &speaks));
+    let (client, host) = tokio::join!(
+        offer(&mut client_end, &speaks),
+        answer(&mut host_end, &speaks)
+    );
     assert_eq!(client.unwrap(), Version { major: 1, minor: 0 });
     assert_eq!(host.unwrap(), Version { major: 1, minor: 0 });
 }
@@ -69,10 +78,17 @@ async fn over_a_childs_stdio() {
     let mut child = peer("2.1,1.3").spawn().unwrap();
     let mut stdio = join(child.stdout.take().unwrap(), child.stdin.take().unwrap());
     let ours = Speaks::new([Version { major: 1, minor: 5 }]);
-    assert_eq!(offer(&mut stdio, &ours).await.unwrap(), Version { major: 1, minor: 3 });
+    assert_eq!(
+        offer(&mut stdio, &ours).await.unwrap(),
+        Version { major: 1, minor: 3 }
+    );
     drop(stdio);
     let out = child.wait_with_output().await.unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 #[tokio::test]
@@ -85,7 +101,10 @@ async fn a_child_that_shares_no_major_refuses_and_says_so() {
     }
     drop(stdio);
     let out = child.wait_with_output().await.unwrap();
-    assert!(!out.status.success(), "a refused negotiation is a failure on the host too");
+    assert!(
+        !out.status.success(),
+        "a refused negotiation is a failure on the host too"
+    );
     let said = String::from_utf8_lossy(&out.stderr);
     assert!(said.contains("no major version in common"), "{said}");
 }

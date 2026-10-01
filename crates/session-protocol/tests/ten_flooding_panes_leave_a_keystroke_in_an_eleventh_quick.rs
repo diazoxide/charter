@@ -3,6 +3,9 @@
 //! eleventh pane's bytes down, sharing the link with ten panes that write as fast as the
 //! client draws them. Over a real unix socket.
 
+// Unix sockets and pipes. Windows is not ported yet (ADR 0068, *Later decisions*).
+#![cfg(unix)]
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
@@ -35,7 +38,13 @@ async fn the_ninety_fifth_percentile_keystroke_stays_inside_fifty_milliseconds()
         let mut link = link::serve(stream, v1()).await.unwrap();
         let mut floods = Vec::new();
         for pane in 0..FLOODING {
-            let feed = view::start(link.open().await.unwrap(), pane, 1, Bytes::new(), Limits::default());
+            let feed = view::start(
+                link.open().await.unwrap(),
+                pane,
+                1,
+                Bytes::new(),
+                Limits::default(),
+            );
             let stop = Arc::clone(&host_stop);
             floods.push(tokio::spawn(async move {
                 let line = Bytes::from(format!("pane {pane}: {}\r\n", "x".repeat(200)).repeat(64));
@@ -46,11 +55,18 @@ async fn the_ninety_fifth_percentile_keystroke_stays_inside_fifty_milliseconds()
                         tokio::time::sleep(Duration::from_millis(1)).await;
                         continue;
                     }
-                    feed.push(line.clone()).expect("a client that draws never falls behind");
+                    feed.push(line.clone())
+                        .expect("a client that draws never falls behind");
                 }
             }));
         }
-        let echo = view::start(link.open().await.unwrap(), FLOODING, 1, Bytes::new(), Limits::default());
+        let echo = view::start(
+            link.open().await.unwrap(),
+            FLOODING,
+            1,
+            Bytes::new(),
+            Limits::default(),
+        );
         while let Some(Ok(key)) = link.control().next().await {
             echo.push(key).unwrap();
         }
@@ -60,7 +76,9 @@ async fn the_ninety_fifth_percentile_keystroke_stays_inside_fifty_milliseconds()
     });
 
     // The client: draws every pane as fast as it reads, and types into the eleventh.
-    let mut client = link::connect(UnixStream::connect(&path).await.unwrap(), v1()).await.unwrap();
+    let mut client = link::connect(UnixStream::connect(&path).await.unwrap(), v1())
+        .await
+        .unwrap();
     let drawn = Arc::new(AtomicUsize::new(0));
     let mut echo = None;
     for _ in 0..=FLOODING {
@@ -90,7 +108,9 @@ async fn the_ninety_fifth_percentile_keystroke_stays_inside_fifty_milliseconds()
         let key = Bytes::from(format!("{}", n % 10));
         let typed = Instant::now();
         client.control().send(key.clone()).await.unwrap();
-        let Some(Ok(Chunk::Live(seen))) = echo.next().await else { panic!("no echo") };
+        let Some(Ok(Chunk::Live(seen))) = echo.next().await else {
+            panic!("no echo")
+        };
         took.push(typed.elapsed());
         echo.ack(seen.len()).await.unwrap();
         assert_eq!(seen, key);
@@ -111,9 +131,15 @@ async fn the_ninety_fifth_percentile_keystroke_stays_inside_fifty_milliseconds()
         took[SAMPLES / 2]
     );
     // A flood that did not flood would pass anything.
-    assert!(flood_rate >= 10.0, "the panes drew only {flood_rate:.1} MB/s");
+    assert!(
+        flood_rate >= 10.0,
+        "the panes drew only {flood_rate:.1} MB/s"
+    );
     // The 95th percentile, the usual way a latency budget is stated, so one sample the
     // scheduler of a loaded CI machine delays does not fail the build. It was 84 to 96 ms when
     // the flooding producers spun the runtime instead of waiting, which is what this guards.
-    assert!(p95 <= BUDGET, "p95 {p95:?} is over {BUDGET:?} (worst {worst:?})");
+    assert!(
+        p95 <= BUDGET,
+        "p95 {p95:?} is over {BUDGET:?} (worst {worst:?})"
+    );
 }

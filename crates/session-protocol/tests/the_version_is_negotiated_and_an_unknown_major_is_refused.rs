@@ -5,10 +5,17 @@ use charter_session_protocol::version::{Refused, Speaks, Version, answer, offer}
 use tokio::io::{AsyncReadExt, AsyncWriteExt, duplex};
 
 fn speaks(versions: &[(u16, u16)]) -> Speaks {
-    Speaks::new(versions.iter().map(|&(major, minor)| Version { major, minor }))
+    Speaks::new(
+        versions
+            .iter()
+            .map(|&(major, minor)| Version { major, minor }),
+    )
 }
 
-async fn negotiate(client: Speaks, host: Speaks) -> (Result<Version, Refused>, Result<Version, Refused>) {
+async fn negotiate(
+    client: Speaks,
+    host: Speaks,
+) -> (Result<Version, Refused>, Result<Version, Refused>) {
     let (mut a, mut b) = duplex(64 * 1024);
     tokio::join!(offer(&mut a, &client), answer(&mut b, &host))
 }
@@ -53,8 +60,12 @@ async fn a_host_that_accepts_a_major_the_client_never_offered_is_refused_by_the_
         let mut hello = [0u8; 512];
         let _ = b.read(&mut hello).await.unwrap();
         let body = br#"{"accept":{"major":9,"minor":0}}"#;
-        b.write_all(charter_session_protocol::version::MAGIC).await.unwrap();
-        b.write_all(&(body.len() as u16).to_be_bytes()).await.unwrap();
+        b.write_all(charter_session_protocol::version::MAGIC)
+            .await
+            .unwrap();
+        b.write_all(&(body.len() as u16).to_be_bytes())
+            .await
+            .unwrap();
         b.write_all(body).await.unwrap();
         b
     };
@@ -74,7 +85,10 @@ async fn a_stream_that_does_not_open_with_the_magic_is_refused_before_anything_i
         a.write_all(b"SSH-2.0-OpenSSH_9.9\r\n").await.unwrap();
         a.shutdown().await.unwrap();
     });
-    assert!(matches!(host.unwrap_err(), Refused::NotThisProtocol), "an ssh banner is not a hello");
+    assert!(
+        matches!(host.unwrap_err(), Refused::NotThisProtocol),
+        "an ssh banner is not a hello"
+    );
 }
 
 #[tokio::test]
@@ -82,7 +96,9 @@ async fn a_hello_longer_than_the_limit_is_refused_without_reading_it() {
     let (mut a, mut b) = duplex(64 * 1024);
     let host = speaks(&[(1, 0)]);
     let (host, _) = tokio::join!(answer(&mut b, &host), async {
-        a.write_all(charter_session_protocol::version::MAGIC).await.unwrap();
+        a.write_all(charter_session_protocol::version::MAGIC)
+            .await
+            .unwrap();
         a.write_all(&u16::MAX.to_be_bytes()).await.unwrap();
     });
     assert!(matches!(host.unwrap_err(), Refused::TooLong { .. }));
@@ -94,8 +110,12 @@ async fn a_hello_that_is_not_the_expected_shape_is_refused() {
     let host = speaks(&[(1, 0)]);
     let (host, _) = tokio::join!(answer(&mut b, &host), async {
         let body = br#"{"speaks":"everything"}"#;
-        a.write_all(charter_session_protocol::version::MAGIC).await.unwrap();
-        a.write_all(&(body.len() as u16).to_be_bytes()).await.unwrap();
+        a.write_all(charter_session_protocol::version::MAGIC)
+            .await
+            .unwrap();
+        a.write_all(&(body.len() as u16).to_be_bytes())
+            .await
+            .unwrap();
         a.write_all(body).await.unwrap();
     });
     assert!(matches!(host.unwrap_err(), Refused::Malformed(_)));

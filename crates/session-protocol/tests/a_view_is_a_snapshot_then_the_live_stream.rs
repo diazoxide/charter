@@ -34,7 +34,13 @@ async fn read_live(reader: &mut view::Reader, want: usize) -> Vec<u8> {
 async fn the_snapshot_comes_first_whole_then_the_live_bytes_in_order() {
     let (mut client, mut host) = linked().await;
     let snapshot = Bytes::from_static(b"\x1b[2J\x1b[Hprompt$ ");
-    let feed = view::start(host.open().await.unwrap(), 7, 1, snapshot.clone(), Limits::default());
+    let feed = view::start(
+        host.open().await.unwrap(),
+        7,
+        1,
+        snapshot.clone(),
+        Limits::default(),
+    );
     let typed: &[u8] = b"ls\r\n";
     let listed: &[u8] = b"\x1b[1mREADME.md\x1b[0m\r\n";
     feed.push(Bytes::from_static(typed)).unwrap();
@@ -60,7 +66,13 @@ async fn the_snapshot_comes_first_whole_then_the_live_bytes_in_order() {
 #[tokio::test]
 async fn an_empty_snapshot_is_still_a_snapshot_boundary() {
     let (mut client, mut host) = linked().await;
-    let feed = view::start(host.open().await.unwrap(), 1, 1, Bytes::new(), Limits::default());
+    let feed = view::start(
+        host.open().await.unwrap(),
+        1,
+        1,
+        Bytes::new(),
+        Limits::default(),
+    );
     feed.push(Bytes::from_static(b"hi")).unwrap();
     let mut reader = view::accept(client.accept().await.unwrap()).await.unwrap();
     assert_eq!(read_live(&mut reader, 2).await, b"hi");
@@ -71,7 +83,13 @@ async fn many_views_share_one_link_and_each_keeps_its_own_order() {
     let (mut client, mut host) = linked().await;
     let mut feeds = Vec::new();
     for v in 0..20u32 {
-        let feed = view::start(host.open().await.unwrap(), v, 1, Bytes::new(), Limits::default());
+        let feed = view::start(
+            host.open().await.unwrap(),
+            v,
+            1,
+            Bytes::new(),
+            Limits::default(),
+        );
         for n in 0..50u32 {
             feed.push(Bytes::from(format!("{v}:{n};"))).unwrap();
         }

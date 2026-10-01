@@ -20,13 +20,26 @@ async fn control_frames_arrive_whole_and_in_order_both_ways() {
 
     // A frame far larger than the transport's own buffer still arrives as one frame.
     let big = Bytes::from(vec![7u8; 200 * 1024]);
-    client.control().send(Bytes::from_static(b"list")).await.unwrap();
+    client
+        .control()
+        .send(Bytes::from_static(b"list"))
+        .await
+        .unwrap();
     client.control().send(big.clone()).await.unwrap();
-    assert_eq!(host.control().next().await.unwrap().unwrap(), Bytes::from_static(b"list"));
+    assert_eq!(
+        host.control().next().await.unwrap().unwrap(),
+        Bytes::from_static(b"list")
+    );
     assert_eq!(host.control().next().await.unwrap().unwrap(), big);
 
-    host.control().send(Bytes::from_static(b"chats: 0")).await.unwrap();
-    assert_eq!(client.control().next().await.unwrap().unwrap(), Bytes::from_static(b"chats: 0"));
+    host.control()
+        .send(Bytes::from_static(b"chats: 0"))
+        .await
+        .unwrap();
+    assert_eq!(
+        client.control().next().await.unwrap().unwrap(),
+        Bytes::from_static(b"chats: 0")
+    );
 }
 
 #[tokio::test]
@@ -41,7 +54,10 @@ async fn a_stream_one_end_opens_is_one_the_other_end_accepts() {
     let mut accepted = client.accept().await.unwrap();
     let mut read = [0u8; 12];
     accepted.read_exact(&mut read).await.unwrap();
-    assert_eq!(&read, b"\x1b[31mred\x1b[0m", "terminal bytes cross raw, ESC and all");
+    assert_eq!(
+        &read, b"\x1b[31mred\x1b[0m",
+        "terminal bytes cross raw, ESC and all"
+    );
 
     // And the other way, a stream the client opens.
     let mut up = client.open().await.unwrap();
@@ -60,8 +76,14 @@ async fn a_refused_negotiation_starts_no_link() {
         link::connect(a, Speaks::new([Version { major: 2, minor: 0 }])),
         link::serve(b, v1())
     );
-    assert!(matches!(client.err().unwrap(), LinkError::Refused(Refused::ByPeer { .. })));
-    assert!(matches!(host.err().unwrap(), LinkError::Refused(Refused::NoSharedMajor { .. })));
+    assert!(matches!(
+        client.err().unwrap(),
+        LinkError::Refused(Refused::ByPeer { .. })
+    ));
+    assert!(matches!(
+        host.err().unwrap(),
+        LinkError::Refused(Refused::NoSharedMajor { .. })
+    ));
 }
 
 #[tokio::test]
@@ -70,8 +92,18 @@ async fn a_control_frame_past_the_limit_is_refused_and_the_lane_stays_usable() {
     let (client, host) = tokio::join!(link::connect(a, v1()), link::serve(b, v1()));
     let (mut client, mut host) = (client.unwrap(), host.unwrap());
     let too_big = Bytes::from(vec![0u8; link::MOST_CONTROL_FRAME_BYTES + 1]);
-    assert!(client.control().send(too_big).await.is_err(), "the sender refuses it");
+    assert!(
+        client.control().send(too_big).await.is_err(),
+        "the sender refuses it"
+    );
     // The host's lane stays usable for frames that fit.
-    client.control().send(Bytes::from_static(b"ok")).await.unwrap();
-    assert_eq!(host.control().next().await.unwrap().unwrap(), Bytes::from_static(b"ok"));
+    client
+        .control()
+        .send(Bytes::from_static(b"ok"))
+        .await
+        .unwrap();
+    assert_eq!(
+        host.control().next().await.unwrap().unwrap(),
+        Bytes::from_static(b"ok")
+    );
 }

@@ -15,7 +15,10 @@ fn speaks(arg: &str) -> Option<Speaks> {
         .split(',')
         .map(|v| {
             let (major, minor) = v.split_once('.')?;
-            Some(Version { major: major.parse().ok()?, minor: minor.parse().ok()? })
+            Some(Version {
+                major: major.parse().ok()?,
+                minor: minor.parse().ok()?,
+            })
         })
         .collect();
     versions.map(Speaks::new)

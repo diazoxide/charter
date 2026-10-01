@@ -35,7 +35,10 @@ struct Lcg(u64);
 
 impl Lcg {
     fn next(&mut self) -> u64 {
-        self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        self.0 = self
+            .0
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         self.0 >> 33
     }
 }
@@ -63,13 +66,17 @@ async fn shape(mut from: ReadHalf<DuplexStream>, mut to: WriteHalf<DuplexStream>
         let on_the_wire = Duration::from_secs_f64(n as f64 / BYTES_PER_SECOND);
         free_at = free_at.max(now) + on_the_wire;
         let mut at = free_at + ROUND_TRIP / 2;
-        if random.next() % LOSS_IN == 0 {
+        if random.next().is_multiple_of(LOSS_IN) {
             at += RETRANSMIT;
         }
         // Ordered: nothing is delivered before a chunk sent ahead of it.
         at = at.max(last_at);
         last_at = at;
-        if queue.send((at, Bytes::copy_from_slice(&buffer[..n]))).await.is_err() {
+        if queue
+            .send((at, Bytes::copy_from_slice(&buffer[..n])))
+            .await
+            .is_err()
+        {
             return;
         }
     }
@@ -105,12 +112,16 @@ async fn every_needs_you_arrives_inside_a_second_plus_the_round_trip_and_memory_
     let opener = host.opener();
     for chat in 0..CHATS {
         let opener = opener.clone();
-        let (stop, held, most_held) = (Arc::clone(&stop), Arc::clone(&held), Arc::clone(&most_held));
+        let (stop, held, most_held) =
+            (Arc::clone(&stop), Arc::clone(&held), Arc::clone(&most_held));
         tokio::spawn(async move {
-            let output = Bytes::from(format!("chat {chat} working… {}\r\n", "▒".repeat(60)).repeat(16));
+            let output =
+                Bytes::from(format!("chat {chat} working… {}\r\n", "▒".repeat(60)).repeat(16));
             let mut epoch = 1;
             while !stop.load(Ordering::Relaxed) {
-                let Ok(stream) = opener.open().await else { return };
+                let Ok(stream) = opener.open().await else {
+                    return;
+                };
                 let snapshot = Bytes::from(format!("\x1b[2J\x1b[Hchat {chat}, epoch {epoch}"));
                 let feed = view::start(stream, chat, epoch, snapshot, limits);
                 let mut mine = 0;
@@ -133,10 +144,16 @@ async fn every_needs_you_arrives_inside_a_second_plus_the_round_trip_and_memory_
     let mut accept = client.acceptor();
     tokio::spawn(async move {
         while !accepting_stop.load(Ordering::Relaxed) {
-            let Ok(stream) = accept.accept().await else { return };
+            let Ok(stream) = accept.accept().await else {
+                return;
+            };
             tokio::spawn(async move {
-                let Ok(mut reader) = view::accept(stream).await else { return };
-                while let Some(Ok(Chunk::Live(bytes) | Chunk::Snapshot(bytes))) = reader.next().await {
+                let Ok(mut reader) = view::accept(stream).await else {
+                    return;
+                };
+                while let Some(Ok(Chunk::Live(bytes) | Chunk::Snapshot(bytes))) =
+                    reader.next().await
+                {
                     if reader.ack(bytes.len()).await.is_err() {
                         return;
                     }
@@ -152,7 +169,10 @@ async fn every_needs_you_arrives_inside_a_second_plus_the_round_trip_and_memory_
     let asks = tokio::spawn(async move {
         for chat in 0..CHATS {
             asking.lock().unwrap().insert(chat, Instant::now());
-            host.control().send(Bytes::from(format!("needs-you {chat}"))).await.unwrap();
+            host.control()
+                .send(Bytes::from(format!("needs-you {chat}")))
+                .await
+                .unwrap();
             sleep(Duration::from_millis(60)).await;
         }
         host
@@ -177,6 +197,12 @@ async fn every_needs_you_arrives_inside_a_second_plus_the_round_trip_and_memory_
         "needs-you over {CHATS} chats, {ROUND_TRIP:?} round trip, 2% loss, 10 MB/s: p50 {:?}, worst {worst:?}; peak queued {peak} bytes",
         took[took.len() / 2]
     );
-    assert!(worst <= budget, "the slowest needs-you took {worst:?}, over {budget:?}");
-    assert!(peak <= bound, "the host held {peak} bytes for its views, over {bound}");
+    assert!(
+        worst <= budget,
+        "the slowest needs-you took {worst:?}, over {budget:?}"
+    );
+    assert!(
+        peak <= bound,
+        "the host held {peak} bytes for its views, over {bound}"
+    );
 }

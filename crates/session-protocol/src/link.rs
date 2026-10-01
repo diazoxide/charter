@@ -101,7 +101,11 @@ impl Link {
 
     /// The next stream the other end opened.
     pub async fn accept(&mut self) -> Result<Stream, LinkError> {
-        self.inbound.recv().await.map(|s| s.compat()).ok_or(LinkError::Closed)
+        self.inbound
+            .recv()
+            .await
+            .map(|s| s.compat())
+            .ok_or(LinkError::Closed)
     }
 
     /// Hand the streams the other end opens to a task of their own. After this, [`Link::accept`]
@@ -129,7 +133,11 @@ pub struct Acceptor(mpsc::UnboundedReceiver<yamux::Stream>);
 impl Acceptor {
     /// The next stream the other end opened.
     pub async fn accept(&mut self) -> Result<Stream, LinkError> {
-        self.0.recv().await.map(|s| s.compat()).ok_or(LinkError::Closed)
+        self.0
+            .recv()
+            .await
+            .map(|s| s.compat())
+            .ok_or(LinkError::Closed)
     }
 }
 
@@ -178,7 +186,12 @@ pub async fn connect<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     let mut lane = opened.await.map_err(|_| LinkError::Closed)??.compat();
     lane.write_all(&[CONTROL_LANE]).await?;
     lane.flush().await?;
-    Ok(Link { version, control: lane_framed(lane), open, inbound })
+    Ok(Link {
+        version,
+        control: lane_framed(lane),
+        open,
+        inbound,
+    })
 }
 
 /// The host end: answer with what `speaks` names, start the multiplexer and take the control
@@ -193,7 +206,12 @@ pub async fn serve<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     if lane.read_u8().await? != CONTROL_LANE {
         return Err(LinkError::NoControlLane);
     }
-    Ok(Link { version, control: lane_framed(lane), open, inbound })
+    Ok(Link {
+        version,
+        control: lane_framed(lane),
+        open,
+        inbound,
+    })
 }
 
 fn lane_framed(lane: Stream) -> Control {

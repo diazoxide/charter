@@ -25,7 +25,11 @@ const CHUNK: usize = 4 * 1024;
 const TOTAL: usize = 512 * 1024;
 
 fn limits() -> Limits {
-    Limits { most_queued_bytes: 8 << 20, high_watermark: HIGH, low_watermark: LOW }
+    Limits {
+        most_queued_bytes: 8 << 20,
+        high_watermark: HIGH,
+        low_watermark: LOW,
+    }
 }
 
 /// Read without acknowledging until nothing more comes for a while; return how much came.
@@ -48,7 +52,10 @@ async fn the_host_stops_at_the_high_watermark_while_nothing_is_acknowledged() {
     }
     let mut reader = view::accept(client.accept().await.unwrap()).await.unwrap();
     let got = read_until_quiet(&mut reader).await;
-    assert!(got >= HIGH - CHUNK, "it wrote up to the watermark ({got} bytes)");
+    assert!(
+        got >= HIGH - CHUNK,
+        "it wrote up to the watermark ({got} bytes)"
+    );
     assert!(got <= HIGH + CHUNK, "and stopped there, not at {got} bytes");
 }
 
@@ -64,11 +71,18 @@ async fn acknowledging_down_to_the_low_watermark_lets_it_write_again() {
 
     // Drawing less than takes it below the low watermark is not enough.
     reader.ack(first - LOW - 1).await.unwrap();
-    assert_eq!(read_until_quiet(&mut reader).await, 0, "still above the low watermark");
+    assert_eq!(
+        read_until_quiet(&mut reader).await,
+        0,
+        "still above the low watermark"
+    );
 
     // Drawing the rest is.
     reader.ack(LOW + 1).await.unwrap();
-    assert!(read_until_quiet(&mut reader).await > 0, "below the low watermark it writes again");
+    assert!(
+        read_until_quiet(&mut reader).await > 0,
+        "below the low watermark it writes again"
+    );
 }
 
 #[tokio::test]
@@ -84,8 +98,14 @@ async fn a_client_that_draws_as_it_reads_gets_every_byte_in_order() {
     let mut reader = view::accept(client.accept().await.unwrap()).await.unwrap();
     let mut got = Vec::with_capacity(TOTAL);
     while got.len() < TOTAL {
-        let chunk = timeout(Duration::from_secs(10), reader.next()).await.unwrap().unwrap().unwrap();
-        let Chunk::Live(bytes) = chunk else { panic!("a snapshot after live bytes") };
+        let chunk = timeout(Duration::from_secs(10), reader.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let Chunk::Live(bytes) = chunk else {
+            panic!("a snapshot after live bytes")
+        };
         reader.ack(bytes.len()).await.unwrap();
         got.extend_from_slice(&bytes);
     }

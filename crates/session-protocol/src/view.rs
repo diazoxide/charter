@@ -39,7 +39,11 @@ pub struct Limits {
 
 impl Default for Limits {
     fn default() -> Self {
-        Limits { most_queued_bytes: 1 << 20, high_watermark: 64 << 10, low_watermark: 16 << 10 }
+        Limits {
+            most_queued_bytes: 1 << 20,
+            high_watermark: 64 << 10,
+            low_watermark: 16 << 10,
+        }
     }
 }
 
@@ -76,7 +80,9 @@ struct Shared {
 
 impl Shared {
     fn queue(&self) -> MutexGuard<'_, Queue> {
-        self.queue.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.queue
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 
@@ -144,7 +150,12 @@ pub fn start(stream: Stream, view: u32, epoch: u32, snapshot: Bytes, limits: Lim
         let (acks, out) = tokio::io::split(stream);
         let (acked, drawn) = watch::channel(0u64);
         let counting = tokio::spawn(count_acks(acks, acked));
-        let mut writer = Gated { out, sent: 0, drawn, limits };
+        let mut writer = Gated {
+            out,
+            sent: 0,
+            drawn,
+            limits,
+        };
         tokio::select! {
             _ = writer.write(view, epoch, &snapshot, &pump) => {}
             () = pump.dropped.cancelled() => {}
@@ -216,7 +227,12 @@ impl Gated {
             if self.sent - *self.drawn.borrow() >= high {
                 let sent = self.sent;
                 self.out.flush().await?;
-                if self.drawn.wait_for(|drawn| sent - (*drawn).min(sent) <= low).await.is_err() {
+                if self
+                    .drawn
+                    .wait_for(|drawn| sent - (*drawn).min(sent) <= low)
+                    .await
+                    .is_err()
+                {
                     return Err(std::io::ErrorKind::BrokenPipe.into());
                 }
             }
@@ -250,7 +266,11 @@ impl Reader {
 
     /// The next chunk, or `None` when the host has ended the view.
     pub async fn next(&mut self) -> Option<Result<Chunk, LinkError>> {
-        let most = if self.snapshot_left > 0 { self.snapshot_left.min(MOST_CHUNK_BYTES) } else { MOST_CHUNK_BYTES };
+        let most = if self.snapshot_left > 0 {
+            self.snapshot_left.min(MOST_CHUNK_BYTES)
+        } else {
+            MOST_CHUNK_BYTES
+        };
         let mut buffer = vec![0u8; most];
         match self.input.read(&mut buffer).await {
             Ok(0) => None,
@@ -295,5 +315,11 @@ pub async fn accept(stream: Stream) -> Result<Reader, LinkError> {
     let view = input.read_u32().await?;
     let epoch = input.read_u32().await?;
     let snapshot_left = input.read_u32().await? as usize;
-    Ok(Reader { view, epoch, snapshot_left, input, acks })
+    Ok(Reader {
+        view,
+        epoch,
+        snapshot_left,
+        input,
+        acks,
+    })
 }
