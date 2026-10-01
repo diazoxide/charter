@@ -227,26 +227,14 @@ fn hidden_agents_md_note(ask: &Ask) -> Option<String> {
     let checkout = cwd
         .ancestors()
         .find(|dir| crate::guest::git_dir(dir).is_some())?;
-    let hidden = crate::guest::hidden_agents_md(checkout);
-    if hidden.is_empty() {
-        return None;
-    }
-    let named = hidden
-        .iter()
-        .map(|path| {
-            format!(
-                "`{}`",
-                shown::readable(&path.display().to_string(), usize::MAX)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
+    let said = crate::guest::hidden_agents_md(checkout).said(|path| {
+        format!(
+            "`{}`",
+            shown::readable(&path.display().to_string(), usize::MAX)
+        )
+    })?;
     Some(format!(
-        "⚠ **An `AGENTS.md` charter's exclude hides:** {named}. Charter did not write it, and the \
-         `/AGENTS.md` line charter keeps in this repository's `info/exclude` for a chat's own \
-         worktree hides it from `git status` too — so it can go uncommitted without anyone \
-         seeing, and a checkout that brings in a tracked `AGENTS.md` replaces it. Tell the \
-         operator: commit it, or move it aside (ADR 0085)."
+        "⚠ **An `AGENTS.md` charter's exclude may hide.** {said} Tell the operator."
     ))
 }
 

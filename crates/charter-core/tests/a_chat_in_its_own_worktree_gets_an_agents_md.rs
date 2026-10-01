@@ -233,11 +233,11 @@ fn an_agents_md_charters_line_hides_is_named_and_charters_own_is_not() {
     let (f, piece) = hidden_in_the_clone();
 
     assert_eq!(
-        guest::hidden_agents_md(&piece),
+        guest::hidden_agents_md(&piece).found,
         vec![f.clone.join("AGENTS.md")]
     );
     assert_eq!(
-        guest::hidden_agents_md(&f.clone),
+        guest::hidden_agents_md(&f.clone).found,
         vec![f.clone.join("AGENTS.md")]
     );
 }
@@ -249,8 +249,8 @@ fn nothing_is_named_where_charters_line_hides_nothing_of_anyones() {
     let piece = cut(&f, "p1");
     start::layered_or_refusal(&piece, &f.plane, Some("ops")).unwrap();
 
-    assert_eq!(guest::hidden_agents_md(&piece), Vec::<PathBuf>::new());
-    assert_eq!(guest::hidden_agents_md(&f.clone), Vec::<PathBuf>::new());
+    assert!(guest::hidden_agents_md(&piece).is_empty());
+    assert!(guest::hidden_agents_md(&f.clone).is_empty());
 }
 
 #[test]
@@ -304,4 +304,273 @@ fn a_chat_starting_beside_it_is_told_to_name_it_to_the_operator() {
         "{told}"
     );
     assert!(told.contains("Tell the operator"), "{told}");
+}
+
+// ---- review of #819 -----------------------------------------------------------------------
+
+/// The `info/exclude` every checkout of the fixture's repository reads.
+fn exclude(f: &support::Fixture) -> String {
+    read(&f.clone.join(".git/info/exclude"))
+}
+
+#[test]
+fn a_start_that_is_refused_writes_no_agents_md() {
+    charter_core::unsteered!();
+    let f = plane();
+    f.give_the_plane_a_layer();
+    let piece = cut(&f, "p1");
+    // Somebody else's settings where the layer wants charter's: the guard refuses the chat.
+    std::fs::write(piece.join(".claude/settings.json"), "{\"mine\": true}\n").unwrap();
+
+    start::layered_or_refusal(&piece, &f.plane, Some("ops")).expect_err("no chat starts");
+
+    assert!(!piece.join("AGENTS.md").exists());
+    assert!(!exclude(&f).contains("/AGENTS.md"), "{}", exclude(&f));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_record_that_cannot_be_published_leaves_no_line_behind_and_says_why() {
+    charter_core::unsteered!();
+    use std::os::unix::fs::PermissionsExt;
+    let f = plane();
+    let piece = cut(&f, "p1");
+    std::fs::set_permissions(&piece, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+    let started = start::layered_or_refusal(&piece, &f.plane, Some("ops"));
+    std::fs::set_permissions(&piece, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let notices = started.expect("the chat starts");
+    assert!(!piece.join("AGENTS.md").exists());
+    assert!(!exclude(&f).contains("/AGENTS.md"), "{}", exclude(&f));
+    assert!(
+        notices
+            .iter()
+            .any(|n| n.contains("AGENTS.md") && n.contains("EACCES")),
+        "the reason reaches the operator: {notices:?}"
+    );
+}
+
+#[test]
+fn a_withheld_agents_md_says_why_at_the_start() {
+    charter_core::unsteered!();
+    let f = plane();
+    std::fs::write(f.clone.join("AGENTS.md"), "# the operator's draft\n").unwrap();
+    let piece = cut(&f, "p1");
+
+    let notices = start::layered_or_refusal(&piece, &f.plane, Some("ops")).unwrap();
+
+    assert!(
+        notices
+            .iter()
+            .any(|n| n.contains(&f.clone.join("AGENTS.md").display().to_string())),
+        "{notices:?}"
+    );
+}
+
+#[test]
+fn wire_for_chat_writes_nothing_into_a_tree_that_is_not_a_piece() {
+    charter_core::unsteered!();
+    let f = plane();
+
+    let (_, guided) = guest::wire_for_chat(&f.plane, &f.clone, Some("x\n"));
+
+    assert_eq!(guided, None);
+    assert!(!f.clone.join("AGENTS.md").exists());
+}
+
+#[test]
+fn two_chats_starting_in_one_piece_at_once_leave_charters_own_file() {
+    charter_core::unsteered!();
+    let f = plane();
+    let piece = cut(&f, "p1");
+    for round in 0..12 {
+        let barrier = std::sync::Barrier::new(2);
+        std::thread::scope(|s| {
+            for who in ["ops", "qa"] {
+                let (plane, piece, barrier) = (&f.plane, &piece, &barrier);
+                s.spawn(move || {
+                    barrier.wait();
+                    start::layered_or_refusal(piece, plane, Some(who)).unwrap();
+                });
+            }
+        });
+        // Whichever won, the file is charter's by its record, and the next start can still
+        // rewrite it.
+        let again = start::layered_or_refusal(&piece, &f.plane, Some("ops")).unwrap();
+        assert!(
+            read(&piece.join("AGENTS.md")).contains("`ops` persona"),
+            "round {round}: {again:?}"
+        );
+    }
+}
+
+/// Where a chat in the clone starts: the plane's own profile, so `start::ready` itself runs.
+fn with_a_profile(f: &support::Fixture) {
+    let program = stand_in::program(&f.plane, "claude-stand-in", "#!/bin/sh\nexit 0\n");
+    std::fs::write(
+        f.plane.join(charter_core::profiles::LOCAL_FILE),
+        format!(
+            "[harness.work]\nkind = \"claude\"\ncommand = [{:?}]\n",
+            program.display().to_string()
+        ),
+    )
+    .unwrap();
+    let set = charter_core::profiles::current(&f.plane);
+    let p = set.get("work").expect("the profile is declared");
+    charter_core::profiletrust::record_launched(
+        &f.plane,
+        "work",
+        &charter_core::profiletrust::fingerprint(p),
+    )
+    .unwrap();
+}
+
+#[test]
+fn every_chat_start_hands_the_window_a_notice_naming_a_hidden_agents_md() {
+    charter_core::unsteered!();
+    let (f, piece) = hidden_in_the_clone();
+    with_a_profile(&f);
+    let starting = |cwd: &Path| start::Start {
+        profile: Some("work".into()),
+        persona: Some("ops".into()),
+        name: "1".into(),
+        cwd: Some(cwd.to_path_buf()),
+        ..Default::default()
+    };
+
+    for cwd in [&f.clone, &piece] {
+        let ready = start::ready(&starting(cwd), &f.plane).expect("it starts");
+        assert!(
+            ready
+                .notices
+                .iter()
+                .any(|n| n.contains(&f.clone.join("AGENTS.md").display().to_string())),
+            "{cwd:?}: {:?}",
+            ready.notices
+        );
+    }
+}
+
+#[test]
+fn a_chat_start_with_nothing_hidden_has_no_notice() {
+    charter_core::unsteered!();
+    let f = plane();
+    let piece = cut(&f, "p1");
+    with_a_profile(&f);
+    let ready = start::ready(
+        &start::Start {
+            profile: Some("work".into()),
+            persona: Some("ops".into()),
+            name: "1".into(),
+            cwd: Some(piece.clone()),
+            ..Default::default()
+        },
+        &f.plane,
+    )
+    .expect("it starts");
+
+    assert_eq!(ready.notices, Vec::<String>::new());
+    assert!(piece.join("AGENTS.md").exists());
+}
+
+// ---- V35 never misses a file silently -----------------------------------------------------
+
+#[cfg(unix)]
+fn mode(path: &Path, bits: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(bits)).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn a_worktree_list_charter_cannot_read_is_a_doubt_not_a_clean_answer() {
+    charter_core::unsteered!();
+    let f = plane();
+    let piece = cut(&f, "p1");
+    start::layered_or_refusal(&piece, &f.plane, Some("ops")).unwrap();
+    let admin = f.clone.join(".git/worktrees");
+    mode(&admin, 0o000);
+
+    let hidden = guest::hidden_agents_md(&f.clone);
+    let rows = doctor::Doctor::at(&f.plane, &f.plane, false, false).run();
+    mode(&admin, 0o755);
+
+    assert!(!hidden.unsure.is_empty(), "{hidden:?}");
+    let row = rows
+        .iter()
+        .find(|r| r.name == "hidden AGENTS.md")
+        .expect("a row");
+    assert_eq!(row.status, doctor::Status::Warn);
+}
+
+#[cfg(unix)]
+#[test]
+fn an_agents_md_charter_cannot_look_at_is_a_doubt() {
+    charter_core::unsteered!();
+    let f = plane();
+    let piece = cut(&f, "p1");
+    let sibling = cut(&f, "p2");
+    start::layered_or_refusal(&piece, &f.plane, Some("ops")).unwrap();
+    mode(&sibling, 0o600);
+
+    let hidden = guest::hidden_agents_md(&piece);
+    mode(&sibling, 0o755);
+
+    assert!(
+        hidden
+            .unsure
+            .iter()
+            .any(|why| why.contains(&sibling.display().to_string())),
+        "{hidden:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_recorded_agents_md_charter_cannot_read_is_a_doubt_not_charters() {
+    charter_core::unsteered!();
+    let f = plane();
+    let piece = cut(&f, "p1");
+    start::layered_or_refusal(&piece, &f.plane, Some("ops")).unwrap();
+    let file = piece.join("AGENTS.md");
+    mode(&file, 0o000);
+
+    let hidden = guest::hidden_agents_md(&piece);
+    mode(&file, 0o644);
+
+    assert!(
+        hidden
+            .unsure
+            .iter()
+            .any(|why| why.contains(&file.display().to_string())),
+        "{hidden:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn workspaces_doctor_cannot_read_are_a_warning_not_a_missing_row() {
+    charter_core::unsteered!();
+    let f = plane();
+    let workspaces = f.plane.join("workspaces");
+    mode(&workspaces, 0o000);
+    let rows = doctor::Doctor::at(&f.plane, &f.plane, false, false).run();
+    mode(&workspaces, 0o755);
+    let row = rows
+        .iter()
+        .find(|r| r.name == "hidden AGENTS.md")
+        .expect("a row");
+    assert_eq!(row.status, doctor::Status::Warn);
+
+    let ws = f.workspace();
+    mode(&ws, 0o000);
+    let rows = doctor::Doctor::at(&f.plane, &f.plane, false, false).run();
+    mode(&ws, 0o755);
+    let row = rows
+        .iter()
+        .find(|r| r.name == "hidden AGENTS.md")
+        .expect("a row");
+    assert_eq!(row.status, doctor::Status::Warn);
+    assert!(row.detail.contains("alpha"), "{}", row.detail);
 }

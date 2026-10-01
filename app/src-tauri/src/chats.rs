@@ -1644,6 +1644,7 @@ mod tests {
             how: charter_core::reopen::Reopened::Fresh(Fresh::NoConversationRecorded),
             plugins: std::collections::BTreeMap::new(),
             sandbox: Some(sandbox),
+            notices: Vec::new(),
         }
     }
 
@@ -2886,6 +2887,7 @@ mod tests {
             ),
             plugins: std::collections::BTreeMap::new(),
             sandbox: None,
+            notices: Vec::new(),
         };
 
         let session = chats
@@ -2957,6 +2959,7 @@ mod tests {
             ),
             plugins: std::collections::BTreeMap::new(),
             sandbox: None,
+            notices: Vec::new(),
         };
 
         let session = chats.start_ready(&chat, &ready, SIZE).unwrap();

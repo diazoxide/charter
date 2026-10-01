@@ -129,36 +129,50 @@ pub(super) fn hidden_agents_md(d: &Doctor) -> Option<Row> {
     }
     let root = d.root.as_path();
     let base = root.join("workspaces");
-    let (workspaces, _) = fsx::read_workspaces(root).ok()?;
-    let mut hidden: Vec<String> = Vec::new();
+    let mut hidden = crate::guest::HiddenAgentsMd::default();
+    // A workspace or clone this cannot list is a doubt, never an absent row: silence here
+    // would read as "nothing hidden".
+    let (workspaces, unseen) = match fsx::read_workspaces(root) {
+        Ok(found) => found,
+        Err(e) => {
+            return Some(Row::not_checked(NAME, fsx::py_os_error(&e, &base)));
+        }
+    };
+    let cannot = |(path, code): &Unread| {
+        format!(
+            "{} cannot be checked{} — restoring read access clears this",
+            path.display(),
+            code.map(|c| format!(" (errno {c})")).unwrap_or_default()
+        )
+    };
+    hidden.unsure.extend(unseen.iter().map(cannot));
     for ws in &workspaces {
-        let Ok((clones, _)) = fsx::read_clones(root, ws) else {
-            continue;
-        };
-        for clone in clones {
-            for path in crate::guest::hidden_agents_md(&clone) {
-                let shown = path
-                    .strip_prefix(&base)
-                    .unwrap_or(&path)
-                    .display()
-                    .to_string();
-                hidden.push(super::one_line(&shown, super::DISPLAY_LIMIT));
+        let (clones, unstatted) = match fsx::read_clones(root, ws) {
+            Ok(found) => found,
+            Err(e) => {
+                hidden.unsure.push(fsx::py_os_error(&e, &base.join(ws)));
+                continue;
             }
+        };
+        hidden.unsure.extend(unstatted.iter().map(cannot));
+        for clone in clones {
+            hidden.extend(crate::guest::hidden_agents_md(&clone));
         }
     }
-    hidden.sort();
-    hidden.dedup();
-    if hidden.is_empty() {
-        return None;
-    }
+    let said = hidden.said(|path| {
+        super::one_line(
+            &path
+                .strip_prefix(&base)
+                .unwrap_or(path)
+                .display()
+                .to_string(),
+            super::DISPLAY_LIMIT,
+        )
+    })?;
     Some(Row::warn(
         NAME,
-        format!(
-            "{} — not written by charter, and hidden from git status by the /AGENTS.md line \
-             charter keeps in that repository's info/exclude for a chat's own worktree",
-            hidden.join(", ")
-        ),
-        "Commit it or move it aside: while it is hidden it can go uncommitted unseen, and a \
-         checkout that brings in a tracked AGENTS.md replaces it (ADR 0085).",
+        said,
+        "Commit or move aside each file named, and restore read access where a check could not \
+         run (ADR 0085).",
     ))
 }

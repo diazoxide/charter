@@ -3077,6 +3077,11 @@ export type Started = {
 	 *  blank — so the tab draws what the record holds rather than what was typed.
 	 */
 	label: string | null,
+	/**
+	 *  What the start found to say, one line each, for the chat's pane (ADR 0085): why its
+	 *  `AGENTS.md` was not written, and an `AGENTS.md` charter's exclude line hides.
+	 */
+	notices: string[],
 };
 
 /**  What one subject is offered. */

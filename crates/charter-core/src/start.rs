@@ -119,6 +119,10 @@ pub struct Ready {
     /// on ([`crate::sandbox::for_start`], ADR 0067). It reaches the harness through
     /// [`crate::harness::Harness::state_hooks_under`].
     pub sandbox: Option<crate::sandbox::Applied>,
+    /// What the window says on this chat's tab as it starts, one line each, non-modal: why its
+    /// `AGENTS.md` was not written, and every `AGENTS.md` that charter's exclude line hides
+    /// and charter did not write (V35, ADR 0085). Empty for nearly every start.
+    pub notices: Vec<String>,
 }
 
 impl Ready {
@@ -196,7 +200,8 @@ pub fn ready(start: &Start, root: &Path) -> Result<Ready, String> {
     // Nothing here runs a command out of a file a chat can write, which is what the consent
     // gate below exists for: this writes charter's own documents into a tree charter owns,
     // and it is idempotent, so doing it for a start that is then refused costs nothing.
-    layered_or_refusal(&here, root, persona.as_deref())?;
+    let mut notices = layered_or_refusal(&here, root, persona.as_deref())?;
+    notices.extend(hidden_agents_md_notice(&here));
     // The gate. Startable kind, ignored file, approved command — one call, so no caller can
     // start a chat past a check another caller makes.
     if let Some(why) = crate::wiring::refusal(profile, root) {
@@ -280,6 +285,7 @@ pub fn ready(start: &Start, root: &Path) -> Result<Ready, String> {
         how,
         plugins,
         sandbox,
+        notices,
     })
 }
 
@@ -335,9 +341,15 @@ impl Standing {
 /// `persona` (or the persona the briefing's ladder names, where none is given). It is written
 /// here and nowhere else, so a shared clone never gets one. Nothing that happens to it refuses
 /// the chat: it is guidance, and [`crate::guest::Guidance`] says what became of it.
-pub fn layered_or_refusal(here: &Path, root: &Path, persona: Option<&str>) -> Result<(), String> {
+///
+/// `Ok` carries what the window should say at the start (empty for nearly every chat).
+pub fn layered_or_refusal(
+    here: &Path,
+    root: &Path,
+    persona: Option<&str>,
+) -> Result<Vec<String>, String> {
     let Some(found) = crate::worktree::locate(root, here) else {
-        return Ok(());
+        return Ok(Vec::new());
     };
     let piece = crate::worktree::path_for(root, &found.workspace, &found.repo, &found.piece)
         .and_then(|path| {
@@ -351,11 +363,21 @@ pub fn layered_or_refusal(here: &Path, root: &Path, persona: Option<&str>) -> Re
             )
         })?;
     let guidance = guidance_for(root, &piece, &found.workspace, persona);
-    let (layered, _guided) = crate::guest::wire_for_chat(root, &piece, guidance.as_deref());
+    let (layered, guided) = crate::guest::wire_for_chat(root, &piece, guidance.as_deref());
     if layered.complete() {
-        return Ok(());
+        return Ok(guided.and_then(|g| g.notice()).into_iter().collect());
     }
     Err(format!("{} Nothing was started.", layered.refusal(&piece)))
+}
+
+/// V35: the window's notice naming every `AGENTS.md` that charter's exclude line hides in
+/// the repository a chat starting in `here` stands in, and charter did not write — or none.
+/// Asked at every start, in a piece or a clone alike, because the line hides the clone's.
+fn hidden_agents_md_notice(here: &Path) -> Option<String> {
+    let checkout = here
+        .ancestors()
+        .find(|dir| crate::guest::git_dir(dir).is_some())?;
+    crate::guest::hidden_agents_md(checkout).said(|p| p.display().to_string())
 }
 
 /// What a chat starting in `piece` as `persona` is told in its `AGENTS.md`

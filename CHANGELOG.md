@@ -19,8 +19,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a Codex, opencode or other agent started there by hand is told the same. It never carries
   memory, todos or session records, and it is never written into a shared clone. A repo that has
   its own `AGENTS.md` keeps it. Because git hides the file by one line for every worktree of the
-  repo, `charter doctor` and the chat's briefing name any `AGENTS.md` of yours that line hides
-  (ADR 0085).
+  repo, `charter doctor`, a note on the chat's pane and the chat's briefing name any `AGENTS.md`
+  of yours that line hides (ADR 0085).
 - **The first run offers your repo's agent instructions to its workspace's memory.** When the
   repo you open has a `CLAUDE.md`, an `AGENTS.md` or Cursor rules in `.cursor/rules`, a *Memory
   from the repo* tab opens beside the first chat, showing each file whole. Press Add to memory
