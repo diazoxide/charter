@@ -9,6 +9,7 @@ use charter_core::template;
 
 #[test]
 fn charter_ships_one_template_per_stack_the_first_run_offers() {
+    charter_core::unsteered!();
     let listed: Vec<(String, String)> = template::all()
         .iter()
         .map(|one| (one.id.clone(), one.title.clone()))
@@ -39,6 +40,7 @@ fn detected(files: &[&str]) -> Option<String> {
 
 #[test]
 fn a_repo_is_the_stack_whose_file_is_at_its_top_level() {
+    charter_core::unsteered!();
     assert_eq!(detected(&["Cargo.toml"]).as_deref(), Some("rust"));
     assert_eq!(
         detected(&["package.json", "tsconfig.json"]).as_deref(),
@@ -51,6 +53,7 @@ fn a_repo_is_the_stack_whose_file_is_at_its_top_level() {
 
 #[test]
 fn a_repo_with_two_stacks_or_a_workspace_file_is_a_monorepo() {
+    charter_core::unsteered!();
     assert_eq!(
         detected(&["Cargo.toml", "package.json"]).as_deref(),
         Some("monorepo")
@@ -63,17 +66,20 @@ fn a_repo_with_two_stacks_or_a_workspace_file_is_a_monorepo() {
 
 #[test]
 fn a_docs_site_inside_a_code_repo_is_the_code_repos_stack() {
+    charter_core::unsteered!();
     assert_eq!(detected(&["go.mod", "mkdocs.yml"]).as_deref(), Some("go"));
 }
 
 #[test]
 fn a_repo_charter_cannot_place_gets_no_template() {
+    charter_core::unsteered!();
     assert_eq!(detected(&[]), None);
     assert_eq!(detected(&["README.md"]), None);
 }
 
 #[test]
 fn a_marker_that_is_a_directory_is_not_the_file_it_is_named_after() {
+    charter_core::unsteered!();
     let repo = tempfile::tempdir().expect("a directory");
     std::fs::create_dir(repo.path().join("Cargo.toml")).expect("a directory");
 
@@ -435,6 +441,7 @@ fn digest(one: &template::Template) -> String {
 /// template's `template.toml` and put the new version and digest here, in the same commit.
 #[test]
 fn a_templates_files_change_only_with_its_version() {
+    charter_core::unsteered!();
     let published: [(&str, u32, &str); 6] = [
         (
             "docs",
