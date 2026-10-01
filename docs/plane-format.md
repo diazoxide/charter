@@ -292,6 +292,95 @@ the three ways a line number rots when code moves under it. It is a pointer chec
 check: it cannot tell whether the cited line still says what this document claims. If it goes
 red, re-derive the numbers rather than editing them by hand.
 
+### Compatibility across charter versions (FR-24)
+
+A team shares one project through git, and each person upgrades charter on their own schedule.
+So two charter versions read the same files, and this section is the rule they follow (X31, as
+amended by V5, and ruled by V37 and D-FR24). It is written before the code that holds it (V5).
+
+**Settled by X31 and V5:**
+
+- **An additive change keeps `schema`.** A new optional key, file or section that an older
+  charter can ignore safely does not bump anything.
+- **A reader keeps what it does not know.** A charter that rewrites a file keeps every key,
+  section and line it does not understand, in place. `charter.toml` is edited as text, one key
+  at a time ([`charter.toml`](#chartertoml), *Encoding details*), and `workspace.json` is
+  rewritten from the whole document charter read, unknown keys included.
+- **A change an older charter must not ignore is a required feature**, named in `charter.toml`'s
+  top-level `requires` list. A charter that lacks any feature the project requires **opens it
+  read-only**: it reads, writes nothing to it, and names the charter version that has the
+  feature.
+- **Each sub-format carries its own version**, as `workspaces/<ws>/.charter-structure` and the
+  hook registry's `schema` already do, and none is compared with another (see the note on
+  `instance.SCHEMA` and `workspace.STRUCTURE_VERSION` at the end of this document).
+- **A bump of `schema` or of a sub-format's version needs an ADR, a migration (FR-9) and a
+  `doctor` row**, and is staged and announced, so that one person's migration never locks the
+  rest of the team out (V5).
+
+**Settled by V37 and D-FR24:**
+
+- **`requires` takes effect together with `schema = 2`** (V37a), as git's `extensions.*` do
+  under `repositoryformatversion = 1`. A project that lists `requires` declares `schema = 2`, so
+  that a charter older than FR-24, which does not know `requires`, refuses the project for its
+  schema instead of writing it. A charter that knows `requires` reads it at any `schema`.
+- **A `schema` this charter does not understand makes the project read-only everywhere** (V37a),
+  not only for forge commands. This charter understands 2. A new project is still written with
+  `schema = 1`, because it requires nothing.
+- **An entry is `{ feature, since }`** (V37b), a public format commitment:
+
+  ```toml
+  schema = 2
+  requires = [
+    { feature = "memory-proposals", since = "0.9.0" },
+  ]
+  ```
+
+  `feature` names the feature. `since` is the first charter version that has it, and it is
+  what a charter that lacks it names in its refusal. Without `since`, the refusal says a newer
+  charter has it.
+- **Old forms are read for six months from the first release that writes the new form** (V37c).
+  After a bump of `schema` or of a sub-format's version, charter keeps reading the previous
+  version for six months. The plane → project rename's old names (#762, ADR 0072) are read for
+  the same six months.
+- **A file with a closed key set keeps it closed, and gets its own sub-format version**
+  (D-FR24). A change record (`workspaces/<ws>/changes/<slug>.json`, ADR 0060) refuses a key it
+  does not know rather than drop it. The first change that adds a key to it also gives change
+  records a version of their own (absent means 1), so that a charter that does not know the new
+  version locks out only change records, not the whole project.
+
+**Failing closed.** A `charter.toml` that cannot be read or is not TOML, a `schema` that is not
+an integer or is higher than 2, a `requires` that is not a list, and an entry with no readable
+`feature` each make the project read-only, with a reason that says which. A charter that guessed
+would write a project it does not understand. A directory with no `charter.toml` is not a
+project and says nothing.
+
+**Read-only means the committed project files.** Clone state and machine stores belong to this
+clone and this machine, and are still written.
+
+**What charter does with a read-only project today:**
+
+- **The commands that only read still run**, after one line on stderr saying the project is
+  read-only and why: `status`, `recall`, `statusline`, `workspace list` and `workspace current`.
+  `doctor` (without `--fix`), `update`, `version`, `news`, `root` and the commands that need no
+  project run as they always do. The list is explicit: a command that is not on it is refused,
+  so a new command is refused on a read-only project until it is shown to only read.
+- **Every other command is refused**, each refusal naming the reason: extension commands and the
+  core-owned aliases onto them (the same test `extension::cli::extension_command` gives the tool
+  guard), `doctor --fix`, `init` and `reinit`.
+- **`init` and `reinit` facing a `charter.toml` that is a link out of the project, or into its
+  `.git`, write nothing**, and say where the link leads. A link that stays inside the project is
+  read through like the file it points at, so its `requires` and `schema` count.
+- `charter doctor`'s `schema` row fails with the same reason and its remedy.
+- **The window, and the hooks a chat runs, follow in #826, and no release carries this rule
+  without them.** Until #826 lands they do not check `requires` or `schema`.
+
+**This charter knows no features yet**, so any `requires` entry makes a project read-only to it.
+The first feature is added with the first change that needs one.
+
+Read by `crates/charter-core/src/compat.rs` (`read`, `SCHEMA`), and checked by the `charter`
+command before it runs a command that could write (`crates/charter-cli/src/main.rs`) and by
+`charter doctor`'s `schema` row (`crates/charter-core/src/doctor/config.rs`).
+
 ## Finding the plane, and the plane root
 
 Covered here: `charter.toml`, `charter.local.toml`, `.charter/harness-profiles-launched.json`,
@@ -430,7 +519,8 @@ Paths derived from the root (all in `derive`, `charter/config.py:661`) that land
 
 | Field | Type | Required / default | Meaning | Status | Source |
 |---|---|---|---|---|---|
-| `schema` | int (top level) | optional; absent = 1 | Plane format version. Only buys refusal. | stable | `charter/instance.py:98` |
+| `schema` | int (top level) | optional; absent = 1 | Project format version. charter-app understands 2, and a higher one makes the project read-only to it (V37a). `init` writes 1. A bump follows [Compatibility across charter versions](#compatibility-across-charter-versions-fr-24). | stable | `charter/instance.py:98` |
+| `requires` | array of tables (top level) | optional; absent = none. Declared with `schema = 2` (V37a) | Features a charter must have to write this project, each `{ feature, since }` (V37b). A charter that lacks one opens the project read-only and names `since` ([Compatibility across charter versions](#compatibility-across-charter-versions-fr-24)). | **stable**, a public format commitment (V37b): read by charter-app from FR-24; written by no charter yet, since no feature exists | `crates/charter-core/src/compat.rs` |
 | `[[forge]]` | array of tables | optional; none = one default GitLab forge | One block per forge tracked. Index 0 is `config.GROUP`/`EXCLUDE`. | stable | `charter/instance.py:143` |
 | `[[forge]].kind` | str | default `"gitlab"`; one of `gitlab`, `github` | Backend class. Unknown kind = that block skipped + reported. | stable | `charter/forge/registry.py:69`, `charter/forge/registry.py:15` |
 | `[[forge]].group` / `.owner` | str | optional; `group` wins, else `owner`, else `""` | Org/group whose repos are discovered. | stable | `charter/instance.py:162` |

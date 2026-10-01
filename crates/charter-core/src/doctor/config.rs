@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use super::{Config, Doctor, NOT_CHECKED_HINT, Row, SCHEMA, deferred, first_line};
+use super::{Config, Doctor, NOT_CHECKED_HINT, Row, deferred, first_line};
 
 /// The words `[harness] default` may name, in registration order — Python's
 /// `instance.launchable_harnesses`.
@@ -454,6 +454,23 @@ pub(super) fn schema(d: &Doctor) -> Row {
              update` is the way out; every other command declines until it runs.",
         );
     }
+    // A format this charter places can still require a feature it lacks (FR-24). Here rather
+    // than in a row of its own: the row's question is "can this charter work on this project's
+    // format", and a second row would say the same thing twice.
+    if let crate::compat::Compat::ReadOnly(
+        why @ (crate::compat::Why::Missing { .. } | crate::compat::Why::RequiresUnreadable { .. }),
+    ) = crate::compat::read(&d.root)
+    {
+        return Row::fail(
+            NAME,
+            why.to_string(),
+            format!(
+                "{} Until then every command that could write this project declines, and \
+                 `charter doctor` still runs.",
+                why.remedy()
+            ),
+        );
+    }
     let found: Vec<String> = BASELINE_DIRS
         .iter()
         .filter_map(|dir| {
@@ -471,7 +488,12 @@ pub(super) fn schema(d: &Doctor) -> Row {
         })
         .collect();
     if found.is_empty() {
-        return Row::ok(NAME, format!("up to date (schema {SCHEMA})"));
+        // A `charter.toml` that is not TOML reads as no file at all, as Python's `{}` does.
+        let schema = match d.config.table().map(crate::compat::schema) {
+            Some(crate::compat::Schema::Understood(found)) => found,
+            _ => crate::compat::UNSTAMPED,
+        };
+        return Row::ok(NAME, format!("up to date (schema {schema})"));
     }
     Row::warn(
         NAME,

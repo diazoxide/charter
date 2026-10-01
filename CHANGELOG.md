@@ -13,6 +13,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A project can say which charter it needs.** When a newer charter starts writing something an
+  older one would get wrong, it lists the feature in `charter.toml`'s `requires` and sets
+  `schema = 2`. A charter that lacks the feature, or does not understand the project's `schema`,
+  or cannot read its `charter.toml`, treats the project as read-only. `charter` still reads it
+  (`status`, `recall`, `workspace list`, `statusline`, `doctor`), saying once that it is
+  read-only and why. Every command that could write it is refused, extension commands,
+  `doctor --fix`, `init` and `reinit` included, with the version to upgrade to (update the app); `charter
+  doctor`'s `schema` row says the same. Keys and sections charter does not know are kept when it
+  rewrites `charter.toml` or a workspace's `workspace.json`. The window and the chat hooks will
+  follow the same rule before any release carries it (#826).
+
 - **A chat that starts in a repo gets a branch of its own.** Start a chat with *New tab in
   <repo>*, or after *Start new chats in <repo>*, and charter cuts a new branch for it, in a folder
   beside the repo's clone, so two chats in one repo no longer edit the same files. The branch is
@@ -20,6 +31,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   to work on the branch the repo has checked out, as before. If the chat does not start, the
   branch goes with it. *New branch in <repo>…* on the repo's menu and in the palette cuts one
   without starting a chat, and new chats start on it.
+
 - **A chat in its own worktree leaves an `AGENTS.md` behind for any agent that opens it.** When
   a chat starts in a piece of a repo that has no `AGENTS.md`, charter writes one there, hidden
   from `git status`. It says which persona the chat was started as and which piece it holds, so

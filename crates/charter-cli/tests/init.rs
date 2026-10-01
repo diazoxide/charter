@@ -369,11 +369,14 @@ fn a_link_out_of_the_plane_at_any_path_init_writes_is_written_through_by_nothing
 
             let what = format!("{rel} -> {} (dangling: {dangling})", target.display());
             assert_eq!(out.status.code(), Some(1), "{what}: {}", stderr(&out));
-            assert!(
-                stderr(&out).contains("which is outside this plane"),
-                "{what}: {}",
-                stderr(&out)
-            );
+            // The linked `charter.toml` meets FR-24's refusal, which says "project" (V23); the
+            // other paths keep the scaffold's older wording.
+            let says = if rel == "charter.toml" {
+                "which is outside this project"
+            } else {
+                "which is outside this plane"
+            };
+            assert!(stderr(&out).contains(says), "{what}: {}", stderr(&out));
             assert_eq!(
                 tree(&scene.outside),
                 outside,
@@ -384,7 +387,12 @@ fn a_link_out_of_the_plane_at_any_path_init_writes_is_written_through_by_nothing
                 Some(target.clone()),
                 "{what}: the link itself was replaced"
             );
-            // Additive: what the link does not block is still created.
+            // Additive: what the link does not block is still created. Except behind a linked
+            // `charter.toml`: it is the format gate (V5, FR-24), and a project whose manifest is
+            // somebody else's file gets nothing written at all.
+            if rel == "charter.toml" {
+                continue;
+            }
             if rel != "workspaces" {
                 assert!(scene.plane.join("workspaces").is_dir(), "{what}");
             }
@@ -534,14 +542,14 @@ fn a_settings_file_claude_code_cannot_read_is_left_byte_for_byte() {
 #[test]
 fn a_plane_from_a_newer_charter_is_refused_before_anything_is_written() {
     let scene = Scene::new();
-    scene.write("charter.toml", "schema = 2\n");
+    scene.write("charter.toml", "schema = 3\n");
     let before = tree(&scene.plane);
 
     for command in [&["init"][..], &["reinit"][..]] {
         let out = scene.run(command);
         assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
         assert!(
-            stderr(&out).contains("declares schema 2"),
+            stderr(&out).contains("declares schema 3"),
             "{}",
             stderr(&out)
         );

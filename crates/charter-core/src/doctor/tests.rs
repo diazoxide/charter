@@ -295,13 +295,40 @@ fn a_file_that_is_not_toml_is_a_blocker_and_the_schema_row_still_reads_the_plane
 }
 
 #[test]
-fn a_plane_from_the_future_is_refused_by_both_rows() {
+fn a_project_that_requires_a_feature_this_charter_lacks_fails_the_schema_row() {
+    let (_d, root) =
+        plane("schema = 2\nrequires = [{ feature = \"memory-proposals\", since = \"0.9.0\" }]\n");
+    let r = one(&root, "schema");
+    assert_eq!(r.status, Status::Fail, "{r:?}");
+    assert!(r.detail.contains("memory-proposals"), "{r:?}");
+    assert!(r.detail.contains("0.9.0"), "{r:?}");
+    assert!(r.hint.contains("update the app"), "{r:?}");
+}
+
+#[test]
+fn the_schema_row_gives_the_remedy_that_fits_the_reason() {
+    let (_d, root) = plane("schema = 2\nrequires = [\"memory-proposals\"]\n");
+    let r = one(&root, "schema");
+    assert_eq!(r.status, Status::Fail, "{r:?}");
+    assert!(r.hint.contains("fix `requires`"), "{r:?}");
+}
+
+#[test]
+fn the_schema_row_names_the_projects_own_version() {
     let (_d, root) = plane("schema = 2\n");
+    assert_eq!(one(&root, "schema").detail, "up to date (schema 2)");
+    let (_d, root) = plane("");
+    assert_eq!(one(&root, "schema").detail, "up to date (schema 1)");
+}
+
+#[test]
+fn a_plane_from_the_future_is_refused_by_both_rows() {
+    let (_d, root) = plane("schema = 3\n");
     let r = one(&root, "charter.toml");
     assert_eq!(r.status, Status::Fail);
     assert!(
         r.detail.ends_with(
-            "declares schema 2, but this charter understands 1. Upgrade charter: update the app."
+            "declares schema 3, but this charter understands 2. Upgrade charter: update the app."
         ),
         "{r:?}"
     );
@@ -1286,7 +1313,8 @@ fn a_plane_format_up_to_this_charters_own_is_read_and_one_past_it_is_refused() {
         ("schema = 1\n", true),
         ("schema = 0\n", true),
         ("schema = -3\n", true),
-        ("schema = 2\n", false),
+        ("schema = 2\n", true),
+        ("schema = 3\n", false),
     ] {
         let (_d, root) = plane(schema);
         let config = Config::load(&root);

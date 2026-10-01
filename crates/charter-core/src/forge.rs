@@ -346,9 +346,6 @@ fn url_path(scheme: &str, url: &str) -> String {
 // charter.toml                                                                            #
 // ---------------------------------------------------------------------------------------
 
-/// The plane format version this charter understands. Python's `instance.SCHEMA`.
-const SCHEMA: i64 = 1;
-
 /// `charter.toml`, parsed, or `{}` when there is none. Python's `instance.load`, including its
 /// refusal of a plane format this charter cannot place.
 pub fn load_config(root: &Path) -> Result<toml::Table, String> {
@@ -361,24 +358,8 @@ pub fn load_config(root: &Path) -> Result<toml::Table, String> {
     let cfg: toml::Table = text
         .parse()
         .map_err(|e| format!("{} is not valid TOML: {e}", path.display()))?;
-    match cfg.get("schema") {
-        None => {}
-        Some(toml::Value::Integer(found)) if *found > SCHEMA => {
-            return Err(format!(
-                "{} declares schema {found}, but this charter understands {SCHEMA}. Upgrade \
-                 charter.",
-                path.display()
-            ));
-        }
-        Some(toml::Value::Integer(_)) => {}
-        Some(other) => {
-            return Err(format!(
-                "{} declares schema {other}, which is not a plane format version this charter \
-                 can compare against {SCHEMA}. charter will not operate on a plane whose \
-                 format it cannot place. Fix the `schema` line, or upgrade charter.",
-                path.display()
-            ));
-        }
+    if let Some(refusal) = crate::compat::schema(&cfg).refusal(&path.display().to_string()) {
+        return Err(refusal);
     }
     Ok(cfg)
 }
@@ -1000,15 +981,21 @@ mod tests {
             at("schema = 0\n").is_ok(),
             "an older format is still placed"
         );
-        let newer = at("schema = 2\n").unwrap_err();
         assert!(
-            newer.ends_with("declares schema 2, but this charter understands 1. Upgrade charter."),
+            at("schema = 2\n").is_ok(),
+            "schema 2 is this charter's own (FR-24)"
+        );
+        let newer = at("schema = 3\n").unwrap_err();
+        assert!(
+            newer.ends_with(
+                "declares schema 3, but this charter understands 2. Upgrade charter: update the app."
+            ),
             "{newer}"
         );
-        assert!(at("schema = 3\n").is_err());
+        assert!(at("schema = 4\n").is_err());
         let word = at("schema = \"one\"\n").unwrap_err();
         assert!(
-            word.contains("which is not a plane format version this charter can compare"),
+            word.contains("which is not a project format version this charter can compare"),
             "{word}"
         );
         assert!(at("schema = [").unwrap_err().contains("is not valid TOML"));

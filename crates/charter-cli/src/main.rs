@@ -621,6 +621,48 @@ fn emit(report: &charter_core::news::Report) -> ExitCode {
     ExitCode::from(report.code)
 }
 
+/// What a command may do on a project that is read-only to this charter (FR-24).
+enum ReadOnly {
+    /// It reports on the project or moves charter itself forward, and says what is wrong itself.
+    Runs,
+    /// It only reads, so it runs, after one line saying the project is read-only (V5: a
+    /// read-only project "opens read-only: it reads").
+    RunsAndSays,
+    /// It could write the project.
+    Refused,
+}
+
+/// An explicit list of the commands that run on a read-only project. Everything else is
+/// refused, so a new command is refused there until somebody shows it only reads.
+fn read_only_standing(command: &Command) -> ReadOnly {
+    match command {
+        Command::Doctor { fix: false, .. }
+        | Command::Update { .. }
+        | Command::Version { .. }
+        | Command::News(_)
+        | Command::Root => ReadOnly::Runs,
+        Command::Status { .. }
+        | Command::Recall(_)
+        | Command::Statusline { .. }
+        | Command::Workspace(WorkspaceCommand::List | WorkspaceCommand::Current) => {
+            ReadOnly::RunsAndSays
+        }
+        _ => ReadOnly::Refused,
+    }
+}
+
+/// Why the project this command stands in is read-only to this charter, or `None` (FR-24).
+fn read_only_project() -> Option<String> {
+    let place = place().ok()?;
+    if !place.is_plane {
+        return None;
+    }
+    match charter_core::compat::read(&place.root) {
+        charter_core::compat::Compat::Writable => None,
+        charter_core::compat::Compat::ReadOnly(why) => Some(why.to_string()),
+    }
+}
+
 /// Where `init` and `reinit` act: `charter/root.py:find_root_or_cwd`.
 fn place() -> Result<charter_core::plane::Place, String> {
     let cwd =
@@ -2800,6 +2842,19 @@ fn main() -> ExitCode {
         Cli::command()
     };
     parser.build();
+    // An extension's command runs before clap and before the read-only gate below, so it is
+    // gated here: any first word that is not a core command or a flag goes to an extension,
+    // and an extension's command can write the project (FR-24).
+    let words: Vec<String> = argv
+        .iter()
+        .skip(1)
+        .map(|word| word.to_string_lossy().into_owned())
+        .collect();
+    if charter_core::extension::cli::extension_command(&words).is_some()
+        && let Some(why) = read_only_project()
+    {
+        return refused(&why);
+    }
     if let Some(code) = extcmd::intercept(&argv, |word| parser.find_subcommand(word).is_some()) {
         return code;
     }
@@ -2870,6 +2925,25 @@ fn main() -> ExitCode {
             | Command::Persona(memory::PersonaCommand::Gc { .. })
     ) {
         return ExitCode::SUCCESS;
+    }
+    // A project this charter cannot write is read-only to it (FR-24, V37a,
+    // `docs/plane-format.md` § Compatibility across charter versions): a format it does not
+    // understand, a feature it lacks, or a `charter.toml` it cannot read. Every command that
+    // could write it is refused, naming why; the ones that only say what is wrong or move
+    // charter itself forward still run.
+    //
+    // `init` and `reinit` facing a `charter.toml` that is a link are left to their own
+    // containment gate, which refuses a link out of the project with the words that name it and
+    // writes nothing; reading through the link here would answer a file that is not the
+    // project's.
+    let own_gate = matches!(&cli.command, Command::Init(_) | Command::Reinit)
+        && place().is_ok_and(|p| charter_core::scaffold::manifest_escapes(&p.root));
+    if !own_gate && let Some(why) = read_only_project() {
+        match read_only_standing(&cli.command) {
+            ReadOnly::Runs => {}
+            ReadOnly::RunsAndSays => eprintln!("charter: {why}"),
+            ReadOnly::Refused => return refused(&why),
+        }
     }
     // `init`, `reinit` and `doctor` each say several lines of their own and choose their own
     // exit status — and for `doctor` the status IS the verdict, where a blocker is not an

@@ -7,9 +7,9 @@ use std::path::Path;
 
 use super::text;
 
-/// The plane format this charter reads and writes (`instance.SCHEMA`).
-pub const SCHEMA: i64 = 1;
-
+/// The format version `init` writes into a new project (`instance.SCHEMA`). It stays 1: a new
+/// project requires no feature, and `schema = 2` is declared only beside `requires` (FR-24, V37a).
+pub const WRITTEN: i64 = 1;
 /// What reading `charter.toml` found.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Read {
@@ -41,31 +41,10 @@ pub fn load(root: &Path) -> Read {
             return Read::Malformed(format!("{shown} is not valid TOML: {}", e.message().trim()));
         }
     };
-    match table.get("schema") {
+    match crate::compat::schema(&table).refusal(&shown.to_string()) {
         None => Read::Config(table),
-        Some(toml::Value::Integer(found)) if *found > SCHEMA => Read::Refused(format!(
-            "{shown} declares schema {found}, but this charter understands {SCHEMA}. Upgrade \
-             charter: update the app."
-        )),
-        Some(toml::Value::Integer(_)) => Read::Config(table),
-        Some(other) => Read::Refused(format!(
-            "{shown} declares schema {}, which is not a plane format version this charter can \
-             compare against {SCHEMA}. charter will not operate on a plane whose format it \
-             cannot place. Fix the `schema` line, or upgrade charter: update the app.",
-            py_value(other)
-        )),
+        Some(refusal) => Read::Refused(refusal),
     }
-}
-
-/// A TOML value as Python's `repr` prints what `tomllib` made of it —
-/// [`crate::pyrepr::repr_toml`], the crate's one answer.
-///
-/// This had a body of its own, and `profiles` had a second one for the same question. They
-/// disagreed about a float: this one asked [`crate::pyjson::float_repr`] and the other let
-/// `toml`'s own `Display` write it, so `1e300` was quoted back as `1e+300` by one refusal and
-/// as `1e300` by the next. `repr_toml` is this body, moved.
-fn py_value(value: &toml::Value) -> String {
-    crate::pyrepr::repr_toml(value)
 }
 
 /// `str(value)` for what a `[section] default` holds — [`crate::pyrepr::str_toml`].
@@ -132,7 +111,7 @@ fn toml_str(s: &str) -> String {
 /// `commands._render_charter_toml`: what `init` writes into a fresh plane.
 pub fn render(forge: &str, owner: &str, host: Option<&str>) -> String {
     let mut lines = vec![
-        format!("schema = {SCHEMA}"),
+        format!("schema = {WRITTEN}"),
         String::new(),
         "[[forge]]".to_owned(),
         format!("kind = {}", toml_str(forge)),
