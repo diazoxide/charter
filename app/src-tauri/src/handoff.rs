@@ -969,6 +969,7 @@ mod tests {
                 event: charter_core::state::Event::UserPromptSubmit,
                 conversation: charter_core::hookwire::Conversation::Named(conversation),
                 pid: Some(4242),
+                agent: None,
                 detail: charter_core::state::Detail::default(),
             },
         )

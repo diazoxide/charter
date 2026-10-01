@@ -124,6 +124,7 @@ impl Log {
         &mut self,
         chat: Option<&str>,
         run: Option<&str>,
+        parent_run: Option<&str>,
         kind: &str,
         body: serde_json::Value,
     ) -> io::Result<Event> {
@@ -141,7 +142,7 @@ impl Log {
             ulid: ulid::Ulid::new().to_string(),
             chat: chat.map(str::to_owned),
             run: run.map(str::to_owned),
-            parent_run: None,
+            parent_run: parent_run.map(str::to_owned),
             kind: kind.to_owned(),
             body,
         };
@@ -263,15 +264,64 @@ pub fn args_hash(args: &serde_json::Value) -> String {
 /// What the board did with a report's conversation, which is how the host tells a new run
 /// (ADR 0066, "A run is a stretch…").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Followed<'a> {
+pub enum Followed {
     /// The chat is in the conversation it was in, or the board refused the report.
     No,
     /// The harness named its conversation for the first time (Codex and opencode do, in the
     /// first turn's hook). The run gains a conversation; it does not start again.
     FirstNamed,
-    /// The board followed the chat off this conversation onto another: `/clear`, a new run.
-    From(&'a str),
+    /// The board followed the chat off one conversation onto another: `/clear`, a new run.
+    Moved,
 }
+
+/// Why a run began (ADR 0066's `cause`), as far as this host can tell today.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Began {
+    /// The chat's first run this host has seen.
+    Start,
+    /// The board followed the chat onto another conversation.
+    Clear,
+    /// A sub-agent's first call: a child run of the run that was current.
+    Child,
+}
+
+impl Began {
+    /// The cause's word, as `run.started`'s body says it.
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Start => "start",
+            Self::Clear => "clear",
+            Self::Child => "child",
+        }
+    }
+}
+
+/// Which end of a tool call a tool hook is on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Phase {
+    /// Before the tool runs: `PreToolUse`.
+    Pre,
+    /// After it ran: `PostToolUse`.
+    Post,
+}
+
+/// The phase of a tool hook word charter answers, from `hookreg` and nothing else: a word it
+/// does not answer is no phase, and no event kind.
+pub fn phase(word: &str) -> Option<Phase> {
+    let event = crate::hookreg::find(word)
+        .filter(|handler| handler.matcher.is_some())
+        .map(|handler| handler.event)
+        .or_else(|| crate::hookreg::NO_OPS.contains(&word).then_some("PostToolUse"))?;
+    match event {
+        "PreToolUse" => Some(Phase::Pre),
+        "PostToolUse" => Some(Phase::Post),
+        _ => None,
+    }
+}
+
+/// The kind a tool hook word charter does not answer is recorded under, so a line cannot mint
+/// a kind of its own: the word goes in the body, shortened.
+pub const UNKNOWN_HOOK: &str = "hook.unknown";
 
 /// Who a chat is in the log: its id and its current run's.
 #[derive(Debug, Clone)]
@@ -280,25 +330,43 @@ struct Identity {
     run: String,
 }
 
+/// The run an event is recorded under, and the run that one came from.
+#[derive(Debug, Clone)]
+struct Under {
+    chat: String,
+    run: String,
+    parent: Option<String>,
+}
+
 /// The host's side of the log: it turns what the hook channel hears into events, one per hook
 /// call, each under the chat and the run it happened in.
 ///
 /// **The host decides runs, never a hook** (ADR 0066, "What changes where"): a hook carries
 /// the chat's number and token and nothing more, and the host maps the number to the chat's
-/// id and current run in its own memory. A chat it has not seen yet is given an id and its
-/// first run, `cause: start`; a chat the board follows onto another conversation begins a run
-/// with `cause: clear`.
+/// id and current run in its own memory.
+///
+/// - A chat it has not seen yet is given an id and its first run, `cause: start`, at its first
+///   line, whatever the board made of that line. Only a chat charter started holds a token the
+///   channel admits, so such a line is from a chat this host started.
+/// - A chat the board follows onto another conversation begins a run with `cause: clear`. A
+///   line the board refused (a harness nested in the chat's shell, ADR 0024 C5) is `No` and
+///   never does.
+/// - A sub-agent's calls are a child run (`cause: child`) of the run that was current when it
+///   first appeared, until its `SubagentStop` (ADR 0066, "A child agent…").
 pub struct Recorder {
     log: Log,
     key: ArgsKey,
     /// By plane and number: a number means nothing outside the plane that dealt it.
     chats: HashMap<(PathBuf, u32), Identity>,
+    /// Each live sub-agent's child run, by chat id and the harness's agent id.
+    children: HashMap<(String, String), (String, String)>,
     /// When each tool call's pre hook was heard, by run and the harness's id for the call.
     calls: HashMap<(String, String), Instant>,
 }
 
-/// How many tool calls awaiting their post hook are remembered.
-const CALLS_HELD: usize = 4096;
+/// How long a tool call is waited on for its post hook. One that never came (the harness died,
+/// or a guard refused the call) is a duration lost, not a leak.
+pub const CALL_IS_OPEN_AT_MOST: std::time::Duration = std::time::Duration::from_secs(3600);
 
 impl Recorder {
     /// The recorder for this device, its log under `<data>` and its device id from the
@@ -306,8 +374,8 @@ impl Recorder {
     ///
     /// `<data>/events/<device>/`: by device, as the audit is (ADR 0075 §6), so a backup
     /// restored onto another machine is kept as that device's records and never appended to
-    /// (ADR 0069 §5). A `<data>` inside a plane or a git work tree is refused before anything
-    /// is made there.
+    /// (ADR 0069 §5). A `<data>` inside a project or a git work tree is refused before
+    /// anything is made there.
     pub fn open_in(config: &Path, data: &Path) -> io::Result<Recorder> {
         if let Some(why) = crate::datahome::refusal(data) {
             return Err(io::Error::new(io::ErrorKind::PermissionDenied, why));
@@ -326,9 +394,6 @@ impl Recorder {
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no config home"))?;
         let data = crate::datahome::root()
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no data home"))?;
-        // A fenced build never writes a test run's events into the operator's own data home,
-        // for the reason `machine::config_root` gives (charter-app#129).
-        crate::fence::hold(crate::fence::Act::Store, &data);
         Recorder::open_in(&config, &data)
     }
 
@@ -337,6 +402,7 @@ impl Recorder {
             log,
             key,
             chats: HashMap::new(),
+            children: HashMap::new(),
             calls: HashMap::new(),
         }
     }
@@ -347,39 +413,51 @@ impl Recorder {
         &mut self,
         plane: &Path,
         report: &crate::hookwire::Report,
-        followed: Followed<'_>,
+        followed: Followed,
     ) -> io::Result<Event> {
-        let who = match followed {
-            Followed::From(_) => self.new_run(plane, report.chat, "clear")?,
-            Followed::No | Followed::FirstNamed => self.identity(plane, report.chat)?,
+        let known = self.chats.contains_key(&(plane.to_path_buf(), report.chat));
+        let top = match followed {
+            Followed::Moved if known => self.new_run(plane, report.chat, Began::Clear)?,
+            Followed::Moved | Followed::No | Followed::FirstNamed => {
+                self.identity(plane, report.chat)?
+            }
         };
+        let under = self.under(top, report.agent.as_deref())?;
         let mut body = serde_json::json!({});
         if report.event == crate::state::Event::SessionStart {
             body["started"] = started(report.detail.started).into();
         }
-        self.log.append(
-            Some(&who.chat),
-            Some(&who.run),
-            &format!("hook.{}", report.event.word()),
-            body,
-        )
+        let event = self.append(&under, &format!("hook.{}", report.event.word()), body)?;
+        if report.event == crate::state::Event::SubagentStop
+            && let Some(agent) = &report.agent
+        {
+            self.children.remove(&(under.chat, agent.clone()));
+        }
+        Ok(event)
     }
 
-    /// The event for one tool hook: `hook.<word>`, with the tool, the keyed digest of its
-    /// arguments, what charter answered and how long the hook took. A post hook whose call's
-    /// pre hook was heard also says how long the tool ran, from one to the other, as the host
-    /// heard them (`now`).
+    /// The event for one tool hook: `hook.<word>` for a word charter answers, with the tool,
+    /// the keyed digest of its arguments, what charter answered and how long the hook took. A
+    /// post hook whose call's pre hook was heard also says how long the tool ran, from one to
+    /// the other, as the host heard them (`now`). A word charter does not answer is recorded
+    /// as [`UNKNOWN_HOOK`].
     pub fn tool(
         &mut self,
         plane: &Path,
         call: &crate::hookwire::ToolCall,
         now: Instant,
     ) -> io::Result<Event> {
-        let who = self.identity(plane, call.chat)?;
+        let top = self.identity(plane, call.chat)?;
+        let under = self.under(top, call.agent.as_deref())?;
+        let phase = phase(&call.tool_hook);
         let mut body = serde_json::json!({
             "decision": call.decision.word(),
             "hook_ms": call.hook_ms,
         });
+        if phase.is_none() {
+            body["word"] =
+                crate::shown::readable(&call.tool_hook, crate::shown::DISPLAY_LIMIT).into();
+        }
         if let Some(tool) = &call.tool {
             body["tool"] = tool.as_str().into();
         }
@@ -391,39 +469,86 @@ impl Recorder {
         }
         if let Some(id) = &call.call {
             body["call"] = id.as_str().into();
-            let key = (who.run.clone(), id.clone());
-            if call.tool_hook.starts_with("pretooluse") {
-                if self.calls.len() >= CALLS_HELD {
-                    // A call whose post hook never came (the harness died, or the tool was
-                    // refused) is only a duration lost, so the oldest are simply let go.
-                    self.calls.clear();
+            let key = (under.run.clone(), id.clone());
+            match phase {
+                Some(Phase::Pre) => {
+                    self.calls
+                        .retain(|_, began| now.saturating_duration_since(*began) <= CALL_IS_OPEN_AT_MOST);
+                    // The first pre hook of a call is its start; a second one for the same
+                    // call (`pretooluse` and `pretooluse-read`) is not a later start.
+                    self.calls.entry(key).or_insert(now);
                 }
-                self.calls.entry(key).or_insert(now);
-            } else if call.tool_hook.starts_with("posttooluse")
-                && let Some(began) = self.calls.get(&key)
-            {
-                let ran = now.saturating_duration_since(*began).as_millis();
-                body["tool_ms"] = u64::try_from(ran).unwrap_or(u64::MAX).into();
+                Some(Phase::Post) => {
+                    if let Some(began) = self.calls.remove(&key) {
+                        let ran = now.saturating_duration_since(began).as_millis();
+                        body["tool_ms"] = u64::try_from(ran).unwrap_or(u64::MAX).into();
+                    }
+                }
+                None => {}
             }
         }
+        let kind = match phase {
+            Some(_) => format!("hook.{}", call.tool_hook),
+            None => UNKNOWN_HOOK.to_owned(),
+        };
+        self.append(&under, &kind, body)
+    }
+
+    fn append(&mut self, under: &Under, kind: &str, body: serde_json::Value) -> io::Result<Event> {
         self.log.append(
-            Some(&who.chat),
-            Some(&who.run),
-            &format!("hook.{}", call.tool_hook),
+            Some(&under.chat),
+            Some(&under.run),
+            under.parent.as_deref(),
+            kind,
             body,
         )
+    }
+
+    /// The run an event of `top`'s chat is under: `top`'s, or the child run of `agent`, begun
+    /// the first time that agent is seen.
+    fn under(&mut self, top: Identity, agent: Option<&str>) -> io::Result<Under> {
+        let Some(agent) = agent else {
+            return Ok(Under {
+                chat: top.chat,
+                run: top.run,
+                parent: None,
+            });
+        };
+        let key = (top.chat.clone(), agent.to_owned());
+        if let Some((run, parent)) = self.children.get(&key) {
+            return Ok(Under {
+                chat: top.chat,
+                run: run.clone(),
+                parent: Some(parent.clone()),
+            });
+        }
+        let under = Under {
+            chat: top.chat,
+            run: ulid::Ulid::new().to_string(),
+            parent: Some(top.run),
+        };
+        self.append(
+            &under,
+            "run.started",
+            serde_json::json!({ "cause": Began::Child.word() }),
+        )?;
+        self.children.insert(
+            key,
+            (under.run.clone(), under.parent.clone().unwrap_or_default()),
+        );
+        Ok(under)
     }
 
     /// The chat's identity, giving it one and its first run when it has none.
     fn identity(&mut self, plane: &Path, number: u32) -> io::Result<Identity> {
         match self.chats.get(&(plane.to_path_buf(), number)) {
             Some(who) => Ok(who.clone()),
-            None => self.new_run(plane, number, "start"),
+            None => self.new_run(plane, number, Began::Start),
         }
     }
 
     /// Begins a run of the chat for `cause`, and says so in the log.
-    fn new_run(&mut self, plane: &Path, number: u32, cause: &str) -> io::Result<Identity> {
+    fn new_run(&mut self, plane: &Path, number: u32, cause: Began) -> io::Result<Identity> {
         let key = (plane.to_path_buf(), number);
         let chat = self
             .chats
@@ -436,8 +561,9 @@ impl Recorder {
         self.log.append(
             Some(&who.chat),
             Some(&who.run),
+            None,
             "run.started",
-            serde_json::json!({ "cause": cause }),
+            serde_json::json!({ "cause": cause.word() }),
         )?;
         self.chats.insert(key, who.clone());
         Ok(who)

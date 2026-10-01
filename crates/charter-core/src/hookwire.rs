@@ -137,6 +137,10 @@ pub struct Report {
     /// the chat has not seen, and only the pid says which happened.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pid: Option<u32>,
+    /// The sub-agent this came from, where the payload's `agent_id` names one on a harness
+    /// where that field was measured to mean a sub-agent (ADR 0066, a child run).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
     /// What the harness said about this event beyond its name: what a `SessionStart` was for,
     /// and what a `SessionEnd` was for. Each is meaningless on the other's event and ignored
     /// there.
@@ -175,6 +179,7 @@ impl Report {
             pid: env(CLAUDE_PID_ENV)
                 .and_then(|pid| pid.parse().ok())
                 .filter(|pid| *pid > 0),
+            agent: sub_agent(field("agent_id").as_deref(), env),
             detail: Detail {
                 started: Started::of(source.as_deref()),
                 ending: Ending::of(reason.as_deref()),
@@ -182,6 +187,21 @@ impl Report {
         })
     }
 }
+
+/// The sub-agent a payload's `agent_id` names, only on a harness where that field was measured
+/// to mean one ([`crate::handoffguard::Caller::from_a_subagent`]): elsewhere it is no agent.
+pub fn sub_agent(agent_id: Option<&str>, env: &dyn Fn(&str) -> Option<String>) -> Option<String> {
+    let harness = env(HARNESS_ENV);
+    let caller = crate::handoffguard::Caller {
+        agent_id,
+        harness: harness.as_deref(),
+        permission_mode: None,
+    };
+    caller.from_a_subagent().then(|| agent_id.unwrap_or_default().to_owned())
+}
+
+/// The harness a chat runs, as charter put it into the chat's environment.
+pub const HARNESS_ENV: &str = "CHARTER_HARNESS";
 
 /// Which conversation this report is of, and how well that is known.
 ///
@@ -726,6 +746,9 @@ pub struct ToolCall {
     /// How long charter's hook took, in milliseconds.
     #[serde(default)]
     pub hook_ms: u64,
+    /// The sub-agent that made the call ([`Report::agent`]'s rule).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
 }
 
 /// What a tool hook answered the harness.
@@ -1542,6 +1565,7 @@ mod tests {
             event: Event::Notification,
             conversation: Conversation::Named("abc".to_owned()),
             pid: Some(99),
+            agent: None,
             detail: Detail::default(),
         };
         send(&path, Some(&token), &sent).expect("the app took it");
@@ -1576,6 +1600,7 @@ mod tests {
                             event: Event::Stop,
                             conversation: Conversation::Unknown,
                             pid: None,
+                            agent: None,
                             detail: Detail::default(),
                         },
                     )
@@ -1631,6 +1656,7 @@ mod tests {
             event: Event::Stop,
             conversation: Conversation::Unknown,
             pid: None,
+            agent: None,
             detail: Detail::default(),
         };
         send(&path, Some(&token), &good).expect("the app took it");
@@ -1670,6 +1696,7 @@ mod tests {
             event: Event::Stop,
             conversation: Conversation::Unknown,
             pid: None,
+            agent: None,
             detail: Detail::default(),
         };
         send(&path, Some(&token), &good).expect("the app took it");
@@ -1777,6 +1804,7 @@ mod tests {
             event: Event::Stop,
             conversation: Conversation::Unknown,
             pid: None,
+            agent: None,
             detail: Detail::default(),
         };
         send(&path, Some(&token), &good).expect("the app took it");
@@ -2007,6 +2035,7 @@ mod tests {
                 event: Event::Stop,
                 conversation: Conversation::Unknown,
                 pid: None,
+                agent: None,
                 detail: Detail::default(),
             },
         );
@@ -2029,6 +2058,7 @@ mod tests {
             event: Event::Stop,
             conversation: Conversation::Unknown,
             pid: None,
+            agent: None,
             detail: Detail::default(),
         };
         let wire = line_with(Some(&ChatToken::from("t")), &report).expect("it serialises");
@@ -2550,6 +2580,7 @@ mod tests {
             event: Event::Stop,
             conversation: Conversation::Unknown,
             pid: None,
+            agent: None,
             detail: Detail::default(),
         })
         .unwrap();
@@ -2616,6 +2647,7 @@ mod tests {
             event: Event::Stop,
             conversation: Conversation::Unknown,
             pid: None,
+            agent: None,
             detail: Detail::default(),
         })
         .unwrap();
@@ -2651,6 +2683,7 @@ mod tests {
             decision: Decision::Deny,
             rule: Some("no-force-push".to_owned()),
             hook_ms: 2,
+            agent: None,
         };
         let line = serde_json::to_string(&call).unwrap();
         assert!(
@@ -2760,6 +2793,7 @@ mod tests {
                 event: Event::Stop,
                 conversation: Conversation::Unknown,
                 pid: None,
+                agent: None,
                 detail: Detail::default(),
             },
         )
@@ -2787,6 +2821,7 @@ mod tests {
             event: Event::Stop,
             conversation: Conversation::Unknown,
             pid: None,
+            agent: None,
             detail: Detail::default(),
         }
     }

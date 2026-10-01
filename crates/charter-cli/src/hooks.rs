@@ -78,26 +78,24 @@ pub struct Answered {
     pub rule: Option<String>,
 }
 
-/// The tool hook `name` over `payload`, if it is one this file answers, run and printed.
-pub fn tool(name: &str, payload: &str, now: Option<&str>) -> Option<Answered> {
-    let handler = handler(name)?;
+/// A tool hook's handler, run over `payload` and printed.
+pub fn run(handler: Handler, payload: &str, now: Option<&str>) -> Answered {
     let answer = with_hook(payload, now, handler);
-    Some(Answered {
+    Answered {
         code: answered(&answer),
         decision: decision_of(&answer),
         rule: match &answer {
             Answer::Deny(verdict) => Some(verdict.reason.clone()),
             Answer::Nothing | Answer::Say(_) => None,
         },
-    })
+    }
 }
 
-/// Whether `name` is a tool hook this file answers.
-pub fn answers(name: &str) -> bool {
-    handler(name).is_some()
-}
+/// What answers one tool hook word.
+pub type Handler = fn(&Hook) -> Answer;
 
-fn handler(name: &str) -> Option<fn(&Hook) -> Answer> {
+/// The handler for the tool hook `name`, if it is one this file answers.
+pub fn handler(name: &str) -> Option<Handler> {
     Some(match name {
         "pretooluse-read" => toolhooks::pretooluse_read,
         "pretooluse-edit" => toolhooks::pretooluse_edit,

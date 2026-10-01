@@ -1147,6 +1147,7 @@ mod tests {
         pid: u32,
     ) -> crate::hookwire::Report {
         crate::hookwire::Report {
+            agent: None,
             chat,
             event,
             conversation: match conversation {
@@ -1161,6 +1162,7 @@ mod tests {
     /// A report from a harness that names no pid — Codex, and anything not Claude Code.
     fn unsigned(chat: u32, event: Event, conversation: Option<&str>) -> crate::hookwire::Report {
         crate::hookwire::Report {
+            agent: None,
             chat,
             event,
             conversation: match conversation {
@@ -1218,6 +1220,7 @@ mod tests {
     /// A `SessionEnd` that says what it was for.
     fn ending(chat: u32, ending: Ending) -> crate::hookwire::Report {
         crate::hookwire::Report {
+            agent: None,
             chat,
             event: Event::SessionEnd,
             conversation: Conversation::Named(A.to_owned()),
@@ -1456,6 +1459,7 @@ mod tests {
     /// could read both halves of.
     fn contradicting(chat: u32, event: Event, pid: u32) -> crate::hookwire::Report {
         crate::hookwire::Report {
+            agent: None,
             chat,
             event,
             conversation: Conversation::Contradicted,
@@ -1467,6 +1471,7 @@ mod tests {
     /// A report in a dialect charter does not read — opencode's `sessionID`, say.
     fn foreign(chat: u32, event: Event, pid: Option<u32>) -> crate::hookwire::Report {
         crate::hookwire::Report {
+            agent: None,
             chat,
             event,
             conversation: Conversation::Foreign,

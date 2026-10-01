@@ -71,6 +71,7 @@ fn a_hook_tells_the_app_what_the_harness_fired() {
             event: Event::Stop,
             conversation: Conversation::Named("11111111-2222-4333-8444-555555555555".to_owned()),
             pid: Some(4242),
+            agent: None,
             detail: Detail::default(),
         })
     );

@@ -15,6 +15,15 @@ const CHARTER: &str = env!("CARGO_BIN_EXE_charter");
 /// Runs `charter hook <word>` with `payload`, a host listening. Answers its exit code, its
 /// stdout, and the tool call the host heard.
 fn hook(word: &str, payload: &serde_json::Value) -> (i32, String, Option<ToolCall>) {
+    hook_with(word, payload, &[])
+}
+
+/// [`hook`], with more of the environment a chat's hook is given.
+fn hook_with(
+    word: &str,
+    payload: &serde_json::Value,
+    env: &[(&str, &str)],
+) -> (i32, String, Option<ToolCall>) {
     let dir = tempfile::tempdir().expect("a directory");
     let path = dir.path().join("hooks.sock");
     let listener = Listener::bind(dir.path(), &path).expect("a socket");
@@ -38,6 +47,7 @@ fn hook(word: &str, payload: &serde_json::Value) -> (i32, String, Option<ToolCal
         .env(SOCKET_ENV, &path)
         .env(CHAT_ENV, "7")
         .env(TOKEN_ENV, token.expose())
+        .envs(env.iter().copied())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -97,4 +107,50 @@ fn a_tool_hook_that_decides_nothing_still_tells_the_host_it_ran() {
     assert_eq!(heard.tool.as_deref(), Some("Read"));
     assert_eq!(heard.decision, Decision::None);
     assert_eq!(heard.rule, None);
+}
+
+#[test]
+fn a_guard_that_crashed_tells_the_host_it_refused() {
+    let (code, _, heard) = hook_with(
+        "pretooluse",
+        &serde_json::json!({"tool_name": "Bash", "tool_input": {"command": "ls"}}),
+        &[("CHARTER_TEST_HOOK_PANICS", "1")],
+    );
+
+    assert_eq!(code, 2, "a crashed guard refuses");
+    let heard = heard.expect("the host heard the refusal");
+    assert_eq!(heard.decision, Decision::Deny);
+    assert_eq!(heard.rule.as_deref(), Some("guard-crashed"));
+}
+
+#[test]
+fn a_tool_hook_word_this_binary_does_not_answer_tells_the_host_it_refused() {
+    let (code, _, heard) = hook("pretooluse-nonesuch", &serde_json::json!({"tool_name": "Bash"}));
+
+    assert_eq!(code, 2);
+    let heard = heard.expect("the host heard the refusal");
+    assert_eq!(heard.tool_hook, "pretooluse-nonesuch");
+    assert_eq!(heard.decision, Decision::Deny);
+    assert_eq!(heard.rule.as_deref(), Some("unknown-hook"));
+}
+
+#[test]
+fn a_hook_an_older_plugin_still_wires_is_still_one_call_the_host_hears() {
+    let (code, _, heard) = hook("posttooluse-bash", &serde_json::json!({"tool_name": "Bash"}));
+
+    assert_eq!(code, 0);
+    let heard = heard.expect("the host heard it");
+    assert_eq!(heard.tool_hook, "posttooluse-bash");
+    assert_eq!(heard.decision, Decision::None);
+}
+
+#[test]
+fn a_sub_agents_call_names_its_agent_only_on_a_harness_where_that_was_measured() {
+    let payload = serde_json::json!({"tool_name": "Read", "agent_id": "agent-7", "tool_input": {}});
+
+    let (_, _, measured) = hook_with("posttooluse", &payload, &[("CHARTER_HARNESS", "claude-code")]);
+    let (_, _, unmeasured) = hook_with("posttooluse", &payload, &[("CHARTER_HARNESS", "opencode")]);
+
+    assert_eq!(measured.unwrap().agent.as_deref(), Some("agent-7"));
+    assert_eq!(unmeasured.unwrap().agent, None, "ADR 0066: opencode has no child runs");
 }

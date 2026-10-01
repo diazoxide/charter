@@ -4289,6 +4289,7 @@ mod tests {
                 event: charter_core::state::Event::Stop,
                 conversation: charter_core::hookwire::Conversation::Unknown,
                 pid: None,
+                agent: None,
                 detail: charter_core::state::Detail::default(),
             },
         )
@@ -4305,6 +4306,7 @@ mod tests {
                 event: charter_core::state::Event::UserPromptSubmit,
                 conversation: charter_core::hookwire::Conversation::Unknown,
                 pid: None,
+                agent: None,
                 detail: charter_core::state::Detail::default(),
             },
         )
@@ -4321,6 +4323,7 @@ mod tests {
                 event,
                 conversation: charter_core::hookwire::Conversation::Unknown,
                 pid: None,
+                agent: None,
                 detail: charter_core::state::Detail::default(),
             },
         )
@@ -5085,6 +5088,7 @@ mod tests {
             event: Stop,
             conversation: charter_core::hookwire::Conversation::Unknown,
             pid: None,
+            agent: None,
             detail: charter_core::state::Detail::default(),
         };
         held.hooks().board().reported(&stop);
@@ -5741,6 +5745,7 @@ mod tests {
         event: charter_core::state::Event,
         conversation: charter_core::hookwire::Conversation,
         pid: Option<u32>,
+        agent: None,
     ) {
         charter_core::hookwire::send(
             held.hooks().socket().expect("the plane is listening"),

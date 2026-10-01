@@ -162,8 +162,11 @@ pub fn pretooluse(payload: &str, now: Option<&str>) -> crate::hooks::Answered {
 ///
 /// Only for a `PreToolUse` word. A crash on a reporting hook must never exit 2, which on `Stop`
 /// would keep a session from ending.
-pub(crate) fn refuse_on_a_crash() {
-    std::panic::set_hook(Box::new(|info| {
+pub(crate) fn refuse_on_a_crash(tell_the_host: fn(&str)) {
+    // The word this process answers, for the host's event log: the call is refused, and one
+    // event says so (FD-9).
+    let word = std::env::args().nth(2).unwrap_or_default();
+    std::panic::set_hook(Box::new(move |info| {
         let at = info
             .location()
             .map(|at| format!(" (at {}:{})", at.file(), at.line()))
@@ -175,6 +178,8 @@ pub(crate) fn refuse_on_a_crash() {
              could answer, and a guard that could not answer does not allow."
         );
         let _ = err.flush();
+        drop(err);
+        tell_the_host(&word);
         std::process::exit(i32::from(DENY_EXIT));
     }));
 }

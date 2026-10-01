@@ -826,6 +826,7 @@ mod tests {
             event,
             conversation: Conversation::Unknown,
             pid: None,
+            agent: None,
             detail: Detail {
                 started,
                 ..Detail::default()
@@ -1526,6 +1527,7 @@ mod tests {
                 event: Event::SessionStart,
                 conversation: Conversation::Named(conversation),
                 pid: Some(std::process::id()),
+                agent: None,
                 detail: Detail::default(),
             },
         )
@@ -1663,6 +1665,7 @@ mod tests {
                     event,
                     conversation: Conversation::Unknown,
                     pid: None,
+                    agent: None,
                     detail: Detail::default(),
                 },
             )

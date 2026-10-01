@@ -763,6 +763,7 @@ mod tests {
             event: charter_core::state::Event::Stop,
             conversation: charter_core::hookwire::Conversation::Unknown,
             pid: None,
+            agent: None,
             detail: charter_core::state::Detail::default(),
         }
     }
@@ -951,6 +952,7 @@ mod tests {
                 event: charter_core::state::Event::UserPromptSubmit,
                 conversation: Default::default(),
                 pid: None,
+                agent: None,
                 detail: Default::default(),
             },
         )
@@ -983,6 +985,7 @@ mod tests {
                 decision: charter_core::hookwire::Decision::None,
                 rule: None,
                 hook_ms: 1,
+                agent: None,
             },
         )
         .expect("told");
@@ -1068,6 +1071,7 @@ mod tests {
         hooks: &Hooks,
         conversation: Conversation,
         pid: Option<u32>,
+        agent: None,
     ) -> Option<String> {
         let report = Report {
             chat: 7,
