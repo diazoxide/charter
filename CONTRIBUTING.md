@@ -67,5 +67,5 @@ received it under.
 
 ## Getting an answer
 
-[SUPPORT.md](SUPPORT.md) says how soon a pull request, an issue or a discussion gets its first
-response.
+[SUPPORT.md](SUPPORT.md) gives the time we aim to take to first respond to a pull request, an
+issue or a discussion.

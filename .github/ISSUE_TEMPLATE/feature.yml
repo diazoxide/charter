@@ -1,5 +1,5 @@
 name: Feature request
-description: A piece of work that is already clear. An idea still being shaped goes to Discussions → Ideas.
+description: A change that is already clear. An idea still being shaped goes to Discussions → Ideas.
 labels: ["enhancement"]
 body:
   - type: textarea

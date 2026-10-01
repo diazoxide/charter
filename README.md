@@ -140,7 +140,7 @@ a plain checkout — where the sidecar has not been built — still builds in CI
 
 - **Questions and ideas:** [Discussions](https://github.com/diazoxide/charter/discussions).
 - **Bugs and feature requests:** [issues](https://github.com/diazoxide/charter/issues/new/choose).
-- **Where to go for what, and how soon you get an answer:** [SUPPORT.md](SUPPORT.md).
+- **Where to go for what, and how soon we aim to answer:** [SUPPORT.md](SUPPORT.md).
 - **Contributing, and signing commits off under the DCO:** [CONTRIBUTING.md](CONTRIBUTING.md).
 - **How we treat each other:** the [Code of Conduct](CODE_OF_CONDUCT.md).
 - **Security vulnerabilities:** privately, as [SECURITY.md](SECURITY.md) describes, never in a

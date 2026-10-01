@@ -7,6 +7,7 @@ import App from "./App";
 import { LEAST, leastAt } from "./fits";
 import { DEFAULT_TEXT } from "./textSize";
 import { TitleBar } from "./TitleBar";
+import { HELP } from "./About";
 import type { About, Moved, OpenChat, PlaneSaving, RepoSaving } from "./bindings";
 
 /**
@@ -227,15 +228,15 @@ describe("About Charter", () => {
 
     expect(within(dialog).getByRole("link", { name: "Discussions" })).toHaveAttribute(
       "href",
-      "https://github.com/diazoxide/charter/discussions",
+      HELP.discussions,
     );
     expect(within(dialog).getByRole("link", { name: "report a bug" })).toHaveAttribute(
       "href",
-      "https://github.com/diazoxide/charter/issues/new/choose",
+      HELP.newIssue,
     );
     expect(within(dialog).getByRole("link", { name: "how to get help" })).toHaveAttribute(
       "href",
-      "https://github.com/diazoxide/charter/blob/main/SUPPORT.md",
+      HELP.support,
     );
   });
 

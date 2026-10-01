@@ -10,7 +10,7 @@ from **About Charter** on the title bar.
 | Ask how to do something, or why charter did what it did | [Discussions → Q&A](https://github.com/diazoxide/charter/discussions/categories/q-a) |
 | Suggest a feature or a change | [Discussions → Ideas](https://github.com/diazoxide/charter/discussions/categories/ideas) |
 | Report something that is broken | [a bug report](https://github.com/diazoxide/charter/issues/new?template=bug.yml) |
-| Propose a piece of work that is already clear | [a feature request](https://github.com/diazoxide/charter/issues/new?template=feature.yml) |
+| Propose a change that is already clear | [a feature request](https://github.com/diazoxide/charter/issues/new?template=feature.yml) |
 | Contribute code or docs | [CONTRIBUTING.md](CONTRIBUTING.md) |
 | Report a security vulnerability | **Never in public.** Follow [SECURITY.md](SECURITY.md) |
 | Report a conduct problem | [privately, below](#reporting-a-conduct-problem) |
@@ -18,15 +18,15 @@ from **About Charter** on the title bar.
 Before asking, it is worth searching
 [Discussions](https://github.com/diazoxide/charter/discussions) and
 [issues](https://github.com/diazoxide/charter/issues?q=is%3Aissue): someone may have asked
-already. A question that turns out to be a bug is moved to an issue for you, so there is no
-wrong door.
+already. A question that turns out to be a bug may be moved to an issue for you, so there is
+no wrong door.
 
-## How soon you get an answer
+## How soon we aim to answer
 
-These are targets for the **first response**: a person has read what you wrote and replied,
+These are targets, not guarantees, for the **first response**: a person has read what you wrote and replied,
 asked for what is missing, or said where it goes next. They are not promises of a fix.
 
-| Channel | First response |
+| Channel | We aim to respond |
 | --- | --- |
 | Discussions | within 3 working days |
 | Bug reports | within 3 working days |
@@ -40,7 +40,7 @@ reports follow the process in [SECURITY.md](SECURITY.md), not this table.
 
 - **Your charter version.** About Charter on the title bar shows it, and so does
   `charter version` in a terminal.
-- **Your system.** macOS or Linux, the version, and on Linux the desktop.
+- **Your system.** macOS or Linux, its version, and on Linux the desktop.
 - **The harness** the chat ran, such as Claude Code or Codex, and its version.
 - **What you did, what you expected, and what happened**, in that order.
 - **`charter doctor`'s output**, when the problem is about a project, a workspace or a repo.

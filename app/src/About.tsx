@@ -8,10 +8,13 @@ import { ExternalLink, ReleaseNotes } from "./ReleaseNotes";
 const RELEASES = "https://github.com/diazoxide/charter/releases";
 
 /** The community channels (FR-14, #609). `SUPPORT.md` says what each one is for and how soon
- *  someone answers; security reports go where `SECURITY.md` says, never to these. */
-const DISCUSSIONS = "https://github.com/diazoxide/charter/discussions";
-const NEW_ISSUE = "https://github.com/diazoxide/charter/issues/new/choose";
-const SUPPORT = "https://github.com/diazoxide/charter/blob/main/SUPPORT.md";
+ *  we aim to answer; security reports go where `SECURITY.md` says, never to these. */
+export const HELP = {
+  discussions: "https://github.com/diazoxide/charter/discussions",
+  /** GitHub's issue chooser: the forms and contact links of `.github/ISSUE_TEMPLATE/`. */
+  newIssue: "https://github.com/diazoxide/charter/issues/new/choose",
+  support: "https://github.com/diazoxide/charter/blob/main/SUPPORT.md",
+} as const;
 
 /**
  * **About Charter**: which version of the app this is, and what that version brought.
@@ -105,12 +108,13 @@ export function AboutCharter() {
             {/* Outside the answer, so a dialog whose changelog could not be read still says
                 where to get help. */}
             <p className="honest">
-              Questions and ideas go to <ExternalLink href={DISCUSSIONS}>Discussions</ExternalLink>,
-              or you can <ExternalLink href={NEW_ISSUE}>report a bug</ExternalLink>. See{" "}
-              <ExternalLink href={SUPPORT}>how to get help</ExternalLink>.
+              Questions and ideas go to{" "}
+              <ExternalLink href={HELP.discussions}>Discussions</ExternalLink>, or you can{" "}
+              <ExternalLink href={HELP.newIssue}>report a bug</ExternalLink>. See{" "}
+              <ExternalLink href={HELP.support}>how to get help</ExternalLink>.
             </p>
           </div>
-          {/* `tabIndex={0}` on the one control, per `docs/ui-primitives.md`. */}
+          {/* `tabIndex={0}` on Close, per `docs/ui-primitives.md`, as `ExternalLink` gives each link. */}
           <div className="answer">
             <Dialog.Close asChild>
               <button type="button" tabIndex={0}>
