@@ -360,10 +360,13 @@ clone and this machine, and are still written.
 **What charter does with a read-only project today:**
 
 - **The commands that only read still run**, after one line on stderr saying the project is
-  read-only and why: `status`, `recall`, `statusline`, `workspace list` and `workspace current`.
-  `doctor` (without `--fix`), `update`, `version`, `news`, `root` and the commands that need no
-  project run as they always do. The list is explicit: a command that is not on it is refused,
-  so a new command is refused on a read-only project until it is shown to only read.
+  read-only and why: `status`, `recall`, `statusline`, `workspace list`, `workspace current`,
+  `workspace recall`, `persona list`, `change list`, `session list`, `harness list` and
+  `guard list` (or bare `guard`). Each is on the list because a test runs it on a read-only
+  project and finds every file unchanged. `doctor` (without `--fix`), `update`, `version`,
+  `news`, `root` and the commands that need no project run as they always do. The list is
+  explicit: a command that is not on it is refused, so a new command is refused on a read-only
+  project until it is shown to only read.
 - **Every other command is refused**, each refusal naming the reason: extension commands and the
   core-owned aliases onto them (the same test `extension::cli::extension_command` gives the tool
   guard), `doctor --fix`, `init` and `reinit`.

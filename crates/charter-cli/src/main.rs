@@ -641,12 +641,22 @@ fn read_only_standing(command: &Command) -> ReadOnly {
         | Command::Version { .. }
         | Command::News(_)
         | Command::Root => ReadOnly::Runs,
+        // Each one is here because a test runs it on a lived-in read-only project, sees it
+        // print what it read, and finds every file unchanged
+        // (`tests/a_project_charter_cannot_write_is_read_only.rs`, #833).
         Command::Status { .. }
         | Command::Recall(_)
         | Command::Statusline { .. }
-        | Command::Workspace(WorkspaceCommand::List | WorkspaceCommand::Current) => {
-            ReadOnly::RunsAndSays
-        }
+        | Command::Workspace(
+            WorkspaceCommand::List | WorkspaceCommand::Current | WorkspaceCommand::Recall { .. },
+        )
+        | Command::Persona(memory::PersonaCommand::List)
+        | Command::Change(change::ChangeCommand::List { .. })
+        | Command::Session(session::SessionCommand::List { .. })
+        | Command::Harness(HarnessCommand::List)
+        | Command::Guard {
+            verb: None | Some(GuardCommand::List),
+        } => ReadOnly::RunsAndSays,
         _ => ReadOnly::Refused,
     }
 }

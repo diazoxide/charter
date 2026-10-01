@@ -42,18 +42,181 @@ impl Project {
     }
 
     fn run(&self, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_charter"))
+        self.run_with(args, &[])
+    }
+
+    /// [`Project::run`] with `stdin` on its standard input.
+    fn run_feeding(&self, args: &[&str], stdin: &str) -> Output {
+        use std::io::Write;
+        let mut child = self
+            .command(args, &[])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("the binary runs");
+        child
+            .stdin
+            .take()
+            .expect("its stdin")
+            .write_all(stdin.as_bytes())
+            .expect("written");
+        child.wait_with_output().expect("it finishes")
+    }
+
+    /// [`Project::run`] in an environment of its own: nothing the shell that started the
+    /// suite has set (a chat's `CHARTER_WORKSPACE`, its session) reaches the binary, only
+    /// `env`.
+    fn run_with(&self, args: &[&str], env: &[(&str, &str)]) -> Output {
+        self.command(args, env).output().expect("the binary runs")
+    }
+
+    fn command(&self, args: &[&str], env: &[(&str, &str)]) -> Command {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_charter"));
+        command
             .args(args)
             .current_dir(&self.root)
+            .env_clear()
+            .envs(env.iter().copied())
             .env("CHARTER_PLANE_FENCE", &self.fence)
-            .env_remove("CHARTER_ROOT")
-            .env_remove("CLAUDE_CONFIG_DIR")
             .env("XDG_CONFIG_HOME", self.home.join(".config"))
             .env("HOME", &self.home)
             .env("PATH", "/usr/bin:/bin")
-            .env("NO_COLOR", "1")
-            .output()
-            .expect("the binary runs")
+            .env("NO_COLOR", "1");
+        command
+    }
+
+    /// A project a charter has been used on, which then names a feature this charter lacks.
+    ///
+    /// It has what the read commands read, so a write one makes on the way is not hidden by
+    /// an empty project's early return: a front door whose plain-file vault holds a secret, a
+    /// workspace with a memory, a change record and a session record, a harness profile in
+    /// `charter.local.toml`, and a git repository with all of it committed.
+    fn lived_in() -> Self {
+        let project = Project::new("");
+        std::fs::remove_file(project.root.join("charter.toml")).unwrap();
+        let ok = |args: &[&str], stdin: &str| {
+            let out = project.run_feeding(args, stdin);
+            assert!(
+                out.status.success(),
+                "{args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        ok(&["init", "--forge", "github", "--owner", "acme"], "");
+        ok(
+            &[
+                "workspace",
+                "create",
+                "alpha",
+                "--vision",
+                "Ship the widget",
+            ],
+            "",
+        );
+        ok(
+            &[
+                "workspace",
+                "remember",
+                "The widget ships on Friday",
+                "-w",
+                "alpha",
+            ],
+            "",
+        );
+        ok(
+            &[
+                "change",
+                "create",
+                "widget-v2",
+                "--why",
+                "Ship the second widget",
+                "-w",
+                "alpha",
+            ],
+            "",
+        );
+        ok(
+            &[
+                "vault",
+                "add",
+                "stew",
+                "--provider",
+                "plain-file",
+                "--persona",
+                "steward",
+                "--share",
+            ],
+            "",
+        );
+        ok(
+            &["secret", "set", "stew", "db-password", "--stdin"],
+            "hunter2",
+        );
+        let persona = project.root.join("personas/steward/persona.md");
+        let text = std::fs::read_to_string(&persona).unwrap();
+        assert!(text.contains("\nvault: none\n"), "{text}");
+        std::fs::write(&persona, text.replace("\nvault: none\n", "\nvault: stew\n")).unwrap();
+        std::fs::write(
+            project.root.join("charter.local.toml"),
+            "[harness.work]\nkind = \"claude\"\ncommand = [\"claude\"]\n",
+        )
+        .unwrap();
+        let sessions = project.root.join("workspaces/alpha/sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::write(
+            sessions.join("20260501-120000-the-widget.md"),
+            "---\ntitle: The widget\ndate: 2026-05-01 12:00:00\nchat: 1\nchat-name: unknown\n\
+             persona: none\nharness: claude\nprofile: unknown\nconversation: unknown\n\
+             workspace: alpha\ncwd: unknown\n---\n\n# The widget\n\n## Goal\nShip it.\n",
+        )
+        .unwrap();
+        // The manifest's first two lines become `REQUIRES`'s: `schema = 2` and the feature
+        // this build lacks.
+        let manifest = project.root.join("charter.toml");
+        let written = std::fs::read_to_string(&manifest).unwrap();
+        let head: String = REQUIRES
+            .lines()
+            .take(2)
+            .map(|line| format!("{line}\n"))
+            .collect();
+        let required = written.replacen("schema = 1\n", &head, 1);
+        assert_ne!(written, required, "init writes `schema = 1`: {written}");
+        std::fs::write(&manifest, required).unwrap();
+        for args in [
+            &["init", "-q", "-b", "main", "."][..],
+            &["add", "-A"],
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@e.invalid",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-q",
+                "-m",
+                "the project as a teammate pushed it",
+            ],
+        ] {
+            // No auto-maintenance: a detached `git maintenance` from this commit would take
+            // `.git/objects/maintenance.lock` while a command under test runs, and the tree
+            // check would blame the command for it.
+            let done = Command::new("git")
+                .args(["-c", "gc.auto=0", "-c", "maintenance.auto=false"])
+                .args(args)
+                .current_dir(&project.root)
+                .env("HOME", &project.home)
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .output()
+                .expect("git runs");
+            assert!(
+                done.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&done.stderr)
+            );
+        }
+        project
     }
 
     /// Every file under the project, with its bytes.
@@ -264,24 +427,116 @@ fn a_core_owned_alias_onto_an_extension_is_refused_on_a_read_only_project() {
     assert_eq!(project.tree(), before);
 }
 
-#[test]
-fn a_command_that_only_reads_still_runs_on_a_read_only_project_and_says_so() {
-    let project = Project::new(REQUIRES);
+/// One read command on [`Project::lived_in`]: it runs, says once that the project is read-only,
+/// shows `shows` (so it read what it was meant to), and leaves every file in the project exactly
+/// as it was (#833).
+fn only_reads(args: &[&str], shows: &str) {
+    only_reads_with(args, &[], shows);
+}
+
+/// [`only_reads`], with `env` set for the command.
+fn only_reads_with(args: &[&str], env: &[(&str, &str)], shows: &str) {
+    let project = Project::lived_in();
     let before = project.tree();
-    for args in [
-        vec!["status"],
-        vec!["recall", "anything"],
-        vec!["workspace", "list"],
-        vec!["statusline"],
-    ] {
-        let out = project.run(&args);
-        let said = String::from_utf8_lossy(&out.stderr);
-        assert!(out.status.success(), "{args:?} must still read: {said}");
-        assert!(
-            said.contains("read-only") && said.contains("memory-proposals"),
-            "{args:?} says once that the project is read-only: {said}"
-        );
-        assert_eq!(said.matches("read-only").count(), 1, "{args:?}: {said}");
-        assert_eq!(project.tree(), before, "{args:?} wrote to the project");
-    }
+    let out = project.run_with(args, env);
+    let said = String::from_utf8_lossy(&out.stderr);
+    let printed = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{args:?} must still read: {said}");
+    assert!(
+        said.contains("read-only") && said.contains("memory-proposals"),
+        "{args:?} says once that the project is read-only: {said}"
+    );
+    assert_eq!(said.matches("read-only").count(), 1, "{args:?}: {said}");
+    // Some listings are reports, and charter prints its reports on stderr.
+    assert!(
+        printed.contains(shows) || said.contains(shows),
+        "{args:?} shows {shows:?}: {printed}{said}"
+    );
+    let after = project.tree();
+    let changed: Vec<&PathBuf> = before
+        .keys()
+        .chain(after.keys())
+        .filter(|path| before.get(*path) != after.get(*path))
+        .collect();
+    assert!(
+        changed.is_empty(),
+        "{args:?} wrote to the project: {changed:?}"
+    );
+}
+
+#[test]
+fn status_only_reads_a_read_only_project() {
+    only_reads_with(&["status"], &[("CHARTER_WORKSPACE", "alpha")], "alpha");
+}
+
+#[test]
+fn recall_only_reads_a_read_only_project() {
+    only_reads_with(
+        &["recall", "widget"],
+        &[("CHARTER_WORKSPACE", "alpha")],
+        "Friday",
+    );
+}
+
+#[test]
+fn workspace_list_only_reads_a_read_only_project() {
+    only_reads(&["workspace", "list"], "alpha");
+}
+
+#[test]
+fn statusline_only_reads_a_read_only_project() {
+    only_reads_with(&["statusline"], &[("CHARTER_WORKSPACE", "alpha")], "alpha");
+}
+
+#[test]
+fn persona_list_only_reads_a_read_only_project() {
+    only_reads(&["persona", "list"], "1 secret(s)");
+}
+
+#[test]
+fn change_list_only_reads_a_read_only_project() {
+    only_reads(&["change", "list", "-w", "alpha"], "widget-v2");
+}
+
+#[test]
+fn session_list_only_reads_a_read_only_project() {
+    only_reads(&["session", "list", "-w", "alpha"], "The widget");
+}
+
+#[test]
+fn harness_list_only_reads_a_read_only_project() {
+    only_reads(&["harness", "list"], "work");
+}
+
+#[test]
+fn guard_list_only_reads_a_read_only_project() {
+    only_reads(&["guard", "list"], "charter handoff");
+}
+
+#[test]
+fn bare_guard_lists_and_only_reads_a_read_only_project() {
+    only_reads(&["guard"], "charter handoff");
+}
+
+#[test]
+fn workspace_recall_only_reads_a_read_only_project() {
+    only_reads(&["workspace", "recall", "-w", "alpha"], "Friday");
+}
+
+#[test]
+fn workspace_recall_with_a_query_only_reads_a_read_only_project() {
+    only_reads(
+        &["workspace", "recall", "-q", "widget", "-w", "alpha"],
+        "Friday",
+    );
+}
+
+/// Already on FR-24's list (#827): it had no test of its own.
+#[test]
+fn workspace_current_only_reads_a_read_only_project() {
+    only_reads_with(
+        &["workspace", "current"],
+        &[("CHARTER_WORKSPACE", "alpha")],
+        "alpha",
+    );
 }
