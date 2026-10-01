@@ -197,9 +197,9 @@ _Avoid_: tier (that is a store's), machine size, profile
 **Performance budget**:
 One measured limit on what charter's chats cost the device: a count, a size, a time or a share of
 a core, stated at the device's hot target, and named with the job that measures it. It is
-checked in CI either exactly or against how the last runs went, or on the operator's machine at
-each release. It is a target, never a promise, and never a cap on the operator. The spec's
-limits are performance budgets too. It belongs to **Chat** (ADR 0086).
+checked in CI either exactly or against what `main` last recorded, or on the operator's machine
+at each release. It is a target, never a promise, and never a cap on the operator. The spec's
+speed and memory limits are performance budgets too; its open and hot chat counts are targets. It belongs to **Chat** (ADR 0086).
 _Avoid_: budget (unqualified: that is a chat's spend budget), limit (for a row CI checks only
 against earlier runs), SLA
 

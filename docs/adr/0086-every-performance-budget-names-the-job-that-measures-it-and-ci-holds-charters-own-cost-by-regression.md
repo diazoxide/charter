@@ -38,8 +38,8 @@ cost the device they run on.
 
 ## Where charter is today
 
-- **`docs/spec.md`'s Limits** are eight felt-speed rows, *"measured on the operator's machine, in
-  the scenario harness"*, plus ADR 0082's two scale rows. ADR 0026 measured them once, by hand,
+- **`docs/spec.md`'s Limits** are seven felt-speed and memory rows, *"measured on the operator's
+  machine, in the scenario harness"*, plus ADR 0082's two scale rows, Open chats and Hot chats. ADR 0026 measured them once, by hand,
   with `tools/bench.mjs`. No CI job runs the bench.
 - **`stress.yml` ("fifty tabs")** opens fifty fake-harness tabs for three rounds on macOS and
   Ubuntu. It asserts thread slack after each close (`THREAD_SLACK = 40`) and a round's time, and
@@ -79,37 +79,54 @@ class**, **where the table lives**, and **the words**.
 
 **A performance budget is one row: what is measured, its value, its kind, and the job that
 measures it. There are three kinds. A *CI absolute* row is a count or a size CI can measure
-exactly, and going past it fails the job. A *CI relative* row is a timing or a memory figure
-CI's shared runners measure with noise, and it fails the job when it regresses more than 20% and
-more than a stated floor against the median of `main`'s last five runs. A *release absolute* row
-is measured with real harnesses on the operator's machine each release, and a miss is a bug.
+exactly, or one of the few timings §1 names, and going past it fails the job. A *CI relative* row is a timing or a memory figure
+CI's shared runners measure with noise, and it fails the job when it is more than 20% worse than
+the last value `main` recorded, through github-action-benchmark. A *release absolute* row is
+measured with real harnesses on the operator's machine each release, and a miss is a bug.
 Every row is stated at the device's hot target, as charter's own base plus a cost per hot chat and
 a cost per hibernated chat, so that each RAM class's totals follow from ADR 0082's formula. The
-table of record is in `docs/spec.md`. It is a target, never a promise and never published
-(D-0082b).**
+table of record is in `docs/spec.md`. Every row is a target, never a promise (ADR 0082 §3 and
+§4), and never published (D-0082b).**
 
 ### 1. Three kinds of row
 
 | Kind | What it suits | Where | What a miss does |
 |---|---|---|---|
-| **CI absolute** | counts and sizes CI measures exactly: threads, descriptors, bytes per entry, tokens, a median with a wide margin | the row's CI job, on every pull request the job runs for and on every push to `main` | fails the job |
-| **CI relative** | timings and memory, which a shared runner measures with noise | the same | fails the job on a regression (below) |
-| **Release absolute** | what needs a real harness, a real display or the operator's own machine: felt speed, the harness footprint, the web content peak, macOS energy | the release scale run, #814, at the operator's machine's RAM class | a bug, filed before the release notes are written. The release is not blocked by it |
+| **CI absolute** | counts and sizes CI measures exactly: threads, descriptors, bytes per entry, tokens. And, as the one exception below, a timing whose median sits far inside its budget | the row's CI job, on every pull request the job runs for and on every push to `main` | fails the job |
+| **CI relative** | timings and memory far enough above a shared runner's noise for a 20% change to mean something | the same | fails the job on a regression (below) |
+| **Release absolute** | what needs a real harness, a real display or the operator's own machine: felt speed, the harness footprint, the web content peak, macOS energy | the release scale run, #814, at the operator's machine's RAM class | a bug, filed before the release notes are written. The release is not blocked by it, because a row is a target (ADR 0082 §3) and never a cap (§4) |
 
 **A row may have two kinds.** Most felt-speed rows are *release absolute* against the spec's
 value and *CI relative* against `main`, because a shared runner cannot hold a 50 ms keystroke to
 the millisecond, and can tell when a change made it 30% worse.
 
-**The relative rule.** A row regresses when its median on the pull request is **more than 20%
-above the baseline and more than the row's floor above it.** The baseline is **the median of the
-last five green runs of the same job on `main`, on the same operating system.** The floors are:
-5 ms for a timing, 32 MB for memory, 0.1% of a core for CPU. With fewer than five runs on `main`
-(a new row, or a new operating system), the row is reported and fails nothing. 20% is SC-16's
-number. The floor is what keeps a 2 ms hook from failing a job for 0.5 ms of noise.
+**The one exception: an absolute timing in CI, as a median with a wide margin.** A timing is CI
+absolute only when its budget is many times what it measures, so that a shared runner's noise
+cannot reach it, and only as the median of the job's own samples, never one sample. It covers
+exactly these rows: **L5** (the hook, a budget of 50 ms), **L6** (cold start on Linux, a median of
+five against 2 s with a 2.5 s ceiling, as `app builds` already runs it), **T1** and **T2** (rates
+of 1,000 a second), **E1** (idle CPU on Linux, SC-18's row), and **ADR 0079 §4's search and index
+budgets**. Any other timing is CI relative or release absolute.
 
-**Creep.** Five 19% regressions in a row each pass the relative rule. So each push to `main` also
-compares each relative row with its median at the last release tag. A drift of more than 20%
-since the release opens an issue labelled with the row, and blocks nothing.
+**The relative rule, through a standard tool.** CI relative rows are recorded and compared by
+**github-action-benchmark** (`benchmark-action/github-action-benchmark`), the way it is meant to be
+used:
+
+- each push to `main` appends the row's value to the tool's data on a branch of its own,
+  `benchmarks`, in this repo. Only a push to `main` writes it; a pull request's run reads it and
+  never holds a token that can write the repository, so a pull request from a fork changes no
+  baseline;
+- a pull request's run compares its values with the latest on that branch, with
+  `alert-threshold: "120%"` and `fail-on-alert: true`, and comments the comparison;
+- each value the tool sees is a median of the job's own samples (`bench.mjs` already takes 30), so
+  one slow sample is not a regression.
+
+20% is SC-16's number. **A row is relative only when it is far above the runner's noise.** The
+first five green runs of a new row on `main` measure that noise. A row whose run-to-run spread
+over those five is more than a third of the threshold (more than about 7%) does not gate: it is
+recorded as evidence, and its owner ticket either makes it steadier (more samples) or moves it to
+release absolute. So the noise limit is a starting value, and those first five runs set each row's
+place, once for each operating system.
 
 ### 2. The rows
 
@@ -122,17 +139,18 @@ hibernated with the fake harness (ADR 0082 §5).
 | # | What | Budget | Kind and job | Owner |
 |---|---|---|---|---|
 | M1 | charter's own base: web content peak plus the native side, at 200 open chats, scrollback excluded | **≤ 2 GB** (ADR 0082 §3's base) | release absolute (#814) | SC-1, #814 |
-| M2 | the web content process, peak, at the hot target | ≤ 1.5 GB (measured 1,529 MB at 12 chats, ADR 0082) | release absolute (#814); CI relative (`stress`, once SC-1 adds the field) | SC-1 |
+| M2 | the web content process, peak, at the hot target | ≤ 1.5 GB. **At risk, expected to miss:** the only measurement is 1,529 MB, at 12 chats and not at the hot target | release absolute (#814); CI relative (`stress`, once SC-1 adds the field) | SC-1, #814 |
 | M3 | the native side (the app and `charterd` together) with no chats | ≤ 384 MB (measured 183 MB on macOS, 311 MB on Ubuntu) | CI absolute and CI relative (`stress`) | SC-8 |
 | M4 | the native side's cost of one hot chat, scrollback excluded | ≤ 4 MB (measured 3.1 MB on macOS, 0.12 MB on Ubuntu) | CI absolute (`stress`) | SC-8 |
 | M5 | the native side's cost of one hibernated chat | ≤ 1 MB, and no harness process (SC-4's acceptance) | CI absolute (`stress`, with SC-8's 150 hibernated) | SC-4, SC-8 |
 | M6 | an idle hidden session's scrollback at the shipped cap | ≤ 50 MB (the spec; measured 20.2 MB, ADR 0026) | release absolute (`bench.mjs`); CI relative (`bench`, SC-16) | SC-16, SC-5 |
-| M7 | after a round of opening and closing, memory and threads back at the base | within `stress`'s slack (40 threads) and M3 + 32 MB | CI absolute (`stress`, already) | SC-8 |
+| M7 | no leak across rounds: after the first round, each later round's close leaves memory within 32 MB of the first round's close, and threads within 40 of the base | **passes today**: on macOS, 334.6 MB with all closed after round 1 against a 182.6 MB base, then flat in rounds 2 and 3; on Ubuntu, 321.7 MB after round 3; threads back at 45 | CI absolute (`stress`): threads asserted today; the memory half is SC-8's to add | SC-8 |
 
 **M1 is ADR 0082's base, and it binds.** The parts' ceilings add to more than it: M2 + M3 +
 150 × M5 + 50 × M4 is 1.5 GB + 384 MB + 150 MB + 200 MB, about 2.2 GB. They cannot all be at
-their ceilings at once, and M1 is the row that says so. Measured today, the same sum is about
-1.8 GB (ADR 0082's 1,529 MB and 337 MB). A change that pushes the measured M1 past 2 GB moves ADR
+their ceilings at once, and M1 is the row that says so. At the loads measured so far the same sum
+is about 1.8 GB (ADR 0082's 1,529 MB at 12 chats and 337 MB at 50), and M2 at the hot target
+is not yet known: it is the row most likely to break M1 (*At risk* above). A change that pushes the measured M1 past 2 GB moves ADR
 0082's table, which is recomputed from its formula (ADR 0082 §3). This record does not raise the
 2 GB.
 
@@ -159,8 +177,8 @@ their ceilings at once, and M1 is the row that says so. Measured today, the same
 | L1 | keystroke to screen, while the hot target minus one other chats stream | ≤ 50 ms | release absolute (`bench.mjs`, #814); CI relative (`bench`) | SC-16 |
 | L2 | tab or pane switch | ≤ 100 ms | the same | SC-16 |
 | L3 | 2 MB and 13 MB output bursts | the UI never freezes; input and other panes stay responsive | the same, on the burst's longest frame and the keystroke beside it | SC-16 |
-| L4 | synchronized-output animation | smooth, ≥ 30 fps | release absolute (`bench.mjs`) | SC-16 |
-| L5 | a hook call (`charter hook …`), p95, at 50,000 memories and the hot target | ≤ 50 ms (measured 1.8 ms on a small project) | CI absolute (`stress`, KN-22's fixture); CI relative (`bench`) | KN-22, SC-16 |
+| L4 | synchronized-output animation | smooth, ≥ 30 fps (measured 52.4 and 52.0 draws a second against a 60 fps display, ADR 0026) | release absolute (`bench.mjs`) | SC-16 |
+| L5 | a hook call (`charter hook …`), p95, at 50,000 memories and the hot target | ≤ 50 ms. **Not yet measured** at that load | CI absolute, the exception in §1 (`stress`, KN-22's fixture) | KN-22 |
 | L6 | cold start to the first frame, no chats | ≤ 2 s | CI absolute on Linux (`app builds`: median of five ≤ 2 s, none past 2.5 s, as today); release absolute on macOS (#814) | FR-8 |
 | L7 | reattach after the window restarts with `charterd` up: first paint of the focused pane, with the hot target's chats | ≤ 1 s (V7, FD-5's row) | CI relative (`bench`, through the host); release absolute (#814) | FD-5, FD-7 |
 | L8 | relaunch with the hot target's chats to put back: interactive | ≤ 3 s (SC-20's row) | CI relative (`bench`); release absolute (#814) | SC-20 |
@@ -169,12 +187,12 @@ their ceilings at once, and M1 is the row that says so. Measured today, the same
 
 | # | What | Budget | Kind and job | Owner |
 |---|---|---|---|---|
-| T1 | event log throughput | ≥ 1,000 events a second sustained, with L5 not regressing by the relative rule | CI absolute (`stress`) | FD-9 |
+| T1 | event log throughput | ≥ 1,000 events a second sustained, with L5 still inside its budget | CI absolute (`stress`) | FD-9 |
 | T2 | the audit's throughput and group commit | 1,000 entries a second, at most 100 ms between commits (ADR 0075 §7) | CI absolute (`stress`) | AU-3 |
 | D1 | bytes written per event-log event, and per audit entry | ≤ 1 KB, and ≤ 512 B (ADR 0075's estimate is about 400 B), before compression | CI absolute (`stress`) | FD-9, AU-3 |
 | D2 | charter's own disk writes over a busy day at the top class: 50 hot chats at 0.3 tool calls a second for 8 hours | ≤ 100 MB compressed, the event log and the audit together | CI absolute, computed from D1 and T1's run (`stress`) | FD-9 |
 | D3 | a hibernated chat's scrollback snapshot on disk | ≤ 1 MB, an initial value | CI absolute (`stress`) | SC-4 |
-| D4 | every store that grows is bounded | the audit: 1 year and 2 GiB (V25b). The event log: the retention FD-9 sets, initially 90 days and 1 GiB, whichever comes first. `.charter/sessions`, traces and reports: SC-7's rule. Indexes: rebuildable (ADR 0079) | CI absolute (`rust`: each store's prune is tested) | FD-9, SC-7 |
+| D4 | every store that grows is bounded | the audit: 1 year and 2 GiB (V25b). The event log: the retention FD-24 states (ADR 0066), which this record does not set. `.charter/sessions`, traces and reports: SC-7's rule. Indexes: rebuildable (ADR 0079) | CI absolute (`rust`: each store's prune is tested) | FD-24, SC-7 |
 
 The disk-space guard (GL-15: a warning when less than 20 GB is left, and no new branch folder
 when less than 5 GB is) is a guard, not a budget. It is listed in the spec beside these rows and keeps GL-15's numbers.
@@ -184,6 +202,18 @@ when less than 5 GB is) is a guard, not a budget. It is listed in the spec besid
 | # | What | Budget | Kind and job | Owner |
 |---|---|---|---|---|
 | K1 | the context tax: tokens charter injects at a chat's start (briefing, agent files, MCP tool schemas, packs), per harness | ≤ 3,000 on the 50,000-memory, 1,000-persona fixture (KN-30's row) | CI absolute (`stress`, on KN-22's fixture) | KN-30 |
+
+**The formula's inputs** (ADR 0082 §3 asked SC-17 for a row naming them).
+
+| # | What | Value used now | Kind and job | Owner |
+|---|---|---|---|---|
+| F1 | each harness's memory footprint, per process, with its child runs | Claude Code 385 MB (ADR 0082, by `ps` on the operator's machine). Codex and opencode not yet measured | release absolute (#814) | SC-1, #814 |
+| F2 | the scrollback term: one hot chat's scrollback at the shipped cap | 20.2 MB (ADR 0026), the measured value of M6 | release absolute (#814) | #814 |
+| F3 | charter's own base | M1 | release absolute (#814) | #814 |
+
+When #814 records a new F1 or F3, ADR 0082 §3's table is recomputed from its formula with the
+largest measured F1, as that record says. These rows have values, not budgets: they are what
+the targets are computed from.
 
 **By reference.** ADR 0079 §4's six search and index budgets are rows of this table as they
 stand, with the jobs that record names.
@@ -238,8 +268,9 @@ release measurement confirm it (D-0082b).
 - **The release scale run** (#814) is a script on the operator's machine, a step in the release
   checklist, and the *Last measured* column.
 
-**Stores.** This record adds no store. The baselines are the CI runs' own artifacts on `main`,
-tier **None**, kept by the workflow's retention, like `stress.jsonl` (ADR 0082 §5). The *Last
+**Stores.** This record adds no store. The relative baselines are github-action-benchmark's data
+on this repo's `benchmarks` branch, written by CI on pushes to `main`: tier **None**, a branch of
+the repo and not a store charter writes, as `stress.jsonl` is a CI artifact (ADR 0082 §5). The *Last
 measured* column is text in `docs/spec.md`, a document of this repo and not a store charter
 writes.
 
@@ -261,18 +292,22 @@ The code does not change with this record.
 |---|---|
 | `docs/spec.md` | The Limits line and the new section (in this PR) |
 | `CONTEXT.md` | Gains **Performance budget** (in this PR) |
-| `stress.yml` | SC-8: required on macOS and Linux, no `paths:` filter, the `stress` rows asserted, the relative rule against `main`'s last five runs, and the creep check on `main` |
-| `ci.yml` | SC-16: the `bench` job and its rows |
+| `stress.yml` | SC-8: required on macOS and Linux, no `paths:` filter, the `stress` rows asserted, its relative rows through github-action-benchmark |
+| `ci.yml` | SC-16: the `bench` job and its rows, through github-action-benchmark. The `benchmarks` branch, written only from `main` |
 | `stress.jsonl` | SC-1: web content and harness memory. SC-15: descriptors on macOS. C4's spawn count |
 | #814 | The release scale run: its script, its checklist step and the *Last measured* column |
-| FD-9 | The event log's retention and cap (D4's initial values), T1, D1 |
+| FD-9 | T1, D1, D2 |
+| FD-24 | The event log's retention, which D4 requires to exist (ADR 0066) |
 | SC-4, KN-22, KN-30, SC-18, SC-20, FD-5 | Each puts its row's test in its row's job |
 
 ## What this costs
 
 - **Most felt speed is held only relatively in CI.** A change can make keystrokes 15% slower on
-  each of several pull requests and pass each one. The creep check opens an issue, and the
-  release run finds the absolute miss, a release later at worst.
+  each of several pull requests and pass each one, since each is compared with the last value
+  `main` recorded. The tool's chart on the `benchmarks` branch shows the drift, and the release
+  run finds the absolute miss, a release later at worst.
+- **A noisy row does not gate.** A row whose first five runs spread more than about 7% is evidence
+  until its owner makes it steadier.
 - **A smaller machine's timings are never measured by charter.** An 8 GB laptop is held to the
   same limits at 5 hot chats by arithmetic and by reports.
 - **`stress` and `bench` cost runner minutes on every pull request** once required: about sixteen
@@ -283,16 +318,27 @@ The code does not change with this record.
 
 ## What was rejected
 
-- **Absolute budgets for timings in CI.** Shared runners vary more than the margins of the 50 ms
-  and 100 ms limits. P3-01 proposed relative mode, and SC-16 adopted it.
+- **Absolute budgets for most timings in CI.** Shared runners vary more than the margins of the
+  50 ms and 100 ms limits. P3-01 proposed relative mode, and SC-16 adopted it. §1's exception
+  keeps only timings whose budget is many times their median.
 - **Relative budgets for counts.** Threads and descriptors are exact. A relative rule would let a
   leak of three descriptors a chat through.
-- **A relative rule without a floor.** A 2 ms hook measured on a shared runner moves more than
-  20% between runs with no change.
-- **A committed baseline file.** It would need a bot to refresh it, and it would drift from what
-  `main` actually measures. `main`'s own runs are the baseline.
-- **Blocking a release on a release-absolute miss.** These are targets (D-0082b), and a miss with
-  a filed bug is more useful than a held release.
+- **Custom artifact diffing** (a script that downloads `main`'s last five artifacts and compares
+  medians with a floor). It is what the first draft proposed. CLAUDE.md's second priority is
+  *"Never build custom tooling where a standard tool exists"*, and github-action-benchmark is the
+  standard GitHub Actions tool for exactly this: it stores each `main` value, compares a pull
+  request with it at a stated threshold, fails the job and comments. What the custom script had
+  and the tool lacks, a median of several baselines and an absolute floor, is replaced by taking
+  each value as a median of the job's own samples and by gating only rows that are steady (§1).
+- **Bencher.** It is a mature continuous-benchmarking tool with statistical thresholds over a
+  window of runs, which would give back the median of several baselines. It needs Bencher Cloud, an
+  outside service holding the results, or a Bencher server to run, for what one branch in this
+  repo does. It is the next step if github-action-benchmark's single baseline proves too noisy
+  (*Later decisions*).
+- **A committed baseline file.** Someone would have to refresh it, and it would drift from what
+  `main` measures.
+- **Blocking a release on a release-absolute miss.** A row is a target (ADR 0082 §3) and never a
+  cap (ADR 0082 §4), and a miss with a filed bug is more useful than a held release.
 - **Restating ADR 0082's targets per row.** The rows are stated at the hot target, and the
   targets stay ADR 0082's alone.
 - **The table in this record only.** A record is not edited after it is accepted, and the table
@@ -305,20 +351,25 @@ its reason:
 
 1. **Three kinds of row**, and a row may have two. Counts suit CI absolute, timings CI relative,
    and what needs a real harness the release run.
-2. **The relative rule: more than 20% and more than a floor, against the median of `main`'s last
-   five green runs on the same OS.** 20% is SC-16's number; the floor stops noise on small values.
-3. **Floors of 5 ms, 32 MB and 0.1% of a core.** About the noise one run shows on a shared runner.
-4. **A creep check against the last release, which opens an issue.** Relative gates miss slow
-   drift.
+2. **The relative rule is github-action-benchmark's: more than 20% worse than `main`'s last value
+   fails the job.** 20% is SC-16's number, and the tool is the standard one (CLAUDE.md's second
+   priority).
+3. **A row gates only when steady: a spread of at most about 7% over its first five green runs on
+   `main`.** It is a starting value. Those first five runs set each row's place, per OS, and no
+   noise data exists yet to set it otherwise.
+4. **Absolute timings in CI only as a median far inside the budget**: L5, L6, T1, T2, E1 and ADR
+   0079's rows.
 5. **Every row is stated at the hot target, as a base plus per-hot and per-hibernated costs.**
    It matches ADR 0082's formula, so classes are arithmetic.
 6. **M1 to M5 split ADR 0082's 2 GB base without raising it.**
 7. **The initial values: M3 384 MB, M4 4 MB, M5 1 MB, C1 and C2 64 at none, 5 and 4 a hot chat,
-   E2 1% of a core, D1 1 KB and 512 B, D2 100 MB a day, D3 1 MB, the event log 90 days and
-   1 GiB.** Each is above today's measurement where one exists, and each owner ticket may lower
-   it.
+   E2 1% of a core, D1 1 KB and 512 B, D2 100 MB a day, D3 1 MB.** Each is above today's
+   measurement where one exists, and each owner ticket may lower it. M2 keeps 1.5 GB and is marked
+   at risk rather than raised, because ADR 0082's 2 GB base has no room for more. The event log's
+   retention is FD-24's (ADR 0066), and is not set here.
 8. **The spec is the table of record**, with a *Last measured* column filled by the release run.
-9. **A release-absolute miss is a bug filed before the release notes, not a block.**
+9. **A release-absolute miss is a bug filed before the release notes, not a block** (ADR 0082 §3
+   and §4).
 10. **The release scale run is a ticket of its own (#814)**, filed with this PR, as ADR 0082 §5
     asked.
 
@@ -329,6 +380,8 @@ None. Every point is inside V8, Q1, V7, ADR 0082 and the rows of the tickets thi
 ## Later decisions
 
 - **Lowering the initial values** once each owner ticket has measured its row.
+- **Bencher**, if github-action-benchmark's single baseline proves too noisy for the rows that
+  should gate.
 - **A flood row** (ten panes printing at full speed, a keystroke in an eleventh), which SC-12's
   measurement decides.
 - **`charter doctor --perf`**, showing these figures to the operator on their own machine, which is

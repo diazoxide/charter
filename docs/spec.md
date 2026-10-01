@@ -411,8 +411,9 @@ how it is cited and nothing here is renumbered.
 
 ## Limits (acceptance)
 
-Only what a person would notice. Each limit is also a row of the *Performance budgets of record*
-below, which says which job measures it ([ADR 0086](adr/0086-every-performance-budget-names-the-job-that-measures-it-and-ci-holds-charters-own-cost-by-regression.md)).
+Only what a person would notice. Each limit after *Open chats* and *Hot chats*, which are
+ADR 0082's targets, is also a row of the *Performance budgets of record* below, which says which
+job measures it ([ADR 0086](adr/0086-every-performance-budget-names-the-job-that-measures-it-and-ci-holds-charters-own-cost-by-regression.md)).
 
 | | Limit |
 | --- | --- |
@@ -435,14 +436,15 @@ tmux's end-to-end throughput is re-measured in M0 on the same machine and record
 Each row is a target, not a promise, and none is published until SC-8 and a release measurement
 confirm it (D-0082b). A row is added in the pull request that adds its job.
 
-- **Kinds.** *CI absolute*: going past it fails its job. *CI relative*: it fails its job when the
-  pull request's median is more than 20% **and** more than the row's floor (5 ms for a timing,
-  32 MB for memory, 0.1% of a core for CPU) above the median of the last five green runs of that
-  job on `main`, on the same OS; with fewer than five such runs it is reported only. Each push to
-  `main` also compares each relative row with its median at the last release tag, and a drift of
-  more than 20% opens an issue. *Release absolute*: measured with real harnesses on the
-  operator's machine each release by the release scale run (#814); a miss is a bug filed before
-  the release notes.
+- **Kinds.** *CI absolute*: going past it fails its job. It is for counts and sizes, and for the
+  few timings whose budget is many times their median (L5, L6, T1, T2, E1 and ADR 0079's rows),
+  always as a median. *CI relative*: through github-action-benchmark, a pull request fails its job
+  when a row is more than 20% worse than the last value `main` recorded on the `benchmarks`
+  branch; each value is a median of the job's own samples, and a row gates only once its first
+  five green runs on `main` spread by at most about 7% (a starting value), being evidence before
+  that. *Release absolute*: measured with real harnesses on the operator's machine each release
+  by the release scale run (#814); a miss is a bug filed before the release notes, not a block
+  (ADR 0082 §3 and §4).
 - **Load.** Every row is stated at the device's hot target ([ADR 0082](adr/0082-charter-serves-one-persons-agents-first-and-its-scale-is-a-hot-chat-count-per-ram-class.md) §3)
   with the rest of the 200 open chats hibernated, unless it says otherwise. CI measures the top
   class (50 hot, 150 hibernated) with the fake harness. Counts and sizes are a base plus a cost
@@ -454,12 +456,12 @@ confirm it (D-0082b). A row is added in the pull request that adds its job.
 | # | What | Budget | Kind and job | Owner | Last measured |
 |---|---|---|---|---|---|
 | M1 | charter's own base: web content peak plus native side, at 200 open, scrollback excluded | ≤ 2 GB (ADR 0082's base; it binds over M2 to M5) | release absolute | SC-1, #814 | about 1.8 GB (ADR 0082) |
-| M2 | web content process, peak | ≤ 1.5 GB | release absolute; CI relative (`stress`) | SC-1 | 1,529 MB at 12 chats |
+| M2 | web content process, peak, at the hot target | ≤ 1.5 GB. **At risk, expected to miss** | release absolute; CI relative (`stress`) | SC-1, #814 | 1,529 MB at 12 chats, not at the hot target |
 | M3 | native side (app and `charterd`), no chats | ≤ 384 MB | CI absolute and relative (`stress`) | SC-8 | 183 MB macOS, 311 MB Ubuntu |
 | M4 | native cost of a hot chat, scrollback excluded | ≤ 4 MB | CI absolute (`stress`) | SC-8 | 3.1 MB macOS, 0.12 MB Ubuntu |
 | M5 | native cost of a hibernated chat; no harness process | ≤ 1 MB | CI absolute (`stress`) | SC-4, SC-8 | — |
 | M6 | idle hidden session's scrollback at the cap | ≤ 50 MB | release absolute; CI relative (`bench`) | SC-16 | 20.2 MB |
-| M7 | memory and threads back at the base after a round's close | M3 + 32 MB; 40 threads | CI absolute (`stress`) | SC-8 | held |
+| M7 | no leak: after round 1, each round's close within 32 MB of round 1's, threads within 40 of the base | passes today | CI absolute (`stress`; threads asserted today, memory added by SC-8) | SC-8 | macOS 334.6 MB after round 1, flat in rounds 2 and 3 (base 182.6 MB); Ubuntu 321.7 MB after round 3; threads at 45 |
 | C1 | threads | ≤ 64 at none; ≤ 5 a hot chat; 0 a hibernated | CI absolute (`stress`) | SC-8 | 49 / 24 at none; 3.9 / 4.0 a chat |
 | C2 | descriptors | ≤ 64 at none; ≤ 4 a hot chat; 0 a hibernated | CI absolute (`stress`, macOS with SC-15) | SC-8, SC-15 | 54 at none, 3 a chat (Ubuntu) |
 | C3 | open-file limit raised to `min(hard, OPEN_MAX)`; 200 fake chats in a launchd-started app | met | CI absolute (`stress`, macOS) | SC-15 | — |
@@ -469,18 +471,21 @@ confirm it (D-0082b). A row is added in the pull request that adds its job.
 | L1 | keystroke to screen, hot target minus one streaming | ≤ 50 ms | release absolute; CI relative (`bench`) | SC-16 | worst 26 ms |
 | L2 | tab or pane switch | ≤ 100 ms | the same | SC-16 | worst 48 ms |
 | L3 | 2 MB and 13 MB bursts | no freeze; input and other panes responsive | the same | SC-16 | longest frame 42 / 52 ms |
-| L4 | synchronized-output animation | ≥ 30 fps | release absolute | SC-16 | 60 fps |
-| L5 | hook call p95, at 50,000 memories and the hot target | ≤ 50 ms | CI absolute (`stress`); CI relative (`bench`) | KN-22, SC-16 | 1.8 ms, small project |
+| L4 | synchronized-output animation | ≥ 30 fps | release absolute | SC-16 | 52.4 and 52.0 draws/s against a 60 fps display |
+| L5 | hook call p95, at 50,000 memories and the hot target | ≤ 50 ms | CI absolute (`stress`) | KN-22 | not yet measured |
 | L6 | cold start to the first frame, no chats | ≤ 2 s | CI absolute on Linux (`app builds`, median of five, ceiling 2.5 s); release absolute on macOS | FR-8 | 370 ms macOS |
 | L7 | reattach with `charterd` up: first paint of the focused pane | ≤ 1 s | CI relative (`bench`); release absolute | FD-5, FD-7 | — |
 | L8 | relaunch with the hot target's chats to put back: interactive | ≤ 3 s | CI relative (`bench`); release absolute | SC-20 | — |
-| T1 | event log throughput | ≥ 1,000 events/s sustained, L5 not regressing | CI absolute (`stress`) | FD-9 | — |
+| T1 | event log throughput | ≥ 1,000 events/s sustained, L5 inside its budget | CI absolute (`stress`) | FD-9 | — |
 | T2 | audit throughput and group commit | 1,000 entries/s; ≤ 100 ms between commits (ADR 0075) | CI absolute (`stress`) | AU-3 | — |
 | D1 | bytes per event, per audit entry, uncompressed | ≤ 1 KB; ≤ 512 B | CI absolute (`stress`) | FD-9, AU-3 | — |
 | D2 | disk written over a busy day at the top class (50 hot, 0.3 tool calls/s, 8 h) | ≤ 100 MB compressed | CI absolute (`stress`, computed) | FD-9 | — |
 | D3 | a hibernated chat's scrollback snapshot | ≤ 1 MB on disk | CI absolute (`stress`) | SC-4 | — |
-| D4 | every growing store bounded: audit 1 year / 2 GiB; event log 90 days / 1 GiB (FD-9 may change it); sessions, traces, reports by SC-7; indexes rebuildable | each prune tested | CI absolute (`rust`) | FD-9, SC-7 | — |
+| D4 | every growing store bounded: audit 1 year / 2 GiB; event log as FD-24 states (ADR 0066); sessions, traces, reports by SC-7; indexes rebuildable | each prune tested | CI absolute (`rust`) | FD-24, SC-7 | — |
 | K1 | context tax at a chat's start, per harness, on the 50,000-memory, 1,000-persona fixture | ≤ 3,000 tokens | CI absolute (`stress`) | KN-30 | — |
+| F1 | formula input: each harness's footprint per process, child runs included | value, not budget | release absolute | SC-1, #814 | Claude Code 385 MB; Codex, opencode not yet |
+| F2 | formula input: one hot chat's scrollback at the cap | value, not budget | release absolute | #814 | 20.2 MB |
+| F3 | formula input: charter's own base | M1 | release absolute | #814 | as M1 |
 | S | search and index budgets | as [ADR 0079](adr/0079-search-runs-on-derived-sqlite-indexes-one-per-project-clone-and-one-per-machine.md) §4 | as there | KN-1, KN-2, KN-22, KN-32 | — |
 
 **Not a budget, a guard:** GL-15 warns when less than 20 GB of disk is left, and starts no new
