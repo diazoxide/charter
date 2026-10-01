@@ -343,19 +343,19 @@ For this pipeline that means:
 
   | # | Store | Tier | Sync | Backed up | Rebuildable |
   |---|---|---|---|---|---|
-  | 77 | `<data>/telemetry/`, the telemetry store's segments and index (ADR 0083) | Machine | device-bound | no (the §2 exception below) | no |
-  | 78 | `<data>/telemetry/cursors.json`, each export destination's place in the store (ADR 0083) | Machine, rebuildable | device-bound | no | yes |
-  | 79 | `<config>/telemetry.json`, collection, retention and cap, each project's open content gates, and the export destinations (ADR 0083) | Machine | device-bound | yes | no |
-  | 80 | an export destination's auth header (ADR 0083) | Keyring | — | no | no |
+  | 81 | `<data>/telemetry/`, the telemetry store's segments and index (ADR 0083) | Machine | device-bound | no (the §2 exception below) | no |
+  | 82 | `<data>/telemetry/cursors.json`, each export destination's place in the store (ADR 0083) | Machine, rebuildable | device-bound | no | yes |
+  | 83 | `<config>/telemetry.json`, collection, retention and cap, each project's open content gates, and the export destinations (ADR 0083) | Machine | device-bound | yes | no |
+  | 84 | an export destination's auth header (ADR 0083) | Keyring | — | no | no |
 
 - **§2, what FR-10 backs up, gains a second exception**, beside the plain-file vault in Clone
   state: **the telemetry store is Machine and not rebuildable, and FR-10 does not copy it.**
   Losing it costs past charts and nothing charter or the user relies on, and gigabytes of charts
   restored to a new machine are worth less than the backup they would fill. The mark keeps its
   meaning; this is an exception to the rule, named as one.
-- **Row 78 is rebuildable** because a lost cursor restarts its destination at the store's oldest
+- **Row 82 is rebuildable** because a lost cursor restarts its destination at the store's oldest
   record, and OTLP backends take a resend.
-- **Row 79 is device-bound**, not syncable, because its destinations point into this machine's
+- **Row 83 is device-bound**, not syncable, because its destinations point into this machine's
   keyring and its gates are this machine's consent.
 - **The receiver's per-run credential is held in memory only**, and is not a store.
 - **`[telemetry] content` in `charter.toml` and `charter.local.toml`** is a key in files that
@@ -396,7 +396,7 @@ The code does not change with this record.
 
 | Where | What changes |
 |---|---|
-| `docs/plane-format.md` | Rows 77 to 80 in *State charter keeps outside the plane*, marked **decided, not yet written** (in this PR) |
+| `docs/plane-format.md` | Rows 81 to 84 of ADR 0069's inventory, as paths in *State charter keeps outside the plane*, marked **decided, not yet written** (in this PR) |
 | `CONTEXT.md` | **Telemetry** names the receiver and the store; gains **Content gate** and **Export destination** (in this PR) |
 | ADR 0066, ADR 0067, ADR 0068, ADR 0069, ADR 0075, ADR 0076 | Amended above. Their texts are left as accepted, and this record is the amendment |
 | OB-2 | The receiver in `charterd`: OTLP/HTTP on a unix socket behind the egress proxy, per-run credentials and the checks of §2, the stripping of §3, the gates of §4, the pin of §5, the store of §7, the highest-value rule of §10. Its acceptance adds: a record naming another chat is attributed to its credential's chat; a child run's records keep its run; a content attribute with its gate off is not stored |
