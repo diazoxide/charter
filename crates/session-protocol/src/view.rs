@@ -39,7 +39,7 @@ pub struct Limits {
 
 impl Default for Limits {
     fn default() -> Self {
-        Limits { most_queued_bytes: 1 << 20, high_watermark: 256 << 10, low_watermark: 64 << 10 }
+        Limits { most_queued_bytes: 1 << 20, high_watermark: 64 << 10, low_watermark: 16 << 10 }
     }
 }
 
