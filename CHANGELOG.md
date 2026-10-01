@@ -13,6 +13,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The first run lays your project out for the stack you work in.** Project templates for
+  Rust, TypeScript, Python, Go, monorepos and docs-only repos each add an engineer and a
+  reviewer persona, a review checklist (`REVIEW.md`, in the reviewer's refs), how a change is
+  checked in the workspace's `workspace.md`, and the publish and deploy commands, such as
+  `cargo publish` or `twine upload`, that Claude Code and opencode ask you about before they run
+  them. Codex's command rules live in `CODEX_HOME` or a trusted project's `.codex/rules`, which
+  charter does not write, so charter's own guard applies there. The first run picks the
+  template that fits your repo from the files at its top level, and says which when you type the
+  path; pick another, or None, before you open it. Nothing is written into your repo, nothing you
+  already have is replaced, and a command you deny stays denied.
 - **A project can say which charter it needs.** When a newer charter starts writing something an
   older one would get wrong, it lists the feature in `charter.toml`'s `requires` and sets
   `schema = 2`. A charter that lacks the feature, or does not understand the project's `schema`,
@@ -177,6 +187,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`charter guard ask` never turns a command opencode denies into one it asks about.** opencode
+  goes by the last rule that matches a command, so a rule added after `"*": "deny"` used to win
+  over it, and a rule for a command that was denied exactly used to replace the deny. Now a
+  denied command stays denied, and the command says so. Claude Code was never affected: there a
+  deny always wins.
 - **The first run checks `glab` as well as `gh`.** Under **On this machine**, the first window
   now says whether GitLab's `glab` is installed and signed in, beside GitHub's `gh`. If it is
   installed but not signed in, **Sign in to GitLab** opens a shell tab running `glab auth login`.

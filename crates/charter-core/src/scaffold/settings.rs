@@ -67,6 +67,10 @@ pub enum Wrote {
     Created,
     /// Already there; nothing written.
     Present,
+    /// The harness already denies exactly this; nothing written. A rule charter adds never
+    /// takes a command a deny holds back and makes it something the operator can answer
+    /// (FR-17's review, B1).
+    Denied,
     /// The file is not one charter can read and write back; nothing written. The string is
     /// what Python puts in its message: the path, and for a wrong-typed key, which one.
     Malformed(String),
@@ -207,6 +211,16 @@ pub fn ensure_rule(path: &Path, bucket: &str, rule: &str, dry_run: bool) -> Wrot
     if entries.iter().any(|e| e.as_str() == Some(rule)) {
         return Wrote::Present;
     }
+    // Claude Code weighs `deny` before `ask` and `allow` whatever the order, so a rule added
+    // here never outranks a broader deny; an exact one is said, and nothing is added beside it.
+    if bucket != "deny"
+        && perms
+            .get("deny")
+            .and_then(Value::as_array)
+            .is_some_and(|denied| denied.iter().any(|e| e.as_str() == Some(rule)))
+    {
+        return Wrote::Denied;
+    }
     entries.push(Value::String(rule.to_owned()));
     perms.insert(bucket.to_owned(), Value::Array(entries));
     map.insert("permissions".to_owned(), Value::Object(perms));
@@ -234,9 +248,29 @@ pub fn ensure_opencode_ask(root: &Path, glob: &str, dry_run: bool) -> Wrote {
 
 /// [`ensure_opencode_ask`] for either decision: `permission.bash[glob] = decision`, where the
 /// check is "is the decision already this one".
+///
+/// **Never weaker than a deny that is there.** opencode decides a command by the last rule in
+/// `permission.bash` that matches it (opencode.ai/docs/permissions: "the last matching rule
+/// winning"), so where Python appends, this:
+///
+/// - leaves an exact `deny` for `glob` as it is, and answers [`Wrote::Denied`];
+/// - puts a new `glob` **right after the last entry that is not a deny and whose pattern
+///   matches `glob`'s own text** — `"cargo *": "allow"` for `cargo publish *` — so no allow or
+///   ask that would answer the same command comes after it and outranks it, which in an
+///   allowlist (`"*": "deny"`, then what is let through) would leave the new rule doing
+///   nothing. A deny written after that entry still comes after the new rule and still decides;
+/// - with no such entry, puts it **before the first `deny`**, so every deny that matches the
+///   same command still comes after it: `"*": "deny"` stays the last word on `cargo publish`;
+/// - with neither, appends it, as Python does.
+///
+/// Patterns are compared as opencode compares them, `*` and `?` as wildcards, against the
+/// glob's text. An existing entry for `glob` with another decision (an `allow` made an `ask`)
+/// changes where it stands, as Python changes it, unless a later non-deny entry matches it; then
+/// it is moved by the same rule, so that broader allow cannot outrank it. A `deny` is appended,
+/// the last word wherever it would otherwise go.
 pub fn ensure_opencode_rule(root: &Path, glob: &str, decision: &str, dry_run: bool) -> Wrote {
     let path = root.join(OPENCODE);
-    let mut map = if path.exists() {
+    let map = if path.exists() {
         let parsed = std::fs::read_to_string(&path)
             .ok()
             .and_then(|raw| pyjson::loads_strict(&raw));
@@ -247,7 +281,7 @@ pub fn ensure_opencode_rule(root: &Path, glob: &str, decision: &str, dry_run: bo
     } else {
         Map::new()
     };
-    let mut perms = match map.get("permission") {
+    let perms = match map.get("permission") {
         Some(Value::Object(perms)) => perms.clone(),
         Some(_) => {
             return Wrote::Malformed(format!(
@@ -267,17 +301,72 @@ pub fn ensure_opencode_rule(root: &Path, glob: &str, decision: &str, dry_run: bo
         }
         None => Map::new(),
     };
-    if block.get(glob).and_then(Value::as_str) == Some(decision) {
+    let had = block.get(glob).and_then(Value::as_str);
+    if had == Some(decision) {
         return Wrote::Present;
     }
-    block.insert(glob.to_owned(), Value::String(decision.to_owned()));
+    if had == Some("deny") {
+        return Wrote::Denied;
+    }
+    let matches =
+        |pattern: &str| glob::Pattern::new(pattern).is_ok_and(|pattern| pattern.matches(glob));
+    // An entry already there with another decision changes where it stands, as Python changes
+    // it, unless a later entry that is not a deny matches it: that one would answer first, so
+    // the entry is taken out and placed again by the rule below.
+    if had.is_some() {
+        let outranked = block
+            .iter()
+            .skip_while(|(pattern, _)| pattern.as_str() != glob)
+            .skip(1)
+            .any(|(pattern, value)| value.as_str() != Some("deny") && matches(pattern));
+        if !outranked {
+            block.insert(glob.to_owned(), Value::String(decision.to_owned()));
+            return finish(&path, map, perms, block, dry_run);
+        }
+        block.shift_remove(glob);
+    }
+    let after_match = block
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, (pattern, value))| value.as_str() != Some("deny") && matches(pattern))
+        .map(|(i, _)| i + 1);
+    let first_deny = block
+        .values()
+        .position(|value| value.as_str() == Some("deny"));
+    match after_match.or(first_deny) {
+        Some(at) if decision != "deny" && at < block.len() => {
+            let mut placed = Map::new();
+            for (i, (key, value)) in std::mem::take(&mut block).into_iter().enumerate() {
+                if i == at {
+                    placed.insert(glob.to_owned(), Value::String(decision.to_owned()));
+                }
+                placed.insert(key, value);
+            }
+            block = placed;
+        }
+        _ => {
+            block.insert(glob.to_owned(), Value::String(decision.to_owned()));
+        }
+    }
+    finish(&path, map, perms, block, dry_run)
+}
+
+/// Puts `block` back as `permission.bash` and writes `opencode.json`, or says it would.
+fn finish(
+    path: &Path,
+    mut map: Map<String, Value>,
+    mut perms: Map<String, Value>,
+    block: Map<String, Value>,
+    dry_run: bool,
+) -> Wrote {
     perms.insert("bash".to_owned(), Value::Object(block));
     map.insert("permission".to_owned(), Value::Object(perms));
     let text = pyjson::dumps_indent2(&Value::Object(map));
     if dry_run {
         return Wrote::Created;
     }
-    match write(&path, &text) {
+    match write(path, &text) {
         Ok(()) => Wrote::Created,
         Err(wrote) => wrote,
     }

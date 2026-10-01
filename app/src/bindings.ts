@@ -273,12 +273,19 @@ export const commands = {
 	firstRunFound: () => typedError<FirstRunFound, string>(__TAURI_INVOKE("first_run_found")),
 	/**
 	 *  Opens `path`, a repo, into this machine's local plane: the plane is made when there is
-	 *  none, the repo is cloned into a workspace named after it, and the plane is opened
-	 *  **through the trust gate**, exactly as `create_project` opens a plane it has just made.
+	 *  none, laid out from the project template `template` names (FR-17), the repo is cloned into
+	 *  a workspace named after it, and the plane is opened **through the trust gate**, exactly as
+	 *  `create_project` opens a plane it has just made.
 	 * 
 	 *  Nothing asks where the plane goes (W10). The repo is read and never written to.
 	 */
-	openRepo: (path: string) => typedError<OpenedRepo, string>(__TAURI_INVOKE("open_repo", { path })),
+	openRepo: (path: string, template: TemplateChoice) => typedError<OpenedRepo, string>(__TAURI_INVOKE("open_repo", { path, template })),
+	/**
+	 *  The project template that fits the repo at `path`, by id, or `null` when none does or `path`
+	 *  is not a full path to a directory: what the first run's "Fits the repo" says it will pick
+	 *  (FR-17). It asks only whether files are there, and reads nothing.
+	 */
+	templateThatFits: (path: string) => typedError<string | null, string>(__TAURI_INVOKE("template_that_fits", { path })),
 	/**
 	 *  Opens this machine's local project with no repo in it, made first when there is none, and
 	 *  through the trust gate: what "Sign in to GitHub" (or GitLab) on the first run opens, so the
@@ -1650,6 +1657,8 @@ export type FirstRunFound = {
 	 *  chosen, so which forge the project will use is not known yet: both CLIs are checked.
 	 */
 	forges: ForgeRow[],
+	/**  The project templates this charter ships, in the order the screen lists them. */
+	templates: TemplateRow[],
 };
 
 /**  One forge's CLI, as the first-run screen lists it. */
@@ -2109,6 +2118,8 @@ export type OpenedRepo = {
 	 *  (FR-18a): the window offers them in a tab beside the first chat when there are any.
 	 */
 	instructions: number,
+	/**  The project template the project was laid out from, by id, when one was (FR-17). */
+	template: string | null,
 };
 
 /**  One part of a panel's body. */
@@ -3148,6 +3159,28 @@ export type SubjectCurations = {
 	left_out: LeftOut[],
 	/**  Why this subject has no list at all — a workspace deleted a moment ago, say. */
 	trouble: string | null,
+};
+
+/**
+ *  Which project template the repo's project is laid out from: `charter_core::firstrun::Choice`
+ *  on the wire, which the core keeps free of serde and specta.
+ */
+export type TemplateChoice = 
+/**  The one that fits the repo, or none when none does. What the screen starts on. */
+{ kind: "fits" } | 
+/**  No template: the screen's *None*. */
+{ kind: "no-template" } | 
+/**  This one. */
+{ kind: "named"; id: string };
+
+/**  One project template, as the first-run screen offers it (FR-17). */
+export type TemplateRow = {
+	/**  What `open_repo` is asked for it by. */
+	id: string,
+	/**  What the screen calls it. */
+	title: string,
+	/**  One line on what it is for. */
+	summary: string,
 };
 
 /**  One theme a project may pick, as the Theme select lists it. */

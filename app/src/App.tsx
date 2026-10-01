@@ -26,6 +26,7 @@ import {
   type PlaneId,
   type RelaunchChoice,
   type RelaunchQuestion,
+  type TemplateChoice,
 } from "./bindings";
 import { UnsavedMark } from "./SavingView";
 import { SessionBusNotice } from "./SessionBusNotice";
@@ -575,34 +576,39 @@ function App() {
    * Answers why nothing was opened, or `undefined` when something was, so the first run and the
    * New project dialog can each keep the refusal where the operator is standing.
    */
-  const openRepo = useCallback(async (path: string): Promise<string | undefined> => {
-    setOpeningRepo(true);
-    const answer = await commands
-      .openRepo(path)
-      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
-    setOpeningRepo(false);
-    if (answer.status === "error") return answer.error;
-    const { opened, workspace, cwd, harness, instructions } = answer.data;
-    const plane = opened.plane;
-    const ask = opened.ask;
-    setFirstChat((was) => ({
-      workspace,
-      cwd,
-      harness,
-      instructions,
-      plane,
-      asking: plane === null ? (ask?.path ?? null) : null,
-      at: (was?.at ?? 0) + 1,
-    }));
-    if (plane === null) {
-      if (ask)
-        setApproving((queue) => (queue.some((q) => q.path === ask.path) ? queue : [...queue, ask]));
+  const openRepo = useCallback(
+    async (path: string, template: TemplateChoice): Promise<string | undefined> => {
+      setOpeningRepo(true);
+      const answer = await commands
+        .openRepo(path, template)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      setOpeningRepo(false);
+      if (answer.status === "error") return answer.error;
+      const { opened, workspace, cwd, harness, instructions } = answer.data;
+      const plane = opened.plane;
+      const ask = opened.ask;
+      setFirstChat((was) => ({
+        workspace,
+        cwd,
+        harness,
+        instructions,
+        plane,
+        asking: plane === null ? (ask?.path ?? null) : null,
+        at: (was?.at ?? 0) + 1,
+      }));
+      if (plane === null) {
+        if (ask)
+          setApproving((queue) =>
+            queue.some((q) => q.path === ask.path) ? queue : [...queue, ask],
+          );
+        return undefined;
+      }
+      setPlanes((was) => (was.includes(plane) ? was : [...was, plane]));
+      setShowing({ at: "plane", plane });
       return undefined;
-    }
-    setPlanes((was) => (was.includes(plane) ? was : [...was, plane]));
-    setShowing({ at: "plane", plane });
-    return undefined;
-  }, []);
+    },
+    [],
+  );
 
   /**
    * "Sign in to GitHub" or "Sign in to GitLab" on the first run (FR-4, W10's "detected and
@@ -1634,9 +1640,9 @@ function App() {
                 onOpenRepo={
                   heldSomething
                     ? undefined
-                    : (path) => {
+                    : (path, template) => {
                         setRepoTrouble(undefined);
-                        void openRepo(path).then(setRepoTrouble);
+                        void openRepo(path, template).then(setRepoTrouble);
                       }
                 }
                 onSignInToForge={(cli) => {
@@ -1676,7 +1682,9 @@ function App() {
           }
           onOpenRepo={(path) => {
             setCreateTrouble(undefined);
-            void openRepo(path).then((refused) => {
+            // The New project dialog lays out no template: the first run is where one is
+            // chosen (FR-17).
+            void openRepo(path, { kind: "no-template" }).then((refused) => {
               if (refused === undefined) setCreating(false);
               else setCreateTrouble(refused);
             });

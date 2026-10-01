@@ -118,6 +118,7 @@ pub mod standings;
 pub mod start;
 pub mod state;
 pub(crate) mod steer;
+pub mod template;
 #[cfg(test)]
 mod testgit;
 // Public, and not `cfg(test)`, for one reason: charter-core's integration tests are separate

@@ -1,5 +1,5 @@
 //! The first run's two commands (FR-4, #603): what this machine has, and a repository opened
-//! into the local plane.
+//! into the local plane, laid out from the project template the operator chose (FR-17).
 //!
 //! The rules are `charter_core::firstrun`'s. This module is the window's door to them: it puts
 //! the answers in the shape the window draws, keeps the slow parts off the thread that draws,
@@ -40,6 +40,17 @@ pub struct ForgeRow {
     pub signed_in: bool,
 }
 
+/// One project template, as the first-run screen offers it (FR-17).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct TemplateRow {
+    /// What `open_repo` is asked for it by.
+    pub id: String,
+    /// What the screen calls it.
+    pub title: String,
+    /// One line on what it is for.
+    pub summary: String,
+}
+
 /// What the first-run screen shows about this machine.
 #[derive(Debug, Clone, serde::Serialize, specta::Type)]
 pub struct FirstRunFound {
@@ -47,6 +58,43 @@ pub struct FirstRunFound {
     /// Every forge charter works with, GitHub first. The first run comes before any repo is
     /// chosen, so which forge the project will use is not known yet: both CLIs are checked.
     pub forges: Vec<ForgeRow>,
+    /// The project templates this charter ships, in the order the screen lists them.
+    pub templates: Vec<TemplateRow>,
+}
+
+/// Which project template the repo's project is laid out from: `charter_core::firstrun::Choice`
+/// on the wire, which the core keeps free of serde and specta.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, specta::Type)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum TemplateChoice {
+    /// The one that fits the repo, or none when none does. What the screen starts on.
+    Fits,
+    /// No template: the screen's *None*.
+    NoTemplate,
+    /// This one.
+    Named { id: String },
+}
+
+impl From<TemplateChoice> for firstrun::Choice {
+    fn from(choice: TemplateChoice) -> Self {
+        match choice {
+            TemplateChoice::Fits => Self::Fits,
+            TemplateChoice::NoTemplate => Self::NoTemplate,
+            TemplateChoice::Named { id } => Self::Named(id),
+        }
+    }
+}
+
+/// Every project template this charter ships.
+fn templates() -> Vec<TemplateRow> {
+    charter_core::template::all()
+        .iter()
+        .map(|one| TemplateRow {
+            id: one.id.clone(),
+            title: one.title.clone(),
+            summary: one.summary.clone(),
+        })
+        .collect()
 }
 
 /// The forges the first run checks, in the order it lists them.
@@ -86,6 +134,8 @@ pub struct OpenedRepo {
     /// How many of the repo's agent instruction files can be added to the workspace's memory
     /// (FR-18a): the window offers them in a tab beside the first chat when there are any.
     pub instructions: u32,
+    /// The project template the project was laid out from, by id, when one was (FR-17).
+    pub template: Option<String>,
 }
 
 /// One agent instruction file in a workspace's clone, as the tab that offers it draws it
@@ -143,15 +193,20 @@ pub async fn first_run_found() -> Result<FirstRunFound, String> {
             &|kind| charter_core::forge::find_cli(kind.cli()).is_some(),
             &|kind| Forge::default_of(kind).check_auth().is_ok(),
         );
-        FirstRunFound { harnesses, forges }
+        FirstRunFound {
+            harnesses,
+            forges,
+            templates: templates(),
+        }
     })
     .await
     .map_err(|err| format!("charter could not look at this machine: {err}"))
 }
 
 /// Opens `path`, a repo, into this machine's local plane: the plane is made when there is
-/// none, the repo is cloned into a workspace named after it, and the plane is opened
-/// **through the trust gate**, exactly as `create_project` opens a plane it has just made.
+/// none, laid out from the project template `template` names (FR-17), the repo is cloned into
+/// a workspace named after it, and the plane is opened **through the trust gate**, exactly as
+/// `create_project` opens a plane it has just made.
 ///
 /// Nothing asks where the plane goes (W10). The repo is read and never written to.
 #[tauri::command]
@@ -159,10 +214,11 @@ pub async fn first_run_found() -> Result<FirstRunFound, String> {
 pub async fn open_repo(
     planes: tauri::State<'_, Planes>,
     path: String,
+    template: TemplateChoice,
 ) -> Result<OpenedRepo, String> {
     let config = config_of(&planes)?;
     let (root, taken, harness, instructions) = tauri::async_runtime::spawn_blocking(move || {
-        let (root, taken) = taken_in(&config, Path::new(&path))?;
+        let (root, taken) = taken_in(&config, Path::new(&path), &template.into())?;
         let harness = firstrun::only_ready(&firstrun::harnesses_here());
         // Counted, not written: the tab that offers them is where the operator says yes.
         let instructions = offered(&root, &taken.workspace);
@@ -177,7 +233,27 @@ pub async fn open_repo(
         cwd: taken.clone.display().to_string(),
         harness: harness.map(|one| one.name().to_owned()),
         instructions,
+        template: taken.template,
     })
+}
+
+/// The project template that fits the repo at `path`, by id, or `null` when none does or `path`
+/// is not a full path to a directory: what the first run's "Fits the repo" says it will pick
+/// (FR-17). It asks only whether files are there, and reads nothing.
+#[tauri::command]
+#[specta::specta]
+pub async fn template_that_fits(path: String) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || fits(&path))
+        .await
+        .map_err(|err| format!("charter could not look at the repo: {err}"))
+}
+
+fn fits(path: &str) -> Option<String> {
+    let repo = Path::new(path);
+    if !repo.is_absolute() || !repo.is_dir() {
+        return None;
+    }
+    charter_core::template::detect(repo).map(|one| one.id.clone())
 }
 
 /// How many of workspace `ws`'s instruction files can be added to its memory. A workspace
@@ -286,8 +362,13 @@ fn config_of(planes: &Planes) -> Result<PathBuf, String> {
     })
 }
 
-/// The local plane under `config`, made if it is not there, with `repo` taken in.
-fn taken_in(config: &Path, repo: &Path) -> Result<(PathBuf, firstrun::TakenIn), String> {
+/// The local plane under `config`, made if it is not there, with `repo` taken in and the
+/// project laid out from the template `choice` names.
+fn taken_in(
+    config: &Path,
+    repo: &Path,
+    choice: &firstrun::Choice,
+) -> Result<(PathBuf, firstrun::TakenIn), String> {
     if !repo.is_absolute() {
         return Err(format!(
             "'{}' is not a full path, so charter cannot tell which directory it means. Pick a \
@@ -296,7 +377,7 @@ fn taken_in(config: &Path, repo: &Path) -> Result<(PathBuf, firstrun::TakenIn), 
         ));
     }
     let root = firstrun::ensure_local_plane(config)?;
-    let taken = firstrun::take_in(&root, repo)?;
+    let taken = firstrun::take_in_from(&root, repo, choice)?;
     Ok((root, taken))
 }
 
@@ -373,12 +454,72 @@ mod tests {
     }
 
     #[test]
+    fn the_window_names_a_template_by_its_kind_and_id() {
+        let said = |json: &str| {
+            firstrun::Choice::from(
+                serde_json::from_str::<TemplateChoice>(json).expect("the window's spelling"),
+            )
+        };
+
+        assert_eq!(said(r#"{"kind":"fits"}"#), firstrun::Choice::Fits);
+        assert_eq!(
+            said(r#"{"kind":"no-template"}"#),
+            firstrun::Choice::NoTemplate
+        );
+        assert_eq!(
+            said(r#"{"kind":"named","id":"rust"}"#),
+            firstrun::Choice::Named("rust".to_owned())
+        );
+    }
+
+    #[test]
+    fn the_first_run_names_the_template_that_fits_a_typed_path() {
+        let dir = tempfile::tempdir().expect("a directory");
+        std::fs::write(dir.path().join("go.mod"), "").expect("a marker");
+
+        assert_eq!(
+            fits(&dir.path().display().to_string()).as_deref(),
+            Some("go")
+        );
+        assert_eq!(
+            fits("widget"),
+            None,
+            "a path that is not a full one names nothing"
+        );
+        assert_eq!(fits(&dir.path().join("gone").display().to_string()), None);
+    }
+
+    #[test]
+    fn the_first_run_offers_every_template_charter_ships() {
+        let offered: Vec<String> = templates().into_iter().map(|row| row.id).collect();
+
+        assert_eq!(
+            offered,
+            ["docs", "go", "monorepo", "python", "rust", "typescript"].map(str::to_owned)
+        );
+    }
+
+    #[test]
+    fn a_repo_opened_on_the_first_run_is_laid_out_from_the_template_it_was_given() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let config = dir.path().join("config");
+        let repo = a_repo(&dir.path().join("widget"));
+
+        let (root, taken) =
+            taken_in(&config, &repo, &firstrun::Choice::Named("go".to_owned())).expect("opened");
+
+        assert_eq!(taken.template.as_deref(), Some("go"));
+        assert!(root.join("personas/go-reviewer/refs/REVIEW.md").is_file());
+    }
+
+    #[test]
     fn a_new_machine_gets_a_local_plane_with_the_repository_as_a_workspace_of_its_name() {
         let dir = tempfile::tempdir().expect("a directory");
         let config = dir.path().join("config");
         let repo = a_repo(&dir.path().join("widget"));
 
-        let (root, taken) = taken_in(&config, &repo).expect("the repository is opened");
+        let (root, taken) =
+            taken_in(&config, &repo, &firstrun::Choice::Fits).expect("the repository is opened");
 
         assert_eq!(
             root,
@@ -392,11 +533,19 @@ mod tests {
     fn a_second_repository_goes_into_the_same_local_plane() {
         let dir = tempfile::tempdir().expect("a directory");
         let config = dir.path().join("config");
-        let (first, _) =
-            taken_in(&config, &a_repo(&dir.path().join("one"))).expect("the first repository");
+        let (first, _) = taken_in(
+            &config,
+            &a_repo(&dir.path().join("one")),
+            &firstrun::Choice::Fits,
+        )
+        .expect("the first repository");
 
-        let (second, taken) =
-            taken_in(&config, &a_repo(&dir.path().join("two"))).expect("the second repository");
+        let (second, taken) = taken_in(
+            &config,
+            &a_repo(&dir.path().join("two")),
+            &firstrun::Choice::Fits,
+        )
+        .expect("the second repository");
 
         assert_eq!(first, second);
         assert_eq!(taken.workspace, "two");
@@ -408,7 +557,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let config = dir.path().join("config");
 
-        let refused = taken_in(&config, Path::new("widget")).expect_err("refused");
+        let refused =
+            taken_in(&config, Path::new("widget"), &firstrun::Choice::Fits).expect_err("refused");
 
         assert!(refused.contains("is not a full path"), "{refused}");
         assert!(!firstrun::local_plane(&config).exists());
@@ -433,7 +583,7 @@ mod tests {
             .expect("git runs in a test");
             assert!(done.status.success(), "git {argv:?}");
         }
-        let (root, taken) = taken_in(&config, &repo).expect("opened");
+        let (root, taken) = taken_in(&config, &repo, &firstrun::Choice::Fits).expect("opened");
 
         assert_eq!(offered(&root, &taken.workspace), 1);
         let files = instruction_files(&root, &taken.workspace).expect("read");

@@ -70,6 +70,10 @@ const FOUND = {
     { cli: "gh", title: "GitHub", installed: true, signed_in: false },
     { cli: "glab", title: "GitLab", installed: true, signed_in: false },
   ],
+  templates: [
+    { id: "go", title: "Go", summary: "A Go module." },
+    { id: "rust", title: "Rust", summary: "A Cargo crate or workspace." },
+  ],
 };
 
 const ASK = {
@@ -117,6 +121,65 @@ async function openRepoByPath(path: string) {
   return person;
 }
 
+describe("the first run's project template (FR-17)", () => {
+  it("offers every template, starting on the one that fits the repo", async () => {
+    core();
+    render(<App />);
+
+    const group = await screen.findByRole("radiogroup", { name: "Project template" });
+    // What fits the repo, every template the core ships, and none.
+    expect(within(group).getAllByRole("radio")).toHaveLength(4);
+    expect(within(group).getByRole("radio", { name: "Fits the repo" })).toBeChecked();
+    expect(within(group).getByRole("radio", { name: "Rust" })).not.toBeChecked();
+    expect(within(group).getByRole("radio", { name: "None" })).not.toBeChecked();
+    expect(within(group).getByText("A Cargo crate or workspace.")).toBeInTheDocument();
+  });
+
+  it("says which template fits the repo whose path is typed", async () => {
+    const { calls } = core((cmd, args) =>
+      cmd === "template_that_fits" ? (args.path === REPO ? "rust" : null) : undefined,
+    );
+    render(<App />);
+
+    const group = await screen.findByRole("radiogroup", { name: "Project template" });
+    await userEvent.setup().type(screen.getByLabelText("Or type the repo's path"), REPO);
+
+    const fits = within(group).getByRole("radio", { name: "Fits the repo" });
+    await waitFor(() => expect(fits).toHaveAccessibleDescription(/Rust/));
+    expect(calls("template_that_fits").at(-1)?.args).toEqual({ path: REPO });
+  });
+
+  it("opens the repo with the template the operator picked", async () => {
+    const { calls } = core();
+    render(<App />);
+
+    const group = await screen.findByRole("radiogroup", { name: "Project template" });
+    await userEvent.setup().click(within(group).getByRole("radio", { name: "Rust" }));
+    await openRepoByPath(REPO);
+
+    await vi.waitFor(() =>
+      expect(calls("open_repo").map((one) => one.args)).toEqual([
+        { path: REPO, template: { kind: "named", id: "rust" } },
+      ]),
+    );
+  });
+
+  it("opens the repo with no template when the operator picks none", async () => {
+    const { calls } = core();
+    render(<App />);
+
+    const group = await screen.findByRole("radiogroup", { name: "Project template" });
+    await userEvent.setup().click(within(group).getByRole("radio", { name: "None" }));
+    await openRepoByPath(REPO);
+
+    await vi.waitFor(() =>
+      expect(calls("open_repo").map((one) => one.args)).toEqual([
+        { path: REPO, template: { kind: "no-template" } },
+      ]),
+    );
+  });
+});
+
 describe("the first run", () => {
   it("asks for a repo, says what a project is, and nothing about where it goes", async () => {
     core();
@@ -161,7 +224,9 @@ describe("the first run", () => {
 
     const person = await openRepoByPath(REPO);
 
-    expect(calls("open_repo").map((one) => one.args)).toEqual([{ path: REPO }]);
+    expect(calls("open_repo").map((one) => one.args)).toEqual([
+      { path: REPO, template: { kind: "fits" } },
+    ]);
     // The first chat is asked for by itself: the harness picker, which ADR 0022 keeps.
     const picker = await screen.findByRole("dialog", { name: "Start a chat" });
     await person.click(within(picker).getByRole("button", { name: "Start" }));

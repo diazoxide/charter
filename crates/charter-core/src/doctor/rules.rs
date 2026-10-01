@@ -196,7 +196,8 @@ enum Found {
 
 fn found(wrote: settings::Wrote) -> Found {
     match wrote {
-        settings::Wrote::Present => Found::Present,
+        // A deny is stricter than the ask rule asked about: the rule is not missing.
+        settings::Wrote::Present | settings::Wrote::Denied => Found::Present,
         settings::Wrote::Created => Found::Missing,
         settings::Wrote::Malformed(what) => Found::Unreadable(format!("{what} is not valid")),
         settings::Wrote::Blocked(dir) => Found::Unreadable(format!(
