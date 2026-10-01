@@ -162,4 +162,18 @@ mod tests {
         assert!(root.is_absolute(), "{}", root.display());
         assert!(root.ends_with("rel/data"));
     }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_data_home_through_a_link_to_a_directory_inside_a_repository_is_refused() {
+        // `link/.git` is not there, so a check that walked the spelled path would pass it.
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        std::fs::create_dir_all(repo.join("sub")).unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(repo.join("sub"), &link).unwrap();
+
+        assert!(refusal(&link.join("data")).is_some());
+    }
 }

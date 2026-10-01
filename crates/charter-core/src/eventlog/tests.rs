@@ -232,6 +232,7 @@ fn tool_call(
         rule: (decision == crate::hookwire::Decision::Deny).then(|| "no-force-push".to_owned()),
         hook_ms: 3,
         agent: None,
+        at_ms: 0,
     }
 }
 
@@ -446,15 +447,18 @@ fn a_sub_agents_calls_are_a_child_run_of_the_run_that_was_current_until_its_stop
         "the same agent is the same child run"
     );
     assert_eq!(stopped.run, first.run, "its stop is its own");
-    assert_ne!(
-        after.run, first.run,
-        "the child run ended at its SubagentStop"
+    assert_eq!(
+        after.run.as_deref(),
+        Some(parent.as_str()),
+        "a stopped agent's late line is the parent run's, and mints no second child run"
     );
+    assert_eq!(after.parent_run, None);
     let started: Vec<_> = read(dir.path())
         .unwrap()
         .into_iter()
         .filter(|e| e.kind == "run.started")
         .collect();
+    assert_eq!(started.len(), 2, "the parent's run and one child run: {started:#?}");
     assert_eq!(started[1].body["cause"], "child");
     assert_eq!(started[1].parent_run.as_deref(), Some(parent.as_str()));
 }
@@ -525,4 +529,95 @@ fn a_tool_calls_duration_is_taken_once_and_a_call_left_open_is_let_go_by_age() {
         stale_post.body.get("tool_ms").is_none(),
         "the open call was let go by age"
     );
+}
+
+#[test]
+fn a_sub_agents_child_run_ends_with_its_parents_run() {
+    use crate::hookwire::Decision;
+    use crate::state::Event::{SessionEnd, SessionStart, UserPromptSubmit};
+    use std::time::Instant;
+    let dir = tempfile::tempdir().unwrap();
+    let plane = Path::new("/p");
+    let mut host = recorder(dir.path());
+    host.report(plane, &report(5, UserPromptSubmit), Followed::No).unwrap();
+    let mut by_agent = tool_call(5, "pretooluse", Decision::None);
+    by_agent.agent = Some("agent-1".to_owned());
+    let before = host.tool(plane, &by_agent, Instant::now()).unwrap();
+
+    // `/clear`: the parent run ends, and a Codex sub-agent, whose `SubagentStop` charter does
+    // not arm, ends with it.
+    host.report(plane, &report(5, SessionStart), Followed::Moved).unwrap();
+    let after_clear = host.tool(plane, &by_agent, Instant::now()).unwrap();
+    host.report(plane, &report(5, SessionEnd), Followed::No).unwrap();
+    let after_end = host.tool(plane, &by_agent, Instant::now()).unwrap();
+
+    assert_ne!(after_clear.run, before.run, "the child of the cleared run ended with it");
+    assert_ne!(after_clear.parent_run, before.parent_run, "a child of the new run");
+    assert_ne!(after_end.run, after_clear.run, "a child run ends with its parent's session");
+}
+
+#[test]
+fn a_tool_calls_post_hook_heard_before_its_pre_hook_still_pairs_by_when_each_ran() {
+    use crate::hookwire::Decision;
+    use std::time::Instant;
+    let dir = tempfile::tempdir().unwrap();
+    let plane = Path::new("/p");
+    let mut host = recorder(dir.path());
+    let mut pre = tool_call(1, "pretooluse", Decision::None);
+    pre.at_ms = 10_000;
+    let mut post = tool_call(1, "posttooluse", Decision::None);
+    post.at_ms = 10_420;
+
+    let post_first = host.tool(plane, &post, Instant::now()).unwrap();
+    let pre_second = host.tool(plane, &pre, Instant::now()).unwrap();
+
+    assert!(post_first.body.get("tool_ms").is_none(), "its pre hook is not heard yet");
+    assert_eq!(
+        pre_second.body["tool_ms"], 420,
+        "the second of the pair says how long the tool ran, by the hooks' own clocks"
+    );
+}
+
+#[test]
+fn a_post_hook_heard_long_after_its_pre_hook_gives_no_duration() {
+    use crate::hookwire::Decision;
+    use std::time::{Duration, Instant};
+    let dir = tempfile::tempdir().unwrap();
+    let plane = Path::new("/p");
+    let mut host = recorder(dir.path());
+    let at = Instant::now();
+
+    host.tool(plane, &tool_call(1, "pretooluse", Decision::None), at).unwrap();
+    let late = host
+        .tool(
+            plane,
+            &tool_call(1, "posttooluse", Decision::None),
+            at + CALL_IS_OPEN_AT_MOST + Duration::from_secs(1),
+        )
+        .unwrap();
+
+    assert!(late.body.get("tool_ms").is_none(), "a call is open an hour at most");
+}
+
+#[test]
+fn a_write_that_failed_partway_is_cut_back_before_the_next_event() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut log = Log::open(dir.path(), DEVICE).unwrap();
+    log.append(Some("CHAT"), None, None, "chat.opened", serde_json::json!({}))
+        .unwrap();
+
+    log.fail_the_next_write_after(10);
+    assert!(
+        log.append(Some("CHAT"), None, None, "chat.opened", serde_json::json!({}))
+            .is_err()
+    );
+    let next = log
+        .append(Some("CHAT"), None, None, "chat.opened", serde_json::json!({}))
+        .unwrap();
+
+    let events = read(dir.path()).unwrap();
+    assert_eq!(events.len(), 2, "the half line is gone: {events:#?}");
+    assert_eq!(events[1], next);
+    let text = std::fs::read_to_string(dir.path().join(FILE)).unwrap();
+    assert_eq!(text.lines().count(), 2, "{text}");
 }

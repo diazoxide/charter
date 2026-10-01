@@ -751,6 +751,10 @@ pub struct ToolCall {
     /// The sub-agent that made the call ([`Report::agent`]'s rule).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
+    /// When the hook began, in milliseconds since 1970 by the hook's own clock: what pairs a
+    /// call's pre and post hooks into a duration whichever the host hears first. 0 is unknown.
+    #[serde(default)]
+    pub at_ms: u64,
 }
 
 /// What a tool hook answered the harness.
@@ -2879,6 +2883,7 @@ mod tests {
             rule: Some("no-force-push".to_owned()),
             hook_ms: 2,
             agent: None,
+            at_ms: 0,
         };
         let line = serde_json::to_string(&call).unwrap();
         assert!(

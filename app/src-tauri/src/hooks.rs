@@ -986,6 +986,7 @@ mod tests {
                 rule: None,
                 hook_ms: 1,
                 agent: None,
+                at_ms: 0,
             },
         )
         .expect("told");

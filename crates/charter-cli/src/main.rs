@@ -1305,6 +1305,11 @@ fn tell_the_host_about_the_tool_call(
         rule: answered.rule.clone(),
         hook_ms: u64::try_from(took.as_millis()).unwrap_or(u64::MAX),
         agent: hookwire::sub_agent(data["agent_id"].as_str(), &|name| std::env::var(name).ok()),
+        at_ms: std::time::SystemTime::now()
+            .checked_sub(took)
+            .and_then(|began| began.duration_since(std::time::UNIX_EPOCH).ok())
+            .and_then(|since| u64::try_from(since.as_millis()).ok())
+            .unwrap_or_default(),
     };
     if let Err(why) = hookwire::tell_tool(
         std::path::Path::new(&socket),

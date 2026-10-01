@@ -64,6 +64,9 @@ pub struct Log {
     good: u64,
     /// Whether a write failed partway, so the file may end in a torn line.
     torn: bool,
+    /// A test's way to make the next write fail after this many bytes.
+    #[cfg(test)]
+    fail_after: Option<usize>,
 }
 
 impl Log {
@@ -112,6 +115,8 @@ impl Log {
             next,
             good,
             torn: false,
+            #[cfg(test)]
+            fail_after: None,
         })
     }
 
@@ -149,6 +154,12 @@ impl Log {
         let mut line = serde_json::to_vec(&event).map_err(io::Error::other)?;
         line.push(b'\n');
         // One `write_all` of one whole line on an append-mode file.
+        #[cfg(test)]
+        if let Some(after) = self.fail_after.take() {
+            let _ = self.file.write_all(&line[..after.min(line.len())]);
+            self.torn = true;
+            return Err(io::Error::other("a write the test made fail"));
+        }
         if let Err(why) = self.file.write_all(&line) {
             self.torn = true;
             return Err(why);
@@ -156,6 +167,14 @@ impl Log {
         self.good += line.len() as u64;
         self.next = after(seq)?;
         Ok(event)
+    }
+}
+
+#[cfg(test)]
+impl Log {
+    /// Makes the next append write `bytes` of its line and fail, as a full disk would.
+    pub fn fail_the_next_write_after(&mut self, bytes: usize) {
+        self.fail_after = Some(bytes);
     }
 }
 
@@ -365,13 +384,29 @@ pub struct Recorder {
     chats: HashMap<(PathBuf, u32), Identity>,
     /// Each live sub-agent's child run, by chat id and the harness's agent id.
     children: HashMap<(String, String), (String, String)>,
-    /// When each tool call's pre hook was heard, by run and the harness's id for the call.
-    calls: HashMap<(String, String), Instant>,
+    /// The sub-agents whose `SubagentStop` was heard, by chat id and agent id: a later line
+    /// from one is its parent run's, never a second child run.
+    stopped: std::collections::HashSet<(String, String)>,
+    /// The first of each tool call's pre and post hooks heard, by run and the harness's id for
+    /// the call: which it was, when the host heard it, and when the hook said it began.
+    calls: HashMap<(String, String), Heard>,
 }
 
-/// How long a tool call is waited on for its post hook. One that never came (the harness died,
-/// or a guard refused the call) is a duration lost, not a leak.
+/// One end of a tool call, heard and waiting for the other.
+#[derive(Debug, Clone, Copy)]
+struct Heard {
+    phase: Phase,
+    at: Instant,
+    at_ms: u64,
+}
+
+/// How long one end of a tool call is waited on for the other. One that never came (the
+/// harness died, or a guard refused the call) is a duration lost, not a leak: it is let go
+/// when anything is next recorded after this long, and an end heard later gives no duration.
 pub const CALL_IS_OPEN_AT_MOST: std::time::Duration = std::time::Duration::from_secs(3600);
+
+/// How many stopped sub-agents are remembered.
+const AGENTS_HELD: usize = 4096;
 
 impl Recorder {
     /// The recorder for this device, its log under `<data>` and its device id from the
@@ -408,6 +443,7 @@ impl Recorder {
             key,
             chats: HashMap::new(),
             children: HashMap::new(),
+            stopped: std::collections::HashSet::new(),
             calls: HashMap::new(),
         }
     }
@@ -438,10 +474,18 @@ impl Recorder {
             body["started"] = started(report.detail.started).into();
         }
         let event = self.append(&under, &format!("hook.{}", report.event.word()), body)?;
-        if report.event == crate::state::Event::SubagentStop
-            && let Some(agent) = &report.agent
-        {
-            self.children.remove(&(under.chat, agent.clone()));
+        match (report.event, &report.agent) {
+            (crate::state::Event::SubagentStop, Some(agent)) => {
+                let key = (under.chat.clone(), agent.clone());
+                self.children.remove(&key);
+                if self.stopped.len() >= AGENTS_HELD {
+                    self.stopped.clear();
+                }
+                self.stopped.insert(key);
+            }
+            // The chat's session is over, and every sub-agent of its run with it.
+            (crate::state::Event::SessionEnd, None) => self.end_children(&under.chat),
+            _ => {}
         }
         Ok(event)
     }
@@ -480,22 +524,10 @@ impl Recorder {
         if let Some(id) = &call.call {
             body["call"] = id.as_str().into();
             let key = (under.run.clone(), id.clone());
-            match phase {
-                Some(Phase::Pre) => {
-                    self.calls.retain(|_, began| {
-                        now.saturating_duration_since(*began) <= CALL_IS_OPEN_AT_MOST
-                    });
-                    // The first pre hook of a call is its start; a second one for the same
-                    // call (`pretooluse` and `pretooluse-read`) is not a later start.
-                    self.calls.entry(key).or_insert(now);
+            if let Some(phase) = phase {
+                if let Some(ms) = self.pair(key, phase, now, call.at_ms) {
+                    body["tool_ms"] = ms.into();
                 }
-                Some(Phase::Post) => {
-                    if let Some(began) = self.calls.remove(&key) {
-                        let ran = now.saturating_duration_since(began).as_millis();
-                        body["tool_ms"] = u64::try_from(ran).unwrap_or(u64::MAX).into();
-                    }
-                }
-                None => {}
             }
         }
         let kind = match phase {
@@ -503,6 +535,37 @@ impl Recorder {
             None => UNKNOWN_HOOK.to_owned(),
         };
         self.append(&under, &kind, body)
+    }
+
+    /// How long a tool call ran, once both of its ends have been heard, in either order.
+    ///
+    /// The first end heard is kept. The second gives the duration: by the hooks' own clocks
+    /// when both said when they began (`at_ms`), else by when the host heard each. A second
+    /// pre hook of one call (`pretooluse` and `pretooluse-read`) is not a later start, and an
+    /// end left waiting longer than [`CALL_IS_OPEN_AT_MOST`] is let go: the other end, heard
+    /// later than that, gives no duration.
+    fn pair(&mut self, key: (String, String), phase: Phase, now: Instant, at_ms: u64) -> Option<u64> {
+        self.calls
+            .retain(|_, heard| now.saturating_duration_since(heard.at) <= CALL_IS_OPEN_AT_MOST);
+        match self.calls.get(&key) {
+            Some(first) if first.phase != phase => {
+                let first = self.calls.remove(&key)?;
+                let (pre, post) = match phase {
+                    Phase::Post => (first.at_ms, at_ms),
+                    Phase::Pre => (at_ms, first.at_ms),
+                };
+                if pre > 0 && post > 0 {
+                    return Some(post.saturating_sub(pre));
+                }
+                let ran = now.saturating_duration_since(first.at).as_millis();
+                Some(u64::try_from(ran).unwrap_or(u64::MAX))
+            }
+            Some(_) => None,
+            None => {
+                self.calls.insert(key, Heard { phase, at: now, at_ms });
+                None
+            }
+        }
     }
 
     fn append(&mut self, under: &Under, kind: &str, body: serde_json::Value) -> io::Result<Event> {
@@ -526,6 +589,15 @@ impl Recorder {
             });
         };
         let key = (top.chat.clone(), agent.to_owned());
+        if self.stopped.contains(&key) {
+            // A line from an agent whose stop was heard: its run is over, so the line is the
+            // parent run's, as an unmeasured harness's sub-agent's would be.
+            return Ok(Under {
+                chat: top.chat,
+                run: top.run,
+                parent: None,
+            });
+        }
         if let Some((run, parent)) = self.children.get(&key) {
             return Ok(Under {
                 chat: top.chat,
@@ -558,6 +630,13 @@ impl Recorder {
         }
     }
 
+    /// Forgets every sub-agent of `chat`: its run ended, and theirs with it. This is how a
+    /// Codex chat's child runs end at all, since charter does not arm Codex's `SubagentStop`.
+    fn end_children(&mut self, chat: &str) {
+        self.children.retain(|(of, _), _| of != chat);
+        self.stopped.retain(|(of, _)| of != chat);
+    }
+
     /// Begins a run of the chat for `cause`, and says so in the log.
     fn new_run(&mut self, plane: &Path, number: u32, cause: Began) -> io::Result<Identity> {
         let key = (plane.to_path_buf(), number);
@@ -577,6 +656,9 @@ impl Recorder {
             serde_json::json!({ "cause": cause.word() }),
         )?;
         self.chats.insert(key, who.clone());
+        if cause == Began::Clear {
+            self.end_children(&who.chat);
+        }
         Ok(who)
     }
 }
