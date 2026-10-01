@@ -61,6 +61,13 @@ toml = { version = "1.1", features = ["preserve_order"] }
 # version already in this workspace's lockfile, so it adds no crate to the tree.
 toml_edit = "0.25"
 unicode-normalization = "0.1.25"
+# The diagnostic log (`applog`, #647): what the app notices and nobody asked to see goes to
+# `tracing`, and from there to a file that rotates daily and to standard error. `tracing` is
+# already in this workspace's lockfile through Tauri; the subscriber and the rolling appender
+# are the tokio project's own, the standard pair for it. No ANSI: the file is read as text.
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
 uuid = { version = "1.26.1", features = ["v4"] }
 
 [features]

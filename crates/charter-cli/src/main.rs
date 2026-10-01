@@ -1218,6 +1218,12 @@ const BLOCK: u8 = 2;
 #[cfg(debug_assertions)]
 const PANIC_ON_PURPOSE_ENV: &str = "CHARTER_TEST_HOOK_PANICS";
 
+/// Set in a debug build, `charter-core` raises one warning before the command line is read: the
+/// test suite's way to watch where a core diagnostic goes under the CLI (#647). Compiled out of
+/// a release build.
+#[cfg(debug_assertions)]
+const CORE_WARNS_ON_PURPOSE_ENV: &str = "CHARTER_TEST_CORE_WARNS";
+
 /// How long the payload on stdin is waited for.
 ///
 /// **Two seconds, and it used to be 25 milliseconds.** The spec allows the whole call 50 ms
@@ -2642,9 +2648,16 @@ fn main() -> ExitCode {
     if is_a_pretooluse_call(&std::env::args_os().collect::<Vec<_>>()) {
         guard::refuse_on_a_crash();
     }
+    // A warning the core raises is said on this terminal rather than dropped (#647). Output a
+    // command prints on purpose never goes through it.
+    charter_core::applog::install_for_a_terminal();
     #[cfg(debug_assertions)]
     if std::env::var_os(PANIC_ON_PURPOSE_ENV).is_some() {
         panic!("{PANIC_ON_PURPOSE_ENV} is set, so charter crashes");
+    }
+    #[cfg(debug_assertions)]
+    if std::env::var_os(CORE_WARNS_ON_PURPOSE_ENV).is_some() {
+        charter_core::applog::warn_on_purpose();
     }
     // **`Cli::parse` exits 2 on a bad command line, and 2 is the one code a harness reads as
     // "block".** A hook that exited 2 by accident would make a session unable to end, so this

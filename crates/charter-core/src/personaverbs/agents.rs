@@ -21,7 +21,7 @@
 //! state directory) separately.
 
 use std::collections::BTreeMap;
-use std::io::{BufRead, IsTerminal};
+use std::io::{BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 use crate::repocmd::{Say, Sink};
@@ -754,11 +754,14 @@ pub fn confirm_on_terminal() -> Option<Confirm> {
         return None;
     }
     Some(Box::new(|prompt: &str| {
-        eprint!("{prompt}");
+        // The question is the command's output on the terminal, not a diagnostic, so it is
+        // written to standard error directly and never through the log (#647). A terminal
+        // that cannot be written to still gets its answer read.
+        let _ = write!(std::io::stderr(), "{prompt}");
         let mut line = String::new();
         match std::io::stdin().lock().read_line(&mut line) {
             Ok(0) | Err(_) => {
-                eprintln!();
+                let _ = writeln!(std::io::stderr());
                 Some(false)
             }
             Ok(_) => {

@@ -605,7 +605,7 @@ pub fn type_once_it_reads_keys(chat: &impl Waiting, within: Duration) {
             Ok(Some(true)) if Instant::now() < until => std::thread::sleep(ASKED_EVERY),
             Ok(Some(true)) => {
                 chat.let_go();
-                eprintln!(
+                tracing::warn!(
                     "charter: a curation chat's terminal was still editing lines {}s after its \
                      harness started, so its prompt was not typed",
                     within.as_secs()
@@ -696,7 +696,7 @@ pub fn type_once_raw_and_quiet(chat: &impl Waiting, wait: Wait) {
         }
         if Instant::now() >= until {
             chat.let_go();
-            eprintln!(
+            tracing::warn!(
                 "charter: a curation chat's terminal was not raw and quiet {}s after it \
                  started, so its prompt was not typed",
                 wait.within.as_secs()

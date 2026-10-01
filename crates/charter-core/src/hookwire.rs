@@ -1149,11 +1149,11 @@ fn serve(
         };
         // Every line is checked against the token of the chat it names, and one that does not
         // carry it ends the connection unread, as a line that will not parse does: hook calls
-        // never break a turn, so nothing is written back. The chat's number is said on the
-        // app's standard error; the token is not.
+        // never break a turn, so nothing is written back. The chat's number is said in the
+        // app's log (#647); the token is not.
         let chat = line.chat();
         if !tokens.admits(chat, token.as_deref()) {
-            eprintln!(
+            tracing::warn!(
                 "charter: a line on the hook channel for chat {chat} did not carry that chat's \
                  token, so it was dropped"
             );

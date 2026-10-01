@@ -120,7 +120,7 @@ impl KillSwitch {
                 return Moved::Nothing;
             }
             if let Err(why) = halt::restore(config, halt::now()) {
-                eprintln!(
+                tracing::warn!(
                     "charter: the kill switch's marker was removed and could not be put back ({why})"
                 );
             }
@@ -245,7 +245,7 @@ pub fn hear(app: &tauri::AppHandle) {
         Some(Ok(watch)) => {
             app.manage(watch);
         }
-        Some(Err(why)) => eprintln!(
+        Some(Err(why)) => tracing::warn!(
             "charter: `charter stop --all` will not be heard by this app until it restarts ({why})"
         ),
         None => {}

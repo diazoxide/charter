@@ -127,7 +127,7 @@ impl Records {
             return;
         }
         if let Err(why) = reopen::write(&self.root, record) {
-            eprintln!(
+            tracing::warn!(
                 "charter: what is open in {} was not recorded ({why})",
                 self.root.display()
             );
@@ -155,7 +155,7 @@ impl Records {
             store.vouch(&root, contributed, when);
         }) && why.kind() != std::io::ErrorKind::Unsupported
         {
-            eprintln!(
+            tracing::warn!(
                 "charter: the record of {} was written but not vouched for ({why}); charter                  may ask about this plane again at the next launch",
                 self.root.display()
             );
@@ -357,7 +357,7 @@ impl Held {
             Ok(record) if choice == Choice::StartFresh => {
                 let fresh = record.chosen(Choice::StartFresh);
                 self.records.write(&fresh);
-                eprintln!(
+                tracing::info!(
                     "charter: plane {}, started fresh as asked; nothing is reopened",
                     self.root.display()
                 );
@@ -367,7 +367,7 @@ impl Held {
             Err(why) => {
                 // Not the same thing as an empty plane, and an operator told "nothing to
                 // reopen" would go looking in the wrong place.
-                eprintln!(
+                tracing::warn!(
                     "charter: the record of what was open in {} was refused ({why}); nothing \
                      is reopened and nothing will be recorded until it is repaired",
                     self.root.display()
@@ -378,15 +378,15 @@ impl Held {
         let wanted = record.chats.len();
         let back = self.chats.put_back(&record, &self.root, size).len();
         if wanted > 0 {
-            eprintln!(
+            tracing::info!(
                 "charter: plane {}, {back} of {wanted} chats back",
                 self.root.display()
             );
             for (name, why) in self.chats.would_not_start() {
-                eprintln!("charter: {name} did not start ({why}); it is still recorded");
+                tracing::warn!("charter: {name} did not start ({why}); it is still recorded");
             }
         } else {
-            eprintln!("charter: plane {}, nothing to reopen", self.root.display());
+            tracing::info!("charter: plane {}, nothing to reopen", self.root.display());
         }
     }
 
@@ -1120,7 +1120,7 @@ impl Planes {
             store.pin_the_most_active(&plane);
         }) && why.kind() != std::io::ErrorKind::Unsupported
         {
-            eprintln!(
+            tracing::warn!(
                 "charter: {} was opened but not added to the list of recent planes ({why})",
                 root.display()
             );
@@ -1144,7 +1144,7 @@ impl Planes {
             store.approve(&plane, when, contributed);
         }) && why.kind() != std::io::ErrorKind::Unsupported
         {
-            eprintln!(
+            tracing::warn!(
                 "charter: {} was opened, but your approval of it was not recorded ({why}); \
                  charter will ask about it again",
                 root.display()
@@ -1204,7 +1204,7 @@ impl Planes {
         if let Err(why) = machine::update(config, move |store| store.windows = arranged)
             && why.kind() != std::io::ErrorKind::Unsupported
         {
-            eprintln!(
+            tracing::warn!(
                 "charter: the projects this window holds were not written down ({why}); the \
                  next launch will not put them back"
             );
@@ -1295,7 +1295,7 @@ impl Planes {
             Arc::clone(&self.by_hand),
         )
         .unwrap_or_else(|why| {
-            eprintln!(
+            tracing::warn!(
                 "charter: no hook channel at {} ({why}); every chat in {} will show as \
                      unknown",
                 at.socket.display(),
@@ -1398,7 +1398,7 @@ impl Planes {
         // and its panels read it when a workspace is focused.
         let watch = crate::planewatch::Watch::start(id.clone(), &root, Arc::clone(&self.changes))
             .map_err(|why| {
-                eprintln!(
+                tracing::warn!(
                     "charter: {} is not watched ({why}); its panels will not follow changes \
                      made outside this window",
                     root.display()
@@ -1526,7 +1526,7 @@ impl Planes {
         if let Some(config) = self.config.as_deref()
             && let Err(why) = reopen::mark_restart_to_update(config)
         {
-            eprintln!(
+            tracing::warn!(
                 "charter: the launch after this restart will not say it followed an update \
                  ({why}); what was open is recorded all the same"
             );
@@ -2120,7 +2120,7 @@ fn resolving_with(
             }
         }
         Err(why) => {
-            eprintln!(
+            tracing::warn!(
                 "charter: no plane here, so nothing is reopened and nothing is recorded \
                  (a plane is the nearest directory at or above this one with a charter.toml)"
             );

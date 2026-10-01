@@ -5,6 +5,17 @@
 #[macro_use]
 mod ipc_commands;
 
+/// `tauri::generate_context!`, with its arguments, in the one place that allows it: Tauri's own
+/// expansion prints with `eprintln!`, which `clippy.toml` refuses in this crate (#647). The
+/// allow is for Tauri's code, not charter's. Above every module, so each of them can use it.
+macro_rules! tauri_context {
+    ($($arg:tt)*) => {{
+        #[allow(clippy::disallowed_macros)]
+        let context = tauri::generate_context!($($arg)*);
+        context
+    }};
+}
+
 mod about;
 mod alerts;
 mod autosave;
@@ -99,7 +110,7 @@ fn shell_tab_shims<R: tauri::Runtime>(
         Ok(()) => Some(shims),
         Err(why) if why.kind() == std::io::ErrorKind::Unsupported => None,
         Err(why) => {
-            eprintln!(
+            tracing::warn!(
                 "charter: no shell-tab shims at {} ({why}); a harness started in a shell tab \
                  will not be warned about",
                 dir.display()
@@ -122,7 +133,7 @@ fn chat_git_hooks<R: tauri::Runtime>(
         Ok(()) => Some(hooks),
         Err(why) if why.kind() == std::io::ErrorKind::Unsupported => None,
         Err(why) => {
-            eprintln!(
+            tracing::warn!(
                 "charter: no git hooks at {} ({why}); a chat's commits will not be scanned \
                  for secrets",
                 dir.display()
@@ -167,7 +178,7 @@ fn refresh_installed_plugin(binary: PathBuf, plugin: PathBuf) {
             let machine = match install::Machine::from_env(binary, Some(plugin)) {
                 Ok(machine) => machine,
                 Err(why) => {
-                    eprintln!("charter: the installed plugin was not checked: {why}");
+                    tracing::warn!("charter: the installed plugin was not checked: {why}");
                     return;
                 }
             };
@@ -179,7 +190,11 @@ fn refresh_installed_plugin(binary: PathBuf, plugin: PathBuf) {
                 } else {
                     "brought the installed plugin up to date with this app"
                 };
-                eprint!("charter: {said}\n{}", install::render(&outcomes, false));
+                // One event, without the newline `render` ends on: the log adds its own.
+                tracing::info!(
+                    "charter: {said}\n{}",
+                    install::render(&outcomes, false).trim_end()
+                );
             }
         });
 }
@@ -335,7 +350,7 @@ static STARTED: LazyLock<Instant> = LazyLock::new(Instant::now);
 /// reached. Silent unless the variable is set, which nothing but a person debugging does.
 fn reached(step: &str) {
     if std::env::var_os("CHARTER_LAUNCH_LOG").is_some() {
-        eprintln!(
+        tracing::info!(
             "charter-launch {:>5} ms  {step}",
             STARTED.elapsed().as_millis()
         );
@@ -1523,6 +1538,9 @@ pub fn run() {
     // Before anything that can panic: a panic that ends the app is written down on its way
     // out, where one that went to a standard error nobody reads was lost (charter-app#16).
     panics::record();
+    // Next, so everything the app notices from here on is kept in a file as well as said on
+    // a standard error that, launched from the Dock, nobody reads (#647).
+    charter_core::applog::install();
     reached("run() entered");
     // Before anything touches GTK: a desktop portal the session bus is still trying to start
     // costs GTK 25 s and WebKitGTK 5 more (charter-app#24). Asked here for 300 ms; when it is
@@ -1542,7 +1560,7 @@ pub fn run() {
     // Everything slow about a launch happens inside `build()`: the window is created there,
     // and on a Linux session whose desktop portal cannot start, GTK waits out 25 s of D-Bus
     // and WebKitGTK another 5 before any of it (charter-app#24). Nothing charter can say is
-    // on screen yet — there is no screen — so it is said on standard error, from a thread,
+    // on screen yet — there is no screen — so it is said in the log and on standard error, from a thread,
     // while the wait is still going on. `built` below lets the thread go.
     let (built, still_building) = std::sync::mpsc::channel::<()>();
     // A machine with no thread to spare still starts; it just starts without the warning.
@@ -1553,7 +1571,7 @@ pub fn run() {
                 &still_building,
                 slowstart::LIMIT,
                 std::env::consts::OS,
-                &mut |line| eprintln!("{line}"),
+                &mut |line| tracing::warn!("{line}"),
             );
         });
 
@@ -1670,14 +1688,14 @@ pub fn run() {
             // property of this build and not of a project, so every plane arms with it.
             let binary = charter_binary();
             if binary.is_none() {
-                eprintln!(
+                tracing::warn!(
                     "charter: no `charter` binary beside the app, so no chat can report its \
                      state; every one will show as unknown"
                 );
             }
             let plugin = bundled_plugin(app.handle());
             if plugin.is_none() {
-                eprintln!(
+                tracing::warn!(
                     "charter: no plugin in the app's resources, so a Claude Code chat is started \
                      without charter's hooks, guard or skills; every one will show as unknown"
                 );
@@ -1815,11 +1833,13 @@ pub fn run() {
             updates::watch(app.handle());
 
             if let Err(why) = lifecycle::tray(app.handle()) {
-                eprintln!("charter: no tray icon ({why}); the window is reached from the dock");
+                tracing::warn!(
+                    "charter: no tray icon ({why}); the window is reached from the dock"
+                );
             }
             Ok(())
         })
-        .build(tauri::generate_context!())
+        .build(tauri_context!())
         .inspect(|_| {
             reached("built");
             // Past the part of a launch that has no window in it, so the thread watching for

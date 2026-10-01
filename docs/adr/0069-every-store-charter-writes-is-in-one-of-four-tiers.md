@@ -57,7 +57,7 @@ directory. ADR 0034 is amended to say so plainly. This record calls the tier **M
 says where each store in it is. It does
 not move any store. The Tauri application-data and log directories are Machine too. They hold
 only the shims and the git hooks (ADR 0074), which are rebuilt at every launch, and the panic
-log.
+log. Since the amendment of 2026-10-01 below, they also hold the diagnostic log.
 
 A path `docs/plane-format.md` records that is **not charter's store** gets the tier **None**:
 the operator's checkout and its worktrees, a harness's own files, a vendor CLI's output, an
@@ -377,3 +377,14 @@ the rulings.
 9. **Runner binaries live under the machine store**, at `<config>/server/<ver>/`.
 10. **The tier test checks the document**, and "names its tier" is a review question on every PR
     that adds a store.
+
+## Amendment, 2026-10-01: the Tauri log directory also holds the diagnostic log (#647)
+
+§1 says the Tauri application-data and log directories hold only the shims and the git hooks,
+rebuilt at every launch, and the panic log. **The log directory now also holds the app's
+diagnostic log**, `<app log>/charter.<YYYY-MM-DD>.log`, written by `charter_core::applog`
+(FD-8, #647). It is **Machine, device-bound, transient**, as `panics.log` (row 57) is, and
+`docs/plane-format.md` has its row. A new file starts each day and the newest seven are kept.
+FR-10 does not back it up: it records what happened on this machine, and only a person
+reads it. It is neither the audit nor telemetry (O1, ADR 0075). Nothing else in this record
+changes.

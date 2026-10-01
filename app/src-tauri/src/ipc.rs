@@ -99,7 +99,7 @@ mod tests {
                 invoke.resolver.resolve(true);
                 true
             })
-            .build(tauri::generate_context!(test = true))
+            .build(tauri_context!(test = true))
             .expect("the app builds with its real ACL")
     }
 

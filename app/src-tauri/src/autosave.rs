@@ -120,7 +120,7 @@ impl Worker {
                 );
             });
         let thread = spawned
-            .map_err(|why| eprintln!("charter: auto-save did not start ({why}); save by hand"))
+            .map_err(|why| tracing::warn!("charter: auto-save did not start ({why}); save by hand"))
             .ok();
         Self {
             poke,

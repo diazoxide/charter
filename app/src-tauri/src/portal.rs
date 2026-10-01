@@ -291,7 +291,7 @@ pub fn start_clear_of_a_silent_portal() {
         Start::AsItIs => return,
         Start::OnTheBus(bus) => Bus::At(bus),
         Start::WithoutTheBus { say, kept } => {
-            eprintln!("{say}");
+            tracing::warn!("{say}");
             Bus::Without { kept }
         }
     };
@@ -299,7 +299,7 @@ pub fn start_clear_of_a_silent_portal() {
         Ok(mut command) => command.exec(),
         Err(err) => err,
     };
-    eprintln!("charter: could not start again ({failed}); going on with the bus as it was.");
+    tracing::warn!("charter: could not start again ({failed}); going on with the bus as it was.");
 }
 
 /// Which session bus a launch of this binary is started on.
@@ -510,7 +510,7 @@ pub fn listen_again(app: &tauri::AppHandle) {
             if !answered {
                 return;
             }
-            eprintln!(
+            tracing::info!(
                 "charter: the desktop portal answers on the session bus now; the window offers \
                  to restart on it."
             );
@@ -570,7 +570,9 @@ fn restart_if_asked_with(bus: &SessionBus, start: &mut dyn FnMut(&Bus) -> std::i
         return;
     };
     if let Err(why) = start(&onto) {
-        eprintln!("charter: could not start again on the session bus ({why}); start charter again");
+        tracing::warn!(
+            "charter: could not start again on the session bus ({why}); start charter again"
+        );
     }
 }
 
