@@ -1157,17 +1157,20 @@ impl Listener {
                 // are mid-write, which is almost always none.
                 let hearing = std::sync::Arc::clone(&hearing);
                 let tokens = std::sync::Arc::clone(&tokens);
-                let turns = std::sync::Arc::clone(&turns);
+                let serving = std::sync::Arc::clone(&turns);
                 dealt += 1;
                 let this = dealt;
                 let started = std::thread::Builder::new()
                     .name("charter-hook-report".into())
                     .spawn(move || {
-                        serve(connection, this, &tokens, &hearing, &turns);
+                        serve(connection, this, &tokens, &hearing, &serving);
                     });
                 // A thread that will not start costs this one report. Refusing the rest of
-                // the channel over it would cost every report after it too.
-                let _ = started;
+                // the channel over it would cost every report after it too, and so would a
+                // turn left waiting for a connection nobody serves.
+                if started.is_err() {
+                    turns.done(this);
+                }
             }
         });
         Reading {
@@ -1316,6 +1319,9 @@ fn serve(
         match line {
             Line::Report(report) => (hearing.each)(report),
             Line::Ask(ask) => {
+                // An ask is answered for as long as opening a chat takes, and nothing about
+                // the order of hook calls hangs on it: the turn is let go before it is.
+                turn.finish();
                 let Ok(mut said) = serde_json::to_vec(&(hearing.answer)(this, ask)) else {
                     return;
                 };
@@ -1338,12 +1344,16 @@ fn serve(
 /// The order connections arrived in, which their first lines are handed on in (FD-9).
 ///
 /// **A thread per connection reads lines in whatever order the threads are scheduled**, and
-/// the host's event log needs the order the hooks ran in: a tool call's post hook must never
-/// be recorded before its pre hook, which connected first. Each connection is dealt a number
-/// as it is accepted, in the order the hooks connected, and hands on its first line only once
-/// every earlier connection has handed on its own or gone. A connection that says nothing
-/// holds the ones after it for [`A_TURN_IS_WAITED_AT_MOST`] at most, so the channel is never
-/// held hostage by one.
+/// the host's event log wants the order the hooks ran in: a tool call's post hook connects only
+/// after its pre hook has exited, so it should be recorded after it. Each connection is dealt
+/// a number as it is accepted, and hands its first line to its hearer only once every earlier
+/// connection's hearer has returned, which in the app is once that line is recorded.
+///
+/// **Best effort: ordered unless a recording takes longer than [`A_TURN_IS_WAITED_AT_MOST`].**
+/// A connection that says nothing, or a hearer that is slow, holds the ones after it for that
+/// long at most, so the channel is never held hostage by one; past it, lines can be recorded
+/// out of order, and the event log's pairing of a tool call's two ends does not depend on the
+/// order (`eventlog::Recorder::tool`). An ask lets its turn go before it is answered.
 #[cfg(unix)]
 struct InTurn {
     /// The lowest number not yet done, and the numbers above it that are.
