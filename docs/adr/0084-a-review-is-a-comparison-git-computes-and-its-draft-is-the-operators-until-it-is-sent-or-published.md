@@ -73,8 +73,8 @@ five concepts, the first-hour words, a piece shown as its branch),
 (run states), [ADR 0077](0077-a-forge-sign-in-is-the-humans-through-one-registration-per-forge-host-and-it-mints-nothing-for-an-agent.md)
 (the human's forge sign-in) and
 [ADR 0081](0081-charter-is-where-agents-work-and-writing-code-by-hand-opens-in-your-editor.md)
-(the light editor, your editor, the editor protocol and X26's lines). It **amends ADR 0070 and
-ADR 0075**, each in a section of its own below. RC-2 to RC-16, RC-18 to RC-20 and FW-16a/b build
+(the light editor, your editor, the editor protocol and X26's lines). It **amends ADR 0061, ADR 0069, ADR 0070, ADR 0075 and ADR 0081**, each in a section of its
+own below. RC-2 to RC-16, RC-18 to RC-20 and FW-16a/b build
 on it. Its concept is **Workspace**: a review is a view of a workspace's repos and its chats'
 branches, as the light editor is (ADR 0081).
 
@@ -171,15 +171,25 @@ TypeScript.
 - **Generated and lock files** are collapsed when the repo's `.gitattributes` marks them
   `linguist-generated`, or their name is on charter's list of lock files. Collapsed is drawn on
   request.
-- **Nothing from the repo under review runs.** Every call disables external diff programs and
-  text conversion filters, whatever the repo's or the operator's git configuration says. A
-  request's head is someone else's content, and so is its configuration. A file's contents are
-  drawn as text and never as markup; an image is drawn as an image, and an SVG is never put into
-  the window's page as markup. This is class-level: content under review is data, never code.
+- **git run by charter on a repo an agent can write must not execute programs named by that
+  repo's config.** Every repo a review reads is one an agent can write: a chat's branch folder,
+  the workspace's clone it shares, or a request's head from someone else. A repo's configuration
+  can name programs for git to run (for diffing, filtering, paging, watching the file system,
+  hooks, fetching and its transport), so every git call the engine makes runs with **one fixed
+  set of overrides that turns each such program off**, whatever the repo's configuration says,
+  held in one place in `charter-core` and never assembled per call. Where an override cannot
+  cover a key, the engine refuses to run on that repo and says why. RC-2's tests include **a
+  fixture repo whose configuration names a program for each of those places**, and assert that no
+  comparison, file list, hunk or fetch on it runs any of them. The same rule for charter's other
+  git calls is #810's.
+- **Content under review is data, never code.** A file's contents are drawn as text and never as
+  markup; an image is drawn as an image, and an SVG is never put into the window's page as
+  markup.
 - **A request's head is fetched into the workspace's clone, under `refs/charter/review/`.** The
-  objects must be local for git to diff them. The fetch uses the clone's own git credentials,
-  which ADR 0070 §4 keeps outside the seam. The refs are removed when no Review tab and no draft
-  needs them.
+  objects must be local for git to diff them. The fetch runs under the same overrides, so it
+  authenticates with the operator's own git credentials and never with a program the repo's
+  configuration names. ADR 0070 §4 keeps git's credential path outside the forge seam. The refs
+  are removed when no Review tab and no draft needs them.
 
 ### 3. The Review tab
 
@@ -234,23 +244,43 @@ comment as `path:line` (or `path:line-line`, and *base* for a removed line) foll
 operator's text, in file order, then the overall comment. It carries no code; the agent reads
 the files.
 
+**Send to agent is the one place charter presses Enter in a chat on the operator's behalf, and
+it changes what ADR 0081 §4 settled for `place`.** See *ADR 0061 and ADR 0081, amended*, and
+the operator's ruling question 2.
+
 When it is delivered depends on the chat's current run (ADR 0076 §1):
 
-| The run is | Send to agent |
-|---|---|
-| `input-required (ready)` or `(turn-ended)` | delivers now: `charterd` checks the state and delivers the prompt as one step under the run's state lock, as ADR 0081 §4 checks `place` |
-| `working` | holds it and delivers it when the turn ends, with *Take back* while held: HP-15's queue (V11). Until HP-15 lands, Send is disabled, saying *the chat is working; send when its turn ends* |
-| `input-required (asked)` | refused: a prompt delivered then could be read as the ask's answer |
-| `hibernated` | wakes the chat as focus would (ADR 0076 §5, SC-20), then delivers at `ready` |
-| `paused`, `queued`, `starting` | refused, naming the state |
-| ended | offers *Start a chat on this branch* with the review typed into its prompt and never sent (ADR 0061) |
+| The run is | Before HP-15 | Once HP-15 lands |
+|---|---|---|
+| `input-required (ready)` or `(turn-ended)` | delivered now: `charterd` checks the state and delivers the prompt as one step under the run's state lock, as ADR 0081 §4 checks `place` | the same |
+| `working` | refused: *the chat is working; send when its turn ends* | held in HP-15's queue, shown with *Take back*, and delivered at the turn's end (V11) |
+| `input-required (asked)` | refused: a prompt delivered then could be read as the ask's answer | held, as for `working`. An ask keeps it held, and it is delivered only at `ready` or `turn-ended` |
+| `hibernated` | refused: *open the chat first*. Opening it resumes it (ADR 0076 §5, SC-20), and the operator sends again | held, and the chat is woken. The hold is checked again under the **new** run's state lock and delivered only at `ready` or `turn-ended`; an ask on resume keeps it held |
+| `paused` (any cause) | refused, naming the cause. Send never unpauses; only the operator does (ADR 0076 §2) | the same. A message already held when a budget pause comes stays held, and is delivered only after the operator unpauses and the run reaches a turn boundary |
+| `queued`, `starting` | refused, naming the state | held, delivered at `ready` |
+| ended | offers *Start a chat on this branch* with the review typed into its prompt and never sent (ADR 0061) | the same |
 
-- **It is the operator's act, from the window.** Delivery is a call on the window's own
-  connection (`local-ui`), never a session-protocol command and never one the `editor` scope has.
-  Unlike ADR 0081's `place`, it does send: the operator pressed *Send*.
-- **At level 2 it is HP-15's delivery**: one bracketed paste, control characters taken out, then
-  Enter, under the state lock. At level 3 the host delivers the prompt through the protocol.
-  TS1's per-harness measure from ADR 0081 §4 covers it.
+A held message is HP-15's, not this record's: it is visible, can be taken back, and is dropped
+if the chat ends. This record defines no hold of its own.
+
+- **It is the operator's act, from the window only.** Delivery is a command on the window's own
+  connection (`local-ui`, the UI RPC), never a session-protocol command, and the `editor` scope
+  never has it. An editor's `place` stays typed and never sent (V31a).
+- **How it is delivered.** At level 3 the host delivers the prompt through the protocol. At level
+  2, one bracketed paste with control characters taken out, then Enter, as one step under the
+  state lock.
+- **Enter is delivered only on a harness that has passed TS1's Enter measure.** ADR 0081 §4's
+  residual risk was a paste without a line end landing in a dialog the harness opened between
+  turns and had not yet reported. Enter is worse: it accepts a dialog's default choice. So TS1
+  measures, per harness and harness version, that **a bracketed paste followed by Enter, sent
+  into each dialog the harness can open between turns, chooses nothing**. A harness that has not
+  passed, or that fails, gets the paste without Enter: the review is typed into the prompt and
+  the operator presses Enter in the chat, which is then the operator's own key press.
+- **The residual risk.** The state lock orders charter's view of the run, not the harness's
+  screen. On a harness that passed TS1, a dialog that TS1 does not know (a new harness version
+  before the nightly runs, a dialog from a harness plugin) could still take Enter as its default.
+  TS1 runs nightly against each supported version, and a failure turns Enter off for that
+  harness until it passes again.
 - **Request changes is Send to agent** (R6). Once sent, the comments move from the draft to the
   review's list of sent comments, marked with the run they went to.
 - **A review past 64 KiB of text is refused**, asking the operator to send it in parts, since
@@ -314,6 +344,43 @@ branches (ADR 0072 §4's *Remove folder*). **Pulling a hunk across** applies it 
 branch's folder, which is a human edit (§8). This record fixes only that a race is N comparisons
 of kind (a) against one base.
 
+## ADR 0061 and ADR 0081, amended
+
+ADR 0061 types a prompt and never sends it. ADR 0081 §4 extended that to an editor's `place`:
+typed into an idle chat, never sent, never held to be typed later, never woken (V31a's *"typed
+and never sent"*). **Send to agent (§5) is a different act, from a different client, and it
+reverses three of those rules for it alone:**
+
+1. **It sends.** At level 2 it delivers a bracketed paste followed by Enter, on a harness that
+   has passed TS1's Enter measure (§5); on any other it types without Enter, as `place` does.
+2. **It holds.** Once HP-15 lands, a Send to a `working`, `asked`, `hibernated`, `queued` or
+   `starting` run is held in HP-15's queue and delivered at a turn boundary, visible and taken
+   back at will. `place` is never held.
+3. **It wakes.** Once HP-15 lands, a Send to a `hibernated` chat wakes it and delivers at the
+   new run's turn boundary, checked again under that run's lock. Before HP-15 it is refused.
+   `place` refuses a `hibernated` chat and never wakes one.
+
+It also **adds one command to the UI RPC on `local-ui`**: deliver a review to a chat, with the
+check and the delivery as one step under the run's state lock. The session protocol does not
+gain it, so the `editor` scope never has it (ADR 0068 §5 as ADR 0081 amended it), and no other
+scope does either.
+
+**What stands:** for ADR 0061's curation actions and ADR 0081's `place`, a prompt is typed and
+never sent, never held and never wakes a chat. The `editor` scope still makes no agent act.
+This amendment is the operator's ruling question 2.
+
+The rest of ADR 0061 and ADR 0081 stands.
+
+## ADR 0069, amended
+
+**FR-10's backup.** ADR 0075 amended ADR 0069 so that FR-10 backs up `<data>/audit/` as well as
+the machine store. **FR-10 also backs up `<data>/reviews/`** (§4, *Tiers*): the operator's
+review drafts, which ADR 0069 row 71 already marks Machine, syncable and backed up, now have a
+place, and it is in `<data>`. On a restore it comes back like `layout.json`, as a syncable store
+(ADR 0069 §5).
+
+The rest of ADR 0069 stands.
+
 ## ADR 0070, amended
 
 **§1, the `Reviews` area.** Its comment gains RC-8a/b: `pub trait Reviews { /* RC-8a/b, FG-5a/b,
@@ -322,6 +389,12 @@ with its line comments, each anchored to the request's head commit, on both forg
 record). It takes a human `Caller` for the operator's review and a chat `Caller` for a reviewer
 persona's (FG-5a/b), and §4's rules for each `Caller` are unchanged. GitLab's draft notes and
 bulk publish are a forge capability, with one discussion per comment as its fallback.
+
+**A chat `Caller` on `Reviews` adds no power (FI3).** Before SD-7a/b it resolves exactly as
+§4 says for any chat `Caller`: to the CLI transport with the CLI login the chat already reaches,
+and to no forge credential on a host whose login was imported. So a reviewer persona can post
+nothing it could not already post by running `gh` or `glab` itself, and never under the
+operator's sign-in token. After SD-7a/b it posts under its own per-agent identity.
 
 The rest of ADR 0070 stands.
 
@@ -350,7 +423,7 @@ The rest of ADR 0075 stands.
 
 | Store | Tier | Why |
 |---|---|---|
-| `<data>/reviews/`: one file per review, holding its draft, ticks, last reviewed head, position and sent comments | **Machine, syncable**, backed up by FR-10 | V22b and ADR 0069 row 71. It names reviews by project, workspace, repo and branch and holds no path or code (§4). It is in charter's data home, beside the audit, because it is the operator's data and not a preference. Chats are denied it. **Added to `docs/plane-format.md` in this PR** |
+| `<data>/reviews/`: one file per review, holding its draft, ticks, last reviewed head, position and sent comments | **Machine, syncable**, backed up by FR-10 (*ADR 0069, amended*) | V22b and ADR 0069 row 71. It names reviews by project, workspace, repo and branch and holds no path or code (§4). It is in charter's data home, beside the audit, because it is the operator's data and not a preference. Chats are denied it. **Added to `docs/plane-format.md` in this PR** |
 | `refs/charter/review/` in a workspace's clone | **None** | the repo's own git, as its worktrees are (ADR 0069 row 72); removed when nothing needs it (§2) |
 | the human-edit event | **Machine, device-bound** | the event log (ADR 0069 row 63) |
 | the three audit actions | **Machine, device-bound** | the audit store (ADR 0075) |
@@ -364,21 +437,27 @@ The code does not change with this record.
 
 | Where | What changes |
 |---|---|
-| `charter-core` | RC-2: the comparison types and the engine, git with external diff and text conversion off; the fetch under `refs/charter/review/`. RC-7: the review store, written through one module the window calls |
-| `charterd` | RC-7: Send to agent's check and delivery under the run's state lock, on `local-ui`; later HP-15's queue. The sandbox denies chats `<data>/reviews/` |
+| `charter-core` | RC-2: the comparison types and the engine; the one fixed set of git overrides, and the fixture repo with a hostile configuration; the fetch under `refs/charter/review/`. RC-7: the review store, written through one module the window calls |
+| `charterd` | RC-7: Send to agent's one UI RPC command on `local-ui`, its check and delivery under the run's state lock, Enter only where TS1 passed; later HP-15's queue, which holds and wakes. The sandbox denies chats `<data>/reviews/` |
 | The window | RC-4: the Review tab. RC-5: one CodeMirror 6 component for files and diffs. RC-6: R3's basics. RC-10: the edit and its warning. RC-3: the entry points |
 | The forge seam | RC-8a/b: the `Reviews` area's first method (*ADR 0070, amended*) |
 | Hooks and MCP | RC-11: the next-turn note |
+| Harness checks | TS1: per harness and version, a bracketed paste followed by Enter into each between-turn dialog chooses nothing; a failure turns Send's Enter off for that harness |
+| Other git calls | #810: the same rule for every git call charter makes on a repo an agent can write |
 | Audit | AU-2 registers the three actions (*ADR 0075, amended*) |
 | `docs/plane-format.md` | The `<data>/reviews/` row (in this PR) |
-| `CONTEXT.md` | Gains **Review**, **Comparison**, **Review draft** and **Human edit**, each with its concept (in this PR) |
+| `CONTEXT.md` | Gains **Review tab**, **Comparison**, **Review draft** and **Human edit**, each with its concept (in this PR) |
 
 ## What this costs
 
 - **A request for a repo outside every workspace needs the repo added first.** One step more
   than pasting a link into a forge's own page.
-- **Send to agent waits for a turn to end**, and until HP-15 it is disabled while the chat
-  works.
+- **Send to agent waits for a turn to end**, and until HP-15 it is refused while the chat
+  works, asks or hibernates.
+- **On a harness that has not passed TS1's Enter measure, Send only types.** The operator
+  presses Enter in the chat.
+- **A dialog TS1 does not know could take Enter as its default** on a harness that passed (§5).
+  TS1 runs nightly, and a failure turns Enter off for that harness.
 - **A comment that cannot follow its line is not published.** The operator decides about each
   one.
 - **A repo's own diff drivers never apply.** A file type the repo diffs through a text
@@ -398,9 +477,15 @@ The code does not change with this record.
   the operator's identity.
 - **Copying the commented lines into the draft.** It would put code from a private repo in a
   syncable store, and git already has the lines.
-- **Typing the review into the prompt unsent**, as ADR 0081's `place` does. The operator pressed
-  *Send*, in charter's window.
-- **Delivering into an `asked` run.** The prompt could answer the ask.
+- **Typing the review into the prompt unsent everywhere**, as ADR 0081's `place` does. The
+  operator pressed *Send*, in charter's window; it is the fallback only where TS1 has not passed.
+- **Send from the `editor` scope.** Any program that reads the editor credential could then drive
+  an agent (ADR 0081, *What was rejected*).
+- **A hold of this record's own before HP-15.** Two queues would disagree about what a held
+  message is; until HP-15, Send is refused instead.
+- **Disabling repo-config programs call by call.** One missed call runs a program the repo
+  names; one fixed set in one place, with a test, does not drift.
+- **Delivering into an `asked` run.** The prompt could answer the ask; it is held instead.
 - **Committing a human edit for the operator.** Saving or committing is the operator's or the
   agent's, and the agent is told about it.
 - **Publishing a GitLab review as separate discussions by default.** Draft notes publish
@@ -418,8 +503,9 @@ its reason:
    both forges.
 3. **A pasted request for a repo no workspace holds offers to add it.** The review needs the
    objects locally.
-4. **git with external diff programs and text conversion off, on every call.** Content under
-   review is someone else's.
+4. **One fixed set of git overrides, held in one place, so no program named by a reviewed
+   repo's configuration runs**, with a refusal where an override cannot cover a key. An agent can
+   write every repo a review reads.
 5. **Request heads are fetched under `refs/charter/review/`**, tier None, removed when unneeded.
 6. **The merge view draws git's hunks** and diffs only inside them for word-level highlighting.
    It keeps R4's one engine.
@@ -432,31 +518,43 @@ its reason:
     operator's identity.
 11. **A comment follows its line, and one that cannot is *outdated*** and never published by
     itself.
-12. **Send to agent is refused in an `asked` run, held in a `working` one (through HP-15), and
-    otherwise delivered under the run's state lock.**
-13. **A review over 64 KiB is refused**, to be sent in parts.
-14. **Publish is one act on both forges** (GitHub's review; GitLab's draft notes and bulk
+12. **A review over 64 KiB is refused**, to be sent in parts.
+13. **Publish is one act on both forges** (GitHub's review; GitLab's draft notes and bulk
     publish), with one discussion per comment as the fallback.
-15. **Approve's forge approval is posted only on *Publish and approve*.**
-16. **Changes since my last review** use the head at the last Send, Publish or Approve, and
+14. **Approve's forge approval is posted only on *Publish and approve*.**
+15. **Changes since my last review** use the head at the last Send, Publish or Approve, and
     compare trees when the branch was rewritten.
-17. **Idle for an edit** is ready, turn-ended, hibernated or ended, for every chat in the folder.
-18. **A human edit is an event, and its save is an audit action**, both without contents; the
+16. **Idle for an edit** is ready, turn-ended, hibernated or ended, for every chat in the folder.
+17. **A human edit is an event, and its save is an audit action**, both without contents; the
     edit stays uncommitted.
-19. **Three audit actions**, `review.sent`, `review.approved`, `review.edit.saved`.
+18. **Three audit actions**, `review.sent`, `review.approved`, `review.edit.saved`.
 
 ## For the operator's ruling
 
-1. **The chat tab's button is *Review*, not *Changes*.** R1 names *"a Changes button on every
-   chat tab"*. A chat's tab and header are first-hour surfaces, and ADR 0072 §3 (V23) lists
-   **change** among the words those surfaces never say, because a cross-repo change is a charter
-   noun; FR-3's UI-string test would fail the button. **Recommended: *Review***, an ordinary
-   verb, with the tooltip *Review what this chat changed on its branch*. It names what the
-   button opens, the Review tab (R2). The rejected options: *Changes* (fails the budget, or
-   needs an exception to it), *Diff* (a developer's word, and the tab is more than a diff), and
-   *What changed* (passes the test only if it matches whole words, and reads as a question). The
-   Explorer branch and the *Compare…* palette entry keep R1's words; neither is a first-hour
-   surface that says *change*.
+1. **Which word the chat-tab button uses, and whether it gets an exception to the first-hour
+   budget.** R1 names *"a Changes button on every chat tab"*. A chat's tab and header are
+   first-hour surfaces, and ADR 0072 §3 (V23) lists **change** among the words those surfaces
+   never say, because a cross-repo change is a charter noun; FR-3's UI-string test would fail
+   the button. The options:
+   - **"Review" (recommended).** A plain verb, as *open* and *new* are, so it needs no exception
+     and adds no charter noun to the first hour. Its tooltip: *Review this chat's work on its
+     branch*. It opens the Review tab (R2), which is a view tab and outside the budget.
+   - **"Changes"**, R1's word. It needs an exception to ADR 0072 §3 for this one button, and puts
+     a second meaning of "change" next to the cross-repo change.
+   - **No button on the chat tab.** Reviews open from the Explorer's branch row and the
+     *Compare…* palette entry only. It keeps the budget untouched, and loses R1's most direct
+     entry point.
+2. **Send to agent sends, holds and wakes, from the window only** (*ADR 0061 and ADR 0081,
+   amended*). V31a ruled an editor's selection *"typed and never sent"*, and ADR 0081 §4 made
+   `place` never held and never waking a chat. Send to agent, which R5 rules as *"one prompt
+   with file:line refs"*, presses Enter, is held by HP-15 until a turn boundary, and wakes a
+   hibernated chat once HP-15 lands. **Recommended: allow it from `local-ui` only, through one
+   UI RPC command, and never from the `editor` scope, which keeps "typed and never sent"**;
+   Enter only on a harness that passed TS1's Enter measure (§5), and the paste alone elsewhere.
+   The rejected options: typing the review unsent everywhere, as `place` does (R5's *Send*
+   becomes *Type*, and every review needs a second key press in the chat), and sending from the
+   `editor` scope too (any program that reads the editor credential could drive an agent, which
+   ADR 0081 rejected).
 
 ## Later decisions
 

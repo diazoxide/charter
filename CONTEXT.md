@@ -366,27 +366,30 @@ is a setting of this machine, so it belongs to **Project** (ADR 0072 §2, ADR 00
 _Avoid_: external editor; IDE (except in the category phrase "the agent IDE")
 
 **Comparison**:
-A base and a head in one of a workspace's repos, which git turns into the diff a review shows: a
+A base and a head in one of a workspace's repos, which git turns into the diff a Review tab shows: a
 chat's branch against its base, two refs, uncommitted work, one agent turn, a request. A
 cross-repo change is one comparison per member. It is a part of a **Workspace** (ADR 0084).
 _Avoid_: diff (for the pair; the diff is what git computes from it), changeset
 
-**Review**:
-The operator reading a comparison in a Review tab, commenting on its lines, and ending it by
-sending the comments to the chat, publishing them to the request, or approving. There is one
-review per branch, and it remembers where the operator was. The forge's own review of a request
-stays the review of record. It is a view of a **Workspace**'s repos (ADR 0084).
-_Avoid_: code review (for charter's), PR review (that is the forge's), diff view
+**Review tab**:
+A view tab showing one comparison (or one per member of a cross-repo change), where the operator
+reads the diff, ticks files as viewed, comments on lines, and ends by sending the comments to the
+chat, publishing them to the request, or approving. There is one per branch, and it remembers
+where the operator was. The forge's own review of a request stays the review of record. "Review"
+on its own is the plain verb, as on the chat tab's button, and is not a charter noun. It is a view
+of a **Workspace**'s repos (ADR 0084).
+_Avoid_: Review (as a noun for the tab), code review (for charter's), PR review (that is the
+forge's), diff view
 
 **Review draft**:
-A review's unsent comments: each one's line and the operator's words, never code. Only the
+A Review tab's unsent comments: each one's line and the operator's words, never code. Only the
 window writes it, it is kept on this machine and travels with the operator's other machines,
 and it leaves only by **Send to agent**, **Publish** or being kept. It belongs to **Workspace**
 (ADR 0084).
 _Avoid_: pending review (that is GitHub's), draft (unqualified)
 
 **Human edit**:
-A change the operator saved to a file in a chat's branch from the light editor. charter records
+An edit the operator saved to a file in a chat's branch from the light editor. charter records
 which file and lines, and tells the chat's agent at its next turn. It is a part of a **Chat**'s
 history (ADR 0084).
 _Avoid_: manual edit, override
