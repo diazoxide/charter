@@ -53,10 +53,13 @@ teammate shared as a GitHub repository.
 
 ## Working with your GitHub repos
 
-The project charter makes on the first run tracks GitHub, with no owner set. To list and clone
-the repos under your account or organisation:
+The project charter makes on the first run tracks the forge your repo's `origin` is on, and its
+owner: a repo cloned from `github.com/acme/widget` gives a project that tracks GitHub, owner
+`acme`. If the repo has no remote, or its remote is not on github.com or gitlab.com, the first
+run asks which forge before it makes the project. To list and clone the repos under your account
+or organisation:
 
-1. Open **Project settings…** and, under **Forges**, set the first forge's **owner** to your
+1. Open **Project settings…** and, under **Forges**, check the first forge's **owner**: your
    GitHub user or organisation. Leave **host** empty for github.com, or set it to your GitHub
    Enterprise Server's host, such as `github.example.com`.
 2. Open **New workspace…**. Its repo picker lists the repos your own `gh` login reaches under
@@ -70,7 +73,9 @@ If the picker cannot ask GitHub, it says why in `gh`'s words, for example that `
 signed in for that host, and tells you the command to run.
 
 From a terminal, `charter init --forge github --owner <owner>` makes a project in the current
-directory that tracks that owner. Add `--host <host>` for GitHub Enterprise Server.
+directory that tracks that owner. Add `--host <host>` for GitHub Enterprise Server. With
+`--adopt <repo>`, `charter init` reads the forge and owner from that repo's `origin` instead, and
+without either it asks you to name the forge.
 
 ## Saving your project to GitHub
 

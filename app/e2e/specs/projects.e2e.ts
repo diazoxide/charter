@@ -312,6 +312,9 @@ describe("a window holding more than one project", function () {
     // takes the workspace name out of its sibling dialog.
     await $('[role="dialog"] details.advanced input').setValue(made);
     await $("button=Create project").click();
+    // An empty folder has no repo whose remote could say which forge (#839): the dialog asks,
+    // and the answer makes the project.
+    await $("button=GitHub").click();
 
     // **A plane charter made a second ago is still one this machine has approved nothing
     // about** (ADR 0035). There is no shortcut past the ask, and this is the assertion that

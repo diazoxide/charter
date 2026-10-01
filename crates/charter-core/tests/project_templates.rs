@@ -89,8 +89,11 @@ fn a_marker_that_is_a_directory_is_not_the_file_it_is_named_after() {
 /// A new local project, as the first run makes one, under a config home of its own.
 fn new_project() -> (tempfile::TempDir, std::path::PathBuf) {
     let dir = tempfile::tempdir().expect("a directory");
-    let root = charter_core::firstrun::ensure_local_plane(&dir.path().join("config"))
-        .expect("a local project");
+    let root = charter_core::firstrun::ensure_local_plane(
+        &dir.path().join("config"),
+        charter_core::firstrun::ForgeFrom::Named(charter_core::forge::Kind::GitHub),
+    )
+    .expect("a local project");
     (dir, root)
 }
 
@@ -328,7 +331,11 @@ fn a_project_made_from_each_template_starts_a_chat_in_its_repo_under_each_of_its
     );
     for (id, marker) in markers {
         let dir = tempfile::tempdir().expect("a directory");
-        let root = firstrun::ensure_local_plane(&dir.path().join("config")).expect("a project");
+        let root = firstrun::ensure_local_plane(
+            &dir.path().join("config"),
+            charter_core::firstrun::ForgeFrom::Named(charter_core::forge::Kind::GitHub),
+        )
+        .expect("a project");
         let repo = repo_with(dir.path(), "widget", marker);
         a_profile(&root);
 
@@ -368,7 +375,11 @@ fn a_project_made_from_each_template_starts_a_chat_in_its_repo_under_each_of_its
 fn a_project_opened_with_no_template_gets_none() {
     charter_core::unsteered!();
     let dir = tempfile::tempdir().expect("a directory");
-    let root = firstrun::ensure_local_plane(&dir.path().join("config")).expect("a project");
+    let root = firstrun::ensure_local_plane(
+        &dir.path().join("config"),
+        charter_core::firstrun::ForgeFrom::Named(charter_core::forge::Kind::GitHub),
+    )
+    .expect("a project");
     let repo = repo_with(dir.path(), "widget", "Cargo.toml");
 
     let taken = firstrun::take_in_from(&root, &repo, &Choice::NoTemplate).expect("opened");
@@ -381,7 +392,11 @@ fn a_project_opened_with_no_template_gets_none() {
 fn the_operators_pick_wins_over_what_the_repo_looks_like() {
     charter_core::unsteered!();
     let dir = tempfile::tempdir().expect("a directory");
-    let root = firstrun::ensure_local_plane(&dir.path().join("config")).expect("a project");
+    let root = firstrun::ensure_local_plane(
+        &dir.path().join("config"),
+        charter_core::firstrun::ForgeFrom::Named(charter_core::forge::Kind::GitHub),
+    )
+    .expect("a project");
     let repo = repo_with(dir.path(), "widget", "Cargo.toml");
 
     let taken =
@@ -403,7 +418,11 @@ fn the_operators_pick_wins_over_what_the_repo_looks_like() {
 fn a_template_charter_does_not_ship_is_refused_before_anything_is_copied() {
     charter_core::unsteered!();
     let dir = tempfile::tempdir().expect("a directory");
-    let root = firstrun::ensure_local_plane(&dir.path().join("config")).expect("a project");
+    let root = firstrun::ensure_local_plane(
+        &dir.path().join("config"),
+        charter_core::firstrun::ForgeFrom::Named(charter_core::forge::Kind::GitHub),
+    )
+    .expect("a project");
     let repo = repo_with(dir.path(), "widget", "Cargo.toml");
 
     let refused = firstrun::take_in_from(&root, &repo, &Choice::Named("cobol".to_owned()))
@@ -619,7 +638,11 @@ fn a_workspace_is_told_the_same_checks_its_templates_engineer_runs() {
 fn a_template_a_harness_file_refuses_stops_the_open_before_anything_is_copied() {
     charter_core::unsteered!();
     let dir = tempfile::tempdir().expect("a directory");
-    let root = firstrun::ensure_local_plane(&dir.path().join("config")).expect("a project");
+    let root = firstrun::ensure_local_plane(
+        &dir.path().join("config"),
+        charter_core::firstrun::ForgeFrom::Named(charter_core::forge::Kind::GitHub),
+    )
+    .expect("a project");
     let repo = repo_with(dir.path(), "widget", "Cargo.toml");
     std::fs::write(root.join("opencode.json"), "[]")
         .expect("an opencode.json charter cannot extend");
@@ -641,7 +664,11 @@ fn a_template_a_harness_file_refuses_stops_the_open_before_anything_is_copied() 
 fn a_template_that_fails_part_way_is_taken_back_whole() {
     charter_core::unsteered!();
     let dir = tempfile::tempdir().expect("a directory");
-    let root = firstrun::ensure_local_plane(&dir.path().join("config")).expect("a project");
+    let root = firstrun::ensure_local_plane(
+        &dir.path().join("config"),
+        charter_core::firstrun::ForgeFrom::Named(charter_core::forge::Kind::GitHub),
+    )
+    .expect("a project");
     let repo = repo_with(dir.path(), "widget", "Cargo.toml");
     // A workspace.md that reads, and that charter will not write: a link out of the project.
     // So the last step, the workspace's starter, fails after the personas, their sub-agents
@@ -675,7 +702,11 @@ fn a_workspace_md_charter_cannot_read_stops_the_template_and_is_never_removed() 
     charter_core::unsteered!();
     use std::os::unix::fs::PermissionsExt as _;
     let dir = tempfile::tempdir().expect("a directory");
-    let root = firstrun::ensure_local_plane(&dir.path().join("config")).expect("a project");
+    let root = firstrun::ensure_local_plane(
+        &dir.path().join("config"),
+        charter_core::firstrun::ForgeFrom::Named(charter_core::forge::Kind::GitHub),
+    )
+    .expect("a project");
     let repo = repo_with(dir.path(), "widget", "Cargo.toml");
     let file = root.join("workspaces/widget/workspace.md");
     std::fs::create_dir_all(file.parent().expect("its workspace")).expect("the workspace");
@@ -701,7 +732,11 @@ fn a_workspace_md_charter_cannot_read_stops_the_template_and_is_never_removed() 
 fn taking_a_template_back_keeps_a_sub_agent_that_was_there_before() {
     charter_core::unsteered!();
     let dir = tempfile::tempdir().expect("a directory");
-    let root = firstrun::ensure_local_plane(&dir.path().join("config")).expect("a project");
+    let root = firstrun::ensure_local_plane(
+        &dir.path().join("config"),
+        charter_core::firstrun::ForgeFrom::Named(charter_core::forge::Kind::GitHub),
+    )
+    .expect("a project");
     let repo = repo_with(dir.path(), "widget", "Cargo.toml");
     // A sub-agent charter generated for an earlier `rust-engineer`, whose persona is gone.
     let agent = root.join(".claude/agents/rust-engineer.md");

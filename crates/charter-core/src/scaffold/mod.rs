@@ -70,6 +70,7 @@
 //! for (charter-app#175, step 4).
 
 pub(crate) mod firstclone;
+pub mod fromremote;
 pub mod planefile;
 pub mod settings;
 pub mod text;
@@ -116,6 +117,9 @@ impl Say {
 pub struct Outcome {
     pub said: Vec<Say>,
     pub code: u8,
+    /// Why the forge could not be read, when `code` is [`ASKS_FOR_FORGE`]: what a caller that
+    /// asks in its own words (the app's two buttons) says, without parsing `said`.
+    pub asks_forge: Option<String>,
 }
 
 /// The forges `init --forge` takes (`forge/registry.py:KINDS`), sorted as argparse lists them.
@@ -124,10 +128,16 @@ pub const FORGES: [&str; 2] = ["github", "gitlab"];
 /// The directories every plane has (`instance.BASELINE_DIRS`).
 pub const BASELINE_DIRS: [&str; 3] = ["personas", "inventory", "workspaces"];
 
+/// The exit status of an `init` that cannot tell which forge the project's repos are on and
+/// asks for it (#839). It wrote nothing; the caller asks the operator and runs it again.
+pub const ASKS_FOR_FORGE: u8 = 2;
+
 /// What `charter init` was asked for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InitArgs {
-    pub forge: String,
+    /// The forge the project's repos are on, or `None` to read it from the remote of the repo
+    /// the project is made for ([`fromremote`]). Asked for when that remote does not say.
+    pub forge: Option<String>,
     pub owner: String,
     pub host: Option<String>,
     pub clone_this_repo: bool,
@@ -155,12 +165,18 @@ impl InitArgs {
     /// What the app scaffolds a plane with — the New project dialog's Advanced form and the
     /// first run's local project (FR-4) — given the one decision and the one repo the dialog
     /// asks for.
-    pub fn for_the_app(plane_is_this_repo: bool, adopt: Option<PathBuf>) -> Self {
+    ///
+    /// `forge` is the operator's answer when an earlier run asked for it
+    /// ([`ASKS_FOR_FORGE`]); `None` reads it from the repo's remote, as `charter init` does.
+    pub fn for_the_app(
+        plane_is_this_repo: bool,
+        adopt: Option<PathBuf>,
+        forge: Option<crate::forge::Kind>,
+    ) -> Self {
         Self {
-            // What `charter init` defaults to, and the same defaults the CLI hands it: the
-            // forge and owner are edited in `charter.toml` afterwards, and `init` says so
-            // itself when no owner was given.
-            forge: "github".to_owned(),
+            // `charter init`'s rule (#839): the forge, and the owner with it, come from the
+            // repo's remote, or are asked for.
+            forge: forge.map(|kind| kind.word().to_owned()),
             owner: String::new(),
             host: None,
             // Never from the app: it is `adopt` with the source fixed to the plane's own
@@ -234,6 +250,8 @@ struct Run {
     failed: bool,
     /// An ask rule was written, so the workspace layers are rewritten to carry it.
     carry: bool,
+    /// Why the forge could not be read from a remote (#839), when it could not.
+    asks_forge: Option<String>,
 }
 
 impl Run {
@@ -267,6 +285,7 @@ impl Run {
         Outcome {
             said: self.said,
             code,
+            asks_forge: self.asks_forge,
         }
     }
 }
@@ -328,6 +347,7 @@ fn refused(root: &Path) -> Option<Outcome> {
                 crate::shown::readable(&lands, 1024)
             ))],
             code: 1,
+            asks_forge: None,
         });
     }
     match planefile::load(root) {
@@ -337,6 +357,7 @@ fn refused(root: &Path) -> Option<Outcome> {
                  out."
             ))],
             code: 1,
+            asks_forge: None,
         }),
         _ => None,
     }
@@ -349,10 +370,14 @@ pub fn init(place: &Place, args: &InitArgs) -> Outcome {
         return refusal;
     }
     let mut run = Run::default();
-    if !FORGES.contains(&args.forge.as_str()) {
+    if let Some(forge) = args
+        .forge
+        .as_deref()
+        .filter(|forge| !FORGES.contains(forge))
+    {
         run.err(format!(
             "unknown --forge {} — known kinds: {}",
-            text::py_repr(&args.forge),
+            text::py_repr(forge),
             FORGES.join(", ")
         ));
         return run.outcome(1);
@@ -373,6 +398,17 @@ pub fn init(place: &Place, args: &InitArgs) -> Outcome {
         return refusal;
     }
 
+    // Which forge, and whose repos: asked before the first write, and only of a plane whose
+    // `charter.toml` this run would write.
+    let (forge, owner) = if already_a_plane(root) {
+        (String::new(), args.owner.clone())
+    } else {
+        match forge_and_owner(&mut run, root, args) {
+            Some(named) => named,
+            None => return run.outcome(ASKS_FOR_FORGE),
+        }
+    };
+
     // charter.toml
     if let Some(path) = run.gate(root, crate::plane::MANIFEST) {
         if path.exists() {
@@ -380,11 +416,11 @@ pub fn init(place: &Place, args: &InitArgs) -> Outcome {
         } else {
             match std::fs::write(
                 &path,
-                planefile::render(&args.forge, &args.owner, args.host.as_deref()),
+                planefile::render(&forge, &owner, args.host.as_deref()),
             ) {
                 Ok(()) => {
                     run.created.push("charter.toml".to_owned());
-                    if args.owner.is_empty() {
+                    if owner.is_empty() {
                         run.warn(
                             "No --owner given — charter.toml's [[forge]] block has no \
                              owner/group set. Add one before `charter discover`.",
@@ -1295,13 +1331,16 @@ fn front_door(run: &mut Run, root: &Path, name: &str) {
 /// The flags the operator typed, as a shell will read them back — so the two commands the
 /// refusal below prints can be pasted rather than reassembled by hand.
 ///
-/// Only what `init` was actually given: `--forge` always, because it has a default that is
-/// not the one most people want; `--owner` and `--host` when they carry something; and the
+/// Only what `init` was actually given: `--forge`, `--owner` and `--host` when they carry
+/// something (with no `--forge`, the commands below read it from the repo's origin); and the
 /// front-door flags only when they are not the default, which is the one `None` that means
 /// `--no-front-door` rather than "unset".
 fn typed_flags(args: &InitArgs) -> String {
     use crate::handoff::quote;
-    let mut out = format!(" --forge {}", quote(&args.forge));
+    let mut out = String::new();
+    if let Some(forge) = &args.forge {
+        out.push_str(&format!(" --forge {}", quote(forge)));
+    }
     if !args.owner.is_empty() {
         out.push_str(&format!(" --owner {}", quote(&args.owner)));
     }
@@ -1401,6 +1440,63 @@ fn repo_is_not_a_plane_yet(root: &Path, args: &InitArgs) -> Option<Outcome> {
          of a git repo is unchanged.",
     );
     Some(run.outcome(1))
+}
+
+/// The forge and owner `charter.toml` is written with (#839): what the operator named, else
+/// what the `origin` of the repo the plane is made for says. `None` when neither says, after
+/// asking for it on `run`.
+///
+/// The repo is the one `--adopt` names, or the plane's own directory for `--clone-this-repo`
+/// and `--plane-is-this-repo`. A plain `init` names no repo, so it is asked.
+fn forge_and_owner(run: &mut Run, root: &Path, args: &InitArgs) -> Option<(String, String)> {
+    let repo = match &args.adopt {
+        Some(repo) => Some(repo.clone()),
+        None if args.clone_this_repo || args.plane_is_this_repo => Some(root.to_path_buf()),
+        None => None,
+    };
+    let read = match &repo {
+        Some(repo) => fromremote::forge_of_repo(repo),
+        None => Err("no repo was named to read it from".to_owned()),
+    };
+    if let Some(forge) = &args.forge {
+        // `--owner`'s help: the owner comes from the same origin when it is not given, and
+        // only from an origin on the forge that was named.
+        let owner = match &read {
+            Ok(found) if args.owner.is_empty() && found.kind.word() == forge => found.owner.clone(),
+            _ => args.owner.clone(),
+        };
+        return Some((forge.clone(), owner));
+    }
+    match read {
+        Ok(found) => {
+            let owner = if args.owner.is_empty() {
+                found.owner
+            } else {
+                args.owner.clone()
+            };
+            let whose = if owner.is_empty() {
+                String::new()
+            } else {
+                format!(", owner {owner}")
+            };
+            run.info(format!(
+                "Forge {}{whose}, read from {}'s origin.",
+                found.kind.word(),
+                repo.as_deref().unwrap_or(root).display()
+            ));
+            Some((found.kind.word().to_owned(), owner))
+        }
+        Err(why) => {
+            run.err(format!(
+                "charter cannot tell which forge this project's repos are on: {why}. Name it \
+                 with `--forge github` or `--forge gitlab`, and its org or group with \
+                 `--owner`, or adopt a repo whose origin is on github.com or gitlab.com with \
+                 `--adopt <repo>`. Nothing was written."
+            ));
+            run.asks_forge = Some(why);
+            None
+        }
+    }
 }
 
 /// Whether `root` already holds a `charter.toml` charter would read — asked through the gate,
@@ -1644,7 +1740,7 @@ mod tests {
     /// `InitArgs` as `charter init --forge github --owner acme` builds it.
     pub(super) fn plain() -> InitArgs {
         InitArgs {
-            forge: "github".to_owned(),
+            forge: Some("github".to_owned()),
             owner: "acme".to_owned(),
             host: None,
             clone_this_repo: false,
@@ -1918,6 +2014,200 @@ mod tests {
         assert_eq!(outcome.code, 0);
     }
 
+    /// A repo at `<dir>/<name>` with one commit and `origin` set to `origin`, for `--adopt`.
+    fn a_source_repo(dir: &Path, name: &str, origin: Option<&str>) -> PathBuf {
+        let repo = dir.join(name);
+        std::fs::create_dir_all(&repo).expect("the repo's directory");
+        let git = |args: &[&str]| {
+            let r = crate::testgit::run(&repo, args);
+            assert!(r.ok(), "git {args:?} failed: {}", r.err);
+        };
+        git(&["init", "-q", "-b", "main", "."]);
+        git(&["config", "user.email", "t@e.invalid"]);
+        git(&["config", "user.name", "t"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "first"]);
+        if let Some(origin) = origin {
+            git(&["remote", "add", "origin", origin]);
+        }
+        repo
+    }
+
+    /// The `[[forge]]` block's `kind` and `owner`, as `init` wrote them.
+    fn forge_written(root: &Path) -> (String, String) {
+        let toml: toml::Table = std::fs::read_to_string(root.join("charter.toml"))
+            .expect("charter.toml")
+            .parse()
+            .expect("charter.toml is TOML");
+        let block = &toml["forge"][0];
+        let text = |key: &str| {
+            block
+                .get(key)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_owned()
+        };
+        (text("kind"), text("owner"))
+    }
+
+    /// #839: with no `--forge`, the forge and owner come from the remote of the repo the
+    /// project is made for.
+    #[test]
+    fn init_without_a_forge_reads_it_and_the_owner_from_the_adopted_repos_origin() {
+        let (dir, root) = empty_plane();
+        let repo = a_source_repo(
+            dir.path(),
+            "widget",
+            Some("git@gitlab.com:group/sub/widget.git"),
+        );
+
+        let outcome = init(
+            &at(&root, false),
+            &InitArgs {
+                forge: None,
+                owner: String::new(),
+                adopt: Some(repo),
+                ..plain()
+            },
+        );
+
+        assert_eq!(outcome.code, 0, "{}", Say::in_full(&outcome.said));
+        assert_eq!(
+            forge_written(&root),
+            ("gitlab".to_owned(), "group/sub".to_owned())
+        );
+        assert!(
+            !outcome.said.iter().any(|line| matches!(line, Say::Warn(_))),
+            "an owner read from the origin is not a missing one: {:?}",
+            outcome.said
+        );
+    }
+
+    /// What the operator names wins over what the origin says.
+    #[test]
+    fn a_named_forge_and_owner_win_over_the_origin() {
+        let (dir, root) = empty_plane();
+        let repo = a_source_repo(
+            dir.path(),
+            "widget",
+            Some("git@gitlab.com:group/widget.git"),
+        );
+
+        let outcome = init(
+            &at(&root, false),
+            &InitArgs {
+                adopt: Some(repo),
+                ..plain()
+            },
+        );
+
+        assert_eq!(outcome.code, 0, "{}", Say::in_full(&outcome.said));
+        assert_eq!(
+            forge_written(&root),
+            ("github".to_owned(), "acme".to_owned())
+        );
+    }
+
+    /// #839's "else ask": no repo to read, or a remote that does not say, and `init` writes
+    /// nothing and asks for the forge by name.
+    #[test]
+    fn init_without_a_forge_it_cannot_read_asks_for_one_and_writes_nothing() {
+        let (dir, root) = empty_plane();
+        let no_origin = a_source_repo(dir.path(), "local", None);
+        let elsewhere = a_source_repo(dir.path(), "hosted", Some("git@git.example.com:a/b.git"));
+        for (adopt, why) in [
+            (None, "no repo was named to read it from"),
+            (Some(no_origin.clone()), "has no `origin` remote"),
+            (Some(elsewhere), "neither github.com nor gitlab.com"),
+        ] {
+            let outcome = init(
+                &at(&root, false),
+                &InitArgs {
+                    forge: None,
+                    owner: String::new(),
+                    adopt,
+                    ..plain()
+                },
+            );
+
+            assert_eq!(outcome.code, ASKS_FOR_FORGE, "{why}");
+            let said = Say::in_full(&outcome.said);
+            assert!(said.contains(why), "{said}");
+            assert!(said.contains("--forge github"), "{said}");
+            assert!(
+                said.contains("--adopt"),
+                "the refusal names the other way to answer: {said}"
+            );
+            assert!(said.contains("Nothing was written."), "{said}");
+            assert!(
+                outcome
+                    .asks_forge
+                    .as_deref()
+                    .is_some_and(|asked| asked.ends_with(why)),
+                "the reason is handed over as data: {:?}",
+                outcome.asks_forge
+            );
+            assert_eq!(
+                std::fs::read_dir(&root)
+                    .expect("the plane's directory")
+                    .count(),
+                0,
+                "{why}: init wrote into the plane"
+            );
+        }
+    }
+
+    /// `--owner`'s help says the owner is read from the same origin: naming only the forge
+    /// still takes the owner from a remote on that forge, and from no other.
+    #[test]
+    fn a_named_forge_still_reads_the_owner_from_an_origin_on_that_forge() {
+        for (forge, origin, owner) in [
+            ("github", "git@github.com:acme/widget.git", "acme"),
+            ("github", "git@gitlab.com:group/widget.git", ""),
+        ] {
+            let (dir, root) = empty_plane();
+            let repo = a_source_repo(dir.path(), "widget", Some(origin));
+
+            let outcome = init(
+                &at(&root, false),
+                &InitArgs {
+                    forge: Some(forge.to_owned()),
+                    owner: String::new(),
+                    adopt: Some(repo),
+                    ..plain()
+                },
+            );
+
+            assert_eq!(outcome.code, 0, "{}", Say::in_full(&outcome.said));
+            assert_eq!(
+                forge_written(&root),
+                (forge.to_owned(), owner.to_owned()),
+                "{origin}"
+            );
+        }
+    }
+
+    /// `init` run again on a plane that has its `charter.toml` writes no forge, so it asks
+    /// for none.
+    #[test]
+    fn init_on_a_plane_that_has_its_charter_toml_asks_for_no_forge() {
+        let (_dir, root) = empty_plane();
+        assert_eq!(init(&at(&root, false), &plain()).code, 0);
+
+        let again = init(
+            &at(&root, true),
+            &InitArgs {
+                forge: None,
+                ..plain()
+            },
+        );
+
+        assert_eq!(again.code, 0, "{}", Say::in_full(&again.said));
+        assert_eq!(
+            forge_written(&root),
+            ("github".to_owned(), "acme".to_owned())
+        );
+    }
+
     /// `cmd_init`'s first refusal: `unknown --forge 'x' — known kinds: github, gitlab`
     /// (`sorted(_registry.KINDS)`), before anything is written.
     #[test]
@@ -1927,7 +2217,7 @@ mod tests {
         let outcome = init(
             &at(&root, false),
             &InitArgs {
-                forge: "bitbucket".to_owned(),
+                forge: Some("bitbucket".to_owned()),
                 ..plain()
             },
         );

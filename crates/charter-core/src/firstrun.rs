@@ -46,30 +46,77 @@ pub fn local_plane(config_root: &Path) -> PathBuf {
     crate::machine::dir(config_root).join(LOCAL_PLANE)
 }
 
+/// Where the local plane's forge comes from when the plane is made (#839).
+#[derive(Debug, Clone, Copy)]
+pub enum ForgeFrom<'a> {
+    /// The `origin` of the repo the first run opens.
+    Repo(&'a Path),
+    /// The operator's answer: a forge they picked, or the one whose sign-in they pressed.
+    Named(crate::forge::Kind),
+}
+
+/// Why [`ensure_local_plane`] made nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NotMade {
+    /// The repo's remote does not say which forge its project's repos are on: the operator is
+    /// asked, and the answer comes back as [`ForgeFrom::Named`]. Says why the remote did not.
+    AsksForForge(String),
+    /// Anything else, in charter's words.
+    Refused(String),
+}
+
+impl std::fmt::Display for NotMade {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NotMade::AsksForForge(why) => write!(
+                f,
+                "charter cannot tell which forge this project's repos are on: {why}."
+            ),
+            NotMade::Refused(why) => f.write_str(why),
+        }
+    }
+}
+
 /// The local plane under `config_root`, made first when it is not there yet.
 ///
-/// A plane already there is left exactly as it is. The plane is scaffolded the way the app's
-/// New project dialog scaffolds one, with no repo adopted and no remote: `git remote`
-/// is empty until the operator shares it.
-pub fn ensure_local_plane(config_root: &Path) -> Result<PathBuf, String> {
+/// A plane already there is left exactly as it is, and nothing is asked. The plane is
+/// scaffolded the way the app's New project dialog scaffolds one, with no repo adopted and no
+/// remote: `git remote` is empty until the operator shares it. Its `[[forge]]` comes from
+/// `forge`, by `charter init`'s rule: a repo's `origin`, else the operator's answer.
+pub fn ensure_local_plane(config_root: &Path, forge: ForgeFrom<'_>) -> Result<PathBuf, NotMade> {
     let at = local_plane(config_root);
-    std::fs::create_dir_all(&at)
-        .map_err(|why| format!("charter could not make {} ({why}).", at.display()))?;
-    let root = at
-        .canonicalize()
-        .map_err(|why| format!("charter cannot read {} ({why}).", at.display()))?;
-    if root.join(crate::plane::MANIFEST).is_file() {
+    let root = at.canonicalize().ok();
+    if let Some(root) = root.filter(|root| root.join(crate::plane::MANIFEST).is_file()) {
         return Ok(root);
     }
+    // Asked before anything is made, so a question leaves no empty directory behind.
+    let (kind, owner) = match forge {
+        ForgeFrom::Named(kind) => (kind, String::new()),
+        ForgeFrom::Repo(repo) => match crate::scaffold::fromremote::forge_of_repo(repo) {
+            Ok(found) => (found.kind, found.owner),
+            Err(why) => return Err(NotMade::AsksForForge(why)),
+        },
+    };
+    std::fs::create_dir_all(&at).map_err(|why| {
+        NotMade::Refused(format!("charter could not make {} ({why}).", at.display()))
+    })?;
+    let root = at.canonicalize().map_err(|why| {
+        NotMade::Refused(format!("charter cannot read {} ({why}).", at.display()))
+    })?;
     let outcome = crate::scaffold::init(
         &crate::plane::Place {
             root: root.clone(),
             is_plane: false,
         },
-        &crate::scaffold::InitArgs::for_the_app(false, None),
+        &crate::scaffold::InitArgs {
+            owner,
+            ..crate::scaffold::InitArgs::for_the_app(false, None, Some(kind))
+        },
     );
     if outcome.code != 0 {
-        return Err(crate::scaffold::Say::in_full(&outcome.said));
+        return Err(NotMade::Refused(crate::scaffold::Say::in_full(
+            &outcome.said,
+        )));
     }
     Ok(root)
 }
@@ -399,6 +446,69 @@ mod tests {
         assert!(of(&found(home.path(), &no_env), Harness::Opencode).signed_in);
     }
 
+    const GITHUB: ForgeFrom<'static> = ForgeFrom::Named(crate::forge::Kind::GitHub);
+
+    /// The `[[forge]]` block's `kind` and `owner` in the plane at `root`.
+    fn forge_of(root: &Path) -> (String, String) {
+        let toml: toml::Table = std::fs::read_to_string(root.join(crate::plane::MANIFEST))
+            .expect("charter.toml")
+            .parse()
+            .expect("charter.toml is TOML");
+        let block = &toml["forge"][0];
+        let text = |key: &str| {
+            block
+                .get(key)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_owned()
+        };
+        (text("kind"), text("owner"))
+    }
+
+    /// #839: the first run's project tracks the forge the opened repo's `origin` is on, with
+    /// its owner, by `charter init`'s rule.
+    #[test]
+    fn the_local_plane_takes_its_forge_and_owner_from_the_repos_origin() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let repo = a_repo(&dir.path().join("svc"));
+        assert!(
+            crate::testgit::run(
+                &repo,
+                &["remote", "add", "origin", "git@gitlab.com:group/svc.git"]
+            )
+            .ok()
+        );
+
+        let root = ensure_local_plane(&dir.path().join("cfg"), ForgeFrom::Repo(&repo))
+            .expect("the local plane");
+
+        assert_eq!(forge_of(&root), ("gitlab".to_owned(), "group".to_owned()));
+    }
+
+    /// #839's "else ask": a repo whose remote does not say makes nothing, and the answer the
+    /// operator gives is the plane's forge.
+    #[test]
+    fn a_repo_whose_remote_does_not_say_asks_and_the_answer_is_the_forge() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let repo = a_repo(&dir.path().join("svc"));
+        let config = dir.path().join("cfg");
+
+        let asked = ensure_local_plane(&config, ForgeFrom::Repo(&repo));
+
+        assert!(
+            matches!(&asked, Err(NotMade::AsksForForge(why)) if why.ends_with("has no `origin` remote")),
+            "{asked:?}"
+        );
+        assert!(!local_plane(&config).exists(), "asking made a directory");
+
+        let root = ensure_local_plane(&config, ForgeFrom::Named(crate::forge::Kind::GitLab))
+            .expect("the local plane");
+        assert_eq!(forge_of(&root).0, "gitlab");
+
+        let again = ensure_local_plane(&config, ForgeFrom::Repo(&repo));
+        assert_eq!(again, Ok(root), "a plane that is there asks nothing");
+    }
+
     #[test]
     fn the_local_plane_is_in_charters_directory_in_the_config_home() {
         assert_eq!(
@@ -411,7 +521,7 @@ mod tests {
     fn the_local_plane_is_made_once_with_no_remote_and_left_alone_after() {
         let config = tempfile::tempdir().expect("a config home");
 
-        let root = ensure_local_plane(config.path()).expect("the local plane is made");
+        let root = ensure_local_plane(config.path(), GITHUB).expect("the local plane is made");
 
         assert!(root.join(crate::plane::MANIFEST).is_file());
         assert!(root.starts_with(config.path().canonicalize().expect("resolved")));
@@ -428,7 +538,7 @@ mod tests {
         );
 
         std::fs::write(root.join("mine.txt"), "kept").expect("a file of the operator's");
-        let again = ensure_local_plane(config.path()).expect("a second call answers");
+        let again = ensure_local_plane(config.path(), GITHUB).expect("a second call answers");
         assert_eq!(again, root);
         assert!(root.join("mine.txt").is_file());
     }
@@ -451,7 +561,7 @@ mod tests {
     #[test]
     fn a_repo_is_taken_in_as_a_workspace_named_after_it_and_not_written_into() {
         let dir = tempfile::tempdir().expect("a directory");
-        let root = ensure_local_plane(&dir.path().join("cfg")).expect("the local plane");
+        let root = ensure_local_plane(&dir.path().join("cfg"), GITHUB).expect("the local plane");
         let repo = a_repo(&dir.path().join("svc"));
         let before = std::fs::read_dir(&repo).expect("the repo").count();
 
@@ -470,7 +580,7 @@ mod tests {
     #[test]
     fn taking_in_the_same_repo_twice_answers_with_the_same_workspace() {
         let dir = tempfile::tempdir().expect("a directory");
-        let root = ensure_local_plane(&dir.path().join("cfg")).expect("the local plane");
+        let root = ensure_local_plane(&dir.path().join("cfg"), GITHUB).expect("the local plane");
         let repo = a_repo(&dir.path().join("svc"));
 
         let first = take_in(&root, &repo).expect("taken in");
@@ -482,7 +592,7 @@ mod tests {
     #[test]
     fn a_directory_that_is_not_a_repo_is_refused_and_no_workspace_is_made() {
         let dir = tempfile::tempdir().expect("a directory");
-        let root = ensure_local_plane(&dir.path().join("cfg")).expect("the local plane");
+        let root = ensure_local_plane(&dir.path().join("cfg"), GITHUB).expect("the local plane");
         let papers = dir.path().join("papers");
         std::fs::create_dir_all(&papers).expect("not a repo");
 
@@ -500,7 +610,7 @@ mod tests {
         // Two repos called `svc` from different places: the second must never be handed the
         // first one's clone, which would start the chat in the wrong repo.
         let dir = tempfile::tempdir().expect("a directory");
-        let root = ensure_local_plane(&dir.path().join("cfg")).expect("the local plane");
+        let root = ensure_local_plane(&dir.path().join("cfg"), GITHUB).expect("the local plane");
         let one = a_repo(&dir.path().join("a/svc"));
         let other = a_repo(&dir.path().join("b/svc"));
 
@@ -520,7 +630,7 @@ mod tests {
     #[test]
     fn a_clone_already_in_the_projects_workspaces_is_that_workspace_and_is_not_copied_again() {
         let dir = tempfile::tempdir().expect("a directory");
-        let root = ensure_local_plane(&dir.path().join("cfg")).expect("the local plane");
+        let root = ensure_local_plane(&dir.path().join("cfg"), GITHUB).expect("the local plane");
         let taken = take_in(&root, &a_repo(&dir.path().join("svc"))).expect("taken in");
 
         let picked = take_in(&root, &taken.clone).expect("its clone, picked");
@@ -535,7 +645,7 @@ mod tests {
     #[test]
     fn a_path_that_cannot_be_read_is_refused_rather_than_taken_as_typed() {
         let dir = tempfile::tempdir().expect("a directory");
-        let root = ensure_local_plane(&dir.path().join("cfg")).expect("the local plane");
+        let root = ensure_local_plane(&dir.path().join("cfg"), GITHUB).expect("the local plane");
 
         let refused = take_in(&root, &dir.path().join("not-there")).expect_err("refused");
 

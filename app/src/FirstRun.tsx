@@ -18,6 +18,7 @@ function choiceOf(value: string): TemplateChoice {
   if (value === NONE) return { kind: "no-template" };
   return { kind: "named", id: value };
 }
+import { type ForgeAsk, ForgeQuestion } from "./ForgeQuestion";
 
 /**
  * What a machine that has never opened a project sees (FR-4, #603).
@@ -54,17 +55,20 @@ export function FirstRun({
   onSignInToForge,
   opening,
   trouble,
+  forgeAsk,
 }: {
   /** Asks the core to open this repo into the local project, laid out from `template`. */
   onOpenRepo: (path: string, template: TemplateChoice) => void;
   /** Shows the ordinary opener, for a project that already exists. */
   onOpenProject: () => void;
   /** Opens the local project with `<cli> auth login` running in a shell tab. */
-  onSignInToForge: (cli: string) => void;
+  onSignInToForge: (row: ForgeRow) => void;
   /** Whether the core is cloning it right now, so it is not asked twice. */
   opening: boolean;
   /** Why the last attempt opened nothing — the core's words, all of them. */
   trouble?: string;
+  /** Which forge the repo's repos are on, when its remote did not say (#839). */
+  forgeAsk?: ForgeAsk;
 }) {
   const [found, setFound] = useState<FirstRunFound>();
   const [typed, setTyped] = useState("");
@@ -199,6 +203,8 @@ export function FirstRun({
         </p>
       )}
 
+      {forgeAsk && <ForgeQuestion ask={forgeAsk} />}
+
       {/* Verbatim: the sentence names the path and what was wrong with it. */}
       {trouble && (
         <p className="trouble said-in-full" role="alert">
@@ -221,7 +227,7 @@ export function FirstRun({
                 {row.installed && !row.signed_in && (
                   <>
                     {" "}
-                    <button type="button" tabIndex={0} onClick={() => onSignInToForge(row.cli)}>
+                    <button type="button" tabIndex={0} onClick={() => onSignInToForge(row)}>
                       Sign in to {row.title}
                     </button>
                   </>

@@ -43,7 +43,9 @@ const NOT_INTO_A_REPO = [
 ].join("\n");
 
 /** The core, with a plane open and a `create_project` that answers as charter's does. */
-function core(over: { answer?: unknown; refuses?: string; repoRefuses?: string } = {}) {
+function core(
+  over: { answer?: unknown; refuses?: string; repoRefuses?: string; asksForge?: boolean } = {},
+) {
   const asked: { cmd: string; args: Record<string, unknown> }[] = [];
   mockIPC((cmd, args) => {
     const got = (args ?? {}) as Record<string, unknown>;
@@ -57,12 +59,17 @@ function core(over: { answer?: unknown; refuses?: string; repoRefuses?: string }
       return { root: PLANE, personas: [], persona: null, unfiled: [], workspaces: [] };
     if (cmd === "open_repo") {
       if (over.repoRefuses !== undefined) throw over.repoRefuses;
-      return { opened: { plane: PLANE, ask: null }, workspace: "widget", cwd: `${PLANE}/w` };
+      return {
+        opened: { opened: { plane: PLANE, ask: null }, workspace: "widget", cwd: `${PLANE}/w` },
+        asks_forge: null,
+      };
     }
     if (cmd === "create_project") {
       if (over.refuses !== undefined) throw over.refuses;
-      return (
-        over.answer ?? {
+      if (over.asksForge && got.forge === null)
+        return { opened: null, asks_forge: "no repo was named to read it from" };
+      return {
+        opened: over.answer ?? {
           plane: null,
           ask: {
             path: MADE,
@@ -70,8 +77,9 @@ function core(over: { answer?: unknown; refuses?: string; repoRefuses?: string }
             changes: [],
             first: true,
           },
-        }
-      );
+        },
+        asks_forge: null,
+      };
     }
     return null;
   });
@@ -155,7 +163,7 @@ describe("making a project", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "Open repo" }));
 
     expect(calls("open_repo").map((one) => one.args)).toEqual([
-      { path: REPO, template: { kind: "no-template" } },
+      { path: REPO, template: { kind: "no-template" }, forge: null },
     ]);
     expect(calls("create_project")).toEqual([]);
   });
@@ -181,7 +189,7 @@ describe("making a project", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "Create project" }));
 
     expect(calls("create_project").map((one) => one.args)).toEqual([
-      { path: MADE, planeIsThisRepo: false, adopt: null },
+      { path: MADE, planeIsThisRepo: false, adopt: null, forge: null },
     ]);
   });
 
@@ -197,7 +205,7 @@ describe("making a project", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "Create project" }));
 
     expect(calls("create_project").map((one) => one.args)).toEqual([
-      { path: MADE, planeIsThisRepo: false, adopt: REPO },
+      { path: MADE, planeIsThisRepo: false, adopt: REPO, forge: null },
     ]);
   });
 
@@ -221,6 +229,7 @@ describe("making a project", () => {
       path: MADE,
       planeIsThisRepo: true,
       adopt: null,
+      forge: null,
     });
   });
 
@@ -234,6 +243,43 @@ describe("making a project", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "Create project" }));
 
     expect(calls("create_project")[0].args.planeIsThisRepo).toBe(true);
+  });
+
+  it("asks which forge when there is no remote to read, and makes the project with the answer", async () => {
+    const { calls } = core({ asksForge: true });
+    render(<App />);
+    const dialog = await askForOne();
+
+    await userEvent.type(within(dialog).getByLabelText("Folder"), MADE);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create project" }));
+    const question = await within(dialog).findByRole("group", {
+      name: "Which forge are its repos on?",
+    });
+    expect(question).toHaveTextContent("no repo was named to read it from");
+    await userEvent.click(within(question).getByRole("button", { name: "GitHub" }));
+
+    await vi.waitFor(() =>
+      expect(calls("create_project").map((one) => one.args)).toEqual([
+        { path: MADE, planeIsThisRepo: false, adopt: null, forge: null },
+        { path: MADE, planeIsThisRepo: false, adopt: null, forge: "github" },
+      ]),
+    );
+    expect(await screen.findByRole("dialog", { name: "Open this project?" })).toBeInTheDocument();
+  });
+
+  it("drops a pending forge question once the form it was about changes", async () => {
+    core({ asksForge: true });
+    render(<App />);
+    const dialog = await askForOne();
+
+    await userEvent.type(within(dialog).getByLabelText("Folder"), MADE);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create project" }));
+    await within(dialog).findByRole("group", { name: "Which forge are its repos on?" });
+    await userEvent.type(within(dialog).getByLabelText("Folder"), "-2");
+
+    expect(
+      within(dialog).queryByRole("group", { name: "Which forge are its repos on?" }),
+    ).toBeNull();
   });
 
   it("opens what it made through the trust gate, not around it", async () => {

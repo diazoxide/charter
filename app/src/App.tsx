@@ -23,11 +23,18 @@ import "./styles.css";
 import {
   commands,
   type Ask,
+  type ForgeRow,
+  type ForgeWord,
+  type OpenedRepo,
   type PlaneId,
   type RelaunchChoice,
   type RelaunchQuestion,
   type TemplateChoice,
 } from "./bindings";
+import type { ForgeAsk } from "./ForgeQuestion";
+
+/** What trying to open a repo came to: refused, a question about its forge, or opened. */
+type RepoTried = { refused?: string; asksForge?: string };
 import { UnsavedMark } from "./SavingView";
 import { SessionBusNotice } from "./SessionBusNotice";
 import { tellSaved, useRepoSaving } from "./saving";
@@ -200,6 +207,10 @@ function App() {
   /** Whether a repo is being opened right now, and why the last one opened nothing. */
   const [openingRepo, setOpeningRepo] = useState(false);
   const [repoTrouble, setRepoTrouble] = useState<string>();
+  /** The first run's question about the forge, when the repo's remote did not say (#839). */
+  const [repoForgeAsk, setRepoForgeAsk] = useState<ForgeAsk>();
+  /** The New project dialog's, for either of its forms. */
+  const [createForgeAsk, setCreateForgeAsk] = useState<ForgeAsk>();
   /** Preferences asked for with no project in front: drawn where the opener is, because there
    *  is no strip to open a tab on and a text size is still worth changing. */
   const [preferencesAlone, setPreferencesAlone] = useState(false);
@@ -544,27 +555,72 @@ function App() {
    * A refusal stays IN the dialog rather than behind it: `init`'s refusal in a repository is
    * four lines naming what to do instead, and the operator is still standing at the box.
    */
-  const makeProject = useCallback(async (path: string, planeIsThisRepo: boolean, adopt: string) => {
-    setMakingProject(true);
-    const answer = await commands
-      .createProject(path, planeIsThisRepo, adopt === "" ? null : adopt)
-      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
-    setMakingProject(false);
-    if (answer.status === "error") {
-      setCreateTrouble(answer.error);
-      return;
-    }
-    setCreating(false);
-    setCreateTrouble(undefined);
-    if (answer.data.plane === null) {
-      const ask = answer.data.ask;
+  const makeProject = useCallback(
+    async (
+      path: string,
+      planeIsThisRepo: boolean,
+      adopt: string,
+      forge: ForgeWord | null = null,
+    ) => {
+      setMakingProject(true);
+      setCreateForgeAsk(undefined);
+      const answer = await commands
+        .createProject(path, planeIsThisRepo, adopt === "" ? null : adopt, forge)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      setMakingProject(false);
+      if (answer.status === "error") {
+        setCreateTrouble(answer.error);
+        return;
+      }
+      const made = answer.data.opened;
+      if (made === null) {
+        // The repo's remote did not say which forge (#839): asked in the dialog, and the
+        // answer makes the project.
+        const why = answer.data.asks_forge ?? "";
+        setCreateForgeAsk({
+          why,
+          answer: (named) => void makeProject(path, planeIsThisRepo, adopt, named),
+        });
+        return;
+      }
+      setCreating(false);
+      setCreateTrouble(undefined);
+      if (made.plane === null) {
+        const ask = made.ask;
+        if (ask)
+          setApproving((queue) =>
+            queue.some((q) => q.path === ask.path) ? queue : [...queue, ask],
+          );
+        return;
+      }
+      const opened = made.plane;
+      setPlanes((was) => (was.includes(opened) ? was : [...was, opened]));
+      setShowing({ at: "plane", plane: opened });
+    },
+    [],
+  );
+
+  /** What an opened repo puts in the window: its first chat, through the trust gate. */
+  const openedRepo = useCallback((repo: OpenedRepo) => {
+    const { opened, workspace, cwd, harness, instructions } = repo;
+    const plane = opened.plane;
+    const ask = opened.ask;
+    setFirstChat((was) => ({
+      workspace,
+      cwd,
+      harness,
+      instructions,
+      plane,
+      asking: plane === null ? (ask?.path ?? null) : null,
+      at: (was?.at ?? 0) + 1,
+    }));
+    if (plane === null) {
       if (ask)
         setApproving((queue) => (queue.some((q) => q.path === ask.path) ? queue : [...queue, ask]));
       return;
     }
-    const opened = answer.data.plane;
-    setPlanes((was) => (was.includes(opened) ? was : [...was, opened]));
-    setShowing({ at: "plane", plane: opened });
+    setPlanes((was) => (was.includes(plane) ? was : [...was, plane]));
+    setShowing({ at: "plane", plane });
   }, []);
 
   /**
@@ -573,41 +629,65 @@ function App() {
    * directory when there is none, clones the repo into a workspace named after it, and
    * answers as `create_project` does — a project, or the trust question to ask first.
    *
-   * Answers why nothing was opened, or `undefined` when something was, so the first run and the
-   * New project dialog can each keep the refusal where the operator is standing.
+   * Answers why nothing was opened (`refused`), or that the forge has to be asked first
+   * (`asksForge`, #839), or neither when something was opened, so the first run and the New
+   * project dialog can each keep the refusal or the question where the operator is standing.
+   * `forge` is the answer to that question, on the call after it.
    */
   const openRepo = useCallback(
-    async (path: string, template: TemplateChoice): Promise<string | undefined> => {
+    async (
+      path: string,
+      template: TemplateChoice,
+      forge: ForgeWord | null = null,
+    ): Promise<RepoTried> => {
       setOpeningRepo(true);
       const answer = await commands
-        .openRepo(path, template)
+        .openRepo(path, template, forge)
         .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
       setOpeningRepo(false);
-      if (answer.status === "error") return answer.error;
-      const { opened, workspace, cwd, harness, instructions } = answer.data;
-      const plane = opened.plane;
-      const ask = opened.ask;
-      setFirstChat((was) => ({
-        workspace,
-        cwd,
-        harness,
-        instructions,
-        plane,
-        asking: plane === null ? (ask?.path ?? null) : null,
-        at: (was?.at ?? 0) + 1,
-      }));
-      if (plane === null) {
-        if (ask)
-          setApproving((queue) =>
-            queue.some((q) => q.path === ask.path) ? queue : [...queue, ask],
-          );
-        return undefined;
-      }
-      setPlanes((was) => (was.includes(plane) ? was : [...was, plane]));
-      setShowing({ at: "plane", plane });
-      return undefined;
+      if (answer.status === "error") return { refused: answer.error };
+      if (answer.data.opened === null) return { asksForge: answer.data.asks_forge ?? "" };
+      openedRepo(answer.data.opened);
+      return {};
     },
-    [],
+    [openedRepo],
+  );
+
+  /**
+   * The first run's repo, opened, with its refusal or its forge question kept on the first-run
+   * screen. The question's answer opens it again, with the forge named.
+   */
+  const firstRunRepo = useCallback(
+    (path: string, template: TemplateChoice, forge: ForgeWord | null = null) => {
+      setRepoTrouble(undefined);
+      setRepoForgeAsk(undefined);
+      void openRepo(path, template, forge).then(({ refused, asksForge }) => {
+        setRepoTrouble(refused);
+        if (asksForge !== undefined)
+          setRepoForgeAsk({
+            why: asksForge,
+            answer: (named) => firstRunRepo(path, template, named),
+          });
+      });
+    },
+    [openRepo],
+  );
+
+  /** The same, from the New project dialog, which closes once the repo is open. */
+  const dialogRepo = useCallback(
+    (path: string, forge: ForgeWord | null = null) => {
+      setCreateTrouble(undefined);
+      setCreateForgeAsk(undefined);
+      // The New project dialog lays out no template: the first run is where one is chosen
+      // (FR-17).
+      void openRepo(path, { kind: "no-template" }, forge).then(({ refused, asksForge }) => {
+        if (asksForge !== undefined)
+          setCreateForgeAsk({ why: asksForge, answer: (named) => dialogRepo(path, named) });
+        else if (refused === undefined) setCreating(false);
+        else setCreateTrouble(refused);
+      });
+    },
+    [openRepo],
   );
 
   /**
@@ -615,11 +695,13 @@ function App() {
    * offered"): the local project is opened — made first when there is none, and through the
    * trust gate — and `<cli> auth login` is typed into a shell tab at its root. The forge CLI's
    * own login, in a tab the operator can leave; nothing here asks anything. `cli` is the one the
-   * core's first-run row names (`gh`, `glab`).
+   * core's first-run row names (`gh`, `glab`). With no repo to read, the forge whose sign-in
+   * was pressed is the one a project made here tracks (#839).
    */
-  const signInToForge = useCallback(async (cli: string): Promise<string | undefined> => {
+  const signInToForge = useCallback(async (row: ForgeRow): Promise<string | undefined> => {
+    const cli = row.cli;
     const answer = await commands
-      .openLocalProject()
+      .openLocalProject(row.forge)
       .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
     if (answer.status === "error") return answer.error;
     const { plane, ask } = answer.data;
@@ -1638,19 +1720,15 @@ function App() {
                 // The first run is for a window that has never held a project: one whose last
                 // project was closed is somebody who has had one, and gets the opener.
                 onOpenRepo={
-                  heldSomething
-                    ? undefined
-                    : (path, template) => {
-                        setRepoTrouble(undefined);
-                        void openRepo(path, template).then(setRepoTrouble);
-                      }
+                  heldSomething ? undefined : (path, template) => firstRunRepo(path, template)
                 }
-                onSignInToForge={(cli) => {
+                onSignInToForge={(row) => {
                   setRepoTrouble(undefined);
-                  void signInToForge(cli).then(setRepoTrouble);
+                  void signInToForge(row).then(setRepoTrouble);
                 }}
                 openingRepo={openingRepo}
                 repoTrouble={repoTrouble}
+                repoForgeAsk={repoForgeAsk}
               />
             )}
           </div>
@@ -1676,23 +1754,18 @@ function App() {
       {creating && (
         <NewProject
           trouble={createTrouble}
+          forgeAsk={createForgeAsk}
+          onEdit={() => setCreateForgeAsk(undefined)}
           making={makingProject}
           onCreate={(path, planeIsThisRepo, adopt) =>
             void makeProject(path, planeIsThisRepo, adopt)
           }
-          onOpenRepo={(path) => {
-            setCreateTrouble(undefined);
-            // The New project dialog lays out no template: the first run is where one is
-            // chosen (FR-17).
-            void openRepo(path, { kind: "no-template" }).then((refused) => {
-              if (refused === undefined) setCreating(false);
-              else setCreateTrouble(refused);
-            });
-          }}
+          onOpenRepo={(path) => dialogRepo(path)}
           opening={openingRepo}
           onCancel={() => {
             setCreating(false);
             setCreateTrouble(undefined);
+            setCreateForgeAsk(undefined);
           }}
         />
       )}

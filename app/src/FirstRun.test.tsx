@@ -67,8 +67,8 @@ const FOUND = {
     { name: "opencode", title: "opencode", installed: false, signed_in: false },
   ],
   forges: [
-    { cli: "gh", title: "GitHub", installed: true, signed_in: false },
-    { cli: "glab", title: "GitLab", installed: true, signed_in: false },
+    { cli: "gh", forge: "github", title: "GitHub", installed: true, signed_in: false },
+    { cli: "glab", forge: "gitlab", title: "GitLab", installed: true, signed_in: false },
   ],
   templates: [
     { id: "go", title: "Go", summary: "A Go module." },
@@ -96,11 +96,14 @@ function core(answers: (cmd: string, args: Record<string, unknown>) => unknown =
     if (cmd === "first_run_found") return FOUND;
     if (cmd === "open_repo")
       return {
-        opened: { plane: LOCAL, ask: null },
-        workspace: "widget",
-        cwd: CLONE,
-        harness: null,
-        instructions: 0,
+        opened: {
+          opened: { plane: LOCAL, ask: null },
+          workspace: "widget",
+          cwd: CLONE,
+          harness: null,
+          instructions: 0,
+        },
+        asks_forge: null,
       };
     if (cmd === "plane_sidebar") return SIDEBAR;
     if (cmd === "start_options") return START_OPTIONS;
@@ -159,7 +162,7 @@ describe("the first run's project template (FR-17)", () => {
 
     await vi.waitFor(() =>
       expect(calls("open_repo").map((one) => one.args)).toEqual([
-        { path: REPO, template: { kind: "named", id: "rust" } },
+        { path: REPO, template: { kind: "named", id: "rust" }, forge: null },
       ]),
     );
   });
@@ -174,7 +177,7 @@ describe("the first run's project template (FR-17)", () => {
 
     await vi.waitFor(() =>
       expect(calls("open_repo").map((one) => one.args)).toEqual([
-        { path: REPO, template: { kind: "no-template" } },
+        { path: REPO, template: { kind: "no-template" }, forge: null },
       ]),
     );
   });
@@ -225,7 +228,7 @@ describe("the first run", () => {
     const person = await openRepoByPath(REPO);
 
     expect(calls("open_repo").map((one) => one.args)).toEqual([
-      { path: REPO, template: { kind: "fits" } },
+      { path: REPO, template: { kind: "fits" }, forge: null },
     ]);
     // The first chat is asked for by itself: the harness picker, which ADR 0022 keeps.
     const picker = await screen.findByRole("dialog", { name: "Start a chat" });
@@ -241,11 +244,14 @@ describe("the first run", () => {
     const { calls } = core((cmd) => {
       if (cmd === "open_repo")
         return {
-          opened: { plane: null, ask: ASK },
-          workspace: "widget",
-          cwd: CLONE,
-          harness: null,
-          instructions: 0,
+          opened: {
+            opened: { plane: null, ask: ASK },
+            workspace: "widget",
+            cwd: CLONE,
+            harness: null,
+            instructions: 0,
+          },
+          asks_forge: null,
         };
       if (cmd === "approve_plane") return LOCAL;
       return undefined;
@@ -314,11 +320,14 @@ describe("the first run", () => {
     const { calls } = core((cmd) => {
       if (cmd === "open_repo")
         return {
-          opened: { plane: LOCAL, ask: null },
-          workspace: "widget",
-          cwd: CLONE,
-          harness: "claude",
-          instructions: 0,
+          opened: {
+            opened: { plane: LOCAL, ask: null },
+            workspace: "widget",
+            cwd: CLONE,
+            harness: "claude",
+            instructions: 0,
+          },
+          asks_forge: null,
         };
       return undefined;
     });
@@ -342,11 +351,14 @@ describe("the first run", () => {
     const { calls } = core((cmd) => {
       if (cmd === "open_repo")
         return {
-          opened: { plane: LOCAL, ask: null },
-          workspace: "widget",
-          cwd: CLONE,
-          harness: "claude",
-          instructions: 0,
+          opened: {
+            opened: { plane: LOCAL, ask: null },
+            workspace: "widget",
+            cwd: CLONE,
+            harness: "claude",
+            instructions: 0,
+          },
+          asks_forge: null,
         };
       if (cmd === "start_chat") return { session: 1, label: null, notices: [line] };
       return undefined;
@@ -369,11 +381,14 @@ describe("the first run", () => {
     const { calls } = core((cmd) => {
       if (cmd === "open_repo")
         return {
-          opened: { plane: LOCAL, ask: null },
-          workspace: "widget",
-          cwd: CLONE,
-          harness: "claude",
-          instructions: 0,
+          opened: {
+            opened: { plane: LOCAL, ask: null },
+            workspace: "widget",
+            cwd: CLONE,
+            harness: "claude",
+            instructions: 0,
+          },
+          asks_forge: null,
         };
       if (cmd === "start_options")
         return {
@@ -430,6 +445,32 @@ describe("the first run", () => {
       session: 7,
       text: "glab auth login\n",
     });
+    // With no repo to read, the forge whose sign-in was pressed is the project's (#839).
+    expect(calls("open_local_project")[0].args).toEqual({ forge: "gitlab" });
+  });
+
+  it("asks which forge when the repo's remote does not say, and opens it with the answer", async () => {
+    const { calls } = core((cmd, args) => {
+      if (cmd === "open_repo" && args.forge === null)
+        return { opened: null, asks_forge: `${REPO} has no \`origin\` remote` };
+      return undefined;
+    });
+    render(<App />);
+
+    const person = await openRepoByPath(REPO);
+    const question = await screen.findByRole("group", { name: "Which forge are its repos on?" });
+    expect(question).toHaveTextContent(`${REPO} has no \`origin\` remote`);
+    expect(calls("start_chat")).toHaveLength(0);
+    await person.click(within(question).getByRole("button", { name: "GitLab" }));
+
+    await vi.waitFor(() =>
+      expect(calls("open_repo").map((one) => one.args)).toEqual([
+        { path: REPO, template: { kind: "fits" }, forge: null },
+        { path: REPO, template: { kind: "fits" }, forge: "gitlab" },
+      ]),
+    );
+    expect(await screen.findByRole("dialog", { name: "Start a chat" })).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Which forge are its repos on?" })).toBeNull();
   });
 });
 
@@ -471,11 +512,14 @@ describe("the repo's agent instructions", () => {
       if (instead !== undefined) return instead;
       if (cmd === "open_repo")
         return {
-          opened: { plane: LOCAL, ask: null },
-          workspace: "widget",
-          cwd: CLONE,
-          harness: "claude",
-          instructions: 2,
+          opened: {
+            opened: { plane: LOCAL, ask: null },
+            workspace: "widget",
+            cwd: CLONE,
+            harness: "claude",
+            instructions: 2,
+          },
+          asks_forge: null,
         };
       if (cmd === "repo_instructions") return FILES;
       if (cmd === "import_instructions") return 2;
@@ -502,11 +546,14 @@ describe("the repo's agent instructions", () => {
     const { calls } = core((cmd) => {
       if (cmd === "open_repo")
         return {
-          opened: { plane: LOCAL, ask: null },
-          workspace: "widget",
-          cwd: CLONE,
-          harness: "claude",
-          instructions: 0,
+          opened: {
+            opened: { plane: LOCAL, ask: null },
+            workspace: "widget",
+            cwd: CLONE,
+            harness: "claude",
+            instructions: 0,
+          },
+          asks_forge: null,
         };
       return undefined;
     });

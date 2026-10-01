@@ -33,6 +33,8 @@ pub struct HarnessRow {
 pub struct ForgeRow {
     /// The program (`gh`, `glab`). Its own login is `<cli> auth login`.
     pub cli: String,
+    /// The forge: what its sign-in names when it makes the project (#839).
+    pub forge: ForgeWord,
     /// The forge it works with (`GitHub`, `GitLab`).
     pub title: String,
     pub installed: bool,
@@ -109,6 +111,7 @@ fn forge_rows(installed: &dyn Fn(Kind) -> bool, signed_in: &dyn Fn(Kind) -> bool
             let installed = installed(kind);
             ForgeRow {
                 cli: kind.cli().to_owned(),
+                forge: kind.into(),
                 title: kind.display().to_owned(),
                 installed,
                 signed_in: installed && signed_in(kind),
@@ -136,6 +139,18 @@ pub struct OpenedRepo {
     pub instructions: u32,
     /// The project template the project was laid out from, by id, when one was (FR-17).
     pub template: Option<String>,
+}
+
+/// What opening a repo on the first run came to: opened, or a question about the forge.
+///
+/// Two nullable fields rather than a tagged union, as `Opened` is: exactly one is ever set.
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+pub struct RepoAnswer {
+    /// What was opened. Null when the forge has to be asked first.
+    pub opened: Option<OpenedRepo>,
+    /// Why the repo's remote does not say which forge the project's repos are on (#839):
+    /// the window asks GitHub or GitLab and calls again with the answer. Nothing was made.
+    pub asks_forge: Option<String>,
 }
 
 /// One agent instruction file in a workspace's clone, as the tab that offers it draws it
@@ -209,31 +224,53 @@ pub async fn first_run_found() -> Result<FirstRunFound, String> {
 /// `create_project` opens a plane it has just made.
 ///
 /// Nothing asks where the plane goes (W10). The repo is read and never written to.
+///
+/// The project's forge is read from the repo's `origin`, as `charter init` reads it (#839).
+/// When the remote does not say, nothing is made and the answer asks for it; `forge` is the
+/// operator's answer (`github`, `gitlab`) on the call after. A local project that is already
+/// there asks nothing.
 #[tauri::command]
 #[specta::specta]
 pub async fn open_repo(
     planes: tauri::State<'_, Planes>,
     path: String,
     template: TemplateChoice,
-) -> Result<OpenedRepo, String> {
+    forge: Option<ForgeWord>,
+) -> Result<RepoAnswer, String> {
     let config = config_of(&planes)?;
-    let (root, taken, harness, instructions) = tauri::async_runtime::spawn_blocking(move || {
-        let (root, taken) = taken_in(&config, Path::new(&path), &template.into())?;
+    let forge = forge.map(Kind::from);
+    let made = tauri::async_runtime::spawn_blocking(move || {
+        let (root, taken) = match taken_in(&config, Path::new(&path), &template.into(), forge)? {
+            Taken::In(root, taken) => (root, taken),
+            Taken::AsksForge(why) => return Ok(Err(why)),
+        };
         let harness = firstrun::only_ready(&firstrun::harnesses_here());
         // Counted, not written: the tab that offers them is where the operator says yes.
         let instructions = offered(&root, &taken.workspace);
-        Ok::<_, String>((root, taken, harness, instructions))
+        Ok::<_, String>(Ok((root, taken, harness, instructions)))
     })
     .await
     .map_err(|err| format!("charter could not open the repo: {err}"))??;
+    let (root, taken, harness, instructions) = match made {
+        Ok(made) => made,
+        Err(why) => {
+            return Ok(RepoAnswer {
+                opened: None,
+                asks_forge: Some(why),
+            });
+        }
+    };
     let opened = planes.open_if_approved(&root).map(Opened::from)?;
-    Ok(OpenedRepo {
-        opened,
-        workspace: taken.workspace,
-        cwd: taken.clone.display().to_string(),
-        harness: harness.map(|one| one.name().to_owned()),
-        instructions,
-        template: taken.template,
+    Ok(RepoAnswer {
+        opened: Some(OpenedRepo {
+            opened,
+            workspace: taken.workspace,
+            cwd: taken.clone.display().to_string(),
+            harness: harness.map(|one| one.name().to_owned()),
+            instructions,
+            template: taken.template,
+        }),
+        asks_forge: None,
     })
 }
 
@@ -254,6 +291,33 @@ fn fits(path: &str) -> Option<String> {
         return None;
     }
     charter_core::template::detect(repo).map(|one| one.id.clone())
+}
+
+/// A forge on the wire: the window's spelling of `charter_core::forge::Kind`, which the core
+/// keeps free of serde and specta.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
+#[serde(rename_all = "lowercase")]
+pub enum ForgeWord {
+    Github,
+    Gitlab,
+}
+
+impl From<ForgeWord> for Kind {
+    fn from(word: ForgeWord) -> Kind {
+        match word {
+            ForgeWord::Github => Kind::GitHub,
+            ForgeWord::Gitlab => Kind::GitLab,
+        }
+    }
+}
+
+impl From<Kind> for ForgeWord {
+    fn from(kind: Kind) -> ForgeWord {
+        match kind {
+            Kind::GitHub => ForgeWord::Github,
+            Kind::GitLab => ForgeWord::Gitlab,
+        }
+    }
 }
 
 /// How many of workspace `ws`'s instruction files can be added to its memory. A workspace
@@ -341,15 +405,25 @@ fn imported(
 }
 
 /// Opens this machine's local project with no repo in it, made first when there is none, and
-/// through the trust gate: what "Sign in to GitHub" (or GitLab) on the first run opens, so the
-/// sign-in has a shell tab to run in (W10).
+/// through the trust gate: what "Sign in to GitHub" or "Sign in to GitLab" on the first run
+/// opens, so the sign-in has a shell tab to run in (W10).
+///
+/// `forge` is the forge whose sign-in was pressed (`github`, `gitlab`). With no repo to read,
+/// that press is the operator's answer to which forge a new project tracks (#839).
 #[tauri::command]
 #[specta::specta]
-pub async fn open_local_project(planes: tauri::State<'_, Planes>) -> Result<Opened, String> {
+pub async fn open_local_project(
+    planes: tauri::State<'_, Planes>,
+    forge: ForgeWord,
+) -> Result<Opened, String> {
     let config = config_of(&planes)?;
-    let root = tauri::async_runtime::spawn_blocking(move || firstrun::ensure_local_plane(&config))
-        .await
-        .map_err(|err| format!("charter could not open its project: {err}"))??;
+    let kind = Kind::from(forge);
+    let root = tauri::async_runtime::spawn_blocking(move || {
+        firstrun::ensure_local_plane(&config, firstrun::ForgeFrom::Named(kind))
+            .map_err(|why| why.to_string())
+    })
+    .await
+    .map_err(|err| format!("charter could not open its project: {err}"))??;
     planes.open_if_approved(&root).map(Opened::from)
 }
 
@@ -362,13 +436,24 @@ fn config_of(planes: &Planes) -> Result<PathBuf, String> {
     })
 }
 
+/// What [`taken_in`] came to.
+#[derive(Debug)]
+enum Taken {
+    /// The local plane, with the repo in it.
+    In(PathBuf, firstrun::TakenIn),
+    /// The forge has to be asked first, and why. Nothing was made.
+    AsksForge(String),
+}
+
 /// The local plane under `config`, made if it is not there, with `repo` taken in and the
-/// project laid out from the template `choice` names.
+/// project laid out from the template `choice` names. A plane that is made takes its forge
+/// from `forge`, the operator's answer, else from `repo`'s remote.
 fn taken_in(
     config: &Path,
     repo: &Path,
     choice: &firstrun::Choice,
-) -> Result<(PathBuf, firstrun::TakenIn), String> {
+    forge: Option<Kind>,
+) -> Result<Taken, String> {
     if !repo.is_absolute() {
         return Err(format!(
             "'{}' is not a full path, so charter cannot tell which directory it means. Pick a \
@@ -376,14 +461,79 @@ fn taken_in(
             repo.display()
         ));
     }
-    let root = firstrun::ensure_local_plane(config)?;
+    let from = forge.map_or(firstrun::ForgeFrom::Repo(repo), firstrun::ForgeFrom::Named);
+    let root = match firstrun::ensure_local_plane(config, from) {
+        Ok(root) => root,
+        Err(firstrun::NotMade::AsksForForge(why)) => return Ok(Taken::AsksForge(why)),
+        Err(firstrun::NotMade::Refused(why)) => return Err(why),
+    };
     let taken = firstrun::take_in_from(&root, repo, choice)?;
-    Ok((root, taken))
+    Ok(Taken::In(root, taken))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const GITHUB: Option<Kind> = Some(Kind::GitHub);
+
+    /// The plane and the repo taken in, from a run that was not asked a question.
+    fn taken(answer: Taken) -> (PathBuf, firstrun::TakenIn) {
+        match answer {
+            Taken::In(root, taken) => (root, taken),
+            Taken::AsksForge(why) => panic!("asked for the forge: {why}"),
+        }
+    }
+
+    /// #839: a repo whose remote does not say asks for the forge, makes nothing, and the
+    /// answer makes the project; a repo on github.com or gitlab.com is never asked about.
+    #[test]
+    fn a_repo_whose_remote_does_not_say_asks_for_the_forge_before_anything_is_made() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let config = dir.path().join("config");
+        let repo = a_repo(&dir.path().join("widget"));
+
+        let asked = taken_in(&config, &repo, &firstrun::Choice::Fits, None).expect("answered");
+
+        assert!(
+            matches!(&asked, Taken::AsksForge(why) if why.ends_with("has no `origin` remote")),
+            "{asked:?}"
+        );
+        assert!(!firstrun::local_plane(&config).exists());
+        let (root, _) = taken(
+            taken_in(&config, &repo, &firstrun::Choice::Fits, Some(Kind::GitLab))
+                .expect("answered"),
+        );
+        let manifest = std::fs::read_to_string(root.join("charter.toml")).expect("made");
+        assert!(manifest.contains("kind = \"gitlab\""), "{manifest}");
+    }
+
+    #[test]
+    fn a_repo_on_github_names_the_projects_forge_and_owner_without_asking() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let config = dir.path().join("config");
+        let repo = a_repo(&dir.path().join("widget"));
+        let added = charter_core::forklock::output(
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args([
+                    "remote",
+                    "add",
+                    "origin",
+                    "https://github.com/acme/widget.git",
+                ]),
+        )
+        .expect("git runs in a test");
+        assert!(added.status.success());
+
+        let (root, _) =
+            taken(taken_in(&config, &repo, &firstrun::Choice::Fits, None).expect("answered"));
+
+        let manifest = std::fs::read_to_string(root.join("charter.toml")).expect("made");
+        assert!(manifest.contains("kind = \"github\""), "{manifest}");
+        assert!(manifest.contains("owner = \"acme\""), "{manifest}");
+    }
 
     #[test]
     fn the_first_run_checks_both_forge_clis_and_asks_only_an_installed_one_for_its_login() {
@@ -395,6 +545,11 @@ mod tests {
 
         let row = |cli: &str, title: &str, installed, signed_in| ForgeRow {
             cli: cli.to_owned(),
+            forge: if cli == "gh" {
+                ForgeWord::Github
+            } else {
+                ForgeWord::Gitlab
+            },
             title: title.to_owned(),
             installed,
             signed_in,
@@ -505,8 +660,14 @@ mod tests {
         let config = dir.path().join("config");
         let repo = a_repo(&dir.path().join("widget"));
 
-        let (root, taken) =
-            taken_in(&config, &repo, &firstrun::Choice::Named("go".to_owned())).expect("opened");
+        let (root, taken) = taken_in(
+            &config,
+            &repo,
+            &firstrun::Choice::Named("go".to_owned()),
+            GITHUB,
+        )
+        .map(taken)
+        .expect("opened");
 
         assert_eq!(taken.template.as_deref(), Some("go"));
         assert!(root.join("personas/go-reviewer/refs/REVIEW.md").is_file());
@@ -518,8 +679,9 @@ mod tests {
         let config = dir.path().join("config");
         let repo = a_repo(&dir.path().join("widget"));
 
-        let (root, taken) =
-            taken_in(&config, &repo, &firstrun::Choice::Fits).expect("the repository is opened");
+        let (root, taken) = taken_in(&config, &repo, &firstrun::Choice::Fits, GITHUB)
+            .map(taken)
+            .expect("the repository is opened");
 
         assert_eq!(
             root,
@@ -537,14 +699,18 @@ mod tests {
             &config,
             &a_repo(&dir.path().join("one")),
             &firstrun::Choice::Fits,
+            GITHUB,
         )
+        .map(taken)
         .expect("the first repository");
 
         let (second, taken) = taken_in(
             &config,
             &a_repo(&dir.path().join("two")),
             &firstrun::Choice::Fits,
+            GITHUB,
         )
+        .map(taken)
         .expect("the second repository");
 
         assert_eq!(first, second);
@@ -557,8 +723,13 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let config = dir.path().join("config");
 
-        let refused =
-            taken_in(&config, Path::new("widget"), &firstrun::Choice::Fits).expect_err("refused");
+        let refused = taken_in(
+            &config,
+            Path::new("widget"),
+            &firstrun::Choice::Fits,
+            GITHUB,
+        )
+        .expect_err("refused");
 
         assert!(refused.contains("is not a full path"), "{refused}");
         assert!(!firstrun::local_plane(&config).exists());
@@ -583,7 +754,9 @@ mod tests {
             .expect("git runs in a test");
             assert!(done.status.success(), "git {argv:?}");
         }
-        let (root, taken) = taken_in(&config, &repo, &firstrun::Choice::Fits).expect("opened");
+        let (root, taken) = taken_in(&config, &repo, &firstrun::Choice::Fits, GITHUB)
+            .map(taken)
+            .expect("opened");
 
         assert_eq!(offered(&root, &taken.workspace), 1);
         let files = instruction_files(&root, &taken.workspace).expect("read");

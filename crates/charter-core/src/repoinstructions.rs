@@ -436,8 +436,11 @@ mod tests {
     /// A plane with workspace `svc` holding a clone `svc`, with `files` committed in it.
     fn a_workspace(files: &[(&str, &str)]) -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().expect("a directory");
-        let root =
-            crate::firstrun::ensure_local_plane(&dir.path().join("cfg")).expect("a local plane");
+        let root = crate::firstrun::ensure_local_plane(
+            &dir.path().join("cfg"),
+            crate::firstrun::ForgeFrom::Named(crate::forge::Kind::GitHub),
+        )
+        .expect("a local plane");
         let repo = dir.path().join("svc");
         std::fs::create_dir_all(&repo).expect("the repo's directory");
         for (file, text) in files {

@@ -59,11 +59,14 @@ teammate shared as a GitLab repo.
 
 ## Working with your GitLab repos
 
-The project charter makes on the first run tracks GitHub. To list and clone the repos in your
-GitLab group:
+The project charter makes on the first run tracks the forge your repo's `origin` is on, and its
+group: a repo cloned from `gitlab.com/my-group/widget` gives a project that tracks GitLab, group
+`my-group`. If the repo has no remote, or its remote is on a self-managed GitLab, the first run
+asks which forge before it makes the project; pick **GitLab**. To list and clone the repos in
+your GitLab group:
 
-1. Open **Project settings…** and, under **Forges**, set the first forge's **kind** to `gitlab`
-   and its **owner** to your group, such as `my-group`. Set **host** to your GitLab's host, such
+1. Open **Project settings…** and, under **Forges**, check that the first forge's **kind** is
+   `gitlab` and its **owner** is your group, such as `my-group`. Set **host** to your GitLab's host, such
    as `gitlab.example.com`, or leave it empty for gitlab.com. In `charter.toml` a forge block
    may say `group` instead of `owner`, and `group` wins when it has both.
 2. Open **New workspace…**. Its repo picker lists the repos your own `glab` login is a member
@@ -76,9 +79,10 @@ GitLab group:
 If the picker cannot ask GitLab, it says why in `glab`'s words, for example that `glab` is not
 signed in for that host, and tells you the command to run.
 
-From a terminal, `charter init --owner <group>` makes a project in the current directory that
-tracks that group: GitLab is `charter init`'s default forge. Add `--host <host>` for a
-self-managed GitLab.
+From a terminal, `charter init --forge gitlab --owner <group>` makes a project in the current
+directory that tracks that group. Add `--host <host>` for a self-managed GitLab. With
+`--adopt <repo>`, `charter init` reads the forge and group from that repo's `origin` instead,
+and without either it asks you to name the forge.
 
 ## Saving your project to GitLab
 
