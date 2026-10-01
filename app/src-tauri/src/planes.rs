@@ -583,7 +583,7 @@ pub struct Planes {
     /// Makes each plane's session host (FD-3): [`Sessions`] in the app, told where its chats
     /// report.
     hosting: Hosting,
-    /// The host's event log (FD-9), shared by every plane: one writer per device. None until
+    /// The host's event log (FD-9), shared by every project: one writer per device. None until
     /// the app opens it, and on a machine that has no data home.
     events: Option<hooks::Events>,
 }
@@ -656,7 +656,7 @@ impl Planes {
         }
     }
 
-    /// Records every hook call of every plane this registry holds into `events` (FD-9).
+    /// Records every hook call of every project this registry holds into `events` (FD-9).
     pub fn recording_events(mut self, events: Option<hooks::Events>) -> Self {
         self.events = events;
         self

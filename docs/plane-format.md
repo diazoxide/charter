@@ -4390,7 +4390,7 @@ Support/charter` on macOS, `~/.local/share/charter` on Linux). The host's event 
 there (FD-9, `charter_core::datahome`). The other rows are **decided, not yet written**: AU-3
 writes the audit's, RR-16 a runner's bare repos (ADR 0078), KN-32 the search index's
 (ADR 0079), RC-7 the reviews (ADR 0084) and OB-2 the telemetry store (ADR 0083). Every writer
-refuses a `<data>` under a plane or inside any git work tree.
+refuses a `<data>` under a project or inside any git work tree.
 
 | Path | Tier | What it holds | Written by |
 |---|---|---|---|

@@ -5,7 +5,7 @@
 //! `$CHARTER_DATA_HOME`, else `$XDG_DATA_HOME/charter`, else the OS data directory's `charter/`
 //! (`~/Library/Application Support/charter` on macOS, `~/.local/share/charter` on Linux).
 //!
-//! **Never inside a plane or a git work tree** (ADR 0075 §6). What is kept here is device-bound
+//! **Never inside a project or a git work tree** (ADR 0075 §6). What is kept here is device-bound
 //! and never committed, and a `<data>` a variable pointed into a repository would be one
 //! `git add -A` from being pushed. The writer asks [`refusal`] first.
 

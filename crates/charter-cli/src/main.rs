@@ -1256,16 +1256,16 @@ fn payload() -> String {
     rx.recv_timeout(PAYLOAD_DEADLINE).unwrap_or_default()
 }
 
-/// One [`hookwire::ToolCall`] to the host, when a host is listening: the tool, the hash of its
-/// arguments, the decision and how long the hook took. Never the arguments themselves. A host
-/// that has gone is not the harness's business, and is said only on stderr, as a report that
-/// did not arrive is.
 /// The rule a refused tool hook word this binary does not answer is recorded under.
 const UNKNOWN_HOOK_RULE: &str = "unknown-hook";
 
 /// The rule a tool call refused because its guard crashed is recorded under.
 pub(crate) const GUARD_CRASHED_RULE: &str = "guard-crashed";
 
+/// One [`hookwire::ToolCall`] to the host, when a host is listening: the tool, the hash of its
+/// arguments, the decision and how long the hook took. Never the arguments themselves. A host
+/// that has gone is not the harness's business, and is said only on stderr, as a report that
+/// did not arrive is.
 #[cfg(unix)]
 fn tell_the_host_about_the_tool_call(
     word: &str,

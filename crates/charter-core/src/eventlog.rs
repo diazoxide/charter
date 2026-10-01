@@ -249,7 +249,7 @@ const KEY_BYTES: usize = 32;
 /// **Keyed, because a plain hash of a short command can be guessed.** `ls -la` has one SHA-256
 /// and anybody can compute it; an HMAC under a key only this device holds cannot be matched
 /// from outside, and still lets two calls on this device be seen to have had the same
-/// arguments. The key is made once and kept, as `fingerprint.key` is for a plane's `fp:`
+/// arguments. The key is made once and kept, as `fingerprint.key` is for a project's `fp:`
 /// values, so a digest compares with yesterday's; AU-19 may move it into the keyring.
 pub struct ArgsKey(Vec<u8>);
 
@@ -380,7 +380,7 @@ pub struct Recorder {
     dir: PathBuf,
     log: Log,
     key: ArgsKey,
-    /// By plane and number: a number means nothing outside the plane that dealt it.
+    /// By project and number: a number means nothing outside the project that dealt it.
     chats: HashMap<(PathBuf, u32), Identity>,
     /// Each live sub-agent's child run, by chat id and the harness's agent id.
     children: HashMap<(String, String), (String, String)>,
@@ -544,7 +544,13 @@ impl Recorder {
     /// pre hook of one call (`pretooluse` and `pretooluse-read`) is not a later start, and an
     /// end left waiting longer than [`CALL_IS_OPEN_AT_MOST`] is let go: the other end, heard
     /// later than that, gives no duration.
-    fn pair(&mut self, key: (String, String), phase: Phase, now: Instant, at_ms: u64) -> Option<u64> {
+    fn pair(
+        &mut self,
+        key: (String, String),
+        phase: Phase,
+        now: Instant,
+        at_ms: u64,
+    ) -> Option<u64> {
         self.calls
             .retain(|_, heard| now.saturating_duration_since(heard.at) <= CALL_IS_OPEN_AT_MOST);
         match self.calls.get(&key) {
@@ -562,7 +568,14 @@ impl Recorder {
             }
             Some(_) => None,
             None => {
-                self.calls.insert(key, Heard { phase, at: now, at_ms });
+                self.calls.insert(
+                    key,
+                    Heard {
+                        phase,
+                        at: now,
+                        at_ms,
+                    },
+                );
                 None
             }
         }

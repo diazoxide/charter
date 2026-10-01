@@ -2877,7 +2877,11 @@ mod tests {
         });
 
         assert!(gave_up.is_err());
-        assert!(began.elapsed() < std::time::Duration::from_secs(2), "{:?}", began.elapsed());
+        assert!(
+            began.elapsed() < std::time::Duration::from_secs(2),
+            "{:?}",
+            began.elapsed()
+        );
         assert!(within(std::time::Duration::from_secs(1), || Ok(())).is_ok());
     }
 

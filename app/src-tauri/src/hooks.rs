@@ -140,7 +140,7 @@ pub struct Hooks {
     /// relaunch resumes is the one the chat is in now (Q10).
     following: Arc<Mutex<Option<Following>>>,
     /// The host's event log, once the app has one (FD-9) — a slot filled after the fact, so
-    /// a plane is opened the same way with or without it. Every line the channel hears from
+    /// a project is opened the same way with or without it. Every line the channel hears from
     /// a chat's hooks is recorded there, whether or not it moved the board.
     events: Arc<Mutex<Option<Events>>>,
     /// Told EVERY report on this socket once the board has had it, whether it moved the board or
@@ -166,7 +166,7 @@ pub type Following = Arc<dyn Fn(u32, &str) + Send + Sync + 'static>;
 /// What answers an ask, told which connection it came on.
 pub type Answering = Arc<dyn Fn(u64, Ask) -> Answer + Send + Sync + 'static>;
 
-/// The host's event log, shared by every plane this process holds: one writer per device.
+/// The host's event log, shared by every project this process holds: one writer per device.
 pub type Events = Arc<Mutex<charter_core::eventlog::Recorder>>;
 
 /// Where this app listens, and where containment of that path begins.
@@ -437,7 +437,7 @@ impl Hooks {
         })
     }
 
-    /// Records every hook call this plane's channel hears into `events` from now on (FD-9).
+    /// Records every hook call this project's channel hears into `events` from now on (FD-9).
     pub fn record_into(&self, events: Events) {
         *self.events.lock().unwrap_or_else(PoisonError::into_inner) = Some(events);
     }
