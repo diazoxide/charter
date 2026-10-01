@@ -11,7 +11,8 @@
 //! writes the queue to the stream.
 
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use bytes::Bytes;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
@@ -56,10 +57,16 @@ pub enum Chunk {
     Live(Bytes),
 }
 
-/// The view could not keep up and was dropped (see [`Feed::push`]).
-#[derive(Debug, thiserror::Error)]
-#[error("the view fell behind and was dropped; attach it again with a fresh snapshot")]
-pub struct FellBehind;
+/// Why the host closed a view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum Closed {
+    /// The view could not keep up and was dropped (see [`Feed::push`]).
+    #[error("the view fell behind and was dropped; attach it again with a fresh snapshot")]
+    FellBehind,
+    /// The client acknowledged bytes it was never sent.
+    #[error("the client acknowledged more than it was sent")]
+    OverAcknowledged,
+}
 
 #[derive(Default)]
 struct Queue {
@@ -73,8 +80,12 @@ struct Queue {
 struct Shared {
     queue: Mutex<Queue>,
     more: Notify,
-    /// Cancelled when the view falls behind: the writer stops where it is.
+    /// Cancelled when the host closes the view: the writer stops where it is.
     dropped: CancellationToken,
+    /// Why, once it has.
+    why: OnceLock<Closed>,
+    /// Bytes handed to the stream so far, header aside: what the client may acknowledge.
+    sent: AtomicU64,
     most_queued: usize,
 }
 
@@ -83,6 +94,13 @@ impl Shared {
         self.queue
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Close the view: the first reason given is the one kept.
+    fn close(&self, why: Closed) -> Closed {
+        let why = *self.why.get_or_init(|| why);
+        self.dropped.cancel();
+        why
     }
 }
 
@@ -96,18 +114,17 @@ impl Feed {
     ///
     /// When the queue would pass [`Limits::most_queued_bytes`], the view has fallen behind:
     /// its queue is let go, its stream ends, and this and every later push answer
-    /// [`FellBehind`]. The host then attaches the view again with a fresh snapshot and the next
+    /// [`Closed::FellBehind`]. The host then attaches the view again with a fresh snapshot and the next
     /// epoch, exactly as it attaches a new one.
-    pub fn push(&self, bytes: Bytes) -> Result<(), FellBehind> {
+    pub fn push(&self, bytes: Bytes) -> Result<(), Closed> {
         let mut queue = self.shared.queue();
-        if self.shared.dropped.is_cancelled() {
-            return Err(FellBehind);
+        if let Some(why) = self.shared.why.get() {
+            return Err(*why);
         }
         if queue.bytes + bytes.len() > self.shared.most_queued {
             queue.chunks.clear();
             queue.bytes = 0;
-            self.shared.dropped.cancel();
-            return Err(FellBehind);
+            return Err(self.shared.close(Closed::FellBehind));
         }
         queue.bytes += bytes.len();
         queue.chunks.push_back(bytes);
@@ -122,9 +139,9 @@ impl Feed {
         self.shared.queue().bytes
     }
 
-    /// Whether the view fell behind and was dropped.
-    pub fn fell_behind(&self) -> bool {
-        self.shared.dropped.is_cancelled()
+    /// Why the host closed the view, once it has.
+    pub fn closed(&self) -> Option<Closed> {
+        self.shared.why.get().copied()
     }
 }
 
@@ -143,18 +160,21 @@ pub fn start(stream: Stream, view: u32, epoch: u32, snapshot: Bytes, limits: Lim
         queue: Mutex::new(Queue::default()),
         more: Notify::new(),
         dropped: CancellationToken::new(),
+        why: OnceLock::new(),
+        sent: AtomicU64::new(0),
         most_queued: limits.most_queued_bytes,
     });
     let pump = Arc::clone(&shared);
     tokio::spawn(async move {
         let (acks, out) = tokio::io::split(stream);
         let (acked, drawn) = watch::channel(0u64);
-        let counting = tokio::spawn(count_acks(acks, acked));
+        let counting = tokio::spawn(count_acks(acks, acked, Arc::clone(&pump)));
         let mut writer = Gated {
             out,
             sent: 0,
             drawn,
             limits,
+            shared: Arc::clone(&pump),
         };
         tokio::select! {
             _ = writer.write(view, epoch, &snapshot, &pump) => {}
@@ -166,10 +186,21 @@ pub fn start(stream: Stream, view: u32, epoch: u32, snapshot: Bytes, limits: Lim
     Feed { shared }
 }
 
-/// Read the client's acknowledgements, and keep the running total of bytes drawn.
-async fn count_acks(mut acks: ReadHalf<Stream>, drawn: watch::Sender<u64>) {
+/// Read the client's acknowledgements, and keep the running total of bytes drawn. A client
+/// that acknowledges more than it was sent is wrong about the view, and loses it.
+async fn count_acks(mut acks: ReadHalf<Stream>, drawn: watch::Sender<u64>, shared: Arc<Shared>) {
+    let mut total: u64 = 0;
     while let Ok(n) = acks.read_u32().await {
-        drawn.send_modify(|total| *total += u64::from(n));
+        match total.checked_add(u64::from(n)) {
+            Some(more) if more <= shared.sent.load(Ordering::Acquire) => {
+                total = more;
+                drawn.send_replace(total);
+            }
+            _ => {
+                shared.close(Closed::OverAcknowledged);
+                return;
+            }
+        }
     }
 }
 
@@ -179,6 +210,7 @@ struct Gated {
     sent: u64,
     drawn: watch::Receiver<u64>,
     limits: Limits,
+    shared: Arc<Shared>,
 }
 
 impl Gated {
@@ -224,20 +256,22 @@ impl Gated {
         let high = self.limits.high_watermark as u64;
         let low = self.limits.low_watermark as u64;
         for piece in bytes.chunks(MOST_CHUNK_BYTES) {
-            if self.sent - *self.drawn.borrow() >= high {
+            if self.sent.saturating_sub(*self.drawn.borrow()) >= high {
                 let sent = self.sent;
                 self.out.flush().await?;
                 if self
                     .drawn
-                    .wait_for(|drawn| sent - (*drawn).min(sent) <= low)
+                    .wait_for(|drawn| sent.saturating_sub(*drawn) <= low)
                     .await
                     .is_err()
                 {
                     return Err(std::io::ErrorKind::BrokenPipe.into());
                 }
             }
-            self.out.write_all(piece).await?;
+            // Counted before it is written, so an acknowledgement of it can never arrive first.
             self.sent += piece.len() as u64;
+            self.shared.sent.store(self.sent, Ordering::Release);
+            self.out.write_all(piece).await?;
         }
         self.out.flush().await
     }
