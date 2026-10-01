@@ -1,12 +1,20 @@
 import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render as renderBare, screen, waitFor, within } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render as renderBare,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import type { Moved, OpenChat } from "./bindings";
 import { dragWithTheKeyboard, laidOutInARow } from "./test-strips";
 import { BUILT_IN, DEFAULT_THEME, drawIn, inForce, onDrawn, type Theme } from "./theme/theme";
+import { onAMac } from "./tabKeys";
 
 /**
  * A window holding more than one project (ADR 0033, spec decision 23).
@@ -691,5 +699,103 @@ describe("the cold launch putting the last quit's projects back", () => {
       "Open a repo to start",
     );
     expect(screen.queryByRole("tablist", { name: "Projects" })).not.toBeInTheDocument();
+  });
+});
+
+const THREE = "/home/dev/three";
+
+/** The switcher's rows, as it lists them: each project's name, `*` on the one Enter would run. */
+const switcherRows = () =>
+  within(screen.getByRole("listbox", { name: "Projects" }))
+    .getAllByRole("option")
+    .map(
+      (row) =>
+        `${row.querySelector(".palette-title")?.textContent}${
+          row.getAttribute("aria-selected") === "true" ? "*" : ""
+        }`,
+    );
+
+/** The switcher's own key, as this platform spells it (`switcherKey.ts`). */
+const switcherKey = () =>
+  fireEvent.keyDown(
+    window,
+    onAMac() ? { key: "p", metaKey: true } : { key: "P", ctrlKey: true, shiftKey: true },
+  );
+
+describe("the project switcher (FR-27)", () => {
+  /** Three projects back from the last quit, `one` in front, and the operator having been in
+   *  `two` and then `three` — so the last project before this one is `two`. */
+  async function beenInTwoThenThree() {
+    core({ launch: null, restore: { planes: [ONE, TWO, THREE], active: 0, dropped: [] } });
+    render(<App />);
+    await vi.waitFor(() => expect(projectTabs()).toEqual(["one*", "two", "three"]));
+    await userEvent.click(projectTab("two"));
+    await userEvent.click(projectTab("three"));
+    await vi.waitFor(() => expect(projectTabs()).toEqual(["one", "two", "three*"]));
+  }
+
+  it("lists the open projects from the title bar, the last one you were in first and aimed at", async () => {
+    await beenInTwoThenThree();
+
+    await userEvent.click(screen.getByRole("button", { name: "Switch project…" }));
+
+    // The one in front is listed, and cannot run — the strip's rule — so Enter is on the one
+    // before it, and the rest follow in the order the operator was last in them.
+    await waitFor(() => expect(switcherRows()).toEqual(["three", "two*", "one"]));
+    expect(screen.getByText("It is already in front.")).toBeInTheDocument();
+  });
+
+  it("goes back to the last project with the key and Enter, and nothing else", async () => {
+    await beenInTwoThenThree();
+
+    switcherKey();
+    await waitFor(() => expect(switcherRows()).toEqual(["three", "two*", "one"]));
+    await userEvent.keyboard("{Enter}");
+
+    await vi.waitFor(() => expect(projectTabs()).toEqual(["one", "two*", "three"]));
+    expect(screen.queryByRole("listbox", { name: "Projects" })).not.toBeInTheDocument();
+    // And the next switch back is to `three`, which is now the last one before this.
+    switcherKey();
+    await waitFor(() => expect(switcherRows()).toEqual(["two", "three*", "one"]));
+  });
+
+  it("moves down the list on each further press of its key, the way a window switcher does", async () => {
+    await beenInTwoThenThree();
+
+    switcherKey();
+    await waitFor(() => expect(switcherRows()).toEqual(["three", "two*", "one"]));
+    switcherKey();
+
+    await waitFor(() => expect(switcherRows()).toEqual(["three", "two", "one*"]));
+  });
+
+  it("narrows to what is typed, by the project's name", async () => {
+    await beenInTwoThenThree();
+    switcherKey();
+    await waitFor(() => expect(switcherRows()).toHaveLength(3));
+
+    await userEvent.keyboard("on");
+
+    await waitFor(() => expect(switcherRows()).toEqual(["one*"]));
+  });
+
+  it("is a row of the palette, which turns into the switcher when it is run", async () => {
+    await beenInTwoThenThree();
+    await userEvent.keyboard("{Meta>}k{/Meta}");
+    await userEvent.keyboard("Switch project…");
+    await userEvent.keyboard("{Enter}");
+
+    await waitFor(() => expect(switcherRows()).toEqual(["three", "two*", "one"]));
+    // Nothing was switched by opening it, and Escape leaves it as the palette is left.
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(projectTabs()).toEqual(["one", "two", "three*"]));
+  });
+
+  it("draws no switcher in the title bar while the window holds one project", async () => {
+    core({ launch: ONE });
+    render(<App />);
+    await vi.waitFor(() => expect(projectTabs()).toEqual(["one*"]));
+
+    expect(screen.queryByRole("button", { name: "Switch project…" })).not.toBeInTheDocument();
   });
 });

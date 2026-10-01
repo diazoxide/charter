@@ -168,6 +168,12 @@ function App() {
    * have left behind. The project's own `PlaneView` opens it, because its tabs are its own.
    */
   const [settingsAsk, setSettingsAsk] = useState<{ plane: PlaneId; at: number }>();
+  /**
+   * How many times the project switcher has been asked for from outside the palette (FR-27) —
+   * the title bar's button, or the row run from a menu. A count, `settingsAsk`'s shape, so that
+   * asking twice opens it twice; the palette opens on each new value.
+   */
+  const [switcherAsk, setSwitcherAsk] = useState(0);
   /** The last ask for a project's Saving tab (charter-app#294), the same shape as `settingsAsk`. */
   const [savingAsk, setSavingAsk] = useState<{ plane: PlaneId; at: number }>();
   /**
@@ -653,6 +659,7 @@ function App() {
       showExtensions: () => setExtensions(true),
       installCli,
       selectProject: (plane: string) => setShowing({ at: "plane", plane }),
+      switchProject: () => setSwitcherAsk((was) => was + 1),
       closeProject,
       moveProject,
       pinProject,
@@ -1054,6 +1061,7 @@ function App() {
       showExtensions: windowDoes.showExtensions,
       installCli: windowDoes.installCli,
       selectProject: windowDoes.selectProject,
+      switchProject: windowDoes.switchProject,
       closeProject: windowDoes.closeProject,
       moveProject: windowDoes.moveProject,
       openSettings: windowDoes.openSettings,
@@ -1084,12 +1092,41 @@ function App() {
     [pinnedProjects, projects],
   );
 
+  /**
+   * The projects in the order the operator was last in them, the one in front first (FR-27).
+   *
+   * **The switcher's order, and nothing else's.** The strip's order never moves under the
+   * operator's hand (ADR 0039); a switcher is a list read once, aimed at the last project, so
+   * that the key and Enter is a switch back. Held for this window and never written down: it
+   * is what this sitting did, and a cold launch starts it again from the project in front.
+   */
+  const [recent, setRecent] = useState<PlaneId[]>([]);
+  useEffect(() => {
+    if (inFront === undefined) return;
+    setRecent((was) => (was[0] === inFront ? was : [inFront, ...was.filter((p) => p !== inFront)]));
+  }, [inFront]);
+
   /** The rows the project strip draws. The same rows `catalogue` splices into the palette —
    *  one place the words and the availability are written down (`actions.projectRows`). */
   const strip = useMemo(
     () => projectRows(drawn, inFront, pinnedProjects, split),
     [drawn, inFront, pinnedProjects, split],
   );
+
+  /**
+   * **The switcher's rows** (FR-27): the strip's own `Switch to project …` rows — so the words,
+   * the reason the one in front cannot run and what a row does are written once — in the order
+   * the operator was last in each, with the path as the note, because two projects can share a
+   * directory name and the name is all the row shows.
+   */
+  const switcherRows = useMemo(() => {
+    const held = drawn.map((project) => project.plane);
+    const order = [
+      ...recent.filter((plane) => held.includes(plane)),
+      ...held.filter((plane) => !recent.includes(plane)),
+    ];
+    return order.map((plane) => ({ ...strip.switchTo[held.indexOf(plane)], note: plane }));
+  }, [drawn, recent, strip]);
 
   /**
    * The project strip's rows as one list, for the context menu on a project tab.
@@ -1492,6 +1529,11 @@ function App() {
                         And the projects there was no room for, in the same component the chat strip
                         uses, so an operator learns one control for all three strips. */}
                     <span className="strip-doing" ref={projectControls}>
+                      {/* The switcher (FR-27), first of the strip's controls because it is
+                          about the tabs before it. Only once there is somewhere to switch to:
+                          with one project it could only ever say so, and the palette's row
+                          already does. */}
+                      {drawn.length > 1 && <Doer offer={strip.switcher} onPress={press} iconOnly />}
                       <Doer offer={strip.open} onPress={press} iconOnly />
                       <Doer offer={strip.create} onPress={press} iconOnly />
                       <ShowMore
@@ -1709,6 +1751,7 @@ function App() {
           refusals are #111's. */}
       <Palette
         offers={saying?.offers ?? openerOffers}
+        projects={{ rows: switcherRows, asked: switcherAsk }}
         said={said}
         onRun={saying?.run ?? run}
         onOpened={setPaletteOpen}

@@ -19,6 +19,7 @@ import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
 import { closestCenter, DndContext } from "@dnd-kit/core";
 import { horizontalListSortingStrategy, SortableContext } from "@dnd-kit/sortable";
 import {
+  ArrowLeftRight,
   ChevronDown,
   FolderOpen,
   FolderPlus,
@@ -2686,6 +2687,7 @@ export function PlaneView({
       showExtensions: windowDoes.showExtensions,
       installCli: windowDoes.installCli,
       selectProject: windowDoes.selectProject,
+      switchProject: windowDoes.switchProject,
       closeProject: windowDoes.closeProject,
       moveProject: windowDoes.moveProject,
       openSettings: windowDoes.openSettings,
@@ -4118,6 +4120,8 @@ export type WindowDoing = {
   /** Puts the app's `charter` on a terminal's PATH. The window's: it is about the machine. */
   installCli: () => Promise<Ran>;
   selectProject: (plane: string) => void;
+  /** Opens the project switcher (FR-27). The window's: the palette and the projects are. */
+  switchProject: () => void;
   closeProject: (plane: string) => Promise<Ran>;
   /** Moves a project into another window, or a new one (charter#126). The window's, because
    *  the window is what holds projects. */
@@ -4462,6 +4466,8 @@ export const MARKS: Record<string, typeof Plus> = {
   "pane.close": X,
   "project.create": FolderPlus,
   "project.open": FolderOpen,
+  // The title bar's switcher (FR-27): two ways along the strip, which is what it does.
+  "project.switch": ArrowLeftRight,
 };
 
 /**
