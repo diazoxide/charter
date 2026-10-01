@@ -177,6 +177,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The first run checks `glab` as well as `gh`.** Under **On this machine**, the first window
+  now says whether GitLab's `glab` is installed and signed in, beside GitHub's `gh`. If it is
+  installed but not signed in, **Sign in to GitLab** opens a shell tab running `glab auth login`.
+
 - **Charter opened from the Finder or the Dock can hold two hundred chats.** macOS starts such
   an app with room for only 256 open files, and each chat needs several, so the app could run
   out well short of two hundred. It now raises its own limit as it starts, to 10,240 or the

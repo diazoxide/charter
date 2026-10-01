@@ -49,8 +49,10 @@ workspace named after it, and the first chat starts in that clone. Nothing is wr
 repo you picked.
 
 Under **On this machine**, the window shows which harnesses it found and whether each is
-signed in. It also shows GitHub's `gh`, which a GitLab user does not need. It does not check
-`glab` yet, so run `glab auth status` in a terminal to see whether you are signed in.
+signed in, and whether `gh` and `glab` are. A GitLab user needs only `glab`. If `glab` is
+installed but not signed in, **Sign in to GitLab** opens a shell tab running `glab auth login`.
+For a self-managed GitLab, add `--hostname <host>` in that tab before you press Enter, because
+the first run checks only `gitlab.com`.
 
 **Open an existing project instead** opens a project you already have, for example one a
 teammate shared as a GitLab repo.

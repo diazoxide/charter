@@ -186,8 +186,9 @@ function App() {
     FirstChat & { plane: PlaneId | null; asking: string | null }
   >();
   /**
-   * A shell tab asked for with a command already typed in it — `gh auth login`, from the first
-   * run's "Sign in to GitHub" (FR-4, W10) — in the same two stages as `firstChat`.
+   * A shell tab asked for with a command already typed in it — `gh auth login` or `glab auth
+   * login`, from the first run's "Sign in to GitHub" or "Sign in to GitLab" (FR-4, W10) — in
+   * the same two stages as `firstChat`.
    */
   const [shellAsk, setShellAsk] = useState<{
     plane: PlaneId | null;
@@ -604,12 +605,13 @@ function App() {
   }, []);
 
   /**
-   * "Sign in to GitHub" on the first run (FR-4, W10's "detected and offered"): the local
-   * project is opened — made first when there is none, and through the trust gate — and
-   * `gh auth login` is typed into a shell tab at its root. `gh`'s own login, in a tab the
-   * operator can leave; nothing here asks anything.
+   * "Sign in to GitHub" or "Sign in to GitLab" on the first run (FR-4, W10's "detected and
+   * offered"): the local project is opened — made first when there is none, and through the
+   * trust gate — and `<cli> auth login` is typed into a shell tab at its root. The forge CLI's
+   * own login, in a tab the operator can leave; nothing here asks anything. `cli` is the one the
+   * core's first-run row names (`gh`, `glab`).
    */
-  const signInToGitHub = useCallback(async (): Promise<string | undefined> => {
+  const signInToForge = useCallback(async (cli: string): Promise<string | undefined> => {
     const answer = await commands
       .openLocalProject()
       .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
@@ -618,7 +620,7 @@ function App() {
     setShellAsk((was) => ({
       plane,
       asking: plane === null ? (ask?.path ?? null) : null,
-      typed: "gh auth login",
+      typed: `${cli} auth login`,
       at: (was?.at ?? 0) + 1,
     }));
     if (plane === null) {
@@ -1637,9 +1639,9 @@ function App() {
                         void openRepo(path).then(setRepoTrouble);
                       }
                 }
-                onSignInToGitHub={() => {
+                onSignInToForge={(cli) => {
                   setRepoTrouble(undefined);
-                  void signInToGitHub().then(setRepoTrouble);
+                  void signInToForge(cli).then(setRepoTrouble);
                 }}
                 openingRepo={openingRepo}
                 repoTrouble={repoTrouble}

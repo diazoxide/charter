@@ -45,8 +45,8 @@ repo is cloned into a workspace named after it, and the first chat starts in tha
 Nothing is written into the repo you picked.
 
 Under **On this machine**, the window shows which harnesses it found and whether each is
-signed in, and whether `gh` is. If `gh` is installed but not signed in, **Sign in to GitHub**
-opens a shell tab running `gh auth login`.
+signed in, and whether `gh` and `glab` are. A GitHub user needs only `gh`. If `gh` is
+installed but not signed in, **Sign in to GitHub** opens a shell tab running `gh auth login`.
 
 **Open an existing project instead** opens a project you already have, for example one a
 teammate shared as a GitHub repository.

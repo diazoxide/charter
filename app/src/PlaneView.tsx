@@ -1370,8 +1370,8 @@ export function PlaneView({
 
   /**
    * A shell tab at the project root with `shellAsked`'s command typed in (FR-4: `gh auth
-   * login`, from the first run's "Sign in to GitHub"). Once the plane is read, so the root is
-   * known, and once per ask.
+   * login` or `glab auth login`, from the first run's "Sign in to GitHub" or "Sign in to
+   * GitLab"). Once the plane is read, so the root is known, and once per ask.
    */
   const shellHandled = useRef<number | undefined>(undefined);
   const root = sidebar?.root;

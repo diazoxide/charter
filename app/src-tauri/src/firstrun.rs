@@ -28,11 +28,13 @@ pub struct HarnessRow {
     pub signed_in: bool,
 }
 
-/// The forge CLI, as the first-run screen lists it.
-#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+/// One forge's CLI, as the first-run screen lists it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
 pub struct ForgeRow {
-    /// The program (`gh`).
+    /// The program (`gh`, `glab`). Its own login is `<cli> auth login`.
     pub cli: String,
+    /// The forge it works with (`GitHub`, `GitLab`).
+    pub title: String,
     pub installed: bool,
     /// Whether it is logged in to its default host.
     pub signed_in: bool,
@@ -42,7 +44,29 @@ pub struct ForgeRow {
 #[derive(Debug, Clone, serde::Serialize, specta::Type)]
 pub struct FirstRunFound {
     pub harnesses: Vec<HarnessRow>,
-    pub forge: ForgeRow,
+    /// Every forge charter works with, GitHub first. The first run comes before any repo is
+    /// chosen, so which forge the project will use is not known yet: both CLIs are checked.
+    pub forges: Vec<ForgeRow>,
+}
+
+/// The forges the first run checks, in the order it lists them.
+const FIRST_RUN_FORGES: [Kind; 2] = [Kind::GitHub, Kind::GitLab];
+
+/// One row per forge in [`FIRST_RUN_FORGES`]. `installed` says whether a forge's CLI is found;
+/// `signed_in` is asked only of an installed one.
+fn forge_rows(installed: &dyn Fn(Kind) -> bool, signed_in: &dyn Fn(Kind) -> bool) -> Vec<ForgeRow> {
+    FIRST_RUN_FORGES
+        .iter()
+        .map(|&kind| {
+            let installed = installed(kind);
+            ForgeRow {
+                cli: kind.cli().to_owned(),
+                title: kind.display().to_owned(),
+                installed,
+                signed_in: installed && signed_in(kind),
+            }
+        })
+        .collect()
 }
 
 /// What opening a repo made: the plane, opened or asked about, and where the first chat
@@ -98,10 +122,10 @@ pub struct ChosenInstruction {
     pub text: String,
 }
 
-/// Which harnesses are installed and signed in, and whether `gh` is logged in.
+/// Which harnesses are installed and signed in, and whether `gh` and `glab` are logged in.
 ///
-/// **On a blocking thread**: `gh auth status` is a subprocess with a timeout, and the screen
-/// that asked is drawn while it runs. Nothing here signs anybody in.
+/// **On a blocking thread**: `gh auth status` and `glab auth status` are subprocesses with a
+/// timeout, and the screen that asked is drawn while it runs. Nothing here signs anybody in.
 #[tauri::command]
 #[specta::specta]
 pub async fn first_run_found() -> Result<FirstRunFound, String> {
@@ -115,17 +139,11 @@ pub async fn first_run_found() -> Result<FirstRunFound, String> {
                 signed_in: found.signed_in,
             })
             .collect();
-        let kind = Kind::GitHub;
-        let installed = charter_core::forge::find_cli(kind.cli()).is_some();
-        let signed_in = installed && Forge::default_of(kind).check_auth().is_ok();
-        FirstRunFound {
-            harnesses,
-            forge: ForgeRow {
-                cli: kind.cli().to_owned(),
-                installed,
-                signed_in,
-            },
-        }
+        let forges = forge_rows(
+            &|kind| charter_core::forge::find_cli(kind.cli()).is_some(),
+            &|kind| Forge::default_of(kind).check_auth().is_ok(),
+        );
+        FirstRunFound { harnesses, forges }
     })
     .await
     .map_err(|err| format!("charter could not look at this machine: {err}"))
@@ -247,8 +265,8 @@ fn imported(
 }
 
 /// Opens this machine's local project with no repo in it, made first when there is none, and
-/// through the trust gate: what "Sign in to GitHub" on the first run opens, so the sign-in has
-/// a shell tab to run in (W10).
+/// through the trust gate: what "Sign in to GitHub" (or GitLab) on the first run opens, so the
+/// sign-in has a shell tab to run in (W10).
 #[tauri::command]
 #[specta::specta]
 pub async fn open_local_project(planes: tauri::State<'_, Planes>) -> Result<Opened, String> {
@@ -285,6 +303,34 @@ fn taken_in(config: &Path, repo: &Path) -> Result<(PathBuf, firstrun::TakenIn), 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_first_run_checks_both_forge_clis_and_asks_only_an_installed_one_for_its_login() {
+        let asked = std::cell::RefCell::new(Vec::new());
+        let rows = forge_rows(&|kind| kind == Kind::GitLab, &|kind| {
+            asked.borrow_mut().push(kind);
+            true
+        });
+
+        let row = |cli: &str, title: &str, installed, signed_in| ForgeRow {
+            cli: cli.to_owned(),
+            title: title.to_owned(),
+            installed,
+            signed_in,
+        };
+        assert_eq!(
+            rows,
+            [
+                row("gh", "GitHub", false, false),
+                row("glab", "GitLab", true, true),
+            ]
+        );
+        assert_eq!(
+            *asked.borrow(),
+            [Kind::GitLab],
+            "gh is not installed, so not asked"
+        );
+    }
 
     /// A repo with one commit, made from charter-core's git template so it never asks the
     /// developer's signer (charter-app#191) — `testgit`'s rule, which `extensions.rs`'s
