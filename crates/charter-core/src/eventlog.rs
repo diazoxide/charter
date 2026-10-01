@@ -60,6 +60,10 @@ pub struct Log {
     file: File,
     device: String,
     next: u64,
+    /// How long the file is up to the end of its last whole line.
+    good: u64,
+    /// Whether a write failed partway, so the file may end in a torn line.
+    torn: bool,
 }
 
 impl Log {
@@ -88,16 +92,34 @@ impl Log {
             ),
             std::fs::TryLockError::Error(why) => why,
         })?;
-        let next = last_seq(&mut file)?.map_or(1, |last| last + 1);
+        let good = cut_a_torn_line(&mut file)?;
+        let next = match last_seq(&mut file)? {
+            Some(last) => after(last)?,
+            None if good == 0 => 1,
+            // Lines, and not one of them an event charter wrote: counting from 1 again would
+            // reuse every number already handed out, which is the one thing a seq may not do.
+            None => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "the event log holds no event charter can read, so it is not written to \
+                     (starting again from 1 would reuse its numbers)",
+                ));
+            }
+        };
         Ok(Log {
             file,
             device: device.to_owned(),
             next,
+            good,
+            torn: false,
         })
     }
 
-    /// Appends one event and answers it as written. The line is on disk when this returns
-    /// `Ok`: a hook is answered once its event is in the log (ADR 0075 §7).
+    /// Appends one event and answers it as written. When this returns `Ok` the whole line has
+    /// been handed to the operating system, which a reader sees at once; it is not `fsync`ed,
+    /// so a machine that loses power can lose the last events. ADR 0075 §7's "answered once the
+    /// event is in the log" is not met yet: the hook has already answered when its line
+    /// reaches the host, until FD-30's spool.
     pub fn append(
         &mut self,
         chat: Option<&str>,
@@ -105,10 +127,17 @@ impl Log {
         kind: &str,
         body: serde_json::Value,
     ) -> io::Result<Event> {
+        if self.torn {
+            // A write that failed partway may have left half a line, and the next line would
+            // be glued to it: cut back to the last whole line first.
+            self.file.set_len(self.good)?;
+            self.torn = false;
+        }
+        let seq = self.next;
         let event = Event {
             v: VERSION,
             device_id: self.device.clone(),
-            seq: self.next,
+            seq,
             ulid: ulid::Ulid::new().to_string(),
             chat: chat.map(str::to_owned),
             run: run.map(str::to_owned),
@@ -118,11 +147,46 @@ impl Log {
         };
         let mut line = serde_json::to_vec(&event).map_err(io::Error::other)?;
         line.push(b'\n');
-        // One `write_all` of one whole line on an append-mode file: a reader never sees half.
-        self.file.write_all(&line)?;
-        self.next += 1;
+        // One `write_all` of one whole line on an append-mode file.
+        if let Err(why) = self.file.write_all(&line) {
+            self.torn = true;
+            return Err(why);
+        }
+        self.good += line.len() as u64;
+        self.next = after(seq)?;
         Ok(event)
     }
+}
+
+/// The number after `seq`, or an error at the end of the range rather than a wrap to 0.
+fn after(seq: u64) -> io::Result<u64> {
+    seq.checked_add(1)
+        .ok_or_else(|| io::Error::other("the event log has used every seq there is"))
+}
+
+/// Cuts `file` back to the end of its last whole line, where a crash left a part of one, and
+/// answers how long it is then.
+fn cut_a_torn_line(file: &mut File) -> io::Result<u64> {
+    let len = file.metadata()?.len();
+    let mut end = len;
+    while end > 0 {
+        let from = end.saturating_sub(TAIL);
+        file.seek(SeekFrom::Start(from))?;
+        let mut chunk = vec![0; usize::try_from(end - from).map_err(io::Error::other)?];
+        file.read_exact(&mut chunk)?;
+        if let Some(at) = chunk.iter().rposition(|byte| *byte == b'\n') {
+            let whole = from + at as u64 + 1;
+            if whole < len {
+                file.set_len(whole)?;
+            }
+            return Ok(whole);
+        }
+        end = from;
+    }
+    if len > 0 {
+        file.set_len(0)?;
+    }
+    Ok(0)
 }
 
 /// The `seq` of the last whole event in `file`, read from its end.
@@ -170,25 +234,10 @@ const KEY_BYTES: usize = 32;
 pub struct ArgsKey(Vec<u8>);
 
 impl ArgsKey {
-    /// The key in `dir`, made on first use: 32 random bytes, `0600`, never read or written
-    /// through a link. A key of the wrong length is made again rather than used short.
+    /// The key in `dir`, made on first use: [`crate::secrets::key_file`], as `fingerprint.key`
+    /// is.
     pub fn open(dir: &Path) -> io::Result<ArgsKey> {
-        let path = dir.join(ARGS_KEY);
-        match crate::contain::read_no_link(dir, &path) {
-            Ok(key) if key.len() == KEY_BYTES => return Ok(ArgsKey(key)),
-            Ok(_) => {}
-            Err(why) if why.kind() == io::ErrorKind::NotFound => {}
-            Err(why) => return Err(why),
-        }
-        crate::secrets::make_private_dir(dir)?;
-        // Drawn word by word from the OS rather than filled into a zeroed buffer, so no
-        // constant ever stands where the key goes, even before it is filled.
-        let mut key = Vec::with_capacity(KEY_BYTES);
-        while key.len() < KEY_BYTES {
-            key.extend(getrandom::u64().map_err(io::Error::other)?.to_le_bytes());
-        }
-        crate::rewrite::replace(dir, &path, &key, crate::rewrite::Mode::Secret)?;
-        Ok(ArgsKey(key))
+        crate::secrets::key_file(dir, &dir.join(ARGS_KEY), KEY_BYTES).map(ArgsKey)
     }
 
     /// The digest the log holds for arguments whose [`args_hash`] is `hash`: HMAC-SHA256 under
@@ -198,7 +247,7 @@ impl ArgsKey {
         let mut mac = hmac::Hmac::<sha2::Sha256>::new_from_slice(&self.0)
             .expect("HMAC takes a key of any length");
         mac.update(hash.as_bytes());
-        hex(&mac.finalize().into_bytes())
+        crate::extension::hex(&mac.finalize().into_bytes())
     }
 }
 
@@ -207,16 +256,9 @@ impl ArgsKey {
 pub fn args_hash(args: &serde_json::Value) -> String {
     use sha2::Digest;
     let text = serde_json::to_vec(args).unwrap_or_default();
-    hex(&sha2::Sha256::digest(&text))
+    crate::extension::hex(&sha2::Sha256::digest(&text))
 }
 
-fn hex(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-    bytes.iter().fold(String::new(), |mut out, byte| {
-        let _ = write!(out, "{byte:02x}");
-        out
-    })
-}
 
 /// What the board did with a report's conversation, which is how the host tells a new run
 /// (ADR 0066, "A run is a stretch…").

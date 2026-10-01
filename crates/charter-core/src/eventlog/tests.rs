@@ -300,3 +300,66 @@ fn a_data_home_inside_a_repository_gets_no_log() {
         "nothing was made there"
     );
 }
+
+#[test]
+fn a_line_torn_by_a_crash_is_cut_off_and_the_next_event_is_whole() {
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let mut log = Log::open(dir.path(), DEVICE).unwrap();
+        log.append(Some("CHAT"), None, "chat.opened", serde_json::json!({}))
+            .unwrap();
+    }
+    // The machine died in the middle of the second line.
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(dir.path().join(FILE))
+        .unwrap();
+    std::io::Write::write_all(&mut file, br#"{"v":1,"device_id":"X","seq":2,"ul"#).unwrap();
+    drop(file);
+
+    let mut log = Log::open(dir.path(), DEVICE).unwrap();
+    let next = log
+        .append(Some("CHAT"), None, "chat.opened", serde_json::json!({}))
+        .unwrap();
+
+    let events = read(dir.path()).unwrap();
+    assert_eq!(events.len(), 2, "the torn line went, the new one is whole: {events:#?}");
+    assert_eq!(events[0].seq, 1);
+    assert_eq!(next.seq, 2);
+    assert_eq!(events[1], next);
+}
+
+#[test]
+fn a_log_with_lines_but_no_number_in_them_is_refused_rather_than_counted_from_one_again() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join(FILE), "not an event\nnor this\n").unwrap();
+
+    let refused = Log::open(dir.path(), DEVICE);
+
+    assert!(refused.is_err(), "a seq is never reused, so a log it cannot read is not restarted");
+}
+
+#[test]
+fn a_last_seq_at_the_top_of_the_range_is_refused_rather_than_wrapped() {
+    let dir = tempfile::tempdir().unwrap();
+    let event = Event {
+        v: VERSION,
+        device_id: DEVICE.to_owned(),
+        seq: u64::MAX,
+        ulid: ulid::Ulid::new().to_string(),
+        chat: None,
+        run: None,
+        parent_run: None,
+        kind: "chat.opened".to_owned(),
+        body: serde_json::json!({}),
+    };
+    std::fs::write(
+        dir.path().join(FILE),
+        format!("{}\n", serde_json::to_string(&event).unwrap()),
+    )
+    .unwrap();
+
+    let opened = Log::open(dir.path(), DEVICE);
+
+    assert!(opened.is_err());
+}
