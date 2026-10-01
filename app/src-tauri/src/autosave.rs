@@ -194,6 +194,11 @@ impl State {
     /// One look at the plane at `root`. Answers whether anything was done the window should
     /// hear about.
     fn look(&mut self, root: &Path, now: Instant, poke: Option<Poke>) -> bool {
+        // A chat that ended has most likely left work behind, wherever in the plane it wrote:
+        // the standing is read again rather than shared from before it ended (FD-11).
+        if poke == Some(Poke::SessionEnded) {
+            planegit::touch(root);
+        }
         let plane = planesave::Settings::read(root).plane;
         let mut did = false;
 
@@ -213,7 +218,9 @@ impl State {
             return did;
         }
 
-        let standing = planegit::standing(root);
+        // Shared with the title bar, the Saving tab and the alerts (FD-11): git runs for one
+        // of them, and the save this may start reads the tree again for itself.
+        let standing = planegit::shared_standing(root);
         let trigger = if !self.launched {
             self.launched = true;
             // What the last run committed and could not push, pushed first.
@@ -252,6 +259,9 @@ impl State {
         mid_turn: &dyn Fn(&str) -> Vec<String>,
     ) -> bool {
         let launched = std::mem::replace(&mut self.repos_launched, true);
+        if poke == Some(Poke::SessionEnded) {
+            reposave::touch_within(root);
+        }
         let settings = planesave::Settings::read(root);
         let saved: Vec<String> = settings
             .repo_tables()
@@ -280,7 +290,7 @@ impl State {
                     *quiet = Quiet::default();
                     continue;
                 }
-                let standing = reposave::standing(root, &workspace, repo);
+                let standing = reposave::shared_standing(root, &workspace, repo);
                 let settled = standing.stage != Stage::Blocked && standing.worth_saving();
                 let trigger = if !launched {
                     (standing.stage == Stage::Committed && standing.pushes)
@@ -491,6 +501,8 @@ mod tests {
         let at = Instant::now();
         state.look(dir.path(), at, None);
         std::fs::write(dir.path().join("note.md"), "n").unwrap();
+        // The plane's watcher seeing the write (FD-11): the shared standing is read again.
+        planegit::touch(dir.path());
 
         assert!(!state.look(dir.path(), at + Duration::from_secs(2), None));
         assert!(!state.look(dir.path(), at + Duration::from_secs(31), None));
@@ -550,6 +562,8 @@ mod tests {
         let idle = |_: &str| Vec::new();
         state.look_at_repos(root, at, None, &idle);
         std::fs::write(clone.join("a.md"), "a").unwrap();
+        // Told, as the watcher or the shared standing's age tells it in the app (FD-11).
+        reposave::touch_within(root);
 
         // A chat in alpha is mid-turn: every cycle is skipped, however long it runs.
         for s in [1, 31, 90, 300] {
@@ -584,6 +598,8 @@ mod tests {
         let idle = |_: &str| Vec::new();
         state.look_at_repos(root, at, None, &idle);
         std::fs::write(clone.join("a.md"), "a").unwrap();
+        // Told, as the watcher or the shared standing's age tells it in the app (FD-11).
+        reposave::touch_within(root);
         state.look_at_repos(root, at + Duration::from_secs(1), None, &idle);
 
         // Nobody at this look; somebody by the time the save asks again.

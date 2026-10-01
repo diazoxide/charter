@@ -444,8 +444,68 @@ fn spawn_with(dir: &Path, args: &[&str], extra: &Extra) -> Result<Child, GitUnav
     Ok(crate::forklock::spawn(&mut cmd)?)
 }
 
+/// `core.untrackedCache=true`, for a `status` and for the `git add` of a save (FD-11): git
+/// remembers which directories held no untracked files by their modification time, so a
+/// status in a large tree stops reading every directory. A read-only status
+/// (`--no-optional-locks`) uses a cache the index already holds and never writes one, so the
+/// save's `add`, which writes the index anyway, is what adds it. Git's own `feature.manyFiles`
+/// turns it on the same way.
+pub const UNTRACKED_CACHE: &str = "core.untrackedCache=true";
+
+/// How many git processes this process has run in one directory, and the most that ran there
+/// at once (FD-11): what proves that the pollers share one standing instead of each spawning
+/// its own.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Tally {
+    pub spawned: u64,
+    pub most_at_once: u64,
+}
+
+/// Each directory's tally, and how many git processes run there now.
+static TALLIES: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<PathBuf, (Tally, u64)>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// [`Tally`] for `dir`, as it was handed to the runner.
+pub fn tally(dir: &Path) -> Tally {
+    TALLIES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(dir)
+        .map(|(tally, _)| *tally)
+        .unwrap_or_default()
+}
+
+/// One git process in a directory, from before it is spawned until it has been waited for.
+struct Running(PathBuf);
+
+impl Running {
+    fn start(dir: &Path) -> Self {
+        let mut all = TALLIES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (tally, now) = all.entry(dir.to_path_buf()).or_default();
+        *now += 1;
+        tally.spawned += 1;
+        tally.most_at_once = tally.most_at_once.max(*now);
+        Self(dir.to_path_buf())
+    }
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        let mut all = TALLIES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((_, now)) = all.get_mut(&self.0) {
+            *now = now.saturating_sub(1);
+        }
+    }
+}
+
 /// Run `git -C <dir> <args>` with no deadline — for a call that checks out a tree.
 pub fn run_untimed(dir: &Path, args: &[&str]) -> Result<Run, GitUnavailable> {
+    let _running = Running::start(dir);
     let child = spawn(dir, args)?;
     // `wait_with_output` reads both pipes as it waits, so it cannot deadlock on them.
     let out = child.wait_with_output()?;
@@ -463,6 +523,7 @@ pub fn run_untimed(dir: &Path, args: &[&str]) -> Result<Run, GitUnavailable> {
 /// 64 KiB, which `status --porcelain` in a large dirty clone passes easily — and the symptom
 /// is a timeout that looks like a slow machine.
 pub fn run(dir: &Path, args: &[&str], timeout: Duration) -> Result<Run, GitUnavailable> {
+    let _running = Running::start(dir);
     Ok(wait(spawn(dir, args)?, timeout)?)
 }
 
@@ -493,6 +554,7 @@ pub fn run_as_session(
         pass: config_location_env(|name| std::env::var_os(name)),
         ..Extra::default()
     };
+    let _running = Running::start(dir);
     Ok(wait_raw(spawn_with(dir, args, &extra)?, timeout)?)
 }
 
@@ -525,6 +587,7 @@ pub fn run_in_hook(dir: &Path, args: &[&str], timeout: Duration) -> Result<RawRu
         pass,
         ..Extra::default()
     };
+    let _running = Running::start(dir);
     Ok(wait_raw(spawn_with(dir, args, &extra)?, timeout)?)
 }
 
@@ -547,6 +610,7 @@ pub fn run_network(dir: &Path, helper: Option<&str>, args: &[&str]) -> Result<Ru
         credentials: true,
         ..Extra::default()
     };
+    let _running = Running::start(dir);
     Ok(wait(spawn_with(dir, args, &extra)?, NETWORK)?)
 }
 

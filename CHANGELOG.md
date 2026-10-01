@@ -133,6 +133,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `CHANGELOG` passes with no entry at all, unless `[builtin] enabled = false` turns that off
   (#593).
 
+### Changed
+
+- **charter runs far fewer git processes in your repos while it is idle.** Auto-save, the
+  title bar's save indicator, the Saving tab and the alerts used to each run `git status` and
+  its friends on their own timers — about ten git processes every two seconds per project, and
+  more in a busy repo, where they could pile up on each other. They now share one reading per
+  repo, made again only when the repo's git files move, its project's watcher sees a change, a
+  save or fetch finishes, a chat ends, or ten seconds have passed. Only one git process runs in
+  a repo at a time for them, and git's untracked cache is turned on so `status` stays quick in a
+  large repo.
+
 ### Fixed
 
 - **Charter opened from the Finder or the Dock can hold two hundred chats.** macOS starts such

@@ -806,3 +806,73 @@ fn a_generated_message_naming_exactly_as_many_files_as_it_shows_counts_none_as_m
         "charter save: 5 files (f1, f2, f3, f4, f5)"
     );
 }
+
+// One shared standing per clone (FD-11, #651).
+
+impl Fixture {
+    fn shared(&self) -> Standing {
+        shared_standing(
+            &self.plane,
+            "alpha",
+            &repos::Repo {
+                name: "widget".into(),
+                path: self.clone.clone(),
+            },
+        )
+    }
+}
+
+#[test]
+fn a_clone_asked_twice_with_nothing_changed_runs_git_for_it_once() {
+    let fx = Fixture::new("");
+    let before = crate::worktree::git::tally(&fx.clone).spawned;
+    fx.standing();
+    let one = crate::worktree::git::tally(&fx.clone).spawned - before;
+
+    fx.shared();
+    fx.shared();
+
+    assert_eq!(
+        crate::worktree::git::tally(&fx.clone).spawned - before,
+        2 * one,
+        "the second shared read ran git again"
+    );
+}
+
+#[test]
+fn a_save_is_in_the_next_shared_standing_of_the_clone() {
+    let fx = Fixture::new("[repos.widget]\nmode = \"commit\"\n");
+    std::fs::write(fx.clone.join("README.md"), "two\n").unwrap();
+    assert_eq!(fx.shared().changed, 1);
+
+    let (code, said) = fx.save();
+
+    assert_eq!(code, 0, "{said}");
+    assert_eq!(fx.shared().changed, 0);
+}
+
+#[test]
+fn an_edit_in_a_clone_is_seen_once_its_plane_is_said_to_have_moved() {
+    let fx = Fixture::new("");
+    assert_eq!(fx.shared().changed, 0);
+
+    std::fs::write(fx.clone.join("README.md"), "two\n").unwrap();
+    touch_within(&fx.plane);
+
+    assert_eq!(fx.shared().changed, 1);
+}
+
+#[test]
+fn a_repo_save_leaves_the_index_carrying_gits_untracked_cache() {
+    let fx = Fixture::new("[repos.widget]\nmode = \"commit\"\n");
+    std::fs::write(fx.clone.join("README.md"), "two\n").unwrap();
+
+    let (code, said) = fx.save();
+
+    assert_eq!(code, 0, "{said}");
+    let index = std::fs::read(fx.clone.join(".git/index")).unwrap();
+    assert!(
+        index.windows(4).any(|w| w == b"UNTR"),
+        "no untracked cache in the index"
+    );
+}

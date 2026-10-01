@@ -246,6 +246,8 @@ pub fn state_of(tree: &Path) -> Result<TreeState, Unreadable> {
     let seen = git::run(
         tree,
         &[
+            "-c",
+            git::UNTRACKED_CACHE,
             "--no-optional-locks",
             "status",
             "--porcelain=v1",

@@ -110,6 +110,7 @@ pub mod shellwrap;
 pub mod shown;
 pub mod skills;
 pub mod skilluse;
+pub mod standings;
 pub mod start;
 pub mod state;
 pub(crate) mod steer;
