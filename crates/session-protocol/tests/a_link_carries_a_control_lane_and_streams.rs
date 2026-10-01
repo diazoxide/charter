@@ -107,3 +107,28 @@ async fn a_control_frame_past_the_limit_is_refused_and_the_lane_stays_usable() {
         Bytes::from_static(b"ok")
     );
 }
+
+#[tokio::test]
+async fn a_link_the_multiplexer_gave_up_on_says_why() {
+    // The host negotiates, then sends bytes that are not Yamux. The client's link ends, and
+    // what it answers next names the multiplexer's reason rather than only "closed".
+    let (a, b) = duplex(64 * 1024);
+    let host = tokio::spawn(async move {
+        let (_, mut rest) = charter_session_protocol::version::answer(b, &v1())
+            .await
+            .unwrap();
+        // Wait for the client's control lane to arrive, so its link is up first.
+        let mut lane = [0u8; 13];
+        rest.read_exact(&mut lane).await.unwrap();
+        rest.write_all(&[0xff; 64]).await.unwrap();
+        rest.flush().await.unwrap();
+        rest
+    });
+    let mut client = link::connect(a, v1()).await.unwrap();
+    let _host = host.await.unwrap();
+    match client.accept().await {
+        Err(LinkError::Ended(why)) => assert!(why.contains("decode"), "{why}"),
+        Err(other) => panic!("{other:?}"),
+        Ok(_) => panic!("a stream from bytes that are not Yamux"),
+    }
+}

@@ -28,6 +28,7 @@
 
 use std::collections::VecDeque;
 use std::future::poll_fn;
+use std::sync::{Arc, OnceLock};
 use std::task::Poll;
 
 use bytes::Bytes;
@@ -61,6 +62,10 @@ pub enum LinkError {
     NoControlLane,
     #[error("the link is closed")]
     Closed,
+    /// The multiplexer ended the link, and this is why: the transport closed, or the other end
+    /// sent something that is not Yamux.
+    #[error("the link ended: {0}")]
+    Ended(String),
     /// The client did not open the control lane within the handshake's deadline.
     #[error(
         "the client did not open the control lane within {:?}",
@@ -82,8 +87,18 @@ type Opening = oneshot::Sender<yamux::Result<yamux::Stream>>;
 pub struct Link {
     version: Version,
     control: Control,
-    open: mpsc::UnboundedSender<Opening>,
-    inbound: mpsc::Receiver<yamux::Stream>,
+    opener: Opener,
+    inbound: Acceptor,
+}
+
+/// Why the driver stopped, once it has: what every handle answers after.
+type Ending = Arc<OnceLock<String>>;
+
+fn ended(why: &Ending) -> LinkError {
+    match why.get() {
+        Some(why) => LinkError::Ended(why.clone()),
+        None => LinkError::Closed,
+    }
 }
 
 /// The control lane: frames, whole and in order, both ways.
@@ -101,66 +116,67 @@ impl Link {
 
     /// Open a stream. The other end sees it once this end writes to it.
     pub async fn open(&mut self) -> Result<Stream, LinkError> {
-        open_on(&self.open).await
+        self.opener.open().await
     }
 
     /// A handle that opens streams on this link from any task, as each chat's view does.
     pub fn opener(&self) -> Opener {
-        Opener(self.open.clone())
+        self.opener.clone()
     }
 
     /// The next stream the other end opened.
     pub async fn accept(&mut self) -> Result<Stream, LinkError> {
-        self.inbound
-            .recv()
-            .await
-            .map(|s| s.compat())
-            .ok_or(LinkError::Closed)
+        self.inbound.accept().await
     }
 
     /// Streams the other end opened that nobody has accepted yet, at most
     /// [`MOST_UNACCEPTED_STREAMS`].
     pub fn unaccepted(&self) -> usize {
-        self.inbound.len()
+        self.inbound.streams.len()
     }
 
     /// Hand the streams the other end opens to a task of their own. After this, [`Link::accept`]
     /// answers [`LinkError::Closed`].
     pub fn acceptor(&mut self) -> Acceptor {
-        let (_, closed) = mpsc::channel(1);
-        Acceptor(std::mem::replace(&mut self.inbound, closed))
+        let (_, none) = mpsc::channel(1);
+        let taken = Acceptor {
+            streams: none,
+            why: Arc::default(),
+        };
+        std::mem::replace(&mut self.inbound, taken)
     }
 }
 
 /// Opens streams on a link from any task. It keeps the link's driver running while it lives.
 #[derive(Clone)]
-pub struct Opener(mpsc::UnboundedSender<Opening>);
+pub struct Opener {
+    asks: mpsc::UnboundedSender<Opening>,
+    why: Ending,
+}
 
 impl Opener {
     /// Open a stream. The other end sees it once this end writes to it.
     pub async fn open(&self) -> Result<Stream, LinkError> {
-        open_on(&self.0).await
+        let (reply, opened) = oneshot::channel();
+        self.asks.send(reply).map_err(|_| ended(&self.why))?;
+        Ok(opened.await.map_err(|_| ended(&self.why))??.compat())
     }
 }
 
 /// Takes the streams the other end opens, apart from the [`Link`].
-pub struct Acceptor(mpsc::Receiver<yamux::Stream>);
+pub struct Acceptor {
+    streams: mpsc::Receiver<yamux::Stream>,
+    why: Ending,
+}
 
 impl Acceptor {
     /// The next stream the other end opened.
     pub async fn accept(&mut self) -> Result<Stream, LinkError> {
-        self.0
-            .recv()
-            .await
-            .map(|s| s.compat())
-            .ok_or(LinkError::Closed)
+        match self.streams.recv().await {
+            Some(stream) => Ok(stream.compat()),
+            None => Err(ended(&self.why)),
+        }
     }
-}
-
-async fn open_on(open: &mpsc::UnboundedSender<Opening>) -> Result<Stream, LinkError> {
-    let (reply, opened) = oneshot::channel();
-    open.send(reply).map_err(|_| LinkError::Closed)?;
-    Ok(opened.await.map_err(|_| LinkError::Closed)??.compat())
 }
 
 impl Control {
@@ -196,16 +212,14 @@ pub async fn connect<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     speaks: Speaks,
 ) -> Result<Link, LinkError> {
     let (version, io) = version::offer(io, &speaks).await?;
-    let (open, inbound) = drive(io, yamux::Mode::Client);
-    let (reply, opened) = oneshot::channel();
-    open.send(reply).map_err(|_| LinkError::Closed)?;
-    let mut lane = opened.await.map_err(|_| LinkError::Closed)??.compat();
+    let (opener, inbound) = drive(io, yamux::Mode::Client);
+    let mut lane = opener.open().await?;
     lane.write_all(&[CONTROL_LANE]).await?;
     lane.flush().await?;
     Ok(Link {
         version,
         control: lane_framed(lane),
-        open,
+        opener,
         inbound,
     })
 }
@@ -217,9 +231,9 @@ pub async fn serve<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     speaks: Speaks,
 ) -> Result<Link, LinkError> {
     let (version, io) = version::answer(io, &speaks).await?;
-    let (open, mut inbound) = drive(io, yamux::Mode::Server);
+    let (opener, mut inbound) = drive(io, yamux::Mode::Server);
     let lane = tokio::time::timeout(version::HANDSHAKE_TIMEOUT, async {
-        let mut lane = inbound.recv().await.ok_or(LinkError::Closed)?.compat();
+        let mut lane = inbound.accept().await?;
         if lane.read_u8().await? != CONTROL_LANE {
             return Err(LinkError::NoControlLane);
         }
@@ -230,7 +244,7 @@ pub async fn serve<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     Ok(Link {
         version,
         control: lane_framed(lane),
-        open,
+        opener,
         inbound,
     })
 }
@@ -249,17 +263,16 @@ fn lane_framed(lane: Stream) -> Control {
 fn drive<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     io: S,
     mode: yamux::Mode,
-) -> (
-    mpsc::UnboundedSender<Opening>,
-    mpsc::Receiver<yamux::Stream>,
-) {
+) -> (Opener, Acceptor) {
     let mut connection = yamux::Connection::new(io.compat(), config(), mode);
-    let (open, mut opens) = mpsc::unbounded_channel::<Opening>();
-    let (hand_over, inbound) = mpsc::channel(MOST_UNACCEPTED_STREAMS);
+    let (asks, mut opens) = mpsc::unbounded_channel::<Opening>();
+    let (hand_over, streams) = mpsc::channel(MOST_UNACCEPTED_STREAMS);
+    let why: Ending = Arc::default();
+    let record = Arc::clone(&why);
     tokio::spawn(async move {
         let mut waiting: VecDeque<Opening> = VecDeque::new();
         let mut asks_closed = false;
-        let _ended = poll_fn(|cx| {
+        let ended: yamux::Result<()> = poll_fn(|cx| {
             loop {
                 let mut moved = false;
                 if !asks_closed {
@@ -303,8 +316,21 @@ fn drive<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
             }
         })
         .await;
+        // Kept before the channels close, so whoever finds them closed can say why.
+        let _ = record.set(match ended {
+            Ok(()) => "the transport closed".to_owned(),
+            Err(e) => e.to_string(),
+        });
+        drop(hand_over);
+        drop(opens);
     });
-    (open, inbound)
+    (
+        Opener {
+            asks,
+            why: Arc::clone(&why),
+        },
+        Acceptor { streams, why },
+    )
 }
 
 /// Streams one link carries at once, open by either end. A host serves about 200 chats per
