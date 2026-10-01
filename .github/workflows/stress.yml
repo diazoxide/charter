@@ -142,7 +142,7 @@ jobs:
     # macOS too, since SC-15) and session count every ten tabs, so a run that stops says which
     # tab it stopped on. STRESS=1 also starts the app under launchd's open-file limit
     # (`launchedUnderLaunchdsLimit` in `e2e/harness.ts`).
-    name: fifty tabs (${{ matrix.os }}, evidence only)
+    name: fifty tabs, then two hundred (${{ matrix.os }}, evidence only)
     continue-on-error: true
     strategy:
       fail-fast: false

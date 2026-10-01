@@ -68,6 +68,15 @@ const BUDGET = 15 * 60_000;
  */
 const ROUND_BUDGET = 4 * 60_000;
 
+/**
+ * How long opening the two hundred may take. Each test runs under the suite's `BUDGET`, and the
+ * close that follows needs room too (100 s on a macOS runner on 2026-10-01), so this is under
+ * it with minutes to spare: a guard past the budget would never fire, and the test would end
+ * as a bare `Error: Timeout` again. The opens took 184 s on macOS and 137 s on Ubuntu, so this
+ * is over three times the slower one.
+ */
+const OPEN_TARGET_BUDGET = 10 * 60_000;
+
 /** How often the round writes down how far it has got, in tabs. */
 const PROGRESS_EVERY = 10;
 
@@ -244,9 +253,9 @@ async function answers(said: string): Promise<void> {
   });
 }
 
-describe("fifty tabs, over and over", function () {
-  // Three rounds of fifty is minutes, not the seconds a scenario usually takes. On the suite
-  // rather than in the test body: see BUDGET.
+describe("fifty tabs over and over, then two hundred at once", function () {
+  // Three rounds of fifty, and then two hundred, are minutes each, not the seconds a scenario
+  // usually takes. On the suite rather than in a test body: see BUDGET. It is each test's.
   this.timeout(BUDGET);
 
   it("opens fifty tabs with no pause, closes them all, three times, alive and usable throughout", async () => {
@@ -325,10 +334,10 @@ describe("fifty tabs, over and over", function () {
         look(pid, 0, `${opened + 1} of ${OPEN_TARGET} open`, began);
       }
       const spent = Date.now() - began;
-      if (spent > (OPEN_TARGET / TABS) * ROUND_BUDGET) {
+      if (spent > OPEN_TARGET_BUDGET) {
         throw new Error(
           `${opened + 1} of ${OPEN_TARGET} tabs took ${spent / 1000}s, past the ` +
-            `${((OPEN_TARGET / TABS) * ROUND_BUDGET) / 1000}s they are given (see logs/stress.jsonl)`,
+            `${OPEN_TARGET_BUDGET / 1000}s they are given (see logs/stress.jsonl)`,
         );
       }
     }

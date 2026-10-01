@@ -148,8 +148,8 @@ export function launchedUnderLaunchdsLimit(app: string): string {
       "#!/bin/sh",
       "# Written by the scenario tests: the app, started with the open-file limit launchd gives it.",
       `ulimit -S -n ${LAUNCHDS_LIMIT} || exit 70`,
-      `ulimit -S -n > ${JSON.stringify(THE_APPS_STARTING_LIMIT)}`,
-      `exec ${JSON.stringify(app)} "$@"`,
+      `ulimit -S -n > ${singleQuoted(THE_APPS_STARTING_LIMIT)}`,
+      `exec ${singleQuoted(app)} "$@"`,
       "",
     ].join("\n"),
   );
@@ -231,8 +231,12 @@ export function writeAPluginHookingShell(fakeHarness: string): string {
   return shell;
 }
 
-/** `text` as one word `/bin/sh` expands nothing in. */
-function singleQuoted(text: string): string {
+/**
+ * `text` as one word `/bin/sh` expands nothing in. Inside single quotes nothing is special but
+ * the quote itself, which is closed, escaped and reopened; inside double quotes, as
+ * `JSON.stringify` gives, `$`, a backtick and `\` would still be read by the shell.
+ */
+export function singleQuoted(text: string): string {
   return `'${text.replace(/'/g, `'\\''`)}'`;
 }
 
