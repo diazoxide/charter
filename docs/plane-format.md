@@ -109,6 +109,7 @@ prose under another heading, which is why every store gets a heading or a row.
   - [`charter.toml`](#chartertoml)
   - [`charter.local.toml`](#charterlocaltoml)
   - [`.charter/harness-profiles-launched.json`](#charterharness-profiles-launchedjson)
+  - [`.charter/unattended-logins.json`](#charterunattended-loginsjson)
   - [`.gitignore` (plane root)](#gitignore-plane-root)
   - [`.gitattributes` (plane root)](#gitattributes-plane-root)
   - [Baseline directories: `personas/`, `inventory/`, `workspaces/`](#baseline-directories-personas-inventory-workspaces)
@@ -603,6 +604,20 @@ key refuses.
   (`charter/config.py:389`, `charter/config.py:595`).
   The fingerprint is **as declared, before `~` expansion** (`charter/profiletrust.py:121`).
   A built-in profile is never recorded and never asks (`charter/profiletrust.py:187`).
+
+### `.charter/unattended-logins.json`
+
+- **Format:** **decided, not yet written**
+  ([ADR 0087](adr/0087-a-chats-model-is-one-choice-from-four-sources-and-charter-never-carries-a-harness-login.md) §3, SD-28).
+  JSON object keyed by harness name, then by the login as the harness reports it, each holding
+  when the operator acknowledged it. It holds no credential and no token.
+- **Status:** **stable** — the operator's one-time acknowledgement that a harness's subscription
+  login may run unattended (a trigger, a schedule, a workflow, a race, headless) in this project.
+  Deleting it makes the next unattended `login` run ask again; it fails towards asking.
+- **Tier:** Clone state — the operator's consent on this clone, like the profile record above.
+- **Written by:** `charterd`, from the operator's answer on a human scope (SD-28). Chats are
+  denied it.
+- **Git:** gitignored (inside `/.charter/`).
 
 ---
 

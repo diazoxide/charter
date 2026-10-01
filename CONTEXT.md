@@ -237,6 +237,18 @@ with the fallback charter uses, or unknown, which reads as no. The capability ca
 *no*s in plain words (ADR 0073).
 _Avoid_: capability (unqualified, which is an extension's), feature, support
 
+**Model choice**:
+The model a chat runs on: the model, its provider, and the **model source** it is reached
+through. Set on the chat, or given as a default by its persona, its workspace or the project, and
+fixed for a run. It is always shown with the account it is billed to (ADR 0087).
+_Avoid_: model config, model settings
+
+**Model source**:
+How a chat reaches its model: the harness's own **login**, a **key** the user keeps in a vault,
+or a **local** model. None of them passes through Charter's servers. charter never reads, stores
+or relays a harness's login (ADR 0087).
+_Avoid_: provider (that is who serves the model), backend, BYO (for the whole of it)
+
 **Session host** (`charterd`):
 The process that owns every chat's terminal on a device, one per OS user per device: the
 `charter` binary run as `charter serve`. The app is its client (ADR 0068).
