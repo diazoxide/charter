@@ -140,7 +140,8 @@ jobs:
     # a red X. If this one goes red again, read `logs/stress.jsonl` in the artifact below
     # before assuming the runner: it now records the app's memory, threads, descriptors (on
     # macOS too, since SC-15) and session count every ten tabs, so a run that stops says which
-    # tab it stopped on.
+    # tab it stopped on. STRESS=1 also starts the app under launchd's open-file limit
+    # (`launchedUnderLaunchdsLimit` in `e2e/harness.ts`).
     name: fifty tabs (${{ matrix.os }}, evidence only)
     continue-on-error: true
     strategy:
@@ -173,11 +174,7 @@ jobs:
       - name: Build the app for the scenario tests
         run: npx tauri build --debug --no-bundle --features e2e --config src-tauri/tauri.e2e.conf.json
         working-directory: app
-      # **Under the open-file limit launchd gives an app** opened from the Finder or the Dock:
-      # a soft 256, the hard limit left as it is. Every process in the run inherits it, the app
-      # included, so the two-hundred-chat test can only pass if the app raises its own limit as
-      # it starts (SC-15, ADR 0068 §9). Linux too, so both legs ask the same question.
-      - run: ulimit -S -n 256 && npm run e2e
+      - run: npm run e2e
         if: runner.os == 'macOS'
         working-directory: app
         env:
@@ -185,7 +182,7 @@ jobs:
           # The app says how far its launch got (#23). A stress run that loses the app has to
           # be able to tell a launch that never finished from one that did and then died.
           CHARTER_LAUNCH_LOG: "1"
-      - run: ulimit -S -n 256 && xvfb-run -a npm run e2e
+      - run: xvfb-run -a npm run e2e
         if: runner.os == 'Linux'
         working-directory: app
         env:

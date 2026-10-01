@@ -10,6 +10,7 @@ use rustix::process::{Resource, Rlimit, getrlimit, setrlimit};
 
 #[test]
 fn a_process_started_with_launchds_256_raises_its_soft_limit_and_keeps_its_hard_one() {
+    charter_core::unsteered!();
     let given = getrlimit(Resource::Nofile);
     setrlimit(
         Resource::Nofile,

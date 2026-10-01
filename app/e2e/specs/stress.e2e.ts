@@ -1,7 +1,7 @@
-import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import process from "node:process";
 import { $, $$, browser, expect } from "@wdio/globals";
-import { READY, built } from "../harness.js";
+import { LAUNCHDS_LIMIT, READY, THE_APPS_STARTING_LIMIT, built } from "../harness.js";
 import { answerTheAsk, pressAndStart } from "../opening.js";
 import { type Sample, harnessesRunning, logLine, running, sample } from "../processes.js";
 
@@ -25,16 +25,11 @@ const TABS = 50;
 
 /**
  * The chats one device keeps open (ADR 0082 §3), all at once and every one of them hot: there
- * is no hibernation yet (SC-4), so this is harder than the target asks.
+ * is no hibernation yet (SC-4), so this is harder than the target asks. A stress run starts
+ * the app under launchd's open-file limit (`launchedUnderLaunchdsLimit`), and 200 chats hold
+ * more descriptors than that, so they open only if the app raised its limit (SC-15).
  */
 const OPEN_TARGET = 200;
-
-/**
- * The soft open-file limit launchd gives an app opened from the Finder or the Dock. This run
- * starts the app under it (`stress.yml`: `ulimit -S -n 256`), and 200 chats hold more
- * descriptors than that, so they open only if the app raised its limit (SC-15).
- */
-const LAUNCHDS_LIMIT = 256;
 
 /**
  * How long the whole spec may take — declared on the SUITE, and that is not a style choice.
@@ -304,14 +299,19 @@ describe("fifty tabs, over and over", function () {
   });
 
   it("opens two hundred chats in an app started under launchd's open-file limit", async () => {
-    // What this run, and so the app, was started with. Not the app's own limit, which nothing
-    // outside it can read on macOS: the app raises its own as it starts.
-    const startedWith = Number(execFileSync("sh", ["-c", "ulimit -Sn"], { encoding: "utf8" }));
+    // What the launcher started the app with. Not the app's limit now, which nothing outside
+    // it can read on macOS: the app raises its own as it starts.
+    let startedWith = Number.NaN;
+    try {
+      startedWith = Number(readFileSync(THE_APPS_STARTING_LIMIT, "utf8").trim());
+    } catch {
+      // Not written: the app was not started through the launcher. Said below.
+    }
     if (!(startedWith <= LAUNCHDS_LIMIT)) {
       throw new Error(
-        `this run's soft open-file limit is ${startedWith}, so it cannot show the app gets ` +
-          `past launchd's ${LAUNCHDS_LIMIT}: run it under \`ulimit -S -n ${LAUNCHDS_LIMIT}\`, ` +
-          "as stress.yml does",
+        `the app was started with a soft open-file limit of ${startedWith}, so this cannot ` +
+          `show it gets past launchd's ${LAUNCHDS_LIMIT}: a stress run (STRESS=1) starts it ` +
+          "through launchedUnderLaunchdsLimit",
       );
     }
     const pid = theApp();

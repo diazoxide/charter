@@ -6,6 +6,7 @@ import {
   copyFixturePlane,
   cutAFixturePiece,
   declareAProfile,
+  launchedUnderLaunchdsLimit,
   theRunsEnvironment,
   writeForgeCache,
   writeShell,
@@ -27,6 +28,13 @@ import { PANIC_LOG, collectEvidence } from "./processes.js";
  * the service's ADR 0002. Both plugins are behind the app's `e2e` cargo feature.
  */
 const app = built(process.platform === "win32" ? "charter-app.exe" : "charter-app");
+
+/**
+ * What the service starts. A stress run starts the app the way launchd would, with a soft
+ * open-file limit of 256, so that its two hundred chats show the app raised it (SC-15). Every
+ * other run starts the binary itself.
+ */
+const launched = process.env.STRESS === "1" ? launchedUnderLaunchdsLimit(app) : app;
 
 // The plane the app is started in: a fresh copy of a fixture plane, never the committed one.
 const plane = copyFixturePlane();
@@ -82,12 +90,12 @@ export const config: WebdriverIO.Config = {
   },
 
   // The service reads `tauri:options`, which WebdriverIO's own capability type does not know.
-  capabilities: [{ browserName: "tauri", "tauri:options": { application: app } }] as never,
+  capabilities: [{ browserName: "tauri", "tauri:options": { application: launched } }] as never,
   services: [
     [
       "@wdio/tauri-service",
       {
-        appBinaryPath: app,
+        appBinaryPath: launched,
         // The app's own output, for when a scenario test fails because the app did.
         captureBackendLogs: true,
         captureFrontendLogs: true,
