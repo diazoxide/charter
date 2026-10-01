@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { commands, type Recents, type TemplateChoice } from "./bindings";
+import { commands, type ForgeRow, type Recents, type TemplateChoice } from "./bindings";
+import type { ForgeAsk } from "./ForgeQuestion";
 import { FirstRun } from "./FirstRun";
 
 /**
@@ -38,6 +39,7 @@ export function Opener({
   onSignInToForge,
   openingRepo,
   repoTrouble,
+  repoForgeAsk,
 }: {
   /** Whether the launch had a directory to go on at all. */
   here: boolean;
@@ -59,11 +61,13 @@ export function Opener({
    *  never drawn: the window passes it only until it has held a project. */
   onOpenRepo?: (path: string, template: TemplateChoice) => void;
   /** Opens the local project with `<cli> auth login` in a shell tab, for the first run. */
-  onSignInToForge?: (cli: string) => void;
+  onSignInToForge?: (row: ForgeRow) => void;
   /** Whether that is happening right now. */
   openingRepo?: boolean;
   /** Why the last repository opened nothing. */
   repoTrouble?: string;
+  /** The first run's question about the forge, when the repo's remote did not say (#839). */
+  repoForgeAsk?: ForgeAsk;
 }) {
   const [recents, setRecents] = useState<Recents>();
   /** Whether the recent list has answered at all, so the first run is never drawn over a
@@ -124,6 +128,7 @@ export function Opener({
         onSignInToForge={onSignInToForge ?? (() => undefined)}
         opening={openingRepo ?? false}
         trouble={repoTrouble}
+        forgeAsk={repoForgeAsk}
       />
     );
 

@@ -293,8 +293,8 @@ export function PlaneView({
    *  repository's clone, on the workspace named after it. `at` counts the asks, so each is
    *  answered once. */
   firstChatAsked?: FirstChat;
-  /** A shell tab at the project root with a command typed into it — `gh auth login` from the
-   *  first run (FR-4) — asked for once per `at`. */
+  /** A shell tab at the project root with a command typed into it — `gh auth login` or `glab
+   *  auth login` from the first run (FR-4) — asked for once per `at`. */
   shellAsked?: { typed: string; at: number };
 }) {
   const [tabs, setTabs] = useState<Tabs>(noTabs);

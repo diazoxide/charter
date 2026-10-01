@@ -6,7 +6,7 @@ so once you're anywhere inside one, every command just works. There is nothing e
 special about the directory: no required name, no fixed location. `charter init` creates
 one from nothing (see the README's quickstart).
 
-A fresh `charter init` writes the minimal file:
+A fresh `charter init --forge gitlab` writes the minimal file:
 
 ```toml
 schema = 1
@@ -27,6 +27,15 @@ can rename, rewrite or delete. Name it something else with `charter init --front
 or skip it entirely with `--no-front-door`; either way charter's own code knows only *that*
 a plane may declare a default, never which one. If the plane already has personas, `init`
 scaffolds nothing — it creates only what is absent.
+
+**Which forge** (#839): `--forge` names it. Without it, `init` reads the forge, and the owner
+when `--owner` is not given, from the `origin` of the repo the plane is made for — the one
+`--adopt` names, or the plane's own directory with `--clone-this-repo` or
+`--plane-is-this-repo` — when that remote is on github.com or gitlab.com. Otherwise it writes
+nothing, exits 2, and asks for `--forge github` or `--forge gitlab`. A self-managed host is never
+read as one kind or the other from its name. The app's first run and New project dialog follow
+the same rule, and ask with two buttons. An `init` run again on a plane that has its
+`charter.toml` asks nothing.
 
 A charter the Python generated also declares `routing: advise`. That key is retired: it is
 read without error and does nothing, and `charter doctor` says so. Personas are offered to

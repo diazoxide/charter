@@ -561,7 +561,7 @@ fn a_plane_from_a_newer_charter_is_refused_before_anything_is_written() {
 fn no_front_door_scaffolds_no_persona_and_declares_none() {
     let scene = Scene::new();
 
-    let out = scene.run(&["init", "--no-front-door"]);
+    let out = scene.run(&["init", "--forge", "github", "--no-front-door"]);
 
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(!scene.plane.join("personas/steward").exists());
@@ -945,7 +945,7 @@ fn a_directory_that_merely_sits_inside_a_repo_still_gets_its_plane() {
 fn clone_this_repo_outside_a_repository_is_refused_and_the_plane_still_made() {
     let scene = Scene::new();
 
-    let out = scene.run(&["init", "--clone-this-repo"]);
+    let out = scene.run(&["init", "--clone-this-repo", "--forge", "github"]);
 
     assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
     assert!(
@@ -954,4 +954,22 @@ fn clone_this_repo_outside_a_repository_is_refused_and_the_plane_still_made() {
         stderr(&out)
     );
     assert!(scene.plane.join("charter.toml").is_file());
+}
+
+/// #839: with no `--forge` and no repo to read it from, `init` writes nothing and asks for it,
+/// exiting 2; adopting a repo on gitlab.com reads the forge and the group from its origin.
+#[test]
+fn init_reads_the_forge_from_the_adopted_repos_origin_or_asks_for_it() {
+    let scene = Scene::new();
+    let before = std::fs::read_dir(&scene.plane).unwrap().count();
+
+    let asked = scene.run(&["init"]);
+
+    assert_eq!(asked.status.code(), Some(2), "{}", stderr(&asked));
+    assert!(
+        stderr(&asked).contains("--forge github"),
+        "{}",
+        stderr(&asked)
+    );
+    assert_eq!(std::fs::read_dir(&scene.plane).unwrap().count(), before);
 }

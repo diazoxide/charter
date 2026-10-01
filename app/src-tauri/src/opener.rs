@@ -31,6 +31,8 @@ use charter_core::machine;
 use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
 
+use charter_core::firstrun::NotMade;
+
 use crate::planes::{Asking, Holding, Opening, PlaneId, Planes, Restoring, Showing, restorable};
 
 /// What a plane would contribute, as the trust prompt draws it — **and the exact value the
@@ -568,6 +570,10 @@ pub fn window_holds_planes(
 /// existing repo adopts that repo as the plane's first clone and makes the plane beside it"*.
 /// It is two directories because it is two answers: the dialog asks for both, and neither is
 /// guessed from the other.
+///
+/// **The forge is `charter init`'s rule** (#839): read from the remote of the repo the project
+/// is made for, else asked. `forge` is the operator's answer (`github`, `gitlab`) on the call
+/// after a question.
 #[tauri::command]
 #[specta::specta]
 pub fn create_project(
@@ -575,9 +581,36 @@ pub fn create_project(
     path: String,
     plane_is_this_repo: bool,
     adopt: Option<String>,
-) -> Result<Opened, String> {
-    let root = scaffold_at(std::path::Path::new(&path), plane_is_this_repo, adopt)?;
-    planes.open_if_approved(&root).map(Opened::from)
+    forge: Option<crate::firstrun::ForgeWord>,
+) -> Result<ProjectAnswer, String> {
+    let forge = forge.map(charter_core::forge::Kind::from);
+    match scaffold_at(
+        std::path::Path::new(&path),
+        plane_is_this_repo,
+        adopt,
+        forge,
+    ) {
+        Ok(root) => Ok(ProjectAnswer {
+            opened: Some(planes.open_if_approved(&root).map(Opened::from)?),
+            asks_forge: None,
+        }),
+        Err(NotMade::AsksForForge(why)) => Ok(ProjectAnswer {
+            opened: None,
+            asks_forge: Some(why),
+        }),
+        Err(NotMade::Refused(why)) => Err(why),
+    }
+}
+
+/// What came of making a project: made and opened (or asked about), or a question about the
+/// forge first. Two nullable fields, as [`Opened`] is: exactly one is ever set.
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+pub struct ProjectAnswer {
+    /// The project, opened or with its trust question. Null when the forge is asked first.
+    pub opened: Option<Opened>,
+    /// Why the repo's remote does not say which forge the project's repos are on: the window
+    /// asks GitHub or GitLab and calls again with the answer. Nothing was made.
+    pub asks_forge: Option<String>,
 }
 
 /// Scaffolds the plane and answers with the directory to open, or with why nothing was made.
@@ -585,23 +618,25 @@ fn scaffold_at(
     at: &std::path::Path,
     plane_is_this_repo: bool,
     adopt: Option<String>,
-) -> Result<std::path::PathBuf, String> {
+    forge: Option<charter_core::forge::Kind>,
+) -> Result<std::path::PathBuf, NotMade> {
     if !at.is_absolute() {
-        return Err(format!(
+        return Err(NotMade::Refused(format!(
             "'{}' is not a full path, so charter cannot tell which directory it means. Pick a \
              folder, or type the whole path.",
             at.display()
-        ));
+        )));
     }
     if at.exists() && !at.is_dir() {
-        return Err(format!(
+        return Err(NotMade::Refused(format!(
             "{} is a file, and a project is a directory. Pick a folder, or name one that is not \
              there yet.",
             at.display()
-        ));
+        )));
     }
-    std::fs::create_dir_all(at)
-        .map_err(|why| format!("charter could not make {} ({why}).", at.display()))?;
+    std::fs::create_dir_all(at).map_err(|why| {
+        NotMade::Refused(format!("charter could not make {} ({why}).", at.display()))
+    })?;
     // Resolved before anything reads it, so a path with a link in it names the tree by the
     // route everything downstream will use.
     let root = at.canonicalize().unwrap_or_else(|_| at.to_path_buf());
@@ -610,13 +645,13 @@ fn scaffold_at(
         // exactly what pointing the opener at it would have done.
         Ok(found) if found == root => return Ok(root),
         Ok(found) => {
-            return Err(format!(
+            return Err(NotMade::Refused(format!(
                 "{} is inside the project {}. A project is a plane of its own, and a plane \
                  inside another one is a workspace's clone — charter wrote nothing. Pick a \
                  directory outside it.",
                 root.display(),
                 found.display()
-            ));
+            )));
         }
         Err(_) => {}
     }
@@ -633,22 +668,62 @@ fn scaffold_at(
                 .map(str::trim)
                 .filter(|repo| !repo.is_empty())
                 .map(std::path::PathBuf::from),
+            forge,
         ),
     );
+    if outcome.code == charter_core::scaffold::ASKS_FOR_FORGE {
+        // The core's sentence names `--forge`, a flag nobody types here: the window asks with
+        // two buttons, and says only why the remote did not answer.
+        return Err(NotMade::AsksForForge(asked_why(&outcome.said)));
+    }
     if outcome.code != 0 {
         // **Verbatim, and all of it.** `init`'s refusal in a repository is four lines: what it
         // will not do, the three commands that make a plane beside the repo, what asking for
         // the old shape by name would write, and where the decision is recorded. An operator
         // shown a summary of that can follow none of it.
-        return Err(charter_core::scaffold::Say::in_full(&outcome.said));
+        return Err(NotMade::Refused(charter_core::scaffold::Say::in_full(
+            &outcome.said,
+        )));
     }
     Ok(root)
+}
+
+/// The reason in `init`'s question about the forge: what comes between its first `: ` and
+/// the `. Name it` that tells a terminal what to type.
+fn asked_why(said: &[charter_core::scaffold::Say]) -> String {
+    let all = charter_core::scaffold::Say::in_full(said);
+    all.split_once(": ")
+        .and_then(|(_, rest)| rest.split_once(". Name it"))
+        .map_or(all.clone(), |(why, _)| why.to_owned())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::{Path, PathBuf};
+
+    const GITHUB: Option<charter_core::forge::Kind> = Some(charter_core::forge::Kind::GitHub);
+
+    /// #839: the New project dialog's Advanced form follows `charter init`'s rule. A
+    /// directory with no repo to read asks for the forge, and the question says only why;
+    /// the answer makes the project.
+    #[test]
+    fn a_project_with_no_remote_to_read_asks_for_the_forge_and_the_answer_makes_it() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let at = dir.path().join("project");
+
+        let asked = scaffold_at(&at, false, None, None).expect_err("asked");
+
+        assert_eq!(
+            asked,
+            NotMade::AsksForForge("no repo was named to read it from".to_owned())
+        );
+        assert!(!at.join(charter_core::plane::MANIFEST).exists());
+        let root = scaffold_at(&at, false, None, Some(charter_core::forge::Kind::GitLab))
+            .expect("the answer makes it");
+        let manifest = std::fs::read_to_string(root.join("charter.toml")).expect("made");
+        assert!(manifest.contains("kind = \"gitlab\""), "{manifest}");
+    }
 
     /// A plane on disk, with nothing in it but the marker that makes it one.
     fn a_plane(at: &Path) -> PathBuf {
@@ -682,7 +757,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let at = dir.path().join("thing");
 
-        let root = scaffold_at(&at, false, None).expect("an empty directory is scaffolded");
+        let root = scaffold_at(&at, false, None, GITHUB).expect("an empty directory is scaffolded");
 
         assert!(root.join(charter_core::plane::MANIFEST).is_file());
         for baseline in charter_core::scaffold::BASELINE_DIRS {
@@ -698,7 +773,9 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let repo = a_repo(&dir.path().join("svc"));
 
-        let refused = scaffold_at(&repo, false, None).expect_err("a repo is not scaffolded into");
+        let refused = scaffold_at(&repo, false, None, GITHUB)
+            .expect_err("a repo is not scaffolded into")
+            .to_string();
 
         assert!(
             refused.contains("does not make a repository into a control plane"),
@@ -728,6 +805,7 @@ mod tests {
             &dir.path().join("svc-plane"),
             false,
             Some(repo.to_string_lossy().into_owned()),
+            GITHUB,
         )
         .expect("a repository is adopted, not refused");
 
@@ -754,8 +832,10 @@ mod tests {
             &dir.path().join("plane"),
             false,
             Some(papers.to_string_lossy().into_owned()),
+            GITHUB,
         )
-        .expect_err("only a repository can be adopted");
+        .expect_err("only a repository can be adopted")
+        .to_string();
 
         assert!(
             refused.contains("is not the top level of a git working tree"),
@@ -770,7 +850,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let repo = a_repo(&dir.path().join("svc"));
 
-        let root = scaffold_at(&repo, true, None).expect("the operator asked for it by name");
+        let root =
+            scaffold_at(&repo, true, None, GITHUB).expect("the operator asked for it by name");
 
         assert!(root.join(charter_core::plane::MANIFEST).is_file());
     }
@@ -784,7 +865,9 @@ mod tests {
         let plane = a_plane(&dir.path().join("plane"));
         let inside = plane.join("workspaces").join("alpha").join("thing");
 
-        let refused = scaffold_at(&inside, false, None).expect_err("a plane inside a plane");
+        let refused = scaffold_at(&inside, false, None, GITHUB)
+            .expect_err("a plane inside a plane")
+            .to_string();
 
         assert!(refused.contains("is inside the project"), "{refused}");
         assert!(!inside.join(charter_core::plane::MANIFEST).exists());
@@ -812,7 +895,9 @@ mod tests {
         let plane = a_plane(&dir.path().join("plane"));
         let inside = plane.join("workspaces").join("alpha").join("thing");
 
-        let refused = scaffold_at(&inside, false, None).expect_err("a plane inside a plane");
+        let refused = scaffold_at(&inside, false, None, GITHUB)
+            .expect_err("a plane inside a plane")
+            .to_string();
 
         let cli_would_write_into = charter_core::plane::place(&inside).root;
         assert_ne!(
@@ -840,7 +925,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let plane = a_plane(&dir.path().join("plane"));
 
-        let root = scaffold_at(&plane, false, None).expect("an existing plane is simply opened");
+        let root =
+            scaffold_at(&plane, false, None, GITHUB).expect("an existing plane is simply opened");
 
         assert_eq!(root, plane.canonicalize().expect("it resolves"));
         assert_eq!(
@@ -856,7 +942,9 @@ mod tests {
 
     #[test]
     fn a_path_that_is_not_a_full_one_is_refused_before_anything_is_made() {
-        let refused = scaffold_at(Path::new("thing"), false, None).expect_err("a relative path");
+        let refused = scaffold_at(Path::new("thing"), false, None, GITHUB)
+            .expect_err("a relative path")
+            .to_string();
 
         assert!(refused.contains("is not a full path"), "{refused}");
         assert!(!Path::new("thing").exists());

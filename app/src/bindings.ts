@@ -262,8 +262,12 @@ export const commands = {
 	 *  existing repo adopts that repo as the plane's first clone and makes the plane beside it"*.
 	 *  It is two directories because it is two answers: the dialog asks for both, and neither is
 	 *  guessed from the other.
+	 * 
+	 *  **The forge is `charter init`'s rule** (#839): read from the remote of the repo the project
+	 *  is made for, else asked. `forge` is the operator's answer (`github`, `gitlab`) on the call
+	 *  after a question.
 	 */
-	createProject: (path: string, planeIsThisRepo: boolean, adopt: string | null) => typedError<Opened, string>(__TAURI_INVOKE("create_project", { path, planeIsThisRepo, adopt })),
+	createProject: (path: string, planeIsThisRepo: boolean, adopt: string | null, forge: "github" | "gitlab" | null) => typedError<ProjectAnswer, string>(__TAURI_INVOKE("create_project", { path, planeIsThisRepo, adopt, forge })),
 	/**
 	 *  Which harnesses are installed and signed in, and whether `gh` and `glab` are logged in.
 	 * 
@@ -273,25 +277,26 @@ export const commands = {
 	firstRunFound: () => typedError<FirstRunFound, string>(__TAURI_INVOKE("first_run_found")),
 	/**
 	 *  Opens `path`, a repo, into this machine's local plane: the plane is made when there is
-	 *  none, laid out from the project template `template` names (FR-17), the repo is cloned into
-	 *  a workspace named after it, and the plane is opened **through the trust gate**, exactly as
-	 *  `create_project` opens a plane it has just made.
+	 *  none, the repo is cloned into a workspace named after it, and the plane is opened
+	 *  **through the trust gate**, exactly as `create_project` opens a plane it has just made.
 	 * 
 	 *  Nothing asks where the plane goes (W10). The repo is read and never written to.
+	 * 
+	 *  The project's forge is read from the repo's `origin`, as `charter init` reads it (#839).
+	 *  When the remote does not say, nothing is made and the answer asks for it; `forge` is the
+	 *  operator's answer (`github`, `gitlab`) on the call after. A local project that is already
+	 *  there asks nothing.
 	 */
-	openRepo: (path: string, template: TemplateChoice) => typedError<OpenedRepo, string>(__TAURI_INVOKE("open_repo", { path, template })),
-	/**
-	 *  The project template that fits the repo at `path`, by id, or `null` when none does or `path`
-	 *  is not a full path to a directory: what the first run's "Fits the repo" says it will pick
-	 *  (FR-17). It asks only whether files are there, and reads nothing.
-	 */
-	templateThatFits: (path: string) => typedError<string | null, string>(__TAURI_INVOKE("template_that_fits", { path })),
+	openRepo: (path: string, forge: "github" | "gitlab" | null) => typedError<RepoAnswer, string>(__TAURI_INVOKE("open_repo", { path, forge })),
 	/**
 	 *  Opens this machine's local project with no repo in it, made first when there is none, and
-	 *  through the trust gate: what "Sign in to GitHub" (or GitLab) on the first run opens, so the
-	 *  sign-in has a shell tab to run in (W10).
+	 *  through the trust gate: what "Sign in to GitHub" or "Sign in to GitLab" on the first run
+	 *  opens, so the sign-in has a shell tab to run in (W10).
+	 * 
+	 *  `forge` is the forge whose sign-in was pressed (`github`, `gitlab`). With no repo to read,
+	 *  that press is the operator's answer to which forge a new project tracks (#839).
 	 */
-	openLocalProject: () => typedError<Opened, string>(__TAURI_INVOKE("open_local_project")),
+	openLocalProject: (forge: ForgeWord) => typedError<Opened, string>(__TAURI_INVOKE("open_local_project", { forge })),
 	/**
 	 *  The agent instruction files in workspace `workspace`'s clones, each with its whole text:
 	 *  the preview the import tab draws (FR-18a). Reads, and writes nothing.
@@ -1657,20 +1662,26 @@ export type FirstRunFound = {
 	 *  chosen, so which forge the project will use is not known yet: both CLIs are checked.
 	 */
 	forges: ForgeRow[],
-	/**  The project templates this charter ships, in the order the screen lists them. */
-	templates: TemplateRow[],
 };
 
 /**  One forge's CLI, as the first-run screen lists it. */
 export type ForgeRow = {
 	/**  The program (`gh`, `glab`). Its own login is `<cli> auth login`. */
 	cli: string,
+	/**  The forge: what its sign-in names when it makes the project (#839). */
+	forge: ForgeWord,
 	/**  The forge it works with (`GitHub`, `GitLab`). */
 	title: string,
 	installed: boolean,
 	/**  Whether it is logged in to its default host. */
 	signed_in: boolean,
 };
+
+/**
+ *  A forge on the wire: the window's spelling of `charter_core::forge::Kind`, which the core
+ *  keeps free of serde and specta.
+ */
+export type ForgeWord = "github" | "gitlab";
 
 /**  How a number reads, as the window colours it — `charter_core::usage::Tone`. */
 export type GaugeTone = "ok" | "warn" | "bad";
@@ -2118,8 +2129,6 @@ export type OpenedRepo = {
 	 *  (FR-18a): the window offers them in a tab beside the first chat when there are any.
 	 */
 	instructions: number,
-	/**  The project template the project was laid out from, by id, when one was (FR-17). */
-	template: string | null,
 };
 
 /**  One part of a panel's body. */
@@ -2570,6 +2579,20 @@ export type ProfileRow = {
 	approval: string | null,
 };
 
+/**
+ *  What came of making a project: made and opened (or asked about), or a question about the
+ *  forge first. Two nullable fields, as [`Opened`] is: exactly one is ever set.
+ */
+export type ProjectAnswer = {
+	/**  The project, opened or with its trust question. Null when the forge is asked first. */
+	opened: Opened | null,
+	/**
+	 *  Why the repo's remote does not say which forge the project's repos are on: the window
+	 *  asks GitHub or GitLab and calls again with the answer. Nothing was made.
+	 */
+	asks_forge: string | null,
+};
+
 /**  One extension in one project, as the Project settings tab draws it. */
 export type ProjectExtension = {
 	id: string,
@@ -2778,6 +2801,21 @@ export type RelaunchQuestion = {
 	 *  quitting it (charter-app#251). The question then says so.
 	 */
 	after_update: boolean,
+};
+
+/**
+ *  What opening a repo on the first run came to: opened, or a question about the forge.
+ * 
+ *  Two nullable fields rather than a tagged union, as `Opened` is: exactly one is ever set.
+ */
+export type RepoAnswer = {
+	/**  What was opened. Null when the forge has to be asked first. */
+	opened: OpenedRepo | null,
+	/**
+	 *  Why the repo's remote does not say which forge the project's repos are on (#839):
+	 *  the window asks GitHub or GitLab and calls again with the answer. Nothing was made.
+	 */
+	asks_forge: string | null,
 };
 
 /**  `[repos.<name>]` for one repo, as `planesave::Settings::repo` resolves it. */
@@ -3159,28 +3197,6 @@ export type SubjectCurations = {
 	left_out: LeftOut[],
 	/**  Why this subject has no list at all — a workspace deleted a moment ago, say. */
 	trouble: string | null,
-};
-
-/**
- *  Which project template the repo's project is laid out from: `charter_core::firstrun::Choice`
- *  on the wire, which the core keeps free of serde and specta.
- */
-export type TemplateChoice = 
-/**  The one that fits the repo, or none when none does. What the screen starts on. */
-{ kind: "fits" } | 
-/**  No template: the screen's *None*. */
-{ kind: "no-template" } | 
-/**  This one. */
-{ kind: "named"; id: string };
-
-/**  One project template, as the first-run screen offers it (FR-17). */
-export type TemplateRow = {
-	/**  What `open_repo` is asked for it by. */
-	id: string,
-	/**  What the screen calls it. */
-	title: string,
-	/**  One line on what it is for. */
-	summary: string,
 };
 
 /**  One theme a project may pick, as the Theme select lists it. */

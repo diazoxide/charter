@@ -518,10 +518,12 @@ struct NewsCommand {
 
 #[derive(Args)]
 struct InitCommand {
-    /// Forge this control plane tracks.
-    #[arg(long, default_value = "gitlab", value_parser = charter_core::scaffold::FORGES)]
-    forge: String,
-    /// Group/org/user that owns the repos.
+    /// Forge this project's repos are on. Default: read from the origin of the repo the
+    /// project is made for (`--adopt`, `--clone-this-repo`, `--plane-is-this-repo`) when it is
+    /// on github.com or gitlab.com; otherwise `init` asks for it and writes nothing.
+    #[arg(long, value_parser = charter_core::scaffold::FORGES)]
+    forge: Option<String>,
+    /// Group/org/user that owns the repos (default: read from the same origin).
     #[arg(long)]
     owner: Option<String>,
     /// Self-hosted forge host (default: the forge's own public host).

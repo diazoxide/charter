@@ -2,6 +2,7 @@ import { useCallback, useId, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import * as Checkbox from "@radix-ui/react-checkbox";
 import { commands } from "./bindings";
+import { type ForgeAsk, ForgeQuestion } from "./ForgeQuestion";
 
 /**
  * Making a new project — a plane charter scaffolds — and the one decision it asks about.
@@ -48,6 +49,8 @@ import { commands } from "./bindings";
 export function NewProject({
   /** Why the last attempt made nothing — **the core's lines, unchanged and all of them**. */
   trouble,
+  /** Which forge the project's repos are on, when the repo's remote did not say (#839). */
+  forgeAsk,
   /** Whether charter is making it right now, so the answer cannot be given twice. */
   making,
   onCreate,
@@ -56,6 +59,7 @@ export function NewProject({
   onCancel,
 }: {
   trouble?: string;
+  forgeAsk?: ForgeAsk;
   making: boolean;
   onCreate: (path: string, planeIsThisRepo: boolean, adopt: string) => void;
   /** Opens a repo into this machine's local project (FR-4). */
@@ -147,6 +151,8 @@ export function NewProject({
                 {trouble}
               </p>
             )}
+            {/* Asked for whichever form was sent last, as the refusal is (#839). */}
+            {forgeAsk && <ForgeQuestion ask={forgeAsk} />}
             <div className="doing">
               <button type="submit" tabIndex={0} disabled={repo.trim() === "" || opening}>
                 Open repo
