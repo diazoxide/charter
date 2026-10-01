@@ -365,6 +365,37 @@ code by hand happens. charter opens a file there at a line, and never replaces i
 is a setting of this machine, so it belongs to **Project** (ADR 0072 §2, ADR 0081).
 _Avoid_: external editor; IDE (except in the category phrase "the agent IDE")
 
+**Comparison**:
+A base and a head in one of a workspace's repos, which git turns into the diff a Review tab shows: a
+chat's branch against its base, two refs, uncommitted work, one agent turn, a request. A
+cross-repo change is one comparison per member. It is a part of a **Workspace** (ADR 0084).
+_Avoid_: diff (for the pair; the diff is what git computes from it), changeset
+
+**Review tab**:
+A view tab showing one comparison (or one per member of a cross-repo change), where the operator
+reads the diff, ticks files as viewed, comments on lines, and ends by sending the comments to the
+chat, publishing them to the request, or approving. There is one per branch, and it remembers
+where the operator was. The forge's own review of a request stays the review of record. "Review"
+on its own is the plain verb, as on the chat tab's button, and is not a charter noun. It is a view
+of a **Workspace**'s repos (ADR 0084).
+_Avoid_: Review (as a noun for the tab), code review (for charter's), PR review (that is the
+forge's), diff view
+
+**Review draft**:
+A Review tab's unsent comments: each one's line and the operator's words, never code. Only the
+window writes it, it is kept on this machine and travels with the operator's other machines,
+and it leaves only by **Send to agent**, **Publish** or being kept. It belongs to **Workspace**
+(ADR 0084).
+_Avoid_: pending review (that is GitHub's), draft (unqualified)
+
+**Human edit**:
+An edit the operator saved to a file in a chat's branch from the light editor. charter records
+which file and lines, and announces it to the chat's harness at its next turn: one line of
+context naming the files edited since its last turn, paths only, never contents. Edits from
+several sittings add up until that turn, and the announcement is never a prompt sent for the
+operator. It is a part of a **Chat**'s history (ADR 0084).
+_Avoid_: manual edit, override
+
 **Session record**:
 A summary a chat writes of its own session when it closes through **Smart close** — its goal,
 what it did, what it decided, what is still open and how to pick it up — filed as one file in
