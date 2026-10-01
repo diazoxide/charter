@@ -136,7 +136,11 @@ async fn a_slow_client_never_has_more_than_the_watermark_in_flight() {
     // host has written and the client not drawn stays at the high watermark, plus one piece
     // of at most 16 KiB; without the watermark it is whatever Yamux's window lets through.
     let (mut client, host) = linked().await;
-    let roomy = Limits { most_queued_bytes: 64 << 20, high_watermark: HIGH, low_watermark: LOW };
+    let roomy = Limits {
+        most_queued_bytes: 64 << 20,
+        high_watermark: HIGH,
+        low_watermark: LOW,
+    };
     let feed = Attacher::new(host.opener(), roomy)
         .attach(ViewId(1), Bytes::new())
         .await

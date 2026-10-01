@@ -23,6 +23,8 @@ yamux = "0.14"
 [dev-dependencies]
 # The heap of the test process, measured, so a memory bound is a measured one.
 dhat = "0.3"
+# The multiplexer's own constants, for the bounds the tests compute.
+yamux = "0.14"
 tempfile.workspace = true
 tokio = { version = "1", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "sync", "test-util", "time"] }
 

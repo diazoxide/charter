@@ -1,17 +1,25 @@
-//! #643's second acceptance line: fifty chats over one link with 150 ms of round trip and 2%
-//! loss show needs-you within a second plus the round trip, with bounded memory.
+//! Fifty busy chats share one shaped link fairly, and the memory the views hold is bounded:
+//! a needs-you on the control lane is not starved by fifty terminals' output, and the heap
+//! stays within what the limits allow. Evidence for #643's second acceptance line, **not** a
+//! measurement of it: that line asks for kernel netem, which this is not (see below).
 //!
-//! The link is simulated in process, the way netem shapes one: every chunk is held for half
-//! the round trip each way; 2% of chunks are "lost", which on an ordered stream is a
-//! retransmission: TCP's fast retransmit resends the chunk after about one more round trip
-//! (RFC 5681), and every chunk behind it waits for it, since the stream is ordered; and the link carries at most 10 MB/s, a 100 Mbit line, holding at most 2 MiB in
-//! flight, about what TCP's window and socket buffers hold at that rate and delay. Past that,
-//! the sender's writes wait, as they do on a real socket. The rate is what makes the test
-//! bite: bytes the terminals have in flight are bytes a needs-you event waits behind, and only
-//! the views' watermark keeps that bounded.
+//! **The link is a model, and a simple one.** Each chunk read from the sender is held for half
+//! the round trip (150 ms) each way and serialized at 10 MB/s, with at most 2 MiB in flight,
+//! after which the sender's writes wait, as on a real socket. Loss is drawn per 1,460-byte
+//! packet at 2%; a chunk with a lost packet waits one more round trip (fast retransmit, RFC
+//! 5681), and everything behind it waits for it, since the stream is ordered. There is **no
+//! congestion control**: no slow start, no window halving after a loss, so the sender is never
+//! slowed the way TCP would slow it. What this checks is that the multiplexer shares the link
+//! when the terminals' bytes in flight are bounded, not how the protocol fares under real TCP.
+//! The real measurement, over TCP on loopback shaped by `tc netem` in CI, is its own ticket.
+//!
+//! **No timing is asserted tightly here** (ADR 0086: plain `cargo test` holds no wall-clock
+//! budget). The numbers are printed as evidence; the asserted bound, ten seconds for every
+//! needs-you, is one a loaded runner cannot reach unless something is wrong. The memory bound
+//! is the heap of this test process, measured with dhat, both ends of the link included.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -26,7 +34,8 @@ use tokio::time::{Instant, sleep, sleep_until};
 const CHATS: u32 = 50;
 const ROUND_TRIP: Duration = Duration::from_millis(150);
 const RETRANSMIT: Duration = ROUND_TRIP;
-const LOSS_IN: u64 = 50; // one chunk in fifty, 2%
+const LOSS_IN: u64 = 50; // one packet in fifty, 2%
+const PACKET: usize = 1460;
 const BYTES_PER_SECOND: f64 = 10e6;
 const IN_FLIGHT_CHUNKS: usize = 128; // of up to 16 KiB: 2 MiB
 
@@ -66,7 +75,7 @@ async fn shape(mut from: ReadHalf<DuplexStream>, mut to: WriteHalf<DuplexStream>
         let on_the_wire = Duration::from_secs_f64(n as f64 / BYTES_PER_SECOND);
         free_at = free_at.max(now) + on_the_wire;
         let mut at = free_at + ROUND_TRIP / 2;
-        if random.next().is_multiple_of(LOSS_IN) {
+        if (0..n.div_ceil(PACKET)).any(|_| random.next().is_multiple_of(LOSS_IN)) {
             at += RETRANSMIT;
         }
         // Ordered: nothing is delivered before a chunk sent ahead of it.
@@ -93,45 +102,54 @@ fn shaped_link() -> (DuplexStream, DuplexStream) {
     (client, host)
 }
 
+/// A terminal's output is new bytes every time, not one buffer shared by reference, so what
+/// the views hold is what the heap holds.
+fn fresh(output: &Bytes) -> Bytes {
+    Bytes::from(output.to_vec())
+}
+
 fn v1() -> Speaks {
     Speaks::new([Version { major: 1, minor: 0 }])
 }
 
+#[global_allocator]
+static ALLOCATOR: dhat::Alloc = dhat::Alloc;
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn every_needs_you_arrives_inside_a_second_plus_the_round_trip_and_memory_stays_bounded() {
+async fn every_needs_you_gets_through_fifty_busy_terminals_and_the_heap_stays_bounded() {
+    let _profiler = dhat::Profiler::builder().testing().build();
     let (client_end, host_end) = shaped_link();
     let (client, host) = tokio::join!(link::connect(client_end, v1()), link::serve(host_end, v1()));
     let (mut client, mut host) = (client.unwrap(), host.unwrap());
     let limits = Limits::default();
+    // What the limits allow, both ends of the link in this process: per chat, the host's
+    // queue and its watermark's worth in flight, and the client's Yamux receive window; plus
+    // the shaped link's 2 MiB each way, and 16 MiB for everything else.
+    let per_chat =
+        limits.most_queued_bytes + limits.high_watermark + yamux::DEFAULT_CREDIT as usize;
+    let bound = CHATS as usize * per_chat + (4 << 20) + (16 << 20);
+    // Watch the heap while the terminals run, and stop them the moment it passes the bound,
+    // so a view that holds without limit fails here instead of filling the machine.
+    let over = Arc::new(AtomicBool::new(false));
     let stop = Arc::new(AtomicBool::new(false));
-    let held = Arc::new(AtomicUsize::new(0));
-    let most_held = Arc::new(AtomicUsize::new(0));
 
     // The host: fifty busy terminals, each re-attached with a fresh snapshot when it falls
     // behind, and a needs-you for each chat in turn on the control lane.
     let attacher = Arc::new(Attacher::new(host.opener(), limits));
     for chat in 0..CHATS {
         let attacher = Arc::clone(&attacher);
-        let (stop, held, most_held) =
-            (Arc::clone(&stop), Arc::clone(&held), Arc::clone(&most_held));
+        let stop = Arc::clone(&stop);
         tokio::spawn(async move {
             let output =
-                Bytes::from(format!("chat {chat} working… {}\r\n", "▒".repeat(60)).repeat(16));
+                Bytes::from(format!("chat {chat} working… {}\r\n", "▒".repeat(60)).repeat(80));
             while !stop.load(Ordering::Relaxed) {
                 let snapshot = Bytes::from(format!("\x1b[2J\x1b[Hchat {chat}"));
                 let Ok(feed) = attacher.attach(ViewId(chat), snapshot).await else {
                     return;
                 };
-                let mut mine = 0;
-                while !stop.load(Ordering::Relaxed) && feed.push(output.clone()).is_ok() {
-                    let now = feed.queued_bytes();
-                    held.fetch_add(now, Ordering::Relaxed);
-                    held.fetch_sub(mine, Ordering::Relaxed);
-                    mine = now;
-                    most_held.fetch_max(held.load(Ordering::Relaxed), Ordering::Relaxed);
+                while !stop.load(Ordering::Relaxed) && feed.push(fresh(&output)).is_ok() {
                     sleep(Duration::from_millis(5)).await;
                 }
-                held.fetch_sub(mine, Ordering::Relaxed);
             }
         });
     }
@@ -159,6 +177,17 @@ async fn every_needs_you_arrives_inside_a_second_plus_the_round_trip_and_memory_
         }
     });
 
+    let (watch_stop, watch_over) = (Arc::clone(&stop), Arc::clone(&over));
+    tokio::spawn(async move {
+        while !watch_stop.load(Ordering::Relaxed) {
+            if dhat::HeapStats::get().curr_bytes > bound {
+                watch_over.store(true, Ordering::Relaxed);
+                watch_stop.store(true, Ordering::Relaxed);
+            }
+            sleep(Duration::from_millis(20)).await;
+        }
+    });
+
     // Let every terminal get going, then ask for the operator once per chat.
     sleep(Duration::from_secs(1)).await;
     let sent: Arc<Mutex<HashMap<u32, Instant>>> = Arc::default();
@@ -175,7 +204,7 @@ async fn every_needs_you_arrives_inside_a_second_plus_the_round_trip_and_memory_
         host
     });
     let mut took = Vec::new();
-    while took.len() < CHATS as usize {
+    while took.len() < CHATS as usize && !over.load(Ordering::Relaxed) {
         let frame = client.control().next().await.unwrap().unwrap();
         let text = String::from_utf8(frame.to_vec()).unwrap();
         let chat: u32 = text.strip_prefix("needs-you ").unwrap().parse().unwrap();
@@ -186,20 +215,23 @@ async fn every_needs_you_arrives_inside_a_second_plus_the_round_trip_and_memory_
     let _host = asks.await.unwrap();
 
     took.sort();
-    let worst = *took.last().unwrap();
-    let budget = Duration::from_secs(1) + ROUND_TRIP;
-    let bound = CHATS as usize * limits.most_queued_bytes;
-    let peak = most_held.load(Ordering::Relaxed);
+    let worst = took.last().copied().unwrap_or_default();
+    let peak = dhat::HeapStats::get().max_bytes;
     eprintln!(
-        "needs-you over {CHATS} chats, {ROUND_TRIP:?} round trip, 2% loss, 10 MB/s: p50 {:?}, worst {worst:?}; peak queued {peak} bytes",
-        took[took.len() / 2]
+        "needs-you through {CHATS} busy chats on the shaped link: p50 {:?}, worst {worst:?}; heap peak {peak} bytes of {bound} allowed",
+        took.get(took.len() / 2).copied().unwrap_or_default()
     );
     assert!(
-        worst <= budget,
-        "the slowest needs-you took {worst:?}, over {budget:?}"
+        !over.load(Ordering::Relaxed),
+        "the heap passed {bound} bytes while the terminals ran"
+    );
+    let generous = Duration::from_secs(10);
+    assert!(
+        worst <= generous,
+        "the slowest needs-you took {worst:?}, over {generous:?}"
     );
     assert!(
         peak <= bound,
-        "the host held {peak} bytes for its views, over {bound}"
+        "the heap peaked at {peak} bytes, over {bound}"
     );
 }
