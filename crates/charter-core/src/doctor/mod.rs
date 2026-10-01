@@ -191,21 +191,9 @@ impl Config {
         // Python's `found > SCHEMA` is the refusal, so everything up to and including this
         // charter's own version is read. (Spelled once, as `<= SCHEMA`: an arm for `1` ahead of
         // one for `< 1` left the `<` with a boundary no input could reach.)
-        match table.get("schema") {
+        match crate::compat::schema(&table).refusal(&fsx::path_field(path)) {
             None => Self::Read(table),
-            Some(toml::Value::Integer(found)) if *found <= SCHEMA => Self::Read(table),
-            Some(toml::Value::Integer(found)) => Self::Refused(format!(
-                "{} declares schema {found}, but this charter understands {SCHEMA}. Upgrade \
-                 charter: update the app.",
-                fsx::path_field(path)
-            )),
-            Some(other) => Self::Refused(format!(
-                "{} declares schema {}, which is not a plane format version this charter can \
-                 compare against {SCHEMA}. charter will not operate on a plane whose format it \
-                 cannot place. Fix the `schema` line, or upgrade charter: update the app.",
-                fsx::path_field(path),
-                config::toml_repr(other)
-            )),
+            Some(refusal) => Self::Refused(refusal),
         }
     }
 
@@ -279,9 +267,6 @@ pub(crate) const PATH_DISPLAY_LIMIT: usize = 1024;
 pub(crate) fn one_line(value: &str, limit: usize) -> String {
     crate::shown::one_line(value, limit)
 }
-
-/// The plane format version this charter understands — Python's `instance.SCHEMA`.
-pub(crate) const SCHEMA: i64 = 1;
 
 /// Everything a check is asked about: which plane, standing where, and how it was invoked.
 pub struct Doctor {

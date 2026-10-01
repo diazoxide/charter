@@ -928,3 +928,37 @@ mod entry_tests {
         assert_eq!(entry.body, "body");
     }
 }
+
+/// FR-24: a reader keeps what it does not know when it rewrites a file.
+#[cfg(test)]
+mod unknown_field_tests {
+    use super::*;
+
+    #[test]
+    fn a_manifest_rewrite_keeps_keys_charter_does_not_know() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        std::fs::create_dir_all(root.join("workspaces/demo")).unwrap();
+        std::fs::write(
+            root.join("workspaces/demo/workspace.json"),
+            "{\n  \"name\": \"demo\",\n  \"a-future-key\": {\n    \"kept\": true\n  }\n}\n",
+        )
+        .unwrap();
+        let ws = Plane::open(&root).workspace("demo").unwrap();
+        let (Some(serde_json::Value::Object(mut doc)), owner) = ws.manifest() else {
+            panic!("the manifest reads");
+        };
+        doc.insert("name".into(), "renamed".into());
+        ws.write_manifest_as(
+            &serde_json::Value::Object(doc),
+            owner == crate::manifest::Ownership::Charter,
+        )
+        .unwrap();
+        let written: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join("workspaces/demo/workspace.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(written["name"], "renamed");
+        assert_eq!(written["a-future-key"]["kept"], true, "{written}");
+    }
+}

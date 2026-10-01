@@ -14,6 +14,7 @@ pub mod cistate;
 pub mod clipath;
 pub mod commitgate;
 pub mod commitguard;
+pub mod compat;
 pub mod contain;
 pub mod credguard;
 pub mod curate;

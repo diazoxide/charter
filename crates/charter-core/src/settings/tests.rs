@@ -160,11 +160,11 @@ fn a_shared_file_that_is_not_toml_is_refused_in_the_words_charter_reads_it_with(
 #[test]
 fn a_schema_this_charter_cannot_place_is_refused() {
     let dir = plane(COMMENTED);
-    let why = refusals(dir.path(), Which::Shared, "schema = 2\n");
+    let why = refusals(dir.path(), Which::Shared, "schema = 3\n");
     assert_eq!(why.len(), 1);
     assert!(
         why[0].ends_with(
-            "declares schema 2, but this charter understands 1. Upgrade charter: update the app."
+            "declares schema 3, but this charter understands 2. Upgrade charter: update the app."
         ),
         "{why:?}"
     );

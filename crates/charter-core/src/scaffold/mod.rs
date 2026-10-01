@@ -300,12 +300,36 @@ fn strerror(e: &std::io::Error) -> String {
     }
 }
 
+/// Whether `root`'s `charter.toml` is a link this command's containment gate refuses: one that
+/// leads out of the project or into its `.git`. `init` and `reinit` refuse such a project and
+/// write nothing (FR-24); the read-only check leaves it to them, because reading through the
+/// link would answer a file that is not the project's.
+pub fn manifest_escapes(root: &Path) -> bool {
+    occupied(&root.join(crate::plane::MANIFEST)) && gate(root, crate::plane::MANIFEST).is_err()
+}
+
 /// The refusal a command meets on a plane whose format this charter cannot place
-/// (`cli._plane_refusal`). `init` and `reinit` are not exempt: both write into the plane.
+/// (`cli._plane_refusal`), or whose `charter.toml` is a link out of it. `init` and `reinit` are
+/// not exempt: both write into the plane.
 fn refused(root: &Path) -> Option<Outcome> {
-    // Read only through the gate: a `charter.toml` that is a link out of the plane is not a
-    // file charter reads, and the command reports it as a blocker instead.
-    gate(root, crate::plane::MANIFEST).ok()?;
+    // `charter.toml` is the format gate (V5, FR-24). One that is a link out of the plane, or into
+    // its `.git`, is somebody else's file: charter reads nothing through it, and writes nothing
+    // at all, because every other file would belong to a project whose format it cannot see.
+    if let Err((rel, lands)) = gate(root, crate::plane::MANIFEST) {
+        if !occupied(&root.join(crate::plane::MANIFEST)) {
+            return None;
+        }
+        return Some(Outcome {
+            said: vec![Say::Err(format!(
+                "{} resolves to {}, which is outside this plane or inside its .git — charter \
+                 reads and writes nothing through it. Point it inside the plane or remove it \
+                 yourself, then run the command again. Nothing was written.",
+                crate::shown::readable(&rel, 1024),
+                crate::shown::readable(&lands, 1024)
+            ))],
+            code: 1,
+        });
+    }
     match planefile::load(root) {
         planefile::Read::Refused(why) => Some(Outcome {
             said: vec![Say::Err(format!(
@@ -456,13 +480,13 @@ pub fn init(place: &Place, args: &InitArgs) -> Outcome {
     if run.created.is_empty() {
         run.ok(format!(
             "Control plane already fully set up (schema {}) — nothing to do.",
-            planefile::SCHEMA
+            planefile::WRITTEN
         ));
     } else {
         let entries = fold(&run.created);
         run.ok(format!(
             "Initialized control plane (schema {}) — {} item(s) written.",
-            planefile::SCHEMA,
+            planefile::WRITTEN,
             entries.len()
         ));
         for item in entries {
@@ -584,7 +608,7 @@ pub fn reinit(place: &Place) -> Outcome {
     if run.created.is_empty() {
         run.ok(format!(
             "Up to date (schema {}) — nothing to do.",
-            planefile::SCHEMA
+            planefile::WRITTEN
         ));
         return run.outcome(0);
     }
@@ -2246,11 +2270,11 @@ mod tests {
     #[test]
     fn a_plane_from_a_newer_charter_is_refused_by_init_and_reinit_alike() {
         let (_dir, root) = empty_plane();
-        std::fs::write(root.join("charter.toml"), "schema = 2\n").expect("charter.toml");
+        std::fs::write(root.join("charter.toml"), "schema = 3\n").expect("charter.toml");
         let refusal = vec![Say::Err(format!(
             // The app's own wording (ADR 0045): Python's pointed at `uv tool install
             // charter-cp`, which this charter never ships on. A declared divergence.
-            "{} declares schema 2, but this charter understands 1. Upgrade charter: update the \
+            "{} declares schema 3, but this charter understands 2. Upgrade charter: update the \
              app. Nothing was run. `charter doctor` reports it; `charter update` is the way out.",
             root.join("charter.toml").display()
         ))];
