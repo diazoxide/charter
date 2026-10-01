@@ -1,0 +1,44 @@
+---
+title: charter
+description: One desktop app for running many coding-agent chats in parallel, across workspaces and repos.
+template: splash
+hero:
+  tagline: Run many coding-agent chats in parallel, across workspaces and repos, and always know which one needs you.
+  actions:
+    - text: Get started with GitHub
+      link: /charter/docs/getting-started/github/
+      icon: right-arrow
+    - text: Get started with GitLab
+      link: /charter/docs/getting-started/gitlab/
+      icon: right-arrow
+      variant: secondary
+    - text: Source on GitHub
+      link: https://github.com/diazoxide/charter
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid, LinkCard } from "@astrojs/starlight/components";
+
+<CardGrid>
+  <Card title="One window for every chat" icon="laptop">
+    Claude Code, Codex and opencode chats run side by side, each in its own tab.
+  </Card>
+  <Card title="Your project is a git repository" icon="document">
+    Workspaces, personas and memory are plain files in a git repository you own, saved as far
+    as you choose: a commit, a push or a pull request.
+  </Card>
+  <Card title="GitHub and GitLab" icon="github">
+    Repos are listed and cloned from what your own forge login reaches, on either forge.
+  </Card>
+  <Card title="Open source" icon="open-book">
+    MIT licensed. The spec, the decisions and the on-disk format are all in the docs.
+  </Card>
+</CardGrid>
+
+<CardGrid>
+  <LinkCard title="The spec" href="/charter/docs/spec/" description="What charter is for and the limits it is held to." />
+  <LinkCard title="The project format" href="/charter/docs/plane-format/" description="Every file charter reads and writes, and its tier." />
+  <LinkCard title="Decisions" href="/charter/docs/adr/0025-charter-is-rebuilt-as-a-desktop-app-on-a-rust-core/" description="The architecture decision records, from ADR 0025." />
+  <LinkCard title="Updating" href="/charter/docs/updating/" description="How charter updates itself, and what it checks first." />
+</CardGrid>

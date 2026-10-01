@@ -1,0 +1,8 @@
+{
+  "name": "sharp",
+  "version": "0.0.0-not-installed",
+  "description": "Stands in for sharp, which the site never loads (astro.config.mjs uses passthroughImageService). sharp's prebuilt libvips is LGPL-3.0, so it is kept out of the install.",
+  "license": "MIT",
+  "private": true,
+  "main": "index.js"
+}
