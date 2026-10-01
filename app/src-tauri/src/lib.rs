@@ -122,7 +122,7 @@ fn chat_git_hooks<R: tauri::Runtime>(
         Ok(()) => Some(hooks),
         Err(why) if why.kind() == std::io::ErrorKind::Unsupported => None,
         Err(why) => {
-            eprintln!(
+            tracing::warn!(
                 "charter: no git hooks at {} ({why}); a chat's commits will not be scanned \
                  for secrets",
                 dir.display()
