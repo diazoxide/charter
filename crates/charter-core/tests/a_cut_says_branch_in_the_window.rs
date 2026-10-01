@@ -83,6 +83,7 @@ fn every_refusal() -> Vec<Refusal> {
 
 #[test]
 fn no_refusal_a_cut_can_meet_says_piece_or_worktree_in_the_window() {
+    charter_core::unsteered!();
     for refusal in every_refusal() {
         says_none_of_them(&refusal.in_window());
     }
@@ -90,6 +91,7 @@ fn no_refusal_a_cut_can_meet_says_piece_or_worktree_in_the_window() {
 
 #[test]
 fn a_taken_branch_is_refused_in_the_windows_words_and_the_cli_keeps_its_own() {
+    charter_core::unsteered!();
     let taken = Refusal::BranchTaken {
         repo: "api".into(),
         branch: "spike".into(),
@@ -105,6 +107,7 @@ fn a_taken_branch_is_refused_in_the_windows_words_and_the_cli_keeps_its_own() {
 
 #[test]
 fn what_a_cut_found_to_say_is_said_of_the_branch_in_the_window() {
+    charter_core::unsteered!();
     for note in [
         Note::Dirty { repo: "api".into() },
         Note::DirtUnknown { repo: "api".into() },
