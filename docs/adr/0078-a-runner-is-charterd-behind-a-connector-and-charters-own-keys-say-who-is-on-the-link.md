@@ -458,15 +458,15 @@ The classes stay classes, and SD-2 and RR-5 turn them into rules and tests.
 - **§6**, the stores that records in flight add, gains the runner definitions, the runner's
   peers, the link key and the runner's bare repos, with the tiers of §8 above. The row for *"a
   runner's host versions"* stands.
-- **The inventory, *Every store, by tier*,** gains these rows. Row 69 already holds a runner's
+- **The inventory, *Every store, by tier*,** gains these rows (row numbers renumbered 2026-10-01; see ADR 0069). Row 69 already holds a runner's
   `<config>/server/<ver>/`.
 
   | # | Store | Tier | Sync | Backed up | Rebuildable |
   |---|---|---|---|---|---|
-  | 73 | `<config>/runners.json`, the runner definitions (ADR 0078) | Machine | device-bound | yes | no |
-  | 74 | `<config>/peers.json`, a runner's peers (ADR 0078) | Machine | device-bound | yes | no |
-  | 75 | the link key (ADR 0078) | Keyring | — | no | no |
-  | 76 | `<data>/repos/<workspace>/<repo>.git`, a runner's bare repos (ADR 0078) | Machine, rebuildable | device-bound | no | yes |
+  | 74 | `<config>/runners.json`, the runner definitions (ADR 0078) | Machine | device-bound | yes | no |
+  | 75 | `<config>/peers.json`, a runner's peers (ADR 0078) | Machine | device-bound | yes | no |
+  | 76 | the link key (ADR 0078) | Keyring | — | no | no |
+  | 77 | `<data>/repos/<workspace>/<repo>.git`, a runner's bare repos (ADR 0078) | Machine, rebuildable | device-bound | no | yes |
 
 ## ADR 0071, amended
 
