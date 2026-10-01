@@ -865,7 +865,34 @@ pub fn tell_tool(
     one_line_with_a_deadline(path, token, call)
 }
 
-/// One connection, one line, closed, and at most [`A_NOTICE_TAKES_AT_MOST`] spent writing it.
+/// `act`, or an error once `deadline` has passed without it finishing.
+#[cfg(unix)]
+///
+/// On a thread of its own, as `charter hook`'s payload read is: a `connect` to a socket whose
+/// backlog is full blocks, on Linux, for as long as the app does not accept, and an app that
+/// is frozen never does. A guard's verdict must never wait on that, so the act is let go and
+/// left to finish or fail on its own; the process is on its way out anyway.
+#[cfg(unix)]
+fn within(
+    deadline: std::time::Duration,
+    act: impl FnOnce() -> io::Result<()> + Send + 'static,
+) -> io::Result<()> {
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("charter-hook-notice".into())
+        .spawn(move || {
+            let _ = done.send(act());
+        })?;
+    finished.recv_timeout(deadline).unwrap_or_else(|_| {
+        Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "the app did not take the line in time",
+        ))
+    })
+}
+
+/// One connection, one line, closed, and at most [`A_NOTICE_TAKES_AT_MOST`] spent connecting
+/// and writing it.
 #[cfg(unix)]
 fn one_line_with_a_deadline(
     path: &std::path::Path,
@@ -874,10 +901,15 @@ fn one_line_with_a_deadline(
 ) -> io::Result<()> {
     use std::io::Write;
 
-    let mut socket = std::os::unix::net::UnixStream::connect(path)?;
-    socket.set_write_timeout(Some(A_NOTICE_TAKES_AT_MOST))?;
-    socket.write_all(&line_with(token, line)?)?;
-    socket.flush()
+    let bytes = line_with(token, line)?;
+    let path = path.to_path_buf();
+    // The connect as well as the write is bounded: see [`within`].
+    within(A_NOTICE_TAKES_AT_MOST, move || {
+        let mut socket = std::os::unix::net::UnixStream::connect(&path)?;
+        socket.set_write_timeout(Some(A_NOTICE_TAKES_AT_MOST))?;
+        socket.write_all(&bytes)?;
+        socket.flush()
+    })
 }
 
 /// How long [`tell`] and [`tell_saved`] may spend writing their line: a line is under 4 KiB and the app reads it on
@@ -2818,6 +2850,21 @@ mod tests {
             "{:?}",
             began.elapsed()
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_notice_that_cannot_be_delivered_in_time_is_given_up_on_and_does_not_hold_the_hook() {
+        let began = std::time::Instant::now();
+
+        let gave_up = within(std::time::Duration::from_millis(50), || {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            Ok(())
+        });
+
+        assert!(gave_up.is_err());
+        assert!(began.elapsed() < std::time::Duration::from_secs(2), "{:?}", began.elapsed());
+        assert!(within(std::time::Duration::from_secs(1), || Ok(())).is_ok());
     }
 
     #[test]

@@ -1349,13 +1349,13 @@ fn tell_the_host_about_the_tool_call(
 /// ([`guard::refuse_on_a_crash`]).
 fn hook(name: &str, now: Option<&str>) -> ExitCode {
     // FIRST, in front of `Event::parse`, because none of these is one of the app's reporting
-    // events: a tool call carries no chat state worth a `Report`, and a guard that also spoke
-    // on the app's socket would be two jobs on one exit status.
+    // events: a tool call carries no chat state worth a `Report`.
     //
     // **The host still hears every tool call** (FD-9): after the answer is printed, one line on
     // the hook channel says what was answered, so its event log has one event per hook call.
-    // It is a separate act on a separate channel, and nothing it does can change the exit
-    // status or the line the harness has already been given.
+    // The verdict is decided and printed before that line is sent, the exit status is the
+    // verdict's whatever the send does, and the send gives up after a bounded wait
+    // (`hookwire::tell_tool`), so a slow or frozen app never holds a guard's answer.
     let guarded = name == GUARDED_TOOL_HOOK;
     let handler = hooks::handler(name);
     if guarded || handler.is_some() {
