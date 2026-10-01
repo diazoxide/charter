@@ -1,0 +1,22 @@
+# The form for Discussions → Ideas (FR-14, #609). GitHub matches it to the category whose slug
+# is this file's name, `ideas`.
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you are trying to do
+      description: The work you do with charter, or want to, and where it falls short.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Your idea
+      description: What charter could do about it. A rough sketch is fine.
+    validations:
+      required: true
+  - type: textarea
+    id: today
+    attributes:
+      label: What you do today
+      description: How you handle it now, with charter or with something else.

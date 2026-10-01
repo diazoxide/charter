@@ -7,6 +7,7 @@ import App from "./App";
 import { LEAST, leastAt } from "./fits";
 import { DEFAULT_TEXT } from "./textSize";
 import { TitleBar } from "./TitleBar";
+import { HELP } from "./About";
 import type { About, Moved, OpenChat, PlaneSaving, RepoSaving } from "./bindings";
 
 /**
@@ -213,6 +214,30 @@ describe("About Charter", () => {
       "https://github.com/diazoxide/charter/releases",
     );
     expect(dialog).not.toHaveTextContent("charter news");
+  });
+
+  it("says where to ask a question and where to report a bug, whatever the core answered", async () => {
+    // FR-14 (#609): the community channels are linked from the app. They are drawn even when
+    // the changelog cannot be read, because that is exactly when someone needs help.
+    core(new Error("no changelog"));
+    render(<TitleBar />);
+
+    await userEvent.click(screen.getByTestId("title-about"));
+    const dialog = await screen.findByRole("dialog");
+    await within(dialog).findByRole("alert");
+
+    expect(within(dialog).getByRole("link", { name: "Discussions" })).toHaveAttribute(
+      "href",
+      HELP.discussions,
+    );
+    expect(within(dialog).getByRole("link", { name: "report a bug" })).toHaveAttribute(
+      "href",
+      HELP.newIssue,
+    );
+    expect(within(dialog).getByRole("link", { name: "how to get help" })).toHaveAttribute(
+      "href",
+      HELP.support,
+    );
   });
 
   it("says what went wrong rather than drawing an empty list, when the core refuses", async () => {
