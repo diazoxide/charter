@@ -30,8 +30,8 @@ scaffolds nothing — it creates only what is absent.
 
 **Which forge** (#839): `--forge` names it. Without it, `init` reads the forge, and the owner
 when `--owner` is not given, from the `origin` of the repo the plane is made for — the one
-`--adopt` names, or the plane's own directory with `--clone-this-repo` or
-`--plane-is-this-repo` — when that remote is on github.com or gitlab.com. Otherwise it writes
+`--adopt` names, or the plane's own directory with `--plane-is-this-repo` — when that
+remote is on github.com or gitlab.com. Otherwise it writes
 nothing, exits 2, and asks for `--forge github` or `--forge gitlab`. A self-managed host is never
 read as one kind or the other from its name. The app's first run and New project dialog follow
 the same rule, and ask with two buttons. An `init` run again on a plane that has its

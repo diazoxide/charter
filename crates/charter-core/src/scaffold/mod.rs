@@ -2007,6 +2007,8 @@ mod tests {
             assert!(r.ok(), "git {args:?} failed: {}", r.err);
         };
         git(&["init", "-q", "-b", "main", "."]);
+        git(&["config", "user.email", "t@e.invalid"]);
+        git(&["config", "user.name", "t"]);
         git(&["commit", "-q", "--allow-empty", "-m", "first"]);
         if let Some(origin) = origin {
             git(&["remote", "add", "origin", origin]);
