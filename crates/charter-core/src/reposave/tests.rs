@@ -806,3 +806,132 @@ fn a_generated_message_naming_exactly_as_many_files_as_it_shows_counts_none_as_m
         "charter save: 5 files (f1, f2, f3, f4, f5)"
     );
 }
+
+// One shared standing per clone (FD-11, #651).
+
+impl Fixture {
+    fn shared(&self) -> Standing {
+        shared_standing(
+            &self.plane,
+            "alpha",
+            &repos::Repo {
+                name: "widget".into(),
+                path: self.clone.clone(),
+            },
+        )
+    }
+}
+
+#[test]
+fn a_clone_asked_twice_with_nothing_changed_runs_git_for_it_once() {
+    let fx = Fixture::new("");
+    let before = crate::worktree::git::tally(&fx.clone).spawned;
+    fx.standing();
+    let one = crate::worktree::git::tally(&fx.clone).spawned - before;
+
+    fx.shared();
+    fx.shared();
+
+    assert_eq!(
+        crate::worktree::git::tally(&fx.clone).spawned - before,
+        2 * one,
+        "the second shared read ran git again"
+    );
+}
+
+#[test]
+fn a_save_is_in_the_next_shared_standing_of_the_clone() {
+    let fx = Fixture::new("[repos.widget]\nmode = \"commit\"\n");
+    std::fs::write(fx.clone.join("README.md"), "two\n").unwrap();
+    assert_eq!(fx.shared().changed, 1);
+
+    let (code, said) = fx.save();
+
+    assert_eq!(code, 0, "{said}");
+    assert_eq!(fx.shared().changed, 0);
+}
+
+#[test]
+fn an_edit_in_a_clone_is_seen_once_its_plane_is_said_to_have_moved() {
+    let fx = Fixture::new("");
+    assert_eq!(fx.shared().changed, 0);
+
+    std::fs::write(fx.clone.join("README.md"), "two\n").unwrap();
+    planegit::touch(&fx.plane);
+
+    assert_eq!(fx.shared().changed, 1);
+}
+
+#[test]
+fn a_repo_save_leaves_the_index_carrying_gits_untracked_cache() {
+    let fx = Fixture::new("[repos.widget]\nmode = \"commit\"\n");
+    std::fs::write(fx.clone.join("README.md"), "two\n").unwrap();
+
+    let (code, said) = fx.save();
+
+    assert_eq!(code, 0, "{said}");
+    let index = std::fs::read(fx.clone.join(".git/index")).unwrap();
+    assert!(
+        index.windows(4).any(|w| w == b"UNTR"),
+        "no untracked cache in the index"
+    );
+}
+
+#[test]
+fn an_operators_untracked_cache_setting_is_never_overridden_by_any_read_or_save() {
+    // Every call site that may ask for the cache — the plane's status and its save's `add`, a
+    // clone's status and its save's `add` — through the real paths, with the operator's
+    // `false` in both repos. Asserted on what git was handed, because git's own commit drops
+    // the cache under `false` again, so the index alone could not tell a hard-coded `-c`.
+    let fx = Fixture::new("[plane]\nmode = \"commit\"\n[repos.widget]\nmode = \"commit\"\n");
+    for argv in [
+        &["init", "-q", "-b", "main", "."][..],
+        &["config", "user.name", "Fixture"],
+        &["config", "user.email", "fixture@example.invalid"],
+        &["config", "core.untrackedCache", "false"],
+        &["add", "charter.toml"],
+        &["commit", "-q", "-m", "one"],
+    ] {
+        run(&fx.plane, argv);
+    }
+    run(&fx.clone, &["config", "core.untrackedCache", "false"]);
+    std::fs::write(fx.plane.join("note.md"), "n\n").unwrap();
+    std::fs::write(fx.clone.join("README.md"), "two\n").unwrap();
+
+    planegit::standing(&fx.plane);
+    let mut said = String::new();
+    let code = planegit::save(
+        &planegit::Request {
+            root: &fx.plane,
+            message: Some("a save"),
+            sign: false,
+            no_push: true,
+            cwd: &fx.plane,
+        },
+        &mut |line: Say| said.push_str(&format!("{line}\n")),
+    );
+    assert_eq!(code, 0, "{said}");
+    fx.standing();
+    let (code, said) = fx.save();
+    assert_eq!(code, 0, "{said}");
+
+    for dir in [&fx.plane, &fx.clone] {
+        let asked = crate::worktree::git::tally::asked(dir);
+        assert!(
+            asked.iter().any(|argv| argv.iter().any(|a| a == "add")),
+            "nothing was saved in {}",
+            dir.display()
+        );
+        let forced: Vec<_> = asked
+            .iter()
+            .filter(|argv| {
+                argv.iter()
+                    .any(|a| a == crate::worktree::git::UNTRACKED_CACHE)
+            })
+            .collect();
+        assert!(
+            forced.is_empty(),
+            "the operator's false was overridden: {forced:?}"
+        );
+    }
+}

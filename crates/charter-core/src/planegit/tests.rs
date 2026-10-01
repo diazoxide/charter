@@ -2951,3 +2951,168 @@ fn the_push_record_is_stamped_with_the_time_it_is_now() {
         "stamped {stamped}, and it is {before}"
     );
 }
+
+// ------------------------------------------------------------------------------------------ //
+// One shared standing per plane (FD-11, #651).
+// ------------------------------------------------------------------------------------------ //
+
+/// How many files the shared-standing fixture holds: a few thousand by default, and the 300,000
+/// of the ticket's monorepo when `CHARTER_STANDING_FILES` says so (`stress.yml`).
+fn fixture_files() -> usize {
+    std::env::var("CHARTER_STANDING_FILES")
+        .ok()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(2_000)
+}
+
+/// A plane holding `files` committed files in directories of a thousand, and one changed.
+fn a_large_plane(files: usize) -> Fixture {
+    let fixture = Fixture::plane();
+    for n in 0..files {
+        let dir = fixture.root.join(format!("tree/{:04}", n / 1000));
+        if n % 1000 == 0 {
+            std::fs::create_dir_all(&dir).unwrap();
+        }
+        std::fs::write(dir.join(format!("{n}.txt")), "x\n").unwrap();
+    }
+    run(&fixture.root, &["add", "-A"]);
+    run(&fixture.root, &["commit", "-q", "-m", "many"]);
+    std::fs::write(fixture.root.join("README.md"), "changed\n").unwrap();
+    fixture
+}
+
+/// `calls` callers on `threads` threads at once, each asking `ask` of the plane.
+fn at_once(threads: usize, calls: usize, ask: &(dyn Fn() + Sync)) {
+    let start = std::sync::Barrier::new(threads);
+    std::thread::scope(|scope| {
+        for _ in 0..threads {
+            scope.spawn(|| {
+                start.wait();
+                for _ in 0..calls {
+                    ask();
+                }
+            });
+        }
+    });
+}
+
+#[test]
+fn pollers_at_once_without_the_shared_standing_run_git_in_the_plane_side_by_side() {
+    // The measurement's own control: the four pollers each reading the standing for itself
+    // overlap in one repo, which is what the shared standing below is measured against.
+    let plane = a_large_plane(fixture_files());
+    let before = git::tally(&plane.root);
+
+    at_once(4, 2, &|| {
+        standing(&plane.root);
+    });
+
+    let after = git::tally(&plane.root);
+    assert!(after.most_at_once > 1, "{after:?}");
+    assert!(
+        after.spawned - before.spawned >= 8 * 5,
+        "{before:?} {after:?}"
+    );
+}
+
+#[test]
+fn pollers_at_once_share_one_standing_and_never_run_git_in_the_plane_two_at_a_time() {
+    let plane = a_large_plane(fixture_files());
+    let one = {
+        let before = git::tally(&plane.root).spawned;
+        standing(&plane.root);
+        git::tally(&plane.root).spawned - before
+    };
+    let before = git::tally(&plane.root);
+
+    at_once(4, 2, &|| {
+        assert_eq!(shared_standing(&plane.root).stage, Stage::Changed);
+    });
+
+    let after = git::tally(&plane.root);
+    assert_eq!(
+        after.most_at_once, 1,
+        "two git processes ran in the plane at once"
+    );
+    assert!(
+        after.spawned - before.spawned <= one,
+        "eight reads cost {} git processes, one costs {one}",
+        after.spawned - before.spawned
+    );
+}
+
+#[test]
+fn a_commit_is_in_the_next_shared_standing_without_anyone_saying_so() {
+    let plane = Fixture::plane();
+    std::fs::write(plane.root.join("README.md"), "two\n").unwrap();
+    assert_eq!(shared_standing(&plane.root).stage, Stage::Changed);
+
+    run(&plane.root, &["commit", "-q", "-am", "two"]);
+
+    assert_ne!(shared_standing(&plane.root).stage, Stage::Changed);
+}
+
+#[test]
+fn an_edit_is_in_the_next_shared_standing_once_the_watcher_says_the_plane_moved() {
+    let plane = Fixture::plane();
+    assert!(shared_standing(&plane.root).changed.is_empty());
+
+    std::fs::write(plane.root.join("README.md"), "two\n").unwrap();
+    touch(&plane.root);
+
+    assert_eq!(
+        shared_standing(&plane.root).changed,
+        vec!["README.md".to_owned()]
+    );
+}
+
+#[test]
+fn auto_saves_fingerprint_of_a_standing_already_read_runs_no_git() {
+    let plane = Fixture::plane();
+    std::fs::write(plane.root.join("README.md"), "two\n").unwrap();
+    let read = standing(&plane.root);
+    let before = git::tally(&plane.root).spawned;
+
+    let seen = fingerprint_of(&plane.root, &read);
+
+    assert_eq!(git::tally(&plane.root).spawned, before);
+    assert!(
+        seen.starts_with(run(&plane.root, &["rev-parse", "HEAD"]).trim()),
+        "{seen}"
+    );
+}
+
+#[test]
+fn a_save_leaves_the_index_carrying_gits_untracked_cache_for_the_reads_after_it() {
+    // `core.untrackedCache` (FD-11): the save's `git add` already writes the index, so it is the
+    // write that adds the cache the read-only status of every later standing then uses.
+    let fixture = Fixture::plane();
+    fixture.with_settings("[plane]\nmode = \"commit\"\n");
+    std::fs::write(fixture.root.join("work.md"), "work").unwrap();
+
+    let (code, said) = fixture.just_save();
+
+    assert_eq!(code, 0, "{said}");
+    let index = std::fs::read(fixture.root.join(".git/index")).unwrap();
+    assert!(
+        index.windows(4).any(|w| w == b"UNTR"),
+        "no untracked cache in the index"
+    );
+}
+
+#[test]
+fn the_untracked_cache_is_asked_for_only_where_the_operators_config_says_nothing() {
+    // A `-c` on the command line beats every config file, so charter passes one only when no
+    // config sets `core.untrackedCache`: an operator's `false` (or `keep`) is theirs.
+    let fixture = Fixture::plane();
+    assert_eq!(
+        git::untracked_cache(&fixture.root),
+        Some(git::UNTRACKED_CACHE)
+    );
+
+    run(&fixture.root, &["config", "core.untrackedCache", "false"]);
+    assert_eq!(git::untracked_cache(&fixture.root), None);
+
+    run(&fixture.root, &["config", "core.untrackedCache", "keep"]);
+    assert_eq!(git::untracked_cache(&fixture.root), None);
+}

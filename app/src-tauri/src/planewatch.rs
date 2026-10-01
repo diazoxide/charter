@@ -138,6 +138,9 @@ impl<W: notify::Watcher + Send + 'static> Watch<W> {
                 }
                 inner.follow(&at);
             }
+            // Before the window hears it, so the reads it makes on `plane-changed` are of the
+            // plane as it is now, not the shared standings from before (FD-11).
+            charter_core::planegit::touch(&at);
             changed(plane.clone());
         };
         let debouncer = new_debouncer_opt(QUIET_FOR, None, tell, RecommendedCache::new(), config)?;
@@ -417,6 +420,43 @@ mod tests {
         std::fs::write(root.join("workspaces/beta/todos/new.md"), "# new\n").expect("a todo");
         told.recv_timeout(PATIENCE)
             .expect("told about a todo in the new workspace");
+    }
+
+    /// `git` in `dir`, through charter's hardened runner, never signing.
+    fn git(dir: &Path, args: &[&str]) {
+        let argv: Vec<&str> = ["-c", "commit.gpgsign=false"]
+            .into_iter()
+            .chain(args.iter().copied())
+            .collect();
+        let done = charter_core::worktree::git::run(dir, &argv, charter_core::worktree::git::READ)
+            .expect("git runs in a test");
+        assert!(done.ok(), "git {args:?}: {done:?}");
+    }
+
+    #[test]
+    fn a_change_the_watch_tells_is_in_the_next_shared_standing() {
+        // FD-11: the window reads the plane again on `plane-changed`, and what it reads is the
+        // standing every poller shares, so the watch makes it current before it tells.
+        let plane = plane_with_todos(&[]);
+        let root = plane.path().canonicalize().expect("canonical");
+        git(&root, &["init", "-q", "-b", "main", "."]);
+        git(&root, &["config", "user.email", "t@example.invalid"]);
+        git(&root, &["config", "user.name", "t"]);
+        git(&root, &["commit", "-q", "--allow-empty", "-m", "one"]);
+        assert!(
+            charter_core::planegit::shared_standing(&root)
+                .changed
+                .is_empty()
+        );
+        let (_watch, told) = watching(&root);
+
+        std::fs::write(root.join("workspaces/alpha/todos/new.md"), "# new\n").expect("a todo");
+        told.recv_timeout(PATIENCE).expect("told about the todo");
+
+        assert_eq!(
+            charter_core::planegit::shared_standing(&root).changed,
+            vec!["workspaces/alpha/todos/new.md".to_owned()]
+        );
     }
 
     #[test]

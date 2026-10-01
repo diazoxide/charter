@@ -20,6 +20,7 @@ fn standing(stage: Stage, changed: &[&str], pushes: bool) -> Standing {
         push_failed: None,
         conflicts: Vec::new(),
         notice: None,
+        head: String::new(),
     }
 }
 

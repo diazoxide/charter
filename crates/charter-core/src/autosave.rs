@@ -84,6 +84,24 @@ impl Quiet {
         )
     }
 
+    /// After [`Quiet::tick`] answered [`Decision::Save`]: whether the tree read again now still
+    /// has the `fingerprint` the quiet period was measured on (FD-11). The standing `tick` was
+    /// given may be shared, and a few seconds behind a new file; when the fresh one differs,
+    /// the quiet period starts again from `now` and nothing is saved.
+    pub fn still(&mut self, now: Instant, fingerprint: &str) -> bool {
+        match &self.seen {
+            Some(seen) if seen.fingerprint == fingerprint => true,
+            _ => {
+                self.seen = Some(Seen {
+                    fingerprint: fingerprint.to_owned(),
+                    since: now,
+                    tried: false,
+                });
+                false
+            }
+        }
+    }
+
     fn tick_when(
         &mut self,
         now: Instant,

@@ -245,12 +245,15 @@ pub fn state_of(tree: &Path) -> Result<TreeState, Unreadable> {
     // and an agent's `git add` in the same clone would fail on it.
     let seen = git::run(
         tree,
-        &[
-            "--no-optional-locks",
-            "status",
-            "--porcelain=v1",
-            "--branch",
-        ],
+        &git::with_untracked_cache(
+            tree,
+            &[
+                "--no-optional-locks",
+                "status",
+                "--porcelain=v1",
+                "--branch",
+            ],
+        ),
         git::READ,
     )
     .map_err(|err| unreadable(err.to_string()))?;

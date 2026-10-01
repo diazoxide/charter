@@ -468,6 +468,9 @@ pub struct Standing {
     /// What a save cannot do here that is not a block — a PR mode on a remote no forge adapter
     /// serves, where a save still commits and goes no further.
     pub notice: Option<String>,
+    /// HEAD's commit as it was read, or empty when there is none: what auto-save's
+    /// [`fingerprint_of`] starts from, so a look asks git for it once.
+    pub head: String,
 }
 
 /// Where the plane at `root`'s unsaved work sits.
@@ -492,6 +495,7 @@ pub fn standing(root: &Path) -> Standing {
             push_failed: None,
             conflicts: Vec::new(),
             notice: None,
+            head: String::new(),
         };
     };
     let here_branch = here.clone();
@@ -635,7 +639,37 @@ pub fn standing(root: &Path) -> Standing {
             _ => conflicts,
         },
         notice,
+        head,
     }
+}
+
+/// The longest a shared plane standing is kept without its git files moving or anyone saying
+/// the plane changed: the backstop for an edit no watcher reported, which is how stale the
+/// title bar could already be between its reads.
+pub const SHARED_FOR: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Every plane's standing, one per plane.
+static PLANES: std::sync::LazyLock<crate::standings::Shared<Standing>> =
+    std::sync::LazyLock::new(|| crate::standings::Shared::new(SHARED_FOR));
+
+/// [`standing`], **shared by every caller in this process** (FD-11, #651): auto-save's look, the
+/// title bar, the Saving tab and the alerts ask this, and git runs once for all of them —
+/// one computation at a time per plane, again only when the plane's git files move
+/// ([`crate::standings::Stamp`]), [`touch`] says it changed, or [`SHARED_FOR`] has passed.
+///
+/// A save's own decisions read [`standing`] directly, as they always did: what is committed is
+/// decided from the tree as it is at that moment, never from a shared answer.
+pub fn shared_standing(root: &Path) -> Standing {
+    PLANES.get(root, || standing(root))
+}
+
+/// Something at or under `dir` changed — a plane its watcher saw move, a plane or a clone a save
+/// or a fetch let go of, a setting written: the next shared standing of every plane and every
+/// clone there ([`shared_standing`], [`crate::reposave::shared_standing`]) reads git again. The
+/// one call for both stores, since a plane's settings are what each of its clones reads too.
+pub fn touch(dir: &Path) {
+    PLANES.touch_within(dir);
+    crate::reposave::touch_within(dir);
 }
 
 /// `git rev-list --count <range>`, or `None` when git cannot count it — a ref that is not there.
@@ -659,10 +693,7 @@ pub fn fingerprint(root: &Path) -> String {
 /// [`fingerprint`], from a [`Standing`] already read — so a look at the plane asks git for its
 /// status once, not twice.
 pub fn fingerprint_of(root: &Path, standing: &Standing) -> String {
-    let head = git::run(root, &["rev-parse", "HEAD"], git::READ)
-        .map(|r| r.line().trim().to_string())
-        .unwrap_or_default();
-    let mut out = format!("{head}\0{:?}", standing.ahead);
+    let mut out = format!("{}\0{:?}", standing.head, standing.ahead);
     for path in &standing.changed {
         let seen = std::fs::symlink_metadata(root.join(path)).ok().map(|meta| {
             let at = meta
@@ -897,13 +928,16 @@ pub(crate) fn changed_paths(root: &Path) -> Vec<String> {
         // `--no-optional-locks`, as `profiles.rs` and `guest.rs` ask: a plain `status`
         // refreshes the index and takes `index.lock`, and the title bar asks this every ten
         // seconds — a save's `git add -A` landing inside that window failed on the lock.
-        &[
-            "--no-optional-locks",
-            "status",
-            "--porcelain=v1",
-            "-z",
-            "--untracked-files=all",
-        ],
+        &git::with_untracked_cache(
+            root,
+            &[
+                "--no-optional-locks",
+                "status",
+                "--porcelain=v1",
+                "-z",
+                "--untracked-files=all",
+            ],
+        ),
         git::READ,
     ) else {
         return Vec::new();
@@ -1556,6 +1590,9 @@ impl Drop for Claim {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&self.0);
+        // Every save and fetch of a plane or a clone holds its claim, so letting go of one is
+        // when what it committed, pushed or fetched is there to be read (FD-11).
+        touch(&self.0);
     }
 }
 
@@ -2065,7 +2102,9 @@ fn commit_push(
     // and stages nothing, and the probe below then answers 0 — because there is no difference
     // between HEAD and an index nothing was written to. Discarded, that made "charter could not
     // stage anything" and "there was nothing to stage" the same value.
-    let added = match git::run_untimed(root, add_cmd) {
+    // The write that adds git's untracked cache to the index, for the read-only status of
+    // every standing after it (FD-11, [`git::UNTRACKED_CACHE`]).
+    let added = match git::run_untimed(root, &git::with_untracked_cache(root, add_cmd)) {
         Ok(run) => run,
         Err(unavailable) => {
             return refuse_unreadable(

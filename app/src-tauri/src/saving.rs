@@ -2,7 +2,8 @@
 //! plane's unsaved work sits, the save journal, and the save button.
 //!
 //! Both are the core's answers, re-shaped for the window and nothing more. The stage is
-//! [`planegit::standing`], read from git and the push record and never from the network; the
+//! [`planegit::shared_standing`] — the one standing auto-save and the alerts read too (FD-11) —
+//! read from git and the push record and never from the network; the
 //! save is [`planegit::save_as`] with [`Trigger::Manual`] — the same function `charter save`
 //! runs, so the button and the command cannot disagree about what a save does.
 
@@ -155,12 +156,15 @@ pub fn choose_mode(root: &Path, mode: &str) -> Result<PlaneSaving, String> {
         &text,
     )
     .map_err(|reasons| reasons.join("\n"))?;
+    // The mode changes what the shared standing says (FD-11): it is read again, not answered
+    // from before the choice.
+    planegit::touch(root);
     Ok(saving_of(root))
 }
 
 /// [`plane_saving`], without a runtime.
 pub fn saving_of(root: &Path) -> PlaneSaving {
-    let standing = planegit::standing(root);
+    let standing = planegit::shared_standing(root);
     let plane = planesave::Settings::read(root).plane;
     let mode_from = if plane.from_share {
         "[memory] share".to_owned()
@@ -309,7 +313,7 @@ pub fn repos_saving(root: &Path, workspace: &str) -> Result<Vec<RepoSaving>, Str
         .repos
         .iter()
         .map(|repo| {
-            let standing = reposave::standing(root, workspace, repo);
+            let standing = reposave::shared_standing(root, workspace, repo);
             let opens_a_pr = matches!(
                 standing.mode,
                 planesave::Mode::Pr | planesave::Mode::PrMerge
@@ -516,6 +520,30 @@ mod tests {
         let text = std::fs::read_to_string(dir.path().join("charter.toml")).unwrap();
         assert!(text.starts_with("# the team's settings\n"), "{text}");
         assert!(text.contains("[plane]\nmode = \"commit\"\n"), "{text}");
+    }
+
+    #[test]
+    fn the_standing_answered_after_choosing_a_mode_is_the_new_modes() {
+        // FD-11: the standing is shared, and choosing writes `charter.toml` — so what is
+        // answered is the plane with that change in it, not the "committed" read before.
+        let dir = plane("");
+        git(
+            dir.path(),
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/acme/plane.git",
+            ],
+        );
+        assert_eq!(saving_of(dir.path()).stage, "committed");
+
+        let got = choose_mode(dir.path(), "commit").expect("chosen");
+
+        assert_eq!(
+            (got.stage.as_str(), got.changed.as_slice()),
+            ("changed", ["charter.toml".to_owned()].as_slice())
+        );
     }
 
     #[test]

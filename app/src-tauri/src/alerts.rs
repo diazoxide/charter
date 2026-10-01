@@ -87,7 +87,7 @@ const BLOCKED_FOR: f64 = 600.0;
 /// core's alerts, and the Saving view is where this one is resolved.
 fn save_blocked(root: &Path, now: f64) -> Option<AlertRow> {
     use charter_core::planegit;
-    let standing = planegit::standing(root);
+    let standing = planegit::shared_standing(root);
     let why = standing.blocked?;
     // A secret is said at once: that save never goes through without somebody.
     let secret = why == planegit::SECRET_REFUSED;

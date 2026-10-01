@@ -105,6 +105,9 @@ on:
       - Cargo.lock
       - rust-toolchain.toml
       - .nvmrc
+      # The shared standing job's own tests (FD-11), which the `tests.rs` line above leaves
+      # out: last, so it puts back the one file the job runs.
+      - crates/charter-core/src/planegit/tests.rs
       # NOT `crates/charter-cli`. The job builds it, because other specs in the same run
       # start it, but no pane in this spec does: `writeShell` starts the fake harness with
       # no `--hook`, and the fake harness runs no `statusLine`. A charter-cli that does not
@@ -198,3 +201,23 @@ jobs:
           name: stress-logs-${{ matrix.os }}
           path: app/logs
           if-no-files-found: warn
+
+  standing:
+    # FD-11 (#651): the shared standing at the ticket's monorepo size. A plane of 300,000
+    # committed files, where one standing takes seconds — long enough that pollers asking for
+    # themselves overlap, which the control test shows they do, and the shared standing's test
+    # shows they no longer do: one git process in the repo at a time, and eight reads costing
+    # no more git than one. The same two tests run at 2,000 files in every `cargo test`.
+    name: shared standing at 300,000 files
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master, 2026-09-12
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Pollers at once on a 300,000-file plane, with and without the shared standing
+        run: cargo test -p charter-core --lib -- planegit::tests::pollers_at_once --test-threads 1 --nocapture
+        env:
+          CHARTER_STANDING_FILES: "300000"
