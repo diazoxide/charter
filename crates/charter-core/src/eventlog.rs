@@ -181,8 +181,12 @@ impl ArgsKey {
             Err(why) => return Err(why),
         }
         crate::secrets::make_private_dir(dir)?;
-        let mut key = vec![0u8; KEY_BYTES];
-        getrandom::fill(&mut key).map_err(io::Error::other)?;
+        // Drawn word by word from the OS rather than filled into a zeroed buffer, so no
+        // constant ever stands where the key goes, even before it is filled.
+        let mut key = Vec::with_capacity(KEY_BYTES);
+        while key.len() < KEY_BYTES {
+            key.extend(getrandom::u64().map_err(io::Error::other)?.to_le_bytes());
+        }
         crate::rewrite::replace(dir, &path, &key, crate::rewrite::Mode::Secret)?;
         Ok(ArgsKey(key))
     }
