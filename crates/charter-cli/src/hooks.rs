@@ -12,6 +12,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use charter_core::hookwire::Decision;
 use charter_core::toolhooks::{self, Answer, Hook};
 
 /// The plane as a hook sees it — `config.ROOT` and `config.HAS_CONTROL_PLANE`.
@@ -68,9 +69,36 @@ pub fn with_hook<T>(payload: &str, now: Option<&str>, handler: impl FnOnce(&Hook
     handler(&hook)
 }
 
-/// The tool hook `name`, if it is one this file answers, run and printed.
-pub fn tool(name: &str, now: Option<&str>) -> Option<ExitCode> {
-    let handler: fn(&Hook) -> Answer = match name {
+/// What a tool hook answered: the exit status the harness reads, and what the host's event
+/// log records of it (FD-9).
+pub struct Answered {
+    pub code: ExitCode,
+    pub decision: Decision,
+    /// The guard rule that refused, for a denial.
+    pub rule: Option<String>,
+}
+
+/// The tool hook `name` over `payload`, if it is one this file answers, run and printed.
+pub fn tool(name: &str, payload: &str, now: Option<&str>) -> Option<Answered> {
+    let handler = handler(name)?;
+    let answer = with_hook(payload, now, handler);
+    Some(Answered {
+        code: answered(&answer),
+        decision: decision_of(&answer),
+        rule: match &answer {
+            Answer::Deny(verdict) => Some(verdict.reason.clone()),
+            Answer::Nothing | Answer::Say(_) => None,
+        },
+    })
+}
+
+/// Whether `name` is a tool hook this file answers.
+pub fn answers(name: &str) -> bool {
+    handler(name).is_some()
+}
+
+fn handler(name: &str) -> Option<fn(&Hook) -> Answer> {
+    Some(match name {
         "pretooluse-read" => toolhooks::pretooluse_read,
         "pretooluse-edit" => toolhooks::pretooluse_edit,
         "pretooluse-dispatch" => toolhooks::pretooluse_dispatch,
@@ -79,9 +107,28 @@ pub fn tool(name: &str, now: Option<&str>) -> Option<ExitCode> {
         "posttooluse-dispatch" => toolhooks::posttooluse_dispatch,
         "posttooluse-message" => toolhooks::posttooluse_message,
         _ => return None,
-    };
-    let answer = with_hook(&crate::payload(), now, handler);
-    Some(answered(&answer))
+    })
+}
+
+/// The decision an answer gave: a denial is one; a line said is whatever permission it names,
+/// read from the JSON charter itself printed and never from a harness's output.
+pub fn decision_of(answer: &Answer) -> Decision {
+    match answer {
+        Answer::Nothing => Decision::None,
+        Answer::Deny(_) => Decision::Deny,
+        Answer::Say(line) => decision_said(line),
+    }
+}
+
+/// The permission a line charter prints names, if any.
+pub fn decision_said(line: &str) -> Decision {
+    let said: serde_json::Value = serde_json::from_str(line).unwrap_or_default();
+    match said["hookSpecificOutput"]["permissionDecision"].as_str() {
+        Some("allow") => Decision::Allow,
+        Some("ask") => Decision::Ask,
+        Some("deny") => Decision::Deny,
+        _ => Decision::None,
+    }
 }
 
 /// Print an [`Answer`]: nothing, a line, or a denial with its exit-2 fallback.

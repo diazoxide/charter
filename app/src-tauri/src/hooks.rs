@@ -139,6 +139,10 @@ pub struct Hooks {
     /// the fact, for `answering`'s reason. The chats' record listens, so the conversation a
     /// relaunch resumes is the one the chat is in now (Q10).
     following: Arc<Mutex<Option<Following>>>,
+    /// The host's event log, once the app has one (FD-9) — a slot filled after the fact, so
+    /// a plane is opened the same way with or without it. Every line the channel hears from
+    /// a chat's hooks is recorded there, whether or not it moved the board.
+    events: Arc<Mutex<Option<Events>>>,
     /// Told EVERY report on this socket once the board has had it, whether it moved the board or
     /// not — a slot filled after the fact, for `answering`'s reason. A smart close queued for a
     /// turn's end waits on it (`crate::smartclose`): the `Stop` that ends a turn in which the
@@ -161,6 +165,9 @@ pub type Following = Arc<dyn Fn(u32, &str) + Send + Sync + 'static>;
 
 /// What answers an ask, told which connection it came on.
 pub type Answering = Arc<dyn Fn(u64, Ask) -> Answer + Send + Sync + 'static>;
+
+/// The host's event log, shared by every plane this process holds: one writer per device.
+pub type Events = Arc<Mutex<charter_core::eventlog::Recorder>>;
 
 /// Where this app listens, and where containment of that path begins.
 ///
@@ -277,6 +284,7 @@ impl Hooks {
             following: Arc::new(Mutex::new(None)),
             all_reports: Arc::new(Mutex::new(None)),
             saved: Arc::new(Mutex::new(None)),
+            events: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -300,6 +308,7 @@ impl Hooks {
         let following: Arc<Mutex<Option<Following>>> = Arc::new(Mutex::new(None));
         let all_reports: Arc<Mutex<Option<Heard>>> = Arc::new(Mutex::new(None));
         let saved: Arc<Mutex<Option<SavedHeard>>> = Arc::new(Mutex::new(None));
+        let events: Arc<Mutex<Option<Events>>> = Arc::new(Mutex::new(None));
         let reading = listener.hear(Hearing {
             each: {
                 let board = Arc::clone(&board);
@@ -308,8 +317,12 @@ impl Hooks {
                 let following = Arc::clone(&following);
                 let all_reports = Arc::clone(&all_reports);
                 let moved = Arc::clone(&moved);
+                let events = Arc::clone(&events);
                 Box::new(move |report| {
                     let applied = apply(&board, &plane, &report);
+                    record(&events, |log| {
+                        log.report(plane.root(), &report, applied.followed())
+                    });
                     // Before the window is told, so the record already names the conversation
                     // by the time anything the move prompts could ask for it. Whether or not a
                     // reader sees a difference: after `/clear` the chat may be in the state it
@@ -399,6 +412,15 @@ impl Hooks {
                     }
                 })
             },
+            tool: {
+                let events = Arc::clone(&events);
+                let plane = plane.clone();
+                Box::new(move |call| {
+                    record(&events, |log| {
+                        log.tool(plane.root(), &call, std::time::Instant::now())
+                    });
+                })
+            },
         });
         Ok(Self {
             plane,
@@ -411,7 +433,13 @@ impl Hooks {
             following,
             all_reports,
             saved,
+            events,
         })
+    }
+
+    /// Records every hook call this plane's channel hears into `events` from now on (FD-9).
+    pub fn record_into(&self, events: Events) {
+        *self.events.lock().unwrap_or_else(PoisonError::into_inner) = Some(events);
     }
 
     /// Stops listening and releases the socket. The plane on disk is untouched.
@@ -612,6 +640,21 @@ struct Applied {
     /// a Codex or opencode chat names, or the one a Claude Code chat's own process moved to on
     /// `/clear` (C6). Nothing for a report that left the chat where it was.
     followed: Option<String>,
+    /// The conversation the chat was in before the report, where it was in one: with
+    /// `followed`, what tells a harness naming its conversation from `/clear` (ADR 0066).
+    was: Option<String>,
+}
+
+impl Applied {
+    /// What the board did with the chat's conversation, as the event log reads a new run.
+    fn followed(&self) -> charter_core::eventlog::Followed<'_> {
+        use charter_core::eventlog::Followed;
+        match (&self.followed, &self.was) {
+            (None, _) => Followed::No,
+            (Some(_), None) => Followed::FirstNamed,
+            (Some(_), Some(was)) => Followed::From(was),
+        }
+    }
 }
 
 /// Applies one report, answering with what a reader would now see differently and which
@@ -636,7 +679,33 @@ fn apply(board: &Mutex<Board>, plane: &PlaneId, report: &Report) -> Applied {
     let followed = now
         .filter(|now| was.as_deref() != Some(*now))
         .map(str::to_owned);
-    Applied { moved, followed }
+    Applied {
+        moved,
+        followed,
+        was,
+    }
+}
+
+/// Writes one event into the host's log, when there is one. A write that fails is said in the
+/// app's log and lets the hook go: the harness was answered already, and a chat is never held
+/// up by a disk (ADR 0075 §7 keeps that for the audit, which is written from this log).
+fn record(
+    events: &Mutex<Option<Events>>,
+    write: impl FnOnce(
+        &mut charter_core::eventlog::Recorder,
+    ) -> std::io::Result<charter_core::eventlog::Event>,
+) {
+    let held = events
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    let Some(log) = held else {
+        return;
+    };
+    let mut log = log.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Err(why) = write(&mut log) {
+        tracing::warn!("charter: a hook call was not written to the event log ({why})");
+    }
 }
 
 /// The board, whether or not a thread panicked while holding it.
@@ -851,6 +920,78 @@ mod tests {
                 harness: "codex".to_owned(),
                 cwd: Some("/work/alpha".to_owned()),
             })
+        );
+    }
+
+    #[test]
+    fn every_hook_call_the_channel_hears_is_one_event_in_the_hosts_log() {
+        use charter_core::eventlog::{self, ArgsKey, Log, Recorder};
+        let dir = tempfile::tempdir().expect("a directory");
+        let at = Where {
+            within: dir.path().to_path_buf(),
+            socket: dir.path().join("app").join("hooks.sock"),
+        };
+        let plane: PlaneId = serde_json::from_str("\"/plane\"").expect("a plane id");
+        let hooks =
+            Hooks::listening_on(plane, &at, Arc::new(|_| {}), Arc::new(|_| {})).expect("listening");
+        let logs = dir.path().join("events");
+        hooks.record_into(Arc::new(Mutex::new(Recorder::new(
+            Log::open(&logs, "DEVICE").expect("a log"),
+            ArgsKey::open(&logs).expect("a key"),
+        ))));
+        hooks.board().opened(3, Some(Harness::ClaudeCode), None);
+        let socket = hooks.socket().expect("a socket");
+        let token = hooks.token_for(3);
+
+        charter_core::hookwire::send(
+            socket,
+            Some(&token),
+            &Report {
+                chat: 3,
+                event: charter_core::state::Event::UserPromptSubmit,
+                conversation: Default::default(),
+                pid: None,
+                detail: Default::default(),
+            },
+        )
+        .expect("sent");
+        // Each line is its own connection; the second is sent once the first is in the log.
+        let logged = |at_least: usize| {
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                let kinds: Vec<String> = eventlog::read(&logs)
+                    .expect("the log reads")
+                    .into_iter()
+                    .map(|event| event.kind)
+                    .collect();
+                if kinds.len() >= at_least || std::time::Instant::now() > until {
+                    break kinds;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        };
+        assert_eq!(logged(2).len(), 2, "the report is in the log");
+        charter_core::hookwire::tell_tool(
+            socket,
+            Some(&token),
+            &charter_core::hookwire::ToolCall {
+                chat: 3,
+                tool_hook: "pretooluse".to_owned(),
+                tool: Some("Bash".to_owned()),
+                call: Some("toolu_1".to_owned()),
+                args: Some(eventlog::args_hash(&serde_json::json!({"command": "ls"}))),
+                decision: charter_core::hookwire::Decision::None,
+                rule: None,
+                hook_ms: 1,
+            },
+        )
+        .expect("told");
+
+        let kinds = logged(3);
+        assert_eq!(
+            kinds,
+            vec!["run.started", "hook.userpromptsubmit", "hook.pretooluse"],
+            "one event per hook call, after the run it is under"
         );
     }
 

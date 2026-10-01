@@ -57,6 +57,8 @@ const PATIENCE = 90_000;
  * throwaway planes into the operator's `~/.config/charter`.
  */
 const CONFIG_HOME = mkdtempSync(join(tmpdir(), "charter-relaunch-config-"));
+// The host's event log (FD-9) goes here, not into the operator's own data home.
+const DATA_HOME = mkdtempSync(join(tmpdir(), "charter-relaunch-data-"));
 
 if (!existsSync(APP)) {
   console.error(
@@ -207,6 +209,7 @@ async function theAppRuns(plane, done, answer) {
       CHARTER_ROOT: plane,
       CHARTER_PLANE_FENCE: tmpdir(),
       CHARTER_CONFIG_HOME: CONFIG_HOME,
+      CHARTER_DATA_HOME: DATA_HOME,
       TAURI_WEBDRIVER_PORT: String(port),
     },
   });

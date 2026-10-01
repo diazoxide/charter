@@ -49,6 +49,7 @@ impl Chat {
             noticed: Box::new(|_| {}),
             saved: Box::new(|_| {}),
             refused: Box::new(move |refused| tx.lock().unwrap().send(refused).unwrap()),
+            tool: Box::new(|_| {}),
         });
         let env = hooks.arm(vec![
             (SOCKET_ENV.into(), socket.clone().into_os_string()),

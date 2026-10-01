@@ -4386,15 +4386,15 @@ platform that is not unix none of it is written (ADR 0031). The Tauri directorie
 identifier `dev.charter.app`. The keyring rows are the operating system's store (ADR 0047).
 `<data>` is charter's data home (ADR 0075, amending ADR 0069): `$CHARTER_DATA_HOME`, else
 `$XDG_DATA_HOME/charter`, else the OS data directory's `charter/` (`~/Library/Application
-Support/charter` on macOS, `~/.local/share/charter` on Linux). Its rows are **decided, not yet
-written**: AU-3 writes the audit's, RR-16 a runner's bare repos (ADR 0078), KN-32 the
-search index's (ADR 0079), RC-7 the reviews (ADR 0084) and OB-2 the telemetry store (ADR 0083),
-and no code does yet. Their writer refuses a `<data>` under a plane
-or inside any git work tree.
+Support/charter` on macOS, `~/.local/share/charter` on Linux). The host's event log is written
+there (FD-9, `charter_core::datahome`). The other rows are **decided, not yet written**: AU-3
+writes the audit's, RR-16 a runner's bare repos (ADR 0078), KN-32 the search index's
+(ADR 0079), RC-7 the reviews (ADR 0084) and OB-2 the telemetry store (ADR 0083). Every writer
+refuses a `<data>` under a plane or inside any git work tree.
 
 | Path | Tier | What it holds | Written by |
 |---|---|---|---|
-| `<config>/machine.json` | Machine, device-bound | the planes this machine opened (absolute paths), the operator's approval of each with what it would do when opened, the windows open at the last quit, pinned planes and workspaces, and the update channel. Pins and the channel are preferences, but they are keyed by absolute path and share one file with the approvals, so the file is device-bound as a whole | `machine::update`, from the app's opener and `charter update --channel` |
+| `<config>/machine.json` | Machine, device-bound | the planes this machine opened (absolute paths), the operator's approval of each with what it would do when opened, the windows open at the last quit, pinned planes and workspaces, the update channel, and this device's id with when it was minted (`device`, ADR 0066: a ULID minted at the first launch that asks, and the key events and records name the device by). Pins and the channel are preferences, but they are keyed by absolute path and share one file with the approvals, so the file is device-bound as a whole | `machine::update`, from the app's opener and `charter update --channel` |
 | `<config>/machine.json.lock` | Machine, device-bound, transient | the `flock` that makes a read-modify-write of `machine.json` one act | `machine::update` |
 | `<config>/layout.json` | Machine, syncable | the window's arrangement of regions | `windowprefs::write_layout`, `adopt_layout` (which moves the legacy `charter.layout` localStorage key into it once) |
 | `<config>/theme.json` | Machine, syncable | the operator's own theme; charter only reads it | the operator, by hand |
@@ -4416,6 +4416,8 @@ or inside any git work tree.
 | keyring `charter/@identity/<16 hex>`, account = the variable's name | Keyring | a vault provider's identity, such as a 1Password service-account token | `secrets::identity` |
 | `<config>/forge-accounts.json` | Machine, device-bound | **decided, not yet written** (ADR 0077). Each forge account: its id (a ULID), kind, host, login, how it was signed in (`device`, `pkce`, `pat` or `import`), the client id of a registration made on a host charter has none compiled in for, whether it is signed in and the scopes last read; and each repo's or owner's binding to one account. Nothing secret. Device-bound because each entry points into this machine's keyring. Backed up by FR-10 and restored only onto a machine that replaces the old one (ADR 0069 §5), with every account signed out, since no token is backed up | the process holding the human scope: the window, then `charterd` on `local-ui` (FW-3a, FW-3b) |
 | keyring `charter/@forge/<host>/<id>`, `<id>` = the forge account's id | Keyring | **decided, not yet written** (ADR 0070, ADR 0077). A forge account's token: the access token, and the refresh token and expiry where the flow gives them. The human's; only a `local-ui` caller reads or refreshes it, and a chat's sandbox denies it. The `@` keeps it apart from any vault's items | FW-3a, FW-3b |
+| `<data>/events/<device>/events.jsonl` | Machine, device-bound | the host's event log (FD-9, ADR 0066, ADR 0068): one JSON line per event in ADR 0066's envelope (`v`, `device_id`, `seq`, `ulid`, `chat`, `run`, `parent_run`, `kind`, `body`), `seq` from 1 and never reused, one writer per device holding a lock on the file. Kinds written today: `run.started` (body `cause`: `start` or `clear`), `hook.<word>` for every state hook (`sessionstart` adds `started`), and `hook.<word>` for every tool hook (`tool`, `call`, `args`, the HMAC of the arguments' SHA-256 and never the arguments, `decision` of `allow`, `ask`, `deny` or `none`, `rule` for a denial, `hook_ms`, and `tool_ms` on a post hook whose pre hook was heard). Chat and run ids are ULIDs the host gives a chat it has not seen in this launch. Never committed and never sent. The audit (ADR 0075) and OTel logs (ADR 0083) are written from it. No retention yet (FD-24). Backed up by FR-10 (ADR 0069 row 63) | `charter_core::eventlog::Recorder`, held by the app, its only writer |
+| `<data>/events/<device>/args.key` | Machine, device-bound | 32 random bytes, `0600`, that key the event log's args digests, so a digest of `ls -la` cannot be matched by anyone who lacks the key and stays comparable from one launch to the next. Backed up with the log, which it is useless without (AU-19 may move it into the keyring) | `eventlog::ArgsKey`, made on first use |
 | `<data>/audit/<device>/active.jsonl` | Machine, device-bound | **decided, not yet written** (ADR 0075). The audit segment being written: one JSON line per audit entry, metadata only, people as keyed pseudonyms. Chats are denied it. Backed up by FR-10 | `charterd`, its only writer (AU-3) |
 | `<data>/audit/<device>/<first>-<last>.jsonl.zst` | Machine, device-bound | **decided, not yet written** (ADR 0075). A sealed audit segment, zstd, named by its first and last entry numbers; pruned only whole, oldest first, and only once a checkpoint covers it. Backed up by FR-10 | `charterd` (AU-3) |
 | `<data>/audit/<device>/checkpoints/` | Machine, device-bound | **decided, not yet written** (ADR 0075). The audit chain's signed checkpoints. Backed up by FR-10 | `charterd` (AU-7) |
@@ -4454,7 +4456,7 @@ or inside any git work tree.
 | `CLAUDE_PLUGIN_ROOT` | Decides `guard-seen.json`'s `source` field (`plugin` vs `settings`) | `charter/guardseen.py:55` |
 | `CLAUDE_PID` | Adopting a harness pid into `frame/<chat>/harness.pid` | `charter/hooks.py:6084` |
 | `CHARTER_CONFIG_HOME` / `XDG_CONFIG_HOME` | Move `reporting-consent` | `charter/report.py:462` |
-| `CHARTER_DATA_HOME` / `XDG_DATA_HOME` | **Decided, not yet written** (ADR 0075). Move `<data>`, charter's data home, and the audit in it. A value under a plane or inside a git work tree is refused | ADR 0075 |
+| `CHARTER_DATA_HOME` / `XDG_DATA_HOME` | Move `<data>`, charter's data home: the event log in it today (FD-9), and the audit once it is written (ADR 0075). A value under a plane or inside a git work tree is refused | ADR 0075, `crates/charter-core/src/datahome.rs` |
 | `EDM_HOME` / `EDM_WORKSPACE` / `EDM_PERSONA` | Legacy names, warned about only | `charter/legacyenv.py:39` |
 
 ---

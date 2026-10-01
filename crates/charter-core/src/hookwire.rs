@@ -601,6 +601,8 @@ enum Line {
     Saved(SessionSaved),
     /// After every other kind: it requires `commit_refused`, which none of them carries.
     Refused(CommitRefused),
+    /// After every other kind: it requires `tool_hook`, which none of them carries.
+    Tool(ToolCall),
 }
 
 impl Line {
@@ -614,6 +616,7 @@ impl Line {
             Self::ByHand(notice) => notice.chat,
             Self::Saved(saved) => saved.chat,
             Self::Refused(refused) => refused.chat,
+            Self::Tool(call) => call.chat,
         }
     }
 }
@@ -692,6 +695,69 @@ pub struct CommitRefused {
 /// What hears a [`CommitRefused`].
 pub type Refused = Box<dyn Fn(CommitRefused) + Send + Sync + 'static>;
 
+/// A tool hook ran: what the host's event log records of it (FD-9, #649).
+///
+/// **Neither a report nor an ask, and it moves no chat.** Every tool hook `charter hook`
+/// answers sends one, after it has answered, so the host has one event per hook call. It never
+/// carries the tool's arguments: `args` is their SHA-256 ([`crate::eventlog::args_hash`]), which
+/// the host keys again before anything is written. A line that cannot be sent changes nothing
+/// about the answer the harness was given.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ToolCall {
+    /// The app's number for the chat the hook ran in, from [`CHAT_ENV`].
+    pub chat: u32,
+    /// The hook's word: `pretooluse`, `pretooluse-read`, `posttooluse`, ….
+    pub tool_hook: String,
+    /// The tool, by the harness's name for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+    /// The harness's id for this one call, which pairs its pre hook with its post hook.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub call: Option<String>,
+    /// SHA-256 of the arguments, in hex. Never the arguments.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<String>,
+    /// What charter's hook answered.
+    #[serde(default)]
+    pub decision: Decision,
+    /// The guard rule that refused, for a `deny`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule: Option<String>,
+    /// How long charter's hook took, in milliseconds.
+    #[serde(default)]
+    pub hook_ms: u64,
+}
+
+/// What a tool hook answered the harness.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Decision {
+    /// It allowed the call.
+    Allow,
+    /// It asked the operator.
+    Ask,
+    /// It refused the call.
+    Deny,
+    /// It said nothing either way, so the harness decides as it would have.
+    #[default]
+    None,
+}
+
+impl Decision {
+    /// The word an event records.
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Allow => "allow",
+            Self::Ask => "ask",
+            Self::Deny => "deny",
+            Self::None => "none",
+        }
+    }
+}
+
+/// What hears a [`ToolCall`].
+pub type Tooled = Box<dyn Fn(ToolCall) + Send + Sync + 'static>;
+
 /// Who hears each kind of line on the hook channel ([`Listener::hear`]): one field per kind, so
 /// a kind added later is a field every caller is made to answer.
 pub struct Hearing {
@@ -705,6 +771,8 @@ pub struct Hearing {
     pub saved: Saved,
     /// Every [`CommitRefused`].
     pub refused: Refused,
+    /// Every [`ToolCall`].
+    pub tool: Tooled,
 }
 
 /// Sends one report to the socket at `path`. Answers whether the app took it.
@@ -759,6 +827,17 @@ pub fn tell_refused(
     refused: &CommitRefused,
 ) -> io::Result<()> {
     one_line_with_a_deadline(path, token, refused)
+}
+
+/// Tells the app at `path` a tool hook ran. [`tell`]'s shape and deadline: the hook has
+/// already answered the harness, and nothing this does can change that answer.
+#[cfg(unix)]
+pub fn tell_tool(
+    path: &std::path::Path,
+    token: Option<&ChatToken>,
+    call: &ToolCall,
+) -> io::Result<()> {
+    one_line_with_a_deadline(path, token, call)
 }
 
 /// One connection, one line, closed, and at most [`A_NOTICE_TAKES_AT_MOST`] spent writing it.
@@ -977,6 +1056,7 @@ impl Listener {
             noticed,
             saved,
             refused: Box::new(|_| {}),
+            tool: Box::new(|_| {}),
         })
     }
 
@@ -1173,6 +1253,7 @@ fn serve(
             Line::ByHand(notice) => (hearing.noticed)(notice),
             Line::Saved(record) => (hearing.saved)(record),
             Line::Refused(refused) => (hearing.refused)(refused),
+            Line::Tool(call) => (hearing.tool)(call),
         }
     }
 }
@@ -2560,6 +2641,57 @@ mod tests {
     }
 
     #[test]
+    fn a_tool_call_is_its_own_line_and_is_handed_to_the_app_with_its_chats_token() {
+        let call = ToolCall {
+            chat: 4,
+            tool_hook: "pretooluse".to_owned(),
+            tool: Some("Bash".to_owned()),
+            call: Some("toolu_01".to_owned()),
+            args: Some("ab".repeat(32)),
+            decision: Decision::Deny,
+            rule: Some("no-force-push".to_owned()),
+            hook_ms: 2,
+        };
+        let line = serde_json::to_string(&call).unwrap();
+        assert!(
+            matches!(serde_json::from_str::<Line>(&line), Ok(Line::Tool(_))),
+            "{line}"
+        );
+        for other in [
+            serde_json::to_string(&saved()).unwrap(),
+            r#"{"chat":4,"event":"stop"}"#.to_owned(),
+        ] {
+            assert!(
+                !matches!(serde_json::from_str::<Line>(&other), Ok(Line::Tool(_))),
+                "no older line reads as a tool call: {other}"
+            );
+        }
+
+        let dir = tempfile::tempdir().expect("a directory");
+        let path = dir.path().join("hooks.sock");
+        let listener = Listener::bind(dir.path(), &path).expect("a socket");
+        let token = listener.tokens().issue(4).expect("a token");
+        let (tx, rx) = mpsc::channel();
+        let tx = std::sync::Mutex::new(tx);
+        let _reading = listener.hear(Hearing {
+            each: Box::new(|_| panic!("no report was sent")),
+            answer: Box::new(|_, _| panic!("no ask was sent")),
+            noticed: Box::new(|_| panic!("no harness was started by hand")),
+            saved: Box::new(|_| panic!("no record was saved")),
+            refused: Box::new(|_| panic!("no commit was refused")),
+            tool: Box::new(move |call| tx.lock().unwrap().send(call).unwrap()),
+        });
+        tell_tool(&path, None, &call).expect("the line is written");
+        tell_tool(&path, Some(&token), &call).expect("the line is written");
+        assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(5)), Ok(call));
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_millis(200))
+                .is_err(),
+            "the line without the chat's token was dropped"
+        );
+    }
+
+    #[test]
     fn a_refused_commit_is_its_own_line_and_is_handed_to_the_app_with_its_chats_token() {
         let refused = CommitRefused {
             chat: 4,
@@ -2588,6 +2720,7 @@ mod tests {
             noticed: Box::new(|_| panic!("no harness was started by hand")),
             saved: Box::new(|_| panic!("no record was saved")),
             refused: Box::new(move |refused| tx.lock().unwrap().send(refused).unwrap()),
+            tool: Box::new(|_| panic!("no tool hook ran")),
         });
         // Without the token it is dropped, as every line is.
         tell_refused(&path, None, &refused).expect("the line is written");

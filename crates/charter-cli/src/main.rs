@@ -1256,6 +1256,58 @@ fn payload() -> String {
     rx.recv_timeout(PAYLOAD_DEADLINE).unwrap_or_default()
 }
 
+/// One [`hookwire::ToolCall`] to the host, when a host is listening: the tool, the hash of its
+/// arguments, the decision and how long the hook took. Never the arguments themselves. A host
+/// that has gone is not the harness's business, and is said only on stderr, as a report that
+/// did not arrive is.
+#[cfg(unix)]
+fn tell_the_host_about_the_tool_call(
+    word: &str,
+    payload: &str,
+    answered: &hooks::Answered,
+    took: std::time::Duration,
+) {
+    let Some(socket) = std::env::var_os(SOCKET_ENV) else {
+        return;
+    };
+    let Some(chat) = std::env::var(hookwire::CHAT_ENV)
+        .ok()
+        .and_then(|chat| chat.parse().ok())
+    else {
+        return;
+    };
+    let data: serde_json::Value = serde_json::from_str(payload).unwrap_or_default();
+    let text = |field: &str| data[field].as_str().map(str::to_owned);
+    let call = hookwire::ToolCall {
+        chat,
+        tool_hook: word.to_owned(),
+        tool: text("tool_name"),
+        call: text("tool_use_id"),
+        args: data
+            .get("tool_input")
+            .map(charter_core::eventlog::args_hash),
+        decision: answered.decision,
+        rule: answered.rule.clone(),
+        hook_ms: u64::try_from(took.as_millis()).unwrap_or(u64::MAX),
+    };
+    if let Err(why) = hookwire::tell_tool(
+        std::path::Path::new(&socket),
+        hookwire::ChatToken::from_env().as_ref(),
+        &call,
+    ) {
+        eprintln!("charter: the app did not take this {word} ({why})");
+    }
+}
+
+#[cfg(not(unix))]
+fn tell_the_host_about_the_tool_call(
+    _word: &str,
+    _payload: &str,
+    _answered: &hooks::Answered,
+    _took: std::time::Duration,
+) {
+}
+
 /// `charter hook <name>` — always succeeds, whatever went wrong.
 ///
 /// **Never exit 2, except where the whole point is to.** A harness reads 2 as "block": on
@@ -1269,11 +1321,21 @@ fn hook(name: &str, now: Option<&str>) -> ExitCode {
     // FIRST, in front of `Event::parse`, because none of these is one of the app's reporting
     // events: a tool call carries no chat state worth a `Report`, and a guard that also spoke
     // on the app's socket would be two jobs on one exit status.
-    if name == GUARDED_TOOL_HOOK {
-        return guard::pretooluse(&payload(), now);
-    }
-    if let Some(answered) = hooks::tool(name, now) {
-        return answered;
+    //
+    // **The host still hears every tool call** (FD-9): after the answer is printed, one line on
+    // the hook channel says what was answered, so its event log has one event per hook call.
+    // It is a separate act on a separate channel, and nothing it does can change the exit
+    // status or the line the harness has already been given.
+    if name == GUARDED_TOOL_HOOK || hooks::answers(name) {
+        let began = std::time::Instant::now();
+        let text = payload();
+        let answered = if name == GUARDED_TOOL_HOOK {
+            guard::pretooluse(&text, now)
+        } else {
+            hooks::tool(name, &text, now).expect("a word `hooks::answers` named")
+        };
+        tell_the_host_about_the_tool_call(name, &text, &answered, began.elapsed());
+        return answered.code;
     }
     if charter_core::hookreg::NO_OPS.contains(&name) {
         return ExitCode::SUCCESS;

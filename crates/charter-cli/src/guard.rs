@@ -68,7 +68,7 @@ struct Found {
 /// is deliberate and is not a fail-open — a guard with no command to judge has nothing to
 /// refuse, and refusing anyway would block every tool call on a harness whose payload charter
 /// does not understand.
-pub fn pretooluse(payload: &str, now: Option<&str>) -> ExitCode {
+pub fn pretooluse(payload: &str, now: Option<&str>) -> crate::hooks::Answered {
     // Bookkeeping first, as the Python does: a refusal below still means the session was here.
     crate::hooks::with_hook(
         payload,
@@ -125,16 +125,26 @@ pub fn pretooluse(payload: &str, now: Option<&str>) -> ExitCode {
         },
     };
     if let Some(verdict) = toolgate::verdict(&call, plane.as_ref()) {
-        return deny(&verdict);
+        return crate::hooks::Answered {
+            code: deny(&verdict),
+            decision: charter_core::hookwire::Decision::Deny,
+            rule: Some(verdict.reason.clone()),
+        };
     }
     // Nothing refused, so the persona tool gate is asked. Its answer is an allow or nothing;
     // one it could not print is simply the ordinary prompt.
+    let mut decision = charter_core::hookwire::Decision::None;
     if let Some(allow) =
         crate::hooks::with_hook(payload, now, charter_core::toolhooks::persona_allow)
     {
         crate::hooks::say(&allow);
+        decision = crate::hooks::decision_said(&allow);
     }
-    ExitCode::SUCCESS
+    crate::hooks::Answered {
+        code: ExitCode::SUCCESS,
+        decision,
+        rule: None,
+    }
 }
 
 /// From here on, a panic anywhere in this process is a refusal: exit 2, one line on stderr.

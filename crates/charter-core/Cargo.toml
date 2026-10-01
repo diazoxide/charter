@@ -85,6 +85,9 @@ graphql_client = "0.16"
 secrecy = "0.10"
 zeroize = "1"
 uuid = { version = "1.26.1", features = ["v4"] }
+# The ids ADR 0066 gives devices, chats, runs and events: ULIDs, whose time part sorts them and
+# dates an event without a timestamp field. The standard crate for them.
+ulid = "1"
 
 [features]
 # The plane fence (`src/fence.rs`): a build that carries it dies rather than act on a plane

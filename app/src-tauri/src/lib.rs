@@ -199,6 +199,19 @@ fn refresh_installed_plugin(binary: PathBuf, plugin: PathBuf) {
         });
 }
 
+/// The host's event log, opened once for the process (FD-9). A machine with no data home, or
+/// one whose data home is refused, runs without it and says why: every chat still works, and
+/// only the record of its hook calls is missing.
+fn events() -> Option<hooks::Events> {
+    match charter_core::eventlog::Recorder::open() {
+        Ok(recorder) => Some(std::sync::Arc::new(std::sync::Mutex::new(recorder))),
+        Err(why) => {
+            tracing::warn!("charter: no event log ({why}); hook calls are not recorded");
+            None
+        }
+    }
+}
+
 /// Where the bundled plugin is, or none when this build has none.
 ///
 /// Tauri's resource directory: `Contents/Resources` in a macOS bundle, `/usr/lib/charter` in a
@@ -1749,6 +1762,8 @@ pub fn run() {
                     // second reader of it is a second answer to where this machine's store is.
                     charter_core::machine::config_root(),
                 )
+                // The host's event log (FD-9): one event per hook call, from every plane.
+                .recording_events(events())
                 // A chat a handoff opened goes to the window, which files it on its workspace's
                 // strip without taking the front (`handoff::Arrived`).
                 .telling_arrivals({

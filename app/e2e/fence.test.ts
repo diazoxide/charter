@@ -78,6 +78,10 @@ describe("every launcher starts the app inside a plane the run made", () => {
       const env = await serviceEnvironmentOf(config);
 
       expect(inside(env.CHARTER_CONFIG_HOME, env.CHARTER_PLANE_FENCE)).toBe(true);
+      expect(
+        inside(env.CHARTER_DATA_HOME, env.CHARTER_PLANE_FENCE),
+        `${config} lets the run append to the runner's own event log`,
+      ).toBe(true);
     },
   );
 

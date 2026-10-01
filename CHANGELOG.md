@@ -21,6 +21,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   its own `AGENTS.md` keeps it. Because git hides the file by one line for every worktree of the
   repo, `charter doctor`, a note on the chat's pane and the chat's briefing name any `AGENTS.md`
   of yours that line hides (ADR 0085).
+
+- **charter keeps a log of every hook call its chats make.** Each state hook and each tool call
+  is one line in the event log in charter's data home (`~/Library/Application Support/charter`
+  on macOS, `~/.local/share/charter` on Linux, or `CHARTER_DATA_HOME`). A line records the chat
+  and the run it happened in, the tool, what charter's guard answered and how long it took. A
+  tool call's arguments are never written, only a digest keyed to this machine. The log stays
+  on this machine. The coming timeline, audit and fleet views are built from it (#649).
+
 - **The first run offers your repo's agent instructions to its workspace's memory.** When the
   repo you open has a `CLAUDE.md`, an `AGENTS.md` or Cursor rules in `.cursor/rules`, a *Memory
   from the repo* tab opens beside the first chat, showing each file whole. Press Add to memory
