@@ -378,7 +378,7 @@ fn a_last_seq_at_the_top_of_the_range_is_refused_rather_than_wrapped() {
         v: VERSION,
         device_id: DEVICE.to_owned(),
         seq: u64::MAX,
-        ulid: ulid::Ulid::new().to_string(),
+        ulid: ulid::Ulid::generate().to_string(),
         chat: None,
         run: None,
         parent_run: None,

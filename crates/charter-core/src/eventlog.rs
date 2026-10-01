@@ -144,7 +144,7 @@ impl Log {
             v: VERSION,
             device_id: self.device.clone(),
             seq,
-            ulid: ulid::Ulid::new().to_string(),
+            ulid: ulid::Ulid::generate().to_string(),
             chat: chat.map(str::to_owned),
             run: run.map(str::to_owned),
             parent_run: parent_run.map(str::to_owned),
@@ -625,7 +625,7 @@ impl Recorder {
         }
         let under = Under {
             chat: top.chat,
-            run: ulid::Ulid::new().to_string(),
+            run: ulid::Ulid::generate().to_string(),
             parent: Some(top.run),
         };
         self.append(
@@ -658,13 +658,13 @@ impl Recorder {
     /// Begins a run of the chat for `cause`, and says so in the log.
     fn new_run(&mut self, plane: &Path, number: u32, cause: Began) -> io::Result<Identity> {
         let key = (plane.to_path_buf(), number);
-        let chat = self
-            .chats
-            .get(&key)
-            .map_or_else(|| ulid::Ulid::new().to_string(), |who| who.chat.clone());
+        let chat = self.chats.get(&key).map_or_else(
+            || ulid::Ulid::generate().to_string(),
+            |who| who.chat.clone(),
+        );
         let who = Identity {
             chat,
-            run: ulid::Ulid::new().to_string(),
+            run: ulid::Ulid::generate().to_string(),
         };
         self.log.append(
             Some(&who.chat),

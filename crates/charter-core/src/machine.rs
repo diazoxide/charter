@@ -916,7 +916,7 @@ pub fn device_id(config_root: &Path) -> io::Result<String> {
     let loaded = update(config_root, |store| {
         if store.device.is_none() {
             store.device = Some(Device {
-                id: ulid::Ulid::new().to_string(),
+                id: ulid::Ulid::generate().to_string(),
                 created: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|since| since.as_secs())
