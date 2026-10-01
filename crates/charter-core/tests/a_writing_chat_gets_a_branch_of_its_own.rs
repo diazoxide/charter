@@ -7,7 +7,7 @@
 
 mod support;
 
-use charter_core::chatpiece::{self, Naming};
+use charter_core::chatpiece::{self, Held, Naming, Undone};
 use charter_core::worktree;
 
 /// Whether the clone has `branch`, asked without `support::git`, which asserts success.
@@ -127,7 +127,7 @@ fn a_chat_that_did_not_start_leaves_neither_its_folder_nor_its_branch() {
     let f = support::plane_with_clone("api");
     let cut = chatpiece::cut(&f.plane, &f.ws, &f.repo, &Naming::After(None)).unwrap();
 
-    chatpiece::undo(&f.plane, &cut).unwrap();
+    assert_eq!(chatpiece::undo(&f.plane, &cut).unwrap(), Undone::Gone);
 
     assert!(!cut.path.exists());
     assert!(!has_branch(&f, "chat-1"));
@@ -176,4 +176,143 @@ fn a_folder_already_where_a_branch_would_go_is_skipped_and_left_alone() {
         std::fs::read_to_string(stray.join("notes.txt")).unwrap(),
         "mine\n"
     );
+}
+
+/// What git says about the clone: `status` runs, so the repository is still readable.
+fn clone_is_healthy(f: &support::Fixture) -> bool {
+    let mut ask = support::unsigned();
+    ask.arg("-C").arg(&f.clone).args(["status", "--porcelain"]);
+    charter_core::forklock::output(&mut ask)
+        .expect("git runs")
+        .status
+        .success()
+}
+
+#[test]
+fn a_chats_name_never_costs_it_its_branch() {
+    charter_core::unsteered!();
+    // GL-1 review B1: each of these slugged to something git refuses, or that a
+    // case-insensitive filesystem reads as the repository's own HEAD.
+    let f = support::plane_with_clone("api");
+    let cases = [
+        ("v1..v2 diff", "v1.v2-diff"),
+        ("notes.lock", "notes"),
+        ("HEAD", "chat-1"),
+        ("Head", "chat-2"),
+        ("da39a3ee5e6b4b0d3255bfef95601890afd80709", "chat-3"),
+    ];
+
+    for (name, branch) in cases {
+        let cut = chatpiece::cut(&f.plane, &f.ws, &f.repo, &Naming::After(Some(name.into())))
+            .unwrap_or_else(|why| panic!("{name:?} cost the chat its start: {why}"));
+        assert_eq!(cut.branch, branch, "{name:?}");
+    }
+    assert!(
+        clone_is_healthy(&f),
+        "the clone still reads after a chat named HEAD"
+    );
+    assert_eq!(
+        chatpiece::cut(&f.plane, &f.ws, &f.repo, &Naming::After(None))
+            .unwrap()
+            .branch,
+        "chat-4",
+        "and the next cut after it still works"
+    );
+}
+
+#[test]
+fn a_branch_something_landed_on_is_kept_and_said_to_be() {
+    charter_core::unsteered!();
+    // GL-1 review S2: `undo` answered Ok while git kept the branch.
+    let f = support::plane_with_clone("api");
+    let cut = chatpiece::cut(&f.plane, &f.ws, &f.repo, &Naming::After(None)).unwrap();
+    f.commit(&cut.path, "work");
+    support::git(&f.clone, &["branch", "kept-too", "chat-1"]);
+    // The commit is reachable from another ref now, so the folder may go, and `-d` still
+    // refuses the branch: it is not merged into HEAD.
+
+    let undone = chatpiece::undo(&f.plane, &cut).unwrap();
+
+    assert_eq!(undone, Undone::BranchKept);
+    assert!(!cut.path.exists());
+    assert!(has_branch(&f, "chat-1"));
+}
+
+#[test]
+fn a_cut_whose_base_could_not_be_recorded_takes_itself_back() {
+    charter_core::unsteered!();
+    // GL-1 review S1: git made the folder and the branch, then the record of the base could
+    // not be written, and both were left behind. A config lock held by someone else is how
+    // `git config` comes to refuse.
+    let f = support::plane_with_clone("api");
+    let lock = f.clone.join(".git/config.lock");
+    std::fs::write(&lock, "").unwrap();
+
+    let refused = chatpiece::cut(&f.plane, &f.ws, &f.repo, &Naming::After(None));
+
+    std::fs::remove_file(&lock).unwrap();
+    assert!(
+        matches!(refused, Err(worktree::Refusal::BaseNotRecorded { .. })),
+        "{refused:?}"
+    );
+    assert!(
+        !worktree::path_for(&f.plane, &f.ws, &f.repo, "chat-1")
+            .unwrap()
+            .exists()
+    );
+    assert!(!has_branch(&f, "chat-1"));
+}
+
+#[test]
+fn a_cut_dropped_without_being_kept_is_taken_back() {
+    charter_core::unsteered!();
+    // A panic between the cut and the start drops the guard on the way out.
+    let f = support::plane_with_clone("api");
+    let cut = chatpiece::cut(&f.plane, &f.ws, &f.repo, &Naming::After(None)).unwrap();
+    let path = cut.path.clone();
+
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _held = Held::new(&f.plane, cut);
+        panic!("the start fell over");
+    }));
+
+    assert!(unwound.is_err());
+    assert!(!path.exists());
+    assert!(!has_branch(&f, "chat-1"));
+}
+
+#[test]
+fn a_kept_cut_stays() {
+    charter_core::unsteered!();
+    let f = support::plane_with_clone("api");
+    let cut = chatpiece::cut(&f.plane, &f.ws, &f.repo, &Naming::After(None)).unwrap();
+
+    let kept = Held::new(&f.plane, cut).keep();
+
+    assert!(kept.path.is_dir());
+    assert!(has_branch(&f, "chat-1"));
+}
+
+#[test]
+fn chats_started_together_in_one_repo_each_get_a_branch() {
+    charter_core::unsteered!();
+    // GL-1 review S3: off the main thread, two starts at once both saw `chat-1` free.
+    let f = support::plane_with_clone("api");
+
+    let mut got: Vec<String> = std::thread::scope(|s| {
+        let cuts: Vec<_> = (0..4)
+            .map(|_| s.spawn(|| chatpiece::cut(&f.plane, &f.ws, &f.repo, &Naming::After(None))))
+            .collect();
+        cuts.into_iter()
+            .map(|one| {
+                one.join()
+                    .unwrap()
+                    .expect("every start gets a branch")
+                    .branch
+            })
+            .collect()
+    });
+    got.sort();
+
+    assert_eq!(got, ["chat-1", "chat-2", "chat-3", "chat-4"]);
 }

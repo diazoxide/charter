@@ -15,12 +15,14 @@
 //! directory is a clone, a name for a chat that was given none, and the undo for a start that
 //! did not happen.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 
 use chrono::{DateTime, Utc};
 
 use crate::pieces::{self, Event, Who};
-use crate::worktree::{self, Refusal, name};
+use crate::worktree::{self, Base, Note, Refusal, name};
 
 /// The name a branch is cut under.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,9 +42,11 @@ pub struct Cut {
     pub piece: String,
     pub path: PathBuf,
     pub branch: String,
+    /// The branch it was cut from, or the commit when the clone's HEAD was detached.
+    pub base: Base,
     /// What the cut found to say: a dirty clone whose changes stay behind, or a layer that did
-    /// not land. The core's sentences, unchanged.
-    pub warnings: Vec<String>,
+    /// not land. Each has the CLI's sentence and the window's.
+    pub notes: Vec<Note>,
 }
 
 /// The workspace and repo whose clone `cwd` is, or `None` when it is not one.
@@ -76,14 +80,43 @@ pub fn clone_at(plane: &Path, cwd: &Path) -> Option<(String, String)> {
 /// The most names [`Naming::After`] tries before it says so.
 const TRIES: usize = 100;
 
+/// One lock per clone, held across the choice of a name and the cut under it.
+///
+/// Two starts in one repo used to be ordered by the window's main thread. Off it (GL-1 review
+/// S3), two chats started together would both see `chat-1` free and race git for it, and the
+/// loser's `worktree add` fails with git's own words rather than moving on to `chat-2`. Only
+/// this process is ordered; a `charter worktree add` in a terminal still meets git's refusal.
+fn clone_lock(plane: &Path, ws: &str, repo: &str) -> Arc<Mutex<()>> {
+    static LOCKS: LazyLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
+    let key = plane.join("workspaces").join(ws).join(repo);
+    let mut held = LOCKS.lock().unwrap_or_else(PoisonError::into_inner);
+    Arc::clone(held.entry(key).or_default())
+}
+
+/// Whether `refusal` is about the NAME, which a chat that did not choose it should never pay
+/// for: the next `chat-<n>` is tried instead (GL-1 review B1).
+fn about_the_name(refusal: &Refusal) -> bool {
+    matches!(
+        refusal,
+        Refusal::BadPiece(_)
+            | Refusal::PieceGoesElsewhere { .. }
+            | Refusal::BadBranch(_)
+            | Refusal::BadBranchName(_)
+    )
+}
+
 /// Cut a branch in `repo`'s clone, named as `naming` says.
 pub fn cut(plane: &Path, ws: &str, repo: &str, naming: &Naming) -> Result<Cut, Refusal> {
-    let label = match naming {
+    let lock = clone_lock(plane, ws, repo);
+    let _one_at_a_time = lock.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut label = match naming {
         Naming::Exactly(piece) => return cut_as(plane, ws, repo, piece),
         Naming::After(label) => label.as_deref().and_then(name::slug),
     };
     let mut last = None;
-    for n in 1..=TRIES {
+    let mut n = 1;
+    while n <= TRIES {
         // A chat called `fix login` gets `fix-login`, then `fix-login-2`. One with no name
         // gets `chat-1`, `chat-2`: a bare `chat` would say nothing about which.
         let piece = match &label {
@@ -91,14 +124,23 @@ pub fn cut(plane: &Path, ws: &str, repo: &str, naming: &Naming) -> Result<Cut, R
             Some(slug) => format!("{slug}-{n}"),
             None => format!("chat-{n}"),
         };
-        let taken = worktree::path_for(plane, ws, repo, &piece)?
-            .symlink_metadata()
-            .is_ok();
-        if taken {
-            continue;
-        }
-        match cut_as(plane, ws, repo, &piece) {
+        n += 1;
+        let taken =
+            worktree::path_for(plane, ws, repo, &piece).map(|path| path.symlink_metadata().is_ok());
+        let tried = match taken {
+            Ok(true) => continue,
+            Ok(false) => cut_as(plane, ws, repo, &piece),
+            Err(refusal) => Err(refusal),
+        };
+        match tried {
             Err(Refusal::BranchTaken { .. }) => last = Some(piece),
+            // The chat's name made a name git or charter will not take. `slug` is meant to
+            // make that impossible, and this is what holds if it ever is not: the chat
+            // starts on `chat-<n>` rather than being refused for what it was called.
+            Err(refusal) if label.is_some() && about_the_name(&refusal) => {
+                label = None;
+                n = 1;
+            }
             done => return done,
         }
     }
@@ -109,15 +151,25 @@ pub fn cut(plane: &Path, ws: &str, repo: &str, naming: &Naming) -> Result<Cut, R
 }
 
 fn cut_as(plane: &Path, ws: &str, repo: &str, piece: &str) -> Result<Cut, Refusal> {
-    let added = worktree::add(plane, ws, repo, piece, None)?;
-    Ok(Cut {
-        workspace: ws.to_string(),
-        repo: repo.to_string(),
-        piece: piece.to_string(),
-        path: added.path,
-        branch: added.branch,
-        warnings: added.warnings,
-    })
+    match worktree::add(plane, ws, repo, piece, None) {
+        Ok(added) => Ok(Cut {
+            workspace: ws.to_string(),
+            repo: repo.to_string(),
+            piece: piece.to_string(),
+            path: added.path,
+            branch: added.branch,
+            base: added.base,
+            notes: added.warnings,
+        }),
+        // git made the folder and the branch, and only the record of where it came from is
+        // missing (GL-1 review S1). Nothing has used it, so it goes back rather than being
+        // left for the operator to find; the refusal still says what happened.
+        Err(refusal @ Refusal::BaseNotRecorded { .. }) => {
+            let _ = worktree::remove(plane, ws, repo, piece, false, true);
+            Err(refusal)
+        }
+        Err(refusal) => Err(refusal),
+    }
 }
 
 /// Log the cut `claimed`, once the chat it was cut for has started. `None` when the log could
@@ -135,9 +187,71 @@ pub fn claim(plane: &Path, cut: &Cut, who: &Who, now: DateTime<Utc>) -> Option<P
     )
 }
 
+/// What taking a cut back did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Undone {
+    /// The folder and the branch are both gone.
+    Gone,
+    /// The folder is gone and git kept the branch: something landed on it after all.
+    BranchKept,
+}
+
 /// Take back a cut whose chat did not start: its folder and its branch, which nothing has
 /// written to yet. git's own safe removal, never a forced one: if anything did land on it in
-/// the meantime, the refusal says what and the branch stays.
-pub fn undo(plane: &Path, cut: &Cut) -> Result<(), Refusal> {
-    worktree::remove(plane, &cut.workspace, &cut.repo, &cut.piece, false, true).map(|_| ())
+/// the meantime, the refusal says what, and a branch git will not delete is reported as kept.
+///
+/// **Deleting the branch is not the row action ADR 0072 §4 rules out.** That rule is about a
+/// branch the operator has had and may have pushed; this is one charter cut a moment ago for a
+/// chat that never started, with nothing on it, so taking it back leaves the repo as it was.
+pub fn undo(plane: &Path, cut: &Cut) -> Result<Undone, Refusal> {
+    let removed = worktree::remove(plane, &cut.workspace, &cut.repo, &cut.piece, false, true)?;
+    Ok(if removed.branch_deleted {
+        Undone::Gone
+    } else {
+        Undone::BranchKept
+    })
+}
+
+/// A cut that is taken back unless it is kept: by [`Held::keep`] once its chat has started, by
+/// [`Held::take_back`] when the start is refused, and by `Drop` when neither happens — a panic
+/// between the cut and the start (GL-1 review S1).
+#[derive(Debug)]
+pub struct Held<'a> {
+    plane: &'a Path,
+    cut: Option<Cut>,
+}
+
+impl<'a> Held<'a> {
+    pub fn new(plane: &'a Path, cut: Cut) -> Self {
+        Self {
+            plane,
+            cut: Some(cut),
+        }
+    }
+
+    pub fn cut(&self) -> &Cut {
+        self.cut
+            .as_ref()
+            .expect("a held cut is held until it is kept or taken back")
+    }
+
+    /// The chat started: the branch is its.
+    pub fn keep(mut self) -> Cut {
+        self.cut.take().expect("a held cut is kept once")
+    }
+
+    /// The start was refused: take the branch back, and say what that did.
+    pub fn take_back(mut self) -> (Cut, Result<Undone, Refusal>) {
+        let cut = self.cut.take().expect("a held cut is taken back once");
+        let undone = undo(self.plane, &cut);
+        (cut, undone)
+    }
+}
+
+impl Drop for Held<'_> {
+    fn drop(&mut self) {
+        if let Some(cut) = self.cut.take() {
+            let _ = undo(self.plane, &cut);
+        }
+    }
 }

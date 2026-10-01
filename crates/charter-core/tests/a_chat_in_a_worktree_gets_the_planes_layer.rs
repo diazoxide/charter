@@ -67,7 +67,7 @@ fn a_worktree_charter_cuts_carries_the_planes_rules_its_agents_and_charter_harne
     let warned = added
         .warnings
         .iter()
-        .any(|w| w.contains("no charter layer"));
+        .any(|w| w.to_string().contains("no charter layer"));
     assert!(
         !warned,
         "the cut does not warn about a layer that is there: {:?}",

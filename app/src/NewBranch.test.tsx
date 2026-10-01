@@ -5,6 +5,9 @@ import { NewBranch } from "./NewBranch";
 
 afterEach(cleanup);
 
+const TAKEN =
+  "branch 'spike' already exists in svc. Pick another name, or delete that branch if nothing on it is needed.";
+
 function show(over: { trouble?: string; making?: boolean } = {}) {
   const onCut = vi.fn();
   const onCancel = vi.fn();
@@ -53,9 +56,12 @@ describe("cutting a new branch from the window (GL-1)", () => {
   });
 
   it("shows the core's refusal in the dialog, and cannot be answered twice", () => {
-    show({ trouble: "branch 'spike' already exists in svc.", making: true });
+    // The sentence `worktree_add` answers for a taken name — `Refusal::in_window`, held to
+    // these words by `worktrees::tests` — so what this dialog draws is what the core says.
+    show({ trouble: TAKEN, making: true });
 
-    expect(screen.getByRole("alert")).toHaveTextContent("branch 'spike' already exists in svc.");
+    expect(screen.getByRole("alert")).toHaveTextContent(TAKEN);
+    expect(screen.getByRole("dialog").textContent ?? "").not.toMatch(/worktree|piece/i);
     expect(screen.getByRole("button", { name: "Create branch" })).toBeDisabled();
   });
 

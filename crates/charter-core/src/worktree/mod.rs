@@ -128,6 +128,136 @@ pub enum Refusal {
     },
 }
 
+impl Refusal {
+    /// The refusal as the window says it: of a **branch** and its **folder**, never of a piece
+    /// or a worktree (ADR 0072 §3/§4, V23d). `charter worktree` keeps the sentence its
+    /// `Display` gives, where the difference between the two is the point.
+    ///
+    /// Exhaustive on purpose: a refusal added later reaches the window only once someone has
+    /// chosen its words. What git printed, and a repo's or branch's own name, pass through.
+    pub fn in_window(&self) -> String {
+        match self {
+            Self::BadWorkspace(ws) => format!("'{ws}' does not name a workspace in this project."),
+            Self::BadPiece(name) => format!(
+                "'{name}' cannot name a branch's folder: use letters, digits, '.', '_' and '-', \
+                 starting with a letter or digit."
+            ),
+            Self::PieceGoesElsewhere { piece, .. } => format!(
+                "charter will not cut a branch called '{piece}': Windows reads that name as \
+                 something else, so its folder would not be where charter put it. Put a letter \
+                 or a digit beside it."
+            ),
+            Self::Outside(_) => "charter will not put this branch's folder there: a link or a \
+                 '..' on the way would land it somewhere charter did not check."
+                .to_string(),
+            Self::Relocated(_) => "this project's charter.toml moves where branches' folders go, \
+                 which this version of charter does not follow yet. Remove that setting to keep \
+                 them in the project."
+                .to_string(),
+            Self::NotARepo(repo) => {
+                format!("'{repo}' is not a git repository. Clone it into this workspace first.")
+            }
+            Self::BranchTaken { repo, branch } => format!(
+                "branch '{branch}' already exists in {repo}. Pick another name, or delete that \
+                 branch if nothing on it is needed."
+            ),
+            Self::NoSuchPiece { ws, repo, piece } => {
+                format!("{repo} in workspace '{ws}' has no branch folder called '{piece}'.")
+            }
+            Self::BaseNotRecorded { branch, why } => format!(
+                "charter cut branch '{branch}' but could not record the branch it came from \
+                 ({why}), so a merge would not know where to land it."
+            ),
+            Self::GitRefused { err, .. } => format!("git refused:\n{err}"),
+            Self::Io { what, why, .. } => format!("could not {what} the branch's folder: {why}"),
+            Self::Dirty { piece } => format!(
+                "'{piece}' has uncommitted changes, so charter did not merge it. Commit or stash \
+                 them first."
+            ),
+            Self::Uncommitted { piece, changes } => format!(
+                "'{piece}' has uncommitted changes, so charter left its folder where it is. \
+                 These would be lost:\n{}",
+                listed(changes, changes.len())
+            ),
+            Self::DirtUnknown { piece } => format!(
+                "charter could not tell whether '{piece}' holds uncommitted changes, so it left \
+                 its folder where it is. Look in it by hand."
+            ),
+            Self::UniqueUnknown { piece } => format!(
+                "charter could not tell whether '{piece}' holds commits that exist nowhere else, \
+                 so it left its folder where it is. Look in it by hand."
+            ),
+            Self::WouldLoseWork {
+                piece,
+                count,
+                commits,
+            } => format!(
+                "'{piece}' has {count} commit(s) that exist nowhere else, so charter left its \
+                 folder where it is. These would be lost:\n{}",
+                listed(commits, *count as usize)
+            ),
+            Self::BadRepo(_)
+            | Self::BadBranch(_)
+            | Self::BadBranchName(_)
+            | Self::GitUnavailable(_)
+            | Self::Unreadable { .. } => self.to_string(),
+        }
+    }
+}
+
+/// What a cut found to say about the branch it made. `Display` is `charter worktree add`'s
+/// sentence; [`Note::in_window`] is the window's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Note {
+    /// The clone has uncommitted changes, which stay in it.
+    Dirty { repo: String },
+    /// charter could not read whether the clone is clean.
+    DirtUnknown { repo: String },
+    /// The layer did not land, and why — a sentence naming the path and the repair.
+    Unwired { why: String },
+}
+
+impl std::fmt::Display for Note {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Dirty { repo } => write!(
+                f,
+                "{repo} has uncommitted changes — they stay in the clone and are NOT carried \
+                 into the worktree."
+            ),
+            Self::DirtUnknown { repo } => {
+                write!(
+                    f,
+                    "{repo}: charter could not read whether the clone is clean."
+                )
+            }
+            Self::Unwired { why } => f.write_str(&unwired_warning(why)),
+        }
+    }
+}
+
+impl Note {
+    /// The note as the window says it, of the branch (ADR 0072 §3/§4).
+    ///
+    /// An unwired folder is said without the path and repair the CLI names: a chat started on
+    /// the branch writes the layer or refuses with its own sentence, so that is where the
+    /// detail reaches the operator.
+    pub fn in_window(&self) -> String {
+        match self {
+            Self::Dirty { repo } => format!(
+                "{repo} has uncommitted changes. They stay where they are, and the new branch \
+                 does not have them."
+            ),
+            Self::DirtUnknown { repo } => {
+                format!("charter could not read whether {repo} has uncommitted changes.")
+            }
+            Self::Unwired { .. } => "charter could not write its layer into the new branch's \
+                 folder. A chat started on it writes the layer, or says why it cannot."
+                .to_string(),
+        }
+    }
+}
+
 /// How many changed paths or commits a refusal names before it says how many more there are.
 pub const NAMED: usize = 10;
 
@@ -318,7 +448,7 @@ pub struct Added {
     pub path: PathBuf,
     pub branch: String,
     pub base: Base,
-    pub warnings: Vec<String>,
+    pub warnings: Vec<Note>,
 }
 
 /// What a worktree charter cut does not have, said where the CLI operator will see it.
@@ -377,13 +507,12 @@ pub fn add(
     let base = head_of(&clone)?;
     let mut warnings = Vec::new();
     match dirt(&clone) {
-        Dirt::Dirty => warnings.push(format!(
-            "{repo} has uncommitted changes — they stay in the clone and are NOT carried into \
-             the worktree."
-        )),
-        Dirt::Unknown => warnings.push(format!(
-            "{repo}: charter could not read whether the clone is clean."
-        )),
+        Dirt::Dirty => warnings.push(Note::Dirty {
+            repo: repo.to_string(),
+        }),
+        Dirt::Unknown => warnings.push(Note::DirtUnknown {
+            repo: repo.to_string(),
+        }),
         Dirt::Clean => {}
     }
 
@@ -460,7 +589,9 @@ pub fn add(
     // refusal that would have to undo a checkout.
     let layered = crate::guest::wire(plane, &path);
     if !layered.complete() {
-        warnings.push(unwired_warning(&layered.refusal(&path)));
+        warnings.push(Note::Unwired {
+            why: layered.refusal(&path),
+        });
     }
     Ok(Added {
         path,

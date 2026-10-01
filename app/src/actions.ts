@@ -1413,7 +1413,7 @@ export function catalogue(now: Now): Offer[] {
     }
   }
   // **The focused workspace's clones, three rows each** (charter-app#174, GL-1). A clone is
-  // where a chat can start, one level up from a piece: open a tab there, cut a new branch in
+  // where a chat can start, one level up from a branch's folder: open a tab there, cut a new branch in
   // it, or pick it as where every new chat starts. The first is the ordinary `New tab`'s picker
   // aimed at the clone for that one tab; the second opens the New branch dialog; the third is
   // the explorer's pick. None writes anything by itself, so all three are above the line.
@@ -2351,8 +2351,9 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
         below: [`memory.delete:${what.key}`],
       };
     case "clone":
-      // Where a chat can start, and nothing else: a clone is the operator's own checkout, and
-      // nothing in this window writes to one (charter-app#174).
+      // Where a chat can start, and a new branch beside it: a clone is the operator's own
+      // checkout, and nothing in this window writes to its working tree. New branch adds a
+      // branch and a folder of its own next to it (charter-app#174, GL-1).
       return {
         above: [`clone.chat:${what.repo}`, `clone.branch:${what.repo}`, `clone.pick:${what.repo}`],
         below: [],

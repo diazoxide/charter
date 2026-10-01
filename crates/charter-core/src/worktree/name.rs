@@ -62,6 +62,23 @@ pub fn as_ref(branch: &str) -> String {
     format!("refs/heads/{branch}")
 }
 
+/// Whether `name` is one git keeps for itself or reads as something else, so charter never
+/// mints it as a branch, though git's grammar would take some of them.
+///
+/// - `HEAD`, in any case: git refuses it as a branch, and on a case-insensitive filesystem
+///   (macOS's default) `head` and `HEAD` are one file, so a branch or folder called `head`
+///   is read as the repository's own HEAD.
+/// - `*_HEAD`, in any case: `FETCH_HEAD`, `ORIG_HEAD`, `MERGE_HEAD`, `CHERRY_PICK_HEAD` and
+///   the ones git adds next are files beside HEAD, for the same reason.
+/// - Forty hex digits or more: where a branch is taken as a revision, git reads it as an
+///   object name first.
+pub fn reserved(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower == "head"
+        || lower.ends_with("_head")
+        || (name.len() >= 40 && name.chars().all(|c| c.is_ascii_hexdigit()))
+}
+
 /// The longest piece name charter will mint from a chat's name.
 const MAX_SLUG: usize = 40;
 
@@ -74,6 +91,11 @@ pub fn slug(name: &str) -> Option<String> {
     let mut out = String::with_capacity(name.len().min(MAX_SLUG));
     let mut pending_dash = false;
     for c in name.chars() {
+        // `..` is never part of a ref name (`git check-ref-format`), so a run of dots is one:
+        // `v1..v2` reads `v1.v2`.
+        if c == '.' && !pending_dash && out.ends_with('.') {
+            continue;
+        }
         let keep = if c.is_ascii_alphanumeric() {
             Some(c.to_ascii_lowercase())
         } else if (c == '_' || c == '.') && !out.is_empty() {
@@ -102,8 +124,14 @@ pub fn slug(name: &str) -> Option<String> {
     }
     // A trailing `.` or `_` can survive the loop; a piece name ending in one is legal but
     // ugly, and `.lock` endings are refused by git anyway.
-    let out = out.trim_end_matches(['.', '_', '-']).to_string();
-    if out.is_empty() {
+    let mut out = out.trim_end_matches(['.', '_', '-']).to_string();
+    // A ref may not end `.lock` (git's lock files), however many times it says so.
+    while let Some(kept) = out.strip_suffix(".lock") {
+        out = kept.trim_end_matches(['.', '_', '-']).to_string();
+    }
+    // A name git keeps for itself, or reads as an object, is no name to mint. `None` sends a
+    // writing chat to `chat-<n>` rather than to a refusal (GL-1 review B1).
+    if out.is_empty() || reserved(&out) {
         return None;
     }
     // And a chat called "NUL" must not slug to `nul`, which `add` refuses because Windows
@@ -111,7 +139,8 @@ pub fn slug(name: &str) -> Option<String> {
     // loop above emits `[a-z0-9._-]` and the trim takes the strippable endings off — and
     // every device name is four characters or fewer, so the suffix never crowds `MAX_SLUG`.
     if contain::mintable(&out).is_err() {
-        return Some(format!("{out}-piece"));
+        // `-chat`, not `-piece`: the window shows this name as a branch (ADR 0072 §3).
+        return Some(format!("{out}-chat"));
     }
     Some(out)
 }
@@ -174,10 +203,87 @@ mod tests {
         assert_eq!(slug("_wip").as_deref(), Some("wip"));
         assert_eq!(slug("__scratch__").as_deref(), Some("scratch"));
         assert_eq!(slug(".hidden").as_deref(), Some("hidden"));
-        assert_eq!(slug(&"a".repeat(80)).as_deref(), Some(&*"a".repeat(40)));
+        assert_eq!(slug(&"z".repeat(80)).as_deref(), Some(&*"z".repeat(40)));
         for nothing in ["🔥🔥🔥", "...", "___", "", "   ", "---"] {
             assert_eq!(slug(nothing), None, "{nothing:?} leaves no legal name");
         }
+    }
+
+    /// Whether git itself takes `name` as a new branch: `check-ref-format --branch`, the
+    /// definition, not a copy of its rules.
+    fn git_takes(name: &str) -> bool {
+        let dir = tempfile::tempdir().unwrap();
+        let ran = crate::testgit::run(dir.path(), &["check-ref-format", "--branch", name]);
+        ran.ok() && ran.line() == name
+    }
+
+    /// Names git refuses, or that a case-insensitive filesystem reads as one of git's own files
+    /// (GL-1 review B1). A chat's Name must never turn into one of these.
+    const GITS_EDGES: &[&str] = &[
+        "v1..v2 diff",
+        "notes.lock",
+        "notes.lock.lock",
+        "a..lock",
+        "HEAD",
+        "Head",
+        "head",
+        "FETCH_HEAD",
+        "orig_head",
+        "Merge_Head",
+        "cherry-pick_head",
+        "my_head",
+        "da39a3ee5e6b4b0d3255bfef95601890afd80709",
+        "DA39A3EE5E6B4B0D3255BFEF95601890AFD80709 and more",
+        "@",
+        "@{-1}",
+        "x.",
+        "1..2",
+    ];
+
+    #[test]
+    fn every_slug_it_produces_is_a_branch_git_itself_takes() {
+        for raw in GITS_EDGES
+            .iter()
+            .chain(["Fix login", "release 1.2", "v1.lock-in"].iter())
+        {
+            if let Some(name) = slug(raw) {
+                assert!(
+                    git_takes(&name),
+                    "{raw:?} slugged to {name:?}, which git refuses"
+                );
+                assert!(
+                    !reserved(&name),
+                    "{raw:?} slugged to {name:?}, which git reserves"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_name_git_reserves_or_reads_as_an_object_slugs_to_nothing() {
+        for raw in [
+            "HEAD",
+            "Head",
+            "fetch_head",
+            "ORIG_HEAD",
+            "Merge_Head",
+            "x_head",
+        ] {
+            assert_eq!(slug(raw), None, "{raw:?}");
+        }
+        assert_eq!(slug("da39a3ee5e6b4b0d3255bfef95601890afd80709"), None);
+        // All hex at forty or more reads to git as an object name wherever a branch is taken
+        // as a revision, whatever it was meant as.
+        assert_eq!(slug(&"a".repeat(40)), None);
+        assert_eq!(slug(&"a".repeat(39)).as_deref(), Some(&*"a".repeat(39)));
+    }
+
+    #[test]
+    fn a_dotted_name_keeps_its_words_and_loses_what_git_refuses() {
+        assert_eq!(slug("v1..v2 diff").as_deref(), Some("v1.v2-diff"));
+        assert_eq!(slug("notes.lock").as_deref(), Some("notes"));
+        assert_eq!(slug("notes.lock.lock").as_deref(), Some("notes"));
+        assert_eq!(slug("v1.lock-in").as_deref(), Some("v1.lock-in"));
     }
 
     #[test]

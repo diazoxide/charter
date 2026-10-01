@@ -680,7 +680,13 @@ export const commands = {
 	 * 
 	 *  `boxes.new_branch` is the picker's "on a new branch" box (GL-1). When `cwd` is a repo's clone
 	 *  and it is set, the chat starts on a branch of its own, cut for it and taken back if the start is
-	 *  refused (`worktrees::on_a_branch`); anywhere else it changes nothing.
+	 *  refused (`worktrees::on_a_branch`); anywhere else it changes nothing. The pane is told the
+	 *  branch first, then whatever the start found to say.
+	 * 
+	 *  **Off the main thread** (GL-1 review S3): cutting a branch checks a tree out, which takes
+	 *  seconds on a large repo, and the window froze for it. Two starts in one clone are still
+	 *  cut one at a time, by `chatpiece`'s lock per clone. Starting a session off the main thread
+	 *  is what a relaunch's put-back already does.
 	 */
 	startChat: (plane: PlaneId, profile: string, persona: string | null, cwd: string | null, name: string, label: string | null, boxes: Boxes, columns: number, rows: number) => typedError<Started, string>(__TAURI_INVOKE("start_chat", { plane, profile, persona, cwd, name, label, boxes, columns, rows })),
 	/**
@@ -704,6 +710,9 @@ export const commands = {
 	 *  **New branch**, from a repo's row (GL-1): cut a piece off the clone's HEAD and log it
 	 *  `claimed`. It starts nothing. `branch` is the name the operator typed, used exactly or
 	 *  refused; `None` is charter's next free `chat-<n>`.
+	 * 
+	 *  Off the main thread: a checkout can take seconds on a large repo, and the window must not
+	 *  freeze for it (GL-1 review S3).
 	 */
 	worktreeAdd: (plane: PlaneId, workspace: string, repo: string, branch: string | null) => typedError<NewBranch, string>(__TAURI_INVOKE("worktree_add", { plane, workspace, repo, branch })),
 	/**
@@ -1986,7 +1995,7 @@ export type NewBranch = {
 	branch: string,
 	/**
 	 *  What the cut found to say — a dirty clone whose changes stayed behind, a layer that did
-	 *  not land — in the core's words.
+	 *  not land — in the window's words.
 	 */
 	warnings: string[],
 };

@@ -113,7 +113,7 @@ pub fn add(
         )));
     }
     for warning in &added.warnings {
-        say(Say::Warn(warning.clone()));
+        say(Say::Warn(warning.to_string()));
     }
     say(Say::Done(format!(
         "{repo} · {piece} → {}",

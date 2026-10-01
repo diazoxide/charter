@@ -951,15 +951,21 @@ fn approve_profile(
 ///
 /// `boxes.new_branch` is the picker's "on a new branch" box (GL-1). When `cwd` is a repo's clone
 /// and it is set, the chat starts on a branch of its own, cut for it and taken back if the start is
-/// refused (`worktrees::on_a_branch`); anywhere else it changes nothing.
+/// refused (`worktrees::on_a_branch`); anywhere else it changes nothing. The pane is told the
+/// branch first, then whatever the start found to say.
+///
+/// **Off the main thread** (GL-1 review S3): cutting a branch checks a tree out, which takes
+/// seconds on a large repo, and the window froze for it. Two starts in one clone are still
+/// cut one at a time, by `chatpiece`'s lock per clone. Starting a session off the main thread
+/// is what a relaunch's put-back already does.
 // Over clippy's threshold, and it is a command's argument list: every one of these is a
-// separate value the window sends, and folding a few into a struct would put a generated
-// TypeScript type between the picker and the call for nothing. Not a doc comment, because
-// the generated bindings carry those and this is about the Rust.
+// separate value the window sends. The picker's two boxes are folded into `Boxes`, because
+// tauri-specta types at most ten arguments; the rest stay separate, as the window sends them.
+// Not a doc comment, because the generated bindings carry those and this is about the Rust.
 #[tauri::command]
 #[specta::specta]
 #[allow(clippy::too_many_arguments)]
-fn start_chat(
+async fn start_chat(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
     profile: String,
@@ -976,32 +982,33 @@ fn start_chat(
         None => None,
     };
     let held = planes.held(&plane)?;
-    let root = held.root();
-    let named = label.clone();
-    let show_footer = boxes.show_footer;
-    let (mut started, cut) = worktrees::on_a_branch(
-        root,
-        cwd.as_deref().map(std::path::Path::new),
-        named.as_deref(),
-        boxes.new_branch,
-        |cwd| {
-            start_chat_in(
-                &held,
-                profile,
-                persona,
-                cwd,
-                name,
-                label,
-                show_footer,
-                columns,
-                rows,
-            )
-        },
-    )?;
-    if let Some(cut) = cut {
-        started.notices.extend(cut.warnings);
-    }
-    Ok(started)
+    tauri::async_runtime::spawn_blocking(move || {
+        let named = label.clone();
+        let show_footer = boxes.show_footer;
+        let (mut started, said) = worktrees::on_a_branch(
+            held.root(),
+            cwd.as_deref().map(std::path::Path::new),
+            named.as_deref(),
+            boxes.new_branch,
+            |cwd| {
+                start_chat_in(
+                    &held,
+                    profile,
+                    persona,
+                    cwd,
+                    name,
+                    label,
+                    show_footer,
+                    columns,
+                    rows,
+                )
+            },
+        )?;
+        started.notices.splice(0..0, said);
+        Ok(started)
+    })
+    .await
+    .map_err(|err| format!("charter could not start the chat: {err}"))?
 }
 
 /// The picker's two boxes, as the start reads them.
