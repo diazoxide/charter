@@ -1,7 +1,6 @@
 # A chat in its own worktree gets an `AGENTS.md` when the repo has none
 
-**Proposed 2026-10-01**, for program-map ticket HP-13 (#676). Its concept is **Chat**. If
-accepted, it amends:
+**Accepted 2026-10-01** by the operator (rulings V34d and V35), for program-map ticket HP-13 (#676). Its concept is **Chat**. It amends:
 
 - `docs/plane-format.md`'s line that *"`CLAUDE.md` / `AGENTS.md` are deliberately never
   generated or mirrored; charter writes no project-instructions file"*;
@@ -138,7 +137,7 @@ clone. If they do:
 - it is hidden from their `git status`, so they may not notice it is uncommitted;
 - a checkout that brings in a tracked `AGENTS.md` replaces it without a word.
 
-The question and the options are in *For the operator's ruling*.
+The operator chose (a), the common `info/exclude` with a warning (V35). See *Ruled*.
 
 ## `docs/plane-format.md`, amended
 
@@ -208,36 +207,11 @@ would only bring back a snapshot of a chat that is gone.
   foreign file. A chat without the file still has its hook briefing.
 - **The whole briefing.** See §2.
 
-## For the operator's ruling
+## Ruled (V34d, V35, 2026-10-01)
 
-**The question V34d answers:** may charter write a git-excluded, redacted `AGENTS.md` into a
-chat's own worktree when the repository has none, never into a shared clone, stepping aside when
-the repository has its own? Doing so reverses `docs/plane-format.md`'s "charter writes no
-project-instructions file".
+- **V34d.** charter may write a git-excluded, redacted `AGENTS.md` into a chat's own worktree when the repository has none. It never writes one into a shared clone, and it steps aside when the repository has its own. This reverses `docs/plane-format.md`'s "charter writes no project-instructions file". The operator confirmed it directly on 2026-10-01.
+- **V35.** The file is hidden by a line in the common `info/exclude`, the way the rest of the guest layer is hidden. `charter doctor` and every chat start report an untracked `AGENTS.md` that charter's line hides and charter did not write. Two alternatives are rejected:
+  - (b) worktreeConfig, because it changes the repository's configuration and drops the operator's own global ignores;
+  - (c) no exclude, because the file would sit one command from a commit.
 
-**The question V34d does not answer: how the file is hidden.** Git has no per-worktree exclude
-(§5), so every way of hiding it reaches beyond the one worktree:
-
-- **(a) A line in the common `info/exclude`**, as the rest of the guest layer is hidden.
-  - It hides an `AGENTS.md` the operator later creates in the shared clone, or in any sibling
-    piece.
-  - charter#1072's check withholds the file when such a file is already there. It cannot see
-    one created afterwards.
-  - Mitigation: `charter doctor` and each start report an untracked `AGENTS.md` that charter's
-    line hides and charter did not write.
-- **(b) `extensions.worktreeConfig` plus a per-worktree `core.excludesFile`.**
-  - Hidden in that piece alone.
-  - It writes the extension into the repository's shared `.git/config`.
-  - It replaces the operator's global ignore file inside that piece, so their own global
-    patterns stop applying there.
-- **(c) No exclude.**
-  - The file shows as `??` in the piece's `git status`, one `git add -A` from a commit into the
-    repository.
-- **(d) No file.**
-  - HP-13 stops at the renderer (#809), and only hooks brief a chat.
-
-**Recommended: (a), with the `doctor` and start-time report.** It is the mechanism the rest of
-the guest layer already relies on, and its cost is confined to a file that charter can detect
-and name. (b) changes the repository's configuration and silently drops the operator's own
-ignores, which is worse than the risk it removes. (c) puts charter's file one command from
-somebody else's history.
+  (d), no file, is also rejected.
