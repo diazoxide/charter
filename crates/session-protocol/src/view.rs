@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use bytes::Bytes;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
-use tokio::sync::Notify;
+use tokio::sync::{Notify, watch};
 
 use crate::link::{LinkError, Stream};
 
@@ -96,51 +96,89 @@ impl Drop for Feed {
 }
 
 /// Start a view on `stream`, a stream this end just opened: write the header and the
-/// snapshot, then whatever is pushed to the [`Feed`] it returns.
-pub fn start(stream: Stream, view: u32, epoch: u32, snapshot: Bytes, _limits: Limits) -> Feed {
+/// snapshot, then whatever is pushed to the [`Feed`] it returns, never more than
+/// `limits.high_watermark` ahead of what the client has acknowledged.
+pub fn start(stream: Stream, view: u32, epoch: u32, snapshot: Bytes, limits: Limits) -> Feed {
     let shared = Arc::new(Shared::default());
     let pump = Arc::clone(&shared);
     tokio::spawn(async move {
-        let (_acks, mut out) = tokio::io::split(stream);
-        let _ = write(&mut out, view, epoch, &snapshot, &pump).await;
-        let _ = out.shutdown().await;
+        let (acks, out) = tokio::io::split(stream);
+        let (acked, drawn) = watch::channel(0u64);
+        let counting = tokio::spawn(count_acks(acks, acked));
+        let mut writer = Gated { out, sent: 0, drawn, limits };
+        let _ = writer.write(view, epoch, &snapshot, &pump).await;
+        let _ = writer.out.shutdown().await;
+        counting.abort();
     });
     Feed { shared }
 }
 
-async fn write(
-    out: &mut WriteHalf<Stream>,
-    view: u32,
-    epoch: u32,
-    snapshot: &Bytes,
-    shared: &Shared,
-) -> std::io::Result<()> {
-    let length = u32::try_from(snapshot.len())
-        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "a snapshot over 4 GiB"))?;
-    let mut header = Vec::with_capacity(13);
-    header.push(VIEW);
-    header.extend_from_slice(&view.to_be_bytes());
-    header.extend_from_slice(&epoch.to_be_bytes());
-    header.extend_from_slice(&length.to_be_bytes());
-    out.write_all(&header).await?;
-    out.write_all(snapshot).await?;
-    out.flush().await?;
-    loop {
-        let next = {
-            let mut queue = shared.queue();
-            match queue.chunks.pop_front() {
-                Some(chunk) => Some(chunk),
-                None if queue.gone => return Ok(()),
-                None => None,
+/// Read the client's acknowledgements, and keep the running total of bytes drawn.
+async fn count_acks(mut acks: ReadHalf<Stream>, drawn: watch::Sender<u64>) {
+    while let Ok(n) = acks.read_u32().await {
+        drawn.send_modify(|total| *total += u64::from(n));
+    }
+}
+
+/// The writing half of a view, held to the watermarks.
+struct Gated {
+    out: WriteHalf<Stream>,
+    sent: u64,
+    drawn: watch::Receiver<u64>,
+    limits: Limits,
+}
+
+impl Gated {
+    async fn write(
+        &mut self,
+        view: u32,
+        epoch: u32,
+        snapshot: &Bytes,
+        shared: &Shared,
+    ) -> std::io::Result<()> {
+        let length = u32::try_from(snapshot.len()).map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "a snapshot over 4 GiB")
+        })?;
+        let mut header = Vec::with_capacity(13);
+        header.push(VIEW);
+        header.extend_from_slice(&view.to_be_bytes());
+        header.extend_from_slice(&epoch.to_be_bytes());
+        header.extend_from_slice(&length.to_be_bytes());
+        self.out.write_all(&header).await?;
+        self.send(snapshot).await?;
+        loop {
+            let next = {
+                let mut queue = shared.queue();
+                match queue.chunks.pop_front() {
+                    Some(chunk) => Some(chunk),
+                    None if queue.gone => return Ok(()),
+                    None => None,
+                }
+            };
+            match next {
+                Some(chunk) => self.send(&chunk).await?,
+                None => shared.more.notified().await,
             }
-        };
-        match next {
-            Some(chunk) => {
-                out.write_all(&chunk).await?;
-                out.flush().await?;
-            }
-            None => shared.more.notified().await,
         }
+    }
+
+    /// Write `bytes` in pieces, waiting before each one while the client is a high watermark
+    /// behind, until it is back below the low one.
+    async fn send(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        let high = self.limits.high_watermark as u64;
+        let low = self.limits.low_watermark as u64;
+        for piece in bytes.chunks(MOST_CHUNK_BYTES) {
+            if self.sent - *self.drawn.borrow() >= high {
+                let sent = self.sent;
+                self.out.flush().await?;
+                if self.drawn.wait_for(|drawn| sent - (*drawn).min(sent) <= low).await.is_err() {
+                    return Err(std::io::ErrorKind::BrokenPipe.into());
+                }
+            }
+            self.out.write_all(piece).await?;
+            self.sent += piece.len() as u64;
+        }
+        self.out.flush().await
     }
 }
 
