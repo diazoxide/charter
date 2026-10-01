@@ -931,7 +931,36 @@ mod tests {
     /// handoff on a line after the heredoc are all still refused.
     #[test]
     fn a_handoff_is_still_caught_around_a_quoted_substitution() {
+        // The command AROUND the substitution runs its output too: a runner nobody can name, a
+        // remote shell, a shell or `source`, or the substitution standing where the program
+        // goes. Any of them runs the heredoc's text, whatever program printed it.
+        for cmd in [
+            "$SHELL -c \"$(cat <<'EOF'\ncharter handoff beta\nEOF\n)\"",
+            "$0 -c \"$(cat <<'EOF'\ncharter handoff beta\nEOF\n)\"",
+            "\"$RUNNER\" -c \"$(cat <<'EOF'\ncharter handoff beta\nEOF\n)\"",
+            "${X} -c \"$(cat <<'EOF'\ncharter handoff beta\nEOF\n)\"",
+            "ssh host \"$(cat <<'EOF'\ncharter handoff beta\nEOF\n)\"",
+            "fish -c \"$(true; cat <<'EOF'\ncharter handoff beta\nEOF\n)\"",
+            "busybox sh -c \"$(true; cat <<'EOF'\ncharter handoff beta\nEOF\n)\"",
+            "$(cat <<'EOF'\ncharter handoff beta\nEOF\n)",
+            "source /dev/stdin <<< \"$(cat <<'EOF'\ncharter handoff beta\nEOF\n)\"",
+            ". /dev/stdin <<< \"$(cat <<'EOF'\ncharter handoff beta\nEOF\n)\"",
+            "\"$(cat <<'EOF'\ncharter handoff beta\nEOF\n)\"",
+        ] {
+            assert_eq!(reason(cmd), Some(REASON_SHELL_STRING), "{cmd:?}");
+        }
         for (cmd, want) in [
+            // #450's two-way reading still holds around an assignment: GNU bash 3.2.57 ends the
+            // substitution at the `)` in the body and runs the lines after it, unquoted or once
+            // the body has closed the string the substitution stood in.
+            (
+                "x=$(cat <<'EOF'\nfix (a)\ncharter handoff beta\nEOF\n)",
+                REASON_SHELL_STRING,
+            ),
+            (
+                "x=\"$(cat <<'EOF'\nfix (a)\"\ncharter handoff beta\nEOF\n)\"",
+                REASON_SHELL_STRING,
+            ),
             (
                 "x=\"$(bash <<'EOF'\ncharter handoff beta\nEOF\n)\"",
                 REASON_SHELL_STRING,
