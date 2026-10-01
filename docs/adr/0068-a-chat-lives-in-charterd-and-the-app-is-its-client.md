@@ -465,3 +465,34 @@ The code does not change with this record. Each row is what the tickets after it
    host.** The operator's own CLI reads vaults directly for now.
 10. **A runner's host versions live under the machine store** (`<config>/server/<ver>/`), from
     ADR 0069's item 9.
+
+## Amended by FD-4 (#643, PR #817), 2026-10-01
+
+FD-4 built §4's transport as the `charter-session-protocol` crate: a version negotiation that
+fails closed, Yamux over any ordered byte stream, and views with a watermark and a byte-bounded
+queue. One thing departed from the text above, and the text above is left as accepted.
+
+1. **There is no priority control lane; the control lane is never behind more than a bounded
+   amount instead.** §4 says *"a priority control lane carries commands and events past a busy
+   terminal"*. The multiplexer §4 asks for, an existing one, is Yamux, and Yamux has no stream
+   priorities: its frames go out in the order the streams hand them over. What carries a
+   command or an event past a busy terminal is that nothing ahead of it is unbounded:
+   - each stream's bytes in flight are held to its Yamux window, and each link to
+     `MOST_STREAMS` (256) streams and a 64 MiB receive window across them;
+   - each view's bytes written and not drawn are held to its high watermark (64 KiB), and its
+     queue to `most_queued_bytes` (1 MiB), past which the view is dropped and re-attached;
+   - Yamux sends data in frames of at most 16 KiB, so a control frame interleaves with them
+     rather than waiting for a terminal's whole burst.
+
+   **What was measured**, in the crate's tests on the operator's machine, which is evidence and
+   not a gate (ADR 0086): a keystroke through ten panes flooding 100 to 270 MB/s over a unix
+   socket at a p95 of 3 to 21 ms; and a needs-you through fifty busy chats on an in-process
+   shaped link (150 ms round trip, 2% per-packet loss as fast retransmit, 10 MB/s, 2 MiB in
+   flight, no congestion control) at a p50 of about 250 to 300 ms and a worst of 330 to 720 ms.
+   With the watermark's gate removed, a slow client had 266 KiB in flight instead of 64 KiB.
+
+   **What is not measured yet:** the same over TCP shaped by kernel netem, which a CI job
+   files for, and the keystroke budget through the host, which is ADR 0086's L1 row in
+   SC-16's `bench` job. If either shows the control lane waiting too long, the fix is a
+   scheduler in `link` that drains the control lane first, behind the same interface; it
+   changes nothing else in this record.

@@ -8,7 +8,8 @@
 //! Three layers, each in its own module:
 //!
 //! 1. [`version`]: before anything else, the two ends agree on one version, and refuse when
-//!    they share no major. It fails closed.
+//!    they share no major, or when the other end has not finished its half within
+//!    [`version::HANDSHAKE_TIMEOUT`]. It fails closed.
 //! 2. [`link`]: the stream is multiplexed with Yamux into a **control lane** (length-delimited
 //!    frames, the commands and events) and any number of streams, each with **its own credit
 //!    flow control**, so a pane that stops reading stops only itself.
@@ -16,7 +17,9 @@
 //!    raw. The host holds a view to two bounds: it writes no more than a **high watermark**
 //!    ahead of what the client has drawn (xterm.js's flow control, with acknowledgements), and
 //!    it queues no more than a bound in bytes. A view that falls behind that bound is dropped,
-//!    and the host attaches it again with a fresh snapshot.
+//!    and the host's [`view::Attacher`] attaches it again with a fresh snapshot at the next
+//!    epoch, after a growing pause when its client drew nothing. A client that acknowledges
+//!    more than it was sent loses the view.
 //!
 //! **Why these pieces, and not others.** ADR 0068 asked for an existing multiplexer rather than
 //! a new one. Yamux is the standard one for a single reliable, ordered connection that is not
@@ -26,13 +29,14 @@
 //! framing is tokio-util's `LengthDelimitedCodec`, the standard one for the runtime the app
 //! already uses.
 //!
-//! **What carries the control lane past a busy terminal.** Yamux has no stream priorities. The
-//! lane gets through because nothing ahead of it is unbounded: every stream's bytes in flight
-//! are held to its window and every view's to its watermark, and Yamux sends data in frames of
-//! at most 16 KiB, so a control frame interleaves with them. The tests measure it: ten panes
-//! flooding about 150 MB/s leave a keystroke in an eleventh at a few milliseconds, and fifty
-//! chats over a shaped 150 ms, 2% loss, 10 MB/s link show each needs-you in well under a
-//! second.
+//! **What carries the control lane past a busy terminal** (ADR 0068, amended by FD-4). Yamux
+//! has no stream priorities. The lane gets through because nothing ahead of it is unbounded:
+//! every stream's bytes in flight are held to its window, every view's to its watermark, the
+//! streams on a link to [`link::MOST_STREAMS`], and Yamux sends data in frames of at most
+//! 16 KiB, so a control frame interleaves with them. The tests print what that gives as
+//! evidence (ADR 0086 keeps wall-clock budgets out of `cargo test`): a keystroke through ten
+//! panes flooding about 100 to 270 MB/s at a p95 of a few milliseconds, and a needs-you through
+//! fifty busy chats on a shaped 150 ms link in well under a second.
 //!
 //! **What this crate does not decide.** What a control frame means (the session protocol's
 //! commands and events, and the UI RPC beside them) is FD-26's split and LV-2a's crate. Where
