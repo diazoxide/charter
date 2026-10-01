@@ -250,6 +250,8 @@ prose under another heading, which is why every store gets a heading or a row.
   - [`cache/update-baseline`](#cacheupdate-baseline)
   - [`cache/vaulthealth.json`](#cachevaulthealthjson)
   - [`cache/harness-wiring.json`](#cacheharness-wiringjson)
+  - [`index/<clone-key>/` — the project's search index](#indexclone-key--the-projects-search-index)
+  - [`index/<clone-key>/writer.lock`](#indexclone-keywriterlock)
   - [State charter keeps **outside** the plane](#state-charter-keeps-outside-the-plane)
   - [Environment variables that move or key this state](#environment-variables-that-move-or-key-this-state)
   - [What the tmux frame and the status line read that a **hook** wrote](#what-the-tmux-frame-and-the-status-line-read-that-a-hook-wrote)
@@ -4258,6 +4260,40 @@ semantics below.
 - **Git:** gitignored; key = `sha256(json.dumps({**profiletrust.fingerprint(p), "name":
   p.name, "cwd": str(cwd)}, sort_keys=True))` (`charter/wiring.py:770`)
 
+### `index/<clone-key>/` — the project's search index
+
+- **Format:** **decided, not yet written** ([ADR 0079](adr/0079-search-runs-on-derived-sqlite-indexes-one-per-project-clone-and-one-per-machine.md)).
+  `<clone-key>` is the first 16 hex characters of the SHA-256 of the clone's canonical root path, so
+  two clones sharing a state directory through `$CHARTER_HOME` never share an index. Inside it:
+  `current`, a plain-text file naming the live generation, and one directory per generation
+  holding `search.sqlite` (SQLite in WAL mode, with its `-wal` and `-shm`): an item table (path,
+  kind, owner, audience, approval state, workspace, persona, content hash, size, modification
+  time), an FTS5 contentless table (`detail=full`: each term with its row, column and position,
+  enough to reconstruct much of the wording, but no text as written), and a `meta` table (schema
+  version, redaction rules version, the commit last reconciled, the time built). A span the
+  shape scanner flags is indexed as its kind. A deleted item's rows stop answering at once, and
+  its terms leave the file at the next FTS5 `optimize` plus `wal_checkpoint(TRUNCATE)` with
+  `secure_delete` on; an unlinked old generation is not overwritten. A chat is answered only
+  from its own `<clone-key>`
+- **Status:** **internal**. Derived from the project's memory bases, session records and todos,
+  read through `memstore::read_files`' gate. Deleted ⇒ `recall` and the briefing scan the files
+  until `charterd` has rebuilt it. A version it did not write is discarded and rebuilt, never
+  migrated
+- **Tier:** Clone state, rebuildable
+- **Written by:** `charterd`, its only writer (KN-2). A full rebuild writes a new generation and
+  swaps `current` in one rename
+- **Read by:** the app's panels, the hooks, the CLI and the palette, read-only
+- **Git:** gitignored, with the rest of `.charter/`
+
+### `index/<clone-key>/writer.lock`
+
+- **Format:** an empty file, held with an advisory `flock` by the index's writer. **Decided, not
+  yet written** (ADR 0079)
+- **Status:** **internal**. A second writer waits on it rather than writing alongside
+- **Tier:** Clone state, transient
+- **Written by:** `charterd` (KN-2)
+- **Git:** gitignored
+
 ---
 
 ### State charter keeps **outside** the plane
@@ -4293,8 +4329,8 @@ identifier `dev.charter.app`. The keyring rows are the operating system's store 
 `<data>` is charter's data home (ADR 0075, amending ADR 0069): `$CHARTER_DATA_HOME`, else
 `$XDG_DATA_HOME/charter`, else the OS data directory's `charter/` (`~/Library/Application
 Support/charter` on macOS, `~/.local/share/charter` on Linux). Its rows are **decided, not yet
-written**: AU-3 writes the audit's and RR-16 a runner's bare repos (ADR 0078), and no code
-does yet. Their writer refuses a `<data>` under a plane
+written**: AU-3 writes the audit's, RR-16 a runner's bare repos (ADR 0078) and KN-32 the
+search index's (ADR 0079), and no code does yet. Their writer refuses a `<data>` under a plane
 or inside any git work tree.
 
 | Path | Tier | What it holds | Written by |
@@ -4323,6 +4359,8 @@ or inside any git work tree.
 | `<data>/audit/<device>/<first>-<last>.jsonl.zst` | Machine, device-bound | **decided, not yet written** (ADR 0075). A sealed audit segment, zstd, named by its first and last entry numbers; pruned only whole, oldest first, and only once a checkpoint covers it. Backed up by FR-10 | `charterd` (AU-3) |
 | `<data>/audit/<device>/checkpoints/` | Machine, device-bound | **decided, not yet written** (ADR 0075). The audit chain's signed checkpoints. Backed up by FR-10 | `charterd` (AU-7) |
 | `<data>/audit/retention.json` | Machine, syncable | **decided, not yet written** (ADR 0075). The audit's retention and disk cap (defaults one year and 2 GiB); every change is itself an audit entry | `charterd`, from the viewer's setting (AU-8) |
+| `<data>/index/` | Machine, device-bound, rebuildable | **decided, not yet written** (ADR 0079). The machine's search index over the transcript archive (KN-31) only: `current`, naming the live generation, and one directory per generation holding `search.sqlite` (WAL, FTS5 contentless at `detail=full`: terms with their positions and row metadata, no text as written; a span the shape scanner flags is indexed as its kind). Each row carries its chat, run, turn and the `<clone-key>` of the clone the chat ran in, which the host filters a chat's search on. Rows stop answering when the archive drops their chat, and leave the file at the `optimize` and checkpoint that follow every erasure. Chats are denied it. Not backed up | `charterd`, its only writer (KN-32) |
+| `<data>/index/writer.lock` | Machine, device-bound, transient | **decided, not yet written** (ADR 0079). The machine index writer's advisory `flock` | `charterd` (KN-32) |
 | keyring item for a human's audit pseudonym key | Keyring | **decided, not yet written** (ADR 0075). One key per human principal on this device, which turns that person's principal into the pseudonyms the audit stores. Deleting it is erasure. Its item name is AU-18's | AU-18 |
 | keyring item for the device key | Keyring | **decided, not yet written** (ADR 0066, ADR 0075). The key that signs this device's audit chain; on a headless host, an age-encrypted file stands in for it. Its item name is AU-3's | AU-3 |
 | `<config>/runners.json` | Machine, device-bound | **decided, not yet written** (ADR 0078). The runners this machine uses: each one's name, connector (an argument vector, never a shell string), preset, provider if any, the runner's device id and its pinned public link key. Written only from a human scope, and denied to chats. A project names a runner and never defines one | `charter runner add` and `remove`, and the window (RR-1) |
@@ -4335,7 +4373,7 @@ or inside any git work tree.
 
 | Variable | Effect | Source |
 |---|---|---|
-| `CHARTER_HOME` | **In the Python charter, replaces the state directory outright**: every file in this section moves, verbatim, with no migration. **In charter-app only part of it moves** ([#750](https://github.com/diazoxide/charter/issues/750)). The local vault registry, `vaults/`, `fingerprint.key`, the push and save journals, the gate files (`sessions/<sid>.tools`, `.gate`, `commit-gate/`), `sessions/<sid>.memnudge`, `dispatch-inflight/`, `ws-edit-nudge/`, `agent-personas.json`, `mcp-approved.json` and `unrecorded/` move, because their writers call `plane::state_dir`. The session and terminal pointers, `active-persona`, `sessions/<sid>.usage`, `sessions/<chat>.saved`, `persona-state/`, `handbacks/`, `cache/glstate.json`, `harness-profiles-launched.json`, `app/` and `workspace-rename.json` stay in `<plane>/.charter`, because their writers join `.charter` to the root themselves | `charter/config.py:42`, `charter/config.py:110`; `crates/charter-core/src/plane.rs` (`state_dir`) |
+| `CHARTER_HOME` | **In the Python charter, replaces the state directory outright**: every file in this section moves, verbatim, with no migration. **In charter-app only part of it moves** ([#750](https://github.com/diazoxide/charter/issues/750)). The local vault registry, `vaults/`, `fingerprint.key`, the push and save journals, the gate files (`sessions/<sid>.tools`, `.gate`, `commit-gate/`), `sessions/<sid>.memnudge`, `dispatch-inflight/`, `ws-edit-nudge/`, `agent-personas.json`, `mcp-approved.json` and `unrecorded/` move, because their writers call `plane::state_dir`. The session and terminal pointers, `active-persona`, `sessions/<sid>.usage`, `sessions/<chat>.saved`, `persona-state/`, `handbacks/`, `cache/glstate.json`, `harness-profiles-launched.json`, `app/` and `workspace-rename.json` stay in `<plane>/.charter`, because their writers join `.charter` to the root themselves. **Decided, not yet written** (ADR 0079): the project's search index, `index/<clone-key>/`, moves with the state directory (V22b), keyed by clone so that clones sharing one directory never share an index | `charter/config.py:42`, `charter/config.py:110`; `crates/charter-core/src/plane.rs` (`state_dir`) |
 | `CHARTER_ROOT` | Picks the plane (hence `<root>/.charter`); a bad value raises rather than falling back | `charter/root.py:20` |
 | `CHARTER_SESSION_ID` | Names `sessions/<sid>.*`, `commit-gate/<sid>`, `ws-edit-nudge/<sid>-…`, the trace bucket, and inside a frame it is the **chat id** that names `frame/<chat>/` and `chat-turns/<chat>` | `charter/session.py:65`, shadowing explained `charter/session.py:46` |
 | `CLAUDE_CODE_SESSION_ID` | Fallback for the above | `charter/session.py:66` |
