@@ -1690,6 +1690,35 @@ and an archived one is where `memstore.archive` would have put it (ADR 0065).
     all of them, and a line is never *added* over an untracked file of the operator's in a
     sibling tree (`charter/workspace.py:3718`–`3734`).
 
+### `.charter-scan-allow.toml` — the commit scan's allowlist (any repository)
+
+- **Format:** TOML at the top of a repository.
+  - `[[allow]]` tables. Each has a required `reason`, and either:
+    - a `rule`, an id `charter scan --explain` prints (`email`, `forge-token`, …), with
+      `paths`. `paths` is a list of globs from the repository's top: `*` stays within one
+      directory and `**` crosses them. It is required for a rule entry; the whole repository is
+      `paths = ["**"]`.
+    - a `fingerprint`: `sha256:` and the hex SHA-256 of one key's value, with optional `paths`.
+      Personal data (`email`, `card-number`, `us-ssn`) is never let through by fingerprint,
+      because the value can be recovered from its hash by guessing. Those rules take `paths`.
+  - An optional `[builtin]` table with `enabled = false`, which turns charter's own entries off.
+  - An entry that can't be read, or that breaks one of these rules, allows nothing, and the scan
+    says so.
+- **Status:** **stable** (SQ-17, ADR 0074 as amended).
+- **Tier:** Plane — committed, in a plane. In any other repository it is committed to that
+  repository and reviewed like its code, and that repository as a whole stays tier None.
+- **Written by:** the operator, by hand, in a commit made outside a chat. charter never writes
+  it. `charter scan --explain` prints the entry that would let a finding through.
+- **Read by:** `charter_core::diffscan::checked` and `charter scan`, **as it is at `HEAD`**
+  (`git show HEAD:.charter-scan-allow.toml`), never from the working tree or the index.
+- **Git:** committed. A chat's `pre-commit` refuses a commit that changes it, including a move
+  (`--no-renames`). The Bash guard refuses a chat's `git revert` of a commit that changed it, and
+  `git merge --ff-only` onto one. A merge commit may bring it as it was committed elsewhere.
+  This is a mistake guard: ADR 0074 names the ways past it.
+- **Beside it:** charter's own entry, the same in every repository: an `email` in a file named
+  `Cargo.toml`, `package.json`, `.mailmap`, `AUTHORS`, `CONTRIBUTORS` or `CHANGELOG` (the last
+  three also `.md` and `.txt`), at any depth.
+
 ### `workspaces/<ws>/.worktrees/<repo>/<piece>/` — pieces
 
 - **Format:** git linked worktrees.

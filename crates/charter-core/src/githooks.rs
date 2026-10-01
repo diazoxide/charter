@@ -46,9 +46,16 @@ use std::path::{Path, PathBuf};
 /// The CLI word the checking shims run: `charter git-hook <name>`.
 pub const COMMAND: &str = "git-hook";
 
+/// The hook a chat's own commit runs, and the only one that refuses a change to the scan's
+/// allowlist (SQ-17): a merge brings the file as it was committed on the other side.
+pub const PRE_COMMIT: &str = "pre-commit";
+
 /// The hooks charter checks a commit in: an ordinary commit, and a merge commit, which git
 /// never runs `pre-commit` for.
-pub const CHECKED: [&str; 2] = ["pre-commit", "pre-merge-commit"];
+pub const CHECKED: [&str; 2] = [PRE_COMMIT, PRE_MERGE_COMMIT];
+
+/// The hook git runs before it makes a merge commit, which never runs `pre-commit`.
+pub const PRE_MERGE_COMMIT: &str = "pre-merge-commit";
 
 /// The hooks that get a shim, so the repository's own still runs. Every hook `githooks(5)`
 /// names but three, which run on every index or ref change and cost a shell and a `git` each

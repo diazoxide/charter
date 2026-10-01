@@ -252,7 +252,7 @@ pub fn verdict(call: &Call<'_>, plane: Option<&Plane<'_>>) -> Option<Verdict> {
     // A8: a commit that would skip the hooks a chat's git runs charter's scan in (SQ-16, ADR
     // 0074). UNGATED: a chat commits in repositories outside any plane. charter's own, after
     // every arm the Python had, so no recorded answer moves.
-    if let Some((spelling, why)) = commitguard::hook_skip_hit(cmd) {
+    if let Some((spelling, why)) = commitguard::hook_skip_hit(cmd, call.cwd) {
         return Some(Verdict::new(
             REASON_GIT_HOOK_SKIP,
             Some(spelling.to_owned()),

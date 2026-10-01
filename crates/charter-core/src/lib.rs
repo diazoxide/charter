@@ -94,6 +94,7 @@ pub mod rewrite;
 pub mod roster;
 pub mod sandbox;
 pub mod scaffold;
+pub mod scanallow;
 pub mod secrets;
 pub mod secretshape;
 pub mod session;

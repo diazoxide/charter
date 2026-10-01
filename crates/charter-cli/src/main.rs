@@ -45,6 +45,7 @@ mod hooks;
 mod memory;
 mod piece;
 mod report;
+mod scan;
 mod secret;
 mod session;
 mod shellguard;
@@ -383,6 +384,15 @@ enum Command {
         /// Its arguments, exactly as typed, after `--`.
         #[arg(last = true, allow_hyphen_values = true)]
         args: Vec<std::ffi::OsString>,
+    },
+
+    /// Scan what is staged here as a chat's commit would be scanned: secrets and personal data
+    /// in the lines it adds, and what the allowlist lets through. Commits nothing.
+    Scan {
+        /// For each finding, name its rule and the `.charter-scan-allow.toml` entry that would
+        /// let it through, for the operator to review and commit.
+        #[arg(long)]
+        explain: bool,
     },
 
     /// charter's check in a chat's git hooks (SQ-16): for `pre-commit` and `pre-merge-commit`, scans what the commit
@@ -2208,6 +2218,7 @@ fn run(command: Command) -> Result<u8, String> {
         | Command::Report(_)
         | Command::ShellGuard { .. }
         | Command::GitHook { .. }
+        | Command::Scan { .. }
         | Command::Workspace(WorkspaceCommand::Remove { .. })
         | Command::Workspace(WorkspaceCommand::Rename { .. })
         | Command::Workspace(WorkspaceCommand::Live { .. })
@@ -2705,6 +2716,10 @@ fn main() -> ExitCode {
     // Needs no plane: it runs in whatever repository a chat commits to.
     if let Command::GitHook { name } = &cli.command {
         return githook::run(name);
+    }
+    // Needs no plane either: it scans the repository it stands in.
+    if let Command::Scan { explain } = &cli.command {
+        return scan::run(*explain);
     }
     // The three internal words the Python charter's plugin wires beside its hooks. Answered —
     // exit 0, nothing printed, nothing read — so a plugin that still names them can never fail

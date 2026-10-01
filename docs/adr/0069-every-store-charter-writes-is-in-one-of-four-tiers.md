@@ -271,6 +271,7 @@ relative to the plane root unless they start with `<config>` (the machine store)
 | 71 | review drafts (R5), private memory (KN-7) | Machine | syncable | yes | no |
 | 72 | a guest checkout, its worktrees, an extension's workspace folder or state directory, a vendor's `.playwright*` files, Claude Code's own files | None | — | no | — |
 | 73 | `<app data>/git-hooks/` (ADR 0074, added 2026-09-30) | Machine, rebuildable | device-bound | no | yes |
+| 74 | `.charter-scan-allow.toml` in a repository a chat commits to (ADR 0074, SQ-17, added 2026-10-01) | Plane in a plane; elsewhere committed to that repository, which is tier None | — | remote in a plane; — elsewhere | no |
 
 ## Where V2's tiers do not fit cleanly
 

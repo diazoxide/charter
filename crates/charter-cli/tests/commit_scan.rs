@@ -73,6 +73,15 @@ impl Chat {
 
     /// git as the chat runs it: the developer's config shut out, the chat's own environment in.
     fn git(&self, args: &[&str]) -> Output {
+        self.git_as(args, true)
+    }
+
+    /// git as the operator runs it in their own terminal, which charter does not arm.
+    fn operator_git(&self, args: &[&str]) -> Output {
+        self.git_as(args, false)
+    }
+
+    fn git_as(&self, args: &[&str], chat: bool) -> Output {
         let mut cmd = std::process::Command::new("git");
         cmd.arg("-C").arg(&self.repo).args(args);
         cmd.env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -82,8 +91,10 @@ impl Chat {
             .env("GIT_COMMITTER_NAME", "agent")
             .env("GIT_COMMITTER_EMAIL", "agent@example.invalid")
             .env("HOME", self.dir.path());
-        for (k, v) in &self.env {
-            cmd.env(k, v);
+        if chat {
+            for (k, v) in &self.env {
+                cmd.env(k, v);
+            }
         }
         charter_core::forklock::output(&mut cmd).unwrap()
     }
@@ -191,4 +202,80 @@ fn the_repositorys_own_hook_decides_when_it_refuses() {
 
     assert!(!ran.status.success());
     assert!(String::from_utf8_lossy(&ran.stderr).contains("lint failed"));
+}
+
+const DOCS_EMAIL: &str = "[[allow]]\nrule = \"email\"\npaths = [\"docs/**\"]\nreason = \"the docs name their authors\"\n";
+
+#[test]
+fn an_allowlisted_fixture_passes_once_the_operator_has_committed_the_entry() {
+    let chat = Chat::new();
+    std::fs::write(chat.repo.join(".charter-scan-allow.toml"), DOCS_EMAIL).unwrap();
+    chat.operator_git(&["add", ".charter-scan-allow.toml"]);
+    assert!(
+        chat.operator_git(&["commit", "-q", "-m", "allow the docs' authors"])
+            .status
+            .success()
+    );
+    std::fs::create_dir(chat.repo.join("docs")).unwrap();
+    std::fs::write(chat.repo.join("docs/intro.md"), "By ada@lovelace.dev\n").unwrap();
+    chat.git(&["add", "docs/intro.md"]);
+
+    let ran = chat.git(&["commit", "-q", "-m", "docs"]);
+
+    assert!(ran.status.success(), "{ran:?}");
+}
+
+#[test]
+fn a_chat_cannot_commit_an_allowlist_entry_for_its_own_finding() {
+    let chat = Chat::new();
+    let before = chat.head();
+    std::fs::write(chat.repo.join(".charter-scan-allow.toml"), DOCS_EMAIL).unwrap();
+    std::fs::create_dir(chat.repo.join("docs")).unwrap();
+    std::fs::write(chat.repo.join("docs/intro.md"), "By ada@lovelace.dev\n").unwrap();
+    chat.git(&["add", "."]);
+
+    let ran = chat.git(&["commit", "-q", "-m", "allow myself"]);
+
+    assert!(!ran.status.success());
+    assert_eq!(chat.head(), before);
+    let said = String::from_utf8_lossy(&ran.stderr);
+    assert!(said.contains("only a commit made outside a chat"), "{said}");
+    let heard = chat.heard.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(heard.commit_refused.contains("allowlist"), "{heard:?}");
+
+    // Nor on its own, in a commit that finds nothing else.
+    chat.git(&["reset", "-q"]);
+    chat.git(&["add", ".charter-scan-allow.toml"]);
+    assert!(
+        !chat
+            .git(&["commit", "-q", "-m", "only the file"])
+            .status
+            .success()
+    );
+}
+
+#[test]
+fn charter_scan_explain_names_the_rule_and_the_entry_that_would_let_it_through() {
+    let chat = Chat::new();
+    std::fs::write(chat.repo.join("notes.md"), "ada@lovelace.dev\n").unwrap();
+    chat.git(&["add", "notes.md"]);
+
+    let mut cmd = std::process::Command::new(CHARTER);
+    cmd.args(["scan", "--explain"]).current_dir(&chat.repo);
+    cmd.env("GIT_CONFIG_GLOBAL", "/dev/null");
+    let ran = charter_core::forklock::output(&mut cmd).unwrap();
+
+    let said = String::from_utf8_lossy(&ran.stdout);
+    assert_eq!(ran.status.code(), Some(1), "{said}");
+    assert!(said.contains("notes.md:1"), "{said}");
+    assert!(said.contains("rule: email"), "{said}");
+    assert!(
+        said.contains("[[allow]]") && said.contains("paths = [\"notes.md\"]"),
+        "{said}"
+    );
+    assert!(
+        !said.contains("fingerprint = \"sha256:"),
+        "an email is let through by path only: {said}"
+    );
+    assert!(!said.contains("ada@lovelace.dev"), "{said}");
 }
