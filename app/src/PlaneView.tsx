@@ -119,6 +119,9 @@ import {
   openTab,
   openTabBehind,
   openView,
+  offerView,
+  repoInstructionsTitle,
+  repoInstructionsView,
   panesOf,
   putViewBack,
   refileViews,
@@ -1752,8 +1755,23 @@ export function PlaneView({
     if (firstChatAsked === undefined || firstChatHandled.current === firstChatAsked.at) return;
     if (!sidebar?.workspaces.some((ws) => ws.name === firstChatAsked.workspace)) return;
     firstChatHandled.current = firstChatAsked.at;
-    const { workspace, cwd, harness } = firstChatAsked;
+    const { workspace, cwd, harness, instructions } = firstChatAsked;
     const where: Where = { tab: true, in: cwd };
+    // **The repo's agent instructions, offered beside the chat and not in front of it**
+    // (FR-18a): a tab that asks nothing until the operator goes to it, so W10's budget —
+    // the repo, the trust question and, only when there is a choice, the picker — is not
+    // spent on it. Nothing is written until its own press.
+    const offerInstructions = () => {
+      if (instructions > 0)
+        change((tabs) =>
+          offerView(
+            tabs,
+            repoInstructionsView(workspace),
+            repoInstructionsTitle(workspace),
+            workspace,
+          ),
+        );
+    };
     // `ask`'s steps, written out so the state is set in the command's callback: the
     // `react-hooks/set-state-in-effect` rule reads a call in an effect body as synchronous
     // however far the setState is from it (`Extensions.tsx` says the same).
@@ -1784,13 +1802,17 @@ export function PlaneView({
             null,
             workspace,
           );
-          if (refused === undefined) return;
+          if (refused === undefined) {
+            offerInstructions();
+            return;
+          }
           setPickerTrouble(refused);
         } else setPickerTrouble(undefined);
+        offerInstructions();
         setPicking({ options: options.data, where });
       })
       .catch((err: unknown) => setTrouble(String(err)));
-  }, [firstChatAsked, focusWorkspace, plane, sidebar, startOn]);
+  }, [change, firstChatAsked, focusWorkspace, plane, sidebar, startOn]);
 
   /** What a chat is called here: the tab holding it, or its session number. */
   const nameOf = useCallback(
@@ -3911,6 +3933,9 @@ export type FirstChat = {
   /** The one harness signed in on this machine, which the chat starts on without the picker;
    *  `null` when there is a choice to make. */
   harness: string | null;
+  /** How many of the repo's agent instruction files can go into the workspace's memory
+   *  (FR-18a): offered in a tab beside the chat when there are any. */
+  instructions: number;
   /** Which ask this is, so each is answered once. */
   at: number;
 };

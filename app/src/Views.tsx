@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Brain,
   ChartColumn,
+  FileText,
   GitPullRequest,
   History,
   KeyRound,
@@ -16,6 +17,7 @@ import {
 import { EmptyState } from "./EmptyState";
 import { AskFirst, runExtensionAction } from "./ExtensionAction";
 import { PanelList } from "./PanelList";
+import { RepoInstructionsTab } from "./RepoInstructionsTab";
 import { Preferences } from "./Preferences";
 import { ProjectSettings, WorkspaceSettings } from "./ProjectSettings";
 import {
@@ -44,6 +46,9 @@ import { factsChanged } from "./extensionFacts";
 
 /** What `workspaceSettingsView` names a workspace's settings view (charter-app#280). */
 const WORKSPACE_SETTINGS = "workspace-settings";
+
+/** What `repoInstructionsView` names a workspace's repo instructions view (FR-18a). */
+const REPO_INSTRUCTIONS = "repo-instructions";
 
 /**
  * **Views: what a tab shows when it does not show a chat** — ADR 0043 as amended
@@ -184,6 +189,7 @@ const OWN_MARKS: Record<string, React.ComponentType<{ className?: string }>> = {
   [MEMORY_VIEW]: Brain,
   [SHARED_MEMORY_VIEW.view]: Brain,
   [WORKSPACE_SETTINGS]: Settings2,
+  [REPO_INSTRUCTIONS]: FileText,
   preferences: SlidersHorizontal,
 };
 
@@ -347,6 +353,16 @@ export function ViewPane({
           /* A workspace's settings (charter-app#280): Project settings' body, for the one file
              a workspace holds. Keyed by both, for the same reason. */
           <WorkspaceSettings key={`${plane}\u0000${view.key}`} plane={plane} workspace={view.key} />
+        ) : isRepoInstructions(view) ? (
+          /* The agent instructions a workspace's repo carries, offered to its memory (FR-18a):
+             a preview whose press is the only thing that writes. Keyed by both, as a
+             workspace's settings are. */
+          <RepoInstructionsTab
+            key={`${plane}\u0000${view.key}`}
+            plane={plane}
+            workspace={view.key}
+            onClose={() => onCloseView?.(view)}
+          />
         ) : isSaving(view) ? (
           /* The plane's save standing and its save button (charter-app#294). Keyed by the
              plane, so a pane that comes to show another project's starts from its own read. */
@@ -435,6 +451,11 @@ function isSettings(view: ViewRef): boolean {
 /** Whether `view` is a workspace's settings view (charter-app#280). */
 function isWorkspaceSettings(view: ViewRef): boolean {
   return view.from === null && view.view === WORKSPACE_SETTINGS;
+}
+
+/** Whether `view` is a workspace's repo instructions (FR-18a). */
+function isRepoInstructions(view: ViewRef): boolean {
+  return view.from === null && view.view === REPO_INSTRUCTIONS;
 }
 
 /** Whether `view` is the Saving view (charter-app#294). */

@@ -48,6 +48,8 @@ macro_rules! app_commands {
                 firstrun::first_run_found,
                 firstrun::open_repo,
                 firstrun::open_local_project,
+                firstrun::repo_instructions,
+                firstrun::import_instructions,
                 open_session,
                 close_session,
                 ignore_needs_you,
