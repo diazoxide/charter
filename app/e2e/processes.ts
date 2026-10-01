@@ -11,6 +11,7 @@ import {
 import { homedir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
+import { PS_COLUMNS, footprintKb, harnesses, parseProcesses, webContent } from "./memory.js";
 
 /**
  * The app under test and the harnesses it runs, as the operating system sees them — and what
@@ -133,6 +134,51 @@ function descriptorsOnMacos(pid: number): number | null {
     const stdout = (err as { stdout?: string }).stdout;
     return stdout ? descriptorsListed(stdout) : null;
   }
+}
+
+/**
+ * What the app costs beyond its own process, for `stress.jsonl` (SC-1, #679). Each field feeds
+ * a row of ADR 0086's performance budgets:
+ *
+ * - `webContentKb`, `webContentProcesses`: the web content process's resident memory, and how
+ *   many there are. M2 (CI relative, `stress`), and with the app's own `rssKb` M1.
+ * - `webContentFootprintKb`: the same processes' total by `footprint`, on macOS only, the
+ *   measure ADR 0082 took its 1,529 MB peak with. M2 and M1, read as ADR 0082 read them.
+ *   `null` elsewhere.
+ * - `harnessKb`, `harnessLargestKb`: the harnesses' memory with their child runs, together and
+ *   the largest one. F1's measure. In CI the harness is the fake one, so these say what the
+ *   harness side of charter's tree costs, and the real harnesses' F1 values come from the
+ *   release scale run (#814), which takes them the same way.
+ *
+ * One `ps` call answers all of them, so a look stays as cheap as the one `sample` takes.
+ */
+export interface Beyond {
+  webContentKb: number;
+  webContentProcesses: number;
+  webContentFootprintKb: number | null;
+  harnessKb: number;
+  harnessLargestKb: number;
+}
+
+/** What the app at `pid` costs beyond its own process. */
+export function beyond(pid: number): Beyond {
+  const rows = parseProcesses(ps(["-A", "-o", PS_COLUMNS]));
+  const web = webContent(rows, pid, process.platform);
+  let webContentFootprintKb: number | null = null;
+  if (process.platform === "darwin" && web.processes.length > 0) {
+    const each = web.processes.map((one) => footprintKb(run("footprint", ["-p", String(one)])));
+    webContentFootprintKb = each.every((kb) => kb !== null)
+      ? each.reduce<number>((sum, kb) => sum + (kb ?? 0), 0)
+      : null;
+  }
+  const harness = harnesses(rows, pid, "fake-harness");
+  return {
+    webContentKb: web.rssKb,
+    webContentProcesses: web.processes.length,
+    webContentFootprintKb,
+    harnessKb: harness.rssKb,
+    harnessLargestKb: harness.largestKb,
+  };
 }
 
 /** Adds one line of JSON to a file in `logs/`, for a run to be read back afterwards. */

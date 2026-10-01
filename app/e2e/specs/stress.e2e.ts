@@ -3,7 +3,7 @@ import process from "node:process";
 import { $, $$, browser, expect } from "@wdio/globals";
 import { LAUNCHDS_LIMIT, READY, THE_APPS_STARTING_LIMIT, built } from "../harness.js";
 import { answerTheAsk, pressAndStart } from "../opening.js";
-import { type Sample, harnessesRunning, logLine, running, sample } from "../processes.js";
+import { type Sample, beyond, harnessesRunning, logLine, running, sample } from "../processes.js";
 
 /**
  * Fifty tabs as fast as they open, every one closed, and again: the load the app exists for,
@@ -12,7 +12,8 @@ import { type Sample, harnessesRunning, logLine, running, sample } from "../proc
  * The app died once while a scenario was opening its fiftieth tab, and has not since on the
  * machine it died on. CI runs on quiet machines, so this gives that death its chances where it
  * will be recorded: three rounds of fifty with no pause between tabs, the app's memory and
- * thread count written to `logs/stress.jsonl` at every step, and — if the app does die — the
+ * thread count written to `logs/stress.jsonl` at every step, with the web content process's and
+ * the harnesses' memory beside them (SC-1), and — if the app does die — the
  * evidence `wdio.conf.ts` writes down for every failed test.
  *
  * It also holds the app to what closing a tab is for. Closing ends the session's program and
@@ -209,6 +210,9 @@ function look(pid: number, round: number, step: string, began: number): Sample {
     seconds: (Date.now() - began) / 1000,
     harnesses: harnessesRunning(),
     ...seen,
+    // The web content process and the harnesses (SC-1): see `beyond` for the ADR 0086 row
+    // each field feeds.
+    ...beyond(pid),
   };
   logLine("stress.jsonl", record);
   console.log(`charter-stress ${JSON.stringify(record)}`);
