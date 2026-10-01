@@ -194,7 +194,7 @@ pub fn tray(app: &AppHandle) -> tauri::Result<()> {
         Some(icon) => tray = tray.icon(icon.image).icon_as_template(icon.as_template),
         // Said out loud, because a tray with no icon is a tray that is hard to find, and
         // reaching the window from the dock is easier than hunting for an empty slot.
-        None => eprintln!("charter: the tray has no icon; its menu is still on the click"),
+        None => tracing::warn!("charter: the tray has no icon; its menu is still on the click"),
     }
     tray.build(app)?;
     Ok(())

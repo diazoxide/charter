@@ -374,7 +374,7 @@ impl Hooks {
                     let listener = saved.lock().unwrap_or_else(PoisonError::into_inner).clone();
                     match listener {
                         Some(listener) => listener(record),
-                        None => eprintln!(
+                        None => tracing::warn!(
                             "charter: chat {} saved a session record before this project could \
                              hear it, so nothing was closed",
                             record.chat

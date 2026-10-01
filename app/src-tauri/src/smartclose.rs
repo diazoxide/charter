@@ -426,7 +426,7 @@ pub(crate) fn reported_sending(
 /// it is being smart-closed.
 pub fn saved(held: &Held, saved: &SessionSaved) {
     if !held.closing().forget(saved.chat) {
-        eprintln!(
+        tracing::warn!(
             "charter: chat {} wrote a session record while it was not being smart-closed, so \
              nothing was closed",
             saved.chat
@@ -434,7 +434,7 @@ pub fn saved(held: &Held, saved: &SessionSaved) {
         return;
     }
     if let Err(why) = held.close_chat(saved.chat) {
-        eprintln!(
+        tracing::warn!(
             "charter: chat {} wrote its session record and did not close cleanly ({why})",
             saved.chat
         );

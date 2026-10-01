@@ -1134,7 +1134,7 @@ fn refresh_if_it_is_due(root: &Path, workspace: &str, binary: Option<&Path>) {
         // every one of these is the policy working, and none of them is news.
         Refreshing::Started { .. } | Refreshing::Declined(_) => {}
         Refreshing::NotStarted { why } => {
-            eprintln!("charter: a forge refresh for '{workspace}' would not start ({why})");
+            tracing::warn!("charter: a forge refresh for '{workspace}' would not start ({why})");
         }
     }
 }

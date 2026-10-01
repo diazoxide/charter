@@ -629,13 +629,7 @@ pub fn panic_log() -> Option<PathBuf> {
     if let Some(file) = std::env::var_os("CHARTER_PANIC_LOG").filter(|f| !f.is_empty()) {
         return Some(PathBuf::from(file));
     }
-    const APP: &str = "dev.charter.app";
-    let dir = if cfg!(target_os = "macos") {
-        dirs::home_dir()?.join("Library/Logs").join(APP)
-    } else {
-        dirs::data_local_dir()?.join(APP).join("logs")
-    };
-    Some(dir.join("panics.log"))
+    Some(crate::applog::app_log_dir()?.join("panics.log"))
 }
 
 /// How long a saved panic is offered: one older than this was most likely reported, or

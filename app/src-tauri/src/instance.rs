@@ -67,11 +67,11 @@ pub fn one_per_user(app: &tauri::App) {
             app.manage(Instance::holding(held));
         }
         Err(NotHeld::Taken) => {
-            eprintln!("{ALREADY_RUNNING}");
+            tracing::info!("{ALREADY_RUNNING}");
             app.handle().cleanup_before_exit();
             std::process::exit(0);
         }
-        Err(NotHeld::Failed(why)) => eprintln!(
+        Err(NotHeld::Failed(why)) => tracing::warn!(
             "charter: could not take {} ({why}); going on without the guard against a second \
              charter",
             lock.display()

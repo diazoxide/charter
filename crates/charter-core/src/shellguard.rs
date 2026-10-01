@@ -764,7 +764,7 @@ mod tests {
     /// `HOME` whose start file puts `~/.local/bin` first — the operator's own `~/.zshrc`.
     fn path_seen_by(shell: &str, start_file: &str) -> Option<String> {
         if !have(shell) {
-            eprintln!("no {shell} on this machine; the test that starts one is not run here");
+            println!("no {shell} on this machine; the test that starts one is not run here");
             return None;
         }
         let dir = tempfile::tempdir().unwrap();

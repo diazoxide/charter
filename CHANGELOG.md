@@ -25,6 +25,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the command (#583). The update manifest (`latest.json`, `dev.json`) is not attested; the
   updater checks each build's own minisign signature, as before.
 
+- **The app keeps a log you can read after the fact.** What the app notices while it runs, such
+  as a chat that would not start, a project it could not watch or a record it could not write,
+  now goes to `charter.<date>.log` in the app's log directory (`~/Library/Logs/dev.charter.app`
+  on macOS, `~/.local/share/dev.charter.app/logs` on Linux), as well as to standard error. An app
+  started from the Dock or a desktop launcher used to lose all of it. A new file starts each
+  day and the last seven are kept. A line that looks like it holds a credential is replaced by
+  a note saying what kind it looked like. `CHARTER_LOG_DIR` moves the log.
+
 - **A kill switch that stops every chat and shell charter started.** Stop all on the title bar,
   or `charter stop --all` in any terminal, interrupts and ends every chat's and shell's program in
   every project and every window within seconds. No chat starts again, not even from a relaunch,
