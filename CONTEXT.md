@@ -257,6 +257,13 @@ with the two devices it joins (ADR 0072 §2, ADR 0078).
 _Avoid_: connection (unqualified), session (that is the process), pairing (that is how the keys
 were pinned)
 
+**Editor protocol**:
+The part of the session host's public protocol an editor integration speaks: find which chat or
+workspace a file belongs to, ask the window to show one, type a selection into a chat's prompt
+without sending it, and list a chat's changed files. Nothing in it starts, sends to or answers a
+chat. It is a part of the session host, so it belongs to **Project** (ADR 0072 §2, ADR 0081).
+_Avoid_: editor API, editor extension API (that is a non-goal: code running inside charter's editor)
+
 **Audit**:
 The record of who did what, for whom, to what, and whether it was allowed, kept per device by
 the session host as **audit entries** in charter's data home, never in a project. Once AU-3
@@ -331,6 +338,20 @@ A harness typed into one runs outside charter's session tracking, so charter's *
 shims** stand first on its `PATH`: the harness still starts, after one line saying so, and the
 tab shows a banner offering to open it as a chat instead (ADR 0062).
 _Avoid_: terminal (for the tab), console, plain chat
+
+**Light editor**:
+charter's one editor, for reading a file of a chat's branch, making a small edit in it and
+reviewing a diff. It has no language server, debugger, repo-wide refactor or extension code of
+anyone else's; deep work opens in **your editor** at the same file and line. It is a view of a
+**Workspace**'s repos (ADR 0072 §2, ADR 0081).
+_Avoid_: editor (unqualified), code editor, IDE (except in the category phrase "the agent IDE",
+which is charter as a whole)
+
+**Your editor**:
+The editor the operator already uses (VS Code, Zed, a JetBrains IDE, or `$EDITOR`), where writing
+code by hand happens. charter opens a file there at a line, and never replaces it. Which editor
+is a setting of this machine, so it belongs to **Project** (ADR 0072 §2, ADR 0081).
+_Avoid_: external editor; IDE (except in the category phrase "the agent IDE")
 
 **Session record**:
 A summary a chat writes of its own session when it closes through **Smart close** — its goal,
@@ -547,6 +568,13 @@ _Avoid_: secret store, keychain (as the name of the concept)
 **Forge extension**:
 An extension about a code host's pull requests, merge requests or issues, which reaches the
 forge through `gh` or `glab`'s own login and never through a secret charter hands it. Once
-PE-29 opens the forge seam to extensions, it asks charter to make the call instead (ADR 0070,
-proposed).
+PE-29 opens the forge seam to extensions, it asks charter to make the call instead (ADR 0070).
 _Avoid_: forge plugin, GitHub integration
+
+**Editor integration**:
+charter's own extension for VS Code or Zed, or its own plugin for JetBrains IDEs: installed in
+**your editor**, it opens a file's chat in charter, sends a selection to a chat's prompt for the
+operator to send, and shows a chat's changes. It speaks the **editor protocol**, and is neither a
+charter **extension** nor a **harness plugin**. It is a view of a **Workspace** and its chats,
+drawn in your editor (ADR 0072 §2, ADR 0081).
+_Avoid_: extension or plugin (on their own), IDE plugin
