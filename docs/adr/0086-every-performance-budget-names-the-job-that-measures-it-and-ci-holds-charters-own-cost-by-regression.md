@@ -1,6 +1,7 @@
 # Every performance budget names the job that measures it, and CI holds charter's own cost by regression
 
-**Proposed 2026-10-01**, drafted for program-map ticket SC-17 (#685). It follows these of the
+**Accepted 2026-10-01** by the dispatcher under the operator's delegation of 2026-10-01 (decision
+D-0086), drafted for program-map ticket SC-17 (#685). It follows these of the
 operator's rulings:
 
 - **V8:** *"Performance budgets. Q1's targets are stated per RAM class. An idle-CPU budget; polls
@@ -376,6 +377,13 @@ its reason:
 ## For the operator's ruling
 
 None. Every point is inside V8, Q1, V7, ADR 0082 and the rows of the tickets this record cites.
+
+## Decided (dispatcher, 2026-10-01)
+
+- **D-0086:** *"Accepted under the delegation, with no major question. Relative timing rows use
+  github-action-benchmark: a row gates only after five green runs on main spread by at most about
+  7%, and fails a PR more than 20% worse than main's last value. Writes only come from main.
+  Retention is left to FD-24. M2 is marked at risk; #814 measures it."*
 
 ## Later decisions
 
