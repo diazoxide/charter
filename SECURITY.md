@@ -41,11 +41,20 @@ fails.
 ## What a release is made of: the SBOM, and `cargo audit bin`
 
 Each release carries a [CycloneDX](https://cyclonedx.org/) SBOM for each platform:
-`charter-macos-arm64.cdx.json` and `charter-linux-x86_64.cdx.json`. The Linux SBOM covers the
-`.deb` and the AppImage, which ship the same binaries. It is read off the built bundle, not the
-source. The Rust crates come from the binaries themselves, and the web front end's packages
-come from `app/package-lock.json`, production packages only. Like every build file, it carries
-provenance, so check it with `gh attestation verify` first. Then list what it names:
+`charter-macos-arm64.cdx.json` and `charter-linux-x86_64.cdx.json`. What it lists, exactly:
+
+- **The Rust crates of the three charter binaries**: the app, the `charter` command beside it
+  and the built-in `persona-statistics` extension. They are read out of the built binaries
+  themselves (see `cargo auditable` below): on macOS from the `.app`, on Linux from the `.deb`.
+  The AppImage carries the same three binaries, but it also bundles system libraries
+  (WebKitGTK and what it needs), and the SBOM does not list those. Nor does it list the macOS
+  system frameworks the app links.
+- **The web front end's npm packages**, from `app/package-lock.json`, production packages
+  only. The front end is compiled into the app, so these are the packages it was built from,
+  not ones found in the download.
+
+Like every build file, the SBOM carries provenance, so check it with `gh attestation verify`
+first. Then list what it names:
 
 ```sh
 jq -r '.components[] | "\(.purl // .name)"' charter-macos-arm64.cdx.json
@@ -57,7 +66,11 @@ Any scanner that reads CycloneDX can check it against advisories, for example
 **Every Rust binary charter ships carries its own dependency list.** The app, the `charter`
 command beside it and the built-in extensions are built with
 [`cargo auditable`](https://github.com/rust-secure-code/cargo-auditable), which puts the exact
-crates and versions each one was compiled from into the binary. So you can check an installed
+crates and versions each one was compiled from into the binary. It is the first third-party
+compiled tool in the release job that holds the signing keys, so it is pinned to one exact
+version and built from its own lockfile (`cargo install --locked --version`). `cargo install`
+cannot pin a checksum for the crate it installs; crates.io never replaces a published
+version, and Cargo checks every crate it downloads against the index. So you can check an installed
 copy against the [RustSec](https://rustsec.org/) advisory database with no SBOM at hand:
 
 ```sh

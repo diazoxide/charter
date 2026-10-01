@@ -353,9 +353,18 @@ jobs:
       # the `sbom` job reads back out of the bundle, and what `cargo audit bin` checks against
       # the advisory database on anyone's machine. It changes no name, no profile and no
       # signing step: codesign and the minisign signature both run after linking, over the
-      # binary as it now is. One exact version, compiled from crates.io with its own lockfile.
+      # binary as it now is.
+      #
+      # **The first third-party compiled tool in the job that holds the signing keys.** It runs
+      # as the rustc wrapper for every crate this job compiles, so it is pinned as tightly as
+      # `cargo install` allows: one exact version, built from its own lockfile (`--locked`).
+      # `cargo install` takes no checksum for the crate it installs; what holds the bytes is
+      # crates.io never replacing a published version, and Cargo checking every crate it
+      # downloads against the index. Moving to a new version is a reviewed change to this line.
       - name: cargo-auditable
-        run: cargo install --locked cargo-auditable --version 0.7.6
+        env:
+          CARGO_AUDITABLE_VERSION: 0.7.6
+        run: cargo install --locked cargo-auditable --version "$CARGO_AUDITABLE_VERSION"
 
       - name: The charter binary the app's hooks run, and the built-in extensions
         run: cargo auditable build --release --locked -p charter-cli -p persona-statistics
@@ -800,17 +809,26 @@ jobs:
             || { echo "FAIL: the sidecar IS the app — every hook would launch the GUI"; exit 1; }
           "$dir/charter" --version
 
-  # **A CycloneDX SBOM for each platform a release ships** (#584), read off the bundles that
-  # were built rather than off the lockfiles. `build` links every Rust binary with
-  # `cargo auditable`, so each one carries the crates it was compiled from; syft reads those
-  # back out of the unpacked `.app` and `.deb`, and the web front end's production packages
-  # out of `app/package-lock.json` (the bundler compiles them into the app, where no scanner
-  # can see them). Dev dependencies are left out: nothing of them ships.
+  # **A CycloneDX SBOM for each platform a release ships** (#584). What it covers, exactly:
   #
-  # A job that holds nothing: no secret, no environment, `contents: read`. It runs for every
-  # build, including one started by hand, which is how to try it without publishing. Its
-  # files are a `charter-*` artifact, so `provenance` attests them and `publish` verifies and
-  # uploads them beside the bundles, as `charter-<platform>.cdx.json`.
+  #   - The Rust crates of the three charter binaries (the app, the `charter` command beside it
+  #     and the `persona-statistics` extension), read out of the built binaries themselves:
+  #     `build` links each with `cargo auditable`, which embeds the crates it was compiled from.
+  #     macOS: read from the unpacked `.app`. Linux: from the unpacked `.deb`. The AppImage
+  #     carries the same three binaries, but it also bundles system libraries (WebKitGTK and
+  #     what it needs) that this SBOM does not list, and nor does it list the macOS frameworks.
+  #   - The web front end's npm packages, from `app/package-lock.json`, production packages
+  #     only. The bundler compiles them into the app, where no scanner can see them, so these
+  #     are the packages the front end was built FROM, not ones found in the download.
+  #
+  # A job that holds nothing: no secret, no environment, `contents: read`, and no third-party
+  # action. syft is downloaded at one version and checked against a sha256 committed below
+  # before it is unpacked, and it runs in a `run:` step, which the runner hands no artifact
+  # token, so even a bad syft cannot upload an artifact that `provenance` would attest. It runs
+  # for every build, including one started by hand, which is how to try it without publishing.
+  # The SBOMs are uploaded under one exact name, `charter-sbom-<version>`, which `provenance`
+  # attests and `publish` verifies and uploads beside the bundles, as
+  # `charter-<platform>.cdx.json`.
   sbom:
     name: SBOM
     needs: [plan, build]
@@ -825,12 +843,14 @@ jobs:
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
+          name: charter-macos-arm64-${{ needs.plan.outputs.version }}
           path: dist
-          pattern: charter-*
-          merge-multiple: true
 
-      # What each platform installs, unpacked, with the front end's lockfile beside it. The
-      # AppImage carries the same three binaries as the `.deb`.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: charter-linux-x86_64-${{ needs.plan.outputs.version }}
+          path: dist
+
       - name: Unpack what each platform ships
         run: |
           set -euo pipefail
@@ -842,33 +862,32 @@ jobs:
           dpkg-deb -x dist/charter-linux-x86_64.deb sbom/linux-x86_64
           mkdir -p out
 
-      - uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
-        with:
-          path: sbom/macos-arm64
-          format: cyclonedx-json
-          output-file: out/charter-macos-arm64.cdx.json
-          syft-version: v1.52.0
-          upload-artifact: false
-          upload-release-assets: false
-
-      - uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
-        with:
-          path: sbom/linux-x86_64
-          format: cyclonedx-json
-          output-file: out/charter-linux-x86_64.cdx.json
-          syft-version: v1.52.0
-          upload-artifact: false
-          upload-release-assets: false
+      # The checksum is the `linux_amd64.tar.gz` line of that release's
+      # `syft_<version>_checksums.txt`. Moving to a new syft is both lines, by hand.
+      - name: syft, at one version and checksum, reads each platform's bundle
+        env:
+          SYFT_VERSION: 1.52.0
+          SYFT_SHA256: caeedb81fb0491615f1ebd1761e4145d41ee86dd2cc7bf80669f9f5ad9d6133d
+        run: |
+          set -euo pipefail
+          curl -fsSL --proto '=https' -o "$RUNNER_TEMP/syft.tar.gz" "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_amd64.tar.gz"
+          echo "$SYFT_SHA256  $RUNNER_TEMP/syft.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/syft.tar.gz" -C "$RUNNER_TEMP" syft
+          "$RUNNER_TEMP/syft" version
+          "$RUNNER_TEMP/syft" scan "dir:sbom/macos-arm64" -o "cyclonedx-json=out/charter-macos-arm64.cdx.json"
+          "$RUNNER_TEMP/syft" scan "dir:sbom/linux-x86_64" -o "cyclonedx-json=out/charter-linux-x86_64.cdx.json"
 
       # An SBOM that lists nothing looks exactly like one that lists everything until someone
       # reads it. Each shipped binary's own crate has to be in it, which it only is when that
       # binary was built with cargo-auditable, and so do the front end's packages.
       - name: Each SBOM names every binary it ships, and the front end
+        env:
+          REQUIRED_PURLS: pkg:cargo/charter-app@ pkg:cargo/charter-cli@ pkg:cargo/persona-statistics@ pkg:npm/
         run: |
           set -euo pipefail
           for sbom in out/*.cdx.json; do
             purls=$(jq -r '.components[]?.purl // empty' "$sbom")
-            for want in pkg:cargo/charter-app@ pkg:cargo/charter-cli@ pkg:cargo/persona-statistics@ pkg:npm/; do
+            for want in $REQUIRED_PURLS; do
               grep -q "^$want" <<<"$purls" \
                 || { echo "::error::$sbom has no $want component — was that binary built with cargo auditable?"; exit 1; }
             done
@@ -909,13 +928,24 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      # The build jobs' artifacts by name (`charter-<platform>-<version>`, see `build`), and
-      # nothing else a run might hold.
+      # The build artifacts by their EXACT names (`charter-<platform>-<version>` from `build`,
+      # `charter-sbom-<version>` from `sbom`), never by pattern. Any step of this run that holds
+      # the artifact token can upload an artifact, and a pattern would take one it uploaded
+      # under a lookalike name, attest it, and ship it (#584 review).
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
+          name: charter-macos-arm64-${{ needs.plan.outputs.version }}
           path: dist
-          pattern: charter-*
-          merge-multiple: true
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: charter-linux-x86_64-${{ needs.plan.outputs.version }}
+          path: dist
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: charter-sbom-${{ needs.plan.outputs.version }}
+          path: dist
 
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
@@ -974,12 +1004,22 @@ jobs:
       # No cache here: this job can write the release, so it builds from nothing but main's
       # own tree.
 
-      # The build jobs' artifacts by name, the same set `provenance` attested.
+      # The build artifacts by their exact names, the same set `provenance` attested (see the
+      # note there on why never a pattern).
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
+          name: charter-macos-arm64-${{ needs.plan.outputs.version }}
           path: dist
-          pattern: charter-*
-          merge-multiple: true
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: charter-linux-x86_64-${{ needs.plan.outputs.version }}
+          path: dist
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: charter-sbom-${{ needs.plan.outputs.version }}
+          path: dist
 
       # The bytes about to be uploaded are the bytes `provenance` attested in this run. The
       # same run-pinned check, over what this job downloaded, before anything is uploaded.

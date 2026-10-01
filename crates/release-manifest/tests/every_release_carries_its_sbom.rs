@@ -17,17 +17,7 @@ mod workflow;
 
 use std::path::PathBuf;
 
-use workflow::{Job, release_jobs, step_uses};
-
-fn job<'a>(jobs: &'a [Job], name: &str) -> &'a Job {
-    jobs.iter()
-        .find(|j| j.name == name)
-        .unwrap_or_else(|| panic!("release.yml has no `{name}` job"))
-}
-
-fn text_of(job: &Job) -> String {
-    job.body.join("\n")
-}
+use workflow::{Job, downloads_by_name, job, release_jobs, run_lines, step_uses, step_value};
 
 /// The wrapper Tauri's `--runner` calls in place of `cargo`.
 const RUNNER: &str = "tools/auditable-cargo";
@@ -36,42 +26,58 @@ const RUNNER: &str = "tools/auditable-cargo";
 fn every_rust_binary_the_release_ships_is_built_with_its_dependency_list() {
     let jobs = release_jobs();
     let build = job(&jobs, "build");
-    let text = text_of(build);
 
+    // One exact cargo-auditable, from its own lockfile. `cargo install` takes no checksum for
+    // the crate it installs; crates.io never replaces a published version, and Cargo checks
+    // every crate it downloads against the index.
+    let install = step(build, "cargo-auditable");
+    let version = step_value(&install, "env", "CARGO_AUDITABLE_VERSION").expect("a version");
     assert!(
-        text.contains("cargo install --locked cargo-auditable --version "),
-        "build installs one exact cargo-auditable:\n{text}"
+        version.split('.').count() == 3
+            && version
+                .split('.')
+                .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit())),
+        "CARGO_AUDITABLE_VERSION is one exact version: {version}"
     );
-    assert!(
-        text.contains(
-            "cargo auditable build --release --locked -p charter-cli -p persona-statistics"
-        ),
-        "the sidecar and the built-in extension are built with cargo auditable"
+    assert_eq!(
+        run_lines(&install),
+        [r#"cargo install --locked cargo-auditable --version "$CARGO_AUDITABLE_VERSION""#]
     );
-    let plain: Vec<&String> = build
-        .body
+
+    assert_eq!(
+        run_lines(&step(
+            build,
+            "The charter binary the app's hooks run, and the built-in extensions"
+        )),
+        ["cargo auditable build --release --locked -p charter-cli -p persona-statistics"]
+    );
+
+    // Tauri runs `<runner> build …` itself, so the app binary goes through the wrapper. Both
+    // `tauri build` calls, or the one that makes the published bundle may be the plain one.
+    assert_eq!(
+        run_lines(&step(build, "Build the app")),
+        [format!(
+            r#"npx tauri build --config src-tauri/tauri.build.conf.json --bundles ${{{{ matrix.bundles }}}} --runner "$GITHUB_WORKSPACE/{RUNNER}""#
+        )]
+    );
+    assert_eq!(
+        run_lines(&step(build, "Build the extra bundle")),
+        [format!(
+            r#"npx tauri build --config src-tauri/tauri.build.conf.json --bundles ${{{{ matrix.bundles }}}},${{{{ matrix.extra_bundles }}}} --runner "$GITHUB_WORKSPACE/{RUNNER}""#
+        )]
+    );
+
+    // And nothing in the job compiles around it.
+    let plain: Vec<String> = build
+        .steps()
         .iter()
-        .filter(|l| l.contains("cargo build"))
+        .flat_map(|s| run_lines(s))
+        .filter(|l| l.starts_with("cargo build") || l.contains(" cargo build"))
         .collect();
     assert!(
         plain.is_empty(),
         "build runs a plain `cargo build`: {plain:#?}"
     );
-
-    // Tauri runs `<runner> build …` itself, so the app binary goes through the wrapper. Both
-    // `tauri build` calls, or the one that makes the published bundle may be the plain one.
-    let tauri: Vec<&String> = build
-        .body
-        .iter()
-        .filter(|l| l.contains("npx tauri build"))
-        .collect();
-    assert_eq!(tauri.len(), 2, "{tauri:#?}");
-    for line in tauri {
-        assert!(
-            line.contains(&format!("--runner \"$GITHUB_WORKSPACE/{RUNNER}\"")),
-            "`tauri build` without the auditable runner: {line}"
-        );
-    }
 }
 
 #[test]
@@ -95,6 +101,21 @@ fn the_runner_is_cargo_auditable_and_nothing_else() {
     }
 }
 
+/// The step called `name` in `job`.
+fn step(job: &Job, name: &str) -> Vec<String> {
+    job.steps()
+        .into_iter()
+        .find(|s| s[0].trim() == format!("- name: {name}"))
+        .unwrap_or_else(|| panic!("job `{}` has no step `{name}`", job.name))
+}
+
+fn position(lines: &[String], want: &str) -> usize {
+    lines
+        .iter()
+        .position(|l| l == want)
+        .unwrap_or_else(|| panic!("`{want}` is not a command of {lines:#?}"))
+}
+
 #[test]
 fn the_sbom_job_holds_nothing_and_reads_the_sbom_off_the_built_bundles() {
     let jobs = release_jobs();
@@ -112,56 +133,110 @@ fn the_sbom_job_holds_nothing_and_reads_the_sbom_off_the_built_bundles() {
     );
     assert!(!sbom.reads_a_secret() && !sbom.publishes() && sbom.environment().is_none());
     assert!(!sbom.can_mint_an_oidc_token());
+    assert_eq!(
+        downloads_by_name(sbom),
+        [
+            "charter-linux-x86_64-${{ needs.plan.outputs.version }}",
+            "charter-macos-arm64-${{ needs.plan.outputs.version }}",
+        ]
+    );
 
-    let steps = sbom.steps();
-    let download = steps
+    // Only GitHub's own actions. A third-party action gets the run's artifact token, and with
+    // it could upload an artifact that provenance would attest and publish would ship.
+    let actions: Vec<String> = sbom
+        .steps()
         .iter()
-        .find(|s| step_uses(s).is_some_and(|u| u.starts_with("actions/download-artifact@")))
-        .expect("the sbom job downloads the builds");
-    assert!(download.iter().any(|l| l.trim() == "pattern: charter-*"));
-
-    let syft: Vec<&Vec<String>> = steps
-        .iter()
-        .filter(|s| step_uses(s).is_some_and(|u| u.starts_with("anchore/sbom-action@")))
+        .filter_map(|s| step_uses(s))
+        .map(|u| u.split('@').next().unwrap_or_default().to_owned())
         .collect();
-    assert_eq!(syft.len(), 2, "one SBOM per platform");
-    for step in syft {
-        let has = |want: &str| step.iter().any(|l| l.trim() == want);
-        assert!(has("format: cyclonedx-json"), "{step:#?}");
-        // The action would otherwise upload its own artifact, and on a release event attach
-        // itself to the release outside `publish`.
-        assert!(has("upload-artifact: false"), "{step:#?}");
-        assert!(has("upload-release-assets: false"), "{step:#?}");
-        assert!(
-            step.iter().any(|l| l.trim().starts_with("syft-version: v")),
-            "the syft version is pinned: {step:#?}"
+    assert_eq!(
+        actions,
+        [
+            "actions/checkout",
+            "actions/download-artifact",
+            "actions/download-artifact",
+            "actions/upload-artifact",
+        ]
+    );
+
+    // syft, at one version, checked against a sha256 committed here BEFORE it is unpacked,
+    // and run from a `run:` step, which is handed no runtime token.
+    let syft = step(
+        sbom,
+        "syft, at one version and checksum, reads each platform's bundle",
+    );
+    let version = step_value(&syft, "env", "SYFT_VERSION").expect("SYFT_VERSION");
+    assert!(
+        version.split('.').count() == 3
+            && version
+                .split('.')
+                .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit())),
+        "SYFT_VERSION is one exact version: {version}"
+    );
+    let sha = step_value(&syft, "env", "SYFT_SHA256").expect("SYFT_SHA256");
+    assert!(
+        sha.len() == 64
+            && sha
+                .chars()
+                .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
+        "SYFT_SHA256 is a sha256: {sha}"
+    );
+    let lines = run_lines(&syft);
+    let fetch = position(
+        &lines,
+        r#"curl -fsSL --proto '=https' -o "$RUNNER_TEMP/syft.tar.gz" "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_amd64.tar.gz""#,
+    );
+    let check = position(
+        &lines,
+        r#"echo "$SYFT_SHA256  $RUNNER_TEMP/syft.tar.gz" | sha256sum -c -"#,
+    );
+    let unpack = position(
+        &lines,
+        r#"tar -xzf "$RUNNER_TEMP/syft.tar.gz" -C "$RUNNER_TEMP" syft"#,
+    );
+    assert!(
+        fetch < check && check < unpack,
+        "fetched, checked, THEN unpacked"
+    );
+    for platform in ["macos-arm64", "linux-x86_64"] {
+        let scan = position(
+            &lines,
+            &format!(
+                r#""$RUNNER_TEMP/syft" scan "dir:sbom/{platform}" -o "cyclonedx-json=out/charter-{platform}.cdx.json""#
+            ),
         );
+        assert!(unpack < scan);
     }
 
     // What proves cargo-auditable worked: each shipped binary's own crate is in the SBOM.
-    let text = text_of(sbom);
-    for purl in [
-        "pkg:cargo/charter-app@",
-        "pkg:cargo/charter-cli@",
-        "pkg:cargo/persona-statistics@",
-        "pkg:npm/",
-    ] {
-        assert!(
-            text.contains(purl),
-            "the sbom job does not check for {purl}"
-        );
-    }
+    let names = step(
+        sbom,
+        "Each SBOM names every binary it ships, and the front end",
+    );
+    assert_eq!(
+        step_value(&names, "env", "REQUIRED_PURLS"),
+        Some(
+            "pkg:cargo/charter-app@ pkg:cargo/charter-cli@ pkg:cargo/persona-statistics@ pkg:npm/"
+        )
+    );
+    let lines = run_lines(&names);
+    position(&lines, r#"for sbom in out/*.cdx.json; do"#);
+    position(
+        &lines,
+        r#"purls=$(jq -r '.components[]?.purl // empty' "$sbom")"#,
+    );
+    position(&lines, r#"for want in $REQUIRED_PURLS; do"#);
 
-    let upload = steps
-        .iter()
+    let upload = sbom
+        .steps()
+        .into_iter()
         .find(|s| step_uses(s).is_some_and(|u| u.starts_with("actions/upload-artifact@")))
         .expect("the sbom job uploads what it made");
-    assert!(
-        upload
-            .iter()
-            .any(|l| l.trim().starts_with("name: charter-sbom-")),
-        "a `charter-*` artifact, so provenance and publish pick it up: {upload:#?}"
+    assert_eq!(
+        step_value(&upload, "with", "name"),
+        Some("charter-sbom-${{ needs.plan.outputs.version }}")
     );
+    assert_eq!(step_value(&upload, "with", "path"), Some("out/"));
 }
 
 #[test]

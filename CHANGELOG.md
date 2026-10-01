@@ -20,8 +20,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   discussion forms, and a pull request template (#609).
 
 - **Every release says what it is made of.** Each release carries a CycloneDX SBOM per platform
-  (`charter-macos-arm64.cdx.json`, `charter-linux-x86_64.cdx.json`), read off the built app,
-  and every Rust binary charter ships now carries its own dependency list, so
+  (`charter-macos-arm64.cdx.json`, `charter-linux-x86_64.cdx.json`). It lists the Rust crates
+  read out of the built binaries and the front end's npm packages from its lockfile. Every
+  Rust binary charter ships now carries its own dependency list, so
   `cargo audit bin` can check an installed copy against the RustSec advisories. `SECURITY.md`
   says how to read both (#584).
 
