@@ -364,8 +364,9 @@ clone and this machine, and are still written.
   `workspace recall`, `persona list`, `change list`, `session list`, `harness list` and
   `guard list` (or bare `guard`). Each is on the list because a test runs it on a read-only
   project and finds every file unchanged. `doctor` (without `--fix`), `update`, `version`,
-  `news`, `root` and the commands that need no project run as they always do. The list is explicit: a command that is not on it is refused,
-  so a new command is refused on a read-only project until it is shown to only read.
+  `news`, `root` and the commands that need no project run as they always do. The list is
+  explicit: a command that is not on it is refused, so a new command is refused on a read-only
+  project until it is shown to only read.
 - **Every other command is refused**, each refusal naming the reason: extension commands and the
   core-owned aliases onto them (the same test `extension::cli::extension_command` gives the tool
   guard), `doctor --fix`, `init` and `reinit`.
