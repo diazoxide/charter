@@ -11,6 +11,6 @@
 
 ## Checklist
 
-- [ ] Every commit is signed off (`Signed-off-by`, `git commit -s`), per the DCO in CONTRIBUTING.md.
+- [ ] Every commit is signed off (`Signed-off-by`, `git commit -s`), per the DCO in CONTRIBUTING.md (not needed when a maintainer opens the pull request).
 - [ ] What CI runs passes locally (README.md, "Develop").
 - [ ] CHANGELOG.md has a line under `## [Unreleased]`, if people using charter would notice.

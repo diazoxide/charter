@@ -45,7 +45,8 @@ is responsible for it and signs it off.
 charter uses the [Developer Certificate of Origin](https://developercertificate.org/) (DCO)
 instead of a contributor licence agreement. By signing a commit off you state that you wrote
 it, or otherwise have the right to submit it under the project's licence. Every commit in a
-pull request carries a line like this at the end of its message:
+pull request from a contributor outside the maintainers carries a line like this at the end of
+its message:
 
 ```
 Signed-off-by: Your Name <you@example.com>
@@ -58,6 +59,10 @@ off commits you have already made on your branch:
 git rebase --signoff main
 git push --force-with-lease
 ```
+
+**Maintainers are exempt.** A pull request opened by a maintainer (someone with write
+access to this repository) needs no sign-off, and that includes the commits the
+maintainer's coding agents make in it.
 
 ## Licence
 

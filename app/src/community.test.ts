@@ -17,6 +17,9 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
 const read = (path: string) => readFileSync(join(ROOT, path), "utf8");
 
+/** A file's words with each run of whitespace made one space, so rewrapping a line is free. */
+const prose = (path: string) => read(path).replace(/\s+/g, " ");
+
 /** The documents a person reads before asking, contributing or reporting. */
 const DOCS = [
   "CODE_OF_CONDUCT.md",
@@ -95,11 +98,27 @@ describe("the community files", () => {
     });
   });
 
-  it("ask every commit to be signed off under the DCO", () => {
+  it("ask every outside contributor's commit to be signed off under the DCO", () => {
     const contributing = read("CONTRIBUTING.md");
     expect(contributing).toContain("https://developercertificate.org/");
     expect(contributing).toContain("git commit -s");
+    expect(prose("CONTRIBUTING.md")).toContain(
+      "Every commit in a pull request from a contributor outside the maintainers carries",
+    );
     expect(read(".github/PULL_REQUEST_TEMPLATE.md")).toMatch(/Signed-off-by/);
+  });
+
+  it("exempt the maintainers' own pull requests from the sign-off, agents' commits included", () => {
+    // The operator's ruling V32b: the DCO is for outside contributors. A pull request a
+    // maintainer opens needs no sign-off, and neither do the commits their agents make in it.
+    expect(prose("CONTRIBUTING.md")).toContain(
+      "**Maintainers are exempt.** A pull request opened by a maintainer (someone with write " +
+        "access to this repository) needs no sign-off, and that includes the commits the " +
+        "maintainer's coding agents make in it.",
+    );
+    expect(prose(".github/PULL_REQUEST_TEMPLATE.md")).toContain(
+      "per the DCO in CONTRIBUTING.md (not needed when a maintainer opens the pull request).",
+    );
   });
 
   it("keep the Contributor Covenant 2.1 word for word, but for where a report goes", () => {
