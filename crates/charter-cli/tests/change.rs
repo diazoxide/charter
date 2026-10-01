@@ -397,8 +397,12 @@ fn push_refuses_a_member_whose_clone_is_gone_by_name_and_asks_no_forge() {
     plane.ok(&["add", "api-2", "svc"]);
     std::fs::remove_dir_all(plane.ws().join("svc")).unwrap();
     let (code, out, err) = plane.change(&["push", "api-2"]);
-    assert_eq!(code, 2, "stdout: {out}\nstderr: {err}");
-    assert!(err.contains("svc: no clone in workspace 'alpha'"), "{err}");
+    // 1, as the Python charter answered: not everything asked for happened.
+    assert_eq!(code, 1, "stdout: {out}\nstderr: {err}");
+    assert!(
+        err.contains("svc: not a repo in workspace 'alpha'"),
+        "{err}"
+    );
     assert!(err.contains("charter clone svc -w alpha"), "{err}");
 }
 

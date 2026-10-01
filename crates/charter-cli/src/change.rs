@@ -65,8 +65,9 @@ pub enum ChangeCommand {
     },
     /// Push every member's branch and open or update its pull or merge request, each carrying
     /// the change's cross-link block. Prints every repo, branch and destination first. Commits
-    /// nothing, never forces, and pushes a repo whose save mode is `off` too. Exit 2 when a
-    /// member has no clone here; the others are still pushed.
+    /// nothing, never forces, and pushes a repo whose save mode is `off` too. A member that is
+    /// not a repo in this workspace is refused by name, the others are still pushed, and the
+    /// exit is 1.
     Push {
         change: String,
         /// The workspace (default: the active one).

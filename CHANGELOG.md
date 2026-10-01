@@ -19,9 +19,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   description that lists every member's request, so a partial landing can be read from any one
   repo. Running it again opens no second request, and the block is rewritten in place when the
   members change; the rest of the description is left alone. It commits nothing, never
-  force-pushes, and pushes repos whose save mode is `off` too. A member with no clone here is
-  refused by name and the others are still pushed. GitHub is covered end to end; GitLab merge
-  requests follow (#471).
+  force-pushes, sends no tags with the branch, and pushes repos whose save mode is `off` too.
+  A repo whose git config sends pushes somewhere other than the URL printed is refused. A
+  member that is not a repo in this workspace is refused by name and the others are still
+  pushed. GitLab members are pushed and their merge requests opened the same way, but that is
+  not yet tested end to end. The guard that stops a live substitution in `charter change
+  create` or `drop` now names `charter change push` as what writes the `why` into requests
+  (#471).
 
 - **The first run lays your project out for the stack you work in.** Project templates for
   Rust, TypeScript, Python, Go, monorepos and docs-only repos each add an engineer and a

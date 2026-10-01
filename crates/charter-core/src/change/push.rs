@@ -13,10 +13,16 @@
 //! `off` included: `off` governs saves, and this verb is run by hand over repos somebody named
 //! (ADR 0060 D4, ADR 0051 amended).
 //!
+//! **The destination printed is the one git uses.** A repo whose git config rewrites where a
+//! push goes (`url.*.pushInsteadOf`, `remote.*.pushurl`) is refused, and the push sets on its
+//! own command line that no tag, push option or submodule goes with the branch.
+//!
 //! **Fire and report.** One member's failure is said and the rest still run: a third member
-//! with no clone is no reason to leave the first two unpushed. A member charter reached and
-//! could not open a request for is a `—` row of the block, never a missing one, because a
-//! table without it says the change has fewer members than it has.
+//! that is not a repo here is no reason to leave the first two unpushed. The exit is 1 when
+//! any member was not pushed, opened or written, as the Python charter answered, and 2 only
+//! when the whole command is refused. A member charter reached and could not open a request
+//! for is a `—` row of the block, never a missing one, because a table without it says the
+//! change has fewer members than it has.
 //!
 //! **The block is charter's; the rest of the description is not.** Charter writes only
 //! between [`BLOCK_BEGIN`] and [`BLOCK_END`]. A request whose description lacks exactly one
@@ -45,11 +51,31 @@ pub const BLOCK_END: &str = "<!-- END charter change -->";
 /// block, and splicing there would rewrite an example somebody wrote out.
 const FENCES: [&str; 2] = ["```", "~~~"];
 
-/// One table cell: contained to one line first, so a `why` cannot become a second row, then
-/// markdown's column separator escaped, so it cannot become a second column.
+/// One table cell: contained to one line first, so a `why` cannot become a second row; then
+/// markdown's column separator escaped, so it cannot become a second column; then an HTML
+/// comment's opening neutralised, so a `why` that spells one of charter's markers cannot put
+/// a second marker in the block and lock it against every later splice.
 fn cell(value: &str) -> String {
-    shown::one_line(value, TEXT_LIMIT).replace('|', "\\|")
+    shown::one_line(value, TEXT_LIMIT)
+        .replace('|', "\\|")
+        .replace("<!--", "&lt;!--")
 }
+
+/// The git config keys that send a push somewhere other than the URL it was given. A repo that
+/// sets one is refused, so the destination printed is always the one git pushes to.
+const PUSH_REWRITES: &str = r"^(url\..*\.pushinsteadof|remote\..*\.pushurl)$";
+
+/// What this push sets for itself on git's command line, which beats every config file: no
+/// tag goes with the branch, no push option a repo's config names is sent, and no submodule is
+/// pushed or checked.
+const PUSH_ONLY_THE_BRANCH: [&str; 6] = [
+    "-c",
+    "push.followTags=false",
+    "-c",
+    "push.pushOption=",
+    "-c",
+    "push.recurseSubmodules=no",
+];
 
 /// A member charter reached: its request's number, and where that request lives.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,8 +88,8 @@ pub struct Reached {
 }
 
 /// The block charter writes into every member's request: the change, why, and one row per
-/// member with its request, or `—` for a member charter could not reach.
-pub fn block(record: &Record, reached: &BTreeMap<String, Reached>) -> String {
+/// member with its request, or `—` for a member `reached` has no request for.
+pub fn block<'r>(record: &Record, reached: &dyn Fn(&str) -> Option<&'r Reached>) -> String {
     let mut lines = vec![
         BLOCK_BEGIN.to_string(),
         format!(
@@ -76,7 +102,7 @@ pub fn block(record: &Record, reached: &BTreeMap<String, Reached>) -> String {
         "|---|---|---|".to_string(),
     ];
     for m in &record.members {
-        let at = reached.get(&m.repo).map_or_else(
+        let at = reached(&m.repo).map_or_else(
             || "—".to_string(),
             |r| format!("{}{}{}", cell(&r.path), r.sigil, r.number),
         );
@@ -98,21 +124,31 @@ pub fn block(record: &Record, reached: &BTreeMap<String, Reached>) -> String {
 /// `body` with the region between charter's markers replaced by `block`, or `None` — a
 /// refusal, not a fallback — when the markers are absent, when either appears more than
 /// once, when they are out of order, or when either sits inside a code fence.
+///
+/// Everything outside the block goes back byte for byte: its line endings, and whether the
+/// description ends in a newline. The block's own lines take the ending of the line its first
+/// marker was on, so a description written with `\r\n` stays `\r\n` throughout.
 pub fn splice(body: &str, block: &str) -> Option<String> {
-    let lines: Vec<&str> = body.lines().collect();
+    let lines: Vec<&str> = body.split_inclusive('\n').collect();
     let (mut begins, mut ends) = (Vec::new(), Vec::new());
-    let (mut fence, mut fenced) = (false, false);
+    let (mut fence, mut fenced): (Option<&str>, bool) = (None, false);
     for (i, line) in lines.iter().enumerate() {
-        if FENCES.iter().any(|f| line.trim().starts_with(f)) {
-            fence = !fence;
+        // A fence is closed only by a fence of its own kind: a `~~~` inside a ``` fence is
+        // the fence's text.
+        if let Some(kind) = FENCES.iter().find(|f| line.trim().starts_with(**f)) {
+            match fence {
+                None => fence = Some(kind),
+                Some(open) if open == *kind => fence = None,
+                Some(_) => {}
+            }
         }
         if line.contains(BLOCK_BEGIN) {
             begins.push(i);
-            fenced |= fence;
+            fenced |= fence.is_some();
         }
         if line.contains(BLOCK_END) {
             ends.push(i);
-            fenced |= fence;
+            fenced |= fence.is_some();
         }
     }
     let ([begin], [end]) = (begins.as_slice(), ends.as_slice()) else {
@@ -121,23 +157,27 @@ pub fn splice(body: &str, block: &str) -> Option<String> {
     if fenced || begin > end {
         return None;
     }
-    let mut out: Vec<&str> = lines[..*begin].to_vec();
-    out.extend(block.lines());
-    out.extend_from_slice(&lines[end + 1..]);
-    Some(out.join("\n"))
+    let ending = if lines[*begin].ends_with("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    let last = lines[*end];
+    let kept_ending = &last[last.trim_end_matches(['\n', '\r']).len()..];
+    let mut out = lines[..*begin].concat();
+    out.push_str(&block.lines().collect::<Vec<_>>().join(ending));
+    out.push_str(kept_ending);
+    out.push_str(&lines[end + 1..].concat());
+    Some(out)
 }
 
 /// The description charter writes when it opens a request: the change's `why`, and its block
 /// with no request in it yet, so the splice that follows has its markers to find.
 fn new_body(record: &Record) -> String {
-    format!(
-        "{}\n\n{}",
-        cell(&record.why),
-        block(record, &BTreeMap::new())
-    )
+    format!("{}\n\n{}", cell(&record.why), block(record, &|_| None))
 }
 
-/// Where one member goes, resolved from its clone before anything is pushed.
+/// Where one member goes, resolved from its repo before anything is pushed.
 struct Plan {
     repo: String,
     branch: String,
@@ -147,40 +187,39 @@ struct Plan {
     base: Option<String>,
 }
 
-/// One member that could not be planned: a refusal (2) or something wrong (1).
-enum Unplanned {
-    Refused,
-    Failed,
-}
-
+/// One member's plan, or `Err` with the reason it is not pushed already said.
 fn plan(
     plane: &Path,
     ws: &str,
+    slug: &str,
     repo: &str,
     branch: &str,
     say: &mut dyn FnMut(Say),
-) -> Result<Plan, Unplanned> {
+) -> Result<Plan, ()> {
     let Some(clone) = crate::repos::clone_at(plane, ws, repo) else {
         say(Say::Fail(format!(
-            "{}: no clone in workspace '{ws}', so it is not pushed.",
+            "{}: not a repo in workspace '{ws}', so it is not pushed.",
             named(repo)
         )));
         say(Say::Info(format!(
             "Clone it first: charter clone {} -w {ws}",
             named(repo)
         )));
-        return Err(Unplanned::Refused);
+        return Err(());
     };
-    let fail = |say: &mut dyn FnMut(Say), why: String| {
+    let fail = |say: &mut dyn FnMut(Say), why: String| -> Result<Plan, ()> {
         say(Say::Fail(format!("{}: {}", named(repo), shown::line(&why))));
-        Unplanned::Failed
+        Err(())
     };
-    let on = Repo::of_clone(plane, &clone.path).map_err(|why| fail(say, why))?;
+    let on = match Repo::of_clone(plane, &clone.path) {
+        Ok(on) => on,
+        Err(why) => return fail(say, why),
+    };
     let Some(https) = crate::planegit::origin_https_of(plane, &clone.path) else {
-        return Err(fail(
+        return fail(
             say,
             "its origin is not a GitHub or GitLab URL charter can push to over HTTPS".into(),
-        ));
+        );
     };
     let local = git::run(
         &clone.path,
@@ -193,14 +232,47 @@ fn plan(
         git::READ,
     );
     if !local.is_ok_and(|run| run.ok()) {
-        return Err(fail(
+        return fail(
             say,
             format!(
-                "its clone has no branch {}. Create it there, or set the member's branch in \
-                 workspaces/{ws}/changes/<slug>.json",
-                named(branch)
+                "it has no branch {} here. Create it in the repo, or set the member's branch \
+                 in workspaces/{ws}/changes/{}.json",
+                named(branch),
+                named(slug)
             ),
-        ));
+        );
+    }
+    match git::run(
+        &clone.path,
+        &["config", "--get-regexp", PUSH_REWRITES],
+        git::READ,
+    ) {
+        // `git config --get-regexp` exits 1 when no key matches.
+        Ok(run) if run.code == Some(1) => {}
+        Ok(run) if run.ok() => {
+            let keys: Vec<String> = run
+                .out
+                .lines()
+                .filter_map(|l| l.split_whitespace().next())
+                .map(shown::line)
+                .collect();
+            return fail(
+                say,
+                format!(
+                    "its git config sends pushes somewhere other than the URL printed here \
+                     ({}), so it is not pushed. Remove that setting to push it.",
+                    keys.join(", ")
+                ),
+            );
+        }
+        _ => {
+            return fail(
+                say,
+                "charter could not read its git config, so it cannot say where a push would \
+                 go"
+                .into(),
+            );
+        }
     }
     let base = crate::reposave::default_branch(plane, repo, &clone.path);
     Ok(Plan {
@@ -241,21 +313,21 @@ pub fn push_with(
         )));
         return REFUSED;
     }
-    let (mut refused, mut failed) = (0usize, 0usize);
+    let mut failed = 0usize;
     let mut plans = Vec::new();
     for m in &record.members {
-        match plan(plane, ws, &m.repo, &m.branch, say) {
+        match plan(plane, ws, slug, &m.repo, &m.branch, say) {
             Ok(p) => plans.push(p),
-            Err(Unplanned::Refused) => refused += 1,
-            Err(Unplanned::Failed) => failed += 1,
+            Err(()) => failed += 1,
         }
     }
     let names: Vec<String> = plans.iter().map(|p| shown::line(&p.repo)).collect();
     let w = tui::column("", names.iter().map(String::as_str), 0, None);
     if !plans.is_empty() {
         say(Say::Info(format!(
-            "Pushing {} member(s) of '{slug}'. Nothing is committed and nothing is forced:",
-            plans.len()
+            "Pushing {} member(s) of {}. Nothing is committed and nothing is forced:",
+            plans.len(),
+            named(slug)
         )));
     }
     for (p, name) in plans.iter().zip(&names) {
@@ -271,8 +343,8 @@ pub fn push_with(
     }
 
     let caller = Caller::command();
-    let mut reached: BTreeMap<String, Reached> = BTreeMap::new();
-    let mut backends: BTreeMap<String, (Box<dyn ForgeBackend>, Pr)> = BTreeMap::new();
+    // Every member charter reached: where its request is, the request, and its forge.
+    let mut reached: BTreeMap<String, (Reached, Pr, Box<dyn ForgeBackend>)> = BTreeMap::new();
     for (p, name) in plans.iter().zip(&names) {
         let named_row = tui::pad(name, w, Align::Left);
         if !pushed(p, say) {
@@ -344,22 +416,18 @@ pub fn push_with(
             standing.unwrap_or_default(),
             shown::line(&pr.url)
         )));
-        reached.insert(
-            p.repo.clone(),
-            Reached {
-                number: pr.number,
-                path: p.on.path.clone(),
-                sigil,
-            },
-        );
-        backends.insert(p.repo.clone(), (backend, pr));
+        let at = Reached {
+            number: pr.number,
+            path: p.on.path.clone(),
+            sigil,
+        };
+        reached.insert(p.repo.clone(), (at, pr, backend));
     }
 
-    let block = block(&record, &reached);
+    let block = block(&record, &|repo| reached.get(repo).map(|(at, _, _)| at));
     let (mut written, mut current) = (0usize, 0usize);
-    for (repo, (backend, pr)) in &backends {
-        let path = &reached[repo].path;
-        let sigil = reached[repo].sigil;
+    for (repo, (at, pr, backend)) in &reached {
+        let (path, sigil) = (&at.path, at.sigil);
         let body = match backend.body(&caller, path, pr) {
             Ok(body) => body,
             Err(why) => {
@@ -384,7 +452,7 @@ pub fn push_with(
             failed += 1;
             continue;
         };
-        if spliced == body.lines().collect::<Vec<_>>().join("\n") {
+        if spliced == body {
             current += 1;
             continue;
         }
@@ -411,13 +479,10 @@ pub fn push_with(
             "cross-link block already current in {current} request description(s)"
         )));
     }
-    if failed > 0 {
-        1
-    } else if refused > 0 {
-        REFUSED
-    } else {
-        0
-    }
+    // 1 when any member was not pushed, opened or written, as the Python charter answered:
+    // a script reads "not everything it was asked to do happened" from one code. Exit 2 stays
+    // the refusal of the whole command (no such change, no members).
+    u8::from(failed > 0)
 }
 
 /// Push one member's branch to its own name on its origin, and nothing else. `false` with
@@ -425,7 +490,9 @@ pub fn push_with(
 fn pushed(p: &Plan, say: &mut dyn FnMut(Say)) -> bool {
     let refspec = format!("refs/heads/{0}:refs/heads/{0}", p.branch);
     let helper = forge::helper_for(&p.on.forge);
-    let run = match git::run_network(&p.clone, Some(&helper), &["push", &p.https, &refspec]) {
+    let mut args: Vec<&str> = PUSH_ONLY_THE_BRANCH.to_vec();
+    args.extend(["push", p.https.as_str(), refspec.as_str()]);
+    let run = match git::run_network(&p.clone, Some(&helper), &args) {
         Ok(run) => run,
         Err(unavailable) => {
             say(Say::Fail(format!(
@@ -453,16 +520,20 @@ fn pushed(p: &Plan, say: &mut dyn FnMut(Say)) -> bool {
         )));
         return false;
     }
-    // Kept in step, so the clone's own view of its remote matches what it now holds.
-    let _ = git::run(
+    // Kept in step, so the repo's own view of its remote matches what the remote now holds.
+    let tracking = format!("refs/remotes/origin/{}", p.branch);
+    let moved = git::run(
         &p.clone,
-        &[
-            "update-ref",
-            &format!("refs/remotes/origin/{}", p.branch),
-            &format!("refs/heads/{}", p.branch),
-        ],
+        &["update-ref", &tracking, &format!("refs/heads/{}", p.branch)],
         git::READ,
     );
+    if !moved.is_ok_and(|run| run.ok()) {
+        say(Say::Warn(format!(
+            "{}: pushed, but {} was not moved to it. `git fetch` in the repo corrects it.",
+            named(&p.repo),
+            shown::line(&tracking)
+        )));
+    }
     true
 }
 

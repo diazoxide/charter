@@ -92,23 +92,27 @@ by `tests/a_forge_cli_is_asked_exactly_what_python_asked.rs` and
 
 `charter change push <slug>` is the first change verb that writes to a forge (ADR 0060, #471).
 For each member it reads the forge, the repository path and the HTTPS push URL from the
-member's own clone's `origin`, and prints every repo, branch and destination before it pushes
+member's own repo's `origin`, and prints every repo, branch and destination before it pushes
 anything. Each push is `git push <https-url> refs/heads/<branch>:refs/heads/<branch>`, through
 the forge CLI's credential helper and nothing else: no `+`, no `--force` of any spelling, so it
-can only create the branch or fast-forward it. It commits nothing, and it pushes a repo whose
+can only create the branch or fast-forward it. The push's own command line turns off tags,
+push options and submodules, and a repo whose git config rewrites where pushes go is refused,
+so the destination printed is the one git uses. It commits nothing, and it pushes a repo whose
 `[repos.<name>] mode` is `off` too (ADR 0051, amended by ADR 0060 D4).
 
 Then `by_head` finds the member's request in any state. When there is none, `open_or_update`
-opens one into the clone's default branch, titled `<slug>: <repo>`, with the change's `why` and
+opens one into the repo's default branch, titled `<slug>: <repo>`, with the change's `why` and
 an empty cross-link block as its description. Last, every request's description is read
 (`body`) and the block between charter's two markers is replaced with one that names every
 member's request, `—` for a member charter could not reach. A description that is already
 current is not written (`set_body`), so a second run asks the forge nothing new. Charter writes
 only between its markers: a description without exactly one pair of them outside a code fence
-is left alone and named. The markers are the Python charter's, to the byte.
+(a fence closes only on its own kind) is left alone and named, and everything outside the block
+keeps its line endings. The markers are the Python charter's, to the byte.
 
-One member's failure costs only that member. A member with no clone in the workspace is
-refused by name, and the exit is 2 when that is all that went wrong; any other failure is 1.
+One member's failure costs only that member. A member that is not a repo in the workspace is
+refused by name. The exit is 1 when any member was not pushed, opened or written, as the Python
+charter answered, and 2 only when the whole command is refused.
 
 **Not behind the seam, and why:**
 
