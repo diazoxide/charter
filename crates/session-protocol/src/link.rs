@@ -91,15 +91,52 @@ impl Link {
 
     /// Open a stream. The other end sees it once this end writes to it.
     pub async fn open(&mut self) -> Result<Stream, LinkError> {
-        let (reply, opened) = oneshot::channel();
-        self.open.send(reply).map_err(|_| LinkError::Closed)?;
-        Ok(opened.await.map_err(|_| LinkError::Closed)??.compat())
+        open_on(&self.open).await
+    }
+
+    /// A handle that opens streams on this link from any task, as each chat's view does.
+    pub fn opener(&self) -> Opener {
+        Opener(self.open.clone())
     }
 
     /// The next stream the other end opened.
     pub async fn accept(&mut self) -> Result<Stream, LinkError> {
         self.inbound.recv().await.map(|s| s.compat()).ok_or(LinkError::Closed)
     }
+
+    /// Hand the streams the other end opens to a task of their own. After this, [`Link::accept`]
+    /// answers [`LinkError::Closed`].
+    pub fn acceptor(&mut self) -> Acceptor {
+        let (_, closed) = mpsc::unbounded_channel();
+        Acceptor(std::mem::replace(&mut self.inbound, closed))
+    }
+}
+
+/// Opens streams on a link from any task. It keeps the link's driver running while it lives.
+#[derive(Clone)]
+pub struct Opener(mpsc::UnboundedSender<Opening>);
+
+impl Opener {
+    /// Open a stream. The other end sees it once this end writes to it.
+    pub async fn open(&self) -> Result<Stream, LinkError> {
+        open_on(&self.0).await
+    }
+}
+
+/// Takes the streams the other end opens, apart from the [`Link`].
+pub struct Acceptor(mpsc::UnboundedReceiver<yamux::Stream>);
+
+impl Acceptor {
+    /// The next stream the other end opened.
+    pub async fn accept(&mut self) -> Result<Stream, LinkError> {
+        self.0.recv().await.map(|s| s.compat()).ok_or(LinkError::Closed)
+    }
+}
+
+async fn open_on(open: &mpsc::UnboundedSender<Opening>) -> Result<Stream, LinkError> {
+    let (reply, opened) = oneshot::channel();
+    open.send(reply).map_err(|_| LinkError::Closed)?;
+    Ok(opened.await.map_err(|_| LinkError::Closed)??.compat())
 }
 
 impl Control {
