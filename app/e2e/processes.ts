@@ -73,7 +73,7 @@ export interface Sample {
   /** Resident memory, in kilobytes. */
   rssKb: number;
   threads: number;
-  /** Open descriptors, where the system says cheaply (Linux); `null` elsewhere. */
+  /** Open descriptors: `/proc` on Linux, `lsof` on macOS (SC-15); `null` where neither answers. */
   descriptors: number | null;
 }
 
@@ -98,8 +98,41 @@ export function sample(pid: number): Sample | null {
       ps(["-M", "-p", String(pid)])
         .split("\n")
         .filter((line) => line.trim() !== "").length - 1;
+    if (process.platform === "darwin") descriptors = descriptorsOnMacos(pid);
   }
   return { pid, rssKb: rss, threads, descriptors };
+}
+
+/**
+ * How many descriptors `lsof -F f` listed: its `f` lines that are numbers. The others name what
+ * is not a descriptor: the working directory (`cwd`), the program's text (`txt`) and each
+ * library mapped into it.
+ */
+export function descriptorsListed(listed: string): number {
+  return listed.split("\n").filter((line) => /^f\d+$/.test(line)).length;
+}
+
+/**
+ * The app's open descriptors on macOS, which has no `/proc`: `lsof`, the one tool every Mac
+ * has that lists another process's descriptors. About a tenth of a second at fifty chats, and
+ * a stress look is every ten. `-n -P` keep it from resolving names, `-a -d 0-999999` from
+ * listing anything but numbered descriptors in the first place. `null` when it does not
+ * answer, as the Linux count is when `/proc` does not.
+ */
+function descriptorsOnMacos(pid: number): number | null {
+  try {
+    const listed = execFileSync(
+      "lsof",
+      ["-n", "-P", "-a", "-p", String(pid), "-d", "0-999999", "-F", "f"],
+      { encoding: "utf8", timeout: 20_000 },
+    );
+    return descriptorsListed(listed);
+  } catch (err) {
+    // `lsof` exits 1 when it warns about one entry it could not read; what it listed is
+    // still the answer.
+    const stdout = (err as { stdout?: string }).stdout;
+    return stdout ? descriptorsListed(stdout) : null;
+  }
 }
 
 /** Adds one line of JSON to a file in `logs/`, for a run to be read back afterwards. */
