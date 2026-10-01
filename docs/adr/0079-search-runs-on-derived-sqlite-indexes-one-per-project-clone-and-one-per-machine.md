@@ -1,6 +1,6 @@
 # Search runs on derived SQLite indexes, one per project clone and one per machine
 
-**Proposed 2026-10-01**, drafted for program-map ticket KN-1 (#714). It follows these of the
+**Accepted 2026-10-01** by the operator (ruling V33), with dispatcher decisions D-0079a/b/c, drafted for program-map ticket KN-1 (#714). It follows these of the
 operator's rulings:
 
 - **Q12:** *"A derived SQLite FTS index under `.charter/`, rebuildable, never the truth."*
@@ -349,14 +349,13 @@ written**. A store names its tier before it ships (ADR 0069, ruling 10).
 - **Class 2, charter's integrity state, gains both kinds of index, for writing.** A chat that
   could write an index could change what `recall`, the briefing and the palette tell the next
   chat. `charterd` is their only writer (§3).
-- **Proposed, subject to ruling question 1: chats may not read the machine index or the
-  transcript archive either.** The machine index describes every project's chats on this machine,
+- **Chats may not read the machine index or the transcript archive either. Ruled by V33.** The machine index describes every project's chats on this machine,
   so reading it would let a chat in one project search another project's conversations. The
   host's `chat`-scoped search (§7, and ADR 0068, amended) would be the chat's way in. The project
   index may still be read, since it holds nothing the chat could not read from its project's
   files, but it is never written. This would be the first read denial about one project reaching
   another, rather than about secrets or integrity. **The archive has no ADR yet.** Denying it here
-  pre-empts KN-31, which is why the whole point waits for the operator.
+  pre-empts KN-31, as V33 accepts.
 
 ## ADR 0068, amended
 
@@ -461,19 +460,12 @@ DECISIONS.md as D-0079:
 - **D-0079c:** *"Rebuild budget: resumable, starting at ≤60 s per 1,000 archived chats; KN-22
   measures it."* Applied in §4's budgets.
 
-## For the operator's ruling
+## Ruled (V33, 2026-10-01)
 
-1. **May a chat reach transcripts only through a `chat`-scope search limited to its own clone,
-   with the sandbox denying it direct reads of the machine index and the transcript archive?**
-   This has two halves:
-   - **A capability:** ADR 0068's `chat` scope gains search, answered from the chat's own
-     `<clone-key>` project index and from machine-index rows carrying that key. It reads only,
-     and the host derives the key from the chat and never from the request.
-   - **A denial:** ADR 0067 §5 gains a read denial of the machine index and the archive. It is
-     the first denial about one project reaching another. V16's classes are about vaults,
-     integrity and human powers. **The archive has no ADR yet**, so denying it here pre-empts
-     KN-31.
+The operator accepted the one question as recommended:
 
-   **Recommended: yes to both.** The machine index describes every project's chats on the
-   machine. Without the denial, the clone filter in the host is advisory. Without the
-   capability, a chat loses transcript search altogether.
+1. **V33: a chat reaches transcripts only through a `chat`-scope search, limited to its own
+   `<clone-key>`.** The host derives the key from the chat and never from the request (ADR 0068,
+   amended). **ADR 0067 §5 gains a read denial of the machine index and the transcript archive**,
+   the first denial about one project reaching another. That denial pre-empts KN-31 for the
+   archive.
