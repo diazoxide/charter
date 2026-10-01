@@ -300,16 +300,16 @@ enum Command {
     /// is the only place that record exists (ADR 0019). Everywhere else it draws the frame and
     /// the workspace's identity row, and says in the body which surfaces it does not draw yet.
     Statusline {
-        /// Repaint in place until Ctrl-C, on a harness with no status bar of its own.
+        /// Refused in this version: statusline does not repaint yet.
         ///
-        /// Refused: this build has no repaint. Drawing one frame and exiting 0 read as a watch
-        /// that stopped by itself. The flag is still parsed, so a plane wired for
-        /// `charter statusline --watch` meets charter's reason, not a usage error.
+        /// Drawing one frame and exiting 0 read as a watch that stopped by itself. The flag is
+        /// still parsed, so a plane wired for `charter statusline --watch` meets charter's
+        /// reason, not a usage error.
         #[arg(long)]
         watch: bool,
-        /// Seconds between repaints with --watch.
+        /// Refused with --watch: there are no repaints to space out yet.
         ///
-        /// Parsed for the same reason `--watch` is, and never used: `--watch` is refused.
+        /// Parsed for the same reason `--watch` is, and never used.
         #[allow(dead_code)]
         #[arg(long, default_value = "10")]
         interval: f64,
@@ -2795,9 +2795,10 @@ fn main() -> ExitCode {
             // recorded, and the answer does not depend on where it is asked (HY-11).
             if *watch {
                 return refused(
-                    "`statusline --watch` does not repaint yet, and one frame would pass for a \
-                     watch that stopped; run `charter statusline` once per turn from the \
-                     harness's status-line command instead",
+                    "`statusline --watch` is not in this version yet; statusline does not repaint, \
+                     and one frame would pass for a watch that stopped, so run \
+                     `charter statusline` once per turn from the harness's status-line \
+                     command instead",
                 );
             }
             let payload = payload();

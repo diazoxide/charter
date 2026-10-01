@@ -23,13 +23,20 @@ const A_TURN: &str = r#"{"session_id":"s-1","context_window":{"used_percentage":
 
 struct Ran {
     out: String,
+    err: String,
     code: i32,
 }
 
 /// `charter statusline` with `payload` on stdin, standing in `plane`.
 fn statusline(plane: &Path, payload: &str, env: &[(&str, &str)]) -> Ran {
+    statusline_with(plane, &[], payload, env)
+}
+
+/// `charter statusline <args>`, otherwise as [`statusline`] runs it.
+fn statusline_with(plane: &Path, args: &[&str], payload: &str, env: &[(&str, &str)]) -> Ran {
     let mut child = Command::new(CHARTER)
         .arg("statusline")
+        .args(args)
         .current_dir(plane)
         .env_clear()
         .env("PATH", std::env::var("PATH").unwrap_or_default())
@@ -45,6 +52,7 @@ fn statusline(plane: &Path, payload: &str, env: &[(&str, &str)]) -> Ran {
     let done = child.wait_with_output().expect("charter finishes");
     Ran {
         out: String::from_utf8_lossy(&done.stdout).into_owned(),
+        err: String::from_utf8_lossy(&done.stderr).into_owned(),
         code: done.status.code().unwrap_or(-1),
     }
 }
@@ -365,29 +373,50 @@ fn watch_is_refused_with_its_reason_rather_than_answered_with_one_frame() {
     let (_keep, at) = plane();
 
     for args in [&["--watch"][..], &["--watch", "--interval", "2"][..]] {
-        let done = Command::new(CHARTER)
-            .arg("statusline")
-            .args(args)
-            .current_dir(&at)
-            .env_clear()
-            .env("PATH", std::env::var("PATH").unwrap_or_default())
-            .env("HOME", &at)
-            .env("CHARTER_ROOT", &at)
-            // Nothing is read from stdin under `--watch`; an open pipe would show a wait.
-            .stdin(Stdio::null())
-            .output()
-            .expect("charter runs");
-        let err = String::from_utf8_lossy(&done.stderr);
+        let ran = statusline_with(&at, args, A_TURN, &[]);
 
-        assert_eq!(done.status.code(), Some(1), "{args:?}: {err:?}");
-        assert!(done.stdout.is_empty(), "{args:?} drew a frame anyway");
+        assert_eq!(ran.code, 1, "{args:?}: {:?}", ran.err);
+        assert_eq!(ran.out, "", "{args:?} drew a frame anyway");
         assert!(
-            err.starts_with("charter: `statusline --watch` does not repaint yet"),
-            "{args:?}: {err:?}"
+            ran.err
+                .starts_with("charter: `statusline --watch` is not in this version yet; "),
+            "{args:?}: {:?}",
+            ran.err
         );
         assert!(
-            err.contains("run `charter statusline` once per turn"),
-            "{args:?} did not say what to run instead: {err:?}"
+            ran.err.contains("run `charter statusline` once per turn"),
+            "{args:?} did not say what to run instead: {:?}",
+            ran.err
         );
+        assert_eq!(recorded(&at), "", "{args:?} recorded a turn it never read");
     }
+}
+
+#[test]
+fn help_does_not_offer_the_repaint_it_refuses() {
+    let (_keep, at) = plane();
+
+    let ran = statusline_with(&at, &["--help"], "", &[]);
+
+    assert_eq!(ran.code, 0, "{:?}", ran.err);
+    assert!(!ran.out.contains("Repaint in place"), "{:?}", ran.out);
+    // `--help` sets each flag on its own line and its first doc line under it.
+    let lines: Vec<&str> = ran.out.lines().collect();
+    let line = |flag: &str| {
+        let at = lines
+            .iter()
+            .position(|l| l.trim_start().starts_with(flag))
+            .unwrap_or_else(|| panic!("no {flag} in {:?}", ran.out));
+        lines.get(at + 1).copied().unwrap_or_default().to_owned()
+    };
+    assert!(
+        line("--watch").contains("Refused in this version"),
+        "{}",
+        line("--watch")
+    );
+    assert!(
+        line("--interval").contains("Refused with --watch"),
+        "{}",
+        line("--interval")
+    );
 }
