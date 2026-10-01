@@ -1,7 +1,7 @@
 # A chat's model is one choice from four sources, and charter never carries a harness login
 
-**Proposed 2026-10-01**, drafted for program-map ticket MS-1 (#700), with dispatcher decisions
-D-0087a/b. It follows these of the operator's rulings:
+**Accepted 2026-10-01** by the operator (ruling V36), with dispatcher decisions D-0087a/b,
+drafted for program-map ticket MS-1 (#700). It follows these of the operator's rulings:
 
 - **M1:** *"One model choice with three sources: (1) the harness's own login, (2) a BYO API key
   from the vault, desktop → provider directly, (3) Charter credits through the cloud gateway.
@@ -43,6 +43,8 @@ D-0087a/b. It follows these of the operator's rulings:
   **waits** (it does not fail)"*, and an unanswered request is denied after a timeout (default 5
   minutes). *"Creating a scheduled or triggered agent warns when it uses an approval-required
   secret."*
+- **V36**, the ruling on this record (*Ruled*, below): a key reaches the harness through a proxy
+  in `charterd` wherever the harness accepts a base URL.
 - **V34c**, through [ADR 0083](0083-telemetry-is-one-otel-pipeline-on-the-device-and-only-the-signed-updater-calls-charter.md):
   *"A spend budget may pause a chat on harness-reported spend."*
 
@@ -52,7 +54,7 @@ It builds on [ADR 0066](0066-a-chat-is-a-ulid-a-run-is-a-stretch-of-its-conversa
 (one path to a secret's value), [ADR 0072](0072-charter-has-five-concepts-and-every-other-word-belongs-to-one-of-them.md)
 (the five concepts), [ADR 0073](0073-a-harness-is-declared-as-data-and-a-chat-runs-it-at-one-of-three-levels.md)
 (harness declarations and capabilities), [ADR 0078](0078-a-runner-is-charterd-behind-a-connector-and-charters-own-keys-say-who-is-on-the-link.md)
-(runners) and ADR 0083 (telemetry and spend). It amends ADR 0066, ADR 0073, ADR 0078 and ADR 0083,
+(runners) and ADR 0083 (telemetry and spend). It amends ADR 0066, ADR 0073 (including its §4), ADR 0078 and ADR 0083,
 each in a section of its own below. MS-2 (the matrix), MS-3 (the picker), MS-4 (a key from a
 vault), MS-5 (the harness's login), MS-6 (persona preferences), MS-14, MS-17 (local models), MS-18
 and SD-28 build on it. The gateway's own tickets (MS-7 to MS-16) are cloud work and wait for
@@ -200,10 +202,11 @@ With none of them set, the chat uses `login` with the harness's default model, a
   offered (M9, MS-14). Claude Code is never offered a non-Claude model.
 - **A harness that cannot take a source does not get it.** A harness whose configuration cannot
   be injected per session, such as Cursor's CLI, runs on `login` only, and the picker says why.
-- **A key goes into the harness's process environment, never into a file.** A harness that reads
-  its configuration from a file is given a generated file that names the variable
-  (`${ANTHROPIC_API_KEY}`, `{env:…}`), never the value. charter never writes a key to disk. The
-  operator's ruling on question 1 may move the key out of the environment as well.
+- **A key never goes into a file.** A harness that accepts a base URL gets the key through the
+  proxy of §7, and sees only a loopback URL and a per-chat token. A harness that does not gets the
+  key in its process environment. A harness that reads its configuration from a file is given a
+  generated file that names a variable (`${ANTHROPIC_API_KEY}`, `{env:…}`), never a value.
+  charter never writes a key to disk.
 
 ### 5. What charter never does with a login
 
@@ -261,9 +264,9 @@ With none of them set, the chat uses `login` with the harness's default model, a
   with its tier. A committed `key = "vault:…"` reference to an entry without the mark is refused
   when it is read, so a merged pull request cannot make `charterd` put an arbitrary secret, such
   as a database password, into a chat's environment. A marked key is injected only into the
-  variables of the provider its mark names.
+  variables of the provider its mark names, or used by the proxy only toward that provider.
 - **One path to the value.** `charterd` reads the key at spawn, as it reads every vault value
-  (ADR 0068 §1), and hands it to the harness's process. **The key's approval setting applies**
+  (ADR 0068 §1), and keeps it in the proxy or hands it to the harness's process (below). **The key's approval setting applies**
   (V15). A key set to *every use* or *OS authentication* makes the chat's start wait for the
   operator, and the ask shows the chat, the harness, the key's name and that it is the chat's model
   key. **An ask unanswered within V15's timeout (default 5 minutes) is denied.** The chat does not
@@ -271,9 +274,30 @@ With none of them set, the chat uses `login` with the harness's default model, a
 - **Creating a scheduled or triggered agent warns** when its resolved choice uses a model key whose
   approval would make it wait (V15). An unattended start that hits the timeout is denied like any
   other, and nothing falls back (below).
-- **While the key is in the harness's environment, the agent can read it.** That is the
-  measurement the profile refusal was built on, and it holds until the operator rules on question
-  1. What follows is the residual, stated as it is:
+- **The proxy is the default for every harness that accepts a base URL.** **Settled by V36:**
+  *"A key reaches the harness through a proxy in `charterd`. The harness gets a loopback base URL
+  and a per-chat token, never the key; the host swaps in the credential header and passes bytes
+  through. Every harness that accepts a base URL uses it, which includes Claude Code, Codex and
+  opencode."*
+  - **What the harness gets:** a loopback base URL (Claude Code's `ANTHROPIC_BASE_URL`, Codex's
+    `model_providers.<id>.base_url`, opencode's `baseURL`) and a token minted for that chat's run,
+    in the variable the harness reads its key from. The token is worth nothing outside this host.
+  - **What the proxy does:** it checks the token, swaps it for the key in the credential header,
+    sends the request to the provider the key's mark names, and passes the request and its stream
+    through byte for byte. It changes nothing else, and it shares a crate with M8's passthrough
+    (V36).
+  - **What it gives:** the agent never holds the key, so it cannot print it, send it through an
+    open preset or use it outside the harness. Every model call crosses the host, so the host meters
+    it, which closes the spend gap below for these harnesses. Ending a run drops its token.
+  - **What it never does:** carry a `login` chat (§5, V36). A `login` chat never has a proxy URL
+    set, and the proxy refuses a request that does not carry a `key` run's token.
+  - **What it costs:** a chat's model calls fail while its host is down, and a chat already lives
+    in its host (ADR 0068). A harness that treats a custom base URL as a gateway, for example in
+    model discovery, may behave differently. The matrix (MS-2) records that per harness and model.
+- **For a harness that takes no base URL, the key is in its environment, and the agent can read
+  it.** That is the measurement the profile refusal was built on. **Settled by V36:** *"Environment
+  injection is only for the rest, with the residual stated."* What follows is that residual, and it
+  applies only to these harnesses. The picker states it beside a key chosen for one of them:
   - **The sandbox's egress narrows where the key can go, and does not close it.** A new project's
     presets are `model-providers`, `forge` and `toolchains` (ADR 0067 §3). The last two open the
     forge hosts and the package registries, and any of those can accept data an agent sends.
@@ -285,7 +309,7 @@ With none of them set, the chat uses `login` with the harness's default model, a
     spends without the harness reporting it, so V34c's spend budget does not see that spend. The
     provider's own limit on the key is the only hard cap.
   - **The key is per user, billed to its owner and revocable at the provider.** `chatenv`'s refusal
-    stands for every other route: only the adapter, from a source of `key`, puts a provider key
+    stands for every other route: only the adapter, from a source of `key` on a harness with no base URL, puts a provider key
     into a chat.
 - **No fallback across sources.** **Decided by D-0087a:** *"charter never switches a chat's model
   source on its own after a failure. The start stops with a needs-you item that offers the other
@@ -311,9 +335,8 @@ With none of them set, the chat uses `login` with the harness's default model, a
   desktop's login never travels.
 - **A `key` for a runner chat is forwarded once, when the run starts**, over the link, through V15's
   gate on the desktop and V9's allowlist and step-up (ADR 0078 §7). The runner keeps it in memory
-  for that run only: in the run's process environment, or in the runner host's own proxy if the
-  operator rules for one on question 1. It is never written there, and it is dropped when the run
-  ends. **This is a new exception to ADR 0078 §7's "for that one command", and ADR 0078 is amended
+  for that run only: in the runner host's own proxy (§7), or, for a harness with no base URL, in
+  the run's process environment. It is never written there, and it is dropped when the run ends. **This is a new exception to ADR 0078 §7's "for that one command", and ADR 0078 is amended
   below.** A harness calls its provider throughout a run, with no command charter sees, so a key
   forwarded per command would not be there when the harness needed it. An unattended runner uses
   its resident store (V9), whose approvals still happen on the desktop.
@@ -377,6 +400,13 @@ where it is kept when it writes it.
   URL into the harness's environment or config. A declaration may not name a variable that reads
   as a credential (ADR 0073 §5, ADR 0022), so these are adapter code, like level 2. So is §5's
   check of committed harness config.
+- **§4 is narrowed for a credential-header swap.** **Settled by V36:** *"ADR 0073 §4's "proxy
+  that edits its traffic" is narrowed to exclude a credential-header swap."* §4 counts a proxy that
+  edits a harness's traffic as standing in. It now reads: **a proxy that edits what the harness or
+  its model sends or receives stands in. The key proxy of ADR 0087 §7 does not.** That proxy
+  changes only the credential header on a request the harness sends to the provider the user
+  chose, and passes the rest, the stream included, byte for byte. The model never sees that header.
+  Any other change to a request or a response is still standing in, and charter never does it.
 - **A capability, `model_sources`**, lists the sources a harness can take (ADR 0073 §6: yes, no
   with a reason, or unknown). The card and the picker read it, so a *no* is shown in words.
 - **The harness × model matrix stays its own project data** (M10, MS-2), as ADR 0073 §3 says.
@@ -398,8 +428,12 @@ where it is kept when it writes it.
   plan, which may not be money the user is billed per token. The meter and the budget view say
   *"plan usage, as the harness reports it"* for `login` and *"billed to your key"* for `key`. For
   `gateway` they use GT-CLOUD's wording, and for `local` they show nothing.
-- **For `key`, the meter can miss spend.** An agent that uses the key directly is not reported
-  (§7). The budget view says so where a key source is chosen, beside V34c's stated residual.
+- **Behind the proxy, the host meters `key` spend itself.** Every model call of a proxied chat
+  crosses `charterd`, which counts it from the provider's own usage fields. Harness-reported spend
+  stays V34c's source for every other chat.
+- **Without the proxy, the meter can miss `key` spend.** On a harness with no base URL, an agent
+  that uses the key directly is not reported (§7). The budget view says so where a key source is
+  chosen for one, beside V34c's stated residual.
 
 ## What changes where
 
@@ -413,7 +447,8 @@ The code does not change with this record.
 | FD-13 | `ModelChoice` joins the neutral model, and the adapter applies it |
 | MS-2 | The matrix, keyed by (harness, source, model) |
 | MS-3, MS-14 | The picker, the icons, the "billed to" line, hidden and degraded tuples, per-harness tables |
-| MS-4 | The model-key mark, a key read by `charterd` through V15, put into the environment by the adapter, never written to a file |
+| MS-4 | The model-key mark, and a key read by `charterd` through V15 and never written to a file. Its environment path is only for harnesses that take no base URL, and waits on the proxy ticket for every other |
+| The proxy ticket (new, V36) | The model-key proxy in `charterd`: a loopback listener, per-run tokens, the header swap over M8's shared passthrough crate, the host's own metering, the refusal of `login` |
 | MS-5 | Routing variables removed for `login`, committed harness config overridden or refused, and the test |
 | MS-6 | Persona preferences and fallbacks, within one source |
 | MS-17 | Local endpoints, the `localhost` preset, a runner's own endpoint |
@@ -422,8 +457,11 @@ The code does not change with this record.
 
 ## What this costs
 
-- **A key in the environment is readable by the agent** (§7), until the operator rules on question
-  1. The sandbox's egress narrows where it can go, and the meter can miss spend made with it.
+- **A proxy in the host's path.** Every proxied model call crosses `charterd`, so a host that is down
+  takes its chats' model calls with it, and the passthrough must keep up with streaming.
+- **A key in the environment is still readable by the agent** on a harness with no base URL (§7).
+  For those, the sandbox's egress only narrows where it can go, and the meter can miss spend made
+  with it.
 - **No automatic fallback.** A key that hits its quota stops the next chat's start until the
   operator picks another source, even when a working login is right there.
 - **A committed harness config can block a `login` chat.** A repo whose `.claude/settings.json`
@@ -464,32 +502,15 @@ recorded in DECISIONS.md as D-0087:
   comes only from the chat's picker, `charter.local.toml` or org policy, and waits for GT-CLOUD."*
   Applied in §1 and §3.
 
-## For the operator's ruling
+## Ruled (V36, 2026-10-01)
 
-1. **Does a key reach the harness through a proxy in `charterd`, or through its environment?**
-   - **(a) A proxy in `charterd` that holds the key, used first for every harness that accepts a
-     base URL. Environment injection only for the rest, with §7's residual stated for them.
-     Recommended.**
-     - *How it works:* the harness gets a loopback base URL and a per-chat token, never the key.
-       `charterd` checks the token, puts the key in the credential header, and passes the request
-       and its stream through byte for byte. The three built-ins all accept a base URL (Claude Code
-       `ANTHROPIC_BASE_URL`, Codex `model_providers.<id>.base_url`, opencode `baseURL`).
-     - *What it costs:* a loopback listener in `charterd` and a header swap over a byte-for-byte
-       stream. That is the passthrough M8 already builds in Rust, so the two share one crate. A
-       chat's model calls fail while its host is down, but a chat lives in its host anyway (ADR
-       0068). ADR 0073 §4's "a proxy that edits its traffic" is narrowed so that this proxy is not
-       standing in: it changes only a credential header the model never sees.
-     - *What it gives:* the agent can no longer read the key. Every model call is metered by the
-       host, which closes §7's spend gap for these harnesses. A key can be revoked per chat by
-       dropping its token.
-     - *What it gives up:* a harness may treat a custom base URL as a gateway and change its
-       behaviour, for example in model discovery. The matrix (MS-2) records any such breakage per
-       harness and model. It is never used for `login` (§5).
-   - **(b) Environment injection everywhere now, with a hardening ticket for the proxy** that blocks
-     any org policy relying on keys the agent cannot read.
-     - *What it costs:* nothing beyond MS-4 as filed. It works for every harness that reads a key
-       from its environment.
-     - *What it gives up:* the claim that the model never sees the key, for every harness, until
-       the ticket lands. §7's residuals stand in full: the key can be sent out through any host the
-       presets open, written into the transcript, a record or a memory, and used outside the spend
-       meter.
+The operator chose option (a), as recommended:
+
+1. **V36: a key reaches the harness through a proxy in `charterd`.** The harness gets a loopback base
+   URL and a per-chat token, never the key, and the host swaps in the credential header and passes
+   bytes through. Every harness that accepts a base URL uses it, which includes Claude Code, Codex
+   and opencode. Environment injection is only for the rest, with the residual stated. The proxy
+   shares a crate with M8's passthrough. ADR 0073 §4's "proxy that edits its traffic" is narrowed to
+   exclude a credential-header swap. The proxy is never used for `login`. Rejected: environment
+   injection everywhere with a hardening ticket, which would have given up the claim that the model
+   never sees the key.
