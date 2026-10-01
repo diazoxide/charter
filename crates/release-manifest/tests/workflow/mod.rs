@@ -134,6 +134,47 @@ pub fn step_uses(step: &[String]) -> Option<&str> {
     step.iter().find_map(|l| uses_value(l))
 }
 
+/// The value of `key` in the step's `with:` or `env:` map (`parent`), exactly as written after
+/// the colon. Only the map's own keys count, so a comment or a line of a script never does.
+pub fn step_value<'a>(step: &'a [String], parent: &str, key: &str) -> Option<&'a str> {
+    let header = format!("        {parent}:");
+    let start = step.iter().position(|l| l.trim_end() == header)?;
+    step[start + 1..]
+        .iter()
+        .filter(|l| !l.trim().is_empty())
+        .take_while(|l| l.starts_with("          "))
+        .filter(|l| !l.starts_with("           ") && !l.trim_start().starts_with('#'))
+        .find_map(|l| {
+            let (k, v) = l.trim().split_once(':')?;
+            (k == key).then(|| v.trim())
+        })
+}
+
+/// The commands of the step's `run:`, one per line, trimmed, with blank lines and shell
+/// comments left out: what the shell executes, and nothing a comment could add.
+pub fn run_lines(step: &[String]) -> Vec<String> {
+    let Some(start) = step.iter().position(|l| {
+        let t = l.trim_start();
+        let t = t.strip_prefix("- ").unwrap_or(t);
+        t.starts_with("run:")
+    }) else {
+        return Vec::new();
+    };
+    let first = step[start].trim_start();
+    let first = first.strip_prefix("- ").unwrap_or(first);
+    let value = first["run:".len()..].trim();
+    if value != "|" {
+        return vec![value.to_owned()];
+    }
+    step[start + 1..]
+        .iter()
+        .take_while(|l| l.trim().is_empty() || l.starts_with("          "))
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(str::to_owned)
+        .collect()
+}
+
 /// The value of a `uses:` key on this line, whether it opens a step (`- uses: x`) or not, with
 /// any trailing comment cut off and quotes removed.
 pub fn uses_value(line: &str) -> Option<&str> {
@@ -182,6 +223,37 @@ pub fn workflow_permissions(text: &str) -> Vec<(String, String)> {
         .collect();
     pairs.sort();
     pairs
+}
+
+/// The job called `name`, or a panic naming the one that is missing.
+pub fn job<'a>(jobs: &'a [Job], name: &str) -> &'a Job {
+    jobs.iter()
+        .find(|j| j.name == name)
+        .unwrap_or_else(|| panic!("release.yml has no `{name}` job"))
+}
+
+/// The `name:` of each `download-artifact` step in the job, sorted, after checking that none
+/// downloads by pattern: a pattern takes whatever any step of the run uploaded under a
+/// matching name, and that is not only the build jobs.
+pub fn downloads_by_name(job: &Job) -> Vec<String> {
+    let mut names: Vec<String> = job
+        .steps()
+        .iter()
+        .filter(|s| step_uses(s).is_some_and(|u| u.starts_with("actions/download-artifact@")))
+        .map(|s| {
+            assert_eq!(
+                step_value(s, "with", "pattern"),
+                None,
+                "job `{}` downloads by pattern: {s:#?}",
+                job.name
+            );
+            step_value(s, "with", "name")
+                .unwrap_or_else(|| panic!("job `{}` downloads without a name: {s:#?}", job.name))
+                .to_owned()
+        })
+        .collect();
+    names.sort();
+    names
 }
 
 pub fn release_jobs() -> Vec<Job> {

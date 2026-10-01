@@ -13,13 +13,9 @@
 
 mod workflow;
 
-use workflow::{Job, release_jobs, step_uses, workflow_permissions};
-
-fn job<'a>(jobs: &'a [Job], name: &str) -> &'a Job {
-    jobs.iter()
-        .find(|j| j.name == name)
-        .unwrap_or_else(|| panic!("release.yml has no `{name}` job"))
-}
+use workflow::{
+    Job, downloads_by_name, job, release_jobs, run_lines, step_uses, workflow_permissions,
+};
 
 fn pairs(list: &[(&str, &str)]) -> Vec<(String, String)> {
     list.iter()
@@ -111,16 +107,6 @@ fn publish_downloads_only_the_builds_and_verifies_them_before_it_uploads_anythin
     );
 
     let steps = publish.steps();
-    let download = steps
-        .iter()
-        .find(|s| step_uses(s).is_some_and(|u| u.starts_with("actions/download-artifact@")))
-        .expect("publish downloads the builds");
-    assert!(
-        download.iter().any(|l| l.trim() == "pattern: charter-*"),
-        "publish downloads the build artifacts by name, not every artifact of the run: \
-         {download:#?}"
-    );
-
     let verify_at = run_pinned_verification(publish);
     let first_upload = steps
         .iter()
@@ -178,4 +164,39 @@ fn only_the_provenance_job_can_sign_and_publish_can_only_read() {
 fn the_workflow_default_stays_read_only() {
     let text = workflow::read(&workflow::workflows_dir().join("release.yml"));
     assert_eq!(workflow_permissions(&text), pairs(&[("contents", "read")]));
+}
+
+/// What each build job uploads, by the exact name `build` and `sbom` give it.
+const BUILD_ARTIFACTS: [&str; 3] = [
+    "charter-linux-x86_64-${{ needs.plan.outputs.version }}",
+    "charter-macos-arm64-${{ needs.plan.outputs.version }}",
+    "charter-sbom-${{ needs.plan.outputs.version }}",
+];
+
+#[test]
+fn provenance_and_publish_take_only_the_build_artifacts_by_their_exact_names() {
+    let jobs = release_jobs();
+    for name in ["provenance", "publish"] {
+        assert_eq!(
+            downloads_by_name(job(&jobs, name)),
+            BUILD_ARTIFACTS,
+            "job `{name}`"
+        );
+    }
+
+    // The names those are: `build` names its artifact after the platform it built and the
+    // version `plan` decided.
+    let names = job(&jobs, "build")
+        .steps()
+        .into_iter()
+        .find(|s| s[0].trim() == "- name: What this build is called")
+        .expect("build names its artifact");
+    let lines = run_lines(&names);
+    for want in [
+        "aarch64-apple-darwin) slug=macos-arm64; updater=darwin-aarch64 ;;",
+        "x86_64-unknown-linux-gnu) slug=linux-x86_64; updater=linux-x86_64-appimage ;;",
+        r#"echo "artifact=charter-$slug-${VERSION}" >> "$GITHUB_OUTPUT""#,
+    ] {
+        assert!(lines.iter().any(|l| l == want), "{want} not in {lines:#?}");
+    }
 }

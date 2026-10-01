@@ -23,7 +23,10 @@ terminal's `PATH`.
 **Checking a download:** every build file here carries a signed build provenance attestation
 (`latest.json`, the update manifest, does not; the updater checks each build's own signature).
 [`SECURITY.md`](https://github.com/diazoxide/charter/blob/__TAG__/SECURITY.md#checking-that-a-download-is-a-real-charter-build)
-gives the `gh attestation verify` command.
+gives the `gh attestation verify` command. What each build is made of is in its CycloneDX SBOM
+(`charter-<platform>.cdx.json`), and every Rust binary in it can be checked with
+`cargo audit bin`; [`SECURITY.md`](https://github.com/diazoxide/charter/blob/__TAG__/SECURITY.md#what-a-release-is-made-of-the-sbom-and-cargo-audit-bin)
+says how.
 
 ---
 
