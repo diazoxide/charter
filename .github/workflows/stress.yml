@@ -105,6 +105,9 @@ on:
       - Cargo.lock
       - rust-toolchain.toml
       - .nvmrc
+      # The shared standing job's own tests (FD-11), which the `tests.rs` line above leaves
+      # out: last, so it puts back the one file the job runs.
+      - crates/charter-core/src/planegit/tests.rs
       # NOT `crates/charter-cli`. The job builds it, because other specs in the same run
       # start it, but no pane in this spec does: `writeShell` starts the fake harness with
       # no `--hook`, and the fake harness runs no `statusLine`. A charter-cli that does not

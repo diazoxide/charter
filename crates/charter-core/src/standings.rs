@@ -178,11 +178,32 @@ impl<V> Drop for Done<'_, V> {
     }
 }
 
-/// The repo's git files as they are, by size, modification time and inode: what moves when a
-/// commit, a checkout, a fetch, a staged change, a merge or a rebase moves the repo. Read with
-/// `stat` and one small read of `HEAD`, never with git.
+/// The repo's git state as the file system describes it: what moves when a commit, a
+/// checkout, a fetch, a staged change, a merge, a rebase, a ref of any name, the repo's config or
+/// its top ignore files move it. Read with `stat` and one small read of `commondir`, never
+/// with git.
+///
+/// - `HEAD`, the index, `FETCH_HEAD`, `ORIG_HEAD`, the merge, cherry-pick, revert and rebase
+///   state, and `config` (a `[branch]` upstream, `core.untrackedCache`);
+/// - every directory under `refs/`, by its modification time, which a ref created, moved or
+///   deleted in it changes — so a branch in a folder, an upstream that is not `origin` and a
+///   `[plane] branch` HEAD is not on are all in it — and `packed-refs`;
+/// - a reftable repo's `reftable/tables.list`, which git rewrites on every ref update;
+/// - `.gitignore` at the repo's top and `info/exclude`.
+///
+/// **Not in it, and left to the store's `max_age`:** a change in the working tree nothing
+/// reported, an ignore file below the top, and a global excludes file or config.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct Stamp(Vec<Option<(u64, u128, u64)>>);
+pub struct Stamp(Vec<Option<Seen>>);
+
+/// One file or directory as `stat` describes it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Seen {
+    pub size: u64,
+    /// Nanoseconds since the epoch.
+    pub modified: u128,
+    pub inode: u64,
+}
 
 impl Stamp {
     /// The stamp of the repo whose top is `repo`.
@@ -194,7 +215,7 @@ impl Stamp {
             .ok()
             .map(|to| git.join(to.trim()))
             .unwrap_or_else(|| git.clone());
-        let mut files: Vec<PathBuf> = [
+        let mut paths: Vec<PathBuf> = [
             "HEAD",
             "index",
             "FETCH_HEAD",
@@ -204,29 +225,56 @@ impl Stamp {
             "REVERT_HEAD",
             "rebase-merge",
             "rebase-apply",
+            "config",
         ]
         .iter()
         .map(|name| git.join(name))
         .collect();
-        files.push(common.join("packed-refs"));
-        // The branch HEAD is on, and the remote-tracking branch it is counted against.
-        if let Some(branch) = std::fs::read_to_string(git.join("HEAD"))
-            .ok()
-            .and_then(|head| {
-                head.strip_prefix("ref: refs/heads/")
-                    .map(|b| b.trim().to_owned())
-            })
-        {
-            files.push(common.join("refs/heads").join(&branch));
-            files.push(common.join("refs/remotes/origin").join(&branch));
-        }
-        Self(files.iter().map(|path| seen(path)).collect())
+        paths.extend(
+            [
+                "packed-refs",
+                "config",
+                "info/exclude",
+                "reftable/tables.list",
+            ]
+            .iter()
+            .map(|name| common.join(name)),
+        );
+        paths.push(repo.join(".gitignore"));
+        let mut dirs = Vec::new();
+        directories(&common.join("refs"), &mut dirs);
+        paths.extend(dirs);
+        Self(paths.iter().map(|path| seen(path)).collect())
     }
 }
 
-fn seen(path: &Path) -> Option<(u64, u128, u64)> {
+/// `dir` and every directory under it, in name order, without following a link. A deep tree of
+/// branches is a few hundred directories at most; the files in them are not asked about.
+fn directories(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(meta) = std::fs::symlink_metadata(dir) else {
+        return;
+    };
+    if !meta.is_dir() {
+        return;
+    }
+    out.push(dir.to_path_buf());
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut inside: Vec<PathBuf> = entries
+        .flatten()
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .map(|entry| entry.path())
+        .collect();
+    inside.sort();
+    for one in inside {
+        directories(&one, out);
+    }
+}
+
+fn seen(path: &Path) -> Option<Seen> {
     let meta = std::fs::metadata(path).ok()?;
-    let at = meta
+    let modified = meta
         .modified()
         .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
@@ -235,7 +283,11 @@ fn seen(path: &Path) -> Option<(u64, u128, u64)> {
     let inode = std::os::unix::fs::MetadataExt::ino(&meta);
     #[cfg(not(unix))]
     let inode = 0;
-    Some((meta.len(), at, inode))
+    Some(Seen {
+        size: meta.len(),
+        modified,
+        inode,
+    })
 }
 
 /// The repository directory of the repo whose top is `repo`: `.git`, or where a linked
@@ -374,5 +426,101 @@ mod tests {
         });
 
         assert_eq!(shared.get(repo.path(), || 2), 2);
+    }
+
+    /// A repo with one commit, through `testgit`, so no developer's signer is asked.
+    fn a_repo(extra: &[&str]) -> tempfile::TempDir {
+        let dir = a_dir();
+        let init: Vec<&str> = ["init", "-q", "-b", "main"]
+            .into_iter()
+            .chain(extra.iter().copied())
+            .chain(["."])
+            .collect();
+        for argv in [
+            init,
+            vec!["config", "user.email", "t@e.invalid"],
+            vec!["config", "user.name", "t"],
+            vec!["commit", "-q", "--allow-empty", "-m", "one"],
+        ] {
+            assert!(crate::testgit::run(dir.path(), &argv).ok(), "git {argv:?}");
+        }
+        dir
+    }
+
+    fn git(dir: &Path, argv: &[&str]) {
+        assert!(crate::testgit::run(dir, argv).ok(), "git {argv:?}");
+    }
+
+    /// The stamp moves when `change` changes the repo.
+    fn moves(repo: &Path, change: impl FnOnce()) -> bool {
+        let before = Stamp::of(repo);
+        // Past a coarse filesystem clock, so a same-size rewrite is still a new time.
+        std::thread::sleep(Duration::from_millis(20));
+        change();
+        Stamp::of(repo) != before
+    }
+
+    #[test]
+    fn the_stamp_moves_with_a_commit_and_the_index() {
+        let repo = a_repo(&[]);
+        assert!(moves(repo.path(), || git(
+            repo.path(),
+            &["commit", "-q", "--allow-empty", "-m", "two"]
+        )));
+        std::fs::write(repo.path().join("a"), "a").unwrap();
+        assert!(moves(repo.path(), || git(repo.path(), &["add", "a"])));
+    }
+
+    #[test]
+    fn the_stamp_moves_with_any_ref_however_it_is_named() {
+        let repo = a_repo(&[]);
+        // An upstream that is not `origin`, a branch in a folder, and a branch HEAD is not on —
+        // a `[plane] branch` other than the one checked out.
+        assert!(moves(repo.path(), || git(
+            repo.path(),
+            &["update-ref", "refs/remotes/upstream/main", "HEAD"]
+        )));
+        assert!(moves(repo.path(), || git(
+            repo.path(),
+            &["update-ref", "refs/heads/team/feature", "HEAD"]
+        )));
+        assert!(moves(repo.path(), || git(
+            repo.path(),
+            &["branch", "-f", "release", "HEAD"]
+        )));
+    }
+
+    #[test]
+    fn the_stamp_moves_with_the_config_and_the_top_ignore_files() {
+        let repo = a_repo(&[]);
+        assert!(moves(repo.path(), || git(
+            repo.path(),
+            &["config", "branch.main.remote", "upstream"]
+        )));
+        assert!(moves(repo.path(), || std::fs::write(
+            repo.path().join(".gitignore"),
+            "target/\n"
+        )
+        .unwrap()));
+        std::fs::create_dir_all(repo.path().join(".git/info")).unwrap();
+        assert!(moves(repo.path(), || std::fs::write(
+            repo.path().join(".git/info/exclude"),
+            "scratch/\n"
+        )
+        .unwrap()));
+    }
+
+    #[test]
+    fn the_stamp_moves_with_a_reftable_repos_refs() {
+        // git 2.45 and later; an older git has no reftable to stamp.
+        let probe = a_dir();
+        if !crate::testgit::run(probe.path(), &["init", "-q", "--ref-format=reftable", "."]).ok() {
+            return;
+        }
+        let repo = a_repo(&["--ref-format=reftable"]);
+        assert!(moves(repo.path(), || git(
+            repo.path(),
+            &["update-ref", "refs/remotes/upstream/main", "HEAD"]
+        )));
     }
 }

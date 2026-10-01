@@ -3099,3 +3099,20 @@ fn a_save_leaves_the_index_carrying_gits_untracked_cache_for_the_reads_after_it(
         "no untracked cache in the index"
     );
 }
+
+#[test]
+fn the_untracked_cache_is_asked_for_only_where_the_operators_config_says_nothing() {
+    // A `-c` on the command line beats every config file, so charter passes one only when no
+    // config sets `core.untrackedCache`: an operator's `false` (or `keep`) is theirs.
+    let fixture = Fixture::plane();
+    assert_eq!(
+        git::untracked_cache(&fixture.root),
+        Some(git::UNTRACKED_CACHE)
+    );
+
+    run(&fixture.root, &["config", "core.untrackedCache", "false"]);
+    assert_eq!(git::untracked_cache(&fixture.root), None);
+
+    run(&fixture.root, &["config", "core.untrackedCache", "keep"]);
+    assert_eq!(git::untracked_cache(&fixture.root), None);
+}

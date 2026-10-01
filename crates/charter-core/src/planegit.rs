@@ -663,10 +663,13 @@ pub fn shared_standing(root: &Path) -> Standing {
     PLANES.get(root, || standing(root))
 }
 
-/// Something in the plane at `root` changed — its watcher saw a file move, or a save, a fetch
-/// or a setting changed it: the next [`shared_standing`] reads git again.
-pub fn touch(root: &Path) {
-    PLANES.touch_within(root);
+/// Something at or under `dir` changed — a plane its watcher saw move, a plane or a clone a save
+/// or a fetch let go of, a setting written: the next shared standing of every plane and every
+/// clone there ([`shared_standing`], [`crate::reposave::shared_standing`]) reads git again. The
+/// one call for both stores, since a plane's settings are what each of its clones reads too.
+pub fn touch(dir: &Path) {
+    PLANES.touch_within(dir);
+    crate::reposave::touch_within(dir);
 }
 
 /// `git rev-list --count <range>`, or `None` when git cannot count it — a ref that is not there.
@@ -925,15 +928,18 @@ pub(crate) fn changed_paths(root: &Path) -> Vec<String> {
         // `--no-optional-locks`, as `profiles.rs` and `guest.rs` ask: a plain `status`
         // refreshes the index and takes `index.lock`, and the title bar asks this every ten
         // seconds — a save's `git add -A` landing inside that window failed on the lock.
-        &[
-            "-c",
-            git::UNTRACKED_CACHE,
-            "--no-optional-locks",
-            "status",
-            "--porcelain=v1",
-            "-z",
-            "--untracked-files=all",
-        ],
+        &git::untracked_cache(root)
+            .map(|cache| ["-c", cache])
+            .into_iter()
+            .flatten()
+            .chain([
+                "--no-optional-locks",
+                "status",
+                "--porcelain=v1",
+                "-z",
+                "--untracked-files=all",
+            ])
+            .collect::<Vec<_>>(),
         git::READ,
     ) else {
         return Vec::new();
@@ -1589,7 +1595,6 @@ impl Drop for Claim {
         // Every save and fetch of a plane or a clone holds its claim, so letting go of one is
         // when what it committed, pushed or fetched is there to be read (FD-11).
         touch(&self.0);
-        crate::reposave::touch_within(&self.0);
     }
 }
 
@@ -2101,8 +2106,10 @@ fn commit_push(
     // stage anything" and "there was nothing to stage" the same value.
     // The write that adds git's untracked cache to the index, for the read-only status of
     // every standing after it (FD-11, [`git::UNTRACKED_CACHE`]).
-    let cached: Vec<&str> = ["-c", git::UNTRACKED_CACHE]
+    let cached: Vec<&str> = git::untracked_cache(root)
+        .map(|cache| ["-c", cache])
         .into_iter()
+        .flatten()
         .chain(add_cmd.iter().copied())
         .collect();
     let added = match git::run_untimed(root, &cached) {

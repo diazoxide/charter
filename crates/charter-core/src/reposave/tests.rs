@@ -857,7 +857,7 @@ fn an_edit_in_a_clone_is_seen_once_its_plane_is_said_to_have_moved() {
     assert_eq!(fx.shared().changed, 0);
 
     std::fs::write(fx.clone.join("README.md"), "two\n").unwrap();
-    touch_within(&fx.plane);
+    planegit::touch(&fx.plane);
 
     assert_eq!(fx.shared().changed, 1);
 }

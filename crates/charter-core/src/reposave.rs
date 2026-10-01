@@ -291,7 +291,10 @@ fn commit_push(
     // As the plane's save: the add's exit status decides, never the probe after it.
     // Untimed, as the plane's: an `add` killed at a deadline leaves `index.lock` behind.
     // The write that adds git's untracked cache to the index (FD-11, `git::UNTRACKED_CACHE`).
-    let added = git::run_untimed(clone, &["-c", git::UNTRACKED_CACHE, "add", "-A"]);
+    let added = match git::untracked_cache(clone) {
+        Some(cache) => git::run_untimed(clone, &["-c", cache, "add", "-A"]),
+        None => git::run_untimed(clone, &["add", "-A"]),
+    };
     if !added.as_ref().is_ok_and(git::Run::ok) {
         let said = added.map_or_else(|e| e.to_string(), |run| planegit::tail(&run));
         say(Say::Fail(format!(
@@ -886,9 +889,8 @@ pub fn shared_standing(plane: &Path, workspace: &str, repo: &repos::Repo) -> Sta
     CLONES.get(&repo.path, || standing(plane, workspace, repo))
 }
 
-/// Something at or under `dir` changed — a clone, or the plane whose settings every clone in it
-/// reads: the next [`shared_standing`] of each clone there reads git again.
-pub fn touch_within(dir: &Path) {
+/// The clones' half of [`planegit::touch`], which is the one to call.
+pub(crate) fn touch_within(dir: &Path) {
     CLONES.touch_within(dir);
 }
 

@@ -141,8 +141,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   more in a busy repo, where they could pile up on each other. They now share one reading per
   repo, made again only when the repo's git files move, its project's watcher sees a change, a
   save or fetch finishes, a chat ends, or ten seconds have passed. Only one git process runs in
-  a repo at a time for them, and git's untracked cache is turned on so `status` stays quick in a
-  large repo.
+  a repo at a time for them. Where your git config says nothing about `core.untrackedCache`,
+  charter turns git's untracked cache on for these reads and for its saves, so `status` stays
+  quick in a large repo: the cache is then kept in that project's and those clones' index, as
+  git keeps it (`git update-index --no-untracked-cache` removes it, and setting
+  `core.untrackedCache` yourself, to anything, stops charter asking for it).
 
 ### Fixed
 

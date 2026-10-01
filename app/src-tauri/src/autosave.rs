@@ -236,8 +236,9 @@ impl State {
         };
         let trigger = trigger.or_else(|| {
             let seen = planegit::fingerprint_of(root, &standing);
-            (self.quiet.tick(now, &plane, &standing, &seen) == Decision::Save)
-                .then_some(Trigger::Quiet)
+            (self.quiet.tick(now, &plane, &standing, &seen) == Decision::Save
+                && self.still_quiet(root, now))
+            .then_some(Trigger::Quiet)
         });
         if let Some(trigger) = trigger {
             // A refusal is in the journal, in its own words; the stage says blocked.
@@ -245,6 +246,23 @@ impl State {
             did = true;
         }
         did
+    }
+}
+
+impl State {
+    /// The quiet period is over by the shared standing, which can be up to
+    /// [`planegit::SHARED_FOR`] behind a new file: read the plane again before saving, and start
+    /// the period again when it has moved (FD-11).
+    fn still_quiet(&mut self, root: &Path, now: Instant) -> bool {
+        let fresh = planegit::standing(root);
+        let still = self
+            .quiet
+            .still(now, &planegit::fingerprint_of(root, &fresh));
+        if !still {
+            // The shared standing is behind: the next look reads it again.
+            planegit::touch(root);
+        }
+        still
     }
 }
 
@@ -260,7 +278,7 @@ impl State {
     ) -> bool {
         let launched = std::mem::replace(&mut self.repos_launched, true);
         if poke == Some(Poke::SessionEnded) {
-            reposave::touch_within(root);
+            planegit::touch(root);
         }
         let settings = planesave::Settings::read(root);
         let saved: Vec<String> = settings
@@ -301,8 +319,17 @@ impl State {
                     None
                 };
                 let trigger = trigger.or_else(|| {
-                    (quiet.tick_repo(now, &settings.repo(&repo.name), &standing) == Decision::Save)
-                        .then_some(Trigger::Quiet)
+                    (quiet.tick_repo(now, &settings.repo(&repo.name), &standing) == Decision::Save
+                        // Read again before saving, as the plane is (FD-11).
+                        && {
+                            let fresh = reposave::standing(root, &workspace, repo);
+                            let still = quiet.still(now, &fresh.fingerprint());
+                            if !still {
+                                planegit::touch(&repo.path);
+                            }
+                            still
+                        })
+                    .then_some(Trigger::Quiet)
                 });
                 if let Some(trigger) = trigger {
                     // A refusal is in the journal, in its own words; the row says blocked.
@@ -512,6 +539,27 @@ mod tests {
     }
 
     #[test]
+    fn a_file_the_shared_standing_has_not_seen_yet_restarts_the_quiet_period() {
+        // FD-11: the shared standing may be up to ten seconds behind a new file, so the save a
+        // quiet period earns is checked against the tree as it is first.
+        let dir = plane("[plane]\nmode = \"commit\"\nautosave_after = \"30s\"\n");
+        let mut state = State::default();
+        let at = Instant::now();
+        state.look(dir.path(), at, None);
+        std::fs::write(dir.path().join("note.md"), "n").unwrap();
+        planegit::touch(dir.path());
+        assert!(!state.look(dir.path(), at + Duration::from_secs(2), None));
+
+        // Written a moment before the quiet period ends, and not yet in the shared standing.
+        std::fs::write(dir.path().join("late.md"), "l").unwrap();
+
+        assert!(!state.look(dir.path(), at + Duration::from_secs(33), None));
+        assert_eq!(commits(dir.path()), 0, "a file seconds old was saved");
+        assert!(state.look(dir.path(), at + Duration::from_secs(64), None));
+        assert_eq!(commits(dir.path()), 1);
+    }
+
+    #[test]
     fn a_plane_nobody_has_chosen_a_mode_for_is_never_saved_by_itself() {
         let dir = plane("[memory]\nshare = \"local\"\n");
         let mut state = State::default();
@@ -563,7 +611,7 @@ mod tests {
         state.look_at_repos(root, at, None, &idle);
         std::fs::write(clone.join("a.md"), "a").unwrap();
         // Told, as the watcher or the shared standing's age tells it in the app (FD-11).
-        reposave::touch_within(root);
+        planegit::touch(root);
 
         // A chat in alpha is mid-turn: every cycle is skipped, however long it runs.
         for s in [1, 31, 90, 300] {
@@ -588,6 +636,29 @@ mod tests {
     }
 
     #[test]
+    fn a_file_in_a_repo_the_shared_standing_has_not_seen_restarts_its_quiet_period() {
+        let (dir, clone) = plane_with_a_repo(
+            "[repos.widget]\nmode = \"commit\"\nautosave = true\nautosave_after = \"30s\"\n",
+        );
+        let root = dir.path();
+        let mut state = State::default();
+        let at = Instant::now();
+        let idle = |_: &str| Vec::new();
+        state.look_at_repos(root, at, None, &idle);
+        std::fs::write(clone.join("a.md"), "a").unwrap();
+        planegit::touch(root);
+        assert!(!state.look_at_repos(root, at + Duration::from_secs(1), None, &idle));
+
+        // A new file, not yet in the shared standing, a moment before the period ends.
+        std::fs::write(clone.join("late.md"), "l").unwrap();
+
+        assert!(!state.look_at_repos(root, at + Duration::from_secs(32), None, &idle));
+        assert_eq!(repo_commits(root), 0, "a file seconds old was saved");
+        assert!(state.look_at_repos(root, at + Duration::from_secs(63), None, &idle));
+        assert_eq!(repo_commits(root), 1);
+    }
+
+    #[test]
     fn a_turn_that_starts_during_a_repo_auto_save_is_seen_right_before_it_stages() {
         let (dir, clone) = plane_with_a_repo(
             "[repos.widget]\nmode = \"commit\"\nautosave = true\nautosave_after = \"30s\"\n",
@@ -599,7 +670,7 @@ mod tests {
         state.look_at_repos(root, at, None, &idle);
         std::fs::write(clone.join("a.md"), "a").unwrap();
         // Told, as the watcher or the shared standing's age tells it in the app (FD-11).
-        reposave::touch_within(root);
+        planegit::touch(root);
         state.look_at_repos(root, at + Duration::from_secs(1), None, &idle);
 
         // Nobody at this look; somebody by the time the save asks again.

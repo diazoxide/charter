@@ -452,67 +452,91 @@ fn spawn_with(dir: &Path, args: &[&str], extra: &Extra) -> Result<Child, GitUnav
 /// turns it on the same way.
 pub const UNTRACKED_CACHE: &str = "core.untrackedCache=true";
 
-/// How many git processes this process has run in one directory, and the most that ran there
-/// at once (FD-11): what proves that the pollers share one standing instead of each spawning
-/// its own.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct Tally {
-    pub spawned: u64,
-    pub most_at_once: u64,
+/// [`UNTRACKED_CACHE`] for `dir`, unless the operator's config already says what to do about
+/// the untracked cache (`true`, `false` or `keep`): a `-c` on the command line beats every
+/// config file, so it is passed only where none speaks.
+pub fn untracked_cache(dir: &Path) -> Option<&'static str> {
+    let asked = run(dir, &["config", "--get", "core.untrackedCache"], READ).ok()?;
+    // `git config --get` exits 1 when the key is set nowhere.
+    (asked.code == Some(1)).then_some(UNTRACKED_CACHE)
 }
 
-/// Each directory's tally, and how many git processes run there now.
-static TALLIES: std::sync::LazyLock<
-    std::sync::Mutex<std::collections::HashMap<PathBuf, (Tally, u64)>>,
-> = std::sync::LazyLock::new(Default::default);
-
-/// [`Tally`] for `dir`, as it was handed to the runner.
-pub fn tally(dir: &Path) -> Tally {
-    TALLIES
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .get(dir)
-        .map(|(tally, _)| *tally)
-        .unwrap_or_default()
+/// `run`, counted in the test build's [`tally`]: one git process in `dir` from before it is
+/// spawned until it has been waited for. In the shipped build it is `run` itself.
+fn counted<T>(dir: &Path, run: impl FnOnce() -> T) -> T {
+    #[cfg(test)]
+    let _running = tally::Running::start(dir);
+    #[cfg(not(test))]
+    let _ = dir;
+    run()
 }
 
-/// One git process in a directory, from before it is spawned until it has been waited for.
-struct Running(PathBuf);
+/// How many git processes the runner ran in one directory in this test process, and the most
+/// that ran there at once (FD-11): what shows the pollers share one standing instead of each
+/// spawning its own. Test builds only; the shipped runner counts nothing.
+#[cfg(test)]
+pub(crate) mod tally {
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
+    use std::sync::{LazyLock, Mutex, PoisonError};
 
-impl Running {
-    fn start(dir: &Path) -> Self {
-        let mut all = TALLIES
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let (tally, now) = all.entry(dir.to_path_buf()).or_default();
-        *now += 1;
-        tally.spawned += 1;
-        tally.most_at_once = tally.most_at_once.max(*now);
-        Self(dir.to_path_buf())
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+    pub struct Tally {
+        pub spawned: u64,
+        pub most_at_once: u64,
     }
-}
 
-impl Drop for Running {
-    fn drop(&mut self) {
-        let mut all = TALLIES
+    /// Each directory's tally, and how many git processes run there now.
+    static TALLIES: LazyLock<Mutex<HashMap<PathBuf, (Tally, u64)>>> =
+        LazyLock::new(Default::default);
+
+    /// [`Tally`] for `dir`, as it was handed to the runner.
+    pub fn of(dir: &Path) -> Tally {
+        TALLIES
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some((_, now)) = all.get_mut(&self.0) {
-            *now = now.saturating_sub(1);
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(dir)
+            .map(|(tally, _)| *tally)
+            .unwrap_or_default()
+    }
+
+    pub(super) struct Running(PathBuf);
+
+    impl Running {
+        pub(super) fn start(dir: &Path) -> Self {
+            let mut all = TALLIES.lock().unwrap_or_else(PoisonError::into_inner);
+            let (tally, now) = all.entry(dir.to_path_buf()).or_default();
+            *now += 1;
+            tally.spawned += 1;
+            tally.most_at_once = tally.most_at_once.max(*now);
+            Self(dir.to_path_buf())
+        }
+    }
+
+    impl Drop for Running {
+        fn drop(&mut self) {
+            let mut all = TALLIES.lock().unwrap_or_else(PoisonError::into_inner);
+            if let Some((_, now)) = all.get_mut(&self.0) {
+                *now = now.saturating_sub(1);
+            }
         }
     }
 }
 
+#[cfg(test)]
+pub(crate) use tally::of as tally;
+
 /// Run `git -C <dir> <args>` with no deadline — for a call that checks out a tree.
 pub fn run_untimed(dir: &Path, args: &[&str]) -> Result<Run, GitUnavailable> {
-    let _running = Running::start(dir);
-    let child = spawn(dir, args)?;
-    // `wait_with_output` reads both pipes as it waits, so it cannot deadlock on them.
-    let out = child.wait_with_output()?;
-    Ok(Run {
-        code: out.status.code(),
-        out: String::from_utf8_lossy(&out.stdout).into_owned(),
-        err: String::from_utf8_lossy(&out.stderr).into_owned(),
+    counted(dir, || {
+        let child = spawn(dir, args)?;
+        // `wait_with_output` reads both pipes as it waits, so it cannot deadlock on them.
+        let out = child.wait_with_output()?;
+        Ok(Run {
+            code: out.status.code(),
+            out: String::from_utf8_lossy(&out.stdout).into_owned(),
+            err: String::from_utf8_lossy(&out.stderr).into_owned(),
+        })
     })
 }
 
@@ -523,8 +547,7 @@ pub fn run_untimed(dir: &Path, args: &[&str]) -> Result<Run, GitUnavailable> {
 /// 64 KiB, which `status --porcelain` in a large dirty clone passes easily — and the symptom
 /// is a timeout that looks like a slow machine.
 pub fn run(dir: &Path, args: &[&str], timeout: Duration) -> Result<Run, GitUnavailable> {
-    let _running = Running::start(dir);
-    Ok(wait(spawn(dir, args)?, timeout)?)
+    counted(dir, || Ok(wait(spawn(dir, args)?, timeout)?))
 }
 
 /// What one git call answered, as the BYTES it wrote. `code` is `None` when the deadline passed.
@@ -554,8 +577,9 @@ pub fn run_as_session(
         pass: config_location_env(|name| std::env::var_os(name)),
         ..Extra::default()
     };
-    let _running = Running::start(dir);
-    Ok(wait_raw(spawn_with(dir, args, &extra)?, timeout)?)
+    counted(dir, || {
+        Ok(wait_raw(spawn_with(dir, args, &extra)?, timeout)?)
+    })
 }
 
 /// The variables git hands a hook to say WHICH repository and which index it is working on.
@@ -587,8 +611,9 @@ pub fn run_in_hook(dir: &Path, args: &[&str], timeout: Duration) -> Result<RawRu
         pass,
         ..Extra::default()
     };
-    let _running = Running::start(dir);
-    Ok(wait_raw(spawn_with(dir, args, &extra)?, timeout)?)
+    counted(dir, || {
+        Ok(wait_raw(spawn_with(dir, args, &extra)?, timeout)?)
+    })
 }
 
 /// Run `git -C <dir> <args>` across a network, under the one-credential rule.
@@ -610,8 +635,7 @@ pub fn run_network(dir: &Path, helper: Option<&str>, args: &[&str]) -> Result<Ru
         credentials: true,
         ..Extra::default()
     };
-    let _running = Running::start(dir);
-    Ok(wait(spawn_with(dir, args, &extra)?, NETWORK)?)
+    counted(dir, || Ok(wait(spawn_with(dir, args, &extra)?, NETWORK)?))
 }
 
 /// Wait for `child` with a deadline, draining both pipes as it runs.

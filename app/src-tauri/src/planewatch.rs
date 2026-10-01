@@ -141,7 +141,6 @@ impl<W: notify::Watcher + Send + 'static> Watch<W> {
             // Before the window hears it, so the reads it makes on `plane-changed` are of the
             // plane as it is now, not the shared standings from before (FD-11).
             charter_core::planegit::touch(&at);
-            charter_core::reposave::touch_within(&at);
             changed(plane.clone());
         };
         let debouncer = new_debouncer_opt(QUIET_FOR, None, tell, RecommendedCache::new(), config)?;

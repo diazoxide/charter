@@ -478,6 +478,7 @@ confirm it (D-0082b). A row is added in the pull request that adds its job.
 | L8 | relaunch with the hot target's chats to put back: interactive | ≤ 3 s | CI relative (`bench`); release absolute | SC-20 | — |
 | T1 | event log throughput | ≥ 1,000 events/s sustained, L5 inside its budget | CI absolute (`stress`) | FD-9 | — |
 | T2 | audit throughput and group commit | 1,000 entries/s; ≤ 100 ms between commits (ADR 0075) | CI absolute (`stress`) | AU-3 | — |
+| G1 | git standing at 300,000 files: git processes in one repo at once while the pollers read it; eight reads against one | 1 at a time; eight reads cost no more git processes than one standing | CI absolute (`stress`, *shared standing at 300,000 files*) | FD-11 | — |
 | D1 | bytes per event, per audit entry, uncompressed | ≤ 1 KB; ≤ 512 B | CI absolute (`stress`) | FD-9, AU-3 | — |
 | D2 | disk written over a busy day at the top class (50 hot, 0.3 tool calls/s, 8 h) | ≤ 100 MB compressed | CI absolute (`stress`, computed) | FD-9 | — |
 | D3 | a hibernated chat's scrollback snapshot | ≤ 1 MB on disk | CI absolute (`stress`) | SC-4 | — |

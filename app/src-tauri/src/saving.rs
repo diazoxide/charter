@@ -156,6 +156,9 @@ pub fn choose_mode(root: &Path, mode: &str) -> Result<PlaneSaving, String> {
         &text,
     )
     .map_err(|reasons| reasons.join("\n"))?;
+    // The mode changes what the shared standing says (FD-11): it is read again, not answered
+    // from before the choice.
+    planegit::touch(root);
     Ok(saving_of(root))
 }
 
@@ -517,6 +520,30 @@ mod tests {
         let text = std::fs::read_to_string(dir.path().join("charter.toml")).unwrap();
         assert!(text.starts_with("# the team's settings\n"), "{text}");
         assert!(text.contains("[plane]\nmode = \"commit\"\n"), "{text}");
+    }
+
+    #[test]
+    fn the_standing_answered_after_choosing_a_mode_is_the_new_modes() {
+        // FD-11: the standing is shared, and choosing writes `charter.toml` — so what is
+        // answered is the plane with that change in it, not the "committed" read before.
+        let dir = plane("");
+        git(
+            dir.path(),
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/acme/plane.git",
+            ],
+        );
+        assert_eq!(saving_of(dir.path()).stage, "committed");
+
+        let got = choose_mode(dir.path(), "commit").expect("chosen");
+
+        assert_eq!(
+            (got.stage.as_str(), got.changed.as_slice()),
+            ("changed", ["charter.toml".to_owned()].as_slice())
+        );
     }
 
     #[test]
