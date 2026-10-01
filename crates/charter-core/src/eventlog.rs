@@ -529,10 +529,10 @@ impl Recorder {
         if let Some(id) = &call.call {
             body["call"] = id.as_str().into();
             let key = (under.run.clone(), id.clone());
-            if let Some(phase) = phase {
-                if let Some(ms) = self.pair(key, phase, now, call.at_ms) {
-                    body["tool_ms"] = ms.into();
-                }
+            if let Some(phase) = phase
+                && let Some(ms) = self.pair(key, phase, now, call.at_ms)
+            {
+                body["tool_ms"] = ms.into();
             }
         }
         let kind = match phase {
