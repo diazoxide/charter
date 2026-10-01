@@ -3228,9 +3228,16 @@ writes is the next heading's `AGENTS.md`, in a piece only (ADR 0085).
 
   It never carries memory, session records, todos, other workspaces, the skills listing or a
   path on this machine.
-- **Ownership:** one entry in the piece's `.charter-generated`, and a line that hides it, written
-  before the file is. Where that line goes is open in ADR 0085 §5. Charter rewrites the file only
-  while its digest is the recorded one.
+- **Ownership:** one entry in the piece's `.charter-generated`, and the line `/AGENTS.md` in
+  charter's block in the common `info/exclude`, written before the file is (V35; git has no
+  per-worktree exclude). Charter rewrites the file only while its digest is the recorded one.
+- **The line hides every worktree root's `AGENTS.md`, the clone's included.** So `charter
+  doctor` (the `hidden AGENTS.md` row, shown only when there is something to say), a notice on
+  the chat's pane at every start from the picker (`start::Ready::notices`), and every chat's
+  briefing name each untracked `AGENTS.md` that the line hides and charter did not write
+  (`guest::hidden_agents_md`). A place the check could not look is said too, never passed over.
+- **Two chats starting in one piece take turns**: an `flock` on the piece's own git directory
+  (`.git/worktrees/<id>/`), which is no file and no store.
 - **Steps aside, and never refuses a chat.** It is not written where:
   - the repository tracks an `AGENTS.md`;
   - an `AGENTS.md` charter did not write is there.

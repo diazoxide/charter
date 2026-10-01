@@ -381,6 +381,7 @@ impl Doctor {
         rows.push(deferred::row("guard seen", deferred::GUARD));
         rows.push(plane::nested(self));
         rows.push(clones::workspace_clones(self));
+        rows.extend(clones::hidden_agents_md(self));
         rows.push(deferred::row("workspace layer", deferred::WORKSPACE_LAYER));
         rows.push(changes::changes(self));
         rows.push(inventory::inventory(self));

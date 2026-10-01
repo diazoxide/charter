@@ -1008,7 +1008,11 @@ fn start_chat(
     let session = held
         .chats()
         .start_ready(&chat, &ready, Size { columns, rows })?;
-    Ok(Started { session, label })
+    Ok(Started {
+        session,
+        label,
+        notices: ready.notices,
+    })
 }
 
 /// A chat that started: its session, and the name it was given as charter holds it.
@@ -1018,6 +1022,9 @@ struct Started {
     /// The picker's Name field as the core's rule left it — trimmed, and none when it was
     /// blank — so the tab draws what the record holds rather than what was typed.
     label: Option<String>,
+    /// What the start found to say, one line each, for the chat's pane (ADR 0085): why its
+    /// `AGENTS.md` was not written, and an `AGENTS.md` charter's exclude line hides.
+    notices: Vec<String>,
 }
 
 /// Starts a session, and remembers it as a chat so a quit can write it down. No program is

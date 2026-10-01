@@ -483,6 +483,8 @@ export function PlaneView({
    * or answered.
    */
   const [byHand, setByHand] = useState<Record<number, ByHandNote>>({});
+  /** What each chat's start found to say, by session, until it is dismissed (ADR 0085). */
+  const [startNotes, setStartNotes] = useState<Record<number, readonly string[]>>({});
   /** The tab that was in front on each workspace's strip, so coming back to a workspace
    *  comes back to the chat that was on screen there rather than to its first. */
   const lastFront = useRef<Record<string, number>>({});
@@ -1443,6 +1445,13 @@ export function PlaneView({
     };
   }, [plane]);
 
+  /** A start notice put away: it is said once, and the operator has read it. */
+  const dismissStartNote = useCallback((session: number) => {
+    setStartNotes((was) =>
+      Object.fromEntries(Object.entries(was).filter(([held]) => Number(held) !== session)),
+    );
+  }, []);
+
   /** The banner's two answers: open that harness as a chat where the shell was standing — the
    *  picker, started on that harness — or put the banner away. Either way it is answered. */
   const answerByHand = useCallback(
@@ -1502,6 +1511,9 @@ export function PlaneView({
         .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
       if (started.status === "error") return started.error;
       const session = started.data.session;
+      // `?? []`, as the label's `?? null` below: an older core, or a stand-in, sends none.
+      const notes = started.data.notices ?? [];
+      if (notes.length > 0) setStartNotes((was) => ({ ...was, [session]: notes }));
       // Where charter put it, written down before the tab is drawn: the plane will say the
       // same thing a tick later, and until it does this is what keeps the tab on the strip
       // the operator is looking at.
@@ -3668,6 +3680,8 @@ export function PlaneView({
                   handedFrom={handedFrom}
                   byHand={byHand}
                   onByHand={answerByHand}
+                  startNotes={startNotes}
+                  onDismissStartNote={dismissStartNote}
                   offered={views}
                   onOpenView={showView}
                   onAsk={(pane) => change((tabs) => stopWaiting(tabs, pane))}
@@ -4064,6 +4078,23 @@ function ByHandBanner({ note, onAnswer }: { note: ByHandNote; onAnswer: (open: b
 }
 
 /**
+ * **What a chat's start found to say** (ADR 0085, V35): why its `AGENTS.md` was not written,
+ * or an `AGENTS.md` of the operator's that charter's exclude line hides. One line each, in the
+ * pane's corner beside the by-hand banner and drawn the same way: a `status`, because nothing is
+ * waiting on the operator and the chat is already running.
+ */
+function StartNotice({ notes, onDismiss }: { notes: readonly string[]; onDismiss: () => void }) {
+  return (
+    <div className="pane-by-hand" role="status" aria-label="What this chat's start found">
+      <span>{notes.join(" ")}</span>
+      <button type="button" tabIndex={0} className="dismiss" onClick={onDismiss}>
+        Dismiss
+      </button>
+    </div>
+  );
+}
+
+/**
  * What a chat's default name puts before its number (charter-app#254): the persona it adopted,
  * or — with none — the program it runs, by the word the plane calls its harness. `steward 3`,
  * `claude 4`. Not the profile's name, which is the operator's word for an account (`work 4`
@@ -4178,6 +4209,8 @@ function PaneFrame({
   from,
   byHand,
   onByHand,
+  startNotes,
+  onDismissStartNote,
   doing,
   children,
 }: {
@@ -4190,6 +4223,9 @@ function PaneFrame({
   /** A harness started by hand in this shell tab, while its banner is up (ADR 0062). */
   byHand?: ByHandNote;
   onByHand: (open: boolean) => void;
+  /** What this chat's start found to say, while it is up (ADR 0085). */
+  startNotes?: readonly string[];
+  onDismissStartNote: () => void;
   doing: ReactNode;
   children: ReactNode;
 }) {
@@ -4204,6 +4240,7 @@ function PaneFrame({
         <ChatGauge usage={usage} />
         {from && <span className="pane-from">{from}</span>}
         {byHand && <ByHandBanner note={byHand} onAnswer={onByHand} />}
+        {startNotes && <StartNotice notes={startNotes} onDismiss={onDismissStartNote} />}
       </div>
       <div className="pane-corner at-end">{doing}</div>
       {children}
@@ -4590,6 +4627,8 @@ function LayoutPanes({
   handedFrom,
   byHand,
   onByHand,
+  startNotes,
+  onDismissStartNote,
   offered,
   onOpenView,
   onAsk,
@@ -4616,6 +4655,9 @@ function LayoutPanes({
   byHand: Readonly<Record<number, ByHandNote>>;
   /** The banner answered: `open` asks for that harness as a chat, else it is put away. */
   onByHand: (session: number, open: boolean) => void;
+  /** What each chat's start found to say, by session (ADR 0085). */
+  startNotes: Readonly<Record<number, readonly string[]>>;
+  onDismissStartNote: (session: number) => void;
   /** The views approved extensions offer, for the buttons a view draws beside itself. */
   offered: readonly ExtensionView[];
   onOpenView: (view: ViewRef, title: string) => void;
@@ -4676,6 +4718,8 @@ function LayoutPanes({
         from={handedFrom[content.session]}
         byHand={byHand[content.session]}
         onByHand={(open) => onByHand(content.session, open)}
+        startNotes={startNotes[content.session]}
+        onDismissStartNote={() => onDismissStartNote(content.session)}
         doing={<PaneDoing pane={layout.pane} offerFor={offerFor} onPaneDoes={onPaneDoes} />}
       >
         <SessionPane
@@ -4721,6 +4765,8 @@ function LayoutPanes({
               handedFrom={handedFrom}
               byHand={byHand}
               onByHand={onByHand}
+              startNotes={startNotes}
+              onDismissStartNote={onDismissStartNote}
               offered={offered}
               onOpenView={onOpenView}
               onAsk={onAsk}

@@ -481,7 +481,7 @@ pub fn wire(plane: &Path, tree: &Path) -> Wired {
     // content somebody committed — and charter publishing its own over it would show as a
     // modified TRACKED file, which no `info/exclude` line can hide. So nothing is written and
     // the tree is reported blocked, rather than charter dirtying a repo it is a guest in.
-    if tree.join(MARKER).exists() && tracked(tree, MARKER) {
+    if commits_a_marker(tree) {
         return Wired {
             rows: Vec::new(),
             hidden: Hidden::Blocked(
@@ -689,8 +689,7 @@ pub fn wire(plane: &Path, tree: &Path) -> Wired {
     // The second pass settles the block on what the record says NOW: a withdrawal takes its
     // line with it, and a checkout left with nothing of charter's loses the block altogether
     // — which reading the record from before the writes would skip.
-    let owned = charter_owned(tree, &layer::read_record(tree));
-    let (second, _) = register_excludes(plane, tree, &owned, false);
+    let (second, owned) = settle_block(plane, tree);
     // One row for the two passes, worst first: blocked whichever pass hit it, then a line
     // left out over a file of yours, then the pass that actually wrote. Two rows would report
     // one file twice.
@@ -709,6 +708,353 @@ pub fn wire(plane: &Path, tree: &Path) -> Wired {
         rows,
         hidden: Hidden::InPlace,
         block,
+    }
+}
+
+/// Whether the repository at `tree` commits a `.charter-generated`. Charter's own is
+/// per-checkout and untracked, so writing over a tracked one would change a tracked file,
+/// which no `info/exclude` line can hide. [`wire`] reports the tree blocked over it, and
+/// [`wire_for_chat`] writes no guidance.
+fn commits_a_marker(tree: &Path) -> bool {
+    tree.join(MARKER).exists() && tracked(tree, MARKER)
+}
+
+/// The block's settling pass: charter's block in `tree`'s exclude, written again from what
+/// `tree`'s record says now. `(what it wrote, what the record owns)`.
+///
+/// After the files, never before: a withdrawal takes its line with it, a line added for a
+/// file that was then not written leaves again (its path is confirmed absent), and a checkout
+/// left with nothing of charter's loses the block altogether.
+fn settle_block(plane: &Path, tree: &Path) -> (Wrote, Vec<String>) {
+    let owned = charter_owned(tree, &layer::read_record(tree));
+    let (wrote, _) = register_excludes(plane, tree, &owned, false);
+    (wrote, owned)
+}
+
+/// The one project-instructions file charter writes: a chat's guidance, in its own worktree
+/// alone (ADR 0085).
+pub const AGENTS_MD: &str = "AGENTS.md";
+
+/// What became of a chat's `AGENTS.md` ([`wire_for_chat`]). None of these refuses a chat: the
+/// file is guidance, and a chat without it still has its hook briefing (ADR 0085 §4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Guidance {
+    /// Charter wrote it, where there was none or where its own was.
+    Written,
+    /// Charter's own was there, already saying this.
+    Current,
+    /// The repository tracks an `AGENTS.md`: charter writes nothing.
+    Tracked,
+    /// An `AGENTS.md` charter did not write is there (or one it cannot read): the operator's,
+    /// left exactly as it is.
+    Theirs,
+    /// Not written, because it could not be hidden: the exclude cannot be written, or its line
+    /// would hide an untracked file of the operator's in a checkout that reads the same
+    /// exclude (charter#1072). A generated file that shows is one `git add` from a commit.
+    Withheld(String),
+    /// Not written: the record or the file could not be written. No line is left behind.
+    Blocked(String),
+}
+
+impl Guidance {
+    /// The one sentence the window shows for this at the chat's start, or none for an outcome
+    /// that is nothing to report. The reason is the operator's to act on, so it is never
+    /// dropped (a withheld or blocked file is otherwise invisible).
+    pub fn notice(&self) -> Option<String> {
+        match self {
+            Self::Written | Self::Current | Self::Tracked | Self::Theirs => None,
+            Self::Withheld(why) | Self::Blocked(why) => Some(format!(
+                "charter did not write this chat's {AGENTS_MD}: {why} (ADR 0085)."
+            )),
+        }
+    }
+}
+
+/// [`wire`], and then, for a chat starting in its own worktree, its `AGENTS.md` (ADR 0085).
+///
+/// **The layer first, and the two never mixed.** The layer is a guard, and [`Wired`] says
+/// whether a chat may start; the guidance is not, and nothing that happens to it changes that
+/// answer. The guidance is written **only where the layer is complete**: a start that is
+/// refused writes nothing a chat would have read.
+///
+/// **Only into a piece.** `tree` is asked here ([`crate::worktree::locate`]), not trusted: a
+/// shared clone, where two personas would overwrite each other's file, or any tree that is not
+/// a piece of this plane, gets `None` and nothing written. `guidance` is
+/// `briefing::agents_md`'s text, or `None` for a chat with nothing to be told.
+pub fn wire_for_chat(
+    plane: &Path,
+    tree: &Path,
+    guidance: Option<&str>,
+) -> (Wired, Option<Guidance>) {
+    let wired = wire(plane, tree);
+    let a_piece = crate::worktree::locate(plane, tree).is_some_and(|found| {
+        crate::worktree::path_for(plane, &found.workspace, &found.repo, &found.piece)
+            .ok()
+            .and_then(|path| crate::contain::resolved(&path))
+            == crate::contain::resolved(tree)
+    });
+    let guided = match guidance {
+        Some(text) if a_piece && wired.complete() => Some(guide(plane, tree, text)),
+        _ => None,
+    };
+    (wired, guided)
+}
+
+/// Write `text` as `tree`'s `AGENTS.md`, under the guest layer's ownership rule, or step aside.
+///
+/// Held under [`Held`], so two chats starting in one piece at once take turns: interleaved,
+/// one could settle its record over the other's file, and the file would read as somebody
+/// else's for good.
+fn guide(plane: &Path, tree: &Path, text: &str) -> Guidance {
+    let _held = Held::on(tree);
+    let _answers = crate::worktree::listing::answers();
+    if tracked(tree, AGENTS_MD) {
+        return Guidance::Tracked;
+    }
+    if commits_a_marker(tree) {
+        return Guidance::Withheld(format!(
+            "this repository commits a {MARKER}, and charter's record is never committed"
+        ));
+    }
+    let record = layer::read_record(tree);
+    let plan = planned(tree, AGENTS_MD, text, &record);
+    match plan {
+        Plan::Foreign | Plan::Unreadable | Plan::Theirs | Plan::HarnessEdited => {
+            return Guidance::Theirs;
+        }
+        Plan::Current | Plan::Create | Plan::Refresh => {}
+    }
+    // The line first, before a byte of the file exists, and with it every line this tree
+    // already needs: the block is written whole.
+    let mut rels = charter_owned(tree, &record);
+    rels.push(AGENTS_MD.to_owned());
+    if !rels.iter().any(|r| r == MARKER) {
+        rels.push(MARKER.to_owned());
+    }
+    let (first, left) = register_excludes(plane, tree, &rels, false);
+    if let Wrote::Blocked(why) = first {
+        return Guidance::Withheld(format!(
+            "its line could not be written to the exclude ({why})"
+        ));
+    }
+    if left.contains(AGENTS_MD) {
+        return Guidance::Withheld(left_out_why(tree));
+    }
+    if plan == Plan::Current {
+        return Guidance::Current;
+    }
+    let outcome = write_guidance(tree, text, &record);
+    // Always, whatever the write did: a line added above for a file that was then not written
+    // leaves again here, because its path is confirmed absent.
+    settle_block(plane, tree);
+    outcome
+}
+
+/// Intent, file, settled record — [`wire`]'s order, for the one file.
+fn write_guidance(tree: &Path, text: &str, record: &layer::Record) -> Guidance {
+    let mut intent = record.clone();
+    intent.pend(AGENTS_MD, digest(text));
+    if let Err(refused) = layer::publish_io(tree, &intent) {
+        return Guidance::Blocked(format!(
+            "its record could not be written ({})",
+            reason(&refused)
+        ));
+    }
+    if let Err(why) = write_into(tree, AGENTS_MD, text) {
+        // The entry stays pending over a file that holds what it held, and the next start
+        // writes it again.
+        return Guidance::Blocked(format!("the file could not be written ({why})"));
+    }
+    let mut settled = intent;
+    settled.settle(AGENTS_MD, digest(text));
+    match layer::publish_io(tree, &settled) {
+        Err(refused) => Guidance::Blocked(format!(
+            "its record could not be settled ({})",
+            reason(&refused)
+        )),
+        Ok(()) => Guidance::Written,
+    }
+}
+
+/// Why the line for `tree`'s `AGENTS.md` was left out: the untracked file of the operator's,
+/// in a checkout that reads the same exclude, that it would have hidden (charter#1072).
+fn left_out_why(tree: &Path) -> String {
+    let theirs = exclude_file(tree)
+        .and_then(|exclude| crate::worktree::listing::live_trees(tree, &exclude).0)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|t| crate::contain::resolved(t) != crate::contain::resolved(tree))
+        .find(|t| yours_untracked(t, AGENTS_MD))
+        .map(|t| t.join(AGENTS_MD).display().to_string());
+    match theirs {
+        Some(theirs) => format!(
+            "{theirs} is an untracked file charter did not write, and the line that would hide \
+             charter's would hide it too — commit or move it, and the next chat here gets one"
+        ),
+        None => "the line that would hide it would hide an untracked file of yours in another \
+                 checkout of this repository"
+            .to_owned(),
+    }
+}
+
+/// An exclusive `flock` on `tree`'s own git directory for as long as it is held: one chat's
+/// [`guide`] at a time in one piece.
+///
+/// **On the git directory, and no file of its own**: for a piece that is
+/// `.git/worktrees/<id>/`, which is that piece's alone and outside its working tree, so the
+/// lock is no store and nothing shows in `git status`. **Best effort**, as `machine.rs`'s is:
+/// a lock that cannot be taken costs only the protection it adds.
+struct Held(Option<std::fs::File>);
+
+impl Held {
+    fn on(tree: &Path) -> Self {
+        let Some(dir) = git_dir(tree) else {
+            return Self(None);
+        };
+        let Ok(file) = std::fs::File::open(&dir) else {
+            return Self(None);
+        };
+        #[cfg(unix)]
+        match rustix::fs::flock(&file, rustix::fs::FlockOperation::LockExclusive) {
+            Ok(()) => Self(Some(file)),
+            Err(_) => Self(None),
+        }
+        #[cfg(not(unix))]
+        {
+            drop(file);
+            Self(None)
+        }
+    }
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        if let Some(file) = self.0.take() {
+            #[cfg(unix)]
+            let _ = rustix::fs::flock(&file, rustix::fs::FlockOperation::Unlock);
+            drop(file);
+        }
+    }
+}
+
+/// What V35's check found: each `AGENTS.md` charter's line hides and charter did not write,
+/// and each place it could not look. Doubt is never silence: a check that could not finish
+/// says so, and a caller reports it as a warning ([`Self::said`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HiddenAgentsMd {
+    /// The hidden files, by path, sorted.
+    pub found: Vec<PathBuf>,
+    /// Why some checkout or file could not be checked, each naming what clears it.
+    pub unsure: Vec<String>,
+}
+
+impl HiddenAgentsMd {
+    /// Nothing found and nothing in doubt.
+    pub fn is_empty(&self) -> bool {
+        self.found.is_empty() && self.unsure.is_empty()
+    }
+
+    /// Add another check's answer to this one.
+    pub fn extend(&mut self, other: HiddenAgentsMd) {
+        self.found.extend(other.found);
+        self.unsure.extend(other.unsure);
+        self.found.sort();
+        self.found.dedup();
+        self.unsure.dedup();
+    }
+
+    /// **The one wording** of V35, for `charter doctor`, the window's notice at a chat's
+    /// start and the chat's briefing alike, with `shown` spelling each path for its surface.
+    /// `None` when there is nothing to say.
+    pub fn said(&self, shown: impl Fn(&Path) -> String) -> Option<String> {
+        if self.is_empty() {
+            return None;
+        }
+        let mut parts = Vec::new();
+        if !self.found.is_empty() {
+            let named = self
+                .found
+                .iter()
+                .map(|p| shown(p))
+                .collect::<Vec<_>>()
+                .join(", ");
+            parts.push(format!(
+                "{named}: not written by charter, and hidden from git status by the /{AGENTS_MD} \
+                 line charter keeps in that repository's info/exclude for a chat's own worktree. \
+                 While it is hidden it can go uncommitted unseen, and a checkout that brings in a \
+                 tracked {AGENTS_MD} replaces it — commit it or move it aside (ADR 0085)."
+            ));
+        }
+        if !self.unsure.is_empty() {
+            parts.push(format!(
+                "charter could not check every {AGENTS_MD} its line may hide: {}.",
+                self.unsure.join("; ")
+            ));
+        }
+        Some(parts.join(" "))
+    }
+}
+
+/// Every `AGENTS.md` that charter's line in the exclude `tree` reads hides, and that charter
+/// did not write: in `tree` and in every checkout that reads the same exclude (V35).
+///
+/// Git has no per-worktree exclude (ADR 0085 §5), so the line that hides a piece's
+/// `AGENTS.md` hides one at the root of the clone and of every sibling piece too. A file the
+/// operator makes there afterwards is hidden from their own `git status`, and a checkout that
+/// brings in a tracked one replaces it without a word. Empty where charter's block has no
+/// such line. READ ONLY.
+pub fn hidden_agents_md(tree: &Path) -> HiddenAgentsMd {
+    let _answers = crate::worktree::listing::answers();
+    let mut out = HiddenAgentsMd::default();
+    let Some(exclude) = exclude_file(tree) else {
+        return out;
+    };
+    let text = std::fs::read_to_string(&exclude).unwrap_or_default();
+    if !already(&text).contains(AGENTS_MD) {
+        return out;
+    }
+    let (trees, doubt) = crate::worktree::listing::live_trees(tree, &exclude);
+    let trees = trees.unwrap_or_else(|| {
+        out.unsure.push(doubt);
+        vec![tree.to_path_buf()]
+    });
+    hidden_in(trees, &mut out);
+    out.found.sort();
+    out.found.dedup();
+    out
+}
+
+/// [`hidden_agents_md`]'s question, asked of each of `trees`: whether its `AGENTS.md` is one
+/// charter's line hides and charter did not write, or one it cannot tell about.
+fn hidden_in(trees: Vec<PathBuf>, out: &mut HiddenAgentsMd) {
+    for t in trees {
+        let path = t.join(AGENTS_MD);
+        match crate::worktree::listing::exists(&path) {
+            Some(false) => continue,
+            None => {
+                out.unsure.push(format!(
+                    "{} cannot be checked — restoring read access clears this",
+                    path.display()
+                ));
+                continue;
+            }
+            Some(true) => {}
+        }
+        if tracked(&t, AGENTS_MD) {
+            continue;
+        }
+        let record = layer::read_record(&t);
+        match std::fs::read_to_string(&path) {
+            Ok(on_disk) if record.recorded(AGENTS_MD).contains(&digest(&on_disk)) => {}
+            Ok(_) => out.found.push(path),
+            // Charter's ownership rule keeps the line for a file it cannot read; that is not
+            // evidence the file is charter's, so it is a doubt here.
+            Err(_) => out.unsure.push(format!(
+                "{} cannot be read, so charter cannot tell whether it wrote it — restoring read \
+                 access clears this",
+                path.display()
+            )),
+        }
     }
 }
 
@@ -1744,6 +2090,63 @@ mod tests {
         let tree = plane.join("workspaces").join("beta").join(name);
         std::fs::create_dir_all(tree.join(".git").join("info")).unwrap();
         (dir, plane, tree)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_agents_md_in_a_tree_charter_cannot_look_into_is_a_doubt() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let tree = dir.path().join("p2");
+        std::fs::create_dir_all(&tree).unwrap();
+        std::fs::set_permissions(&tree, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let mut out = HiddenAgentsMd::default();
+        hidden_in(vec![tree.clone()], &mut out);
+        std::fs::set_permissions(&tree, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(out.found.is_empty());
+        assert!(
+            out.unsure
+                .iter()
+                .any(|why| why.contains(&tree.join(AGENTS_MD).display().to_string())),
+            "{out:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_chats_agents_md_waits_for_another_start_in_the_same_piece() {
+        let dir = tempfile::tempdir().unwrap();
+        let plane = std::fs::canonicalize(dir.path()).unwrap();
+        let tree = plane.join("tree");
+        std::fs::create_dir_all(&tree).unwrap();
+        crate::testgit::run(&tree, &["init", "-q", "-b", "main"]);
+        let held = Held::on(&tree);
+        assert!(
+            held.0.is_some(),
+            "the lock is taken on the tree's git directory"
+        );
+        let done = std::sync::atomic::AtomicBool::new(false);
+
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                guide(&plane, &tree, "x\n");
+                done.store(true, std::sync::atomic::Ordering::SeqCst);
+            });
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            assert!(
+                !done.load(std::sync::atomic::Ordering::SeqCst),
+                "a second start writes nothing while the first holds the piece"
+            );
+            drop(held);
+        });
+
+        assert!(done.load(std::sync::atomic::Ordering::SeqCst));
+        assert_eq!(
+            std::fs::read_to_string(tree.join(AGENTS_MD)).unwrap(),
+            "x\n"
+        );
     }
 
     #[test]
