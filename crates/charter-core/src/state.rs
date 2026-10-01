@@ -734,10 +734,10 @@ impl Board {
     /// because `u32` is a boundary this file chose rather than one it was given.
     fn moved(&mut self) -> u32 {
         use std::sync::atomic::Ordering;
-        // `fetch_update` only fails when the closure answers `None`, and this one never does,
+        // `try_update` only fails when the closure answers `None`, and this one never does,
         // so both arms hold the count as it was before this move.
         let was = MOVES
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |was| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |was| {
                 Some(was.saturating_add(1))
             })
             .unwrap_or_else(|was| was);

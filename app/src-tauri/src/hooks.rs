@@ -597,7 +597,7 @@ fn seen_by(board: &Board, plane: &PlaneId, session: u32) -> Moved {
 fn sequence() -> u32 {
     static TAKEN: AtomicU32 = AtomicU32::new(0);
     let was = TAKEN
-        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+        .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
             Some(n.saturating_add(1))
         })
         .unwrap_or_else(|n| n);
