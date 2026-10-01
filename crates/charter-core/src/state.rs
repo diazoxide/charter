@@ -734,13 +734,17 @@ impl Board {
     /// because `u32` is a boundary this file chose rather than one it was given.
     fn moved(&mut self) -> u32 {
         use std::sync::atomic::Ordering;
-        // `fetch_update` only fails when the closure answers `None`, and this one never does,
-        // so both arms hold the count as it was before this move.
-        let was = MOVES
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |was| {
-                Some(was.saturating_add(1))
-            })
-            .unwrap_or_else(|was| was);
+        // The loop `fetch_update` is, written out: Rust 1.99 deprecates that name for
+        // `try_update`, which this crate's 1.98 floor does not have.
+        let mut was = MOVES.load(Ordering::Relaxed);
+        while let Err(now) = MOVES.compare_exchange_weak(
+            was,
+            was.saturating_add(1),
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            was = now;
+        }
         was.saturating_add(1)
     }
 

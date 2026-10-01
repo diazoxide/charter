@@ -596,11 +596,17 @@ fn seen_by(board: &Board, plane: &PlaneId, session: u32) -> Moved {
 /// stopping listening.
 fn sequence() -> u32 {
     static TAKEN: AtomicU32 = AtomicU32::new(0);
-    let was = TAKEN
-        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
-            Some(n.saturating_add(1))
-        })
-        .unwrap_or_else(|n| n);
+    // The loop `fetch_update` is, written out: Rust 1.99 deprecates that name for
+    // `try_update`, which this workspace's 1.98 floor does not have.
+    let mut was = TAKEN.load(Ordering::SeqCst);
+    while let Err(now) = TAKEN.compare_exchange_weak(
+        was,
+        was.saturating_add(1),
+        Ordering::SeqCst,
+        Ordering::SeqCst,
+    ) {
+        was = now;
+    }
     was.saturating_add(1)
 }
 
