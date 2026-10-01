@@ -45,6 +45,13 @@ updates:
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
 
+  # The docs site (`site/`), its own package and lockfile, apart from the app's.
+  - package-ecosystem: npm
+    directory: /site
+    schedule: { interval: weekly }
+    groups:
+      site: { patterns: ["*"] }
+
   # The Tauri pair, one PR across both ecosystems (see the note at the top).
   - package-ecosystem: cargo
     directory: /

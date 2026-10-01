@@ -1,0 +1,47 @@
+name: docs
+
+# charter's website and docs, one Astro Starlight site in `site/` built from `docs/` (FR-5).
+#
+# On every pull request and on `main` the site is built and checked: every link inside the
+# site leads to a page and a heading that exist (starlight-links-validator), every relative link
+# out of `docs/` leads to a file that exists (`site/src/repo-links.mjs`), and every page in
+# `docs/` is built and in the sidebar (`site/scripts/check-reachable.mjs`).
+#
+# Nothing is published. Publishing the site is deferred by the operator's ruling V38: the first
+# releases are quiet, for internal testing on the dev channel.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: docs-${{ github.ref }}
+  # As in ci.yml: a newer push supersedes a PR's run, and every run on `main` is kept.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+env:
+  ASTRO_TELEMETRY_DISABLED: "1"
+
+jobs:
+  build:
+    name: docs (build, links, reachable)
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: site
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
