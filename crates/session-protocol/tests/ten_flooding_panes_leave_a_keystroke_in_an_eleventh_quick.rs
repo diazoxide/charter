@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use charter_session_protocol::link;
 use charter_session_protocol::version::{Speaks, Version};
-use charter_session_protocol::view::{self, Chunk, Limits};
+use charter_session_protocol::view::{Attacher, Chunk, Limits, ViewId, Viewer};
 use tokio::net::{UnixListener, UnixStream};
 
 const FLOODING: u32 = 10;
@@ -38,13 +38,10 @@ async fn the_ninety_fifth_percentile_keystroke_stays_inside_fifty_milliseconds()
         let mut link = link::serve(stream, v1()).await.unwrap();
         let mut floods = Vec::new();
         for pane in 0..FLOODING {
-            let feed = view::start(
-                link.open().await.unwrap(),
-                pane,
-                1,
-                Bytes::new(),
-                Limits::default(),
-            );
+            let feed = Attacher::new(link.opener(), Limits::default())
+                .attach(ViewId(pane), Bytes::new())
+                .await
+                .unwrap();
             let stop = Arc::clone(&host_stop);
             floods.push(tokio::spawn(async move {
                 let line = Bytes::from(format!("pane {pane}: {}\r\n", "x".repeat(200)).repeat(64));
@@ -60,13 +57,10 @@ async fn the_ninety_fifth_percentile_keystroke_stays_inside_fifty_milliseconds()
                 }
             }));
         }
-        let echo = view::start(
-            link.open().await.unwrap(),
-            FLOODING,
-            1,
-            Bytes::new(),
-            Limits::default(),
-        );
+        let echo = Attacher::new(link.opener(), Limits::default())
+            .attach(ViewId(FLOODING), Bytes::new())
+            .await
+            .unwrap();
         while let Some(Ok(key)) = link.control().next().await {
             echo.push(key).unwrap();
         }
@@ -82,8 +76,11 @@ async fn the_ninety_fifth_percentile_keystroke_stays_inside_fifty_milliseconds()
     let drawn = Arc::new(AtomicUsize::new(0));
     let mut echo = None;
     for _ in 0..=FLOODING {
-        let mut reader = view::accept(client.accept().await.unwrap()).await.unwrap();
-        if reader.view() == FLOODING {
+        let mut reader = Viewer::default()
+            .accept(client.accept().await.unwrap())
+            .await
+            .unwrap();
+        if reader.view() == ViewId(FLOODING) {
             echo = Some(reader);
             continue;
         }

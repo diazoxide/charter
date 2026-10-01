@@ -8,7 +8,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use charter_session_protocol::link::{self, Link};
 use charter_session_protocol::version::{Speaks, Version};
-use charter_session_protocol::view::{self, Chunk, Limits};
+use charter_session_protocol::view::{self, Attacher, Chunk, Limits, ViewId, Viewer};
 use tokio::io::duplex;
 use tokio::time::timeout;
 
@@ -45,12 +45,18 @@ async fn read_until_quiet(reader: &mut view::Reader) -> usize {
 
 #[tokio::test]
 async fn the_host_stops_at_the_high_watermark_while_nothing_is_acknowledged() {
-    let (mut client, mut host) = linked().await;
-    let feed = view::start(host.open().await.unwrap(), 1, 1, Bytes::new(), limits());
+    let (mut client, host) = linked().await;
+    let feed = Attacher::new(host.opener(), limits())
+        .attach(ViewId(1), Bytes::new())
+        .await
+        .unwrap();
     for _ in 0..TOTAL / CHUNK {
         feed.push(Bytes::from(vec![b'x'; CHUNK])).unwrap();
     }
-    let mut reader = view::accept(client.accept().await.unwrap()).await.unwrap();
+    let mut reader = Viewer::default()
+        .accept(client.accept().await.unwrap())
+        .await
+        .unwrap();
     let got = read_until_quiet(&mut reader).await;
     assert!(
         got >= HIGH - CHUNK,
@@ -61,12 +67,18 @@ async fn the_host_stops_at_the_high_watermark_while_nothing_is_acknowledged() {
 
 #[tokio::test]
 async fn acknowledging_down_to_the_low_watermark_lets_it_write_again() {
-    let (mut client, mut host) = linked().await;
-    let feed = view::start(host.open().await.unwrap(), 1, 1, Bytes::new(), limits());
+    let (mut client, host) = linked().await;
+    let feed = Attacher::new(host.opener(), limits())
+        .attach(ViewId(1), Bytes::new())
+        .await
+        .unwrap();
     for _ in 0..TOTAL / CHUNK {
         feed.push(Bytes::from(vec![b'x'; CHUNK])).unwrap();
     }
-    let mut reader = view::accept(client.accept().await.unwrap()).await.unwrap();
+    let mut reader = Viewer::default()
+        .accept(client.accept().await.unwrap())
+        .await
+        .unwrap();
     let first = read_until_quiet(&mut reader).await;
 
     // Drawing less than takes it below the low watermark is not enough.
@@ -87,15 +99,21 @@ async fn acknowledging_down_to_the_low_watermark_lets_it_write_again() {
 
 #[tokio::test]
 async fn a_client_that_draws_as_it_reads_gets_every_byte_in_order() {
-    let (mut client, mut host) = linked().await;
-    let feed = view::start(host.open().await.unwrap(), 1, 1, Bytes::new(), limits());
+    let (mut client, host) = linked().await;
+    let feed = Attacher::new(host.opener(), limits())
+        .attach(ViewId(1), Bytes::new())
+        .await
+        .unwrap();
     let mut sent = Vec::with_capacity(TOTAL);
     for n in 0..TOTAL / CHUNK {
         let chunk = vec![(n % 251) as u8; CHUNK];
         sent.extend_from_slice(&chunk);
         feed.push(Bytes::from(chunk)).unwrap();
     }
-    let mut reader = view::accept(client.accept().await.unwrap()).await.unwrap();
+    let mut reader = Viewer::default()
+        .accept(client.accept().await.unwrap())
+        .await
+        .unwrap();
     let mut got = Vec::with_capacity(TOTAL);
     while got.len() < TOTAL {
         let chunk = timeout(Duration::from_secs(10), reader.next())

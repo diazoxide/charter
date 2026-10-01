@@ -62,7 +62,10 @@ pub enum LinkError {
     #[error("the link is closed")]
     Closed,
     /// The client did not open the control lane within the handshake's deadline.
-    #[error("the client did not open the control lane within {:?}", crate::version::HANDSHAKE_TIMEOUT)]
+    #[error(
+        "the client did not open the control lane within {:?}",
+        crate::version::HANDSHAKE_TIMEOUT
+    )]
     TimedOut,
     #[error(transparent)]
     Mux(#[from] yamux::ConnectionError),

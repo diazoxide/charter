@@ -219,10 +219,14 @@ fn codec() -> LengthDelimitedCodec {
 async fn send<W: AsyncWrite + Unpin, T: Serialize>(io: &mut W, message: &T) -> Result<(), Refused> {
     let body = serde_json::to_vec(message).map_err(|e| Refused::Malformed(e.to_string()))?;
     if body.len() > MOST_HELLO_BYTES {
-        return Err(Refused::TooLong { most: MOST_HELLO_BYTES });
+        return Err(Refused::TooLong {
+            most: MOST_HELLO_BYTES,
+        });
     }
     io.write_all(MAGIC).await?;
-    FramedWrite::new(&mut *io, codec()).send(Bytes::from(body)).await?;
+    FramedWrite::new(&mut *io, codec())
+        .send(Bytes::from(body))
+        .await?;
     Ok(())
 }
 
@@ -242,8 +246,13 @@ async fn receive<R: AsyncRead + Unpin, T: for<'de> Deserialize<'de>>(
     let mut frames = FramedRead::new(&mut *io, codec());
     let body = match frames.next().await {
         Some(Ok(body)) => body,
-        Some(Err(e)) if e.get_ref().is_some_and(|inner| inner.is::<LengthDelimitedCodecError>()) => {
-            return Err(Refused::TooLong { most: MOST_HELLO_BYTES });
+        Some(Err(e))
+            if e.get_ref()
+                .is_some_and(|inner| inner.is::<LengthDelimitedCodecError>()) =>
+        {
+            return Err(Refused::TooLong {
+                most: MOST_HELLO_BYTES,
+            });
         }
         Some(Err(e)) => return Err(e.into()),
         None => return Err(Refused::NotThisProtocol),

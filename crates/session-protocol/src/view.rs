@@ -10,16 +10,17 @@
 //! **The host never waits on a view.** [`Feed::push`] queues and returns. A task per view
 //! writes the queue to the stream.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::time::Duration;
 
 use bytes::Bytes;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::sync::{Notify, watch};
 use tokio_util::sync::CancellationToken;
 
-use crate::link::{LinkError, Stream};
+use crate::link::{LinkError, Opener, Stream};
 
 /// What opens a view's stream.
 pub const VIEW: u8 = 0x01;
@@ -86,6 +87,8 @@ struct Shared {
     why: OnceLock<Closed>,
     /// Bytes handed to the stream so far, header aside: what the client may acknowledge.
     sent: AtomicU64,
+    /// Bytes the client has acknowledged drawing.
+    drawn: AtomicU64,
     most_queued: usize,
 }
 
@@ -155,13 +158,20 @@ impl Drop for Feed {
 /// Start a view on `stream`, a stream this end just opened: write the header and the
 /// snapshot, then whatever is pushed to the [`Feed`] it returns, never more than
 /// `limits.high_watermark` ahead of what the client has acknowledged.
-pub fn start(stream: Stream, view: u32, epoch: u32, snapshot: Bytes, limits: Limits) -> Feed {
+fn start(
+    stream: Stream,
+    view: ViewId,
+    epoch: Epoch,
+    snapshot: Bytes,
+    limits: Limits,
+) -> (Feed, Arc<Shared>) {
     let shared = Arc::new(Shared {
         queue: Mutex::new(Queue::default()),
         more: Notify::new(),
         dropped: CancellationToken::new(),
         why: OnceLock::new(),
         sent: AtomicU64::new(0),
+        drawn: AtomicU64::new(0),
         most_queued: limits.most_queued_bytes,
     });
     let pump = Arc::clone(&shared);
@@ -183,7 +193,12 @@ pub fn start(stream: Stream, view: u32, epoch: u32, snapshot: Bytes, limits: Lim
         let _ = writer.out.shutdown().await;
         counting.abort();
     });
-    Feed { shared }
+    (
+        Feed {
+            shared: Arc::clone(&shared),
+        },
+        shared,
+    )
 }
 
 /// Read the client's acknowledgements, and keep the running total of bytes drawn. A client
@@ -194,6 +209,7 @@ async fn count_acks(mut acks: ReadHalf<Stream>, drawn: watch::Sender<u64>, share
         match total.checked_add(u64::from(n)) {
             Some(more) if more <= shared.sent.load(Ordering::Acquire) => {
                 total = more;
+                shared.drawn.store(total, Ordering::Release);
                 drawn.send_replace(total);
             }
             _ => {
@@ -216,8 +232,8 @@ struct Gated {
 impl Gated {
     async fn write(
         &mut self,
-        view: u32,
-        epoch: u32,
+        view: ViewId,
+        epoch: Epoch,
         snapshot: &Bytes,
         shared: &Shared,
     ) -> std::io::Result<()> {
@@ -226,8 +242,8 @@ impl Gated {
         })?;
         let mut header = Vec::with_capacity(13);
         header.push(VIEW);
-        header.extend_from_slice(&view.to_be_bytes());
-        header.extend_from_slice(&epoch.to_be_bytes());
+        header.extend_from_slice(&view.0.to_be_bytes());
+        header.extend_from_slice(&epoch.0.to_be_bytes());
         header.extend_from_slice(&length.to_be_bytes());
         self.out.write_all(&header).await?;
         self.send(snapshot).await?;
@@ -279,8 +295,8 @@ impl Gated {
 
 /// The client's end of a view.
 pub struct Reader {
-    view: u32,
-    epoch: u32,
+    view: ViewId,
+    epoch: Epoch,
     snapshot_left: usize,
     input: ReadHalf<Stream>,
     acks: WriteHalf<Stream>,
@@ -288,13 +304,13 @@ pub struct Reader {
 
 impl Reader {
     /// The view's number, as the host gave it.
-    pub fn view(&self) -> u32 {
+    pub fn view(&self) -> ViewId {
         self.view
     }
 
     /// Which snapshot of the view this is. A view attached again after it fell behind comes
     /// back with the same number and a higher epoch, and the client resets its terminal.
-    pub fn epoch(&self) -> u32 {
+    pub fn epoch(&self) -> Epoch {
         self.epoch
     }
 
@@ -337,7 +353,7 @@ impl Reader {
 }
 
 /// Take a view the host opened: read its header.
-pub async fn accept(stream: Stream) -> Result<Reader, LinkError> {
+async fn accept(stream: Stream) -> Result<Reader, LinkError> {
     let (mut input, acks) = tokio::io::split(stream);
     let kind = input.read_u8().await?;
     if kind != VIEW {
@@ -346,8 +362,8 @@ pub async fn accept(stream: Stream) -> Result<Reader, LinkError> {
             format!("a stream that opens with {kind:#04x} is not a view"),
         )));
     }
-    let view = input.read_u32().await?;
-    let epoch = input.read_u32().await?;
+    let view = ViewId(input.read_u32().await?);
+    let epoch = Epoch(input.read_u32().await?);
     let snapshot_left = input.read_u32().await? as usize;
     Ok(Reader {
         view,
@@ -356,4 +372,133 @@ pub async fn accept(stream: Stream) -> Result<Reader, LinkError> {
         input,
         acks,
     })
+}
+
+/// A view's number on a link: which terminal it shows. The layer above says which chat that is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ViewId(pub u32);
+
+/// Which attachment of a view this is. Every re-attach, after a view fell behind, is the next
+/// one, and a client resets its terminal for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Epoch(pub u32);
+
+/// The pause before re-attaching a view whose client drew nothing before it fell behind. It
+/// doubles with each such attachment in a row, up to [`MOST_BACKOFF`], and a client that
+/// draws anything starts again from none.
+pub const FIRST_BACKOFF: Duration = Duration::from_millis(250);
+
+/// The longest pause before a re-attach.
+pub const MOST_BACKOFF: Duration = Duration::from_secs(8);
+
+/// What the host remembers of a view's last attachment.
+struct Attached {
+    epoch: Epoch,
+    /// Attachments in a row that fell behind with nothing drawn.
+    stalled: u32,
+    last: Option<Arc<Shared>>,
+}
+
+/// The host's views on one link: it numbers each view's attachments, and paces the
+/// re-attachment of a client that never draws.
+pub struct Attacher {
+    opener: Opener,
+    limits: Limits,
+    views: Mutex<HashMap<ViewId, Attached>>,
+}
+
+impl Attacher {
+    pub fn new(opener: Opener, limits: Limits) -> Self {
+        Attacher {
+            opener,
+            limits,
+            views: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Attach `view`, new or again, with `snapshot`: open its stream, at the next epoch, after
+    /// the pause its record calls for.
+    pub async fn attach(&self, view: ViewId, snapshot: Bytes) -> Result<Feed, LinkError> {
+        let (epoch, pause) = {
+            let mut views = self
+                .views
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let next = match views.get(&view) {
+                None => Attached {
+                    epoch: Epoch(1),
+                    stalled: 0,
+                    last: None,
+                },
+                Some(before) => {
+                    let epoch = before.epoch.0.checked_add(1).map(Epoch).ok_or_else(|| {
+                        LinkError::Io(std::io::Error::other("a view attached 4 billion times"))
+                    })?;
+                    let stalled = match &before.last {
+                        Some(last)
+                            if last.why.get() == Some(&Closed::FellBehind)
+                                && last.drawn.load(Ordering::Acquire) == 0 =>
+                        {
+                            before.stalled.saturating_add(1)
+                        }
+                        _ => 0,
+                    };
+                    Attached {
+                        epoch,
+                        stalled,
+                        last: None,
+                    }
+                }
+            };
+            let pause = match next.stalled {
+                0 => Duration::ZERO,
+                n => FIRST_BACKOFF
+                    .saturating_mul(1 << (n - 1).min(16))
+                    .min(MOST_BACKOFF),
+            };
+            let epoch = next.epoch;
+            views.insert(view, next);
+            (epoch, pause)
+        };
+        tokio::time::sleep(pause).await;
+        let stream = self.opener.open().await?;
+        let (feed, shared) = start(stream, view, epoch, snapshot, self.limits);
+        if let Some(attached) = self
+            .views
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get_mut(&view)
+            .filter(|attached| attached.epoch == epoch)
+        {
+            attached.last = Some(shared);
+        }
+        Ok(feed)
+    }
+}
+
+/// The client's views on one link: it takes each view the host opens, and refuses an
+/// attachment that is not newer than the last it saw of that view.
+#[derive(Default)]
+pub struct Viewer {
+    seen: HashMap<ViewId, Epoch>,
+}
+
+impl Viewer {
+    /// Take a view the host opened.
+    pub async fn accept(&mut self, stream: Stream) -> Result<Reader, LinkError> {
+        let reader = accept(stream).await?;
+        if let Some(last) = self.seen.get(&reader.view)
+            && reader.epoch <= *last
+        {
+            return Err(LinkError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "view {} at epoch {}, which is not newer than {}",
+                    reader.view.0, reader.epoch.0, last.0
+                ),
+            )));
+        }
+        self.seen.insert(reader.view, reader.epoch);
+        Ok(reader)
+    }
 }

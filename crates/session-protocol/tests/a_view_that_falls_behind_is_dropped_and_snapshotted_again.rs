@@ -7,7 +7,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use charter_session_protocol::link::{self, Link};
 use charter_session_protocol::version::{Speaks, Version};
-use charter_session_protocol::view::{self, Chunk, Limits};
+use charter_session_protocol::view::{self, Attacher, Chunk, Epoch, Limits, ViewId, Viewer};
 use tokio::io::duplex;
 use tokio::time::timeout;
 
@@ -49,9 +49,13 @@ fn push_until_behind(feed: &view::Feed) -> usize {
 
 #[tokio::test]
 async fn a_view_that_never_draws_falls_behind_at_its_bound_and_holds_nothing_after() {
-    let (mut client, mut host) = linked().await;
-    let feed = view::start(host.open().await.unwrap(), 3, 1, Bytes::new(), limits());
-    let mut reader = view::accept(client.accept().await.unwrap()).await.unwrap();
+    let (mut client, host) = linked().await;
+    let attacher = Attacher::new(host.opener(), limits());
+    let feed = attacher.attach(ViewId(3), Bytes::new()).await.unwrap();
+    let mut reader = Viewer::default()
+        .accept(client.accept().await.unwrap())
+        .await
+        .unwrap();
     // Let the host write what the watermark allows, so the rest has to queue.
     tokio::time::sleep(Duration::from_millis(100)).await;
 
@@ -86,18 +90,20 @@ async fn a_view_that_never_draws_falls_behind_at_its_bound_and_holds_nothing_aft
 
 #[tokio::test]
 async fn the_view_comes_back_with_a_fresh_snapshot_and_a_higher_epoch() {
-    let (mut client, mut host) = linked().await;
-    let feed = view::start(host.open().await.unwrap(), 3, 1, Bytes::new(), limits());
-    let _stale = view::accept(client.accept().await.unwrap()).await.unwrap();
+    let (mut client, host) = linked().await;
+    let attacher = Attacher::new(host.opener(), limits());
+    let mut viewer = Viewer::default();
+    let feed = attacher.attach(ViewId(3), Bytes::new()).await.unwrap();
+    let _stale = viewer.accept(client.accept().await.unwrap()).await.unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
     push_until_behind(&feed);
 
     // The host attaches the view again, as a new view does: the snapshot first.
     let fresh = Bytes::from_static(b"\x1b[2J\x1b[Hthe screen now");
-    let again = view::start(host.open().await.unwrap(), 3, 2, fresh.clone(), limits());
+    let again = attacher.attach(ViewId(3), fresh.clone()).await.unwrap();
     again.push(Bytes::from_static(b"!")).unwrap();
-    let mut reader = view::accept(client.accept().await.unwrap()).await.unwrap();
-    assert_eq!((reader.view(), reader.epoch()), (3, 2));
+    let mut reader = viewer.accept(client.accept().await.unwrap()).await.unwrap();
+    assert_eq!((reader.view(), reader.epoch()), (ViewId(3), Epoch(2)));
     let mut snapshot = Vec::new();
     while snapshot.len() < fresh.len() {
         match reader.next().await.unwrap().unwrap() {

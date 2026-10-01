@@ -107,13 +107,13 @@ async fn flood<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 
     let _ = std::future::poll_fn(|cx| {
         loop {
             let mut moved = false;
-            if asked <= streams {
-                if let std::task::Poll::Ready(stream) = connection.poll_new_outbound(cx) {
-                    asked += 1;
-                    moved = true;
-                    if let Ok(stream) = stream {
-                        let _ = opened.send(stream);
-                    }
+            if asked <= streams
+                && let std::task::Poll::Ready(stream) = connection.poll_new_outbound(cx)
+            {
+                asked += 1;
+                moved = true;
+                if let Ok(stream) = stream {
+                    let _ = opened.send(stream);
                 }
             }
             match connection.poll_next_inbound(cx) {

@@ -7,7 +7,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use charter_session_protocol::link::{self, Link};
 use charter_session_protocol::version::{Speaks, Version};
-use charter_session_protocol::view::{self, Closed, Limits};
+use charter_session_protocol::view::{Attacher, Closed, Limits, ViewId, Viewer};
 use tokio::io::duplex;
 use tokio::time::timeout;
 
@@ -20,9 +20,15 @@ async fn linked() -> (Link, Link) {
 
 #[tokio::test]
 async fn acknowledging_bytes_never_sent_closes_the_view() {
-    let (mut client, mut host) = linked().await;
-    let feed = view::start(host.open().await.unwrap(), 1, 1, Bytes::from_static(b"snap"), Limits::default());
-    let mut reader = view::accept(client.accept().await.unwrap()).await.unwrap();
+    let (mut client, host) = linked().await;
+    let feed = Attacher::new(host.opener(), Limits::default())
+        .attach(ViewId(1), Bytes::from_static(b"snap"))
+        .await
+        .unwrap();
+    let mut reader = Viewer::default()
+        .accept(client.accept().await.unwrap())
+        .await
+        .unwrap();
     let _ = reader.next().await.unwrap().unwrap();
     reader.ack(1 << 30).await.unwrap();
 
@@ -47,13 +53,21 @@ async fn acknowledging_bytes_never_sent_closes_the_view() {
 
 #[tokio::test]
 async fn acknowledging_exactly_what_was_drawn_is_fine() {
-    let (mut client, mut host) = linked().await;
-    let feed = view::start(host.open().await.unwrap(), 1, 1, Bytes::from_static(b"snap"), Limits::default());
-    let mut reader = view::accept(client.accept().await.unwrap()).await.unwrap();
+    let (mut client, host) = linked().await;
+    let feed = Attacher::new(host.opener(), Limits::default())
+        .attach(ViewId(1), Bytes::from_static(b"snap"))
+        .await
+        .unwrap();
+    let mut reader = Viewer::default()
+        .accept(client.accept().await.unwrap())
+        .await
+        .unwrap();
     let _ = reader.next().await.unwrap().unwrap();
     reader.ack(4).await.unwrap();
     feed.push(Bytes::from_static(b"live")).unwrap();
-    let next = timeout(Duration::from_secs(5), reader.next()).await.unwrap();
+    let next = timeout(Duration::from_secs(5), reader.next())
+        .await
+        .unwrap();
     assert!(matches!(next, Some(Ok(_))), "{next:?}");
     assert_eq!(feed.push(Bytes::from_static(b"!")), Ok(()));
 }

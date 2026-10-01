@@ -18,7 +18,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use charter_session_protocol::link;
 use charter_session_protocol::version::{Speaks, Version};
-use charter_session_protocol::view::{self, Chunk, Limits};
+use charter_session_protocol::view::{Attacher, Chunk, Limits, ViewId, Viewer};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream, ReadHalf, WriteHalf, duplex};
 use tokio::sync::mpsc;
 use tokio::time::{Instant, sleep, sleep_until};
@@ -109,21 +109,19 @@ async fn every_needs_you_arrives_inside_a_second_plus_the_round_trip_and_memory_
 
     // The host: fifty busy terminals, each re-attached with a fresh snapshot when it falls
     // behind, and a needs-you for each chat in turn on the control lane.
-    let opener = host.opener();
+    let attacher = Arc::new(Attacher::new(host.opener(), limits));
     for chat in 0..CHATS {
-        let opener = opener.clone();
+        let attacher = Arc::clone(&attacher);
         let (stop, held, most_held) =
             (Arc::clone(&stop), Arc::clone(&held), Arc::clone(&most_held));
         tokio::spawn(async move {
             let output =
                 Bytes::from(format!("chat {chat} working… {}\r\n", "▒".repeat(60)).repeat(16));
-            let mut epoch = 1;
             while !stop.load(Ordering::Relaxed) {
-                let Ok(stream) = opener.open().await else {
+                let snapshot = Bytes::from(format!("\x1b[2J\x1b[Hchat {chat}"));
+                let Ok(feed) = attacher.attach(ViewId(chat), snapshot).await else {
                     return;
                 };
-                let snapshot = Bytes::from(format!("\x1b[2J\x1b[Hchat {chat}, epoch {epoch}"));
-                let feed = view::start(stream, chat, epoch, snapshot, limits);
                 let mut mine = 0;
                 while !stop.load(Ordering::Relaxed) && feed.push(output.clone()).is_ok() {
                     let now = feed.queued_bytes();
@@ -134,7 +132,6 @@ async fn every_needs_you_arrives_inside_a_second_plus_the_round_trip_and_memory_
                     sleep(Duration::from_millis(5)).await;
                 }
                 held.fetch_sub(mine, Ordering::Relaxed);
-                epoch += 1;
             }
         });
     }
@@ -148,7 +145,7 @@ async fn every_needs_you_arrives_inside_a_second_plus_the_round_trip_and_memory_
                 return;
             };
             tokio::spawn(async move {
-                let Ok(mut reader) = view::accept(stream).await else {
+                let Ok(mut reader) = Viewer::default().accept(stream).await else {
                     return;
                 };
                 while let Some(Ok(Chunk::Live(bytes) | Chunk::Snapshot(bytes))) =

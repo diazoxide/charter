@@ -32,7 +32,7 @@ async fn the_host_holds_a_bounded_number_of_streams_and_bytes_however_many_are_o
         .unwrap();
     let stdio = tokio::io::join(child.stdout.take().unwrap(), child.stdin.take().unwrap());
     let speaks = Speaks::new([Version { major: 1, minor: 0 }]);
-    let mut host = link::serve(stdio, speaks).await.unwrap();
+    let host = link::serve(stdio, speaks).await.unwrap();
 
     // Nobody accepts while the flood arrives. Sample what the host holds as it does.
     let mut most_unaccepted = 0;
