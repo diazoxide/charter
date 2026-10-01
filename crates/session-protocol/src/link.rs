@@ -43,6 +43,10 @@ use crate::version::{self, Refused, Speaks, Version};
 /// size is a peer that is wrong, and it is refused rather than buffered.
 pub const MOST_CONTROL_FRAME_BYTES: usize = 1024 * 1024;
 
+/// Streams the other end opened that nobody has accepted yet. Past this, a new stream is
+/// refused: dropped, which resets it for the opener.
+pub const MOST_UNACCEPTED_STREAMS: usize = 32;
+
 /// The byte the client writes first on the control lane, which is what makes the host see it,
 /// and what the host checks before it believes the first stream is the lane.
 pub const CONTROL_LANE: u8 = 0x00;
@@ -76,7 +80,7 @@ pub struct Link {
     version: Version,
     control: Control,
     open: mpsc::UnboundedSender<Opening>,
-    inbound: mpsc::UnboundedReceiver<yamux::Stream>,
+    inbound: mpsc::Receiver<yamux::Stream>,
 }
 
 /// The control lane: frames, whole and in order, both ways.
@@ -111,10 +115,16 @@ impl Link {
             .ok_or(LinkError::Closed)
     }
 
+    /// Streams the other end opened that nobody has accepted yet, at most
+    /// [`MOST_UNACCEPTED_STREAMS`].
+    pub fn unaccepted(&self) -> usize {
+        self.inbound.len()
+    }
+
     /// Hand the streams the other end opens to a task of their own. After this, [`Link::accept`]
     /// answers [`LinkError::Closed`].
     pub fn acceptor(&mut self) -> Acceptor {
-        let (_, closed) = mpsc::unbounded_channel();
+        let (_, closed) = mpsc::channel(1);
         Acceptor(std::mem::replace(&mut self.inbound, closed))
     }
 }
@@ -131,7 +141,7 @@ impl Opener {
 }
 
 /// Takes the streams the other end opens, apart from the [`Link`].
-pub struct Acceptor(mpsc::UnboundedReceiver<yamux::Stream>);
+pub struct Acceptor(mpsc::Receiver<yamux::Stream>);
 
 impl Acceptor {
     /// The next stream the other end opened.
@@ -238,11 +248,11 @@ fn drive<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     mode: yamux::Mode,
 ) -> (
     mpsc::UnboundedSender<Opening>,
-    mpsc::UnboundedReceiver<yamux::Stream>,
+    mpsc::Receiver<yamux::Stream>,
 ) {
     let mut connection = yamux::Connection::new(io.compat(), config(), mode);
     let (open, mut opens) = mpsc::unbounded_channel::<Opening>();
-    let (hand_over, inbound) = mpsc::unbounded_channel();
+    let (hand_over, inbound) = mpsc::channel(MOST_UNACCEPTED_STREAMS);
     tokio::spawn(async move {
         let mut waiting: VecDeque<Opening> = VecDeque::new();
         let mut asks_closed = false;
@@ -272,7 +282,9 @@ fn drive<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
                 }
                 match connection.poll_next_inbound(cx) {
                     Poll::Ready(Some(Ok(stream))) => {
-                        let _ = hand_over.send(stream);
+                        // Full: nobody is taking streams as fast as they come, and this one is
+                        // refused. Dropping it resets it for the end that opened it.
+                        let _ = hand_over.try_send(stream);
                         moved = true;
                     }
                     Poll::Ready(Some(Err(e))) => return Poll::Ready(Err(e)),
@@ -292,6 +304,17 @@ fn drive<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     (open, inbound)
 }
 
+/// Streams one link carries at once, open by either end. A host serves about 200 chats per
+/// machine (Q1), each with one view per client, and the rest is room.
+pub const MOST_STREAMS: usize = 256;
+
+/// The multiplexer's limits, set rather than left to its defaults (512 streams and a 1 GiB
+/// receive window across them). Each stream gets Yamux's own initial window of 256 KiB, and the
+/// whole link's receive windows together are capped at that times [`MOST_STREAMS`], 64 MiB:
+/// the most a peer can make this end buffer, however it opens and writes.
 fn config() -> yamux::Config {
-    yamux::Config::default()
+    let mut config = yamux::Config::default();
+    config.set_max_num_streams(MOST_STREAMS);
+    config.set_max_connection_receive_window(Some(MOST_STREAMS * yamux::DEFAULT_CREDIT as usize));
+    config
 }

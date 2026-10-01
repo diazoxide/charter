@@ -21,6 +21,8 @@ bytes = "1"
 yamux = "0.14"
 
 [dev-dependencies]
+# The heap of the test process, measured, so a memory bound is a measured one.
+dhat = "0.3"
 tempfile.workspace = true
 tokio = { version = "1", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "sync", "test-util", "time"] }
 
