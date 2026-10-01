@@ -1,88 +1,144 @@
 # A chat in its own worktree gets an `AGENTS.md` when the repo has none
 
-**Proposed 2026-10-01**, for program-map ticket HP-13 (#676). Its concept is **Chat**. It would
-amend `docs/plane-format.md`'s line that *"`CLAUDE.md` / `AGENTS.md` are deliberately never
-generated or mirrored; charter writes no project-instructions file"* (see the section below).
+**Proposed 2026-10-01**, for program-map ticket HP-13 (#676). Its concept is **Chat**. If
+accepted, it amends:
+
+- `docs/plane-format.md`'s line that *"`CLAUDE.md` / `AGENTS.md` are deliberately never
+  generated or mirrored; charter writes no project-instructions file"*;
+- ADR 0069's inventory, which gains one row.
+
+Both are set out in their own sections below. One question, how the file is hidden, is still
+open for the operator (§5).
 
 ## Where charter is today
 
-A chat charter starts is told who it is by its harness's `SessionStart` hook. That briefing
-(`charter_core::briefing`) reaches every built-in harness through its own adapter (ADRs 0050,
-0058, 0063). A harness charter did not arm gets none of it. That covers a `codex` typed into a
-shell tab (ADR 0062), a harness started by hand in a worktree after the chat closed, and a
-level-1 harness (ADR 0073) with no hooks at all. Nearly every one of them reads `AGENTS.md`: a
-plain-Markdown convention for agent guidance in a repository, read from the git root down to
-the working directory.
+A chat that charter starts is told who it is by its harness's `SessionStart` hook. That
+briefing (`charter_core::briefing`) reaches every built-in harness through the harness's own
+adapter (ADRs 0050, 0058, 0063).
+
+A harness that charter did not arm gets none of it. That covers:
+
+- a `codex` typed into a shell tab (ADR 0062);
+- a harness started by hand in a worktree after the chat closed;
+- a level-1 harness (ADR 0073), which has no hooks at all.
+
+Nearly all of these read `AGENTS.md`. It is a plain-Markdown convention for agent guidance in a
+repository, read from the git root down to the working directory.
 
 `briefing::agents_md` (#809) already renders a redacted form of a chat's briefing as an
 `AGENTS.md`. Nothing writes it anywhere yet.
 
 ## The decision
 
-**When a chat starts in its own worktree (a piece, ADR 0027) and that repository has no
-`AGENTS.md` of its own, charter writes one there, git-excluded, holding the redacted form of
-the chat's briefing. It is never written into a shared clone. Charter steps aside whenever the
-repository has an `AGENTS.md` of its own, and the file never stops a chat from starting.**
+**When a chat starts in its own worktree and that repository has no `AGENTS.md` of its own,
+charter writes one there, hidden from git, holding the redacted form of the chat's briefing.**
+
+- **Own worktree** means a piece (ADR 0027).
+- **The file is never written into a shared clone.**
+- **charter steps aside** whenever the repository has an `AGENTS.md` of its own.
+- **The file never stops a chat from starting.**
 
 ### 1. Only a chat's own worktree
 
-A piece is cut for one line of work, and the chat that starts in it is the one the file is for.
-A workspace's clone is shared by every chat that starts there, so a per-chat file in it would be
-overwritten by whichever persona started last.
+A piece is cut for one line of work, and the file is for the chat that starts in it. A
+workspace's clone is shared by every chat that starts there, so a per-chat file in a clone would
+be overwritten by whichever persona started last.
 
-So the file is written by `start::layered_or_refusal`, through `guest::wire_for_chat`, which is
-the step that already writes the guest layer into a piece and nowhere else. A chat in a clone,
+So the file is written by `start::layered_or_refusal`, through `guest::wire_for_chat`. That is
+the step that already writes the guest layer into a piece, and only a piece. A chat in a clone,
 a workspace directory or the project root gets no file.
 
-Two chats started in one piece are already warned about by the briefing
-(`piece_announcement`). In that case the last chat to start writes the file.
+When two chats start in one piece, the briefing already warns about it (`piece_announcement`).
+The last of them to start writes the file.
 
 ### 2. Redacted, by an allowlist
 
-A file in a repository is read by whatever opens the tree. It outlives the chat, and it is one
-`git add -f` away from a commit. So it carries two things only:
+A file in a repository is read by anything that opens the tree. It outlives the chat, and it is
+one `git add -f` away from a commit. So it carries two things only.
 
-- **the persona the chat was started as**: charter's line naming it, and its `role:` and
-  `delegate-when:`, quoted as data. The memory digest is left out.
-- **the first line of the piece note**: which piece of which repository, in which workspace,
-  and what it owes. The rest of that note is a warning about another session that claimed the
-  piece, which is true only at the moment of the hook, so it is left out.
+**The persona the chat was started as.** This is charter's line naming the persona, with its
+`role:` and `delegate-when:` quoted as data, and without the memory digest.
 
-The file never carries memory titles, session records, todos, other workspaces, the skills
-listing, or a path on this machine. A block added to the briefing later stays out of the file
-until someone adds it to the allowlist.
+- That line names the persona's charter as `personas/<name>/persona.md`. That path is relative
+  to the project, and it does not resolve inside the repository.
+- No path on this machine appears anywhere in the file.
 
-### 3. Charter's own file, by the guest layer's ownership rule
+**The first line of the piece note.** This says which piece of which repository, in which
+workspace, and what it owes.
 
-- `AGENTS.md` is one more path in the piece's `.charter-generated` record. Charter rewrites it
-  only while its digest is one the record names.
-- It is hidden by the same charter block in `info/exclude`, and the block names it before the
-  file is written. For a linked worktree that is the common directory's `info/exclude`, as it
-  is for the rest of the guest layer.
-- Its first line is the generated marker:
+- The rest of the note warns about another session that claimed the piece. That is true only
+  at the moment of the hook, so it is left out.
+- The cut is enforced by `briefing::agents_md` itself, which keeps only the note's first line.
+- Today `agents_md(ask, piece_note)` takes the note whole, and its caller builds the note with
+  `briefing::piece_announcement`. The delivery PR moves the cut into `agents_md`, with a test.
+  This PR changes documents only.
+
+The file never carries memory titles, session records, todos, other workspaces, or the skills
+listing. A block added to the briefing later stays out of the file until someone adds it to the
+allowlist.
+
+### 3. charter's own file, under the guest layer's ownership rule
+
+- **`AGENTS.md` is one more path in the piece's `.charter-generated` record.** charter rewrites
+  it only while its digest is one the record names.
+- **It is hidden from git before it is written** (see §5 for where the line goes).
+- **Its first line is a generated marker:**
   `<!-- GENERATED by charter for one chat, from its persona and its piece. Edit the persona, not this file. -->`
 
 ### 4. Stepping aside, and never refusing a chat over it
 
-The rest of the guest layer is a guard, and a foreign file at one of its paths refuses the
-chat. This file is guidance, not a guard, so nothing that stops it being written stops the
-chat.
+The rest of the guest layer is a guard, and a foreign file at one of its paths refuses the chat.
+This file is guidance, not a guard. Nothing that stops it being written stops the chat.
 
-- **The repository tracks an `AGENTS.md`.** Nothing is written.
-- **An `AGENTS.md` charter did not write is there**, untracked, or unreadable. It is the
-  operator's, and it is left exactly as it is.
-- **Its exclude line was left out**, because the line would hide an untracked file of the
-  operator's in a sibling checkout that reads the same `info/exclude` (charter#1072). The file
-  is **withheld**, as the machine-local settings are, because a generated file that is not
-  hidden is one `git add` from a commit.
+**Not written:**
 
-**A repository that commits its own later takes the path back by itself.** Measured on git
-2.50: in a linked worktree whose common `info/exclude` lists `/AGENTS.md`, with an untracked
-`AGENTS.md` written there, `git merge` of a branch that adds a tracked `AGENTS.md` succeeds
-silently and replaces the file with the tracked one. Git treats an ignored file as expendable.
-The next chat that starts there finds `AGENTS.md` tracked and writes nothing. The stale entry
-in charter's record names a digest the file no longer has, so the file reads as somebody
-else's, which is the direction the ownership rule is built to fail in.
+- when the repository tracks an `AGENTS.md`;
+- when an `AGENTS.md` that charter did not write is there, whether untracked or unreadable. It
+  is the operator's, and it is left exactly as it is.
+
+**Withheld**, as the machine-local settings are, because a generated file that is not hidden is
+one `git add` from a commit:
+
+- **when the exclude cannot be written at all.** The layer's `Hidden::Blocked` case: an
+  unwritable `info/`, or a repository that commits a `.charter-generated`.
+- **when its exclude line was left out.** The line would hide an untracked file of the
+  operator's in a sibling checkout that reads the same `info/exclude` (charter#1072).
+
+**A repository that commits its own `AGENTS.md` later takes the path back by itself.** Measured
+on git 2.50.1:
+
+1. In a linked worktree, an excluded, untracked `AGENTS.md` was written.
+2. `git merge` of a branch that adds a tracked `AGENTS.md` succeeded silently, and replaced the
+   file with the tracked one. Git treats an ignored file as expendable.
+3. The next chat to start there finds `AGENTS.md` tracked and writes nothing.
+
+charter's record still holds the old digest, which the file no longer has. So the file reads as
+somebody else's. That is the direction the ownership rule is built to fail in.
+
+### 5. Where the line that hides it goes: open
+
+The guest layer hides its files with lines in charter's block in `info/exclude`. For a linked
+worktree, git reads only the common directory's `info/exclude`. These facts were measured on
+git 2.50.1, in a clone with one linked worktree:
+
+| What was tried | Result |
+|---|---|
+| `git rev-parse --git-path info/exclude` in the worktree | Names the common `.git/info/exclude` |
+| A pattern in `.git/worktrees/<id>/info/exclude` | Not read: the worktree's `AGENTS.md` still shows as `??` |
+| `/AGENTS.md` in the common `info/exclude` | Hides `AGENTS.md` at **every** worktree's root, the shared clone included (`git check-ignore -v` in the clone names that line) |
+| `extensions.worktreeConfig = true` plus a per-worktree `core.excludesFile` | Hides the file in that worktree only; the clone still shows its own |
+| The same, measured for side effects | The extension is written into the clone's shared `.git/config`. The per-worktree `core.excludesFile` **replaces** the operator's global one in that worktree, so a pattern from their global ignore file stopped applying there |
+
+So **git 2.50 has no per-worktree exclude** that leaves the repository's configuration alone.
+
+`/.claude/settings.json` and the guest layer's other lines already reach the clone in the same
+way. `AGENTS.md` differs in one respect: an operator is much more likely to create one in the
+clone. If they do:
+
+- it is hidden from their `git status`, so they may not notice it is uncommitted;
+- a checkout that brings in a tracked `AGENTS.md` replaces it without a word.
+
+The question and the options are in *For the operator's ruling*.
 
 ## `docs/plane-format.md`, amended
 
@@ -91,27 +147,52 @@ else's, which is the direction the ownership rule is built to fail in.
 > **`CLAUDE.md` / `AGENTS.md` are deliberately never generated or mirrored** … charter writes no
 > project-instructions file.
 
-This record reverses that line **for `AGENTS.md` in a piece, and only there**:
+This record reverses that line **for `AGENTS.md` in a piece, and only there**.
 
-- `CLAUDE.md` is still never generated or mirrored, for the reason `guest::WALKUP_DIRS` gives.
-  It walks up past the git root, so the project's own copy already reaches a piece, and a
+- **`CLAUDE.md` is still never generated or mirrored**, for the reason `guest::WALKUP_DIRS`
+  gives. It walks up past the git root, so the project's own copy already reaches a piece, and a
   mirror would be read as that repository's own instructions.
-- `AGENTS.md` is still never mirrored. Charter does not copy the project's or anyone else's.
-- What charter writes is the new store `<piece>/AGENTS.md`, set out under its own heading in
-  `docs/plane-format.md`. **Tier:** Clone state, rebuildable. It is rendered from the project's
-  persona files and the piece when a chat starts.
+- **`AGENTS.md` is still never mirrored.** charter copies neither the project's own nor anyone
+  else's.
+- **What charter writes is a new store, `<piece>/AGENTS.md`**, set out under its own heading in
+  `docs/plane-format.md`.
 
 The edit to `docs/plane-format.md` is in the same change as this record.
 
+## ADR 0069, amended
+
+The inventory, *Every store, by tier*, gains one row. Rows 81 to 84 are taken by ADR 0083
+(#807), so this one is 85:
+
+| # | Store | Tier | Sync | Backed up | Rebuildable |
+|---|---|---|---|---|---|
+| 85 | `<piece>/AGENTS.md`, a chat's redacted guidance in its own worktree (ADR 0085) | Clone state, rebuildable | — | no | yes |
+
+It is rebuildable because it is rendered again from the project's persona files and the piece
+every time a chat starts there. It is not backed up, because a restore that brings it back
+would only bring back a snapshot of a chat that is gone.
+
+## What changes where
+
+| Where | What changes |
+|---|---|
+| `docs/plane-format.md` | The no-instructions-file line, amended above, and the new heading `<piece>/AGENTS.md` with its tier (in this PR) |
+| ADR 0069's inventory | Row 85 (in this PR) |
+| `charter_core::briefing` | `agents_md` keeps only the piece note's first line itself, with a test (the delivery PR) |
+| `charter_core::guest` | `wire_for_chat(plane, tree, guidance)` adds `AGENTS.md` as one more recorded, hidden path. It does not write it where the repository tracks one or a foreign file is there, and it withholds it whenever the exclude is blocked or its line is left out, with no refusal (the delivery PR) |
+| `charter_core::start` | `layered_or_refusal` takes the chat's persona and renders the guidance for a piece (the delivery PR) |
+| The exclude itself | Whatever §5's ruling chooses (the delivery PR) |
+
 ## What this costs
 
-- **A Codex or opencode chat in a piece is told its persona twice**: once by its hook and once
+- **A Codex or opencode chat in a piece is told its persona twice:** once by its hook and once
   by the file. The words are the same, because both are rendered from one source. ADR 0063
   rejected telling a chat about its skills twice because the listing is long. A persona line is
   short.
 - **The file is a snapshot.** It says what was true when the chat started. A harness started by
   hand there later reads the last chat's persona.
 - **One more file in somebody else's repository.** It is hidden, but it is there.
+- **The cost of §5's answer**, whichever is chosen.
 
 ## What was rejected
 
@@ -119,8 +200,8 @@ The edit to `docs/plane-format.md` is in the same change as this record.
 - **A per-chat file in `.charter/`, handed to each harness by its own route.** Every built-in
   harness is already briefed by its hook, so nothing would read the file, and a harness started
   by hand never would.
-- **A CLI word that prints the file.** It would be a new public word, and it still reaches no
-  harness by itself.
+- **A CLI word that prints the file.** A new public word that still reaches no harness by
+  itself.
 - **Merging into a repository's own `AGENTS.md`.** That file is the operator's, and the
   ownership rule never edits what charter did not write.
 - **Refusing the chat when the file cannot be written**, as the guest layer refuses over a
@@ -129,6 +210,34 @@ The edit to `docs/plane-format.md` is in the same change as this record.
 
 ## For the operator's ruling
 
-**May charter write a git-excluded, redacted `AGENTS.md` into a chat's own worktree when the
-repository has none, never into a shared clone, stepping aside when the repository has its
-own, and so reverse `docs/plane-format.md`'s "charter writes no project-instructions file"?**
+**The question V34d answers:** may charter write a git-excluded, redacted `AGENTS.md` into a
+chat's own worktree when the repository has none, never into a shared clone, stepping aside when
+the repository has its own? Doing so reverses `docs/plane-format.md`'s "charter writes no
+project-instructions file".
+
+**The question V34d does not answer: how the file is hidden.** Git has no per-worktree exclude
+(§5), so every way of hiding it reaches beyond the one worktree:
+
+- **(a) A line in the common `info/exclude`**, as the rest of the guest layer is hidden.
+  - It hides an `AGENTS.md` the operator later creates in the shared clone, or in any sibling
+    piece.
+  - charter#1072's check withholds the file when such a file is already there. It cannot see
+    one created afterwards.
+  - Mitigation: `charter doctor` and each start report an untracked `AGENTS.md` that charter's
+    line hides and charter did not write.
+- **(b) `extensions.worktreeConfig` plus a per-worktree `core.excludesFile`.**
+  - Hidden in that piece alone.
+  - It writes the extension into the repository's shared `.git/config`.
+  - It replaces the operator's global ignore file inside that piece, so their own global
+    patterns stop applying there.
+- **(c) No exclude.**
+  - The file shows as `??` in the piece's `git status`, one `git add -A` from a commit into the
+    repository.
+- **(d) No file.**
+  - HP-13 stops at the renderer (#809), and only hooks brief a chat.
+
+**Recommended: (a), with the `doctor` and start-time report.** It is the mechanism the rest of
+the guest layer already relies on, and its cost is confined to a file that charter can detect
+and name. (b) changes the repository's configuration and silently drops the operator's own
+ignores, which is worse than the risk it removes. (c) puts charter's file one command from
+somebody else's history.
