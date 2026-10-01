@@ -107,6 +107,22 @@ pub enum Refusal {
          by hand: git -C <clone> config --replace-all branch.{branch}.charterBase <base>"
     )]
     BaseNotRecorded { branch: String, why: String },
+    /// A writing chat's cut whose base could not be recorded, taken back again
+    /// ([`crate::chatpiece`]). `kept` is why the take-back failed, when it did, and then the
+    /// folder and the branch are still there.
+    #[error(
+        "charter could not record the branch '{branch}' was cut from ({why}), so it took the \
+         worktree back{}",
+        match kept {
+            None => ".".to_string(),
+            Some(why) => format!(", and could not ({why}): the worktree and its branch remain"),
+        }
+    )]
+    CutTakenBack {
+        branch: String,
+        why: String,
+        kept: Option<String>,
+    },
     #[error(
         "'{piece}' has {count} commit(s) that exist nowhere else — refusing to remove. These \
          would be lost:\n{}\nPush the branch or merge it, or discard with --force",
@@ -168,6 +184,28 @@ impl Refusal {
                 "charter cut branch '{branch}' but could not record the branch it came from \
                  ({why}), so a merge would not know where to land it."
             ),
+            Self::CutTakenBack {
+                branch,
+                why,
+                kept: None,
+            } => format!(
+                "charter could not record the branch {branch} was cut from ({why}), so it took \
+                 {branch} back. Nothing was left behind."
+            ),
+            Self::CutTakenBack {
+                branch,
+                why,
+                kept: Some(kept),
+            } => format!(
+                "charter could not record the branch {branch} was cut from ({why}), and could \
+                 not take it back ({kept}): the branch {branch} and its folder remain."
+            ),
+            // `what` is a path or "the worktrees of <repo>", neither of which is the window's
+            // to show; `why` is git's own words.
+            Self::Unreadable { why, .. } => format!(
+                "charter could not read what git says about this repo's branches ({why}), so \
+                 it did nothing."
+            ),
             Self::GitRefused { err, .. } => format!("git refused:\n{err}"),
             Self::Io { what, why, .. } => format!("could not {what} the branch's folder: {why}"),
             Self::Dirty { piece } => format!(
@@ -199,8 +237,7 @@ impl Refusal {
             Self::BadRepo(_)
             | Self::BadBranch(_)
             | Self::BadBranchName(_)
-            | Self::GitUnavailable(_)
-            | Self::Unreadable { .. } => self.to_string(),
+            | Self::GitUnavailable(_) => self.to_string(),
         }
     }
 }

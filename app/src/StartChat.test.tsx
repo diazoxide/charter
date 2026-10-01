@@ -77,6 +77,26 @@ describe("a chat that starts in a repo (GL-1)", () => {
   });
 });
 
+describe("a start already running (GL-1)", () => {
+  it("says so on Start, which cannot be pressed again", async () => {
+    const onStart = vi.fn();
+    render(
+      <StartChat
+        options={options()}
+        starting
+        onStart={onStart}
+        onApprove={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    const start = screen.getByRole("button", { name: "Starting…" });
+    expect(start).toBeDisabled();
+    await userEvent.setup().click(start);
+    expect(onStart).not.toHaveBeenCalled();
+  });
+});
+
 describe("the picker a chat starts from", () => {
   it("shows even when one profile is available, because one profile costs one Enter", () => {
     // Skipping it would bring back the harness nobody picked on a one-harness machine,

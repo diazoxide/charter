@@ -328,11 +328,12 @@ fn cut_branch(
 /// handed `cwd` as it came and nothing is cut.
 ///
 /// Answers what `start` answered and the lines the chat's pane should say: which branch it is
-/// on, then what the cut found. **A start that is refused takes its branch back**, and so does
-/// one that panics (`chatpiece::Held`). Nothing has written to it, so git's safe removal takes
-/// the folder and the branch, and the refusal the operator reads is the start's own sentence,
-/// followed by what could not be taken back if anything. A branch is logged `claimed` only once
-/// its chat has started.
+/// on, then what the cut found. **A start that is refused or fails takes its branch back**
+/// (`chatpiece::Held`). Nothing has written to it, so git's safe removal takes the folder and
+/// the branch, and the refusal the operator reads is the start's own sentence, followed by what
+/// could not be taken back if anything. A branch is logged `claimed` only once its chat has
+/// started. A crash between the cut and the start is not covered: the release build aborts on
+/// a panic, so no cleanup runs and the branch and its folder stay (see `chatpiece::Held`).
 pub fn on_a_branch<T>(
     plane: &Path,
     cwd: Option<&Path>,
@@ -417,29 +418,15 @@ mod tests {
         std::fs::write(root.join("charter.toml"), "schema = 1\n").unwrap();
         let clone = root.join("workspaces/alpha/thing");
         std::fs::create_dir_all(&clone).unwrap();
-        for args in [
-            vec!["init", "-q", "-b", "main", "."],
-            vec!["config", "user.email", "t@e.invalid"],
-            vec!["config", "user.name", "t"],
-        ] {
-            charter_core::forklock::output(
-                std::process::Command::new("git")
-                    .arg("-C")
-                    .arg(&clone)
-                    .args(&args),
-            )
-            .unwrap();
-        }
+        // Through `git`, which checks the exit status and never signs: a fixture whose setup
+        // failed must not pass for a plane, and the developer's signer must not be asked.
+        git(&clone, &["init", "-q", "-b", "main", "."]);
+        git(&clone, &["config", "user.email", "t@e.invalid"]);
+        git(&clone, &["config", "user.name", "t"]);
+        git(&clone, &["config", "commit.gpgsign", "false"]);
         std::fs::write(clone.join("README.md"), "one\n").unwrap();
-        for args in [vec!["add", "-A"], vec!["commit", "-q", "-m", "one"]] {
-            charter_core::forklock::output(
-                std::process::Command::new("git")
-                    .arg("-C")
-                    .arg(&clone)
-                    .args(&args),
-            )
-            .unwrap();
-        }
+        git(&clone, &["add", "-A"]);
+        git(&clone, &["commit", "-q", "-m", "one"]);
         (dir, root, clone)
     }
 

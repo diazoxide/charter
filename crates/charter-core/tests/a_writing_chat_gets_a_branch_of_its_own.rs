@@ -252,7 +252,10 @@ fn a_cut_whose_base_could_not_be_recorded_takes_itself_back() {
 
     std::fs::remove_file(&lock).unwrap();
     assert!(
-        matches!(refused, Err(worktree::Refusal::BaseNotRecorded { .. })),
+        matches!(
+            refused,
+            Err(worktree::Refusal::CutTakenBack { kept: None, .. })
+        ),
         "{refused:?}"
     );
     assert!(

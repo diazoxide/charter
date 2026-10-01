@@ -1546,6 +1546,9 @@ export function PlaneView({
   /** A row was picked: the chat starts on that profile, with that persona, either drawing
    *  charter's footer in its pane or leaving it blank (ADR 0029), and under the name typed in
    *  the picker, if one was (charter-app#254). */
+  /** Whether the picker's start is in flight: the ref is the guard, the state is the button. */
+  const startingNow = useRef(false);
+  const [starting, setStarting] = useState(false);
   const startPicked = useCallback(
     async (
       profile: string,
@@ -1554,8 +1557,13 @@ export function PlaneView({
       label: string | null,
       newBranch: boolean,
     ) => {
-      if (picking === undefined) return;
+      if (picking === undefined || startingNow.current) return;
       const kind = picking.options.profiles.find((one) => one.name === profile)?.kind;
+      // **One start per picker at a time** (GL-1). A start runs off the main thread for as
+      // long as its branch takes to check out, and a second press of Start in that time was a
+      // second chat. The ref answers at once, where state would answer on the next render.
+      startingNow.current = true;
+      setStarting(true);
       const refused = await startOn(
         picking.where,
         kind,
@@ -1564,7 +1572,10 @@ export function PlaneView({
         showFooter,
         label,
         newBranch,
-      );
+      ).finally(() => {
+        startingNow.current = false;
+        setStarting(false);
+      });
       if (refused !== undefined) {
         // In the picker, not behind it: the operator is still choosing, and a refusal they
         // cannot see beside the rows is one they cannot act on.
@@ -1588,6 +1599,8 @@ export function PlaneView({
       label: string | null,
       newBranch: boolean,
     ) => {
+      // A start already running from this picker is the one start it gets (GL-1).
+      if (startingNow.current) return;
       const said = await commands
         .approveProfile(plane, profile, shown)
         .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
@@ -4007,6 +4020,7 @@ export function PlaneView({
         <StartChat
           options={picking.options}
           repo={pickingInRepo}
+          starting={starting}
           prefer={"prefer" in picking.where ? picking.where.prefer : undefined}
           trouble={pickerTrouble}
           onStart={(profile, persona, footer, label, newBranch) =>

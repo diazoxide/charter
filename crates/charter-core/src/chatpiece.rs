@@ -77,7 +77,8 @@ pub fn clone_at(plane: &Path, cwd: &Path) -> Option<(String, String)> {
         .then(|| ((*ws).to_string(), (*repo).to_string()))
 }
 
-/// The most names [`Naming::After`] tries before it says so.
+/// The most names [`Naming::After`] tries in one run before it says so: up to twice this in
+/// all, when the chat's own name gives way to `chat-<n>` partway.
 const TRIES: usize = 100;
 
 /// One lock per clone, held across the choice of a name and the cut under it.
@@ -164,9 +165,13 @@ fn cut_as(plane: &Path, ws: &str, repo: &str, piece: &str) -> Result<Cut, Refusa
         // git made the folder and the branch, and only the record of where it came from is
         // missing (GL-1 review S1). Nothing has used it, so it goes back rather than being
         // left for the operator to find; the refusal still says what happened.
-        Err(refusal @ Refusal::BaseNotRecorded { .. }) => {
-            let _ = worktree::remove(plane, ws, repo, piece, false, true);
-            Err(refusal)
+        Err(Refusal::BaseNotRecorded { branch, why }) => {
+            let kept = match worktree::remove(plane, ws, repo, piece, false, true) {
+                Ok(removed) if removed.branch_deleted => None,
+                Ok(_) => Some("git kept the branch".to_string()),
+                Err(refusal) => Some(refusal.in_window()),
+            };
+            Err(Refusal::CutTakenBack { branch, why, kept })
         }
         Err(refusal) => Err(refusal),
     }
@@ -213,8 +218,14 @@ pub fn undo(plane: &Path, cut: &Cut) -> Result<Undone, Refusal> {
 }
 
 /// A cut that is taken back unless it is kept: by [`Held::keep`] once its chat has started, by
-/// [`Held::take_back`] when the start is refused, and by `Drop` when neither happens — a panic
-/// between the cut and the start (GL-1 review S1).
+/// [`Held::take_back`] when the start is refused or fails, and by `Drop` when neither happens.
+///
+/// **`Drop` is not crash safety.** It runs on an early return and on an unwinding panic, which
+/// is what a debug build and the tests do. The release build sets `panic = "abort"`, so a panic
+/// there, like a crash or a kill, ends the process with no `Drop` at all, and the folder and
+/// the branch stay. Nothing sweeps them up afterwards on purpose: deleting branches charter
+/// did not see used risks the operator's work (D-GL1a). A safe way to show unclaimed chat
+/// branches is charter#835.
 #[derive(Debug)]
 pub struct Held<'a> {
     plane: &'a Path,

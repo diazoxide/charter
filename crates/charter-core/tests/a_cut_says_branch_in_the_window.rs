@@ -7,6 +7,7 @@
 
 use charter_core::contain::Elsewhere;
 use charter_core::worktree::confine::Outside;
+use charter_core::worktree::git::GitUnavailable;
 use charter_core::worktree::name::BadBranch;
 use charter_core::worktree::{Note, Refusal};
 
@@ -56,9 +57,25 @@ fn every_refusal() -> Vec<Refusal> {
         },
         Refusal::DirtUnknown { piece: s("spike") },
         Refusal::UniqueUnknown { piece: s("spike") },
+        // The two `what`s charter really writes: `list`'s, and `head_of`'s tree path.
         Refusal::Unreadable {
-            what: s("spike"),
-            why: s("denied"),
+            what: s("the worktrees of api"),
+            why: s("fatal: not a git repository"),
+        },
+        Refusal::Unreadable {
+            what: s("/p/workspaces/alpha/.worktrees/api/chat-1"),
+            why: s("git could not read HEAD"),
+        },
+        Refusal::GitUnavailable(GitUnavailable::from(std::io::Error::other("not found"))),
+        Refusal::CutTakenBack {
+            branch: s("chat-1"),
+            why: s("could not lock config file"),
+            kept: None,
+        },
+        Refusal::CutTakenBack {
+            branch: s("chat-1"),
+            why: s("could not lock config file"),
+            kept: Some(s("'chat-1' has uncommitted changes")),
         },
         Refusal::BaseNotRecorded {
             branch: s("spike"),
@@ -125,5 +142,27 @@ fn what_a_cut_found_to_say_is_said_of_the_branch_in_the_window() {
         Note::Dirty { repo: "api".into() }.in_window(),
         "api has uncommitted changes. They stay where they are, and the new branch does not \
          have them."
+    );
+}
+
+#[test]
+fn a_cut_taken_back_says_it_was_taken_back_and_what_remains_if_anything_does() {
+    charter_core::unsteered!();
+    let back = |kept: Option<&str>| Refusal::CutTakenBack {
+        branch: "chat-1".into(),
+        why: "could not lock config file".into(),
+        kept: kept.map(str::to_string),
+    };
+
+    assert_eq!(
+        back(None).in_window(),
+        "charter could not record the branch chat-1 was cut from (could not lock config \
+         file), so it took chat-1 back. Nothing was left behind."
+    );
+    assert_eq!(
+        back(Some("git said no")).in_window(),
+        "charter could not record the branch chat-1 was cut from (could not lock config \
+         file), and could not take it back (git said no): the branch chat-1 and its folder \
+         remain."
     );
 }

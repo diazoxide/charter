@@ -79,6 +79,7 @@ const NO_PERSONA = "";
 export function StartChat({
   options,
   repo,
+  starting = false,
   prefer,
   trouble,
   onStart,
@@ -88,6 +89,9 @@ export function StartChat({
   options: StartOptions;
   /** The repo whose clone this chat would start in, when it would start in one. */
   repo?: string;
+  /** Whether a start from this picker is running: Start says so and cannot be pressed again,
+   *  because a second press was a second chat (GL-1). */
+  starting?: boolean;
   /**
    * The harness (a profile's `kind`) to start on, when something already knows which one is
    * wanted — a harness started by hand in a shell tab, opened as a chat instead (ADR 0062).
@@ -397,17 +401,17 @@ export function StartChat({
                 onClick={() =>
                   onApprove(picked.name, persona, showFooter, picked.shown, label, newBranch)
                 }
-                disabled={!picked}
+                disabled={!picked || starting}
               >
-                Approve and start
+                {starting ? "Starting…" : "Approve and start"}
               </button>
             ) : (
               <button
                 tabIndex={0}
                 onClick={() => profile && onStart(profile, persona, showFooter, label, newBranch)}
-                disabled={!profile}
+                disabled={!profile || starting}
               >
-                Start
+                {starting ? "Starting…" : "Start"}
               </button>
             )}
           </div>
