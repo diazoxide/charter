@@ -1,6 +1,6 @@
 # A review is a comparison git computes, and its draft is the operator's until it is sent or published
 
-**Proposed 2026-10-01**, drafted for program-map ticket RC-1 (#703). It follows these of the
+**Accepted 2026-10-01** by the operator (rulings V34a, V34b), drafted for program-map ticket RC-1 (#703). It follows these of the
 operator's rulings:
 
 - **U3:** *"A review surface: a diff per piece in a view tab, inline comments back to the chat,
@@ -59,6 +59,8 @@ operator's rulings:
 - **N61:** *"git GUI basics (history, blame, hunks)"*. **N3**, in part: *"cross-harness
   checkpoints/rollback via a git ref per turn"*.
 - **X22:** *"Every new ruling must name which concept it belongs to."*
+- **V34a:** *"The chat-tab button is **Review**. From it the operator reviews, edits by hand, or asks the AI for changes. **A hand edit the operator saves is announced to that chat's harness at its next turn**: the briefing lists the files changed since its last turn, so no prompt is sent on the operator's behalf."*
+- **V34b:** *"Send to agent comes from the window (`local-ui`) only, never from the `editor` scope, which stays "typed, never sent". It presses Enter only on harnesses that pass TS1's paste+Enter test. This amends V31a for this one action."*
 
 It builds on [ADR 0060](0060-a-cross-repo-change-is-a-record-of-intent-and-charter-lands-it-one-member-at-a-time.md)
 (a cross-repo change),
@@ -193,7 +195,9 @@ TypeScript.
 
 ### 3. The Review tab
 
-R2's Review tab is a view tab. It holds one comparison, or one per member for a cross-repo
+**The chat tab's button is *Review*** (V34a), with the tooltip *Review this chat's work on its
+branch*. It is a plain verb, so ADR 0072 §3's first-hour budget needs no exception, and it opens
+the Review tab. R2's Review tab is a view tab. It holds one comparison, or one per member for a cross-repo
 change, each a section in `needs` order.
 
 - **A review starts** at the first comment, the first *Viewed* tick or the first edit. Until
@@ -245,8 +249,8 @@ operator's text, in file order, then the overall comment. It carries no code; th
 the files.
 
 **Send to agent is the one place charter presses Enter in a chat on the operator's behalf, and
-it changes what ADR 0081 §4 settled for `place`.** See *ADR 0061 and ADR 0081, amended*, and
-the operator's ruling question 2.
+it changes what ADR 0081 §4 settled for `place`.** See *ADR 0061 and ADR 0081, amended*.
+Settled by V34b, quoted above.
 
 When it is delivered depends on the chat's current run (ADR 0076 §1):
 
@@ -331,10 +335,33 @@ warns, naming the chat and its state, and saving is still the operator's choice.
 - **A saved edit is a human edit.** charter records, as an event in the event log (FD-9): the
   chat, its run, the path relative to the repo, the changed line ranges, and whether the chat was
   busy. No contents. The edit is left in the folder uncommitted; charter does not commit it.
-- **The agent is told at its next turn** (R8, RC-11): a note listing the human edits since its
-  last turn, path and line ranges, and that a review was sent, if one was. It carries no file
-  contents. It is added at the next prompt, by the harness's prompt hook where it has one and
-  through charter's MCP server (HP-7) otherwise.
+- **The edit is announced to the chat's harness at its next turn** (R8, RC-11, V34a). It is
+  never a prompt sent for the operator: it is context the harness reads at the start of a turn
+  the chat begins anyway. The line is:
+
+  > *The operator edited these files by hand since your last turn. Read them again before you
+  > change them: `<path>`, `<path>` in `<repo>`.*
+
+  - **Paths only.** It names each file relative to its repo, one clause per repo, and never
+    contents, line ranges or a diff. The agent reads the files.
+  - **Edits accumulate.** Every human edit saved since the chat's last turn began is in it, from
+    one save or from many across several of the operator's sittings, each path once. Once a turn
+    has carried the line, those edits are announced and are not repeated.
+  - **Where it goes.** At level 2, in the harness's `UserPromptSubmit` hook output as
+    `additionalContext`, beside a handed-back report (`crates/charter-core/src/handback.rs`), or
+    the harness's equivalent hook; on a harness with no prompt hook, in its `SessionStart`
+    briefing at the next run and through charter's MCP server (HP-7) in between. At level 3, in
+    the structured context of the next prompt the host delivers.
+  - **A chat that is working** when the edit is saved gets the line at its next turn boundary,
+    with the next prompt, never in the middle of the turn it is in.
+  - **A review sent** (§5) is its own prompt and is not repeated in the line.
+  - **What it is built from.** The human-edit events in the event log (FD-9) since the chat's
+    last `prompted` move (ADR 0076 §2). It adds no store.
+  - **No ADR owns the briefing's parts as a whole.** `briefing::parts`
+    (`crates/charter-core/src/briefing.rs`) is a port of the Python charter's session-start
+    briefing, and ADR 0063 and ADR 0064 each added one part to it. This line is a per-turn part,
+    so it lives in the prompt hook's output, and the `SessionStart` briefing carries it only on a
+    harness without one.
 
 ### 9. Race-mode comparison
 
@@ -367,7 +394,7 @@ scope does either.
 
 **What stands:** for ADR 0061's curation actions and ADR 0081's `place`, a prompt is typed and
 never sent, never held and never wakes a chat. The `editor` scope still makes no agent act.
-This amendment is the operator's ruling question 2.
+Ruled by V34b, which amends V31a for this one action.
 
 The rest of ADR 0061 and ADR 0081 stands.
 
@@ -526,35 +553,22 @@ its reason:
     compare trees when the branch was rewritten.
 16. **Idle for an edit** is ready, turn-ended, hibernated or ended, for every chat in the folder.
 17. **A human edit is an event, and its save is an audit action**, both without contents; the
-    edit stays uncommitted.
+    edit stays uncommitted. Its announcement (§8, V34a) names paths only.
 18. **Three audit actions**, `review.sent`, `review.approved`, `review.edit.saved`.
 
-## For the operator's ruling
+## Ruled (V34, 2026-10-01)
 
-1. **Which word the chat-tab button uses, and whether it gets an exception to the first-hour
-   budget.** R1 names *"a Changes button on every chat tab"*. A chat's tab and header are
-   first-hour surfaces, and ADR 0072 §3 (V23) lists **change** among the words those surfaces
-   never say, because a cross-repo change is a charter noun; FR-3's UI-string test would fail
-   the button. The options:
-   - **"Review" (recommended).** A plain verb, as *open* and *new* are, so it needs no exception
-     and adds no charter noun to the first hour. Its tooltip: *Review this chat's work on its
-     branch*. It opens the Review tab (R2), which is a view tab and outside the budget.
-   - **"Changes"**, R1's word. It needs an exception to ADR 0072 §3 for this one button, and puts
-     a second meaning of "change" next to the cross-repo change.
-   - **No button on the chat tab.** Reviews open from the Explorer's branch row and the
-     *Compare…* palette entry only. It keeps the budget untouched, and loses R1's most direct
-     entry point.
-2. **Send to agent sends, holds and wakes, from the window only** (*ADR 0061 and ADR 0081,
-   amended*). V31a ruled an editor's selection *"typed and never sent"*, and ADR 0081 §4 made
-   `place` never held and never waking a chat. Send to agent, which R5 rules as *"one prompt
-   with file:line refs"*, presses Enter, is held by HP-15 until a turn boundary, and wakes a
-   hibernated chat once HP-15 lands. **Recommended: allow it from `local-ui` only, through one
-   UI RPC command, and never from the `editor` scope, which keeps "typed and never sent"**;
-   Enter only on a harness that passed TS1's Enter measure (§5), and the paste alone elsewhere.
-   The rejected options: typing the review unsent everywhere, as `place` does (R5's *Send*
-   becomes *Type*, and every review needs a second key press in the chat), and sending from the
-   `editor` scope too (any program that reads the editor credential could drive an agent, which
-   ADR 0081 rejected).
+1. **The chat tab's button is *Review*** (V34a, as recommended). It is a plain verb and needs no
+   exception to ADR 0072 §3. The rejected options were *Changes* (R1's word, which needed an
+   exception) and no button on the chat tab. **The operator added a requirement:** a hand edit
+   the operator saves is announced to that chat's harness at its next turn, listing the files
+   changed since its last turn, and no prompt is sent on the operator's behalf. §8 gives the line,
+   which names paths only.
+2. **Send to agent comes from the window (`local-ui`) only, never from the `editor` scope, which
+   stays "typed, never sent"; it presses Enter only on harnesses that pass TS1's paste and Enter
+   test** (V34b, as recommended). This amends V31a for this one action (*ADR 0061 and ADR 0081,
+   amended*). The rejected options were typing the review unsent everywhere and sending from the
+   `editor` scope.
 
 ## Later decisions
 

@@ -390,8 +390,10 @@ _Avoid_: pending review (that is GitHub's), draft (unqualified)
 
 **Human edit**:
 An edit the operator saved to a file in a chat's branch from the light editor. charter records
-which file and lines, and tells the chat's agent at its next turn. It is a part of a **Chat**'s
-history (ADR 0084).
+which file and lines, and announces it to the chat's harness at its next turn: one line of
+context naming the files edited since its last turn, paths only, never contents. Edits from
+several sittings add up until that turn, and the announcement is never a prompt sent for the
+operator. It is a part of a **Chat**'s history (ADR 0084).
 _Avoid_: manual edit, override
 
 **Session record**:
