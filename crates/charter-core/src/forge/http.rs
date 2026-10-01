@@ -20,8 +20,8 @@
 //! `HeaderValue` (`http` keeps its bytes in a `Bytes` buffer it frees without wiping, and offers
 //! no way to wipe it), and `ureq`'s write buffer. Both live for one request.
 //!
-//! A token is sent only over HTTPS, or plain HTTP to this machine's loopback (a recorded forge
-//! in a test). A URL with user information is refused, so `http://127.0.0.1:1@evil.example/`
+//! A token is sent only over HTTPS, or, in a test build alone, plain HTTP to this machine's
+//! loopback (a recorded forge). A URL with user information is refused, so `http://127.0.0.1:1@evil.example/`
 //! is not loopback, and so is a request whose authority differs from the API root's. No
 //! redirect is followed.
 
@@ -44,12 +44,16 @@ pub trait TokenSource: Send + Sync {
 }
 
 /// Where a forge's API lives: its REST root and its GraphQL endpoint.
+///
+/// Its fields are private, and the one constructor a shipped build has, [`ApiRoot::github`],
+/// always names an HTTPS root. [`ApiRoot::at`], which can name a loopback `http://` root for a
+/// recorded forge, exists only in a test build.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApiRoot {
     /// `https://api.github.com`, or `https://<host>/api/v3` on a GHES.
-    pub rest: String,
+    rest: String,
     /// `https://api.github.com/graphql`, or `https://<host>/api/graphql` on a GHES.
-    pub graphql: String,
+    graphql: String,
 }
 
 impl ApiRoot {
@@ -69,7 +73,9 @@ impl ApiRoot {
     }
 
     /// One root for both: a recorded forge in a test serves REST under `base` and GraphQL at
-    /// `base/graphql`.
+    /// `base/graphql`. Only a build with the plane fence on has it, and only a test build turns
+    /// that on (`Cargo.toml`).
+    #[cfg(any(test, feature = "fenced"))]
     pub fn at(base: &str) -> ApiRoot {
         let base = base.trim_end_matches('/');
         ApiRoot {
@@ -95,7 +101,9 @@ fn checked(url: &str) -> Result<(String, String), String> {
         ));
     }
     let host = authority.host();
-    let loopback = matches!(host, "127.0.0.1" | "localhost" | "[::1]");
+    // Plain HTTP to loopback is for a recorded forge, so only a test build sends a token there.
+    let loopback =
+        cfg!(any(test, feature = "fenced")) && matches!(host, "127.0.0.1" | "localhost" | "[::1]");
     match scheme.as_str() {
         "https" => Ok((scheme, authority.as_str().to_ascii_lowercase())),
         "http" if loopback => Ok((scheme, authority.as_str().to_ascii_lowercase())),

@@ -724,9 +724,11 @@ pub fn gh_as_the_operator(args: &[String], timeout: Duration) -> Result<String, 
     match cli::Cli::as_the_operator().run(Kind::GitHub, args, timeout) {
         Ok(answer) if answer.ok() => Ok(answer.out),
         Ok(answer) => Err(ForgeError::new(answer.said(Kind::GitHub))),
-        Err(transport::NoAnswer::Timeout(why) | transport::NoAnswer::Missing(why)) => {
-            Err(ForgeError::transport(why))
-        }
+        Err(
+            transport::NoAnswer::Timeout(why)
+            | transport::NoAnswer::Missing(why)
+            | transport::NoAnswer::Refused(why),
+        ) => Err(ForgeError::transport(why)),
     }
 }
 

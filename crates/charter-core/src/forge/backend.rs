@@ -499,7 +499,7 @@ impl Asker {
         let transport = self
             .transports
             .for_caller(caller)
-            .map_err(|refused| NoAnswer::Missing(refused.to_string()))?;
+            .map_err(|refused| NoAnswer::Refused(refused.to_string()))?;
         transport.send(&self.forge, call)
     }
 
@@ -517,7 +517,9 @@ impl Asker {
             Err(NoAnswer::Timeout(why)) => {
                 return Err(ForgeError::transport(format!("{doing}: {why}")));
             }
-            Err(NoAnswer::Missing(why)) => return Err(ForgeError::transport(why)),
+            Err(no @ (NoAnswer::Missing(_) | NoAnswer::Refused(_))) => {
+                return Err(no.error(no.said().to_string()));
+            }
         };
         if !answer.ok() {
             return Err(ForgeError::of(
@@ -543,9 +545,7 @@ impl Asker {
         match self.send(caller, call) {
             Ok(answer) if answer.ok() => Ok(Ok(())),
             Ok(answer) => Ok(Err(answer.said(self.kind()))),
-            Err(NoAnswer::Timeout(why)) | Err(NoAnswer::Missing(why)) => {
-                Err(ForgeError::transport(why))
-            }
+            Err(no) => Err(no.error(no.said().to_string())),
         }
     }
 
@@ -564,7 +564,9 @@ impl Asker {
                     "{what_failed} ({path}) {why}"
                 )));
             }
-            Err(NoAnswer::Missing(why)) => return Err(ForgeError::transport(why)),
+            Err(no @ (NoAnswer::Missing(_) | NoAnswer::Refused(_))) => {
+                return Err(no.error(no.said().to_string()));
+            }
         };
         if !answer.ok() {
             return Err(ForgeError::of(

@@ -229,6 +229,46 @@ fn a_chat_never_writes_the_approvals_a_person_gave() {
 }
 
 #[test]
+fn a_chat_never_reads_or_writes_the_forge_answers_the_humans_token_fetched() {
+    // The native forge transport's ETag store holds raw answers the human's sign-in token
+    // fetched (ADR 0070 §3, FW-2a); a chat reads neither it nor the bodies in it.
+    let (_plane, denied) = denied_with(None, Os::Linux);
+    assert_eq!(
+        paths(&denied, Class::HumanPowers, Access::ReadWrite),
+        [std::path::PathBuf::from(
+            "/home/op/.config/charter/forge-etags"
+        )]
+    );
+}
+
+#[test]
+fn claude_code_and_codex_both_deny_a_chat_the_forge_etag_store() {
+    let etags = "/home/op/.config/charter/forge-etags";
+    let (_plane, denied) = denied_with(None, Os::Linux);
+    let settings = claude::settings(&compiled(denied.clone(), Os::Linux)).expect("compiles");
+    let read_denied = settings.sandbox["filesystem"]["denyRead"].clone();
+    assert!(
+        read_denied
+            .as_array()
+            .is_some_and(|all| all.iter().any(|p| p == etags)),
+        "{read_denied}"
+    );
+    assert!(
+        settings.deny.contains(&format!("Read(/{etags}/**)")),
+        "{:?}",
+        settings.deny
+    );
+    let flags =
+        codex::flags_named(&compiled(denied, Os::Linux), "charter-sandbox-1").expect("compiles");
+    let profile = codex_value(&flags, "permissions.charter-sandbox-1");
+    assert_eq!(
+        profile["filesystem"][etags].as_str(),
+        Some("deny"),
+        "{profile}"
+    );
+}
+
+#[test]
 fn off_a_runner_there_are_no_runner_internals_to_deny() {
     // A placeholder for class 4, kept because ADR 0067 fixes the classes: charter has no
     // runner yet (RR-5), so there is nothing of one to deny. The runner slice replaces this

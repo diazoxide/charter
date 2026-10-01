@@ -495,3 +495,34 @@ above. Each holds until the ticket named, and the text above is left as accepted
 
 `Caller` carries the surface and the priority only. The account, the principal and the human join
 it with FW-1 and FD-27, and until then every `Caller` resolves to the CLI transport, as §4 says.
+
+## Amended by FW-2a (#727, PR #800), 2026-10-01
+
+FW-2a built the native GitHub transport behind FG-3's seam. Four things depart from the text
+above, or from FG-3's amendment. Each holds until the ticket named, and the text above is left as
+accepted.
+
+1. **The CLI transport gets no conditional requests; FW-4 (#731) decides.** §3 says the CLI
+   transport runs the same middleware chain as the native one, because `--include` gives it the
+   status and headers. That needs `gh api --include`, which changes every argv the recorded
+   Python behaviour pins (ADR 0046). So only the native transport makes a `GET` conditional, and
+   its ETag store is the native transport's alone, keyed by the account it sends as. FW-4 is the
+   first ticket that needs the CLI's headers, for the budget, and it decides whether to make that
+   ADR 0046 move.
+2. **The body stays as `-f` and `-F` fields.** FG-3's amendment 3 left the move to stdin to
+   FW-2a/b. It is not made: the CLI transport is FG-3's, unchanged, and the native transport reads
+   a `Call`'s fields as `gh api` reads them, so one request means the same on both. #323 stays
+   closed because only charter's own values are ever typed.
+3. **The closed error set is a kind beside the words.** FG-3's amendment 1 kept
+   `ForgeError(String)` until the native transport. `ForgeError` now carries a `Failure` from §1's
+   set beside its words, and `Display` is the words alone, so every pinned message stays. The
+   native transport reads the kind from the HTTP status. A CLI refusal is `Unrecognised`,
+   because charter does not parse a CLI's sentence to decide anything.
+4. **Zeroizing the token is best effort: two copies live for one request.** §4 says the token is
+   a `SecretString`, zeroized on drop, and that holds. The `Bearer …` string built from it is a
+   `Zeroizing` string, wiped on drop too. Two copies are beyond charter's reach: the
+   `http::HeaderValue`, whose bytes `http` keeps in a buffer it frees without wiping, and
+   `ureq`'s write buffer. Both live for the one request they carry.
+
+A chat's sandbox denies the ETag store to read and to write (ADR 0067's human-powers class),
+because its answers were fetched with the human's token.

@@ -238,6 +238,26 @@ pub enum NoAnswer {
     Timeout(String),
     /// It could not be sent: the CLI is missing, or nothing recorded this request.
     Missing(String),
+    /// The caller may not ask at all: [`super::route`] refused it any forge credential.
+    Refused(String),
+}
+
+impl NoAnswer {
+    /// The error a call that got no answer fails with: [`Failure::Forbidden`] for a caller
+    /// refused any credential, [`Failure::Transport`] otherwise, in `said`'s words.
+    pub fn error(&self, said: String) -> ForgeError {
+        match self {
+            NoAnswer::Refused(_) => ForgeError::of(Failure::Forbidden, said),
+            NoAnswer::Timeout(_) | NoAnswer::Missing(_) => ForgeError::transport(said),
+        }
+    }
+
+    /// The words this carries.
+    pub fn said(&self) -> &str {
+        match self {
+            NoAnswer::Timeout(why) | NoAnswer::Missing(why) | NoAnswer::Refused(why) => why,
+        }
+    }
 }
 
 /// What carries a [`Call`] to a forge and brings back its [`Reply`] (ADR 0070 §3).

@@ -181,7 +181,11 @@ fn a_chat_on_a_host_whose_cli_login_was_imported_gets_no_forge_credential() {
     let scene = Scene::new();
     let chat = Caller::chat("01J9CHAT").as_account(account());
     let got = scene.backend(true).state(&chat, "o/r", &pr());
-    assert!(got.is_err(), "{got:?}");
+    assert_eq!(
+        got.as_ref().map_err(|e| e.failure().clone()),
+        Err(charter_core::forge::Failure::Forbidden),
+        "a refused credential is Forbidden: {got:?}"
+    );
     assert!(!format!("{got:?}").contains(CANARY));
     assert_eq!(scene.cli_asked(), 0, "the imported CLI login was used");
     scene.assert_the_canary_went_nowhere();

@@ -438,6 +438,14 @@ impl Denied {
                 crate::machine::dir(&config_root),
                 Access::Write,
             );
+            // What the human's forge sign-in fetched: the native transport's ETag store holds
+            // raw answers, private repos' among them, so a chat neither reads nor writes it
+            // (ADR 0070 §3 and §4).
+            deny(
+                Class::HumanPowers,
+                crate::forge::etag::root(&config_root),
+                Access::ReadWrite,
+            );
         }
 
         Self {

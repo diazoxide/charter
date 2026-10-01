@@ -785,6 +785,7 @@ dependencies = [
  "http",
  "keyring",
  "libc",
+ "log",
  "memchr",
  "portable-pty",
  "proptest",

@@ -1,8 +1,10 @@
 //! ADR 0070 §4: `a_forge_token_appears_in_no_log_record_or_crash_report`.
 //!
 //! A child of this binary signs a canary token in, installs the diagnostic log (FD-8's
-//! `applog`, into a directory of its own), and makes every forge seam operation natively
-//! against a recorded forge twice: once answered, once refused with a `401`. It writes every
+//! `applog`, into a directory of its own) and a `log` recorder at trace level for what `ureq`
+//! and rustls write (with `RUST_LOG=trace` set too), and makes every forge seam operation
+//! natively three times: against a recorded forge that answers, against one that refuses with
+//! a `401`, and against a port nothing listens on. It writes every
 //! answer and every error to the log, keeps its ETag store in the same run directory, and then
 //! crashes: a panic on a thread holding the token, then one on the main thread.
 //!
@@ -49,6 +51,15 @@ fn account() -> Account {
 /// Every seam operation, as a human in the window, against a forge answering `status`.
 fn every_operation(rt: &tokio::runtime::Runtime, run: &Path, status: u16) {
     let server = rt.block_on(MockServer::start());
+    // Status 0: nothing listens where the forge should be.
+    let root = if status == 0 {
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = closed.local_addr().unwrap().port();
+        drop(closed);
+        ApiRoot::at(&format!("http://127.0.0.1:{port}"))
+    } else {
+        ApiRoot::at(&server.uri())
+    };
     let body = if status == 200 {
         json!({"data": {}, "number": 1, "html_url": "x", "state": "open"}).to_string()
     } else {
@@ -57,14 +68,14 @@ fn every_operation(rt: &tokio::runtime::Runtime, run: &Path, status: u16) {
     rt.block_on(
         Mock::given(any())
             .respond_with(
-                ResponseTemplate::new(status)
+                ResponseTemplate::new(status.max(200))
                     .set_body_string(body)
                     .insert_header("etag", "\"v1\""),
             )
             .mount(&server),
     );
     let resolver = Resolver::new(Kind::GitHub, "github.com")
-        .at_root(ApiRoot::at(&server.uri()))
+        .at_root(root)
         .etags_in(&run.join("config"))
         .signed_in(
             &HostScope::for_a_test(),
@@ -116,6 +127,28 @@ fn every_operation(rt: &tokio::runtime::Runtime, run: &Path, status: u16) {
     }
 }
 
+/// Every `log` record, at every level, appended to one file.
+struct Recorder(std::sync::Mutex<std::fs::File>);
+
+impl log::Log for Recorder {
+    fn enabled(&self, _: &log::Metadata) -> bool {
+        true
+    }
+    fn log(&self, record: &log::Record) {
+        use std::io::Write;
+        if let Ok(mut file) = self.0.lock() {
+            let _ = writeln!(
+                file,
+                "{} {} {}",
+                record.level(),
+                record.target(),
+                record.args()
+            );
+        }
+    }
+    fn flush(&self) {}
+}
+
 /// Every file under `dir`, recursively.
 fn files_under(dir: &Path) -> Vec<std::path::PathBuf> {
     let mut out = Vec::new();
@@ -139,12 +172,16 @@ fn a_forge_token_appears_in_no_log_record_or_crash_report() {
     if let Some(run) = std::env::var_os(RUN).filter(|_| std::env::var_os(CHILD).is_some()) {
         let run = Path::new(&run);
         charter_core::applog::install();
+        let trace = std::fs::File::create(run.join("trace.log")).unwrap();
+        log::set_boxed_logger(Box::new(Recorder(std::sync::Mutex::new(trace)))).unwrap();
+        log::set_max_level(log::LevelFilter::Trace);
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap();
         every_operation(&rt, run, 200);
         every_operation(&rt, run, 401);
+        every_operation(&rt, run, 0);
         // The crash: a thread holding the token panics, then the main thread does.
         let held = Canary.token().unwrap();
         let _ = std::thread::spawn(move || {
@@ -167,6 +204,7 @@ fn a_forge_token_appears_in_no_log_record_or_crash_report() {
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())
             .env("HOME", run.path())
             .env("RUST_BACKTRACE", "1")
+            .env("RUST_LOG", "trace")
             .env("CHARTER_LOG_DIR", &logs)
             .env(CHILD, "1")
             .env(RUN, run.path()),

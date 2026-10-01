@@ -145,7 +145,9 @@ impl Resolver {
         }
     }
 
-    /// Send native requests to `root` rather than the host's own API (a recorded forge).
+    /// Send native requests to `root` rather than the host's own API (a recorded forge). Only a
+    /// test build has it.
+    #[cfg(any(test, feature = "fenced"))]
     pub fn at_root(mut self, root: ApiRoot) -> Resolver {
         self.root = root;
         self

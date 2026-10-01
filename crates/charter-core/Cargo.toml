@@ -114,6 +114,9 @@ tempfile.workspace = true
 # synchronous test drives it through `tokio`'s `block_on`.
 wiremock = "0.6"
 tokio = { version = "1", features = ["rt"] }
+# The token-leak test records every `log` line `ureq` and rustls write at trace level, which the
+# diagnostic log does not carry. Already in this workspace's lockfile through both.
+log = { version = "0.4", features = ["std"] }
 
 [lints]
 workspace = true

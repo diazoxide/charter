@@ -82,7 +82,9 @@ impl Transport for Cli {
                     "{cli} did not answer for {host}: {why}"
                 )));
             }
-            Err(NoAnswer::Missing(why)) => return Err(ForgeError::transport(why)),
+            Err(NoAnswer::Missing(why) | NoAnswer::Refused(why)) => {
+                return Err(ForgeError::transport(why));
+            }
         };
         let logged_in = match forge.kind {
             Kind::GitHub => answer.ok(),

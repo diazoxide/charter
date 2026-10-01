@@ -54,15 +54,20 @@ pub struct EtagDir {
     dir: PathBuf,
 }
 
+/// Where every account's store lives under the machine store `config_root`. A chat's sandbox
+/// denies it to read and to write (`sandbox::Denied`, the human-powers class): what is in it was
+/// fetched with the human's sign-in token.
+pub fn root(config_root: &Path) -> PathBuf {
+    crate::machine::dir(config_root).join("forge-etags")
+}
+
 impl EtagDir {
     /// The store for what the native transport fetched as `account`, under the machine store
     /// `config_root`. The directory names the transport as well as the account, so nothing a
     /// different identity fetched can share it.
     pub fn for_native(config_root: &Path, account: &Account) -> EtagDir {
         EtagDir {
-            dir: crate::machine::dir(config_root)
-                .join("forge-etags")
-                .join(format!("native-{}", account.key())),
+            dir: root(config_root).join(format!("native-{}", account.key())),
         }
     }
 

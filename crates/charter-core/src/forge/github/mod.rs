@@ -88,8 +88,8 @@ impl GitHub {
                         "listing repos for GitHub owner '{owner}' {why}"
                     ))));
                 }
-                Err(NoAnswer::Missing(why)) => {
-                    return Err(Paged::Failed(ForgeError::transport(why)));
+                Err(no @ (NoAnswer::Missing(_) | NoAnswer::Refused(_))) => {
+                    return Err(Paged::Failed(no.error(no.said().to_string())));
                 }
             };
             if !answer.ok() {
@@ -280,7 +280,9 @@ impl Repos for GitHub {
                     "listing tree for {path}@{git_ref} {why}"
                 )));
             }
-            Err(NoAnswer::Missing(why)) => return Err(ForgeError::transport(why)),
+            Err(no @ (NoAnswer::Missing(_) | NoAnswer::Refused(_))) => {
+                return Err(no.error(no.said().to_string()));
+            }
         };
         if !answer.ok() {
             return Err(ForgeError::new(format!(
