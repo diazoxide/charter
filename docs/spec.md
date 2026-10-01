@@ -411,7 +411,8 @@ how it is cited and nothing here is renumbered.
 
 ## Limits (acceptance)
 
-Only what a person would notice. Measured on the operator's machine, in the scenario harness.
+Only what a person would notice. Each limit is also a row of the *Performance budgets of record*
+below, which says which job measures it ([ADR 0086](adr/0086-every-performance-budget-names-the-job-that-measures-it-and-ci-holds-charters-own-cost-by-regression.md)).
 
 | | Limit |
 | --- | --- |
@@ -427,6 +428,63 @@ Only what a person would notice. Measured on the operator's machine, in the scen
 
 tmux's end-to-end throughput is re-measured in M0 on the same machine and recorded as a
 **reference**, not a gate.
+
+## Performance budgets of record
+
+**The table of record for every performance budget** ([ADR 0086](adr/0086-every-performance-budget-names-the-job-that-measures-it-and-ci-holds-charters-own-cost-by-regression.md)).
+Each row is a target, not a promise, and none is published until SC-8 and a release measurement
+confirm it (D-0082b). A row is added in the pull request that adds its job.
+
+- **Kinds.** *CI absolute*: going past it fails its job. *CI relative*: it fails its job when the
+  pull request's median is more than 20% **and** more than the row's floor (5 ms for a timing,
+  32 MB for memory, 0.1% of a core for CPU) above the median of the last five green runs of that
+  job on `main`, on the same OS; with fewer than five such runs it is reported only. Each push to
+  `main` also compares each relative row with its median at the last release tag, and a drift of
+  more than 20% opens an issue. *Release absolute*: measured with real harnesses on the
+  operator's machine each release by the release scale run (#814); a miss is a bug filed before
+  the release notes.
+- **Load.** Every row is stated at the device's hot target ([ADR 0082](adr/0082-charter-serves-one-persons-agents-first-and-its-scale-is-a-hot-chat-count-per-ram-class.md) §3)
+  with the rest of the 200 open chats hibernated, unless it says otherwise. CI measures the top
+  class (50 hot, 150 hibernated) with the fake harness. Counts and sizes are a base plus a cost
+  per hot chat and per hibernated chat, so each RAM class's total is arithmetic (ADR 0086 §3).
+- **Jobs.** `stress` (`stress.yml`, required on macOS and Linux once SC-8 lands), `bench` (SC-16's
+  job in `ci.yml`), `app builds` and `rust` (`ci.yml`), and the release scale run (#814).
+- **Last measured** is filled in by the release scale run in its release PR. *—* means not yet.
+
+| # | What | Budget | Kind and job | Owner | Last measured |
+|---|---|---|---|---|---|
+| M1 | charter's own base: web content peak plus native side, at 200 open, scrollback excluded | ≤ 2 GB (ADR 0082's base; it binds over M2 to M5) | release absolute | SC-1, #814 | about 1.8 GB (ADR 0082) |
+| M2 | web content process, peak | ≤ 1.5 GB | release absolute; CI relative (`stress`) | SC-1 | 1,529 MB at 12 chats |
+| M3 | native side (app and `charterd`), no chats | ≤ 384 MB | CI absolute and relative (`stress`) | SC-8 | 183 MB macOS, 311 MB Ubuntu |
+| M4 | native cost of a hot chat, scrollback excluded | ≤ 4 MB | CI absolute (`stress`) | SC-8 | 3.1 MB macOS, 0.12 MB Ubuntu |
+| M5 | native cost of a hibernated chat; no harness process | ≤ 1 MB | CI absolute (`stress`) | SC-4, SC-8 | — |
+| M6 | idle hidden session's scrollback at the cap | ≤ 50 MB | release absolute; CI relative (`bench`) | SC-16 | 20.2 MB |
+| M7 | memory and threads back at the base after a round's close | M3 + 32 MB; 40 threads | CI absolute (`stress`) | SC-8 | held |
+| C1 | threads | ≤ 64 at none; ≤ 5 a hot chat; 0 a hibernated | CI absolute (`stress`) | SC-8 | 49 / 24 at none; 3.9 / 4.0 a chat |
+| C2 | descriptors | ≤ 64 at none; ≤ 4 a hot chat; 0 a hibernated | CI absolute (`stress`, macOS with SC-15) | SC-8, SC-15 | 54 at none, 3 a chat (Ubuntu) |
+| C3 | open-file limit raised to `min(hard, OPEN_MAX)`; 200 fake chats in a launchd-started app | met | CI absolute (`stress`, macOS) | SC-15 | — |
+| C4 | hook processes spawned per second | recorded | evidence only (`stress`) | SC-8 | — |
+| E1 | idle, window hidden, 3 projects, no chats | ≤ 0.5% of a core, ≤ 1 wakeup/s | CI absolute on Linux (`stress`); release absolute on macOS | SC-18 | — |
+| E2 | idle, window hidden, the hot target's chats at a turn boundary, harnesses excluded | ≤ 1% of a core | CI relative (`stress`); release absolute | SC-18 | — |
+| L1 | keystroke to screen, hot target minus one streaming | ≤ 50 ms | release absolute; CI relative (`bench`) | SC-16 | worst 26 ms |
+| L2 | tab or pane switch | ≤ 100 ms | the same | SC-16 | worst 48 ms |
+| L3 | 2 MB and 13 MB bursts | no freeze; input and other panes responsive | the same | SC-16 | longest frame 42 / 52 ms |
+| L4 | synchronized-output animation | ≥ 30 fps | release absolute | SC-16 | 60 fps |
+| L5 | hook call p95, at 50,000 memories and the hot target | ≤ 50 ms | CI absolute (`stress`); CI relative (`bench`) | KN-22, SC-16 | 1.8 ms, small project |
+| L6 | cold start to the first frame, no chats | ≤ 2 s | CI absolute on Linux (`app builds`, median of five, ceiling 2.5 s); release absolute on macOS | FR-8 | 370 ms macOS |
+| L7 | reattach with `charterd` up: first paint of the focused pane | ≤ 1 s | CI relative (`bench`); release absolute | FD-5, FD-7 | — |
+| L8 | relaunch with the hot target's chats to put back: interactive | ≤ 3 s | CI relative (`bench`); release absolute | SC-20 | — |
+| T1 | event log throughput | ≥ 1,000 events/s sustained, L5 not regressing | CI absolute (`stress`) | FD-9 | — |
+| T2 | audit throughput and group commit | 1,000 entries/s; ≤ 100 ms between commits (ADR 0075) | CI absolute (`stress`) | AU-3 | — |
+| D1 | bytes per event, per audit entry, uncompressed | ≤ 1 KB; ≤ 512 B | CI absolute (`stress`) | FD-9, AU-3 | — |
+| D2 | disk written over a busy day at the top class (50 hot, 0.3 tool calls/s, 8 h) | ≤ 100 MB compressed | CI absolute (`stress`, computed) | FD-9 | — |
+| D3 | a hibernated chat's scrollback snapshot | ≤ 1 MB on disk | CI absolute (`stress`) | SC-4 | — |
+| D4 | every growing store bounded: audit 1 year / 2 GiB; event log 90 days / 1 GiB (FD-9 may change it); sessions, traces, reports by SC-7; indexes rebuildable | each prune tested | CI absolute (`rust`) | FD-9, SC-7 | — |
+| K1 | context tax at a chat's start, per harness, on the 50,000-memory, 1,000-persona fixture | ≤ 3,000 tokens | CI absolute (`stress`) | KN-30 | — |
+| S | search and index budgets | as [ADR 0079](adr/0079-search-runs-on-derived-sqlite-indexes-one-per-project-clone-and-one-per-machine.md) §4 | as there | KN-1, KN-2, KN-22, KN-32 | — |
+
+**Not a budget, a guard:** GL-15 warns when less than 20 GB of disk is left, and starts no new
+branch folder when less than 5 GB is.
 
 ## Milestones
 

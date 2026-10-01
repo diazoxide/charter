@@ -194,6 +194,15 @@ many hot chats the device targets; a device under 8 GB targets one. A property o
 it belongs to Project. A budget, never a cap: charter warns past it and refuses nothing (ADR 0082).
 _Avoid_: tier (that is a store's), machine size, profile
 
+**Performance budget**:
+One measured limit on what charter's chats cost the device: a count, a size, a time or a share of
+a core, stated at the device's hot target, and named with the job that measures it. It is
+checked in CI either exactly or against how the last runs went, or on the operator's machine at
+each release. It is a target, never a promise, and never a cap on the operator. The spec's
+limits are performance budgets too. It belongs to **Chat** (ADR 0086).
+_Avoid_: budget (unqualified: that is a chat's spend budget), limit (for a row CI checks only
+against earlier runs), SLA
+
 **Remote chat**:
 A vendor-cloud session charter lists read-only, with its state, pull request and cost: a chat of
 kind **observed**, which charter never pauses, stops or counts toward a budget. Every chat
