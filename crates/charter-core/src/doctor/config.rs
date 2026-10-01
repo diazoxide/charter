@@ -372,8 +372,8 @@ fn save_finding(root: &Path) -> Option<(String, String)> {
                  GitHub or GitLab forge charter knows",
                 mode.as_str()
             ),
-            "Saves stop at a local commit, and the plane shows as blocked, until origin is on a \
-             forge a [[forge]] block declares, or mode is commit or push."
+            "Saves stop at a local commit, shown as a notice, until origin is on a forge a \
+             [[forge]] block declares, or mode is commit or push."
                 .to_owned(),
         ));
     }
