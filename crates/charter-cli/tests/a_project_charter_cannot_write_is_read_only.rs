@@ -199,7 +199,11 @@ impl Project {
                 "the project as a teammate pushed it",
             ],
         ] {
+            // No auto-maintenance: a detached `git maintenance` from this commit would take
+            // `.git/objects/maintenance.lock` while a command under test runs, and the tree
+            // check would blame the command for it.
             let done = Command::new("git")
+                .args(["-c", "gc.auto=0", "-c", "maintenance.auto=false"])
                 .args(args)
                 .current_dir(&project.root)
                 .env("HOME", &project.home)
