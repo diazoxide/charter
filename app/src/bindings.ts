@@ -265,10 +265,10 @@ export const commands = {
 	 */
 	createProject: (path: string, planeIsThisRepo: boolean, adopt: string | null) => typedError<Opened, string>(__TAURI_INVOKE("create_project", { path, planeIsThisRepo, adopt })),
 	/**
-	 *  Which harnesses are installed and signed in, and whether `gh` is logged in.
+	 *  Which harnesses are installed and signed in, and whether `gh` and `glab` are logged in.
 	 * 
-	 *  **On a blocking thread**: `gh auth status` is a subprocess with a timeout, and the screen
-	 *  that asked is drawn while it runs. Nothing here signs anybody in.
+	 *  **On a blocking thread**: `gh auth status` and `glab auth status` are subprocesses with a
+	 *  timeout, and the screen that asked is drawn while it runs. Nothing here signs anybody in.
 	 */
 	firstRunFound: () => typedError<FirstRunFound, string>(__TAURI_INVOKE("first_run_found")),
 	/**
@@ -281,8 +281,8 @@ export const commands = {
 	openRepo: (path: string) => typedError<OpenedRepo, string>(__TAURI_INVOKE("open_repo", { path })),
 	/**
 	 *  Opens this machine's local project with no repo in it, made first when there is none, and
-	 *  through the trust gate: what "Sign in to GitHub" on the first run opens, so the sign-in has
-	 *  a shell tab to run in (W10).
+	 *  through the trust gate: what "Sign in to GitHub" (or GitLab) on the first run opens, so the
+	 *  sign-in has a shell tab to run in (W10).
 	 */
 	openLocalProject: () => typedError<Opened, string>(__TAURI_INVOKE("open_local_project")),
 	/**
@@ -1645,13 +1645,19 @@ export type FactColumn = {
 /**  What the first-run screen shows about this machine. */
 export type FirstRunFound = {
 	harnesses: HarnessRow[],
-	forge: ForgeRow,
+	/**
+	 *  Every forge charter works with, GitHub first. The first run comes before any repo is
+	 *  chosen, so which forge the project will use is not known yet: both CLIs are checked.
+	 */
+	forges: ForgeRow[],
 };
 
-/**  The forge CLI, as the first-run screen lists it. */
+/**  One forge's CLI, as the first-run screen lists it. */
 export type ForgeRow = {
-	/**  The program (`gh`). */
+	/**  The program (`gh`, `glab`). Its own login is `<cli> auth login`. */
 	cli: string,
+	/**  The forge it works with (`GitHub`, `GitLab`). */
+	title: string,
 	installed: boolean,
 	/**  Whether it is logged in to its default host. */
 	signed_in: boolean,

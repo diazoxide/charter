@@ -66,7 +66,10 @@ const FOUND = {
     { name: "codex", title: "Codex", installed: true, signed_in: false },
     { name: "opencode", title: "opencode", installed: false, signed_in: false },
   ],
-  forge: { cli: "gh", installed: true, signed_in: false },
+  forges: [
+    { cli: "gh", title: "GitHub", installed: true, signed_in: false },
+    { cli: "glab", title: "GitLab", installed: true, signed_in: false },
+  ],
 };
 
 const ASK = {
@@ -134,12 +137,12 @@ describe("the first run", () => {
     expect(document.body.textContent).not.toMatch(/plane|repository/i);
   });
 
-  it("says which harnesses are installed and signed in, and whether gh is", async () => {
+  it("says which harnesses are installed and signed in, and whether gh and glab are", async () => {
     core();
     render(<App />);
 
     const found = await screen.findByRole("list", { name: "On this machine" });
-    await waitFor(() => expect(within(found).getAllByRole("listitem")).toHaveLength(4));
+    await waitFor(() => expect(within(found).getAllByRole("listitem")).toHaveLength(5));
     const rows = within(found)
       .getAllByRole("listitem")
       .map((row) => row.textContent);
@@ -148,6 +151,7 @@ describe("the first run", () => {
       "Codex: installed; it asks you to sign in when its chat starts",
       "opencode: not installed",
       "gh: installed, not signed in; only needed to work with GitHub Sign in to GitHub",
+      "glab: installed, not signed in; only needed to work with GitLab Sign in to GitLab",
     ]);
   });
 
@@ -343,6 +347,24 @@ describe("the first run", () => {
       text: "gh auth login\n",
     });
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("offers GitLab's own sign-in the same way, with glab", async () => {
+    const { calls } = core((cmd) => {
+      if (cmd === "open_local_project") return { plane: LOCAL, ask: null };
+      if (cmd === "open_session") return 7;
+      return undefined;
+    });
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Sign in to GitLab" }));
+
+    await vi.waitFor(() => expect(calls("send_input")).toHaveLength(1));
+    expect(calls("send_input")[0].args).toEqual({
+      plane: LOCAL,
+      session: 7,
+      text: "glab auth login\n",
+    });
   });
 });
 

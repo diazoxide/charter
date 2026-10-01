@@ -12,13 +12,14 @@ import { commands, type FirstRunFound, type ForgeRow, type HarnessRow } from "./
  * or telemetry: none of them stands between a new machine and a working chat (G5, C2, B2).
  *
  * **What the machine has is shown, never asked about.** Which harnesses are installed and
- * signed in, and whether `gh` is: a harness that is not signed in still starts, and asks for
+ * signed in, and whether `gh` and `glab` are: a harness that is not signed in still starts, and asks for
  * its own login in its own first screen, which is where that question belongs.
  *
- * **Signing in to GitHub is offered, not asked** (W10: "forge CLI auth detected and offered").
- * A button beside `gh`'s row, when it is installed and not signed in, opens the local project
- * and runs `gh auth login` in a shell tab there — `gh`'s own login, in a tab the operator can
- * leave, so it adds nothing to the interrupt budget.
+ * **Signing in to a forge is offered, not asked** (W10: "forge CLI auth detected and offered").
+ * The first run comes before a repo is chosen, so which forge the project will use is not known
+ * yet, and both CLIs are listed. A button beside a CLI's row, when it is installed and not
+ * signed in, opens the local project and runs `<cli> auth login` in a shell tab there — the
+ * CLI's own login, in a tab the operator can leave, so it adds nothing to the interrupt budget.
  *
  * The path box is there for the opener's reason: a native folder dialog cannot be driven by
  * the scenario tests, and an operator who knows the path types it faster than they click.
@@ -26,7 +27,7 @@ import { commands, type FirstRunFound, type ForgeRow, type HarnessRow } from "./
 export function FirstRun({
   onOpenRepo,
   onOpenProject,
-  onSignInToGitHub,
+  onSignInToForge,
   opening,
   trouble,
 }: {
@@ -34,8 +35,8 @@ export function FirstRun({
   onOpenRepo: (path: string) => void;
   /** Shows the ordinary opener, for a project that already exists. */
   onOpenProject: () => void;
-  /** Opens the local project with `gh auth login` running in a shell tab. */
-  onSignInToGitHub: () => void;
+  /** Opens the local project with `<cli> auth login` running in a shell tab. */
+  onSignInToForge: (cli: string) => void;
   /** Whether the core is cloning it right now, so it is not asked twice. */
   opening: boolean;
   /** Why the last attempt opened nothing — the core's words, all of them. */
@@ -127,17 +128,19 @@ export function FirstRun({
                 <span className="tab-name">{row.title}</span>: {harnessSays(row)}
               </li>
             ))}
-            <li>
-              <span className="tab-name">{found.forge.cli}</span>: {forgeSays(found.forge)}
-              {found.forge.installed && !found.forge.signed_in && (
-                <>
-                  {" "}
-                  <button type="button" tabIndex={0} onClick={onSignInToGitHub}>
-                    Sign in to GitHub
-                  </button>
-                </>
-              )}
-            </li>
+            {found.forges.map((row) => (
+              <li key={row.cli}>
+                <span className="tab-name">{row.cli}</span>: {forgeSays(row)}
+                {row.installed && !row.signed_in && (
+                  <>
+                    {" "}
+                    <button type="button" tabIndex={0} onClick={() => onSignInToForge(row.cli)}>
+                      Sign in to {row.title}
+                    </button>
+                  </>
+                )}
+              </li>
+            ))}
           </ul>
         </>
       )}
@@ -157,6 +160,7 @@ function harnessSays(row: HarnessRow): string {
 }
 
 function forgeSays(row: ForgeRow): string {
-  if (!row.installed) return "not installed; only needed to work with GitHub";
-  return row.signed_in ? "signed in" : "installed, not signed in; only needed to work with GitHub";
+  const why = `only needed to work with ${row.title}`;
+  if (!row.installed) return `not installed; ${why}`;
+  return row.signed_in ? "signed in" : `installed, not signed in; ${why}`;
 }
