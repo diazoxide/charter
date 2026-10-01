@@ -1,4 +1,5 @@
-//! `charter change` — the command line over [`charter_core::change::cmd`] (ADR 0060).
+//! `charter change` — the command line over [`charter_core::change::cmd`] and
+//! [`charter_core::change::push`] (ADR 0060).
 //!
 //! Every member is named by hand. There is no `--all` and no pattern, and
 //! `tests/change.rs` asserts it.
@@ -57,6 +58,16 @@ pub enum ChangeCommand {
     },
     /// One change whole: why, members, branches, blockers, exclusions.
     Show {
+        change: String,
+        /// The workspace (default: the active one).
+        #[arg(short = 'w', long = "workspace")]
+        workspace: Option<String>,
+    },
+    /// Push every member's branch and open or update its pull or merge request, each carrying
+    /// the change's cross-link block. Prints every repo, branch and destination first. Commits
+    /// nothing, never forces, and pushes a repo whose save mode is `off` too. Exit 2 when a
+    /// member has no clone here; the others are still pushed.
+    Push {
         change: String,
         /// The workspace (default: the active one).
         #[arg(short = 'w', long = "workspace")]
@@ -122,6 +133,9 @@ pub fn run(here: &Here, command: ChangeCommand) -> Result<u8, String> {
         ChangeCommand::List { workspace } => cmd::list(&root, &ws(workspace.as_deref())?, &mut say),
         ChangeCommand::Show { change, workspace } => {
             cmd::show(&root, &ws(workspace.as_deref())?, &change, now, &mut say)
+        }
+        ChangeCommand::Push { change, workspace } => {
+            charter_core::change::push::push(&root, &ws(workspace.as_deref())?, &change, &mut say)
         }
         ChangeCommand::Forget { change, workspace } => {
             cmd::forget(&root, &ws(workspace.as_deref())?, &change, &mut say)

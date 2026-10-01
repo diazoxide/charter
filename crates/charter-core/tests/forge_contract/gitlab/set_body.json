@@ -1,0 +1,28 @@
+{
+  "source": "GitLab 19.4 REST API docs (gitlab-org/gitlab 19-4-stable-ee, doc/api), merge_requests.md: Update a merge request (description)",
+  "exchanges": [
+    {
+      "call": {
+        "endpoint": {
+          "rest": {
+            "method": "PUT",
+            "path": "projects/acme%2Fapi/merge_requests/12"
+          }
+        },
+        "fields": [
+          {
+            "text": [
+              "description",
+              "Why this change.\n\n<!-- END charter change -->"
+            ]
+          }
+        ]
+      },
+      "reply": {
+        "code": 0,
+        "out": "{\"iid\": 12, \"web_url\": \"https://gitlab.com/acme/api/-/merge_requests/12\", \"description\": \"Why this change.\\n\\n<!-- END charter change -->\"}",
+        "err": ""
+      }
+    }
+  ]
+}

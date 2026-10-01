@@ -251,6 +251,14 @@ pub trait Requests {
     /// Where `pr` stands: open, merged or closed.
     fn state(&self, caller: &Caller, path: &str, pr: &Pr) -> Result<State, ForgeError>;
 
+    /// The description `pr` holds, whole: GitHub's `body`, GitLab's `description`. A request
+    /// with none is the empty string (ADR 0060: `charter change push` splices its block in).
+    fn body(&self, caller: &Caller, path: &str, pr: &Pr) -> Result<String, ForgeError>;
+
+    /// Replace `pr`'s description with `body`, and nothing else about it: not its title, its
+    /// base or its state (ADR 0060).
+    fn set_body(&self, caller: &Caller, path: &str, pr: &Pr, body: &str) -> Result<(), ForgeError>;
+
     /// The newest request whose head is `branch`, in any state (ADR 0060).
     fn by_head(
         &self,

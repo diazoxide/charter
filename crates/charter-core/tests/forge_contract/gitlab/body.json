@@ -1,0 +1,21 @@
+{
+  "source": "GitLab 19.4 REST API docs (gitlab-org/gitlab 19-4-stable-ee, doc/api), merge_requests.md: Retrieve a merge request (description)",
+  "exchanges": [
+    {
+      "call": {
+        "endpoint": {
+          "rest": {
+            "method": null,
+            "path": "projects/acme%2Fapi/merge_requests/12"
+          }
+        },
+        "fields": []
+      },
+      "reply": {
+        "code": 0,
+        "out": "{\"iid\": 12, \"state\": \"opened\", \"description\": \"Why this change.\\n\\n<!-- END charter change -->\"}",
+        "err": ""
+      }
+    }
+  ]
+}

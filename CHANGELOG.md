@@ -13,6 +13,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`charter change push` pushes a cross-repo change.** For each member it prints the repo,
+  the branch and where it goes, then pushes the branch, opens its pull request into the repo's
+  default branch (or finds the one already there), and writes a block into each request's
+  description that lists every member's request, so a partial landing can be read from any one
+  repo. Running it again opens no second request, and the block is rewritten in place when the
+  members change; the rest of the description is left alone. It commits nothing, never
+  force-pushes, and pushes repos whose save mode is `off` too. A member with no clone here is
+  refused by name and the others are still pushed. GitHub is covered end to end; GitLab merge
+  requests follow (#471).
+
 - **The first run lays your project out for the stack you work in.** Project templates for
   Rust, TypeScript, Python, Go, monorepos and docs-only repos each add an engineer and a
   reviewer persona, a review checklist (`REVIEW.md`, in the reviewer's refs), how a change is

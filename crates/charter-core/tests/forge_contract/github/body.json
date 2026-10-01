@@ -1,0 +1,21 @@
+{
+  "source": "GitHub REST API version 2022-11-28, docs.github.com/en/rest, pulls: Get a pull request (body, null when empty)",
+  "exchanges": [
+    {
+      "call": {
+        "endpoint": {
+          "rest": {
+            "method": null,
+            "path": "repos/acme/api/pulls/12"
+          }
+        },
+        "fields": []
+      },
+      "reply": {
+        "code": 0,
+        "out": "{\"number\": 12, \"state\": \"open\", \"body\": \"Why this change.\\n\\n<!-- END charter change -->\"}",
+        "err": ""
+      }
+    }
+  ]
+}

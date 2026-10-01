@@ -8,6 +8,7 @@
 //! - [`Record`]: the closed six-key record, parsed and serialised canonically. Pure.
 //! - [`store`]: where records live, gated by containment.
 //! - [`cmd`]: the verbs `charter change` runs, speaking through a `Say` sink.
+//! - [`push`]: `charter change push`, the first verb that writes to a forge.
 //!
 //! Words, because "change" already means one pull request in parts of `forge`: a **change** is
 //! the cross-repo object, a **member** one repo's part of it, and a member's pull or merge
@@ -15,6 +16,7 @@
 
 pub mod cmd;
 pub mod observe;
+pub mod push;
 mod record;
 pub mod store;
 pub mod view;

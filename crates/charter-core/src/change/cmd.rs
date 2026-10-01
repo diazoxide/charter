@@ -34,7 +34,7 @@ fn cell(value: &str) -> String {
 }
 
 /// A value a refusal names, readable back off the line.
-fn named(value: &str) -> String {
+pub(super) fn named(value: &str) -> String {
     shown::short(value)
 }
 
@@ -76,7 +76,7 @@ fn contained(value: &str) -> String {
 
 /// Whether `ws` is a workspace this plane has, reached without a link. Asked first by every
 /// verb, so a mistyped `-w` is refused rather than creating `workspaces/<typo>/changes/`.
-fn workspace_ok(plane: &Path, ws: &str, say: &mut dyn FnMut(Say)) -> bool {
+pub(super) fn workspace_ok(plane: &Path, ws: &str, say: &mut dyn FnMut(Say)) -> bool {
     match crate::worktree::confine::workspace_dir(plane, ws) {
         Ok(_) => {
             // `ws` passed `workspace_name_ok` above, so it prints as itself from here on.
@@ -126,7 +126,12 @@ fn unknown(ws: &str, slug: &str, say: &mut dyn FnMut(Say)) -> u8 {
 
 /// The record, or the exit code with the refusal said. No such change is a refusal (2); a
 /// record that exists and does not read is a defect in a file (1).
-fn load(plane: &Path, ws: &str, slug: &str, say: &mut dyn FnMut(Say)) -> Result<Record, u8> {
+pub(super) fn load(
+    plane: &Path,
+    ws: &str,
+    slug: &str,
+    say: &mut dyn FnMut(Say),
+) -> Result<Record, u8> {
     if !store::exists(plane, ws, slug) {
         return Err(unknown(ws, slug, say));
     }

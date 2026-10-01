@@ -36,12 +36,14 @@ const SHA: &str = "6dcb09b5b57875f334f61aebed695e2e4193db5e";
 const MERGE: &str = "e5bd3914e2e596debea16f433f57875b5b90bcd6";
 
 /// Every case, by the seam method it covers. The parity test compares this with the traits.
-const CASES: [&str; 11] = [
+const CASES: [&str; 13] = [
     "owned",
     "reachable",
     "top_level",
     "open_or_update",
     "state",
+    "body",
+    "set_body",
     "by_head",
     "request_auto_merge",
     "checks_at",
@@ -223,6 +225,37 @@ mod cases {
         spent(&recorded);
     }
 
+    /// The body a request's description holds, as `charter change push` splices it.
+    const BODY: &str = "Why this change.\n\n<!-- END charter change -->";
+
+    pub fn body(kind: &str, how: How) {
+        let recorded = over(kind, "body", how);
+        let backend = &recorded.backend;
+        let pr = Pr {
+            number: 12,
+            url: String::new(),
+        };
+        assert_eq!(
+            backend.body(&recorded.caller, "acme/api", &pr),
+            Ok(BODY.to_string())
+        );
+        spent(&recorded);
+    }
+
+    pub fn set_body(kind: &str, how: How) {
+        let recorded = over(kind, "set_body", how);
+        let backend = &recorded.backend;
+        let pr = Pr {
+            number: 12,
+            url: String::new(),
+        };
+        assert_eq!(
+            backend.set_body(&recorded.caller, "acme/api", &pr, BODY),
+            Ok(())
+        );
+        spent(&recorded);
+    }
+
     pub fn by_head(kind: &str, how: How) {
         let recorded = over(kind, "by_head", how);
         let backend = &recorded.backend;
@@ -333,6 +366,16 @@ macro_rules! contract {
             fn state_reads_a_merged_request_with_the_commit_it_landed_as() {
                 charter_core::unsteered!();
                 super::cases::state(stringify!($forge), super::How::$how);
+            }
+            #[test]
+            fn body_reads_the_requests_description_whole() {
+                charter_core::unsteered!();
+                super::cases::body(stringify!($forge), super::How::$how);
+            }
+            #[test]
+            fn set_body_replaces_the_requests_description_and_nothing_else() {
+                charter_core::unsteered!();
+                super::cases::set_body(stringify!($forge), super::How::$how);
             }
             #[test]
             fn by_head_finds_the_request_from_the_branch_with_its_head_commit() {

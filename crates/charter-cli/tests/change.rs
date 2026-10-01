@@ -1,5 +1,7 @@
-//! `charter change create|add|drop|list|show|forget`: a cross-repo change declared and read
-//! through the binary, with no network (charter#467, ADR 0060).
+//! `charter change create|add|drop|list|show|forget|push`: a cross-repo change declared and
+//! read through the binary, with no network (charter#467, ADR 0060). `push`'s forge half is
+//! tested in `charter_core::change::push`, against local bare remotes and a recorded forge;
+//! what is here is the part that never reaches one.
 //!
 //! Ported from the behaviour of `cli-final`'s `tests/test_commands_change.py`. Exit 2 is a
 //! named refusal and 1 is something wrong, so every refusal test asserts WHICH one fired.
@@ -386,6 +388,36 @@ fn there_is_no_all_flag_and_no_pattern() {
     let help = plane.charter(&["change", "add", "--help"]);
     let help = String::from_utf8_lossy(&help.stdout);
     assert!(!help.contains("--all"), "{help}");
+}
+
+#[test]
+fn push_refuses_a_member_whose_clone_is_gone_by_name_and_asks_no_forge() {
+    let plane = Plane::new();
+    plane.ok(&["create", "api-2", "--why", "bump"]);
+    plane.ok(&["add", "api-2", "svc"]);
+    std::fs::remove_dir_all(plane.ws().join("svc")).unwrap();
+    let (code, out, err) = plane.change(&["push", "api-2"]);
+    assert_eq!(code, 2, "stdout: {out}\nstderr: {err}");
+    assert!(err.contains("svc: no clone in workspace 'alpha'"), "{err}");
+    assert!(err.contains("charter clone svc -w alpha"), "{err}");
+}
+
+#[test]
+fn push_has_no_force_and_no_all() {
+    let plane = Plane::new();
+    plane.ok(&["create", "api-2", "--why", "bump"]);
+    for flag in ["--force", "--all"] {
+        let (code, _, err) = plane.change(&["push", "api-2", flag]);
+        assert_ne!(code, 0, "{flag} parsed");
+        assert!(err.contains(flag), "{err}");
+    }
+    let help = plane.charter(&["change", "push", "--help"]);
+    let help = String::from_utf8_lossy(&help.stdout);
+    assert!(help.contains("never forces"), "{help}");
+    assert!(
+        !help.contains("--force") && !help.contains("--all"),
+        "{help}"
+    );
 }
 
 // ---- drop and forget ----------------------------------------------------------------------
