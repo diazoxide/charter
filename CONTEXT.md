@@ -288,9 +288,23 @@ _Avoid_: level (that is the run's), completeness
 
 **Telemetry**:
 What charter measures about how chats and charter itself perform: time, resources, tokens and
-cost, sent through OpenTelemetry to the user's own backend, plus the opt-in product telemetry and
-crash reports. It may be sampled, never names a person, and never reads the audit (ADR 0075).
-_Avoid_: audit, analytics, metrics (for the whole of it)
+cost. It is one OpenTelemetry pipeline per device: the session host receives what the harnesses
+and charter report, keeps it on the device for a month, and sends it only to the user's own
+**export destinations**. The opt-in product telemetry and crash reports are telemetry too, each
+with its own consent. It may be sampled, never names a person, and never reads the audit (ADR
+0075, ADR 0083).
+_Avoid_: audit, analytics, metrics (for the whole of it), log (that is the diagnostic log)
+
+**Content gate**:
+A switch that lets telemetry keep what was said in a chat: `prompts`, or tool arguments and
+results (`tools`). Both are off by default. Only this machine opens one for a project; a
+committed setting or an org's policy can only close it (ADR 0083).
+_Avoid_: redaction (that is removing secrets from text), privacy mode
+
+**Export destination**:
+A backend the user added, such as Langfuse, Grafana or Datadog, that the device's telemetry is
+sent to over OTLP. A machine setting, never a project's, and later also an org's (ADR 0083).
+_Avoid_: exporter (that is the harness's own sender), sink (that is the audit's)
 
 **Search index**:
 A derived SQLite full-text index that search, `recall` and the briefing read, kept so they need
