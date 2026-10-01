@@ -174,7 +174,7 @@ describe("the first run's project template (FR-17)", () => {
 
     await vi.waitFor(() =>
       expect(calls("open_repo").map((one) => one.args)).toEqual([
-        { path: REPO, template: { kind: "none" } },
+        { path: REPO, template: { kind: "no-template" } },
       ]),
     );
   });

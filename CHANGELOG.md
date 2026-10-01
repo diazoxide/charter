@@ -18,7 +18,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   reviewer persona, a review checklist (`REVIEW.md`, in the reviewer's refs), how a change is
   checked in the workspace's `workspace.md`, and the publish and deploy commands, such as
   `cargo publish` or `twine upload`, that Claude Code and opencode ask you about before they run
-  them. Codex has no command permissions, so it gets no such rules. The first run picks the
+  them. Codex's command rules live in `CODEX_HOME` or a trusted project's `.codex/rules`, which
+  charter does not write, so charter's own guard applies there. The first run picks the
   template that fits your repo from the files at its top level, and says which when you type the
   path; pick another, or None, before you open it. Nothing is written into your repo, nothing you
   already have is replaced, and a command you deny stays denied.

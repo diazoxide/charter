@@ -254,11 +254,18 @@ pub fn ensure_opencode_ask(root: &Path, glob: &str, dry_run: bool) -> Wrote {
 /// winning"), so where Python appends, this:
 ///
 /// - leaves an exact `deny` for `glob` as it is, and answers [`Wrote::Denied`];
-/// - puts a new `glob` **before the first `deny`**, so every deny that matches the same
-///   command still comes after it and still decides. `"*": "deny"` stays the last word on
-///   `cargo publish`, and an ask with no deny over it is in force as before.
+/// - puts a new `glob` **right after the last entry that is not a deny and whose pattern
+///   matches `glob`'s own text** — `"cargo *": "allow"` for `cargo publish *` — so no allow or
+///   ask that would answer the same command comes after it and outranks it, which in an
+///   allowlist (`"*": "deny"`, then what is let through) would leave the new rule doing
+///   nothing. A deny written after that entry still comes after the new rule and still decides;
+/// - with no such entry, puts it **before the first `deny`**, so every deny that matches the
+///   same command still comes after it: `"*": "deny"` stays the last word on `cargo publish`;
+/// - with neither, appends it, as Python does.
 ///
-/// An existing entry for `glob` keeps its place: its decision changes and its order does not.
+/// Patterns are compared as opencode compares them, `*` and `?` as wildcards, against the
+/// glob's text. An existing entry for `glob` keeps its place: its decision changes and its
+/// order does not.
 pub fn ensure_opencode_rule(root: &Path, glob: &str, decision: &str, dry_run: bool) -> Wrote {
     let path = root.join(OPENCODE);
     let mut map = if path.exists() {
@@ -299,11 +306,19 @@ pub fn ensure_opencode_rule(root: &Path, glob: &str, decision: &str, dry_run: bo
     if had == Some("deny") {
         return Wrote::Denied;
     }
+    let matches =
+        |pattern: &str| glob::Pattern::new(pattern).is_ok_and(|pattern| pattern.matches(glob));
+    let after_match = block
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, (pattern, value))| value.as_str() != Some("deny") && matches(pattern))
+        .map(|(i, _)| i + 1);
     let first_deny = block
         .values()
         .position(|value| value.as_str() == Some("deny"));
-    match first_deny {
-        Some(at) if had.is_none() && decision != "deny" => {
+    match after_match.or(first_deny) {
+        Some(at) if had.is_none() && decision != "deny" && at < block.len() => {
             let mut placed = Map::new();
             for (i, (key, value)) in std::mem::take(&mut block).into_iter().enumerate() {
                 if i == at {

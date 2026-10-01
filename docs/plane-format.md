@@ -3199,8 +3199,7 @@ arguments raises `UnexpressibleRule` and nothing is written.
 2026-09-26), and `reinit` adds it to a plane that predates it. `opencode.json` gets the same
 two globs. A **project template** (FR-17) adds its stack's guard defaults the same way,
 through `charter guard ask`'s writer (every harness with command permissions or none, then
-every workspace layer; Codex has no command permissions, so it gets none and charter's own
-guard is what applies there):
+every workspace layer). Codex's command rules live in `CODEX_HOME` or a trusted project's `.codex/rules`, which charter does not write, so charter's own guard applies there:
 the commands that publish or deploy, such as `Bash(cargo publish *)` for Rust or
 `Bash(twine upload *)` for Python. The list is each template's `[guard] ask` in
 `crates/charter-core/templates/<stack>/template.toml`, and a monorepo's is its own and every
@@ -3259,8 +3258,11 @@ Measured after `init` + `guard ask 'terraform apply *'`:
   appends, `crates/charter-core/src/scaffold/settings.rs` `ensure_opencode_rule` leaves an exact
   `"deny"` for the glob as it is (answered `denied`, said by `charter guard ask`, and listed in
   a template's `denied`), and puts a **new** glob before the first `"deny"` entry, so every deny
-  that matches the same command still comes after it and still decides. An entry already there
-  keeps its place. Claude Code weighs `deny` before `ask` and `allow` whatever the order, so its
+  that matches the same command still comes after it and still decides, **except** that it
+  goes right after the last non-deny entry whose pattern matches the glob's own text (`"cargo
+  *": "allow"` for `cargo publish *`), so in an allowlist an allow that would answer the same
+  command never comes after it; a deny written after that entry still decides. An entry
+  already there keeps its place. Claude Code weighs `deny` before `ask` and `allow` whatever the order, so its
   writer only says an exact deny and adds nothing beside it.
 - Fixture: `{"permission": {"bash": {"charter handoff *": "ask", "terraform apply *": "ask"}}}`.
 

@@ -155,7 +155,7 @@ describe("making a project", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "Open repo" }));
 
     expect(calls("open_repo").map((one) => one.args)).toEqual([
-      { path: REPO, template: { kind: "none" } },
+      { path: REPO, template: { kind: "no-template" } },
     ]);
     expect(calls("create_project")).toEqual([]);
   });

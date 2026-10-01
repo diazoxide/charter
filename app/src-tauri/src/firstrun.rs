@@ -69,8 +69,8 @@ pub struct FirstRunFound {
 pub enum TemplateChoice {
     /// The one that fits the repo, or none when none does. What the screen starts on.
     Fits,
-    /// No template.
-    None,
+    /// No template: the screen's *None*.
+    NoTemplate,
     /// This one.
     Named { id: String },
 }
@@ -79,7 +79,7 @@ impl From<TemplateChoice> for firstrun::Choice {
     fn from(choice: TemplateChoice) -> Self {
         match choice {
             TemplateChoice::Fits => Self::Fits,
-            TemplateChoice::None => Self::None,
+            TemplateChoice::NoTemplate => Self::NoTemplate,
             TemplateChoice::Named { id } => Self::Named(id),
         }
     }
@@ -462,7 +462,10 @@ mod tests {
         };
 
         assert_eq!(said(r#"{"kind":"fits"}"#), firstrun::Choice::Fits);
-        assert_eq!(said(r#"{"kind":"none"}"#), firstrun::Choice::None);
+        assert_eq!(
+            said(r#"{"kind":"no-template"}"#),
+            firstrun::Choice::NoTemplate
+        );
         assert_eq!(
             said(r#"{"kind":"named","id":"rust"}"#),
             firstrun::Choice::Named("rust".to_owned())

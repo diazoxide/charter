@@ -371,7 +371,7 @@ fn a_project_opened_with_no_template_gets_none() {
     let root = firstrun::ensure_local_plane(&dir.path().join("config")).expect("a project");
     let repo = repo_with(dir.path(), "widget", "Cargo.toml");
 
-    let taken = firstrun::take_in_from(&root, &repo, &Choice::None).expect("opened");
+    let taken = firstrun::take_in_from(&root, &repo, &Choice::NoTemplate).expect("opened");
 
     assert_eq!(taken.template, None);
     assert!(!root.join("personas/rust-engineer").exists());
@@ -636,14 +636,26 @@ fn a_template_a_harness_file_refuses_stops_the_open_before_anything_is_copied() 
     assert_eq!(read(&root.join(".claude/settings.json")), settings);
 }
 
+#[cfg(unix)]
 #[test]
 fn a_template_that_fails_part_way_is_taken_back_whole() {
     charter_core::unsteered!();
     let dir = tempfile::tempdir().expect("a directory");
     let root = firstrun::ensure_local_plane(&dir.path().join("config")).expect("a project");
     let repo = repo_with(dir.path(), "widget", "Cargo.toml");
-    // A workspace.md charter cannot read, so the last step, the workspace's starter, fails.
-    std::fs::create_dir_all(root.join("workspaces/widget/workspace.md")).expect("in the way");
+    // A workspace.md that reads, and that charter will not write: a link out of the project.
+    // So the last step, the workspace's starter, fails after the personas, their sub-agents
+    // and the ask rules are all written, and what the template wrote into both harness files
+    // has to be put back byte for byte.
+    let outside = dir.path().join("elsewhere.md");
+    std::fs::write(
+        &outside,
+        "# widget\n\n## Context & decisions\n\n_Nothing yet._\n",
+    )
+    .expect("a file");
+    std::fs::create_dir_all(root.join("workspaces/widget")).expect("the workspace");
+    std::os::unix::fs::symlink(&outside, root.join("workspaces/widget/workspace.md"))
+        .expect("a link");
     let settings = read(&root.join(".claude/settings.json"));
     let opencode = read(&root.join("opencode.json"));
 
@@ -655,4 +667,57 @@ fn a_template_that_fails_part_way_is_taken_back_whole() {
     assert!(!root.join(".claude/agents/rust-engineer.md").exists());
     assert_eq!(read(&root.join(".claude/settings.json")), settings);
     assert_eq!(read(&root.join("opencode.json")), opencode);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_workspace_md_charter_cannot_read_stops_the_template_and_is_never_removed() {
+    charter_core::unsteered!();
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = tempfile::tempdir().expect("a directory");
+    let root = firstrun::ensure_local_plane(&dir.path().join("config")).expect("a project");
+    let repo = repo_with(dir.path(), "widget", "Cargo.toml");
+    let file = root.join("workspaces/widget/workspace.md");
+    std::fs::create_dir_all(file.parent().expect("its workspace")).expect("the workspace");
+    std::fs::write(&file, "# widget\n\nOurs.\n").expect("the operator's");
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000)).expect("unreadable");
+
+    let refused = firstrun::take_in_from(&root, &repo, &Choice::Named("rust".to_owned()));
+
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).expect("readable");
+    assert!(refused.is_err(), "{refused:?}");
+    assert_eq!(
+        read(&file),
+        "# widget\n\nOurs.\n",
+        "never removed, never rewritten"
+    );
+    assert!(
+        !root.join("personas/rust-engineer").exists(),
+        "nothing was laid out"
+    );
+}
+
+#[test]
+fn taking_a_template_back_keeps_a_sub_agent_that_was_there_before() {
+    charter_core::unsteered!();
+    let dir = tempfile::tempdir().expect("a directory");
+    let root = firstrun::ensure_local_plane(&dir.path().join("config")).expect("a project");
+    let repo = repo_with(dir.path(), "widget", "Cargo.toml");
+    // A sub-agent charter generated for an earlier `rust-engineer`, whose persona is gone.
+    let agent = root.join(".claude/agents/rust-engineer.md");
+    std::fs::create_dir_all(agent.parent().expect("agents")).expect("agents");
+    let before = format!(
+        "---\nname: rust-engineer\n---\n<!-- {} -->\nAn earlier one.\n",
+        charter_core::personaverbs::agents::MARKER
+    );
+    std::fs::write(&agent, &before).expect("an earlier agent");
+    // The last step fails, so the template is taken back.
+    std::fs::create_dir_all(root.join("workspaces/widget/workspace.md")).expect("in the way");
+
+    firstrun::take_in_from(&root, &repo, &Choice::Fits).expect_err("refused");
+
+    assert!(
+        agent.is_file(),
+        "a sub-agent the template did not make stays"
+    );
 }

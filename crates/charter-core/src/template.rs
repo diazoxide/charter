@@ -225,7 +225,7 @@ fn refused(
 /// Lays `template` into the project at `root`: its personas, each with the `memory/` and
 /// `refs/` every persona has and its sub-agent; the starter of `workspace`, when one is named
 /// ([`seed_workspace`]); and its ask rules in every harness that holds command permissions
-/// (Claude Code and opencode; Codex has none, so charter's own guard is what applies there).
+/// (Claude Code and opencode). Codex's command rules live in `CODEX_HOME` or a trusted project's `.codex/rules`, which charter does not write, so charter's own guard applies there.
 ///
 /// **Additive, as `charter init` is.** A persona whose directory is already there is left whole,
 /// so a template never writes into a role somebody already has; any other file that is there is
@@ -233,30 +233,54 @@ fn refused(
 /// denies stays denied ([`Applied::denied`]). Applying a template twice is applying it once.
 /// Nothing is written through a link.
 ///
-/// **Whole, or not at all.** Every harness file is asked first ([`check`]). When a step fails
-/// after that, everything this call wrote is taken back — the personas it made, their
-/// sub-agents, and the harness files and `workspace.md` as they were — and the reason is the
-/// answer. Only when it all landed is every workspace layer rewritten to carry the rules.
+/// **Whole, or not at all.** Every harness file is asked first ([`check`]). Then the personas
+/// and their sub-agents are laid out, the ask rules written, and the workspace's starter given
+/// last. When a step fails, everything this call wrote is taken back — the persona directories
+/// it made, the sub-agents that were not there before it, and the harness files and
+/// `workspace.md` byte for byte as they were — and the reason is the answer. A file charter
+/// cannot read to keep stops it before anything is laid out, since it could not be put back.
+/// Only when it all landed is every workspace layer rewritten to carry the rules.
 pub fn apply(
     root: &std::path::Path,
     template: &Template,
     workspace: Option<&str>,
 ) -> Result<Applied, String> {
     check(root, template)?;
+    apply_checked(root, template, workspace)
+}
+
+/// [`apply`] for a caller that has just had [`check`] answer, so the harness files are asked
+/// once (the first run asks before it copies the repo).
+pub(crate) fn apply_checked(
+    root: &std::path::Path,
+    template: &Template,
+    workspace: Option<&str>,
+) -> Result<Applied, String> {
     let mut kept = vec![
         root.join(crate::scaffold::settings::SETTINGS),
         root.join(crate::scaffold::settings::OPENCODE),
     ];
     if let Some(ws) = workspace {
-        kept.push(root.join("workspaces").join(ws).join("workspace.md"));
+        kept.push(root.join("workspaces").join(ws).join(WORKSPACE_STARTER));
     }
-    let before: Vec<(std::path::PathBuf, Option<Vec<u8>>)> = kept
-        .into_iter()
-        .map(|path| {
-            let was = std::fs::read(&path).ok();
-            (path, was)
-        })
-        .collect();
+    // What each file holds now, so a failure can put it back. Only a file that is not there
+    // is "absent": one charter cannot read is one it could not restore, so nothing is laid out.
+    let mut before: Vec<(std::path::PathBuf, Option<Vec<u8>>)> = Vec::new();
+    for path in kept {
+        let was = match std::fs::read(&path) {
+            Ok(bytes) => Some(bytes),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => {
+                return Err(format!(
+                    "charter cannot read {} ({e}), so it could not put it back if laying out the \
+                     {} template failed. Nothing from the template was written.",
+                    path.display(),
+                    template.title
+                ));
+            }
+        };
+        before.push((path, was));
+    }
     let mut made = Made::default();
     match lay(root, template, workspace, &mut made) {
         Ok(applied) => {
@@ -355,21 +379,19 @@ fn lay(
         }
         // Its sub-agent, as `charter persona create` writes one, so a chat can hand work to it
         // from the start. A hand-written agent at the name is left alone, as it is there.
+        let rel = format!(".claude/agents/{persona}.md");
+        // Only an agent this call brings into being is its to take back: one that was there
+        // (an earlier persona's, refreshed now) stays.
+        let new = std::fs::symlink_metadata(root.join(&rel)).is_err();
         let mut quiet = |_: crate::repocmd::Say| {};
         if crate::personaverbs::agents::write_agent(root, &state, persona, &mut quiet)
             == crate::personaverbs::agents::Outcome::Written
         {
-            let rel = format!(".claude/agents/{persona}.md");
-            made.agents.push(root.join(&rel));
+            if new {
+                made.agents.push(root.join(&rel));
+            }
             applied.written.push(rel);
         }
-    }
-    if let Some(ws) = workspace
-        && seed_workspace(root, ws, template)?
-    {
-        applied
-            .written
-            .push(format!("workspaces/{ws}/workspace.md"));
     }
     for pattern in &template.ask {
         let rule = crate::guardcmd::as_rule(pattern)?;
@@ -384,6 +406,13 @@ fn lay(
         if any(|answer| matches!(answer, crate::guardcmd::Answer::Added(_))) {
             applied.asked.push(rule);
         }
+    }
+    if let Some(ws) = workspace
+        && seed_workspace(root, ws, template)?
+    {
+        applied
+            .written
+            .push(format!("workspaces/{ws}/{WORKSPACE_STARTER}"));
     }
     Ok(applied)
 }

@@ -179,3 +179,60 @@ fn a_command_claude_code_denies_is_not_also_made_an_ask() {
         "{applied:?}"
     );
 }
+
+/// An allowlist: everything denied, then the commands the project lets through.
+const ALLOWLIST: &[(&str, &str)] = &[("*", "deny"), ("cargo *", "allow"), ("git status", "allow")];
+
+#[test]
+fn guard_ask_is_in_force_in_an_allowlist_where_a_broader_allow_matches() {
+    charter_core::unsteered!();
+    let (_dir, root) = project();
+    opencode_with(&root, ALLOWLIST);
+
+    let (said, code) = guardcmd::report(&root, "Bash(cargo publish *)", Bucket::Ask, false);
+
+    assert_eq!(code, 0, "{said}");
+    assert_eq!(
+        opencode_decides(&root, "cargo publish --dry-run").as_deref(),
+        Some("ask"),
+        "the ask is what opencode answers, not the allow before it: {:?}",
+        opencode_rules(&root)
+    );
+    assert_eq!(
+        opencode_decides(&root, "cargo build").as_deref(),
+        Some("allow")
+    );
+    assert_eq!(
+        opencode_decides(&root, "git status").as_deref(),
+        Some("allow")
+    );
+    assert_eq!(opencode_decides(&root, "rm -rf x").as_deref(), Some("deny"));
+}
+
+#[test]
+fn a_template_ask_is_in_force_in_an_allowlist_and_a_later_deny_still_wins() {
+    charter_core::unsteered!();
+    let (_dir, root) = project();
+    opencode_with(
+        &root,
+        &[
+            ("*", "deny"),
+            ("cargo *", "allow"),
+            ("cargo publish --token *", "deny"),
+        ],
+    );
+
+    template::apply(&root, rust(), None).expect("laid out");
+
+    assert_eq!(
+        opencode_decides(&root, "cargo publish --dry-run").as_deref(),
+        Some("ask"),
+        "{:?}",
+        opencode_rules(&root)
+    );
+    assert_eq!(
+        opencode_decides(&root, "cargo publish --token x").as_deref(),
+        Some("deny"),
+        "a deny after the allow still decides"
+    );
+}

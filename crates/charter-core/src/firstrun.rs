@@ -91,8 +91,8 @@ pub enum Choice {
     /// The one that fits the repo ([`crate::template::detect`]), or none when none does: what
     /// the first run picks until the operator picks something else.
     Fits,
-    /// No template: the project as `charter init` makes it.
-    None,
+    /// No template: the project as `charter init` makes it. The window calls it *None*.
+    NoTemplate,
     /// This one, by id, whatever the repo looks like.
     Named(String),
 }
@@ -104,7 +104,7 @@ pub enum Choice {
 /// written to. Taking in a repo that is already there answers with what is there, so
 /// opening the same repo twice is the same workspace both times.
 pub fn take_in(root: &Path, repo: &Path) -> Result<TakenIn, String> {
-    take_in_from(root, repo, &Choice::None)
+    take_in_from(root, repo, &Choice::NoTemplate)
 }
 
 /// [`take_in`], with the project template `choice` names laid into the project first and its
@@ -113,14 +113,15 @@ pub fn take_in(root: &Path, repo: &Path) -> Result<TakenIn, String> {
 /// **The template is in the project whole, or not at all.** It is resolved, and every harness
 /// file it writes a rule into is asked whether it can take one, before the repo is copied, so
 /// a template charter does not ship, or a file it cannot extend, stops the open with nothing
-/// copied and nothing written. Then the repo is copied, and the template is laid out with the
-/// workspace's starter as its last step; a failure there takes back everything the template
-/// wrote ([`crate::template::apply`]) and says why, and the workspace is left as a repo opened
-/// with no template. Laying a template out is additive, so a second repo opened into the same
+/// copied and nothing written. Then the repo is copied, and the template is laid out: personas
+/// and sub-agents, then the ask rules, then the workspace's starter last. A failure at any of
+/// those takes back everything the template wrote, harness files and `workspace.md` byte for
+/// byte ([`crate::template::apply`]), and says why; the workspace is left as a repo opened with
+/// no template. Laying a template out is additive, so a second repo opened into the same
 /// project adds what the first one's template did not.
 pub fn take_in_from(root: &Path, repo: &Path, choice: &Choice) -> Result<TakenIn, String> {
     let template = match choice {
-        Choice::None => None,
+        Choice::NoTemplate => None,
         Choice::Fits => crate::template::detect(repo),
         Choice::Named(id) => Some(crate::template::named(id).ok_or_else(|| {
             format!(
@@ -140,7 +141,7 @@ pub fn take_in_from(root: &Path, repo: &Path, choice: &Choice) -> Result<TakenIn
     }
     let (workspace, clone) = crate::scaffold::adopt_as_workspace(root, repo, chrono::Utc::now())?;
     if let Some(template) = template {
-        crate::template::apply(root, template, Some(&workspace))?;
+        crate::template::apply_checked(root, template, Some(&workspace))?;
     }
     Ok(TakenIn {
         workspace,

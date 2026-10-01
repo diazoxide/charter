@@ -15,7 +15,7 @@ const NONE = ":none";
 
 function choiceOf(value: string): TemplateChoice {
   if (value === FITS) return { kind: "fits" };
-  if (value === NONE) return { kind: "none" };
+  if (value === NONE) return { kind: "no-template" };
   return { kind: "named", id: value };
 }
 

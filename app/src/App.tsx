@@ -1684,7 +1684,7 @@ function App() {
             setCreateTrouble(undefined);
             // The New project dialog lays out no template: the first run is where one is
             // chosen (FR-17).
-            void openRepo(path, { kind: "none" }).then((refused) => {
+            void openRepo(path, { kind: "no-template" }).then((refused) => {
               if (refused === undefined) setCreating(false);
               else setCreateTrouble(refused);
             });
