@@ -131,8 +131,18 @@ _Avoid_: discovered repos, the inventory
 
 **Forge account**:
 One sign-in to one forge host: a kind, a host and a login, held in the keyring or reached
-through `gh`'s or `glab`'s own login. Each repo is bound to one (ADR 0070).
+through `gh`'s or `glab`'s own login. Each repo is bound to one (ADR 0070). It is the human's,
+signed in from the window through a forge registration, a PAT or an imported CLI login, and it
+never reaches a chat. It holds for the whole machine, so it is a setting of the **Project**
+(ADR 0072 §2, ADR 0077).
 _Avoid_: forge login (for charter's own sign-in), connection, integration
+
+**Forge registration**:
+What a forge host knows charter by when a person signs in: a GitHub App on GitHub, an OAuth
+application on GitLab, identified by a public client id. charter's own exist on github.com and
+gitlab.com; a GHES or a self-managed GitLab needs one made on that host. It mints nothing for an
+agent. A setting of the **Project**, like the forge account that uses it (ADR 0072 §2, ADR 0077).
+_Avoid_: OAuth app (unqualified), integration, client
 
 **Forge capability**:
 One thing a forge may or may not do for one repo, such as a merge queue, judged per forge, host
