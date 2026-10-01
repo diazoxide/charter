@@ -12,6 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
+import { LOGS } from "./processes.js";
 
 /**
  * What the app runs when a pane asks for a new session.
@@ -80,6 +81,9 @@ export function theRunsEnvironment(
     CHARTER_ROOT: plane,
     CHARTER_CONFIG_HOME: aConfigHomeOfItsOwn(),
     CHARTER_PLANE_FENCE: THE_RUNS_TREE,
+    // The app's diagnostic log (#647) goes with the rest of the run's evidence, never into the
+    // runner's own log directory.
+    CHARTER_LOG_DIR: LOGS,
     ...extra,
   };
 }

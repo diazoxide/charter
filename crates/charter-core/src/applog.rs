@@ -7,14 +7,20 @@
 //! standard error. One file a day, the newest seven kept. `docs/plane-format.md` records the
 //! store: Machine, device-bound, transient (ADR 0069), beside `panics.log`.
 //!
+//! **The `charter` binary has a terminal and no log file.** [`install_for_a_terminal`] sends
+//! the core's warnings there, as the message alone, so one raised under the CLI is not lost.
+//! Its `info` and every library's events are not shown there: a command's terminal holds its
+//! answer.
+//!
 //! **Output is not a log.** What a `charter` command prints to its terminal on purpose is that
 //! command's answer, replayed against the recorded fixtures (ADR 0046), and it never goes
 //! through here. Only diagnostics do, and `clippy.toml` refuses `eprintln!` in this crate and
 //! the app so a new one cannot slip back to standard error alone.
 //!
-//! **No secrets.** Every event is held whole and asked [`crate::secretshape::found`] before it
-//! is written, to the file and to standard error alike; one that looks like it holds a
-//! credential is replaced by a line naming the kind. Callers still say a chat's number and
+//! **No secrets.** Every event is held whole and checked before it is written, to the file
+//! and to standard error alike (`what_it_holds`: `secretshape::found`, `secretshape::leaks` a
+//! line at a time, and a field named for a token or a secret). An event that looks like it
+//! holds a credential or personal data is replaced by a line naming the kind. Callers still say a chat's number and
 //! never its token: this is the net under that rule, not a licence to break it.
 //!
 //! **Not the audit and not telemetry** (O1, ADR 0075). Nothing reads this file but a person.
@@ -23,7 +29,9 @@ use std::borrow::Cow;
 use std::ffi::OsString;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
+use regex::Regex;
 use tracing::Level;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::filter::Targets;
@@ -32,7 +40,7 @@ use tracing_subscriber::layer::SubscriberExt;
 
 /// The directory the log is kept in: `$CHARTER_LOG_DIR` when it is set, else the app's own log
 /// directory, where `panics.log` already is.
-pub fn dir() -> Option<PathBuf> {
+pub(crate) fn dir() -> Option<PathBuf> {
     dir_from(std::env::var_os("CHARTER_LOG_DIR"))
 }
 
@@ -81,6 +89,47 @@ pub fn install() {
     }
 }
 
+/// Sends the core's warnings to standard error alone, from now on: what the `charter` binary
+/// installs. A command's terminal is where a person running it looks, and its output there is
+/// the command's answer (ADR 0046), so only charter's own warnings join it, never its `info`
+/// and never a library's. Called a second time, it changes nothing.
+pub fn install_for_a_terminal() {
+    let _ = tracing::subscriber::set_global_default(terminal_only(std::io::stderr));
+}
+
+/// charter's warnings, and nothing else, to `screen`.
+fn terminal_only(
+    screen: impl for<'a> MakeWriter<'a> + Send + Sync + 'static,
+) -> impl tracing::Subscriber + Send + Sync {
+    tracing_subscriber::registry()
+        .with(Targets::new().with_target("charter", Level::WARN))
+        .with(terminal(screen))
+}
+
+/// The message alone, as `eprintln!` printed it, redacted: what a person running charter from
+/// a terminal, and a CI log, has always read. The time and the level are the file's.
+fn terminal<S>(
+    screen: impl for<'a> MakeWriter<'a> + Send + Sync + 'static,
+) -> impl tracing_subscriber::Layer<S> + Send + Sync
+where
+    S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+{
+    tracing_subscriber::fmt::layer()
+        .with_ansi(false)
+        .without_time()
+        .with_level(false)
+        .with_target(false)
+        .with_writer(Redacting(screen))
+}
+
+/// One warning, raised here on purpose so a test can watch where a core diagnostic goes in the
+/// process that links this crate. Only a debug build has it.
+#[cfg(debug_assertions)]
+#[doc(hidden)]
+pub fn warn_on_purpose() {
+    tracing::warn!("charter: a warning charter-core raised on purpose, for a test");
+}
+
 /// The file in `dir` that today's events go to.
 ///
 /// **Blocking, on purpose.** `tracing-appender`'s non-blocking writer hands lines to a thread
@@ -102,13 +151,6 @@ fn subscriber_to(
     file: Option<RollingFileAppender>,
     screen: impl for<'a> MakeWriter<'a> + Send + Sync + 'static,
 ) -> impl tracing::Subscriber + Send + Sync {
-    // Standard error gets the message alone, as `eprintln!` printed it: that is what a person
-    // running the app from a terminal, and a CI log, has always read. The file has the rest.
-    let terminal = tracing_subscriber::fmt::layer()
-        .without_time()
-        .with_level(false)
-        .with_target(false)
-        .with_writer(Redacting(screen));
     // charter's own crates (`charter_core`, `charter_app_lib`) at `info`, so what the app did
     // is there to read; everything it links at `warn`, so a library's routine chatter is not.
     let wanted = Targets::new()
@@ -121,7 +163,7 @@ fn subscriber_to(
                 .with_ansi(false)
                 .with_writer(Redacting(file))
         }))
-        .with(terminal)
+        .with(terminal(screen))
 }
 
 /// A writer that holds each event whole and lets it through only once it has been asked
@@ -175,13 +217,49 @@ impl<W: Write> Drop for Held<W> {
 /// is lines of base64 no rule recognises), and a log is read to find out what happened, which
 /// a timestamp without its message does not say anyway.
 fn redacted(event: &str) -> Cow<'_, str> {
-    match crate::secretshape::found(event) {
-        Some(found) => Cow::Owned(format!(
-            "[redacted: an event that looks like it holds {}]\n",
-            found.kind
+    match what_it_holds(event) {
+        Some(kind) => Cow::Owned(format!(
+            "[redacted: an event that looks like it holds {kind}]\n"
         )),
         None => Cow::Borrowed(event),
     }
+}
+
+/// The kind of secret or personal data `event` looks like it holds, or `None`. Three nets, the
+/// widest charter has:
+///
+/// - [`crate::secretshape::found`]: what a plane save refuses, a credential assignment
+///   included.
+/// - [`crate::secretshape::leaks`], a line at a time: what an agent's commit is scanned for,
+///   which adds gitleaks' vendor shapes and personal data (an email address, a card number,
+///   an ID number).
+/// - A field named for a token or a secret (`access_token=`, `client_secret:`, a JSON
+///   `"auth_token":`). `found`'s assignment rule keeps Python's word boundary, so it does not
+///   see `token` inside `access_token`, and it has to stay Python's for the plane save. A log
+///   is not code, so this rule needs no such care.
+fn what_it_holds(event: &str) -> Option<&'static str> {
+    if let Some(found) = crate::secretshape::found(event) {
+        return Some(found.kind);
+    }
+    if let Some(leak) = event
+        .lines()
+        .find_map(|line| crate::secretshape::leaks(line).into_iter().next())
+    {
+        return Some(leak.kind);
+    }
+    secret_named_field()
+        .is_match(event)
+        .then_some("a field named for a token or a secret")
+}
+
+/// `<anything>token` or `<anything>secret`, an optional closing quote, `:` or `=`, then a value
+/// of six characters or more: the same length `found`'s assignment rule asks for.
+fn secret_named_field() -> &'static Regex {
+    static FIELD: OnceLock<Regex> = OnceLock::new();
+    FIELD.get_or_init(|| {
+        Regex::new(r#"(?i)[a-z0-9_-]*(?:token|secret)["']?\s*[:=]\s*["']?[^\s"']{6}"#)
+            .expect("a pattern this module wrote")
+    })
 }
 
 #[cfg(test)]
@@ -379,5 +457,77 @@ mod tests {
             app.ends_with("Library/Logs/dev.charter.app") || app.ends_with("dev.charter.app/logs"),
             "Tauri's `app_log_dir` for charter's identifier: {app}"
         );
+    }
+
+    /// What `events` leave in the file, each raised as a warning from charter.
+    fn written(events: &[&str]) -> String {
+        let dir = tempfile::tempdir().unwrap();
+        tracing::subscriber::with_default(quiet(dir.path()), || {
+            for event in events {
+                tracing::warn!("charter: {event}");
+            }
+        });
+        logged(dir.path())
+    }
+
+    #[test]
+    fn a_vendor_key_gitleaks_knows_never_reaches_the_file() {
+        let key = concat!("lin_api_", "0123456789abcdefghijABCDEFGHIJ0123456789");
+        let said = written(&[&format!("the tracker refused {key}")]);
+        assert!(!said.contains(key), "{said:?}");
+        assert!(
+            said.contains("[redacted: an event that looks like it holds Linear key]"),
+            "{said:?}"
+        );
+    }
+
+    #[test]
+    fn personal_data_never_reaches_the_file() {
+        let said = written(&["the commit was authored by jane.doe@acme-corp.io"]);
+        assert!(!said.contains("jane.doe@acme-corp.io"), "{said:?}");
+        assert!(
+            said.contains("[redacted: an event that looks like it holds"),
+            "{said:?}"
+        );
+    }
+
+    #[test]
+    fn a_field_named_for_a_token_or_a_secret_never_reaches_the_file() {
+        for field in [
+            "access_token=Zq8xV3mN0pRt",
+            "refresh_token: Zq8xV3mN0pRt",
+            "auth_token=Zq8xV3mN0pRt",
+            "client_secret=Zq8xV3mN0pRt",
+            "webhook_secret = Zq8xV3mN0pRt",
+            r#"{"access_token":"Zq8xV3mN0pRt"}"#,
+        ] {
+            let said = written(&[&format!("the forge answered {field}")]);
+            assert!(!said.contains("Zq8xV3mN0pRt"), "{field}: {said:?}");
+            assert!(
+                said.contains("[redacted: an event that looks like it holds"),
+                "{field}: {said:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_word_that_only_mentions_a_token_is_still_written() {
+        let said = written(&["the access_token field was missing from the answer"]);
+        assert!(
+            said.contains("the access_token field was missing"),
+            "{said:?}"
+        );
+    }
+
+    #[test]
+    fn under_the_cli_only_charters_warnings_reach_the_terminal() {
+        let screen = Screen::default();
+        let seen = screen.clone();
+        tracing::subscriber::with_default(terminal_only(move || seen.clone()), || {
+            tracing::info!("charter: narration the terminal never asked for");
+            tracing::warn!(target: "zbus::connection", "a library's own trouble");
+            tracing::warn!("charter: the core noticed something");
+        });
+        assert_eq!(screen.said(), "charter: the core noticed something\n");
     }
 }

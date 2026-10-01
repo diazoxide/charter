@@ -94,16 +94,12 @@ mod tests {
     /// a handler that answers every command it is handed. Whatever is refused was refused by
     /// the ACL before any handler saw it.
     fn app() -> tauri::App<MockRuntime> {
-        // Tauri's own expansion prints with `eprintln!`, which `clippy.toml` refuses in this crate
-        // (#647). The allow is for Tauri's code, not charter's.
-        #[allow(clippy::disallowed_macros)]
-        let context = tauri::generate_context!(test = true);
         mock_builder()
             .invoke_handler(|invoke| {
                 invoke.resolver.resolve(true);
                 true
             })
-            .build(context)
+            .build(tauri_context!(test = true))
             .expect("the app builds with its real ACL")
     }
 

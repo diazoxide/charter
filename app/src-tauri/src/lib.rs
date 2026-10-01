@@ -5,6 +5,17 @@
 #[macro_use]
 mod ipc_commands;
 
+/// `tauri::generate_context!`, with its arguments, in the one place that allows it: Tauri's own
+/// expansion prints with `eprintln!`, which `clippy.toml` refuses in this crate (#647). The
+/// allow is for Tauri's code, not charter's. Above every module, so each of them can use it.
+macro_rules! tauri_context {
+    ($($arg:tt)*) => {{
+        #[allow(clippy::disallowed_macros)]
+        let context = tauri::generate_context!($($arg)*);
+        context
+    }};
+}
+
 mod about;
 mod alerts;
 mod autosave;
@@ -1564,10 +1575,6 @@ pub fn run() {
             );
         });
 
-    // Tauri's own expansion prints with `eprintln!`, which `clippy.toml` refuses in this crate
-    // (#647). The allow is for Tauri's code, not charter's.
-    #[allow(clippy::disallowed_macros)]
-    let context = tauri::generate_context!();
     let app = tauri::Builder::default()
         // First, so a second launch is handed to the app already running rather than
         // starting a second one — which would be a second set of sessions on the same plane.
@@ -1832,7 +1839,7 @@ pub fn run() {
             }
             Ok(())
         })
-        .build(context)
+        .build(tauri_context!())
         .inspect(|_| {
             reached("built");
             // Past the part of a launch that has no window in it, so the thread watching for
