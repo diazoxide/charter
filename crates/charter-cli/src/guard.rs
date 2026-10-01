@@ -68,7 +68,7 @@ struct Found {
 /// is deliberate and is not a fail-open — a guard with no command to judge has nothing to
 /// refuse, and refusing anyway would block every tool call on a harness whose payload charter
 /// does not understand.
-pub fn pretooluse(payload: &str, now: Option<&str>) -> ExitCode {
+pub fn pretooluse(payload: &str, now: Option<&str>) -> crate::hooks::Answered {
     // Bookkeeping first, as the Python does: a refusal below still means the session was here.
     crate::hooks::with_hook(
         payload,
@@ -125,16 +125,26 @@ pub fn pretooluse(payload: &str, now: Option<&str>) -> ExitCode {
         },
     };
     if let Some(verdict) = toolgate::verdict(&call, plane.as_ref()) {
-        return deny(&verdict);
+        return crate::hooks::Answered {
+            code: deny(&verdict),
+            decision: charter_core::hookwire::Decision::Deny,
+            rule: Some(verdict.reason.clone()),
+        };
     }
     // Nothing refused, so the persona tool gate is asked. Its answer is an allow or nothing;
     // one it could not print is simply the ordinary prompt.
+    let mut decision = charter_core::hookwire::Decision::None;
     if let Some(allow) =
         crate::hooks::with_hook(payload, now, charter_core::toolhooks::persona_allow)
     {
         crate::hooks::say(&allow);
+        decision = crate::hooks::decision_said(&allow);
     }
-    ExitCode::SUCCESS
+    crate::hooks::Answered {
+        code: ExitCode::SUCCESS,
+        decision,
+        rule: None,
+    }
 }
 
 /// From here on, a panic anywhere in this process is a refusal: exit 2, one line on stderr.
@@ -152,8 +162,16 @@ pub fn pretooluse(payload: &str, now: Option<&str>) -> ExitCode {
 ///
 /// Only for a `PreToolUse` word. A crash on a reporting hook must never exit 2, which on `Stop`
 /// would keep a session from ending.
-pub(crate) fn refuse_on_a_crash() {
-    std::panic::set_hook(Box::new(|info| {
+pub(crate) fn refuse_on_a_crash(tell_the_host: fn(&str)) {
+    // The word this process answers, for the host's event log: the call is refused, and one
+    // event says so (FD-9).
+    // `args_os`, read before anything is installed: `args` panics on a word that is not
+    // UTF-8, and nothing on the way to this hook may panic.
+    let word = std::env::args_os()
+        .nth(2)
+        .map(|word| word.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    std::panic::set_hook(Box::new(move |info| {
         let at = info
             .location()
             .map(|at| format!(" (at {}:{})", at.file(), at.line()))
@@ -165,6 +183,8 @@ pub(crate) fn refuse_on_a_crash() {
              could answer, and a guard that could not answer does not allow."
         );
         let _ = err.flush();
+        drop(err);
+        tell_the_host(&word);
         std::process::exit(i32::from(DENY_EXIT));
     }));
 }

@@ -534,6 +534,42 @@ pub fn identity_note(vault: &registry::Vault) -> String {
     }
 }
 
+/// The key of `len` random bytes kept at `path`, made on first use: what `fingerprint.key` and
+/// the event log's `args.key` are.
+///
+/// Read and written from `trust`, never through a link (#440): a key that is a link, or a
+/// directory on the way that is one, gives no key at all, because a linked file of the right
+/// length would otherwise BE the key, and no new key is written there either. A key of the
+/// wrong length is made again, never used short. A new key is replaced whole, `0600` before a
+/// byte of it lands (#434), so a crash leaves the old key rather than a short one.
+pub fn key_file(trust: &Path, path: &Path, len: usize) -> std::io::Result<Vec<u8>> {
+    match crate::contain::read_no_link(trust, path) {
+        Ok(existing) if existing.len() == len => return Ok(existing),
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| std::io::Error::other("a key file has a directory"))?;
+    // Gated before the directory is made, so a linked directory is not made through either.
+    crate::contain::no_link_on_the_way(trust, parent)?;
+    make_private_dir(parent)?;
+    // Drawn word by word from the OS rather than filled into a zeroed buffer, so no constant
+    // ever stands where a key goes.
+    let mut key = Vec::with_capacity(len + 8);
+    while key.len() < len {
+        key.extend(
+            getrandom::u64()
+                .map_err(std::io::Error::other)?
+                .to_le_bytes(),
+        );
+    }
+    key.truncate(len);
+    crate::rewrite::replace(trust, path, &key, crate::rewrite::Mode::Secret)?;
+    Ok(key)
+}
+
 /// Create `dir` and every missing level above it at 0700 — `base.make_private_dir`. A
 /// directory that already exists is left exactly as it is.
 pub fn make_private_dir(dir: &Path) -> std::io::Result<()> {

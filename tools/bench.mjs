@@ -165,6 +165,8 @@ function activate(pid) {
  * `~/.config/charter`, and would measure a store the operator's real use keeps growing.
  */
 const COLD_START_CONFIG_HOME = join(tmpdir(), "charter-bench-cold-start-config");
+// The host's event log (FD-9) goes here, not into the operator's own data home.
+const COLD_START_DATA_HOME = join(tmpdir(), "charter-bench-cold-start-data");
 
 /**
  * A plane for cold start to launch in, holding a record of `chats` chats to put back.
@@ -230,6 +232,7 @@ async function launchOnce(cwd, profile) {
       CHARTER_ROOT: cwd,
       CHARTER_PLANE_FENCE: tmpdir(),
       CHARTER_CONFIG_HOME: COLD_START_CONFIG_HOME,
+      CHARTER_DATA_HOME: COLD_START_DATA_HOME,
       ...profile,
     },
   });

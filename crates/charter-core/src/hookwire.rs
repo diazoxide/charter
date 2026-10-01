@@ -137,6 +137,10 @@ pub struct Report {
     /// the chat has not seen, and only the pid says which happened.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pid: Option<u32>,
+    /// The sub-agent this came from, where the payload's `agent_id` names one on a harness
+    /// where that field was measured to mean a sub-agent (ADR 0066, a child run).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
     /// What the harness said about this event beyond its name: what a `SessionStart` was for,
     /// and what a `SessionEnd` was for. Each is meaningless on the other's event and ignored
     /// there.
@@ -175,6 +179,7 @@ impl Report {
             pid: env(CLAUDE_PID_ENV)
                 .and_then(|pid| pid.parse().ok())
                 .filter(|pid| *pid > 0),
+            agent: sub_agent(field("agent_id").as_deref(), env),
             detail: Detail {
                 started: Started::of(source.as_deref()),
                 ending: Ending::of(reason.as_deref()),
@@ -182,6 +187,23 @@ impl Report {
         })
     }
 }
+
+/// The sub-agent a payload's `agent_id` names, only on a harness where that field was measured
+/// to mean one ([`crate::handoffguard::Caller::from_a_subagent`]): elsewhere it is no agent.
+pub fn sub_agent(agent_id: Option<&str>, env: &dyn Fn(&str) -> Option<String>) -> Option<String> {
+    let harness = env(HARNESS_ENV);
+    let caller = crate::handoffguard::Caller {
+        agent_id,
+        harness: harness.as_deref(),
+        permission_mode: None,
+    };
+    caller
+        .from_a_subagent()
+        .then(|| agent_id.unwrap_or_default().to_owned())
+}
+
+/// The harness a chat runs, as charter put it into the chat's environment.
+pub const HARNESS_ENV: &str = "CHARTER_HARNESS";
 
 /// Which conversation this report is of, and how well that is known.
 ///
@@ -601,6 +623,8 @@ enum Line {
     Saved(SessionSaved),
     /// After every other kind: it requires `commit_refused`, which none of them carries.
     Refused(CommitRefused),
+    /// After every other kind: it requires `tool_hook`, which none of them carries.
+    Tool(ToolCall),
 }
 
 impl Line {
@@ -614,6 +638,7 @@ impl Line {
             Self::ByHand(notice) => notice.chat,
             Self::Saved(saved) => saved.chat,
             Self::Refused(refused) => refused.chat,
+            Self::Tool(call) => call.chat,
         }
     }
 }
@@ -692,6 +717,76 @@ pub struct CommitRefused {
 /// What hears a [`CommitRefused`].
 pub type Refused = Box<dyn Fn(CommitRefused) + Send + Sync + 'static>;
 
+/// A tool hook ran: what the host's event log records of it (FD-9, #649).
+///
+/// **Neither a report nor an ask, and it moves no chat.** Every tool hook `charter hook`
+/// answers sends one, after it has answered, so the host has one event per hook call. It never
+/// carries the tool's arguments: `args` is their SHA-256 ([`crate::eventlog::args_hash`]), which
+/// the host keys again before anything is written. A line that cannot be sent changes nothing
+/// about the answer the harness was given.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ToolCall {
+    /// The app's number for the chat the hook ran in, from [`CHAT_ENV`].
+    pub chat: u32,
+    /// The hook's word: `pretooluse`, `pretooluse-read`, `posttooluse`, ….
+    pub tool_hook: String,
+    /// The tool, by the harness's name for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+    /// The harness's id for this one call, which pairs its pre hook with its post hook.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub call: Option<String>,
+    /// SHA-256 of the arguments, in hex. Never the arguments.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<String>,
+    /// What charter's hook answered.
+    #[serde(default)]
+    pub decision: Decision,
+    /// The guard rule that refused, for a `deny`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule: Option<String>,
+    /// How long charter's hook took, in milliseconds.
+    #[serde(default)]
+    pub hook_ms: u64,
+    /// The sub-agent that made the call ([`Report::agent`]'s rule).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    /// When the hook began, in milliseconds since 1970 by the hook's own clock: what pairs a
+    /// call's pre and post hooks into a duration whichever the host hears first. 0 is unknown.
+    #[serde(default)]
+    pub at_ms: u64,
+}
+
+/// What a tool hook answered the harness.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Decision {
+    /// It allowed the call.
+    Allow,
+    /// It asked the operator.
+    Ask,
+    /// It refused the call.
+    Deny,
+    /// It said nothing either way, so the harness decides as it would have.
+    #[default]
+    None,
+}
+
+impl Decision {
+    /// The word an event records.
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Allow => "allow",
+            Self::Ask => "ask",
+            Self::Deny => "deny",
+            Self::None => "none",
+        }
+    }
+}
+
+/// What hears a [`ToolCall`].
+pub type Tooled = Box<dyn Fn(ToolCall) + Send + Sync + 'static>;
+
 /// Who hears each kind of line on the hook channel ([`Listener::hear`]): one field per kind, so
 /// a kind added later is a field every caller is made to answer.
 pub struct Hearing {
@@ -705,6 +800,8 @@ pub struct Hearing {
     pub saved: Saved,
     /// Every [`CommitRefused`].
     pub refused: Refused,
+    /// Every [`ToolCall`].
+    pub tool: Tooled,
 }
 
 /// Sends one report to the socket at `path`. Answers whether the app took it.
@@ -761,7 +858,45 @@ pub fn tell_refused(
     one_line_with_a_deadline(path, token, refused)
 }
 
-/// One connection, one line, closed, and at most [`A_NOTICE_TAKES_AT_MOST`] spent writing it.
+/// Tells the app at `path` a tool hook ran. [`tell`]'s shape and deadline: the hook has
+/// already answered the harness, and nothing this does can change that answer.
+#[cfg(unix)]
+pub fn tell_tool(
+    path: &std::path::Path,
+    token: Option<&ChatToken>,
+    call: &ToolCall,
+) -> io::Result<()> {
+    one_line_with_a_deadline(path, token, call)
+}
+
+/// `act`, or an error once `deadline` has passed without it finishing.
+#[cfg(unix)]
+///
+/// On a thread of its own, as `charter hook`'s payload read is: a `connect` to a socket whose
+/// backlog is full blocks, on Linux, for as long as the app does not accept, and an app that
+/// is frozen never does. A guard's verdict must never wait on that, so the act is let go and
+/// left to finish or fail on its own; the process is on its way out anyway.
+#[cfg(unix)]
+fn within(
+    deadline: std::time::Duration,
+    act: impl FnOnce() -> io::Result<()> + Send + 'static,
+) -> io::Result<()> {
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("charter-hook-notice".into())
+        .spawn(move || {
+            let _ = done.send(act());
+        })?;
+    finished.recv_timeout(deadline).unwrap_or_else(|_| {
+        Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "the app did not take the line in time",
+        ))
+    })
+}
+
+/// One connection, one line, closed, and at most [`A_NOTICE_TAKES_AT_MOST`] spent connecting
+/// and writing it.
 #[cfg(unix)]
 fn one_line_with_a_deadline(
     path: &std::path::Path,
@@ -770,10 +905,15 @@ fn one_line_with_a_deadline(
 ) -> io::Result<()> {
     use std::io::Write;
 
-    let mut socket = std::os::unix::net::UnixStream::connect(path)?;
-    socket.set_write_timeout(Some(A_NOTICE_TAKES_AT_MOST))?;
-    socket.write_all(&line_with(token, line)?)?;
-    socket.flush()
+    let bytes = line_with(token, line)?;
+    let path = path.to_path_buf();
+    // The connect as well as the write is bounded: see [`within`].
+    within(A_NOTICE_TAKES_AT_MOST, move || {
+        let mut socket = std::os::unix::net::UnixStream::connect(&path)?;
+        socket.set_write_timeout(Some(A_NOTICE_TAKES_AT_MOST))?;
+        socket.write_all(&bytes)?;
+        socket.flush()
+    })
 }
 
 /// How long [`tell`] and [`tell_saved`] may spend writing their line: a line is under 4 KiB and the app reads it on
@@ -977,6 +1117,7 @@ impl Listener {
             noticed,
             saved,
             refused: Box::new(|_| {}),
+            tool: Box::new(|_| {}),
         })
     }
 
@@ -989,6 +1130,7 @@ impl Listener {
         let stopped = std::sync::Arc::clone(&stopping);
         let hearing = std::sync::Arc::new(hearing);
         let tokens = std::sync::Arc::clone(&self.tokens);
+        let turns = std::sync::Arc::new(InTurn::new());
         let reading = std::thread::spawn(move || {
             let mut dealt: u64 = 0;
             for connection in self.socket.incoming() {
@@ -1015,16 +1157,20 @@ impl Listener {
                 // are mid-write, which is almost always none.
                 let hearing = std::sync::Arc::clone(&hearing);
                 let tokens = std::sync::Arc::clone(&tokens);
+                let serving = std::sync::Arc::clone(&turns);
                 dealt += 1;
                 let this = dealt;
                 let started = std::thread::Builder::new()
                     .name("charter-hook-report".into())
                     .spawn(move || {
-                        serve(connection, this, &tokens, &hearing);
+                        serve(connection, this, &tokens, &hearing, &serving);
                     });
                 // A thread that will not start costs this one report. Refusing the rest of
-                // the channel over it would cost every report after it too.
-                let _ = started;
+                // the channel over it would cost every report after it too, and so would a
+                // turn left waiting for a connection nobody serves.
+                if started.is_err() {
+                    turns.done(this);
+                }
             }
         });
         Reading {
@@ -1124,7 +1270,13 @@ fn serve(
     this: u64,
     tokens: &ChatTokens,
     hearing: &Hearing,
+    turns: &InTurn,
 ) {
+    let mut turn = Turn {
+        turns,
+        this,
+        done: false,
+    };
     use std::io::{BufRead, Read, Write};
 
     // Both directions: a client that connects and neither writes nor closes must not hold
@@ -1159,9 +1311,17 @@ fn serve(
             );
             return;
         }
+        // The first line waits for the connections that arrived before this one (FD-9).
+        if !turn.done {
+            turns.wait(this);
+        }
+        let first = !turn.done;
         match line {
             Line::Report(report) => (hearing.each)(report),
             Line::Ask(ask) => {
+                // An ask is answered for as long as opening a chat takes, and nothing about
+                // the order of hook calls hangs on it: the turn is let go before it is.
+                turn.finish();
                 let Ok(mut said) = serde_json::to_vec(&(hearing.answer)(this, ask)) else {
                     return;
                 };
@@ -1173,9 +1333,110 @@ fn serve(
             Line::ByHand(notice) => (hearing.noticed)(notice),
             Line::Saved(record) => (hearing.saved)(record),
             Line::Refused(refused) => (hearing.refused)(refused),
+            Line::Tool(call) => (hearing.tool)(call),
+        }
+        if first {
+            turn.finish();
         }
     }
 }
+
+/// The order connections arrived in, which their first lines are handed on in (FD-9).
+///
+/// **A thread per connection reads lines in whatever order the threads are scheduled**, and
+/// the host's event log wants the order the hooks ran in: a tool call's post hook connects only
+/// after its pre hook has exited, so it should be recorded after it. Each connection is dealt
+/// a number as it is accepted, and hands its first line to its hearer only once every earlier
+/// connection's hearer has returned, which in the app is once that line is recorded.
+///
+/// **Best effort: ordered unless a recording takes longer than [`A_TURN_IS_WAITED_AT_MOST`].**
+/// A connection that says nothing, or a hearer that is slow, holds the ones after it for that
+/// long at most, so the channel is never held hostage by one; past it, lines can be recorded
+/// out of order, and the event log's pairing of a tool call's two ends does not depend on the
+/// order (`eventlog::Recorder::tool`). An ask lets its turn go before it is answered.
+#[cfg(unix)]
+struct InTurn {
+    /// The lowest number not yet done, and the numbers above it that are.
+    state: std::sync::Mutex<(u64, std::collections::BTreeSet<u64>)>,
+    turned: std::sync::Condvar,
+}
+
+#[cfg(unix)]
+impl InTurn {
+    fn new() -> Self {
+        Self {
+            state: std::sync::Mutex::new((1, std::collections::BTreeSet::new())),
+            turned: std::sync::Condvar::new(),
+        }
+    }
+
+    /// Waits until every connection before `this` is done, or the wait has gone on too long.
+    fn wait(&self, this: u64) {
+        let until = std::time::Instant::now() + A_TURN_IS_WAITED_AT_MOST;
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        while state.0 < this {
+            let left = until.saturating_duration_since(std::time::Instant::now());
+            if left.is_zero() {
+                return;
+            }
+            state = self
+                .turned
+                .wait_timeout(state, left)
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .0;
+        }
+    }
+
+    /// Marks `this` done: its first line is handed on, or it never had one.
+    fn done(&self, this: u64) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.1.insert(this);
+        loop {
+            let next = state.0;
+            if !state.1.remove(&next) {
+                break;
+            }
+            state.0 += 1;
+        }
+        drop(state);
+        self.turned.notify_all();
+    }
+}
+
+/// Marks a connection done however its serving ends.
+#[cfg(unix)]
+struct Turn<'a> {
+    turns: &'a InTurn,
+    this: u64,
+    done: bool,
+}
+
+#[cfg(unix)]
+impl Turn<'_> {
+    fn finish(&mut self) {
+        if !self.done {
+            self.done = true;
+            self.turns.done(self.this);
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for Turn<'_> {
+    fn drop(&mut self) {
+        self.finish();
+    }
+}
+
+/// How long a line waits for the lines whose connections arrived before it.
+#[cfg(unix)]
+const A_TURN_IS_WAITED_AT_MOST: std::time::Duration = std::time::Duration::from_millis(50);
 
 /// A listener being read on its own thread. Dropping it stops the reading.
 #[cfg(unix)]
@@ -1461,6 +1722,7 @@ mod tests {
             event: Event::Notification,
             conversation: Conversation::Named("abc".to_owned()),
             pid: Some(99),
+            agent: None,
             detail: Detail::default(),
         };
         send(&path, Some(&token), &sent).expect("the app took it");
@@ -1495,6 +1757,7 @@ mod tests {
                             event: Event::Stop,
                             conversation: Conversation::Unknown,
                             pid: None,
+                            agent: None,
                             detail: Detail::default(),
                         },
                     )
@@ -1550,6 +1813,7 @@ mod tests {
             event: Event::Stop,
             conversation: Conversation::Unknown,
             pid: None,
+            agent: None,
             detail: Detail::default(),
         };
         send(&path, Some(&token), &good).expect("the app took it");
@@ -1589,6 +1853,7 @@ mod tests {
             event: Event::Stop,
             conversation: Conversation::Unknown,
             pid: None,
+            agent: None,
             detail: Detail::default(),
         };
         send(&path, Some(&token), &good).expect("the app took it");
@@ -1696,6 +1961,7 @@ mod tests {
             event: Event::Stop,
             conversation: Conversation::Unknown,
             pid: None,
+            agent: None,
             detail: Detail::default(),
         };
         send(&path, Some(&token), &good).expect("the app took it");
@@ -1926,6 +2192,7 @@ mod tests {
                 event: Event::Stop,
                 conversation: Conversation::Unknown,
                 pid: None,
+                agent: None,
                 detail: Detail::default(),
             },
         );
@@ -1948,6 +2215,7 @@ mod tests {
             event: Event::Stop,
             conversation: Conversation::Unknown,
             pid: None,
+            agent: None,
             detail: Detail::default(),
         };
         let wire = line_with(Some(&ChatToken::from("t")), &report).expect("it serialises");
@@ -2469,6 +2737,7 @@ mod tests {
             event: Event::Stop,
             conversation: Conversation::Unknown,
             pid: None,
+            agent: None,
             detail: Detail::default(),
         })
         .unwrap();
@@ -2535,6 +2804,7 @@ mod tests {
             event: Event::Stop,
             conversation: Conversation::Unknown,
             pid: None,
+            agent: None,
             detail: Detail::default(),
         })
         .unwrap();
@@ -2557,6 +2827,115 @@ mod tests {
             serde_json::from_str::<Line>(&line),
             Ok(Line::Saved(_))
         ));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_line_is_handed_on_after_every_line_whose_connection_arrived_before_it() {
+        let turns = std::sync::Arc::new(InTurn::new());
+        let (tx, rx) = mpsc::channel();
+        let second = {
+            let turns = std::sync::Arc::clone(&turns);
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                turns.wait(2);
+                tx.send(2).unwrap();
+                turns.done(2);
+            })
+        };
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        tx.send(1).unwrap();
+        turns.done(1);
+        second.join().unwrap();
+
+        assert_eq!(rx.try_iter().collect::<Vec<_>>(), vec![1, 2]);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_connection_that_never_says_anything_holds_the_next_one_only_so_long() {
+        let turns = InTurn::new();
+        let began = std::time::Instant::now();
+
+        turns.wait(2);
+
+        assert!(
+            began.elapsed() < A_TURN_IS_WAITED_AT_MOST * 4,
+            "{:?}",
+            began.elapsed()
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_notice_that_cannot_be_delivered_in_time_is_given_up_on_and_does_not_hold_the_hook() {
+        let began = std::time::Instant::now();
+
+        let gave_up = within(std::time::Duration::from_millis(50), || {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            Ok(())
+        });
+
+        assert!(gave_up.is_err());
+        assert!(
+            began.elapsed() < std::time::Duration::from_secs(2),
+            "{:?}",
+            began.elapsed()
+        );
+        assert!(within(std::time::Duration::from_secs(1), || Ok(())).is_ok());
+    }
+
+    #[test]
+    fn a_tool_call_is_its_own_line_and_is_handed_to_the_app_with_its_chats_token() {
+        let call = ToolCall {
+            chat: 4,
+            tool_hook: "pretooluse".to_owned(),
+            tool: Some("Bash".to_owned()),
+            call: Some("toolu_01".to_owned()),
+            args: Some("ab".repeat(32)),
+            decision: Decision::Deny,
+            rule: Some("no-force-push".to_owned()),
+            hook_ms: 2,
+            agent: None,
+            at_ms: 0,
+        };
+        let line = serde_json::to_string(&call).unwrap();
+        assert!(
+            matches!(serde_json::from_str::<Line>(&line), Ok(Line::Tool(_))),
+            "{line}"
+        );
+        for other in [
+            serde_json::to_string(&saved()).unwrap(),
+            r#"{"chat":4,"event":"stop"}"#.to_owned(),
+        ] {
+            assert!(
+                !matches!(serde_json::from_str::<Line>(&other), Ok(Line::Tool(_))),
+                "no older line reads as a tool call: {other}"
+            );
+        }
+
+        let dir = tempfile::tempdir().expect("a directory");
+        let path = dir.path().join("hooks.sock");
+        let listener = Listener::bind(dir.path(), &path).expect("a socket");
+        let token = listener.tokens().issue(4).expect("a token");
+        let (tx, rx) = mpsc::channel();
+        let tx = std::sync::Mutex::new(tx);
+        let _reading = listener.hear(Hearing {
+            each: Box::new(|_| panic!("no report was sent")),
+            answer: Box::new(|_, _| panic!("no ask was sent")),
+            noticed: Box::new(|_| panic!("no harness was started by hand")),
+            saved: Box::new(|_| panic!("no record was saved")),
+            refused: Box::new(|_| panic!("no commit was refused")),
+            tool: Box::new(move |call| tx.lock().unwrap().send(call).unwrap()),
+        });
+        tell_tool(&path, None, &call).expect("the line is written");
+        tell_tool(&path, Some(&token), &call).expect("the line is written");
+        assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(5)), Ok(call));
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_millis(200))
+                .is_err(),
+            "the line without the chat's token was dropped"
+        );
     }
 
     #[test]
@@ -2588,6 +2967,7 @@ mod tests {
             noticed: Box::new(|_| panic!("no harness was started by hand")),
             saved: Box::new(|_| panic!("no record was saved")),
             refused: Box::new(move |refused| tx.lock().unwrap().send(refused).unwrap()),
+            tool: Box::new(|_| panic!("no tool hook ran")),
         });
         // Without the token it is dropped, as every line is.
         tell_refused(&path, None, &refused).expect("the line is written");
@@ -2627,6 +3007,7 @@ mod tests {
                 event: Event::Stop,
                 conversation: Conversation::Unknown,
                 pid: None,
+                agent: None,
                 detail: Detail::default(),
             },
         )
@@ -2654,6 +3035,7 @@ mod tests {
             event: Event::Stop,
             conversation: Conversation::Unknown,
             pid: None,
+            agent: None,
             detail: Detail::default(),
         }
     }

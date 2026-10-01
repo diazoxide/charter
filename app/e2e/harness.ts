@@ -80,6 +80,7 @@ export function theRunsEnvironment(
   return {
     CHARTER_ROOT: plane,
     CHARTER_CONFIG_HOME: aConfigHomeOfItsOwn(),
+    CHARTER_DATA_HOME: aDataHomeOfItsOwn(),
     CHARTER_PLANE_FENCE: THE_RUNS_TREE,
     // The app's diagnostic log (#647) goes with the rest of the run's evidence, never into the
     // runner's own log directory.
@@ -536,6 +537,15 @@ export function anEmptyRecord(plane: string): void {
  */
 export function aConfigHomeOfItsOwn(): string {
   return mkdtempSync(join(THE_RUNS_TREE, "config-"));
+}
+
+/**
+ * A data home of this run's own (`<data>`, ADR 0075), where the app keeps the host's event log
+ * (FD-9). Left alone, a run would append its throwaway chats' events to the runner's own log,
+ * and a fenced app would die opening it: the data home is a machine store the fence holds.
+ */
+export function aDataHomeOfItsOwn(): string {
+  return mkdtempSync(join(THE_RUNS_TREE, "data-"));
 }
 
 /**

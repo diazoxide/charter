@@ -43,6 +43,11 @@ use crate::sessions::{Reporting, Sessions};
 pub struct PlaneId(String);
 
 impl PlaneId {
+    /// The root this id names.
+    pub fn root(&self) -> &Path {
+        Path::new(&self.0)
+    }
+
     /// The id of a root that has already been resolved.
     fn of(root: &Path) -> Self {
         Self(root.display().to_string())
@@ -578,6 +583,9 @@ pub struct Planes {
     /// Makes each plane's session host (FD-3): [`Sessions`] in the app, told where its chats
     /// report.
     hosting: Hosting,
+    /// The host's event log (FD-9), shared by every project: one writer per device. None until
+    /// the app opens it, and on a machine that has no data home.
+    events: Option<hooks::Events>,
 }
 
 /// Makes a plane's session host, given where its chats are to report.
@@ -644,7 +652,14 @@ impl Planes {
             smart: Arc::new(|_| {}),
             relaunching: Mutex::new(Relaunching::default()),
             hosting: Arc::new(|reporting| Box::new(Sessions::reporting_to(reporting))),
+            events: None,
         }
+    }
+
+    /// Records every hook call of every project this registry holds into `events` (FD-9).
+    pub fn recording_events(mut self, events: Option<hooks::Events>) -> Self {
+        self.events = events;
+        self
     }
 
     /// Runs every plane's sessions on the hosts `hosting` makes, rather than in this process.
@@ -1303,6 +1318,9 @@ impl Planes {
             );
             Hooks::deaf(id.clone())
         });
+        if let Some(events) = &self.events {
+            hooks.record_into(Arc::clone(events));
+        }
         let reporting = hooks.reporting();
 
         let records = Arc::new(Records {
@@ -4271,6 +4289,7 @@ mod tests {
                 event: charter_core::state::Event::Stop,
                 conversation: charter_core::hookwire::Conversation::Unknown,
                 pid: None,
+                agent: None,
                 detail: charter_core::state::Detail::default(),
             },
         )
@@ -4287,6 +4306,7 @@ mod tests {
                 event: charter_core::state::Event::UserPromptSubmit,
                 conversation: charter_core::hookwire::Conversation::Unknown,
                 pid: None,
+                agent: None,
                 detail: charter_core::state::Detail::default(),
             },
         )
@@ -4303,6 +4323,7 @@ mod tests {
                 event,
                 conversation: charter_core::hookwire::Conversation::Unknown,
                 pid: None,
+                agent: None,
                 detail: charter_core::state::Detail::default(),
             },
         )
@@ -5067,6 +5088,7 @@ mod tests {
             event: Stop,
             conversation: charter_core::hookwire::Conversation::Unknown,
             pid: None,
+            agent: None,
             detail: charter_core::state::Detail::default(),
         };
         held.hooks().board().reported(&stop);
@@ -5728,6 +5750,7 @@ mod tests {
             held.hooks().socket().expect("the plane is listening"),
             Some(&held.hooks().token_for(session)),
             &charter_core::hookwire::Report {
+                agent: None,
                 chat: session,
                 event,
                 conversation,

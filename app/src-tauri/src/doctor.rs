@@ -140,7 +140,7 @@ pub(crate) fn report(root: &std::path::Path, full: bool) -> DoctorReport {
             .into_iter()
             .map(DoctorRow::from)
             .collect(),
-        app_rows: vec![chat_footer(root)],
+        app_rows: vec![chat_footer(root), event_log(crate::EVENT_LOG.get())],
         full,
         path: std::env::var_os("PATH").map(|p| p.to_string_lossy().into_owned()),
     }
@@ -243,6 +243,60 @@ fn chat_footer(root: &std::path::Path) -> DoctorRow {
     }
 }
 
+/// `event log`: is this app recording its chats' hook calls (FD-9), and if not, why not?
+///
+/// **The app's own row**, for `chat_footer`'s reason: the log is opened by the app, and only the
+/// app knows whether that worked. `opened` is what this process's open answered; `None` is a
+/// process that never tried, which is not health either. The hint is the repair for the reason
+/// it failed, not one repair for every reason.
+fn event_log(opened: Option<&Result<std::path::PathBuf, crate::EventLogRefused>>) -> DoctorRow {
+    use std::io::ErrorKind;
+    let row = |status: DoctorStatus, detail: String, hint: String| DoctorRow {
+        name: "event log".to_owned(),
+        status,
+        detail,
+        hint,
+        checked: true,
+    };
+    match opened {
+        Some(Ok(dir)) => row(
+            DoctorStatus::Ok,
+            format!(
+                "every hook call a chat makes is recorded in {}",
+                dir.display()
+            ),
+            "readable by your user on this machine and by a backup that carries it; a tool \
+             call's arguments are never written, only a digest keyed to this device"
+                .to_owned(),
+        ),
+        Some(Err(refused)) => row(
+            DoctorStatus::Warn,
+            format!("hook calls are not recorded ({})", refused.why),
+            match refused.kind {
+                ErrorKind::PermissionDenied | ErrorKind::NotFound => {
+                    "set CHARTER_DATA_HOME to a directory outside any project or repository, \
+                     and start charter again; every chat works meanwhile"
+                }
+                ErrorKind::WouldBlock => {
+                    "another charter on this machine is writing this device's log; quit it, \
+                     and start this one again"
+                }
+                ErrorKind::InvalidData => {
+                    "the log holds nothing charter can read; move events.jsonl aside (charter \
+                     never rewrites it), and start charter again"
+                }
+                _ => "start charter again; every chat works meanwhile",
+            }
+            .to_owned(),
+        ),
+        None => row(
+            DoctorStatus::Warn,
+            "not checked (this app has not opened its event log)".to_owned(),
+            "start charter again; the log is opened as the app starts".to_owned(),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -279,6 +333,50 @@ mod tests {
             assert_eq!(serde_json::json!(row.detail), json["detail"]);
             assert_eq!(serde_json::json!(row.hint), json["hint"]);
         }
+    }
+
+    #[test]
+    fn the_apps_own_row_says_where_hook_calls_are_recorded_or_why_they_are_not() {
+        let kept = event_log(Some(&Ok(std::path::PathBuf::from("/data/events/DEVICE"))));
+        let refused = event_log(Some(&Err(crate::EventLogRefused {
+            kind: std::io::ErrorKind::PermissionDenied,
+            why: "/repo/data is inside the git work tree at /repo".to_owned(),
+        })));
+        let busy = event_log(Some(&Err(crate::EventLogRefused {
+            kind: std::io::ErrorKind::WouldBlock,
+            why: "another host is already writing this device's event log".to_owned(),
+        })));
+        let never = event_log(None);
+
+        assert_eq!(kept.name, "event log");
+        assert_eq!(kept.status, DoctorStatus::Ok);
+        assert!(
+            kept.detail.contains("/data/events/DEVICE"),
+            "{}",
+            kept.detail
+        );
+        assert_eq!(refused.status, DoctorStatus::Warn);
+        assert!(
+            refused.detail.contains("inside the git work tree"),
+            "{}",
+            refused.detail
+        );
+        assert!(
+            refused.hint.contains("CHARTER_DATA_HOME"),
+            "{}",
+            refused.hint
+        );
+        assert_eq!(
+            never.status,
+            DoctorStatus::Warn,
+            "an absent answer is not health"
+        );
+        assert!(
+            busy.hint.contains("another charter"),
+            "the repair for that reason: {}",
+            busy.hint
+        );
+        assert!(!busy.hint.contains("CHARTER_DATA_HOME"), "{}", busy.hint);
     }
 
     #[test]

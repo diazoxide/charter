@@ -14,7 +14,7 @@
 //! a Reporter with several planes would be asked repeatedly until the safeguard became a
 //! reflex."* charter-app also already writes its panic log to Tauri's `app_log_dir()`.
 //!
-//! **Five things, and nothing else:**
+//! **Six things, and nothing else:**
 //!
 //! - **the planes recently opened**, so the opener has something to offer;
 //! - **whether the operator approved each one**, and *what it would do when opened* at the
@@ -27,9 +27,14 @@
 //!   workspaces for them once ([`Recent::most_active_pinned`], ADR 0054), which is a fact
 //!   about those pins and not a sixth thing;
 //! - **which stream this machine takes charter from** ([`Store::channel`]).
+//! - **this device's id** ([`Store::device`], [`device_id`]), argued in ADR 0066, which
+//!   amends ADR 0034 for it: a random ULID minted at the first launch that finds none, so an
+//!   event, a record or the audit can say which device it happened on without a hostname.
 //!
-//! **The fourth was three until ADR 0040, and the fifth is newer still; the count is
-//! load-bearing.** Those records are the amendments: the operator ruled on 2026-09-22 that a
+//! **The fourth was three until ADR 0040, and the fifth and sixth are newer still; the count
+//! is load-bearing.** ADR 0040 and ADR 0066 are the amendments: ADR 0066 argues the sixth (a
+//! device needs one id that every event and record names it by, and no project can hold it,
+//! because one machine holds many projects). For the fourth, the operator ruled on 2026-09-22 that a
 //! pin is how one operator likes their window rather than a fact about the plane, so it
 //! cannot be committed to `charter.toml`, where it would arrive with every clone and put
 //! somebody else's workspace first on a strip its operator never arranged. The whole value of
@@ -888,6 +893,56 @@ pub struct Store {
     /// The fifth thing, and the first that is not about planes at all — the module note above
     /// says why it is here and why the count had to be argued again.
     pub channel: crate::updates::Channel,
+    /// This device's id, once one has been asked for ([`device_id`]).
+    pub device: Option<Device>,
+}
+
+/// A device's id (ADR 0066): random, minted at the first launch that finds none, and the only
+/// key anything charter records about where it happened uses. The hostname is a label.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Device {
+    /// A ULID.
+    pub id: String,
+    /// When it was minted, in seconds since the epoch.
+    pub created: u64,
+}
+
+/// This device's id, minting it the first time it is asked for.
+///
+/// Through [`update`], so two processes asking at once mint one id between them, and an
+/// unreadable store refuses rather than minting a second identity over the first. Where the
+/// store refuses (not unix, ADR 0031) there is no device id, and this says so.
+pub fn device_id(config_root: &Path) -> io::Result<String> {
+    let loaded = update(config_root, |store| {
+        if store.device.is_none() {
+            store.device = Some(Device {
+                id: ulid::Ulid::new().to_string(),
+                created: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|since| since.as_secs())
+                    .unwrap_or_default(),
+            });
+        }
+    })?;
+    loaded
+        .store
+        .device
+        .map(|device| device.id)
+        .ok_or_else(|| io::Error::other("the machine store kept no device id"))
+}
+
+/// The device off the file: an id that is not a ULID is no id, and the next ask mints one.
+fn device_of(raw: Option<&serde_json::Value>) -> Option<Device> {
+    let raw = raw?;
+    let id = raw.get("id")?.as_str()?;
+    ulid::Ulid::from_string(id).ok()?;
+    Some(Device {
+        id: id.to_owned(),
+        created: raw
+            .get("created")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or_default(),
+    })
 }
 
 impl Store {
@@ -1753,6 +1808,7 @@ fn load(doc: &serde_json::Value, dropped: &mut Vec<Dropped>) -> Store {
         recents,
         windows,
         channel: channel_of(doc.get("channel"), dropped),
+        device: device_of(doc.get("device")),
     }
 }
 
@@ -1905,6 +1961,15 @@ struct OnDisk {
     /// what was true.
     #[serde(skip_serializing_if = "is_the_default_channel")]
     channel: &'static str,
+    /// Left out until one is minted, so a store that never needed one is the file it was.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    device: Option<DeviceOnDisk>,
+}
+
+#[derive(serde::Serialize)]
+struct DeviceOnDisk {
+    id: String,
+    created: u64,
 }
 
 #[derive(serde::Serialize)]
@@ -1962,6 +2027,10 @@ impl From<&Store> for OnDisk {
                 .map(|since| since.as_secs())
                 .unwrap_or_default(),
             channel: store.channel.name(),
+            device: store.device.as_ref().map(|device| DeviceOnDisk {
+                id: device.id.clone(),
+                created: device.created,
+            }),
             recents: store
                 .recents
                 .iter()
@@ -2098,6 +2167,50 @@ mod tests {
         assert_eq!(back.store, store);
         assert_eq!(back.dropped, Vec::new());
         assert_eq!(back.unreadable, None);
+    }
+
+    // The device id (ADR 0066): what events say about where they happened.
+
+    #[test]
+    fn a_device_id_is_minted_once_and_kept() {
+        let machine = machine();
+
+        let first = device_id(machine.path()).expect("a device id");
+        let again = device_id(machine.path()).expect("the same device id");
+
+        assert_eq!(first, again, "a device keeps its id");
+        assert_eq!(first.len(), 26, "a ULID: {first}");
+        let store = read(machine.path()).store;
+        assert_eq!(
+            store.device.as_ref().map(|d| d.id.as_str()),
+            Some(first.as_str())
+        );
+        assert!(store.device.unwrap().created > 0, "with when it was minted");
+    }
+
+    #[test]
+    fn an_update_that_is_not_about_the_device_keeps_its_id() {
+        let machine = machine();
+        let id = device_id(machine.path()).unwrap();
+
+        update(machine.path(), |store| {
+            store.channel = crate::updates::Channel::Dev
+        })
+        .unwrap();
+
+        assert_eq!(device_id(machine.path()).unwrap(), id);
+    }
+
+    #[test]
+    fn a_store_written_before_device_ids_reads_as_having_none() {
+        let machine = machine();
+        write(machine.path(), &one_plane()).unwrap();
+        let text = std::fs::read_to_string(file(machine.path())).unwrap();
+        assert!(
+            !text.contains("device"),
+            "nothing minted until asked: {text}"
+        );
+        assert_eq!(read(machine.path()).store.device, None);
     }
 
     // The fifth thing this file holds (ADR 0042): which stream the app updates from.

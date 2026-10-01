@@ -1256,6 +1256,93 @@ fn payload() -> String {
     rx.recv_timeout(PAYLOAD_DEADLINE).unwrap_or_default()
 }
 
+/// The rule a refused tool hook word this binary does not answer is recorded under.
+const UNKNOWN_HOOK_RULE: &str = "unknown-hook";
+
+/// The rule a tool call refused because its guard crashed is recorded under.
+pub(crate) const GUARD_CRASHED_RULE: &str = "guard-crashed";
+
+/// One [`hookwire::ToolCall`] to the host, when a host is listening: the tool, the hash of its
+/// arguments, the decision and how long the hook took. Never the arguments themselves. A host
+/// that has gone is not the harness's business, and is said only on stderr, as a report that
+/// did not arrive is.
+#[cfg(unix)]
+fn tell_the_host_about_the_tool_call(
+    word: &str,
+    payload: &str,
+    answered: &hooks::Answered,
+    took: std::time::Duration,
+) {
+    use std::io::Write as _;
+    let Some(socket) = std::env::var_os(SOCKET_ENV) else {
+        return;
+    };
+    let Some(chat) = std::env::var(hookwire::CHAT_ENV)
+        .ok()
+        .and_then(|chat| chat.parse().ok())
+    else {
+        // Never `eprintln!` here: this runs from a crashed guard's panic hook too, and a
+        // print to a closed stderr panics there, which aborts instead of refusing (exit 2).
+        let _ = writeln!(
+            std::io::stderr(),
+            "charter: this {word} names no chat (`${}` is not a chat number), so the app was \
+             not told",
+            hookwire::CHAT_ENV
+        );
+        return;
+    };
+    let data: serde_json::Value = serde_json::from_str(payload).unwrap_or_default();
+    let text = |field: &str| data[field].as_str().map(str::to_owned);
+    let call = hookwire::ToolCall {
+        chat,
+        tool_hook: word.to_owned(),
+        tool: text("tool_name"),
+        call: text("tool_use_id"),
+        args: data
+            .get("tool_input")
+            .map(charter_core::eventlog::args_hash),
+        decision: answered.decision,
+        rule: answered.rule.clone(),
+        hook_ms: u64::try_from(took.as_millis()).unwrap_or(u64::MAX),
+        agent: hookwire::sub_agent(data["agent_id"].as_str(), &|name| std::env::var(name).ok()),
+        at_ms: std::time::SystemTime::now()
+            .checked_sub(took)
+            .and_then(|began| began.duration_since(std::time::UNIX_EPOCH).ok())
+            .and_then(|since| u64::try_from(since.as_millis()).ok())
+            .unwrap_or_default(),
+    };
+    if let Err(why) = hookwire::tell_tool(
+        std::path::Path::new(&socket),
+        hookwire::ChatToken::from_env().as_ref(),
+        &call,
+    ) {
+        let _ = writeln!(
+            std::io::stderr(),
+            "charter: the app did not take this {word} ({why})"
+        );
+    }
+}
+
+/// What a crashed `PreToolUse` guard tells the host from its panic hook: the call was refused,
+/// and why. The payload is not read again in a process that is going down.
+fn tell_the_host_about_a_crash(word: &str) {
+    let answered = hooks::Answered {
+        code: ExitCode::from(BLOCK),
+        decision: hookwire::Decision::Deny,
+        rule: Some(GUARD_CRASHED_RULE.to_owned()),
+    };
+    tell_the_host_about_the_tool_call(word, "", &answered, Duration::ZERO);
+}
+
+#[cfg(not(unix))]
+fn tell_the_host_about_the_tool_call(
+    _word: &str,
+    _payload: &str,
+    _answered: &hooks::Answered,
+    _took: std::time::Duration,
+) {
+}
+
 /// `charter hook <name>` — always succeeds, whatever went wrong.
 ///
 /// **Never exit 2, except where the whole point is to.** A harness reads 2 as "block": on
@@ -1267,15 +1354,38 @@ fn payload() -> String {
 /// ([`guard::refuse_on_a_crash`]).
 fn hook(name: &str, now: Option<&str>) -> ExitCode {
     // FIRST, in front of `Event::parse`, because none of these is one of the app's reporting
-    // events: a tool call carries no chat state worth a `Report`, and a guard that also spoke
-    // on the app's socket would be two jobs on one exit status.
-    if name == GUARDED_TOOL_HOOK {
-        return guard::pretooluse(&payload(), now);
-    }
-    if let Some(answered) = hooks::tool(name, now) {
-        return answered;
+    // events: a tool call carries no chat state worth a `Report`.
+    //
+    // **The host still hears every tool call** (FD-9): after the answer is printed, one line on
+    // the hook channel says what was answered, so its event log has one event per hook call.
+    // The verdict is decided and printed before that line is sent, the exit status is the
+    // verdict's whatever the send does, and the send gives up after a bounded wait
+    // (`hookwire::tell_tool`), so a slow or frozen app never holds a guard's answer.
+    let guarded = name == GUARDED_TOOL_HOOK;
+    let handler = hooks::handler(name);
+    if guarded || handler.is_some() {
+        let began = std::time::Instant::now();
+        let text = payload();
+        let answered = match handler {
+            Some(handler) if !guarded => hooks::run(handler, &text, now),
+            _ => guard::pretooluse(&text, now),
+        };
+        tell_the_host_about_the_tool_call(name, &text, &answered, began.elapsed());
+        return answered.code;
     }
     if charter_core::hookreg::NO_OPS.contains(&name) {
+        // Answered with nothing, as ever, and still one call the host hears. The payload is
+        // read only when a host is listening, so a terminal's own harness pays nothing for it.
+        let began = std::time::Instant::now();
+        if std::env::var_os(SOCKET_ENV).is_some() {
+            let text = payload();
+            let answered = hooks::Answered {
+                code: ExitCode::SUCCESS,
+                decision: hookwire::Decision::None,
+                rule: None,
+            };
+            tell_the_host_about_the_tool_call(name, &text, &answered, began.elapsed());
+        }
         return ExitCode::SUCCESS;
     }
     let Some(event) = Event::parse(name) else {
@@ -1296,11 +1406,19 @@ fn hook(name: &str, now: Option<&str>) -> ExitCode {
         );
         // Blocking only where there is a tool call to protect. Everywhere else a refusal that
         // a harness reads as "block" would wedge the session instead of guarding anything.
-        return if tool {
-            ExitCode::from(BLOCK)
-        } else {
-            ExitCode::FAILURE
-        };
+        if !tool {
+            return ExitCode::FAILURE;
+        }
+        // A refused tool call is still one the host hears.
+        if std::env::var_os(SOCKET_ENV).is_some() {
+            let answered = hooks::Answered {
+                code: ExitCode::from(BLOCK),
+                decision: hookwire::Decision::Deny,
+                rule: Some(UNKNOWN_HOOK_RULE.to_owned()),
+            };
+            tell_the_host_about_the_tool_call(name.as_ref(), &payload(), &answered, Duration::ZERO);
+        }
+        return ExitCode::from(BLOCK);
     };
     let socket = std::env::var_os(SOCKET_ENV);
     // The payload is read once, and only when something reads it: `sessionstart` always does,
@@ -1324,6 +1442,16 @@ fn hook(name: &str, now: Option<&str>) -> ExitCode {
         return ExitCode::SUCCESS;
     };
     let report = Report::read(event, &text, &|name| std::env::var(name).ok());
+    if report.is_none() {
+        // A host is listening and this hook names no chat it started: `$CHARTER_CHAT` is
+        // missing or not a number. There is no chat to put the event under, so none is sent,
+        // and that is said rather than left for nobody to notice.
+        eprintln!(
+            "charter: this {} names no chat (`${}` is not a chat number), so the app was not told",
+            event.word(),
+            hookwire::CHAT_ENV
+        );
+    }
     if let Some(report) = &report
         && let Err(why) = hookwire::send(
             std::path::Path::new(&socket),
@@ -2646,7 +2774,7 @@ fn main() -> ExitCode {
     // FIRST, before anything that could panic, argv and clap included: a guard that crashed
     // must refuse the tool call, not allow it (#349).
     if is_a_pretooluse_call(&std::env::args_os().collect::<Vec<_>>()) {
-        guard::refuse_on_a_crash();
+        guard::refuse_on_a_crash(tell_the_host_about_a_crash);
     }
     // A warning the core raises is said on this terminal rather than dropped (#647). Output a
     // command prints on purpose never goes through it.
