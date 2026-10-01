@@ -18,7 +18,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   from the repo* tab opens beside the first chat, showing each file whole. Press Add to memory
   and every chat in that workspace starts with them, whichever agent runs it. Nothing is written
   until you press it, and nothing is ever written into your repo. A link, a file over 64 KB, or
-  one that looks like it holds a secret is left out and says why.
+  one that looks like it holds a secret is left out and says which line. A file over 8 KB, or one
+  with invisible characters, starts unticked, and the preview shows each invisible character by
+  its code point.
 
 - **Where to get help, in the app and the repository.** About Charter now links to Discussions
   for questions and ideas, to the bug report form, and to `SUPPORT.md`, which says where each

@@ -1326,7 +1326,10 @@ export type ChatWorktree = {
 	stale: boolean,
 };
 
-/**  One file the operator ticked, with the text the preview showed them. */
+/**
+ *  One file the operator ticked, with the text the preview showed them: the wire's spelling of
+ *  `repoinstructions::Shown`, which the core keeps free of serde and specta.
+ */
 export type ChosenInstruction = {
 	repo: string,
 	file: string,
@@ -1756,11 +1759,17 @@ export type InstructionFile = {
 	file: string,
 	/**  Its whole text: the preview. Empty when it was left out before it was read. */
 	text: string,
-	/**  `offered`, `in-memory` or `left-out`. */
-	standing: string,
-	/**  Why it was left out; `null` otherwise. */
-	why: string | null,
+	standing: InstructionStanding,
 };
+
+/**  Whether a file can go into memory, as `repoinstructions::Standing` says. */
+export type InstructionStanding = 
+/**  It can. `caution` is why its box starts unticked, when it does. */
+{ kind: "offered"; caution: string | null } | 
+/**  A memory already holds its text. */
+{ kind: "in-memory" } | 
+/**  It cannot, and why. */
+{ kind: "left-out"; why: string };
 
 /**
  *  What a launch had to go on, and what came of it.

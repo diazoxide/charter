@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import * as Checkbox from "@radix-ui/react-checkbox";
 import { LoaderCircle } from "lucide-react";
 import { commands, type InstructionFile, type PlaneId } from "./bindings";
@@ -34,9 +34,12 @@ export function RepoInstructionsTab({
 }) {
   const [files, setFiles] = useState<InstructionFile[]>();
   const [trouble, setTrouble] = useState<string>();
-  const [unticked, setUnticked] = useState<ReadonlySet<string>>(new Set());
+  /** The boxes the operator has pressed, by file: what each was set to. */
+  const [pressed, setPressed] = useState<ReadonlyMap<string, boolean>>(new Map());
   const [adding, setAdding] = useState(false);
   const [added, setAdded] = useState<number>();
+  /** Bumped to read the files again: after an import, and after a refusal, so what is shown is
+   *  what is on disk now and never the text the core just refused. */
   const [asked, setAsked] = useState(0);
 
   useEffect(() => {
@@ -46,7 +49,10 @@ export function RepoInstructionsTab({
       .then((answer) => {
         if (gone) return;
         if (answer.status === "error") setTrouble(answer.error);
-        else setFiles(answer.data);
+        else {
+          setFiles(answer.data);
+          setPressed(new Map());
+        }
       })
       .catch((err: unknown) => {
         if (!gone) setTrouble(String(err));
@@ -56,10 +62,11 @@ export function RepoInstructionsTab({
     };
   }, [plane, workspace, asked]);
 
-  const offered = (files ?? []).filter((one) => one.standing === "offered");
-  const ticked = offered.filter((one) => !unticked.has(named(one)));
+  const ticked = (files ?? []).filter(
+    (one) => one.standing.kind === "offered" && isTicked(one, pressed),
+  );
 
-  const add = useCallback(() => {
+  function add() {
     setAdding(true);
     setTrouble(undefined);
     void commands
@@ -70,15 +77,14 @@ export function RepoInstructionsTab({
       )
       .then((answer) => {
         if (answer.status === "error") setTrouble(answer.error);
-        else {
-          setAdded(answer.data);
-          setUnticked(new Set());
-          setAsked((was) => was + 1);
-        }
+        else setAdded(answer.data);
       })
       .catch((err: unknown) => setTrouble(String(err)))
-      .finally(() => setAdding(false));
-  }, [plane, workspace, ticked]);
+      .finally(() => {
+        setAdding(false);
+        setAsked((was) => was + 1);
+      });
+  }
 
   if (files === undefined && trouble === undefined) {
     return (
@@ -114,15 +120,8 @@ export function RepoInstructionsTab({
           <FileRow
             key={named(one)}
             file={one}
-            ticked={!unticked.has(named(one))}
-            onTicked={(on) =>
-              setUnticked((was) => {
-                const next = new Set(was);
-                if (on) next.delete(named(one));
-                else next.add(named(one));
-                return next;
-              })
-            }
+            ticked={isTicked(one, pressed)}
+            onTicked={(on) => setPressed((was) => new Map(was).set(named(one), on))}
           />
         ))}
       </ul>
@@ -145,6 +144,40 @@ function named(file: InstructionFile): string {
   return `${file.repo}/${file.file}`;
 }
 
+/** Whether `file`'s box is ticked: as the operator last pressed it, else ticked unless the core
+ *  gave a caution — a long file, or one with invisible characters, starts unticked. */
+function isTicked(file: InstructionFile, pressed: ReadonlyMap<string, boolean>): boolean {
+  const caution = file.standing.kind === "offered" ? file.standing.caution : null;
+  return pressed.get(named(file)) ?? caution === null;
+}
+
+/**
+ * Zero-width characters, the bidirectional controls and the Unicode tag block — the characters
+ * `charter_core::repoinstructions::is_invisible` names. Text the operator approves goes into
+ * every chat's briefing, so the preview draws each one as its code point instead of nothing.
+ */
+const INVISIBLE =
+  /[\u00AD\u061C\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF\u{E0000}-\u{E007F}]/u;
+
+/** `text` with every invisible character drawn as a marked `U+XXXX`. */
+function Visible({ text }: { text: string }) {
+  const parts: React.ReactNode[] = [];
+  let rest = text;
+  let at = 0;
+  for (let hit = INVISIBLE.exec(rest); hit !== null; hit = INVISIBLE.exec(rest)) {
+    parts.push(rest.slice(0, hit.index));
+    const code = (hit[0].codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, "0");
+    parts.push(
+      <mark key={at++} className="invisible-char" title="An invisible character">
+        {`U+${code}`}
+      </mark>,
+    );
+    rest = rest.slice(hit.index + hit[0].length);
+  }
+  parts.push(rest);
+  return <>{parts}</>;
+}
+
 function FileRow({
   file,
   ticked,
@@ -156,9 +189,10 @@ function FileRow({
 }) {
   const id = useId();
   const name = named(file);
+  const { standing } = file;
   return (
     <li className="choice">
-      {file.standing === "offered" ? (
+      {standing.kind === "offered" ? (
         <>
           <Checkbox.Root
             id={id}
@@ -173,15 +207,20 @@ function FileRow({
           <label className="who" htmlFor={id}>
             {name}
           </label>
+          {standing.caution !== null && <span className="meta">{standing.caution}</span>}
         </>
       ) : (
         <span className="who">
           {name}
           {": "}
-          {file.standing === "in-memory" ? "already in memory" : `left out; ${file.why ?? ""}`}
+          {standing.kind === "in-memory" ? "already in memory" : `left out; ${standing.why}`}
         </span>
       )}
-      {file.text !== "" && <pre className="repo-instruction-text">{file.text}</pre>}
+      {file.text !== "" && (
+        <pre className="repo-instruction-text">
+          <Visible text={file.text} />
+        </pre>
+      )}
     </li>
   );
 }

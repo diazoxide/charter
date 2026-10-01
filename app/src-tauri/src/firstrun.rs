@@ -74,13 +74,23 @@ pub struct InstructionFile {
     pub file: String,
     /// Its whole text: the preview. Empty when it was left out before it was read.
     pub text: String,
-    /// `offered`, `in-memory` or `left-out`.
-    pub standing: String,
-    /// Why it was left out; `null` otherwise.
-    pub why: Option<String>,
+    pub standing: InstructionStanding,
 }
 
-/// One file the operator ticked, with the text the preview showed them.
+/// Whether a file can go into memory, as `repoinstructions::Standing` says.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum InstructionStanding {
+    /// It can. `caution` is why its box starts unticked, when it does.
+    Offered { caution: Option<String> },
+    /// A memory already holds its text.
+    InMemory,
+    /// It cannot, and why.
+    LeftOut { why: String },
+}
+
+/// One file the operator ticked, with the text the preview showed them: the wire's spelling of
+/// `repoinstructions::Shown`, which the core keeps free of serde and specta.
 #[derive(Debug, Clone, serde::Deserialize, specta::Type)]
 pub struct ChosenInstruction {
     pub repo: String,
@@ -158,7 +168,7 @@ fn offered(root: &Path, ws: &str) -> u32 {
     repoinstructions::found(root, ws).map_or(0, |found| {
         let count = found
             .iter()
-            .filter(|one| one.standing == Standing::Offered)
+            .filter(|one| matches!(one.standing, Standing::Offered { .. }))
             .count();
         u32::try_from(count).unwrap_or(u32::MAX)
     })
@@ -205,19 +215,15 @@ pub async fn import_instructions(
 fn instruction_files(root: &Path, workspace: &str) -> Result<Vec<InstructionFile>, String> {
     Ok(repoinstructions::found(root, workspace)?
         .into_iter()
-        .map(|one| {
-            let (standing, why) = match one.standing {
-                Standing::Offered => ("offered", None),
-                Standing::InMemory => ("in-memory", None),
-                Standing::LeftOut(why) => ("left-out", Some(why)),
-            };
-            InstructionFile {
-                repo: one.repo,
-                file: one.file,
-                text: one.text,
-                standing: standing.to_owned(),
-                why,
-            }
+        .map(|one| InstructionFile {
+            repo: one.shown.repo,
+            file: one.shown.file,
+            text: one.shown.text,
+            standing: match one.standing {
+                Standing::Offered { caution } => InstructionStanding::Offered { caution },
+                Standing::InMemory => InstructionStanding::InMemory,
+                Standing::LeftOut(why) => InstructionStanding::LeftOut { why },
+            },
         })
         .collect())
 }
@@ -228,9 +234,9 @@ fn imported(
     chosen: &[ChosenInstruction],
     stamp: chrono::NaiveDateTime,
 ) -> Result<u32, String> {
-    let chosen: Vec<repoinstructions::Chosen> = chosen
+    let chosen: Vec<repoinstructions::Shown> = chosen
         .iter()
-        .map(|one| repoinstructions::Chosen {
+        .map(|one| repoinstructions::Shown {
             repo: one.repo.clone(),
             file: one.file.clone(),
             text: one.text.clone(),
@@ -391,8 +397,7 @@ mod tests {
                 repo: "widget".into(),
                 file: "AGENTS.md".into(),
                 text: "Run make check.\n".into(),
-                standing: "offered".into(),
-                why: None,
+                standing: InstructionStanding::Offered { caution: None },
             }]
         );
         let workspace = charter_core::workspaces::Plane::open(&root)
@@ -414,7 +419,7 @@ mod tests {
         assert_eq!(offered(&root, &taken.workspace), 0);
         assert_eq!(
             instruction_files(&root, "widget").expect("read")[0].standing,
-            "in-memory"
+            InstructionStanding::InMemory
         );
     }
 }

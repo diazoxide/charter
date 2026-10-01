@@ -28,9 +28,16 @@
 //! A `.cursor` or `rules` directory that is a link is not walked at all.
 //!
 //! **A file that looks like it holds a secret is left out**, by the rule a plane save refuses a
-//! staged file by ([`crate::secretshape::found`]): memory is never where a secret goes. So is
-//! one larger than [`LARGEST`] or not UTF-8. Each says why, so a file that is missing from the
-//! offer is never merely missing.
+//! staged file by ([`crate::secretshape::found`]), and so is one with a URL that carries a
+//! password: memory is never where a secret goes. The reason names the line, never the value.
+//! So is a file larger than [`LARGEST`] or not UTF-8. Each says why, so a file that is missing
+//! from the offer is never merely missing.
+//!
+//! **Some files are offered with their box unticked**, and say why: one longer than
+//! [`TICKED_UP_TO`], since every chat in the workspace reads all of it, and one holding an
+//! invisible character ([`is_invisible`]) — a zero-width, bidirectional or tag character can
+//! hide an instruction in text that looks harmless, and the preview draws each by its code
+//! point.
 //!
 //! # Where it is written
 //!
@@ -58,15 +65,22 @@ const AT_TOP: [&str; 2] = ["CLAUDE.md", "AGENTS.md"];
 /// Cursor's rules directory, from a clone's top.
 const RULES: [&str; 2] = [".cursor", "rules"];
 
-/// One file of instructions, as found in one of a workspace's clones.
+/// One file of instructions and its text: what the preview shows, and — handed back — what the
+/// operator said yes to. One type for both, so the yes names a file exactly as it was shown.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Found {
+pub struct Shown {
     /// The clone's name in the workspace.
     pub repo: String,
     /// The file's path inside the clone, `/`-separated.
     pub file: String,
     /// What the file holds; empty when it was left out before it was read.
     pub text: String,
+}
+
+/// One file of instructions, as found in one of a workspace's clones.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Found {
+    pub shown: Shown,
     /// Whether it can be taken in.
     pub standing: Standing,
 }
@@ -74,20 +88,19 @@ pub struct Found {
 /// Whether a found file can be taken into memory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Standing {
-    /// Offered: nothing in the workspace's memory holds it yet.
-    Offered,
+    /// Offered: nothing in the workspace's memory holds it yet. `caution` is why its box
+    /// starts unticked, when something about it deserves a second look first.
+    Offered { caution: Option<String> },
     /// A memory in the workspace's journal already holds this text.
     InMemory,
     /// It cannot go into memory, and this says why.
     LeftOut(String),
 }
 
-/// One file the operator ticked, with the text the preview showed them.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Chosen {
-    pub repo: String,
-    pub file: String,
-    pub text: String,
+impl Standing {
+    fn offered(&self) -> bool {
+        matches!(self, Self::Offered { .. })
+    }
 }
 
 /// Every file of instructions in the clones of workspace `ws` of the plane at `plane`, clone
@@ -110,11 +123,10 @@ pub fn found(plane: &Path, ws: &str) -> Result<Vec<Found>, String> {
     for repo in clones.repos {
         for file in candidates(&repo.path) {
             let mut one = read(&repo.name, &repo.path, &file);
-            if one.standing == Standing::Offered && py_strip(&one.text).is_empty() {
+            if one.standing.offered() && py_strip(&one.shown.text).is_empty() {
                 continue;
             }
-            if one.standing == Standing::Offered
-                && kept.iter().any(|body| *body == py_strip(&one.text))
+            if one.standing.offered() && kept.iter().any(|body| *body == py_strip(&one.shown.text))
             {
                 one.standing = Standing::InMemory;
             }
@@ -126,68 +138,94 @@ pub fn found(plane: &Path, ws: &str) -> Result<Vec<Found>, String> {
 
 /// Writes each of `chosen` into workspace `ws`'s memory, and answers how many were written.
 ///
-/// Every one is checked before any is written: it must be a file [`found`] offers now, holding
-/// exactly the text the preview showed. Anything else refuses the whole import and writes
-/// nothing.
+/// **All or nothing.** Every one is checked before any is written: it must be a file [`found`]
+/// offers now, holding exactly the text the preview showed, and anything else refuses the whole
+/// import. A write that fails part way takes back the memories this import already wrote, so a
+/// refusal always means nothing was added.
+///
+/// **Once.** A file chosen twice is written once, and the check and the writes are held under
+/// a lock on the workspace's directory, so a second import of the same files — a double press,
+/// or a second window — waits, then finds them already in memory.
 pub fn import(
     plane: &Path,
     ws: &str,
-    chosen: &[Chosen],
+    chosen: &[Shown],
     stamp: chrono::NaiveDateTime,
 ) -> Result<usize, String> {
-    let now = found(plane, ws)?;
-    for one in chosen {
-        let Some(there) = now
-            .iter()
-            .find(|found| found.repo == one.repo && found.file == one.file)
-        else {
-            return Err(format!(
-                "{}/{} is not one of the repo's instruction files charter found, so nothing was \
-                 added to memory.",
-                one.repo, one.file
-            ));
-        };
-        match &there.standing {
-            Standing::Offered => {}
-            Standing::InMemory => {
-                return Err(format!(
-                    "{}/{} is already in memory, so nothing was added.",
-                    one.repo, one.file
-                ));
-            }
-            Standing::LeftOut(why) => {
-                return Err(format!(
-                    "{}/{} is left out: {why}. Nothing was added to memory.",
-                    one.repo, one.file
-                ));
-            }
-        }
-        if there.text != one.text {
-            return Err(format!(
-                "{}/{} has changed since it was shown, so nothing was added to memory. Look at \
-                 it again, then add it.",
-                one.repo, one.file
-            ));
-        }
-    }
     let workspace = Plane::open(plane)
         .workspace(ws)
         .map_err(|why| why.to_string())?;
+    let mut unique: Vec<&Shown> = Vec::new();
     for one in chosen {
-        workspace
-            .remember_titled(&one.text, Some(&title(one)), stamp)
-            .map_err(|why| {
-                format!(
-                    "charter could not add {}/{} to memory ({why}).",
-                    one.repo, one.file
-                )
-            })?;
+        if !unique.contains(&one) {
+            unique.push(one);
+        }
     }
-    Ok(chosen.len())
+    // Not the journal's own lock, which every memory write takes and a second `Lock::on` of
+    // the same directory in this process would wait on forever (`rewrite::Lock`).
+    let _held = crate::rewrite::Lock::on(workspace.dir());
+    let now = found(plane, ws)?;
+    for one in &unique {
+        refusal(&now, one).map_or(Ok(()), Err)?;
+    }
+    let mut written: Vec<std::path::PathBuf> = Vec::new();
+    for one in &unique {
+        match workspace.remember_titled(&one.text, Some(&title(one)), stamp) {
+            Ok(path) => written.push(path),
+            Err(why) => {
+                take_back(plane, &workspace.dir().join("memory"), &written);
+                return Err(format!(
+                    "charter could not add {}/{} to memory ({why}), so nothing was added.",
+                    one.repo, one.file
+                ));
+            }
+        }
+    }
+    Ok(written.len())
+}
+
+/// Why `one` cannot be written, given what [`found`] answers now; `None` when it can.
+fn refusal(now: &[Found], one: &Shown) -> Option<String> {
+    let Some(there) = now
+        .iter()
+        .find(|found| found.shown.repo == one.repo && found.shown.file == one.file)
+    else {
+        return Some(format!(
+            "{}/{} is not one of the repo's instruction files charter found, so nothing was \
+             added to memory.",
+            one.repo, one.file
+        ));
+    };
+    match &there.standing {
+        Standing::Offered { .. } if there.shown.text == one.text => None,
+        Standing::Offered { .. } => Some(format!(
+            "{}/{} has changed since it was shown, so nothing was added to memory. Look at it \
+             again, then add it.",
+            one.repo, one.file
+        )),
+        Standing::InMemory => Some(format!(
+            "{}/{} is already in memory, so nothing was added.",
+            one.repo, one.file
+        )),
+        Standing::LeftOut(why) => Some(format!(
+            "{}/{} is left out: {why}. Nothing was added to memory.",
+            one.repo, one.file
+        )),
+    }
+}
+
+/// Removes the memories an import wrote before one of its writes failed, index lines and all.
+/// Best effort: a memory that cannot be taken back is one the operator can see and delete.
+fn take_back(plane: &Path, journal: &Path, written: &[std::path::PathBuf]) {
+    for path in written {
+        if let Some(name) = path.file_name() {
+            let _ = crate::memstore::forget(plane, journal, &name.to_string_lossy());
+        }
+    }
 }
 
 /// A memory's title for an imported file: `CLAUDE.md from svc`.
-fn title(one: &Chosen) -> String {
+fn title(one: &Shown) -> String {
     format!("{} from {}", one.file, one.repo)
 }
 
@@ -240,49 +278,154 @@ fn walk(dir: &Path, shown: &str, depth: usize, out: &mut Vec<String>) {
 }
 
 /// `file` in the clone at `clone`, read if it can go into memory, or left out with why.
+///
+/// **Read through the handle that was checked**: the file is opened `O_NOFOLLOW`, and its kind
+/// and size are asked of that open file, so a link swapped in after the `lstat` is refused by
+/// the open rather than followed.
 fn read(repo: &str, clone: &Path, file: &str) -> Found {
+    use std::io::Read;
     let left_out = |why: String| Found {
-        repo: repo.to_owned(),
-        file: file.to_owned(),
-        text: String::new(),
+        shown: Shown {
+            repo: repo.to_owned(),
+            file: file.to_owned(),
+            text: String::new(),
+        },
         standing: Standing::LeftOut(why),
     };
+    const LINK: &str = "it is a link, and charter reads only files that are in the repo itself";
     let path = clone.join(file);
-    let meta = match std::fs::symlink_metadata(&path) {
+    match std::fs::symlink_metadata(&path) {
+        Ok(meta) if meta.file_type().is_symlink() => return left_out(LINK.to_owned()),
+        Ok(_) => {}
+        Err(why) => return left_out(format!("charter could not read it ({why})")),
+    }
+    let opened = crate::contain::nofollow(std::fs::OpenOptions::new().read(true)).open(&path);
+    let handle = match opened {
+        Ok(handle) => handle,
+        // `ELOOP`: it became a link after the `lstat`.
+        Err(why) if is_a_link(&why) => return left_out(LINK.to_owned()),
+        Err(why) => return left_out(format!("charter could not read it ({why})")),
+    };
+    let meta = match handle.metadata() {
         Ok(meta) => meta,
         Err(why) => return left_out(format!("charter could not read it ({why})")),
     };
-    if meta.file_type().is_symlink() {
-        return left_out(
-            "it is a link, and charter reads only files that are in the repo itself".to_owned(),
-        );
-    }
     if !meta.is_file() {
         return left_out("it is not a file".to_owned());
     }
     if meta.len() > LARGEST {
-        return left_out(format!(
-            "it is larger than {} KB, which is more than a memory should hold",
-            LARGEST / 1024
-        ));
+        return left_out(too_large());
     }
-    let text = match std::fs::read(&path).map(String::from_utf8) {
-        Ok(Ok(text)) => text,
-        Ok(Err(_)) => return left_out("it is not text".to_owned()),
-        Err(why) => return left_out(format!("charter could not read it ({why})")),
+    let mut bytes = Vec::new();
+    if let Err(why) = handle.take(LARGEST + 1).read_to_end(&mut bytes) {
+        return left_out(format!("charter could not read it ({why})"));
+    }
+    if bytes.len() as u64 > LARGEST {
+        return left_out(too_large());
+    }
+    let Ok(text) = String::from_utf8(bytes) else {
+        return left_out("it is not text".to_owned());
     };
     if let Some(found) = crate::secretshape::found(&text) {
         return left_out(format!(
-            "it holds what looks like a secret ({}), and a secret never goes into memory",
-            found.kind
+            "line {} holds what looks like a secret ({}), and a secret never goes into memory",
+            found.line, found.kind
         ));
     }
-    Found {
-        repo: repo.to_owned(),
-        file: file.to_owned(),
-        text,
-        standing: Standing::Offered,
+    if let Some(line) = password_in_a_url(&text) {
+        return left_out(format!(
+            "line {line} has a URL that carries a password, and a secret never goes into memory"
+        ));
     }
+    let caution = [invisible(&text), past_ticking(&text)]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    Found {
+        shown: Shown {
+            repo: repo.to_owned(),
+            file: file.to_owned(),
+            text,
+        },
+        standing: Standing::Offered {
+            caution: (!caution.is_empty()).then(|| caution.join("; ")),
+        },
+    }
+}
+
+/// Whether an `O_NOFOLLOW` open was refused because the last component is a link.
+fn is_a_link(why: &std::io::Error) -> bool {
+    #[cfg(unix)]
+    {
+        why.raw_os_error() == Some(rustix::io::Errno::LOOP.raw_os_error())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = why;
+        false
+    }
+}
+
+fn too_large() -> String {
+    format!(
+        "it is larger than {} KB, which is more than a memory should hold",
+        LARGEST / 1024
+    )
+}
+
+/// The largest file whose box starts ticked, in bytes. Every chat in the workspace reads its
+/// memory at its start, so a longer file is shown and left for the operator to tick.
+pub const TICKED_UP_TO: usize = 8 * 1024;
+
+fn past_ticking(text: &str) -> Option<String> {
+    (text.len() > TICKED_UP_TO).then(|| {
+        format!(
+            "it is longer than {} KB, and every chat here would read all of it, so it starts \
+             unticked",
+            TICKED_UP_TO / 1024
+        )
+    })
+}
+
+/// A character that changes what text means without being seen: zero-width characters, the
+/// bidirectional controls, and the Unicode tag block, which can carry a whole hidden sentence.
+/// The preview draws each as its code point; this unticks the file and says where the first is.
+pub fn is_invisible(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00AD}'
+            | '\u{061C}'
+            | '\u{180E}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{2069}'
+            | '\u{FEFF}'
+            | '\u{E0000}'..='\u{E007F}'
+    )
+}
+
+fn invisible(text: &str) -> Option<String> {
+    text.lines().enumerate().find_map(|(at, line)| {
+        line.chars().find(|c| is_invisible(*c)).map(|c| {
+            format!(
+                "line {} holds an invisible character (U+{:04X}), drawn in the preview by its \
+                 code point, so it starts unticked",
+                at + 1,
+                u32::from(c)
+            )
+        })
+    })
+}
+
+/// The line of the first URL that carries a password (`scheme://user:password@host`).
+fn password_in_a_url(text: &str) -> Option<usize> {
+    static URL: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s/@:]+:[^\s/@]+@")
+            .expect("the pattern compiles")
+    });
+    URL.find(text)
+        .map(|hit| 1 + text[..hit.start()].matches('\n').count())
 }
 
 #[cfg(test)]
@@ -324,35 +467,30 @@ mod tests {
         assert_eq!(
             found,
             vec![Found {
-                repo: "svc".into(),
-                file: "CLAUDE.md".into(),
-                text: "# Rules\n\nRun the tests first.\n".into(),
-                standing: Standing::Offered,
+                shown: Shown {
+                    repo: "svc".into(),
+                    file: "CLAUDE.md".into(),
+                    text: "# Rules\n\nRun the tests first.\n".into(),
+                },
+                standing: Standing::Offered { caution: None },
             }]
         );
     }
 
     fn files(found: &[Found]) -> Vec<&str> {
-        found.iter().map(|one| one.file.as_str()).collect()
+        found.iter().map(|one| one.shown.file.as_str()).collect()
     }
 
     fn standing(found: &[Found], file: &str) -> Standing {
         found
             .iter()
-            .find(|one| one.file == file)
+            .find(|one| one.shown.file == file)
             .map(|one| one.standing.clone())
             .unwrap_or_else(|| panic!("{file} was not found"))
     }
 
-    fn chosen(found: &[Found]) -> Vec<Chosen> {
-        found
-            .iter()
-            .map(|one| Chosen {
-                repo: one.repo.clone(),
-                file: one.file.clone(),
-                text: one.text.clone(),
-            })
-            .collect()
+    fn chosen(found: &[Found]) -> Vec<Shown> {
+        found.iter().map(|one| one.shown.clone()).collect()
     }
 
     fn stamp() -> chrono::NaiveDateTime {
@@ -395,7 +533,11 @@ mod tests {
                 ".cursor/rules/style.mdc",
             ]
         );
-        assert!(found.iter().all(|one| one.standing == Standing::Offered));
+        assert!(
+            found
+                .iter()
+                .all(|one| one.standing == Standing::Offered { caution: None })
+        );
     }
 
     #[test]
@@ -466,7 +608,7 @@ mod tests {
     #[test]
     fn a_file_that_was_not_found_is_refused() {
         let (_dir, root) = a_workspace(&[("CLAUDE.md", "Run the tests first.\n")]);
-        let asked = [Chosen {
+        let asked = [Shown {
             repo: "svc".into(),
             file: "../../../../etc/hosts".into(),
             text: "127.0.0.1 localhost\n".into(),
@@ -496,6 +638,7 @@ mod tests {
         assert!(memories(&root).is_empty());
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_link_is_left_out_rather_than_followed() {
         let outside = tempfile::tempdir().expect("somewhere else");
@@ -513,7 +656,7 @@ mod tests {
             Standing::LeftOut(why) => assert!(why.contains("link"), "{why}"),
             other => panic!("a link was followed: {other:?}"),
         }
-        assert!(found[0].text.is_empty(), "the link's target was read");
+        assert!(found[0].shown.text.is_empty(), "the link's target was read");
     }
 
     #[test]
@@ -567,5 +710,157 @@ mod tests {
         )
         .expect("git runs");
         assert!(String::from_utf8_lossy(&status.stdout).trim().is_empty());
+    }
+
+    fn caution(found: &[Found], file: &str) -> Option<String> {
+        match standing(found, file) {
+            Standing::Offered { caution } => caution,
+            other => panic!("{file} is not offered: {other:?}"),
+        }
+    }
+
+    fn left_out(found: &[Found], file: &str) -> String {
+        match standing(found, file) {
+            Standing::LeftOut(why) => why,
+            other => panic!("{file} is not left out: {other:?}"),
+        }
+    }
+
+    fn index_lines(root: &Path) -> usize {
+        std::fs::read_to_string(root.join("workspaces/svc/memory/MEMORY.md"))
+            .unwrap_or_default()
+            .lines()
+            .filter(|line| line.starts_with("- ["))
+            .count()
+    }
+
+    #[test]
+    fn a_file_past_the_ticking_size_is_offered_with_its_box_unticked() {
+        let big = "Run the tests first.\n".repeat(500);
+        let (_dir, root) = a_workspace(&[("CLAUDE.md", &big), ("AGENTS.md", "Short.\n")]);
+
+        let found = found(&root, "svc").expect("read");
+
+        let why = caution(&found, "CLAUDE.md").expect("a large file starts unticked");
+        assert!(why.contains("8 KB"), "{why}");
+        assert_eq!(caution(&found, "AGENTS.md"), None);
+    }
+
+    #[test]
+    fn invisible_characters_are_named_with_their_line_and_untick_the_file() {
+        let (_dir, root) = a_workspace(&[
+            ("CLAUDE.md", "Be kind.\nRun\u{200b} the tests.\n"),
+            ("AGENTS.md", "Fine.\n\u{202e}reversed\n"),
+            (".cursor/rules/tag.mdc", "Tagged\u{e0041} text.\n"),
+        ]);
+
+        let found = found(&root, "svc").expect("read");
+
+        for (file, code, line) in [
+            ("CLAUDE.md", "U+200B", "line 2"),
+            ("AGENTS.md", "U+202E", "line 2"),
+            (".cursor/rules/tag.mdc", "U+E0041", "line 1"),
+        ] {
+            let why = caution(&found, file).unwrap_or_else(|| panic!("{file} is ticked"));
+            assert!(why.contains(code) && why.contains(line), "{file}: {why}");
+        }
+    }
+
+    #[test]
+    fn a_secret_is_named_by_its_line_and_never_by_its_value() {
+        let value = ["ghp", "_0123456789abcdefABCDEF0123456789abcd"].concat();
+        let text = format!("# Tokens\n\ntoken = {value}\n");
+        let (_dir, root) = a_workspace(&[("AGENTS.md", &text)]);
+
+        let why = left_out(&found(&root, "svc").expect("read"), "AGENTS.md");
+
+        assert!(why.contains("line 3"), "{why}");
+        assert!(
+            !why.contains(&value) && !why.contains("0123456789"),
+            "{why}"
+        );
+    }
+
+    #[test]
+    fn a_url_that_carries_a_password_is_left_out_by_its_line() {
+        let (_dir, root) = a_workspace(&[
+            (
+                "CLAUDE.md",
+                "Connect with\n\npostgres://admin:hunter2@db.internal:5432/app\n",
+            ),
+            (
+                "AGENTS.md",
+                "Docs: https://example.com/a@b and git@github.com:o/r\n",
+            ),
+        ]);
+
+        let found = found(&root, "svc").expect("read");
+
+        let why = left_out(&found, "CLAUDE.md");
+        assert!(why.contains("line 3") && why.contains("password"), "{why}");
+        assert!(!why.contains("hunter2"), "{why}");
+        assert_eq!(caution(&found, "AGENTS.md"), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_write_that_fails_part_way_leaves_no_memory_behind() {
+        let (_dir, root) = a_workspace(&[
+            ("CLAUDE.md", "Run the tests first.\n"),
+            ("AGENTS.md", "Agents: run make check.\n"),
+        ]);
+        let offered = chosen(&found(&root, "svc").expect("read"));
+        // The name the second memory would take is a link out of the plane, which the store
+        // refuses to write through: the first memory is written, the second fails.
+        let memory = root.join("workspaces/svc/memory");
+        std::fs::create_dir_all(&memory).expect("the journal");
+        std::os::unix::fs::symlink(
+            "/nonexistent-outside/agents.md",
+            memory.join("20261001-093000-agents-md-from-svc.md"),
+        )
+        .expect("a planted link");
+
+        let refused = import(&root, "svc", &offered, stamp()).expect_err("the second fails");
+
+        assert!(refused.contains("AGENTS.md"), "{refused}");
+        assert!(
+            memories(&root).is_empty(),
+            "the first memory was left behind"
+        );
+        assert_eq!(index_lines(&root), 0, "an index line was left behind");
+    }
+
+    #[test]
+    fn a_file_chosen_twice_is_written_once() {
+        let (_dir, root) = a_workspace(&[("CLAUDE.md", "Run the tests first.\n")]);
+        let one = chosen(&found(&root, "svc").expect("read"));
+        let twice = [one.clone(), one].concat();
+
+        assert_eq!(import(&root, "svc", &twice, stamp()), Ok(1));
+        assert_eq!(memories(&root).len(), 1);
+    }
+
+    #[test]
+    fn two_imports_at_once_write_each_file_once() {
+        let (_dir, root) = a_workspace(&[("CLAUDE.md", "Run the tests first.\n")]);
+        let offered = chosen(&found(&root, "svc").expect("read"));
+        let start = std::sync::Barrier::new(2);
+
+        let answers: Vec<Result<usize, String>> = std::thread::scope(|scope| {
+            let both: Vec<_> = (0..2)
+                .map(|_| {
+                    scope.spawn(|| {
+                        start.wait();
+                        import(&root, "svc", &offered, stamp())
+                    })
+                })
+                .collect();
+            both.into_iter()
+                .map(|one| one.join().expect("an import"))
+                .collect()
+        });
+
+        assert_eq!(memories(&root).len(), 1, "{answers:?}");
+        assert_eq!(answers.iter().filter(|one| one.is_ok()).count(), 1);
     }
 }

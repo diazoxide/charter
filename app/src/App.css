@@ -4927,3 +4927,11 @@ h2.sidebar-title .node-icon {
   border: 1px solid var(--border-subtle);
   border-radius: 4px;
 }
+
+/* An invisible character in a previewed file, drawn as its code point (FR-18a). */
+.repo-instruction-text .invisible-char {
+  padding: 0 0.15rem;
+  border-radius: 2px;
+  background: var(--danger-surface);
+  color: var(--danger-text);
+}
