@@ -369,11 +369,14 @@ fn a_link_out_of_the_plane_at_any_path_init_writes_is_written_through_by_nothing
 
             let what = format!("{rel} -> {} (dangling: {dangling})", target.display());
             assert_eq!(out.status.code(), Some(1), "{what}: {}", stderr(&out));
-            assert!(
-                stderr(&out).contains("which is outside this plane"),
-                "{what}: {}",
-                stderr(&out)
-            );
+            // The linked `charter.toml` meets FR-24's refusal, which says "project" (V23); the
+            // other paths keep the scaffold's older wording.
+            let says = if rel == "charter.toml" {
+                "which is outside this project"
+            } else {
+                "which is outside this plane"
+            };
+            assert!(stderr(&out).contains(says), "{what}: {}", stderr(&out));
             assert_eq!(
                 tree(&scene.outside),
                 outside,

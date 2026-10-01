@@ -238,7 +238,11 @@ fn init_and_reinit_write_nothing_when_charter_toml_links_out_of_the_project() {
         let out = project.run(&args);
         let said = String::from_utf8_lossy(&out.stderr);
         assert!(!out.status.success(), "{args:?}: {said}");
-        assert!(said.contains("outside this plane"), "{args:?}: {said}");
+        assert!(said.contains("outside this project"), "{args:?}: {said}");
+        assert!(
+            said.contains("Point it inside the project"),
+            "{args:?}: {said}"
+        );
         assert!(said.contains("Nothing was written"), "{args:?}: {said}");
         assert_eq!(project.tree(), before, "{args:?} wrote to the project");
         assert_eq!(

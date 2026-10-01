@@ -312,7 +312,7 @@ pub fn manifest_escapes(root: &Path) -> bool {
 /// (`cli._plane_refusal`), or whose `charter.toml` is a link out of it. `init` and `reinit` are
 /// not exempt: both write into the plane.
 fn refused(root: &Path) -> Option<Outcome> {
-    // `charter.toml` is the format gate (V5, FR-24). One that is a link out of the plane, or into
+    // `charter.toml` is the format gate (V5, FR-24). One that is a link out of the project, or into
     // its `.git`, is somebody else's file: charter reads nothing through it, and writes nothing
     // at all, because every other file would belong to a project whose format it cannot see.
     if let Err((rel, lands)) = gate(root, crate::plane::MANIFEST) {
@@ -321,8 +321,8 @@ fn refused(root: &Path) -> Option<Outcome> {
         }
         return Some(Outcome {
             said: vec![Say::Err(format!(
-                "{} resolves to {}, which is outside this plane or inside its .git — charter \
-                 reads and writes nothing through it. Point it inside the plane or remove it \
+                "{} resolves to {}, which is outside this project or inside its .git — charter \
+                 reads and writes nothing through it. Point it inside the project or remove it \
                  yourself, then run the command again. Nothing was written.",
                 crate::shown::readable(&rel, 1024),
                 crate::shown::readable(&lands, 1024)
