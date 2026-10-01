@@ -337,7 +337,8 @@ code or verifier), and never the device id or the local principal.
 
 ## ADR 0069, amended
 
-The table of stores decided and not yet written gains the two rows of 0077 §8:
+The table of stores decided and not yet written gains the two rows of 0077 §8, rows 78 and 79 of
+ADR 0069's inventory (row numbers renumbered 2026-10-01; see ADR 0069):
 `<config>/forge-accounts.json` (Machine, device-bound, backed up) and the account token
 `charter/@forge/<host>/<id>` (Keyring). ADR 0070 named the account token's item and gave it no
 row; this is that row. `docs/plane-format.md` records both, each **decided, not yet written**.

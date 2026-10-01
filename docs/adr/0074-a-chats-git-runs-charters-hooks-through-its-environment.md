@@ -144,7 +144,7 @@ follow-up there.
 setting of a repo, in the repo itself.
 
 **Tier:** Plane when the repository is a plane. Elsewhere it is committed to the operator's
-repository, which as a whole is tier None (ADR 0069, row 74).
+repository, which as a whole is tier None (ADR 0069, row 80; row numbers renumbered 2026-10-01; see ADR 0069).
 
 **Audit:** #593's acceptance asks that an allowlist change appear in the audit log once AU-5
 lands. Until then, the repository's git history is the record. The note is filed on the audit

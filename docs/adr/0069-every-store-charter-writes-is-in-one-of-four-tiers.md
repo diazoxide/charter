@@ -271,7 +271,18 @@ relative to the plane root unless they start with `<config>` (the machine store)
 | 71 | review drafts (R5), private memory (KN-7) | Machine | syncable | yes | no |
 | 72 | a guest checkout, its worktrees, an extension's workspace folder or state directory, a vendor's `.playwright*` files, Claude Code's own files | None | — | no | — |
 | 73 | `<app data>/git-hooks/` (ADR 0074, added 2026-09-30) | Machine, rebuildable | device-bound | no | yes |
-| 74 | `.charter-scan-allow.toml` in a repository a chat commits to (ADR 0074, SQ-17, added 2026-10-01) | Plane in a plane; elsewhere committed to that repository, which is tier None | — | remote in a plane; — elsewhere | no |
+| 74 | `<config>/runners.json`, the runner definitions (ADR 0078, added 2026-10-01) | Machine | device-bound | yes | no |
+| 75 | `<config>/peers.json`, a runner's peers (ADR 0078, added 2026-10-01) | Machine | device-bound | yes | no |
+| 76 | the link key (ADR 0078, added 2026-10-01) | Keyring | — | no | no |
+| 77 | `<data>/repos/<workspace>/<repo>.git`, a runner's bare repos (ADR 0078, added 2026-10-01) | Machine, rebuildable | device-bound | no | yes |
+| 78 | `<config>/forge-accounts.json`, the forge accounts (ADR 0077, added 2026-10-01) | Machine | device-bound | yes | no |
+| 79 | `keyring charter/@forge/<host>/<id>`: a forge account's token (ADR 0077, added 2026-10-01) | Keyring | — | no | no |
+| 80 | `.charter-scan-allow.toml` in a repository a chat commits to (ADR 0074, SQ-17, added 2026-10-01) | Plane in a plane; elsewhere committed to that repository, which is tier None | — | remote in a plane; — elsewhere | no |
+
+Rows after 72 are numbered in the order their records merged. **Row numbers renumbered
+2026-10-01:** ADR 0078's amendment had numbered its four rows 73 to 76, which collided with rows
+73 and 74 here, and ADR 0077's two rows had no number. They are now rows 74 to 79, and the commit
+scan's allowlist, row 74 before, is row 80.
 
 ## Where V2's tiers do not fit cleanly
 
