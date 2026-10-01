@@ -669,7 +669,7 @@ export const commands = {
 	 *  for the other by a caller passing null: this one goes through every gate a launch has,
 	 *  and that one opens the operator's shell.
 	 * 
-	 *  `show_footer` is the picker's footer checkbox, and it is a property of THIS chat
+	 *  `boxes.show_footer` is the picker's footer checkbox, and it is a property of THIS chat
 	 *  (ADR 0029). It reaches the harness as an environment variable set at the exec, so
 	 *  it is decided here and nowhere later: Claude Code's footer command inherits the
 	 *  environment its harness was started with, and no later click can change it.
@@ -677,8 +677,12 @@ export const commands = {
 	 *  `label` is the picker's optional Name field (charter-app#254): what the chat's tab says
 	 *  instead of its default. It is held to the same rule a rename is, and **a refusal comes back
 	 *  before anything starts**, so a name charter will not draw never costs a chat.
+	 * 
+	 *  `boxes.new_branch` is the picker's "on a new branch" box (GL-1). When `cwd` is a repo's clone
+	 *  and it is set, the chat starts on a branch of its own, cut for it and taken back if the start is
+	 *  refused (`worktrees::on_a_branch`); anywhere else it changes nothing.
 	 */
-	startChat: (plane: PlaneId, profile: string, persona: string | null, cwd: string | null, name: string, label: string | null, showFooter: boolean, columns: number, rows: number) => typedError<Started, string>(__TAURI_INVOKE("start_chat", { plane, profile, persona, cwd, name, label, showFooter, columns, rows })),
+	startChat: (plane: PlaneId, profile: string, persona: string | null, cwd: string | null, name: string, label: string | null, boxes: Boxes, columns: number, rows: number) => typedError<Started, string>(__TAURI_INVOKE("start_chat", { plane, profile, persona, cwd, name, label, boxes, columns, rows })),
 	/**
 	 *  The piece a chat's working directory sits in, or `None`.
 	 * 
@@ -696,6 +700,12 @@ export const commands = {
 } | null, string>(__TAURI_INVOKE("worktree_of_chat", { plane, cwd })),
 	/**  This workspace's pieces for one repo. */
 	worktreeList: (plane: PlaneId, workspace: string, repo: string) => typedError<Piece[], string>(__TAURI_INVOKE("worktree_list", { plane, workspace, repo })),
+	/**
+	 *  **New branch**, from a repo's row (GL-1): cut a piece off the clone's HEAD and log it
+	 *  `claimed`. It starts nothing. `branch` is the name the operator typed, used exactly or
+	 *  refused; `None` is charter's next free `chat-<n>`.
+	 */
+	worktreeAdd: (plane: PlaneId, workspace: string, repo: string, branch: string | null) => typedError<NewBranch, string>(__TAURI_INVOKE("worktree_add", { plane, workspace, repo, branch })),
 	/**
 	 *  Remove a piece. The refusal is the core's sentence, unchanged.
 	 * 
@@ -1258,6 +1268,20 @@ export type AtRisk = {
 	what: string,
 	/**  charter's own sentence about it, name included: `svc: 2 unpushed commit(s)`. */
 	said: string,
+};
+
+/**
+ *  The picker's two boxes, as the start reads them.
+ * 
+ *  A struct because tauri-specta types a command of at most ten arguments, and `start_chat` grew
+ *  an eleventh with `new_branch`. The two boxes are the pair that belong together: both are the
+ *  operator's answer in the picker about this one chat, decided before it starts.
+ */
+export type Boxes = {
+	/**  Draw charter's footer in the pane (ADR 0029). */
+	show_footer: boolean,
+	/**  Start on a branch of its own when the chat starts in a repo's clone (GL-1). */
+	new_branch: boolean,
 };
 
 /**  What kind of build this is, which decides which section is shown. */
@@ -1953,6 +1977,18 @@ export type Moved = {
 	 *  in the order the board was read. [`sequence`] is the whole definition.
 	 */
 	sequence: number,
+};
+
+/**  A branch the window cut: the piece it is, and what git calls it (ADR 0072 §4). */
+export type NewBranch = {
+	piece: string,
+	path: string,
+	branch: string,
+	/**
+	 *  What the cut found to say — a dirty clone whose changes stayed behind, a layer that did
+	 *  not land — in the core's words.
+	 */
+	warnings: string[],
 };
 
 /**  One section of the changelog, as the dialog draws it. */

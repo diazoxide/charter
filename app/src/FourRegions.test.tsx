@@ -80,6 +80,8 @@ function core(
 ) {
   const asked: { cmd: string; args: Record<string, unknown> }[] = [];
   const chats: ReturnType<typeof chat>[] = [];
+  // Branches cut from the window (GL-1), listed after the ones `cut` names.
+  const madeHere: string[] = [];
   let next = 0;
   mockIPC((cmd, args) => {
     const a = (args ?? {}) as Record<string, unknown>;
@@ -130,7 +132,13 @@ function core(
       };
     if (cmd === "workspace_repos")
       return { workspace: a.workspace, repos: [], cache_refused: null };
-    if (cmd === "worktree_list") return a.workspace === "alpha" ? cut() : [];
+    if (cmd === "worktree_list")
+      return a.workspace === "alpha" ? [...cut(), ...madeHere.map((name) => piece(name))] : [];
+    if (cmd === "worktree_add") {
+      const name = (a.branch as string | null) ?? "chat-1";
+      madeHere.push(name);
+      return { piece: name, path: `${CUT}/${name}`, branch: name, warnings: [] };
+    }
     if (cmd === "start_options") return START_OPTIONS;
     if (cmd === "chat_states")
       return waiting.map((session) => ({ session, state: "waiting", queue: waiting, sequence: 1 }));
@@ -254,6 +262,61 @@ describe("the four regions", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Start" }));
 
     expect(startedIn(asked)).toEqual([`${ALPHA}/svc`]);
+  });
+
+  it("starts a chat in a clone on a new branch of its own unless the box is cleared (GL-1)", async () => {
+    const { asked } = core();
+    render(<App />);
+    const boxes = () =>
+      asked.filter((one) => one.cmd === "start_chat").map((one) => one.args.boxes);
+
+    fireEvent.contextMenu(await screen.findByTestId("repo-svc"));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "New tab in svc" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Start" }));
+    await waitFor(() => expect(boxes()).toHaveLength(1));
+    fireEvent.contextMenu(await screen.findByTestId("repo-svc"));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "New tab in svc" }));
+    await userEvent.click(await screen.findByRole("checkbox", { name: /new branch in svc/ }));
+    await userEvent.click(await screen.findByRole("button", { name: "Start" }));
+    await waitFor(() => expect(boxes()).toHaveLength(2));
+    await openAChat();
+
+    expect(boxes()).toEqual([
+      { show_footer: false, new_branch: true },
+      { show_footer: false, new_branch: false },
+      // The workspace's own directory is in no repo: nothing to cut, and nothing asked for.
+      { show_footer: false, new_branch: false },
+    ]);
+  });
+
+  it("cuts a new branch from a repo's menu, and new chats start on it (GL-1)", async () => {
+    const { asked } = core();
+    render(<App />);
+    const heading = within(await screen.findByTestId("clone-svc")).getByRole("treeitem", {
+      name: /^svc/,
+    });
+
+    fireEvent.contextMenu(heading);
+    await userEvent.click(await screen.findByRole("menuitem", { name: "New branch in svc…" }));
+    await userEvent.type(
+      within(await screen.findByRole("dialog", { name: "New branch" })).getByRole("textbox", {
+        name: /^Name/,
+      }),
+      "spike{Enter}",
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "New branch" })).not.toBeInTheDocument(),
+    );
+    await screen.findByTestId("piece-svc-spike");
+    await openAChat();
+
+    expect(asked.find(({ cmd }) => cmd === "worktree_add")?.args).toMatchObject({
+      plane: PLANE,
+      workspace: "alpha",
+      repo: "svc",
+      branch: "spike",
+    });
+    expect(startedIn(asked)).toEqual([`${CUT}/spike`]);
   });
 
   it("starts only that tab in the clone, and the next New tab where it always did", async () => {

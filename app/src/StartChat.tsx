@@ -46,6 +46,14 @@ const NO_PERSONA = "";
  * charter's label for the chat, not the harness's own name, and the core is what refuses one
  * it will not draw: its refusal comes back into this dialog, before anything has started.
  *
+ * **A chat that starts in a repo starts on a new branch in it, unless the box is cleared**
+ * (GL-1, ADR 0072 §4). `repo` names the repo whose clone this chat would start in, and only
+ * then is the box drawn — ticked, because two chats writing in one working tree is the case
+ * this exists to end. Cleared, the chat works on whatever branch the repo has checked out,
+ * shared with every other chat there. The core cuts the branch and takes it back if the start
+ * is refused, so cancelling here or being refused leaves nothing behind. Not remembered between
+ * chats, for the footer box's reason: a box that silently stayed cleared would be a setting.
+ *
  * **Every control here is a Radix primitive** (`docs/ui-primitives.md`). It was hand-rolled
  * markup, and the hand-rolling is what broke it: five spans in one `<label>` with no rule to
  * lay them out ran together into `claudeclaudeclaudebuilt-indefault`, and the accessible name
@@ -70,6 +78,7 @@ const NO_PERSONA = "";
  */
 export function StartChat({
   options,
+  repo,
   prefer,
   trouble,
   onStart,
@@ -77,6 +86,8 @@ export function StartChat({
   onCancel,
 }: {
   options: StartOptions;
+  /** The repo whose clone this chat would start in, when it would start in one. */
+  repo?: string;
   /**
    * The harness (a profile's `kind`) to start on, when something already knows which one is
    * wanted — a harness started by hand in a shell tab, opened as a chat instead (ADR 0062).
@@ -86,12 +97,14 @@ export function StartChat({
   prefer?: string;
   /** Why the last attempt did not start, if it did not. */
   trouble?: string;
-  /** `label` is the Name field, or `null` when it was left empty. */
+  /** `label` is the Name field, or `null` when it was left empty. `newBranch` is the branch
+   *  box, and `false` when there is none to tick. */
   onStart: (
     profile: string,
     persona: string | null,
     showFooter: boolean,
     label: string | null,
+    newBranch: boolean,
   ) => void;
   /** The profile, the persona, the footer choice, and the exact line the operator read — so
    *  the approval is for what was on screen and not for whatever the file says by the time
@@ -102,6 +115,7 @@ export function StartChat({
     showFooter: boolean,
     shown: string,
     label: string | null,
+    newBranch: boolean,
   ) => void;
   onCancel: () => void;
 }) {
@@ -125,6 +139,11 @@ export function StartChat({
   // there is no plane-wide or machine-wide setting for it, and a box that silently stayed
   // ticked would be one.
   const [showFooter, setShowFooter] = useState(false);
+  // Ticked: a chat that starts in a repo gets a branch of its own by default (GL-1). What is
+  // sent is the box AND that there was one, so a chat started outside every repo never asks
+  // the core for a branch.
+  const [onABranch, setOnABranch] = useState(true);
+  const newBranch = repo !== undefined && onABranch;
   // What the Name field says. Sent as typed — the core trims it and holds it to its rule — and
   // as nothing at all when there is nothing in it but spaces, which is "the default".
   const [name, setName] = useState("");
@@ -279,6 +298,39 @@ export function StartChat({
             </div>
           </div>
 
+          {repo !== undefined && (
+            <>
+              <h3 className="choices-name">Branch</h3>
+              <div className="choices surface">
+                <div className="choice">
+                  <Checkbox.Root
+                    className="box"
+                    name="new-branch"
+                    id="new-branch"
+                    // In the tab sequence, said out loud, for the footer box's reason above.
+                    tabIndex={0}
+                    checked={onABranch}
+                    onCheckedChange={(checked) => setOnABranch(checked === true)}
+                    aria-describedby="new-branch-why"
+                  >
+                    <Checkbox.Indicator className="box-mark">✓</Checkbox.Indicator>
+                  </Checkbox.Root>
+                  <label className="who" htmlFor="new-branch">
+                    start on a new branch in {repo}
+                  </label>
+                  <span className="meta" id="new-branch-why">
+                    <span className="what">
+                      its own branch and folder, cut from what {repo} has checked out, so this
+                      chat&apos;s changes stay apart from other chats&apos;. Named after the chat,
+                      or chat-1, chat-2 and on. Cleared, it works on the branch {repo} has checked
+                      out, shared with every chat there.
+                    </span>
+                  </span>
+                </div>
+              </div>
+            </>
+          )}
+
           <h3 className="choices-name">
             <label htmlFor={nameId}>Name</label>
           </h3>
@@ -342,7 +394,9 @@ export function StartChat({
               <button
                 className="ends-it"
                 tabIndex={0}
-                onClick={() => onApprove(picked.name, persona, showFooter, picked.shown, label)}
+                onClick={() =>
+                  onApprove(picked.name, persona, showFooter, picked.shown, label, newBranch)
+                }
                 disabled={!picked}
               >
                 Approve and start
@@ -350,7 +404,7 @@ export function StartChat({
             ) : (
               <button
                 tabIndex={0}
-                onClick={() => profile && onStart(profile, persona, showFooter, label)}
+                onClick={() => profile && onStart(profile, persona, showFooter, label, newBranch)}
                 disabled={!profile}
               >
                 Start

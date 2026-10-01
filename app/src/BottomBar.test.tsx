@@ -731,7 +731,7 @@ describe("a repo row's menu", () => {
       within(menu)
         .getAllByRole("menuitem")
         .map((one) => one.getAttribute("aria-label")),
-    ).toEqual(["New tab in svc", "Start new chats in svc"]);
+    ).toEqual(["New tab in svc", "New branch in svc…", "Start new chats in svc"]);
   });
 
   it("hands the catalogue's offer back when a row is pressed", async () => {

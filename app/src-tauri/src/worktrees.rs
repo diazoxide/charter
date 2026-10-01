@@ -10,9 +10,9 @@
 //! nothing else: no rewording, no "failed to remove worktree", no error code the UI would
 //! then have to translate back into English.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use charter_core::worktree;
+use charter_core::{chatpiece, worktree};
 
 use crate::planes::{PlaneId, Planes};
 
@@ -224,6 +224,119 @@ fn declare_done(plane: &Path, workspace: &str, repo: &str, piece: &str) -> Resul
     .map_err(|why| why.to_string())
 }
 
+/// The window speaking for a branch it cut: no session or persona, and this machine's name, as
+/// `worktree_done` records it.
+fn window() -> charter_core::pieces::Who {
+    charter_core::pieces::Who {
+        session: None,
+        persona: None,
+        host: charter_core::dispatch::host(),
+    }
+}
+
+/// A branch the window cut: the piece it is, and what git calls it (ADR 0072 §4).
+#[derive(Debug, serde::Serialize, specta::Type)]
+pub struct NewBranch {
+    pub piece: String,
+    pub path: String,
+    pub branch: String,
+    /// What the cut found to say — a dirty clone whose changes stayed behind, a layer that did
+    /// not land — in the core's words.
+    pub warnings: Vec<String>,
+}
+
+/// **New branch**, from a repo's row (GL-1): cut a piece off the clone's HEAD and log it
+/// `claimed`. It starts nothing. `branch` is the name the operator typed, used exactly or
+/// refused; `None` is charter's next free `chat-<n>`.
+// Its plane is a `PlaneId` the registry vouches for, like every other command's
+// (charter-app#127); see `worktree_list` above. Not a doc comment, for the reason given there.
+#[tauri::command]
+#[specta::specta]
+pub fn worktree_add(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    workspace: String,
+    repo: String,
+    branch: Option<String>,
+) -> Result<NewBranch, String> {
+    cut_branch(
+        planes.held(&plane)?.root(),
+        &workspace,
+        &repo,
+        branch.as_deref(),
+    )
+}
+
+/// The cut itself, against a root the registry has already vouched for.
+fn cut_branch(
+    plane: &Path,
+    workspace: &str,
+    repo: &str,
+    branch: Option<&str>,
+) -> Result<NewBranch, String> {
+    let naming = match branch {
+        Some(typed) => chatpiece::Naming::Exactly(typed.to_string()),
+        None => chatpiece::Naming::After(None),
+    };
+    let cut = chatpiece::cut(plane, workspace, repo, &naming).map_err(|why| why.to_string())?;
+    let mut warnings = cut.warnings.clone();
+    if chatpiece::claim(plane, &cut, &window(), chrono::Utc::now()).is_none() {
+        warnings.push(UNLOGGED.to_string());
+    }
+    Ok(NewBranch {
+        piece: cut.piece,
+        path: cut.path.display().to_string(),
+        branch: cut.branch,
+        warnings,
+    })
+}
+
+/// Said when a branch was cut but the piece log could not be written.
+const UNLOGGED: &str = "the piece log could not be written, so charter will not say how long this branch has been quiet";
+
+/// **A writing chat starts on a branch of its own** (GL-1, ADR 0072 §4).
+///
+/// When `cwd` is a repo's clone and `new_branch` is set — the picker's default — a piece is cut
+/// off the clone's HEAD, named after the chat's `label` or `chat-<n>`, and `start` is handed
+/// that piece's directory instead. Anywhere else, or with `new_branch` cleared, `start` is
+/// handed `cwd` as it came and nothing is cut.
+///
+/// **A start that is refused takes its branch back.** Nothing has written to it, so git's safe
+/// removal takes the folder and the branch, and the refusal the operator reads is the start's
+/// own sentence. A branch is logged `claimed` only once its chat has started.
+pub fn on_a_branch<T>(
+    plane: &Path,
+    cwd: Option<&Path>,
+    label: Option<&str>,
+    new_branch: bool,
+    start: impl FnOnce(Option<PathBuf>) -> Result<T, String>,
+) -> Result<(T, Option<chatpiece::Cut>), String> {
+    let clone = cwd
+        .filter(|_| new_branch)
+        .and_then(|at| chatpiece::clone_at(plane, at));
+    let Some((workspace, repo)) = clone else {
+        return start(cwd.map(Path::to_path_buf)).map(|started| (started, None));
+    };
+    let naming = chatpiece::Naming::After(label.map(str::to_string));
+    let cut = chatpiece::cut(plane, &workspace, &repo, &naming).map_err(|why| why.to_string())?;
+    match start(Some(cut.path.clone())) {
+        Ok(started) => {
+            let mut cut = cut;
+            if chatpiece::claim(plane, &cut, &window(), chrono::Utc::now()).is_none() {
+                cut.warnings.push(UNLOGGED.to_string());
+            }
+            Ok((started, Some(cut)))
+        }
+        Err(refused) => match chatpiece::undo(plane, &cut) {
+            Ok(()) => Err(refused),
+            Err(kept) => Err(format!(
+                "{refused}\nThe branch cut for it, {}, could not be taken back: {kept}",
+                cut.branch
+            )),
+        },
+    }
+}
+
 /// What a merge did, for the window to report.
 #[derive(Debug, serde::Serialize, specta::Type)]
 pub struct Merged {
@@ -260,8 +373,6 @@ fn merge_piece(plane: &Path, workspace: &str, repo: &str, piece: &str) -> Result
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use super::*;
 
     /// A plane with a clone and one piece in it.
@@ -416,6 +527,94 @@ mod tests {
         assert_eq!(pieces_of(&root, "alpha", "thing").unwrap()[0].said, "done");
         let refused = declare_done(&root, "alpha", "thing", "nope").unwrap_err();
         assert!(refused.contains("'nope' is not a worktree"), "{refused}");
+    }
+
+    /// What a start was handed, for the tests that stand in for the harness.
+    fn started_in(cwd: Option<PathBuf>) -> Result<Option<PathBuf>, String> {
+        Ok(cwd)
+    }
+
+    #[test]
+    fn a_chat_started_in_a_clone_starts_on_a_branch_of_its_own() {
+        let (_dir, root, clone) = plane();
+
+        let (cwd, cut) = on_a_branch(&root, Some(&clone), None, true, started_in).unwrap();
+
+        let cut = cut.expect("a writing chat is cut a branch");
+        assert_eq!(cut.branch, "chat-1");
+        assert_eq!(cwd, Some(cut.path.clone()), "and the chat starts in it");
+        let listed = pieces_of(&root, "alpha", "thing").unwrap();
+        assert_eq!(listed.len(), 1);
+        assert!(
+            listed[0].said.starts_with("silent"),
+            "logged claimed once the chat started: {:?}",
+            listed[0].said
+        );
+    }
+
+    #[test]
+    fn a_chat_told_to_share_the_clone_starts_in_the_clone() {
+        let (_dir, root, clone) = plane();
+
+        let (cwd, cut) = on_a_branch(&root, Some(&clone), None, false, started_in).unwrap();
+
+        assert!(cut.is_none());
+        assert_eq!(cwd, Some(clone));
+        assert!(pieces_of(&root, "alpha", "thing").unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_chat_that_does_not_start_in_a_clone_is_cut_nothing() {
+        let (_dir, root, _clone) = plane();
+        let workspace = root.join("workspaces/alpha");
+
+        for cwd in [None, Some(workspace.as_path()), Some(root.as_path())] {
+            let (_, cut) = on_a_branch(&root, cwd, None, true, started_in).unwrap();
+            assert!(cut.is_none(), "{cwd:?} is not a repo's clone");
+        }
+        assert!(pieces_of(&root, "alpha", "thing").unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_chat_that_was_refused_takes_its_branch_back_with_it() {
+        let (_dir, root, clone) = plane();
+
+        let refused = on_a_branch(&root, Some(&clone), Some("fix login"), true, |_| {
+            Err::<(), _>("agents are stopped".to_string())
+        })
+        .unwrap_err();
+
+        assert_eq!(refused, "agents are stopped", "the start's own sentence");
+        assert!(pieces_of(&root, "alpha", "thing").unwrap().is_empty());
+        let branch = charter_core::forklock::output(
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&clone)
+                .args(["branch", "--list", "fix-login"]),
+        )
+        .unwrap();
+        assert!(branch.stdout.is_empty(), "the branch went with its folder");
+    }
+
+    #[test]
+    fn a_branch_cut_from_the_window_is_named_as_typed_and_logged() {
+        let (_dir, root, _clone) = plane();
+
+        let cut = cut_branch(&root, "alpha", "thing", Some("spike")).unwrap();
+        let generated = cut_branch(&root, "alpha", "thing", None).unwrap();
+        let taken = cut_branch(&root, "alpha", "thing", Some("spike")).unwrap_err();
+
+        assert_eq!(
+            (cut.piece.as_str(), cut.branch.as_str()),
+            ("spike", "spike")
+        );
+        assert_eq!(generated.branch, "chat-1");
+        assert!(taken.contains("already exists"), "{taken}");
+        let listed = pieces_of(&root, "alpha", "thing").unwrap();
+        assert!(
+            listed.iter().all(|p| p.said.starts_with("silent")),
+            "{listed:?}"
+        );
     }
 
     #[test]

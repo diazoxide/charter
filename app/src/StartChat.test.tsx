@@ -26,13 +26,14 @@ const ONE: StartOptions = {
 
 const options = (over: Partial<StartOptions> = {}): StartOptions => ({ ...ONE, ...over });
 
-function show(over: Partial<StartOptions> = {}) {
+function show(over: Partial<StartOptions> = {}, repo?: string) {
   const onStart = vi.fn();
   const onApprove = vi.fn();
   const onCancel = vi.fn();
   render(
     <StartChat
       options={options(over)}
+      repo={repo}
       onStart={onStart}
       onApprove={onApprove}
       onCancel={onCancel}
@@ -40,6 +41,41 @@ function show(over: Partial<StartOptions> = {}) {
   );
   return { onStart, onApprove, onCancel, user: userEvent.setup() };
 }
+
+describe("a chat that starts in a repo (GL-1)", () => {
+  it("starts on a new branch in that repo unless told otherwise", async () => {
+    const { onStart, user } = show({}, "api");
+
+    expect(screen.getByRole("checkbox", { name: /new branch in api/ })).toBeChecked();
+    await user.click(screen.getByRole("button", { name: "Start" }));
+
+    expect(onStart).toHaveBeenCalledWith("claude", "steward", false, null, true);
+  });
+
+  it("works on the branch the repo has checked out when the box is cleared", async () => {
+    const { onStart, user } = show({}, "api");
+
+    await user.click(screen.getByRole("checkbox", { name: /new branch in api/ }));
+    await user.click(screen.getByRole("button", { name: "Start" }));
+
+    expect(onStart).toHaveBeenCalledWith("claude", "steward", false, null, false);
+  });
+
+  it("asks nothing about a branch for a chat that does not start in a repo", () => {
+    show();
+
+    expect(screen.queryByRole("checkbox", { name: /new branch/ })).not.toBeInTheDocument();
+  });
+
+  it("says nothing the first hour does not say", () => {
+    // ADR 0072 §3: the picker is a first-hour surface, so it says branch and never the
+    // words charter keeps for its own internals.
+    show({}, "api");
+
+    const said = screen.getByRole("dialog").textContent ?? "";
+    expect(said).not.toMatch(/worktree|piece/i);
+  });
+});
 
 describe("the picker a chat starts from", () => {
   it("shows even when one profile is available, because one profile costs one Enter", () => {
@@ -66,7 +102,7 @@ describe("the picker a chat starts from", () => {
     await user.click(screen.getByRole("radio", { name: /release/ }));
     await user.click(screen.getByRole("button", { name: "Start" }));
 
-    expect(onStart).toHaveBeenCalledWith("claude", "release", false, null);
+    expect(onStart).toHaveBeenCalledWith("claude", "release", false, null, false);
   });
 
   it("starts on the plane's own default persona when nobody picks another", async () => {
@@ -74,7 +110,7 @@ describe("the picker a chat starts from", () => {
 
     await user.click(screen.getByRole("button", { name: "Start" }));
 
-    expect(onStart).toHaveBeenCalledWith("claude", "steward", false, null);
+    expect(onStart).toHaveBeenCalledWith("claude", "steward", false, null, false);
   });
 
   it("can start a chat that adopts no persona at all", async () => {
@@ -83,7 +119,7 @@ describe("the picker a chat starts from", () => {
     await user.click(screen.getByRole("radio", { name: "none" }));
     await user.click(screen.getByRole("button", { name: "Start" }));
 
-    expect(onStart).toHaveBeenCalledWith("claude", null, false, null);
+    expect(onStart).toHaveBeenCalledWith("claude", null, false, null, false);
   });
 
   it("leaves the pane's footer blank unless this chat asks for charter's", async () => {
@@ -94,7 +130,7 @@ describe("the picker a chat starts from", () => {
     expect(screen.getByRole("checkbox", { name: /charter's footer/ })).not.toBeChecked();
     await user.click(screen.getByRole("button", { name: "Start" }));
 
-    expect(onStart).toHaveBeenCalledWith("claude", "steward", false, null);
+    expect(onStart).toHaveBeenCalledWith("claude", "steward", false, null, false);
   });
 
   it("starts a chat that draws charter's footer when the box is ticked", async () => {
@@ -103,7 +139,7 @@ describe("the picker a chat starts from", () => {
     await user.click(screen.getByRole("checkbox", { name: /charter's footer/ }));
     await user.click(screen.getByRole("button", { name: "Start" }));
 
-    expect(onStart).toHaveBeenCalledWith("claude", "steward", true, null);
+    expect(onStart).toHaveBeenCalledWith("claude", "steward", true, null, false);
   });
 
   it("starts under the name typed in the Name field (charter-app#254)", async () => {
@@ -112,7 +148,7 @@ describe("the picker a chat starts from", () => {
     await user.type(screen.getByRole("textbox", { name: /^Name/ }), "billing bug");
     await user.click(screen.getByRole("button", { name: "Start" }));
 
-    expect(onStart).toHaveBeenCalledWith("claude", "steward", false, "billing bug");
+    expect(onStart).toHaveBeenCalledWith("claude", "steward", false, "billing bug", false);
   });
 
   it("starts under the default name when the Name field is only spaces", async () => {
@@ -121,7 +157,7 @@ describe("the picker a chat starts from", () => {
     await user.type(screen.getByRole("textbox", { name: /^Name/ }), "   ");
     await user.click(screen.getByRole("button", { name: "Start" }));
 
-    expect(onStart).toHaveBeenCalledWith("claude", "steward", false, null);
+    expect(onStart).toHaveBeenCalledWith("claude", "steward", false, null, false);
   });
 
   it("says the Name field is optional and what an empty one means", () => {
@@ -160,7 +196,14 @@ describe("the picker a chat starts from", () => {
     await user.click(screen.getByRole("checkbox", { name: /charter's footer/ }));
     await user.click(screen.getByRole("button", { name: "Approve and start" }));
 
-    expect(onApprove).toHaveBeenCalledWith("work", "steward", true, "claude --model opus", null);
+    expect(onApprove).toHaveBeenCalledWith(
+      "work",
+      "steward",
+      true,
+      "claude --model opus",
+      null,
+      false,
+    );
   });
 
   it("shows the command and asks, for a profile charter has not recorded running", async () => {
@@ -191,6 +234,7 @@ describe("the picker a chat starts from", () => {
       false,
       "CLAUDE_CONFIG_DIR=~/.claude-work claude --model opus",
       null,
+      false,
     );
     expect(onStart).not.toHaveBeenCalled();
   });
@@ -249,7 +293,7 @@ describe("the picker a chat starts from", () => {
     expect(screen.getByRole("radio", { name: "none" })).toBeChecked();
 
     return user.click(screen.getByRole("button", { name: "Start" })).then(() => {
-      expect(onStart).toHaveBeenCalledWith("claude", null, false, null);
+      expect(onStart).toHaveBeenCalledWith("claude", null, false, null, false);
     });
   });
 
@@ -311,7 +355,7 @@ describe("the picker a chat starts from", () => {
         .click(screen.getByText("plain"))
         .then(() => user.click(screen.getByRole("button", { name: "Start" })))
         .then(() => {
-          expect(onStart).toHaveBeenCalledWith("plain", "steward", false, null);
+          expect(onStart).toHaveBeenCalledWith("plain", "steward", false, null, false);
         });
     });
 
@@ -322,7 +366,7 @@ describe("the picker a chat starts from", () => {
       await user.keyboard("{ArrowDown}");
       await user.click(screen.getByRole("button", { name: "Start" }));
 
-      expect(onStart).toHaveBeenCalledWith("plain", "steward", false, null);
+      expect(onStart).toHaveBeenCalledWith("plain", "steward", false, null, false);
     });
 
     it("hides the window behind it from the keyboard and from the accessibility tree", () => {

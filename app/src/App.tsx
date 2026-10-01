@@ -996,6 +996,7 @@ function App() {
       renameTab: () => undefined,
       focusWorkspace: () => undefined,
       pickClone: () => undefined,
+      newBranch: () => undefined,
       newChatIn: () => undefined,
       // Both are rows the catalogue marks unavailable with no plane — there is nowhere to make
       // a workspace and no workspace to delete — so `perform` refuses them before either of

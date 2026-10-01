@@ -67,8 +67,9 @@ const MAX_SLUG: usize = 40;
 
 /// A chat's name as a piece name, or `None` when nothing legal survives.
 ///
-/// `None` is not a failure to swallow: charter asks for a name rather than inventing one,
-/// because a piece name is a directory and a branch the operator has to live with.
+/// `None` is not a failure to swallow: a piece name is a directory and a branch the operator
+/// has to live with, so nothing here invents one. A writing chat whose name slugs to nothing is
+/// given a numbered `chat-<n>` by [`crate::chatpiece`] instead.
 pub fn slug(name: &str) -> Option<String> {
     let mut out = String::with_capacity(name.len().min(MAX_SLUG));
     let mut pending_dash = false;
