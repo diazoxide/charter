@@ -98,8 +98,8 @@ impl Transport for Recorded {
     fn check_auth(&self, forge: &Forge) -> Result<(), ForgeError> {
         match self.auth.as_deref() {
             Some("ok") => Ok(()),
-            Some(refused) => Err(ForgeError(refused.to_string())),
-            None => Err(ForgeError(format!(
+            Some(refused) => Err(ForgeError::new(refused.to_string())),
+            None => Err(ForgeError::new(format!(
                 "nothing recorded the auth check for {}",
                 forge.host
             ))),

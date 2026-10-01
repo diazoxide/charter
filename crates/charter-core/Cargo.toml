@@ -68,6 +68,22 @@ unicode-normalization = "0.1.25"
 tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
+# The native forge clients (ADR 0070 §3, FW-2a). `ureq` is a synchronous HTTP client with no
+# runtime of its own, so a blocking core called from `charterd`'s or the app's async runtime
+# cannot panic the way a blocking `reqwest` does. rustls, with the operating system's own trust
+# store (a GHES behind a company CA verifies as the browser does); both are already in this
+# workspace's lockfile through the app.
+ureq = { version = "3.4", default-features = false, features = ["rustls", "platform-verifier"] }
+# The request and response types `ureq` speaks, and the URL a token may be sent to is parsed with.
+http = "1"
+# GraphQL queries checked at build time against the forge's published schema, so a field the
+# forge renamed fails the build and not a user (ADR 0070 §3).
+graphql_client = "0.16"
+# A forge token is a `SecretString`: no `Debug`, `Display` or `Serialize`, zeroized on drop
+# (ADR 0070 §4); the `Bearer` header value built from it is a `Zeroizing` string. `zeroize` is
+# already in this workspace's lockfile through `secrecy` and the app.
+secrecy = "0.10"
+zeroize = "1"
 uuid = { version = "1.26.1", features = ["v4"] }
 
 [features]
@@ -93,6 +109,11 @@ serde_json = { workspace = true }
 # (charter-app#81).
 stand-in.workspace = true
 tempfile.workspace = true
+# The recorded forge over HTTP (ADR 0070 §7): a server the native transport's tests talk to, which
+# answers only the requests a test mounted. It runs its own runtime on its own thread, so a
+# synchronous test drives it through `tokio`'s `block_on`.
+wiremock = "0.6"
+tokio = { version = "1", features = ["rt"] }
 
 [lints]
 workspace = true

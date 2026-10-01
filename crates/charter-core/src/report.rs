@@ -584,7 +584,7 @@ pub fn search_duplicates(draft: &Draft) -> Result<Vec<Hit>, ForgeError> {
     .collect();
     let out = forge::gh_as_the_operator(&args, forge::STATUS_TIMEOUT)?;
     serde_json::from_str(out.trim()).map_err(|e| {
-        ForgeError(format!(
+        ForgeError::new(format!(
             "gh answered something that is not a list of issues: {e}"
         ))
     })
@@ -606,7 +606,7 @@ pub fn file(draft: &Draft) -> Result<String, ForgeError> {
         .map(str::trim)
         .rfind(|l| l.starts_with("https://"));
     url.map(str::to_string).ok_or_else(|| {
-        ForgeError(format!(
+        ForgeError::new(format!(
             "gh did not answer with the new issue's address: {}",
             out.trim()
         ))

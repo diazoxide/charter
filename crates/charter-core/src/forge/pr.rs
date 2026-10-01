@@ -123,7 +123,7 @@ pub(super) fn pr_of(
             number,
             url: url.to_string(),
         }),
-        _ => Err(ForgeError(format!(
+        _ => Err(ForgeError::new(format!(
             "{doing}: the answer named no {number_key} and {url_key}"
         ))),
     }
@@ -189,7 +189,7 @@ pub(super) fn commit_named(record: &Value, key: &str) -> Option<String> {
 /// A request record whose `state` is none a backend knows.
 pub(super) fn unknown_state(record: &Value, doing: &str) -> ForgeError {
     let word = record["state"].as_str().unwrap_or("");
-    ForgeError(format!("{doing}: the forge answered the state {word:?}"))
+    ForgeError::new(format!("{doing}: the forge answered the state {word:?}"))
 }
 
 /// A pull or merge request found by its head branch: what `charter change show` reads of each
@@ -247,6 +247,6 @@ pub(super) fn not_queued_when(
         Err(why) if nothing_to_wait_for.iter().any(|w| why.contains(w)) => {
             Ok(AutoMerge::NotQueued(why))
         }
-        Err(why) => Err(ForgeError(format!("{doing} failed: {why}"))),
+        Err(why) => Err(ForgeError::new(format!("{doing} failed: {why}"))),
     }
 }

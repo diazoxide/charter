@@ -78,11 +78,11 @@ impl Transport for Cli {
         let answer = match self.run(forge.kind, &args, STATUS_TIMEOUT) {
             Ok(answer) => answer,
             Err(NoAnswer::Timeout(why)) => {
-                return Err(ForgeError(format!(
+                return Err(ForgeError::transport(format!(
                     "{cli} did not answer for {host}: {why}"
                 )));
             }
-            Err(NoAnswer::Missing(why)) => return Err(ForgeError(why)),
+            Err(NoAnswer::Missing(why)) => return Err(ForgeError::transport(why)),
         };
         let logged_in = match forge.kind {
             Kind::GitHub => answer.ok(),
@@ -92,7 +92,7 @@ impl Transport for Cli {
         if logged_in {
             Ok(())
         } else {
-            Err(ForgeError(format!(
+            Err(ForgeError::new(format!(
                 "{cli} is not authenticated for {host}. Run: {cli} auth login"
             )))
         }
@@ -124,11 +124,7 @@ fn call_with(
     let run = git::wait(child, timeout)
         .map_err(|e| NoAnswer::Missing(format!("charter could not run {cli}: {e}")))?;
     match run.code {
-        Some(code) => Ok(Reply {
-            code,
-            out: run.out,
-            err: run.err,
-        }),
+        Some(code) => Ok(Reply::of(code, run.out, run.err)),
         None => Err(NoAnswer::Timeout(format!(
             "timed out after {}s: {cli} {}",
             timeout.as_secs(),

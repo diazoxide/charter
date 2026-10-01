@@ -55,7 +55,7 @@ pub fn discover(root: &Path, options: Options, say: Sink) -> u8 {
             forge.kind.owner_noun()
         )));
         if let Err(why) = forge.check_auth() {
-            say(Say::Plain(why.0));
+            say(Say::Plain(why.to_string()));
             return 1;
         }
         let projects: Vec<Value> = match forge.backend().owned(&Caller::command(), owner) {
@@ -67,7 +67,7 @@ pub fn discover(root: &Path, options: Options, say: Sink) -> u8 {
                 })
                 .collect(),
             Err(why) => {
-                say(Say::Plain(why.0));
+                say(Say::Plain(why.to_string()));
                 return 1;
             }
         };

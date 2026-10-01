@@ -23,7 +23,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use super::{Forge, ForgeError, Kind};
+use super::{Failure, Forge, ForgeError, Kind};
 
 /// An HTTP method other than `GET`, which is what a [`Call`] with no method sends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,6 +32,7 @@ pub enum Method {
     Post,
     Put,
     Patch,
+    Delete,
 }
 
 impl Method {
@@ -40,6 +41,7 @@ impl Method {
             Method::Post => "POST",
             Method::Put => "PUT",
             Method::Patch => "PATCH",
+            Method::Delete => "DELETE",
         }
     }
 }
@@ -143,7 +145,12 @@ impl Call {
     }
 }
 
-/// What a transport got back: an exit code, the answer, and the refusal's own words.
+/// What a transport got back: an exit code, the answer, and the refusal's own words, and, from
+/// the native transport, the HTTP status and headers.
+///
+/// The CLI transport fills only the first three: `gh api` without `--include` prints no status
+/// or headers, and its argv is pinned (ADR 0046). The native transport fills all five, so a
+/// refusal's kind ([`super::Failure`]), the `Link` header and the ETag are read from it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Reply {
     pub code: i32,
@@ -151,9 +158,54 @@ pub struct Reply {
     pub out: String,
     #[serde(default)]
     pub err: String,
+    /// The HTTP status, when the transport saw one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<u16>,
+    /// The response headers the backend reads (`etag`, `link`, `x-ratelimit-*`), lower-case,
+    /// when the transport saw them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub headers: Vec<(String, String)>,
 }
 
 impl Reply {
+    /// An answer with no status or headers: what the CLI transport gets back.
+    pub fn of(code: i32, out: String, err: String) -> Reply {
+        Reply {
+            code,
+            out,
+            err,
+            status: None,
+            headers: Vec::new(),
+        }
+    }
+
+    /// The value of header `name` (lower-case), when the transport saw it.
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, v)| v.as_str())
+    }
+
+    /// What kind of failure a refusal is: from its HTTP status when the transport saw one,
+    /// and [`Failure::Unrecognised`] when it did not (the CLI's sentence is not parsed for it).
+    pub fn failure(&self) -> Failure {
+        let spent = self.header("x-ratelimit-remaining") == Some("0")
+            || self.header("retry-after").is_some();
+        match self.status {
+            Some(401) => Failure::Auth,
+            Some(403 | 429) if spent => Failure::RateLimited {
+                reset: self
+                    .header("x-ratelimit-reset")
+                    .and_then(|r| r.parse().ok()),
+            },
+            Some(403) => Failure::Forbidden,
+            Some(404) => Failure::NotFound,
+            Some(409 | 422) => Failure::Conflict,
+            _ => Failure::Unrecognised,
+        }
+    }
+
     /// Whether the forge answered the request, rather than refusing it.
     pub fn ok(&self) -> bool {
         self.code == 0

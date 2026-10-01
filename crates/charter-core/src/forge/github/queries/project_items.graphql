@@ -1,0 +1,101 @@
+# One page of a Projects v2 board's items: what each is, and the value of each field it has.
+query ProjectItems($owner: String!, $number: Int!, $after: String) {
+  repositoryOwner(login: $owner) {
+    __typename
+    ... on Organization {
+      projectV2(number: $number) {
+        ...Items
+      }
+    }
+    ... on User {
+      projectV2(number: $number) {
+        ...Items
+      }
+    }
+  }
+}
+
+fragment Items on ProjectV2 {
+  items(first: 100, after: $after) {
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    nodes {
+      id
+      content {
+        __typename
+        ... on Issue {
+          id
+          number
+          title
+          repository {
+            nameWithOwner
+          }
+        }
+        ... on PullRequest {
+          id
+          number
+          title
+          repository {
+            nameWithOwner
+          }
+        }
+        ... on DraftIssue {
+          id
+          title
+        }
+      }
+      fieldValues(first: 50) {
+        nodes {
+          __typename
+          ... on ProjectV2ItemFieldTextValue {
+            text
+            field {
+              ...FieldName
+            }
+          }
+          ... on ProjectV2ItemFieldNumberValue {
+            number
+            field {
+              ...FieldName
+            }
+          }
+          ... on ProjectV2ItemFieldDateValue {
+            date
+            field {
+              ...FieldName
+            }
+          }
+          ... on ProjectV2ItemFieldSingleSelectValue {
+            name
+            optionId
+            field {
+              ...FieldName
+            }
+          }
+          ... on ProjectV2ItemFieldIterationValue {
+            title
+            iterationId
+            field {
+              ...FieldName
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+fragment FieldName on ProjectV2FieldConfiguration {
+  __typename
+  ... on ProjectV2Field {
+    name
+  }
+  ... on ProjectV2SingleSelectField {
+    name
+  }
+  ... on ProjectV2IterationField {
+    name
+  }
+}
