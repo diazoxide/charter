@@ -297,8 +297,8 @@ _Avoid_: audit, analytics, metrics (for the whole of it), log (that is the diagn
 
 **Content gate**:
 A switch that lets telemetry keep what was said in a chat: `prompts`, or tool arguments and
-results (`tools`). Both are off by default. Only this machine opens one for a project; a
-committed setting or an org's policy can only close it (ADR 0083).
+results (`tools`). Both are off by default. Only the human opens one, for a project, on this
+machine; a project's settings or an org's policy can only close it (ADR 0083).
 _Avoid_: redaction (that is removing secrets from text), privacy mode
 
 **Export destination**:
