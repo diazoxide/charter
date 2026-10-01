@@ -127,6 +127,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Charter opened from the Finder or the Dock can hold two hundred chats.** macOS starts such
+  an app with room for only 256 open files, and each chat needs several, so the app could run
+  out well short of two hundred. It now raises its own limit as it starts, to 10,240 or the
+  system's hard limit if that is lower, and never lowers a limit it was given (#683).
 - **`charter statusline --watch` says it cannot watch instead of drawing one frame.** It has
   no repaint yet, and one frame followed by exit 0 looked like a watch that had stopped. It now
   exits 1 with the reason and points you to `charter statusline` run once per turn (#574).
