@@ -51,6 +51,11 @@ updates:
     schedule: { interval: weekly }
     groups:
       site: { patterns: ["*"] }
+    # `sharp` is replaced on purpose by the local stand-in `site/no-sharp`, through npm
+    # `overrides` (FR-5, #836), to keep its LGPL libvips out of the build. Dependabot cannot
+    # update a `file:` override, so it would fail every week.
+    ignore:
+      - dependency-name: sharp
 
   # The Tauri pair, one PR across both ecosystems (see the note at the top).
   - package-ecosystem: cargo
