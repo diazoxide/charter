@@ -11,7 +11,31 @@ mod support;
 
 use std::path::PathBuf;
 
-use charter_core::forge::pr::{self, AutoMerge, Pr, Repo, State};
+use charter_core::forge::Caller;
+use charter_core::forge::pr::{self, AutoMerge, Opened, Pr, Repo, State};
+
+/// The seam's `open_or_update`, asked of `repo`'s own backend over the CLI transport.
+fn open_or_update(
+    repo: &Repo,
+    head: &str,
+    base: &str,
+    title: &str,
+    body: &str,
+) -> Result<Opened, String> {
+    repo.backend()
+        .open_or_update(&Caller::command(), &repo.path, head, base, title, body)
+}
+
+/// The seam's `request_auto_merge`, as above.
+fn request_auto_merge(repo: &Repo, pr: &Pr, head: &str) -> Result<AutoMerge, String> {
+    repo.backend()
+        .request_auto_merge(&Caller::command(), &repo.path, pr, head)
+}
+
+/// The seam's `state`, as above.
+fn state(repo: &Repo, pr: &Pr) -> Result<State, String> {
+    repo.backend().state(&Caller::command(), &repo.path, pr)
+}
 use support::forge_cli::{Scene, in_a_child, in_child, was_asked};
 
 #[test]
@@ -85,7 +109,7 @@ mod prs {
             &scene,
             r#"{"number": 12, "html_url": "https://pr-open.test/acme/widget/pull/12"}"#,
         );
-        let opened = pr::open_or_update(
+        let opened = open_or_update(
             &repo(&scene, "github", "acme/widget"),
             "charter/save/mac",
             "release",
@@ -134,7 +158,7 @@ mod prs {
             r#"{"number": 7, "html_url": "https://pr-update.test/acme/widget/pull/7"}"#,
             "",
         );
-        let opened = pr::open_or_update(
+        let opened = open_or_update(
             &repo(&scene, "github", "acme/widget"),
             "charter/save/mac",
             "release",
@@ -166,7 +190,7 @@ mod prs {
             r#"[{"number": 9, "html_url": "https://pr-theirs.test/acme/widget/pull/9", "body": "Hand-written."}]"#,
             "",
         );
-        let opened = pr::open_or_update(
+        let opened = open_or_update(
             &repo(&scene, "github", "acme/widget"),
             "feature/x",
             "main",
@@ -219,7 +243,7 @@ mod prs {
             r#"{"number": 5, "html_url": "https://pr-marked.test/acme/widget/pull/5"}"#,
             "",
         );
-        let opened = pr::open_or_update(
+        let opened = open_or_update(
             &repo(&scene, "github", "acme/widget"),
             "feature/x",
             "main",
@@ -239,7 +263,7 @@ mod prs {
         let scene = Scene::new("pr-lookup-fails.test");
         github_lookup(&scene, 1, "", "HTTP 502: Bad Gateway");
         let created = github_create(&scene, r#"{"number": 1, "html_url": "x"}"#);
-        let said = pr::open_or_update(
+        let said = open_or_update(
             &repo(&scene, "github", "acme/widget"),
             "charter/save/mac",
             "release",
@@ -281,7 +305,7 @@ mod prs {
             r#"{"message":"Validation Failed"}"#,
             "gh: Validation Failed (HTTP 422)",
         );
-        let said = pr::open_or_update(
+        let said = open_or_update(
             &repo(&scene, "github", "acme/widget"),
             "charter/save/mac",
             "release",
@@ -331,7 +355,7 @@ mod prs {
             r#"{"iid": 3, "id": 9001, "web_url": "https://mr-open.test/acme/plat/widget/-/merge_requests/3"}"#,
             "",
         );
-        let opened = pr::open_or_update(
+        let opened = open_or_update(
             &repo(&scene, "gitlab", "acme/plat/widget"),
             "charter/save/mac",
             "release",
@@ -380,7 +404,7 @@ mod prs {
             r#"{"iid": 4, "web_url": "https://mr-update.test/acme/plat/widget/-/merge_requests/4"}"#,
             "",
         );
-        let opened = pr::open_or_update(
+        let opened = open_or_update(
             &repo(&scene, "gitlab", "acme/plat/widget"),
             "charter/save/mac",
             "release",
@@ -425,7 +449,7 @@ mod prs {
             r#"{"iid": 10, "web_url": "https://mr-fork.test/acme/plat/widget/-/merge_requests/10"}"#,
             "",
         );
-        let opened = pr::open_or_update(
+        let opened = open_or_update(
             &repo(&scene, "gitlab", "acme/plat/widget"),
             "charter/save/mac",
             "release",
@@ -512,7 +536,7 @@ mod prs {
         let asked = enable(&scene, "REBASE", 0, ENABLED, "");
         let repo = repo(&scene, "github", "acme/widget");
         assert_eq!(
-            pr::request_auto_merge(&repo, &twelve(&scene), PUSHED),
+            request_auto_merge(&repo, &twelve(&scene), PUSHED),
             Ok(AutoMerge::Queued)
         );
         assert!(was_asked(&asked));
@@ -529,7 +553,7 @@ mod prs {
         let asked = enable(&scene, "MERGE", 0, ENABLED, "");
         let repo = repo(&scene, "github", "acme/widget");
         assert_eq!(
-            pr::request_auto_merge(&repo, &twelve(&scene), PUSHED),
+            request_auto_merge(&repo, &twelve(&scene), PUSHED),
             Ok(AutoMerge::Queued)
         );
         assert!(was_asked(&asked));
@@ -546,7 +570,7 @@ mod prs {
         let asked = enable(&scene, "SQUASH", 0, ENABLED, "");
         let repo = repo(&scene, "github", "acme/widget");
         assert_eq!(
-            pr::request_auto_merge(&repo, &twelve(&scene), PUSHED),
+            request_auto_merge(&repo, &twelve(&scene), PUSHED),
             Ok(AutoMerge::Queued)
         );
         assert!(was_asked(&asked));
@@ -561,7 +585,7 @@ mod prs {
         let scene = Scene::new("am-off.test");
         settings(&scene, [false, true, true, true]);
         let repo = repo(&scene, "github", "acme/widget");
-        let said = pr::request_auto_merge(&repo, &twelve(&scene), PUSHED).unwrap_err();
+        let said = request_auto_merge(&repo, &twelve(&scene), PUSHED).unwrap_err();
         assert!(said.contains("auto-merge"), "{said}");
         assert!(said.contains("acme/widget"), "{said}");
     }
@@ -576,7 +600,7 @@ mod prs {
         settings(&scene, [true, false, false, false]);
         let repo = repo(&scene, "github", "acme/widget");
         assert_eq!(
-            pr::request_auto_merge(&repo, &twelve(&scene), PUSHED),
+            request_auto_merge(&repo, &twelve(&scene), PUSHED),
             Err("acme/widget allows no merge method".into())
         );
     }
@@ -601,7 +625,7 @@ mod prs {
             );
             let repo = repo(&scene, "github", "acme/widget");
             assert_eq!(
-                pr::request_auto_merge(&repo, &twelve(&scene), PUSHED),
+                request_auto_merge(&repo, &twelve(&scene), PUSHED),
                 Ok(AutoMerge::NotQueued(format!(
                     "gh: Pull request Pull request is in {status} status"
                 ))),
@@ -626,7 +650,7 @@ mod prs {
             "gh: Resource not accessible by integration\n",
         );
         let repo = repo(&scene, "github", "acme/widget");
-        let said = pr::request_auto_merge(&repo, &twelve(&scene), PUSHED).unwrap_err();
+        let said = request_auto_merge(&repo, &twelve(&scene), PUSHED).unwrap_err();
         assert!(
             said.contains("Resource not accessible by integration"),
             "{said}"
@@ -709,7 +733,7 @@ mod prs {
         let asked = gitlab_merge(&scene, "false");
         let repo = repo(&scene, "gitlab", "acme/plat/widget");
         assert_eq!(
-            pr::request_auto_merge(&repo, &three(&scene), PUSHED),
+            request_auto_merge(&repo, &three(&scene), PUSHED),
             Ok(AutoMerge::Queued)
         );
         assert!(was_asked(&asked));
@@ -727,7 +751,7 @@ mod prs {
         let asked = gitlab_merge(&scene, "true");
         let repo = repo(&scene, "gitlab", "acme/plat/widget");
         assert_eq!(
-            pr::request_auto_merge(&repo, &three(&scene), PUSHED),
+            request_auto_merge(&repo, &three(&scene), PUSHED),
             Ok(AutoMerge::Queued)
         );
         assert!(was_asked(&asked));
@@ -749,7 +773,7 @@ mod prs {
             gitlab_project(&scene, "default_off");
             gitlab_mr(&scene, pipeline);
             let repo = repo(&scene, "gitlab", "acme/plat/widget");
-            let got = pr::request_auto_merge(&repo, &three(&scene), PUSHED);
+            let got = request_auto_merge(&repo, &three(&scene), PUSHED);
             let Ok(AutoMerge::NotQueued(why)) = got else {
                 panic!("{host}: {got:?}");
             };
@@ -785,7 +809,7 @@ mod prs {
             gitlab_mr(&scene, r#"{"status": "running"}"#);
             gitlab_merge_answered(&scene, "false", 1, "", code_said);
             let repo = repo(&scene, "gitlab", "acme/plat/widget");
-            let got = pr::request_auto_merge(&repo, &three(&scene), PUSHED);
+            let got = request_auto_merge(&repo, &three(&scene), PUSHED);
             if queued {
                 assert_eq!(got, Ok(AutoMerge::NotQueued(code_said.into())), "{host}");
             } else {
@@ -930,7 +954,7 @@ mod prs {
                 number,
                 url: format!("https://pr-state.test/acme/widget/pull/{number}"),
             };
-            assert_eq!(pr::state(&repo, &pr), Ok(want), "#{number}");
+            assert_eq!(state(&repo, &pr), Ok(want), "#{number}");
         }
     }
 
@@ -975,7 +999,7 @@ mod prs {
                 number,
                 url: format!("https://mr-state.test/acme/plat/widget/-/merge_requests/{number}"),
             };
-            assert_eq!(pr::state(&repo, &pr), Ok(want), "!{number}");
+            assert_eq!(state(&repo, &pr), Ok(want), "!{number}");
         }
     }
 
@@ -997,7 +1021,7 @@ mod prs {
             number: 5,
             url: "y".into(),
         };
-        assert!(pr::state(&repo, &four).unwrap_err().contains("HTTP 502"));
-        assert!(pr::state(&repo, &five).unwrap_err().contains("draft"));
+        assert!(state(&repo, &four).unwrap_err().contains("HTTP 502"));
+        assert!(state(&repo, &five).unwrap_err().contains("draft"));
     }
 }

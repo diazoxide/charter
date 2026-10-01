@@ -1,0 +1,21 @@
+{
+  "source": "GitLab 19.4 REST API docs (gitlab-org/gitlab 19-4-stable-ee, doc/api), projects.md: List all projects (GET /projects, membership)",
+  "exchanges": [
+    {
+      "call": {
+        "endpoint": {
+          "rest": {
+            "method": null,
+            "path": "projects?membership=true&archived=false&per_page=100&page=1"
+          }
+        },
+        "fields": []
+      },
+      "reply": {
+        "code": 0,
+        "out": "[{\"id\": 1, \"name\": \"Api\", \"path\": \"api\", \"path_with_namespace\": \"acme/api\", \"default_branch\": \"main\", \"description\": null, \"web_url\": \"https://gitlab.com/acme/api\", \"ssh_url_to_repo\": \"git@gitlab.com:acme/api.git\", \"topics\": []}, {\"id\": 3, \"name\": \"Tool\", \"path\": \"tool\", \"path_with_namespace\": \"other/tool\", \"default_branch\": \"main\", \"description\": null, \"web_url\": \"https://gitlab.com/other/tool\", \"ssh_url_to_repo\": \"git@gitlab.com:other/tool.git\", \"topics\": []}]",
+        "err": ""
+      }
+    }
+  ]
+}

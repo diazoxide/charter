@@ -1,0 +1,37 @@
+{
+  "source": "GitHub REST API version 2022-11-28, docs.github.com/en/rest, checks: List check runs for a Git reference, and commits: Get the combined status for a specific reference",
+  "exchanges": [
+    {
+      "call": {
+        "endpoint": {
+          "rest": {
+            "method": null,
+            "path": "repos/acme/api/commits/6dcb09b5b57875f334f61aebed695e2e4193db5e/check-runs?per_page=100"
+          }
+        },
+        "fields": []
+      },
+      "reply": {
+        "code": 0,
+        "out": "{\"total_count\": 1, \"check_runs\": [{\"id\": 4, \"status\": \"completed\", \"conclusion\": \"success\"}]}",
+        "err": ""
+      }
+    },
+    {
+      "call": {
+        "endpoint": {
+          "rest": {
+            "method": null,
+            "path": "repos/acme/api/commits/6dcb09b5b57875f334f61aebed695e2e4193db5e/status?per_page=100"
+          }
+        },
+        "fields": []
+      },
+      "reply": {
+        "code": 0,
+        "out": "{\"state\": \"success\", \"total_count\": 0, \"statuses\": []}",
+        "err": ""
+      }
+    }
+  ]
+}

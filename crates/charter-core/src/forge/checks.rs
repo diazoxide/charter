@@ -23,9 +23,6 @@
 
 use serde_json::Value;
 
-use super::pr::Repo;
-use super::{Kind, quote};
-
 /// The five values, closed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Ci {
@@ -106,8 +103,10 @@ fn commit_status(status: &Value) -> One {
     })
 }
 
-/// A GitLab pipeline: its `status`. `manual` waits on a person, so it did not pass, as
-/// GitHub's `action_required` does not. A `skipped` pipeline ran nothing (`[ci skip]`, or
+/// A GitLab pipeline: its `status`, one of the thirteen GitLab 19.4 lists
+/// (`doc/api/pipelines.md`). `manual` waits on a person, so it did not pass, as GitHub's
+/// `action_required` does not. `canceling` is on its way to `canceled`, and
+/// `waiting_for_callback` is still going. A `skipped` pipeline ran nothing (`[ci skip]`, or
 /// every job skipped), so it is not counted, and alone it is `NOT RUN` — unlike a GitHub check
 /// run concluded `skipped`, which is one check among others saying it had nothing to do.
 fn pipeline(p: &Value) -> One {
@@ -116,10 +115,14 @@ fn pipeline(p: &Value) -> One {
     }
     One::Counted(match p["status"].as_str().unwrap_or("") {
         "success" => Ci::Passed,
-        "failed" | "canceled" | "manual" => Ci::Failed,
-        "created" | "waiting_for_resource" | "preparing" | "pending" | "running" | "scheduled" => {
-            Ci::Running
-        }
+        "failed" | "canceled" | "canceling" | "manual" => Ci::Failed,
+        "created"
+        | "waiting_for_resource"
+        | "preparing"
+        | "waiting_for_callback"
+        | "pending"
+        | "running"
+        | "scheduled" => Ci::Running,
         _ => Ci::Unknown,
     })
 }
@@ -146,20 +149,17 @@ pub fn sha_ok(sha: &str) -> bool {
     (7..=64).contains(&sha.len()) && sha.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-/// The checks at exactly `sha` of `repo`. `request` is the merge request's number, which
-/// GitLab's read needs and GitHub's does not.
-pub fn at(repo: &Repo, sha: &str, request: u64) -> Checks {
+/// The checks at `sha`, read by `read` only when `sha` is a commit id: anything else, and any
+/// failure `read` reports, is `UNKNOWN` with its reason. Each backend's `checks_at` is this
+/// around its own reads.
+pub(super) fn guarded(sha: &str, read: impl FnOnce() -> Result<Checks, String>) -> Checks {
     if !sha_ok(sha) {
         return Checks::unknown(format!(
             "the forge named the head {}, which is not a commit id",
             crate::shown::short(sha)
         ));
     }
-    let result = match repo.forge.kind {
-        Kind::GitHub => github(repo, sha),
-        Kind::GitLab => gitlab(repo, sha, request),
-    };
-    result.unwrap_or_else(Checks::unknown)
+    read().unwrap_or_else(Checks::unknown)
 }
 
 /// The list under `key`, read whole or refused: a page that does not hold every entry the
@@ -179,19 +179,10 @@ fn whole<'a>(answer: &'a Value, key: &str, what: &str) -> Result<&'a Vec<Value>,
     Ok(list)
 }
 
-fn github(repo: &Repo, sha: &str) -> Result<Checks, String> {
-    let (owner, name) = repo.owner_name();
-    let base = format!("repos/{}/{}/commits/{sha}", quote(owner), quote(name));
-    let runs = repo.ask(
-        repo.api(None, &format!("{base}/check-runs?per_page=100"), &[]),
-        &format!("reading the check runs at {sha} of {}", repo.path),
-    )?;
-    let statuses = repo.ask(
-        repo.api(None, &format!("{base}/status?per_page=100"), &[]),
-        &format!("reading the commit statuses at {sha} of {}", repo.path),
-    )?;
-    let runs = whole(&runs, "check_runs", "check runs")?;
-    let statuses = whole(&statuses, "statuses", "commit statuses")?;
+/// GitHub's check runs and commit statuses at one sha, summed.
+pub(super) fn github(runs: &Value, statuses: &Value) -> Result<Checks, String> {
+    let runs = whole(runs, "check_runs", "check runs")?;
+    let statuses = whole(statuses, "statuses", "commit statuses")?;
     Ok(reduce(
         runs.iter()
             .map(check_run)
@@ -199,21 +190,8 @@ fn github(repo: &Repo, sha: &str) -> Result<Checks, String> {
     ))
 }
 
-fn gitlab(repo: &Repo, sha: &str, request: u64) -> Result<Checks, String> {
-    let answer = repo.ask(
-        repo.api(
-            None,
-            &format!(
-                "projects/{}/merge_requests/{request}/pipelines?per_page=100",
-                quote(&repo.path)
-            ),
-            &[],
-        ),
-        &format!(
-            "reading the pipelines of merge request !{request} of {}",
-            repo.path
-        ),
-    )?;
+/// A GitLab merge request's pipelines, judged at one sha.
+pub(super) fn gitlab(answer: &Value, sha: &str, request: u64) -> Result<Checks, String> {
     let pipelines = answer
         .as_array()
         .ok_or("the forge's pipelines answer is not a list")?;

@@ -1,0 +1,21 @@
+{
+  "source": "GitLab 19.4 REST API docs (gitlab-org/gitlab 19-4-stable-ee, doc/api), repositories.md: List repository tree (GET /projects/:id/repository/tree; ref defaults to the default branch, recursive defaults to false)",
+  "exchanges": [
+    {
+      "call": {
+        "endpoint": {
+          "rest": {
+            "method": null,
+            "path": "projects/7/repository/tree?per_page=100&page=1"
+          }
+        },
+        "fields": []
+      },
+      "reply": {
+        "code": 0,
+        "out": "[{\"id\": \"a1\", \"name\": \"Cargo.toml\", \"type\": \"blob\", \"path\": \"Cargo.toml\", \"mode\": \"100644\"}, {\"id\": \"b2\", \"name\": \"src\", \"type\": \"tree\", \"path\": \"src\", \"mode\": \"040000\"}]",
+        "err": ""
+      }
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "source": "GitHub REST API version 2022-11-28, docs.github.com/en/rest, git/trees: Get a tree (GET /repos/{owner}/{repo}/git/trees/{tree_sha}; not recursive unless asked)",
+  "exchanges": [
+    {
+      "call": {
+        "endpoint": {
+          "rest": {
+            "method": null,
+            "path": "repos/acme/api/git/trees/main"
+          }
+        },
+        "fields": []
+      },
+      "reply": {
+        "code": 0,
+        "out": "{\"sha\": \"e5bd3914e2e596debea16f433f57875b5b90bcd6\", \"tree\": [{\"path\": \"Cargo.toml\", \"type\": \"blob\"}, {\"path\": \"src\", \"type\": \"tree\"}], \"truncated\": false}",
+        "err": ""
+      }
+    }
+  ]
+}

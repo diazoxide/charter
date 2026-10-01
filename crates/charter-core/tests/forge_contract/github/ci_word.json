@@ -1,0 +1,41 @@
+{
+  "source": "GitHub REST API version 2022-11-28, docs.github.com/en/rest; GraphQL API: Commit.statusCheckRollup (StatusState: ERROR, EXPECTED, FAILURE, PENDING, SUCCESS)",
+  "exchanges": [
+    {
+      "call": {
+        "endpoint": "graphql",
+        "fields": [
+          {
+            "text": [
+              "query",
+              "\nquery($owner:String!, $name:String!, $ref:String!) {\n  repository(owner:$owner, name:$name) {\n    ref(qualifiedName:$ref) { target { ... on Commit {\n      statusCheckRollup { state } } } }\n  }\n}\n"
+            ]
+          },
+          {
+            "text": [
+              "owner",
+              "acme"
+            ]
+          },
+          {
+            "text": [
+              "name",
+              "api"
+            ]
+          },
+          {
+            "text": [
+              "ref",
+              "charter/save"
+            ]
+          }
+        ]
+      },
+      "reply": {
+        "code": 0,
+        "out": "{\"data\": {\"repository\": {\"ref\": {\"target\": {\"statusCheckRollup\": {\"state\": \"SUCCESS\"}}}}}}",
+        "err": ""
+      }
+    }
+  ]
+}

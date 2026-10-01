@@ -1,0 +1,21 @@
+{
+  "source": "GitHub REST API version 2022-11-28, docs.github.com/en/rest, pulls: Get a pull request (a merged PR is state closed with merged true)",
+  "exchanges": [
+    {
+      "call": {
+        "endpoint": {
+          "rest": {
+            "method": null,
+            "path": "repos/acme/api/pulls/12"
+          }
+        },
+        "fields": []
+      },
+      "reply": {
+        "code": 0,
+        "out": "{\"number\": 12, \"state\": \"closed\", \"merged\": true, \"merged_at\": \"2026-10-01T10:00:00Z\", \"merge_commit_sha\": \"e5bd3914e2e596debea16f433f57875b5b90bcd6\"}",
+        "err": ""
+      }
+    }
+  ]
+}

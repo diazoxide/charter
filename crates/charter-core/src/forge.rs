@@ -28,15 +28,22 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use serde_json::Value;
 
 use crate::worktree::git;
 
+pub mod backend;
 pub mod checks;
+pub mod cli;
+mod github;
+mod gitlab;
 pub mod pr;
+pub mod recorded;
+pub mod transport;
+
+pub use backend::{Caller, ForgeBackend, Priority, Repos, Requests, Surface};
 
 /// The best-effort budget: an auth check. Python's `base.STATUS_TIMEOUT`.
 pub const STATUS_TIMEOUT: Duration = Duration::from_secs(10);
@@ -580,7 +587,10 @@ pub const TOKEN_ENV: [&str; 4] = [
 /// as widening what the program found can reach.
 ///
 /// Every credential variable `keep` accepts is passed on; [`call`] keeps them all.
-fn cli_env_keeping(cli_dir: Option<&Path>, keep: impl Fn(&str) -> bool) -> Vec<(String, String)> {
+pub(super) fn cli_env_keeping(
+    cli_dir: Option<&Path>,
+    keep: impl Fn(&str) -> bool,
+) -> Vec<(String, String)> {
     let mut dirs: Vec<String> = Vec::new();
     if let Some(dir) = cli_dir {
         dirs.push(dir.display().to_string());
@@ -608,26 +618,6 @@ fn cli_env_keeping(cli_dir: Option<&Path>, keep: impl Fn(&str) -> bool) -> Vec<(
     env
 }
 
-/// What one CLI call answered.
-struct Answer {
-    code: i32,
-    out: String,
-    err: String,
-}
-
-/// How one CLI call failed to answer at all.
-enum NoAnswer {
-    /// The deadline passed. Carries Python's `ProcTimeout` sentence.
-    Timeout(String),
-    /// It could not be started.
-    Missing(String),
-}
-
-/// Run the forge's CLI with `args`, under `timeout`.
-fn call(kind: Kind, args: &[String], timeout: Duration) -> Result<Answer, NoAnswer> {
-    call_with(kind, args, timeout, |_| true)
-}
-
 /// `gh` with `args`, logged in as the operator's own `gh` login and never as a token in this
 /// process's environment: it is given none of [`TOKEN_ENV`].
 ///
@@ -636,56 +626,19 @@ fn call(kind: Kind, args: &[String], timeout: Duration) -> Result<Answer, NoAnsw
 /// `GH_TOKEN`, and `gh` prefers that variable to its stored login, so an issue filed with it
 /// would appear under whoever owns the token. Returns stdout on exit 0; anything else is an
 /// error carrying `gh`'s own words, because a write that fails must fail loudly.
+///
+/// **Not a forge operation, and not behind the seam** (`docs/forges.md`, the parity table):
+/// it files on charter's own tracker, which is on GitHub whatever forge the project uses, and it
+/// speaks `gh`'s own `search issues` and `issue create`. It moves when the work-item area
+/// (FW-6a/b) exists.
 pub fn gh_as_the_operator(args: &[String], timeout: Duration) -> Result<String, ForgeError> {
-    match call_with(Kind::GitHub, args, timeout, |name| {
-        !TOKEN_ENV.contains(&name)
-    }) {
-        Ok(answer) if answer.code == 0 => Ok(answer.out),
-        Ok(answer) => Err(ForgeError(detail(Kind::GitHub, &answer))),
-        Err(NoAnswer::Timeout(why) | NoAnswer::Missing(why)) => Err(ForgeError(why)),
+    match cli::Cli::as_the_operator().run(Kind::GitHub, args, timeout) {
+        Ok(answer) if answer.ok() => Ok(answer.out),
+        Ok(answer) => Err(ForgeError(answer.said(Kind::GitHub))),
+        Err(transport::NoAnswer::Timeout(why) | transport::NoAnswer::Missing(why)) => {
+            Err(ForgeError(why))
+        }
     }
-}
-
-/// [`call`], passing on only the credential variables `keep` accepts.
-fn call_with(
-    kind: Kind,
-    args: &[String],
-    timeout: Duration,
-    keep: impl Fn(&str) -> bool,
-) -> Result<Answer, NoAnswer> {
-    let cli = kind.cli();
-    let Some(path) = find_cli(cli) else {
-        return Err(NoAnswer::Missing(format!(
-            "charter could not find {cli} on PATH — install it and log in (`{cli} auth login`)"
-        )));
-    };
-    let mut cmd = Command::new(&path);
-    cmd.args(args)
-        .env_clear()
-        .envs(cli_env_keeping(path.parent(), keep))
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let child = crate::forklock::spawn(&mut cmd)
-        .map_err(|e| NoAnswer::Missing(format!("charter could not run {cli}: {e}")))?;
-    let run = git::wait(child, timeout)
-        .map_err(|e| NoAnswer::Missing(format!("charter could not run {cli}: {e}")))?;
-    match run.code {
-        Some(code) => Ok(Answer {
-            code,
-            out: run.out,
-            err: run.err,
-        }),
-        None => Err(NoAnswer::Timeout(format!(
-            "timed out after {}s: {cli} {}",
-            timeout.as_secs(),
-            args.join(" ")
-        ))),
-    }
-}
-
-fn strings(args: &[&str]) -> Vec<String> {
-    args.iter().map(|s| (*s).to_string()).collect()
 }
 
 /// `urllib.parse.quote(value, safe="")`.
@@ -701,358 +654,6 @@ pub fn quote(value: &str) -> String {
     out
 }
 
-/// A failed call's own words: stderr, else stdout, else the exit. Python's `detail`.
-fn detail(kind: Kind, answer: &Answer) -> String {
-    let said = if !answer.err.trim().is_empty() {
-        answer.err.trim()
-    } else {
-        answer.out.trim()
-    };
-    if said.is_empty() {
-        format!("{} exited {}", kind.cli(), answer.code)
-    } else {
-        said.to_string()
-    }
-}
-
-impl Forge {
-    /// `gh api --hostname H <path>` or `glab --hostname H api <path>`.
-    fn api_args(&self, path: &str) -> Vec<String> {
-        match self.kind {
-            Kind::GitHub => strings(&["api", "--hostname", &self.host, path]),
-            Kind::GitLab => strings(&["--hostname", &self.host, "api", path]),
-        }
-    }
-
-    /// Refuse unless the CLI is installed and logged in for this host.
-    pub fn check_auth(&self) -> Result<(), ForgeError> {
-        let cli = self.kind.cli();
-        let args = match self.kind {
-            Kind::GitHub => strings(&["auth", "status", "--hostname", &self.host]),
-            Kind::GitLab => strings(&["--hostname", &self.host, "auth", "status"]),
-        };
-        let answer = match call(self.kind, &args, STATUS_TIMEOUT) {
-            Ok(answer) => answer,
-            Err(NoAnswer::Timeout(why)) => {
-                return Err(ForgeError(format!(
-                    "{cli} did not answer for {}: {why}",
-                    self.host
-                )));
-            }
-            Err(NoAnswer::Missing(why)) => return Err(ForgeError(why)),
-        };
-        let logged_in = match self.kind {
-            Kind::GitHub => answer.code == 0,
-            // glab exits 0 while logged in to nothing, so its own words are asked too.
-            Kind::GitLab => {
-                answer.code == 0 && format!("{}{}", answer.out, answer.err).contains("Logged in")
-            }
-        };
-        if logged_in {
-            Ok(())
-        } else {
-            Err(ForgeError(format!(
-                "{cli} is not authenticated for {}. Run: {cli} auth login",
-                self.host
-            )))
-        }
-    }
-
-    /// One strict JSON GET: a failure raises and never reads as "empty". Python's
-    /// `_api_strict`, in each backend's own vocabulary.
-    fn api_strict(&self, path: &str, what_failed: &str) -> Result<Value, ForgeError> {
-        let answer = match call(self.kind, &self.api_args(path), LIST_TIMEOUT) {
-            Ok(answer) => answer,
-            Err(NoAnswer::Timeout(why)) => {
-                return Err(ForgeError(format!("{what_failed} ({path}) {why}")));
-            }
-            Err(NoAnswer::Missing(why)) => return Err(ForgeError(why)),
-        };
-        if answer.code != 0 {
-            return Err(ForgeError(format!(
-                "{what_failed} failed ({path}): {}",
-                detail(self.kind, &answer)
-            )));
-        }
-        parse(self.kind, &answer.out, path)
-    }
-
-    /// Every repo under `owner`, normalised to the record shape Python's backends produce.
-    pub fn list_repos(&self, owner: &str) -> Result<Vec<Value>, ForgeError> {
-        let enc = quote(owner);
-        let raw = match self.kind {
-            Kind::GitHub => match self.paged_github(&format!("orgs/{enc}/repos"), owner, true) {
-                Err(Paged::NotAnOrg) => {
-                    // A personal account 404s on the org endpoint with an identical record
-                    // shape on the user one. Only a real 404 falls back; any other failure
-                    // is a failure.
-                    match self.paged_github(&format!("users/{enc}/repos"), owner, false) {
-                        Ok(items) => items,
-                        Err(Paged::Failed(e)) => return Err(e),
-                        Err(Paged::NotAnOrg) => unreachable!("only the org probe says this"),
-                    }
-                }
-                Err(Paged::Failed(e)) => return Err(e),
-                Ok(items) => items,
-            },
-            Kind::GitLab => self.paged_gitlab(owner)?,
-        };
-        Ok(raw.iter().map(|r| self.normalize(r)).collect())
-    }
-
-    /// Every repo under `owner` that the operator logged in to this forge's CLI can reach,
-    /// private ones included — what the workspace repo picker lists (ADR 0055).
-    ///
-    /// Not [`Self::list_repos`]: that asks what `owner` exposes, and GitHub answers that for a
-    /// personal account with its public repos only. This asks as the operator, so two
-    /// operators on one plane are each shown their own list, and nothing is saved.
-    pub fn list_accessible(&self, owner: &str) -> Result<Vec<Value>, ForgeError> {
-        let raw = match self.kind {
-            Kind::GitHub => match self.paged_github(
-                "user/repos?affiliation=owner,collaborator,organization_member",
-                owner,
-                false,
-            ) {
-                Ok(items) => items,
-                Err(Paged::Failed(e)) => return Err(e),
-                Err(Paged::NotAnOrg) => unreachable!("only the org probe says this"),
-            },
-            Kind::GitLab => self.paged_gitlab_at(owner, |page| {
-                format!("projects?membership=true&archived=false&per_page=100&page={page}")
-            })?,
-        };
-        // The forge answers for every owner the operator belongs to; the plane declared one.
-        // A subgroup's repos are under its group's path, so they are kept.
-        let under = format!("{}/", owner.to_lowercase());
-        Ok(raw
-            .iter()
-            .map(|r| self.normalize(r))
-            .filter(|r| {
-                r.get("path_with_namespace")
-                    .and_then(Value::as_str)
-                    .is_some_and(|pwn| pwn.to_lowercase().starts_with(&under))
-            })
-            .collect())
-    }
-
-    fn paged_github(&self, base: &str, owner: &str, org_probe: bool) -> Result<Vec<Value>, Paged> {
-        let mut out = Vec::new();
-        let mut page = 1;
-        let joint = if base.contains('?') { '&' } else { '?' };
-        loop {
-            let path = format!("{base}{joint}per_page=100&page={page}");
-            let answer = match call(self.kind, &self.api_args(&path), LIST_TIMEOUT) {
-                Ok(answer) => answer,
-                Err(NoAnswer::Timeout(why)) => {
-                    return Err(Paged::Failed(ForgeError(format!(
-                        "listing repos for GitHub owner '{owner}' {why}"
-                    ))));
-                }
-                Err(NoAnswer::Missing(why)) => return Err(Paged::Failed(ForgeError(why))),
-            };
-            if answer.code != 0 {
-                let blob = format!("{} {}", answer.out, answer.err);
-                if org_probe
-                    && page == 1
-                    && (blob.contains("HTTP 404") || blob.contains("\"status\":\"404\""))
-                {
-                    return Err(Paged::NotAnOrg);
-                }
-                return Err(Paged::Failed(ForgeError(format!(
-                    "listing repos for GitHub owner '{owner}' failed ({path}): {}",
-                    detail(self.kind, &answer)
-                ))));
-            }
-            let batch = parse(self.kind, &answer.out, &path).map_err(Paged::Failed)?;
-            let items = batch.as_array().cloned().unwrap_or_default();
-            if items.is_empty() {
-                break;
-            }
-            let short = items.len() < 100;
-            out.extend(items);
-            if short {
-                break;
-            }
-            page += 1;
-        }
-        Ok(out)
-    }
-
-    fn paged_gitlab(&self, owner: &str) -> Result<Vec<Value>, ForgeError> {
-        let enc = quote(owner);
-        self.paged_gitlab_at(owner, |page| {
-            format!(
-                "groups/{enc}/projects?per_page=100&page={page}&include_subgroups=true&archived=false"
-            )
-        })
-    }
-
-    /// Every page of a GitLab listing, `path_of` naming each page's path.
-    fn paged_gitlab_at(
-        &self,
-        owner: &str,
-        path_of: impl Fn(usize) -> String,
-    ) -> Result<Vec<Value>, ForgeError> {
-        let mut out = Vec::new();
-        let mut page = 1;
-        loop {
-            let path = path_of(page);
-            let batch = self.api_strict(&path, "GitLab API call").map_err(|e| {
-                ForgeError(format!(
-                    "listing repos for GitLab group '{owner}' failed: {e}"
-                ))
-            })?;
-            let items = batch.as_array().cloned().unwrap_or_default();
-            if items.is_empty() {
-                break;
-            }
-            let short = items.len() < 100;
-            out.extend(items);
-            if short {
-                break;
-            }
-            page += 1;
-        }
-        Ok(out)
-    }
-
-    /// One forge record in the shape every backend produces (Python's `_normalize`).
-    fn normalize(&self, raw: &Value) -> Value {
-        let get = |key: &str| raw.get(key).cloned().unwrap_or(Value::Null);
-        let text_or_empty = |key: &str| match raw.get(key) {
-            Some(v) if truthy(v) => v.clone(),
-            _ => Value::String(String::new()),
-        };
-        let (name, pwn, ssh) = match self.kind {
-            Kind::GitHub => (get("name"), get("full_name"), text_or_empty("ssh_url")),
-            Kind::GitLab => (
-                match raw.get("path") {
-                    Some(v) if truthy(v) => v.clone(),
-                    _ => get("name"),
-                },
-                get("path_with_namespace"),
-                text_or_empty("ssh_url_to_repo"),
-            ),
-        };
-        let web = match self.kind {
-            Kind::GitHub => text_or_empty("html_url"),
-            Kind::GitLab => text_or_empty("web_url"),
-        };
-        let topics = match raw.get("topics") {
-            Some(v) if truthy(v) => v.clone(),
-            _ => Value::Array(Vec::new()),
-        };
-        serde_json::json!({
-            "id": get("id"),
-            "name": name,
-            "path_with_namespace": pwn,
-            "default_branch": get("default_branch"),
-            "description": text_or_empty("description"),
-            "web_url": web,
-            "ssh_url": ssh,
-            "topics": topics,
-            "forge": self.kind.word(),
-        })
-    }
-
-    /// The top-level file names of a repo, raising on any failure so a failed probe never
-    /// reads as "no recognised stack". Python's `repo_tree_strict`.
-    pub fn repo_tree_strict(
-        &self,
-        repo: &Value,
-        git_ref: Option<&str>,
-    ) -> Result<Vec<String>, ForgeError> {
-        match self.kind {
-            Kind::GitHub => {
-                let path = repo
-                    .get("path_with_namespace")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
-                let (owner, name) = path.split_once('/').unwrap_or((path, ""));
-                let git_ref = git_ref
-                    .filter(|r| !r.is_empty())
-                    .or_else(|| {
-                        repo.get("default_branch")
-                            .and_then(Value::as_str)
-                            .filter(|r| !r.is_empty())
-                    })
-                    .unwrap_or("HEAD");
-                let api = format!(
-                    "repos/{}/{}/git/trees/{}",
-                    quote(owner),
-                    quote(name),
-                    quote(git_ref)
-                );
-                let answer = match call(self.kind, &self.api_args(&api), LIST_TIMEOUT) {
-                    Ok(answer) => answer,
-                    Err(NoAnswer::Timeout(why)) => {
-                        return Err(ForgeError(format!(
-                            "listing tree for {path}@{git_ref} {why}"
-                        )));
-                    }
-                    Err(NoAnswer::Missing(why)) => return Err(ForgeError(why)),
-                };
-                if answer.code != 0 {
-                    return Err(ForgeError(format!(
-                        "listing tree for {path}@{git_ref} failed: {}",
-                        detail(self.kind, &answer)
-                    )));
-                }
-                if answer.out.trim().is_empty() {
-                    return Ok(Vec::new());
-                }
-                let data: Value = serde_json::from_str(&answer.out).map_err(|e| {
-                    ForgeError(format!(
-                        "GitHub API returned malformed JSON (tree {path}@{git_ref}): {e}"
-                    ))
-                })?;
-                Ok(data
-                    .get("tree")
-                    .and_then(Value::as_array)
-                    .map(|entries| {
-                        entries
-                            .iter()
-                            .map(|e| e.get("path").and_then(Value::as_str).unwrap_or_default())
-                            .filter(|p| !p.contains('/'))
-                            .map(str::to_string)
-                            .collect()
-                    })
-                    .unwrap_or_default())
-            }
-            Kind::GitLab => {
-                let rid = quote(&py_str(repo.get("id").unwrap_or(&Value::Null)));
-                let ref_q = git_ref
-                    .filter(|r| !r.is_empty())
-                    .map(|r| format!("&ref={}", quote(r)))
-                    .unwrap_or_default();
-                let mut out = Vec::new();
-                let mut page = 1;
-                loop {
-                    let path =
-                        format!("projects/{rid}/repository/tree?per_page=100&page={page}{ref_q}");
-                    let batch = self.api_strict(&path, "GitLab API call")?;
-                    let items = batch.as_array().cloned().unwrap_or_default();
-                    if items.is_empty() {
-                        break;
-                    }
-                    let short = items.len() < 100;
-                    out.extend(items.iter().map(|e| {
-                        e.get("name")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_string()
-                    }));
-                    if short {
-                        break;
-                    }
-                    page += 1;
-                }
-                Ok(out)
-            }
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------------------
 // The status-line pair: an open change, and the branch's last CI result                   #
 // ---------------------------------------------------------------------------------------
@@ -1066,46 +667,8 @@ impl Forge {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Raised;
 
-/// GitHub's `statusCheckRollup.state` → charter's neutral vocabulary. Python's
-/// `github._CI_MAP`; anything unlisted is no answer rather than an invented one.
-const GITHUB_CI: [(&str, &str); 5] = [
-    ("SUCCESS", "success"),
-    ("FAILURE", "failed"),
-    ("ERROR", "failed"),
-    ("PENDING", "pending"),
-    ("EXPECTED", "pending"),
-];
-
-/// GitLab's pipeline `status` → the same vocabulary. Python's `gitlab._CI_MAP`.
-const GITLAB_CI: [(&str, &str); 11] = [
-    ("success", "success"),
-    ("failed", "failed"),
-    ("running", "running"),
-    ("canceled", "canceled"),
-    ("skipped", "skipped"),
-    ("manual", "manual"),
-    ("pending", "pending"),
-    ("created", "pending"),
-    ("preparing", "pending"),
-    ("waiting_for_resource", "pending"),
-    ("scheduled", "pending"),
-];
-
-/// The one GraphQL document charter sends, byte for byte as `github._ROLLUP_QUERY` spells it
-/// — leading newline included, because it is a value on a command line a recorded `gh`
-/// matches against.
-///
-/// GraphQL and not REST because **there is no single CI status in GitHub's REST API**: a
-/// commit carries N check runs plus legacy commit statuses, and GitHub computes the rollup
-/// only here. Inventing an aggregation would either lose information or state something
-/// GitHub does not.
-const ROLLUP_QUERY: &str = "\nquery($owner:String!, $name:String!, $ref:String!) {\n  \
-                            repository(owner:$owner, name:$name) {\n    \
-                            ref(qualifiedName:$ref) { target { ... on Commit {\n      \
-                            statusCheckRollup { state } } } }\n  }\n}\n";
-
 /// Python's truthiness, which is what `if not arr: return None` asks.
-fn falsy(value: &Value) -> bool {
+pub(super) fn falsy(value: &Value) -> bool {
     !truthy(value)
 }
 
@@ -1114,7 +677,7 @@ fn falsy(value: &Value) -> bool {
 /// `Ok(None)` is Python's `if arr else None` — nothing to report. `Err(Raised)` is every
 /// shape where Python would have thrown: a dict (`KeyError`), a string or a number
 /// (`TypeError`/`AttributeError`), or a list whose first element is not a dict.
-fn first_field(answer: Option<Value>, key: &str) -> Result<Option<Value>, Raised> {
+pub(super) fn first_field(answer: Option<Value>, key: &str) -> Result<Option<Value>, Raised> {
     let Some(answer) = answer else {
         return Ok(None);
     };
@@ -1133,156 +696,37 @@ fn first_field(answer: Option<Value>, key: &str) -> Result<Option<Value>, Raised
 }
 
 /// A mapping table's answer for `word`, or `None` for a word it does not list.
-fn mapped(table: &[(&str, &str)], word: &str) -> Option<String> {
+pub(super) fn mapped(table: &[(&str, &str)], word: &str) -> Option<String> {
     table
         .iter()
         .find(|(from, _)| *from == word)
         .map(|(_, to)| (*to).to_string())
 }
 
-impl Forge {
-    /// Best-effort JSON GET. `None` on **every** failure — a missing CLI, a non-zero exit, a
-    /// timeout, an empty body or unparsable JSON. Python's `_api` on both backends.
-    ///
-    /// Split from [`Self::api_strict`] deliberately and for the reason `github.py`'s module
-    /// docstring gives: the callers here feed a surface that renders every turn and must
-    /// never raise, while `list_repos` must never let a failure read as "no repos".
-    fn api(&self, path: &str) -> Option<Value> {
-        let answer = call(self.kind, &self.api_args(path), STATUS_TIMEOUT).ok()?;
-        if answer.code != 0 || answer.out.trim().is_empty() {
-            return None;
-        }
-        serde_json::from_str(&answer.out).ok()
-    }
-
-    /// The open change on `branch`, as the forge's own field holds it — **uncoerced**.
-    ///
-    /// Coercion is [`crate::glrefresh::change_or_none`]'s, because Python coerces in
-    /// `glstate` and not in the backend, and a forge that serialises its id as `"42"` must be
-    /// read the same way on both sides of that split.
-    pub fn open_change(&self, path: &str, branch: &str) -> Result<Option<Value>, Raised> {
-        match self.kind {
-            Kind::GitHub => {
-                let (owner, name) = path.split_once('/').unwrap_or((path, ""));
-                let asked = format!(
-                    "repos/{}/{}/pulls?state=open&head={}:{}&per_page=1",
-                    quote(owner),
-                    quote(name),
-                    quote(owner),
-                    quote(branch)
-                );
-                first_field(self.api(&asked), "number")
-            }
-            Kind::GitLab => {
-                let asked = format!(
-                    "projects/{}/merge_requests?state=opened&source_branch={}&per_page=1",
-                    quote(path),
-                    quote(branch)
-                );
-                first_field(self.api(&asked), "iid")
-            }
-        }
-    }
-
-    /// The branch's last CI result as one of [`crate::cistate::CI_STATES`], or `None`.
-    ///
-    /// `None` collapses six worlds — no pipeline, a CLI failure, a timeout, a non-zero exit,
-    /// unparsable JSON, and a state charter's vocabulary does not list — and
-    /// `charter/forge/base.py` records that as deliberate: the cell this feeds has room for
-    /// one word, and "I could not look" is not one of the seven.
-    pub fn ci_status(&self, path: &str, branch: &str) -> Result<Option<String>, Raised> {
-        match self.kind {
-            Kind::GitHub => self.rollup(path, branch),
-            Kind::GitLab => {
-                let asked = format!(
-                    "projects/{}/pipelines?ref={}&per_page=1",
-                    quote(path),
-                    quote(branch)
-                );
-                let status = first_field(self.api(&asked), "status")?;
-                Ok(mapped(&GITLAB_CI, word_of(status.as_ref())))
-            }
-        }
-    }
-
-    /// GitHub's rollup, over `gh api graphql`.
-    ///
-    /// **`-f`, never `-F`** (charter #323). None of these three values is charter's: `branch`
-    /// is read out of the tree's `HEAD` and `path` out of `git remote get-url origin`, so
-    /// both are written by whoever wrote the repo. `-F` gives a value magic meaning — a
-    /// leading `@` names a file to read it from, and `-` means stdin — which turned a status
-    /// refresh into an arbitrary local file read **by a process holding the forge token**, on
-    /// a surface that repaints every ten seconds with no human in the loop. `-f` sends the
-    /// value as a literal string.
-    ///
-    /// **Not percent-encoded**, and this is the one place that differs from
-    /// [`Self::open_change`]. Those are URL path and query segments, which the server decodes
-    /// again; these are GraphQL variables, which are JSON strings GitHub never decodes.
-    /// Encoding here would send `feature%2Fx` for `feature/x`, match no ref, and blank the CI
-    /// cell for every branch with a slash in its name.
-    fn rollup(&self, path: &str, branch: &str) -> Result<Option<String>, Raised> {
-        let (owner, name) = path.split_once('/').unwrap_or((path, ""));
-        let args = vec![
-            "api".to_string(),
-            "graphql".to_string(),
-            "--hostname".to_string(),
-            self.host.clone(),
-            "-f".to_string(),
-            format!("query={ROLLUP_QUERY}"),
-            "-f".to_string(),
-            format!("owner={owner}"),
-            "-f".to_string(),
-            format!("name={name}"),
-            "-f".to_string(),
-            format!("ref={branch}"),
-        ];
-        let Ok(answer) = call(self.kind, &args, STATUS_TIMEOUT) else {
-            return Ok(None);
-        };
-        if answer.code != 0 {
-            return Ok(None);
-        }
-        let Ok(data) = serde_json::from_str::<Value>(&answer.out) else {
-            return Ok(None);
-        };
-        // `(x or {}).get(…)` five times over. The `or {}` is what makes a MISSING key
-        // harmless; a key that is present and is not an object is where the next `.get`
-        // makes Python raise, and that distinction is the whole of this loop.
-        let mut node = data;
-        for key in ["data", "repository", "ref", "target", "statusCheckRollup"] {
-            let Some(map) = node.as_object() else {
-                return Err(Raised);
-            };
-            let found = map.get(key).cloned().unwrap_or(Value::Null);
-            node = if falsy(&found) {
-                Value::Object(serde_json::Map::new())
-            } else {
-                found
-            };
-        }
-        let Some(rollup) = node.as_object() else {
-            return Err(Raised);
-        };
-        Ok(mapped(&GITHUB_CI, word_of(rollup.get("state"))))
-    }
-}
-
 /// `value or ""` for a field that is meant to be a word: Python looks the falsy ones up as
 /// the empty string, which no map lists.
-fn word_of(value: Option<&Value>) -> &str {
+pub(super) fn word_of(value: Option<&Value>) -> &str {
     match value {
         Some(Value::String(word)) => word,
         _ => "",
     }
 }
 
-enum Paged {
-    NotAnOrg,
-    Failed(ForgeError),
+/// The neutral records under `owner` of a listing that answers for every owner the account
+/// belongs to. A subgroup's repos are under its group's path, so they are kept.
+pub(super) fn under_owner(records: impl Iterator<Item = Value>, owner: &str) -> Vec<Value> {
+    let under = format!("{}/", owner.to_lowercase());
+    records
+        .filter(|r| {
+            r.get("path_with_namespace")
+                .and_then(Value::as_str)
+                .is_some_and(|pwn| pwn.to_lowercase().starts_with(&under))
+        })
+        .collect()
 }
 
-/// A CLI's stdout as JSON; an empty body is `[]`, a legal and successful answer.
-fn parse(kind: Kind, out: &str, path: &str) -> Result<Value, ForgeError> {
+/// A forge's answer as JSON; an empty body is `[]`, a legal and successful answer.
+pub(super) fn parse(kind: Kind, out: &str, path: &str) -> Result<Value, ForgeError> {
     if out.trim().is_empty() {
         return Ok(Value::Array(Vec::new()));
     }

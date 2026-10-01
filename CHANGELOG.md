@@ -106,7 +106,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`charter statusline --watch` says it cannot watch instead of drawing one frame.** It has
   no repaint yet, and one frame followed by exit 0 looked like a watch that had stopped. It now
   exits 1 with the reason and points you to `charter statusline` run once per turn (#574).
-
+- **Two GitLab pipeline states are no longer read as unknown.** A pipeline that is
+  `waiting_for_callback` now shows as pending and counts as running, and auto-merge waits for it
+  instead of saying there is nothing to wait for. A pipeline that is `canceling` shows as
+  canceled and did not pass. GitLab lists both in its pipelines API (#711).
 - **Linux no longer waits half a minute for a desktop portal that cannot start.** Before GTK
   starts, charter asks the session bus to start the portal and gives it 300 ms. If the bus is
   still silent, charter restarts itself without the session bus, and the window comes up in

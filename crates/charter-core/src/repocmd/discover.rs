@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use serde_json::Value;
 
 use super::{Say, Sink};
-use crate::forge::{self, Forge, py_str};
+use crate::forge::{self, Caller, Forge, py_str};
 use crate::inventory;
 
 /// How many stack probes run at once. Python's `_build_batch` worker count.
@@ -58,7 +58,7 @@ pub fn discover(root: &Path, options: Options, say: Sink) -> u8 {
             say(Say::Plain(why.0));
             return 1;
         }
-        let projects: Vec<Value> = match forge.list_repos(owner) {
+        let projects: Vec<Value> = match forge.backend().owned(&Caller::command(), owner) {
             Ok(all) => all
                 .into_iter()
                 .filter(|p| {
@@ -183,6 +183,8 @@ fn build_batch(forge: &Forge, projects: &[Value], no_probe: bool) -> (Vec<Value>
     let stacks: Mutex<Vec<Option<Result<&'static str, ()>>>> =
         Mutex::new(vec![None; projects.len()]);
     let next = AtomicUsize::new(0);
+    let backend = forge.backend();
+    let backend = backend.as_ref();
     std::thread::scope(|scope| {
         for _ in 0..PROBES.min(projects.len()) {
             scope.spawn(|| {
@@ -192,8 +194,8 @@ fn build_batch(forge: &Forge, projects: &[Value], no_probe: bool) -> (Vec<Value>
                         break;
                     };
                     let git_ref = project.get("default_branch").and_then(Value::as_str);
-                    let found = forge
-                        .repo_tree_strict(project, git_ref)
+                    let found = backend
+                        .top_level(&Caller::command(), project, git_ref)
                         .map(|files| inventory::classify_stack(&files))
                         .map_err(|_| ());
                     if let Ok(mut slots) = stacks.lock() {
