@@ -461,8 +461,8 @@ fn a_pr_mode_on_a_plane_whose_origin_is_no_forge_charter_knows_is_named() {
         );
         assert_eq!(
             r.hint,
-            "Saves stop at a local commit, and the plane shows as blocked, until origin is on a \
-             forge a [[forge]] block declares, or mode is commit or push."
+            "Saves stop at a local commit, shown as a notice, until origin is on a forge a \
+             [[forge]] block declares, or mode is commit or push."
         );
     }
     let (_d, root) = plane("[plane]\nmode = \"push\"\n");
