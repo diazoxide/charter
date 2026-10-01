@@ -168,3 +168,40 @@ fn a_sub_agents_call_names_its_agent_only_on_a_harness_where_that_was_measured()
         "ADR 0066: opencode has no child runs"
     );
 }
+
+/// A crashed guard whose harness has closed stderr, with a host socket that is gone, or none.
+fn crash_with_stderr_closed(socket: Option<&std::path::Path>) -> std::process::ExitStatus {
+    let dir = tempfile::tempdir().expect("a directory");
+    let mut command = Command::new(CHARTER);
+    command
+        .args(["hook", "pretooluse"])
+        .current_dir(dir.path())
+        .env_clear()
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .env("HOME", dir.path())
+        .env(CHAT_ENV, "7")
+        .env("CHARTER_TEST_HOOK_PANICS", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some(socket) = socket {
+        command.env(SOCKET_ENV, socket);
+    }
+    let mut child = command.spawn().expect("charter runs");
+    drop(child.stderr.take());
+    drop(child.stdin.take());
+    child.wait_with_output().expect("charter finishes").status
+}
+
+#[test]
+fn a_crashed_guard_with_its_stderr_closed_still_refuses_with_exit_2() {
+    let dir = tempfile::tempdir().expect("a directory");
+    let gone = dir.path().join("gone.sock");
+
+    assert_eq!(
+        crash_with_stderr_closed(Some(&gone)).code(),
+        Some(2),
+        "a host that cannot be told and a stderr that cannot be written still refuse"
+    );
+    assert_eq!(crash_with_stderr_closed(None).code(), Some(2));
+}

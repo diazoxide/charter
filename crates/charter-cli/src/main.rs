@@ -1273,6 +1273,7 @@ fn tell_the_host_about_the_tool_call(
     answered: &hooks::Answered,
     took: std::time::Duration,
 ) {
+    use std::io::Write as _;
     let Some(socket) = std::env::var_os(SOCKET_ENV) else {
         return;
     };
@@ -1280,7 +1281,10 @@ fn tell_the_host_about_the_tool_call(
         .ok()
         .and_then(|chat| chat.parse().ok())
     else {
-        eprintln!(
+        // Never `eprintln!` here: this runs from a crashed guard's panic hook too, and a
+        // print to a closed stderr panics there, which aborts instead of refusing (exit 2).
+        let _ = writeln!(
+            std::io::stderr(),
             "charter: this {word} names no chat (`${}` is not a chat number), so the app was \
              not told",
             hookwire::CHAT_ENV
@@ -1307,7 +1311,10 @@ fn tell_the_host_about_the_tool_call(
         hookwire::ChatToken::from_env().as_ref(),
         &call,
     ) {
-        eprintln!("charter: the app did not take this {word} ({why})");
+        let _ = writeln!(
+            std::io::stderr(),
+            "charter: the app did not take this {word} ({why})"
+        );
     }
 }
 

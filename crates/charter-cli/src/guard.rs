@@ -165,7 +165,12 @@ pub fn pretooluse(payload: &str, now: Option<&str>) -> crate::hooks::Answered {
 pub(crate) fn refuse_on_a_crash(tell_the_host: fn(&str)) {
     // The word this process answers, for the host's event log: the call is refused, and one
     // event says so (FD-9).
-    let word = std::env::args().nth(2).unwrap_or_default();
+    // `args_os`, read before anything is installed: `args` panics on a word that is not
+    // UTF-8, and nothing on the way to this hook may panic.
+    let word = std::env::args_os()
+        .nth(2)
+        .map(|word| word.to_string_lossy().into_owned())
+        .unwrap_or_default();
     std::panic::set_hook(Box::new(move |info| {
         let at = info
             .location()
