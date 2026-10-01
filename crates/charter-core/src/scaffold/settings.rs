@@ -264,11 +264,13 @@ pub fn ensure_opencode_ask(root: &Path, glob: &str, dry_run: bool) -> Wrote {
 /// - with neither, appends it, as Python does.
 ///
 /// Patterns are compared as opencode compares them, `*` and `?` as wildcards, against the
-/// glob's text. An existing entry for `glob` keeps its place: its decision changes and its
-/// order does not.
+/// glob's text. An existing entry for `glob` with another decision (an `allow` made an `ask`)
+/// changes where it stands, as Python changes it, unless a later non-deny entry matches it; then
+/// it is moved by the same rule, so that broader allow cannot outrank it. A `deny` is appended,
+/// the last word wherever it would otherwise go.
 pub fn ensure_opencode_rule(root: &Path, glob: &str, decision: &str, dry_run: bool) -> Wrote {
     let path = root.join(OPENCODE);
-    let mut map = if path.exists() {
+    let map = if path.exists() {
         let parsed = std::fs::read_to_string(&path)
             .ok()
             .and_then(|raw| pyjson::loads_strict(&raw));
@@ -279,7 +281,7 @@ pub fn ensure_opencode_rule(root: &Path, glob: &str, decision: &str, dry_run: bo
     } else {
         Map::new()
     };
-    let mut perms = match map.get("permission") {
+    let perms = match map.get("permission") {
         Some(Value::Object(perms)) => perms.clone(),
         Some(_) => {
             return Wrote::Malformed(format!(
@@ -308,6 +310,21 @@ pub fn ensure_opencode_rule(root: &Path, glob: &str, decision: &str, dry_run: bo
     }
     let matches =
         |pattern: &str| glob::Pattern::new(pattern).is_ok_and(|pattern| pattern.matches(glob));
+    // An entry already there with another decision changes where it stands, as Python changes
+    // it, unless a later entry that is not a deny matches it: that one would answer first, so
+    // the entry is taken out and placed again by the rule below.
+    if had.is_some() {
+        let outranked = block
+            .iter()
+            .skip_while(|(pattern, _)| pattern.as_str() != glob)
+            .skip(1)
+            .any(|(pattern, value)| value.as_str() != Some("deny") && matches(pattern));
+        if !outranked {
+            block.insert(glob.to_owned(), Value::String(decision.to_owned()));
+            return finish(&path, map, perms, block, dry_run);
+        }
+        block.shift_remove(glob);
+    }
     let after_match = block
         .iter()
         .enumerate()
@@ -318,7 +335,7 @@ pub fn ensure_opencode_rule(root: &Path, glob: &str, decision: &str, dry_run: bo
         .values()
         .position(|value| value.as_str() == Some("deny"));
     match after_match.or(first_deny) {
-        Some(at) if had.is_none() && decision != "deny" && at < block.len() => {
+        Some(at) if decision != "deny" && at < block.len() => {
             let mut placed = Map::new();
             for (i, (key, value)) in std::mem::take(&mut block).into_iter().enumerate() {
                 if i == at {
@@ -332,13 +349,24 @@ pub fn ensure_opencode_rule(root: &Path, glob: &str, decision: &str, dry_run: bo
             block.insert(glob.to_owned(), Value::String(decision.to_owned()));
         }
     }
+    finish(&path, map, perms, block, dry_run)
+}
+
+/// Puts `block` back as `permission.bash` and writes `opencode.json`, or says it would.
+fn finish(
+    path: &Path,
+    mut map: Map<String, Value>,
+    mut perms: Map<String, Value>,
+    block: Map<String, Value>,
+    dry_run: bool,
+) -> Wrote {
     perms.insert("bash".to_owned(), Value::Object(block));
     map.insert("permission".to_owned(), Value::Object(perms));
     let text = pyjson::dumps_indent2(&Value::Object(map));
     if dry_run {
         return Wrote::Created;
     }
-    match write(&path, &text) {
+    match write(path, &text) {
         Ok(()) => Wrote::Created,
         Err(wrote) => wrote,
     }

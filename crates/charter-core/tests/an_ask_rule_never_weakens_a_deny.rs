@@ -236,3 +236,50 @@ fn a_template_ask_is_in_force_in_an_allowlist_and_a_later_deny_still_wins() {
         "a deny after the allow still decides"
     );
 }
+
+#[test]
+fn guard_ask_over_an_existing_allow_moves_it_past_a_later_broader_allow() {
+    charter_core::unsteered!();
+    let (_dir, root) = project();
+    opencode_with(&root, &[("cargo publish *", "allow"), ("cargo *", "allow")]);
+
+    let (said, code) = guardcmd::report(&root, "Bash(cargo publish *)", Bucket::Ask, false);
+
+    assert_eq!(code, 0, "{said}");
+    assert_eq!(
+        opencode_decides(&root, "cargo publish --dry-run").as_deref(),
+        Some("ask"),
+        "the ask is what opencode answers, not the later allow: {:?}",
+        opencode_rules(&root)
+    );
+    assert_eq!(
+        opencode_decides(&root, "cargo build").as_deref(),
+        Some("allow")
+    );
+    assert_eq!(
+        opencode_rules(&root)
+            .iter()
+            .filter(|(glob, _)| glob == "cargo publish *")
+            .count(),
+        1,
+        "one rule for the glob, not two"
+    );
+}
+
+#[test]
+fn an_existing_allow_nothing_later_outranks_is_made_an_ask_where_it_stands() {
+    charter_core::unsteered!();
+    let (_dir, root) = project();
+    opencode_with(&root, &[("cargo publish *", "allow"), ("git *", "ask")]);
+
+    guardcmd::report(&root, "Bash(cargo publish *)", Bucket::Ask, false);
+
+    assert_eq!(
+        opencode_rules(&root)[..2],
+        [
+            ("cargo publish *".to_owned(), "ask".to_owned()),
+            ("git *".to_owned(), "ask".to_owned())
+        ],
+        "the order the file had, as Python keeps it"
+    );
+}

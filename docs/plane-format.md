@@ -3262,7 +3262,9 @@ Measured after `init` + `guard ask 'terraform apply *'`:
   goes right after the last non-deny entry whose pattern matches the glob's own text (`"cargo
   *": "allow"` for `cargo publish *`), so in an allowlist an allow that would answer the same
   command never comes after it; a deny written after that entry still decides. An entry
-  already there keeps its place. Claude Code weighs `deny` before `ask` and `allow` whatever the order, so its
+  already there with another decision (an `allow` made an `ask`) changes where it stands, as
+  Python changes it, unless a later non-deny entry matches it; then it is moved by the same
+  rule, so that broader allow cannot outrank it. A `deny` is appended. Claude Code weighs `deny` before `ask` and `allow` whatever the order, so its
   writer only says an exact deny and adds nothing beside it.
 - Fixture: `{"permission": {"bash": {"charter handoff *": "ask", "terraform apply *": "ask"}}}`.
 
