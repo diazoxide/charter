@@ -13,6 +13,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The first run lays your project out for the stack you work in.** Project templates for
+  Rust, TypeScript, Python, Go, monorepos and docs-only repos each add an engineer and a
+  reviewer persona, a review checklist (`REVIEW.md`, in the reviewer's refs), how a change is
+  checked in the workspace's `workspace.md`, and the publish and deploy commands, such as
+  `cargo publish` or `twine upload`, that every agent asks you about before it runs them. The
+  first run picks the one that fits your repo from the files at its top level; pick another, or
+  None, before you open it. Nothing is written into your repo, and nothing you already have is
+  replaced.
 - **A project can say which charter it needs.** When a newer charter starts writing something an
   older one would get wrong, it lists the feature in `charter.toml`'s `requires` and sets
   `schema = 2`. A charter that lacks the feature, or does not understand the project's `schema`,

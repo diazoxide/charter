@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { commands, type Recents } from "./bindings";
+import { commands, type Recents, type TemplateChoice } from "./bindings";
 import { FirstRun } from "./FirstRun";
 
 /**
@@ -57,7 +57,7 @@ export function Opener({
   trouble?: string;
   /** Opens a repository into the local project, for the first run. Left out, the first run is
    *  never drawn: the window passes it only until it has held a project. */
-  onOpenRepo?: (path: string) => void;
+  onOpenRepo?: (path: string, template: TemplateChoice) => void;
   /** Opens the local project with `<cli> auth login` in a shell tab, for the first run. */
   onSignInToForge?: (cli: string) => void;
   /** Whether that is happening right now. */

@@ -9,7 +9,8 @@
 //! Three pieces, each a seam of its own:
 //!
 //! - [`local_plane`] and [`ensure_local_plane`]: where the plane lives, and making it.
-//! - [`take_in`]: a repo cloned into a workspace of its own name.
+//! - [`take_in`]: a repo cloned into a workspace of its own name, and [`take_in_from`]: the
+//!   same, with the project laid out from a project template first (FR-17).
 //! - [`harnesses`]: which harnesses are installed and whether each has been signed in to.
 //!
 //! # Where the local plane lives
@@ -80,6 +81,20 @@ pub struct TakenIn {
     pub workspace: String,
     /// The repo's clone inside it, which is where a chat about it works.
     pub clone: PathBuf,
+    /// The project template laid out, by id, when one was.
+    pub template: Option<String>,
+}
+
+/// Which project template the first run lays out (FR-17).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Choice {
+    /// The one that fits the repo ([`crate::template::detect`]), or none when none does: what
+    /// the first run picks until the operator picks something else.
+    Detect,
+    /// None: the project as `charter init` makes it.
+    Blank,
+    /// This one, by id, whatever the repo looks like.
+    Named(String),
 }
 
 /// Clones `repo` into a workspace of the plane at `root` named after it.
@@ -89,8 +104,47 @@ pub struct TakenIn {
 /// written to. Taking in a repo that is already there answers with what is there, so
 /// opening the same repo twice is the same workspace both times.
 pub fn take_in(root: &Path, repo: &Path) -> Result<TakenIn, String> {
-    crate::scaffold::adopt_as_workspace(root, repo, chrono::Utc::now())
-        .map(|(workspace, clone)| TakenIn { workspace, clone })
+    take_in_from(root, repo, &Choice::Blank)
+}
+
+/// [`take_in`], with the project template `choice` names laid into the project first and its
+/// starter given to the workspace the repo is taken into.
+///
+/// The template is resolved before anything is written, so one charter does not ship is
+/// refused with the project as it was. It is laid out before the repo is copied, so a template
+/// that cannot be laid out stops the open before the slow part; what it wrote stays, and
+/// opening again with it, or with none, carries on from there. Laying a template out is
+/// additive ([`crate::template::apply`]), so a second repo opened into the same project adds
+/// what the first one's template did not.
+pub fn take_in_from(root: &Path, repo: &Path, choice: &Choice) -> Result<TakenIn, String> {
+    let template = match choice {
+        Choice::Blank => None,
+        Choice::Detect => crate::template::detect(repo),
+        Choice::Named(id) => Some(crate::template::named(id).ok_or_else(|| {
+            format!(
+                "charter has no project template called '{}', so nothing was copied. Pick one \
+                 of: {}.",
+                crate::shown::one_line(id, 64),
+                crate::template::all()
+                    .iter()
+                    .map(|one| one.id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })?),
+    };
+    if let Some(template) = template {
+        crate::template::apply(root, template)?;
+    }
+    let (workspace, clone) = crate::scaffold::adopt_as_workspace(root, repo, chrono::Utc::now())?;
+    if let Some(template) = template {
+        crate::template::seed_workspace(root, &workspace, template)?;
+    }
+    Ok(TakenIn {
+        workspace,
+        clone,
+        template: template.map(|one| one.id.clone()),
+    })
 }
 
 /// One harness as the first run found it.

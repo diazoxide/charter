@@ -1,0 +1,14 @@
+# The Docs only project template. Everything else in this directory is copied into a new
+# project as it is laid out here (crates/charter-core/src/template.rs). Change any file and
+# `version` goes up by one.
+title = "Docs only"
+summary = "Documentation, with no code to build."
+version = 1
+
+[detect]
+# A repo is this stack when one of these files is at its top level.
+files = ["mkdocs.yml", "book.toml", "docusaurus.config.js", "docusaurus.config.ts", "antora.yml"]
+
+[guard]
+# Commands every harness asks the operator about before a chat runs them.
+ask = ["mkdocs gh-deploy *"]

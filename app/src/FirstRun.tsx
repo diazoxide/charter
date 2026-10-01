@@ -1,5 +1,22 @@
-import { useCallback, useEffect, useState } from "react";
-import { commands, type FirstRunFound, type ForgeRow, type HarnessRow } from "./bindings";
+import { useCallback, useEffect, useId, useState } from "react";
+import * as RadioGroup from "@radix-ui/react-radio-group";
+import {
+  commands,
+  type FirstRunFound,
+  type ForgeRow,
+  type HarnessRow,
+  type TemplateChoice,
+} from "./bindings";
+
+/** The radio values that are not a template's id. Ids are lower-case words, so neither clashes. */
+const FITS = ":fits";
+const NONE = ":none";
+
+function choiceOf(value: string): TemplateChoice {
+  if (value === FITS) return { kind: "detect" };
+  if (value === NONE) return { kind: "blank" };
+  return { kind: "named", id: value };
+}
 
 /**
  * What a machine that has never opened a project sees (FR-4, #603).
@@ -21,6 +38,12 @@ import { commands, type FirstRunFound, type ForgeRow, type HarnessRow } from "./
  * signed in, opens the local project and runs `<cli> auth login` in a shell tab there — the
  * CLI's own login, in a tab the operator can leave, so it adds nothing to the interrupt budget.
  *
+ * **The project template is chosen here, and already chosen** (FR-17). It starts on the one that
+ * fits the repo, which the core works out from the files at the repo's top level, so an operator
+ * who does not look at it still gets one, and picking it costs no extra step. A template adds
+ * personas, a review checklist and the commands every harness asks about first; it writes
+ * nothing into the repo.
+ *
  * The path box is there for the opener's reason: a native folder dialog cannot be driven by
  * the scenario tests, and an operator who knows the path types it faster than they click.
  */
@@ -31,8 +54,8 @@ export function FirstRun({
   opening,
   trouble,
 }: {
-  /** Asks the core to open this repo into the local project. */
-  onOpenRepo: (path: string) => void;
+  /** Asks the core to open this repo into the local project, laid out from `template`. */
+  onOpenRepo: (path: string, template: TemplateChoice) => void;
   /** Shows the ordinary opener, for a project that already exists. */
   onOpenProject: () => void;
   /** Opens the local project with `<cli> auth login` running in a shell tab. */
@@ -44,6 +67,8 @@ export function FirstRun({
 }) {
   const [found, setFound] = useState<FirstRunFound>();
   const [typed, setTyped] = useState("");
+  const [template, setTemplate] = useState(FITS);
+  const templateId = useId();
 
   useEffect(() => {
     let gone = false;
@@ -63,10 +88,10 @@ export function FirstRun({
     void commands
       .pickProject()
       .then((answer) => {
-        if (answer.status === "ok" && answer.data) onOpenRepo(answer.data);
+        if (answer.status === "ok" && answer.data) onOpenRepo(answer.data, choiceOf(template));
       })
       .catch(() => undefined);
-  }, [onOpenRepo]);
+  }, [onOpenRepo, template]);
 
   return (
     <section className="opener first-run" aria-labelledby="first-run-heading">
@@ -88,7 +113,7 @@ export function FirstRun({
         className="by-path"
         onSubmit={(event) => {
           event.preventDefault();
-          if (typed.trim() && !opening) onOpenRepo(typed.trim());
+          if (typed.trim() && !opening) onOpenRepo(typed.trim(), choiceOf(template));
         }}
       >
         <label htmlFor="first-run-path">Or type the repo&apos;s path</label>
@@ -105,6 +130,47 @@ export function FirstRun({
           Open
         </button>
       </form>
+
+      {found && found.templates.length > 0 && (
+        <>
+          <h2 id={templateId}>Project template</h2>
+          <p className="came-back">
+            Personas, a review checklist and the commands charter asks you about before a chat runs
+            them, for the stack you work in. Nothing is written into your repo.
+          </p>
+          <RadioGroup.Root
+            className="choices"
+            name="template"
+            value={template}
+            onValueChange={setTemplate}
+            aria-labelledby={templateId}
+            disabled={opening}
+          >
+            {[
+              { id: FITS, title: "Fits the repo", summary: "charter picks by the repo's files." },
+              ...found.templates,
+              { id: NONE, title: "None", summary: "Only the steward persona." },
+            ].map((one) => (
+              <div className="choice" key={one.id}>
+                <RadioGroup.Item
+                  className="dot"
+                  value={one.id}
+                  id={`${templateId}-${one.id}`}
+                  aria-describedby={`${templateId}-${one.id}-says`}
+                >
+                  <RadioGroup.Indicator className="dot-mark" />
+                </RadioGroup.Item>
+                <label className="who" htmlFor={`${templateId}-${one.id}`}>
+                  {one.title}
+                </label>
+                <span className="meta" id={`${templateId}-${one.id}-says`}>
+                  <span className="what">{one.summary}</span>
+                </span>
+              </div>
+            ))}
+          </RadioGroup.Root>
+        </>
+      )}
 
       {opening && (
         <p className="came-back" role="status">

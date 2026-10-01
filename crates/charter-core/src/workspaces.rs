@@ -316,10 +316,7 @@ impl Workspace {
             return Ok(());
         }
         std::fs::create_dir_all(&self.dir)?;
-        let body = CHARTER_TEMPLATE
-            .replace("{name}", &self.name)
-            .replace("{vision}", VISION_PLACEHOLDER)
-            .replace("{sessions}", crate::sessionrecord::NONE_YET);
+        let body = self.fresh_charter();
         match std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -329,6 +326,46 @@ impl Workspace {
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Ok(()),
             Err(e) => Err(e),
         }
+    }
+
+    /// The `workspace.md` charter gives this workspace when it has none.
+    fn fresh_charter(&self) -> String {
+        CHARTER_TEMPLATE
+            .replace("{name}", &self.name)
+            .replace("{vision}", VISION_PLACEHOLDER)
+            .replace("{sessions}", crate::sessionrecord::NONE_YET)
+    }
+
+    /// Gives each `(header, body)` section of `workspace.md` that still holds what charter
+    /// first wrote there the body given instead: a project template's starter (FR-17). A
+    /// section somebody has written in is theirs and is left as it is, and so is a file that is
+    /// not there. `true` when anything was replaced.
+    pub fn seed_sections(&self, sections: &[(&str, &str)]) -> io::Result<bool> {
+        let path = self.dir.join("workspace.md");
+        self.writable(&path)?;
+        let current = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(e) => return Err(e),
+        };
+        let fresh = self.fresh_charter();
+        let mut next = current.clone();
+        for (header, body) in sections {
+            let untouched = mdsection::section_body(&fresh, header);
+            if !untouched.is_empty() && mdsection::section_body(&next, header) == untouched {
+                next = mdsection::replace(&next, header, body);
+            }
+        }
+        if next == current {
+            return Ok(false);
+        }
+        crate::rewrite::replace(
+            &self.plane_root,
+            &path,
+            next.as_bytes(),
+            crate::rewrite::Mode::Kept,
+        )?;
+        Ok(true)
     }
 
     /// Set the `## Vision` body, creating the charter first when it is missing.

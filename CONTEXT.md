@@ -18,6 +18,14 @@ extensions and everything that holds for the whole machine are its settings. A c
 never a project, on any forge: it is a **repo** (ADR 0072).
 _Avoid_: instance, plane (in UI text), project (for a GitLab repo)
 
+**Project template**:
+A part of **Project**: a stack's starting layout, chosen in the first run — two personas, a
+starter `workspace.md` context, a review checklist (`REVIEW.md` in the reviewer persona's refs)
+and the commands every harness asks about first. charter ships one each for Rust, TypeScript,
+Python, Go, monorepos and docs-only repos, as data with a version, and lays one out only where
+nothing is there yet (FR-17).
+_Avoid_: plane template, scaffold, starter kit
+
 **Workspace**:
 One of the five concepts: a named piece of work inside a plane, with its own charter
 (`workspace.md`), memory, todos and repos.
