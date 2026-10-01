@@ -365,6 +365,32 @@ code by hand happens. charter opens a file there at a line, and never replaces i
 is a setting of this machine, so it belongs to **Project** (ADR 0072 §2, ADR 0081).
 _Avoid_: external editor; IDE (except in the category phrase "the agent IDE")
 
+**Comparison**:
+A base and a head in one of a workspace's repos, which git turns into the diff a review shows: a
+chat's branch against its base, two refs, uncommitted work, one agent turn, a request. A
+cross-repo change is one comparison per member. It is a part of a **Workspace** (ADR 0084).
+_Avoid_: diff (for the pair; the diff is what git computes from it), changeset
+
+**Review**:
+The operator reading a comparison in a Review tab, commenting on its lines, and ending it by
+sending the comments to the chat, publishing them to the request, or approving. There is one
+review per branch, and it remembers where the operator was. The forge's own review of a request
+stays the review of record. It is a view of a **Workspace**'s repos (ADR 0084).
+_Avoid_: code review (for charter's), PR review (that is the forge's), diff view
+
+**Review draft**:
+A review's unsent comments: each one's line and the operator's words, never code. Only the
+window writes it, it is kept on this machine and travels with the operator's other machines,
+and it leaves only by **Send to agent**, **Publish** or being kept. It belongs to **Workspace**
+(ADR 0084).
+_Avoid_: pending review (that is GitHub's), draft (unqualified)
+
+**Human edit**:
+A change the operator saved to a file in a chat's branch from the light editor. charter records
+which file and lines, and tells the chat's agent at its next turn. It is a part of a **Chat**'s
+history (ADR 0084).
+_Avoid_: manual edit, override
+
 **Session record**:
 A summary a chat writes of its own session when it closes through **Smart close** — its goal,
 what it did, what it decided, what is still open and how to pick it up — filed as one file in

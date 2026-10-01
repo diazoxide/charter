@@ -4329,8 +4329,8 @@ identifier `dev.charter.app`. The keyring rows are the operating system's store 
 `<data>` is charter's data home (ADR 0075, amending ADR 0069): `$CHARTER_DATA_HOME`, else
 `$XDG_DATA_HOME/charter`, else the OS data directory's `charter/` (`~/Library/Application
 Support/charter` on macOS, `~/.local/share/charter` on Linux). Its rows are **decided, not yet
-written**: AU-3 writes the audit's, RR-16 a runner's bare repos (ADR 0078) and KN-32 the
-search index's (ADR 0079), and no code does yet. Their writer refuses a `<data>` under a plane
+written**: AU-3 writes the audit's, RR-16 a runner's bare repos (ADR 0078), KN-32 the
+search index's (ADR 0079) and RC-7 the reviews (ADR 0084), and no code does yet. Their writer refuses a `<data>` under a plane
 or inside any git work tree.
 
 | Path | Tier | What it holds | Written by |
@@ -4361,6 +4361,7 @@ or inside any git work tree.
 | `<data>/audit/retention.json` | Machine, syncable | **decided, not yet written** (ADR 0075). The audit's retention and disk cap (defaults one year and 2 GiB); every change is itself an audit entry | `charterd`, from the viewer's setting (AU-8) |
 | `<data>/index/` | Machine, device-bound, rebuildable | **decided, not yet written** (ADR 0079). The machine's search index over the transcript archive (KN-31) only: `current`, naming the live generation, and one directory per generation holding `search.sqlite` (WAL, FTS5 contentless at `detail=full`: terms with their positions and row metadata, no text as written; a span the shape scanner flags is indexed as its kind). Each row carries its chat, run, turn and the `<clone-key>` of the clone the chat ran in, which the host filters a chat's search on. Rows stop answering when the archive drops their chat, and leave the file at the `optimize` and checkpoint that follow every erasure. Chats are denied it. Not backed up | `charterd`, its only writer (KN-32) |
 | `<data>/index/writer.lock` | Machine, device-bound, transient | **decided, not yet written** (ADR 0079). The machine index writer's advisory `flock` | `charterd` (KN-32) |
+| `<data>/reviews/` | Machine, syncable | **decided, not yet written** (ADR 0069, ADR 0084). One file per review of a branch: the operator's review draft (each comment's path, side, line or range, the commit it was written against and the operator's text; never code), the *Viewed* ticks, the last reviewed head, where the operator was, and the comments already sent. A review is named by project, workspace, repo and branch, never by an absolute path. Chats are denied it, reading and writing. Backed up by FR-10 | the window (RC-7) |
 | keyring item for a human's audit pseudonym key | Keyring | **decided, not yet written** (ADR 0075). One key per human principal on this device, which turns that person's principal into the pseudonyms the audit stores. Deleting it is erasure. Its item name is AU-18's | AU-18 |
 | keyring item for the device key | Keyring | **decided, not yet written** (ADR 0066, ADR 0075). The key that signs this device's audit chain; on a headless host, an age-encrypted file stands in for it. Its item name is AU-3's | AU-3 |
 | `<config>/runners.json` | Machine, device-bound | **decided, not yet written** (ADR 0078). The runners this machine uses: each one's name, connector (an argument vector, never a shell string), preset, provider if any, the runner's device id and its pinned public link key. Written only from a human scope, and denied to chats. A project names a runner and never defines one | `charter runner add` and `remove`, and the window (RR-1) |
