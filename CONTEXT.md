@@ -260,7 +260,8 @@ were pinned)
 **Editor protocol**:
 The part of the session host's public protocol an editor integration speaks: find which chat or
 workspace a file belongs to, ask the window to show one, type a selection into a chat's prompt
-without sending it, and list a chat's changed files. Nothing in it makes an agent act (ADR 0081).
+without sending it, and list a chat's changed files. Nothing in it starts, sends to or answers a
+chat. It is a part of the session host, so it belongs to **Project** (ADR 0072 §2, ADR 0081).
 _Avoid_: editor API, editor extension API (that is a non-goal: code running inside charter's editor)
 
 **Audit**:
@@ -341,13 +342,16 @@ _Avoid_: terminal (for the tab), console, plain chat
 **Light editor**:
 charter's one editor, for reading a file of a chat's branch, making a small edit in it and
 reviewing a diff. It has no language server, debugger, repo-wide refactor or extension code of
-anyone else's; deep work opens in **your editor** at the same file and line (ADR 0081).
-_Avoid_: editor (unqualified), IDE, code editor
+anyone else's; deep work opens in **your editor** at the same file and line. It is a view of a
+**Workspace**'s repos (ADR 0072 §2, ADR 0081).
+_Avoid_: editor (unqualified), code editor, IDE (except in the category phrase "the agent IDE",
+which is charter as a whole)
 
 **Your editor**:
 The editor the operator already uses (VS Code, Zed, a JetBrains IDE, or `$EDITOR`), where writing
-code by hand happens. charter opens a file there at a line, and never replaces it (ADR 0081).
-_Avoid_: IDE (for charter), external editor
+code by hand happens. charter opens a file there at a line, and never replaces it. Which editor
+is a setting of this machine, so it belongs to **Project** (ADR 0072 §2, ADR 0081).
+_Avoid_: external editor; IDE (except in the category phrase "the agent IDE")
 
 **Session record**:
 A summary a chat writes of its own session when it closes through **Smart close** — its goal,
@@ -572,5 +576,6 @@ _Avoid_: forge plugin, GitHub integration
 charter's own extension for VS Code or Zed, or its own plugin for JetBrains IDEs: installed in
 **your editor**, it opens a file's chat in charter, sends a selection to a chat's prompt for the
 operator to send, and shows a chat's changes. It speaks the **editor protocol**, and is neither a
-charter **extension** nor a **harness plugin** (ADR 0081).
+charter **extension** nor a **harness plugin**. It is a view of a **Workspace** and its chats,
+drawn in your editor (ADR 0072 §2, ADR 0081).
 _Avoid_: extension or plugin (on their own), IDE plugin
