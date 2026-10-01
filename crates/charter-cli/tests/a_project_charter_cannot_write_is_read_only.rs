@@ -56,6 +56,58 @@ impl Project {
             .expect("the binary runs")
     }
 
+    /// A project a charter has been used on — scaffolded, with a workspace that has a memory
+    /// and a session record — which then names a feature this charter lacks. A read command
+    /// run here has real files to read, so a write it makes on the way is not hidden by an
+    /// empty project's early return.
+    fn lived_in() -> Self {
+        let project = Project::new("");
+        std::fs::remove_file(project.root.join("charter.toml")).unwrap();
+        for args in [
+            vec!["init", "--forge", "github", "--owner", "acme"],
+            vec![
+                "workspace",
+                "create",
+                "alpha",
+                "--vision",
+                "Ship the widget",
+            ],
+            vec![
+                "workspace",
+                "remember",
+                "The widget ships on Friday",
+                "-w",
+                "alpha",
+            ],
+        ] {
+            let out = project.run(&args);
+            assert!(
+                out.status.success(),
+                "{args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        let sessions = project.root.join("workspaces/alpha/sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::write(
+            sessions.join("20260501-120000-the-widget.md"),
+            "---\ntitle: The widget\ndate: 2026-05-01 12:00:00\nchat: 1\nchat-name: unknown\n\
+             persona: none\nharness: claude\nprofile: unknown\nconversation: unknown\n\
+             workspace: alpha\ncwd: unknown\n---\n\n# The widget\n\n## Goal\nShip it.\n",
+        )
+        .unwrap();
+        let manifest = project.root.join("charter.toml");
+        let written = std::fs::read_to_string(&manifest).unwrap();
+        let required = written.replacen(
+            "schema = 1\n",
+            "schema = 2\nrequires = [{ feature = \"memory-proposals\", since = \"0.9.0\" }]\n",
+            1,
+        );
+        assert_ne!(written, required, "init writes `schema = 1`: {written}");
+        std::fs::write(&manifest, required).unwrap();
+        project
+    }
+
     /// Every file under the project, with its bytes.
     fn tree(&self) -> BTreeMap<PathBuf, Vec<u8>> {
         fn walk(dir: &Path, base: &Path, into: &mut BTreeMap<PathBuf, Vec<u8>>) {
@@ -284,4 +336,75 @@ fn a_command_that_only_reads_still_runs_on_a_read_only_project_and_says_so() {
         assert_eq!(said.matches("read-only").count(), 1, "{args:?}: {said}");
         assert_eq!(project.tree(), before, "{args:?} wrote to the project");
     }
+}
+
+/// One read command on [`Project::lived_in`]: it runs, says once that the project is read-only,
+/// and leaves every file in the project exactly as it was (#833).
+fn only_reads(args: &[&str]) {
+    let project = Project::lived_in();
+    let before = project.tree();
+    let out = project.run(args);
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{args:?} must still read: {said}");
+    assert!(
+        said.contains("read-only") && said.contains("memory-proposals"),
+        "{args:?} says once that the project is read-only: {said}"
+    );
+    assert_eq!(said.matches("read-only").count(), 1, "{args:?}: {said}");
+    let after = project.tree();
+    let changed: Vec<&PathBuf> = before
+        .keys()
+        .chain(after.keys())
+        .filter(|path| before.get(*path) != after.get(*path))
+        .collect();
+    assert!(
+        changed.is_empty(),
+        "{args:?} wrote to the project: {changed:?}"
+    );
+}
+
+#[test]
+fn persona_list_only_reads_a_read_only_project() {
+    only_reads(&["persona", "list"]);
+}
+
+#[test]
+fn change_list_only_reads_a_read_only_project() {
+    only_reads(&["change", "list", "-w", "alpha"]);
+}
+
+#[test]
+fn session_list_only_reads_a_read_only_project() {
+    only_reads(&["session", "list", "-w", "alpha"]);
+}
+
+#[test]
+fn harness_list_only_reads_a_read_only_project() {
+    only_reads(&["harness", "list"]);
+}
+
+#[test]
+fn guard_list_only_reads_a_read_only_project() {
+    only_reads(&["guard", "list"]);
+}
+
+#[test]
+fn bare_guard_lists_and_only_reads_a_read_only_project() {
+    only_reads(&["guard"]);
+}
+
+#[test]
+fn workspace_recall_only_reads_a_read_only_project() {
+    only_reads(&["workspace", "recall", "-w", "alpha"]);
+}
+
+#[test]
+fn workspace_recall_with_a_query_only_reads_a_read_only_project() {
+    only_reads(&["workspace", "recall", "-q", "widget", "-w", "alpha"]);
+}
+
+/// Already on FR-24's list (#827), and proven the same way here: it had no test of its own.
+#[test]
+fn workspace_current_only_reads_a_read_only_project() {
+    only_reads(&["workspace", "current"]);
 }

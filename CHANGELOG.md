@@ -17,7 +17,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   older one would get wrong, it lists the feature in `charter.toml`'s `requires` and sets
   `schema = 2`. A charter that lacks the feature, or does not understand the project's `schema`,
   or cannot read its `charter.toml`, treats the project as read-only. `charter` still reads it
-  (`status`, `recall`, `workspace list`, `statusline`, `doctor`), saying once that it is
+  (`status`, `recall`, `statusline`, `doctor`, and the `list` commands of workspaces, personas,
+  changes, sessions, harnesses and guards, plus `workspace recall`), saying once that it is
   read-only and why. Every command that could write it is refused, extension commands,
   `doctor --fix`, `init` and `reinit` included, with the version to upgrade to (update the app); `charter
   doctor`'s `schema` row says the same. Keys and sections charter does not know are kept when it
