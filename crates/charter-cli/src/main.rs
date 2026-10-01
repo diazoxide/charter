@@ -301,17 +301,16 @@ enum Command {
     /// is the only place that record exists (ADR 0019). Everywhere else it draws the frame and
     /// the workspace's identity row, and says in the body which surfaces it does not draw yet.
     Statusline {
-        /// Repaint in place until Ctrl-C, on a harness with no status bar of its own.
+        /// Refused in this version: statusline does not repaint yet.
         ///
-        /// Taken and answered with the same one line, because there is no render to repeat
-        /// yet. Accepted rather than refused: a plane wired for `charter statusline --watch`
-        /// must not meet a usage error from a `charter` that appeared first on PATH.
+        /// Drawing one frame and exiting 0 read as a watch that stopped by itself. The flag is
+        /// still parsed, so a plane wired for `charter statusline --watch` meets charter's
+        /// reason, not a usage error.
         #[arg(long)]
         watch: bool,
-        /// Seconds between repaints with --watch.
+        /// Refused with --watch: there are no repaints to space out yet.
         ///
-        /// Taken and ignored, for the same reason `--watch` is: there is nothing to repaint
-        /// yet. Refusing the flag would refuse a command line a plane already has.
+        /// Parsed for the same reason `--watch` is, and never used.
         #[allow(dead_code)]
         #[arg(long, default_value = "10")]
         interval: f64,
@@ -2807,9 +2806,17 @@ fn main() -> ExitCode {
             return gl_refresh(&workspace, *detach, now.as_deref());
         }
         Command::Statusline { watch, now, .. } => {
-            // Nothing writes a payload to a `--watch` render, and reading stdin there would
-            // sit on the deadline for no reason.
-            let payload = if *watch { String::new() } else { payload() };
+            // Before stdin is read or a plane is looked for: nothing is drawn, nothing is
+            // recorded, and the answer does not depend on where it is asked (HY-11).
+            if *watch {
+                return refused(
+                    "`statusline --watch` is not in this version yet; statusline does not repaint, \
+                     and one frame would pass for a watch that stopped, so run \
+                     `charter statusline` once per turn from the harness's status-line \
+                     command instead",
+                );
+            }
+            let payload = payload();
             // Resolved BEFORE the render, and a bad value is refused rather than quietly
             // replaced by the wall clock: the flag exists so a differential can pin the ages
             // on the row, and a pin that silently did not take would make the comparison

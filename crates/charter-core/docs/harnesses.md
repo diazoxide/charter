@@ -261,5 +261,6 @@ reads `unknown` rather than being half-armed from somewhere else.
 Claude Code's footer command. Inside the app it prints an empty line — the window already
 draws the plane — and still records the turn's token usage. Run anywhere else, it draws the
 plane's identity row and says in its body which parts it does not draw yet: repos, personas
-and the session. `--watch` and `--interval` are accepted and answered with that same one
-render, because there is nothing to repaint yet.
+and the session. `--watch` is refused with a reason (exit 1): there is no repaint yet, and
+one frame would pass for a watch that stopped. `--interval` is still parsed, so the refusal is
+charter's and not a usage error.
