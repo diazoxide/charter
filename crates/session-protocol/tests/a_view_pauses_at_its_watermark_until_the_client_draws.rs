@@ -129,3 +129,42 @@ async fn a_client_that_draws_as_it_reads_gets_every_byte_in_order() {
     }
     assert!(got == sent, "every byte, in order");
 }
+
+#[tokio::test]
+async fn a_slow_client_never_has_more_than_the_watermark_in_flight() {
+    // A client that draws 4 KiB every 10 ms while the host has megabytes to write. What the
+    // host has written and the client not drawn stays at the high watermark, plus one piece
+    // of at most 16 KiB; without the watermark it is whatever Yamux's window lets through.
+    let (mut client, host) = linked().await;
+    let roomy = Limits { most_queued_bytes: 64 << 20, high_watermark: HIGH, low_watermark: LOW };
+    let feed = Attacher::new(host.opener(), roomy)
+        .attach(ViewId(1), Bytes::new())
+        .await
+        .unwrap();
+    for _ in 0..(4 << 20) / CHUNK {
+        feed.push(Bytes::from(vec![b's'; CHUNK])).unwrap();
+    }
+    let mut reader = Viewer::default()
+        .accept(client.accept().await.unwrap())
+        .await
+        .unwrap();
+    let mut most_in_flight = 0;
+    let mut drawn = 0;
+    while drawn < 512 * 1024 {
+        let Some(Ok(Chunk::Live(bytes))) = reader.next().await else {
+            panic!("the view ended")
+        };
+        // Draw it slowly, a piece at a time.
+        for piece in bytes.chunks(CHUNK) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            reader.ack(piece.len()).await.unwrap();
+            drawn += piece.len();
+            most_in_flight = most_in_flight.max(feed.in_flight_bytes());
+        }
+    }
+    eprintln!("a slow client: at most {most_in_flight} bytes in flight");
+    assert!(
+        most_in_flight <= HIGH + 16 * 1024,
+        "{most_in_flight} bytes in flight, past the {HIGH}-byte watermark"
+    );
+}

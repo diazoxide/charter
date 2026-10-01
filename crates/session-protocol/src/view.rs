@@ -142,6 +142,14 @@ impl Feed {
         self.shared.queue().bytes
     }
 
+    /// Bytes written to the client and not yet acknowledged as drawn: at most the high
+    /// watermark, plus the one piece being written.
+    pub fn in_flight_bytes(&self) -> usize {
+        let sent = self.shared.sent.load(Ordering::Acquire);
+        let drawn = self.shared.drawn.load(Ordering::Acquire);
+        usize::try_from(sent.saturating_sub(drawn)).unwrap_or(usize::MAX)
+    }
+
     /// Why the host closed the view, once it has.
     pub fn closed(&self) -> Option<Closed> {
         self.shared.why.get().copied()
