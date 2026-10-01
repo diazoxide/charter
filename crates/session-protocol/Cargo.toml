@@ -1,0 +1,28 @@
+[package]
+name = "charter-session-protocol"
+version.workspace = true
+description = "charter's session protocol: versioned, multiplexed, flow-controlled, over any ordered byte stream"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+# The runtime the host and the app already use, and its own codec and compat crates.
+tokio = { version = "1", features = ["io-std", "io-util", "macros", "net", "process", "rt", "sync", "time"] }
+tokio-util = { version = "0.7", features = ["codec", "compat"] }
+futures = "0.3"
+bytes = "1"
+# The multiplexer (ADR 0068 §4): Yamux, per-stream credit over one ordered byte stream.
+yamux = "0.14"
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { version = "1", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
+
+[lints]
+workspace = true
