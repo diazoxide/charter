@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use bytes::Bytes;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::sync::{Notify, watch};
+use tokio_util::sync::CancellationToken;
 
 use crate::link::{LinkError, Stream};
 
@@ -59,13 +60,18 @@ pub struct FellBehind;
 #[derive(Default)]
 struct Queue {
     chunks: VecDeque<Bytes>,
+    /// The bytes in `chunks`.
+    bytes: usize,
+    /// The [`Feed`] was dropped: write what is queued, then end the view.
     gone: bool,
 }
 
-#[derive(Default)]
 struct Shared {
     queue: Mutex<Queue>,
     more: Notify,
+    /// Cancelled when the view falls behind: the writer stops where it is.
+    dropped: CancellationToken,
+    most_queued: usize,
 }
 
 impl Shared {
@@ -81,10 +87,38 @@ pub struct Feed {
 
 impl Feed {
     /// Queue `bytes` for the view, without waiting.
+    ///
+    /// When the queue would pass [`Limits::most_queued_bytes`], the view has fallen behind:
+    /// its queue is let go, its stream ends, and this and every later push answer
+    /// [`FellBehind`]. The host then attaches the view again with a fresh snapshot and the next
+    /// epoch, exactly as it attaches a new one.
     pub fn push(&self, bytes: Bytes) -> Result<(), FellBehind> {
-        self.shared.queue().chunks.push_back(bytes);
+        let mut queue = self.shared.queue();
+        if self.shared.dropped.is_cancelled() {
+            return Err(FellBehind);
+        }
+        if queue.bytes + bytes.len() > self.shared.most_queued {
+            queue.chunks.clear();
+            queue.bytes = 0;
+            self.shared.dropped.cancel();
+            return Err(FellBehind);
+        }
+        queue.bytes += bytes.len();
+        queue.chunks.push_back(bytes);
+        drop(queue);
         self.shared.more.notify_one();
         Ok(())
+    }
+
+    /// Bytes queued and not yet written: what this view holds of the host's memory, beside
+    /// the at most [`Limits::high_watermark`] bytes it has written and the client not drawn.
+    pub fn queued_bytes(&self) -> usize {
+        self.shared.queue().bytes
+    }
+
+    /// Whether the view fell behind and was dropped.
+    pub fn fell_behind(&self) -> bool {
+        self.shared.dropped.is_cancelled()
     }
 }
 
@@ -99,14 +133,22 @@ impl Drop for Feed {
 /// snapshot, then whatever is pushed to the [`Feed`] it returns, never more than
 /// `limits.high_watermark` ahead of what the client has acknowledged.
 pub fn start(stream: Stream, view: u32, epoch: u32, snapshot: Bytes, limits: Limits) -> Feed {
-    let shared = Arc::new(Shared::default());
+    let shared = Arc::new(Shared {
+        queue: Mutex::new(Queue::default()),
+        more: Notify::new(),
+        dropped: CancellationToken::new(),
+        most_queued: limits.most_queued_bytes,
+    });
     let pump = Arc::clone(&shared);
     tokio::spawn(async move {
         let (acks, out) = tokio::io::split(stream);
         let (acked, drawn) = watch::channel(0u64);
         let counting = tokio::spawn(count_acks(acks, acked));
         let mut writer = Gated { out, sent: 0, drawn, limits };
-        let _ = writer.write(view, epoch, &snapshot, &pump).await;
+        tokio::select! {
+            _ = writer.write(view, epoch, &snapshot, &pump) => {}
+            () = pump.dropped.cancelled() => {}
+        }
         let _ = writer.out.shutdown().await;
         counting.abort();
     });
@@ -150,7 +192,10 @@ impl Gated {
             let next = {
                 let mut queue = shared.queue();
                 match queue.chunks.pop_front() {
-                    Some(chunk) => Some(chunk),
+                    Some(chunk) => {
+                        queue.bytes -= chunk.len();
+                        Some(chunk)
+                    }
                     None if queue.gone => return Ok(()),
                     None => None,
                 }
