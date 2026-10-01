@@ -86,6 +86,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`charter statusline --watch` says it cannot watch instead of drawing one frame.** It has
+  no repaint yet, and one frame followed by exit 0 looked like a watch that had stopped. It now
+  exits 1 with the reason and points you to `charter statusline` run once per turn (#574).
+
 - **Linux no longer waits half a minute for a desktop portal that cannot start.** Before GTK
   starts, charter asks the session bus to start the portal and gives it 300 ms. If the bus is
   still silent, charter restarts itself without the session bus, and the window comes up in

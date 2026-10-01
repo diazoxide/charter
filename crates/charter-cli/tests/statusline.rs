@@ -354,3 +354,40 @@ fn a_session_id_that_would_leave_the_state_directory_records_nothing() {
     );
     assert!(!at.join(".charter/sessions").exists());
 }
+
+#[test]
+fn watch_is_refused_with_its_reason_rather_than_answered_with_one_frame() {
+    // `--watch` promises a footer repainted until Ctrl-C, and this build has no repaint: it
+    // drew one frame and exited 0, which reads as a watch that stopped on its own. So it is
+    // refused, in charter's own words and exit status (1), not clap's usage error (2): the flag
+    // and `--interval` are still parsed, so a plane already wired for the command line is told
+    // why rather than how to spell it.
+    let (_keep, at) = plane();
+
+    for args in [&["--watch"][..], &["--watch", "--interval", "2"][..]] {
+        let done = Command::new(CHARTER)
+            .arg("statusline")
+            .args(args)
+            .current_dir(&at)
+            .env_clear()
+            .env("PATH", std::env::var("PATH").unwrap_or_default())
+            .env("HOME", &at)
+            .env("CHARTER_ROOT", &at)
+            // Nothing is read from stdin under `--watch`; an open pipe would show a wait.
+            .stdin(Stdio::null())
+            .output()
+            .expect("charter runs");
+        let err = String::from_utf8_lossy(&done.stderr);
+
+        assert_eq!(done.status.code(), Some(1), "{args:?}: {err:?}");
+        assert!(done.stdout.is_empty(), "{args:?} drew a frame anyway");
+        assert!(
+            err.starts_with("charter: `statusline --watch` does not repaint yet"),
+            "{args:?}: {err:?}"
+        );
+        assert!(
+            err.contains("run `charter statusline` once per turn"),
+            "{args:?} did not say what to run instead: {err:?}"
+        );
+    }
+}
