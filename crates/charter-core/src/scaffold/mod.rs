@@ -117,6 +117,9 @@ impl Say {
 pub struct Outcome {
     pub said: Vec<Say>,
     pub code: u8,
+    /// Why the forge could not be read, when `code` is [`ASKS_FOR_FORGE`]: what a caller that
+    /// asks in its own words (the app's two buttons) says, without parsing `said`.
+    pub asks_forge: Option<String>,
 }
 
 /// The forges `init --forge` takes (`forge/registry.py:KINDS`), sorted as argparse lists them.
@@ -247,6 +250,8 @@ struct Run {
     failed: bool,
     /// An ask rule was written, so the workspace layers are rewritten to carry it.
     carry: bool,
+    /// Why the forge could not be read from a remote (#839), when it could not.
+    asks_forge: Option<String>,
 }
 
 impl Run {
@@ -280,6 +285,7 @@ impl Run {
         Outcome {
             said: self.said,
             code,
+            asks_forge: self.asks_forge,
         }
     }
 }
@@ -341,6 +347,7 @@ fn refused(root: &Path) -> Option<Outcome> {
                 crate::shown::readable(&lands, 1024)
             ))],
             code: 1,
+            asks_forge: None,
         });
     }
     match planefile::load(root) {
@@ -350,6 +357,7 @@ fn refused(root: &Path) -> Option<Outcome> {
                  out."
             ))],
             code: 1,
+            asks_forge: None,
         }),
         _ => None,
     }
@@ -1434,10 +1442,6 @@ fn repo_is_not_a_plane_yet(root: &Path, args: &InitArgs) -> Option<Outcome> {
     Some(run.outcome(1))
 }
 
-/// Whether `root` already holds a `charter.toml` charter would read — asked through the gate,
-/// so a manifest that is a link out of the plane does not count as one. It is not a plane
-/// charter can heal, and answering "no" here only costs that run its scaffolding, which is
-/// the side to be wrong on.
 /// The forge and owner `charter.toml` is written with (#839): what the operator named, else
 /// what the `origin` of the repo the plane is made for says. `None` when neither says, after
 /// asking for it on `run`.
@@ -1445,9 +1449,6 @@ fn repo_is_not_a_plane_yet(root: &Path, args: &InitArgs) -> Option<Outcome> {
 /// The repo is the one `--adopt` names, or the plane's own directory for `--clone-this-repo`
 /// and `--plane-is-this-repo`. A plain `init` names no repo, so it is asked.
 fn forge_and_owner(run: &mut Run, root: &Path, args: &InitArgs) -> Option<(String, String)> {
-    if let Some(forge) = &args.forge {
-        return Some((forge.clone(), args.owner.clone()));
-    }
     let repo = match &args.adopt {
         Some(repo) => Some(repo.clone()),
         None if args.clone_this_repo || args.plane_is_this_repo => Some(root.to_path_buf()),
@@ -1457,6 +1458,15 @@ fn forge_and_owner(run: &mut Run, root: &Path, args: &InitArgs) -> Option<(Strin
         Some(repo) => fromremote::forge_of_repo(repo),
         None => Err("no repo was named to read it from".to_owned()),
     };
+    if let Some(forge) = &args.forge {
+        // `--owner`'s help: the owner comes from the same origin when it is not given, and
+        // only from an origin on the forge that was named.
+        let owner = match &read {
+            Ok(found) if args.owner.is_empty() && found.kind.word() == forge => found.owner.clone(),
+            _ => args.owner.clone(),
+        };
+        return Some((forge.clone(), owner));
+    }
     match read {
         Ok(found) => {
             let owner = if args.owner.is_empty() {
@@ -1480,13 +1490,19 @@ fn forge_and_owner(run: &mut Run, root: &Path, args: &InitArgs) -> Option<(Strin
             run.err(format!(
                 "charter cannot tell which forge this project's repos are on: {why}. Name it \
                  with `--forge github` or `--forge gitlab`, and its org or group with \
-                 `--owner`. Nothing was written."
+                 `--owner`, or adopt a repo whose origin is on github.com or gitlab.com with \
+                 `--adopt <repo>`. Nothing was written."
             ));
+            run.asks_forge = Some(why);
             None
         }
     }
 }
 
+/// Whether `root` already holds a `charter.toml` charter would read — asked through the gate,
+/// so a manifest that is a link out of the plane does not count as one. It is not a plane
+/// charter can heal, and answering "no" here only costs that run its scaffolding, which is
+/// the side to be wrong on.
 fn already_a_plane(root: &Path) -> bool {
     gate(root, crate::plane::MANIFEST).is_ok_and(|path| path.exists())
 }
@@ -2117,13 +2133,55 @@ mod tests {
             let said = Say::in_full(&outcome.said);
             assert!(said.contains(why), "{said}");
             assert!(said.contains("--forge github"), "{said}");
+            assert!(
+                said.contains("--adopt"),
+                "the refusal names the other way to answer: {said}"
+            );
             assert!(said.contains("Nothing was written."), "{said}");
+            assert!(
+                outcome
+                    .asks_forge
+                    .as_deref()
+                    .is_some_and(|asked| asked.ends_with(why)),
+                "the reason is handed over as data: {:?}",
+                outcome.asks_forge
+            );
             assert_eq!(
                 std::fs::read_dir(&root)
                     .expect("the plane's directory")
                     .count(),
                 0,
                 "{why}: init wrote into the plane"
+            );
+        }
+    }
+
+    /// `--owner`'s help says the owner is read from the same origin: naming only the forge
+    /// still takes the owner from a remote on that forge, and from no other.
+    #[test]
+    fn a_named_forge_still_reads_the_owner_from_an_origin_on_that_forge() {
+        for (forge, origin, owner) in [
+            ("github", "git@github.com:acme/widget.git", "acme"),
+            ("github", "git@gitlab.com:group/widget.git", ""),
+        ] {
+            let (dir, root) = empty_plane();
+            let repo = a_source_repo(dir.path(), "widget", Some(origin));
+
+            let outcome = init(
+                &at(&root, false),
+                &InitArgs {
+                    forge: Some(forge.to_owned()),
+                    owner: String::new(),
+                    adopt: Some(repo),
+                    ..plain()
+                },
+            );
+
+            assert_eq!(outcome.code, 0, "{}", Say::in_full(&outcome.said));
+            assert_eq!(
+                forge_written(&root),
+                (forge.to_owned(), owner.to_owned()),
+                "{origin}"
             );
         }
     }

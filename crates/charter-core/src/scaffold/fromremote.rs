@@ -18,20 +18,60 @@ use crate::forge::{self, Kind};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FromRemote {
     pub kind: Kind,
-    /// The org, user or group the repo belongs to. Empty when the remote names only a repo.
+    /// The org, user or group the repo belongs to.
     pub owner: String,
 }
 
-/// What `url` names, or `None` when its host is not one whose kind charter can tell.
+/// What `url` names, or `None` when its host is not one whose kind charter can tell, or when
+/// the remote is shaped to land somewhere other than where it seems to point.
+///
+/// [`forge::host_of`] reads a host the way the Python charter did, and is left as it is. This
+/// is stricter, because its answer is written into a new project unasked: a remote that hides
+/// another host in its userinfo, or walks out of its owner with `..`, names nothing.
 pub fn forge_of_url(url: &str) -> Option<FromRemote> {
+    if hides_another_host(url) {
+        return None;
+    }
     let host = forge::host_of(url);
     let kind = [Kind::GitHub, Kind::GitLab]
         .into_iter()
         .find(|kind| kind.default_host() == host)?;
-    let owner = forge::namespace_of(url)
-        .and_then(|path| path.rsplit_once('/').map(|(owner, _)| owner.to_owned()))
-        .unwrap_or_default();
+    let path = forge::namespace_of(url)?;
+    let segments: Vec<&str> = path.split('/').collect();
+    if !segments.iter().all(|segment| segment_ok(segment)) {
+        return None;
+    }
+    // GitHub names exactly `owner/repo`; a GitLab group may hold subgroups.
+    let fits = match kind {
+        Kind::GitHub => segments.len() == 2,
+        Kind::GitLab => segments.len() >= 2,
+    };
+    if !fits {
+        return None;
+    }
+    let owner = segments[..segments.len() - 1].join("/");
     Some(FromRemote { kind, owner })
+}
+
+/// One segment of an owner or repo path: not empty, not a dot segment, and none of the
+/// characters a URL or an scp-style remote reads as the end of a host.
+fn segment_ok(segment: &str) -> bool {
+    !segment.is_empty() && segment != "." && segment != ".." && !segment.contains(['@', ':', '\\'])
+}
+
+/// Whether the userinfo before a remote's `@` holds what ends the authority for some reader:
+/// a `#`, `?` or `\` in a URL (a browser-grade parser stops the host there), or a `:` in an
+/// scp-style remote (git reads the host as what comes before it).
+fn hides_another_host(url: &str) -> bool {
+    let url = url.trim();
+    if let Some((_, rest)) = url.split_once("://") {
+        let authority = &rest[..rest.find('/').unwrap_or(rest.len())];
+        return authority
+            .rfind('@')
+            .is_some_and(|at| authority[..at].contains(['#', '?', '\\']));
+    }
+    url.split_once('@')
+        .is_some_and(|(user, _)| user.contains([':', '#', '?', '\\']))
 }
 
 /// What the `origin` of the repo at `repo` names, or why it names nothing charter can use: the
@@ -116,6 +156,42 @@ mod tests {
         ] {
             assert_eq!(forge_of_url(url), None, "{url}");
         }
+    }
+
+    /// #848 review: a remote that would land on another host or another path than the one it
+    /// seems to name is no answer, and the operator is asked instead.
+    #[test]
+    fn a_remote_that_hides_another_host_or_path_names_no_forge() {
+        for url in [
+            // Git reads `evil.com` as the host of this scp-style remote.
+            "evil.com:x@github.com:acme/widget",
+            // A fragment, query or backslash before the `@` ends the authority there for a URL
+            // parser, so the host is `evil.com`.
+            "https://evil.com#@github.com/acme/widget",
+            "https://evil.com?@github.com/acme/widget",
+            "https://evil.com\\@github.com/acme/widget",
+            // Dot segments walk out of the owner.
+            "https://github.com/../widget",
+            "git@github.com:acme/../../x/widget",
+            "https://gitlab.com/group/./widget",
+            // Empty segments, and characters no owner or repo name has.
+            "https://github.com//widget",
+            "https://gitlab.com/gr@up/widget",
+            "https://gitlab.com/group\\x/widget",
+            // A GitHub remote names exactly `owner/repo`.
+            "https://github.com/acme/widget/tree/main",
+            "https://github.com/widget",
+        ] {
+            assert_eq!(forge_of_url(url), None, "{url}");
+        }
+    }
+
+    #[test]
+    fn a_plain_userinfo_before_the_host_is_still_read() {
+        assert_eq!(
+            forge_of_url("https://oauth2@gitlab.com/group/widget.git"),
+            named(Kind::GitLab, "group")
+        );
     }
 
     fn git(dir: &Path, args: &[&str]) {

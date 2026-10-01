@@ -28,14 +28,16 @@ or skip it entirely with `--no-front-door`; either way charter's own code knows 
 a plane may declare a default, never which one. If the plane already has personas, `init`
 scaffolds nothing — it creates only what is absent.
 
-**Which forge** (#839): `--forge` names it. Without it, `init` reads the forge, and the owner
-when `--owner` is not given, from the `origin` of the repo the plane is made for — the one
-`--adopt` names, or the plane's own directory with `--plane-is-this-repo` — when that
-remote is on github.com or gitlab.com. Otherwise it writes
-nothing, exits 2, and asks for `--forge github` or `--forge gitlab`. A self-managed host is never
-read as one kind or the other from its name. The app's first run and New project dialog follow
-the same rule, and ask with two buttons. An `init` run again on a plane that has its
-`charter.toml` asks nothing.
+**Which forge** (#839): `--forge` names it. Without it, `init` reads the forge from the
+`origin` of the repo the project is made for: the one `--adopt` names, or the project's own
+directory when it is made in the repo it stands in (`--plane-is-this-repo`). It reads the
+owner from that origin too, whenever `--owner` is not given and the origin is on the forge in
+use. The origin counts only when it is on github.com or gitlab.com, names exactly
+`owner/repo` on GitHub, and hides no other host or path. Otherwise `init` writes nothing,
+exits 2, and asks for `--forge github`, `--forge gitlab` or `--adopt <repo>`. A self-managed
+host is never read as one kind or the other from its name. The app's first run and its New
+project dialog follow the same rule, and ask with two buttons. Running `init` again on a
+project that has its `charter.toml` asks nothing.
 
 A charter the Python generated also declares `routing: advise`. That key is retired: it is
 read without error and does nothing, and `charter doctor` says so. Personas are offered to

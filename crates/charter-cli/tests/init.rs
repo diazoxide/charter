@@ -972,4 +972,28 @@ fn init_reads_the_forge_from_the_adopted_repos_origin_or_asks_for_it() {
         stderr(&asked)
     );
     assert_eq!(std::fs::read_dir(&scene.plane).unwrap().count(), before);
+
+    let repo = scene.outside.join("widget");
+    std::fs::create_dir_all(&repo).unwrap();
+    scene.git_repo(&repo);
+    let set = Command::new("git")
+        .args([
+            "remote",
+            "set-url",
+            "origin",
+            "https://gitlab.com/group/sub/widget.git",
+        ])
+        .current_dir(&repo)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .output()
+        .expect("git runs");
+    assert!(set.status.success(), "{set:?}");
+
+    let read = scene.run(&["init", "--adopt", repo.to_str().unwrap()]);
+
+    assert!(read.status.success(), "{}", stderr(&read));
+    let toml = std::fs::read_to_string(scene.plane.join("charter.toml")).unwrap();
+    assert!(toml.contains("kind = \"gitlab\""), "{toml}");
+    assert!(toml.contains("owner = \"group/sub\""), "{toml}");
 }

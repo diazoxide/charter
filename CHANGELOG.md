@@ -178,9 +178,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   run, the New project dialog and `charter init` now follow one rule. The forge, and its owner or
   group, come from the `origin` of the repo the project is made for, when that remote is on
   github.com or gitlab.com. Otherwise the window asks GitHub or GitLab with two buttons, and
-  `charter init` writes nothing and asks for `--forge` (exit 2). Before, the first run made a
-  GitHub project with no owner, and `charter init` defaulted to GitLab. `--forge` and `--owner`
-  still win when given, and running `init` again on an existing project asks nothing.
+  `charter init` writes nothing and asks for `--forge` or `--adopt`. Before, the first run made
+  a GitHub project with no owner, and `charter init` defaulted to GitLab. **A script that runs a
+  bare `charter init` now exits 2 and makes nothing, where it used to make a GitLab project:
+  add `--forge gitlab` to keep the old result.** `--forge` and `--owner` still win when given,
+  and running `init` again on an existing project asks nothing.
 
 - **charter runs far fewer git processes in your repos while it is idle.** Auto-save, the
   title bar's save indicator, the Saving tab and the alerts used to each run `git status` and

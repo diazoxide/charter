@@ -634,6 +634,9 @@ fn scaffold_at(
             at.display()
         )));
     }
+    // Made here, so taken away again if the forge has to be asked first: a question writes
+    // nothing, not even the directory (#848 review).
+    let made_here = !at.exists();
     std::fs::create_dir_all(at).map_err(|why| {
         NotMade::Refused(format!("charter could not make {} ({why}).", at.display()))
     })?;
@@ -674,7 +677,13 @@ fn scaffold_at(
     if outcome.code == charter_core::scaffold::ASKS_FOR_FORGE {
         // The core's sentence names `--forge`, a flag nobody types here: the window asks with
         // two buttons, and says only why the remote did not answer.
-        return Err(NotMade::AsksForForge(asked_why(&outcome.said)));
+        if made_here {
+            // Only an empty directory goes: `remove_dir` refuses anything else.
+            let _ = std::fs::remove_dir(at);
+        }
+        return Err(NotMade::AsksForForge(
+            outcome.asks_forge.unwrap_or_default(),
+        ));
     }
     if outcome.code != 0 {
         // **Verbatim, and all of it.** `init`'s refusal in a repository is four lines: what it
@@ -686,15 +695,6 @@ fn scaffold_at(
         )));
     }
     Ok(root)
-}
-
-/// The reason in `init`'s question about the forge: what comes between its first `: ` and
-/// the `. Name it` that tells a terminal what to type.
-fn asked_why(said: &[charter_core::scaffold::Say]) -> String {
-    let all = charter_core::scaffold::Say::in_full(said);
-    all.split_once(": ")
-        .and_then(|(_, rest)| rest.split_once(". Name it"))
-        .map_or(all.clone(), |(why, _)| why.to_owned())
 }
 
 #[cfg(test)]
@@ -718,11 +718,25 @@ mod tests {
             asked,
             NotMade::AsksForForge("no repo was named to read it from".to_owned())
         );
-        assert!(!at.join(charter_core::plane::MANIFEST).exists());
+        assert!(!at.exists(), "asking made the project's directory");
         let root = scaffold_at(&at, false, None, Some(charter_core::forge::Kind::GitLab))
             .expect("the answer makes it");
         let manifest = std::fs::read_to_string(root.join("charter.toml")).expect("made");
         assert!(manifest.contains("kind = \"gitlab\""), "{manifest}");
+    }
+
+    /// A directory the operator already had is left where it was when the forge is asked.
+    #[test]
+    fn asking_for_the_forge_leaves_a_directory_that_was_there() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let at = dir.path().join("project");
+        std::fs::create_dir_all(&at).expect("the operator's directory");
+
+        let asked = scaffold_at(&at, false, None, None).expect_err("asked");
+
+        assert!(matches!(asked, NotMade::AsksForForge(_)), "{asked:?}");
+        assert!(at.is_dir());
+        assert_eq!(std::fs::read_dir(&at).expect("readable").count(), 0);
     }
 
     /// A plane on disk, with nothing in it but the marker that makes it one.

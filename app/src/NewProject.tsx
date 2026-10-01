@@ -51,6 +51,8 @@ export function NewProject({
   trouble,
   /** Which forge the project's repos are on, when the repo's remote did not say (#839). */
   forgeAsk,
+  /** The form changed, so a pending question about the forge is about a form that is gone. */
+  onEdit,
   /** Whether charter is making it right now, so the answer cannot be given twice. */
   making,
   onCreate,
@@ -60,6 +62,7 @@ export function NewProject({
 }: {
   trouble?: string;
   forgeAsk?: ForgeAsk;
+  onEdit?: () => void;
   making: boolean;
   onCreate: (path: string, planeIsThisRepo: boolean, adopt: string) => void;
   /** Opens a repo into this machine's local project (FR-4). */
@@ -68,11 +71,29 @@ export function NewProject({
   opening: boolean;
   onCancel: () => void;
 }) {
-  const [repo, setRepo] = useState("");
+  // A question about the forge is about the answers that were sent. Once one of them changes,
+  // the next press asks again rather than answering for a form nobody sent (#848 review).
+  const [repo, keepRepo] = useState("");
+  const [path, keepPath] = useState("");
+  const [adopt, keepAdopt] = useState("");
+  const [planeIsThisRepo, keepPlaneIsThisRepo] = useState(false);
+  const setRepo = (value: string) => {
+    keepRepo(value);
+    onEdit?.();
+  };
+  const setPath = (value: string) => {
+    keepPath(value);
+    onEdit?.();
+  };
+  const setAdopt = (value: string) => {
+    keepAdopt(value);
+    onEdit?.();
+  };
+  const setPlaneIsThisRepo = (value: boolean) => {
+    keepPlaneIsThisRepo(value);
+    onEdit?.();
+  };
   const repoAt = useId();
-  const [path, setPath] = useState("");
-  const [adopt, setAdopt] = useState("");
-  const [planeIsThisRepo, setPlaneIsThisRepo] = useState(false);
   const pathId = useId();
   const adoptId = useId();
   const repoId = useId();

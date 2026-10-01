@@ -14,8 +14,11 @@ use charter_core::template;
 
 fn project() -> (tempfile::TempDir, std::path::PathBuf) {
     let dir = tempfile::tempdir().expect("a directory");
-    let root = charter_core::firstrun::ensure_local_plane(&dir.path().join("config"))
-        .expect("a local project");
+    let root = charter_core::firstrun::ensure_local_plane(
+        &dir.path().join("config"),
+        charter_core::firstrun::ForgeFrom::Named(charter_core::forge::Kind::GitHub),
+    )
+    .expect("a local project");
     (dir, root)
 }
 

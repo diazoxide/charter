@@ -1719,7 +1719,9 @@ function App() {
                 trouble={openTrouble}
                 // The first run is for a window that has never held a project: one whose last
                 // project was closed is somebody who has had one, and gets the opener.
-                onOpenRepo={heldSomething ? undefined : (path, template) => firstRunRepo(path, template)}
+                onOpenRepo={
+                  heldSomething ? undefined : (path, template) => firstRunRepo(path, template)
+                }
                 onSignInToForge={(row) => {
                   setRepoTrouble(undefined);
                   void signInToForge(row).then(setRepoTrouble);
@@ -1753,6 +1755,7 @@ function App() {
         <NewProject
           trouble={createTrouble}
           forgeAsk={createForgeAsk}
+          onEdit={() => setCreateForgeAsk(undefined)}
           making={makingProject}
           onCreate={(path, planeIsThisRepo, adopt) =>
             void makeProject(path, planeIsThisRepo, adopt)

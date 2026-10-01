@@ -22,8 +22,8 @@ export function ForgeQuestion({ ask }: { ask: ForgeAsk }) {
     <div className="asks" role="group" aria-labelledby={heading}>
       <p id={heading}>Which forge are its repos on?</p>
       <p className="came-back">
-        charter could not tell from the repo: {ask.why}. You can change it later in Project
-        settings.
+        charter reads the forge from the remote of the repo the project is made for, and here it
+        could not: {ask.why}. You can change it later in Project settings.
       </p>
       {/* `tabIndex={0}` on every button, per `docs/ui-primitives.md` (charter-app#189). */}
       <div className="doing">

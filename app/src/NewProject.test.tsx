@@ -267,6 +267,21 @@ describe("making a project", () => {
     expect(await screen.findByRole("dialog", { name: "Open this project?" })).toBeInTheDocument();
   });
 
+  it("drops a pending forge question once the form it was about changes", async () => {
+    core({ asksForge: true });
+    render(<App />);
+    const dialog = await askForOne();
+
+    await userEvent.type(within(dialog).getByLabelText("Folder"), MADE);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create project" }));
+    await within(dialog).findByRole("group", { name: "Which forge are its repos on?" });
+    await userEvent.type(within(dialog).getByLabelText("Folder"), "-2");
+
+    expect(
+      within(dialog).queryByRole("group", { name: "Which forge are its repos on?" }),
+    ).toBeNull();
+  });
+
   it("opens what it made through the trust gate, not around it", async () => {
     // **The claim of this file.** `create_project` answers with `open_if_approved`'s own
     // answer, so a plane charter has just scaffolded raises the same question a stranger's

@@ -500,7 +500,10 @@ mod tests {
             "{asked:?}"
         );
         assert!(!firstrun::local_plane(&config).exists());
-        let (root, _) = taken(taken_in(&config, &repo, &firstrun::Choice::Fits, Some(Kind::GitLab)).expect("answered"));
+        let (root, _) = taken(
+            taken_in(&config, &repo, &firstrun::Choice::Fits, Some(Kind::GitLab))
+                .expect("answered"),
+        );
         let manifest = std::fs::read_to_string(root.join("charter.toml")).expect("made");
         assert!(manifest.contains("kind = \"gitlab\""), "{manifest}");
     }
@@ -524,7 +527,8 @@ mod tests {
         .expect("git runs in a test");
         assert!(added.status.success());
 
-        let (root, _) = taken(taken_in(&config, &repo, &firstrun::Choice::Fits, None).expect("answered"));
+        let (root, _) =
+            taken(taken_in(&config, &repo, &firstrun::Choice::Fits, None).expect("answered"));
 
         let manifest = std::fs::read_to_string(root.join("charter.toml")).expect("made");
         assert!(manifest.contains("kind = \"github\""), "{manifest}");
@@ -656,8 +660,14 @@ mod tests {
         let config = dir.path().join("config");
         let repo = a_repo(&dir.path().join("widget"));
 
-        let (root, taken) =
-            taken_in(&config, &repo, &firstrun::Choice::Named("go".to_owned()), GITHUB).map(taken).expect("opened");
+        let (root, taken) = taken_in(
+            &config,
+            &repo,
+            &firstrun::Choice::Named("go".to_owned()),
+            GITHUB,
+        )
+        .map(taken)
+        .expect("opened");
 
         assert_eq!(taken.template.as_deref(), Some("go"));
         assert!(root.join("personas/go-reviewer/refs/REVIEW.md").is_file());
@@ -685,13 +695,23 @@ mod tests {
     fn a_second_repository_goes_into_the_same_local_plane() {
         let dir = tempfile::tempdir().expect("a directory");
         let config = dir.path().join("config");
-        let (first, _) = taken_in(&config, &a_repo(&dir.path().join("one")), &firstrun::Choice::Fits, GITHUB)
-            .map(taken)
-            .expect("the first repository");
+        let (first, _) = taken_in(
+            &config,
+            &a_repo(&dir.path().join("one")),
+            &firstrun::Choice::Fits,
+            GITHUB,
+        )
+        .map(taken)
+        .expect("the first repository");
 
-        let (second, taken) = taken_in(&config, &a_repo(&dir.path().join("two")), &firstrun::Choice::Fits, GITHUB)
-            .map(taken)
-            .expect("the second repository");
+        let (second, taken) = taken_in(
+            &config,
+            &a_repo(&dir.path().join("two")),
+            &firstrun::Choice::Fits,
+            GITHUB,
+        )
+        .map(taken)
+        .expect("the second repository");
 
         assert_eq!(first, second);
         assert_eq!(taken.workspace, "two");
@@ -703,8 +723,13 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let config = dir.path().join("config");
 
-        let refused =
-            taken_in(&config, Path::new("widget"), &firstrun::Choice::Fits, GITHUB).expect_err("refused");
+        let refused = taken_in(
+            &config,
+            Path::new("widget"),
+            &firstrun::Choice::Fits,
+            GITHUB,
+        )
+        .expect_err("refused");
 
         assert!(refused.contains("is not a full path"), "{refused}");
         assert!(!firstrun::local_plane(&config).exists());
