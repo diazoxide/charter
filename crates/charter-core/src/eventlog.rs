@@ -658,10 +658,10 @@ impl Recorder {
     /// Begins a run of the chat for `cause`, and says so in the log.
     fn new_run(&mut self, plane: &Path, number: u32, cause: Began) -> io::Result<Identity> {
         let key = (plane.to_path_buf(), number);
-        let chat = self
-            .chats
-            .get(&key)
-            .map_or_else(|| ulid::Ulid::generate().to_string(), |who| who.chat.clone());
+        let chat = self.chats.get(&key).map_or_else(
+            || ulid::Ulid::generate().to_string(),
+            |who| who.chat.clone(),
+        );
         let who = Identity {
             chat,
             run: ulid::Ulid::generate().to_string(),
