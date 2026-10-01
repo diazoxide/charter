@@ -16,8 +16,9 @@ async fn negotiate(
     client: Speaks,
     host: Speaks,
 ) -> (Result<Version, Refused>, Result<Version, Refused>) {
-    let (mut a, mut b) = duplex(64 * 1024);
-    tokio::join!(offer(&mut a, &client), answer(&mut b, &host))
+    let (a, b) = duplex(64 * 1024);
+    let (client, host) = tokio::join!(offer(a, &client), answer(b, &host));
+    (client.map(|(v, _)| v), host.map(|(v, _)| v))
 }
 
 #[tokio::test]
@@ -119,4 +120,29 @@ async fn a_hello_that_is_not_the_expected_shape_is_refused() {
         a.write_all(body).await.unwrap();
     });
     assert!(matches!(host.unwrap_err(), Refused::Malformed(_)));
+}
+
+#[tokio::test]
+async fn bytes_the_host_sent_right_after_its_answer_are_not_lost() {
+    // The answer is read through a codec, which reads ahead. What it read past the answer is
+    // the multiplexer's first bytes, and the stream handed back starts with them.
+    let (a, mut b) = duplex(64 * 1024);
+    let host = async move {
+        let mut hello = [0u8; 512];
+        let _ = b.read(&mut hello).await.unwrap();
+        let body = br#"{"accept":{"major":1,"minor":0}}"#;
+        let mut all = charter_session_protocol::version::MAGIC.to_vec();
+        all.extend_from_slice(&(body.len() as u16).to_be_bytes());
+        all.extend_from_slice(body);
+        all.extend_from_slice(b"after the answer");
+        b.write_all(&all).await.unwrap();
+        b
+    };
+    let ours = speaks(&[(1, 0)]);
+    let (client, _b) = tokio::join!(offer(a, &ours), host);
+    let (version, mut rest) = client.unwrap();
+    assert_eq!(version, Version { major: 1, minor: 0 });
+    let mut next = [0u8; 16];
+    rest.read_exact(&mut next).await.unwrap();
+    assert_eq!(&next, b"after the answer");
 }

@@ -179,10 +179,10 @@ impl Control {
 /// The client end: negotiate with what `speaks` names, start the multiplexer and open the
 /// control lane.
 pub async fn connect<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
-    mut io: S,
+    io: S,
     speaks: Speaks,
 ) -> Result<Link, LinkError> {
-    let version = version::offer(&mut io, &speaks).await?;
+    let (version, io) = version::offer(io, &speaks).await?;
     let (open, inbound) = drive(io, yamux::Mode::Client);
     let (reply, opened) = oneshot::channel();
     open.send(reply).map_err(|_| LinkError::Closed)?;
@@ -200,10 +200,10 @@ pub async fn connect<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
 /// The host end: answer with what `speaks` names, start the multiplexer and take the control
 /// lane the client opens.
 pub async fn serve<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
-    mut io: S,
+    io: S,
     speaks: Speaks,
 ) -> Result<Link, LinkError> {
-    let version = version::answer(&mut io, &speaks).await?;
+    let (version, io) = version::answer(io, &speaks).await?;
     let (open, mut inbound) = drive(io, yamux::Mode::Server);
     let lane = tokio::time::timeout(version::HANDSHAKE_TIMEOUT, async {
         let mut lane = inbound.recv().await.ok_or(LinkError::Closed)?.compat();

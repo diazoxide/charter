@@ -34,9 +34,9 @@ async fn main() -> ExitCode {
         eprintln!("usage: charter-session-peer --speaks <major>.<minor>[,<major>.<minor>…]");
         return ExitCode::from(2);
     };
-    let mut stdio = tokio::io::join(tokio::io::stdin(), tokio::io::stdout());
-    match answer(&mut stdio, &ours).await {
-        Ok(version) => {
+    let stdio = tokio::io::join(tokio::io::stdin(), tokio::io::stdout());
+    match answer(stdio, &ours).await {
+        Ok((version, _stream)) => {
             eprintln!("agreed on {}.{}", version.major, version.minor);
             ExitCode::SUCCESS
         }

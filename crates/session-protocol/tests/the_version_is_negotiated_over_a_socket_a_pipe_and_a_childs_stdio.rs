@@ -25,11 +25,11 @@ async fn over_a_unix_socket() {
     let listener = UnixListener::bind(&path).unwrap();
     let host = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
-        answer(&mut stream, &v1()).await.unwrap()
+        answer(&mut stream, &v1()).await.unwrap().0
     });
     let mut stream = UnixStream::connect(&path).await.unwrap();
     assert_eq!(
-        offer(&mut stream, &v1()).await.unwrap(),
+        offer(&mut stream, &v1()).await.unwrap().0,
         Version { major: 1, minor: 0 }
     );
     assert_eq!(host.await.unwrap(), Version { major: 1, minor: 0 });
@@ -55,8 +55,8 @@ async fn over_a_pair_of_pipes() {
         offer(&mut client_end, &speaks),
         answer(&mut host_end, &speaks)
     );
-    assert_eq!(client.unwrap(), Version { major: 1, minor: 0 });
-    assert_eq!(host.unwrap(), Version { major: 1, minor: 0 });
+    assert_eq!(client.unwrap().0, Version { major: 1, minor: 0 });
+    assert_eq!(host.unwrap().0, Version { major: 1, minor: 0 });
 }
 
 /// The peer program, a host on its own stdin and stdout, as `charter bridge` will be at the far
@@ -79,7 +79,7 @@ async fn over_a_childs_stdio() {
     let mut stdio = join(child.stdout.take().unwrap(), child.stdin.take().unwrap());
     let ours = Speaks::new([Version { major: 1, minor: 5 }]);
     assert_eq!(
-        offer(&mut stdio, &ours).await.unwrap(),
+        offer(&mut stdio, &ours).await.unwrap().0,
         Version { major: 1, minor: 3 }
     );
     drop(stdio);

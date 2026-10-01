@@ -11,8 +11,8 @@
 //! with [`MAGIC`] is not this protocol and is refused before a byte of it is parsed, and so is
 //! a hello longer than [`MOST_HELLO_BYTES`].
 //!
-//! **On the wire,** each message is [`MAGIC`], a big-endian `u16` length, and that many bytes
-//! of JSON. JSON, because this is the one message that must stay readable to every future
+//! **On the wire,** each message is [`MAGIC`], then one frame of tokio-util's
+//! `LengthDelimitedCodec` with a big-endian `u16` length, holding JSON. JSON, because this is the one message that must stay readable to every future
 //! version, and to a person reading a capture. Fields a version does not know are ignored, so
 //! a later minor may add some.
 //!
@@ -20,8 +20,20 @@
 //! so a stream that strips the eighth bit, rewrites line endings or stops at a DOS end-of-file
 //! fails at the first message instead of later and stranger.
 
+use std::io::Cursor;
+
+use bytes::{Bytes, BytesMut};
+use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{
+    AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, Chain, Join, ReadHalf, WriteHalf, join,
+    split,
+};
+use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec, LengthDelimitedCodecError};
+
+/// The stream after the handshake. Reading the answer may read past it, into what the other
+/// end sent next; those bytes come first.
+pub type Negotiated<S> = Join<Chain<Cursor<BytesMut>, ReadHalf<S>>, WriteHalf<S>>;
 
 /// What every message of the negotiation opens with.
 pub const MAGIC: &[u8; 8] = b"\x89CSP\r\n\x1a\n";
@@ -78,8 +90,8 @@ pub enum Refused {
     #[error("the other end is not speaking charter's session protocol")]
     NotThisProtocol,
     /// A hello or an answer longer than [`MOST_HELLO_BYTES`].
-    #[error("a negotiation message of {length} bytes, longer than {MOST_HELLO_BYTES}")]
-    TooLong { length: usize },
+    #[error("a negotiation message longer than {most} bytes")]
+    TooLong { most: usize },
     /// A message that is not the shape this version reads.
     #[error("a negotiation message that cannot be read: {0}")]
     Malformed(String),
@@ -102,23 +114,28 @@ enum Answer {
     Refuse { speaks: Vec<u16> },
 }
 
-/// The client's side: offer what `speaks` names, and return the version the host agreed to.
-/// A host that has not answered within [`HANDSHAKE_TIMEOUT`] is refused.
-pub async fn offer<S: AsyncRead + AsyncWrite + Unpin>(
-    io: &mut S,
+/// The client's side: offer what `speaks` names, and return the version the host agreed to,
+/// with the stream to go on with. A host that has not answered within [`HANDSHAKE_TIMEOUT`] is
+/// refused.
+pub async fn offer<S: AsyncRead + AsyncWrite>(
+    io: S,
     speaks: &Speaks,
-) -> Result<Version, Refused> {
-    within_the_deadline(offer_now(io, speaks)).await
+) -> Result<(Version, Negotiated<S>), Refused> {
+    let (mut reads, mut writes) = split(io);
+    let (version, left) = within_the_deadline(offer_now(&mut reads, &mut writes, speaks)).await?;
+    Ok((version, join(Cursor::new(left).chain(reads), writes)))
 }
 
 /// The host's side: read a client's hello, and agree to the highest major both speak or
-/// refuse it. A client that has not sent its whole hello within [`HANDSHAKE_TIMEOUT`] is
-/// refused.
-pub async fn answer<S: AsyncRead + AsyncWrite + Unpin>(
-    io: &mut S,
+/// refuse it, returning the stream to go on with. A client that has not sent its whole hello
+/// within [`HANDSHAKE_TIMEOUT`] is refused.
+pub async fn answer<S: AsyncRead + AsyncWrite>(
+    io: S,
     speaks: &Speaks,
-) -> Result<Version, Refused> {
-    within_the_deadline(answer_now(io, speaks)).await
+) -> Result<(Version, Negotiated<S>), Refused> {
+    let (mut reads, mut writes) = split(io);
+    let (version, left) = within_the_deadline(answer_now(&mut reads, &mut writes, speaks)).await?;
+    Ok((version, join(Cursor::new(left).chain(reads), writes)))
 }
 
 async fn within_the_deadline<T>(
@@ -129,20 +146,22 @@ async fn within_the_deadline<T>(
         .unwrap_or(Err(Refused::TimedOut))
 }
 
-async fn offer_now<S: AsyncRead + AsyncWrite + Unpin>(
-    io: &mut S,
+async fn offer_now<S: AsyncRead + AsyncWrite>(
+    reads: &mut ReadHalf<S>,
+    writes: &mut WriteHalf<S>,
     speaks: &Speaks,
-) -> Result<Version, Refused> {
+) -> Result<(Version, BytesMut), Refused> {
     send(
-        io,
+        writes,
         &Hello {
             versions: speaks.0.clone(),
         },
     )
     .await?;
-    match receive::<_, Answer>(io).await? {
+    let (answer, left) = receive::<_, Answer>(reads).await?;
+    match answer {
         Answer::Accept(version) => match speaks.minor_of(version.major) {
-            Some(minor) if version.minor <= minor => Ok(version),
+            Some(minor) if version.minor <= minor => Ok((version, left)),
             Some(_) => Err(Refused::Malformed(format!(
                 "the host agreed to minor {} of major {}, past this client's",
                 version.minor, version.major
@@ -155,11 +174,12 @@ async fn offer_now<S: AsyncRead + AsyncWrite + Unpin>(
     }
 }
 
-async fn answer_now<S: AsyncRead + AsyncWrite + Unpin>(
-    io: &mut S,
+async fn answer_now<S: AsyncRead + AsyncWrite>(
+    reads: &mut ReadHalf<S>,
+    writes: &mut WriteHalf<S>,
     speaks: &Speaks,
-) -> Result<Version, Refused> {
-    let hello: Hello = receive(io).await?;
+) -> Result<(Version, BytesMut), Refused> {
+    let (hello, left): (Hello, _) = receive(reads).await?;
     let theirs = Speaks::new(hello.versions);
     let agreed = speaks.0.iter().find_map(|ours| {
         theirs.minor_of(ours.major).map(|minor| Version {
@@ -169,12 +189,12 @@ async fn answer_now<S: AsyncRead + AsyncWrite + Unpin>(
     });
     match agreed {
         Some(version) => {
-            send(io, &Answer::Accept(version)).await?;
-            Ok(version)
+            send(writes, &Answer::Accept(version)).await?;
+            Ok((version, left))
         }
         None => {
             send(
-                io,
+                writes,
                 &Answer::Refuse {
                     speaks: speaks.majors(),
                 },
@@ -188,24 +208,28 @@ async fn answer_now<S: AsyncRead + AsyncWrite + Unpin>(
     }
 }
 
-async fn send<S: AsyncWrite + Unpin, T: Serialize>(io: &mut S, message: &T) -> Result<(), Refused> {
+/// The codec both messages are framed with.
+fn codec() -> LengthDelimitedCodec {
+    LengthDelimitedCodec::builder()
+        .length_field_type::<u16>()
+        .max_frame_length(MOST_HELLO_BYTES)
+        .new_codec()
+}
+
+async fn send<W: AsyncWrite + Unpin, T: Serialize>(io: &mut W, message: &T) -> Result<(), Refused> {
     let body = serde_json::to_vec(message).map_err(|e| Refused::Malformed(e.to_string()))?;
-    let length = u16::try_from(body.len())
-        .ok()
-        .filter(|&n| usize::from(n) <= MOST_HELLO_BYTES)
-        .ok_or(Refused::TooLong { length: body.len() })?;
-    let mut frame = Vec::with_capacity(MAGIC.len() + 2 + body.len());
-    frame.extend_from_slice(MAGIC);
-    frame.extend_from_slice(&length.to_be_bytes());
-    frame.extend_from_slice(&body);
-    io.write_all(&frame).await?;
-    io.flush().await?;
+    if body.len() > MOST_HELLO_BYTES {
+        return Err(Refused::TooLong { most: MOST_HELLO_BYTES });
+    }
+    io.write_all(MAGIC).await?;
+    FramedWrite::new(&mut *io, codec()).send(Bytes::from(body)).await?;
     Ok(())
 }
 
-async fn receive<S: AsyncRead + Unpin, T: for<'de> Deserialize<'de>>(
-    io: &mut S,
-) -> Result<T, Refused> {
+/// Read one message, returning it and whatever was read past it.
+async fn receive<R: AsyncRead + Unpin, T: for<'de> Deserialize<'de>>(
+    io: &mut R,
+) -> Result<(T, BytesMut), Refused> {
     let mut magic = [0u8; MAGIC.len()];
     match io.read_exact(&mut magic).await {
         Ok(_) if &magic == MAGIC => {}
@@ -215,11 +239,16 @@ async fn receive<S: AsyncRead + Unpin, T: for<'de> Deserialize<'de>>(
         }
         Err(e) => return Err(e.into()),
     }
-    let length = usize::from(io.read_u16().await?);
-    if length > MOST_HELLO_BYTES {
-        return Err(Refused::TooLong { length });
-    }
-    let mut body = vec![0u8; length];
-    io.read_exact(&mut body).await?;
-    serde_json::from_slice(&body).map_err(|e| Refused::Malformed(e.to_string()))
+    let mut frames = FramedRead::new(&mut *io, codec());
+    let body = match frames.next().await {
+        Some(Ok(body)) => body,
+        Some(Err(e)) if e.get_ref().is_some_and(|inner| inner.is::<LengthDelimitedCodecError>()) => {
+            return Err(Refused::TooLong { most: MOST_HELLO_BYTES });
+        }
+        Some(Err(e)) => return Err(e.into()),
+        None => return Err(Refused::NotThisProtocol),
+    };
+    let left = frames.read_buffer_mut().split();
+    let message = serde_json::from_slice(&body).map_err(|e| Refused::Malformed(e.to_string()))?;
+    Ok((message, left))
 }
