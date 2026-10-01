@@ -161,7 +161,7 @@ pub(super) fn guarded(sha: &str, read: impl FnOnce() -> Result<Checks, ForgeErro
             crate::shown::short(sha)
         ));
     }
-    read().unwrap_or_else(|why| Checks::unknown(why.0))
+    read().unwrap_or_else(|why| Checks::unknown(why.to_string()))
 }
 
 /// The list under `key`, read whole or refused: a page that does not hold every entry the

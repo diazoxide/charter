@@ -25,21 +25,21 @@ fn open_or_update(
 ) -> Result<Opened, String> {
     repo.backend()
         .open_or_update(&Caller::command(), &repo.path, head, base, title, body)
-        .map_err(|e| e.0)
+        .map_err(|e| e.to_string())
 }
 
 /// The seam's `request_auto_merge`, as above.
 fn request_auto_merge(repo: &Repo, pr: &Pr, head: &str) -> Result<AutoMerge, String> {
     repo.backend()
         .request_auto_merge(&Caller::command(), &repo.path, pr, head)
-        .map_err(|e| e.0)
+        .map_err(|e| e.to_string())
 }
 
 /// The seam's `state`, as above.
 fn state(repo: &Repo, pr: &Pr) -> Result<State, String> {
     repo.backend()
         .state(&Caller::command(), &repo.path, pr)
-        .map_err(|e| e.0)
+        .map_err(|e| e.to_string())
 }
 use support::forge_cli::{Scene, in_a_child, in_child, was_asked};
 

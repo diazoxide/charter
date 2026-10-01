@@ -1,0 +1,8 @@
+# Put an issue or pull request on a board. Adding one already there returns the item it has.
+mutation AddProjectItem($project: ID!, $content: ID!) {
+  addProjectV2ItemById(input: { projectId: $project, contentId: $content }) {
+    item {
+      id
+    }
+  }
+}

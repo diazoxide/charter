@@ -34,7 +34,7 @@ pub fn reachable(root: &Path) -> Result<Reachable, String> {
     let mut batches = Vec::new();
     for (forge, owner, exclude) in forge::to_query(&cfg)? {
         if let Err(why) = forge.check_auth() {
-            out.trouble.push(why.0);
+            out.trouble.push(why.to_string());
             continue;
         }
         match forge.backend().reachable(&forge::Caller::window(), &owner) {
@@ -48,7 +48,7 @@ pub fn reachable(root: &Path) -> Result<Reachable, String> {
                     .map(|p| inventory::record(&forge, p, "unknown"))
                     .collect::<Vec<_>>(),
             ),
-            Err(why) => out.trouble.push(why.0),
+            Err(why) => out.trouble.push(why.to_string()),
         }
     }
     match inventory::merge(&batches) {

@@ -1,0 +1,50 @@
+# A Projects v2 board by its owner and number, with the fields an item can be given.
+query Project($owner: String!, $number: Int!) {
+  repositoryOwner(login: $owner) {
+    __typename
+    ... on Organization {
+      projectV2(number: $number) {
+        ...Board
+      }
+    }
+    ... on User {
+      projectV2(number: $number) {
+        ...Board
+      }
+    }
+  }
+}
+
+fragment Board on ProjectV2 {
+  id
+  title
+  url
+  fields(first: 100) {
+    nodes {
+      __typename
+      ... on ProjectV2Field {
+        id
+        name
+      }
+      ... on ProjectV2SingleSelectField {
+        id
+        name
+        options {
+          id
+          name
+        }
+      }
+      ... on ProjectV2IterationField {
+        id
+        name
+        configuration {
+          iterations {
+            id
+            title
+            startDate
+          }
+        }
+      }
+    }
+  }
+}

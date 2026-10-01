@@ -24,8 +24,11 @@ use std::sync::Arc;
 use charter_core::forge::checks::{Checks, Ci};
 use charter_core::forge::pr::{AutoMerge, Opened, Pr, Request, State};
 use charter_core::forge::recorded::Recorded;
-use charter_core::forge::{Caller, Forge, ForgeBackend};
+use charter_core::forge::{Caller, Capability, Forge, ForgeBackend, Reach, Support};
 use serde_json::{Value, json};
+
+#[path = "forge_contract/native.rs"]
+mod native;
 
 /// The head every recording's request is at.
 const SHA: &str = "6dcb09b5b57875f334f61aebed695e2e4193db5e";
@@ -33,7 +36,7 @@ const SHA: &str = "6dcb09b5b57875f334f61aebed695e2e4193db5e";
 const MERGE: &str = "e5bd3914e2e596debea16f433f57875b5b90bcd6";
 
 /// Every case, by the seam method it covers. The parity test compares this with the traits.
-const CASES: [&str; 10] = [
+const CASES: [&str; 11] = [
     "owned",
     "reachable",
     "top_level",
@@ -44,25 +47,81 @@ const CASES: [&str; 10] = [
     "checks_at",
     "open_on_branch",
     "ci_word",
+    "support",
 ];
 
 fn recordings() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/forge_contract")
 }
 
-/// A forge's backend over its recording of `case`, and the recording to check afterwards.
-fn over(kind: &str, case: &str) -> (Box<dyn ForgeBackend>, Arc<Recorded>) {
-    let file = recordings().join(kind).join(format!("{case}.json"));
-    let text = std::fs::read_to_string(&file)
-        .unwrap_or_else(|e| panic!("the recording {}: {e}", file.display()));
-    let recorded = Arc::new(Recorded::parse(&text).unwrap());
-    let forge = Forge::default_of(charter_core::forge::Kind::parse(kind).unwrap());
-    (forge.backend_over(recorded.clone()), recorded)
+/// How a case's requests are answered.
+#[derive(Clone, Copy)]
+pub enum How {
+    /// Through the recorded transport, as a CLI call's reply.
+    Recorded,
+    /// Through the native transport, over HTTP, against a server that answers the same
+    /// recording (`native.rs`).
+    Native,
+}
+
+/// A backend over a case's recording, the caller to ask as, and the check that every
+/// recorded exchange was asked for.
+pub struct Over {
+    pub backend: Box<dyn ForgeBackend>,
+    pub caller: Caller,
+    check: Box<dyn Fn()>,
 }
 
 /// Every recorded exchange was asked for.
-fn spent(recorded: &Recorded) {
-    assert_eq!(recorded.unspent(), Vec::new(), "recorded and never asked");
+pub trait Spent {
+    fn spent(&self);
+}
+
+impl Spent for Recorded {
+    fn spent(&self) {
+        assert_eq!(self.unspent(), Vec::new(), "recorded and never asked");
+    }
+}
+
+impl<T: Spent> Spent for Arc<T> {
+    fn spent(&self) {
+        T::spent(self);
+    }
+}
+
+impl Spent for Over {
+    fn spent(&self) {
+        (self.check)();
+    }
+}
+
+fn spent(recorded: &impl Spent) {
+    recorded.spent();
+}
+
+/// The text of `kind`'s recording of `case`.
+pub fn recording(kind: &str, case: &str) -> String {
+    let file = recordings().join(kind).join(format!("{case}.json"));
+    std::fs::read_to_string(&file)
+        .unwrap_or_else(|e| panic!("the recording {}: {e}", file.display()))
+}
+
+/// A forge's backend over its recording of `case`, answered as `how` says.
+fn over(kind: &str, case: &str, how: How) -> Over {
+    let text = recording(kind, case);
+    match how {
+        How::Recorded => {
+            let recorded = Arc::new(Recorded::parse(&text).unwrap());
+            let forge = Forge::default_of(charter_core::forge::Kind::parse(kind).unwrap());
+            let check = recorded.clone();
+            Over {
+                backend: forge.backend_over(recorded),
+                caller: caller(),
+                check: Box::new(move || check.spent()),
+            }
+        }
+        How::Native => native::over(kind, &text),
+    }
 }
 
 fn caller() -> Caller {
@@ -72,9 +131,10 @@ fn caller() -> Caller {
 mod cases {
     use super::*;
 
-    pub fn owned(kind: &str) {
-        let (backend, recorded) = over(kind, "owned");
-        let repos = backend.owned(&caller(), "acme").unwrap();
+    pub fn owned(kind: &str, how: How) {
+        let recorded = over(kind, "owned", how);
+        let backend = &recorded.backend;
+        let repos = backend.owned(&recorded.caller, "acme").unwrap();
         let shown: Vec<(&str, &str, &str)> = repos
             .iter()
             .map(|r| {
@@ -94,9 +154,10 @@ mod cases {
         spent(&recorded);
     }
 
-    pub fn reachable(kind: &str) {
-        let (backend, recorded) = over(kind, "reachable");
-        let repos = backend.reachable(&caller(), "acme").unwrap();
+    pub fn reachable(kind: &str, how: How) {
+        let recorded = over(kind, "reachable", how);
+        let backend = &recorded.backend;
+        let repos = backend.reachable(&recorded.caller, "acme").unwrap();
         let paths: Vec<&str> = repos
             .iter()
             .map(|r| r["path_with_namespace"].as_str().unwrap())
@@ -105,21 +166,23 @@ mod cases {
         spent(&recorded);
     }
 
-    pub fn top_level(kind: &str) {
-        let (backend, recorded) = over(kind, "top_level");
+    pub fn top_level(kind: &str, how: How) {
+        let recorded = over(kind, "top_level", how);
+        let backend = &recorded.backend;
         let repo = json!({"id": 7, "path_with_namespace": "acme/api", "default_branch": "main"});
         assert_eq!(
-            backend.top_level(&caller(), &repo, None).unwrap(),
+            backend.top_level(&recorded.caller, &repo, None).unwrap(),
             ["Cargo.toml", "src"]
         );
         spent(&recorded);
     }
 
-    pub fn open_or_update(kind: &str) {
-        let (backend, recorded) = over(kind, "open_or_update");
+    pub fn open_or_update(kind: &str, how: How) {
+        let recorded = over(kind, "open_or_update", how);
+        let backend = &recorded.backend;
         let opened = backend
             .open_or_update(
-                &caller(),
+                &recorded.caller,
                 "acme/api",
                 "charter/save",
                 "main",
@@ -144,14 +207,15 @@ mod cases {
         spent(&recorded);
     }
 
-    pub fn state(kind: &str) {
-        let (backend, recorded) = over(kind, "state");
+    pub fn state(kind: &str, how: How) {
+        let recorded = over(kind, "state", how);
+        let backend = &recorded.backend;
         let pr = Pr {
             number: 12,
             url: String::new(),
         };
         assert_eq!(
-            backend.state(&caller(), "acme/api", &pr),
+            backend.state(&recorded.caller, "acme/api", &pr),
             Ok(State::Merged {
                 commit: Some(MERGE.into())
             })
@@ -159,10 +223,11 @@ mod cases {
         spent(&recorded);
     }
 
-    pub fn by_head(kind: &str) {
-        let (backend, recorded) = over(kind, "by_head");
+    pub fn by_head(kind: &str, how: How) {
+        let recorded = over(kind, "by_head", how);
+        let backend = &recorded.backend;
         let found = backend
-            .by_head(&caller(), "acme/api", "charter/save")
+            .by_head(&recorded.caller, "acme/api", "charter/save")
             .unwrap()
             .expect("a request");
         assert_eq!(
@@ -173,23 +238,25 @@ mod cases {
         spent(&recorded);
     }
 
-    pub fn request_auto_merge(kind: &str) {
-        let (backend, recorded) = over(kind, "request_auto_merge");
+    pub fn request_auto_merge(kind: &str, how: How) {
+        let recorded = over(kind, "request_auto_merge", how);
+        let backend = &recorded.backend;
         let pr = Pr {
             number: 12,
             url: String::new(),
         };
         assert_eq!(
-            backend.request_auto_merge(&caller(), "acme/api", &pr, SHA),
+            backend.request_auto_merge(&recorded.caller, "acme/api", &pr, SHA),
             Ok(AutoMerge::Queued)
         );
         spent(&recorded);
     }
 
-    pub fn checks_at(kind: &str) {
-        let (backend, recorded) = over(kind, "checks_at");
+    pub fn checks_at(kind: &str, how: How) {
+        let recorded = over(kind, "checks_at", how);
+        let backend = &recorded.backend;
         assert_eq!(
-            backend.checks_at(&caller(), "acme/api", SHA, 12),
+            backend.checks_at(&recorded.caller, "acme/api", SHA, 12),
             Checks {
                 total: Some(1),
                 ci: Ci::Passed,
@@ -199,85 +266,113 @@ mod cases {
         spent(&recorded);
     }
 
-    pub fn open_on_branch(kind: &str) {
-        let (backend, recorded) = over(kind, "open_on_branch");
+    pub fn open_on_branch(kind: &str, how: How) {
+        let recorded = over(kind, "open_on_branch", how);
+        let backend = &recorded.backend;
         assert_eq!(
-            backend.open_on_branch(&caller(), "acme/api", "charter/save"),
+            backend.open_on_branch(&recorded.caller, "acme/api", "charter/save"),
             Ok(Some(Value::from(12)))
         );
         spent(&recorded);
     }
 
-    pub fn ci_word(kind: &str) {
-        let (backend, recorded) = over(kind, "ci_word");
+    pub fn ci_word(kind: &str, how: How) {
+        let recorded = over(kind, "ci_word", how);
+        let backend = &recorded.backend;
         assert_eq!(
-            backend.ci_word(&caller(), "acme/api", "charter/save"),
+            backend.ci_word(&recorded.caller, "acme/api", "charter/save"),
             Ok(Some("success".to_string()))
         );
+        spent(&recorded);
+    }
+
+    pub fn support(kind: &str, how: How) {
+        let recorded = over(kind, "support", how);
+        let backend = &recorded.backend;
+        for what in Capability::ALL {
+            let at = Reach::Repo("acme/api".into());
+            assert_ne!(
+                backend.support(&recorded.caller, &at, what),
+                Support::Available,
+                "{what:?}: what charter has not asked a repo about is never yes"
+            );
+        }
+        assert!(matches!(
+            backend.support(&recorded.caller, &Reach::Instance, Capability::Epics),
+            Support::Unavailable(_)
+        ));
         spent(&recorded);
     }
 }
 
 /// One module per forge, holding every case of [`CASES`].
 macro_rules! contract {
-    ($forge:ident) => {
-        mod $forge {
+    ($module:ident, $forge:ident, $how:ident) => {
+        mod $module {
             #[test]
             fn owned_lists_every_repo_of_the_owner_in_the_neutral_shape() {
                 charter_core::unsteered!();
-                super::cases::owned(stringify!($forge));
+                super::cases::owned(stringify!($forge), super::How::$how);
             }
             #[test]
             fn reachable_keeps_only_the_declared_owners_repos() {
                 charter_core::unsteered!();
-                super::cases::reachable(stringify!($forge));
+                super::cases::reachable(stringify!($forge), super::How::$how);
             }
             #[test]
             fn top_level_lists_the_default_branchs_top_level_names() {
                 charter_core::unsteered!();
-                super::cases::top_level(stringify!($forge));
+                super::cases::top_level(stringify!($forge), super::How::$how);
             }
             #[test]
             fn open_or_update_opens_one_request_when_none_is_open() {
                 charter_core::unsteered!();
-                super::cases::open_or_update(stringify!($forge));
+                super::cases::open_or_update(stringify!($forge), super::How::$how);
             }
             #[test]
             fn state_reads_a_merged_request_with_the_commit_it_landed_as() {
                 charter_core::unsteered!();
-                super::cases::state(stringify!($forge));
+                super::cases::state(stringify!($forge), super::How::$how);
             }
             #[test]
             fn by_head_finds_the_request_from_the_branch_with_its_head_commit() {
                 charter_core::unsteered!();
-                super::cases::by_head(stringify!($forge));
+                super::cases::by_head(stringify!($forge), super::How::$how);
             }
             #[test]
             fn request_auto_merge_queues_the_merge_at_the_pushed_commit() {
                 charter_core::unsteered!();
-                super::cases::request_auto_merge(stringify!($forge));
+                super::cases::request_auto_merge(stringify!($forge), super::How::$how);
             }
             #[test]
             fn checks_at_counts_one_passing_check_at_the_head() {
                 charter_core::unsteered!();
-                super::cases::checks_at(stringify!($forge));
+                super::cases::checks_at(stringify!($forge), super::How::$how);
             }
             #[test]
             fn open_on_branch_names_the_open_requests_number() {
                 charter_core::unsteered!();
-                super::cases::open_on_branch(stringify!($forge));
+                super::cases::open_on_branch(stringify!($forge), super::How::$how);
             }
             #[test]
             fn ci_word_maps_the_forges_success_to_success() {
                 charter_core::unsteered!();
-                super::cases::ci_word(stringify!($forge));
+                super::cases::ci_word(stringify!($forge), super::How::$how);
+            }
+            #[test]
+            fn support_never_reads_silence_as_yes() {
+                charter_core::unsteered!();
+                super::cases::support(stringify!($forge), super::How::$how);
             }
         }
     };
 }
 
-contract!(github);
-contract!(gitlab);
+contract!(github, github, Recorded);
+contract!(gitlab, gitlab, Recorded);
+// The native transport, against a server answering the same recordings over HTTP. GitLab's is
+// FW-2b's (W7: the twin ships one release later).
+contract!(github_native, github, Native);
 
 /// The method names of one `pub trait <name> { … }` block in `backend.rs`.
 fn methods_of(source: &str, name: &str) -> Vec<String> {
@@ -299,7 +394,7 @@ fn every_method_of_the_seam_has_a_case_on_both_forges() {
     let source =
         std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/forge/backend.rs"))
             .unwrap();
-    let mut methods: Vec<String> = ["Repos", "Requests"]
+    let mut methods: Vec<String> = ["Repos", "Requests", "Capabilities"]
         .iter()
         .flat_map(|t| methods_of(&source, t))
         .collect();
@@ -324,11 +419,18 @@ fn every_method_of_the_seam_has_a_case_on_both_forges() {
     .unwrap();
     for kind in ["github", "gitlab"] {
         assert_eq!(
-            me.matches(&format!("contract!({kind});")).count(),
+            me.matches(&format!("contract!({kind}, {kind}, Recorded);"))
+                .count(),
             1,
             "{kind} is instantiated once"
         );
     }
+    assert_eq!(
+        me.matches(&format!("contract!({}, github, Native);", "github_native"))
+            .count(),
+        1,
+        "the native transport runs every case"
+    );
 }
 
 /// GitLab statuses its own documentation lists that the Python port did not (GitLab 19.4
@@ -460,4 +562,32 @@ mod gitlab_forks {
         );
         spent(&recorded);
     }
+}
+
+/// FW-2a's acceptance: the contract passes against the native client with no `gh` on `PATH`.
+/// Every `github_native` case runs again in a child of this binary whose environment is
+/// emptied and whose `PATH` is one empty directory.
+#[test]
+fn the_native_contract_passes_with_no_forge_cli_on_path() {
+    charter_core::unsteered!();
+    let empty = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let out = charter_core::forklock::output(
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["github_native::", "--test-threads=2"])
+            .env_clear()
+            .env("PATH", empty.path())
+            .env("HOME", home.path()),
+    )
+    .unwrap();
+    let said = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "the native contract failed with no CLI on PATH:\n{said}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        said.contains(&format!("{} passed", CASES.len())),
+        "the child did not run every native case:\n{said}"
+    );
 }

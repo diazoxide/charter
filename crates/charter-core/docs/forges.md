@@ -3,10 +3,15 @@
 A **forge** is a code-hosting platform `charter` talks to — GitLab or GitHub today. Every
 forge operation `charter` performs goes through **one seam**: a small set of traits, one per
 area, that each forge implements once ([ADR 0070](../../../docs/adr/0070-a-forge-is-one-seam-with-a-native-client-per-forge-and-gh-and-glab-are-its-fallback.md)).
-A backend builds each request once, and a **transport** sends it. Today every request takes the
-**CLI transport**: that forge's own official CLI (`gh api`, `glab api`), authenticated once,
-over HTTPS, so the token stays in the CLI. The native HTTP transport and charter's own sign-in
-come with FW-2a/b and FW-1. [git-policy.md](git-policy.md) says why the CLI's own login
+A backend builds each request once, and a **transport** sends it. There are two. The **CLI
+transport** is that forge's own official CLI (`gh api`, `glab api`), authenticated once, over
+HTTPS, so the token stays in the CLI. The **native transport** (GitHub's, FW-2a; GitLab's is
+FW-2b) sends the same request over HTTPS with a token charter holds, and makes repeated reads
+conditional against a per-account ETag store. `forge::route` decides which a call takes, from
+its account and its `Caller`: **only a human in the window, on an account charter holds a
+sign-in for, takes the native transport**; a chat, an MCP call, a trigger and every `charter`
+command take the CLI, and no failure is retried on the other. Until FW-1 and FW-3a give charter
+a sign-in, nothing holds one, so every call still takes the CLI. [git-policy.md](git-policy.md) says why the CLI's own login
 matters to an autonomous agent specifically.
 
 ## GitLab

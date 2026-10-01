@@ -4,7 +4,10 @@
 
 use serde_json::Value;
 
-use super::backend::{Asker, Caller, Repos, Requests};
+use super::backend::{
+    Asker, Caller, Capabilities, Capability, Reach, Reason, Repos, Requests, Support, Unavailable,
+    UnknownWhy,
+};
 use super::checks::{self, Checks};
 use super::pr::{
     AutoMerge, GITHUB_METHODS, GITHUB_NOTHING_TO_WAIT_FOR, Opened, Pr, Request, State,
@@ -15,6 +18,13 @@ use super::{
     ForgeError, Kind, LIST_TIMEOUT, Raised, STATUS_TIMEOUT, falsy, first_field, mapped, parse,
     quote, truthy, word_of,
 };
+
+// FW-6a is the first caller of the work items; until it lands only their tests reach them, and
+// not every one of them, so the compiler would call them dead.
+#[allow(dead_code)]
+mod graphql;
+#[allow(dead_code)]
+pub(crate) mod work;
 
 /// The GitHub backend.
 pub(super) struct GitHub(pub(super) Asker);
@@ -59,33 +69,46 @@ fn owner_name(path: &str) -> (&str, &str) {
 }
 
 impl GitHub {
-    fn paged(&self, base: &str, owner: &str, org_probe: bool) -> Result<Vec<Value>, Paged> {
+    fn paged(
+        &self,
+        caller: &Caller,
+        base: &str,
+        owner: &str,
+        org_probe: bool,
+    ) -> Result<Vec<Value>, Paged> {
         let mut out = Vec::new();
         let mut page = 1;
         let joint = if base.contains('?') { '&' } else { '?' };
         loop {
             let path = format!("{base}{joint}per_page=100&page={page}");
-            let answer = match self.0.send(&Call::get(&path, LIST_TIMEOUT)) {
+            let answer = match self.0.send(caller, &Call::get(&path, LIST_TIMEOUT)) {
                 Ok(answer) => answer,
                 Err(NoAnswer::Timeout(why)) => {
-                    return Err(Paged::Failed(ForgeError(format!(
+                    return Err(Paged::Failed(ForgeError::transport(format!(
                         "listing repos for GitHub owner '{owner}' {why}"
                     ))));
                 }
-                Err(NoAnswer::Missing(why)) => return Err(Paged::Failed(ForgeError(why))),
+                Err(no @ (NoAnswer::Missing(_) | NoAnswer::Refused(_))) => {
+                    return Err(Paged::Failed(no.error(no.said().to_string())));
+                }
             };
             if !answer.ok() {
                 let blob = answer.both();
                 if org_probe
                     && page == 1
-                    && (blob.contains("HTTP 404") || blob.contains("\"status\":\"404\""))
+                    && (answer.status == Some(404)
+                        || blob.contains("HTTP 404")
+                        || blob.contains("\"status\":\"404\""))
                 {
                     return Err(Paged::NotAnOrg);
                 }
-                return Err(Paged::Failed(ForgeError(format!(
-                    "listing repos for GitHub owner '{owner}' failed ({path}): {}",
-                    answer.said(Kind::GitHub)
-                ))));
+                return Err(Paged::Failed(ForgeError::of(
+                    answer.failure(),
+                    format!(
+                        "listing repos for GitHub owner '{owner}' failed ({path}): {}",
+                        answer.said(Kind::GitHub)
+                    ),
+                )));
             }
             let batch = parse(Kind::GitHub, &answer.out, &path).map_err(Paged::Failed)?;
             let items = batch.as_array().cloned().unwrap_or_default();
@@ -111,7 +134,7 @@ impl GitHub {
     ///
     /// **Not percent-encoded**: these are GraphQL variables, JSON strings GitHub never
     /// decodes. Encoding would send `feature%2Fx` for `feature/x` and match no ref.
-    fn rollup(&self, path: &str, branch: &str) -> Result<Option<String>, Raised> {
+    fn rollup(&self, caller: &Caller, path: &str, branch: &str) -> Result<Option<String>, Raised> {
         let (owner, name) = owner_name(path);
         let call = Call::graphql(
             ROLLUP_QUERY,
@@ -122,7 +145,7 @@ impl GitHub {
             ],
             STATUS_TIMEOUT,
         );
-        let Ok(answer) = self.0.send(&call) else {
+        let Ok(answer) = self.0.send(caller, &call) else {
             return Ok(None);
         };
         if !answer.ok() {
@@ -193,13 +216,13 @@ fn state_of(record: &Value, doing: &str) -> Result<State, ForgeError> {
 }
 
 impl Repos for GitHub {
-    fn owned(&self, _caller: &Caller, owner: &str) -> Result<Vec<Value>, ForgeError> {
+    fn owned(&self, caller: &Caller, owner: &str) -> Result<Vec<Value>, ForgeError> {
         let enc = quote(owner);
-        let raw = match self.paged(&format!("orgs/{enc}/repos"), owner, true) {
+        let raw = match self.paged(caller, &format!("orgs/{enc}/repos"), owner, true) {
             Err(Paged::NotAnOrg) => {
                 // A personal account 404s on the org endpoint with an identical record shape
                 // on the user one. Only a real 404 falls back; any other failure is a failure.
-                match self.paged(&format!("users/{enc}/repos"), owner, false) {
+                match self.paged(caller, &format!("users/{enc}/repos"), owner, false) {
                     Ok(items) => items,
                     Err(Paged::Failed(e)) => return Err(e),
                     Err(Paged::NotAnOrg) => unreachable!("only the org probe says this"),
@@ -211,8 +234,9 @@ impl Repos for GitHub {
         Ok(raw.iter().map(normalize).collect())
     }
 
-    fn reachable(&self, _caller: &Caller, owner: &str) -> Result<Vec<Value>, ForgeError> {
+    fn reachable(&self, caller: &Caller, owner: &str) -> Result<Vec<Value>, ForgeError> {
         let raw = match self.paged(
+            caller,
             "user/repos?affiliation=owner,collaborator,organization_member",
             owner,
             false,
@@ -226,7 +250,7 @@ impl Repos for GitHub {
 
     fn top_level(
         &self,
-        _caller: &Caller,
+        caller: &Caller,
         repo: &Value,
         git_ref: Option<&str>,
     ) -> Result<Vec<String>, ForgeError> {
@@ -249,17 +273,19 @@ impl Repos for GitHub {
             quote(name),
             quote(git_ref)
         );
-        let answer = match self.0.send(&Call::get(&api, LIST_TIMEOUT)) {
+        let answer = match self.0.send(caller, &Call::get(&api, LIST_TIMEOUT)) {
             Ok(answer) => answer,
             Err(NoAnswer::Timeout(why)) => {
-                return Err(ForgeError(format!(
+                return Err(ForgeError::transport(format!(
                     "listing tree for {path}@{git_ref} {why}"
                 )));
             }
-            Err(NoAnswer::Missing(why)) => return Err(ForgeError(why)),
+            Err(no @ (NoAnswer::Missing(_) | NoAnswer::Refused(_))) => {
+                return Err(no.error(no.said().to_string()));
+            }
         };
         if !answer.ok() {
-            return Err(ForgeError(format!(
+            return Err(ForgeError::new(format!(
                 "listing tree for {path}@{git_ref} failed: {}",
                 answer.said(Kind::GitHub)
             )));
@@ -268,7 +294,7 @@ impl Repos for GitHub {
             return Ok(Vec::new());
         }
         let data: Value = serde_json::from_str(&answer.out).map_err(|e| {
-            ForgeError(format!(
+            ForgeError::new(format!(
                 "GitHub API returned malformed JSON (tree {path}@{git_ref}): {e}"
             ))
         })?;
@@ -290,7 +316,7 @@ impl Repos for GitHub {
 impl Requests for GitHub {
     fn open_or_update(
         &self,
-        _caller: &Caller,
+        caller: &Caller,
         path: &str,
         head: &str,
         base: &str,
@@ -306,7 +332,9 @@ impl Requests for GitHub {
             quote(base)
         );
         let doing = format!("looking for an open pull request from {head} into {base}");
-        let found = self.0.ask(&Call::get(&lookup, LIST_TIMEOUT), &doing)?;
+        let found = self
+            .0
+            .ask(caller, &Call::get(&lookup, LIST_TIMEOUT), &doing)?;
         let call = match first(&found) {
             Some(open) => {
                 let pr = pr_of(open, "number", "html_url", &doing)?;
@@ -331,21 +359,26 @@ impl Requests for GitHub {
             ),
         };
         let doing = format!("opening a pull request from {head} into {base}");
-        let pr = pr_of(&self.0.ask(&call, &doing)?, "number", "html_url", &doing)?;
+        let pr = pr_of(
+            &self.0.ask(caller, &call, &doing)?,
+            "number",
+            "html_url",
+            &doing,
+        )?;
         Ok(Opened { pr, ours: true })
     }
 
-    fn state(&self, _caller: &Caller, path: &str, pr: &Pr) -> Result<State, ForgeError> {
+    fn state(&self, caller: &Caller, path: &str, pr: &Pr) -> Result<State, ForgeError> {
         let (owner, name) = owner_name(path);
         let api = format!("repos/{}/{}/pulls/{}", quote(owner), quote(name), pr.number);
         let doing = format!("reading pull request #{} of {path}", pr.number);
-        let record = self.0.ask(&Call::get(&api, LIST_TIMEOUT), &doing)?;
+        let record = self.0.ask(caller, &Call::get(&api, LIST_TIMEOUT), &doing)?;
         state_of(&record, &doing)
     }
 
     fn by_head(
         &self,
-        _caller: &Caller,
+        caller: &Caller,
         path: &str,
         branch: &str,
     ) -> Result<Option<Request>, ForgeError> {
@@ -358,7 +391,7 @@ impl Requests for GitHub {
             quote(branch)
         );
         let doing = format!("finding the pull request from {branch} in {path}");
-        let listing = self.0.ask(&Call::get(&api, LIST_TIMEOUT), &doing)?;
+        let listing = self.0.ask(caller, &Call::get(&api, LIST_TIMEOUT), &doing)?;
         let found = first(&listing);
         // Asked, not assumed: `owner:branch` can match a branch in another repo the owner
         // holds, and a head filter GitHub cannot parse is ignored rather than refused. A pull
@@ -370,7 +403,7 @@ impl Requests for GitHub {
                 pr["head"]["repo"]["full_name"].as_str(),
             );
             if from != (Some(branch), Some(path)) {
-                return Err(ForgeError(format!(
+                return Err(ForgeError::new(format!(
                     "{doing}: the forge answered a pull request from {}:{}, not from this \
                      branch",
                     from.1.unwrap_or("?"),
@@ -396,7 +429,7 @@ impl Requests for GitHub {
 
     fn request_auto_merge(
         &self,
-        _caller: &Caller,
+        caller: &Caller,
         path: &str,
         pr: &Pr,
         head_sha: &str,
@@ -405,6 +438,7 @@ impl Requests for GitHub {
         let number = pr.number.to_string();
         let doing = format!("reading how {path} merges");
         let answer = self.0.ask(
+            caller,
             &Call::graphql(
                 SETTINGS,
                 vec![
@@ -418,7 +452,7 @@ impl Requests for GitHub {
         )?;
         let settings = &answer["data"]["repository"];
         if settings["autoMergeAllowed"] != Value::Bool(true) {
-            return Err(ForgeError(format!(
+            return Err(ForgeError::new(format!(
                 "{path} does not allow auto-merge. Turn on \"Allow auto-merge\" in its \
                  settings, or choose the pr mode"
             )));
@@ -427,10 +461,12 @@ impl Requests for GitHub {
             .iter()
             .find(|(setting, _)| settings[*setting] == Value::Bool(true))
         else {
-            return Err(ForgeError(format!("{path} allows no merge method")));
+            return Err(ForgeError::new(format!("{path} allows no merge method")));
         };
         let Some(id) = settings["pullRequest"]["id"].as_str() else {
-            return Err(ForgeError(format!("{doing}: no pull request #{number}")));
+            return Err(ForgeError::new(format!(
+                "{doing}: no pull request #{number}"
+            )));
         };
         let call = Call::graphql(
             ENABLE,
@@ -442,7 +478,7 @@ impl Requests for GitHub {
             LIST_TIMEOUT,
         );
         not_queued_when(
-            self.0.said(&call),
+            self.0.said(caller, &call),
             &GITHUB_NOTHING_TO_WAIT_FOR,
             &format!("asking {path} to auto-merge #{number}"),
         )
@@ -450,15 +486,17 @@ impl Requests for GitHub {
 
     /// By the commit alone: GitHub's check runs and commit statuses hang off the sha, not the
     /// pull request, so the request's number is not asked for.
-    fn checks_at(&self, _caller: &Caller, path: &str, sha: &str, _request: u64) -> Checks {
+    fn checks_at(&self, caller: &Caller, path: &str, sha: &str, _request: u64) -> Checks {
         checks::guarded(sha, || {
             let (owner, name) = owner_name(path);
             let base = format!("repos/{}/{}/commits/{sha}", quote(owner), quote(name));
             let runs = self.0.ask(
+                caller,
                 &Call::get(format!("{base}/check-runs?per_page=100"), LIST_TIMEOUT),
                 &format!("reading the check runs at {sha} of {path}"),
             )?;
             let statuses = self.0.ask(
+                caller,
                 &Call::get(format!("{base}/status?per_page=100"), LIST_TIMEOUT),
                 &format!("reading the commit statuses at {sha} of {path}"),
             )?;
@@ -468,7 +506,7 @@ impl Requests for GitHub {
 
     fn open_on_branch(
         &self,
-        _caller: &Caller,
+        caller: &Caller,
         path: &str,
         branch: &str,
     ) -> Result<Option<Value>, Raised> {
@@ -480,15 +518,100 @@ impl Requests for GitHub {
             quote(owner),
             quote(branch)
         );
-        first_field(self.0.best_effort(&asked), "number")
+        first_field(self.0.best_effort(caller, &asked), "number")
     }
 
-    fn ci_word(
-        &self,
-        _caller: &Caller,
-        path: &str,
-        branch: &str,
-    ) -> Result<Option<String>, Raised> {
-        self.rollup(path, branch)
+    fn ci_word(&self, caller: &Caller, path: &str, branch: &str) -> Result<Option<String>, Raised> {
+        self.rollup(caller, path, branch)
+    }
+}
+
+impl Capabilities for GitHub {
+    /// What GitHub is known to have without asking. github.com has sub-issues, dependencies,
+    /// boards and iterations, said of the instance only: whether one owner or repo may use them
+    /// turns on its plan and settings, which FG-2's probes ask, so a narrower reach is
+    /// `Unknown` until then and takes its fallback. A GHES has what its version has: `Unknown`.
+    /// GitHub has no epics anywhere; sub-issues are how it nests work.
+    fn support(&self, _caller: &Caller, at: &Reach, what: Capability) -> Support {
+        let dotcom = self.0.forge.host.eq_ignore_ascii_case("github.com");
+        match what {
+            Capability::Epics => Support::Unavailable(Unavailable::because(
+                Capability::Epics,
+                Reason::NotOnThisForge,
+            )),
+            Capability::SubIssues
+            | Capability::Dependencies
+            | Capability::Boards
+            | Capability::Iterations
+                if dotcom && *at == Reach::Instance =>
+            {
+                Support::Available
+            }
+            _ => Support::Unknown(UnknownWhy::NotProbed),
+        }
+    }
+}
+
+#[cfg(test)]
+mod capability_tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::forge::Forge;
+    use crate::forge::backend::{Fixed, Taken};
+    use crate::forge::recorded::Recorded;
+
+    fn on(host: &str) -> GitHub {
+        let recorded = Recorded::parse(r#"{"source": "none", "exchanges": []}"#).unwrap();
+        let mut forge = Forge::default_of(Kind::GitHub);
+        forge.host = host.to_string();
+        GitHub(Asker {
+            forge,
+            transports: Arc::new(Fixed(Arc::new(recorded))),
+        })
+    }
+
+    #[test]
+    fn github_com_has_sub_issues_said_of_the_instance_and_unknown_of_a_repo() {
+        let github = on("github.com");
+        let me = Caller::window();
+        assert_eq!(
+            github.support(&me, &Reach::Instance, Capability::SubIssues),
+            Support::Available
+        );
+        let repo = Reach::Repo("o/r".into());
+        assert_eq!(
+            github.support(&me, &repo, Capability::SubIssues),
+            Support::Unknown(UnknownWhy::NotProbed)
+        );
+        assert_eq!(
+            github
+                .support(&me, &repo, Capability::SubIssues)
+                .taken(Capability::SubIssues),
+            Taken::Fallback(Capability::SubIssues.fallback())
+        );
+    }
+
+    #[test]
+    fn a_ghes_has_what_its_version_has_which_charter_has_not_asked() {
+        let github = on("ghe.example.com");
+        for what in Capability::ALL {
+            assert_ne!(
+                github.support(&Caller::window(), &Reach::Instance, what),
+                Support::Available,
+                "{what:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_capability_takes_its_fallback_and_never_the_feature() {
+        for what in Capability::ALL {
+            assert_eq!(
+                Support::Unknown(UnknownWhy::NotProbed).taken(what),
+                Taken::Fallback(what.fallback())
+            );
+            assert_eq!(Support::Available.taken(what), Taken::Feature);
+        }
     }
 }

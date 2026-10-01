@@ -79,7 +79,7 @@ pub fn observe(plane: &Path, ws: &str, record: &Record, now: DateTime<Utc>) -> O
                     let found = repo
                         .backend()
                         .by_head(&Caller::command(), &repo.path, &m.branch)
-                        .map_err(|why| why.0)?;
+                        .map_err(|why| why.to_string())?;
                     Ok((repo, found))
                 });
             let (request, checks) = match request {

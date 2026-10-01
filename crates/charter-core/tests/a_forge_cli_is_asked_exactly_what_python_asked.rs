@@ -98,7 +98,7 @@ mod child {
         );
         assert_eq!(
             out.forge("github").check_auth(),
-            Err(ForgeError(
+            Err(ForgeError::new(
                 "gh is not authenticated for auth-out.test. Run: gh auth login".into()
             ))
         );
@@ -131,7 +131,7 @@ mod child {
         );
         assert_eq!(
             silent.forge("gitlab").check_auth(),
-            Err(ForgeError(
+            Err(ForgeError::new(
                 "glab is not authenticated for glab-silent.test. Run: glab auth login".into()
             ))
         );
@@ -488,7 +488,7 @@ mod child {
                 .forge("github")
                 .backend()
                 .owned(&Caller::command(), "o"),
-            Err(ForgeError(
+            Err(ForgeError::new(
                 "listing repos for GitHub owner 'o' failed (orgs/o/repos?per_page=100&page=2): \
                  gh: Not Found (HTTP 404)"
                     .into()
@@ -503,7 +503,7 @@ mod child {
             user.forge("github")
                 .backend()
                 .owned(&Caller::command(), "o"),
-            Err(ForgeError(
+            Err(ForgeError::new(
                 "listing repos for GitHub owner 'o' failed (users/o/repos?per_page=100&page=1): \
                  HTTP 404"
                     .into()
@@ -526,7 +526,7 @@ mod child {
         );
         assert_eq!(
             err.forge("github").backend().owned(&Caller::command(), "o"),
-            Err(ForgeError(
+            Err(ForgeError::new(
                 "listing repos for GitHub owner 'o' failed (orgs/o/repos?per_page=100&page=1): \
                  gh: Server Error (HTTP 502)"
                     .into()
@@ -542,7 +542,7 @@ mod child {
         );
         assert_eq!(
             out.forge("github").backend().owned(&Caller::command(), "o"),
-            Err(ForgeError(
+            Err(ForgeError::new(
                 "listing repos for GitHub owner 'o' failed (orgs/o/repos?per_page=100&page=1): \
                  said on stdout"
                     .into()
@@ -555,7 +555,7 @@ mod child {
             mute.forge("github")
                 .backend()
                 .owned(&Caller::command(), "o"),
-            Err(ForgeError(
+            Err(ForgeError::new(
                 "listing repos for GitHub owner 'o' failed (orgs/o/repos?per_page=100&page=1): \
                  gh exited 4"
                     .into()
@@ -569,7 +569,7 @@ mod child {
             .backend()
             .owned(&Caller::command(), "o")
             .unwrap_err()
-            .0;
+            .to_string();
         assert!(
             why.starts_with(
                 "GitHub API returned malformed JSON (orgs/o/repos?per_page=100&page=1): "
@@ -643,7 +643,7 @@ mod child {
                 .forge("gitlab")
                 .backend()
                 .owned(&Caller::command(), "g"),
-            Err(ForgeError(
+            Err(ForgeError::new(
                 "listing repos for GitLab group 'g' failed: GitLab API call failed \
                  (groups/g/projects?per_page=100&page=1&include_subgroups=true&archived=false): \
                  404 Group Not Found"
@@ -736,7 +736,7 @@ mod child {
 
         assert_eq!(
             forge.backend().top_level(&Caller::command(), &repo, None),
-            Err(ForgeError(
+            Err(ForgeError::new(
                 "listing tree for acme/w@main failed: gh: Not Found (HTTP 404)".into()
             ))
         );
@@ -744,7 +744,7 @@ mod child {
             .backend()
             .top_level(&Caller::command(), &repo, Some("next"))
             .unwrap_err()
-            .0;
+            .to_string();
         assert!(
             why.starts_with("GitHub API returned malformed JSON (tree acme/w@next): "),
             "{why}"
@@ -789,7 +789,7 @@ mod child {
             forge
                 .backend()
                 .top_level(&Caller::command(), &json!({"id": "a/b"}), Some("")),
-            Err(ForgeError(
+            Err(ForgeError::new(
                 "GitLab API call failed (projects/a%2Fb/repository/tree?per_page=100&page=1): boom"
                     .into()
             ))

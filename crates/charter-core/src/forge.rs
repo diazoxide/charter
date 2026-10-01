@@ -37,13 +37,19 @@ use crate::worktree::git;
 pub mod backend;
 pub mod checks;
 pub mod cli;
+pub mod etag;
 mod github;
 mod gitlab;
+pub mod http;
 pub mod pr;
 pub mod recorded;
+pub mod route;
 pub mod transport;
 
-pub use backend::{Caller, ForgeBackend, Priority, Repos, Requests, Surface};
+pub use backend::{
+    Account, Caller, Capabilities, Capability, ForgeBackend, Principal, Priority, Reach, Repos,
+    Requests, Support, Surface,
+};
 
 /// The best-effort budget: an auth check. Python's `base.STATUS_TIMEOUT`.
 pub const STATUS_TIMEOUT: Duration = Duration::from_secs(10);
@@ -530,20 +536,91 @@ pub fn resolve_host(url: &str, root: &Path) -> Option<Forge> {
 // Running the forge's CLI                                                                 #
 // ---------------------------------------------------------------------------------------
 
-/// A forge CLI failed, was missing, or answered something unusable. Python's `ForgeError`.
+/// A forge call failed: its words, and what kind of failure it was (ADR 0070 §1's closed
+/// set). Python's `ForgeError`.
+///
+/// **The words are the contract.** `Display` is [`ForgeError::said`] and nothing else, because
+/// every caller's error text is pinned by the recorded Python behaviour (ADR 0046). The kind is
+/// what a caller branches on: the native transport tells it from the HTTP status, and a CLI
+/// refusal, whose status charter does not parse out of the CLI's sentence, is
+/// [`Failure::Unrecognised`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("{0}")]
-pub struct ForgeError(pub String);
+#[error("{said}")]
+pub struct ForgeError {
+    failure: Failure,
+    said: String,
+}
+
+/// What kind of failure a [`ForgeError`] is (ADR 0070 §1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Failure {
+    /// The credential was refused.
+    Auth,
+    /// The account lacks the right.
+    Forbidden,
+    NotFound,
+    /// The account's budget is spent until `reset`, seconds since the epoch, when the forge
+    /// said.
+    RateLimited {
+        reset: Option<u64>,
+    },
+    /// The forge's state refuses the change: it moved, or it already exists.
+    Conflict,
+    /// A forge capability is not there (ADR 0070 §2).
+    Unavailable(backend::Unavailable),
+    /// charter could not ask: no CLI, no network, a deadline.
+    Transport,
+    /// An answer charter does not understand, or a refusal it cannot classify.
+    Unrecognised,
+}
+
+impl ForgeError {
+    /// A failure in the forge's or the transport's own words, of no kind charter can tell.
+    pub fn new(said: String) -> ForgeError {
+        ForgeError::of(Failure::Unrecognised, said)
+    }
+
+    /// A failure of `failure`'s kind, in these words.
+    pub fn of(failure: Failure, said: impl Into<String>) -> ForgeError {
+        ForgeError {
+            failure,
+            said: said.into(),
+        }
+    }
+
+    /// charter could not ask.
+    pub fn transport(said: impl Into<String>) -> ForgeError {
+        ForgeError::of(Failure::Transport, said)
+    }
+
+    /// What kind of failure this is.
+    pub fn failure(&self) -> &Failure {
+        &self.failure
+    }
+
+    /// The words, exactly as `Display` shows them.
+    pub fn said(&self) -> &str {
+        &self.said
+    }
+
+    /// The same failure, its words replaced.
+    pub fn reworded(self, said: impl Into<String>) -> ForgeError {
+        ForgeError {
+            said: said.into(),
+            ..self
+        }
+    }
+}
 
 impl From<String> for ForgeError {
     fn from(why: String) -> ForgeError {
-        ForgeError(why)
+        ForgeError::new(why)
     }
 }
 
 impl From<&str> for ForgeError {
     fn from(why: &str) -> ForgeError {
-        ForgeError(why.to_string())
+        ForgeError::new(why.to_string())
     }
 }
 
@@ -646,10 +723,12 @@ pub(super) fn cli_env_keeping(
 pub fn gh_as_the_operator(args: &[String], timeout: Duration) -> Result<String, ForgeError> {
     match cli::Cli::as_the_operator().run(Kind::GitHub, args, timeout) {
         Ok(answer) if answer.ok() => Ok(answer.out),
-        Ok(answer) => Err(ForgeError(answer.said(Kind::GitHub))),
-        Err(transport::NoAnswer::Timeout(why) | transport::NoAnswer::Missing(why)) => {
-            Err(ForgeError(why))
-        }
+        Ok(answer) => Err(ForgeError::new(answer.said(Kind::GitHub))),
+        Err(
+            transport::NoAnswer::Timeout(why)
+            | transport::NoAnswer::Missing(why)
+            | transport::NoAnswer::Refused(why),
+        ) => Err(ForgeError::transport(why)),
     }
 }
 
@@ -743,7 +822,7 @@ pub(super) fn parse(kind: Kind, out: &str, path: &str) -> Result<Value, ForgeErr
         return Ok(Value::Array(Vec::new()));
     }
     serde_json::from_str(out).map_err(|e| {
-        ForgeError(format!(
+        ForgeError::new(format!(
             "{} API returned malformed JSON ({path}): {e}",
             kind.display()
         ))
