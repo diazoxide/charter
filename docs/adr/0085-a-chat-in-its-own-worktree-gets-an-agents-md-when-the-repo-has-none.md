@@ -6,8 +6,8 @@
   generated or mirrored; charter writes no project-instructions file"*;
 - ADR 0069's inventory, which gains one row.
 
-Both are set out in their own sections below. One question, how the file is hidden, is still
-open for the operator (§5).
+Both are set out in their own sections below. How the file is hidden (§5) is settled by V35;
+see *Ruled*.
 
 ## Where charter is today
 
@@ -114,7 +114,7 @@ on git 2.50.1:
 charter's record still holds the old digest, which the file no longer has. So the file reads as
 somebody else's. That is the direction the ownership rule is built to fail in.
 
-### 5. Where the line that hides it goes: open
+### 5. Where the line that hides it goes: settled by V35 (see *Ruled*)
 
 The guest layer hides its files with lines in charter's block in `info/exclude`. For a linked
 worktree, git reads only the common directory's `info/exclude`. These facts were measured on
