@@ -2,3 +2,4 @@
 
 pub mod link;
 pub mod version;
+pub mod view;
