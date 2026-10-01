@@ -180,9 +180,19 @@ pub struct Applied {
     pub denied: Vec<String>,
 }
 
-/// Whether every harness file `template` writes a rule into can take it, asked with nothing
-/// written: the reason it cannot, in the words [`apply`] would refuse with.
+/// Whether `template` can be laid into the project at `root`, asked with nothing written: the
+/// project is one this charter may write (FR-24), and every harness file it writes a rule into
+/// can take it. The reason it cannot, in the words [`apply`] would refuse with.
 pub fn check(root: &std::path::Path, template: &Template) -> Result<(), String> {
+    // A project this charter may not write is read-only to it (FR-24), and a template is
+    // nothing but writes.
+    if let crate::compat::Compat::ReadOnly(why) = crate::compat::read(root) {
+        return Err(format!(
+            "This project is read-only to this charter: {why}. Nothing from the {} template was \
+             written.",
+            template.title
+        ));
+    }
     for pattern in &template.ask {
         let rule = crate::guardcmd::as_rule(pattern)?;
         refused(

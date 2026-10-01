@@ -721,3 +721,20 @@ fn taking_a_template_back_keeps_a_sub_agent_that_was_there_before() {
         "a sub-agent the template did not make stays"
     );
 }
+
+#[test]
+fn a_project_this_charter_cannot_write_gets_no_template() {
+    charter_core::unsteered!();
+    let (_dir, root) = new_project();
+    let manifest = root.join("charter.toml");
+    let newer = read(&manifest).replace("schema = 1", "schema = 99");
+    std::fs::write(&manifest, &newer).expect("a project from a newer charter");
+    let settings = read(&root.join(".claude/settings.json"));
+
+    let refused = template::apply(&root, template::named("rust").expect("Rust"), None)
+        .expect_err("read-only (FR-24)");
+
+    assert!(refused.contains("read-only"), "{refused}");
+    assert!(!root.join("personas/rust-engineer").exists());
+    assert_eq!(read(&root.join(".claude/settings.json")), settings);
+}
