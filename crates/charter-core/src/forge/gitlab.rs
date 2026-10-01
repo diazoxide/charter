@@ -7,12 +7,13 @@ use serde_json::Value;
 use super::backend::{Asker, Caller, Repos, Requests};
 use super::checks::{self, Checks};
 use super::pr::{
-    AutoMerge, GITLAB_ACTIVE, GITLAB_NOT_MERGEABLE, Opened, Pr, Request, State, is_ours,
-    not_queued_when, own_mr, pr_of, state_of,
+    AutoMerge, GITLAB_ACTIVE, GITLAB_NOT_MERGEABLE, Opened, Pr, Request, State, commit_named,
+    is_ours, not_queued_when, own_mr, pr_of, unknown_state,
 };
 use super::transport::{Call, Field, Method};
 use super::{
-    ForgeError, Kind, LIST_TIMEOUT, Raised, first_field, mapped, py_str, quote, truthy, word_of,
+    ForgeError, Kind, LIST_TIMEOUT, Raised, falsy, first_field, mapped, py_str, quote, truthy,
+    word_of,
 };
 
 /// The GitLab backend.
@@ -97,6 +98,20 @@ fn normalize(raw: &Value) -> Value {
     })
 }
 
+/// The [`State`] a GitLab merge request record says. A merged MR names its squash commit, else
+/// its merge commit; a fast-forward merge names neither.
+fn state_of(record: &Value, doing: &str) -> Result<State, ForgeError> {
+    match record["state"].as_str().unwrap_or("") {
+        "opened" | "locked" => Ok(State::Open),
+        "closed" => Ok(State::Closed),
+        "merged" => Ok(State::Merged {
+            commit: commit_named(record, "squash_commit_sha")
+                .or_else(|| commit_named(record, "merge_commit_sha")),
+        }),
+        _ => Err(unknown_state(record, doing)),
+    }
+}
+
 impl Repos for GitLab {
     fn owned(&self, _caller: &Caller, owner: &str) -> Result<Vec<Value>, ForgeError> {
         let enc = quote(owner);
@@ -160,7 +175,7 @@ impl Requests for GitLab {
         base: &str,
         title: &str,
         body: &str,
-    ) -> Result<Opened, String> {
+    ) -> Result<Opened, ForgeError> {
         let mrs = format!("projects/{}/merge_requests", quote(path));
         let lookup = format!(
             "{mrs}?state=opened&source_branch={}&target_branch={}&per_page=100",
@@ -203,11 +218,11 @@ impl Requests for GitLab {
         Ok(Opened { pr, ours: true })
     }
 
-    fn state(&self, _caller: &Caller, path: &str, pr: &Pr) -> Result<State, String> {
+    fn state(&self, _caller: &Caller, path: &str, pr: &Pr) -> Result<State, ForgeError> {
         let api = format!("projects/{}/merge_requests/{}", quote(path), pr.number);
         let doing = format!("reading merge request !{} of {path}", pr.number);
         let record = self.0.ask(&Call::get(&api, LIST_TIMEOUT), &doing)?;
-        state_of(Kind::GitLab, &record, &doing)
+        state_of(&record, &doing)
     }
 
     fn by_head(
@@ -215,7 +230,7 @@ impl Requests for GitLab {
         _caller: &Caller,
         path: &str,
         branch: &str,
-    ) -> Result<Option<Request>, String> {
+    ) -> Result<Option<Request>, ForgeError> {
         let api = format!(
             "projects/{}/merge_requests?source_branch={}&state=all&per_page=100",
             quote(path),
@@ -230,10 +245,10 @@ impl Requests for GitLab {
         // which is not "no merge request".
         let full = listing.as_array().is_some_and(|all| all.len() >= 100);
         if found.is_none() && full {
-            return Err(format!(
+            return Err(ForgeError(format!(
                 "{doing}: a hundred merge requests from forks share this branch name, and \
                  charter reads no further"
-            ));
+            )));
         }
         let Some(record) = found else {
             return Ok(None);
@@ -246,7 +261,7 @@ impl Requests for GitLab {
         Ok(Some(Request {
             number: pr.number,
             url: pr.url,
-            state: state_of(Kind::GitLab, record, &doing)?,
+            state: state_of(record, &doing)?,
             head: head.to_string(),
         }))
     }
@@ -266,7 +281,7 @@ impl Requests for GitLab {
         path: &str,
         pr: &Pr,
         head_sha: &str,
-    ) -> Result<AutoMerge, String> {
+    ) -> Result<AutoMerge, ForgeError> {
         let project = format!("projects/{}", quote(path));
         let doing = format!("reading how {path} merges");
         let settings = self.0.ask(&Call::get(&project, LIST_TIMEOUT), &doing)?;
@@ -313,7 +328,7 @@ impl Requests for GitLab {
                 ),
                 &format!("reading the pipelines of merge request !{request} of {path}"),
             )?;
-            checks::gitlab(&answer, sha, request)
+            Ok(checks::gitlab(&answer, sha, request)?)
         })
     }
 
@@ -323,12 +338,24 @@ impl Requests for GitLab {
         path: &str,
         branch: &str,
     ) -> Result<Option<Value>, Raised> {
+        // GitLab matches `source_branch` by name in forks too, so only the project's own merge
+        // request is the branch's, as `by_head` reads it. The first page of a hundred is read;
+        // past it, the status line shows none rather than a stranger's.
         let asked = format!(
-            "projects/{}/merge_requests?state=opened&source_branch={}&per_page=1",
+            "projects/{}/merge_requests?state=opened&source_branch={}&per_page=100",
             quote(path),
             quote(branch)
         );
-        first_field(self.0.best_effort(&asked), "iid")
+        let Some(answer) = self.0.best_effort(&asked) else {
+            return Ok(None);
+        };
+        if falsy(&answer) {
+            return Ok(None);
+        }
+        if !answer.is_array() {
+            return Err(Raised);
+        }
+        Ok(own_mr(&answer).and_then(|mr| mr.get("iid").cloned()))
     }
 
     fn ci_word(

@@ -76,9 +76,10 @@ pub fn observe(plane: &Path, ws: &str, record: &Record, now: DateTime<Utc>) -> O
                 .ok_or_else(|| format!("no clone of {} in this workspace", m.repo))
                 .and_then(|clone| Repo::of_clone(plane, &clone.path))
                 .and_then(|repo| {
-                    let found =
-                        repo.backend()
-                            .by_head(&Caller::command(), &repo.path, &m.branch)?;
+                    let found = repo
+                        .backend()
+                        .by_head(&Caller::command(), &repo.path, &m.branch)
+                        .map_err(|why| why.0)?;
                     Ok((repo, found))
                 });
             let (request, checks) = match request {

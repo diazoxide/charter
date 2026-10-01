@@ -855,7 +855,7 @@ mod child {
             return;
         }
         let asked =
-            "projects/acme%2Fwidget/merge_requests?state=opened&source_branch=main&per_page=1";
+            "projects/acme%2Fwidget/merge_requests?state=opened&source_branch=main&per_page=100";
         let failed = Scene::new("mr-failed.test");
         failed.glab_api(asked, 1, r#"[{"iid": 3}]"#, "");
         assert_eq!(
@@ -888,7 +888,12 @@ mod child {
             Ok(None)
         );
         let found = Scene::new("mr-found.test");
-        found.glab_api(asked, 0, r#"[{"iid": 3, "id": 900}]"#, "");
+        found.glab_api(
+            asked,
+            0,
+            r#"[{"iid": 3, "id": 900, "source_project_id": 7, "target_project_id": 7}]"#,
+            "",
+        );
         assert_eq!(
             found.forge("gitlab").backend().open_on_branch(
                 &Caller::command(),

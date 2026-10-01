@@ -42,7 +42,7 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use super::{Forge, Kind};
+use super::{Forge, ForgeError};
 use crate::worktree::git;
 
 /// A repository on a forge: which forge, and its path there (`owner/name` on GitHub, the full
@@ -115,7 +115,7 @@ pub(super) fn pr_of(
     number_key: &str,
     url_key: &str,
     doing: &str,
-) -> Result<Pr, String> {
+) -> Result<Pr, ForgeError> {
     let number = record.get(number_key).and_then(Value::as_u64);
     let url = record.get(url_key).and_then(Value::as_str);
     match (number, url) {
@@ -123,9 +123,9 @@ pub(super) fn pr_of(
             number,
             url: url.to_string(),
         }),
-        _ => Err(format!(
+        _ => Err(ForgeError(format!(
             "{doing}: the answer named no {number_key} and {url_key}"
-        )),
+        ))),
     }
 }
 
@@ -178,31 +178,18 @@ pub enum State {
     Closed,
 }
 
-/// The [`State`] one pull or merge request record says, read the same way wherever it came from.
-pub(super) fn state_of(kind: Kind, record: &Value, doing: &str) -> Result<State, String> {
+/// A commit a request record names under `key`, if it names a non-empty one.
+pub(super) fn commit_named(record: &Value, key: &str) -> Option<String> {
+    record[key]
+        .as_str()
+        .filter(|sha| !sha.is_empty())
+        .map(str::to_string)
+}
+
+/// A request record whose `state` is none a backend knows.
+pub(super) fn unknown_state(record: &Value, doing: &str) -> ForgeError {
     let word = record["state"].as_str().unwrap_or("");
-    // GitHub says `closed` for a merged PR too; `merged` (and `merged_at`) tell the two apart.
-    let merged = record["merged"] == Value::Bool(true) || record["merged_at"].is_string();
-    // The commit the merge made on the target: GitHub's `merge_commit_sha` (the merge commit,
-    // the squash commit, or a rebase's last commit); GitLab's squash commit, else its merge
-    // commit. A fast-forward merge on GitLab names neither.
-    let named = |key: &str| {
-        record[key]
-            .as_str()
-            .filter(|sha| !sha.is_empty())
-            .map(str::to_string)
-    };
-    let commit = match kind {
-        Kind::GitHub => named("merge_commit_sha"),
-        Kind::GitLab => named("squash_commit_sha").or_else(|| named("merge_commit_sha")),
-    };
-    match (kind, word) {
-        (Kind::GitHub, "open") | (Kind::GitLab, "opened" | "locked") => Ok(State::Open),
-        (Kind::GitHub, "closed") if merged => Ok(State::Merged { commit }),
-        (Kind::GitHub, "closed") | (Kind::GitLab, "closed") => Ok(State::Closed),
-        (Kind::GitLab, "merged") => Ok(State::Merged { commit }),
-        _ => Err(format!("{doing}: the forge answered the state {word:?}")),
-    }
+    ForgeError(format!("{doing}: the forge answered the state {word:?}"))
 }
 
 /// A pull or merge request found by its head branch: what `charter change show` reads of each
@@ -251,15 +238,15 @@ pub(super) const GITLAB_NOT_MERGEABLE: [&str; 2] = ["(HTTP 405)", "(HTTP 422)"];
 /// `Queued` for a call that succeeded, `NotQueued` with the forge's words for a refusal that
 /// names one of `nothing_to_wait_for`, and an error for every other failure.
 pub(super) fn not_queued_when(
-    said: Result<Result<(), String>, String>,
+    said: Result<Result<(), String>, ForgeError>,
     nothing_to_wait_for: &[&str],
     doing: &str,
-) -> Result<AutoMerge, String> {
+) -> Result<AutoMerge, ForgeError> {
     match said? {
         Ok(()) => Ok(AutoMerge::Queued),
         Err(why) if nothing_to_wait_for.iter().any(|w| why.contains(w)) => {
             Ok(AutoMerge::NotQueued(why))
         }
-        Err(why) => Err(format!("{doing} failed: {why}")),
+        Err(why) => Err(ForgeError(format!("{doing} failed: {why}"))),
     }
 }

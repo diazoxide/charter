@@ -14,7 +14,8 @@ use std::path::PathBuf;
 use charter_core::forge::Caller;
 use charter_core::forge::pr::{self, AutoMerge, Opened, Pr, Repo, State};
 
-/// The seam's `open_or_update`, asked of `repo`'s own backend over the CLI transport.
+/// The seam's `open_or_update`, asked of `repo`'s own backend over the CLI transport, with
+/// the error as its words.
 fn open_or_update(
     repo: &Repo,
     head: &str,
@@ -24,17 +25,21 @@ fn open_or_update(
 ) -> Result<Opened, String> {
     repo.backend()
         .open_or_update(&Caller::command(), &repo.path, head, base, title, body)
+        .map_err(|e| e.0)
 }
 
 /// The seam's `request_auto_merge`, as above.
 fn request_auto_merge(repo: &Repo, pr: &Pr, head: &str) -> Result<AutoMerge, String> {
     repo.backend()
         .request_auto_merge(&Caller::command(), &repo.path, pr, head)
+        .map_err(|e| e.0)
 }
 
 /// The seam's `state`, as above.
 fn state(repo: &Repo, pr: &Pr) -> Result<State, String> {
-    repo.backend().state(&Caller::command(), &repo.path, pr)
+    repo.backend()
+        .state(&Caller::command(), &repo.path, pr)
+        .map_err(|e| e.0)
 }
 use support::forge_cli::{Scene, in_a_child, in_child, was_asked};
 

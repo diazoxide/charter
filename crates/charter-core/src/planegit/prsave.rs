@@ -345,7 +345,7 @@ pub(super) fn push(root: &Path, plane: &Plane, sign: bool, say: Sink) -> PushRes
                 root,
                 PushResult {
                     landed: Some(save),
-                    detail: why,
+                    detail: why.0,
                     ..PushResult::of(Outcome::Failed, &target)
                 },
                 &head,
@@ -390,7 +390,7 @@ pub(super) fn push(root: &Path, plane: &Plane, sign: bool, say: Sink) -> PushRes
                 say(Say::Warn(format!(
                     "  Auto-merge could not be requested: {why}. The pull request stays open."
                 )));
-                detail = why;
+                detail = why.0;
             }
         }
     }

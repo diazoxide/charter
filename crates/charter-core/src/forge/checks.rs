@@ -23,6 +23,8 @@
 
 use serde_json::Value;
 
+use super::ForgeError;
+
 /// The five values, closed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Ci {
@@ -152,14 +154,14 @@ pub fn sha_ok(sha: &str) -> bool {
 /// The checks at `sha`, read by `read` only when `sha` is a commit id: anything else, and any
 /// failure `read` reports, is `UNKNOWN` with its reason. Each backend's `checks_at` is this
 /// around its own reads.
-pub(super) fn guarded(sha: &str, read: impl FnOnce() -> Result<Checks, String>) -> Checks {
+pub(super) fn guarded(sha: &str, read: impl FnOnce() -> Result<Checks, ForgeError>) -> Checks {
     if !sha_ok(sha) {
         return Checks::unknown(format!(
             "the forge named the head {}, which is not a commit id",
             crate::shown::short(sha)
         ));
     }
-    read().unwrap_or_else(Checks::unknown)
+    read().unwrap_or_else(|why| Checks::unknown(why.0))
 }
 
 /// The list under `key`, read whole or refused: a page that does not hold every entry the

@@ -412,3 +412,52 @@ mod gitlab_statuses {
         spent(&recorded);
     }
 }
+
+/// GitLab matches `source_branch` by name in every project, forks included
+/// (`doc/api/merge_requests.md`, List project merge requests). A merge request from a fork's
+/// branch of the same name is not the branch's.
+mod gitlab_forks {
+    use super::*;
+
+    fn inline(exchanges: Value) -> (Box<dyn ForgeBackend>, Arc<Recorded>) {
+        let text = json!({"source": "GitLab 19.4 REST API docs, merge_requests.md",
+                          "exchanges": exchanges});
+        let recorded = Arc::new(Recorded::parse(&text.to_string()).unwrap());
+        let forge = Forge::default_of(charter_core::forge::Kind::GitLab);
+        (forge.backend_over(recorded.clone()), recorded)
+    }
+
+    fn listing(out: Value) -> Value {
+        json!([{"call": {"endpoint": {"rest": {"method": null,
+                    "path": "projects/acme%2Fapi/merge_requests?state=opened&source_branch=main&per_page=100"}},
+                 "fields": []},
+                "reply": {"code": 0, "out": out.to_string()}}])
+    }
+
+    #[test]
+    fn the_status_line_never_shows_a_forks_merge_request() {
+        charter_core::unsteered!();
+        let (backend, recorded) = inline(listing(json!([
+            {"iid": 99, "source_project_id": 9, "target_project_id": 3},
+            {"iid": 12, "source_project_id": 3, "target_project_id": 3}
+        ])));
+        assert_eq!(
+            backend.open_on_branch(&caller(), "acme/api", "main"),
+            Ok(Some(Value::from(12)))
+        );
+        spent(&recorded);
+    }
+
+    #[test]
+    fn only_forks_merge_requests_on_the_branch_is_no_open_request() {
+        charter_core::unsteered!();
+        let (backend, recorded) = inline(listing(json!([
+            {"iid": 99, "source_project_id": 9, "target_project_id": 3}
+        ])));
+        assert_eq!(
+            backend.open_on_branch(&caller(), "acme/api", "main"),
+            Ok(None)
+        );
+        spent(&recorded);
+    }
+}

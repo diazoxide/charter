@@ -576,7 +576,7 @@ fn commit_push(
             say(Say::Fail(format!(
                 "Pushed {remote_branch}, but the pull request into {base} was not opened: {why}"
             )));
-            attempt.detail = why;
+            attempt.detail = why.0;
             return 1;
         }
     };

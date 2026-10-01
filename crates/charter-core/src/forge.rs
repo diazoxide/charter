@@ -535,6 +535,18 @@ pub fn resolve_host(url: &str, root: &Path) -> Option<Forge> {
 #[error("{0}")]
 pub struct ForgeError(pub String);
 
+impl From<String> for ForgeError {
+    fn from(why: String) -> ForgeError {
+        ForgeError(why)
+    }
+}
+
+impl From<&str> for ForgeError {
+    fn from(why: &str) -> ForgeError {
+        ForgeError(why.to_string())
+    }
+}
+
 /// The forge CLI `name`, as an absolute path — the operator's `PATH` first (see the module
 /// docs for why), then the fixed directories [`crate::programs`] searches.
 ///

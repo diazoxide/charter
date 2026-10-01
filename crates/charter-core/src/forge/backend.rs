@@ -8,6 +8,15 @@
 //!
 //! No method has a default body, so a method added to an area does not compile until both
 //! backends answer it.
+//!
+//! # One error type per discipline
+//!
+//! Every **strict** method fails with [`ForgeError`], the forge's or the transport's own words.
+//! The two **permissive** methods, the status line's, never fail: every failure is `Ok(None)`,
+//! and [`Raised`] marks only an answer shaped where Python raised (`gl-refresh`'s contract).
+//! `checks_at` folds every failure into `UNKNOWN` with its reason, because a check that could
+//! not be read is one of its five values. ADR 0070's closed error set replaces `ForgeError`'s
+//! single string when the native transport can tell a status from a sentence (FW-2a/b).
 
 use std::sync::Arc;
 
@@ -107,14 +116,18 @@ pub trait Requests {
         base: &str,
         title: &str,
         body: &str,
-    ) -> Result<Opened, String>;
+    ) -> Result<Opened, ForgeError>;
 
     /// Where `pr` stands: open, merged or closed.
-    fn state(&self, caller: &Caller, path: &str, pr: &Pr) -> Result<State, String>;
+    fn state(&self, caller: &Caller, path: &str, pr: &Pr) -> Result<State, ForgeError>;
 
     /// The newest request whose head is `branch`, in any state (ADR 0060).
-    fn by_head(&self, caller: &Caller, path: &str, branch: &str)
-    -> Result<Option<Request>, String>;
+    fn by_head(
+        &self,
+        caller: &Caller,
+        path: &str,
+        branch: &str,
+    ) -> Result<Option<Request>, ForgeError>;
 
     /// Ask the forge to merge `pr` once its checks pass, only at `head_sha` (ADR 0051).
     fn request_auto_merge(
@@ -123,9 +136,11 @@ pub trait Requests {
         path: &str,
         pr: &Pr,
         head_sha: &str,
-    ) -> Result<AutoMerge, String>;
+    ) -> Result<AutoMerge, ForgeError>;
 
-    /// The checks at exactly `sha`; `request` is the request's number (ADR 0060).
+    /// The checks at exactly `sha` (ADR 0060). `request` is the request's number: GitLab reads
+    /// a merge request's own pipelines, and GitHub reads a commit's checks with no request at
+    /// all, so its body does not use it.
     fn checks_at(&self, caller: &Caller, path: &str, sha: &str, request: u64) -> Checks;
 
     /// The open request on `branch`, as the forge's own field holds it. Permissive: every
@@ -187,27 +202,31 @@ impl Asker {
 
     /// Send `call` and read its answer as JSON. Any failure is an error in the forge's own
     /// words; nothing here reads a failure as "none".
-    pub(super) fn ask(&self, call: &Call, doing: &str) -> Result<Value, String> {
+    pub(super) fn ask(&self, call: &Call, doing: &str) -> Result<Value, ForgeError> {
         let kind = self.kind();
         let answer = match self.send(call) {
             Ok(answer) => answer,
-            Err(NoAnswer::Timeout(why)) => return Err(format!("{doing}: {why}")),
-            Err(NoAnswer::Missing(why)) => return Err(why),
+            Err(NoAnswer::Timeout(why)) => return Err(ForgeError(format!("{doing}: {why}"))),
+            Err(NoAnswer::Missing(why)) => return Err(ForgeError(why)),
         };
         if !answer.ok() {
-            return Err(format!("{doing} failed: {}", answer.said(kind)));
+            return Err(ForgeError(format!("{doing} failed: {}", answer.said(kind))));
         }
-        serde_json::from_str(&answer.out)
-            .map_err(|e| format!("{doing}: {} answered malformed JSON: {e}", kind.cli()))
+        serde_json::from_str(&answer.out).map_err(|e| {
+            ForgeError(format!(
+                "{doing}: {} answered malformed JSON: {e}",
+                kind.cli()
+            ))
+        })
     }
 
     /// Send a write and keep the forge's refusal apart from a transport that could not answer:
     /// the outer error is "no answer", the inner one is the forge's own words.
-    pub(super) fn said(&self, call: &Call) -> Result<Result<(), String>, String> {
+    pub(super) fn said(&self, call: &Call) -> Result<Result<(), String>, ForgeError> {
         match self.send(call) {
             Ok(answer) if answer.ok() => Ok(Ok(())),
             Ok(answer) => Ok(Err(answer.said(self.kind()))),
-            Err(NoAnswer::Timeout(why)) | Err(NoAnswer::Missing(why)) => Err(why),
+            Err(NoAnswer::Timeout(why)) | Err(NoAnswer::Missing(why)) => Err(ForgeError(why)),
         }
     }
 

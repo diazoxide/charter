@@ -110,6 +110,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `waiting_for_callback` now shows as pending and counts as running, and auto-merge waits for it
   instead of saying there is nothing to wait for. A pipeline that is `canceling` shows as
   canceled and did not pass. GitLab lists both in its pipelines API (#711).
+- **The status line no longer shows a GitLab fork's merge request as the branch's own.** When a
+  fork had an open merge request from a branch of the same name, the status line could name it.
+  It now names only a merge request from the project itself, as `charter change show` already
+  did (#711).
 - **Linux no longer waits half a minute for a desktop portal that cannot start.** Before GTK
   starts, charter asks the session bus to start the portal and gives it 300 ms. If the bus is
   still silent, charter restarts itself without the session bus, and the window comes up in

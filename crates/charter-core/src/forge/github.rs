@@ -7,8 +7,8 @@ use serde_json::Value;
 use super::backend::{Asker, Caller, Repos, Requests};
 use super::checks::{self, Checks};
 use super::pr::{
-    AutoMerge, GITHUB_METHODS, GITHUB_NOTHING_TO_WAIT_FOR, Opened, Pr, Request, State, first,
-    is_ours, not_queued_when, pr_of, state_of,
+    AutoMerge, GITHUB_METHODS, GITHUB_NOTHING_TO_WAIT_FOR, Opened, Pr, Request, State,
+    commit_named, first, is_ours, not_queued_when, pr_of, unknown_state,
 };
 use super::transport::{Call, Field, Method, NoAnswer};
 use super::{
@@ -177,6 +177,21 @@ fn normalize(raw: &Value) -> Value {
     })
 }
 
+/// The [`State`] a GitHub pull request record says. GitHub says `closed` for a merged PR too;
+/// `merged` (and `merged_at`) tell the two apart, and `merge_commit_sha` is the merge commit,
+/// the squash commit, or a rebase's last commit.
+fn state_of(record: &Value, doing: &str) -> Result<State, ForgeError> {
+    let merged = record["merged"] == Value::Bool(true) || record["merged_at"].is_string();
+    match record["state"].as_str().unwrap_or("") {
+        "open" => Ok(State::Open),
+        "closed" if merged => Ok(State::Merged {
+            commit: commit_named(record, "merge_commit_sha"),
+        }),
+        "closed" => Ok(State::Closed),
+        _ => Err(unknown_state(record, doing)),
+    }
+}
+
 impl Repos for GitHub {
     fn owned(&self, _caller: &Caller, owner: &str) -> Result<Vec<Value>, ForgeError> {
         let enc = quote(owner);
@@ -281,7 +296,7 @@ impl Requests for GitHub {
         base: &str,
         title: &str,
         body: &str,
-    ) -> Result<Opened, String> {
+    ) -> Result<Opened, ForgeError> {
         let (owner, name) = owner_name(path);
         let pulls = format!("repos/{}/{}/pulls", quote(owner), quote(name));
         let lookup = format!(
@@ -320,12 +335,12 @@ impl Requests for GitHub {
         Ok(Opened { pr, ours: true })
     }
 
-    fn state(&self, _caller: &Caller, path: &str, pr: &Pr) -> Result<State, String> {
+    fn state(&self, _caller: &Caller, path: &str, pr: &Pr) -> Result<State, ForgeError> {
         let (owner, name) = owner_name(path);
         let api = format!("repos/{}/{}/pulls/{}", quote(owner), quote(name), pr.number);
         let doing = format!("reading pull request #{} of {path}", pr.number);
         let record = self.0.ask(&Call::get(&api, LIST_TIMEOUT), &doing)?;
-        state_of(Kind::GitHub, &record, &doing)
+        state_of(&record, &doing)
     }
 
     fn by_head(
@@ -333,7 +348,7 @@ impl Requests for GitHub {
         _caller: &Caller,
         path: &str,
         branch: &str,
-    ) -> Result<Option<Request>, String> {
+    ) -> Result<Option<Request>, ForgeError> {
         let (owner, name) = owner_name(path);
         let api = format!(
             "repos/{}/{}/pulls?state=all&head={}:{}&per_page=1",
@@ -355,12 +370,12 @@ impl Requests for GitHub {
                 pr["head"]["repo"]["full_name"].as_str(),
             );
             if from != (Some(branch), Some(path)) {
-                return Err(format!(
+                return Err(ForgeError(format!(
                     "{doing}: the forge answered a pull request from {}:{}, not from this \
                      branch",
                     from.1.unwrap_or("?"),
                     from.0.unwrap_or("?")
-                ));
+                )));
             }
         }
         let Some(record) = found else {
@@ -374,7 +389,7 @@ impl Requests for GitHub {
         Ok(Some(Request {
             number: pr.number,
             url: pr.url,
-            state: state_of(Kind::GitHub, record, &doing)?,
+            state: state_of(record, &doing)?,
             head: head.to_string(),
         }))
     }
@@ -385,7 +400,7 @@ impl Requests for GitHub {
         path: &str,
         pr: &Pr,
         head_sha: &str,
-    ) -> Result<AutoMerge, String> {
+    ) -> Result<AutoMerge, ForgeError> {
         let (owner, name) = owner_name(path);
         let number = pr.number.to_string();
         let doing = format!("reading how {path} merges");
@@ -403,19 +418,19 @@ impl Requests for GitHub {
         )?;
         let settings = &answer["data"]["repository"];
         if settings["autoMergeAllowed"] != Value::Bool(true) {
-            return Err(format!(
+            return Err(ForgeError(format!(
                 "{path} does not allow auto-merge. Turn on \"Allow auto-merge\" in its \
                  settings, or choose the pr mode"
-            ));
+            )));
         }
         let Some(&(_, method)) = GITHUB_METHODS
             .iter()
             .find(|(setting, _)| settings[*setting] == Value::Bool(true))
         else {
-            return Err(format!("{path} allows no merge method"));
+            return Err(ForgeError(format!("{path} allows no merge method")));
         };
         let Some(id) = settings["pullRequest"]["id"].as_str() else {
-            return Err(format!("{doing}: no pull request #{number}"));
+            return Err(ForgeError(format!("{doing}: no pull request #{number}")));
         };
         let call = Call::graphql(
             ENABLE,
@@ -433,6 +448,8 @@ impl Requests for GitHub {
         )
     }
 
+    /// By the commit alone: GitHub's check runs and commit statuses hang off the sha, not the
+    /// pull request, so the request's number is not asked for.
     fn checks_at(&self, _caller: &Caller, path: &str, sha: &str, _request: u64) -> Checks {
         checks::guarded(sha, || {
             let (owner, name) = owner_name(path);
@@ -445,7 +462,7 @@ impl Requests for GitHub {
                 &Call::get(format!("{base}/status?per_page=100"), LIST_TIMEOUT),
                 &format!("reading the commit statuses at {sha} of {path}"),
             )?;
-            checks::github(&runs, &statuses)
+            Ok(checks::github(&runs, &statuses)?)
         })
     }
 

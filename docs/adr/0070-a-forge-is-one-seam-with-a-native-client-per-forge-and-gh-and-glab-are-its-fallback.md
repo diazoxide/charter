@@ -460,3 +460,38 @@ Nothing changes in code with this ADR. Its tickets make these changes:
 9. **Forgejo is refused as a kind until FG-13.**
 10. **The traits are synchronous.**
 11. **The transport's ETag store is separate from FW-7's item cache.**
+
+## Amended by FG-3 (#711, PR #792), 2026-10-01
+
+FG-3 built the seam's first areas, `Repos` and `Requests`, and moved every caller onto them,
+with the CLI transport as the only transport until FW-2a/b. Five things departed from the text
+above. Each holds until the ticket named, and the text above is left as accepted.
+
+1. **Errors stay as they were, until FW-2a/b's closed error set.** §1 names a closed `ForgeError`
+   enum (`Auth`, `Forbidden`, `NotFound`, `RateLimited`, …). The CLI transport cannot tell those
+   apart except by parsing a CLI's words, which charter does not do to decide anything. So the
+   strict methods of both traits fail with today's `ForgeError(String)`, unified across `Repos`
+   and `Requests`. The permissive pair keeps `Raised`, and `checks_at` keeps `UNKNOWN` with its
+   reason. The enum arrives with the native transport, which has HTTP statuses.
+2. **`report.rs` stays on `gh` until FW-6a (#733).** *Out of scope* above gives that move to FG-3.
+   `charter report` files on charter's own tracker, which is on GitHub whatever forge a project
+   uses, so it has no GitLab twin to hold parity with, and its natural home is the work-item area.
+   It keeps `forge::gh_as_the_operator` until #806 moves it there.
+3. **The body goes as `-f` and `-F` fields until the native transport.** §5 sends the CLI
+   transport's body on stdin. FG-3's CLI transport sends exactly the argv charter sent before,
+   because the recorded Python behaviour (ADR 0046) and the argv tests pin it. A `Call`'s fields
+   are literal (`-f`) or typed (`-F`), and only charter's own values are ever typed, which keeps
+   #323 closed. The move to stdin comes with FW-2a/b, which moves those recordings on purpose.
+4. **The recorded run uses a `Recorded` transport until FW-2a's `wiremock`.** §7's recorded run
+   serves native HTTP from `wiremock`. With no native transport yet, FG-3's contract suite runs
+   every method through `forge::recorded::Recorded`, which answers a `Call` from a JSON recording
+   and fails one nobody recorded. The recordings are taken from each forge's API documentation
+   (GitHub REST `2022-11-28` and GraphQL; GitLab 19.4), and each names its source. A
+   self-managed GitLab recording is still missing; FW-15 (#742) records it.
+5. **`Repos` speaks `serde_json::Value` until a `RepoRecord` type exists.** §1's sketch has
+   `reachable(&self, caller, owner: &Owner) -> Vec<RepoRecord>`. The neutral record the inventory
+   already writes is a JSON object with forge-independent keys, so `owned` and `reachable` return
+   `Vec<Value>` in that shape and take the owner as `&str`. FW-5 defines the typed record.
+
+`Caller` carries the surface and the priority only. The account, the principal and the human join
+it with FW-1 and FD-27, and until then every `Caller` resolves to the CLI transport, as §4 says.

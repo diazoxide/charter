@@ -88,11 +88,13 @@ pub struct Call {
     #[serde(default)]
     pub fields: Vec<Field>,
     /// How long the transport waits. Not part of what a recording matches.
-    #[serde(skip, default = "no_timeout")]
+    #[serde(skip, default = "list_timeout")]
     pub timeout: Duration,
 }
 
-fn no_timeout() -> Duration {
+/// The timeout a deserialized `Call` (a recording) is given: the strict budget. A recording
+/// never sends, so it is never waited on.
+fn list_timeout() -> Duration {
     super::LIST_TIMEOUT
 }
 

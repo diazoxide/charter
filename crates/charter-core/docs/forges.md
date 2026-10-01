@@ -70,15 +70,15 @@ by `tests/a_forge_cli_is_asked_exactly_what_python_asked.rs` and
 
 | Area · method | Who calls it | GitHub | GitLab | Discipline | Parity |
 |---|---|---|---|---|---|
-| `Repos::owned` | `charter discover` | `GET orgs/{owner}/repos`, then `users/{owner}/repos` on a 404 | `GET groups/{owner}/projects?include_subgroups=true&archived=false` | strict | **gaps 1, 2** |
+| `Repos::owned` | `charter discover` | `GET orgs/{owner}/repos`, then `users/{owner}/repos` on a 404 | `GET groups/{owner}/projects?include_subgroups=true&archived=false` | strict | **gaps 1, 2** (#803, #804) |
 | `Repos::reachable` | the repo picker (ADR 0055) | `GET user/repos?affiliation=owner,collaborator,organization_member` | `GET projects?membership=true&archived=false` | strict | same |
 | `Repos::top_level` | `discover`'s stack probe | `GET repos/{o}/{r}/git/trees/{ref}` (ref, else default branch, else `HEAD`) | `GET projects/{id}/repository/tree` (ref, else the default branch) | strict | same |
 | `Requests::open_or_update` | a PR-mode save (ADR 0051) | `GET pulls?state=open&head={o}:{b}&base=…`, then `PATCH` or `POST pulls` | `GET merge_requests?state=opened&source_branch=…&target_branch=…`, own project only, then `PUT` or `POST` | strict | same |
 | `Requests::state` | a PR-mode save | `GET pulls/{n}`: `closed` + `merged` is merged, at `merge_commit_sha` | `GET merge_requests/{iid}`: `merged`, at `squash_commit_sha` else `merge_commit_sha` | strict | same |
 | `Requests::by_head` | `charter change show` (ADR 0060) | `GET pulls?state=all&head={o}:{b}`, checked against `head.repo.full_name` | `GET merge_requests?source_branch=…&state=all`, own project only | strict | same |
-| `Requests::request_auto_merge` | a PR-merge save | GraphQL `enablePullRequestAutoMerge` with `expectedHeadOid` | `PUT merge_requests/{iid}/merge` with `merge_when_pipeline_succeeds` and `sha`, only while a pipeline runs | strict | **gap 3** |
+| `Requests::request_auto_merge` | a PR-merge save | GraphQL `enablePullRequestAutoMerge` with `expectedHeadOid` | `PUT merge_requests/{iid}/merge` with `merge_when_pipeline_succeeds` and `sha`, only while a pipeline runs | strict | **gap 3** (#805) |
 | `Requests::checks_at` | `charter change show` | check runs **and** commit statuses at the sha, each read whole | the request's pipelines at the sha; the newest decides | strict, `UNKNOWN` on failure | same, by design |
-| `Requests::open_on_branch` | `gl-refresh` | `GET pulls?state=open&head={o}:{b}&per_page=1` | `GET merge_requests?state=opened&source_branch=…&per_page=1` | permissive | **gap 4** |
+| `Requests::open_on_branch` | `gl-refresh` | `GET pulls?state=open&head={o}:{b}&per_page=1` | `GET merge_requests?state=opened&source_branch=…&per_page=100`, own project only | permissive | same (fixed here) |
 | `Requests::ci_word` | `gl-refresh` | GraphQL `statusCheckRollup.state` (5 values) | `GET pipelines?ref=…&per_page=1`, its `status` (13 values) | permissive | same |
 
 **Not behind the seam, and why:**
@@ -86,37 +86,40 @@ by `tests/a_forge_cli_is_asked_exactly_what_python_asked.rs` and
 | Call | Where | Why |
 |---|---|---|
 | `gh auth status` / `glab auth status` | `Forge::check_auth`, the CLI transport's own check | It asks whether the transport can speak as someone, not the forge anything. The native transport answers it from its own sign-in |
-| `gh search issues`, `gh issue create` | `report.rs`, through `forge::gh_as_the_operator` | It files on charter's own tracker, which is on GitHub whatever forge a project uses, under the reporter's own login. It moves to the work-item area (FW-6a/b) when that exists |
+| `gh search issues`, `gh issue create` | `report.rs`, through `forge::gh_as_the_operator` | It files on charter's own tracker, which is on GitHub whatever forge a project uses, under the reporter's own login. It moves to the work-item area (FW-6a) with #806 |
 | `gh auth git-credential`, `glab`'s helper | a clone's git credential helper | Git's own credential path is not part of the seam (ADR 0070 §4, #752) |
 
 ### Gaps the audit found
 
-Fixed in this audit, each with a case in `tests/forge_contract.rs`:
+Fixed in this audit, each with a case in `tests/forge_contract.rs`. Both move charter away from
+what the Python charter answered, on purpose (ADR 0046):
 
 - **Two GitLab pipeline statuses were unread.** GitLab 19.4 lists thirteen (`doc/api/pipelines.md`,
-  the `status` filter), and charter mapped eleven. `waiting_for_callback` is now `pending` on the
-  status line, `RUNNING` for `change show`, and a pipeline auto-merge waits for. `canceling` is
-  now `canceled` and `FAILED`.
+  the `status` filter), and charter, like Python's `gitlab._CI_MAP`, mapped eleven.
+  `waiting_for_callback` is now `pending` on the status line, `RUNNING` for `change show`, and a
+  pipeline auto-merge waits for. `canceling` is now `canceled` and `FAILED`.
+- **The GitLab status line could show a fork's merge request.** `open_on_branch` took the first
+  open MR whose source branch had that name, while `by_head` and `open_or_update` keep only the
+  project's own (`source_project_id == target_project_id`). It now reads a page of a hundred and
+  keeps only the project's own, as GitHub's `head={owner}:{branch}` already does. Python asked
+  for one MR (`per_page=1`); the pinned argv test moved with it.
 
-Open, each recorded Python behaviour (ADR 0046), so changing it moves a recorded contract on
-purpose in a PR of its own:
+Open, each filed:
 
-1. **A GitLab user namespace cannot be discovered.** `owned` asks `groups/{owner}/projects`, which
-   answers 404 for a personal namespace. GitHub falls back from the org endpoint to the user one;
+1. **A GitLab user namespace cannot be discovered** (#803). `owned` asks `groups/{owner}/projects`,
+   which does not answer for a user. GitHub falls back from the org endpoint to the user one;
    GitLab's equivalent is `GET users/{owner}/projects` (`doc/api/projects.md`).
-2. **GitLab lists projects shared into the group.** `groups/:id/projects` defaults `with_shared`
-   to `true` (`doc/api/groups.md`), so a project another namespace shares with the group is
-   discovered as if it were the group's. GitHub's org listing has no such case. `with_shared=false`
-   would match GitHub.
-3. **GitLab's auto-merge parameter is deprecated.** `merge_when_pipeline_succeeds` was deprecated in
-   GitLab 17.11 in favour of `auto_merge`, and 19.4 still accepts it. charter keeps it on purpose:
-   a GitLab older than `auto_merge` ignores an unknown parameter and would merge at once. Since
-   GitLab 19.1, `auto_merge` on a project with merge trains joins the train. The switch belongs to
-   a forge capability flag (FG-2), keyed on the instance's version.
-4. **The GitLab status line can show a fork's merge request.** `open_on_branch` takes the first
-   open MR whose source branch has that name, while `by_head` and `open_or_update` keep only the
-   project's own (`source_project_id == target_project_id`). GitHub's `head={owner}:{branch}`
-   never matches a fork.
+2. **GitLab lists projects shared into the group** (#804). `groups/:id/projects` defaults
+   `with_shared` to `true` (`doc/api/groups.md`), so a project another namespace shares with the
+   group is discovered as if it were the group's. `with_shared=false` would match GitHub.
+3. **GitLab's auto-merge parameter is deprecated** (#805, after FG-2, #802).
+   `merge_when_pipeline_succeeds` was deprecated in GitLab 17.11 in favour of `auto_merge`, and
+   19.4 still accepts it. charter keeps it on purpose: a GitLab older than `auto_merge` ignores an
+   unknown parameter and would merge at once. Since 19.1, `auto_merge` on a project with merge
+   trains joins the train.
+4. **No self-managed GitLab recording** (#742). ADR 0070 §7 asks for one; the recordings here are
+   GitHub's and GitLab's documented answers.
+5. **`charter report` is outside the seam** (#806), until the work-item area (FW-6a) exists.
 
 ## The mixed-forge collision rule
 
