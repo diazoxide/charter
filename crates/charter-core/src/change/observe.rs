@@ -20,8 +20,9 @@ use std::path::Path;
 use chrono::{DateTime, Utc};
 
 use super::record::Record;
-use crate::forge::checks::{self, Checks};
-use crate::forge::pr::{self, Repo, Request, State};
+use crate::forge::Caller;
+use crate::forge::checks::Checks;
+use crate::forge::pr::{Repo, Request, State};
 
 /// One member, as the forge answered for it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,13 +76,22 @@ pub fn observe(plane: &Path, ws: &str, record: &Record, now: DateTime<Utc>) -> O
                 .ok_or_else(|| format!("no clone of {} in this workspace", m.repo))
                 .and_then(|clone| Repo::of_clone(plane, &clone.path))
                 .and_then(|repo| {
-                    let found = pr::by_head(&repo, &m.branch)?;
+                    let found = repo
+                        .backend()
+                        .by_head(&Caller::command(), &repo.path, &m.branch)
+                        .map_err(|why| why.0)?;
                     Ok((repo, found))
                 });
             let (request, checks) = match request {
                 Ok((repo, Some(req))) => {
-                    let checks = (req.state == State::Open)
-                        .then(|| checks::at(&repo, &req.head, req.number));
+                    let checks = (req.state == State::Open).then(|| {
+                        repo.backend().checks_at(
+                            &Caller::command(),
+                            &repo.path,
+                            &req.head,
+                            req.number,
+                        )
+                    });
                     (Ok(Some(req)), checks)
                 }
                 Ok((_, None)) => (Ok(None), None),

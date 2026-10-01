@@ -1,0 +1,21 @@
+{
+  "source": "GitLab 19.4 REST API docs (gitlab-org/gitlab 19-4-stable-ee, doc/api), pipelines.md: List project pipelines (ref; status is one of thirteen)",
+  "exchanges": [
+    {
+      "call": {
+        "endpoint": {
+          "rest": {
+            "method": null,
+            "path": "projects/acme%2Fapi/pipelines?ref=charter%2Fsave&per_page=1"
+          }
+        },
+        "fields": []
+      },
+      "reply": {
+        "code": 0,
+        "out": "[{\"id\": 77, \"sha\": \"6dcb09b5b57875f334f61aebed695e2e4193db5e\", \"ref\": \"charter/save\", \"status\": \"success\"}]",
+        "err": ""
+      }
+    }
+  ]
+}

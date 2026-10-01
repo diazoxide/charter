@@ -1,0 +1,72 @@
+{
+  "source": "GitLab 19.4 REST API docs (gitlab-org/gitlab 19-4-stable-ee, doc/api), projects.md (squash_option), merge_requests.md: Retrieve a merge request (head_pipeline) and Merge a merge request (merge_when_pipeline_succeeds, deprecated in 17.11 and accepted; sha)",
+  "exchanges": [
+    {
+      "call": {
+        "endpoint": {
+          "rest": {
+            "method": null,
+            "path": "projects/acme%2Fapi"
+          }
+        },
+        "fields": []
+      },
+      "reply": {
+        "code": 0,
+        "out": "{\"id\": 3, \"squash_option\": \"default_off\"}",
+        "err": ""
+      }
+    },
+    {
+      "call": {
+        "endpoint": {
+          "rest": {
+            "method": null,
+            "path": "projects/acme%2Fapi/merge_requests/12"
+          }
+        },
+        "fields": []
+      },
+      "reply": {
+        "code": 0,
+        "out": "{\"iid\": 12, \"head_pipeline\": {\"id\": 77, \"status\": \"running\"}}",
+        "err": ""
+      }
+    },
+    {
+      "call": {
+        "endpoint": {
+          "rest": {
+            "method": "PUT",
+            "path": "projects/acme%2Fapi/merge_requests/12/merge"
+          }
+        },
+        "fields": [
+          {
+            "typed": [
+              "merge_when_pipeline_succeeds",
+              "true"
+            ]
+          },
+          {
+            "typed": [
+              "squash",
+              "false"
+            ]
+          },
+          {
+            "text": [
+              "sha",
+              "6dcb09b5b57875f334f61aebed695e2e4193db5e"
+            ]
+          }
+        ]
+      },
+      "reply": {
+        "code": 0,
+        "out": "{\"iid\": 12, \"state\": \"opened\", \"merge_when_pipeline_succeeds\": true}",
+        "err": ""
+      }
+    }
+  ]
+}

@@ -55,7 +55,7 @@ fn a_cli_whose_path_cannot_be_quoted_is_named_bare_in_the_helper() {
 
 mod child {
     use super::*;
-    use charter_core::forge::{ForgeError, Raised};
+    use charter_core::forge::{Caller, ForgeError, Raised};
     use serde_json::{Value, json};
 
     /// `n` bare records named `r<i>`, as a page of a listing.
@@ -231,7 +231,11 @@ mod child {
             "",
         );
 
-        let repos = scene.forge("github").list_repos("ac me").unwrap();
+        let repos = scene
+            .forge("github")
+            .backend()
+            .owned(&Caller::command(), "ac me")
+            .unwrap();
 
         assert_eq!(repos.len(), 101);
         assert_eq!(names(&repos)[100], "r0");
@@ -258,14 +262,25 @@ mod child {
             "",
         );
         let empty = scene.gh_api("orgs/o/repos?per_page=100&page=2", 0, "[]", "");
-        assert_eq!(scene.forge("github").list_repos("o").unwrap().len(), 100);
+        assert_eq!(
+            scene
+                .forge("github")
+                .backend()
+                .owned(&Caller::command(), "o")
+                .unwrap()
+                .len(),
+            100
+        );
         assert!(was_asked(&empty));
 
         // An empty body is a legal, successful answer, read as `[]`.
         let none = Scene::new("none.test");
         none.gh_api("orgs/o/repos?per_page=100&page=1", 0, "\n", "");
         assert_eq!(
-            none.forge("github").list_repos("o").unwrap(),
+            none.forge("github")
+                .backend()
+                .owned(&Caller::command(), "o")
+                .unwrap(),
             Vec::<Value>::new()
         );
     }
@@ -279,7 +294,13 @@ mod child {
         let scene = Scene::new("short.test");
         scene.gh_api("orgs/o/repos?per_page=100&page=1", 0, &page(3, "name"), "");
         assert_eq!(
-            names(&scene.forge("github").list_repos("o").unwrap()),
+            names(
+                &scene
+                    .forge("github")
+                    .backend()
+                    .owned(&Caller::command(), "o")
+                    .unwrap()
+            ),
             ["r0", "r1", "r2"]
         );
     }
@@ -305,7 +326,11 @@ mod child {
             "",
         );
 
-        let repos = scene.forge("github").list_accessible("acme").unwrap();
+        let repos = scene
+            .forge("github")
+            .backend()
+            .reachable(&Caller::command(), "acme")
+            .unwrap();
 
         assert_eq!(names(&repos), ["widget", "gadget"]);
     }
@@ -328,7 +353,11 @@ mod child {
             "",
         );
 
-        let repos = scene.forge("gitlab").list_accessible("grp").unwrap();
+        let repos = scene
+            .forge("gitlab")
+            .backend()
+            .reachable(&Caller::command(), "grp")
+            .unwrap();
 
         assert_eq!(names(&repos), ["api"]);
     }
@@ -356,7 +385,11 @@ mod child {
             "",
         );
 
-        let repos = scene.forge("github").list_repos("acme").unwrap();
+        let repos = scene
+            .forge("github")
+            .backend()
+            .owned(&Caller::command(), "acme")
+            .unwrap();
 
         assert_eq!(
             repos,
@@ -397,7 +430,13 @@ mod child {
             "",
         );
         assert_eq!(
-            names(&words.forge("github").list_repos("solo").unwrap()),
+            names(
+                &words
+                    .forge("github")
+                    .backend()
+                    .owned(&Caller::command(), "solo")
+                    .unwrap()
+            ),
             ["r0", "r1"]
         );
 
@@ -415,7 +454,14 @@ mod child {
             &page(1, "name"),
             "",
         );
-        assert_eq!(body.forge("github").list_repos("solo").unwrap().len(), 1);
+        assert_eq!(
+            body.forge("github")
+                .backend()
+                .owned(&Caller::command(), "solo")
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -438,7 +484,10 @@ mod child {
             "gh: Not Found (HTTP 404)",
         );
         assert_eq!(
-            scene.forge("github").list_repos("o"),
+            scene
+                .forge("github")
+                .backend()
+                .owned(&Caller::command(), "o"),
             Err(ForgeError(
                 "listing repos for GitHub owner 'o' failed (orgs/o/repos?per_page=100&page=2): \
                  gh: Not Found (HTTP 404)"
@@ -451,7 +500,9 @@ mod child {
         user.gh_api("orgs/o/repos?per_page=100&page=1", 1, "", "HTTP 404");
         user.gh_api("users/o/repos?per_page=100&page=1", 1, "", "HTTP 404");
         assert_eq!(
-            user.forge("github").list_repos("o"),
+            user.forge("github")
+                .backend()
+                .owned(&Caller::command(), "o"),
             Err(ForgeError(
                 "listing repos for GitHub owner 'o' failed (users/o/repos?per_page=100&page=1): \
                  HTTP 404"
@@ -474,7 +525,7 @@ mod child {
             "  gh: Server Error (HTTP 502)\n",
         );
         assert_eq!(
-            err.forge("github").list_repos("o"),
+            err.forge("github").backend().owned(&Caller::command(), "o"),
             Err(ForgeError(
                 "listing repos for GitHub owner 'o' failed (orgs/o/repos?per_page=100&page=1): \
                  gh: Server Error (HTTP 502)"
@@ -490,7 +541,7 @@ mod child {
             " \n",
         );
         assert_eq!(
-            out.forge("github").list_repos("o"),
+            out.forge("github").backend().owned(&Caller::command(), "o"),
             Err(ForgeError(
                 "listing repos for GitHub owner 'o' failed (orgs/o/repos?per_page=100&page=1): \
                  said on stdout"
@@ -501,7 +552,9 @@ mod child {
         let mute = Scene::new("fail-mute.test");
         mute.gh_api("orgs/o/repos?per_page=100&page=1", 4, "", "");
         assert_eq!(
-            mute.forge("github").list_repos("o"),
+            mute.forge("github")
+                .backend()
+                .owned(&Caller::command(), "o"),
             Err(ForgeError(
                 "listing repos for GitHub owner 'o' failed (orgs/o/repos?per_page=100&page=1): \
                  gh exited 4"
@@ -511,7 +564,12 @@ mod child {
 
         let garbled = Scene::new("fail-json.test");
         garbled.gh_api("orgs/o/repos?per_page=100&page=1", 0, "{not json", "");
-        let why = garbled.forge("github").list_repos("o").unwrap_err().0;
+        let why = garbled
+            .forge("github")
+            .backend()
+            .owned(&Caller::command(), "o")
+            .unwrap_err()
+            .0;
         assert!(
             why.starts_with(
                 "GitHub API returned malformed JSON (orgs/o/repos?per_page=100&page=1): "
@@ -548,7 +606,11 @@ mod child {
             "",
         );
 
-        let repos = scene.forge("gitlab").list_repos("grp/sub").unwrap();
+        let repos = scene
+            .forge("gitlab")
+            .backend()
+            .owned(&Caller::command(), "grp/sub")
+            .unwrap();
 
         assert_eq!(repos.len(), 101);
         assert_eq!(repos[0]["name"], "p0", "`path` before `name`");
@@ -577,7 +639,10 @@ mod child {
             "404 Group Not Found",
         );
         assert_eq!(
-            scene.forge("gitlab").list_repos("g"),
+            scene
+                .forge("gitlab")
+                .backend()
+                .owned(&Caller::command(), "g"),
             Err(ForgeError(
                 "listing repos for GitLab group 'g' failed: GitLab API call failed \
                  (groups/g/projects?per_page=100&page=1&include_subgroups=true&archived=false): \
@@ -599,7 +664,14 @@ mod child {
             "",
             "",
         );
-        assert_eq!(full.forge("gitlab").list_repos("g").unwrap().len(), 100);
+        assert_eq!(
+            full.forge("gitlab")
+                .backend()
+                .owned(&Caller::command(), "g")
+                .unwrap()
+                .len(),
+            100
+        );
     }
 
     #[test]
@@ -620,17 +692,26 @@ mod child {
         let repo = json!({"path_with_namespace": "acme/wid get", "default_branch": "dev"});
 
         assert_eq!(
-            forge.repo_tree_strict(&repo, Some("feature/x")).unwrap(),
+            forge
+                .backend()
+                .top_level(&Caller::command(), &repo, Some("feature/x"))
+                .unwrap(),
             ["Cargo.toml", "README.md", ""]
         );
         assert_eq!(
-            forge.repo_tree_strict(&repo, Some("")).unwrap(),
+            forge
+                .backend()
+                .top_level(&Caller::command(), &repo, Some(""))
+                .unwrap(),
             ["Cargo.toml", "README.md", ""],
             "an empty ref is no ref"
         );
         let bare = json!({"path_with_namespace": "acme/wid get", "default_branch": ""});
         assert_eq!(
-            forge.repo_tree_strict(&bare, None).unwrap(),
+            forge
+                .backend()
+                .top_level(&Caller::command(), &bare, None)
+                .unwrap(),
             Vec::<String>::new(),
             "HEAD, and an empty body is an empty tree"
         );
@@ -654,12 +735,16 @@ mod child {
         let repo = json!({"path_with_namespace": "acme/w", "default_branch": "main"});
 
         assert_eq!(
-            forge.repo_tree_strict(&repo, None),
+            forge.backend().top_level(&Caller::command(), &repo, None),
             Err(ForgeError(
                 "listing tree for acme/w@main failed: gh: Not Found (HTTP 404)".into()
             ))
         );
-        let why = forge.repo_tree_strict(&repo, Some("next")).unwrap_err().0;
+        let why = forge
+            .backend()
+            .top_level(&Caller::command(), &repo, Some("next"))
+            .unwrap_err()
+            .0;
         assert!(
             why.starts_with("GitHub API returned malformed JSON (tree acme/w@next): "),
             "{why}"
@@ -694,13 +779,16 @@ mod child {
         let forge = scene.forge("gitlab");
 
         let names = forge
-            .repo_tree_strict(&json!({"id": 42}), Some("feature/x"))
+            .backend()
+            .top_level(&Caller::command(), &json!({"id": 42}), Some("feature/x"))
             .unwrap();
         assert_eq!(names.len(), 102);
         assert_eq!(names[100..], ["last", ""]);
 
         assert_eq!(
-            forge.repo_tree_strict(&json!({"id": "a/b"}), Some("")),
+            forge
+                .backend()
+                .top_level(&Caller::command(), &json!({"id": "a/b"}), Some("")),
             Err(ForgeError(
                 "GitLab API call failed (projects/a%2Fb/repository/tree?per_page=100&page=1): boom"
                     .into()
@@ -718,16 +806,22 @@ mod child {
         let scene = Scene::new("pr.test");
         scene.gh_api(asked, 0, r#"[{"number": 7, "title": "x"}]"#, "");
         assert_eq!(
-            scene
-                .forge("github")
-                .open_change("acme/widget", "feature/x"),
+            scene.forge("github").backend().open_on_branch(
+                &Caller::command(),
+                "acme/widget",
+                "feature/x"
+            ),
             Ok(Some(json!(7)))
         );
 
         let none = Scene::new("pr-none.test");
         none.gh_api(asked, 0, "[]", "");
         assert_eq!(
-            none.forge("github").open_change("acme/widget", "feature/x"),
+            none.forge("github").backend().open_on_branch(
+                &Caller::command(),
+                "acme/widget",
+                "feature/x"
+            ),
             Ok(None)
         );
 
@@ -735,13 +829,21 @@ mod child {
         let dict = Scene::new("pr-dict.test");
         dict.gh_api(asked, 0, r#"{"message": "Bad credentials"}"#, "");
         assert_eq!(
-            dict.forge("github").open_change("acme/widget", "feature/x"),
+            dict.forge("github").backend().open_on_branch(
+                &Caller::command(),
+                "acme/widget",
+                "feature/x"
+            ),
             Err(Raised)
         );
         let word = Scene::new("pr-word.test");
         word.gh_api(asked, 0, r#"["x"]"#, "");
         assert_eq!(
-            word.forge("github").open_change("acme/widget", "feature/x"),
+            word.forge("github").backend().open_on_branch(
+                &Caller::command(),
+                "acme/widget",
+                "feature/x"
+            ),
             Err(Raised)
         );
     }
@@ -753,30 +855,51 @@ mod child {
             return;
         }
         let asked =
-            "projects/acme%2Fwidget/merge_requests?state=opened&source_branch=main&per_page=1";
+            "projects/acme%2Fwidget/merge_requests?state=opened&source_branch=main&per_page=100";
         let failed = Scene::new("mr-failed.test");
         failed.glab_api(asked, 1, r#"[{"iid": 3}]"#, "");
         assert_eq!(
-            failed.forge("gitlab").open_change("acme/widget", "main"),
+            failed.forge("gitlab").backend().open_on_branch(
+                &Caller::command(),
+                "acme/widget",
+                "main"
+            ),
             Ok(None),
             "a non-zero exit, whatever it printed"
         );
         let empty = Scene::new("mr-empty.test");
         empty.glab_api(asked, 0, " \n", "");
         assert_eq!(
-            empty.forge("gitlab").open_change("acme/widget", "main"),
+            empty.forge("gitlab").backend().open_on_branch(
+                &Caller::command(),
+                "acme/widget",
+                "main"
+            ),
             Ok(None)
         );
         let garbled = Scene::new("mr-garbled.test");
         garbled.glab_api(asked, 0, "[{", "");
         assert_eq!(
-            garbled.forge("gitlab").open_change("acme/widget", "main"),
+            garbled.forge("gitlab").backend().open_on_branch(
+                &Caller::command(),
+                "acme/widget",
+                "main"
+            ),
             Ok(None)
         );
         let found = Scene::new("mr-found.test");
-        found.glab_api(asked, 0, r#"[{"iid": 3, "id": 900}]"#, "");
+        found.glab_api(
+            asked,
+            0,
+            r#"[{"iid": 3, "id": 900, "source_project_id": 7, "target_project_id": 7}]"#,
+            "",
+        );
         assert_eq!(
-            found.forge("gitlab").open_change("acme/widget", "main"),
+            found.forge("gitlab").backend().open_on_branch(
+                &Caller::command(),
+                "acme/widget",
+                "main"
+            ),
             Ok(Some(json!(3)))
         );
     }
@@ -802,7 +925,11 @@ mod child {
             let scene = Scene::new(&format!("pipe{i}.test"));
             scene.glab_api(asked, 0, &json!([{ "status": status }]).to_string(), "");
             assert_eq!(
-                scene.forge("gitlab").ci_status("acme/widget", "feature/x"),
+                scene.forge("gitlab").backend().ci_word(
+                    &Caller::command(),
+                    "acme/widget",
+                    "feature/x"
+                ),
                 Ok(want.map(str::to_string)),
                 "{status}"
             );
@@ -810,13 +937,19 @@ mod child {
         let none = Scene::new("pipe-none.test");
         none.glab_api(asked, 0, "[]", "");
         assert_eq!(
-            none.forge("gitlab").ci_status("acme/widget", "feature/x"),
+            none.forge("gitlab")
+                .backend()
+                .ci_word(&Caller::command(), "acme/widget", "feature/x"),
             Ok(None)
         );
         let raised = Scene::new("pipe-raised.test");
         raised.glab_api(asked, 0, r#"{"message": "403 Forbidden"}"#, "");
         assert_eq!(
-            raised.forge("gitlab").ci_status("acme/widget", "feature/x"),
+            raised.forge("gitlab").backend().ci_word(
+                &Caller::command(),
+                "acme/widget",
+                "feature/x"
+            ),
             Err(Raised)
         );
     }
@@ -860,7 +993,10 @@ mod child {
         let answered = |host: &str, code: i32, out: &str| {
             let scene = Scene::new(host);
             rollup(&scene, code, out);
-            scene.forge("github").ci_status("acme/widget", "feature/x")
+            scene
+                .forge("github")
+                .backend()
+                .ci_word(&Caller::command(), "acme/widget", "feature/x")
         };
         let state = |s: &str| {
             json!({"data": {"repository": {"ref": {"target": {"statusCheckRollup": {"state": s}}}}}})

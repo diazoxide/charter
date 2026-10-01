@@ -37,7 +37,7 @@ pub fn reachable(root: &Path) -> Result<Reachable, String> {
             out.trouble.push(why.0);
             continue;
         }
-        match forge.list_accessible(&owner) {
+        match forge.backend().reachable(&forge::Caller::window(), &owner) {
             Ok(projects) => batches.push(
                 projects
                     .iter()

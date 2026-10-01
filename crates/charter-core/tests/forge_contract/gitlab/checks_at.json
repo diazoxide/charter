@@ -1,0 +1,21 @@
+{
+  "source": "GitLab 19.4 REST API docs (gitlab-org/gitlab 19-4-stable-ee, doc/api), merge_requests.md: List merge request pipelines",
+  "exchanges": [
+    {
+      "call": {
+        "endpoint": {
+          "rest": {
+            "method": null,
+            "path": "projects/acme%2Fapi/merge_requests/12/pipelines?per_page=100"
+          }
+        },
+        "fields": []
+      },
+      "reply": {
+        "code": 0,
+        "out": "[{\"id\": 77, \"sha\": \"6dcb09b5b57875f334f61aebed695e2e4193db5e\", \"ref\": \"charter/save\", \"status\": \"success\"}]",
+        "err": ""
+      }
+    }
+  ]
+}

@@ -39,6 +39,7 @@
 //! the plane, and nothing is moved.
 
 use super::*;
+use crate::forge::Caller;
 use crate::forge::pr::{self, AutoMerge, Pr, Repo, State};
 use crate::planesave::{Mode, Plane};
 
@@ -327,24 +328,30 @@ pub(super) fn push(root: &Path, plane: &Plane, sign: bool, say: Sink) -> PushRes
     )));
 
     let (title, body) = describe(root, &target, &save);
-    let pr::Opened { pr: opened, ours } =
-        match pr::open_or_update(&repo, &save, &target, &title, &body) {
-            Ok(opened) => opened,
-            Err(why) => {
-                say(Say::Warn(format!(
-                    "Pushed {save}, but the pull request into {target} could not be opened: {why}"
-                )));
-                return record_push(
-                    root,
-                    PushResult {
-                        landed: Some(save),
-                        detail: why,
-                        ..PushResult::of(Outcome::Failed, &target)
-                    },
-                    &head,
-                );
-            }
-        };
+    let pr::Opened { pr: opened, ours } = match repo.backend().open_or_update(
+        &Caller::command(),
+        &repo.path,
+        &save,
+        &target,
+        &title,
+        &body,
+    ) {
+        Ok(opened) => opened,
+        Err(why) => {
+            say(Say::Warn(format!(
+                "Pushed {save}, but the pull request into {target} could not be opened: {why}"
+            )));
+            return record_push(
+                root,
+                PushResult {
+                    landed: Some(save),
+                    detail: why.0,
+                    ..PushResult::of(Outcome::Failed, &target)
+                },
+                &head,
+            );
+        }
+    };
     kept.pr = Some(KeptPr {
         number: opened.number,
         url: opened.url.clone(),
@@ -365,7 +372,10 @@ pub(super) fn push(root: &Path, plane: &Plane, sign: bool, say: Sink) -> PushRes
             .into();
         say(Say::Info(format!("  {detail}.")));
     } else if mode == Mode::PrMerge {
-        match pr::request_auto_merge(&repo, &opened, &head) {
+        match repo
+            .backend()
+            .request_auto_merge(&Caller::command(), &repo.path, &opened, &head)
+        {
             Ok(AutoMerge::Queued) => say(Say::Info(
                 "  It merges by itself once its checks pass.".into(),
             )),
@@ -380,7 +390,7 @@ pub(super) fn push(root: &Path, plane: &Plane, sign: bool, say: Sink) -> PushRes
                 say(Say::Warn(format!(
                     "  Auto-merge could not be requested: {why}. The pull request stays open."
                 )));
-                detail = why;
+                detail = why.0;
             }
         }
     }
@@ -617,7 +627,10 @@ pub(super) fn settle(
             &head,
         ))
     };
-    let commit = match pr::state(&repo, &opened) {
+    let commit = match repo
+        .backend()
+        .state(&Caller::command(), &repo.path, &opened)
+    {
         Ok(State::Open) => return Settled::Open,
         Ok(State::Closed) => {
             return blocked(

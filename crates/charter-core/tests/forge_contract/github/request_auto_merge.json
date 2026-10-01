@@ -1,0 +1,77 @@
+{
+  "source": "GitHub REST API version 2022-11-28, docs.github.com/en/rest; GraphQL API: Repository.autoMergeAllowed and the enablePullRequestAutoMerge mutation (expectedHeadOid)",
+  "exchanges": [
+    {
+      "call": {
+        "endpoint": "graphql",
+        "fields": [
+          {
+            "text": [
+              "query",
+              "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){autoMergeAllowed rebaseMergeAllowed mergeCommitAllowed squashMergeAllowed pullRequest(number:$number){id}}}"
+            ]
+          },
+          {
+            "text": [
+              "owner",
+              "acme"
+            ]
+          },
+          {
+            "text": [
+              "name",
+              "api"
+            ]
+          },
+          {
+            "typed": [
+              "number",
+              "12"
+            ]
+          }
+        ]
+      },
+      "reply": {
+        "code": 0,
+        "out": "{\"data\": {\"repository\": {\"autoMergeAllowed\": true, \"rebaseMergeAllowed\": true, \"mergeCommitAllowed\": true, \"squashMergeAllowed\": true, \"pullRequest\": {\"id\": \"PR_kwDOAbc\"}}}}",
+        "err": ""
+      }
+    },
+    {
+      "call": {
+        "endpoint": "graphql",
+        "fields": [
+          {
+            "text": [
+              "query",
+              "mutation($id:ID!,$method:PullRequestMergeMethod!,$head:GitObjectID!){enablePullRequestAutoMerge(input:{pullRequestId:$id,mergeMethod:$method,expectedHeadOid:$head}){clientMutationId}}"
+            ]
+          },
+          {
+            "text": [
+              "id",
+              "PR_kwDOAbc"
+            ]
+          },
+          {
+            "text": [
+              "method",
+              "REBASE"
+            ]
+          },
+          {
+            "text": [
+              "head",
+              "6dcb09b5b57875f334f61aebed695e2e4193db5e"
+            ]
+          }
+        ]
+      },
+      "reply": {
+        "code": 0,
+        "out": "{\"data\": {\"enablePullRequestAutoMerge\": {\"clientMutationId\": null}}}",
+        "err": ""
+      }
+    }
+  ]
+}

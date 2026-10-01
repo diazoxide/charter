@@ -1,0 +1,21 @@
+{
+  "source": "GitLab 19.4 REST API docs (gitlab-org/gitlab 19-4-stable-ee, doc/api), merge_requests.md: List project merge requests (source_branch, state=all; source_project_id, target_project_id, sha)",
+  "exchanges": [
+    {
+      "call": {
+        "endpoint": {
+          "rest": {
+            "method": null,
+            "path": "projects/acme%2Fapi/merge_requests?source_branch=charter%2Fsave&state=all&per_page=100"
+          }
+        },
+        "fields": []
+      },
+      "reply": {
+        "code": 0,
+        "out": "[{\"iid\": 12, \"web_url\": \"https://gitlab.com/acme/api/-/merge_requests/12\", \"state\": \"opened\", \"sha\": \"6dcb09b5b57875f334f61aebed695e2e4193db5e\", \"source_project_id\": 3, \"target_project_id\": 3}]",
+        "err": ""
+      }
+    }
+  ]
+}

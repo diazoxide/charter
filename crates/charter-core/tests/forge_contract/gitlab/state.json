@@ -1,0 +1,21 @@
+{
+  "source": "GitLab 19.4 REST API docs (gitlab-org/gitlab 19-4-stable-ee, doc/api), merge_requests.md: Retrieve a merge request (state merged, merge_commit_sha, squash_commit_sha)",
+  "exchanges": [
+    {
+      "call": {
+        "endpoint": {
+          "rest": {
+            "method": null,
+            "path": "projects/acme%2Fapi/merge_requests/12"
+          }
+        },
+        "fields": []
+      },
+      "reply": {
+        "code": 0,
+        "out": "{\"iid\": 12, \"state\": \"merged\", \"merge_commit_sha\": \"e5bd3914e2e596debea16f433f57875b5b90bcd6\", \"squash_commit_sha\": null}",
+        "err": ""
+      }
+    }
+  ]
+}

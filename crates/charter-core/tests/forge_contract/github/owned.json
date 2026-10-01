@@ -1,0 +1,21 @@
+{
+  "source": "GitHub REST API version 2022-11-28, docs.github.com/en/rest, repos: List organization repositories (GET /orgs/{org}/repos)",
+  "exchanges": [
+    {
+      "call": {
+        "endpoint": {
+          "rest": {
+            "method": null,
+            "path": "orgs/acme/repos?per_page=100&page=1"
+          }
+        },
+        "fields": []
+      },
+      "reply": {
+        "code": 0,
+        "out": "[{\"id\": 1, \"name\": \"api\", \"full_name\": \"acme/api\", \"default_branch\": \"main\", \"description\": null, \"html_url\": \"https://github.com/acme/api\", \"ssh_url\": \"git@github.com:acme/api.git\", \"topics\": []}, {\"id\": 2, \"name\": \"web\", \"full_name\": \"acme/web\", \"default_branch\": \"main\", \"description\": null, \"html_url\": \"https://github.com/acme/web\", \"ssh_url\": \"git@github.com:acme/web.git\", \"topics\": []}]",
+        "err": ""
+      }
+    }
+  ]
+}

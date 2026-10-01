@@ -46,7 +46,7 @@
 
 use std::path::Path;
 
-use crate::forge::{self, Forge, pr};
+use crate::forge::{self, Caller, Forge, pr};
 use crate::gitstate;
 use crate::planegit::{self, Claim, Stage, Trigger};
 use crate::planesave::{self, Mode};
@@ -563,13 +563,20 @@ fn commit_push(
         mode.as_str(),
         pr::MARKER
     );
-    let opened = match pr::open_or_update(&repo_on_forge, &remote_branch, &base, &title, &body) {
+    let opened = match repo_on_forge.backend().open_or_update(
+        &Caller::command(),
+        &repo_on_forge.path,
+        &remote_branch,
+        &base,
+        &title,
+        &body,
+    ) {
         Ok(opened) => opened,
         Err(why) => {
             say(Say::Fail(format!(
                 "Pushed {remote_branch}, but the pull request into {base} was not opened: {why}"
             )));
-            attempt.detail = why;
+            attempt.detail = why.0;
             return 1;
         }
     };
@@ -593,7 +600,12 @@ fn commit_push(
         opened.number, opened.url
     )));
     if mode == Mode::PrMerge {
-        match pr::request_auto_merge(&repo_on_forge, &opened, &head_sha) {
+        match repo_on_forge.backend().request_auto_merge(
+            &Caller::command(),
+            &repo_on_forge.path,
+            &opened,
+            &head_sha,
+        ) {
             Ok(pr::AutoMerge::Queued) => say(Say::Done(format!(
                 "#{} is set to merge once its checks pass.",
                 opened.number

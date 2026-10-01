@@ -1,9 +1,13 @@
 # Forges: GitLab and GitHub
 
 A **forge** is a code-hosting platform `charter` talks to — GitLab or GitHub today. Every
-git operation `charter` performs (listing repos, cloning, pushing the plane) goes through
-that forge's own official CLI, authenticated once, over HTTPS. [git-policy.md](git-policy.md)
-says why that matters to an autonomous agent specifically.
+forge operation `charter` performs goes through **one seam**: a small set of traits, one per
+area, that each forge implements once ([ADR 0070](../../../docs/adr/0070-a-forge-is-one-seam-with-a-native-client-per-forge-and-gh-and-glab-are-its-fallback.md)).
+A backend builds each request once, and a **transport** sends it. Today every request takes the
+**CLI transport**: that forge's own official CLI (`gh api`, `glab api`), authenticated once,
+over HTTPS, so the token stays in the CLI. The native HTTP transport and charter's own sign-in
+come with FW-2a/b and FW-1. [git-policy.md](git-policy.md) says why the CLI's own login
+matters to an autonomous agent specifically.
 
 ## GitLab
 
@@ -41,16 +45,81 @@ correctly without you telling `charter` which is which per repo.
 
 ## What charter asks a forge
 
-Every call is a read, and there are two disciplines.
+Every operation is a method of an area trait in `src/forge/backend.rs`, with a GitHub body in
+`src/forge/github.rs` and a GitLab body in `src/forge/gitlab.rs`. Nothing else in the core
+builds a forge request or matches on the forge to do so. Every call carries a `Caller` (which
+surface asked, and whether a person is waiting); the account and principal join it with FW-1.
 
-**Permissive** — the open pull or merge request on a branch, and its last CI result: what
-`charter gl-refresh` writes for the panels to draw. Any failure answers nothing. Being
-wrong costs a blank column, retried at the next refresh, and this path must never break a
-surface that draws all the time.
+There are two disciplines, and they stay with the caller: the trait returns what happened.
 
-**Strict** — listing an owner's repos, and reading a repo's file tree for stack
-detection. A failure is an error, because collapsing "the call failed" into "the result
-was empty" is how a rate-limited lookup wipes an inventory.
+**Strict:** a failure is an error, because collapsing "the call failed" into "the result was
+empty" is how a rate-limited lookup wipes an inventory, or a save opens a second request.
+
+**Permissive:** the status line's open request and CI word (`charter gl-refresh`). Any failure
+answers nothing. Being wrong costs a blank column, retried at the next refresh, and this path
+must never break a surface that draws all the time.
+
+### The parity table
+
+Measured against GitHub's REST API (version `2022-11-28`) and GraphQL schema, and against the
+GitLab 19.4 REST documentation (`gitlab-org/gitlab`, branch `19-4-stable-ee`, `doc/api/`).
+Each row has a contract case on both forges in `tests/forge_contract.rs`, run against the
+recordings in `tests/forge_contract/<forge>/`, and the CLI transport's argv for each is pinned
+by `tests/a_forge_cli_is_asked_exactly_what_python_asked.rs` and
+`tests/a_pr_is_opened_or_updated_and_set_to_auto_merge.rs`.
+
+| Area · method | Who calls it | GitHub | GitLab | Discipline | Parity |
+|---|---|---|---|---|---|
+| `Repos::owned` | `charter discover` | `GET orgs/{owner}/repos`, then `users/{owner}/repos` on a 404 | `GET groups/{owner}/projects?include_subgroups=true&archived=false` | strict | **gaps 1, 2** (#803, #804) |
+| `Repos::reachable` | the repo picker (ADR 0055) | `GET user/repos?affiliation=owner,collaborator,organization_member` | `GET projects?membership=true&archived=false` | strict | same |
+| `Repos::top_level` | `discover`'s stack probe | `GET repos/{o}/{r}/git/trees/{ref}` (ref, else default branch, else `HEAD`) | `GET projects/{id}/repository/tree` (ref, else the default branch) | strict | same |
+| `Requests::open_or_update` | a PR-mode save (ADR 0051) | `GET pulls?state=open&head={o}:{b}&base=…`, then `PATCH` or `POST pulls` | `GET merge_requests?state=opened&source_branch=…&target_branch=…`, own project only, then `PUT` or `POST` | strict | same |
+| `Requests::state` | a PR-mode save | `GET pulls/{n}`: `closed` + `merged` is merged, at `merge_commit_sha` | `GET merge_requests/{iid}`: `merged`, at `squash_commit_sha` else `merge_commit_sha` | strict | same |
+| `Requests::by_head` | `charter change show` (ADR 0060) | `GET pulls?state=all&head={o}:{b}`, checked against `head.repo.full_name` | `GET merge_requests?source_branch=…&state=all`, own project only | strict | same |
+| `Requests::request_auto_merge` | a PR-merge save | GraphQL `enablePullRequestAutoMerge` with `expectedHeadOid` | `PUT merge_requests/{iid}/merge` with `merge_when_pipeline_succeeds` and `sha`, only while a pipeline runs | strict | **gap 3** (#805) |
+| `Requests::checks_at` | `charter change show` | check runs **and** commit statuses at the sha, each read whole | the request's pipelines at the sha; the newest decides | strict, `UNKNOWN` on failure | same, by design |
+| `Requests::open_on_branch` | `gl-refresh` | `GET pulls?state=open&head={o}:{b}&per_page=1` | `GET merge_requests?state=opened&source_branch=…&per_page=100`, own project only | permissive | same (fixed here) |
+| `Requests::ci_word` | `gl-refresh` | GraphQL `statusCheckRollup.state` (5 values) | `GET pipelines?ref=…&per_page=1`, its `status` (13 values) | permissive | same |
+
+**Not behind the seam, and why:**
+
+| Call | Where | Why |
+|---|---|---|
+| `gh auth status` / `glab auth status` | `Forge::check_auth`, the CLI transport's own check | It asks whether the transport can speak as someone, not the forge anything. The native transport answers it from its own sign-in |
+| `gh search issues`, `gh issue create` | `report.rs`, through `forge::gh_as_the_operator` | It files on charter's own tracker, which is on GitHub whatever forge a project uses, under the reporter's own login. It moves to the work-item area (FW-6a) with #806 |
+| `gh auth git-credential`, `glab`'s helper | a clone's git credential helper | Git's own credential path is not part of the seam (ADR 0070 §4, #752) |
+
+### Gaps the audit found
+
+Fixed in this audit, each with a case in `tests/forge_contract.rs`. Both move charter away from
+what the Python charter answered, on purpose (ADR 0046):
+
+- **Two GitLab pipeline statuses were unread.** GitLab 19.4 lists thirteen (`doc/api/pipelines.md`,
+  the `status` filter), and charter, like Python's `gitlab._CI_MAP`, mapped eleven.
+  `waiting_for_callback` is now `pending` on the status line, `RUNNING` for `change show`, and a
+  pipeline auto-merge waits for. `canceling` is now `canceled` and `FAILED`.
+- **The GitLab status line could show a fork's merge request.** `open_on_branch` took the first
+  open MR whose source branch had that name, while `by_head` and `open_or_update` keep only the
+  project's own (`source_project_id == target_project_id`). It now reads a page of a hundred and
+  keeps only the project's own, as GitHub's `head={owner}:{branch}` already does. Python asked
+  for one MR (`per_page=1`); the pinned argv test moved with it.
+
+Open, each filed:
+
+1. **A GitLab user namespace cannot be discovered** (#803). `owned` asks `groups/{owner}/projects`,
+   which does not answer for a user. GitHub falls back from the org endpoint to the user one;
+   GitLab's equivalent is `GET users/{owner}/projects` (`doc/api/projects.md`).
+2. **GitLab lists projects shared into the group** (#804). `groups/:id/projects` defaults
+   `with_shared` to `true` (`doc/api/groups.md`), so a project another namespace shares with the
+   group is discovered as if it were the group's. `with_shared=false` would match GitHub.
+3. **GitLab's auto-merge parameter is deprecated** (#805, after FG-2, #802).
+   `merge_when_pipeline_succeeds` was deprecated in GitLab 17.11 in favour of `auto_merge`, and
+   19.4 still accepts it. charter keeps it on purpose: a GitLab older than `auto_merge` ignores an
+   unknown parameter and would merge at once. Since 19.1, `auto_merge` on a project with merge
+   trains joins the train.
+4. **No self-managed GitLab recording** (#742). ADR 0070 §7 asks for one; the recordings here are
+   GitHub's and GitLab's documented answers.
+5. **`charter report` is outside the seam** (#806), until the work-item area (FW-6a) exists.
 
 ## The mixed-forge collision rule
 

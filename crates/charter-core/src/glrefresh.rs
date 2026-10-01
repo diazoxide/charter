@@ -49,7 +49,7 @@ use serde_json::{Map, Value};
 // `contain` is no longer named here: the two private writers this file had are
 // [`crate::plane::private_dir`] and [`crate::plane::write_private`] now, and they carry the
 // containment walk with them.
-use crate::forge::{self, Raised};
+use crate::forge::{self, Caller, Raised};
 use crate::worktree::git;
 
 /// The cache this writes, relative to the plane root — the same constant the reader uses, so
@@ -385,11 +385,13 @@ pub fn state_for_repo(plane: &Path, tree: &Path, branch: &str) -> State {
     let Some(found) = forge::resolve_host(&url, plane) else {
         return empty();
     };
-    let change = match found.open_change(&path, branch) {
+    let backend = found.backend();
+    let caller = Caller::command().background();
+    let change = match backend.open_on_branch(&caller, &path, branch) {
         Ok(value) => change_or_none(value.as_ref()),
         Err(Raised) => return empty(),
     };
-    let ci = match found.ci_status(&path, branch) {
+    let ci = match backend.ci_word(&caller, &path, branch) {
         Ok(word) => word,
         Err(Raised) => return empty(),
     };

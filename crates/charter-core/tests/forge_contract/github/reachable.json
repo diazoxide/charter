@@ -1,0 +1,21 @@
+{
+  "source": "GitHub REST API version 2022-11-28, docs.github.com/en/rest, repos: List repositories for the authenticated user (GET /user/repos, affiliation)",
+  "exchanges": [
+    {
+      "call": {
+        "endpoint": {
+          "rest": {
+            "method": null,
+            "path": "user/repos?affiliation=owner,collaborator,organization_member&per_page=100&page=1"
+          }
+        },
+        "fields": []
+      },
+      "reply": {
+        "code": 0,
+        "out": "[{\"id\": 1, \"name\": \"api\", \"full_name\": \"acme/api\", \"default_branch\": \"main\", \"description\": null, \"html_url\": \"https://github.com/acme/api\", \"ssh_url\": \"git@github.com:acme/api.git\", \"topics\": []}, {\"id\": 3, \"name\": \"tool\", \"full_name\": \"other/tool\", \"default_branch\": \"main\", \"description\": null, \"html_url\": \"https://github.com/acme/tool\", \"ssh_url\": \"git@github.com:acme/tool.git\", \"topics\": []}]",
+        "err": ""
+      }
+    }
+  ]
+}
