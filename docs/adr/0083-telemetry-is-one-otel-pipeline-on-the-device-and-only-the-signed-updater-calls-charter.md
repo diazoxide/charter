@@ -1,8 +1,7 @@
 # Telemetry is one OTel pipeline on the device, and only the signed updater calls Charter
 
-**Proposed 2026-10-01**, drafted for program-map ticket OB-1 (#686), with dispatcher decisions
-D-0083a and D-0083b. It waits for the operator's ruling on the one item under *For the operator's
-ruling*. It follows these of the operator's rulings:
+**Accepted 2026-10-01** by the operator (ruling V34c), with dispatcher decisions D-0083a/b,
+drafted for program-map ticket OB-1 (#686). It follows these of the operator's rulings:
 
 - **O1:** *"Performance telemetry and the audit log are strictly separate systems, with separate
   stores, schemas and retention. The audit log is never sampled."*
@@ -35,6 +34,8 @@ ruling*. It follows these of the operator's rulings:
 - **W13**, in short: the cloud waits for the GT-CLOUD gate, and *"OTel attribution with a
   Datadog/Grafana dashboard pack (W2)"* is built now, on the device. Nothing in this record
   waits on GT-CLOUD.
+- **V34c**, the ruling on this record (*Ruled*, below): a spend budget may pause a chat on
+  harness-reported spend.
 
 It builds on [ADR 0042](0042-charter-updates-itself-and-nothing-it-cannot-verify-reaches-it.md)
 (the signed updater), [ADR 0066](0066-a-chat-is-a-ulid-a-run-is-a-stretch-of-its-conversation-and-a-device-is-random.md)
@@ -45,8 +46,8 @@ It builds on [ADR 0042](0042-charter-updates-itself-and-nothing-it-cannot-verify
 (harness adapters), [ADR 0075](0075-an-audit-entry-is-metadata-in-a-store-of-its-own-and-telemetry-never-reads-it.md)
 (audit and telemetry apart) and [ADR 0076](0076-a-run-moves-only-by-a-named-cause-and-a-chats-state-is-read-from-its-runs.md)
 (the budget pause). It sits beside FD-8 (#647, PR #794), whose diagnostic log is neither audit
-nor telemetry. It **amends** ADR 0066, ADR 0067, ADR 0068, ADR 0069 and ADR 0075, and, if the
-operator rules yes on the open item, ADR 0076, each in a section of its own below. OB-2, OB-3,
+nor telemetry. It **amends** ADR 0066, ADR 0067, ADR 0068, ADR 0069, ADR 0075 and ADR 0076,
+each in a section of its own below. OB-2, OB-3,
 OB-4, OB-5, OB-9, OB-10, OB-12, OB-14, OB-15, OB-18 and OB-19 build on it.
 
 Its concept is **Chat**: what telemetry measures is chats and their runs
@@ -295,7 +296,8 @@ For this pipeline that means:
 - **A chat whose spend stops reporting is shown as such.** When hooks show turns ending and no
   spend has arrived for that run, the meter says *spend not reported since <time>*, and the budget
   view says the same.
-- **Whether a budget may pause a chat on reported spend is the open item below.**
+- **A spend budget may pause a chat on reported spend.** **Settled by V34c** (*Ruled*, below).
+  The residual risk, an agent hiding its own spend, is stated wherever budgets are set.
 
 ## ADR 0066, amended
 
@@ -375,19 +377,18 @@ For this pipeline that means:
   receiver removes person attributes, and `charter.on_behalf_of` is not emitted (ADR 0083 §3,
   D-0083a).**
 
-## ADR 0076, amended (only if the open item is ruled yes)
+## ADR 0076, amended
 
 - **§2's table, the `budget` row**, read *"the chat's budget ran out (N4, OV-7). The host's own
-  act, from its own counts"*. It would read: **the chat's budget ran out (N4, OV-7). The host's
+  act, from its own counts"*. It now reads: **the chat's budget ran out (N4, OV-7). The host's
   own act: from its own counts for time and tool calls, and for spend from the highest value the
   harness reported per series (ADR 0083 §10).**
 - **The hooks-only rule, as ADR 0076 restated it** (*"Nothing parses harness output to decide
-  anything"*), would gain: **a budget pause may act on the spend a harness reports through its
+  anything"*), gains: **a budget pause may act on the spend a harness reports through its
   OTel exporter. That is a measurement the harness sends, not its output, and it is read only to
   pause.**
 
-If the item is ruled no, ADR 0076 stands as accepted, spend is shown and never pauses a chat, and
-a spend budget waits for spend charter measures itself.
+Ruled by V34c.
 
 ## What changes where
 
@@ -397,7 +398,7 @@ The code does not change with this record.
 |---|---|
 | `docs/plane-format.md` | Rows 77 to 80 in *State charter keeps outside the plane*, marked **decided, not yet written** (in this PR) |
 | `CONTEXT.md` | **Telemetry** names the receiver and the store; gains **Content gate** and **Export destination** (in this PR) |
-| ADR 0066, ADR 0067, ADR 0068, ADR 0069, ADR 0075, and ADR 0076 if the open item is ruled yes | Amended above. Their texts are left as accepted, and this record is the amendment |
+| ADR 0066, ADR 0067, ADR 0068, ADR 0069, ADR 0075, ADR 0076 | Amended above. Their texts are left as accepted, and this record is the amendment |
 | OB-2 | The receiver in `charterd`: OTLP/HTTP on a unix socket behind the egress proxy, per-run credentials and the checks of §2, the stripping of §3, the gates of §4, the pin of §5, the store of §7, the highest-value rule of §10. Its acceptance adds: a record naming another chat is attributed to its credential's chat; a child run's records keep its run; a content attribute with its gate off is not stored |
 | OB-3 | Each adapter injects the proxy endpoint with the credential prefix, asks for cumulative temporality where offered, turns the harness's content settings off, defers to a vendor's managed tier, and lists its harness's person attributes, held by a test against recorded output |
 | OB-9 | Destinations as §8 says: machine settings from a human scope, keyring headers, a cursor each |
@@ -406,7 +407,7 @@ The code does not change with this record.
 | OB-15 | Its no-account test runs with collection on |
 | OB-18 | The attributes of §6, without `charter.on_behalf_of` |
 | OB-19 | Rows for receiver drops, unknown credentials, run-tree mismatches and queue depth |
-| OV-6, OV-7 | Time and tool-call budgets from hooks; spend from §10, pausing only as the open item is ruled |
+| OV-6, OV-7 | Time and tool-call budgets from hooks; spend from §10, pausing on it (V34c), with the residual risk stated where budgets are set |
 | SD-2 | The class 2 additions and the proxy's OTLP route, each with its test |
 | CF-1 | Its wording holds the telemetry side of §9 |
 
@@ -509,21 +510,17 @@ The code does not change with this record.
   that it reaches the receiver only through the proxy."* Applied in §2 and the amendments of ADR
   0067 and ADR 0068, and extended to unsandboxed chats so there is one path.
 
-## For the operator's ruling
+## Ruled (V34c, 2026-10-01)
 
-1. **May a budget pause be driven by the spend a harness reports?** Time and tool-call budgets
-   stay counted from hooks, which charter trusts. Spend is the only budget that comes from the
-   harness, through its OTel exporter. The receiver keeps the highest value seen per series, so a
-   forged or replayed record can only raise spend, never lower it (§10). Saying yes amends ADR
-   0076 (accepted under V27), whose budget pause is *"The host's own act, from its own counts"*,
-   and its restatement of the hooks-only rule (*ADR 0076, amended*).
-   **The residual risk:** an agent that suppresses its own reports, by changing its exporter's
-   settings or stopping it, keeps its spend from rising, and its budget does not pause it. charter
-   shows *spend not reported since <time>* when that happens, but does not pause on it.
-   **Recommended: yes**, with that risk stated where budgets are set. A spend budget is a guard
-   against runaway cost, not against an agent working to hide what it spends. One that must hold
-   against such an agent waits for spend charter measures itself (a model gateway, MS).
-   If no, spend is shown and never pauses a chat.
+The one item put to the operator: *may a budget pause be driven by the spend a harness reports?*
+Answered yes, as recommended.
+
+- **V34c:** *"A spend budget may pause a chat on harness-reported spend. The receiver keeps the
+  highest value it has seen per series, and "spend not reported since <time>" is shown, never
+  acted on. This amends ADR 0076/V27's "own counts". The residual risk, an agent hiding its own
+  spend, is stated wherever budgets are set."*
+- Applied in §10 and *ADR 0076, amended*, which covers both the budget row and the hooks-only
+  rule's restatement. Time and tool-call budgets stay counted from hooks.
 
 ## Later decisions
 
