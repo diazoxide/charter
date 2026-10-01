@@ -116,6 +116,47 @@ export function writeAHarnessOnlyAShellWouldFind(fakeHarness: string): string {
   return home;
 }
 
+/**
+ * The soft open-file limit launchd gives an app opened from the Finder or the Dock (SC-15).
+ */
+export const LAUNCHDS_LIMIT = 256;
+
+/** Where `launchedUnderLaunchdsLimit`'s launcher writes the soft limit it started the app with. */
+export const THE_APPS_STARTING_LIMIT = join(THE_RUNS_TREE, "launchers", "started-with");
+
+/**
+ * A launcher that starts `app` with launchd's soft open-file limit, the hard limit left as it
+ * is, and writes down the limit it started it with (ADR 0068 §9, SC-15).
+ *
+ * **Not `ulimit` in the job's shell.** Node raises its own soft limit to the hard one as it
+ * starts, so WebdriverIO, its workers and every app they spawn run at 1 048 575 on a macOS
+ * runner and 65 536 on Ubuntu whatever the shell was given. That was this file's first try,
+ * and the stress run showed it. The limit has to be set between Node and the app, and a
+ * launcher is the only place there is.
+ *
+ * **`exec`, so the launcher is the app.** The Tauri service spawns this file and later ends the
+ * process it spawned by that pid, and `running(app)` finds the app by its own binary's path;
+ * both see the app itself once the shell has replaced itself with it.
+ */
+export function launchedUnderLaunchdsLimit(app: string): string {
+  const where = join(THE_RUNS_TREE, "launchers");
+  mkdirSync(where, { recursive: true });
+  const launcher = join(where, "app-under-launchds-limit");
+  writeFileSync(
+    launcher,
+    [
+      "#!/bin/sh",
+      "# Written by the scenario tests: the app, started with the open-file limit launchd gives it.",
+      `ulimit -S -n ${LAUNCHDS_LIMIT} || exit 70`,
+      `ulimit -S -n > ${singleQuoted(THE_APPS_STARTING_LIMIT)}`,
+      `exec ${singleQuoted(app)} "$@"`,
+      "",
+    ].join("\n"),
+  );
+  chmodSync(launcher, 0o755);
+  return launcher;
+}
+
 export function writeShell(fakeHarness: string): string {
   const where = join(THE_RUNS_TREE, "shells");
   mkdirSync(where, { recursive: true });
@@ -190,8 +231,12 @@ export function writeAPluginHookingShell(fakeHarness: string): string {
   return shell;
 }
 
-/** `text` as one word `/bin/sh` expands nothing in. */
-function singleQuoted(text: string): string {
+/**
+ * `text` as one word `/bin/sh` expands nothing in. Inside single quotes nothing is special but
+ * the quote itself, which is closed, escaped and reopened; inside double quotes, as
+ * `JSON.stringify` gives, `$`, a backtick and `\` would still be read by the shell.
+ */
+export function singleQuoted(text: string): string {
   return `'${text.replace(/'/g, `'\\''`)}'`;
 }
 

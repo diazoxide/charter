@@ -63,6 +63,7 @@ pub mod mdsection;
 pub mod memstore;
 pub mod news;
 pub mod opencode;
+pub mod openfiles;
 pub mod panel;
 pub mod personacmd;
 pub mod personagate;

@@ -1535,6 +1535,9 @@ pub fn run() {
     // Read first, so that what it holds is when the process started and not when the window
     // first asked.
     LazyLock::force(&STARTED);
+    // Before anything opens a descriptor: an app launchd started (the Finder, the Dock) has a
+    // soft limit of 256, and 200 chats hold more than that (ADR 0068 §9, SC-15).
+    let raised = charter_core::openfiles::raise();
     // Before anything that can panic: a panic that ends the app is written down on its way
     // out, where one that went to a standard error nobody reads was lost (charter-app#16).
     panics::record();
@@ -1542,6 +1545,10 @@ pub fn run() {
     // a standard error that, launched from the Dock, nobody reads (#647).
     charter_core::applog::install();
     reached("run() entered");
+    reached(&raised.to_string());
+    if matches!(raised, charter_core::openfiles::Raised::Refused { .. }) {
+        tracing::warn!("charter: {raised}");
+    }
     // Before anything touches GTK: a desktop portal the session bus is still trying to start
     // costs GTK 25 s and WebKitGTK 5 more (charter-app#24). Asked here for 300 ms; when it is
     // silent this does not return — the launch starts again in place without the bus.

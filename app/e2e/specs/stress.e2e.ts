@@ -1,6 +1,7 @@
+import { readFileSync } from "node:fs";
 import process from "node:process";
 import { $, $$, browser, expect } from "@wdio/globals";
-import { READY, built } from "../harness.js";
+import { LAUNCHDS_LIMIT, READY, THE_APPS_STARTING_LIMIT, built } from "../harness.js";
 import { answerTheAsk, pressAndStart } from "../opening.js";
 import { type Sample, harnessesRunning, logLine, running, sample } from "../processes.js";
 
@@ -21,6 +22,14 @@ import { type Sample, harnessesRunning, logLine, running, sample } from "../proc
 
 const ROUNDS = 3;
 const TABS = 50;
+
+/**
+ * The chats one device keeps open (ADR 0082 §3), all at once and every one of them hot: there
+ * is no hibernation yet (SC-4), so this is harder than the target asks. A stress run starts
+ * the app under launchd's open-file limit (`launchedUnderLaunchdsLimit`), and 200 chats hold
+ * more descriptors than that, so they open only if the app raised its limit (SC-15).
+ */
+const OPEN_TARGET = 200;
 
 /**
  * How long the whole spec may take — declared on the SUITE, and that is not a style choice.
@@ -58,6 +67,15 @@ const BUDGET = 15 * 60_000;
  * rather than as `Error: Timeout` with nothing after it.
  */
 const ROUND_BUDGET = 4 * 60_000;
+
+/**
+ * How long opening the two hundred may take. Each test runs under the suite's `BUDGET`, and the
+ * close that follows needs room too (100 s on a macOS runner on 2026-10-01), so this is under
+ * it with minutes to spare: a guard past the budget would never fire, and the test would end
+ * as a bare `Error: Timeout` again. The opens took 184 s on macOS and 137 s on Ubuntu, so this
+ * is over three times the slower one.
+ */
+const OPEN_TARGET_BUDGET = 10 * 60_000;
 
 /** How often the round writes down how far it has got, in tabs. */
 const PROGRESS_EVERY = 10;
@@ -133,18 +151,18 @@ async function hiddenTabs(): Promise<number> {
  * chats it draws a handful and the rest are behind the show-more button. This loop still
  * terminates, and the reason is worth writing down because it is the whole of the
  * reachability argument: closing a drawn tab gives the strip room for a hidden one, so the
- * hidden tabs flow onto the strip as the drawn ones go. `4 * TABS` presses is four times what
- * fifty chats need. What would catch it going wrong is the pair of assertions below — no
+ * hidden tabs flow onto the strip as the drawn ones go. `4 * most` presses is four times what
+ * `most` chats need. What would catch it going wrong is the pair of assertions below — no
  * close buttons AND nothing hidden — rather than the loop running out, and then the wait for
  * `harnessesRunning() === 0` underneath.
  */
-async function closeEveryTab(): Promise<void> {
+async function closeEveryTab(most = TABS): Promise<void> {
   const names: string[] = [];
   for (const tab of await workspaceTabs()) names.push(await tabName(tab));
   for (const name of names.length > 0 ? names : [""]) {
     if (name !== "" && !(await focusWorkspace(name))) continue;
     // Bounded, so a close that never takes shows up as a failure and not as a hang.
-    for (let pressed = 0; pressed < 4 * TABS; pressed++) {
+    for (let pressed = 0; pressed < 4 * most; pressed++) {
       const buttons = await closeButtons();
       if (buttons.length === 0) {
         break;
@@ -235,9 +253,9 @@ async function answers(said: string): Promise<void> {
   });
 }
 
-describe("fifty tabs, over and over", function () {
-  // Three rounds of fifty is minutes, not the seconds a scenario usually takes. On the suite
-  // rather than in the test body: see BUDGET.
+describe("fifty tabs over and over, then two hundred at once", function () {
+  // Three rounds of fifty, and then two hundred, are minutes each, not the seconds a scenario
+  // usually takes. On the suite rather than in a test body: see BUDGET. It is each test's.
   this.timeout(BUDGET);
 
   it("opens fifty tabs with no pause, closes them all, three times, alive and usable throughout", async () => {
@@ -287,5 +305,57 @@ describe("fifty tabs, over and over", function () {
           `round 1's: closing is leaking what a session runs (see logs/stress.jsonl)`,
       );
     }
+  });
+
+  it("opens two hundred chats in an app started under launchd's open-file limit", async () => {
+    // What the launcher started the app with. Not the app's limit now, which nothing outside
+    // it can read on macOS: the app raises its own as it starts.
+    let startedWith = Number.NaN;
+    try {
+      startedWith = Number(readFileSync(THE_APPS_STARTING_LIMIT, "utf8").trim());
+    } catch {
+      // Not written: the app was not started through the launcher. Said below.
+    }
+    if (!(startedWith <= LAUNCHDS_LIMIT)) {
+      throw new Error(
+        `the app was started with a soft open-file limit of ${startedWith}, so this cannot ` +
+          `show it gets past launchd's ${LAUNCHDS_LIMIT}: a stress run (STRESS=1) starts it ` +
+          "through launchedUnderLaunchdsLimit",
+      );
+    }
+    const pid = theApp();
+    await closeEveryTab();
+    const began = Date.now();
+    look(pid, 0, `${OPEN_TARGET}: nothing open, started with a limit of ${startedWith}`, began);
+
+    for (let opened = 0; opened < OPEN_TARGET; opened++) {
+      await pressAndStart("New tab");
+      if ((opened + 1) % PROGRESS_EVERY === 0) {
+        look(pid, 0, `${opened + 1} of ${OPEN_TARGET} open`, began);
+      }
+      const spent = Date.now() - began;
+      if (spent > OPEN_TARGET_BUDGET) {
+        throw new Error(
+          `${opened + 1} of ${OPEN_TARGET} tabs took ${spent / 1000}s, past the ` +
+            `${OPEN_TARGET_BUDGET / 1000}s they are given (see logs/stress.jsonl)`,
+        );
+      }
+    }
+    await browser.waitUntil(async () => harnessesRunning() === OPEN_TARGET, {
+      timeout: 120_000,
+      interval: 250,
+      timeoutMsg: `${harnessesRunning()} of ${OPEN_TARGET} sessions ever ran`,
+    });
+    const open = look(pid, 0, `${OPEN_TARGET} open`, began);
+    // The app holds more descriptors than it was started with, which it can only do because
+    // it raised its limit. Without the count this test would pass on a host that opened its
+    // chats some cheaper way and prove nothing about the limit.
+    expect(open.descriptors).not.toBeNull();
+    expect(open.descriptors ?? 0).toBeGreaterThan(startedWith);
+    await answers(`with ${OPEN_TARGET} open`);
+
+    await closeEveryTab(OPEN_TARGET);
+    look(pid, 0, `${OPEN_TARGET}: all closed`, began);
+    expect(theApp()).toBe(pid);
   });
 });

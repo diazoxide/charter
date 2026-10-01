@@ -61,4 +61,17 @@ describe("a scenario spec's timeout", () => {
     expect(budget, "stress.e2e.ts no longer declares a BUDGET in minutes").not.toBeNull();
     expect(Number(budget?.[1]) * 60_000).toBeGreaterThan(180_000);
   });
+
+  it("gives the two-hundred-chat guard less than the suite's budget, so the guard can fire", () => {
+    // Each test runs under BUDGET, and the two hundred still have to close after they open. A
+    // guard at or past it never fires, and the test ends as the bare `Error: Timeout` the
+    // guard exists to replace.
+    const source = spec("stress.e2e.ts");
+    const budget = Number(/const BUDGET = (\d+) \* 60_000;/.exec(source)?.[1]);
+    const guard = Number(/const OPEN_TARGET_BUDGET = (\d+) \* 60_000;/.exec(source)?.[1]);
+    expect(guard, "stress.e2e.ts no longer declares OPEN_TARGET_BUDGET in minutes").toBeGreaterThan(
+      0,
+    );
+    expect(budget - guard).toBeGreaterThanOrEqual(3);
+  });
 });
