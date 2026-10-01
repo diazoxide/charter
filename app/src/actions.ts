@@ -277,6 +277,9 @@ export type Does =
    *  it was, so the NEXT plain `New tab` starts where it would have; making the clone the spot
    *  for every chat after is `pickClone`'s, and the two rows must not do the same thing. */
   | { verb: "newTabIn"; repo: string; path: string }
+  /** Opens the dialog that cuts a new branch in that clone (GL-1, ADR 0072 §4). The dialog
+   *  names the branch; the core cuts it, and nothing is started. */
+  | { verb: "newBranch"; repo: string }
   /** Shows the opener, so another project can be opened into this window beside the ones it
    *  already holds. It opens nothing by itself — the trust gate is the opener's (ADR 0035). */
   | { verb: "openProject" }
@@ -412,8 +415,8 @@ export type Now = {
   /**
    * The focused workspace's clones, each with the path the core spelled (`Panels.paths`).
    *
-   * Two rows each (charter-app#174): a clone had no menu because nothing here was about one,
-   * and nothing could be until the core said where a clone is. Ten clones is twenty rows,
+   * Three rows each (charter-app#174, GL-1): a clone had no menu because nothing here was about one,
+   * and nothing could be until the core said where a clone is. Ten clones is thirty rows,
    * counted beside the pieces in `actions.test.ts`.
    */
   clones?: readonly Clone[];
@@ -589,6 +592,8 @@ export type Doing = {
   declareWorktreeDone: (cut: Cut) => Promise<Ran>;
   /** Makes that clone where the next chat starts. It starts nothing, so it answers no `Ran`. */
   pickClone: (repo: string, path: string) => void;
+  /** Opens the New branch dialog for that clone. It cuts nothing until it is answered. */
+  newBranch: (repo: string) => void;
   /** Opens the picker for a new tab whose chat starts in that directory, and nowhere else. */
   newChatIn: (path: string) => void;
   sendKey: (key: string) => Promise<Ran>;
@@ -1407,14 +1412,18 @@ export function catalogue(now: Now): Offer[] {
       );
     }
   }
-  // **The focused workspace's clones, two rows each** (charter-app#174). A clone is where a
-  // chat can start, one level up from a piece, and that is the whole of what this window can
-  // do to one: open a tab there, or pick it as where every new chat starts. The first is the
-  // ordinary `New tab`'s picker aimed at the clone for that one tab; the second is the
-  // explorer's pick. Neither writes anything, so both are above the line.
+  // **The focused workspace's clones, three rows each** (charter-app#174, GL-1). A clone is
+  // where a chat can start, one level up from a branch's folder: open a tab there, cut a new branch in
+  // it, or pick it as where every new chat starts. The first is the ordinary `New tab`'s picker
+  // aimed at the clone for that one tab; the second opens the New branch dialog; the third is
+  // the explorer's pick. None writes anything by itself, so all three are above the line.
   for (const { repo, path } of now.clones ?? []) {
     offers.push(
       can(`clone.chat:${repo}`, `New tab in ${repo}`, { verb: "newTabIn", repo, path }, repo),
+    );
+    // The cut itself is a dialog away, so the row writes nothing either (GL-1).
+    offers.push(
+      can(`clone.branch:${repo}`, `New branch in ${repo}…`, { verb: "newBranch", repo }, repo),
     );
     const pick = `Start new chats in ${repo}`;
     offers.push(
@@ -1826,6 +1835,9 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
       return doing.declareWorktreeDone(does.cut);
     case "pickClone":
       doing.pickClone(does.repo, does.path);
+      return DID;
+    case "newBranch":
+      doing.newBranch(does.repo);
       return DID;
     case "newTabIn":
     case "newChatIn":
@@ -2339,9 +2351,13 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
         below: [`memory.delete:${what.key}`],
       };
     case "clone":
-      // Where a chat can start, and nothing else: a clone is the operator's own checkout, and
-      // nothing in this window writes to one (charter-app#174).
-      return { above: [`clone.chat:${what.repo}`, `clone.pick:${what.repo}`], below: [] };
+      // Where a chat can start, and a new branch beside it: a clone is the operator's own
+      // checkout, and nothing in this window writes to its working tree. New branch adds a
+      // branch and a folder of its own next to it (charter-app#174, GL-1).
+      return {
+        above: [`clone.chat:${what.repo}`, `clone.branch:${what.repo}`, `clone.pick:${what.repo}`],
+        below: [],
+      };
     case "pane":
       return {
         above: ["chat.new", "shell.new", "pane.split.right", "pane.split.down", PASS_THROUGH_ID],

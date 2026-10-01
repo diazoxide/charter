@@ -266,6 +266,36 @@ describe("the first run", () => {
     expect(screen.queryByRole("dialog", { name: "Start a chat" })).not.toBeInTheDocument();
   });
 
+  it("starts the first chat on a branch of its own and says which (GL-1)", async () => {
+    // Nothing was asked, so the default stands, and the pane is the only place the operator
+    // learns the chat is not on the repo's own branch (ADR 0072 §4).
+    const line = "On branch chat-1 in widget, a branch of its own cut from main.";
+    const { calls } = core((cmd) => {
+      if (cmd === "open_repo")
+        return {
+          opened: { plane: LOCAL, ask: null },
+          workspace: "widget",
+          cwd: CLONE,
+          harness: "claude",
+          instructions: 0,
+        };
+      if (cmd === "start_chat") return { session: 1, label: null, notices: [line] };
+      return undefined;
+    });
+    render(<App />);
+
+    await openRepoByPath(REPO);
+
+    await vi.waitFor(() => expect(calls("start_chat")).toHaveLength(1));
+    expect(calls("start_chat")[0].args).toMatchObject({
+      cwd: CLONE,
+      boxes: { show_footer: false, new_branch: true },
+    });
+    expect(
+      await screen.findByRole("status", { name: "What this chat's start found" }),
+    ).toHaveTextContent(line);
+  });
+
   it("still asks when the one signed-in harness's command has to be approved first", async () => {
     const { calls } = core((cmd) => {
       if (cmd === "open_repo")

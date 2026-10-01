@@ -137,8 +137,16 @@ When two choices conflict, the higher priority wins.
      stands in, and `list`, `history` and `remove` read and clear them. Each piece's row in
      the window shows what it declared, or how long it has been silent, and its menu can mark
      it done.
-   - **Not shipped yet:** cutting a piece from the window, a new chat getting one by default,
-     and `publish`.
+   - **A writing chat gets a piece by default** (GL-1): a chat that starts in a repo's clone
+     starts on a new branch of its own, named after the chat or `chat-<n>`, unless the picker's
+     *start on a new branch* box is cleared. The piece is cut before the chat starts, taken back
+     (folder and branch) if the start is refused or fails, and logged `claimed` once it has
+     started; the chat's pane then says *On branch `chat-1` in api*. A chat's name that git
+     would refuse or read as its own (`HEAD`, `*_HEAD`, a sha) falls back to `chat-<n>`, so the
+     name never costs the start. What the window says of it is said of a branch and its folder.
+   - **New branch** on a repo's row and in the palette cuts a piece from the window, under the
+     name typed or charter's `chat-<n>`, and makes it where new chats start (`worktree_add`).
+   - **Not shipped yet:** `publish`.
 
    Neither `merge` nor `publish` takes `--all` (ADR 0020). Git is the only registry, reached
    through the git binary: **ADR 0027**. The design is charter-plane's

@@ -97,6 +97,15 @@ marked *shared*. **New branch** cuts a piece; **Remove folder** removes the work
 the branch (ADR 0072).
 _Avoid_: the chat's branch (singular: a chat may work in several repos), piece, worktree (in UI text)
 
+**Writing chat**:
+A chat that starts in a repo's shared clone (`workspaces/<ws>/<repo>`), which is what *New tab
+in <repo>* and *Start new chats in <repo>* point at. By default it starts on a new branch of its
+own instead: a piece named after the chat, or `chat-<n>`, cut before it starts and taken back if
+the start is refused. The picker's *start on a new branch* box, ticked by default, is the
+opt-out. A chat started in the workspace's own directory, at the project root or in an existing
+piece is not a writing chat and is cut nothing (GL-1).
+_Avoid_: guessing from what a chat does (charter never reads a harness's output to decide)
+
 **Change** (cross-repo):
 One piece of work across several of a workspace's repos, recorded as intent only in
 `workspaces/<ws>/changes/<slug>.json`: why, which repos, which branch in each, and which must

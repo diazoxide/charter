@@ -81,6 +81,7 @@ import {
   useStripSensors,
 } from "./sortable";
 import { NewWorkspace } from "./NewWorkspace";
+import { NewBranch } from "./NewBranch";
 import { RenameWorkspace } from "./RenameWorkspace";
 import { cloneRepos } from "./repoClones";
 import { StartChat } from "./StartChat";
@@ -380,6 +381,11 @@ export function PlaneView({
   const [makingWorkspace, setMakingWorkspace] = useState(false);
   const [workspaceTrouble, setWorkspaceTrouble] = useState<string>();
   const [busyMaking, setBusyMaking] = useState(false);
+  /** The repo the New branch dialog is cutting in, and the workspace it is that repo of, while
+   *  it is up — then `makingWorkspace`'s other two, for a branch (GL-1). */
+  const [branching, setBranching] = useState<{ workspace: string; repo: string }>();
+  const [branchTrouble, setBranchTrouble] = useState<string>();
+  const [busyBranching, setBusyBranching] = useState(false);
   /** The plane's vaults (`vault_list`), read here because four surfaces answer from them: the
    *  Vaults panel, the palette's `vault.open:<name>` rows, the picker, and — by asking for it
    *  again after a write — a vault's own tab (charter-app#235). */
@@ -1480,6 +1486,7 @@ export function PlaneView({
       persona: string | null,
       showFooter: boolean,
       label: string | null,
+      newBranch: boolean,
       filedIn?: string,
     ): Promise<string | undefined> => {
       // A tab asked for in one directory starts there; everything else starts where the
@@ -1504,7 +1511,8 @@ export function PlaneView({
           cwd,
           name,
           label,
-          showFooter,
+          // The core cuts the branch only when `cwd` is a repo's clone (GL-1).
+          { show_footer: showFooter, new_branch: newBranch },
           STARTING_SIZE.columns,
           STARTING_SIZE.rows,
         )
@@ -1538,11 +1546,36 @@ export function PlaneView({
   /** A row was picked: the chat starts on that profile, with that persona, either drawing
    *  charter's footer in its pane or leaving it blank (ADR 0029), and under the name typed in
    *  the picker, if one was (charter-app#254). */
+  /** Whether the picker's start is in flight: the ref is the guard, the state is the button. */
+  const startingNow = useRef(false);
+  const [starting, setStarting] = useState(false);
   const startPicked = useCallback(
-    async (profile: string, persona: string | null, showFooter: boolean, label: string | null) => {
-      if (picking === undefined) return;
+    async (
+      profile: string,
+      persona: string | null,
+      showFooter: boolean,
+      label: string | null,
+      newBranch: boolean,
+    ) => {
+      if (picking === undefined || startingNow.current) return;
       const kind = picking.options.profiles.find((one) => one.name === profile)?.kind;
-      const refused = await startOn(picking.where, kind, profile, persona, showFooter, label);
+      // **One start per picker at a time** (GL-1). A start runs off the main thread for as
+      // long as its branch takes to check out, and a second press of Start in that time was a
+      // second chat. The ref answers at once, where state would answer on the next render.
+      startingNow.current = true;
+      setStarting(true);
+      const refused = await startOn(
+        picking.where,
+        kind,
+        profile,
+        persona,
+        showFooter,
+        label,
+        newBranch,
+      ).finally(() => {
+        startingNow.current = false;
+        setStarting(false);
+      });
       if (refused !== undefined) {
         // In the picker, not behind it: the operator is still choosing, and a refusal they
         // cannot see beside the rows is one they cannot act on.
@@ -1564,7 +1597,10 @@ export function PlaneView({
       showFooter: boolean,
       shown: string,
       label: string | null,
+      newBranch: boolean,
     ) => {
+      // A start already running from this picker is the one start it gets (GL-1).
+      if (startingNow.current) return;
       const said = await commands
         .approveProfile(plane, profile, shown)
         .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
@@ -1577,7 +1613,7 @@ export function PlaneView({
       // away the choice on the one path where a profile is being used for the first time.
       // The footer choice rides the same path, and for the same reason: a first run of a
       // profile is exactly where a dropped choice would go unnoticed.
-      await startPicked(profile, persona, showFooter, label);
+      await startPicked(profile, persona, showFooter, label, newBranch);
     },
     [plane, startPicked],
   );
@@ -1812,6 +1848,9 @@ export function PlaneView({
             persona,
             false,
             null,
+            // Nothing was asked, so the default stands: a first chat in a repo starts on a
+            // branch of its own like any other (GL-1).
+            true,
             workspace,
           );
           if (refused === undefined) {
@@ -1910,6 +1949,54 @@ export function PlaneView({
       return { ok: true, said: `The worktree ${cut.piece} is gone. Its branch stays.` };
     },
     [plane],
+  );
+
+  /** Asks for a new branch in one of the focused workspace's repos. It cuts nothing: the
+   *  dialog is what asks, and `worktree_add` is what cuts (GL-1). */
+  const newBranch = useCallback(
+    (repo: string) => {
+      if (ofWorkspace === undefined) return;
+      setBranchTrouble(undefined);
+      setBranching({ workspace: ofWorkspace, repo });
+    },
+    [ofWorkspace],
+  );
+
+  /**
+   * Cuts the branch the dialog named — `null` for charter's own `chat-<n>` — and makes it
+   * where the next chat starts, the way picking its row would. A refusal stays in the dialog,
+   * verbatim; what the cut found to say (a dirty clone, a layer that did not land) is reported.
+   */
+  const cutBranch = useCallback(
+    async (branch: string | null) => {
+      if (branching === undefined) return;
+      const { workspace, repo } = branching;
+      setBusyBranching(true);
+      const answer = await commands
+        .worktreeAdd(plane, workspace, repo, branch)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      setBusyBranching(false);
+      if (answer.status === "error") {
+        setBranchTrouble(answer.error);
+        return;
+      }
+      setBranching(undefined);
+      setBranchTrouble(undefined);
+      setPickedSpot({
+        workspace,
+        spot: { repo, piece: answer.data.piece, path: answer.data.path },
+      });
+      setRereadWorkspace((asked) => asked + 1);
+      setReport({
+        from: "worktree.add",
+        refused: false,
+        words: [
+          `New branch ${answer.data.branch} in ${repo}. New chats start on it.`,
+          ...answer.data.warnings,
+        ].join(" "),
+      });
+    },
+    [branching, plane],
   );
 
   /** Asks for a new workspace. It makes nothing: the dialog is what asks, and
@@ -2591,6 +2678,7 @@ export function PlaneView({
       // A clone picked from its menu is the explorer's own pick one level up: the same state,
       // so the explorer marks it and `New tab` starts there (charter-app#174).
       pickClone: (repo, path) => pickSpot({ repo, path }),
+      newBranch,
       newChatIn: newTabIn,
       sendKey,
       openProject: windowDoes.openProject,
@@ -2623,6 +2711,7 @@ export function PlaneView({
       focusWorkspace,
       ignoreNeedsYou,
       mergeWorktree,
+      newBranch,
       declareWorktreeDone,
       newTab,
       newShell,
@@ -2717,6 +2806,15 @@ export function PlaneView({
       return path === undefined ? [] : [{ repo, path }];
     });
   }, [ofWorkspace, workspaceState.panels]);
+
+  /** The repo whose clone the chat being picked would start in, if it would: what the picker's
+   *  branch box names (GL-1). The same directory `startOn` sends, compared with the path the
+   *  core spelled for each clone. */
+  const pickingInRepo = useMemo(() => {
+    if (picking === undefined) return undefined;
+    const cwd = ("in" in picking.where ? picking.where.in : undefined) ?? startIn;
+    return clones.find((one) => one.path === cwd)?.repo;
+  }, [clones, picking, startIn]);
 
   /** The plane's personas, straight off the plane's own answer — the array, not a copy of it,
    *  so the catalogue is rebuilt when the plane is read again and not per render. */
@@ -3801,6 +3899,19 @@ export function PlaneView({
         />
       )}
 
+      {branching && (
+        <NewBranch
+          repo={branching.repo}
+          trouble={branchTrouble}
+          making={busyBranching}
+          onCut={(branch) => void cutBranch(branch)}
+          onCancel={() => {
+            setBranching(undefined);
+            setBranchTrouble(undefined);
+          }}
+        />
+      )}
+
       {makingVault && (
         <NewVault
           plane={plane}
@@ -3908,13 +4019,15 @@ export function PlaneView({
       {picking && (
         <StartChat
           options={picking.options}
+          repo={pickingInRepo}
+          starting={starting}
           prefer={"prefer" in picking.where ? picking.where.prefer : undefined}
           trouble={pickerTrouble}
-          onStart={(profile, persona, footer, label) =>
-            void startPicked(profile, persona, footer, label)
+          onStart={(profile, persona, footer, label, newBranch) =>
+            void startPicked(profile, persona, footer, label, newBranch)
           }
-          onApprove={(profile, persona, footer, shown, label) =>
-            void approveAndStart(profile, persona, footer, shown, label)
+          onApprove={(profile, persona, footer, shown, label, newBranch) =>
+            void approveAndStart(profile, persona, footer, shown, label, newBranch)
           }
           onCancel={() => {
             setPicking(undefined);

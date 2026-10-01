@@ -973,7 +973,7 @@ fn approve_profile(
 /// for the other by a caller passing null: this one goes through every gate a launch has,
 /// and that one opens the operator's shell.
 ///
-/// `show_footer` is the picker's footer checkbox, and it is a property of THIS chat
+/// `boxes.show_footer` is the picker's footer checkbox, and it is a property of THIS chat
 /// (ADR 0029). It reaches the harness as an environment variable set at the exec, so
 /// it is decided here and nowhere later: Claude Code's footer command inherits the
 /// environment its harness was started with, and no later click can change it.
@@ -981,14 +981,24 @@ fn approve_profile(
 /// `label` is the picker's optional Name field (charter-app#254): what the chat's tab says
 /// instead of its default. It is held to the same rule a rename is, and **a refusal comes back
 /// before anything starts**, so a name charter will not draw never costs a chat.
+///
+/// `boxes.new_branch` is the picker's "on a new branch" box (GL-1). When `cwd` is a repo's clone
+/// and it is set, the chat starts on a branch of its own, cut for it and taken back if the start is
+/// refused (`worktrees::on_a_branch`); anywhere else it changes nothing. The pane is told the
+/// branch first, then whatever the start found to say.
+///
+/// **Off the main thread** (GL-1 review S3): cutting a branch checks a tree out, which takes
+/// seconds on a large repo, and the window froze for it. Two starts in one clone are still
+/// cut one at a time, by `chatpiece`'s lock per clone. Starting a session off the main thread
+/// is what a relaunch's put-back already does.
 // Over clippy's threshold, and it is a command's argument list: every one of these is a
-// separate value the window sends, and folding a few into a struct would put a generated
-// TypeScript type between the picker and the call for nothing. Not a doc comment, because
-// the generated bindings carry those and this is about the Rust.
+// separate value the window sends. The picker's two boxes are folded into `Boxes`, because
+// tauri-specta types at most ten arguments; the rest stay separate, as the window sends them.
+// Not a doc comment, because the generated bindings carry those and this is about the Rust.
 #[tauri::command]
 #[specta::specta]
 #[allow(clippy::too_many_arguments)]
-fn start_chat(
+async fn start_chat(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
     profile: String,
@@ -996,7 +1006,7 @@ fn start_chat(
     cwd: Option<String>,
     name: String,
     label: Option<String>,
-    show_footer: bool,
+    boxes: Boxes,
     columns: u16,
     rows: u16,
 ) -> Result<Started, String> {
@@ -1005,12 +1015,67 @@ fn start_chat(
         None => None,
     };
     let held = planes.held(&plane)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let named = label.clone();
+        let show_footer = boxes.show_footer;
+        let (mut started, said) = worktrees::on_a_branch(
+            held.root(),
+            cwd.as_deref().map(std::path::Path::new),
+            named.as_deref(),
+            boxes.new_branch,
+            |cwd| {
+                start_chat_in(
+                    &held,
+                    profile,
+                    persona,
+                    cwd,
+                    name,
+                    label,
+                    show_footer,
+                    columns,
+                    rows,
+                )
+            },
+        )?;
+        started.notices.splice(0..0, said);
+        Ok(started)
+    })
+    .await
+    .map_err(|err| format!("charter could not start the chat: {err}"))?
+}
+
+/// The picker's two boxes, as the start reads them.
+///
+/// A struct because tauri-specta types a command of at most ten arguments, and `start_chat` grew
+/// an eleventh with `new_branch`. The two boxes are the pair that belong together: both are the
+/// operator's answer in the picker about this one chat, decided before it starts.
+#[derive(Debug, Clone, Copy, serde::Deserialize, specta::Type)]
+struct Boxes {
+    /// Draw charter's footer in the pane (ADR 0029).
+    show_footer: bool,
+    /// Start on a branch of its own when the chat starts in a repo's clone (GL-1).
+    new_branch: bool,
+}
+
+/// The start itself, in the directory `on_a_branch` settled on.
+#[allow(clippy::too_many_arguments)]
+fn start_chat_in(
+    held: &planes::Held,
+    profile: String,
+    persona: Option<String>,
+    cwd: Option<PathBuf>,
+    name: String,
+    label: Option<String>,
+    show_footer: bool,
+    columns: u16,
+    rows: u16,
+) -> Result<Started, String> {
     let root = held.root();
     let start = charter_core::start::Start {
         profile: Some(profile.clone()),
         persona: persona.clone(),
         name: name.clone(),
-        cwd: cwd.as_deref().map(PathBuf::from),
+        cwd,
         resume: None,
         show_footer,
         resuming: None,

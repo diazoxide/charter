@@ -126,6 +126,7 @@ function doing(): Doing & { calls: string[] } {
       return { ok: true as const };
     }),
     pickClone: note("pickClone"),
+    newBranch: note("newBranch"),
     newChatIn: note("newChatIn"),
     sendKey: vi.fn(async (key: string) => {
       calls.push(`sendKey:${key}`);
@@ -759,9 +760,22 @@ describe("the one list of actions", () => {
       expect(by(catalogue(now()), "clone.pick:svc")).toBeUndefined();
     });
 
-    it("lists the new tab, then the pick, and nothing below the line", () => {
+    it("offers a new branch in it, which cuts one and starts nothing (GL-1)", async () => {
+      // ADR 0072 §4: the action that cuts a piece is "New branch", and it names the repo it
+      // will be cut in. The dialog it opens names the branch.
+      const hands = doing();
+      const offers = catalogue(now({ clones: [SVC] }));
+
+      expect(by(offers, "clone.branch:svc")?.title).toBe("New branch in svc…");
+      expect(by(offers, "clone.branch:svc")?.available).toBe(true);
+      await run(offers, "clone.branch:svc", hands);
+
+      expect(hands.calls).toEqual(["newBranch:svc"]);
+    });
+
+    it("lists the new tab, the new branch, then the pick, and nothing below the line", () => {
       expect(menuOn({ on: "clone", repo: "svc" })).toEqual({
-        above: ["clone.chat:svc", "clone.pick:svc"],
+        above: ["clone.chat:svc", "clone.branch:svc", "clone.pick:svc"],
         below: [],
       });
     });
@@ -1543,6 +1557,8 @@ describe("the palette at fifty chats", () => {
     // them and without them two tests up.
     expect(offers.filter((row) => row.id.startsWith("clone.chat:"))).toHaveLength(10);
     expect(offers.filter((row) => row.id.startsWith("clone.pick:"))).toHaveLength(10);
+    // And a third per clone (GL-1): New branch…, ten more rows.
+    expect(offers.filter((row) => row.id.startsWith("clone.branch:"))).toHaveLength(10);
     // One settings row per workspace (charter-app#280), and none for the strip outside.
     expect(offers.filter((row) => row.id.startsWith("workspace.settings:"))).toHaveLength(6);
     // One new-shell row per workspace (SI-5), and none for the strip outside.
@@ -1568,8 +1584,9 @@ describe("the palette at fifty chats", () => {
     // 460 since SI-5: a shell tab's row, and one per workspace.
     // 471 since SI-9c: a new memory in the focused workspace, in each of the 8 personas and in
     // the shared store, and the shared list's own row.
+    // 481 since GL-1: New branch… in each of the ten clones.
     // This window has no todos loaded, so no `todo.` rows.
-    expect(offers).toHaveLength(471);
+    expect(offers).toHaveLength(481);
   });
 
   /**

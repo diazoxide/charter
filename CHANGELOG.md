@@ -13,6 +13,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A chat that starts in a repo gets a branch of its own.** Start a chat with *New tab in
+  <repo>*, or after *Start new chats in <repo>*, and charter cuts a new branch for it, in a folder
+  beside the repo's clone, so two chats in one repo no longer edit the same files. The branch is
+  named after the chat, or `chat-1`, `chat-2` and on. Clear *start on a new branch* in the picker
+  to work on the branch the repo has checked out, as before. If the chat does not start, the
+  branch goes with it. *New branch in <repo>…* on the repo's menu and in the palette cuts one
+  without starting a chat, and new chats start on it.
 - **A chat in its own worktree leaves an `AGENTS.md` behind for any agent that opens it.** When
   a chat starts in a piece of a repo that has no `AGENTS.md`, charter writes one there, hidden
   from `git status`. It says which persona the chat was started as and which piece it holds, so
