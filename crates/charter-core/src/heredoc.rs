@@ -819,12 +819,23 @@ pub fn heredoc_opener_words(line: &Line, start: usize) -> Option<Vec<String>> {
 ///
 /// Only substitutions are listed — `$( … )`, a backtick, `<( … )` and `>( … )` — because their
 /// output is handed on. A subshell `( … )` or a group `{ …; }` hands nothing on.
-pub fn enclosing_commands(line: &Line, start: usize) -> Vec<Vec<String>> {
+pub fn enclosing_commands(line: &Line, start: usize) -> Vec<Enclosing> {
     opener_walk(line, start).1
 }
 
+/// One command a substitution stands in — [`enclosing_commands`]' answer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Enclosing {
+    /// The command's words before the substitution.
+    pub words: Vec<String>,
+    /// The substitution starts a word of its own (`FOO=1 $( … )`, `bash -c "$( … )"`) rather
+    /// than continuing one (`x=$( … )`, `x="$( … )"`). Where no program stands before it, a
+    /// substitution that starts its own word IS the program.
+    pub own_word: bool,
+}
+
 /// [`heredoc_opener_words`]'s walk, keeping the enclosing substitutions' commands as well.
-fn opener_walk(line: &Line, start: usize) -> (Vec<String>, Vec<Vec<String>>) {
+fn opener_walk(line: &Line, start: usize) -> (Vec<String>, Vec<Enclosing>) {
     let chars = &line.chars;
     // Command starts saved across open groups, each with where the group opened when it is a
     // substitution whose output its command receives, and `None` for a subshell or a group.
@@ -897,7 +908,20 @@ fn opener_walk(line: &Line, start: usize) -> (Vec<String>, Vec<Vec<String>>) {
     }
     let enclosing = stack
         .iter()
-        .filter_map(|&(saved, opened)| opened.map(|at| shellseg::py_split(&line.slice(saved, at))))
+        .filter_map(|&(saved, opened)| {
+            opened.map(|at| {
+                // A `"` right in front belongs to the substitution's word: `"$( … )"` is one.
+                let word_start = if at > saved && chars[at - 1] == '"' {
+                    at - 1
+                } else {
+                    at
+                };
+                Enclosing {
+                    words: shellseg::py_split(&line.slice(saved, at)),
+                    own_word: word_start == saved || is_python_space(chars[word_start - 1]),
+                }
+            })
+        })
         .collect();
     (shellseg::py_split(&line.slice(cmd, n)), enclosing)
 }
@@ -1088,7 +1112,7 @@ pub fn heredoc_could_run(line: &Line, start: usize) -> bool {
     }
     if enclosing_commands(line, start)
         .iter()
-        .any(|words| runs_what_it_is_handed(words))
+        .any(runs_what_it_is_handed)
     {
         return true;
     }
@@ -1108,22 +1132,51 @@ pub fn heredoc_could_run(line: &Line, start: usize) -> bool {
 /// the command itself rather than from the pipeline slice, which a `;` inside the substitution
 /// cuts short (`fish -c "$(true; cat <<'EOF' … )"`). Yes for a remote shell, which runs its
 /// arguments as a command line on the other machine, for `source` and `.` ([`SOURCING`]), and
-/// for a program that cannot be resolved to a name (`$SHELL -c "$( … )"`). Yes, too, for no
-/// words at all: the substitution stands where the program goes, so its output is the command.
-/// An assignment alone (`x="$( … )"`) runs nothing.
-fn runs_what_it_is_handed(words: &[String]) -> bool {
-    if words.is_empty() {
-        return true;
-    }
-    let (prog, _, _) = shellwrap::split_env(words);
-    if prog.is_empty() {
-        return false;
-    }
-    let prog = base_lower(&prog);
-    !plain_name_re().is_match(&prog)
-        || is_executor(&prog)
+/// for a program that cannot be resolved to a name (`$SHELL -c "$( … )"`). Yes for `su`,
+/// `runuser` and `script` ([`RUNS_ITS_ARGUMENTS`]), and for a shell anywhere in the command's
+/// words ([`line_runs_text`]), which `docker exec c sh -c "$( … )"`, `kubectl exec p -- sh -c`
+/// and `find . -exec sh -c` hand the text to.
+///
+/// The program is named as [`opener_program`] names an opener's, and where it names none the
+/// answer is yes, as it is for an opener — with one exception. A substitution that continues a
+/// word, with nothing but assignments or redirections before it (`x=$( … )`, `x="$( … )"`), is
+/// a value, and runs nothing. One that starts its own word there (`FOO=1 $( … )`,
+/// `exec $( … )`, `2>/dev/null $( … )`) is the program, and runs its output.
+fn runs_what_it_is_handed(around: &Enclosing) -> bool {
+    let words = without_leading_redirections(&around.words);
+    let Some(prog) = opener_program(Some(&words)) else {
+        let (prog, _, _) = shellwrap::split_env(&words);
+        return around.own_word || !prog.is_empty();
+    };
+    is_executor(&prog)
         || REMOTE_SHELLS.contains(&prog.as_str())
         || SOURCING.contains(&prog.as_str())
+        || RUNS_ITS_ARGUMENTS.contains(&prog.as_str())
+        || line_runs_text(&around.words.join(" "))
+}
+
+/// Programs that run an argument as a shell command line — `su -c`, `runuser`, `script -c` —
+/// and are no shell or interpreter themselves. Kept to [`runs_what_it_is_handed`] for the
+/// reason [`SOURCING`] is: `script` names a file far more often than it runs one.
+const RUNS_ITS_ARGUMENTS: [&str; 3] = ["su", "runuser", "script"];
+
+/// `words` with the redirections in front of the program removed, target and all.
+///
+/// [`shellwrap::split_env`] strips a redirection that is a token of its own, as the lexer hands
+/// it one. These words are split on whitespace alone, so `2>/dev/null` arrives as one word, and
+/// read as a program it would name `null`.
+fn without_leading_redirections(words: &[String]) -> Vec<String> {
+    static ONCE: OnceLock<Regex> = OnceLock::new();
+    let re = ONCE.get_or_init(|| {
+        Regex::new(r"^(?:[0-9]+|&)?(?:>>|>&|<&|<>|>\||>|<)(.*)$")
+            .expect("a pattern this module wrote")
+    });
+    let mut i = 0usize;
+    while let Some(caps) = words.get(i).and_then(|w| re.captures(w)) {
+        // An operator alone takes the next word as its target.
+        i += if caps[1].is_empty() { 2 } else { 1 };
+    }
+    words.get(i..).unwrap_or_default().to_vec()
 }
 
 /// The builtins that run a FILE in the current shell — `source` and `.` — so that

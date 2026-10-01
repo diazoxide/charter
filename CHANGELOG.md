@@ -127,8 +127,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `x="$(cat <<'EOF' … EOF)"` no longer has `charter handoff` in its body refused as a handoff a
   shell runs. The guard now reads the program that opens a heredoc inside `"$( … )"` as the
   command in the substitution, and still refuses the body when either that command or the one
-  the substitution stands in runs it: a shell, `ssh`, `source` or `.`, a program it cannot name,
-  or the substitution standing in the program's place (#488).
+  the substitution stands in runs it: a shell (anywhere in that command's words), `ssh`, `su`,
+  `runuser`, `script`, `source` or `.`, a program it cannot name, or the substitution standing
+  in the program's place, prefixes included. A live substitution in a body two shells read
+  differently is searched too (#488).
 
 ## [0.4.2] - 2026-09-30
 
