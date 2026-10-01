@@ -87,6 +87,7 @@ pub mod pyrepr;
 pub mod recall;
 pub mod reopen;
 pub mod repocmd;
+pub mod repoinstructions;
 pub mod report;
 pub mod repos;
 pub mod reposave;

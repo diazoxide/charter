@@ -581,13 +581,14 @@ function App() {
       .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
     setOpeningRepo(false);
     if (answer.status === "error") return answer.error;
-    const { opened, workspace, cwd, harness } = answer.data;
+    const { opened, workspace, cwd, harness, instructions } = answer.data;
     const plane = opened.plane;
     const ask = opened.ask;
     setFirstChat((was) => ({
       workspace,
       cwd,
       harness,
+      instructions,
       plane,
       asking: plane === null ? (ask?.path ?? null) : null,
       at: (was?.at ?? 0) + 1,

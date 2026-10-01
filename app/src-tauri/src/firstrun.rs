@@ -9,9 +9,10 @@ use std::path::{Path, PathBuf};
 
 use charter_core::firstrun;
 use charter_core::forge::{Forge, Kind};
+use charter_core::repoinstructions::{self, Standing};
 
 use crate::opener::Opened;
-use crate::planes::Planes;
+use crate::planes::{PlaneId, Planes};
 
 /// One harness, as the first-run screen lists it.
 #[derive(Debug, Clone, serde::Serialize, specta::Type)]
@@ -58,6 +59,33 @@ pub struct OpenedRepo {
     /// first chat starts on it without the picker (W10's interrupt budget). `null` when there
     /// is a choice to make.
     pub harness: Option<String>,
+    /// How many of the repo's agent instruction files can be added to the workspace's memory
+    /// (FR-18a): the window offers them in a tab beside the first chat when there are any.
+    pub instructions: u32,
+}
+
+/// One agent instruction file in a workspace's clone, as the tab that offers it draws it
+/// (FR-18a, `charter_core::repoinstructions`).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct InstructionFile {
+    /// The clone's name in the workspace.
+    pub repo: String,
+    /// Its path inside the clone.
+    pub file: String,
+    /// Its whole text: the preview. Empty when it was left out before it was read.
+    pub text: String,
+    /// `offered`, `in-memory` or `left-out`.
+    pub standing: String,
+    /// Why it was left out; `null` otherwise.
+    pub why: Option<String>,
+}
+
+/// One file the operator ticked, with the text the preview showed them.
+#[derive(Debug, Clone, serde::Deserialize, specta::Type)]
+pub struct ChosenInstruction {
+    pub repo: String,
+    pub file: String,
+    pub text: String,
 }
 
 /// Which harnesses are installed and signed in, and whether `gh` is logged in.
@@ -105,10 +133,12 @@ pub async fn open_repo(
     path: String,
 ) -> Result<OpenedRepo, String> {
     let config = config_of(&planes)?;
-    let (root, taken, harness) = tauri::async_runtime::spawn_blocking(move || {
+    let (root, taken, harness, instructions) = tauri::async_runtime::spawn_blocking(move || {
         let (root, taken) = taken_in(&config, Path::new(&path))?;
         let harness = firstrun::only_ready(&firstrun::harnesses_here());
-        Ok::<_, String>((root, taken, harness))
+        // Counted, not written: the tab that offers them is where the operator says yes.
+        let instructions = offered(&root, &taken.workspace);
+        Ok::<_, String>((root, taken, harness, instructions))
     })
     .await
     .map_err(|err| format!("charter could not open the repo: {err}"))??;
@@ -118,7 +148,96 @@ pub async fn open_repo(
         workspace: taken.workspace,
         cwd: taken.clone.display().to_string(),
         harness: harness.map(|one| one.name().to_owned()),
+        instructions,
     })
+}
+
+/// How many of workspace `ws`'s instruction files can be added to its memory. A workspace
+/// charter could not read offers none: the first chat still starts.
+fn offered(root: &Path, ws: &str) -> u32 {
+    repoinstructions::found(root, ws).map_or(0, |found| {
+        let count = found
+            .iter()
+            .filter(|one| one.standing == Standing::Offered)
+            .count();
+        u32::try_from(count).unwrap_or(u32::MAX)
+    })
+}
+
+/// The agent instruction files in workspace `workspace`'s clones, each with its whole text:
+/// the preview the import tab draws (FR-18a). Reads, and writes nothing.
+#[tauri::command]
+#[specta::specta]
+pub async fn repo_instructions(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    workspace: String,
+) -> Result<Vec<InstructionFile>, String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || instruction_files(&root, &workspace))
+        .await
+        .map_err(|err| format!("charter could not read the repo's instructions: {err}"))?
+}
+
+/// Adds the files the operator ticked to workspace `workspace`'s memory — the preview's yes
+/// (FR-18a). Each must still hold the text the preview showed, or nothing is written.
+#[tauri::command]
+#[specta::specta]
+pub async fn import_instructions(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    workspace: String,
+    chosen: Vec<ChosenInstruction>,
+) -> Result<u32, String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || {
+        imported(
+            &root,
+            &workspace,
+            &chosen,
+            chrono::Local::now().naive_local(),
+        )
+    })
+    .await
+    .map_err(|err| format!("charter could not add them to memory: {err}"))?
+}
+
+fn instruction_files(root: &Path, workspace: &str) -> Result<Vec<InstructionFile>, String> {
+    Ok(repoinstructions::found(root, workspace)?
+        .into_iter()
+        .map(|one| {
+            let (standing, why) = match one.standing {
+                Standing::Offered => ("offered", None),
+                Standing::InMemory => ("in-memory", None),
+                Standing::LeftOut(why) => ("left-out", Some(why)),
+            };
+            InstructionFile {
+                repo: one.repo,
+                file: one.file,
+                text: one.text,
+                standing: standing.to_owned(),
+                why,
+            }
+        })
+        .collect())
+}
+
+fn imported(
+    root: &Path,
+    workspace: &str,
+    chosen: &[ChosenInstruction],
+    stamp: chrono::NaiveDateTime,
+) -> Result<u32, String> {
+    let chosen: Vec<repoinstructions::Chosen> = chosen
+        .iter()
+        .map(|one| repoinstructions::Chosen {
+            repo: one.repo.clone(),
+            file: one.file.clone(),
+            text: one.text.clone(),
+        })
+        .collect();
+    let written = repoinstructions::import(root, workspace, &chosen, stamp)?;
+    Ok(u32::try_from(written).unwrap_or(u32::MAX))
 }
 
 /// Opens this machine's local project with no repo in it, made first when there is none, and
@@ -241,5 +360,61 @@ mod tests {
 
         assert!(refused.contains("is not a full path"), "{refused}");
         assert!(!firstrun::local_plane(&config).exists());
+    }
+
+    #[test]
+    fn a_repo_opened_on_the_first_run_counts_its_instructions_and_adds_them_only_when_asked() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let config = dir.path().join("config");
+        let repo = a_repo(&dir.path().join("widget"));
+        std::fs::write(repo.join("AGENTS.md"), "Run make check.\n").expect("instructions");
+        for argv in [
+            ["add", "AGENTS.md"].as_slice(),
+            &["commit", "-q", "-m", "agents"],
+        ] {
+            let done = charter_core::forklock::output(
+                std::process::Command::new("git")
+                    .arg("-C")
+                    .arg(&repo)
+                    .args(argv),
+            )
+            .expect("git runs in a test");
+            assert!(done.status.success(), "git {argv:?}");
+        }
+        let (root, taken) = taken_in(&config, &repo).expect("opened");
+
+        assert_eq!(offered(&root, &taken.workspace), 1);
+        let files = instruction_files(&root, &taken.workspace).expect("read");
+        assert_eq!(
+            files,
+            vec![InstructionFile {
+                repo: "widget".into(),
+                file: "AGENTS.md".into(),
+                text: "Run make check.\n".into(),
+                standing: "offered".into(),
+                why: None,
+            }]
+        );
+        let workspace = charter_core::workspaces::Plane::open(&root)
+            .workspace("widget")
+            .expect("the workspace");
+        assert!(workspace.memories().unwrap_or_default().is_empty());
+
+        let chosen = [ChosenInstruction {
+            repo: "widget".into(),
+            file: "AGENTS.md".into(),
+            text: "Run make check.\n".into(),
+        }];
+        let stamp = chrono::NaiveDate::from_ymd_opt(2026, 10, 1)
+            .and_then(|d| d.and_hms_opt(9, 0, 0))
+            .expect("a time");
+        assert_eq!(imported(&root, "widget", &chosen, stamp), Ok(1));
+
+        assert_eq!(workspace.memories().expect("read").len(), 1);
+        assert_eq!(offered(&root, &taken.workspace), 0);
+        assert_eq!(
+            instruction_files(&root, "widget").expect("read")[0].standing,
+            "in-memory"
+        );
     }
 }

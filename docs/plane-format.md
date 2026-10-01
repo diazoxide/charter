@@ -1092,7 +1092,12 @@ excepted), and for a secret-shaped value, named by its kind.
   **In charter-app, also** `workspace edit <slug>` (`memstore::edit`, an edit in place — see
   [Editing and archiving a memory](#editing-and-archiving-a-memory-charter-app)) and
   `workspace archive|unarchive <slug>` (`memstore::archive_one`, `memstore::unarchive`),
-  and the window's memory tab, which calls the same functions (ADR 0065).
+  and the window's memory tab, which calls the same functions (ADR 0065). **In charter-app,
+  also** the first run's *Memory from the repo* tab (FR-18a,
+  `charter_core::repoinstructions::import`): a clone's `CLAUDE.md`, `AGENTS.md` and
+  `.cursor/rules/**/*.{md,mdc}`, one memory each through `remember_titled`, titled
+  `<file> from <repo>` with the file's text as it is, and only on the tab's press. It keeps no
+  store of its own: a file is already imported when a memory's body holds its text.
 - **Read by:** `memstore.files`/`entries`/`search` (`charter/memstore.py:169`, `289`, `367`),
   `workspace.recall` (`charter/workspace.py:4244`), `recall.py`, `doctor` (index drift),
   `last_active` (`charter/workspace.py:4424`).

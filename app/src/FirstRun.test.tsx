@@ -93,6 +93,7 @@ function core(answers: (cmd: string, args: Record<string, unknown>) => unknown =
         workspace: "widget",
         cwd: CLONE,
         harness: null,
+        instructions: 0,
       };
     if (cmd === "plane_sidebar") return SIDEBAR;
     if (cmd === "start_options") return START_OPTIONS;
@@ -175,6 +176,7 @@ describe("the first run", () => {
           workspace: "widget",
           cwd: CLONE,
           harness: null,
+          instructions: 0,
         };
       if (cmd === "approve_plane") return LOCAL;
       return undefined;
@@ -247,6 +249,7 @@ describe("the first run", () => {
           workspace: "widget",
           cwd: CLONE,
           harness: "claude",
+          instructions: 0,
         };
       return undefined;
     });
@@ -271,6 +274,7 @@ describe("the first run", () => {
           workspace: "widget",
           cwd: CLONE,
           harness: "claude",
+          instructions: 0,
         };
       if (cmd === "start_options")
         return {
@@ -309,5 +313,140 @@ describe("the first run", () => {
       text: "gh auth login\n",
     });
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * FR-18a (#612): the agent instructions the repo carries — `CLAUDE.md`, `AGENTS.md` and
+ * `.cursor/rules` — offered to the workspace's memory with a preview. What is found, what is
+ * left out and what is written are `charter_core::repoinstructions`'s, tested against real
+ * directories; this is about the window: the offer asks nothing (W10's interrupt budget), and
+ * nothing is written without the preview's yes.
+ */
+describe("the repo's agent instructions", () => {
+  const FILES = [
+    {
+      repo: "widget",
+      file: "CLAUDE.md",
+      text: "# Rules\n\nRun the tests first.\n",
+      standing: "offered",
+      why: null,
+    },
+    {
+      repo: "widget",
+      file: ".cursor/rules/style.mdc",
+      text: "Use tabs.\n",
+      standing: "offered",
+      why: null,
+    },
+    {
+      repo: "widget",
+      file: "AGENTS.md",
+      text: "token = ghp_x\n",
+      standing: "left-out",
+      why: "it holds what looks like a GitHub token, and a secret never goes into memory",
+    },
+  ];
+
+  function withInstructions(extra: (cmd: string) => unknown = () => undefined) {
+    return core((cmd) => {
+      if (cmd === "open_repo")
+        return {
+          opened: { plane: LOCAL, ask: null },
+          workspace: "widget",
+          cwd: CLONE,
+          harness: "claude",
+          instructions: 2,
+        };
+      if (cmd === "repo_instructions") return FILES;
+      if (cmd === "import_instructions") return 2;
+      return extra(cmd);
+    });
+  }
+
+  it("offers them in a tab beside the first chat, and asks nothing", async () => {
+    const { calls } = withInstructions();
+    render(<App />);
+
+    await openRepoByPath(REPO);
+
+    await vi.waitFor(() => expect(calls("start_chat")).toHaveLength(1));
+    const strip = screen.getByRole("tablist", { name: "Tabs" });
+    const offer = await within(strip).findByRole("tab", { name: /Memory from the repo · widget/ });
+    // Beside the chat, not in front of it: the chat is what the operator came for.
+    expect(offer).toHaveAttribute("aria-selected", "false");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(calls("import_instructions")).toHaveLength(0);
+  });
+
+  it("is not offered when the repo has none", async () => {
+    const { calls } = core((cmd) => {
+      if (cmd === "open_repo")
+        return {
+          opened: { plane: LOCAL, ask: null },
+          workspace: "widget",
+          cwd: CLONE,
+          harness: "claude",
+          instructions: 0,
+        };
+      return undefined;
+    });
+    render(<App />);
+
+    await openRepoByPath(REPO);
+
+    await vi.waitFor(() => expect(calls("start_chat")).toHaveLength(1));
+    const strip = screen.getByRole("tablist", { name: "Tabs" });
+    expect(within(strip).queryByRole("tab", { name: /Memory from the repo/ })).toBeNull();
+  });
+
+  it("previews each file and writes only what is ticked, on the press", async () => {
+    const { calls } = withInstructions();
+    render(<App />);
+    const person = await openRepoByPath(REPO);
+    const strip = screen.getByRole("tablist", { name: "Tabs" });
+    await person.click(
+      await within(strip).findByRole("tab", { name: /Memory from the repo · widget/ }),
+    );
+
+    const pane = await screen.findByRole("region", { name: "Memory from the repo · widget" });
+    // The whole text, before anything is written.
+    expect(await within(pane).findByText(/Run the tests first\./)).toBeInTheDocument();
+    expect(within(pane).getByText("Use tabs.")).toBeInTheDocument();
+    // A file that cannot go into memory says why, and cannot be ticked.
+    expect(within(pane).getByText(/a secret never goes into memory/)).toBeInTheDocument();
+    expect(within(pane).queryByRole("checkbox", { name: "widget/AGENTS.md" })).toBeNull();
+    expect(within(pane).getByText(/Nothing is written into your repo/)).toBeInTheDocument();
+    expect(calls("import_instructions")).toHaveLength(0);
+
+    await person.click(
+      within(pane).getByRole("checkbox", { name: "widget/.cursor/rules/style.mdc" }),
+    );
+    await person.click(within(pane).getByRole("button", { name: "Add to memory" }));
+
+    await vi.waitFor(() => expect(calls("import_instructions")).toHaveLength(1));
+    expect(calls("import_instructions")[0].args).toEqual({
+      plane: LOCAL,
+      workspace: "widget",
+      chosen: [{ repo: "widget", file: "CLAUDE.md", text: "# Rules\n\nRun the tests first.\n" }],
+    });
+  });
+
+  it("uses only the first hour's words", async () => {
+    withInstructions();
+    render(<App />);
+    const person = await openRepoByPath(REPO);
+    const strip = screen.getByRole("tablist", { name: "Tabs" });
+    await person.click(
+      await within(strip).findByRole("tab", { name: /Memory from the repo · widget/ }),
+    );
+
+    const pane = await screen.findByRole("region", { name: "Memory from the repo · widget" });
+    await within(pane).findByText(/Run the tests first\./);
+    // ADR 0072 / V23: no "plane", "harness" or "repository" in what the tab says of its own.
+    const own = [...pane.querySelectorAll("p, h2, button, label")]
+      .map((one) => one.textContent ?? "")
+      .join(" ");
+    expect(own).not.toMatch(/plane|harness|repository/i);
   });
 });

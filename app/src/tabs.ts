@@ -98,6 +98,20 @@ export function changesTitle(workspace: string): string {
   return `Changes · ${workspace}`;
 }
 
+/**
+ * **The agent instructions a workspace's repo carries** (FR-18a, #612): `CLAUDE.md`, `AGENTS.md`
+ * and `.cursor/rules`, previewed whole and added to the workspace's memory only on the tab's
+ * press. Keyed by the workspace, like its changes, so there is one tab per workspace.
+ */
+export function repoInstructionsView(workspace: string): ViewRef {
+  return { from: null, view: "repo-instructions", key: workspace };
+}
+
+/** What a workspace's repo instructions tab is called. */
+export function repoInstructionsTitle(workspace: string): string {
+  return `Memory from the repo · ${workspace}`;
+}
+
 /** What a workspace's settings tab is called. */
 export function workspaceSettingsTitle(workspace: string): string {
   return `Workspace settings · ${workspace}`;
@@ -328,6 +342,18 @@ export function openView(tabs: Tabs, view: ViewRef, name: string, workspace: str
     };
   }
   return withTab(tabs, name, { kind: "view", view, workspace }, tabs.order.length);
+}
+
+/**
+ * Opens `view` in a tab of its own **behind the tab in front** — an offer beside what the operator
+ * is doing, which asks them nothing until they go to it (FR-18a, W10's interrupt budget). With
+ * nothing in front it is in front, as there is nothing else to show. A view already open is left
+ * where it is.
+ */
+export function offerView(tabs: Tabs, view: ViewRef, name: string, workspace: string): Tabs {
+  if (findView(tabs, view)) return tabs;
+  const opened = withTab(tabs, name, { kind: "view", view, workspace }, tabs.order.length);
+  return tabs.inFront === undefined ? opened : { ...opened, inFront: tabs.inFront };
 }
 
 /**

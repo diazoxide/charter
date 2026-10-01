@@ -286,6 +286,16 @@ export const commands = {
 	 */
 	openLocalProject: () => typedError<Opened, string>(__TAURI_INVOKE("open_local_project")),
 	/**
+	 *  The agent instruction files in workspace `workspace`'s clones, each with its whole text:
+	 *  the preview the import tab draws (FR-18a). Reads, and writes nothing.
+	 */
+	repoInstructions: (plane: PlaneId, workspace: string) => typedError<InstructionFile[], string>(__TAURI_INVOKE("repo_instructions", { plane, workspace })),
+	/**
+	 *  Adds the files the operator ticked to workspace `workspace`'s memory — the preview's yes
+	 *  (FR-18a). Each must still hold the text the preview showed, or nothing is written.
+	 */
+	importInstructions: (plane: PlaneId, workspace: string, chosen: ChosenInstruction[]) => typedError<number, string>(__TAURI_INVOKE("import_instructions", { plane, workspace, chosen })),
+	/**
 	 *  Starts a session, and remembers it as a chat so a quit can write it down. No program is
 	 *  the operator's shell.
 	 */
@@ -1316,6 +1326,13 @@ export type ChatWorktree = {
 	stale: boolean,
 };
 
+/**  One file the operator ticked, with the text the preview showed them. */
+export type ChosenInstruction = {
+	repo: string,
+	file: string,
+	text: string,
+};
+
 /**  What a palette command does. */
 export type CommandDoes = 
 /**  Opens one of its views, as the view's own button does. */
@@ -1729,6 +1746,23 @@ export type InstalledExtensions = {
 };
 
 /**
+ *  One agent instruction file in a workspace's clone, as the tab that offers it draws it
+ *  (FR-18a, `charter_core::repoinstructions`).
+ */
+export type InstructionFile = {
+	/**  The clone's name in the workspace. */
+	repo: string,
+	/**  Its path inside the clone. */
+	file: string,
+	/**  Its whole text: the preview. Empty when it was left out before it was read. */
+	text: string,
+	/**  `offered`, `in-memory` or `left-out`. */
+	standing: string,
+	/**  Why it was left out; `null` otherwise. */
+	why: string | null,
+};
+
+/**
  *  What a launch had to go on, and what came of it.
  * 
  *  **Three states, and none of them is an error.** The app has to come up holding no plane at
@@ -2010,6 +2044,11 @@ export type OpenedRepo = {
 	 *  is a choice to make.
 	 */
 	harness: string | null,
+	/**
+	 *  How many of the repo's agent instruction files can be added to the workspace's memory
+	 *  (FR-18a): the window offers them in a tab beside the first chat when there are any.
+	 */
+	instructions: number,
 };
 
 /**  One part of a panel's body. */

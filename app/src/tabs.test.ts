@@ -24,6 +24,7 @@ import {
   focusedContent,
   openView,
   putViewBack,
+  offerView,
   refileViews,
   followRename,
   contentsOf,
@@ -663,6 +664,28 @@ describe("a tab that shows a view (ADR 0043, as amended 2026-09-23)", () => {
 
     expect(tabs.order).toEqual([1, 2, 3]);
     expect(selectTab(tabs, 2).order).toEqual([1, 2, 3]);
+  });
+
+  describe("offered beside a chat (FR-18a)", () => {
+    it("goes at the end, behind the tab in front", () => {
+      const chat = openTab(noTabs(), 11);
+
+      const tabs = offerView(chat, STEWARD, "steward", "alpha");
+
+      expect(tabs.order).toEqual([1, 2]);
+      expect(tabs.inFront).toBe(chat.inFront);
+      expect(tabs.byId[2].name).toBe("steward");
+    });
+
+    it("is in front when nothing else is", () => {
+      expect(offerView(noTabs(), STEWARD, "steward", "alpha").inFront).toBe(1);
+    });
+
+    it("is not drawn twice when the view is already open", () => {
+      const open = openView(noTabs(), STEWARD, "steward", "alpha");
+
+      expect(offerView(open, STEWARD, "steward", "alpha")).toBe(open);
+    });
   });
 
   describe("put back by a launch", () => {
