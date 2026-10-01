@@ -50,7 +50,7 @@ When two choices conflict, the higher priority wins.
   the host, the operator or a policy, and never harness output (`state::run`). A chat's state is
   its current run's, and needs you is a view over its runs and its items. Until the board moves
   onto runs, the sidebar still draws each chat as `running`, `waiting` (on you), `done`,
-  `failed` or `unknown` (`state::State`). A shell tab draws no state mark until a harness in it
+  `failed` or `unknown` (`state::State`; the move is #791). A shell tab draws no state mark until a harness in it
   reports one: its terminal mark says what it is, and `unknown` there read as a spinner.
 - **Python charter**: the current implementation, frozen, and the reference for differential
   tests until it is retired.
