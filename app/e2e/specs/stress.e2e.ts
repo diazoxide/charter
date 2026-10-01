@@ -3,7 +3,14 @@ import process from "node:process";
 import { $, $$, browser, expect } from "@wdio/globals";
 import { LAUNCHDS_LIMIT, READY, THE_APPS_STARTING_LIMIT, built } from "../harness.js";
 import { answerTheAsk, pressAndStart } from "../opening.js";
-import { type Sample, beyond, harnessesRunning, logLine, running, sample } from "../processes.js";
+import {
+  type Sample,
+  harnessesRunning,
+  logLine,
+  running,
+  sample,
+  webAndHarnessMemory,
+} from "../processes.js";
 
 /**
  * Fifty tabs as fast as they open, every one closed, and again: the load the app exists for,
@@ -210,9 +217,9 @@ function look(pid: number, round: number, step: string, began: number): Sample {
     seconds: (Date.now() - began) / 1000,
     harnesses: harnessesRunning(),
     ...seen,
-    // The web content process and the harnesses (SC-1): see `beyond` for the ADR 0086 row
-    // each field feeds.
-    ...beyond(pid),
+    // The web content process and the harnesses (SC-1): see `WebAndHarnessMemory` for the
+    // ADR 0086 row each field feeds.
+    ...webAndHarnessMemory(pid),
   };
   logLine("stress.jsonl", record);
   console.log(`charter-stress ${JSON.stringify(record)}`);
