@@ -196,7 +196,7 @@ pub fn ready(start: &Start, root: &Path) -> Result<Ready, String> {
     // Nothing here runs a command out of a file a chat can write, which is what the consent
     // gate below exists for: this writes charter's own documents into a tree charter owns,
     // and it is idempotent, so doing it for a start that is then refused costs nothing.
-    layered_or_refusal(&here, root)?;
+    layered_or_refusal(&here, root, persona.as_deref())?;
     // The gate. Startable kind, ignored file, approved command — one call, so no caller can
     // start a chat past a check another caller makes.
     if let Some(why) = crate::wiring::refusal(profile, root) {
@@ -329,7 +329,13 @@ impl Standing {
 /// another tool — where the repair is this call, not a trip to another binary. A tree whose
 /// layer charter cannot finish is refused with the sentence naming what blocked it, because a
 /// chat that looks guarded and is not is the failure this refusal exists to prevent.
-pub fn layered_or_refusal(here: &Path, root: &Path) -> Result<(), String> {
+///
+/// **And the chat's `AGENTS.md`** (ADR 0085): a piece is a chat's own worktree, so a chat
+/// starting there is given its redacted guidance as that tree's `AGENTS.md`, rendered for
+/// `persona` (or the persona the briefing's ladder names, where none is given). It is written
+/// here and nowhere else, so a shared clone never gets one. Nothing that happens to it refuses
+/// the chat: it is guidance, and [`crate::guest::Guidance`] says what became of it.
+pub fn layered_or_refusal(here: &Path, root: &Path, persona: Option<&str>) -> Result<(), String> {
     let Some(found) = crate::worktree::locate(root, here) else {
         return Ok(());
     };
@@ -344,11 +350,46 @@ pub fn layered_or_refusal(here: &Path, root: &Path) -> Result<(), String> {
                  ({refusal}), so nothing was started."
             )
         })?;
-    let layered = crate::guest::wire(root, &piece);
+    let guidance = guidance_for(root, &piece, &found.workspace, persona);
+    let (layered, _guided) = crate::guest::wire_for_chat(root, &piece, guidance.as_deref());
     if layered.complete() {
         return Ok(());
     }
     Err(format!("{} Nothing was started.", layered.refusal(&piece)))
+}
+
+/// What a chat starting in `piece` as `persona` is told in its `AGENTS.md`
+/// ([`crate::briefing::agents_md`]): asked as the chat's own briefing will be, with the
+/// workspace and persona the start pins.
+fn guidance_for(
+    root: &Path,
+    piece: &Path,
+    workspace: &str,
+    persona: Option<&str>,
+) -> Option<String> {
+    let persona = persona.map(str::to_owned);
+    let workspace = workspace.to_owned();
+    let env = move |name: &str| match name {
+        crate::active::PERSONA_ENV => persona.clone(),
+        crate::active::WORKSPACE_ENV => Some(workspace.clone()),
+        _ => None,
+    };
+    let now = chrono::Utc::now();
+    let note = crate::briefing::piece_announcement(
+        root,
+        &serde_json::json!({"cwd": piece.display().to_string()}),
+        now,
+    );
+    crate::briefing::agents_md(
+        &crate::briefing::Ask {
+            root,
+            cwd: piece,
+            payload: &serde_json::json!({}),
+            env: &env,
+            now,
+        },
+        note,
+    )
 }
 
 /// The arguments charter adds, the conversation the chat is now under, and which of the two

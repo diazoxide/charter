@@ -125,7 +125,7 @@ fn a_plane_with_nothing_to_carry_writes_nothing_and_refuses_nothing() {
         !exclude_of(&added.path).contains("charter"),
         "and no block was added to a file git's own template already wrote"
     );
-    start::layered_or_refusal(&added.path, &f.plane).expect("and no chat is refused over it");
+    start::layered_or_refusal(&added.path, &f.plane, None).expect("and no chat is refused over it");
 }
 
 // ---------------------------------------------------------------------------------------
@@ -332,7 +332,7 @@ fn a_file_charter_did_not_write_is_never_overwritten_and_the_chat_is_refused() {
         "{\"mine\": true}\n",
         "their file is exactly as they left it"
     );
-    let refusal = start::layered_or_refusal(&added.path, &f.plane)
+    let refusal = start::layered_or_refusal(&added.path, &f.plane, None)
         .expect_err("and no chat starts in a tree whose rules are somebody else's");
     assert!(refusal.contains(".claude/settings.json"), "{refusal}");
     assert!(
@@ -360,7 +360,7 @@ fn the_harnesss_own_edit_of_the_local_file_is_kept_and_does_not_refuse_the_chat(
         theirs,
         "the approval the operator saved is still there"
     );
-    start::layered_or_refusal(&added.path, &f.plane).expect("and the chat starts");
+    start::layered_or_refusal(&added.path, &f.plane, None).expect("and the chat starts");
     assert_eq!(f.status(&added.path), "", "and it is still hidden");
 }
 
@@ -424,7 +424,8 @@ fn a_charter_generated_the_repository_commits_is_not_charters_record() {
         !pieces.iter().find(|p| p.piece == "piece").unwrap().wired,
         "and a committed marker is not charter's word that the layer is there"
     );
-    let refusal = start::layered_or_refusal(&added.path, &f.plane).expect_err("no chat starts");
+    let refusal =
+        start::layered_or_refusal(&added.path, &f.plane, None).expect_err("no chat starts");
     assert!(refusal.contains(".charter-generated"), "{refusal}");
 }
 
@@ -640,7 +641,7 @@ fn a_worktree_somebody_else_cut_gets_the_layer_when_a_chat_starts_in_it() {
         "plain git carries no layer"
     );
 
-    start::layered_or_refusal(&by_hand, &f.plane).expect("the start writes it");
+    start::layered_or_refusal(&by_hand, &f.plane, None).expect("the start writes it");
 
     assert!(by_hand.join(".claude/settings.json").is_file());
     assert!(by_hand.join(".claude/agents/steward.md").is_file());
@@ -656,7 +657,7 @@ fn a_chat_outside_every_worktree_is_left_alone() {
     let f = layered_plane("thing");
 
     for here in [f.plane.clone(), f.workspace(), f.clone.clone()] {
-        start::layered_or_refusal(&here, &f.plane).expect("nothing to do");
+        start::layered_or_refusal(&here, &f.plane, None).expect("nothing to do");
         assert!(
             !here.join(".charter-generated").exists(),
             "charter wrote a record into {}",
@@ -688,7 +689,7 @@ fn a_directory_shaped_like_a_piece_is_still_asked_whether_charter_may_write_ther
         .join("piece");
     std::fs::create_dir_all(&odd).unwrap();
 
-    let refusal = start::layered_or_refusal(&odd, &f.plane)
+    let refusal = start::layered_or_refusal(&odd, &f.plane, None)
         .expect_err("charter does not write into a path it will not name");
 
     assert!(refusal.contains("does not name a repo"), "{refusal}");

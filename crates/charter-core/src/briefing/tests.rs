@@ -1379,3 +1379,19 @@ fn an_agents_md_never_carries_the_note_about_a_persona_that_is_gone() {
     let env = [IN_ALPHA[0], IN_ALPHA[1], ("CHARTER_PERSONA", "ghost")];
     briefed_but_never_filed(&root, root.parent().unwrap(), &env, "No persona is active");
 }
+
+#[test]
+fn an_agents_md_keeps_only_the_first_line_of_the_piece_note() {
+    // The rest of the note warns about another session holding the piece, which is true at the
+    // moment of the hook and not for as long as a file lasts (ADR 0085 §2).
+    let (_d, root) = plane();
+    let file = filed_at(
+        &root,
+        root.parent().unwrap(),
+        &IN_ALPHA,
+        Some("⬢ You hold piece **p** of `r`\n⚠ This piece was already claimed by `other`"),
+    )
+    .unwrap();
+    assert!(file.ends_with("⬢ You hold piece **p** of `r`\n"), "{file}");
+    assert!(!file.contains("already claimed"), "{file}");
+}

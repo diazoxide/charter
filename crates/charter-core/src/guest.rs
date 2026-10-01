@@ -712,6 +712,144 @@ pub fn wire(plane: &Path, tree: &Path) -> Wired {
     }
 }
 
+/// The one project-instructions file charter writes: a chat's guidance, in its own worktree
+/// alone (ADR 0085).
+pub const AGENTS_MD: &str = "AGENTS.md";
+
+/// What became of a chat's `AGENTS.md` ([`wire_for_chat`]). None of these refuses a chat: the
+/// file is guidance, and a chat without it still has its hook briefing (ADR 0085 §4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Guidance {
+    /// Charter wrote it, where there was none or where its own was.
+    Written,
+    /// Charter's own was there, already saying this.
+    Current,
+    /// The repository tracks an `AGENTS.md`: charter writes nothing.
+    Tracked,
+    /// An `AGENTS.md` charter did not write is there (or one it cannot read): the operator's,
+    /// left exactly as it is.
+    Theirs,
+    /// Not written, because it could not be hidden: the exclude cannot be written, or its line
+    /// would hide an untracked file of the operator's in a checkout that reads the same
+    /// exclude (charter#1072). A generated file that shows is one `git add` from a commit.
+    Withheld(String),
+    /// Hidden, and the write itself (or its record) was refused. Nothing else changed.
+    Blocked(String),
+}
+
+/// [`wire`], and then, for a chat starting in its own worktree, its `AGENTS.md` (ADR 0085).
+///
+/// **The layer first, and the two never mixed.** The layer is a guard, and [`Wired`] says
+/// whether a chat may start; the guidance is not, and nothing that happens to it changes that
+/// answer. `guidance` is `briefing::agents_md`'s text, or `None` for a chat with nothing to be
+/// told.
+///
+/// The caller says this is a chat's own worktree: [`crate::start::layered_or_refusal`] calls
+/// this for a piece alone, never for a shared clone, where two personas would overwrite each
+/// other's file.
+pub fn wire_for_chat(
+    plane: &Path,
+    tree: &Path,
+    guidance: Option<&str>,
+) -> (Wired, Option<Guidance>) {
+    let wired = wire(plane, tree);
+    let guided = guidance.map(|text| guide(plane, tree, text));
+    (wired, guided)
+}
+
+/// Write `text` as `tree`'s `AGENTS.md`, under the guest layer's ownership rule, or step aside.
+fn guide(plane: &Path, tree: &Path, text: &str) -> Guidance {
+    let _answers = crate::worktree::listing::answers();
+    if tracked(tree, AGENTS_MD) {
+        return Guidance::Tracked;
+    }
+    // A repository that commits a `.charter-generated` is one charter cannot keep a record in
+    // without changing a tracked file; [`wire`] reports it, and nothing is written here.
+    if tree.join(MARKER).exists() && tracked(tree, MARKER) {
+        return Guidance::Withheld(format!("this repository commits a {MARKER}"));
+    }
+    let record = layer::read_record(tree);
+    let plan = planned(tree, AGENTS_MD, text, &record);
+    match plan {
+        Plan::Foreign | Plan::Unreadable | Plan::Theirs | Plan::HarnessEdited => {
+            return Guidance::Theirs;
+        }
+        Plan::Current | Plan::Create | Plan::Refresh => {}
+    }
+    // The line first, before a byte of the file exists, and with it every line this tree
+    // already needs: the block is written whole.
+    let mut rels = charter_owned(tree, &record);
+    rels.push(AGENTS_MD.to_owned());
+    if !rels.iter().any(|r| r == MARKER) {
+        rels.push(MARKER.to_owned());
+    }
+    let (first, left) = register_excludes(plane, tree, &rels, false);
+    if let Wrote::Blocked(why) = first {
+        return Guidance::Withheld(why);
+    }
+    if left.contains(AGENTS_MD) {
+        return Guidance::Withheld(unhidden(plane, tree).join("; "));
+    }
+    if plan == Plan::Current {
+        return Guidance::Current;
+    }
+    let mut intent = record.clone();
+    intent.pend(AGENTS_MD, digest(text));
+    if let Err(refused) = layer::publish_io(tree, &intent) {
+        return Guidance::Blocked(reason(&refused));
+    }
+    let outcome = match write_into(tree, AGENTS_MD, text) {
+        Err(why) => Guidance::Blocked(why),
+        Ok(()) => {
+            let mut settled = intent.clone();
+            settled.settle(AGENTS_MD, digest(text));
+            match layer::publish_io(tree, &settled) {
+                Err(refused) => Guidance::Blocked(reason(&refused)),
+                Ok(()) => Guidance::Written,
+            }
+        }
+    };
+    // Settle the block on what the record says now, as [`wire`]'s second pass does.
+    let owned = charter_owned(tree, &layer::read_record(tree));
+    register_excludes(plane, tree, &owned, false);
+    outcome
+}
+
+/// Every `AGENTS.md` that charter's line in the exclude `tree` reads hides, and that charter
+/// did not write: in `tree` and in every checkout that reads the same exclude (V35).
+///
+/// Git has no per-worktree exclude (ADR 0085 §5), so the line that hides a piece's
+/// `AGENTS.md` hides one at the root of the clone and of every sibling piece too. A file the
+/// operator makes there afterwards is hidden from their own `git status`, and a checkout that
+/// brings in a tracked one replaces it without a word. This names each one, so `charter doctor`
+/// and the briefing can say it. Empty where charter's block has no such line. READ ONLY.
+pub fn hidden_agents_md(tree: &Path) -> Vec<PathBuf> {
+    let _answers = crate::worktree::listing::answers();
+    let Some(exclude) = exclude_file(tree) else {
+        return Vec::new();
+    };
+    let text = std::fs::read_to_string(&exclude).unwrap_or_default();
+    if !already(&text).contains(AGENTS_MD) {
+        return Vec::new();
+    }
+    let (trees, _) = crate::worktree::listing::live_trees(tree, &exclude);
+    let trees = trees.unwrap_or_else(|| vec![tree.to_path_buf()]);
+    let mut found: Vec<PathBuf> = trees
+        .iter()
+        .filter(|t| crate::worktree::listing::exists(&t.join(AGENTS_MD)) == Some(true))
+        .filter(|t| !tracked(t, AGENTS_MD))
+        .filter(|t| {
+            !charter_owned(t, &layer::read_record(t))
+                .iter()
+                .any(|rel| rel == AGENTS_MD)
+        })
+        .map(|t| t.join(AGENTS_MD))
+        .collect();
+    found.sort();
+    found.dedup();
+    found
+}
+
 /// A row for `rel`, starting at the state no write changes: somebody else's file.
 ///
 /// Foreign is the default on purpose. A `Row` built as `Current` and then left unset by a

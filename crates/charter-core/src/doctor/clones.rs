@@ -117,3 +117,48 @@ pub(super) fn workspace_clones(d: &Doctor) -> Row {
     };
     fsx::beside_unread(root, row, &unseen)
 }
+
+/// V35: every `AGENTS.md` that charter's exclude line hides and charter did not write, in
+/// every workspace's repositories ([`crate::guest::hidden_agents_md`]). No row at all where
+/// there is none: the line exists only where a chat's own worktree was given an `AGENTS.md`
+/// (ADR 0085), and a green row for a feature most planes never meet is furniture.
+pub(super) fn hidden_agents_md(d: &Doctor) -> Option<Row> {
+    const NAME: &str = "hidden AGENTS.md";
+    if !d.has_plane {
+        return None;
+    }
+    let root = d.root.as_path();
+    let base = root.join("workspaces");
+    let (workspaces, _) = fsx::read_workspaces(root).ok()?;
+    let mut hidden: Vec<String> = Vec::new();
+    for ws in &workspaces {
+        let Ok((clones, _)) = fsx::read_clones(root, ws) else {
+            continue;
+        };
+        for clone in clones {
+            for path in crate::guest::hidden_agents_md(&clone) {
+                let shown = path
+                    .strip_prefix(&base)
+                    .unwrap_or(&path)
+                    .display()
+                    .to_string();
+                hidden.push(super::one_line(&shown, super::DISPLAY_LIMIT));
+            }
+        }
+    }
+    hidden.sort();
+    hidden.dedup();
+    if hidden.is_empty() {
+        return None;
+    }
+    Some(Row::warn(
+        NAME,
+        format!(
+            "{} — not written by charter, and hidden from git status by the /AGENTS.md line \
+             charter keeps in that repository's info/exclude for a chat's own worktree",
+            hidden.join(", ")
+        ),
+        "Commit it or move it aside: while it is hidden it can go uncommitted unseen, and a \
+         checkout that brings in a tracked AGENTS.md replaces it (ADR 0085).",
+    ))
+}
