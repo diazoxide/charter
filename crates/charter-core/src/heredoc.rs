@@ -804,8 +804,42 @@ pub fn line_pipelines(line: &Line) -> Option<Vec<Pipeline>> {
 /// `$(which bash) <<'EOF'` the substitution IS the program. Both make [`heredoc_could_run`]
 /// search the body.
 pub fn heredoc_opener_words(line: &Line, start: usize) -> Option<Vec<String>> {
+    let (words, _) = opener_walk(line, start);
+    if words.is_empty() { None } else { Some(words) }
+}
+
+/// The words of every command a substitution open at the `<<` at `start` stands in, outermost
+/// first — the commands that receive the heredoc's text as the substitution's OUTPUT.
+///
+/// `bash -c "$(cat <<'EOF' … )"` opens its heredoc with `cat`, and `bash` runs what `cat`
+/// prints; so does `ssh host "$(cat …)"`, `source /dev/stdin <<< "$(cat …)"`, and a runner
+/// nobody can name (`$SHELL -c "$(cat …)"`). A substitution standing where a command's program
+/// goes (`$(cat <<'EOF' … )` alone) runs its output as that command, and reads here as a
+/// command with no words before it. [`heredoc_could_run`] asks each of them (#488's review).
+///
+/// Only substitutions are listed — `$( … )`, a backtick, `<( … )` and `>( … )` — because their
+/// output is handed on. A subshell `( … )` or a group `{ …; }` hands nothing on.
+pub fn enclosing_commands(line: &Line, start: usize) -> Vec<Enclosing> {
+    opener_walk(line, start).1
+}
+
+/// One command a substitution stands in — [`enclosing_commands`]' answer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Enclosing {
+    /// The command's words before the substitution.
+    pub words: Vec<String>,
+    /// The substitution starts a word of its own (`FOO=1 $( … )`, `bash -c "$( … )"`) rather
+    /// than continuing one (`x=$( … )`, `x="$( … )"`). Where no program stands before it, a
+    /// substitution that starts its own word IS the program.
+    pub own_word: bool,
+}
+
+/// [`heredoc_opener_words`]'s walk, keeping the enclosing substitutions' commands as well.
+fn opener_walk(line: &Line, start: usize) -> (Vec<String>, Vec<Enclosing>) {
     let chars = &line.chars;
-    let mut stack: Vec<usize> = Vec::new(); // command starts saved across open groups
+    // Command starts saved across open groups, each with where the group opened when it is a
+    // substitution whose output its command receives, and `None` for a subshell or a group.
+    let mut stack: Vec<(usize, Option<usize>)> = Vec::new();
     let mut btick = false; // inside a backtick substitution?
     let mut cmd = 0usize;
     let mut i = 0usize;
@@ -815,18 +849,24 @@ pub fn heredoc_opener_words(line: &Line, start: usize) -> Option<Vec<String>> {
             i += 2; // an escaped character is never a delimiter
             continue;
         }
+        // A `$(` inside `"…"` opens a command too (#488). The quote map marks its `$` and `(`
+        // as quoted, since they stand in the string, and what follows them as NOT quoted, since
+        // that is the substitution's command. So the `$(` is asked about before the
+        // quoted-skip, and only where the map shows it opened a command context: inside `'…'`
+        // or `$'…'` it is literal, and the text after it stays quoted.
+        let opens_command = line.starts_with(i, "$(") && !line.quoted(i + 2);
         // A backtick is asked about BEFORE the quoted-skip, because the quote map marks the
         // OPENING backtick of a pair inside `"…"` as quoted and its closing partner as not —
         // correct for that map, and half a pair here. Seeing one half toggled `btick` the wrong
         // way and left `cmd` past the closing backtick.
-        if chars[i] != '`' && line.quoted(i) {
+        if chars[i] != '`' && !opens_command && line.quoted(i) {
             i += 1;
             continue;
         }
         // `${…}` needs no case of its own: `{` saves the command start and `}` restores it, so a
         // parameter expansion leaves it exactly where it was.
-        if line.starts_with(i, "$(") {
-            stack.push(cmd);
+        if opens_command {
+            stack.push((cmd, Some(i)));
             cmd = i + 2;
             i += 2;
             continue;
@@ -837,17 +877,19 @@ pub fn heredoc_opener_words(line: &Line, start: usize) -> Option<Vec<String>> {
             // because one character both opens and closes it. Without this, a separator INSIDE
             // the backticks moved the command start past the real program.
             if btick {
-                cmd = stack.pop().unwrap_or(0);
+                cmd = stack.pop().map_or(0, |(saved, _)| saved);
             } else {
-                stack.push(cmd);
+                stack.push((cmd, Some(i)));
                 cmd = i + 1;
             }
             btick = !btick;
         } else if c == '(' || c == '{' {
-            stack.push(cmd);
+            // `<(` and `>(` are process substitutions: their output is handed on as a path.
+            let handed_on = c == '(' && i > 0 && (chars[i - 1] == '<' || chars[i - 1] == '>');
+            stack.push((cmd, handed_on.then_some(i - usize::from(handed_on))));
             cmd = i + 1;
         } else if (c == ')' || c == '}') && !stack.is_empty() {
-            cmd = stack.pop().expect("just checked"); // the group was an argument
+            cmd = stack.pop().expect("just checked").0; // the group was an argument
         } else {
             match COMMAND_STARTS
                 .iter()
@@ -864,8 +906,24 @@ pub fn heredoc_opener_words(line: &Line, start: usize) -> Option<Vec<String>> {
         }
         i += 1;
     }
-    let words = shellseg::py_split(&line.slice(cmd, n));
-    if words.is_empty() { None } else { Some(words) }
+    let enclosing = stack
+        .iter()
+        .filter_map(|&(saved, opened)| {
+            opened.map(|at| {
+                // A `"` right in front belongs to the substitution's word: `"$( … )"` is one.
+                let word_start = if at > saved && chars[at - 1] == '"' {
+                    at - 1
+                } else {
+                    at
+                };
+                Enclosing {
+                    words: shellseg::py_split(&line.slice(saved, at)),
+                    own_word: word_start == saved || is_python_space(chars[word_start - 1]),
+                }
+            })
+        })
+        .collect();
+    (shellseg::py_split(&line.slice(cmd, n)), enclosing)
 }
 
 /// The program `words` names, lowercased and without its directory — or `None` when the source
@@ -1040,7 +1098,9 @@ pub fn crowded_substitutions(line: &Line) -> HashSet<usize> {
 ///    the body on as DATA.
 ///
 /// And whatever the opener, the body is searched when an executor stands **downstream of it in
-/// the same PIPELINE**. An UNQUOTED body is searched whatever opened it: it expands before the
+/// the same PIPELINE**, or when a substitution around the opener hands its output to a command
+/// that runs it ([`enclosing_commands`]): `bash -c "$(cat <<'EOF' … )"` runs the body as surely
+/// as `bash <<'EOF'` does. An UNQUOTED body is searched whatever opened it: it expands before the
 /// program sees it, so a `$( … )` in it runs.
 pub fn heredoc_could_run(line: &Line, start: usize) -> bool {
     let words = heredoc_opener_words(line, start);
@@ -1048,6 +1108,12 @@ pub fn heredoc_could_run(line: &Line, start: usize) -> bool {
         return true;
     };
     if is_executor(&prog) || REMOTE_SHELLS.contains(&prog.as_str()) {
+        return true;
+    }
+    if enclosing_commands(line, start)
+        .iter()
+        .any(runs_what_it_is_handed)
+    {
         return true;
     }
     if line_runs_text(&pipeline_slice(line, start)) {
@@ -1058,6 +1124,66 @@ pub fn heredoc_could_run(line: &Line, start: usize) -> bool {
         Some(h) => h.expands, // unquoted: a `$( … )` in the body RUNS
     }
 }
+
+/// Whether a command that a substitution stands in — its words before the substitution, from
+/// [`enclosing_commands`] — runs the text the substitution hands it.
+///
+/// **Errs toward yes, as [`heredoc_could_run`] does.** Yes for a shell or interpreter, read from
+/// the command itself rather than from the pipeline slice, which a `;` inside the substitution
+/// cuts short (`fish -c "$(true; cat <<'EOF' … )"`). Yes for a remote shell, which runs its
+/// arguments as a command line on the other machine, for `source` and `.` ([`SOURCING`]), and
+/// for a program that cannot be resolved to a name (`$SHELL -c "$( … )"`). Yes for `su`,
+/// `runuser` and `script` ([`RUNS_ITS_ARGUMENTS`]), and for a shell anywhere in the command's
+/// words ([`line_runs_text`]), which `docker exec c sh -c "$( … )"`, `kubectl exec p -- sh -c`
+/// and `find . -exec sh -c` hand the text to.
+///
+/// The program is named as [`opener_program`] names an opener's, and where it names none the
+/// answer is yes, as it is for an opener — with one exception. A substitution that continues a
+/// word, with nothing but assignments or redirections before it (`x=$( … )`, `x="$( … )"`), is
+/// a value, and runs nothing. One that starts its own word there (`FOO=1 $( … )`,
+/// `exec $( … )`, `2>/dev/null $( … )`) is the program, and runs its output.
+fn runs_what_it_is_handed(around: &Enclosing) -> bool {
+    let words = without_leading_redirections(&around.words);
+    let Some(prog) = opener_program(Some(&words)) else {
+        let (prog, _, _) = shellwrap::split_env(&words);
+        return around.own_word || !prog.is_empty();
+    };
+    is_executor(&prog)
+        || REMOTE_SHELLS.contains(&prog.as_str())
+        || SOURCING.contains(&prog.as_str())
+        || RUNS_ITS_ARGUMENTS.contains(&prog.as_str())
+        || line_runs_text(&around.words.join(" "))
+}
+
+/// Programs that run an argument as a shell command line — `su -c`, `runuser`, `script -c` —
+/// and are no shell or interpreter themselves. Kept to [`runs_what_it_is_handed`] for the
+/// reason [`SOURCING`] is: `script` names a file far more often than it runs one.
+const RUNS_ITS_ARGUMENTS: [&str; 3] = ["su", "runuser", "script"];
+
+/// `words` with the redirections in front of the program removed, target and all.
+///
+/// [`shellwrap::split_env`] strips a redirection that is a token of its own, as the lexer hands
+/// it one. These words are split on whitespace alone, so `2>/dev/null` arrives as one word, and
+/// read as a program it would name `null`.
+fn without_leading_redirections(words: &[String]) -> Vec<String> {
+    static ONCE: OnceLock<Regex> = OnceLock::new();
+    let re = ONCE.get_or_init(|| {
+        Regex::new(r"^(?:[0-9]+|&)?(?:>>|>&|<&|<>|>\||>|<)(.*)$")
+            .expect("a pattern this module wrote")
+    });
+    let mut i = 0usize;
+    while let Some(caps) = words.get(i).and_then(|w| re.captures(w)) {
+        // An operator alone takes the next word as its target.
+        i += if caps[1].is_empty() { 2 } else { 1 };
+    }
+    words.get(i..).unwrap_or_default().to_vec()
+}
+
+/// The builtins that run a FILE in the current shell — `source` and `.` — so that
+/// `source /dev/stdin <<< "$( … )"` runs whatever the substitution printed. Not in
+/// [`EXECUTORS`], which the leak guard also reads and which is matched word by word in
+/// [`line_runs_text`], where a bare `.` is far more often a directory than a command.
+const SOURCING: [&str; 2] = ["source", "."];
 
 /// `toks` as `(segment, the control operator in front of it)` pairs — `_segments_of`.
 ///

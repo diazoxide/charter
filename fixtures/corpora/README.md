@@ -135,6 +135,28 @@ now reads `<(` and `>(` wherever they stand unquoted, and zsh's `=(` wherever zs
 `ls` is the only key that moved: no A5, A6 or A7 answer changed on any row, because none of
 those lines is a prose command the guards judge.
 
+**And where a heredoc inside a substitution is read with that substitution's command (#488,
+#780).** The frozen Python skipped every quoted character when it looked for the command that
+opens a `<<`, and the `$(` of a substitution inside `"…"` is quoted. So it read the opener of
+`x="$(cat <<'EOF'` as the word `x="$(cat`, and of `echo "$(sh -s <<'EOF'` as `echo`. It also let
+the `)` that closes an inner `"$( … )"` take back the start an outer `(`, `{` or `$(` had saved.
+The opener reading (`how`) now starts at the program inside the substitution on 45 rows, and the
+program it names (`op`) moved with it on 36 of them: `shellseg-oracle.jsonl` rows 55, 106, 107
+and 447, and generated rows 171, 270, 331, 399, 472, 483, 520, 560, 595, 636, 690, 802, 846,
+876, 1102, 1174, 1181, 1222, 1235, 1239, 1297, 1315, 1359, 1372, 1435, 1523, 1633, 1744, 1747,
+1772, 1782, 1823, 1910, 2152, 2155, 2157, 2163, 2223, 2231, 2302 and 2398.
+
+The command the substitution stands in is asked too, because it receives the heredoc's text:
+a shell or interpreter, a remote shell, `source` or `.`, a program nobody can name, or the
+substitution standing where the program goes runs the body. That moved `hcr` from "nothing
+runs this body" to "a shell may run it" on 41 generated rows, the 40 below and row 2157 above,
+and on rows 531, 644 and 1112 the layout (`hl`) and the leak guard's visible lines (`lacr`)
+with it, each a backtick substitution in the program's place: generated rows 95, 152, 173,
+203, 242, 357, 416, 462, 466, 516, 517, 531, 567, 644, 658, 784, 872, 911, 912, 957, 1049,
+1112, 1251, 1353, 1356, 1357, 1572, 1731, 1732, 1740, 1743, 1791, 1807, 1851, 1872, 1968, 2088,
+2235, 2291 and 2327. Every one of those answers moved toward refusing. No verdict of the leak
+guard, A5, A6 or A7 (`lr`, `hr`, `hrd`, `hl7`, `csh`, `fsh`) moved on any row.
+
 ## The session recording
 
 Re-record with:

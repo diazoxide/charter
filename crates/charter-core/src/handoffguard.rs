@@ -432,10 +432,21 @@ pub fn handoff_segment(toks: &[Tok]) -> (Option<Vec<Tok>>, bool) {
 pub fn handoff_line(cmd: &str) -> Option<(String, bool)> {
     let rows = leakguard::lines_a_command_could_run(cmd);
     let heads = quoted_row_prefixes(&rows);
+    let live = live_text_in_heads(&rows, &heads);
     let mut i = 0usize;
     while i < rows.len() {
         let (row, in_a_shells_body) = rows[i].clone();
         let head = heads[i];
+        // A shell that runs this row runs a `$( … )` or a backtick inside the string its head
+        // sits in, as a `"…"` leaves them live. Read both ways, a body can be that string's
+        // text in one shell and the shell's own in another (#780's review).
+        if in_a_shells_body
+            && let Some(run) = live[i]
+                .iter()
+                .find(|run| is_handoff(&as_the_shell_reads(run)) || disguised_handoff(run))
+        {
+            return Some((run.clone(), true));
+        }
         let mut line: String = row.chars().skip(head).collect();
         if head > 0 && line.is_empty() {
             i += 1;
@@ -498,6 +509,41 @@ fn quoted_row_prefixes(rows: &[(String, bool)]) -> Vec<usize> {
         start += len + 1;
     }
     heads
+}
+
+/// For each row, the stretches of its quoted head ([`quoted_row_prefixes`]) that are NOT quoted
+/// after all: the inside of a `$( … )` or a backtick in a `"…"`, which the shell runs.
+///
+/// Read off the same joined text, with [`shellseg::quote_map`], which opens a command context
+/// at a substitution inside double quotes and none inside single quotes.
+fn live_text_in_heads(rows: &[(String, bool)], heads: &[usize]) -> Vec<Vec<String>> {
+    let text = rows
+        .iter()
+        .map(|(r, _)| r.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let quoted = shellseg::quote_map(&text);
+    let mut out = Vec::with_capacity(rows.len());
+    let mut start = 0usize;
+    for ((row, _), &head) in rows.iter().zip(heads) {
+        let mut runs = Vec::new();
+        let mut run = String::new();
+        for (k, c) in row.chars().take(head).enumerate() {
+            if quoted.get(start + k).copied().unwrap_or(true) {
+                if !run.is_empty() {
+                    runs.push(std::mem::take(&mut run));
+                }
+            } else {
+                run.push(c);
+            }
+        }
+        if !run.is_empty() {
+            runs.push(run);
+        }
+        out.push(runs);
+        start += row.chars().count() + 1;
+    }
+    out
 }
 
 /// How many `\` a line ends with — `len(line) - len(line.rstrip("\\"))`.
@@ -918,9 +964,113 @@ mod tests {
             "git commit -m 'fix the guard\n\ncharter handoff beta now asks first'",
             "python3 -c \"\nimport sys\ncharter handoff beta\n\"",
             "cat > f <<'EOF'\nx\nEOF\necho 'one\ncharter handoff beta'",
+            // #488: a quoted heredoc a reader takes inside a substitution whose value is only
+            // assigned. Every shell reads the body as `cat`'s stdin, so it is data.
+            "x=\"$(cat <<'EOF'\ncharter handoff beta\nEOF\n)\"",
+            // A BALANCED `( … )` in that body ends nothing: bash keeps reading the heredoc.
+            "x=\"$(cat <<'EOF'\nfix (a)\ncharter handoff beta\nEOF\n)\"",
         ] {
             assert_eq!(refusal(cmd), None, "{cmd:?} is text, not a handoff");
         }
+    }
+
+    /// #488's other side: reading the program inside `"$( … )"` must not hide a handoff. A
+    /// body that program RUNS, a program nobody can name, a shell downstream of it, and a
+    /// handoff on a line after the heredoc are all still refused.
+    #[test]
+    fn a_handoff_is_still_caught_around_a_quoted_substitution() {
+        // The command AROUND the substitution runs its output too: a runner nobody can name, a
+        // remote shell, a shell or `source`, or the substitution standing where the program
+        // goes. Any of them runs the heredoc's text, whatever program printed it.
+        for cmd in [
+            "$SHELL -c \"$(cat <<'EOF'\ncharter handoff beta\nEOF\n)\"",
+            "$0 -c \"$(cat <<'EOF'\ncharter handoff beta\nEOF\n)\"",
+            "\"$RUNNER\" -c \"$(cat <<'EOF'\ncharter handoff beta\nEOF\n)\"",
+            "${X} -c \"$(cat <<'EOF'\ncharter handoff beta\nEOF\n)\"",
+            "ssh host \"$(cat <<'EOF'\ncharter handoff beta\nEOF\n)\"",
+            "fish -c \"$(true; cat <<'EOF'\ncharter handoff beta\nEOF\n)\"",
+            "busybox sh -c \"$(true; cat <<'EOF'\ncharter handoff beta\nEOF\n)\"",
+            "$(cat <<'EOF'\ncharter handoff beta\nEOF\n)",
+            "source /dev/stdin <<< \"$(cat <<'EOF'\ncharter handoff beta\nEOF\n)\"",
+            ". /dev/stdin <<< \"$(cat <<'EOF'\ncharter handoff beta\nEOF\n)\"",
+            "\"$(cat <<'EOF'\ncharter handoff beta\nEOF\n)\"",
+            // A substitution that starts its own word, behind an assignment, a wrapper or a
+            // redirection, is still where the program goes.
+            "FOO=1 $(cat <<'EOF'\ncharter handoff beta\nEOF\n)",
+            "x= $(cat <<'EOF'\ncharter handoff beta\nEOF\n)",
+            "exec $(cat <<'EOF'\ncharter handoff beta\nEOF\n)",
+            "command $(cat <<'EOF'\ncharter handoff beta\nEOF\n)",
+            "nice $(cat <<'EOF'\ncharter handoff beta\nEOF\n)",
+            "env $(cat <<'EOF'\ncharter handoff beta\nEOF\n)",
+            "2>/dev/null $(cat <<'EOF'\ncharter handoff beta\nEOF\n)",
+            // A plainly named program that runs its arguments as a command, or hands them to a
+            // shell further along its argv.
+            "su root -c \"$(cat <<'EOF'\ncharter handoff beta\nEOF\n)\"",
+            "runuser -u op -- sh -c \"$(true; cat <<'EOF'\ncharter handoff beta\nEOF\n)\"",
+            "script -qc \"$(cat <<'EOF'\ncharter handoff beta\nEOF\n)\" /dev/null",
+            "docker exec c sh -c \"$(true; cat <<'EOF'\ncharter handoff beta\nEOF\n)\"",
+            "kubectl exec p -- sh -c \"$(true; cat <<'EOF'\ncharter handoff beta\nEOF\n)\"",
+            "find . -exec sh -c \"$(true; cat <<'EOF'\ncharter handoff beta\nEOF\n)\" \\;",
+        ] {
+            assert_eq!(reason(cmd), Some(REASON_SHELL_STRING), "{cmd:?}");
+        }
+        for (cmd, want) in [
+            // #450's two-way reading: GNU bash 3.2.57 ends the substitution at an UNBALANCED `)`
+            // in the body and runs what follows. Unquoted, the next line is a command; inside
+            // `"…"` a `$( … )` or a backtick still runs, and a `"` ends the string.
+            (
+                "x=$(cat <<'EOF'\nfix a)\ncharter handoff beta\nEOF\n)",
+                REASON_SHELL_STRING,
+            ),
+            (
+                "x=\"$(cat <<'EOF'\nfix a)\n$(charter handoff beta)\nEOF\n)\"",
+                REASON_SHELL_STRING,
+            ),
+            (
+                "x=\"$(cat <<'EOF'\nfix a)\n`charter handoff beta`\nEOF\n)\"",
+                REASON_SHELL_STRING,
+            ),
+            (
+                "x=\"$(cat <<'EOF'\nfix a)\"\ncharter handoff beta\nEOF\n)\"",
+                REASON_SHELL_STRING,
+            ),
+            (
+                "x=\"$(bash <<'EOF'\ncharter handoff beta\nEOF\n)\"",
+                REASON_SHELL_STRING,
+            ),
+            (
+                "x=\"$(python3 - <<'EOF'\ncharter handoff beta\nEOF\n)\"",
+                REASON_SHELL_STRING,
+            ),
+            (
+                "x=\"$($RUNNER <<'EOF'\ncharter handoff beta\nEOF\n)\"",
+                REASON_SHELL_STRING,
+            ),
+            (
+                "x=\"$(cat <<'EOF' | sh\ncharter handoff beta\nEOF\n)\"",
+                REASON_SHELL_STRING,
+            ),
+            (
+                "x=\"$(cat <<'EOF'\nhello\nEOF\n)\"\ncharter handoff beta",
+                REASON_BRIEF_SOURCE,
+            ),
+        ] {
+            assert_eq!(reason(cmd), Some(want), "{cmd:?}");
+        }
+        // And a sub-agent is refused for a real one, while the data shape stays data.
+        let sub = Caller {
+            agent_id: Some("a1"),
+            harness: Some("claude-code"),
+            permission_mode: None,
+        };
+        assert_eq!(
+            handoff_refusal("x=\"$(bash <<'EOF'\ncharter handoff beta\nEOF\n)\"", sub).map(|r| r.0),
+            Some(REASON_SUBAGENT)
+        );
+        assert_eq!(
+            handoff_refusal("x=\"$(cat <<'EOF'\ncharter handoff beta\nEOF\n)\"", sub),
+            None
+        );
     }
 
     #[test]
