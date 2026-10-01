@@ -568,8 +568,7 @@ _Avoid_: secret store, keychain (as the name of the concept)
 **Forge extension**:
 An extension about a code host's pull requests, merge requests or issues, which reaches the
 forge through `gh` or `glab`'s own login and never through a secret charter hands it. Once
-PE-29 opens the forge seam to extensions, it asks charter to make the call instead (ADR 0070,
-proposed).
+PE-29 opens the forge seam to extensions, it asks charter to make the call instead (ADR 0070).
 _Avoid_: forge plugin, GitHub integration
 
 **Editor integration**:

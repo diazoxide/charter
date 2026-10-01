@@ -1,6 +1,6 @@
 # charter is where agents work, and writing code by hand opens in your editor
 
-**Proposed 2026-10-01**, drafted for program-map ticket ED-1 (#719). It follows these of the
+**Accepted 2026-10-01** by the operator (ruling V31), drafted for program-map ticket ED-1 (#719). It follows these of the
 operator's rulings:
 
 - **F2:** *"charter is the control plane, not a full editor. (a) Editor integrations: VS Code,
@@ -151,13 +151,19 @@ whatever `$VISUAL` or `$EDITOR` names. charter never replaces it, and two things
   - **Open in charter**: the chat, or else the workspace, that the current file belongs to, shown
     in charter's window.
   - **Send selection to a chat**: the selected text and its `path:line` range, typed into an idle
-    chat's prompt and never sent (subject to ruling 1). With no idle chat, the integration reveals
+    chat's prompt and never sent (V31a). With no idle chat, the integration reveals
     the workspace, so the person starts a chat in charter, and offers to copy the selection to the
     clipboard.
   - **Show this chat's changes**: the files a chat's branches changed, listed in the editor and
     diffed there with the editor's own diff view.
 
-Where the integrations live and in which languages is ruling 2.
+**The editor integrations live in this repo, under `editors/`, each in its own editor's
+language** (V31b): TypeScript for VS Code, Kotlin for JetBrains, Rust for Zed. They are not the
+shipped app, so the operator's rule on languages, *"final app should not use python, fully clean
+implementation in rust — no need to mix languages"*, is read as covering the shipped app only.
+The protocol and its clients change in one pull request. Each integration builds and tests in CI
+jobs of its own, so Kotlin and Gradle stay in the JetBrains integration's jobs and reach no other
+build.
 
 ### 4. The editor protocol
 
@@ -315,7 +321,7 @@ The code does not change with this record.
 |---|---|
 | `charterd` | ED-2: the `editor` scope and the four commands, with FD-6's authentication and FD-27's scope checks; `place`'s check and write under the run's state lock |
 | The session protocol crate | LV-2a: the four commands, in the schema and the conformance kit |
-| Editor integrations | ED-3, ED-4, ED-5: thin clients of the protocol, wherever ruling 2 puts them |
+| `editors/` | ED-3, ED-4, ED-5: the three integrations, thin clients of the protocol, each with CI jobs of its own (V31b) |
 | The window | ED-2: `reveal` with focus on the tab, never a terminal |
 | Harness checks | TS1: per harness, a bracketed paste into its dialogs chooses nothing |
 | The light editor and review | RC-1 and RC-5: one CodeMirror 6 component with charter's own fixed grammars and no extension code inside it |
@@ -334,15 +340,22 @@ The code does not change with this record.
   comes forward without terminal focus, and the person clicks in and presses Enter. A busy chat
   refuses it, and with no idle chat the person starts one in charter.
 - **No `place` at level 3** until a level-3 chat's view tab has a prompt input.
-- **Up to three integrations in three languages and three marketplaces.** Each is thin, but each
-  has its editor's release cadence, and N−1 means the protocol cannot drop a command for six months
-  after the integrations stop using it.
+- **Three integrations in three languages and three marketplaces, all in this repo** (V31b).
+  CI gains a Node build, a Kotlin and Gradle build, and a Zed extension build, each in jobs of its
+  own. Each integration has its editor's release cadence, and N−1 means the protocol cannot drop a
+  command for six months after the integrations stop using it.
 - **A language the light editor has no grammar for shows as plain text.** Only a charter release
   adds one.
 - **The `editor` credential is readable by every extension in the same editor.** The scope's
   limits are the defence, not the credential.
 
 ## What was rejected
+
+- **A separate repo per integration** (V31b). Each would pin a protocol version and run the
+  conformance kit in its own CI, and every protocol change would span two repos.
+- **VS Code only for now, Zed and JetBrains decided later** (the draft's recommendation, V31b).
+  It kept Kotlin out of the repo until a JetBrains integration was scheduled; the operator chose
+  all three here, with Kotlin confined to its own jobs.
 
 - **A full editor in charter** (Monaco, or a CodeMirror with language servers). F2 and X26 rule it
   out; it would compete with editors the operator already has, and lose.
@@ -415,28 +428,13 @@ its reason:
   Kotlin or Java. ED-5 picks between a generated Java client and a hand-written one under the
   conformance kit.
 
-## For the operator's ruling
+## Ruled (V31, 2026-10-01)
 
-1. **A seventh client scope, `editor`, and "send selection" typed, never sent** (a security
-   boundary, extending V7's and V22a's scopes, and narrowing F2(a)'s *"send selection to a
-   chat"*). The scope may resolve a path, ask the window to reveal a chat, workspace or review
-   without focusing a terminal, type a selection into an idle existing chat's prompt under §4's
-   rules without sending it, and list a chat's changed files. It may not start a chat, send a
-   prompt, answer an ask, or read a value or a setting, and chats are denied it as they are the
-   other human scopes. *Recommend yes.* The alternative, sending the selection, would let any
-   extension in the operator's editor drive an agent.
-2. **Where the editor integrations live, and in which languages** (the operator's rule on
-   languages, *"final app should not use python, fully clean implementation in rust — no need to
-   mix languages"*, and a lasting CI cost). Each integration must be written in its editor's
-   language: TypeScript for VS Code, Rust for Zed, Kotlin or Java for JetBrains. The options:
-   - **(a) A separate repo per integration.** This repo stays as it is; each integration pins a
-     protocol version and runs the conformance kit in its own CI. Protocol changes span two repos.
-   - **(b) In this repo, under `editors/`, with the rule read as being about the shipped app.**
-     The protocol and its clients change in one pull request; CI gains a toolchain per editor.
-   - **(c) VS Code only for now, JetBrains later.** Build ED-3 alone in this repo (TypeScript and
-     its toolchain are already here for the window), publish to the VS Code Marketplace and Open
-     VSX, and decide Zed and JetBrains, and where they live, when each is scheduled.
-
-   *Recommend (c)*: it adds no language and no toolchain this repo lacks, one extension reaches
-   VS Code and the editors that install from Open VSX, and Kotlin's build and CI cost waits until
-   a JetBrains integration is scheduled.
+1. **A seventh client scope, `editor`, with "send a selection" typed and never sent.** This
+   narrows F2(a). The scope cannot start a chat, send a prompt, answer an ask, or read values or
+   settings, and chats are denied it (V31a).
+2. **The editor integrations live in this repo under `editors/`, each in its own editor's
+   language**: TypeScript for VS Code, Kotlin for JetBrains, Rust for Zed. The no-language-mixing
+   rule is read as covering the shipped app only. The cost is accepted: Kotlin and Gradle in CI,
+   kept to the JetBrains integration's own jobs (V31b, against the recommendation, which was VS
+   Code only for now).
