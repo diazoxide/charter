@@ -224,12 +224,41 @@ export function dataUrls(text: string): string[] {
   return found;
 }
 
+/**
+ * Whether the colour function at `at` is a `color-mix()` of only `currentcolor`, `transparent`
+ * and theme tokens (`var(--x)`), with percentages and a colour space. Such a mix brings in no
+ * colour of its own: it dims or blends what the theme already gives, the way `opacity` does
+ * without a layer of its own (#891, #1017). Any literal inside it is still refused.
+ */
+export function mixesNoColourOfItsOwn(value: string, at: number): boolean {
+  const open = value.slice(at).match(/^color-mix\s*\(/i);
+  if (!open) return false;
+  let depth = 0;
+  let end = -1;
+  for (let i = at + open[0].length - 1; i < value.length; i++) {
+    if (value[i] === "(") depth++;
+    else if (value[i] === ")" && --depth === 0) {
+      end = i;
+      break;
+    }
+  }
+  if (end < 0) return false;
+  const inside = value.slice(at + open[0].length, end);
+  const [space, ...parts] = inside.split(",").map((part) => part.trim());
+  if (!/^in\s+[a-z0-9-]+$/i.test(space) || parts.length !== 2) return false;
+  return parts.every((part) =>
+    /^(?:currentcolor|transparent|var\(\s*--[a-z0-9-]+\s*\))(?:\s+\d+(?:\.\d+)?%)?$/i.test(part),
+  );
+}
+
 /** Every colour literal in `value`, including those inside its data URLs, as `what: literal`. */
 export function literalsIn(value: string): { what: string; literal: string; index: number }[] {
   const out: { what: string; literal: string; index: number }[] = [];
   for (const { what, pattern } of LITERALS) {
-    for (const hit of value.matchAll(pattern))
+    for (const hit of value.matchAll(pattern)) {
+      if (mixesNoColourOfItsOwn(value, hit.index)) continue;
       out.push({ what, literal: hit[0], index: hit.index });
+    }
   }
   for (const decoded of dataUrls(value)) {
     for (const { what, pattern } of LITERALS) {

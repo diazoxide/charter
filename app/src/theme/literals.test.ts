@@ -17,7 +17,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { LITERALS, dataUrls } from "./literal";
+import { LITERALS, dataUrls, mixesNoColourOfItsOwn } from "./literal";
 import { MOTION_TOKENS, motionProperty } from "./motion";
 import { TOKENS, property, type Token } from "./theme";
 
@@ -107,6 +107,7 @@ function cssComplaints(path: string, text: string): string[] {
   const [hex, fn, named] = LITERALS;
   for (const { what, pattern } of [hex, fn]) {
     for (const hit of text.matchAll(pattern)) {
+      if (pattern === fn.pattern && mixesNoColourOfItsOwn(text, hit.index)) continue;
       complaints.push(`${at(path, text, hit.index)} has ${what}: ${hit[0]}`);
     }
   }
@@ -155,6 +156,28 @@ describe("the stylesheet guard", () => {
     expect(cssComplaints("index.html", '<meta name="theme-color" content="black" />')).not.toEqual(
       [],
     );
+  });
+
+  it("lets a mix of only currentcolor, transparent and tokens through, and nothing else", () => {
+    // Dimming in a colour's own place, not by `opacity` (#891, #1017): no colour of its own.
+    expect(
+      cssComplaints("a.css", ".a { color: color-mix(in srgb, currentcolor 85%, transparent); }"),
+    ).toEqual([]);
+    expect(
+      cssComplaints(
+        "a.css",
+        ".a { color: color-mix(in oklab, var(--text-muted) 70%, transparent); }",
+      ),
+    ).toEqual([]);
+    expect(
+      cssComplaints("a.css", ".a { color: color-mix(in srgb, currentcolor 85%, red); }"),
+    ).not.toEqual([]);
+    expect(
+      cssComplaints("a.css", ".a { color: color-mix(in srgb, #fff 50%, transparent); }"),
+    ).not.toEqual([]);
+    expect(
+      cssComplaints("a.css", ".a { color: color-mix(in srgb, rgb(0 0 0) 50%, currentcolor); }"),
+    ).not.toEqual([]);
   });
 
   it("reads a word that is a colour only where it is a value", () => {
