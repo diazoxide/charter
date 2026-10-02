@@ -189,30 +189,6 @@ describe(`switching among ${OPEN} open projects`, function () {
       console.log(`PROF ${JSON.stringify({ i, ms: Math.round(one.ms), marks, js: one.cmds, rust: near, rows: one.rows, lags: one.lags })}`);
     });
 
-    const arms: [string, string][] = [
-      ["normal", ""],
-      ["explorer hidden", "nav.explorer { display: none !important; }"],
-      ["chat rows hidden", ".explorer .here { display: none !important; }"],
-      ["explorer svg hidden", ".explorer svg { display: none !important; }"],
-      ["explorer guides gone", ".explorer li::before, .explorer li::after, .explorer .clone::before, .explorer .clone::after { content: none !important; }"],
-      ["explorer state marks hidden", ".explorer .state { display: none !important; }"],
-      ["explorer not a scroller", "nav.explorer { overflow: visible !important; }"],
-      ["again normal", ""],
-    ];
-    for (const [name, css] of arms) {
-      await browser.execute((text: string) => {
-        document.getElementById("prof-arm")?.remove();
-        const el = document.createElement("style");
-        el.id = "prof-arm";
-        el.textContent = text;
-        document.head.append(el);
-      }, css);
-      const arm = await measureSwitches(planes, 5, () => PAINTED, jobInTheWindow);
-      const launch = [0, 10, 20, 30, 40].map((i) => Math.round(arm.samples_ms[i]));
-      const rest = arm.samples_ms.filter((_, i) => i % 10 !== 0).sort((a, b) => a - b);
-      console.log(`PROF arm ${name}: p50 ${Math.round(arm.p50)} p95 ${Math.round(arm.p95)} launch ${launch.join(",")} fresh-median ${Math.round(rest[Math.floor(rest.length / 2)])}`);
-    }
-    await browser.execute(() => document.getElementById("prof-arm")?.remove());
     for (const plane of [planes[1], first]) {
       await job({ kind: "project switch", plane, sentinel: PAINTED });
       const census = await browser.execute(() => {
@@ -230,6 +206,56 @@ describe(`switching among ${OPEN} open projects`, function () {
       });
       console.log(`PROF census ${plane === first ? "launch" : "fresh"} ${JSON.stringify(census)}`);
     }
+    // The launch project is in front now (the census's last switch). A microbench of its chat rows.
+    const css: [string, string][] = [
+      ["base", ""],
+      ["svg hidden", ".explorer .here svg { display: none !important; }"],
+      ["guides gone", ".explorer .here li::before, .explorer .here li::after { content: none !important; }"],
+      ["state hidden", ".explorer .here .state { display: none !important; }"],
+      ["state no transition", ".explorer .here .state { transition: none !important; }"],
+      ["harness hidden", ".explorer .here .harness, .explorer .here .persona { display: none !important; }"],
+      ["name hidden", ".explorer .here .session { display: none !important; }"],
+      ["button block", ".explorer .here .chat { display: block !important; min-width: 0 !important; }"],
+      ["system font", ".explorer .here * { font-family: system-ui !important; }"],
+      ["no title attrs", ""],
+      ["base again", ""],
+    ];
+    const bench = await browser.execute(async (armsText: string) => {
+      const arms = JSON.parse(armsText) as [string, string][];
+      const frame = () => new Promise<number>((done) => requestAnimationFrame(() => done(performance.now())));
+      const here = document.querySelector<HTMLElement>(".explorer .here");
+      if (!here) return { error: "no .here", rows: 0 };
+      const out: Record<string, string> = { rows: String(here.children.length) };
+      for (const [name, text] of arms) {
+        document.getElementById("prof-arm")?.remove();
+        const el = document.createElement("style");
+        el.id = "prof-arm";
+        el.textContent = text;
+        document.head.append(el);
+        if (name === "no title attrs") for (const t of Array.from(here.querySelectorAll("[title]"))) t.removeAttribute("title");
+        const layout: number[] = [];
+        const whole: number[] = [];
+        for (let k = 0; k < 9; k++) {
+          here.style.display = "none";
+          void here.offsetHeight;
+          await frame();
+          await frame();
+          const t0 = performance.now();
+          here.style.display = "";
+          void here.offsetHeight;
+          const t1 = performance.now();
+          await frame();
+          const t2 = await frame();
+          layout.push(t1 - t0);
+          whole.push(t2 - t0);
+        }
+        const med = (xs: number[]) => xs.sort((a, b) => a - b)[Math.floor(xs.length / 2)].toFixed(1);
+        out[name] = `layout ${med(layout)} frames ${med(whole)}`;
+      }
+      document.getElementById("prof-arm")?.remove();
+      return out;
+    }, JSON.stringify(css));
+    console.log(`PROF rowbench ${JSON.stringify(bench)}`);
     logLine("project-switch.jsonl", { budgetMs: BUDGET_MS, ...switches });
     // In the job's own output too, where a reviewer reads it without downloading anything.
     console.log(`L9 project switch, ${BUDGET_MS} ms budget: ${JSON.stringify(switches)}`);
