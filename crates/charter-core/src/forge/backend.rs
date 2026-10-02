@@ -216,20 +216,19 @@ impl Caller {
 
 /// Repositories: what an owner has, what an account reaches, and what a repo holds.
 pub trait Repos {
-    /// Every repo under `owner`, as the owner exposes them, in the neutral record shape.
-    /// Strict: a failure is an error, never an empty list.
-    fn owned(&self, caller: &Caller, owner: &str) -> Result<Vec<Value>, ForgeError>;
+    /// Every repo under `owner`, as the owner exposes them. Strict: a failure is an error,
+    /// never an empty list.
+    fn owned(&self, caller: &Caller, owner: &Owner) -> Result<Vec<RepoRecord>, ForgeError>;
 
     /// Every repo under `owner` that the account reaches, private ones included (ADR 0055).
     /// Strict.
-    fn reachable(&self, caller: &Caller, owner: &str) -> Result<Vec<Value>, ForgeError>;
+    fn reachable(&self, caller: &Caller, owner: &Owner) -> Result<Vec<RepoRecord>, ForgeError>;
 
-    /// The top-level file names of `repo` (a neutral record) at `git_ref`, or its default
-    /// branch. Strict.
+    /// The top-level file names of `repo` at `git_ref`, or its default branch. Strict.
     fn top_level(
         &self,
         caller: &Caller,
-        repo: &Value,
+        repo: &RepoRecord,
         git_ref: Option<&str>,
     ) -> Result<Vec<String>, ForgeError>;
 }
@@ -341,6 +340,54 @@ pub enum Reach {
 /// opaquely so that a round trip never re-derives it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ForgeRef(pub String);
+
+/// Whose repos a listing asks for: a GitHub organisation or user, or a GitLab group by its
+/// full path (`grp/sub`), as the plane's forge config declares it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Owner(String);
+
+impl Owner {
+    pub fn new(owner: impl Into<String>) -> Owner {
+        Owner(owner.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Whether `repo` is under this owner. A subgroup's repos are under its group's path, so
+    /// they are held too. Case does not matter, as on both forges.
+    pub fn holds(&self, repo: &RepoRecord) -> bool {
+        repo.path_with_namespace
+            .to_lowercase()
+            .starts_with(&format!("{}/", self.0.to_lowercase()))
+    }
+}
+
+/// One repo as a forge lists it, in neutral fields (ADR 0070 §1). The field names are the
+/// keys the inventory writes (`inventory::record`), so a record reads the same in both.
+///
+/// A field the forge left out, or gave as null or empty, is empty here: `""`, `[]`, or `None`
+/// for the two that can be absent. A text field the forge gave as some other value holds what
+/// Python's `str()` prints of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepoRecord {
+    /// The forge's own id for the repo. GitLab addresses a repo's tree by it.
+    pub id: Option<ForgeRef>,
+    /// The repo's name in its path: GitHub's `name`, GitLab's `path` (else its `name`).
+    pub name: String,
+    /// `owner/name` on GitHub, the full namespace path on GitLab.
+    pub path_with_namespace: String,
+    pub default_branch: Option<String>,
+    pub description: String,
+    /// The repo's page: GitHub's `html_url`, GitLab's `web_url`.
+    pub web_url: String,
+    /// GitHub's `ssh_url`, GitLab's `ssh_url_to_repo`.
+    pub ssh_url: String,
+    pub topics: Vec<String>,
+    /// The forge that listed it.
+    pub forge: Kind,
+}
 
 /// One thing a forge may or may not do for one repo. Not an extension's capability.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

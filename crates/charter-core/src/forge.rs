@@ -47,8 +47,8 @@ pub mod route;
 pub mod transport;
 
 pub use backend::{
-    Account, Caller, Capabilities, Capability, ForgeBackend, Principal, Priority, Reach, Repos,
-    Requests, Support, Surface,
+    Account, Caller, Capabilities, Capability, ForgeBackend, ForgeRef, Owner, Principal, Priority,
+    Reach, RepoRecord, Repos, Requests, Support, Surface,
 };
 
 /// The best-effort budget: an auth check. Python's `base.STATUS_TIMEOUT`.
@@ -802,17 +802,50 @@ pub(super) fn word_of(value: Option<&Value>) -> &str {
     }
 }
 
-/// The neutral records under `owner` of a listing that answers for every owner the account
-/// belongs to. A subgroup's repos are under its group's path, so they are kept.
-pub(super) fn under_owner(records: impl Iterator<Item = Value>, owner: &str) -> Vec<Value> {
-    let under = format!("{}/", owner.to_lowercase());
-    records
-        .filter(|r| {
-            r.get("path_with_namespace")
-                .and_then(Value::as_str)
-                .is_some_and(|pwn| pwn.to_lowercase().starts_with(&under))
+/// A listed repo's `key` when it is a non-empty string, else `""`.
+pub(super) fn listed_str(raw: &Value, key: &str) -> String {
+    raw.get(key)
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// A listed repo's description: a string as given, any other truthy value as Python's `str()`
+/// prints it, and `""` for a missing or falsy one.
+pub(super) fn listed_description(raw: &Value) -> String {
+    match raw.get("description") {
+        Some(Value::String(s)) => s.clone(),
+        Some(v) if truthy(v) => py_str(v),
+        _ => String::new(),
+    }
+}
+
+/// A listed repo's id, as text, for the forge to be asked by later. `None` when it is missing
+/// or null.
+pub(super) fn listed_id(raw: &Value) -> Option<ForgeRef> {
+    match raw.get("id") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(ForgeRef(py_str(v))),
+    }
+}
+
+/// A listed repo's default branch, `None` when it is missing or empty.
+pub(super) fn listed_branch(raw: &Value) -> Option<String> {
+    Some(listed_str(raw, "default_branch")).filter(|b| !b.is_empty())
+}
+
+/// A listed repo's topics: the strings of its `topics` array.
+pub(super) fn listed_topics(raw: &Value) -> Vec<String> {
+    raw.get("topics")
+        .and_then(Value::as_array)
+        .map(|topics| {
+            topics
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
         })
-        .collect()
+        .unwrap_or_default()
 }
 
 /// A forge's answer as JSON; an empty body is `[]`, a legal and successful answer.
@@ -863,6 +896,29 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn a_listed_description_that_is_not_text_is_kept_as_python_would_print_it() {
+        // Stricter-than-a-crash rather than a port: Python's `(… or "").strip()` raises
+        // AttributeError on a truthy non-string and takes `discover` down with it. The Rust
+        // keeps `str()` of it instead, which is what this pins, and a falsy one is `""`.
+        let described = |d: Value| listed_description(&serde_json::json!({ "description": d }));
+        assert_eq!(described(serde_json::json!(5)), "5");
+        assert_eq!(described(serde_json::json!(0)), "");
+        assert_eq!(described(Value::Null), "");
+        assert_eq!(described(serde_json::json!(" kept ")), " kept ");
+    }
+
+    #[test]
+    fn a_listed_default_branch_that_is_null_or_empty_is_none() {
+        // `p.get("default_branch") or …`: both are falsy, and neither reads as a branch.
+        for empty in [Value::Null, serde_json::json!("")] {
+            let raw = serde_json::json!({ "default_branch": empty });
+            assert_eq!(listed_branch(&raw), None, "{empty}");
+        }
+        let raw = serde_json::json!({ "default_branch": "trunk" });
+        assert_eq!(listed_branch(&raw).as_deref(), Some("trunk"));
+    }
 
     /// charter-app#100's `PATH` joined with `:`, as it bit on unix: a forge CLI found under a
     /// `$HOME` with a colon in it — one of `programs::USER_BIN` — used to hand its child a

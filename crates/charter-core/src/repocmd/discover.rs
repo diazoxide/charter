@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use serde_json::Value;
 
 use super::{Say, Sink};
-use crate::forge::{self, Caller, Forge, py_str};
+use crate::forge::{self, Caller, Forge, Owner, RepoRecord, py_str};
 use crate::inventory;
 
 /// How many stack probes run at once. Python's `_build_batch` worker count.
@@ -58,13 +58,13 @@ pub fn discover(root: &Path, options: Options, say: Sink) -> u8 {
             say(Say::Plain(why.to_string()));
             return 1;
         }
-        let projects: Vec<Value> = match forge.backend().owned(&Caller::command(), owner) {
+        let owned = forge
+            .backend()
+            .owned(&Caller::command(), &Owner::new(owner.as_str()));
+        let projects: Vec<RepoRecord> = match owned {
             Ok(all) => all
                 .into_iter()
-                .filter(|p| {
-                    let name = p.get("name").and_then(Value::as_str).unwrap_or_default();
-                    !exclude.iter().any(|e| e == name)
-                })
+                .filter(|p| !exclude.contains(&p.name))
                 .collect(),
             Err(why) => {
                 say(Say::Plain(why.to_string()));
@@ -172,11 +172,11 @@ fn join(names: &[&String]) -> String {
 /// Every project as its inventory record, probing stacks eight at a time. Returns the
 /// records in the order the forge listed them, and how many probes FAILED — as opposed to
 /// found nothing.
-fn build_batch(forge: &Forge, projects: &[Value], no_probe: bool) -> (Vec<Value>, usize) {
+fn build_batch(forge: &Forge, projects: &[RepoRecord], no_probe: bool) -> (Vec<Value>, usize) {
     if no_probe {
         let records = projects
             .iter()
-            .map(|p| inventory::record(forge, p, "unknown"))
+            .map(|p| inventory::record(p, "unknown"))
             .collect();
         return (records, 0);
     }
@@ -193,7 +193,7 @@ fn build_batch(forge: &Forge, projects: &[Value], no_probe: bool) -> (Vec<Value>
                     let Some(project) = projects.get(i) else {
                         break;
                     };
-                    let git_ref = project.get("default_branch").and_then(Value::as_str);
+                    let git_ref = project.default_branch.as_deref();
                     let found = backend
                         .top_level(&Caller::command(), project, git_ref)
                         .map(|files| inventory::classify_stack(&files))
@@ -218,7 +218,7 @@ fn build_batch(forge: &Forge, projects: &[Value], no_probe: bool) -> (Vec<Value>
                     "unknown"
                 }
             };
-            inventory::record(forge, project, stack)
+            inventory::record(project, stack)
         })
         .collect();
     (records, failed)

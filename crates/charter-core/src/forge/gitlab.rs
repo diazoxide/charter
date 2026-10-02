@@ -5,7 +5,8 @@
 use serde_json::Value;
 
 use super::backend::{
-    Asker, Caller, Capabilities, Capability, Reach, Reason, Repos, Requests, Support, Unavailable,
+    Asker, Caller, Capabilities, Capability, ForgeRef, Owner, Reach, Reason, RepoRecord, Repos,
+    Requests, Support, Unavailable,
 };
 use super::checks::{self, Checks};
 use super::pr::{
@@ -14,8 +15,8 @@ use super::pr::{
 };
 use super::transport::{Call, Field, Method};
 use super::{
-    ForgeError, Kind, LIST_TIMEOUT, Raised, falsy, first_field, mapped, py_str, quote, truthy,
-    word_of,
+    ForgeError, Kind, LIST_TIMEOUT, Raised, falsy, first_field, listed_branch, listed_description,
+    listed_id, listed_str, listed_topics, mapped, quote, truthy, word_of,
 };
 
 /// The GitLab backend.
@@ -80,32 +81,23 @@ impl GitLab {
     }
 }
 
-/// One GitLab project in the shape every backend produces (Python's `_normalize`).
-fn normalize(raw: &Value) -> Value {
-    let get = |key: &str| raw.get(key).cloned().unwrap_or(Value::Null);
-    let text_or_empty = |key: &str| match raw.get(key) {
-        Some(v) if truthy(v) => v.clone(),
-        _ => Value::String(String::new()),
-    };
-    let name = match raw.get("path") {
-        Some(v) if truthy(v) => v.clone(),
-        _ => get("name"),
-    };
-    let topics = match raw.get("topics") {
-        Some(v) if truthy(v) => v.clone(),
-        _ => Value::Array(Vec::new()),
-    };
-    serde_json::json!({
-        "id": get("id"),
-        "name": name,
-        "path_with_namespace": get("path_with_namespace"),
-        "default_branch": get("default_branch"),
-        "description": text_or_empty("description"),
-        "web_url": text_or_empty("web_url"),
-        "ssh_url": text_or_empty("ssh_url_to_repo"),
-        "topics": topics,
-        "forge": Kind::GitLab.word(),
-    })
+/// One GitLab repo as a neutral record (Python's `_normalize`). Its name is its `path`, the
+/// name in its URL, else its display `name`.
+fn normalize(raw: &Value) -> RepoRecord {
+    let name = Some(listed_str(raw, "path"))
+        .filter(|p| !p.is_empty())
+        .unwrap_or_else(|| listed_str(raw, "name"));
+    RepoRecord {
+        id: listed_id(raw),
+        name,
+        path_with_namespace: listed_str(raw, "path_with_namespace"),
+        default_branch: listed_branch(raw),
+        description: listed_description(raw),
+        web_url: listed_str(raw, "web_url"),
+        ssh_url: listed_str(raw, "ssh_url_to_repo"),
+        topics: listed_topics(raw),
+        forge: Kind::GitLab,
+    }
 }
 
 /// The [`State`] a GitLab merge request record says. A merged MR names its squash commit, else
@@ -123,7 +115,8 @@ fn state_of(record: &Value, doing: &str) -> Result<State, ForgeError> {
 }
 
 impl Repos for GitLab {
-    fn owned(&self, caller: &Caller, owner: &str) -> Result<Vec<Value>, ForgeError> {
+    fn owned(&self, caller: &Caller, owner: &Owner) -> Result<Vec<RepoRecord>, ForgeError> {
+        let owner = owner.as_str();
         let enc = quote(owner);
         let raw = self.paged(caller, owner, |page| {
             format!(
@@ -133,20 +126,30 @@ impl Repos for GitLab {
         Ok(raw.iter().map(normalize).collect())
     }
 
-    fn reachable(&self, caller: &Caller, owner: &str) -> Result<Vec<Value>, ForgeError> {
-        let raw = self.paged(caller, owner, |page| {
+    fn reachable(&self, caller: &Caller, owner: &Owner) -> Result<Vec<RepoRecord>, ForgeError> {
+        let raw = self.paged(caller, owner.as_str(), |page| {
             format!("projects?membership=true&archived=false&per_page=100&page={page}")
         })?;
-        Ok(super::under_owner(raw.iter().map(normalize), owner))
+        Ok(raw
+            .iter()
+            .map(normalize)
+            .filter(|r| owner.holds(r))
+            .collect())
     }
 
     fn top_level(
         &self,
         caller: &Caller,
-        repo: &Value,
+        repo: &RepoRecord,
         git_ref: Option<&str>,
     ) -> Result<Vec<String>, ForgeError> {
-        let rid = quote(&py_str(repo.get("id").unwrap_or(&Value::Null)));
+        let Some(ForgeRef(id)) = &repo.id else {
+            return Err(ForgeError::new(format!(
+                "GitLab gave no id for {}, so its tree cannot be listed",
+                repo.path_with_namespace
+            )));
+        };
+        let rid = quote(id);
         let ref_q = git_ref
             .filter(|r| !r.is_empty())
             .map(|r| format!("&ref={}", quote(r)))

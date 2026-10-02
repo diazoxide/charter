@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
 
-use crate::forge::{self, Forge, Kind, py_str, truthy};
+use crate::forge::{self, Kind, RepoRecord, py_str};
 use crate::pyrepr::repr_str;
 use crate::worktree::git;
 
@@ -247,52 +247,32 @@ pub fn repos(root: &Path, doc: &Value, exclude: &[String]) -> Vec<Value> {
     out
 }
 
-/// One forge project as the record `discover` writes. Python's `commands._build_repo`, in its
+/// One listed repo as the record `discover` writes. Python's `commands._build_repo`, in its
 /// key order.
-pub fn record(forge: &Forge, project: &Value, stack: &str) -> Value {
-    let get = |key: &str| project.get(key).cloned().unwrap_or(Value::Null);
-    let name = get("name");
-    let default_branch = match project.get("default_branch") {
-        // Python writes `or "main"`, and the file keeps that: it is the plane format. What
-        // `clone` checks out is the remote's own HEAD, never this field.
-        Some(v) if truthy(v) => v.clone(),
-        _ => Value::String("main".into()),
-    };
-    let description = match project.get("description") {
-        Some(Value::String(s)) => py_strip(s).to_string(),
-        // Not Python's answer: its `.strip()` raises on a truthy non-string and `discover`
-        // dies there. This writes `str()` of it instead.
-        Some(v) if truthy(v) => py_str(v),
-        _ => String::new(),
-    };
-    let topics = match project.get("topics") {
-        Some(v) if truthy(v) => v.clone(),
-        _ => Value::Array(Vec::new()),
-    };
-    let stamp = match project.get("forge") {
-        Some(v) if truthy(v) => v.clone(),
-        _ => Value::String(forge.kind.word().into()),
-    };
+pub fn record(repo: &RepoRecord, stack: &str) -> Value {
+    let text = |s: &str| Value::String(s.to_string());
     let mut out = Map::new();
-    out.insert("name".into(), name.clone());
-    out.insert("path_with_namespace".into(), get("path_with_namespace"));
-    out.insert("ssh_url".into(), get("ssh_url"));
-    out.insert("default_branch".into(), default_branch);
+    out.insert("name".into(), text(&repo.name));
     out.insert(
-        "kind".into(),
-        Value::String(classify_kind(name.as_str().unwrap_or_default()).into()),
+        "path_with_namespace".into(),
+        text(&repo.path_with_namespace),
     );
-    out.insert("stack".into(), Value::String(stack.into()));
-    out.insert("description".into(), Value::String(description));
-    out.insert("topics".into(), topics);
+    out.insert("ssh_url".into(), text(&repo.ssh_url));
+    // Python writes `or "main"`, and the file keeps that: it is the plane format. What `clone`
+    // checks out is the remote's own HEAD, never this field.
     out.insert(
-        "web_url".into(),
-        project
-            .get("web_url")
-            .cloned()
-            .unwrap_or(Value::String(String::new())),
+        "default_branch".into(),
+        text(repo.default_branch.as_deref().unwrap_or("main")),
     );
-    out.insert("forge".into(), stamp);
+    out.insert("kind".into(), text(classify_kind(&repo.name)));
+    out.insert("stack".into(), text(stack));
+    out.insert("description".into(), text(py_strip(&repo.description)));
+    out.insert(
+        "topics".into(),
+        Value::Array(repo.topics.iter().map(|t| text(t)).collect()),
+    );
+    out.insert("web_url".into(), text(&repo.web_url));
+    out.insert("forge".into(), text(repo.forge.word()));
     Value::Object(out)
 }
 
@@ -723,22 +703,33 @@ mod tests {
         assert_eq!(names(&all), ["plane", "widget"]);
     }
 
-    #[test]
-    fn a_forge_project_becomes_the_record_discover_writes() {
-        // `commands._build_repo`: every field as the forge gave it when it is truthy.
-        let forge = Forge::default_of(Kind::GitHub);
-        let project = json!({
-            "name": "shop-frontend",
-            "path_with_namespace": "acme/shop-frontend",
-            "ssh_url": "git@github.com:acme/shop-frontend.git",
-            "default_branch": "trunk",
-            "description": "\u{1f}  The shop \n",
-            "topics": ["web"],
-            "web_url": "https://github.com/acme/shop-frontend",
-            "forge": "gitlab",
-        });
+    fn repo_named(name: &str) -> RepoRecord {
+        RepoRecord {
+            id: None,
+            name: name.into(),
+            path_with_namespace: format!("acme/{name}"),
+            default_branch: None,
+            description: String::new(),
+            web_url: String::new(),
+            ssh_url: format!("git@github.com:acme/{name}.git"),
+            topics: Vec::new(),
+            forge: Kind::GitHub,
+        }
+    }
 
-        let made = record(&forge, &project, "node");
+    #[test]
+    fn a_listed_repo_becomes_the_record_discover_writes() {
+        // `commands._build_repo`: every field as the forge gave it, in Python's key order.
+        let repo = RepoRecord {
+            default_branch: Some("trunk".into()),
+            description: "\u{1f}  The shop \n".into(),
+            topics: vec!["web".into()],
+            web_url: "https://gitlab.com/acme/shop-frontend".into(),
+            forge: Kind::GitLab,
+            ..repo_named("shop-frontend")
+        };
+
+        let made = record(&repo, "node");
 
         assert_eq!(
             made,
@@ -751,7 +742,7 @@ mod tests {
                 "stack": "node",
                 "description": "The shop",
                 "topics": ["web"],
-                "web_url": "https://github.com/acme/shop-frontend",
+                "web_url": "https://gitlab.com/acme/shop-frontend",
                 "forge": "gitlab",
             })
         );
@@ -780,48 +771,16 @@ mod tests {
     }
 
     #[test]
-    fn a_forge_project_with_empty_fields_gets_pythons_or_defaults() {
+    fn a_listed_repo_with_empty_fields_gets_pythons_or_defaults() {
         // `p.get("default_branch") or "main"`, `(p.get("description") or "").strip()`,
-        // `p.get("topics") or []`, `p.get("forge") or forge.kind`: a null and an empty value
-        // are both falsy, and neither is written through.
-        let forge = Forge::default_of(Kind::GitHub);
-        for empty in [Value::Null, json!("")] {
-            let project = json!({
-                "name": "legacy",
-                "path_with_namespace": "acme/legacy",
-                "ssh_url": "git@github.com:acme/legacy.git",
-                "default_branch": empty,
-                "description": Value::Null,
-                "topics": Value::Null,
-                "forge": empty,
-            });
+        // `p.get("topics") or []`: an empty field is written as Python's default.
+        let made = record(&repo_named("legacy"), "unknown");
 
-            let made = record(&forge, &project, "unknown");
-
-            assert_eq!(made["default_branch"], json!("main"), "{empty}");
-            assert_eq!(made["description"], json!(""), "{empty}");
-            assert_eq!(made["topics"], json!([]), "{empty}");
-            assert_eq!(made["forge"], json!("github"), "{empty}");
-            assert_eq!(made["web_url"], json!(""), "a missing web_url is `\"\"`");
-        }
-    }
-
-    #[test]
-    fn a_description_that_is_not_text_is_written_as_python_would_print_it() {
-        // Stricter-than-a-crash rather than a port: Python's `(… or "").strip()` raises
-        // AttributeError on a truthy non-string and takes `discover` down with it. The Rust
-        // writes `str()` of it instead, which is what this pins — and a falsy one is `""`.
-        let forge = Forge::default_of(Kind::GitHub);
-        let project = |description: Value| json!({"name": "x", "path_with_namespace": "acme/x", "description": description});
-
-        assert_eq!(
-            record(&forge, &project(json!(5)), "unknown")["description"],
-            json!("5")
-        );
-        assert_eq!(
-            record(&forge, &project(json!(0)), "unknown")["description"],
-            json!("")
-        );
+        assert_eq!(made["default_branch"], json!("main"));
+        assert_eq!(made["description"], json!(""));
+        assert_eq!(made["topics"], json!([]));
+        assert_eq!(made["forge"], json!("github"));
+        assert_eq!(made["web_url"], json!(""), "a missing web_url is `\"\"`");
     }
 
     #[test]

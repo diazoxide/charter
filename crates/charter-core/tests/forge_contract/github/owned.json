@@ -13,7 +13,7 @@
       },
       "reply": {
         "code": 0,
-        "out": "[{\"id\": 1, \"name\": \"api\", \"full_name\": \"acme/api\", \"default_branch\": \"main\", \"description\": null, \"html_url\": \"https://github.com/acme/api\", \"ssh_url\": \"git@github.com:acme/api.git\", \"topics\": []}, {\"id\": 2, \"name\": \"web\", \"full_name\": \"acme/web\", \"default_branch\": \"main\", \"description\": null, \"html_url\": \"https://github.com/acme/web\", \"ssh_url\": \"git@github.com:acme/web.git\", \"topics\": []}]",
+        "out": "[{\"id\": 1, \"name\": \"api\", \"full_name\": \"acme/api\", \"default_branch\": \"main\", \"description\": null, \"html_url\": \"https://github.com/acme/api\", \"ssh_url\": \"git@github.com:acme/api.git\", \"topics\": []}, {\"id\": 2, \"name\": \"web\", \"full_name\": \"acme/web\", \"default_branch\": \"main\", \"description\": null, \"html_url\": \"https://github.com/acme/web\", \"ssh_url\": \"git@github.com:acme/web.git\", \"topics\": [\"frontend\"]}]",
         "err": ""
       }
     }
