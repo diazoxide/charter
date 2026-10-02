@@ -318,12 +318,17 @@ The process that owns every chat's terminal on a device, one per OS user per dev
 _Avoid_: daemon, server (in UI text), backend
 
 **Runner**:
-A device, other than the one the window is on, whose own session host runs a workspace's chats.
-The desktop's session host reaches it through a **connector** and talks to it over a **link**.
-It keeps its own device id, event log, audit chain and kill switch, and it needs no server
-charter runs. A runner is a device, so it belongs to **Project**; which runner a workspace's
-chats run on is a **Workspace** setting (ADR 0072 §2, ADR 0078).
-_Avoid_: remote (unqualified), agent host, worker, server (in UI text)
+A device, other than the one the window is on, whose own session host runs a workspace's chats,
+serves a version of one of its repos, or runs browsers, as its **label** says. A long-lived runner
+is a machine the operator adds; a short-lived one is made by a **provider** for a human or a chat,
+for minutes or hours. Either way the desktop's session host reaches it through a **connector** and
+talks to it over a **link**, and its shell, logs, ports and browser views come only that way. It
+keeps its own device id, event log, audit chain and kill switch, and it needs no server charter
+runs. A short-lived runner belongs to the chat that started it, or to the workspace when a human
+pins it there. A runner is a device, so it belongs to **Project**; which runner a workspace's
+chats run on is a **Workspace** setting, and the **Runners** view tab shows a workspace's runners
+(ADR 0072 §2, ADR 0078, ADR 0089).
+_Avoid_: remote (unqualified), agent host, worker, server (in UI text), sandbox, environment, box
 
 **Connector**:
 The command whose stdin and stdout reach a runner's session host: `ssh <alias>`,
@@ -340,6 +345,29 @@ was added, in a Noise `XX` handshake. The desktop always opens it. It belongs to
 with the two devices it joins (ADR 0072 §2, ADR 0078).
 _Avoid_: connection (unqualified), session (that is the process), pairing (that is how the keys
 were pinned)
+
+**Label** (of a runner):
+What a runner is for: exactly one of `harness` (runs chats), `app` (serves one version of a
+workspace repo) or `browser` (runs browsers only charter drives). charter enforces it at both
+ends of the link: only a `harness` runner starts chats, and a `browser` runner never receives a
+vault value. Tags, any words the operator picks, sit beside it and are enforced by nothing. A
+part of **Runner**, so it belongs to **Project** (ADR 0089).
+_Avoid_: role (unqualified), type, capability (that is an extension's), tag (for the role label)
+
+**Provider** (of runners):
+What makes and destroys short-lived runners and hands back a connector to each: Docker or Podman
+in charter's core, or an extension on the provider seam for anything else. It declares which
+labels it may make. A part of **Project**, beside the extensions it is one of (ADR 0078 §6,
+ADR 0089).
+_Avoid_: backend (in UI text), executor, cloud, connector (that only reaches a runner), provider
+(unqualified, beside a **model source**'s)
+
+**Grant** (to a runner):
+A human's approval, once per workspace on this machine, of one vault entry an app runner's spec
+declares it needs. charter injects the value when that runner starts, never into its image or
+logs. An agent may start a runner with the grants it has and never adds one; a `browser` runner
+never gets one. A setting of **Workspace** (ADR 0089).
+_Avoid_: permission, secret (for the approval), capability (that is an extension's)
 
 **Editor protocol**:
 The part of the session host's public protocol an editor integration speaks: find which chat or
@@ -418,7 +446,8 @@ _Avoid_: tab bar, scroller
 **Pin**:
 One operator's mark that a project, workspace or chat matters to them. It is kept on this
 machine and never in the plane. A pinned item is drawn first, and the workspace strip draws
-only pinned workspaces plus the one you are in.
+only pinned workspaces plus the one you are in. A runner pinned to its workspace is a different
+act: the workspace, not the chat, then owns it, and it outlives the chat (ADR 0089).
 _Avoid_: favourite, star, bookmark
 
 **Show-more**:
@@ -610,7 +639,7 @@ _Avoid_: bundled plugin, first-party plugin, core extension
 One thing charter does for an extension that asked for it in its manifest and was approved,
 such as showing a badge or adding a CLI command. It describes charter's conduct, never a limit
 on the extension.
-_Avoid_: permission, grant (as a noun in UI text), power
+_Avoid_: permission, grant (that is a runner's **Grant**), power
 
 **Facts file**:
 A file an extension keeps in its own state directory, holding the values charter shows for it
