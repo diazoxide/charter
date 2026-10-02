@@ -126,6 +126,7 @@ prose under another heading, which is why every store gets a heading or a row.
   - [`workspaces/<ws>/workspace.json` — the committed manifest](#workspaceswsworkspacejson--the-committed-manifest)
   - [`workspaces/<ws>/memory/` — the task journal](#workspaceswsmemory--the-task-journal)
   - [`workspaces/<ws>/todos/`](#workspaceswstodos)
+  - [`workspaces/<ws>/work/<device>.jsonl` — the work link log](#workspaceswsworkdevicejsonl--the-work-link-log)
   - [`workspaces/<ws>/refs/README.md` (and whatever else the operator drops in `refs/`)](#workspaceswsrefsreadmemd-and-whatever-else-the-operator-drops-in-refs)
   - [`workspaces/<ws>/sessions/` and `sessions/` — session records](#workspaceswssessions-and-sessions--session-records)
   - [`.charter/sessions/<chat>.saved` and `workspaces/<ws>/.charter/sessions/<chat>.saved` — a saved record to pass on](#chartersessionschatsaved-and-workspaceswschartersessionschatsaved--a-saved-record-to-pass-on)
@@ -1348,6 +1349,36 @@ and an archived one is where `memstore.archive` would have put it (ADR 0065).
   filename's second resolution (whole seconds, ties broken alphabetically,
   `charter/todos.py:93`, `charter/memstore.py:119`). Age comes from the in-body `_YYYY-MM-DD` stamp, falling back
   to the filename prefix (`charter/memstore.py:150`).
+
+### `workspaces/<ws>/work/<device>.jsonl` — the work link log
+
+- **Format:** JSON Lines, one object per line, append-only, one file per device: `<device>` is
+  this device's id from the machine store (ADR 0066), never a hostname.
+- **Status:** **accepted, not yet written** ([ADR
+  0088](adr/0088-a-work-items-identity-is-its-tracker-key-and-the-project-records-its-links.md),
+  V40). FW-5 (#732) writes it; nothing writes or reads it yet.
+- **Tier:** Plane when LIVE, Clone state when LOCAL — committed with a LIVE workspace, as its todos are, because FI6's links must reach the operator's other devices; unlike the piece claim log and the landing log, which stay in their clone.
+- **Written by:** FW-5: a chat's link and unlink from the window and the host, a workspace's link
+  from the Work list, `charter ws todo promote` (a `promoted` alias), `workspace rename` (`renamed`
+  aliases) and the item cache, FW-7 (`moved` aliases).
+- **Read by:** the Work list and the board (FW-9), a chat's header, and anything that resolves a
+  tracker key through its aliases.
+- **Git:** committed when LIVE. With FW-5 the LIVE block gains `!/workspaces/<n>/work` and
+  `!/workspaces/<n>/work/**`, a LIVE workspace's staged paths gain `work`, and the
+  `.gitattributes` block gains `workspaces/*/work/*.jsonl merge=union`. `workspace fork` does not
+  copy it.
+- **Encoding details:** each line is one of four closed key sets, `v` being `1` and `ts` UTC
+  ISO-8601 seconds; `item`, `from` and `to` are tracker keys (ADR 0088 §1) and `chat` a chat's
+  ULID. A line with any other key set, `op` or `cause` is skipped and counted in `doctor`.
+  Readers fold every file in `work/`, sorted by `ts`, then file name, then line. A line never
+  holds an item's title, body, labels, state or forge id, nor the local principal.
+
+| Line | Keys | Meaning |
+|---|---|---|
+| workspace link | `v`, `ts`, `op: "link"`, `item` | the workspace holds the item |
+| chat link | `v`, `ts`, `op: "link"`, `item`, `chat` | the chat works on the item; the last one per chat, across every workspace, wins |
+| unlink | `v`, `ts`, `op: "unlink"`, `item`, and `chat` for a chat's | the link ends |
+| alias | `v`, `ts`, `op: "alias"`, `from`, `to`, `cause` | `from` resolves to `to`; `cause` is `promoted`, `moved` or `renamed` |
 
 ### `workspaces/<ws>/refs/README.md` (and whatever else the operator drops in `refs/`)
 

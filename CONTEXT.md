@@ -75,6 +75,24 @@ tracker). A chat links to at most one; a work item may have many chats. It is pa
 Workspace, shown in its Work section, and never a sixth concept (ADR 0072).
 _Avoid_: task, ticket (in UI text), card (that is how a board draws one)
 
+**Tracker key**:
+A work item's identity: the tracker's name and the item's own reference where it lives, such as
+`github:github.com/owner/repo#12` or `todo:<workspace>/<todo>`. Two devices name the same item
+the same way. When an item moves, its old key is kept and points to the new one. It belongs to
+**Workspace**, with the work item it names (ADR 0088).
+_Avoid_: issue id, forge id (that is the forge's own identifier, which travels beside the key)
+
+**Work link**:
+A workspace's or a chat's record that it works on a work item. A chat has at most one; a
+workspace may have many. The project keeps them, so they reach every device. It belongs to
+**Workspace** (ADR 0088).
+_Avoid_: link (unqualified: that is the runner link), relation
+
+**Relation** (between work items):
+How one work item stands to another: a pull or merge request that closes it, blocked-by, or
+parent and child. It belongs to **Workspace**, with the work items it joins (ADR 0088).
+_Avoid_: link (unqualified), dependency (that is one kind of relation)
+
 **Plane root**:
 The plane's own directory, as a place a chat works — and anywhere else in the plane that is no
 workspace's, such as `docs/`: the workspace strip's first tab, drawn as an icon, always there. A chat started there is in no workspace on purpose — it looks after the
