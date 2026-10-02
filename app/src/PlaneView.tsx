@@ -99,7 +99,7 @@ import {
   type Resuming,
 } from "./sessions";
 import { useExtensionFacts } from "./extensionFacts";
-import { usePlaneChanged } from "./planeChanged";
+import { ROOT_PANELS, SIDEBAR, usePlaneChanged, workspaceInterest } from "./planeChanged";
 import { PlaneUpdatedMark, usePlaneUpdated, type PlaneUpdates } from "./PlaneUpdated";
 import { inSlots, SIDES, useArrangement } from "./regions";
 import { RegionFrame } from "./RegionFrame";
@@ -368,9 +368,12 @@ export function PlaneView({
    */
   const [rereadWorkspace, setRereadWorkspace] = useState(0);
   /** Bumped when the core says this plane changed on disk (charter-app#264): a todo closed in
-   *  a terminal, a workspace another chat made. The sidebar and the focused workspace's panels
-   *  are read again on it. */
+   *  a terminal, a workspace another chat made — whatever changed. The sidebar and the panels
+   *  count only the kinds they are made of, below (FD-10). */
   const changesOnDisk = usePlaneChanged([plane]);
+  /** The same, counting only the changes the sidebar is made of (FD-10): a memory an agent
+   *  saves does not make it list every workspace's todos again. */
+  const sidebarChanges = usePlaneChanged([plane], SIDEBAR);
   /** The chats running on instructions the plane has changed since they started (charter#369),
    *  each marked on its tab. */
   const planeUpdates = usePlaneUpdated(plane, changesOnDisk);
@@ -741,8 +744,9 @@ export function PlaneView({
   // The sidebar is read from the plane, and re-read whenever the chats change: the plane is a
   // directory the operator also edits by hand and another charter process writes, so there is
   // nothing to invalidate a cache of it. `tabs` is the dependency because opening or ending a
-  // chat is what this window can change about the answer, and `changesOnDisk` because the core
-  // says when something else changed it (charter-app#264).
+  // chat is what this window can change about the answer, and `sidebarChanges` because the core
+  // says when something else changed it (charter-app#264) — a change of a kind the sidebar
+  // reads (FD-10).
   useEffect(() => {
     void commands
       .planeSidebar(plane)
@@ -793,7 +797,7 @@ export function PlaneView({
       })
       // A window with no readable plane still runs its panes; the header already says so.
       .catch(() => setSidebar(undefined));
-  }, [change, changesOnDisk, plane, replan, startedIn, tabs]);
+  }, [change, sidebarChanges, plane, replan, startedIn, tabs]);
 
   /**
    * What the machine store says this operator has pinned here, and what it says is gone.
@@ -996,9 +1000,13 @@ export function PlaneView({
   // replies.
   useProjectThemeKept(plane, ofWorkspace);
   useRepoSavingKept(plane, ofWorkspace);
-  const workspaceState = useWorkspaceState(plane, ofWorkspace, rereadWorkspace, changesOnDisk);
+  /** The changes the focused workspace's panels are made of (FD-10): its own, and the
+   *  personas'. A todo closed in another workspace does not read this one again. */
+  const workspaceChanges = usePlaneChanged([plane], workspaceInterest(ofWorkspace ?? ""));
+  const workspaceState = useWorkspaceState(plane, ofWorkspace, rereadWorkspace, workspaceChanges);
   /** The plane root's own panels — its session records (SI-8d) — while it is focused. */
-  const rootPanels = usePlaneRootPanels(plane, focused === OUTSIDE, changesOnDisk);
+  const rootChanges = usePlaneChanged([plane], ROOT_PANELS);
+  const rootPanels = usePlaneRootPanels(plane, focused === OUTSIDE, rootChanges);
   /** The badges and repo columns the extensions on here show (charter-app#340). */
   const facts = useExtensionFacts(plane, ofWorkspace);
   /** What `charter doctor` says about this project, run inside the app: the preflight when

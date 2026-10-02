@@ -684,7 +684,7 @@ impl Planes {
             // Nobody to tell yet. A registry with no window still opens a handed-off chat;
             // it simply has no strip to put it on until one asks what is open.
             arrivals: Arc::new(|_| {}),
-            changes: Arc::new(|_| {}),
+            changes: Arc::new(|_, _| {}),
             saves: Arc::new(|_, _| {}),
             by_hand: Arc::new(|_| {}),
             smart: Arc::new(|_| {}),

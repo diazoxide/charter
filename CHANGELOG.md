@@ -296,6 +296,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A memory or session record written by an agent shows up in its panel straight away.**
+  Before, a workspace's or persona's `memory/`, and the session records in `sessions/`, reached
+  the Memory, Personas and Sessions panels only when something else in the project changed.
+  Each panel now reads again only for the kind of change it draws. A todo closed in one
+  workspace no longer re-reads another workspace's panels, and a memory saved no longer re-reads
+  the sidebar (FD-10).
 - **`charter guard ask` never turns a command opencode denies into one it asks about.** opencode
   goes by the last rule that matches a command, so a rule added after `"*": "deny"` used to win
   over it, and a rule for a command that was denied exactly used to replace the deny. Now a

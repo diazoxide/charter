@@ -1379,6 +1379,12 @@ export type ByHand = {
 };
 
 /**
+ *  What one changed path is part of, as the window's readers divide the plane
+ *  ([`charter_core::planechange::Kind`], which this mirrors for the bindings).
+ */
+export type ChangeKind = "project" | "harness" | "workspace" | "todos" | "memory" | "sessions" | "persona";
+
+/**
  *  Where one change's member list is in a changes view, sent with its blocks
  *  (`change::view::ChangeAt`): what Push and Land act on.
  */
@@ -2527,12 +2533,30 @@ export type PlaneAlerts = {
 	stopped: string | null,
 };
 
+/**  One changed path ([`charter_core::planechange::Change`], mirrored for the bindings). */
+export type PlaneChange = {
+	kind: ChangeKind,
+	/**  The workspace it is in, where it is in one. */
+	workspace: string | null,
+	/**  The persona it belongs to, where it belongs to one (`_shared` for the shared store). */
+	persona: string | null,
+	/**  Relative to the plane root, `/` between its parts. */
+	path: string,
+};
+
 /**
- *  What `plane-changed` carries: which plane moved. Every window filters on it, as it filters
- *  `chat-moved`, because the app holds several planes and emits on the app.
+ *  What `plane-changed` carries: which plane moved, and what moved in it. Every window filters
+ *  on the plane, as it filters `chat-moved`, because the app holds several planes and emits on
+ *  the app.
  */
 export type PlaneChanged = {
 	plane: PlaneId,
+	/**
+	 *  Each changed path and what it is part of, or `null` when what changed is not known —
+	 *  a batch this could not place, or auto-save having committed — and every reader reads
+	 *  again.
+	 */
+	changes: PlaneChange[] | null,
 };
 
 /**
