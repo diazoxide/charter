@@ -11,7 +11,9 @@ else: the git repository where charter keeps your workspaces, personas, memory a
 
 - A Mac with Apple Silicon, or a Linux machine on x86_64. There is no Windows build yet.
 - At least one harness, the coding agent a chat runs: Claude Code (`claude`), Codex or
-  opencode. Each one signs in with its own login, the first time a chat starts it.
+  opencode. Each one signs in with its own login, the first time a chat starts it. With none
+  installed, charter lists each one's official installer once your repo is open, and
+  **Install** runs it in a shell tab.
 - GitLab's own command-line tool, [`glab`](https://gitlab.com/gitlab-org/cli), signed in with
   `glab auth login` (add `--hostname <host>` for a self-managed GitLab). charter lists your
   repos, clones them and opens merge requests through `glab`, as you: it keeps no GitLab token
