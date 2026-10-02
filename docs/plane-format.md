@@ -131,9 +131,9 @@ prose under another heading, which is why every store gets a heading or a row.
   - [`workspaces/<ws>/sessions/` and `sessions/` — session records](#workspaceswssessions-and-sessions--session-records)
   - [`.charter/sessions/<chat>.saved` and `workspaces/<ws>/.charter/sessions/<chat>.saved` — a saved record to pass on](#chartersessionschatsaved-and-workspaceswschartersessionschatsaved--a-saved-record-to-pass-on)
   - [`workspaces/<ws>/changes/<slug>.json` — a cross-repo change](#workspaceswschangesslugjson--a-cross-repo-change)
-  - [`workspaces/<ws>/changes/log/<host>.jsonl` — the landing log](#workspaceswschangesloghostjsonl--the-landing-log)
-  - [`workspaces/<ws>/changes/log/pending/<host>.jsonl` — pending landings](#workspaceswschangeslogpendinghostjsonl--pending-landings)
-  - [`workspaces/<ws>/pieces/<host>.jsonl` — the piece claim log](#workspaceswspieceshostjsonl--the-piece-claim-log)
+  - [`workspaces/<ws>/changes/log/<device>.jsonl` — the landing log](#workspaceswschangeslogdevicejsonl--the-landing-log)
+  - [`workspaces/<ws>/changes/log/pending/<device>.jsonl` — pending landings](#workspaceswschangeslogpendingdevicejsonl--pending-landings)
+  - [`workspaces/<ws>/pieces/<device>.jsonl` — the piece claim log](#workspaceswspiecesdevicejsonl--the-piece-claim-log)
   - [`workspaces/<ws>/pieces/seen/<repo>.json` and `pieces/seen/<repo>/<piece>.json`](#workspaceswspiecesseenrepojson-and-piecesseenrepopiecejson)
   - [`workspaces/<ws>/.charter-structure` — the layout stamp](#workspaceswscharter-structure--the-layout-stamp)
   - [`workspaces/<ws>/.charter-generated` — the harness-layer ownership marker](#workspaceswscharter-generated--the-harness-layer-ownership-marker)
@@ -157,9 +157,9 @@ prose under another heading, which is why every store gets a heading or a row.
   - [`personas/<name>/curation/<id>.md` — a curation action](#personasnamecurationidmd--a-curation-action)
   - [`personas/_shared/` (`memory/`, `refs/`)](#personas_shared-memory-refs)
   - [`personas/.default` (legacy)](#personasdefault-legacy)
-  - [`personas/_dispatch/<YYYY-MM>.<host>.jsonl`](#personas_dispatchyyyy-mmhostjsonl)
+  - [`personas/_dispatch/<YYYY-MM>.<device>.jsonl`](#personas_dispatchyyyy-mmdevicejsonl)
   - [`personas/_dispatch/<YYYY-MM>.<host>.backfill.jsonl`](#personas_dispatchyyyy-mmhostbackfilljsonl)
-  - [`personas/_skills/<YYYY-MM>.<host>.jsonl`](#personas_skillsyyyy-mmhostjsonl)
+  - [`personas/_skills/<YYYY-MM>.<device>.jsonl`](#personas_skillsyyyy-mmdevicejsonl)
   - [`.claude/agents/<name>.md` (generated sub-agent)](#claudeagentsnamemd-generated-sub-agent)
   - [`.charter/persona-state/ephemeral/<session>/<name|_shared>/<slug>.md`](#charterpersona-stateephemeralsessionname_sharedslugmd)
   - [`.charter/persona-state/trace/<session>.jsonl`](#charterpersona-statetracesessionjsonl)
@@ -537,7 +537,7 @@ Paths derived from the root (all in `derive`, `charter/config.py:661`) that land
 | `[plane].worktrees` | str | optional; `None` = `workspaces/<ws>/.worktrees/` | Relocated worktree root. Relative resolves against ROOT; a committed value must satisfy `contain.plane_adjacent` or it is ignored (doctor warns). `$CHARTER_WORKTREES` overrides and is unrestricted. | stable | `charter/instance.py:488`, `charter/config.py:82` |
 | `[plane].mode` | str | optional; closed set `off`,`commit`,`push`,`pr`,`pr-merge`; absent = `[memory].share`'s alias when that is `commit` or `push`, else **ask once** (the Saving view asks before anything is pushed); a new plane is written with `push` | **charter-app only.** How far a save of the plane goes, as a ladder: `off` never commits; `commit` commits locally; `push` also pushes to `branch`; `pr` pushes to `save_branch` and opens or updates one PR/MR into `branch`; `pr-merge` also sets that PR to auto-merge. `pr`/`pr-merge` on an origin that is not a GitHub or GitLab forge charter knows is a config error (doctor, the settings tab): saves stop at a local commit, shown as a notice, and the plane is not blocked. Unknown value → refused by the settings tab, read as absent. | stable | ADR 0051; `crates/charter-core/src/planesave.rs`, `crates/charter-core/src/planegit/prsave.rs` |
 | `[plane].branch` | str | optional; default the branch the plane has checked out | **charter-app only.** The *target* branch the plane is saved into. A save whose plane has another branch checked out commits and does not push: pushing would rebase that branch onto this one (ADR 0051). | stable | ADR 0051; `crates/charter-core/src/planesave.rs`, `crates/charter-core/src/planegit.rs` |
-| `[plane].save_branch` | str | optional; default `charter/save/<host>-<clone>`: `<host>` is the machine's name as the dispatch log writes it, `<clone>` the first six hex digits of the SHA-256 of the plane's absolute path, so two clones, or two machines with one name, never share one | **charter-app only.** The one rolling branch per clone that `pr`/`pr-merge` push to; one PR from it is kept open and updated by every save. Replaces the per-push `charter/<sha>` branch for the PR modes. Only this branch is ever force-pushed, with `--force-with-lease` against the commit this clone last pushed there (`save-branch.json`); with none kept it is leased as absent, and an existing branch is pushed over only when its tip is already in HEAD's history — otherwise the plane is blocked. Must not be the target branch (a config error, and the plane is blocked). A value shared in `charter.toml` is one branch for every clone, and the lease then blocks all but the first. | stable | ADR 0051; `crates/charter-core/src/planegit/prsave.rs` (charter-app#298) |
+| `[plane].save_branch` | str | optional; default `charter/save/<host>-<clone>`: `<host>` is the machine's short hostname, by the rule the dispatch log used before FD-25 (`dispatch::host`); a branch name is something the operator reads, so it stays a name (ADR 0066), `<clone>` the first six hex digits of the SHA-256 of the plane's absolute path, so two clones, or two machines with one name, never share one | **charter-app only.** The one rolling branch per clone that `pr`/`pr-merge` push to; one PR from it is kept open and updated by every save. Replaces the per-push `charter/<sha>` branch for the PR modes. Only this branch is ever force-pushed, with `--force-with-lease` against the commit this clone last pushed there (`save-branch.json`); with none kept it is leased as absent, and an existing branch is pushed over only when its tip is already in HEAD's history — otherwise the plane is blocked. Must not be the target branch (a config error, and the plane is blocked). A value shared in `charter.toml` is one branch for every clone, and the lease then blocks all but the first. | stable | ADR 0051; `crates/charter-core/src/planegit/prsave.rs` (charter-app#298) |
 | `[plane].sign` | bool | optional; default `false` | **charter-app only.** Sign save commits. (ADR 0051 also has a push refused for an unsigned commit tell the operator to set this; that hint is not built.) | stable | ADR 0051; `crates/charter-core/src/planesave.rs`, `crates/charter-core/src/planegit.rs` |
 | `[plane].autosave` | bool | optional; default `true` | **charter-app only.** Save by itself: after `autosave_after` of quiet, when a session ends, and when the app quits (the push gets about five seconds; the next launch pushes what was left). Also fast-forwards a clean tree from the remote every five minutes and on window focus; with `false`, incoming commits are shown, not pulled. | stable | ADR 0051; `crates/charter-core/src/autosave.rs`, `app/src-tauri/src/autosave.rs` |
 | `[plane].autosave_after` | str | optional; default `"30s"`; a whole number followed by `s` or `m` | **charter-app only.** The quiet period after the last change before an auto-save. | stable | ADR 0051; `crates/charter-core/src/planesave.rs`, `crates/charter-core/src/autosave.rs` |
@@ -1593,7 +1593,7 @@ and an archived one is where `memstore.archive` would have put it (ADR 0065).
 | `excluded[].why` | string | required, one line | why it is out | stable | `charter/change.py:561` |
 | `excluded[].at` | string | required | UTC ISO-8601 seconds when it was dropped | stable | `charter/commands_change.py:321` |
 
-### `workspaces/<ws>/changes/log/<host>.jsonl` — the landing log
+### `workspaces/<ws>/changes/log/<device>.jsonl` — the landing log
 
 - **Format:** JSON Lines, one object per line, `O_APPEND`, no lock.
 - **Status:** stable — it is read by a *different* process from the one that wrote it (the
@@ -1617,9 +1617,16 @@ and an archived one is where `memstore.archive` would have put it (ADR 0065).
 - **Git:** committed **never** — `/workspaces/<ws>/changes/log/` re-ignored inside the LIVE
   block (`charter/workspace.py:1401`), and `_ws_meta_paths` stages `changes/` only when
   `change.has_records` is true (`charter/commands_workspace.py:1119`).
-- **Encoding details:** filename is the short hostname, `socket.gethostname().split(".")[0]`
-  with every character outside `[A-Za-z0-9_-]` removed, truncated to 32, `"unknown"` when
-  empty (`charter/change.py:142`, `charter/pieces.py:71`). The line is
+- **Encoding details:** filename is **the device's name for its logs** (FD-25, ADR 0066):
+  this device's id from the machine store (`machine.json`'s `device`), a ULID, so two machines
+  that share a hostname write two files and a renamed machine keeps its one. Before that id is
+  minted (the first launch that finds none), or where the store keeps none (ADR 0031), it is
+  the short hostname the Python charter used: `socket.gethostname().split(".")[0]` with every
+  character outside `[A-Za-z0-9_-]` removed, truncated to 32, `"unknown"` when empty
+  (`charter/change.py:142`, `charter/pieces.py:71`). Writing a line never mints the id
+  (`charter_core::dispatch::log_name`). A file named by a hostname that an earlier version
+  wrote is still read beside the new one, since every reader reads every file in the
+  directory; FR-9 renames those (#607). The line is
   `contain.json_line(line, sort_keys=True) + "\n"` — **keys sorted, `ensure_ascii=True`**
   (`charter/commands_change.py:1099`, `charter/contain.py:473`), written with
   `os.open(..., O_WRONLY|O_CREAT|O_APPEND, 0o644)` (`charter/commands_change.py:1100`).
@@ -1635,7 +1642,7 @@ and an archived one is where `memstore.archive` would have put it (ADR 0065).
 | `merge` | string | required | sha of the merge commit charter created | stable | `charter/change.py:113` |
 | `head` | string | required | the member branch tip it was created from | stable | `charter/change.py:113` |
 
-### `workspaces/<ws>/changes/log/pending/<host>.jsonl` — pending landings
+### `workspaces/<ws>/changes/log/pending/<device>.jsonl` — pending landings
 
 - **Format:** JSON Lines, one object per line, `O_APPEND`, no lock; keys sorted, ASCII only.
 - **Status:** stable — written by one `charter change land` and read by a later one and by
@@ -1656,6 +1663,8 @@ and an archived one is where `memstore.archive` would have put it (ADR 0065).
   `land` matches the request and its head, doctor the head of the member's pushed branch.
 - **Git:** committed **never** — under `/workspaces/<ws>/changes/log/`, which the LIVE block
   re-ignores.
+- **Encoding details:** filename `<device>.jsonl`, named as the landing log is (FD-25: the
+  device id, the short hostname only before one is minted).
 
 | Field | Type | Required / default | Meaning | Status | Source |
 |---|---|---|---|---|---|
@@ -1667,7 +1676,7 @@ and an archived one is where `memstore.archive` would have put it (ADR 0065).
 | `via` | string | required | `direct` or `queue` | stable | `change::pending` |
 | `stage` | string | required | `asked`, `refused` or `merge-later` | stable | `change::pending` |
 
-### `workspaces/<ws>/pieces/<host>.jsonl` — the piece claim log
+### `workspaces/<ws>/pieces/<device>.jsonl` — the piece claim log
 
 - **Format:** JSON Lines, `O_APPEND`, no lock.
 - **Status:** stable — written by `charter wt add`/`wt done` and read by the status line,
@@ -1681,8 +1690,10 @@ and an archived one is where `memstore.archive` would have put it (ADR 0065).
   (`charter/pieces.py:368`).
 - **Git:** never committed — `pieces` is deliberately absent from the LIVE block
   (`charter/pieces.py:49`), so `/workspaces/*/*` keeps it ignored.
-- **Encoding details:** filename `<host>.jsonl`, same host rule as above
-  (`charter/pieces.py:85`, `charter/pieces.py:71`). Line is
+- **Encoding details:** filename `<device>.jsonl`, named as the landing log is (above:
+  the device id, the short hostname only before one is minted; `charter/pieces.py:85`,
+  `charter/pieces.py:71`). The line's `host` stays the short hostname: a label for whoever
+  reads the claim, never what the file is keyed by. Line is
   `json.dumps(line, sort_keys=True) + "\n"` (`charter/pieces.py:120`), `0o644`,
   `O_APPEND` (`charter/pieces.py:122`). A malformed line is skipped
   (`charter/pieces.py:159`); events are sorted by `ts` (`charter/pieces.py:164`).
@@ -1697,7 +1708,7 @@ and an archived one is where `memstore.archive` would have put it (ADR 0065).
 | `repo` | string | required | clone the worktree belongs to | stable | `charter/pieces.py:107` |
 | `piece` | string | required | the worktree/piece name | stable | `charter/pieces.py:108` |
 | `session` | string or null | required key | `session.current()` at write time | stable | `charter/pieces.py:109` |
-| `host` | string | required | short hostname | stable | `charter/pieces.py:110` |
+| `host` | string | required | short hostname, as a label: the file is named by the device id (FD-25) | stable | `charter/pieces.py:110` |
 | `persona` | string or null | required key | `persona.resolve_active()` | stable | `charter/pieces.py:111` |
 | `reason` | string | present only when given | a `done`/`abandoned` reason | stable | `charter/pieces.py:113` |
 
@@ -2528,7 +2539,7 @@ An unknown key is a warning, as it is in `persona.md`, and a repeated key is an 
 
 ---
 
-### `personas/_dispatch/<YYYY-MM>.<host>.jsonl`
+### `personas/_dispatch/<YYYY-MM>.<device>.jsonl`
 
 - **Format:** JSON Lines, append-only; one object per line.
 - **Status:** stable — committed (so the tally merges across machines), written by a hook
@@ -2550,8 +2561,12 @@ An unknown key is a warning, as it is in `persona.md`, and a repeated key is an 
 - **Encoding details:**
   - Path: `personas/_dispatch/{when:%Y-%m}.{host}.jsonl` (`charter/dispatch.py:60`-`:62`),
     `when` is UTC now (`:56`).
-  - `host` = `socket.gethostname()` first label, `[^A-Za-z0-9_-]` stripped, 32 chars,
-    `"unknown"` when empty (`charter/dispatch.py:50`-`:53`). No env override.
+  - `<device>` is the device's name for its logs, as the landing log names its file (FD-25:
+    the device id from the machine store, never minted by a hook). Only before an id is
+    minted, or where the store keeps none, is it Python's `host`: `socket.gethostname()`
+    first label, `[^A-Za-z0-9_-]` stripped, 32 chars, `"unknown"` when empty
+    (`charter/dispatch.py:50`-`:53`). No env override. Month files an earlier version named
+    by a hostname are read beside the new ones; FR-9 renames them (#607).
   - One line = `json.dumps(obj, sort_keys=True) + "\n"` → **keys are alphabetical**, ASCII
     escaped, no spaces beyond `json.dumps` defaults (`", "`/`": "`).
   - Written with `os.open(..., O_WRONLY|O_CREAT|O_APPEND, 0o644)` and one `os.write` — no
@@ -2597,7 +2612,7 @@ handoff row (`charter/dispatch.py:170` docstring).
 
 ---
 
-### `personas/_skills/<YYYY-MM>.<host>.jsonl`
+### `personas/_skills/<YYYY-MM>.<device>.jsonl`
 
 - **Format:** JSON Lines, append-only.
 - **Status:** stable — committed, written by a hook, read by `persona stats`.
@@ -2607,8 +2622,9 @@ handoff row (`charter/dispatch.py:170` docstring).
 - **Read by:** `charter/skilluse.py:95` (`_read_all`) → `by_persona` (`:121`), `drift`
   (`:133`); `charter/commands_persona.py:1622` (`persona stats` SKILLS block).
 - **Git:** committed. Nothing commits it automatically (no `_commit_dispatch` equivalent).
-- **Encoding details:** path `personas/_skills/{%Y-%m}.{host}.jsonl`
-  (`charter/skilluse.py:59`, `:62`-`:64`), same host derivation (`:48`-`:51`); same
+- **Encoding details:** path `personas/_skills/{%Y-%m}.{device}.jsonl`
+  (`charter/skilluse.py:59`, `:62`-`:64`), `<device>` named as the dispatch log's is (FD-25;
+  Python's host derivation, `:48`-`:51`, only before a device id is minted); same
   `json.dumps(..., sort_keys=True)` + `\n`, same `O_APPEND`, `0o644` (`:80`-`:85`). Rows
   without a truthy `skill` are ignored on read (`:116`).
 

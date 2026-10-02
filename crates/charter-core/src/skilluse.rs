@@ -1,6 +1,6 @@
 //! Which skills each persona actually invokes — the writer of `charter/skilluse.py`.
 //!
-//! `personas/_skills/<YYYY-MM>.<host>.jsonl`, append-only, one row per `Skill` call, written by
+//! `personas/_skills/<YYYY-MM>.<device>.jsonl`, append-only, one row per `Skill` call, written by
 //! `posttooluse-skill`. It is committed beside the dispatch log for the same reason: a persona
 //! whose declared `skills:` are never used, or which leans on skills it never declared, is a
 //! fact about the whole team's use of it, not about one laptop. `charter persona` reads it back
@@ -11,7 +11,8 @@ use std::path::{Path, PathBuf};
 /// The directory under `personas/` — `skilluse.DIR_NAME`.
 pub const DIR_NAME: &str = "_skills";
 
-/// `personas/_skills/<YYYY-MM>.<host>.jsonl` — `skilluse.path_for`.
+/// `personas/_skills/<YYYY-MM>.<device>.jsonl` — `skilluse.path_for`; `<device>` is
+/// [`crate::dispatch::log_name`]'s (FD-25).
 pub fn path_for(root: &Path, when: chrono::DateTime<chrono::Utc>, host: &str) -> PathBuf {
     root.join("personas")
         .join(DIR_NAME)

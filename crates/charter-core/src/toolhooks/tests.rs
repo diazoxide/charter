@@ -21,6 +21,14 @@ impl Plane {
         std::fs::write(root.join(".charter/vaults/db.json"), "{\"k\": \"v\"}").unwrap();
         let mut env = HashMap::new();
         env.insert("CHARTER_SESSION_ID".to_string(), "chat-1".to_string());
+        // The machine store a log's name is read from (FD-25): this fixture's own, holding no
+        // device id until a test mints one, so a log is filed under the host `box`.
+        let config = root.join("config-home");
+        std::fs::create_dir_all(&config).unwrap();
+        env.insert(
+            crate::machine::HOME_VAR.to_string(),
+            config.to_string_lossy().into_owned(),
+        );
         Self {
             _dir: dir,
             root,
@@ -255,6 +263,23 @@ fn a_returned_dispatch_is_logged_and_no_longer_counts_as_running() {
     );
     let map = std::fs::read_to_string(p.root.join(".charter/agent-personas.json")).unwrap();
     assert_eq!(map, "{\"a1b2c3d4\": \"Explore\"}");
+}
+
+#[test]
+fn a_returned_dispatch_is_logged_under_this_devices_id_and_never_its_hostname() {
+    let p = Plane::new();
+    let config = PathBuf::from(&p.env[crate::machine::HOME_VAR]);
+    let device = crate::machine::device_id(&config).unwrap();
+    let skill = serde_json::json!({"tool_name": "Skill", "tool_input": {"skill": "x"}});
+
+    p.ask(dispatch_of("Explore"), posttooluse_dispatch);
+    p.ask(skill, posttooluse_skill);
+
+    let log = std::fs::read_to_string(dispatch::path_for(&p.root, now(), &device)).unwrap();
+    assert!(log.contains("\"agent\": \"Explore\""), "{log}");
+    assert!(crate::skilluse::path_for(&p.root, now(), &device).is_file());
+    assert!(!dispatch::path_for(&p.root, now(), "box").exists());
+    assert!(!crate::skilluse::path_for(&p.root, now(), "box").exists());
 }
 
 #[test]

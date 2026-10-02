@@ -158,7 +158,7 @@ Then `lands_through_queue` decides the call. On GitLab a repo whose answer has n
 `merge_trains_enabled` (a token that cannot read its settings, a tier that does not report
 trains) is refused and nothing is merged: a direct merge there could skip a train.
 
-**Before the call, a pending landing is written** (`changes/log/pending/<host>.jsonl`, clone
+**Before the call, a pending landing is written** (`changes/log/pending/<device>.jsonl`, clone
 state): the request, the head, `direct` or `queue`. It is charter's evidence that it started
 this landing, and a later `land` records a merge it did not see happen only on that evidence.
 A refusal moves it to `refused`, so a later merge of the same head by somebody else is never

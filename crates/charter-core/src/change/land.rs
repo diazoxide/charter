@@ -128,7 +128,7 @@ pub fn land(
         repos,
         how,
         &|repo: &Repo| repo.backend(),
-        &crate::dispatch::host(),
+        &crate::dispatch::this_log_name(),
         now,
         say,
     )
@@ -356,7 +356,7 @@ pub fn verify(
         slug,
         repo,
         &|repo: &Repo| repo.backend(),
-        &crate::dispatch::host(),
+        &crate::dispatch::this_log_name(),
         now,
         say,
     )
@@ -410,7 +410,7 @@ pub fn land_verified(
         confirmed,
         how,
         &|repo: &Repo| repo.backend(),
-        &crate::dispatch::host(),
+        &crate::dispatch::this_log_name(),
         now,
         say,
     )

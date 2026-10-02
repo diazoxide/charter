@@ -138,7 +138,7 @@ fn live_line(line: &str) -> Option<String> {
 /// `changes` needs the pair **and a third line that re-ignores `changes/log`**, and that
 /// asymmetry is the design of the store rather than an exception to it: a change record holds
 /// intent, which is what a teammate needs and git cannot derive, while
-/// `changes/log/<host>.jsonl` holds a past-tense declaration carrying merge shas, appended
+/// `changes/log/<device>.jsonl` holds a past-tense declaration carrying merge shas, appended
 /// per host without a lock, and is committed **never**. Re-ignoring works only because its
 /// parent was re-included two lines above — git cannot re-include a file whose parent
 /// directory is excluded — which is why the three lines are written together.
