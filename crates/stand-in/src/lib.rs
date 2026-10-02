@@ -51,6 +51,12 @@
 //!
 //! Neither half below is therefore relaxed. Linux still answers `ETXTBSY` and is what CI gates
 //! on, and on Darwin the discipline is what keeps [`copy_of`] out of the kill.
+//!
+//! # Ending what a test started (#923)
+//!
+//! The crate's other job: making sure a fixture does not outlive its test. [`Ends`] kills a
+//! fixture's process group when the test ends or unwinds, and [`stubborn`] writes a fixture
+//! that ignores signals but still ends on its own after [`FIXTURE_LIFETIME_SECS`].
 
 use std::path::{Path, PathBuf};
 
@@ -182,4 +188,230 @@ pub fn feed(child: &mut std::process::Child, bytes: &[u8]) {
         Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => {}
         Err(error) => panic!("the payload is written: {error}"),
     }
+}
+
+/// How long a fixture that ignores signals keeps going before it ends on its own, in seconds.
+///
+/// Five minutes: past any one test's own deadline here (the slowest wait is thirty seconds
+/// for a first-run assessment on a loaded Mac), and short enough that one which slips past
+/// every guard is gone well before the next run starts (#923).
+pub const FIXTURE_LIFETIME_SECS: u32 = 300;
+
+/// A shell script that ignores `signals`, runs `first`, and then waits — for
+/// [`FIXTURE_LIFETIME_SECS`] at most, and never for ever.
+///
+/// What a test means by `trap '' INT HUP; while :; do sleep 600; done`: a program only a kill
+/// can end. Written that way it outlived its test by days whenever the kill never came — a
+/// failed assertion, or a test binary that exited before the reaper thread got to it (#923).
+/// The bound is counted in one-second sleeps, so it needs nothing but `sleep` and the shell's
+/// own arithmetic, and a group kill takes at most one `sleep 1` with it.
+pub fn stubborn(signals: &str, first: &str) -> String {
+    stubborn_for(signals, first, FIXTURE_LIFETIME_SECS)
+}
+
+/// [`stubborn`], with a bound of `secs` seconds instead.
+pub fn stubborn_for(signals: &str, first: &str, secs: u32) -> String {
+    format!(
+        "trap '' {signals}; {first}{sep}i=0; while [ \"$i\" -lt {secs} ]; do sleep 1; \
+         i=$((i+1)); done",
+        sep = if first.is_empty() { "" } else { "; " },
+    )
+}
+
+/// Kills a fixture's whole process group when it drops — when the test ends, and on the
+/// unwind out of a test that failed (#923).
+///
+/// **Synchronous, on purpose.** What leaked was a fixture whose ending was left to someone
+/// else: a session's reaper thread, which hangs up, waits its grace and only then kills, and
+/// which a test binary that exits first never lets finish; or a program a test meant to stop
+/// after its last assertion, when an earlier one failed. This kills before `drop` returns.
+///
+/// **By the pid this test caused to exist, never by name**: either one the test was handed
+/// ([`Ends::group`]), or one the fixture wrote down itself ([`Ends::named_in`]), read when the
+/// guard drops so a test that failed before reading it is still covered. The group is killed
+/// and then the pid itself, since a fixture that is not its group's leader is still named.
+///
+/// **And only while that pid still names the same process.** A guard usually drops after its
+/// fixture already ended — the passing case — and by then the kernel may have handed the pid
+/// to something else; on a machine running other sessions' work beside the tests, that is
+/// someone else's process. So the guard knows when its process started (asked of `ps` when it
+/// is made, or, for a marker, no earlier than the marker was written) and kills nothing if
+/// the process holding the pid now started later.
+///
+/// **It fails toward a leak, never toward a wrong kill.** The kernel is asked first whether any
+/// process holds the pid (the null signal). `ESRCH` — none does — kills only the group: what is
+/// left in it can only be the fixture's own children, since a pid is not handed out again while
+/// a group still bears it as its id. A process that is there but whose start cannot be read —
+/// `ps` would not start, out of processes or descriptors, or answered nothing — is left alone,
+/// and so is one the kernel says is somebody else's (`EPERM`). A fixture that leaks that way is
+/// caught by CI's orphan check (`tools/no-orphans.sh`); a wrong kill would be caught by nobody.
+///
+/// A pid of 0 or 1 is never signalled: those are this process's own group and init.
+#[derive(Debug)]
+#[must_use = "a guard that is dropped at once kills its fixture at once"]
+pub struct Ends {
+    target: Target,
+    ps: PathBuf,
+}
+
+#[derive(Debug)]
+enum Target {
+    /// A pid, and the second its process started, when that could be asked.
+    Pid(u32, Option<u64>),
+    NamedIn(PathBuf),
+}
+
+/// How far apart two readings of one process's start may be: `ps` answers its elapsed time to
+/// the second, and the reading and the clock it is subtracted from are not one instant.
+const SAME_START_SECS: u64 = 2;
+
+/// The `ps` asked, the same path on Linux and macOS.
+const PS: &str = "/bin/ps";
+
+impl Ends {
+    /// Kill the group `pid` leads, and `pid` itself, when this drops — if `pid` still names
+    /// the process it names now.
+    pub fn group(pid: u32) -> Self {
+        Self::of(Target::Pid(pid, started(Path::new(PS), pid)))
+    }
+
+    /// [`Ends::group`], for a process known to have started at `started` (seconds since the
+    /// epoch) rather than whatever holds `pid` now.
+    pub fn started_at(pid: u32, started: u64) -> Self {
+        Self::of(Target::Pid(pid, Some(started)))
+    }
+
+    /// Kill the group led by the pid written in `marker`, and that pid, when this drops —
+    /// nothing, if the marker was never written or does not hold a pid.
+    pub fn named_in(marker: impl Into<PathBuf>) -> Self {
+        Self::of(Target::NamedIn(marker.into()))
+    }
+
+    /// The pid this guard was handed, or `None` for one that reads it from a marker.
+    pub fn pid(&self) -> Option<u32> {
+        match self.target {
+            Target::Pid(pid, _) => Some(pid),
+            Target::NamedIn(_) => None,
+        }
+    }
+
+    /// The same guard, asking `ps` at `ps` when it drops: how a test makes `ps` unavailable.
+    pub fn asking_ps(mut self, ps: impl Into<PathBuf>) -> Self {
+        self.ps = ps.into();
+        self
+    }
+
+    fn of(target: Target) -> Self {
+        Ends {
+            target,
+            ps: PathBuf::from(PS),
+        }
+    }
+}
+
+impl Drop for Ends {
+    fn drop(&mut self) {
+        let ps = self.ps.as_path();
+        match &self.target {
+            Target::Pid(pid, Some(at)) => {
+                kill_if(ps, *pid, |now| now.abs_diff(*at) <= SAME_START_SECS);
+            }
+            // `ps` could not be asked when the guard was made: the process had ended already,
+            // or `ps` would not start. Nothing to tell a reused pid by, so only a pid no
+            // process holds is acted on — its group.
+            Target::Pid(pid, None) => kill_if(ps, *pid, |_| false),
+            Target::NamedIn(marker) => {
+                let Ok(text) = std::fs::read_to_string(marker) else {
+                    return;
+                };
+                let Ok(pid) = text.trim().parse() else {
+                    return;
+                };
+                let written = std::fs::metadata(marker)
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs());
+                // The fixture is started, then writes its pid: a process that started after
+                // the marker was written is not the one that wrote it.
+                kill_if(ps, pid, |now| {
+                    written.is_some_and(|written| now <= written + SAME_START_SECS)
+                });
+            }
+        }
+    }
+}
+
+/// Kill `pid`'s group, and `pid`, if the process holding `pid` now passes `same` on its start
+/// second; kill only the group if no process holds `pid`; and nothing otherwise — including
+/// when the process is there and its start cannot be read.
+#[cfg(unix)]
+fn kill_if(ps: &Path, pid: u32, same: impl Fn(u64) -> bool) {
+    use rustix::io::Errno;
+    use rustix::process::{Pid, Signal, kill_process, kill_process_group, test_kill_process};
+    let Some(raw) = i32::try_from(pid)
+        .ok()
+        .filter(|&raw| raw > 1)
+        .and_then(Pid::from_raw)
+    else {
+        return;
+    };
+    match test_kill_process(raw) {
+        // No process holds the pid: the passing case, or a leader that died before its group.
+        Err(Errno::SRCH) => {
+            let _ = kill_process_group(raw, Signal::KILL);
+        }
+        // There, and ours to signal: only if it is still the process this guard is for.
+        Ok(()) => {
+            if started(ps, pid).is_some_and(same) {
+                let _ = kill_process_group(raw, Signal::KILL);
+                let _ = kill_process(raw, Signal::KILL);
+            }
+        }
+        // `EPERM` is another user's process; anything else is an answer this cannot place.
+        Err(_) => {}
+    }
+}
+
+#[cfg(not(unix))]
+fn kill_if(_ps: &Path, _pid: u32, _same: impl Fn(u64) -> bool) {}
+
+/// The second the process holding `pid` started, from its elapsed time as `ps` reads it
+/// (`[[dd-]hh:]mm:ss`, the same on Linux and macOS); `None` if no process holds it, or `ps`
+/// would not start or answered nothing.
+#[cfg(unix)]
+fn started(ps: &Path, pid: u32) -> Option<u64> {
+    let out = std::process::Command::new(ps)
+        .args(["-o", "etime=", "-p", &pid.to_string()])
+        .env("LC_ALL", "C")
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    let elapsed = elapsed_secs(String::from_utf8_lossy(&out.stdout).trim())?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    Some(now.saturating_sub(elapsed))
+}
+
+#[cfg(not(unix))]
+fn started(_ps: &Path, _pid: u32) -> Option<u64> {
+    None
+}
+
+/// `[[dd-]hh:]mm:ss` in seconds.
+fn elapsed_secs(etime: &str) -> Option<u64> {
+    if etime.is_empty() {
+        return None;
+    }
+    let (days, clock) = match etime.split_once('-') {
+        Some((d, rest)) => (d.parse::<u64>().ok()?, rest),
+        None => (0, etime),
+    };
+    let mut secs = 0u64;
+    for part in clock.split(':') {
+        secs = secs * 60 + part.parse::<u64>().ok()?;
+    }
+    Some(days * 86_400 + secs)
 }
