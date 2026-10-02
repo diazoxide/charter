@@ -135,11 +135,11 @@ fn kill(host: Host) {
 
 #[test]
 fn a_client_resubscribing_after_the_host_is_killed_mid_turn_misses_and_duplicates_nothing() {
+    charter_core::unsteered!();
     if let Some(dir) = std::env::var_os(WRITER) {
         write_as_the_host(Path::new(&dir));
         return;
     }
-    charter_core::unsteered!();
     let home = tempfile::tempdir().unwrap();
     let dir = home.path().join("events").join(DEVICE);
     let mut seen = Vec::new();
