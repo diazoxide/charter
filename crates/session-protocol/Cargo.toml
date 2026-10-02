@@ -20,6 +20,15 @@ bytes = "1"
 # The multiplexer (ADR 0068 §4): Yamux, per-stream credit over one ordered byte stream.
 yamux = "0.14"
 
+[features]
+# `charter-session-bench`'s runtime, the one the crate's tests use (SC-16). Only the bench asks for
+# it, so the library's own dependencies stay what its users ask for.
+bench = ["tokio/rt-multi-thread"]
+
+[[bin]]
+name = "charter-session-bench"
+required-features = ["bench"]
+
 [dev-dependencies]
 # The heap of the test process, measured, so a memory bound is a measured one.
 dhat = "0.3"

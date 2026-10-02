@@ -39,7 +39,9 @@ jobs:
       # tauri::generate_context! reads the built frontend, so it has to exist before clippy.
       - run: mkdir -p app/dist
       - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # `charter-session-protocol/bench` so the latency bench, which only that feature builds, is
+      # linted too (SC-16).
+      - run: cargo clippy --workspace --all-targets --locked --features charter-session-protocol/bench -- -D warnings
       # --no-fail-fast because cargo stops at the first failing test binary and SKIPS every
       # later one. A flake in the binary that happens to run first (charter-app#39) then
       # hides every other result, so a red run says nothing about the rest of the suite.
@@ -77,6 +79,158 @@ jobs:
       - run: npm test
       # The tools' own tests (node:test), such as the cold-start gate's decision.
       - run: node --test "../tools/*.test.mjs"
+
+  # SC-16: the session layer's latency against main's, measured in this job (ADR 0086's CI
+  # relative rows L1 and L3, as amended by V62). It runs on every pull request and posts a green
+  # check when the change cannot move what it measures, so it can be required later: a `paths:`
+  # filter would post no check at all (see `stress.yml`).
+  #
+  # **Evidence only for now (V62):** it reports its verdict and never blocks a merge or turns
+  # main red, until five runs on main show a tight spread. Then `continue-on-error` goes, the
+  # name loses ", evidence only", and the operator adds the check to branch protection.
+  #
+  # **Why main is built here and not read from the `benchmarks` branch.** The same binary on two
+  # ubuntu-24.04 runners differs by more than 20% (they are not one machine), so a change's value
+  # held to the last value main recorded on another runner is a coin toss at the 20% line. main
+  # and the change, built from the same runner and run in turn on it, share whatever this
+  # runner's speed is. `tools/latency-gate.mjs` says what fails: a ratio past 1.20 in all rounds
+  # but one, confirmed by a second pass; a row main cannot agree with itself on passes as noisy.
+  #
+  # **What it executes is the dependency set:** the session-protocol crate, its dependencies'
+  # versions and the toolchain, and the bench and the gate themselves. The window and the app's
+  # own session code are not in it: `stress` and the release scale run (#814) measure those.
+  bench:
+    name: latency against main (session layer, evidence only)
+    continue-on-error: true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The pull request's merge commit and its first parent, the base branch's tip: main
+          # as it is now, which is what the change is measured against.
+          fetch-depth: 2
+      - name: Whether this change can move what the bench measures
+        id: scope
+        run: |
+          if [ "${{ github.event_name }}" != pull_request ]; then
+            echo "measure=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed=$(git diff --name-only HEAD^1 HEAD)
+          echo "$changed"
+          if echo "$changed" | grep -qE '^(crates/session-protocol/|Cargo\.toml$|Cargo\.lock$|rust-toolchain\.toml$|fixtures/corpora/|tools/bench\.mjs$|tools/latency-gate\.mjs$|\.github/workflows/ci\.yml$)'; then
+            echo "measure=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::nothing the session layer's bench runs has changed; not measured"
+          fi
+      - if: steps.scope.outputs.measure == 'true'
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master, 2026-09-12
+        with:
+          toolchain: stable
+      - if: steps.scope.outputs.measure == 'true'
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - if: steps.scope.outputs.measure == 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+      - name: The change's bench, in release
+        if: steps.scope.outputs.measure == 'true'
+        run: cargo build --release --locked -p charter-session-protocol --bin charter-session-bench --features bench
+      # The change's bench source, built against main's crate and lockfile: the same scenarios on
+      # both sides, so only the code under them differs. When main's crate cannot build it (the
+      # change moved the API the bench calls, or main has no such crate), there is no baseline:
+      # every row is reported and nothing is gated, which the job's summary says.
+      #
+      # The bench's runtime is the crate's `bench` feature; a main from before it had none, and
+      # gets the same runtime by naming tokio's feature directly.
+      - name: main's bench, in release
+        id: main
+        if: github.event_name == 'pull_request' && steps.scope.outputs.measure == 'true'
+        run: |
+          git worktree add --detach ../main HEAD^1
+          if [ -d ../main/crates/session-protocol ]; then
+            cp crates/session-protocol/src/bin/charter-session-bench.rs ../main/crates/session-protocol/src/bin/
+          fi
+          features=tokio/rt-multi-thread
+          if grep -q '^bench = ' ../main/crates/session-protocol/Cargo.toml 2>/dev/null; then features=bench; fi
+          if (cd ../main && CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/main" cargo build --release --locked \
+                -p charter-session-protocol --bin charter-session-bench --features "$features"); then
+            echo "bench=$GITHUB_WORKSPACE/target/main/release/charter-session-bench" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::main's crate cannot build this change's bench, so nothing is gated: no baseline"
+          fi
+      - name: The session layer against main, interleaved, in this job
+        if: github.event_name == 'pull_request' && steps.main.outputs.bench != ''
+        timeout-minutes: 15
+        run: node tools/bench.mjs --skip-build --only host --baseline "${{ steps.main.outputs.bench }}"
+      - name: The session layer, with no baseline to judge it by
+        if: github.event_name == 'pull_request' && steps.scope.outputs.measure == 'true' && steps.main.outputs.bench == ''
+        timeout-minutes: 10
+        run: node tools/bench.mjs --skip-build --only host
+      # main's own record (ADR 0086 §1): each row's median of five runs, which `bench record`
+      # appends to the `benchmarks` branch. It gates nothing: on main there is nothing to compare.
+      - name: main's record
+        if: github.event_name == 'push'
+        timeout-minutes: 10
+        run: |
+          node tools/bench.mjs --skip-build --only host
+          cp target/bench/*/host-bench.json host-bench.json
+      - if: github.event_name == 'push'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: host-bench
+          path: host-bench.json
+
+  # main's values onto the `benchmarks` branch through github-action-benchmark (ADR 0086 §5),
+  # for the chart that shows drift across merges. The one job with `contents: write`, and only on
+  # a push to main: a pull request's run never holds a token that can move a baseline.
+  # Evidence, not a gate: a record that fails to push must not turn main red or hold back the
+  # dev release `release.yml` makes when this workflow succeeds. One at a time, so two merges'
+  # records never race for the branch.
+  bench-record:
+    name: latency record (main only, evidence)
+    needs: bench
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    continue-on-error: true
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    concurrency:
+      group: bench-record
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: host-bench
+      # github-action-benchmark fetches the branch and fails when it does not exist yet. The first
+      # record starts it as an empty commit of its own, with no history of main's.
+      - name: The benchmarks branch, made once
+        env:
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        run: |
+          if ! git ls-remote --exit-code --heads origin benchmarks; then
+            empty=$(git hash-object -t tree /dev/null)
+            root=$(git commit-tree "$empty" -m "benchmarks: github-action-benchmark's data for ADR 0086's CI relative rows")
+            git push origin "$root:refs/heads/benchmarks"
+          fi
+      - uses: benchmark-action/github-action-benchmark@4322e5726e6334590d251fc4f92bec0efafc45dc # v1.22.2
+        with:
+          name: session layer (ubuntu-24.04)
+          tool: customSmallerIsBetter
+          output-file-path: host-bench.json
+          gh-pages-branch: benchmarks
+          benchmark-data-dir-path: bench
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          alert-threshold: "120%"
+          fail-on-alert: false
+          comment-on-alert: false
+          summary-always: true
 
   app:
     name: app builds (${{ matrix.os }}${{ matrix.evidence && ', evidence only' || '' }})
