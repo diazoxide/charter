@@ -2610,7 +2610,6 @@ export function PlaneView({
           plane,
           path,
           name,
-          afterFailure,
           insteadOf ?? null,
           STARTING_SIZE.columns,
           STARTING_SIZE.rows,

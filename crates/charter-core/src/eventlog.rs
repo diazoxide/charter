@@ -351,6 +351,13 @@ impl Began {
     }
 }
 
+/// A run by its two ids, the chat's and its own: named, so a call cannot swap the two ULIDs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RunOf<'a> {
+    pub chat: &'a str,
+    pub run: &'a str,
+}
+
 /// Which end of a tool call a tool hook is on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
@@ -501,9 +508,22 @@ impl Recorder {
         report: &crate::hookwire::Report,
         followed: Followed,
     ) -> io::Result<Event> {
+        self.report_with(plane, report, followed, None)
+    }
+
+    /// [`Recorder::report`], with the run the host minted for a move (`cleared`): the run a
+    /// `/clear` begins is the host's, so the record can name it whether or not there is a log.
+    /// `None` mints one here.
+    pub fn report_with(
+        &mut self,
+        plane: &Path,
+        report: &crate::hookwire::Report,
+        followed: Followed,
+        cleared: Option<&str>,
+    ) -> io::Result<Event> {
         let known = self.chats.contains_key(&(plane.to_path_buf(), report.chat));
         let top = match followed {
-            Followed::Moved if known => self.new_run(plane, report.chat, Began::Clear)?,
+            Followed::Moved if known => self.new_run(plane, report.chat, Began::Clear, cleared)?,
             Followed::Moved | Followed::No | Followed::FirstNamed => {
                 self.identity(plane, report.chat)?
             }
@@ -660,7 +680,7 @@ impl Recorder {
         }
         let under = Under {
             chat: top.chat,
-            run: ulid::Ulid::generate().to_string(),
+            run: crate::reopen::mint(),
             parent: Some(top.run),
         };
         self.append(
@@ -675,7 +695,7 @@ impl Recorder {
         Ok(under)
     }
 
-    /// Begins run `run` of chat `number`, under the chat id `chat`, for `cause`, and says so
+    /// Begins run `run` of chat `number`, under the chat id `chat` ([`RunOf`]), for `cause`, and says so
     /// in the log: what the host does when it starts a chat (ADR 0066, "A new run begins
     /// exactly when…").
     ///
@@ -686,8 +706,7 @@ impl Recorder {
         &mut self,
         plane: &Path,
         number: u32,
-        chat: &str,
-        run: &str,
+        RunOf { chat, run }: RunOf<'_>,
         cause: Began,
     ) -> io::Result<Event> {
         // Held before the line is written: a log that refuses the line must not leave the
@@ -713,7 +732,7 @@ impl Recorder {
     fn identity(&mut self, plane: &Path, number: u32) -> io::Result<Identity> {
         match self.chats.get(&(plane.to_path_buf(), number)) {
             Some(who) => Ok(who.clone()),
-            None => self.new_run(plane, number, Began::Start),
+            None => self.new_run(plane, number, Began::Start, None),
         }
     }
 
@@ -724,16 +743,23 @@ impl Recorder {
         self.stopped.retain(|(of, _)| of != chat);
     }
 
-    /// Begins a run of the chat for `cause`, and says so in the log.
-    fn new_run(&mut self, plane: &Path, number: u32, cause: Began) -> io::Result<Identity> {
+    /// Begins a run of the chat for `cause`, as `run` where the host minted it, and says so in
+    /// the log.
+    fn new_run(
+        &mut self,
+        plane: &Path,
+        number: u32,
+        cause: Began,
+        run: Option<&str>,
+    ) -> io::Result<Identity> {
         let key = (plane.to_path_buf(), number);
-        let chat = self.chats.get(&key).map_or_else(
-            || ulid::Ulid::generate().to_string(),
-            |who| who.chat.clone(),
-        );
+        let chat = self
+            .chats
+            .get(&key)
+            .map_or_else(crate::reopen::mint, |who| who.chat.clone());
         let who = Identity {
             chat,
-            run: ulid::Ulid::generate().to_string(),
+            run: run.map_or_else(crate::reopen::mint, str::to_owned),
         };
         self.log.append(
             Some(&who.chat),

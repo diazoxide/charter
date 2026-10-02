@@ -713,12 +713,10 @@ fn session_record(
 /// (`charter_core::sessionresume`). The answer is the chat as the window draws it, whose
 /// `resumed` or `fresh` says which happened.
 ///
-/// `after_failure` is the window saying the chat it resumed this record into ended before its
-/// harness reported a session — the harness could not bring the conversation back — so the same
-/// record starts fresh this time, and says so.
-///
-/// `instead_of` is that chat, by its number: the fresh start is **the same chat** under its id,
-/// in a run that begins `fresh` (ADR 0066), and not a second one. It may already be closed.
+/// `instead_of` is the window saying the chat it resumed this record into, by its number, ended
+/// before its harness reported a session — the harness could not bring the conversation back —
+/// so the same record starts fresh this time, and says so. It is **the same chat**, under its
+/// id, in a run that begins `fresh` (ADR 0066), and not a second one. It may already be closed.
 #[tauri::command]
 #[specta::specta]
 #[allow(clippy::too_many_arguments)]
@@ -727,13 +725,13 @@ fn resume_session(
     plane: PlaneId,
     path: String,
     name: String,
-    after_failure: bool,
     instead_of: Option<u32>,
     columns: u16,
     rows: u16,
 ) -> Result<OpenChat, String> {
     let held = planes.held(&plane)?;
-    let resumed = charter_core::sessionresume::ready(held.root(), &path, &name, after_failure)?;
+    let resumed =
+        charter_core::sessionresume::ready(held.root(), &path, &name, instead_of.is_some())?;
     let chat = Chat {
         program: resumed.ready.program.clone(),
         args: Vec::new(),
@@ -749,7 +747,7 @@ fn resume_session(
         label: None,
         from: None,
         renamed_from: None,
-        identity: charter_core::reopen::Identity::default(),
+        ..Default::default()
     };
     let size = Size { columns, rows };
     let session = match instead_of {
@@ -1112,7 +1110,7 @@ fn start_chat_in(
         label: label.clone(),
         from: None,
         renamed_from: None,
-        identity: charter_core::reopen::Identity::default(),
+        ..Default::default()
     };
     let session = held
         .chats()
@@ -1175,7 +1173,7 @@ fn open_session(
         label: None,
         from: None,
         renamed_from: None,
-        identity: charter_core::reopen::Identity::default(),
+        ..Default::default()
     };
     // The board already knows about it: `Chats` announces a chat BEFORE its program starts,
     // so its very first hook lands somewhere. Registering it here would be too late.

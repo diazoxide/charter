@@ -43,7 +43,7 @@ fn chat(cwd: &Path, name: &str) -> Chat {
         label: None,
         from: None,
         renamed_from: None,
-        identity: crate::reopen::Identity::default(),
+        ..Default::default()
     }
 }
 

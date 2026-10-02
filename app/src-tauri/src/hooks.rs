@@ -322,13 +322,13 @@ impl Hooks {
                 Box::new(move |report| {
                     let applied = apply(&board, &plane, &report);
                     let followed = applied.followed();
-                    let recorded =
-                        record(&events, |log| log.report(plane.root(), &report, followed));
-                    // The run a `/clear` began, by the event the log wrote under it: its own
-                    // run, or the one a sub-agent's line is the child of.
-                    let begun = recorded
-                        .filter(|_| followed == charter_core::eventlog::Followed::Moved)
-                        .and_then(|event| event.parent_run.or(event.run));
+                    // The run a `/clear` begins is the host's, minted here, so the record
+                    // names it whether or not this machine keeps an event log (ADR 0066).
+                    let begun = (followed == charter_core::eventlog::Followed::Moved)
+                        .then(charter_core::reopen::mint);
+                    record(&events, |log| {
+                        log.report_with(plane.root(), &report, followed, begun.as_deref())
+                    });
                     // Before the window is told, so the record already names the conversation
                     // by the time anything the move prompts could ask for it. Whether or not a
                     // reader sees a difference: after `/clear` the chat may be in the state it
@@ -1234,5 +1234,56 @@ mod tests {
             .map(|event| event.run)
             .collect();
         assert_eq!(cleared, vec![run], "the run the log began for the clear");
+    }
+
+    #[test]
+    fn a_clear_begins_a_run_the_record_is_told_even_with_no_event_log() {
+        // #856 review F5: the run is the host's, so `reopen.json` moves with it either way.
+        let dir = tempfile::tempdir().expect("a directory");
+        let at = Where {
+            within: dir.path().to_path_buf(),
+            socket: dir.path().join("app").join("hooks.sock"),
+        };
+        let plane: PlaneId = serde_json::from_str("\"/plane\"").expect("a plane id");
+        let hooks =
+            Hooks::listening_on(plane, &at, Arc::new(|_| {}), Arc::new(|_| {})).expect("listening");
+        let (tx, rx) = std::sync::mpsc::channel();
+        let tx = Mutex::new(tx);
+        hooks.when_it_follows(Arc::new(move |_, id, run| {
+            let _ = tx
+                .lock()
+                .unwrap()
+                .send((id.to_owned(), run.map(str::to_owned)));
+        }));
+        hooks
+            .board()
+            .opened(7, Some(Harness::ClaudeCode), Some("chosen".to_owned()));
+        let token = hooks.token_for(7);
+        for conversation in ["chosen", "cleared"] {
+            charter_core::hookwire::send(
+                hooks.socket().expect("a socket"),
+                Some(&token),
+                &Report {
+                    chat: 7,
+                    event: charter_core::state::Event::UserPromptSubmit,
+                    conversation: named(conversation),
+                    pid: Some(10),
+                    agent: None,
+                    detail: Default::default(),
+                },
+            )
+            .expect("sent");
+        }
+
+        let (id, run) = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the move is told");
+        assert_eq!(id, "cleared");
+        assert!(
+            run.as_deref()
+                .and_then(charter_core::reopen::a_ulid)
+                .is_some(),
+            "{run:?}"
+        );
     }
 }

@@ -1349,9 +1349,9 @@ impl Planes {
             let events = Arc::clone(events);
             // The key the hook channel records this project's chats under.
             let root = id.root().to_path_buf();
-            chats.when_a_run_begins(Box::new(move |session, chat, run, cause| {
+            chats.when_a_run_begins(Box::new(move |session, run, cause| {
                 let mut log = events.lock().unwrap_or_else(PoisonError::into_inner);
-                if let Err(why) = log.begin(&root, session, chat, run, cause) {
+                if let Err(why) = log.begin(&root, session, run, cause) {
                     tracing::warn!("charter: a run was not written to the event log ({why})");
                 }
             }));
@@ -2480,7 +2480,7 @@ mod tests {
                 label: None,
                 from: None,
                 renamed_from: None,
-                identity: charter_core::reopen::Identity::default(),
+                ..Default::default()
             }],
             dealt: 0,
             relaunch_after_update: false,
@@ -2514,7 +2514,7 @@ mod tests {
                 label: None,
                 from: None,
                 renamed_from: None,
-                identity: charter_core::reopen::Identity::default(),
+                ..Default::default()
             })
             .collect();
         reopen::write(
@@ -5517,6 +5517,81 @@ mod tests {
             .expect("the window was told");
         assert_eq!(last.state, "failed");
     }
+
+    /// The record on disk in `root`, as the next launch would read it.
+    fn on_disk(root: &Path) -> reopen::Record {
+        reopen::read_or_refusal(root).expect("the record reads")
+    }
+
+    /// Opens `root` as a launch does and puts its record back.
+    fn relaunched(root: &Path) -> Planes {
+        let (planes, _) = planes_telling();
+        let plane = planes.open(root);
+        let held = planes.held(&plane).expect("it is held");
+        held.reopen(STARTING, reopen::read_or_refusal(root), Choice::ReopenAll);
+        planes
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_chat_recorded_before_ids_has_the_id_it_was_given_on_disk_as_soon_as_it_is_back() {
+        // #856 review F1: an id that reached only memory is minted again after a crash.
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        reopen::write(&root, &one_chat_on("/bin/cat")).expect("the record is written");
+
+        let planes = relaunched(&root);
+
+        let identity = on_disk(&root).chats[0].identity.clone();
+        assert!(
+            identity.id.as_deref().and_then(reopen::a_ulid).is_some(),
+            "{identity:?}"
+        );
+        assert!(identity.run.as_deref().and_then(reopen::a_ulid).is_some());
+        planes.let_go_of_all();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_chat_with_ids_is_back_under_its_id_with_its_new_run_on_disk() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        let was = reopen::Identity {
+            id: Some(CHAT_ID.to_owned()),
+            run: Some(OLD_RUN.to_owned()),
+            ..Default::default()
+        };
+        let mut record = one_chat_on("/bin/cat");
+        record.chats[0].identity = was;
+        reopen::write(&root, &record).expect("the record is written");
+
+        let planes = relaunched(&root);
+
+        let identity = on_disk(&root).chats[0].identity.clone();
+        assert_eq!(identity.id.as_deref(), Some(CHAT_ID));
+        assert_ne!(identity.run.as_deref(), Some(OLD_RUN), "{identity:?}");
+        assert!(identity.run.is_some());
+        planes.let_go_of_all();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_chat_that_will_not_start_keeps_the_id_it_was_given_from_one_launch_to_the_next() {
+        // #856 review F2.
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        reopen::write(&root, &one_chat_on("/nonexistent/harness")).expect("written");
+
+        relaunched(&root).let_go_of_all();
+        let first = on_disk(&root).chats[0].identity.id.clone();
+        relaunched(&root).let_go_of_all();
+
+        assert!(first.is_some(), "the chat is still recorded, with an id");
+        assert_eq!(on_disk(&root).chats[0].identity.id, first);
+    }
+
+    const CHAT_ID: &str = "01K6E8ZK6V4Q9T0N3M2B1C5D7F";
+    const OLD_RUN: &str = "01K6E8ZK6V4Q9T0N3M2B1C5D7H";
 
     #[cfg(unix)]
     #[test]

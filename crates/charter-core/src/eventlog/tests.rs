@@ -663,8 +663,7 @@ fn a_write_that_failed_partway_is_cut_back_before_the_next_event() {
     assert_eq!(text.lines().count(), 2, "{text}");
 }
 
-const CHAT: &str = "01K6E8ZK6V4Q9T0N3M2B1C5D7F";
-const RUN: &str = "01K6E8ZK6V4Q9T0N3M2B1C5D7H";
+use crate::reopen::tests::{CHAT, RUN};
 
 #[test]
 fn a_chat_reopened_after_a_relaunch_keeps_its_id_and_its_first_event_is_a_reopen_run() {
@@ -673,7 +672,17 @@ fn a_chat_reopened_after_a_relaunch_keeps_its_id_and_its_first_event_is_a_reopen
     let plane = Path::new("/planes/one");
     {
         let mut before = recorder(dir.path());
-        before.begin(plane, 7, CHAT, RUN, Began::Start).unwrap();
+        before
+            .begin(
+                plane,
+                7,
+                RunOf {
+                    chat: CHAT,
+                    run: RUN,
+                },
+                Began::Start,
+            )
+            .unwrap();
         before
             .report(plane, &report(7, Stop), Followed::No)
             .unwrap();
@@ -683,7 +692,17 @@ fn a_chat_reopened_after_a_relaunch_keeps_its_id_and_its_first_event_is_a_reopen
     // The next launch: a host with nothing in its memory, told by the record who chat 7 is.
     let mut after = recorder(dir.path());
     let again = "01K6E8ZK6V4Q9T0N3M2B1C5D7K";
-    after.begin(plane, 7, CHAT, again, Began::Reopen).unwrap();
+    after
+        .begin(
+            plane,
+            7,
+            RunOf {
+                chat: CHAT,
+                run: again,
+            },
+            Began::Reopen,
+        )
+        .unwrap();
     after
         .report(plane, &report(7, SessionStart), Followed::No)
         .unwrap();
@@ -727,10 +746,37 @@ fn fresh_and_switch_each_begin_a_run_in_the_same_chat() {
         "01K6E8ZK6V4Q9T0N3M2B1C5D72",
     ];
 
-    host.begin(plane, 3, CHAT, runs[0], Began::Start).unwrap();
-    host.begin(plane, 3, CHAT, runs[1], Began::Fresh).unwrap();
+    host.begin(
+        plane,
+        3,
+        RunOf {
+            chat: CHAT,
+            run: runs[0],
+        },
+        Began::Start,
+    )
+    .unwrap();
+    host.begin(
+        plane,
+        3,
+        RunOf {
+            chat: CHAT,
+            run: runs[1],
+        },
+        Began::Fresh,
+    )
+    .unwrap();
     host.report(plane, &report(3, Stop), Followed::No).unwrap();
-    host.begin(plane, 3, CHAT, runs[2], Began::Switch).unwrap();
+    host.begin(
+        plane,
+        3,
+        RunOf {
+            chat: CHAT,
+            run: runs[2],
+        },
+        Began::Switch,
+    )
+    .unwrap();
     host.report(plane, &report(3, Stop), Followed::No).unwrap();
 
     let events = read(dir.path()).unwrap();
@@ -770,10 +816,28 @@ fn a_new_run_ends_the_sub_agents_of_the_one_before() {
         ..report(chat, Stop)
     };
 
-    host.begin(plane, 3, CHAT, RUN, Began::Start).unwrap();
+    host.begin(
+        plane,
+        3,
+        RunOf {
+            chat: CHAT,
+            run: RUN,
+        },
+        Began::Start,
+    )
+    .unwrap();
     host.report(plane, &agent(3), Followed::No).unwrap();
     let next = "01K6E8ZK6V4Q9T0N3M2B1C5D7K";
-    host.begin(plane, 3, CHAT, next, Began::Switch).unwrap();
+    host.begin(
+        plane,
+        3,
+        RunOf {
+            chat: CHAT,
+            run: next,
+        },
+        Began::Switch,
+    )
+    .unwrap();
     let after = host.report(plane, &agent(3), Followed::No).unwrap();
 
     assert_eq!(
@@ -819,12 +883,67 @@ fn a_run_the_log_could_not_write_still_keeps_the_chat_under_its_id() {
     let mut host = recorder(dir.path());
 
     host.log.fail_the_next_write_after(3);
-    assert!(host.begin(plane, 3, CHAT, RUN, Began::Reopen).is_err());
+    assert!(
+        host.begin(
+            plane,
+            3,
+            RunOf {
+                chat: CHAT,
+                run: RUN
+            },
+            Began::Reopen
+        )
+        .is_err()
+    );
     let next = host.report(plane, &report(3, Stop), Followed::No).unwrap();
 
     assert_eq!(
         (next.chat.as_deref(), next.run.as_deref()),
         (Some(CHAT), Some(RUN)),
         "not a second id minted at the next line"
+    );
+}
+
+#[test]
+fn a_clear_begins_the_run_the_host_minted_for_it() {
+    use crate::state::Event::{SessionStart, Stop};
+    let dir = tempfile::tempdir().unwrap();
+    let plane = Path::new("/planes/one");
+    let mut host = recorder(dir.path());
+    host.begin(
+        plane,
+        3,
+        RunOf {
+            chat: CHAT,
+            run: RUN,
+        },
+        Began::Start,
+    )
+    .unwrap();
+
+    let cleared = "01K6E8ZK6V4Q9T0N3M2B1C5D7K";
+    let event = host
+        .report_with(
+            plane,
+            &report(3, SessionStart),
+            Followed::Moved,
+            Some(cleared),
+        )
+        .unwrap();
+    host.report(plane, &report(3, Stop), Followed::No).unwrap();
+
+    assert_eq!(event.run.as_deref(), Some(cleared));
+    let started: Vec<_> = read(dir.path())
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.kind == "run.started")
+        .map(|e| (e.run.unwrap(), e.body["cause"].as_str().unwrap().to_owned()))
+        .collect();
+    assert_eq!(
+        started,
+        vec![
+            (RUN.to_owned(), "start".to_owned()),
+            (cleared.to_owned(), "clear".to_owned())
+        ]
     );
 }

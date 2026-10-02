@@ -43,7 +43,10 @@ pub const IN_PLANE: &str = ".charter/app/reopen.json";
 pub const MAX_BYTES: u64 = 1_048_576;
 
 /// One chat as it was: what it was running, where, and the conversation to bring back.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Default` is a chat with no program, which is never one a record holds: it is for spelling a
+/// chat by the fields that matter (`Chat { program, name, ..Default::default() }`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Chat {
     /// The program, as it was launched. A path or a bare name.
     pub program: String,
@@ -967,8 +970,13 @@ struct ChatOnDisk {
 
 /// `word` where it is a ULID, else nothing: an id off a file somebody else may have written is
 /// held to the one shape charter mints, in its canonical spelling.
-fn a_ulid(word: String) -> Option<String> {
-    ulid::Ulid::from_string(&word).ok().map(|id| id.to_string())
+pub fn a_ulid(word: &str) -> Option<String> {
+    ulid::Ulid::from_string(word).ok().map(|id| id.to_string())
+}
+
+/// A new ULID: how the host mints a chat's id and each of its runs' (ADR 0066).
+pub fn mint() -> String {
+    ulid::Ulid::generate().to_string()
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -1101,19 +1109,33 @@ impl From<ChatOnDisk> for Chat {
             renamed_from: Some(chat.renamed_from)
                 .filter(|name| crate::contain::workspace_name_ok(name)),
             identity: Identity {
-                id: a_ulid(chat.id),
-                device: a_ulid(chat.device),
-                run: a_ulid(chat.run),
-                resumed_from: a_ulid(chat.resumed_from),
+                id: a_ulid(&chat.id),
+                device: a_ulid(&chat.device),
+                run: a_ulid(&chat.run),
+                resumed_from: a_ulid(&chat.resumed_from),
             },
         }
     }
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::fs;
+
+    /// The ULIDs the core's tests spell a chat's ids with, one set for every module.
+    pub(crate) const CHAT: &str = "01K6E8ZK6V4Q9T0N3M2B1C5D7F";
+    pub(crate) const DEVICE: &str = "01K6E8ZK6V4Q9T0N3M2B1C5D7G";
+    pub(crate) const RUN: &str = "01K6E8ZK6V4Q9T0N3M2B1C5D7H";
+    pub(crate) const RESUMED: &str = "01K6E8ZK6V4Q9T0N3M2B1C5D7J";
+
+    #[test]
+    fn a_minted_id_is_a_ulid_and_a_ulid_reads_back_as_itself() {
+        let id = mint();
+        assert_eq!(a_ulid(&id), Some(id.clone()));
+        assert_ne!(mint(), id, "a new one each time");
+        assert_eq!(a_ulid("-rf"), None);
+    }
 
     fn claude(name: &str, resume: Option<&str>) -> Chat {
         Chat {
@@ -1131,7 +1153,7 @@ mod tests {
             label: None,
             from: None,
             renamed_from: None,
-            identity: Identity::default(),
+            ..Default::default()
         }
     }
 
@@ -1415,11 +1437,6 @@ mod tests {
         assert_eq!(conversation(9), None, "a chat the record does not hold");
     }
 
-    const CHAT: &str = "01K6E8ZK6V4Q9T0N3M2B1C5D7F";
-    const DEVICE: &str = "01K6E8ZK6V4Q9T0N3M2B1C5D7G";
-    const RUN: &str = "01K6E8ZK6V4Q9T0N3M2B1C5D7H";
-    const RESUMED: &str = "01K6E8ZK6V4Q9T0N3M2B1C5D7J";
-
     #[test]
     fn a_chat_s_id_and_current_run_survive_a_quit_and_are_read_by_its_number() {
         let plane = tempfile::tempdir().unwrap();
@@ -1667,7 +1684,7 @@ mod tests {
                 label: None,
                 from: None,
                 renamed_from: None,
-                identity: Identity::default(),
+                ..Default::default()
             }],
         }
     }
