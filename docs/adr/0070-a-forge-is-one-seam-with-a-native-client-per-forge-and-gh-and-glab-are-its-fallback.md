@@ -495,6 +495,7 @@ above. Each holds until the ticket named, and the text above is left as accepted
    *Since ADR 0088 (V40): [#857](https://github.com/diazoxide/charter/issues/857), split out of
    FW-5, defines it.* *#857 defined it: `owned` and `reachable` take an `Owner` and return
    `Vec<RepoRecord>`, and `top_level` takes a `RepoRecord`. The inventory's keys are unchanged.*
+   *#911: `about` takes a `RepoRecord`; `inventory::read` reads a row as one.*
 
 `Caller` carries the surface and the priority only. The account, the principal and the human join
 it with FW-1 and FD-27, and until then every `Caller` resolves to the CLI transport, as §4 says.

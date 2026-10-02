@@ -807,9 +807,10 @@ mod tests {
     }
 
     #[test]
-    fn a_row_discover_wrote_reads_back_as_the_repo_it_was_written_from() {
-        // The reader and the writer agree on every field the row keeps. The id is not kept, and
-        // the written `or "main"` and stripped description are what reads back.
+    fn a_row_written_from_a_repo_with_a_default_branch_reads_back_as_that_repo() {
+        // The reader and the writer agree on every field the row keeps, for a repo with no id,
+        // a default branch and a stripped description. Without a branch the row holds `"main"`
+        // (Python's `or "main"`), so that repo does not read back as itself.
         let repo = RepoRecord {
             default_branch: Some("trunk".into()),
             description: "The shop".into(),

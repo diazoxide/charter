@@ -99,27 +99,16 @@ pub fn target(root: &Path, ws: &str, repo: Option<&str>) -> Result<Target, Strin
                 })?
         }
         None => {
-            let mut on_a_forge = on_a_forge.into_iter();
-            match (on_a_forge.next(), on_a_forge.next()) {
-                (Some(one), None) => one,
-                (None, _) => {
-                    return Err(format!(
-                        "workspace '{ws}' has no repo on a forge to open an issue in"
-                    ));
-                }
-                (Some(first), Some(second)) => {
-                    let listed: Vec<String> = [first, second]
-                        .into_iter()
-                        .chain(on_a_forge)
-                        .map(|(n, _)| n.clone())
-                        .collect();
-                    return Err(format!(
-                        "workspace '{ws}' has more than one repo on a forge; name one with \
-                         --repo: {}",
-                        names(&listed)
-                    ));
-                }
+            if on_a_forge.len() > 1 {
+                let listed: Vec<String> = on_a_forge.iter().map(|(n, _)| (*n).clone()).collect();
+                return Err(format!(
+                    "workspace '{ws}' has more than one repo on a forge; name one with --repo: {}",
+                    names(&listed)
+                ));
             }
+            on_a_forge.into_iter().next().ok_or_else(|| {
+                format!("workspace '{ws}' has no repo on a forge to open an issue in")
+            })?
         }
     };
     if record.path_with_namespace.is_empty() {
