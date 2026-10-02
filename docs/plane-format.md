@@ -1377,9 +1377,13 @@ and an archived one is where `memstore.archive` would have put it (ADR 0065).
     refused both (ADR 0088 §4).
 
   **A line is never dated before the last line of the log it goes in**, so a clock that stepped
-  back cannot reorder one device's own lines. After a chat's link or unlink is written the logs
-  are folded again, and a line the fold does not honour, such as an unlink in the same second as
-  a link in another workspace's log that sorts after it, is reported as refused, never as done.
+  back cannot reorder one device's own lines. **A chat's link or unlink is also dated at least
+  one second after the last line any log holds for that chat.** The fold orders by `(ts, device
+  file, line index, workspace)`, so without that a line in the same second as the chat's link
+  in another workspace's log could sort before it, whatever line each sits on. After the line
+  is written the logs are folded again. A line synced from another device in that moment can
+  still undo it, and that is reported as refused, with what the chat works on now, never as
+  done.
 
   The Work list's workspace links, `workspace rename`'s `renamed` aliases and the item cache's
   `moved` aliases (FW-7) are **decided, not yet written**.

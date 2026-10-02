@@ -1740,7 +1740,8 @@ describe("the palette at fifty chats", () => {
     it("asks for seven rows per tab and never walks the list", () => {
       const offers = new Counting(loaded().map((offer) => [offer.id, offer]));
 
-      // 50 tabs × the seven ids a chat menu lists (the two work link rows are V60's). **Not fifty scans of 291 rows**, which is
+      // 50 tabs × the seven ids a chat menu lists (the two work link rows are V60's).
+      // **Not fifty scans of 291 rows**, which is
       // what this cost before the lookup was built once for the window — and the number that
       // does not move when the catalogue grows again.
       expect(strip(offers)).toBe(350);

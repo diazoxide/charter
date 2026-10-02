@@ -152,6 +152,19 @@ describe("a chat's work link", () => {
     expect(screen.queryByText(`Work item: ${ISSUE}`)).not.toBeInTheDocument();
   });
 
+  it("sends the key as it was typed, so the core refuses one with spaces", async () => {
+    const { asked: asks } = core();
+    render(<App />);
+
+    await fromTheMenu("Link to work item…");
+    const dialog = await screen.findByRole("dialog", { name: "Link to work item" });
+    await userEvent.type(within(dialog).getByLabelText("Tracker key"), ` ${ISSUE} `);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Link" }));
+
+    await waitFor(() => expect(asked(asks, "chat_work_link")).toHaveLength(1));
+    expect(asked(asks, "chat_work_link")[0].args.item).toBe(` ${ISSUE} `);
+  });
+
   it("says the core's refusal in the dialog and links nothing", async () => {
     const refused = "github:x is not a tracker key";
     core({ refuse: refused });

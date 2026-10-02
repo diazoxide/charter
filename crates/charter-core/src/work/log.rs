@@ -231,9 +231,12 @@ pub enum Place<'a> {
 ///   workspace is LIVE. The same item linked from another workspace is written there, so that
 ///   workspace's Work list holds it.
 /// - **A chat linked to another item gets one link line and no unlink**: a chat's link is its
-///   last line (V3: zero or one), so the new line replaces the old link.
+///   last line (V3: zero or one), so the new line replaces the old link. It is dated after the
+///   line it replaces ([`after_its_lines`]).
 /// - **The fold is read again after the line is written**, and a link it does not show is an
-///   error, never a success (see [`unlink_chat`]).
+///   error, never a success. A line synced from another device while this one was written, or
+///   one already in another log dated later, can end the link: the error says so, and a second
+///   try is dated after that line.
 pub fn link_chat(
     root: &Path,
     place: Place<'_>,
@@ -242,7 +245,7 @@ pub fn link_chat(
     item: TrackerKey,
     chat: &str,
 ) -> io::Result<()> {
-    let ws = in_a_workspace(place, "linked to")?;
+    let ws = in_a_workspace(place, Act::Link)?;
     let folded = fold(root);
     let wanted = folded.resolve(&item);
     if folded
@@ -251,13 +254,27 @@ pub fn link_chat(
     {
         return Ok(());
     }
+    let ts = after_its_lines(&folded, chat, ts);
     append(root, ws, device, ts, &Op::link_chat(item, chat))?;
-    if fold(root).chat_link(chat) != Some(wanted.clone()) {
-        return Err(io::Error::other(format!(
-            "the chat was not linked to {wanted}: another log holds a later line for it"
-        )));
+    linked_as_asked(&fold(root), chat, &wanted)
+}
+
+/// Whether chat `chat` works on `wanted` once its link line is written, or the refusal.
+///
+/// Every line already in a log for the chat is dated before the new one, so the only line that
+/// can undo it is one that arrived while it was written: a sync of another device's log.
+fn linked_as_asked(after: &Fold, chat: &str, wanted: &TrackerKey) -> io::Result<()> {
+    match after.chat_link(chat) {
+        Some(now) if now == *wanted => Ok(()),
+        now => Err(io::Error::other(format!(
+            "the chat was not linked to {wanted}: a line from another device, synced as this \
+             one was written, {}. Try again: a new attempt is dated after it",
+            match now {
+                Some(other) => format!("links it to {other}"),
+                None => "ends the link".to_owned(),
+            }
+        ))),
     }
-    Ok(())
 }
 
 /// End chat `chat`'s link, in this device's log of the workspace the chat is in now, and answer
@@ -265,12 +282,13 @@ pub fn link_chat(
 ///
 /// The unlink names the item the chat's link resolves to, so it ends that link and only that
 /// one (D-0015). It is written where the chat is now, not where its link was written: a chat's
-/// link is its last line across every workspace's log (§3), so either ends it — **when the fold
-/// orders it after the link**. A line is never dated before the last line of the log it goes in,
-/// so a clock that stepped back cannot put an unlink before the link it ends in one log; a link
-/// in another workspace's log in the same second can still sort after it, so the fold is read
-/// again and an unlink that ended nothing is an error. A chat at the project root is refused, as
-/// [`link_chat`] refuses it.
+/// link is its last line across every workspace's log (§3), so either ends it once the fold
+/// orders it after the link. The fold orders by `(ts, device file, line index, workspace)`, so
+/// the unlink is dated after the link line it ends ([`after_its_lines`]), whatever this
+/// machine's clock says and wherever each line sits. The fold is read again after the line is
+/// written: a line synced from another device in that moment can still link the chat again,
+/// and that is an error that says what the chat works on now. A chat at the project root is
+/// refused, as [`link_chat`] refuses it.
 pub fn unlink_chat(
     root: &Path,
     place: Place<'_>,
@@ -278,29 +296,73 @@ pub fn unlink_chat(
     ts: DateTime<Utc>,
     chat: &str,
 ) -> io::Result<Option<TrackerKey>> {
-    let ws = in_a_workspace(place, "unlinked from")?;
-    let Some(item) = fold(root).chat_link(chat) else {
+    let ws = in_a_workspace(place, Act::Unlink)?;
+    let folded = fold(root);
+    let Some(item) = folded.chat_link(chat) else {
         return Ok(None);
     };
+    let ts = after_its_lines(&folded, chat, ts);
     append(root, ws, device, ts, &Op::unlink_chat(item.clone(), chat))?;
-    if fold(root).chat_link(chat).is_some() {
-        return Err(io::Error::other(format!(
-            "the chat was not unlinked from {item}: another log holds a line for it in the same \
-             second or later, so the link still stands. Try again in a moment"
-        )));
-    }
+    unlinked_as_asked(&fold(root), chat, &item)?;
     Ok(Some(item))
 }
 
-/// The workspace a chat at `place` is in, or the refusal for one at the project root, which
-/// says what it could not be (`linked to`, `unlinked from`).
-fn in_a_workspace<'a>(place: Place<'a>, could_not_be: &str) -> io::Result<&'a str> {
+/// Whether chat `chat` has no link once its unlink of `item` is written, or the refusal, which
+/// says what the chat works on now. As in [`linked_as_asked`], only a line synced from another
+/// device as this one was written can undo it.
+fn unlinked_as_asked(after: &Fold, chat: &str, item: &TrackerKey) -> io::Result<()> {
+    match after.chat_link(chat) {
+        None => Ok(()),
+        Some(now) if now == *item => Err(io::Error::other(format!(
+            "the chat was not unlinked from {item}: a line from another device, synced as this \
+             one was written, links it again. Try again: a new attempt is dated after it"
+        ))),
+        Some(now) => Err(io::Error::other(format!(
+            "the chat was not unlinked from {item}: another device linked it to {now} as this \
+             was written, so it works on {now} now"
+        ))),
+    }
+}
+
+/// `ts`, or one second after the last line any log holds for chat `chat`, whichever is later.
+///
+/// The fold orders by `(ts, device file, line index, workspace)`, so a line in the same second as
+/// one in another workspace's log, or a device's other file, can sort before it whatever its
+/// place. Dated after every line for the chat, including its current link, a new line is taken
+/// after them all, from any workspace and whatever this machine's clock says. Only lines for
+/// this chat move it, so a clock that is right writes the time it reads.
+fn after_its_lines(folded: &Fold, chat: &str, ts: DateTime<Utc>) -> DateTime<Utc> {
+    folded
+        .last_line_for(chat)
+        .map_or(ts, |at| ts.max(at + chrono::Duration::seconds(1)))
+}
+
+/// What a chat's write was, for its refusal.
+#[derive(Debug, Clone, Copy)]
+enum Act {
+    Link,
+    Unlink,
+}
+
+impl Act {
+    /// What the chat could not be: `linked to` or `unlinked from` a work item.
+    fn could_not_be(self) -> &'static str {
+        match self {
+            Act::Link => "linked to",
+            Act::Unlink => "unlinked from",
+        }
+    }
+}
+
+/// The workspace a chat at `place` is in, or the refusal for one at the project root.
+fn in_a_workspace(place: Place<'_>, act: Act) -> io::Result<&str> {
     match place {
         Place::ProjectRoot => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!(
-                "a chat at the project root is in no workspace, so it cannot be {could_not_be} \
-                 a work item: open the chat in the workspace the item belongs to"
+                "a chat at the project root is in no workspace, so it cannot be {} a work \
+                 item: open the chat in the workspace the item belongs to",
+                act.could_not_be()
             ),
         )),
         Place::Workspace(ws) => Ok(ws),
@@ -409,6 +471,8 @@ pub struct Fold {
     /// Each workspace's own links, resolved.
     held: BTreeMap<String, BTreeSet<TrackerKey>>,
     aliases: BTreeMap<TrackerKey, TrackerKey>,
+    /// The `ts` of the last chat link or unlink line naming each chat, whatever it did.
+    last_for: BTreeMap<String, DateTime<Utc>>,
     /// Lines skipped, by `<workspace>/<file>`.
     skipped: BTreeMap<String, usize>,
 }
@@ -465,6 +529,11 @@ impl Fold {
         self.chats
             .get(chat)
             .map(|(ws, item)| (ws.as_str(), self.resolve(item)))
+    }
+
+    /// When the last line naming chat `chat`, a link or an unlink, was dated.
+    fn last_line_for(&self, chat: &str) -> Option<DateTime<Utc>> {
+        self.last_for.get(chat).copied()
     }
 
     /// Every chat linked to `item`, which is resolved first.
@@ -571,7 +640,12 @@ pub fn fold(root: &Path) -> Fold {
             out.aliases.insert(from.clone(), to.clone());
         }
     }
-    for (_, _, _, ws, op) in lines {
+    for (ts, _, _, ws, op) in lines {
+        if let Some(chat) = op.chat()
+            && let Ok(at) = chrono::NaiveDateTime::parse_from_str(&ts, TS)
+        {
+            out.last_for.insert(chat.to_string(), at.and_utc());
+        }
         match op {
             Op::Link {
                 item,

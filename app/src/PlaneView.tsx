@@ -4422,6 +4422,14 @@ function viewTabsOf(tabs: Tabs, pinnedViews: readonly string[]): ViewTab[] {
   });
 }
 
+/** A chat tab's tooltip: where a handed-off chat came from, and the work item it works on. */
+function tabTip(from: string | undefined, workItem: string | undefined): string | undefined {
+  const lines = [from, workItem === undefined ? undefined : workItemSaid(workItem)].filter(
+    (line): line is string => line !== undefined,
+  );
+  return lines.length === 0 ? undefined : lines.join("\n");
+}
+
 /**
  * One pane's frame: the terminal, and what charter draws over it in the pane's two corners —
  * side by side with the terminal, so neither is ever a child of the element xterm draws into.
@@ -4438,14 +4446,6 @@ function viewTabsOf(tabs: Tabs, pinnedViews: readonly string[]): ViewTab[] {
  * of its own, and a pane with a gauge was then a row shorter than one without — the operator:
  * *"its changing harness container sizes"*. A pane's size is the layout's business alone.
  */
-/** A chat tab's tooltip: where a handed-off chat came from, and the work item it works on. */
-function tabTip(from: string | undefined, workItem: string | undefined): string | undefined {
-  const lines = [from, workItem === undefined ? undefined : workItemSaid(workItem)].filter(
-    (line): line is string => line !== undefined,
-  );
-  return lines.length === 0 ? undefined : lines.join("\n");
-}
-
 function PaneFrame({
   plane,
   session,
@@ -4487,7 +4487,7 @@ function PaneFrame({
       <div className="pane-corner at-start">
         <ChatGauge usage={usage} />
         {from && <span className="pane-from">{from}</span>}
-        {workItem && <span className="pane-from">{workItemSaid(workItem)}</span>}
+        {workItem && <span className="pane-work-item">{workItemSaid(workItem)}</span>}
         {byHand && <ByHandBanner note={byHand} onAnswer={onByHand} />}
         {startNotes && <StartNotice notes={startNotes} onDismiss={onDismissStartNote} />}
       </div>

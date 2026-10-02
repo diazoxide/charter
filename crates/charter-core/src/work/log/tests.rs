@@ -458,9 +458,51 @@ fn relinking_the_same_item_from_another_workspace_writes_a_line_there() {
 fn a_clock_that_stepped_back_never_writes_a_ts_earlier_than_the_logs_last_line() {
     let p = project();
     let root = p.path();
+    append(root, "alpha", DEVICE, at(10), &Op::link(todo())).unwrap();
+
     link_chat(
         root,
         Place::Workspace("alpha"),
+        DEVICE,
+        at(5),
+        issue(),
+        CHAT,
+    )
+    .unwrap();
+    assert_eq!(
+        lines_of(root, "alpha", DEVICE)[1]["ts"],
+        "2026-10-02T08:00:10Z"
+    );
+    assert_eq!(fold(root).chat_link(CHAT), Some(issue()));
+}
+
+#[test]
+fn an_unlink_from_another_workspace_is_dated_after_the_link_it_ends_whatever_the_lines_index() {
+    let p = project();
+    let root = p.path();
+    // beta's log holds two lines before the link, so the link is its third line; alpha's log is
+    // empty, so the unlink is its first. The fold orders by (ts, device file, line index,
+    // workspace), so in the same second the unlink would sort first and end nothing.
+    append(root, "beta", DEVICE, at(1), &Op::link(todo())).unwrap();
+    append(root, "beta", DEVICE, at(2), &Op::unlink(todo())).unwrap();
+    link_chat(root, Place::Workspace("beta"), DEVICE, at(5), issue(), CHAT).unwrap();
+
+    let ended = unlink_chat(root, Place::Workspace("alpha"), DEVICE, at(5), CHAT).unwrap();
+    assert_eq!(ended, Some(issue()));
+    assert_eq!(
+        lines_of(root, "alpha", DEVICE)[0]["ts"],
+        "2026-10-02T08:00:06Z"
+    );
+    assert_eq!(fold(root).chat_link(CHAT), None);
+}
+
+#[test]
+fn a_chat_moved_to_another_workspace_is_unlinked_there_after_its_clock_stepped_back() {
+    let p = project();
+    let root = p.path();
+    link_chat(
+        root,
+        Place::Workspace("beta"),
         DEVICE,
         at(10),
         issue(),
@@ -468,26 +510,112 @@ fn a_clock_that_stepped_back_never_writes_a_ts_earlier_than_the_logs_last_line()
     )
     .unwrap();
 
-    let ended = unlink_chat(root, Place::Workspace("alpha"), DEVICE, at(5), CHAT).unwrap();
+    // The chat is in alpha now, and this machine's clock reads seven seconds earlier.
+    let ended = unlink_chat(root, Place::Workspace("alpha"), DEVICE, at(3), CHAT).unwrap();
     assert_eq!(ended, Some(issue()));
     assert_eq!(
-        lines_of(root, "alpha", DEVICE)[1]["ts"],
-        "2026-10-02T08:00:10Z"
+        lines_of(root, "alpha", DEVICE)[0]["ts"],
+        "2026-10-02T08:00:11Z"
     );
     assert_eq!(fold(root).chat_link(CHAT), None);
 }
 
 #[test]
-fn an_unlink_the_fold_would_order_before_the_link_is_refused_and_never_said_to_have_ended_it() {
+fn a_chat_is_dated_after_every_line_for_it_so_a_later_unlink_in_another_log_cannot_end_its_link() {
     let p = project();
     let root = p.path();
-    // Linked in beta, unlinked from alpha in the same second: the fold breaks that tie by the
-    // workspace's name, so alpha's unlink sorts before beta's link and ends nothing.
-    link_chat(root, Place::Workspace("beta"), DEVICE, at(5), issue(), CHAT).unwrap();
+    let other = key("github:github.com/acme/api#99");
+    // Another device's log ends a link to `other` later than this clock reads. It ends nothing
+    // now; dated before it, a link to `other` would be ended by it.
+    append(
+        root,
+        "beta",
+        OTHER_DEVICE,
+        at(50),
+        &Op::unlink_chat(other.clone(), CHAT),
+    )
+    .unwrap();
 
-    let refused = unlink_chat(root, Place::Workspace("alpha"), DEVICE, at(5), CHAT).unwrap_err();
-    assert!(refused.to_string().contains("not unlinked"), "{refused}");
-    assert_eq!(fold(root).chat_link(CHAT), Some(issue()));
+    link_chat(
+        root,
+        Place::Workspace("alpha"),
+        DEVICE,
+        at(5),
+        other.clone(),
+        CHAT,
+    )
+    .unwrap();
+    assert_eq!(
+        lines_of(root, "alpha", DEVICE)[0]["ts"],
+        "2026-10-02T08:00:51Z"
+    );
+    assert_eq!(fold(root).chat_link(CHAT), Some(other));
+}
+
+#[test]
+fn a_link_a_synced_line_undid_is_refused_with_what_to_do() {
+    let p = project();
+    let root = p.path();
+    let other = key("github:github.com/acme/api#99");
+    // What the fold says after the write, when another device's line arrived as it was written.
+    append(
+        root,
+        "alpha",
+        DEVICE,
+        at(5),
+        &Op::link_chat(other.clone(), CHAT),
+    )
+    .unwrap();
+    append(
+        root,
+        "beta",
+        OTHER_DEVICE,
+        at(6),
+        &Op::unlink_chat(other.clone(), CHAT),
+    )
+    .unwrap();
+
+    let said = linked_as_asked(&fold(root), CHAT, &other)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        said.contains("not linked to github:github.com/acme/api#99"),
+        "{said}"
+    );
+    assert!(said.contains("ends the link"), "{said}");
+    assert!(said.contains("Try again"), "{said}");
+}
+
+#[test]
+fn an_unlink_a_synced_relink_undid_says_what_the_chat_works_on_now() {
+    let p = project();
+    let root = p.path();
+    let other = key("github:github.com/acme/api#99");
+    append(
+        root,
+        "alpha",
+        DEVICE,
+        at(5),
+        &Op::unlink_chat(issue(), CHAT),
+    )
+    .unwrap();
+    append(
+        root,
+        "beta",
+        OTHER_DEVICE,
+        at(6),
+        &Op::link_chat(other, CHAT),
+    )
+    .unwrap();
+
+    let said = unlinked_as_asked(&fold(root), CHAT, &issue())
+        .unwrap_err()
+        .to_string();
+    assert!(
+        said.contains("another device linked it to github:github.com/acme/api#99"),
+        "{said}"
+    );
+    assert!(!said.contains("Try again"), "{said}");
 }
 
 #[test]

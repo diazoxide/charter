@@ -1,12 +1,13 @@
 import { useId, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
+import { useFocusBack } from "./EndingChat";
 
 /**
  * **Link to work item…**, from a chat tab's menu or the palette (V60, ADR 0088 §3).
  *
  * Asks for the work item's tracker key, such as `github:github.com/owner/repo#12` or
- * `todo:<workspace>/<todo>`, and links the chat to it. A chat works on at most one work item, so
- * linking one that is already linked replaces its link.
+ * `todo:<workspace>/<todo>`, and links the chat to it. A chat works on one work item at most, so
+ * a new link replaces the one it has.
  *
  * **It validates nothing**, for `NewBranch`'s reason: what a tracker key is, and which chats
  * may be linked, are the core's rules (`chat_work_link`), so the window refuses exactly what the
@@ -34,8 +35,11 @@ export function LinkWorkItem({
   const [key, setKey] = useState("");
   const keyId = useId();
   const box = useRef<HTMLInputElement>(null);
+  const handBack = useFocusBack();
+  // Sent as typed, spaces and all: a key is refused, never rewritten (D-0021), so the core's
+  // sentence says what is wrong with it.
   const link = () => {
-    if (!linking) onLink(key.trim());
+    if (!linking) onLink(key);
   };
   return (
     <Dialog.Root
@@ -48,15 +52,16 @@ export function LinkWorkItem({
         <Dialog.Overlay className="asking" />
         <Dialog.Content
           className="warning"
-          aria-labelledby="link-work-item"
           // A click outside answers nothing, as in every dialog here (`docs/ui-primitives.md`).
           onInteractOutside={(e) => e.preventDefault()}
           onOpenAutoFocus={(e) => {
             e.preventDefault();
             box.current?.focus();
           }}
+          // The focus goes back to where it was as the dialog opened, as `EndingChat`'s does.
+          onCloseAutoFocus={handBack}
         >
-          <Dialog.Title id="link-work-item">Link to work item</Dialog.Title>
+          <Dialog.Title>Link to work item</Dialog.Title>
           <p className="where">
             for <code>{chat}</code>
           </p>
@@ -82,13 +87,12 @@ export function LinkWorkItem({
             <p className="came-back" id={`${keyId}-why`}>
               {linked ? (
                 <>
-                  It works on <code>{linked}</code> now. A chat works on one work item, so this
-                  replaces it.
+                  This chat works on <code>{linked}</code>. Linking another item replaces that link.
                 </>
               ) : (
                 <>
-                  A chat works on one work item. The link is kept in the workspace&apos;s work link
-                  log.
+                  A chat works on one work item at a time. The link is kept in the workspace&apos;s
+                  work link log, so your other devices see it when the workspace is LIVE.
                 </>
               )}
             </p>
