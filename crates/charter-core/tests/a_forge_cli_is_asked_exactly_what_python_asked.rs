@@ -33,7 +33,7 @@ mod support;
 
 use std::path::{Path, PathBuf};
 
-use support::forge_cli::{BIN, Scene, in_a_child, in_child, was_asked};
+use support::forge_cli::{BIN, Scene, bare_repo, in_a_child, in_child, was_asked};
 
 #[test]
 fn every_question_is_asked_of_a_stand_in_cli_first_on_path() {
@@ -68,28 +68,13 @@ mod child {
         records.iter().map(|r| r.name.clone()).collect()
     }
 
-    /// A record with only a name and a forge: every other field empty.
-    fn bare(name: &str, forge: Kind) -> RepoRecord {
-        RepoRecord {
-            id: None,
-            name: name.into(),
-            path_with_namespace: String::new(),
-            default_branch: None,
-            description: String::new(),
-            web_url: String::new(),
-            ssh_url: String::new(),
-            topics: Vec::new(),
-            forge,
-        }
-    }
-
     /// A record of `path`, at `default_branch`, with an `id` when one is given.
     fn at(path: &str, default_branch: &str, id: Option<&str>) -> RepoRecord {
         RepoRecord {
             id: id.map(|id| ForgeRef(id.into())),
             path_with_namespace: path.into(),
             default_branch: Some(default_branch.to_string()).filter(|b| !b.is_empty()),
-            ..bare(path.rsplit('/').next().unwrap_or(path), Kind::GitHub)
+            ..bare_repo(path.rsplit('/').next().unwrap_or(path), Kind::GitHub)
         }
     }
 
@@ -261,7 +246,7 @@ mod child {
 
         assert_eq!(repos.len(), 101);
         assert_eq!(names(&repos)[100], "r0");
-        assert_eq!(repos[0], bare("r0", Kind::GitHub));
+        assert_eq!(repos[0], bare_repo("r0", Kind::GitHub));
     }
 
     #[test]
@@ -422,7 +407,7 @@ mod child {
                 },
                 RepoRecord {
                     id: Some(ForgeRef("3".into())),
-                    ..bare("bare", Kind::GitHub)
+                    ..bare_repo("bare", Kind::GitHub)
                 },
             ]
         );
@@ -636,7 +621,11 @@ mod child {
             .unwrap();
 
         assert_eq!(repos.len(), 101);
-        assert_eq!(repos[0], bare("p0", Kind::GitLab), "`path` before `name`");
+        assert_eq!(
+            repos[0],
+            bare_repo("p0", Kind::GitLab),
+            "`path` before `name`"
+        );
         assert_eq!(
             repos[100],
             RepoRecord {

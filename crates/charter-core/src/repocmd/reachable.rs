@@ -41,8 +41,8 @@ pub fn reachable(root: &Path) -> Result<Reachable, String> {
             .backend()
             .reachable(&forge::Caller::window(), &forge::Owner::new(owner));
         match reached {
-            Ok(projects) => batches.push(
-                projects
+            Ok(repos) => batches.push(
+                repos
                     .iter()
                     .filter(|p| !exclude.contains(&p.name))
                     .map(|p| inventory::record(p, "unknown"))

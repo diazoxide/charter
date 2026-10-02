@@ -60,8 +60,8 @@ pub fn discover(root: &Path, options: Options, say: Sink) -> u8 {
         }
         let owned = forge
             .backend()
-            .owned(&Caller::command(), &Owner::new(owner.as_str()));
-        let projects: Vec<RepoRecord> = match owned {
+            .owned(&Caller::command(), &Owner::new(owner.clone()));
+        let repos: Vec<RepoRecord> = match owned {
             Ok(all) => all
                 .into_iter()
                 .filter(|p| !exclude.contains(&p.name))
@@ -73,7 +73,7 @@ pub fn discover(root: &Path, options: Options, say: Sink) -> u8 {
         };
         say(Say::Info(format!(
             "Found {} project(s) on {}. {}",
-            projects.len(),
+            repos.len(),
             forge.kind.word(),
             if options.no_probe {
                 "Skipping stack probe."
@@ -81,7 +81,7 @@ pub fn discover(root: &Path, options: Options, say: Sink) -> u8 {
                 "Probing repo stacks …"
             }
         )));
-        let (records, failed) = build_batch(forge, &projects, options.no_probe);
+        let (records, failed) = build_batch(forge, &repos, options.no_probe);
         probe_failures += failed;
         batches.push(records);
     }
@@ -169,33 +169,32 @@ fn join(names: &[&String]) -> String {
         .join(", ")
 }
 
-/// Every project as its inventory record, probing stacks eight at a time. Returns the
+/// Every repo as its inventory record, probing stacks eight at a time. Returns the
 /// records in the order the forge listed them, and how many probes FAILED — as opposed to
 /// found nothing.
-fn build_batch(forge: &Forge, projects: &[RepoRecord], no_probe: bool) -> (Vec<Value>, usize) {
+fn build_batch(forge: &Forge, repos: &[RepoRecord], no_probe: bool) -> (Vec<Value>, usize) {
     if no_probe {
-        let records = projects
+        let records = repos
             .iter()
             .map(|p| inventory::record(p, "unknown"))
             .collect();
         return (records, 0);
     }
-    let stacks: Mutex<Vec<Option<Result<&'static str, ()>>>> =
-        Mutex::new(vec![None; projects.len()]);
+    let stacks: Mutex<Vec<Option<Result<&'static str, ()>>>> = Mutex::new(vec![None; repos.len()]);
     let next = AtomicUsize::new(0);
     let backend = forge.backend();
     let backend = backend.as_ref();
     std::thread::scope(|scope| {
-        for _ in 0..PROBES.min(projects.len()) {
+        for _ in 0..PROBES.min(repos.len()) {
             scope.spawn(|| {
                 loop {
                     let i = next.fetch_add(1, Ordering::SeqCst);
-                    let Some(project) = projects.get(i) else {
+                    let Some(repo) = repos.get(i) else {
                         break;
                     };
-                    let git_ref = project.default_branch.as_deref();
+                    let git_ref = repo.default_branch.as_deref();
                     let found = backend
-                        .top_level(&Caller::command(), project, git_ref)
+                        .top_level(&Caller::command(), repo, git_ref)
                         .map(|files| inventory::classify_stack(&files))
                         .map_err(|_| ());
                     if let Ok(mut slots) = stacks.lock() {
@@ -207,10 +206,10 @@ fn build_batch(forge: &Forge, projects: &[RepoRecord], no_probe: bool) -> (Vec<V
     });
     let stacks = stacks.into_inner().unwrap_or_default();
     let mut failed = 0;
-    let records = projects
+    let records = repos
         .iter()
         .zip(stacks)
-        .map(|(project, stack)| {
+        .map(|(repo, stack)| {
             let stack = match stack {
                 Some(Ok(stack)) => stack,
                 _ => {
@@ -218,7 +217,7 @@ fn build_batch(forge: &Forge, projects: &[RepoRecord], no_probe: bool) -> (Vec<V
                     "unknown"
                 }
             };
-            inventory::record(project, stack)
+            inventory::record(repo, stack)
         })
         .collect();
     (records, failed)

@@ -20,6 +20,9 @@
 use std::path::Path;
 use std::sync::Arc;
 
+mod support;
+use support::forge_cli::bare_repo;
+
 use charter_core::forge::http::{ApiRoot, TokenSource};
 use charter_core::forge::pr::Pr;
 use charter_core::forge::route::{HostScope, Resolver, SignIn};
@@ -94,15 +97,9 @@ fn every_operation(rt: &tokio::runtime::Runtime, run: &Path, status: u16) {
         url: "x".into(),
     };
     let repo = RepoRecord {
-        id: None,
-        name: "r".into(),
         path_with_namespace: "o/r".into(),
         default_branch: Some("main".into()),
-        description: String::new(),
-        web_url: String::new(),
-        ssh_url: String::new(),
-        topics: Vec::new(),
-        forge: Kind::GitHub,
+        ..bare_repo("r", Kind::GitHub)
     };
     let sha = "6dcb09b5b57875f334f61aebed695e2e4193db5e";
     let said = [

@@ -367,9 +367,9 @@ impl Owner {
 /// One repo as a forge lists it, in neutral fields (ADR 0070 §1). The field names are the
 /// keys the inventory writes (`inventory::record`), so a record reads the same in both.
 ///
-/// A field the forge left out, or gave as null or empty, is empty here: `""`, `[]`, or `None`
-/// for the two that can be absent. A text field the forge gave as some other value holds what
-/// Python's `str()` prints of it.
+/// A field the forge left out, or gave as null, empty or not a string, is empty here: `""`,
+/// `[]`, or `None` for the two that can be absent. The one exception is `description`: a
+/// truthy non-string there holds what Python's `str()` prints of it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepoRecord {
     /// The forge's own id for the repo. GitLab addresses a repo's tree by it.
