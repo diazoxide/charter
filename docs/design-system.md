@@ -10,6 +10,11 @@ The rule, in one line each:
   comment that becomes code. `app/src/theme/literals.test.ts` fails the build on one.
 - **No arbitrary Tailwind value** — `text-[13px]`, `bg-[#fff]`, `w-[42rem]`. Same test, same
   reason: a theme cannot reach inside a bracket.
+- **Every view is drawn from tokens, in both themes.** `app/src/theme/views.test.tsx` renders
+  each of charter's own views and an extension's in each built-in theme and fails on what
+  reaches the DOM: a colour in an inline style or an SVG paint attribute, a `var(--x)` that is
+  not a token, or a token the theme in force does not set. It catches a colour built at run
+  time, which no source line shows. A new view is added to its list.
 - **Semantic names only.** A token is `surface.raised`, never `gray-800`.
 - **Both built-in themes get every new token**, or the window will not start.
 - **No time and no easing outside `app/src/theme/`** — no `150ms`, no `ease-out`, no
