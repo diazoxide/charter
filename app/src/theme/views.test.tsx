@@ -8,21 +8,29 @@
  * a library writes, a `var(--x)` spelled from a string — is in no source line the literal
  * guard reads, and is exactly what a theme could not change.
  *
- * So every view is rendered as a tab draws it, from the core's answers, and every element of
- * it is held to three things:
+ * So every view is rendered as a tab draws it, in every state it has — answered, gone,
+ * refused, waiting to be asked, being edited, a row's action refused — from the core's answers,
+ * and every element of it is held to four things:
  *
- * - **an inline style carries no colour literal**, and every custom property it reads is a
+ * - **an inline style carries no colour literal** — hex, a colour function, any of CSS's named
+ *   or system colours, or one inside a data URL — and every custom property it reads is a
  *   token, a motion token, or one the window sets for itself;
  * - **every token it reads is set by the theme in force**, so it resolves in both themes rather
  *   than in the one somebody happened to look at;
- * - **an SVG paint attribute is a token, `currentColor` or nothing** — Lucide's icons are
- *   `stroke="currentColor"`, and a library that wrote `fill="#000"` would be the black band of
- *   charter-app#193 again, through a door the stylesheet guard does not watch.
+ * - **an SVG paint attribute is a token, `currentColor` or nothing**, and a token it reads is
+ *   held to the two rules above — Lucide's icons are `stroke="currentColor"`, and a library
+ *   that wrote `fill="#000"` would be the black band of charter-app#193 again, through a door
+ *   the stylesheet guard does not watch;
+ * - **no class is an arbitrary value**, in any of Tailwind's spellings: `bg-[#fff]`,
+ *   `hover:bg-[#fff]`, `!bg-[#fff]`, `bg-[#fff]/50`, `[color:red]`. A class built from a
+ *   string at run time is the one spelling the source guard cannot see.
  *
- * A class carries no colour of its own: Tailwind's palette is deleted (`tailwind.test.ts`) and
- * `App.css` holds no literal (`literals.test.ts`), so the class half is already held at the
- * source. An arbitrary-value class (`bg-[#fff]`) is refused here too, because a class built
- * from a string at run time is the one spelling the source guard cannot see.
+ * Otherwise a class carries no colour of its own: Tailwind's palette is deleted
+ * (`tailwind.test.ts`) and `App.css` holds no literal (`literals.test.ts`), so that half is
+ * held at the source.
+ *
+ * Every view charter has is in `OWN_MARKS`, and a test below fails when one of them has no
+ * state here. The window's chrome and its dialogs are #956.
  */
 
 /// <reference types="node" />
@@ -30,16 +38,21 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
+import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import { ViewPane } from "../Views";
+import { OWN_MARKS, ViewPane } from "../Views";
+import type { Offer } from "../actions";
+import { DRAFT, forgetDrafts, wantEdit } from "../memories";
 import type {
   HarnessPlugins,
   InstructionFile,
   MemoryView,
+  PanelRow,
   PlaneSaving,
   ProjectSettings,
   ProjectTheme,
   RepoSaving,
+  RowAction,
   SavingInForce,
   SessionRecordView,
   SettingsFile,
@@ -48,6 +61,7 @@ import type {
   WorkspaceSettings,
 } from "../bindings";
 import type { ViewRef } from "../tabs";
+import { literalsIn } from "./literal";
 import { MOTION_TOKENS, motionProperty } from "./motion";
 import { BUILT_IN, DEFAULT_THEME, TOKENS, drawIn, property } from "./theme";
 
@@ -60,11 +74,6 @@ afterEach(() => {
 // What a drawn element may say about colour.
 // ---------------------------------------------------------------------------------------------
 
-/** A colour written out: hex, a colour function, or one of CSS's named colours. The same
- *  three `literals.test.ts` refuses in the source. */
-const LITERAL =
-  /#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color|color-mix)\s*\(|(?<![\w-])(?:white|black|red|green|blue|yellow|orange|purple|pink|brown|gray|grey|silver|gold|cyan|magenta|teal|navy|olive|maroon|lime|aqua|fuchsia)(?![\w-])/;
-
 /** The custom properties the window sets for itself rather than a theme: lengths, never a
  *  colour. The same list, for the same reasons, as `literals.test.ts`'s `fromTheWindow`. */
 const FROM_THE_WINDOW = new Set(["--least", "--root", "--chip", "--window-controls"]);
@@ -72,9 +81,9 @@ const FROM_THE_WINDOW = new Set(["--least", "--root", "--chip", "--window-contro
 /** The custom properties `App.css` declares for itself — a length or a count, since a colour
  *  there would fail `literals.test.ts`. */
 const OWN_PROPERTIES = new Set(
-  [
-    ...readFileSync(join(process.cwd(), "src/App.css"), "utf8").matchAll(/^\s+(--[a-z0-9-]+):/gm),
-  ].map((hit) => hit[1]),
+  [...readFileSync(join(process.cwd(), "src/App.css"), "utf8").matchAll(/^\s+(--[\w-]+):/gm)].map(
+    (hit) => hit[1],
+  ),
 );
 
 const COLOUR_TOKENS = new Set(TOKENS.map(property));
@@ -84,11 +93,37 @@ const MOTION = new Set(MOTION_TOKENS.map(motionProperty));
 const PAINT = ["fill", "stroke", "color", "stop-color", "flood-color", "lighting-color"];
 
 /** A paint value that is no colour of charter's own: no paint, the inherited one, a gradient
- *  or pattern by reference, or a token. */
-const PAINT_OK = /^(?:none|currentColor|transparent|inherit|url\(#[\w-]+\)|var\(--[a-z0-9-]+\))$/i;
+ *  or pattern by reference, or a custom property — which is then held to the tokens like any
+ *  other `var()`. */
+const PAINT_OK = /^(?:none|currentColor|transparent|inherit|url\(#[\w-]+\)|var\(--[\w-]+\))$/i;
 
-/** Tailwind's arbitrary-value spelling, which no theme can reach. */
-const ARBITRARY = /^[a-z][a-z0-9-]*-\[[^\]\s]+\]$/;
+/** A custom property read, in any case: `--Text-Muted` is a different property from
+ *  `--text-muted`, and a pattern that only saw lower case would let it through unread. */
+const READS = /var\(\s*(--[\w-]+)/gi;
+
+/**
+ * Tailwind's arbitrary values, anywhere in a class: `bg-[#fff]`, behind a variant
+ * (`hover:bg-[#fff]`), with `!` or a `/50` modifier, or a bare arbitrary property
+ * (`[color:red]`). No class charter writes has a square bracket in it otherwise, so a bracket
+ * at all is the tell — and none of them is a value a theme can reach.
+ */
+const ARBITRARY = /\[[^\]]*\]/;
+
+/**
+ * What is wrong with each `var()` that `value` reads: one that is not a token, or a token the
+ * theme in force does not set.
+ */
+function unread(value: string, said: (what: string) => void): void {
+  const set = document.documentElement.style;
+  for (const hit of value.matchAll(READS)) {
+    const read = hit[1];
+    if (COLOUR_TOKENS.has(read)) {
+      if (set.getPropertyValue(read) === "") said(`reads ${read}, which the theme does not set`);
+    } else if (!MOTION.has(read) && !FROM_THE_WINDOW.has(read) && !OWN_PROPERTIES.has(read)) {
+      said(`reads ${read}, which is not a token`);
+    }
+  }
+}
 
 /**
  * Everything about `root`'s drawing that a theme could not change, one sentence each;
@@ -96,7 +131,6 @@ const ARBITRARY = /^[a-z][a-z0-9-]*-\[[^\]\s]+\]$/;
  */
 function complaints(root: Element): string[] {
   const said: string[] = [];
-  const set = document.documentElement.style;
   for (const element of [root, ...root.querySelectorAll("*")]) {
     const where = describeElement(element);
     const style = (element as HTMLElement | SVGElement).style;
@@ -105,24 +139,20 @@ function complaints(root: Element): string[] {
         const name = style[at];
         const value = style.getPropertyValue(name);
         // A custom property's own name is not a colour, but its value can be one: the window
-        // setting `--x: #fff` is the same defect as `color: #fff`.
-        if (LITERAL.test(value)) said.push(`${where} style ${name}: ${value} is a colour literal`);
-        for (const hit of value.matchAll(/var\(\s*(--[a-z0-9-]+)/g)) {
-          const read = hit[1];
-          if (COLOUR_TOKENS.has(read)) {
-            if (set.getPropertyValue(read) === "")
-              said.push(`${where} style ${name} reads ${read}, which the theme does not set`);
-          } else if (!MOTION.has(read) && !FROM_THE_WINDOW.has(read) && !OWN_PROPERTIES.has(read)) {
-            said.push(`${where} style ${name} reads ${read}, which is not a token`);
-          }
-        }
+        // setting `--x: #fff` is the same defect as `color: #fff`. So is a colour inside an
+        // inlined SVG's data URL.
+        if (literalsIn(value).length > 0)
+          said.push(`${where} style ${name}: ${value} is a colour literal`);
+        unread(value, (what) => said.push(`${where} style ${name} ${what}`));
       }
     }
     if (element instanceof SVGElement) {
       for (const attribute of PAINT) {
         const value = element.getAttribute(attribute);
-        if (value !== null && !PAINT_OK.test(value.trim()))
+        if (value === null) continue;
+        if (!PAINT_OK.test(value.trim()))
           said.push(`${where} ${attribute}="${value}" is not a token`);
+        else unread(value, (what) => said.push(`${where} ${attribute}="${value}" ${what}`));
       }
     }
     for (const name of element.classList) {
@@ -197,6 +227,57 @@ describe("the token test", () => {
       "<p.bg-[#fff]> class bg-[#fff] is an arbitrary value",
     ]);
   });
+
+  // The loopholes a first version of this checker had, each one probed so it stays shut.
+
+  it("refuses every named CSS colour, not only the common ones", () => {
+    expect(check(`<p style="color: rebeccapurple"></p>`)).not.toEqual([]);
+    expect(check(`<p style="color: papayawhip"></p>`)).not.toEqual([]);
+    expect(check(`<p style="border-color: DarkSlateGray"></p>`)).not.toEqual([]);
+  });
+
+  it("refuses a system colour, which is the platform's and not the theme's", () => {
+    expect(check(`<p style="color: Canvas"></p>`)).not.toEqual([]);
+    expect(check(`<p style="background-color: ButtonFace"></p>`)).not.toEqual([]);
+  });
+
+  it("reads a custom property whatever its case, since --Text-Muted is not --text-muted", () => {
+    expect(check(`<p style="color: var(--Text-Muted)"></p>`)).toEqual([
+      "<p> style color reads --Text-Muted, which is not a token",
+    ]);
+  });
+
+  it("holds an SVG paint's var() to the tokens and to the theme in force", () => {
+    expect(check(`<svg><path fill="var(--text-mutd)"></path></svg>`)).toEqual([
+      '<path> fill="var(--text-mutd)" reads --text-mutd, which is not a token',
+    ]);
+    document.documentElement.style.removeProperty("--accent-base");
+    expect(check(`<svg><path stroke="var(--accent-base)"></path></svg>`)).toEqual([
+      '<path> stroke="var(--accent-base)" reads --accent-base, which the theme does not set',
+    ]);
+  });
+
+  it("refuses an arbitrary value behind a variant, an important mark or a modifier", () => {
+    for (const name of ["hover:bg-[#fff]", "!bg-[#fff]", "bg-[#fff]/50", "dark:md:text-[red]"]) {
+      expect(check(`<p class="${name}"></p>`), name).toEqual([
+        `<p.${name}> class ${name} is an arbitrary value`,
+      ]);
+    }
+  });
+
+  it("refuses an arbitrary property", () => {
+    expect(check(`<p class="[color:red]"></p>`)).toEqual([
+      "<p.[color:red]> class [color:red] is an arbitrary value",
+    ]);
+  });
+
+  it("refuses a colour inside a data URL, percent-encoded or base64", () => {
+    const svg = `<svg xmlns='http://www.w3.org/2000/svg'><path fill='#fff'/></svg>`;
+    const encoded = `data:image/svg+xml,${encodeURIComponent(svg).replace(/'/g, "%27")}`;
+    const base64 = `data:image/svg+xml;base64,${btoa(svg)}`;
+    expect(check(`<p style="background-image: url('${encoded}')"></p>`)).not.toEqual([]);
+    expect(check(`<p style="background-image: url('${base64}')"></p>`)).not.toEqual([]);
+  });
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -206,43 +287,113 @@ describe("the token test", () => {
 const PLANE = "/home/dev/plane";
 const WORKSPACE = "web";
 
-/** A panel answer that uses every block the vocabulary has, so every way a view draws one is
- *  drawn: a note in each tone, facts, a list with a row and a chart. */
-const ANSWERED: ViewAnswer = {
+/** A row of a list, with `over` said on top of a plain one. */
+function row(key: string, over: Partial<PanelRow> = {}): PanelRow {
+  return {
+    key,
+    text: `Row ${key}`,
+    note: "2026-09-20",
+    mark: "dot",
+    tone: "plain",
+    detail: { kind: "text", text: `About ${key}.` },
+    runs: null,
+    actions: [],
+    ...over,
+  };
+}
+
+/** Every mark `charter_core::panel::Mark` has, and a word it does not (drawn as the plain
+ *  circle), each on a row of its own. */
+const MARKS = ["todo", "persona", "repo", "piece", "note", "trouble", "vault", "dot", "unknown"];
+
+/** Every tone `charter_core::panel::Tone` has: plain, default and trouble. */
+const TONES = ["plain", "default", "trouble"];
+
+/**
+ * A panel answer that draws every block the vocabulary has, every way it can be drawn: a note in
+ * each of the three tones, facts, a list whose rows carry every mark and every tone — one of
+ * them a memory, so charter's own views wrap it in its menu — and a chart in each of its two
+ * shapes. `actions` is what each row offers, for an extension's view.
+ */
+function answered(actions: RowAction[] = []): ViewAnswer {
+  return {
+    kind: "answered",
+    blocks: [
+      ...TONES.map((tone) => ({ kind: "note" as const, text: `A ${tone} note`, tone })),
+      { kind: "facts", facts: [{ label: "Vault", value: "none" }] },
+      {
+        kind: "list",
+        rows: [
+          row("memory", {
+            text: "Charter defects go upstream",
+            mark: "note",
+            runs: "memory.open:shared/grill",
+            actions,
+          }),
+          ...MARKS.map((mark) => row(`mark-${mark}`, { mark, actions })),
+          ...TONES.map((tone) => row(`tone-${tone}`, { tone, actions })),
+        ],
+        empty: { headline: "Nothing remembered yet", body: null, offer: null },
+      },
+      {
+        kind: "list",
+        rows: [],
+        empty: { headline: "Nothing here yet", body: "Add one.", offer: null },
+      },
+      ...(["bars", "columns"] as const).map((shape) => ({
+        kind: "chart" as const,
+        title: `Memories per persona, as ${shape}`,
+        shape,
+        unit: "memories",
+        points: [
+          { label: "steward", value: 3, note: "75%" },
+          { label: "devops", value: 1, note: null },
+          { label: "nobody", value: 0, note: null },
+        ],
+      })),
+    ],
+    took_ms: 2,
+    overreach: null,
+  };
+}
+
+/** What an extension's program answers: every block, rows that offer an action of each kind,
+ *  and a sentence about what it changed outside its declared paths — drawn as trouble. */
+const EXTENSION_ANSWER: ViewAnswer = {
+  ...answered([
+    { id: "pin", title: "Pin", asks_first: false, deletes: false },
+    { id: "drop", title: "Drop…", asks_first: true, deletes: true },
+  ]),
+  overreach: "persona-statistics changed memory/x.md, which it does not declare it writes.",
+} as ViewAnswer;
+
+/** A workspace's changes (#474): one change's members are rows, so its list is headed by a
+ *  Push and each member row offers Land. */
+const CHANGES_ANSWER: ViewAnswer = {
   kind: "answered",
   blocks: [
-    { kind: "note", text: "The steward", tone: "default" },
-    { kind: "note", text: "Something is off", tone: "warn" },
-    { kind: "facts", facts: [{ label: "Vault", value: "none" }] },
+    { kind: "note", text: "1 change in web", tone: "plain" },
     {
       kind: "list",
       rows: [
-        {
-          key: "a",
-          text: "Charter defects go upstream",
-          note: "2026-09-20",
-          mark: "note",
-          tone: "plain",
-          detail: { kind: "text", text: "File the issue." },
-          runs: null,
-          actions: [],
-        },
+        row("site#12", { text: "site: tokens for every view", mark: "piece" }),
+        row("api#3", { text: "api: the same", mark: "piece" }),
       ],
-      empty: { headline: "Nothing remembered yet", body: null, offer: null },
+      empty: { headline: "No changes", body: null, offer: null },
     },
+  ],
+  took_ms: 40,
+  overreach: null,
+  changes: [
     {
-      kind: "chart",
-      title: "Memories per persona",
-      shape: "bars",
-      unit: "memories",
-      points: [
-        { label: "steward", value: 3, note: "75%" },
-        { label: "devops", value: 1, note: null },
+      at: 1,
+      change: "tokens",
+      members: [
+        { key: "site#12", repo: "site" },
+        { key: "api#3", repo: "api" },
       ],
     },
   ],
-  took_ms: 2,
-  overreach: null,
 };
 
 const SHARED_FILE: SettingsFile = {
@@ -283,6 +434,17 @@ const THEME: ProjectTheme = {
   local_left_out: null,
 };
 
+/** A project that picked a theme and a workspace colour: the theme group draws what is in
+ *  force, and the colour's sentence. */
+const THEME_PICKED: ProjectTheme = {
+  ...THEME,
+  picked: "charter-light",
+  file: "charter.toml",
+  draws: "charter-light",
+  why: "charter.toml picks it",
+  colour: "slate",
+};
+
 const said = (value: string | null, source = "default") => ({ value, source });
 
 const SAVING_IN_FORCE: SavingInForce = {
@@ -320,6 +482,18 @@ const VAULT: VaultContents = {
   secrets: [{ key: "DB_URL", size: "24 B", updated: "2026-09-20" }],
   identity: [],
   identity_in_app_env: [],
+};
+
+/** A vault that cannot be read, read through an identity still in charter's environment. */
+const VAULT_TROUBLED: VaultContents = {
+  ...VAULT,
+  health: { ok: false, detail: "the keyring is locked" },
+  identity: [
+    { variable: "OP_SERVICE_ACCOUNT_TOKEN", held: "environment" },
+    { variable: "OP_CONNECT_TOKEN", held: "keyring" },
+    { variable: "VAULT_TOKEN", held: "unset" },
+  ],
+  identity_in_app_env: ["OP_SERVICE_ACCOUNT_TOKEN"],
 };
 
 const PLANE_SAVING: PlaneSaving = {
@@ -393,6 +567,15 @@ const WORKSPACE_FILE: WorkspaceSettings = {
   live: true,
 };
 
+/** A workspace whose colour is a custom `#rrggbb`: the colour well is drawn, holding it. */
+const WORKSPACE_COLOURED: WorkspaceSettings = {
+  ...WORKSPACE_FILE,
+  text: '{ "settings": { "theme": { "colour": "#2a9d8f" } } }',
+  fields: [
+    { path: [{ key: "theme" }, { key: "colour" }], value: { kind: "text", value: "#2a9d8f" } },
+  ],
+};
+
 const INSTRUCTIONS: InstructionFile[] = [
   {
     repo: "site",
@@ -402,73 +585,139 @@ const INSTRUCTIONS: InstructionFile[] = [
   },
 ];
 
-/** The core, answering every question a view asks with the answers above. */
-function core() {
+/** What the core answers, by command; a function to answer from the arguments, an `Error` to
+ *  refuse with its message. */
+type Answers = Record<string, unknown>;
+
+/** The core answering every question a view asks, as an ordinary plane would. */
+const ORDINARY: Answers = {
+  open_view: answered(),
+  vault_open: VAULT,
+  vault_secret_reveal: "postgres://db.internal/app",
+  project_settings: SETTINGS,
+  project_extensions: { extensions: [], local_left_out: null },
+  project_harness_plugins: HARNESSES,
+  project_saving_in_force: SAVING_IN_FORCE,
+  project_theme: THEME,
+  project_theme_drawn: null,
+  plane_saving: PLANE_SAVING,
+  workspace_saving: REPO_SAVING,
+  session_record: RECORD,
+  memory_read: MEMORY,
+  workspace_settings: WORKSPACE_FILE,
+  repo_instructions: INSTRUCTIONS,
+  extensions_on: [],
+};
+
+function core(over: Answers = {}) {
+  const answers = { ...ORDINARY, ...over };
   mockIPC((cmd) => {
-    switch (cmd) {
-      case "open_view":
-        return ANSWERED;
-      case "vault_open":
-        return VAULT;
-      case "project_settings":
-        return SETTINGS;
-      case "project_extensions":
-        return { extensions: [], local_left_out: null };
-      case "project_harness_plugins":
-        return HARNESSES;
-      case "project_saving_in_force":
-        return SAVING_IN_FORCE;
-      case "project_theme":
-        return THEME;
-      case "project_theme_drawn":
-        return null;
-      case "plane_saving":
-        return PLANE_SAVING;
-      case "workspace_saving":
-        return REPO_SAVING;
-      case "session_record":
-        return RECORD;
-      case "memory_read":
-        return MEMORY;
-      case "workspace_settings":
-        return WORKSPACE_FILE;
-      case "repo_instructions":
-        return INSTRUCTIONS;
-      default:
-        return null;
-    }
+    const answer = answers[cmd];
+    if (answer instanceof Error) throw answer.message;
+    return answer ?? null;
   });
 }
 
-/** Every view a tab can show, and words that are on it once its answer is drawn — the wait
- *  that makes this a test of the view and not of its "opening" line. */
-const VIEWS: { name: string; view: ViewRef; drawn: RegExp }[] = [
+/** Every heading row a view offers, as a catalogue row that runs — and one that cannot, so the
+ *  disabled button is drawn too. */
+function offerFor(id: string): Offer {
+  const available = !id.endsWith(":ops");
+  return {
+    id,
+    title: id,
+    available,
+    reason: available ? "" : "a vault in use cannot be removed",
+    does: { verb: "chat.new" },
+  };
+}
+
+/** One state a view tab draws: the view, what the core answers, what the operator does once it
+ *  is drawn, and words that are on it once that state is reached. */
+type State = {
+  name: string;
+  view: ViewRef;
+  drawn: RegExp;
+  answers?: Answers;
+  waits?: boolean;
+  before?: () => void;
+  then?: () => Promise<void>;
+};
+
+const PERSONA: ViewRef = { from: null, view: "persona", key: "steward" };
+const EXTENSION: ViewRef = { from: "persona-statistics", view: "statistics", key: "" };
+const CHANGES: ViewRef = { from: null, view: "changes", key: WORKSPACE };
+const MEMORY_REF: ViewRef = { from: null, view: "memory", key: "shared/grill" };
+const VAULT_REF: ViewRef = { from: null, view: "vault", key: "ops" };
+
+const STATES: State[] = [
+  { name: "a persona", view: PERSONA, drawn: /Charter defects go upstream/ },
   {
-    name: "a persona",
-    view: { from: null, view: "persona", key: "steward" },
-    drawn: /Charter defects go upstream/,
+    name: "a persona that has gone",
+    view: PERSONA,
+    answers: { open_view: { kind: "gone", why: "steward was removed." } },
+    drawn: /steward was removed/,
   },
-  { name: "a vault", view: { from: null, view: "vault", key: "ops" }, drawn: /DB_URL/ },
+  {
+    name: "a persona that could not be read",
+    view: PERSONA,
+    answers: { open_view: new Error("persona.md could not be read: permission denied") },
+    drawn: /permission denied/,
+  },
+  {
+    name: "a vault, a secret revealed",
+    view: VAULT_REF,
+    drawn: /postgres:\/\/db\.internal/,
+    then: async () => {
+      await userEvent.click(await screen.findByRole("button", { name: "Reveal DB_URL" }));
+    },
+  },
+  {
+    name: "a vault that cannot be read",
+    view: VAULT_REF,
+    answers: { vault_open: VAULT_TROUBLED },
+    drawn: /the keyring is locked/,
+  },
   {
     name: "Project settings",
     view: { from: null, view: "settings", key: "" },
     drawn: /charter\.toml/,
   },
+  {
+    name: "Project settings with a theme picked",
+    view: { from: null, view: "settings", key: "" },
+    answers: { project_theme: THEME_PICKED, project_theme_drawn: "charter-light" },
+    drawn: /charter\.toml picks it/,
+  },
   { name: "Saving", view: { from: null, view: "saving", key: "" }, drawn: /site/ },
   {
-    name: "a workspace's changes",
-    view: { from: null, view: "changes", key: WORKSPACE },
-    drawn: /Charter defects go upstream/,
+    name: "a workspace's changes, a landing refused",
+    view: CHANGES,
+    answers: {
+      open_view: CHANGES_ANSWER,
+      change_land_question: new Error("site#12 has a failing check"),
+    },
+    drawn: /site#12 has a failing check/,
+    then: async () => {
+      expect(await screen.findByRole("button", { name: /Push tokens/ })).toBeInTheDocument();
+      await userEvent.click((await screen.findAllByRole("button", { name: "Land…" }))[0]);
+    },
   },
   {
     name: "a session record",
     view: { from: null, view: "session", key: RECORD.row.path },
     drawn: /The guard ran/,
   },
+  { name: "a memory", view: MEMORY_REF, drawn: /offer menus/ },
   {
-    name: "a memory",
-    view: { from: null, view: "memory", key: "shared/grill" },
-    drawn: /offer menus/,
+    name: "a memory being edited",
+    view: MEMORY_REF,
+    before: () => wantEdit(PLANE, MEMORY_REF.key),
+    drawn: /^15 \/ 72$/,
+  },
+  {
+    name: "a new memory",
+    view: { from: null, view: "memory", key: `shared/${DRAFT}` },
+    drawn: /0 \/ 72/,
   },
   {
     name: "Shared memory",
@@ -481,38 +730,90 @@ const VIEWS: { name: string; view: ViewRef; drawn: RegExp }[] = [
     drawn: /workspace\.json/,
   },
   {
+    name: "a workspace's settings with a custom colour",
+    view: { from: null, view: "workspace-settings", key: WORKSPACE },
+    answers: { workspace_settings: WORKSPACE_COLOURED },
+    drawn: /Custom colour/,
+  },
+  {
     name: "a workspace's repo instructions",
     view: { from: null, view: "repo-instructions", key: WORKSPACE },
     drawn: /AGENTS\.md/,
   },
   { name: "Preferences", view: { from: null, view: "preferences", key: "" }, drawn: /^Text$/ },
   {
-    name: "an extension's view",
-    view: { from: "persona-statistics", view: "statistics", key: "" },
-    drawn: /Memories per persona/,
+    name: "an extension's view, its action refused",
+    view: EXTENSION,
+    answers: {
+      open_view: EXTENSION_ANSWER,
+      run_action: new Error("persona-statistics refused: busy"),
+    },
+    drawn: /refused: busy/,
+    then: async () => {
+      expect(await screen.findByText(/does not declare it writes/)).toBeInTheDocument();
+      await userEvent.click((await screen.findAllByRole("button", { name: "Pin" }))[0]);
+    },
+  },
+  {
+    name: "an extension's view waiting to be asked",
+    view: EXTENSION,
+    waits: true,
+    drawn: /was open when charter last quit/,
+  },
+  {
+    name: "an extension's view that could not answer",
+    view: EXTENSION,
+    answers: { open_view: new Error("persona-statistics timed out") },
+    drawn: /timed out/,
   },
 ];
 
+describe("every kind of view is drawn here", () => {
+  it("has a state for every view charter has, and for an extension's", () => {
+    // A new view gets a glyph in `OWN_MARKS` the day it is added, so a view this file has not
+    // heard of fails here rather than going unchecked.
+    const drawnHere = new Set(
+      STATES.filter((one) => one.view.from === null).map((one) => one.view.view),
+    );
+    expect(Object.keys(OWN_MARKS).filter((view) => !drawnHere.has(view))).toEqual([]);
+    expect(STATES.some((one) => one.view.from !== null)).toBe(true);
+  });
+});
+
 describe.each(Object.keys(BUILT_IN))("every view in %s", (theme) => {
   beforeEach(() => drawIn(BUILT_IN[theme]));
-  afterEach(() => drawIn(DEFAULT_THEME));
+  afterEach(() => {
+    drawIn(DEFAULT_THEME);
+    forgetDrafts();
+  });
 
-  it.each(VIEWS)("draws $name with tokens only", async ({ view, drawn }) => {
-    core();
+  it.each(STATES)("draws $name with tokens only", async (state) => {
+    core(state.answers);
+    state.before?.();
     const { container } = render(
       <ViewPane
         plane={PLANE}
-        view={view}
+        view={state.view}
         title="The view"
         workspace={WORKSPACE}
-        waits={false}
-        offered={[]}
+        waits={state.waits ?? false}
+        offered={[
+          {
+            extension: "persona-statistics",
+            id: "statistics",
+            title: "Statistics",
+            about: "personas",
+          },
+        ]}
         onOpenView={() => {}}
         onAsk={() => {}}
         onVaultChanged={() => {}}
+        offerFor={offerFor}
+        onPress={() => {}}
       />,
     );
-    expect((await screen.findAllByText(drawn)).length).toBeGreaterThan(0);
+    await state.then?.();
+    expect((await screen.findAllByText(state.drawn)).length).toBeGreaterThan(0);
     expect(complaints(container)).toEqual([]);
   });
 });

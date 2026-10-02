@@ -17,6 +17,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { LITERALS, dataUrls } from "./literal";
 import { MOTION_TOKENS, motionProperty } from "./motion";
 import { TOKENS, property, type Token } from "./theme";
 
@@ -90,29 +91,86 @@ function at(path: string, text: string, index: number): string {
   return `${path}:${text.slice(0, index).split("\n").length}`;
 }
 
-/** Everything that is a colour written out by hand. Hex is matched with a boundary at each
- *  end so `#f0883e` is caught and `#1330` in `(charter-app#1330)` — already removed with the
- *  comments — could not sneak back as a prefix of a longer word. */
-const LITERALS: { what: string; pattern: RegExp }[] = [
-  { what: "a hex colour", pattern: /#[0-9a-fA-F]{3,8}\b/g },
-  { what: "a colour function", pattern: /\b(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\s*\(/g },
-  {
-    what: "a named CSS colour",
-    pattern:
-      /(?<![\w-])(?:white|black|red|green|blue|yellow|orange|purple|pink|brown|gray|grey|silver|gold|cyan|magenta|teal|navy|olive|maroon|lime|aqua|fuchsia)(?![\w-])/g,
-  },
-];
+/**
+ * Every colour literal in a stylesheet's (or a page's) text, comments already out — by the
+ * definition `literal.ts` holds for this guard and the rendered one alike.
+ *
+ * A hex value and a colour function are refused wherever they are; hex is matched with a
+ * boundary at each end so `#f0883e` is caught and `#1330` in `(charter-app#1330)` — already
+ * removed with the comments — could not sneak back as a prefix of a longer word. A colour's
+ * NAME is refused only where it is a value — after a property's colon, or in a page's attribute — because the full list
+ * holds words that are also selectors: `mark` is an element, `field` a class. And a data URL is
+ * decoded and read whole, so an inlined SVG's `fill='%23fff'` is the `#fff` it is.
+ */
+function cssComplaints(path: string, text: string): string[] {
+  const complaints: string[] = [];
+  const [hex, fn, named] = LITERALS;
+  for (const { what, pattern } of [hex, fn]) {
+    for (const hit of text.matchAll(pattern)) {
+      complaints.push(`${at(path, text, hit.index)} has ${what}: ${hit[0]}`);
+    }
+  }
+  // A declaration's value, and — in a page — an attribute's.
+  const values = [
+    ...text.matchAll(/[\w-]+\s*:\s*([^;{}]+?)\s*(?=[;}]|$)/gm),
+    ...text.matchAll(/=\s*"([^"]*)"/g),
+  ];
+  for (const value of values) {
+    for (const hit of value[1].matchAll(named.pattern)) {
+      complaints.push(`${at(path, text, value.index)} has ${named.what}: ${hit[0]}`);
+    }
+  }
+  for (const decoded of dataUrls(text)) {
+    for (const { what, pattern } of LITERALS) {
+      for (const hit of decoded.matchAll(pattern)) {
+        complaints.push(`${path} has ${what} in a data URL: ${hit[0]}`);
+      }
+    }
+  }
+  return complaints;
+}
+
+describe("the stylesheet guard", () => {
+  // Probes for the loopholes the first version of the list had: each is a colour a theme could
+  // not change, and each was let through.
+  it("refuses every named CSS colour, in any case", () => {
+    expect(cssComplaints("a.css", ".a { color: rebeccapurple; }")).not.toEqual([]);
+    expect(cssComplaints("a.css", ".a { color: DarkSlateGray; }")).not.toEqual([]);
+  });
+
+  it("refuses a system colour", () => {
+    expect(cssComplaints("a.css", ".a { background: Canvas; }")).not.toEqual([]);
+  });
+
+  it("refuses a colour inside a data URL", () => {
+    expect(
+      cssComplaints(
+        "a.css",
+        `.a { background-image: url("data:image/svg+xml,%3Csvg fill='%23fff'/%3E"); }`,
+      ),
+    ).not.toEqual([]);
+  });
+
+  it("refuses a named colour in a page's attribute", () => {
+    expect(cssComplaints("index.html", '<meta name="theme-color" content="black" />')).not.toEqual(
+      [],
+    );
+  });
+
+  it("reads a word that is a colour only where it is a value", () => {
+    // `mark` and `field` are system colours and also an element and a class charter has; a
+    // selector naming one is not a colour.
+    expect(cssComplaints("a.css", "mark, .field { color: var(--text-primary); }")).toEqual([]);
+  });
+});
 
 describe("no colour is written outside a theme file", () => {
   it.each(sources(".css", ".html"))("%s holds no colour literal", (path, raw) => {
     const text = withoutComments(raw, "css");
-    const complaints: string[] = [];
-    for (const { what, pattern } of LITERALS) {
-      for (const hit of text.matchAll(pattern)) {
-        complaints.push(`${at(path, text, hit.index)} has ${what}: ${hit[0]}`);
-      }
-    }
-    expect(complaints, "put the colour in src/theme/ and use var(--<token>)").toEqual([]);
+    expect(
+      cssComplaints(path, text),
+      "put the colour in src/theme/ and use var(--<token>)",
+    ).toEqual([]);
   });
 
   it.each(sources(".ts", ".tsx"))("%s holds no colour literal", (path, raw) => {
