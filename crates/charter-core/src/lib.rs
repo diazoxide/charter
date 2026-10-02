@@ -30,6 +30,7 @@ pub mod executor;
 pub mod extension;
 pub mod fence;
 pub mod firstrun;
+pub mod firsttask;
 pub mod floorguard;
 pub mod footer;
 pub mod footerclaim;

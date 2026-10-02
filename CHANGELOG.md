@@ -20,6 +20,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   holds and gets every later event once and in order, across segments and across a host that was
   killed and started again; a cursor older than what is kept is told what it missed (FD-24,
   #661).
+- **A first task, beside your first chat.** After the first run opens your repo, a **First task**
+  tab sits beside the chat. It gives one small, real task to two chats, on two harnesses or two
+  profiles of one, each on a branch of its own in charter's copy of your repo, with the task typed
+  in for you to read and send. The task asks each chat to record what it learned, so the second
+  chat starts with the first one's lesson in its briefing, whichever harness it runs on. **Show its
+  diff** opens a shell in that chat's branch with its diff. Nothing is written into your repo, and
+  the task asks for nothing to be pushed (FR-28, #621).
 
 - **Read any file of a worktree in charter.** A worktree's menu in the explorer has *Browse the
   files of …*: a tab listing the worktree's files, narrowed as you type, with the file you pick

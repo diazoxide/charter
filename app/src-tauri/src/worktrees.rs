@@ -361,16 +361,29 @@ pub fn on_a_branch<T>(
     new_branch: bool,
     start: impl FnOnce(Option<PathBuf>) -> Result<T, String>,
 ) -> Result<(T, Vec<String>), String> {
+    on_a_branch_cut(plane, config, cwd, label, new_branch, |cwd, _| start(cwd))
+}
+
+/// [`on_a_branch`], with `start` also handed the branch it cut, when it cut one: what a caller
+/// needs to say what the branch was cut from (the first task's diff, FR-28).
+pub fn on_a_branch_cut<T>(
+    plane: &Path,
+    config: Option<&Path>,
+    cwd: Option<&Path>,
+    label: Option<&str>,
+    new_branch: bool,
+    start: impl FnOnce(Option<PathBuf>, Option<&chatpiece::Cut>) -> Result<T, String>,
+) -> Result<(T, Vec<String>), String> {
     let clone = cwd
         .filter(|_| new_branch)
         .and_then(|at| chatpiece::clone_at(plane, at));
     let Some((workspace, repo)) = clone else {
-        return start(cwd.map(Path::to_path_buf)).map(|started| (started, Vec::new()));
+        return start(cwd.map(Path::to_path_buf), None).map(|started| (started, Vec::new()));
     };
     let naming = chatpiece::Naming::After(label.map(str::to_string));
     let cut = chatpiece::cut(plane, &workspace, &repo, &naming).map_err(|why| why.in_window())?;
     let held = chatpiece::Held::new(plane, cut);
-    match start(Some(held.cut().path.clone())) {
+    match start(Some(held.cut().path.clone()), Some(held.cut())) {
         Ok(started) => {
             let cut = held.keep();
             let mut said = vec![on_branch(&cut)];

@@ -276,20 +276,6 @@ fn when_typed(profile: &str, harness: Option<Harness>) -> Result<ReadyToType, St
     }
 }
 
-/// Whether `harness` would draw `prompt`, pasted, whole in its input, in a sentence when it
-/// would draw a placeholder instead: a prompt the operator cannot read is not typed (ADR 0061,
-/// amended 2026-09-27). The core's judgment, the one `charter persona lint` warns with.
-fn drawn_whole(prompt: &str, harness: Option<Harness>) -> Result<(), String> {
-    let Some(why) = harness.and_then(|h| h.why_drawn_as_a_placeholder(&curation::pasted(prompt)))
-    else {
-        return Ok(());
-    };
-    Err(format!(
-        "{why}, which you could not read before sending it, so no curation chat was opened. \
-         Shorten the prompt to one line that names a skill, and let the skill hold the steps."
-    ))
-}
-
 /// What a curation chat's tab says: `<label> · <subject>`, held to a chat name's length.
 fn tab_label(label: &str, subject: &str) -> String {
     let whole = format!("{label} · {subject}");
@@ -318,55 +304,26 @@ fn open(held: &Arc<Held>, spec: &str, action: &str, size: Size) -> Result<Curati
     let profile = launch_profile(&root)?;
     let name_shown = name_of(&root, &subject);
     let label = tab_label(&chosen.label, &name_shown);
-    let number = held.chats().sessions().deal();
-    let name = number.to_string();
-    let ready = charter_core::start::ready(
-        &charter_core::start::Start {
-            profile: Some(profile.clone()),
+    let typed = start_typed(
+        held,
+        ChatTyped {
+            profile,
             persona: chosen.runner.clone(),
-            name: name.clone(),
-            cwd: Some(chosen.cwd.clone()),
-            resume: None,
-            // The picker's footer box is one operator choice for one chat, and nobody made it
-            // for this one — a handoff's rule.
-            show_footer: false,
-            resuming: None,
+            cwd: chosen.cwd.clone(),
+            label: label.clone(),
+            prompt: chosen.prompt,
         },
-        &root,
+        size,
+        when_typed,
+        |why| {
+            format!(
+                "{why}, which you could not read before sending it, so no curation chat was \
+                 opened. Shorten the prompt to one line that names a skill, and let the skill \
+                 hold the steps."
+            )
+        },
     )?;
-    // The same question the menu asked, of the harness this start actually resolved.
-    let when = when_typed(&profile, ready.harness)?;
-    drawn_whole(&chosen.prompt, ready.harness)?;
-    let chat = Chat {
-        program: ready.program.clone(),
-        // What the RECORD keeps: the profile's own words. Never the prompt — a relaunch
-        // resumes the conversation, and the prompt was only ever typed once.
-        args: Vec::new(),
-        cwd: ready.cwd.clone(),
-        name: name.clone(),
-        resume: ready.session.clone(),
-        active: false,
-        profile: Some(profile),
-        persona: chosen.runner.clone(),
-        show_footer: false,
-        pinned: false,
-        number: Some(number),
-        label: Some(label.clone()),
-        from: None,
-        renamed_from: None,
-        ..Default::default()
-    };
-    match when {
-        ReadyToType::WhenItReportsItsStart => held.typed().hold(number, chosen.prompt),
-        ReadyToType::WhenRawAndQuiet => held.typed().hold_until_quiet(number, chosen.prompt),
-    }
-    let session = held
-        .chats()
-        .start_ready(&chat, &ready, size)
-        .inspect_err(|_| held.typed().forget(number))?;
-    if when == ReadyToType::WhenRawAndQuiet {
-        type_when_raw_and_quiet(held, session);
-    }
+    let (session, name, ready) = (typed.session, typed.name, typed.ready);
     Ok(Curating {
         session,
         name,
@@ -377,6 +334,105 @@ fn open(held: &Arc<Held>, spec: &str, action: &str, size: Size) -> Result<Curati
         // the chat its workspace by: a chat at the plane root, or in a persona's directory, is
         // in none.
         workspace: charter_core::workspaces::Plane::open(&root).workspace_of(&chosen.cwd),
+    })
+}
+
+/// A chat to open with a prompt typed into it and never sent: a curation action's, or a run of
+/// the first task (FR-28).
+pub struct ChatTyped {
+    /// The harness profile it starts on.
+    pub profile: String,
+    pub persona: Option<String>,
+    /// Where it starts.
+    pub cwd: std::path::PathBuf,
+    /// What its tab says.
+    pub label: String,
+    /// What is typed into it.
+    pub prompt: String,
+}
+
+/// A typed chat that started.
+pub struct StartedTyped {
+    pub session: u32,
+    /// Its name, which is its number.
+    pub name: String,
+    /// What `start::ready` answered for it: its harness and its directory.
+    pub ready: charter_core::start::Ready,
+}
+
+/// Opens `chat` with its prompt typed once its harness has started, and never sent.
+///
+/// `cannot_type` says when the resolved harness can be typed into, or why not, in the caller's
+/// words; `not_drawn` turns the core's reason a paste would be drawn as a placeholder into the
+/// caller's refusal (ADR 0061, amended 2026-09-27: a prompt the operator could not read is not
+/// typed). **The prompt is held BEFORE the chat starts**, because its harness can report its
+/// start before `start_ready` returns, and let go again when nothing started.
+pub fn start_typed(
+    held: &Arc<Held>,
+    chat: ChatTyped,
+    size: Size,
+    cannot_type: impl FnOnce(&str, Option<Harness>) -> Result<ReadyToType, String>,
+    not_drawn: impl FnOnce(String) -> String,
+) -> Result<StartedTyped, String> {
+    let root = held.root().to_path_buf();
+    let number = held.chats().sessions().deal();
+    let name = number.to_string();
+    let ready = charter_core::start::ready(
+        &charter_core::start::Start {
+            profile: Some(chat.profile.clone()),
+            persona: chat.persona.clone(),
+            name: name.clone(),
+            cwd: Some(chat.cwd.clone()),
+            resume: None,
+            // The picker's footer box is one operator choice for one chat, and nobody made it
+            // for this one — a handoff's rule.
+            show_footer: false,
+            resuming: None,
+        },
+        &root,
+    )?;
+    // The same question the caller's menu asked, of the harness this start actually resolved.
+    let when = cannot_type(&chat.profile, ready.harness)?;
+    if let Some(why) = ready
+        .harness
+        .and_then(|h| h.why_drawn_as_a_placeholder(&curation::pasted(&chat.prompt)))
+    {
+        return Err(not_drawn(why));
+    }
+    let record = Chat {
+        program: ready.program.clone(),
+        // What the RECORD keeps: the profile's own words. Never the prompt — a relaunch
+        // resumes the conversation, and the prompt was only ever typed once.
+        args: Vec::new(),
+        cwd: ready.cwd.clone(),
+        name: name.clone(),
+        resume: ready.session.clone(),
+        active: false,
+        profile: Some(chat.profile),
+        persona: chat.persona,
+        show_footer: false,
+        pinned: false,
+        number: Some(number),
+        label: Some(chat.label),
+        from: None,
+        renamed_from: None,
+        ..Default::default()
+    };
+    match when {
+        ReadyToType::WhenItReportsItsStart => held.typed().hold(number, chat.prompt),
+        ReadyToType::WhenRawAndQuiet => held.typed().hold_until_quiet(number, chat.prompt),
+    }
+    let session = held
+        .chats()
+        .start_ready(&record, &ready, size)
+        .inspect_err(|_| held.typed().forget(number))?;
+    if when == ReadyToType::WhenRawAndQuiet {
+        type_when_raw_and_quiet(held, session);
+    }
+    Ok(StartedTyped {
+        session,
+        name,
+        ready,
     })
 }
 

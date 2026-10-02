@@ -2,6 +2,7 @@ import { useId, useRef, useState } from "react";
 import * as Checkbox from "@radix-ui/react-checkbox";
 import * as Dialog from "@radix-ui/react-dialog";
 import * as RadioGroup from "@radix-ui/react-radio-group";
+import { ApprovalSentence, ProfileMeta } from "./ProfileApproval";
 import type { ProfileRow, StartOptions } from "./bindings";
 
 /**
@@ -368,13 +369,7 @@ export function StartChat({
             </details>
           )}
 
-          {picked?.approval && (
-            <p className="honest approve" role="alert">
-              charter has not run this profile{" "}
-              {picked.approval === "new" ? "before" : "as it now stands"}. It would run:{" "}
-              <code>{picked.shown}</code>
-            </p>
-          )}
+          <ApprovalSentence row={picked} />
           {trouble && (
             <p className="honest mid-turn" role="alert">
               {trouble}
@@ -446,15 +441,7 @@ function Row({ row, onPick }: { row: ProfileRow; onPick: (name: string) => void 
       <label className="who" htmlFor={id}>
         {row.name}
       </label>
-      <span className="meta" id={`${id}-meta`}>
-        <span className="what">{row.kind}</span>
-        {/* Already contained by the core: a profile is a file a chat can write, and a control
-          byte in a command must never redraw this row. */}
-        <code className="where">{row.shown}</code>
-        <span className="from">{row.source}</span>
-        {row.is_default && <span className="what">default</span>}
-        {row.approval && <span className="what needs-approval">{row.approval}</span>}
-      </span>
+      <ProfileMeta row={row} id={`${id}-meta`} />
     </div>
   );
 }

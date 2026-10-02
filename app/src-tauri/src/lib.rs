@@ -26,6 +26,7 @@ mod curation;
 mod doctor;
 mod extensions;
 mod firstrun;
+mod firsttask;
 mod handoff;
 mod harness_plugins;
 mod heard;
@@ -849,6 +850,10 @@ struct ProfileRow {
     /// `new` or `changed` when this profile's command must be shown and approved before it
     /// runs; absent when charter has already recorded running exactly this.
     approval: Option<String>,
+    /// Whether charter can type a prompt into a chat on it once its harness has started
+    /// (`Harness::ready_to_type`): what a surface that types one, such as the first task
+    /// (FR-28), offers it by.
+    ready_to_type: bool,
 }
 
 /// Everything the picker draws, read from the plane when it is opened.
@@ -894,6 +899,9 @@ fn start_options(planes: tauri::State<'_, Planes>, plane: PlaneId) -> Result<Sta
                 is_default: set.default.as_deref() == Some(p.name.as_str()),
                 approval: charter_core::profiletrust::approval_needed(root, p)
                     .map(|a| a.as_str().to_owned()),
+                ready_to_type: charter_core::harness::Harness::of_kind(&p.kind)
+                    .and_then(charter_core::harness::Harness::ready_to_type)
+                    .is_some(),
             })
             .collect(),
         refused: set
