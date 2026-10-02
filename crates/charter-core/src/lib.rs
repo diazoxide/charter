@@ -75,6 +75,7 @@ pub mod personagrant;
 pub mod personas;
 pub mod personaverbs;
 pub mod piececmd;
+pub mod piecefiles;
 pub mod pieces;
 pub mod plane;
 pub mod planechange;

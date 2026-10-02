@@ -1,8 +1,10 @@
-import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Fragment, Suspense, lazy, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Brain,
   ChartColumn,
+  FileCode,
   FileText,
+  FolderGit2,
   GitPullRequest,
   History,
   KeyRound,
@@ -41,6 +43,7 @@ import { DRAFT, MEMORY_VIEW, SHARED_MEMORY_VIEW, isMemory, memoryRefOf } from ".
 import { HeadingOffer } from "./PanelSection";
 import { SavingView } from "./SavingView";
 import { SessionRecordTab } from "./SessionRecordTab";
+import { pieceOf } from "./pieceViews";
 import { SESSION_VIEW } from "./sessions";
 import { PREFERENCES_VIEW, SAVING_VIEW, SETTINGS_VIEW, viewKey, type ViewRef } from "./tabs";
 import { VaultTab } from "./VaultTab";
@@ -196,6 +199,8 @@ export const OWN_MARKS: Record<string, React.ComponentType<{ className?: string 
   [WORKSPACE_SETTINGS]: Settings2,
   [REPO_INSTRUCTIONS]: FileText,
   preferences: SlidersHorizontal,
+  "piece-files": FolderGit2,
+  "piece-file": FileCode,
 };
 
 /** The glyph a view's tab carries: a person for a persona, a piece of a puzzle for a view an
@@ -305,6 +310,7 @@ export function ViewPane({
   // charter's own views run no program, so there is nothing a press would be consent to.
   const holding = waits && view.from !== null;
   const memoryAt = isMemory(view) ? memoryRefOf(view.key) : undefined;
+  const piece = pieceOf(view);
   return (
     <section
       className="view-pane"
@@ -376,6 +382,26 @@ export function ViewPane({
           /* The plane's save standing and its save button (charter-app#294). Keyed by the
              plane, so a pane that comes to show another project's starts from its own read. */
           <SavingView key={plane} plane={plane} workspace={workspace} />
+        ) : piece !== undefined ? (
+          /* A piece's files, or one of them, in the light editor (RC-5). Keyed by the view, so
+             a pane that comes to show another file starts from its own read. */
+          <Suspense fallback={OPENING}>
+            {piece.path === undefined ? (
+              <PieceFilesTab
+                key={`${plane}\u0000${view.key}`}
+                plane={plane}
+                cut={piece.cut}
+                onOpenView={onOpenView}
+              />
+            ) : (
+              <PieceFileTab
+                key={`${plane}\u0000${view.key}`}
+                plane={plane}
+                cut={piece.cut}
+                path={piece.path}
+              />
+            )}
+          </Suspense>
         ) : isSession(view) ? (
           /* A session record (SI-8d): read-only Markdown the window renders from the core's
              `session_record`, keyed by the record so a pane that comes to show another starts
@@ -451,6 +477,21 @@ function OfferButton({ offer, onPress }: { offer?: Offer; onPress?: (offer: Offe
     </button>
   );
 }
+
+/**
+ * **The light editor's tabs, loaded the first time one is drawn** (RC-5). CodeMirror and its
+ * grammars are a chunk of their own, so a window that never opens a file or a diff never
+ * parses any of it (ADR 0086 rows M2 and L6).
+ */
+const PieceFilesTab = lazy(() =>
+  import("./editor/PieceFiles").then((module) => ({ default: module.PieceFilesTab })),
+);
+const PieceFileTab = lazy(() =>
+  import("./editor/PieceFiles").then((module) => ({ default: module.PieceFileTab })),
+);
+
+/** What a light editor tab shows while its chunk arrives. */
+const OPENING = <EmptyState mark={LoaderCircle} headline="Opening the light editor…" />;
 
 /** Whether `view` is the Project settings view (charter-app#252). */
 function isSettings(view: ViewRef): boolean {
