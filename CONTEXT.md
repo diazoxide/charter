@@ -318,12 +318,18 @@ The process that owns every chat's terminal on a device, one per OS user per dev
 _Avoid_: daemon, server (in UI text), backend
 
 **Runner**:
-A device, other than the one the window is on, whose own session host runs a workspace's chats.
-The desktop's session host reaches it through a **connector** and talks to it over a **link**.
-It keeps its own device id, event log, audit chain and kill switch, and it needs no server
-charter runs. A runner is a device, so it belongs to **Project**; which runner a workspace's
-chats run on is a **Workspace** setting (ADR 0072 §2, ADR 0078).
-_Avoid_: remote (unqualified), agent host, worker, server (in UI text)
+A device, other than the one the window is on, whose own session host runs a workspace's chats,
+serves a version of one of its repos, or runs browsers, as its **label** says. A long-lived runner
+is a machine the operator adds; a short-lived one is made by a **runner provider** for a human or
+a chat, for minutes or hours. Either way the desktop's session host reaches it through a
+**connector** and talks to it over a **link**, and its shell, logs, ports and browser views come
+only that way. It keeps its own device id, event log, audit chain and kill switch, and it needs
+no server charter runs. A short-lived runner is owned by the chat that started it, or by its
+workspace when a human started it or **pinned** it there. A runner is a device, so it belongs to
+**Project**; which runner a workspace's chats run on is a **Workspace** setting, and the
+**Runners** view tab shows a workspace's runners (ADR 0072 §2, ADR 0078, ADR 0089).
+_Avoid_: remote (unqualified), agent host, worker, server (in UI text), sandbox, environment, box,
+belongs to (for the lifecycle sense: say "is owned by")
 
 **Connector**:
 The command whose stdin and stdout reach a runner's session host: `ssh <alias>`,
@@ -331,7 +337,8 @@ The command whose stdin and stdout reach a runner's session host: `ssh <alias>`,
 as an argument vector on the machine that uses it, never committed in a project. It gives
 reachability, never identity. It belongs to **Project**, with the device it reaches (ADR 0072
 §2, ADR 0078).
-_Avoid_: transport (that is FD-4's framing), tunnel, provider (that creates the machine)
+_Avoid_: transport (that is FD-4's framing), tunnel, provider (that is the **runner provider**,
+which creates the machine)
 
 **Link**:
 The encrypted, mutually authenticated stream between the desktop's session host and a runner's,
@@ -340,6 +347,32 @@ was added, in a Noise `XX` handshake. The desktop always opens it. It belongs to
 with the two devices it joins (ADR 0072 §2, ADR 0078).
 _Avoid_: connection (unqualified), session (that is the process), pairing (that is how the keys
 were pinned)
+
+**Label** (of a runner):
+What a runner is for: exactly one of `harness` (runs chats), `app` (serves one version of a
+workspace repo) or `browser` (runs browsers only charter drives). charter enforces it at both
+ends of the link: only a `harness` runner starts chats, and a `browser` runner never receives a
+vault value. Tags, any words the operator picks, sit beside it and are enforced by nothing. A
+part of **Runner**, so it belongs to **Project** (ADR 0089).
+_Avoid_: role (unqualified), type, capability (that is an extension's), tag (for the role label)
+
+**Runner provider**:
+What makes and destroys short-lived runners and hands back a connector to each: charter's own
+core provider, which drives Docker or Podman on this machine, or an extension on the provider
+seam for anything else. It declares which labels it may make; whether its machines are the
+user's own is the operator's setting for it, never its own claim, and starts as not owned. A
+part of **Project**, beside the extensions it is one of (ADR 0078 §6, ADR 0089).
+_Avoid_: provider (unqualified: a vault's provider is where a vault keeps its values, ADR 0047,
+and a model's is who serves the model, ADR 0087), backend (in UI text), executor, cloud,
+connector (that only reaches a runner)
+
+**Grant** (to a runner):
+A human's approval, once per workspace on this machine, of one vault entry an app runner's spec
+declares it needs. charter injects the value when that runner starts and only when it builds a
+ref a human chose, never an agent's own unreviewed branch, and never into its image or logs. An
+agent may start a runner with the grants it has and never adds one; a `browser` runner, and a
+runner of a provider not marked as owned, never gets one. A setting of **Workspace** (ADR 0089).
+_Avoid_: permission, secret (for the approval), capability (that is an extension's)
 
 **Editor protocol**:
 The part of the session host's public protocol an editor integration speaks: find which chat or
@@ -419,7 +452,14 @@ _Avoid_: tab bar, scroller
 One operator's mark that a project, workspace or chat matters to them. It is kept on this
 machine and never in the plane. A pinned item is drawn first, and the workspace strip draws
 only pinned workspaces plus the one you are in.
-_Avoid_: favourite, star, bookmark
+_Avoid_: favourite, star, bookmark, pin (for a runner: that is **Pin** (of a runner))
+
+**Pin** (of a runner):
+A human's act that gives an agent-started runner to its workspace: the runner is then owned by
+the workspace instead of the chat, outlives the chat, and stops only by a human or the kill
+switch. Kept in the runner's record on this machine. A part of **Runner**, so it belongs to
+**Project** (ADR 0089).
+_Avoid_: keep, hold, pin (unqualified, which is the strip's mark)
 
 **Show-more**:
 The button at the end of a strip that lists what the strip is not drawing, sorted by activity,
@@ -610,7 +650,7 @@ _Avoid_: bundled plugin, first-party plugin, core extension
 One thing charter does for an extension that asked for it in its manifest and was approved,
 such as showing a badge or adding a CLI command. It describes charter's conduct, never a limit
 on the extension.
-_Avoid_: permission, grant (as a noun in UI text), power
+_Avoid_: permission, grant (that is a runner's **Grant**), power
 
 **Facts file**:
 A file an extension keeps in its own state directory, holding the values charter shows for it
