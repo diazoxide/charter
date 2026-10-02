@@ -44,7 +44,9 @@ mod bench {
     use std::time::{Duration, Instant};
 
     use bytes::Bytes;
+    use charter_session_protocol::auth::{Credentials, Scope};
     use charter_session_protocol::link::{self, Link};
+    use charter_session_protocol::local;
     use charter_session_protocol::version::{Speaks, Version};
     use charter_session_protocol::view::{Attacher, Chunk, Limits, Reader, ViewId, Viewer};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -218,16 +220,30 @@ mod bench {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("a directory for the socket");
         let path = dir.join("charterd.sock");
-        let listener = UnixListener::bind(&path).expect("a socket to listen on");
+        // The host's own path: the uid check, then the admission, as `charterd` serves it.
+        let listener =
+            local::Listener::new(UnixListener::bind(&path).expect("a socket to listen on"));
+        let held = Credentials::mint().expect("the host's credentials");
+        let credential = held.of(Scope::LocalUi).clone();
         let host = tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.expect("the client");
-            link::serve(stream, v1()).await.expect("a host link")
+            let stream = listener
+                .accept()
+                .await
+                .expect("the client")
+                .expect("this user");
+            link::serve(stream, v1(), &held).await.expect("a host link")
         });
         let stream = UnixStream::connect(&path).await.expect("the host's socket");
         let client = if o.rtt.is_zero() {
-            link::connect(stream, v1()).await
+            link::connect(stream, v1(), Scope::LocalUi, &credential).await
         } else {
-            link::connect(delayed(stream, o.rtt / 2), v1()).await
+            link::connect(
+                delayed(stream, o.rtt / 2),
+                v1(),
+                Scope::LocalUi,
+                &credential,
+            )
+            .await
         }
         .expect("a client link");
         let host = host.await.expect("the host");

@@ -496,3 +496,34 @@ queue. One thing departed from the text above, and the text above is left as acc
    SC-16's `bench` job. If either shows the control lane waiting too long, the fix is a
    scheduler in `link` that drains the control lane first, behind the same interface; it
    changes nothing else in this record.
+
+## Amended by FD-6 (#645, PR #927), 2026-10-02
+
+FD-6 built §5's authentication. The text of §5 above is left as accepted, and this note is
+the amendment. **Ruled by V68** (operator, 2026-10-02): admission is mutual.
+
+1. **A credential is proved, never presented.** §5 says a connection *"presents"* a credential.
+   On the wire it never crosses at all:
+   - the host sends a fresh challenge;
+   - the client answers with its scope, a fresh nonce of its own, and an HMAC under the
+     scope's credential over a client label, the scope and the challenge;
+   - the host checks that proof in constant time.
+
+   Whatever answers at the socket's path therefore learns nothing it can replay
+   (`charter_session_protocol::auth`).
+2. **The host proves itself too.** The host's admission carries an HMAC under the same
+   credential, over a distinct host label, the scope, its challenge and the client's nonce.
+   The client checks it in constant time and refuses a host that cannot make it, before
+   anything else is said. A process of the same user that bound the socket's path while the
+   host was down can then neither collect a credential nor pass for the host. The two labels
+   differ, so neither proof can be reflected as the other.
+3. **The uid check is a type.** Only the listener's check makes the connection the host's
+   `serve` takes. An unmapped uid (the overflow uid, or `(uid_t)-1`) is refused on either end,
+   since two of them compare equal without being one user.
+4. **One deadline covers the version, the admission and the control lane together.**
+5. **The checks have one copy.** A peer's uid, a private directory and a private file are
+   checked by `crates/same-user` for `charterd.sock`, the hook sockets and the credentials alike.
+
+What is left is stated in the protocol's docs: a same-user process that can already sit between
+a client and a running host could relay one live admission. Such a process can already open the
+credential files, which is why the chat sandbox denies a chat both the files and the socket.

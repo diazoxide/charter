@@ -2,9 +2,13 @@
 //! any number of streams either end opens, each with its own flow control (ADR 0068 §4).
 
 use bytes::Bytes;
+use charter_session_protocol::auth::Scope;
 use charter_session_protocol::link::{self, LinkError};
 use charter_session_protocol::version::{Refused, Speaks, Version};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, duplex};
+
+mod common;
+use common::HELD;
 
 fn v1() -> Speaks {
     Speaks::new([Version { major: 1, minor: 0 }])
@@ -13,7 +17,10 @@ fn v1() -> Speaks {
 #[tokio::test]
 async fn control_frames_arrive_whole_and_in_order_both_ways() {
     let (a, b) = duplex(64 * 1024);
-    let (client, host) = tokio::join!(link::connect(a, v1()), link::serve(b, v1()));
+    let (client, host) = tokio::join!(
+        link::connect(a, v1(), Scope::LocalUi, HELD.of(Scope::LocalUi)),
+        link::serve_any(b, v1(), &HELD)
+    );
     let (mut client, mut host) = (client.unwrap(), host.unwrap());
     assert_eq!(client.version(), Version { major: 1, minor: 0 });
     assert_eq!(host.version(), Version { major: 1, minor: 0 });
@@ -45,7 +52,10 @@ async fn control_frames_arrive_whole_and_in_order_both_ways() {
 #[tokio::test]
 async fn a_stream_one_end_opens_is_one_the_other_end_accepts() {
     let (a, b) = duplex(64 * 1024);
-    let (client, host) = tokio::join!(link::connect(a, v1()), link::serve(b, v1()));
+    let (client, host) = tokio::join!(
+        link::connect(a, v1(), Scope::LocalUi, HELD.of(Scope::LocalUi)),
+        link::serve_any(b, v1(), &HELD)
+    );
     let (mut client, mut host) = (client.unwrap(), host.unwrap());
 
     let mut opened = host.open().await.unwrap();
@@ -73,8 +83,13 @@ async fn a_stream_one_end_opens_is_one_the_other_end_accepts() {
 async fn a_refused_negotiation_starts_no_link() {
     let (a, b) = duplex(64 * 1024);
     let (client, host) = tokio::join!(
-        link::connect(a, Speaks::new([Version { major: 2, minor: 0 }])),
-        link::serve(b, v1())
+        link::connect(
+            a,
+            Speaks::new([Version { major: 2, minor: 0 }]),
+            Scope::LocalUi,
+            HELD.of(Scope::LocalUi)
+        ),
+        link::serve_any(b, v1(), &HELD)
     );
     assert!(matches!(
         client.err().unwrap(),
@@ -89,7 +104,10 @@ async fn a_refused_negotiation_starts_no_link() {
 #[tokio::test]
 async fn a_control_frame_past_the_limit_is_refused_and_the_lane_stays_usable() {
     let (a, b) = duplex(64 * 1024);
-    let (client, host) = tokio::join!(link::connect(a, v1()), link::serve(b, v1()));
+    let (client, host) = tokio::join!(
+        link::connect(a, v1(), Scope::LocalUi, HELD.of(Scope::LocalUi)),
+        link::serve_any(b, v1(), &HELD)
+    );
     let (mut client, mut host) = (client.unwrap(), host.unwrap());
     let too_big = Bytes::from(vec![0u8; link::MOST_CONTROL_FRAME_BYTES + 1]);
     assert!(
@@ -110,11 +128,15 @@ async fn a_control_frame_past_the_limit_is_refused_and_the_lane_stays_usable() {
 
 #[tokio::test]
 async fn a_link_the_multiplexer_gave_up_on_says_why() {
-    // The host negotiates, then sends bytes that are not Yamux. The client's link ends, and
-    // what it answers next names the multiplexer's reason rather than only "closed".
+    // The host negotiates and admits the client, then sends bytes that are not Yamux. The
+    // client's link ends, and what it answers next names the multiplexer's reason rather than
+    // only "closed".
     let (a, b) = duplex(64 * 1024);
     let host = tokio::spawn(async move {
-        let (_, mut rest) = charter_session_protocol::version::answer(b, &v1())
+        let (_, rest) = charter_session_protocol::version::answer(b, &v1())
+            .await
+            .unwrap();
+        let (_, mut rest) = charter_session_protocol::auth::admit(rest, &HELD)
             .await
             .unwrap();
         // Wait for the client's control lane to arrive, so its link is up first.
@@ -124,7 +146,9 @@ async fn a_link_the_multiplexer_gave_up_on_says_why() {
         rest.flush().await.unwrap();
         rest
     });
-    let mut client = link::connect(a, v1()).await.unwrap();
+    let mut client = link::connect(a, v1(), Scope::LocalUi, HELD.of(Scope::LocalUi))
+        .await
+        .unwrap();
     let _host = host.await.unwrap();
     match client.accept().await {
         Err(LinkError::Ended(why)) => assert!(why.contains("decode"), "{why}"),

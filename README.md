@@ -42,6 +42,7 @@ Intel macOS build, no `.rpm`, and no Windows until the port lands.
 | `crates/charter-core` | The core: the plane, and later workspaces, personas and sessions. No UI, no Tauri |
 | `crates/charter-cli` | The `charter` binary, called by hooks, scripts and agents |
 | `crates/stand-in` | Test-only: the one way a test writes a program it is about to run |
+| `crates/same-user` | Whether a socket's peer, a directory or a file is this user's alone: the one copy of the checks `charterd.sock`, the hook sockets and the client scopes' credentials rest on |
 | `crates/persona-statistics` | charter's first built-in extension, and the executor's first consumer: the persona statistics view (ADR 0041 stage 2). The release build assembles it into the app's resources (`persona-statistics assemble <dir>`), and it links the core's stats code so its numbers are `charter persona stats`'s |
 | `app/` | The desktop app: React + TypeScript UI |
 | `app/src-tauri` | The app's Rust side: Tauri commands that call the core |

@@ -1,9 +1,9 @@
 [workspace]
 resolver = "3"
-members = ["crates/charter-core", "crates/charter-cli", "crates/fake-harness", "crates/persona-statistics", "crates/extension-probe", "crates/release-manifest", "crates/changelog", "crates/stand-in", "crates/session-protocol", "app/src-tauri"]
+members = ["crates/charter-core", "crates/charter-cli", "crates/fake-harness", "crates/persona-statistics", "crates/extension-probe", "crates/release-manifest", "crates/changelog", "crates/stand-in", "crates/session-protocol", "crates/same-user", "app/src-tauri"]
 # Plain `cargo test` and `cargo clippy` cover the crates that need no built frontend.
 # The app crate compiles `app/dist` into itself, so it is checked through `npm run tauri`.
-default-members = ["crates/charter-core", "crates/charter-cli", "crates/fake-harness", "crates/persona-statistics", "crates/extension-probe", "crates/release-manifest", "crates/changelog", "crates/stand-in", "crates/session-protocol"]
+default-members = ["crates/charter-core", "crates/charter-cli", "crates/fake-harness", "crates/persona-statistics", "crates/extension-probe", "crates/release-manifest", "crates/changelog", "crates/stand-in", "crates/session-protocol", "crates/same-user"]
 
 [workspace.package]
 version = "0.4.2"
@@ -18,6 +18,8 @@ charter-core = { path = "crates/charter-core" }
 changelog = { path = "crates/changelog" }
 # Test-only: the one way a test writes a program it is about to run (charter-app#81).
 stand-in = { path = "crates/stand-in" }
+# Whether a socket's peer, a directory or a file is this user's alone (FD-6).
+charter-same-user = { path = "crates/same-user" }
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

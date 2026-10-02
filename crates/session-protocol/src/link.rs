@@ -38,6 +38,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 
+use crate::auth::{self, Credential, Credentials, Scope};
 use crate::version::{self, Refused, Speaks, Version};
 
 /// The largest frame the control lane carries. A command or an event is small; a frame this
@@ -66,9 +67,10 @@ pub enum LinkError {
     /// sent something that is not Yamux.
     #[error("the link ended: {0}")]
     Ended(String),
-    /// The client did not open the control lane within the handshake's deadline.
+    /// The other end did not finish the handshake (the version, the admission and the control
+    /// lane) within its one deadline.
     #[error(
-        "the client did not open the control lane within {:?}",
+        "the other end did not finish the handshake within {:?}",
         crate::version::HANDSHAKE_TIMEOUT
     )]
     TimedOut,
@@ -86,6 +88,7 @@ type Opening = oneshot::Sender<yamux::Result<yamux::Stream>>;
 /// A negotiated, multiplexed link.
 pub struct Link {
     version: Version,
+    scope: Scope,
     control: Control,
     opener: Opener,
     inbound: Acceptor,
@@ -108,6 +111,11 @@ impl Link {
     /// The version both ends agreed on.
     pub fn version(&self) -> Version {
         self.version
+    }
+
+    /// The client scope this link was admitted as ([`crate::auth`]).
+    pub fn scope(&self) -> Scope {
+        self.scope
     }
 
     pub fn control(&mut self) -> &mut Control {
@@ -205,48 +213,94 @@ impl Control {
     }
 }
 
-/// The client end: negotiate with what `speaks` names, start the multiplexer and open the
-/// control lane.
+/// The client end: negotiate with what `speaks` names, be admitted as `scope` with its
+/// `credential`, start the multiplexer and open the control lane, all within one
+/// [`version::HANDSHAKE_TIMEOUT`].
 pub async fn connect<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     io: S,
     speaks: Speaks,
+    scope: Scope,
+    credential: &Credential,
 ) -> Result<Link, LinkError> {
-    let (version, io) = version::offer(io, &speaks).await?;
-    let (opener, inbound) = drive(io, yamux::Mode::Client);
-    let mut lane = opener.open().await?;
-    lane.write_all(&[CONTROL_LANE]).await?;
-    lane.flush().await?;
-    Ok(Link {
-        version,
-        control: lane_framed(lane),
-        opener,
-        inbound,
+    within_the_handshake(async {
+        let (version, io) = version::offer_unbounded(io, &speaks).await?;
+        let io = auth::present_unbounded(io, scope, credential).await?;
+        let (opener, inbound) = drive(io, yamux::Mode::Client);
+        let mut lane = opener.open().await?;
+        lane.write_all(&[CONTROL_LANE]).await?;
+        lane.flush().await?;
+        Ok(Link {
+            version,
+            scope,
+            control: lane_framed(lane),
+            opener,
+            inbound,
+        })
     })
+    .await
 }
 
-/// The host end: answer with what `speaks` names, start the multiplexer and take the control
-/// lane the client opens.
-pub async fn serve<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
+/// The host end, on a connection to `charterd.sock` whose peer is this user
+/// ([`crate::local::Listener::accept`]): answer with what `speaks` names, admit the client as
+/// the scope whose credential in `held` it proves to hold or refuse it, start the multiplexer
+/// and take the control lane the client opens, all within one [`version::HANDSHAKE_TIMEOUT`].
+///
+/// It takes a [`crate::local::SameUser`] and nothing else, so a connection that skipped the
+/// uid check cannot be served. A runner's link (ADR 0078 §3) is admitted by its Noise identity,
+/// not by these credentials, and is served by a path of its own.
+#[cfg(unix)]
+pub async fn serve(
+    io: crate::local::SameUser,
+    speaks: Speaks,
+    held: &Credentials,
+) -> Result<Link, LinkError> {
+    serve_over(io.into_stream(), speaks, held).await
+}
+
+/// [`serve`] over any ordered byte stream, for the crate's own tests, which drive the host over
+/// pipes, a child's stdio and in-process streams. It skips the uid check, so it exists only
+/// with the `any-stream` feature, which only this crate's dev-dependencies turn on.
+#[cfg(feature = "any-stream")]
+pub async fn serve_any<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     io: S,
     speaks: Speaks,
+    held: &Credentials,
 ) -> Result<Link, LinkError> {
-    let (version, io) = version::answer(io, &speaks).await?;
-    let (opener, mut inbound) = drive(io, yamux::Mode::Server);
-    let lane = tokio::time::timeout(version::HANDSHAKE_TIMEOUT, async {
+    serve_over(io, speaks, held).await
+}
+
+async fn serve_over<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
+    io: S,
+    speaks: Speaks,
+    held: &Credentials,
+) -> Result<Link, LinkError> {
+    within_the_handshake(async {
+        let (version, io) = version::answer_unbounded(io, &speaks).await?;
+        let (scope, io) = auth::admit_unbounded(io, held).await?;
+        let (opener, mut inbound) = drive(io, yamux::Mode::Server);
         let mut lane = inbound.accept().await?;
         if lane.read_u8().await? != CONTROL_LANE {
             return Err(LinkError::NoControlLane);
         }
-        Ok(lane)
+        Ok(Link {
+            version,
+            scope,
+            control: lane_framed(lane),
+            opener,
+            inbound,
+        })
     })
     .await
-    .unwrap_or(Err(LinkError::TimedOut))?;
-    Ok(Link {
-        version,
-        control: lane_framed(lane),
-        opener,
-        inbound,
-    })
+}
+
+/// One deadline over the whole handshake, so a peer that takes nearly the whole of it at each
+/// step cannot hold the other end for several of them.
+async fn within_the_handshake(
+    handshake: impl Future<Output = Result<Link, LinkError>>,
+) -> Result<Link, LinkError> {
+    tokio::time::timeout(version::HANDSHAKE_TIMEOUT, handshake)
+        .await
+        .unwrap_or(Err(LinkError::TimedOut))
 }
 
 fn lane_framed(lane: Stream) -> Control {

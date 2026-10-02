@@ -10,10 +10,14 @@
 //! - `--flood <streams> <bytes>`: a hostile client. It negotiates 1.0, opens the control lane,
 //!   then opens `<streams>` more streams with a multiplexer that sets no limits of its own and
 //!   writes `<bytes>` to each, and holds them until its stdin closes. The tests run it so that
-//!   what the host holds can be measured in a process that holds nothing else.
+//!   what the host holds can be measured in a process that holds nothing else. It is admitted
+//!   as `local-ui` with the credential in `$CHARTER_SESSION_PEER_CREDENTIAL`, because a
+//!   hostile client the host has admitted is the one whose limits matter: one it has not
+//!   admitted never reaches the multiplexer.
 
 use std::process::ExitCode;
 
+use charter_session_protocol::auth::{self, Credential, Scope};
 use charter_session_protocol::link::CONTROL_LANE;
 use charter_session_protocol::version::{Speaks, Version, answer, offer};
 use futures::AsyncWriteExt;
@@ -32,6 +36,9 @@ fn speaks(arg: &str) -> Option<Speaks> {
         .collect();
     versions.map(Speaks::new)
 }
+
+/// Where `--flood` finds the `local-ui` credential it presents.
+const CREDENTIAL_ENV: &str = "CHARTER_SESSION_PEER_CREDENTIAL";
 
 const USAGE: &str =
     "usage: charter-session-peer --speaks <major>.<minor>[,…] | --flood <streams> <bytes>";
@@ -79,6 +86,17 @@ async fn flood<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 
     let ours = Speaks::new([Version { major: 1, minor: 0 }]);
     let Ok((_, io)) = offer(stdio, &ours).await else {
         eprintln!("the host refused the negotiation");
+        return ExitCode::FAILURE;
+    };
+    let Some(credential) = std::env::var(CREDENTIAL_ENV)
+        .ok()
+        .and_then(|text| text.parse::<Credential>().ok())
+    else {
+        eprintln!("no credential in ${CREDENTIAL_ENV}");
+        return ExitCode::FAILURE;
+    };
+    let Ok(io) = auth::present(io, Scope::LocalUi, &credential).await else {
+        eprintln!("the host did not admit this client");
         return ExitCode::FAILURE;
     };
     let mut no_limits = yamux::Config::default();
