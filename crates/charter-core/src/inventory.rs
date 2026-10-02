@@ -8,7 +8,8 @@
 //!
 //! Records are kept as JSON values rather than a struct, and that is the format rule rather
 //! than a shortcut: the file is Python's, its key order is part of it, and a field a newer
-//! charter adds must survive a rewrite by this one.
+//! charter adds must survive a rewrite by this one. A caller that wants the repo itself reads
+//! a row with [`read`], which types it as a [`RepoRecord`] and leaves the row as it was.
 
 use std::path::{Path, PathBuf};
 
@@ -274,6 +275,28 @@ pub fn record(repo: &RepoRecord, stack: &str) -> Value {
     out.insert("web_url".into(), text(&repo.web_url));
     out.insert("forge".into(), text(repo.forge.word()));
     Value::Object(out)
+}
+
+/// One inventory row as the [`RepoRecord`] [`record`] wrote it from: the reader to that writer.
+/// The row itself is untouched, so the stored format stays the file's (see the module's note).
+///
+/// `None` when the row's `forge` is not a forge charter has a client for, or is missing: a
+/// record names the forge that listed it. The fields read as a forge's listing reads them (a
+/// missing or non-string field is empty), and `id` is whatever the row holds, which a row
+/// `discover` wrote never does.
+pub fn read(row: &Value) -> Option<RepoRecord> {
+    let forge = Kind::parse(row.get("forge")?.as_str()?)?;
+    Some(RepoRecord {
+        id: forge::listed_id(row),
+        name: forge::listed_str(row, "name"),
+        path_with_namespace: forge::listed_str(row, "path_with_namespace"),
+        default_branch: forge::listed_branch(row),
+        description: forge::listed_description(row),
+        web_url: forge::listed_str(row, "web_url"),
+        ssh_url: forge::listed_str(row, "ssh_url"),
+        topics: forge::listed_topics(row),
+        forge,
+    })
 }
 
 /// Python's `repr()` of a JSON value, for a sentence that quotes one back —
@@ -781,6 +804,56 @@ mod tests {
         assert_eq!(made["topics"], json!([]));
         assert_eq!(made["forge"], json!("github"));
         assert_eq!(made["web_url"], json!(""), "a missing web_url is `\"\"`");
+    }
+
+    #[test]
+    fn a_row_discover_wrote_reads_back_as_the_repo_it_was_written_from() {
+        // The reader and the writer agree on every field the row keeps. The id is not kept, and
+        // the written `or "main"` and stripped description are what reads back.
+        let repo = RepoRecord {
+            default_branch: Some("trunk".into()),
+            description: "The shop".into(),
+            topics: vec!["web".into(), "shop".into()],
+            web_url: "https://gitlab.com/acme/shop-frontend".into(),
+            forge: Kind::GitLab,
+            ..repo_named("shop-frontend")
+        };
+
+        assert_eq!(read(&record(&repo, "node")), Some(repo));
+    }
+
+    #[test]
+    fn a_row_with_fields_charter_does_not_type_reads_and_the_row_keeps_them() {
+        // `kind`, `stack`, `source` and a field a newer charter adds stay in the row; the
+        // record is a reading of it, never a rewrite.
+        let row = json!({"name": "api", "path_with_namespace": "acme/api", "forge": "github",
+                         "kind": "api", "stack": "go", "source": "plane", "added_later": 1,
+                         "default_branch": "", "description": null, "topics": ["x", 2]});
+        let before = row.clone();
+
+        let read = read(&row).unwrap();
+
+        assert_eq!(read.name, "api");
+        assert_eq!(read.path_with_namespace, "acme/api");
+        assert_eq!(read.default_branch, None, "an empty branch is none");
+        assert_eq!(read.description, "");
+        assert_eq!(
+            read.topics,
+            ["x"],
+            "a topic that is not a string is dropped"
+        );
+        assert_eq!((read.web_url.as_str(), read.ssh_url.as_str()), ("", ""));
+        assert_eq!(read.id, None);
+        assert_eq!(row, before);
+    }
+
+    #[test]
+    fn a_row_on_no_forge_charter_knows_reads_as_none() {
+        // The record names the forge that listed the repo, so a row with no `forge`, or one
+        // naming a forge charter has no client for, has no record to read.
+        assert_eq!(read(&json!({"name": "api"})), None);
+        assert_eq!(read(&json!({"name": "api", "forge": "bitbucket"})), None);
+        assert_eq!(read(&json!({"name": "api", "forge": 1})), None);
     }
 
     #[test]

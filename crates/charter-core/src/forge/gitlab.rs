@@ -178,7 +178,8 @@ impl Repos for GitLab {
         Ok(out)
     }
 
-    fn about(&self, caller: &Caller, path: &str) -> Result<About, ForgeError> {
+    fn about(&self, caller: &Caller, repo: &RepoRecord) -> Result<About, ForgeError> {
+        let path = repo.path_with_namespace.as_str();
         let api = format!("projects/{}", quote(path));
         let doing = format!("reading {path}");
         let repo = self.0.ask(caller, &Call::get(&api, LIST_TIMEOUT), &doing)?;

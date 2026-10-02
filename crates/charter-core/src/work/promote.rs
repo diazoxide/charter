@@ -21,7 +21,7 @@ use std::path::Path;
 
 use super::log::{self, Cause, Fold};
 use super::{TrackerKey, WorkItem};
-use crate::forge::backend::{About, Issues, NewWorkItem, Visibility};
+use crate::forge::backend::{About, Issues, NewWorkItem, RepoRecord, Visibility};
 use crate::forge::{self, Caller, Forge, ForgeBackend};
 use crate::workspaces::{Plane, Workspace};
 
@@ -31,8 +31,16 @@ pub struct Target {
     /// Its inventory name, as `--repo` takes it.
     pub name: String,
     pub forge: Forge,
+    /// The repo, as its inventory row reads ([`crate::inventory::read`]). Its
+    /// `path_with_namespace` is its path on the forge: `owner/repo`, or GitLab's full namespace.
+    pub repo: RepoRecord,
+}
+
+impl Target {
     /// Its path on the forge: `owner/repo`, or GitLab's full namespace.
-    pub path: String,
+    pub fn path(&self) -> &str {
+        &self.repo.path_with_namespace
+    }
 }
 
 /// What [`promote`] tells its caller as it goes.
@@ -65,14 +73,11 @@ pub fn target(root: &Path, ws: &str, repo: Option<&str>) -> Result<Target, Strin
     let cfg = forge::load_config(root)?;
     let doc = crate::inventory::load(root, &forge::group_of(&cfg, 0))?;
     let inventory = crate::inventory::repos(root, &doc, &[]);
-    let on_a_forge: Vec<(&String, &serde_json::Value)> = declared
+    let on_a_forge: Vec<(&String, RepoRecord)> = declared
         .iter()
         .filter_map(|name| {
-            let record = crate::inventory::find(&inventory, name)?;
-            let forge_of = record.get("forge").and_then(serde_json::Value::as_str);
-            forge_of
-                .and_then(forge::Kind::parse)
-                .map(|_| (name, record))
+            let row = crate::inventory::find(&inventory, name)?;
+            crate::inventory::read(row).map(|record| (name, record))
         })
         .collect();
     let (name, record) = match repo {
@@ -93,36 +98,37 @@ pub fn target(root: &Path, ws: &str, repo: Option<&str>) -> Result<Target, Strin
                     )
                 })?
         }
-        None => match on_a_forge.as_slice() {
-            [one] => *one,
-            [] => {
-                return Err(format!(
-                    "workspace '{ws}' has no repo on a forge to open an issue in"
-                ));
+        None => {
+            let mut on_a_forge = on_a_forge.into_iter();
+            match (on_a_forge.next(), on_a_forge.next()) {
+                (Some(one), None) => one,
+                (None, _) => {
+                    return Err(format!(
+                        "workspace '{ws}' has no repo on a forge to open an issue in"
+                    ));
+                }
+                (Some(first), Some(second)) => {
+                    let listed: Vec<String> = [first, second]
+                        .into_iter()
+                        .chain(on_a_forge)
+                        .map(|(n, _)| n.clone())
+                        .collect();
+                    return Err(format!(
+                        "workspace '{ws}' has more than one repo on a forge; name one with \
+                         --repo: {}",
+                        names(&listed)
+                    ));
+                }
             }
-            many => {
-                let listed: Vec<String> = many.iter().map(|(n, _)| (*n).clone()).collect();
-                return Err(format!(
-                    "workspace '{ws}' has more than one repo on a forge; name one with --repo: {}",
-                    names(&listed)
-                ));
-            }
-        },
+        }
     };
-    let path = record
-        .get("path_with_namespace")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    if path.is_empty() {
+    if record.path_with_namespace.is_empty() {
         return Err(format!("the inventory names no forge path for '{name}'"));
     }
-    let page = record
-        .get("web_url")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default();
+    let page = record.web_url.as_str();
     let forge = if forge::host_of(page).is_empty() {
-        Forge::for_record(record)
+        // At the kind's default host, as `Forge::for_record` builds one from the row.
+        Forge::default_of(record.forge)
     } else {
         forge::resolve_host(page, root).ok_or_else(|| {
             format!(
@@ -134,7 +140,7 @@ pub fn target(root: &Path, ws: &str, repo: Option<&str>) -> Result<Target, Strin
     Ok(Target {
         name: name.clone(),
         forge,
-        path,
+        repo: record,
     })
 }
 
@@ -203,7 +209,7 @@ pub fn promote(
     let host = super::key::normal_host(&target.forge.host)?;
 
     let about = backend
-        .about(caller, &target.path)
+        .about(caller, &target.repo)
         .map_err(|e| e.to_string())?;
     let refusal = match about.issues {
         Issues::Open => None,
@@ -214,7 +220,7 @@ pub fn promote(
     if let Some(why) = refusal {
         return Err(format!(
             "{} {why}, so nothing was sent and the todo stays a todo",
-            target.path
+            target.path()
         ));
     }
     // FI6: the layer-2 label is on for a private repo only (D-FW5a: `internal` is read as
@@ -232,7 +238,7 @@ pub fn promote(
         workspace_label: labelled.then(|| ws.name().to_string()),
     };
     let item = backend
-        .create(caller, &target.path, &new)
+        .create(caller, target.path(), &new)
         .map_err(|e| e.to_string())?;
     tell(Step::Created(&item));
     if item.key.host() != Some(host.as_str()) {

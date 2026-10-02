@@ -333,7 +333,8 @@ impl Repos for GitHub {
             .unwrap_or_default())
     }
 
-    fn about(&self, caller: &Caller, path: &str) -> Result<About, ForgeError> {
+    fn about(&self, caller: &Caller, repo: &RepoRecord) -> Result<About, ForgeError> {
+        let path = repo.path_with_namespace.as_str();
         let (owner, name) = owner_name(path);
         let api = format!("repos/{}/{}", quote(owner), quote(name));
         let doing = format!("reading {path}");
