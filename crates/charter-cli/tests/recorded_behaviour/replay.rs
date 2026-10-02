@@ -199,6 +199,28 @@ fn lay_out_plane(side: &Path, plane: &str) {
     std::fs::create_dir_all(side.join("home")).expect("the side's home");
 }
 
+/// The network log's directory, under the side's `HOME`.
+const NETWORK_LOG: &str = "home/.config/charter/network-log/";
+
+/// Whether `rel` is a day of the network log (OB-15): a `.jsonl` file in its directory whose
+/// every line is a network-log entry. It is the Rust charter's own record of the forge calls a
+/// scenario's stand-in CLI answered. Python charter had none, so the records cannot name it,
+/// and what it holds is checked by charter-core's network-log tests. Anything else written
+/// there is still seen.
+fn is_network_log(rel: &str, bytes: &[u8]) -> bool {
+    let rel = rel.replace('\\', "/");
+    let Some(name) = rel.strip_prefix(NETWORK_LOG) else {
+        return false;
+    };
+    if name.contains('/') || !name.ends_with(".jsonl") {
+        return false;
+    }
+    std::str::from_utf8(bytes).is_ok_and(|text| {
+        text.lines()
+            .all(|line| serde_json::from_str::<charter_core::netlog::Entry>(line).is_ok())
+    })
+}
+
 /// Every file beside the plane, with its contents — the differential's `_outside`.
 fn outside(side: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
     fn walk(side: &Path, dir: &Path, out: &mut std::collections::BTreeMap<String, Vec<u8>>) {
@@ -215,6 +237,7 @@ fn outside(side: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
             if rel == "plane" || rel == "pins" {
                 continue;
             }
+
             let Ok(meta) = std::fs::symlink_metadata(&path) else {
                 continue;
             };
@@ -224,6 +247,9 @@ fn outside(side: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
                 // A link to a directory: `is_dir()` followed it, so the differential skipped it.
             } else {
                 let bytes = std::fs::read(&path).unwrap_or_else(|_| b"<unreadable>".to_vec());
+                if is_network_log(&rel, &bytes) {
+                    continue;
+                }
                 out.insert(rel, bytes);
             }
         }
