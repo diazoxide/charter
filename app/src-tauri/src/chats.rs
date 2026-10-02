@@ -258,6 +258,20 @@ impl Chats {
         self.device = device;
     }
 
+    /// This device's id, as [`Self::on_device`] gave it, or `None` where the machine store has
+    /// none. It names the work link log a chat's link goes in (ADR 0088 §3).
+    pub fn device(&self) -> Option<&str> {
+        self.device.as_deref()
+    }
+
+    /// The id of the chat in `session` and the directory it works in, or `None` for a session
+    /// charter does not have open. The id is `None` only for a chat that has not been given one.
+    pub fn identity_of(&self, session: u32) -> Option<(Option<String>, Option<PathBuf>)> {
+        let open = lock(&self.open);
+        let one = open.get(&session)?;
+        Some((one.chat.identity.id.clone(), one.chat.cwd.clone()))
+    }
+
     /// Calls `tell` when a chat that was announced never started after all.
     ///
     /// The announcement has to come before the program, so a program that then fails to start

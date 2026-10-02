@@ -330,6 +330,109 @@ fn a_chat_at_the_project_root_cannot_be_linked_and_one_in_a_workspace_can() {
 }
 
 #[test]
+fn linking_a_chat_to_the_item_it_already_works_on_writes_nothing_and_another_item_replaces_it() {
+    let p = project();
+    let root = p.path();
+    link_chat(root, Place::Workspace("alpha"), DEVICE, at(1), todo(), CHAT).unwrap();
+    append_alias(
+        root,
+        "alpha",
+        DEVICE,
+        at(2),
+        todo(),
+        issue(),
+        Cause::Promoted,
+    )
+    .unwrap();
+    // The issue is what the todo now resolves to, so the chat already works on it.
+    link_chat(
+        root,
+        Place::Workspace("alpha"),
+        DEVICE,
+        at(3),
+        issue(),
+        CHAT,
+    )
+    .unwrap();
+    assert_eq!(lines_of(root, "alpha", DEVICE).len(), 2);
+
+    // Another item is one link line, and no unlink: V3's zero or one is the fold's.
+    let other = key("github:github.com/acme/api#99");
+    link_chat(
+        root,
+        Place::Workspace("alpha"),
+        DEVICE,
+        at(4),
+        other.clone(),
+        CHAT,
+    )
+    .unwrap();
+    let lines = lines_of(root, "alpha", DEVICE);
+    assert_eq!(lines.len(), 3);
+    assert_eq!(lines[2]["op"], "link");
+    assert_eq!(fold(root).chat_link(CHAT), Some(other));
+}
+
+#[test]
+fn unlinking_a_chat_ends_its_link_by_naming_the_item_it_resolves_to() {
+    let p = project();
+    let root = p.path();
+    link_chat(root, Place::Workspace("alpha"), DEVICE, at(1), todo(), CHAT).unwrap();
+    append_alias(
+        root,
+        "alpha",
+        DEVICE,
+        at(2),
+        todo(),
+        issue(),
+        Cause::Promoted,
+    )
+    .unwrap();
+
+    let ended = unlink_chat(root, Place::Workspace("alpha"), DEVICE, at(3), CHAT).unwrap();
+    assert_eq!(ended, Some(issue()));
+    let lines = lines_of(root, "alpha", DEVICE);
+    assert_eq!(
+        lines[2],
+        serde_json::json!({
+            "v": 1, "ts": "2026-10-02T08:00:03Z", "op": "unlink",
+            "item": "github:github.com/acme/api#12", "chat": CHAT,
+        })
+    );
+    assert_eq!(fold(root).chat_link(CHAT), None);
+}
+
+#[test]
+fn unlinking_a_chat_that_has_no_link_writes_nothing() {
+    let p = project();
+    let root = p.path();
+    let ended = unlink_chat(root, Place::Workspace("alpha"), DEVICE, at(1), CHAT).unwrap();
+    assert_eq!(ended, None);
+    assert!(!dir_for(root, "alpha").exists());
+}
+
+#[test]
+fn a_chat_linked_in_one_workspace_is_unlinked_from_the_one_it_is_in_now() {
+    let p = project();
+    let root = p.path();
+    link_chat(root, Place::Workspace("alpha"), DEVICE, at(1), todo(), CHAT).unwrap();
+    let ended = unlink_chat(root, Place::Workspace("beta"), DEVICE, at(2), CHAT).unwrap();
+    assert_eq!(ended, Some(todo()));
+    assert_eq!(lines_of(root, "beta", DEVICE)[0]["op"], "unlink");
+    let folded = fold(root);
+    assert_eq!(folded.chat_link(CHAT), None);
+    assert_eq!(folded.items_of("alpha"), Vec::<TrackerKey>::new());
+}
+
+#[test]
+fn a_chat_at_the_project_root_cannot_be_unlinked_either() {
+    let p = project();
+    let root = p.path();
+    let refused = unlink_chat(root, Place::ProjectRoot, DEVICE, at(1), CHAT).unwrap_err();
+    assert!(refused.to_string().contains("in no workspace"), "{refused}");
+}
+
+#[test]
 fn an_unlink_ends_the_link_whose_item_it_names_after_both_are_resolved() {
     let p = project();
     let root = p.path();

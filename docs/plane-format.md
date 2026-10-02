@@ -1362,11 +1362,19 @@ and an archived one is where `memstore.archive` would have put it (ADR 0065).
   V40, FW-5 #732). Absent in a workspace nothing has linked or promoted.
 - **Tier:** Plane when LIVE, Clone state when LOCAL — committed with a LIVE workspace, as its todos are, because FI6's links must reach the operator's other devices; unlike the piece claim log and the landing log, which stay in their clone.
 - **Written by:** `charter_core::work::log` (`append`, and `append_alias`, which refuses an
-  alias that would close a cycle). Today its one writer is `charter ws todo promote` (a
-  `promoted` alias, `charter_core::work::promote`). The window's and the host's chat links, the
-  Work list's workspace links, `workspace rename`'s `renamed` aliases and the item cache's
-  `moved` aliases (FW-7) are **decided, not yet written**: the chat half waits on a copied
-  project's chat ids (FW-5 #732), and a project-root chat is refused a link (ADR 0088 §4).
+  alias that would close a cycle). Its writers today:
+  - `charter ws todo promote`: a `promoted` alias (`charter_core::work::promote`);
+  - the app's host, for the window: a chat's link and unlink (`log::link_chat` and
+    `log::unlink_chat`, called by `chat_work_link` and `chat_work_unlink` in
+    `app/src-tauri/src/worklinks.rs`). The line goes in this device's log of the workspace the
+    window files the chat under, and names the chat by its ULID, which V43 keeps across a
+    relaunch and a move and mints again in a copy. Linking a chat to the item it already works
+    on, after both are resolved, writes nothing. An unlink names the item the chat's link
+    resolves to, and a chat with no link writes nothing. A project-root chat is refused both
+    (ADR 0088 §4). No control in the window calls them yet (#914).
+
+  The Work list's workspace links, `workspace rename`'s `renamed` aliases and the item cache's
+  `moved` aliases (FW-7) are **decided, not yet written**.
 - **Read by:** `charter_core::work::log::fold`, for the Work list (`work::list::of`, which the
   board, FW-9, will draw), `charter ws todo` (which finishes closing a promoted todo whose
   close a crash cut short), and `charter doctor`'s `work links` row, shown only when there is

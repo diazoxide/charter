@@ -60,6 +60,7 @@ mod vaults;
 mod views;
 mod windowprefs;
 mod windows;
+mod worklinks;
 mod workspaces;
 mod worktrees;
 

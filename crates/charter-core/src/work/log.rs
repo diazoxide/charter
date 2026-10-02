@@ -220,11 +220,16 @@ pub enum Place<'a> {
     Workspace(&'a str),
 }
 
-/// Link chat `chat` to `item`, in the log of the workspace it is in.
+/// Link chat `chat`, by its ULID, to `item`, in this device's log of the workspace the chat is
+/// in (ADR 0088 §3). This is the writer the window's host calls.
 ///
-/// **A chat at the project root is refused** (ADR 0088 §4, Q5's recommendation): it is in no
-/// workspace, and work items are a workspace's Work section (FI5), so there is no log for its
-/// link until a ruling gives the project one.
+/// - **A chat at the project root is refused** (ADR 0088 §4, Q5's recommendation): it is in no
+///   workspace, and work items are a workspace's Work section (FI5), so there is no log for its
+///   link until a ruling gives the project one.
+/// - **A chat already linked to `item`, after both are resolved, writes nothing**, so a window
+///   that links twice does not grow a log that is committed when the workspace is LIVE.
+/// - **A chat linked to another item gets one link line and no unlink**: a chat's link is its
+///   last line (V3: zero or one), so the new line replaces the old link.
 pub fn link_chat(
     root: &Path,
     place: Place<'_>,
@@ -233,13 +238,45 @@ pub fn link_chat(
     item: TrackerKey,
     chat: &str,
 ) -> io::Result<()> {
+    let ws = in_a_workspace(place)?;
+    let folded = fold(root);
+    if folded.chat_link(chat) == Some(folded.resolve(&item)) {
+        return Ok(());
+    }
+    append(root, ws, device, ts, &Op::link_chat(item, chat))
+}
+
+/// End chat `chat`'s link, in this device's log of the workspace the chat is in now, and answer
+/// the item it worked on, or `None` when it had no link and nothing was written.
+///
+/// The unlink names the item the chat's link resolves to, so it ends that link and only that
+/// one (D-0015). It is written where the chat is now, not where its link was written: a chat's
+/// link is its last line across every workspace's log (§3), so either ends it. A chat at the
+/// project root is refused, as [`link_chat`] refuses it.
+pub fn unlink_chat(
+    root: &Path,
+    place: Place<'_>,
+    device: &str,
+    ts: DateTime<Utc>,
+    chat: &str,
+) -> io::Result<Option<TrackerKey>> {
+    let ws = in_a_workspace(place)?;
+    let Some(item) = fold(root).chat_link(chat) else {
+        return Ok(None);
+    };
+    append(root, ws, device, ts, &Op::unlink_chat(item.clone(), chat))?;
+    Ok(Some(item))
+}
+
+/// The workspace a chat at `place` is in, or the refusal for one at the project root.
+fn in_a_workspace(place: Place<'_>) -> io::Result<&str> {
     match place {
         Place::ProjectRoot => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "a chat at the project root is in no workspace, so it cannot be linked to a work \
              item: open the chat in the workspace the item belongs to",
         )),
-        Place::Workspace(ws) => append(root, ws, device, ts, &Op::link_chat(item, chat)),
+        Place::Workspace(ws) => Ok(ws),
     }
 }
 
