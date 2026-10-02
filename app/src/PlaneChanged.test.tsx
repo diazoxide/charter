@@ -1,9 +1,10 @@
-import { StrictMode } from "react";
+import { Profiler, StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render as renderBare, screen, waitFor, within } from "@testing-library/react";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import { forgetThisLaunch } from "./regions";
+import type { PlaneChange } from "./bindings";
 
 /**
  * **The panels follow the plane on disk** (charter-app#264).
@@ -72,7 +73,7 @@ function todosPanel() {
 /** The core, reading the plane afresh on every ask, and a way to say the plane changed. */
 function core(): {
   asked: string[];
-  changed: (plane: string) => void;
+  changed: (plane: string, changes?: PlaneChange[] | null) => void;
 } {
   const asked: string[] = [];
   const listeners = new Map<string, number[]>();
@@ -120,14 +121,14 @@ function core(): {
   });
   return {
     asked,
-    changed: (plane) => {
+    changed: (plane, changes) => {
       const handlers = listeners.get("plane-changed") ?? [];
       if (handlers.length === 0) throw new Error("the window is not listening for plane changes");
       for (const handler of handlers)
         window.__TAURI_INTERNALS__.runCallback(handler, {
           event: "plane-changed",
           id: 1,
-          payload: { plane },
+          payload: changes === undefined ? { plane } : { plane, changes },
         });
     },
   };
@@ -194,6 +195,92 @@ describe("the panels, when the plane changes on disk", () => {
     await new Promise((settle) => setTimeout(settle, 50));
     expect(asked.filter((cmd) => cmd === "workspace_panels")).toHaveLength(before);
     expect(todoRows()).toHaveLength(2);
+  });
+});
+
+/**
+ * **A reader asks again only for a change its answer is made of** (FD-10). The core says what
+ * moved — each path, and whether it is a todo of `alpha`, a memory, a session record — and a
+ * memory an agent saves no longer makes the sidebar list every workspace's todos once more.
+ */
+describe("the readers of the plane, told what changed", () => {
+  const count = (asked: string[], cmd: string) => asked.filter((one) => one === cmd).length;
+  const settle = () => new Promise((done) => setTimeout(done, 50));
+
+  it("read the focused workspace's panels again for its memory, and leave the sidebar be", async () => {
+    const { asked, changed } = core();
+    render(<App />);
+    await waitFor(() => expect(todoRows()).toHaveLength(2));
+    const panels = count(asked, "workspace_panels");
+    const sidebar = count(asked, "plane_sidebar");
+
+    changed(PLANE, [
+      {
+        kind: "memory",
+        workspace: "alpha",
+        persona: null,
+        path: "workspaces/alpha/memory/20261002-165000-note.md",
+      },
+    ]);
+
+    await waitFor(() => expect(count(asked, "workspace_panels")).toBeGreaterThan(panels));
+    await settle();
+    expect(count(asked, "plane_sidebar")).toBe(sidebar);
+  });
+
+  it("read the sidebar again for another workspace's todo, and not the focused one's panels", async () => {
+    const { asked, changed } = core();
+    render(<App />);
+    await waitFor(() => expect(todoRows()).toHaveLength(2));
+    const panels = count(asked, "workspace_panels");
+    const sidebar = count(asked, "plane_sidebar");
+
+    changed(PLANE, [
+      { kind: "todos", workspace: "beta", persona: null, path: "workspaces/beta/todos/x.md" },
+    ]);
+
+    await waitFor(() => expect(count(asked, "plane_sidebar")).toBeGreaterThan(sidebar));
+    await settle();
+    expect(count(asked, "workspace_panels")).toBe(panels);
+  });
+
+  it("draw nothing again and ask git nothing for a memory or record of a workspace not in front", async () => {
+    // A memory an agent saves is the commonest write there is. The window in front is on
+    // `alpha`; one saved in `beta` concerns no panel on screen, and redrawing the whole window
+    // for it — or asking git for the standings — is what made switching slow (FR-27).
+    const { asked, changed } = core();
+    let commits = 0;
+    render(
+      <Profiler id="window" onRender={() => (commits += 1)}>
+        <App />
+      </Profiler>,
+    );
+    await waitFor(() => expect(todoRows()).toHaveLength(2));
+    await settle();
+    const before = asked.length;
+    const drawn = commits;
+
+    changed(PLANE, [
+      { kind: "memory", workspace: "beta", persona: null, path: "workspaces/beta/memory/m.md" },
+      { kind: "sessions", workspace: "beta", persona: null, path: "workspaces/beta/sessions/r.md" },
+    ]);
+
+    await settle();
+    expect(asked.slice(before)).toEqual([]);
+    expect(commits).toBe(drawn);
+  });
+
+  it("read everything again when the core cannot say what changed", async () => {
+    const { asked, changed } = core();
+    render(<App />);
+    await waitFor(() => expect(todoRows()).toHaveLength(2));
+    const panels = count(asked, "workspace_panels");
+    const sidebar = count(asked, "plane_sidebar");
+
+    changed(PLANE, null);
+
+    await waitFor(() => expect(count(asked, "workspace_panels")).toBeGreaterThan(panels));
+    await waitFor(() => expect(count(asked, "plane_sidebar")).toBeGreaterThan(sidebar));
   });
 });
 
