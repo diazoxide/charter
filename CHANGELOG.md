@@ -267,6 +267,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Switching into a project with many chats is quicker.** Each chat's row in the explorer and its
+  state mark on the tab are dimmed in their colour rather than by transparency, and the mark for a
+  chat that has said nothing yet is a ring broken into two arcs rather than a dashed one, so fifty
+  of them no longer cost the switch a slow paint (FR-27, #891).
+
 - **Fewer redraws when switching projects.** A project's tab strip comes back at the width it
   had instead of drawing every tab and then folding them away, the palette closes in the same
   frame as the switch, and the project's theme and its repos' save standing are drawn from what

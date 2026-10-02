@@ -1542,13 +1542,15 @@ button.show-more:focus-visible {
   background: none;
   font: inherit;
   font-size: 0.8rem;
-  opacity: 0.85;
+  /* Dimmed in its colour rather than by `opacity`, which was a layer per row (#891, above
+     `.state-unknown`). */
+  color: color-mix(in srgb, currentcolor 85%, transparent);
   cursor: default;
 }
 
 .explorer .chat:hover {
   background: var(--surface-hover);
-  opacity: 1;
+  color: inherit;
 }
 
 .explorer .none,
@@ -2101,9 +2103,16 @@ h2.sidebar-title .node-icon {
   vertical-align: middle;
   flex: none;
 }
+/* **Dimmed in the colour, and a ring drawn solid** (#891). A mark is drawn once per chat, on its
+   tab and on its explorer row, and a project can hold fifty. An `opacity` below 1 gives each its
+   own transparency layer and a dashed round border is stroked dash by dash; on a software-rendered
+   WebView fifty of them were most of what the first switch into such a project cost. Unknown is
+   a ring broken into two arcs, so it is still told from done's whole ring by its shape. The plain
+   colour first, for a WebView without `color-mix`. */
 .state-unknown {
-  border: 1px dashed currentcolor;
-  opacity: 0.5;
+  border: 1px solid;
+  border-color: currentcolor transparent;
+  border-color: color-mix(in srgb, currentcolor 50%, transparent) transparent;
   background: none;
 }
 .state-running {
@@ -2117,7 +2126,7 @@ h2.sidebar-title .node-icon {
 .state-done {
   background: none;
   border: 1px solid currentcolor;
-  opacity: 0.45;
+  border-color: color-mix(in srgb, currentcolor 45%, transparent);
 }
 .state-failed {
   background: var(--state-failed);
