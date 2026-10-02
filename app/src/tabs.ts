@@ -112,6 +112,21 @@ export function repoInstructionsTitle(workspace: string): string {
   return `Memory from the repo · ${workspace}`;
 }
 
+/**
+ * **The first task** (FR-28, #621): the guided task FR-1 measures, run twice on the repo the first
+ * run opened — each run a chat on a branch of its own, with the task typed and unsent — and both
+ * diffs one press away. Keyed by the repo's clone, which is where each run's branch is cut, and
+ * filed on its workspace's strip.
+ */
+export function firstTaskView(clone: string): ViewRef {
+  return { from: null, view: "first-task", key: clone };
+}
+
+/** What the first task's tab is called. */
+export function firstTaskTitle(workspace: string): string {
+  return `First task · ${workspace}`;
+}
+
 /** What a workspace's settings tab is called. */
 export function workspaceSettingsTitle(workspace: string): string {
   return `Workspace settings · ${workspace}`;

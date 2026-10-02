@@ -8,6 +8,7 @@ import {
   GitPullRequest,
   History,
   KeyRound,
+  ListChecks,
   LoaderCircle,
   Puzzle,
   RefreshCw,
@@ -21,6 +22,7 @@ import { AskFirst, runExtensionAction } from "./ExtensionAction";
 import { LandAsk, PushAsk, askLand } from "./ChangeActions";
 import { PanelList } from "./PanelList";
 import { RepoInstructionsTab } from "./RepoInstructionsTab";
+import { FirstTaskTab, type FirstTaskDoes } from "./FirstTaskTab";
 import { Preferences } from "./Preferences";
 import { ProjectSettings, WorkspaceSettings } from "./ProjectSettings";
 import {
@@ -56,6 +58,9 @@ const WORKSPACE_SETTINGS = "workspace-settings";
 
 /** What `repoInstructionsView` names a workspace's repo instructions view (FR-18a). */
 const REPO_INSTRUCTIONS = "repo-instructions";
+
+/** What `firstTaskView` names the first task's view (FR-28). */
+const FIRST_TASK = "first-task";
 
 /**
  * **Views: what a tab shows when it does not show a chat** — ADR 0043 as amended
@@ -198,6 +203,7 @@ export const OWN_MARKS: Record<string, React.ComponentType<{ className?: string 
   [SHARED_MEMORY_VIEW.view]: Brain,
   [WORKSPACE_SETTINGS]: Settings2,
   [REPO_INSTRUCTIONS]: FileText,
+  [FIRST_TASK]: ListChecks,
   preferences: SlidersHorizontal,
   "piece-files": FolderGit2,
   "piece-file": FileCode,
@@ -235,6 +241,7 @@ export function ViewPane({
   changed = 0,
   onMemorySaved,
   onCloseView,
+  firstTask,
 }: {
   plane: PlaneId;
   view: ViewRef;
@@ -267,6 +274,8 @@ export function ViewPane({
   onMemorySaved?: (from: ViewRef, memory: MemoryView) => void;
   /** Close the tab showing `view` — a new memory's Cancel. */
   onCloseView?: (view: ViewRef) => void;
+  /** What the first task's tab asks the plane to do: start a run, show a run's diff (FR-28). */
+  firstTask?: FirstTaskDoes;
 }) {
   // **The view follows the disk itself** (FD-10), on every change: the lists and memories
   // charter's own views read are any of the plane's stores. Here and not in the window, so a
@@ -377,6 +386,15 @@ export function ViewPane({
             plane={plane}
             workspace={view.key}
             onClose={() => onCloseView?.(view)}
+          />
+        ) : isFirstTask(view) ? (
+          /* The first task (FR-28): two runs of one task, each on a branch of its own, keyed by
+             the repo's clone the runs are cut from. */
+          <FirstTaskTab
+            key={`${plane}\u0000${view.key}`}
+            plane={plane}
+            clone={view.key}
+            does={firstTask}
           />
         ) : isSaving(view) ? (
           /* The plane's save standing and its save button (charter-app#294). Keyed by the
@@ -506,6 +524,11 @@ function isWorkspaceSettings(view: ViewRef): boolean {
 /** Whether `view` is a workspace's repo instructions (FR-18a). */
 function isRepoInstructions(view: ViewRef): boolean {
   return view.from === null && view.view === REPO_INSTRUCTIONS;
+}
+
+/** Whether `view` is the first task's view (FR-28). */
+function isFirstTask(view: ViewRef): boolean {
+  return view.from === null && view.view === FIRST_TASK;
 }
 
 /** Whether `view` is the Saving view (charter-app#294). */
