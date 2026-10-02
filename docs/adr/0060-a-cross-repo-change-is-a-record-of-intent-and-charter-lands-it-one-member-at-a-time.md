@@ -106,13 +106,18 @@ Every value from the record goes through containment before it is laid out.
 > rulings, recorded in the PR that closes #474:
 >
 > - Each button asks the core twice. The question (`push::destinations`, `land::verify`) runs
->   with no push and no merge and names exactly what would happen: each repo, branch and
+>   with no push and no merge and names exactly what would happen: each repo, branch, commit and
 >   destination; or the request, the head its checks passed at, and merge now, into the queue,
 >   or record only. The yes hands that answer back, and `push_confirmed` / `land_verified` take
 >   every gate again and refuse, before anything outward runs, when it is no longer true.
 > - Landing stays attended only. The window's IPC is the attended path; a chat's only way to
 >   land is the `charter` binary, which `floorguard::PUBLISH_FORGE` refuses unattended.
-> - A member row's key is `<change>/<repo>`, which is how the window's Land names both.
+> - The view's answer carries, beside its blocks, where each change's member list is and each
+>   member row's repo (`change::view::ChangeAt`), so the window reads nothing out of a row's
+>   words or key. A member row's key is `<change>/<repo>`, unique in the view.
+> - Push names each branch's commit too, and a commit made between the question and the yes is
+>   refused as not what was confirmed. Squash is offered only where it is charter's to ask
+>   (`Verified::squash_is_charters`): never on GitHub's merge queue.
 
 **8. A revert is a new change (§3.7).** `charter change revert <slug>` seeds `revert-<slug>`.
 Each landed member gets a branch carrying `git revert` of the logged sha, with `-m 1` only when

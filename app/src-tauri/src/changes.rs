@@ -84,12 +84,15 @@ pub(crate) struct Reach<'a> {
 pub(crate) struct PushDestination {
     pub repo: String,
     pub branch: String,
+    /// The commit the branch is at in its clone: what the push sends.
+    pub head: String,
+    /// Its first twelve characters, as the core's lines show a commit.
+    pub head_short: String,
     /// The HTTPS URL the branch is pushed to.
     pub to: String,
     /// The branch a request opened for it goes into, when charter can tell.
     pub base: Option<String>,
-    /// `github` or `gitlab`.
-    pub forge: String,
+    pub forge: ForgeKind,
     /// What its forge calls a request: `pull request` or `merge request`.
     pub request: String,
 }
@@ -97,30 +100,30 @@ pub(crate) struct PushDestination {
 impl From<Destination> for PushDestination {
     fn from(d: Destination) -> Self {
         Self {
+            head_short: push::short(&d.head),
             repo: d.repo,
             branch: d.branch,
+            head: d.head,
             to: d.to,
             base: d.base,
-            forge: d.kind.word().to_owned(),
+            forge: d.kind.into(),
             request: d.kind.request_noun().to_owned(),
         }
     }
 }
 
-impl TryFrom<PushDestination> for Destination {
-    type Error = String;
-
+impl From<PushDestination> for Destination {
     /// What the operator confirmed, as the core compares it: whole, so a destination edited on
     /// its way back is a refusal, never a different push.
-    fn try_from(d: PushDestination) -> Result<Self, String> {
-        Ok(Self {
-            kind: Kind::parse(&d.forge)
-                .ok_or_else(|| format!("{:?} is not a forge charter knows", d.forge))?,
+    fn from(d: PushDestination) -> Self {
+        Self {
+            kind: d.forge.into(),
             repo: d.repo,
             branch: d.branch,
+            head: d.head,
             to: d.to,
             base: d.base,
-        })
+        }
     }
 }
 
@@ -132,6 +135,64 @@ pub(crate) struct PushQuestion {
     pub not_pushed: Vec<String>,
 }
 
+/// A forge, as the window is told it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum ForgeKind {
+    Github,
+    Gitlab,
+}
+
+impl From<Kind> for ForgeKind {
+    fn from(kind: Kind) -> Self {
+        match kind {
+            Kind::GitHub => Self::Github,
+            Kind::GitLab => Self::Gitlab,
+        }
+    }
+}
+
+impl From<ForgeKind> for Kind {
+    fn from(kind: ForgeKind) -> Self {
+        match kind {
+            ForgeKind::Github => Kind::GitHub,
+            ForgeKind::Gitlab => Kind::GitLab,
+        }
+    }
+}
+
+/// How a verified landing goes (`land::Through`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum LandThrough {
+    /// Charter merges it now.
+    Merge,
+    /// Into the forge's merge queue or merge train.
+    Queue,
+    /// It has merged at a head charter started landing, and is only recorded.
+    Record,
+}
+
+impl From<Through> for LandThrough {
+    fn from(through: Through) -> Self {
+        match through {
+            Through::Merge => Self::Merge,
+            Through::Queue => Self::Queue,
+            Through::Record => Self::Record,
+        }
+    }
+}
+
+impl From<LandThrough> for Through {
+    fn from(through: LandThrough) -> Self {
+        match through {
+            LandThrough::Merge => Through::Merge,
+            LandThrough::Queue => Through::Queue,
+            LandThrough::Record => Through::Record,
+        }
+    }
+}
+
 /// What a Land would do, before it does any of it: the request, the head its checks passed at,
 /// and how it lands. Handed back whole by the yes.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
@@ -141,27 +202,23 @@ pub(crate) struct LandQuestion {
     pub url: String,
     /// The full head commit.
     pub head: String,
-    /// `merge` (charter merges it now), `queue` (into the forge's queue) or `record` (it has
-    /// merged at a head charter started landing, and is only recorded).
-    pub through: String,
-    /// `github` or `gitlab`.
-    pub forge: String,
+    /// Its first twelve characters, as the core's lines show a commit.
+    pub head_short: String,
+    pub through: LandThrough,
+    pub forge: ForgeKind,
     /// What the forge calls a request: `pull request` or `merge request`.
     pub request: String,
     /// `#` or `!`.
     pub sigil: String,
     /// What the forge calls its queue: `merge queue` or `merge train`.
     pub queue: String,
+    /// How it lands, in the core's sentence (`Verified::how`).
+    pub how: String,
+    /// Whether squashing is charter's to ask for here (`Verified::squash_is_charters`): never
+    /// offered where it would do nothing.
+    pub squash: bool,
     /// What the gates said on the way, such as the checks that passed, in the core's words.
     pub said: Vec<String>,
-}
-
-fn through_word(through: Through) -> &'static str {
-    match through {
-        Through::Merge => "merge",
-        Through::Queue => "queue",
-        Through::Record => "record",
-    }
 }
 
 impl LandQuestion {
@@ -169,14 +226,17 @@ impl LandQuestion {
         Ok(Self {
             number: u32::try_from(v.number)
                 .map_err(|_| format!("request {} is not a number charter can show", v.number))?,
-            repo: v.repo,
-            url: v.url,
-            head: v.head,
-            through: through_word(v.through).to_owned(),
-            forge: v.kind.word().to_owned(),
+            head_short: v.head_short(),
+            how: v.how(),
+            squash: v.squash_is_charters(),
+            through: v.through.into(),
+            forge: v.kind.into(),
             request: v.kind.request_noun().to_owned(),
             sigil: v.kind.change_sigil().to_owned(),
             queue: v.kind.queue_noun().to_owned(),
+            repo: v.repo,
+            url: v.url,
+            head: v.head,
             said,
         })
     }
@@ -184,23 +244,50 @@ impl LandQuestion {
     /// The landing the operator confirmed, as the core compares it. Anything the window could
     /// have changed is compared whole by `land_verified`, so a question edited on its way back
     /// is a refusal, never a different landing.
-    fn verified(&self) -> Result<Verified, String> {
-        let through = match self.through.as_str() {
-            "merge" => Through::Merge,
-            "queue" => Through::Queue,
-            "record" => Through::Record,
-            other => return Err(format!("{other:?} is not a way charter lands a request")),
-        };
-        let kind = Kind::parse(&self.forge)
-            .ok_or_else(|| format!("{:?} is not a forge charter knows", self.forge))?;
-        Ok(Verified {
+    fn verified(&self) -> Verified {
+        Verified {
             repo: self.repo.clone(),
             number: u64::from(self.number),
             url: self.url.clone(),
             head: self.head.clone(),
-            through,
-            kind,
-        })
+            through: self.through.into(),
+            kind: self.forge.into(),
+        }
+    }
+}
+
+/// Where one change's member list is in a changes view, sent with its blocks
+/// (`change::view::ChangeAt`): what Push and Land act on.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub(crate) struct ChangeList {
+    /// The index of its member list among the view's blocks.
+    pub at: u32,
+    pub change: String,
+    pub members: Vec<ChangeMember>,
+}
+
+/// One member row of a [`ChangeList`].
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub(crate) struct ChangeMember {
+    /// The row's key.
+    pub key: String,
+    pub repo: String,
+}
+
+impl From<charter_core::change::view::ChangeAt> for ChangeList {
+    fn from(c: charter_core::change::view::ChangeAt) -> Self {
+        Self {
+            at: u32::try_from(c.at).unwrap_or(u32::MAX),
+            change: c.change,
+            members: c
+                .members
+                .into_iter()
+                .map(|m| ChangeMember {
+                    key: m.key,
+                    repo: m.repo,
+                })
+                .collect(),
+        }
     }
 }
 
@@ -261,10 +348,7 @@ pub(crate) fn push_in(
     reach: &Reach,
 ) -> Result<Vec<String>, String> {
     workspace_ok(ws)?;
-    let confirmed = confirmed
-        .into_iter()
-        .map(Destination::try_from)
-        .collect::<Result<Vec<_>, _>>()?;
+    let confirmed: Vec<Destination> = confirmed.into_iter().map(Destination::from).collect();
     let mut said = Vec::new();
     let code = push::push_confirmed_with(
         root,
@@ -314,14 +398,21 @@ pub(crate) fn land_in(
     reach: &Reach,
 ) -> Result<Vec<String>, String> {
     workspace_ok(ws)?;
-    let confirmed = confirmed.verified()?;
+    // Squash is asked for only where it is charter's to ask: the question offered it nowhere
+    // else, and a box the window could not have shown changes nothing.
+    let how = if squash && confirmed.squash {
+        How::Squash
+    } else {
+        How::Merge
+    };
+    let confirmed = confirmed.verified();
     let mut said = Vec::new();
     let code = land::land_verified_with(
         root,
         ws,
         slug,
         &confirmed,
-        if squash { How::Squash } else { How::Merge },
+        how,
         reach.backend_of,
         reach.host,
         chrono::Utc::now(),

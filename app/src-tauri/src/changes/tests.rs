@@ -229,13 +229,20 @@ fn ready() -> Vec<Value> {
     ]
 }
 
-fn widget_destination() -> PushDestination {
+/// What the push question names for widget: its branch at the commit its clone holds.
+fn widget_destination(world: &World) -> PushDestination {
+    let head = git(
+        &world.plane.join("workspaces/alpha/widget"),
+        &["rev-parse", BRANCH],
+    );
     PushDestination {
         repo: "widget".into(),
         branch: BRANCH.into(),
+        head_short: head[..12].to_owned(),
+        head,
         to: "https://github.com/acme/widget.git".into(),
         base: Some("main".into()),
-        forge: "github".into(),
+        forge: ForgeKind::Github,
         request: "pull request".into(),
     }
 }
@@ -250,7 +257,7 @@ fn push_then_land_asks_first_names_what_it_will_do_and_does_only_that() {
     });
     assert_eq!(recorded.unspent(), Vec::new());
     let question = question.expect("the push question");
-    assert_eq!(question.destinations, vec![widget_destination()]);
+    assert_eq!(question.destinations, vec![widget_destination(&world)]);
     assert_eq!(question.not_pushed, Vec::<String>::new());
     assert!(!world.remote_has_branch("widget"), "asking pushed it");
 
@@ -279,11 +286,21 @@ fn push_then_land_asks_first_names_what_it_will_do_and_does_only_that() {
         (
             question.number,
             question.head.as_str(),
-            question.through.as_str(),
+            question.through,
             question.request.as_str(),
             question.sigil.as_str(),
+            question.how.as_str(),
+            question.squash,
         ),
-        (7, HEAD, "merge", "pull request", "#")
+        (
+            7,
+            HEAD,
+            LandThrough::Merge,
+            "pull request",
+            "#",
+            "charter merges it now, at 6dcb09b5b578 and no other.",
+            true
+        )
     );
     assert!(
         question
@@ -396,4 +413,60 @@ fn push_and_land_are_on_the_windows_ipc_allow_list_and_hand_no_secret_back() {
         );
         assert!(!vault_values.contains(&name));
     }
+}
+
+/// Every exchange of a landing of widget's #7 merged by `method`.
+fn landed_by(method: &str) -> Value {
+    let mut exchanges = ready();
+    exchanges.push(write(
+        "PUT",
+        "repos/acme/widget/pulls/7/merge",
+        json!([{"text": ["merge_method", method]},
+               {"text": ["commit_title", "api-2: widget (#7)"]},
+               {"text": ["commit_message", "bump the api\n\nCharter-Change: api-2"]},
+               {"text": ["sha", HEAD]}]),
+        json!({"sha": MERGE, "merged": true}),
+    ));
+    exchanges.push(request("widget", 7, "merged"));
+    json!(exchanges)
+}
+
+#[test]
+fn the_squash_box_reaches_the_merge_the_forge_is_asked_for() {
+    let world = World::new(&[("widget", &[])]);
+    let (question, _) = world.with(json!(ready()), |reach| {
+        land_question_in(&world.plane, "alpha", SLUG, "widget", reach)
+    });
+    let question = question.unwrap();
+
+    // Only a squash merge is recorded: a plain one would be a request nobody wrote down.
+    let (landed, recorded) = world.with(landed_by("squash"), |reach| {
+        land_in(&world.plane, "alpha", SLUG, &question, true, reach)
+    });
+
+    assert_eq!(recorded.unspent(), Vec::new(), "{landed:?}");
+    assert!(
+        landed.unwrap().iter().any(|l| l.contains("(squash)")),
+        "the landing was not a squash"
+    );
+}
+
+#[test]
+fn squash_is_never_asked_where_the_question_did_not_offer_it() {
+    let world = World::new(&[("widget", &[])]);
+    let (question, _) = world.with(json!(ready()), |reach| {
+        land_question_in(&world.plane, "alpha", SLUG, "widget", reach)
+    });
+    // As a question about a GitHub merge queue says it: squash is not charter's there. The
+    // compared fields are untouched, so this is the landing that was confirmed.
+    let question = LandQuestion {
+        squash: false,
+        ..question.unwrap()
+    };
+
+    let (landed, recorded) = world.with(landed_by("merge"), |reach| {
+        land_in(&world.plane, "alpha", SLUG, &question, true, reach)
+    });
+
+    assert_eq!(recorded.unspent(), Vec::new(), "{landed:?}");
 }

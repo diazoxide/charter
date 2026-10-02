@@ -209,6 +209,8 @@ fn new_body(record: &Record, host: &str) -> String {
 struct Plan {
     repo: String,
     branch: String,
+    /// The commit the branch is at here.
+    head: String,
     clone: PathBuf,
     on: Repo,
     /// The destination printed: the HTTPS URL the clone's `origin` names.
@@ -263,7 +265,11 @@ fn plan(
         ],
         git::READ,
     );
-    if !local.is_ok_and(|run| run.ok()) {
+    let head = match local {
+        Ok(run) if run.ok() => run.out.trim().to_string(),
+        _ => String::new(),
+    };
+    if head.is_empty() {
         return fail(
             say,
             format!(
@@ -314,6 +320,7 @@ fn plan(
     Ok(Plan {
         repo: repo.to_string(),
         branch: branch.to_string(),
+        head,
         clone: clone.path,
         on,
         https,
@@ -385,6 +392,8 @@ pub fn push(plane: &Path, ws: &str, slug: &str, say: &mut dyn FnMut(Say)) -> u8 
 pub struct Destination {
     pub repo: String,
     pub branch: String,
+    /// The commit the branch is at in the member's clone: what the push would send.
+    pub head: String,
     /// The HTTPS URL the clone's `origin` names: where the branch goes.
     pub to: String,
     /// The branch a request opened for it would go into, when charter can tell.
@@ -398,6 +407,7 @@ impl From<&Plan> for Destination {
         Destination {
             repo: p.repo.clone(),
             branch: p.branch.clone(),
+            head: p.head.clone(),
             to: p.https.clone(),
             base: p.base.clone(),
             kind: p.on.forge.kind,
@@ -463,6 +473,11 @@ pub fn push_confirmed_with(
     pushing(plane, ws, slug, backend_of, route, Some(confirmed), say)
 }
 
+/// The first twelve characters of a commit, contained, as `land` shows one.
+pub fn short(sha: &str) -> String {
+    shown::line(sha).chars().take(12).collect()
+}
+
 /// What differs between what the operator `confirmed` and what charter would push `now`, one
 /// phrase per member, or nothing when they are the same.
 fn changed_since(confirmed: &[Destination], now: &[Destination]) -> Vec<String> {
@@ -480,6 +495,15 @@ fn changed_since(confirmed: &[Destination], now: &[Destination]) -> Vec<String> 
                 named(&d.repo),
                 named(&d.branch)
             )),
+            Some(c) if c.head != d.head => out.push(format!(
+                "{}'s branch {} is now at {}",
+                named(&d.repo),
+                named(&d.branch),
+                short(&d.head)
+            )),
+            Some(c) if c.kind != d.kind => {
+                out.push(format!("{} is now on {}", named(&d.repo), d.kind.display()))
+            }
             Some(c) if c.base != d.base => out.push(format!(
                 "{}'s request now goes into {}",
                 named(&d.repo),

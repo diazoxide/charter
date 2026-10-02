@@ -17,14 +17,6 @@ import { commands, type LandQuestion, type PlaneId, type PushQuestion } from "./
  * request.
  */
 
-/** A member row's change and repo, from its key (`change::view::member_key`): `<change>/<repo>`.
- *  A change's name never holds a `/`, so the first one is where they part. */
-export function memberOf(key: string): { change: string; repo: string } | undefined {
-  const at = key.indexOf("/");
-  if (at <= 0 || at === key.length - 1) return undefined;
-  return { change: key.slice(0, at), repo: key.slice(at + 1) };
-}
-
 /** What a command answered: its lines, or its refusal in the core's words. */
 type Said<T> = { ok: T } | { refused: string };
 
@@ -47,24 +39,6 @@ export function askLand(
   repo: string,
 ): Promise<Said<LandQuestion>> {
   return asked(() => commands.changeLandQuestion(plane, workspace, change, repo));
-}
-
-/** The 12-character head the core's own lines use. */
-function short(sha: string): string {
-  return sha.slice(0, 12);
-}
-
-/** The sentence that says how a confirmed landing goes. */
-function howItLands(q: LandQuestion): string {
-  const forge = q.forge === "gitlab" ? "GitLab" : "GitHub";
-  switch (q.through) {
-    case "queue":
-      return `charter puts it in its ${q.queue} at this head, and ${forge} merges it once the ${q.queue}'s own checks pass.`;
-    case "record":
-      return `It has merged at this head, which charter started landing. Land records the landing and asks ${forge} for nothing.`;
-    default:
-      return "charter merges it now, at this head and no other.";
-  }
 }
 
 /** The buttons a question ends with: the act, then Cancel, which has the focus. */
@@ -149,6 +123,10 @@ export function PushAsk({
   const [ran, setRan] = useState<Said<string[]>>();
   const cancel = useRef<HTMLButtonElement>(null);
 
+  // Bumped when a push was refused: what it would push now is asked again, so the list on
+  // screen is always the one the next press hands back.
+  const [round, setRound] = useState(0);
+
   useEffect(() => {
     let gone = false;
     void asked(() => commands.changePushQuestion(plane, workspace, change)).then((said) => {
@@ -157,7 +135,7 @@ export function PushAsk({
     return () => {
       gone = true;
     };
-  }, [plane, workspace, change]);
+  }, [plane, workspace, change, round]);
 
   const push = (destinations: PushQuestion["destinations"]) => {
     if (running) return;
@@ -165,6 +143,10 @@ export function PushAsk({
     void asked(() => commands.changePush(plane, workspace, change, destinations)).then((said) => {
       setRan(said);
       setRunning(false);
+      if ("refused" in said) {
+        setQuestion(undefined);
+        setRound((n) => n + 1);
+      }
     });
   };
 
@@ -206,7 +188,7 @@ export function PushAsk({
                 <ul className="saving-files" aria-label="What is pushed">
                   {question.ok.destinations.map((d) => (
                     <li key={d.repo}>
-                      <strong>{d.repo}</strong>: branch {d.branch} → {d.to}
+                      <strong>{d.repo}</strong>: branch {d.branch} at {d.head_short} → {d.to}
                       {d.base !== null && `, its ${d.request} into ${d.base}`}
                     </li>
                   ))}
@@ -267,20 +249,29 @@ export function LandAsk({
   const [running, setRunning] = useState(false);
   const [ran, setRan] = useState<Said<string[]>>();
   const [squash, setSquash] = useState(false);
+  // What is on screen, and what the next press hands back: the question this opened with,
+  // or, after a landing was refused, the core's answer asked again — `undefined` while that
+  // is asked, and a refusal when its gates now refuse.
+  const [now, setNow] = useState<Said<LandQuestion> | undefined>({ ok: question });
   const cancel = useRef<HTMLButtonElement>(null);
   const squashId = useId();
-  const q = question;
+  const q = now !== undefined && "ok" in now ? now.ok : question;
+  const askable = now !== undefined && "ok" in now;
   const done = ran !== undefined && "ok" in ran;
 
   const land = () => {
-    if (running) return;
+    if (running || !askable) return;
     setRunning(true);
-    void asked(() =>
-      commands.changeLand(plane, workspace, change, q, squash && q.through !== "record"),
-    ).then((said) => {
-      setRan(said);
-      setRunning(false);
-    });
+    void asked(() => commands.changeLand(plane, workspace, change, q, squash && q.squash)).then(
+      (said) => {
+        setRan(said);
+        setRunning(false);
+        if ("refused" in said) {
+          setNow(undefined);
+          void askLand(plane, workspace, change, q.repo).then(setNow);
+        }
+      },
+    );
   };
 
   return (
@@ -303,7 +294,18 @@ export function LandAsk({
             {q.through === "record" ? "Record" : "Land"} {q.repo}&apos;s {q.request} {q.sigil}
             {q.number}?
           </AlertDialog.Title>
-          <AlertDialog.Description className="came-back">{howItLands(q)}</AlertDialog.Description>
+          <AlertDialog.Description className="came-back">{q.how}</AlertDialog.Description>
+          {now === undefined && (
+            <p className="pending" aria-busy="true">
+              <LoaderCircle className="node-icon spinning" aria-hidden="true" />
+              Checking it again…
+            </p>
+          )}
+          {now !== undefined && "refused" in now && (
+            <p className="trouble" role="alert">
+              {now.refused}
+            </p>
+          )}
           <dl className="facts">
             <dt>change</dt>
             <dd>{change}</dd>
@@ -319,7 +321,7 @@ export function LandAsk({
                 ? `into the ${q.queue}`
                 : q.through === "record"
                   ? "recorded only"
-                  : `merged now, at ${short(q.head)}`}
+                  : `merged now, at ${q.head_short}`}
             </dd>
           </dl>
           {q.said.map((line, at) => (
@@ -327,7 +329,7 @@ export function LandAsk({
               {line}
             </p>
           ))}
-          {q.through !== "record" && !done && (
+          {q.squash && !done && (
             <div className="choice">
               <Checkbox.Root
                 className="box"
@@ -355,6 +357,7 @@ export function LandAsk({
             act={q.through === "record" ? "Record" : "Land"}
             running={running}
             done={done}
+            disabled={!askable}
             onAct={land}
             cancel={cancel}
           />

@@ -291,6 +291,43 @@ pub struct Verified {
     pub kind: crate::forge::Kind,
 }
 
+impl Verified {
+    /// How it lands, in one sentence naming the head and the forge's own words for its queue:
+    /// what the window's question says before the operator's yes.
+    pub fn how(&self) -> String {
+        let at = short(&self.head);
+        let forge = self.kind.display();
+        let noun = self.kind.queue_noun();
+        match self.through {
+            Through::Merge => format!("charter merges it now, at {at} and no other."),
+            Through::Queue => format!(
+                "charter puts it in its {noun} at {at}, and {forge} merges it once the {noun}'s \
+                 own checks pass."
+            ),
+            Through::Record => format!(
+                "It has merged at {at}, which charter started landing. Land records the landing \
+                 and asks {forge} for nothing."
+            ),
+        }
+    }
+
+    /// Whether squashing is charter's to ask for: a direct merge, or a queue that takes it
+    /// (`Kind::queue_takes_squash`). GitHub's merge queue merges by its rule's method, and a
+    /// landing only recorded merges nothing.
+    pub fn squash_is_charters(&self) -> bool {
+        match self.through {
+            Through::Merge => true,
+            Through::Queue => self.kind.queue_takes_squash(),
+            Through::Record => false,
+        }
+    }
+
+    /// The head as the core's lines show it: its first twelve characters.
+    pub fn head_short(&self) -> String {
+        short(&self.head)
+    }
+}
+
 /// What [`gated`] is asked to do once every gate has passed.
 enum Asked<'v> {
     /// Land it; when the operator confirmed a [`Verified`], only that.

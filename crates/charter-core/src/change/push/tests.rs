@@ -819,10 +819,13 @@ fn the_descriptions_line_endings_and_trailing_newline_are_kept_outside_the_block
 
 mod gitlab;
 
-fn destination(repo: &str) -> Destination {
+/// What `destinations` names for `repo` of `world`: its branch at the commit its clone holds.
+fn destination(world: &World, repo: &str) -> Destination {
+    let clone = world.plane.join("workspaces/alpha").join(repo);
     Destination {
         repo: repo.into(),
         branch: BRANCH.into(),
+        head: run(&clone, &["rev-parse", BRANCH]).trim().to_string(),
         to: format!("https://github.com/acme/{repo}.git"),
         base: Some("main".into()),
         kind: crate::forge::Kind::GitHub,
@@ -840,7 +843,10 @@ fn each_members_destination_is_named_for_the_window_and_nothing_is_pushed_or_ask
 
     assert_eq!(
         found,
-        Ok(vec![destination("widget"), destination("gadget")]),
+        Ok(vec![
+            destination(&world, "widget"),
+            destination(&world, "gadget")
+        ]),
         "{said}"
     );
     assert_eq!(world.remote_has("widget", BRANCH), None, "{said}");
@@ -855,7 +861,7 @@ fn a_member_that_will_not_be_pushed_is_said_in_the_cores_words_beside_the_destin
 
     let (found, said) = world.destinations();
 
-    assert_eq!(found, Ok(vec![destination("widget")]), "{said}");
+    assert_eq!(found, Ok(vec![destination(&world, "widget")]), "{said}");
     assert!(
         said.contains("gadget: not a repo in workspace 'alpha', so it is not pushed."),
         "{said}"
@@ -870,7 +876,7 @@ fn a_push_of_the_destinations_the_operator_confirmed_pushes_them() {
     world.change(&[("widget", &[]), ("gadget", &["widget"])]);
     let [w1, w2] = opened("widget", 7, NEW_BODY);
     let [g1, g2] = opened("gadget", 9, NEW_BODY);
-    let confirmed = [destination("widget"), destination("gadget")];
+    let confirmed = [destination(&world, "widget"), destination(&world, "gadget")];
 
     let (code, said, recorded) = world.push_as(
         Some(&confirmed),
@@ -898,7 +904,7 @@ fn a_push_whose_destinations_changed_since_the_operator_confirmed_them_pushes_no
     let widget = world.clone("widget");
     world.clone("gadget");
     world.change(&[("widget", &[]), ("gadget", &["widget"])]);
-    let confirmed = [destination("widget"), destination("gadget")];
+    let confirmed = [destination(&world, "widget"), destination(&world, "gadget")];
     // After the question was asked, widget's origin is pointed somewhere else.
     run(
         &widget,
@@ -921,4 +927,52 @@ fn a_push_whose_destinations_changed_since_the_operator_confirmed_them_pushes_no
         "{said}"
     );
     assert_eq!(world.remote_has("gadget", BRANCH), None, "{said}");
+}
+
+#[test]
+fn a_push_whose_branch_moved_since_the_operator_confirmed_it_pushes_nothing() {
+    let world = World::new("schema = 1\n");
+    let widget = world.clone("widget");
+    world.change(&[("widget", &[])]);
+    let confirmed = [destination(&world, "widget")];
+    // A commit made between the question and the yes.
+    std::fs::write(widget.join("late.rs"), "pub fn late() {}\n").unwrap();
+    run(&widget, &["switch", "-q", BRANCH]);
+    run(&widget, &["add", "-A"]);
+    run(&widget, &["commit", "-q", "-m", "late"]);
+    let now = run(&widget, &["rev-parse", "--short=12", BRANCH])
+        .trim()
+        .to_string();
+
+    let (code, said, recorded) = world.push_as(Some(&confirmed), json!([]));
+
+    assert_eq!((code, recorded.unspent()), (REFUSED, Vec::new()), "{said}");
+    assert!(
+        said.contains(&format!(
+            "what charter would push is not what you confirmed: widget's branch change/api-2 \
+             is now at {now}. Nothing was pushed."
+        )),
+        "{said}"
+    );
+    assert_eq!(world.remote_has("widget", BRANCH), None, "{said}");
+}
+
+#[test]
+fn a_push_confirmed_for_another_forge_pushes_nothing() {
+    let world = World::new("schema = 1\n");
+    world.clone("widget");
+    world.change(&[("widget", &[])]);
+    let confirmed = [Destination {
+        kind: crate::forge::Kind::GitLab,
+        ..destination(&world, "widget")
+    }];
+
+    let (code, said, recorded) = world.push_as(Some(&confirmed), json!([]));
+
+    assert_eq!((code, recorded.unspent()), (REFUSED, Vec::new()), "{said}");
+    assert!(
+        said.contains("not what you confirmed: widget is now on GitHub. Nothing was pushed."),
+        "{said}"
+    );
+    assert_eq!(world.remote_has("widget", BRANCH), None, "{said}");
 }

@@ -6,7 +6,14 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { ViewPane } from "./Views";
 import { catalogue, catalogued, type Offer } from "./actions";
 import { noTabs } from "./tabs";
-import type { ActionAnswer, ExtensionView, PanelBlock, RowAction, ViewAnswer } from "./bindings";
+import type {
+  ActionAnswer,
+  ExtensionView,
+  LandQuestion,
+  PanelBlock,
+  RowAction,
+  ViewAnswer,
+} from "./bindings";
 import type { ViewRef } from "./tabs";
 
 /**
@@ -707,19 +714,32 @@ describe("a change's Push and Land (#474)", () => {
       ],
       took_ms: 40,
       overreach: null,
+      changes: [
+        {
+          at: 1,
+          change: "api-2",
+          members: [
+            { key: "api-2/widget", repo: "widget" },
+            { key: "api-2/gadget", repo: "gadget" },
+          ],
+        },
+      ],
     } as ViewAnswer;
   }
 
-  const QUESTION = {
+  const QUESTION: LandQuestion = {
     repo: "widget",
     number: 7,
     url: "https://github.com/acme/widget/pull/7",
     head: HEAD,
+    head_short: "6dcb09b5b578",
     through: "merge",
     forge: "github",
     request: "pull request",
     sigil: "#",
     queue: "merge queue",
+    how: "charter merges it now, at 6dcb09b5b578 and no other.",
+    squash: true,
     said: ["• widget: checks PASSED at 6dcb09b5b578 (1 check)"],
   };
 
@@ -803,8 +823,12 @@ describe("a change's Push and Land (#474)", () => {
     await waitFor(() => expect(called("open_view")).toHaveLength(2));
   });
 
-  it("says a branch with a merge queue goes into it", async () => {
-    forge({ change_land_question: () => ({ ...QUESTION, through: "queue" }) });
+  it("says a branch with a merge queue goes into it, and offers no squash it cannot do", async () => {
+    const how =
+      "charter puts it in its merge queue at 6dcb09b5b578, and GitHub merges it once the merge queue's own checks pass.";
+    forge({
+      change_land_question: () => ({ ...QUESTION, through: "queue", how, squash: false }),
+    });
     open("land-queue");
     const widget = (await screen.findByText("widget · change/api-2")).closest("li");
     if (widget === null) throw new Error("no widget row");
@@ -812,11 +836,41 @@ describe("a change's Push and Land (#474)", () => {
 
     const asking = await screen.findByRole("alertdialog");
     expect(within(asking).getByText("into the merge queue")).toBeInTheDocument();
+    expect(within(asking).getByText(how)).toBeInTheDocument();
+    expect(within(asking).queryByRole("checkbox")).toBeNull();
+  });
+
+  it("asks again after a landing is refused, and hands back only what it shows now", async () => {
+    const MOVED = "0123456789abcdef0123456789abcdef01234567";
+    const moved = { ...QUESTION, head: MOVED, head_short: "0123456789ab" };
+    let asked = 0;
+    const { called } = forge({
+      change_land_question: () => (asked++ === 0 ? QUESTION : moved),
+      change_land: (args) =>
+        (args.confirmed as LandQuestion).head === HEAD
+          ? new Error("widget: this is not the landing you confirmed. Nothing was merged.")
+          : ["✓ merged #7 as e5bd3914e2e5"],
+    });
+    open("land-again");
+    const widget = (await screen.findByText("widget · change/api-2")).closest("li");
+    if (widget === null) throw new Error("no widget row");
+    await userEvent.click(within(widget).getByRole("button", { name: "Land…" }));
+    const asking = await screen.findByRole("alertdialog");
+    await userEvent.click(within(asking).getByRole("button", { name: "Land" }));
+
     expect(
-      within(asking).getByText(
-        "charter puts it in its merge queue at this head, and GitHub merges it once the merge queue's own checks pass.",
+      await within(asking).findByText(
+        "widget: this is not the landing you confirmed. Nothing was merged.",
       ),
     ).toBeInTheDocument();
+    expect(await within(asking).findByText(MOVED)).toBeInTheDocument();
+    await userEvent.click(within(asking).getByRole("button", { name: "Land" }));
+
+    expect(await within(asking).findByText("✓ merged #7 as e5bd3914e2e5")).toBeInTheDocument();
+    expect(called("change_land").map((c) => (c.args.confirmed as LandQuestion).head)).toEqual([
+      HEAD,
+      MOVED,
+    ]);
   });
 
   it("asks first naming each repo, branch and destination, and a second click pushes nothing more", async () => {
@@ -825,6 +879,8 @@ describe("a change's Push and Land (#474)", () => {
       {
         repo: "widget",
         branch: "change/api-2",
+        head: HEAD,
+        head_short: "6dcb09b5b578",
         to: "https://github.com/acme/widget.git",
         base: "main",
         forge: "github",
@@ -833,6 +889,8 @@ describe("a change's Push and Land (#474)", () => {
       {
         repo: "gadget",
         branch: "change/api-2",
+        head: HEAD,
+        head_short: "6dcb09b5b578",
         to: "https://gitlab.com/acme/gadget.git",
         base: "main",
         forge: "gitlab",
@@ -852,12 +910,12 @@ describe("a change's Push and Land (#474)", () => {
     const asking = await screen.findByRole("alertdialog");
     expect(
       await within(asking).findByText(
-        /branch change\/api-2 → https:\/\/github.com\/acme\/widget.git, its pull request into main/,
+        /branch change\/api-2 at 6dcb09b5b578 → https:\/\/github.com\/acme\/widget.git, its pull request into main/,
       ),
     ).toBeInTheDocument();
     expect(
       within(asking).getByText(
-        /branch change\/api-2 → https:\/\/gitlab.com\/acme\/gadget.git, its merge request into main/,
+        /branch change\/api-2 at 6dcb09b5b578 → https:\/\/gitlab.com\/acme\/gadget.git, its merge request into main/,
       ),
     ).toBeInTheDocument();
     expect(called("change_push")).toHaveLength(0);
@@ -874,5 +932,40 @@ describe("a change's Push and Land (#474)", () => {
       change: "api-2",
       confirmed: destinations,
     });
+  });
+
+  it("asks again after a push is refused, so the next Push hands back what is shown now", async () => {
+    const at = (head: string) => ({
+      destinations: [
+        {
+          repo: "widget",
+          branch: "change/api-2",
+          head,
+          head_short: head.slice(0, 12),
+          to: "https://github.com/acme/widget.git",
+          base: "main",
+          forge: "github" as const,
+          request: "pull request",
+        },
+      ],
+      not_pushed: [],
+    });
+    let asked = 0;
+    const { called } = forge({
+      change_push_question: () => (asked++ === 0 ? at(HEAD) : at("a1b2c3d4e5f6a1b2c3d4")),
+      change_push: () =>
+        new Error(
+          "what charter would push is not what you confirmed: widget's branch change/api-2 is now at a1b2c3d4e5f6. Nothing was pushed.",
+        ),
+    });
+    open("push-again");
+    await userEvent.click(await screen.findByRole("button", { name: "Push api-2…" }));
+    const asking = await screen.findByRole("alertdialog");
+    await within(asking).findByText(/at 6dcb09b5b578 →/);
+    await userEvent.click(within(asking).getByRole("button", { name: "Push" }));
+
+    expect(await within(asking).findByText(/not what you confirmed/)).toBeInTheDocument();
+    expect(await within(asking).findByText(/at a1b2c3d4e5f6 →/)).toBeInTheDocument();
+    expect(called("change_push_question")).toHaveLength(2);
   });
 });

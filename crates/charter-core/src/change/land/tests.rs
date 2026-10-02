@@ -1269,3 +1269,48 @@ fn a_merge_charter_queued_is_verified_as_one_to_record_and_recorded_once_confirm
     assert_eq!((code, recorded.unspent()), (0, Vec::new()), "{said}");
     assert_eq!(world.log().len(), 1);
 }
+
+#[test]
+fn a_verified_landing_says_how_it_lands_in_its_forges_words_and_whether_squash_is_charters() {
+    let github = verified_merge();
+    assert_eq!(
+        github.how(),
+        "charter merges it now, at 6dcb09b5b578 and no other."
+    );
+    assert!(github.squash_is_charters());
+
+    let queued = Verified {
+        through: Through::Queue,
+        ..verified_merge()
+    };
+    assert_eq!(
+        queued.how(),
+        "charter puts it in its merge queue at 6dcb09b5b578, and GitHub merges it once the \
+         merge queue's own checks pass."
+    );
+    assert!(
+        !queued.squash_is_charters(),
+        "GitHub's merge queue merges by its own rule's method"
+    );
+
+    let train = Verified {
+        kind: crate::forge::Kind::GitLab,
+        ..queued.clone()
+    };
+    assert!(train.how().contains("its merge train"), "{}", train.how());
+    assert!(
+        train.squash_is_charters(),
+        "GitLab's merge train takes squash"
+    );
+
+    let record = Verified {
+        through: Through::Record,
+        ..verified_merge()
+    };
+    assert_eq!(
+        record.how(),
+        "It has merged at 6dcb09b5b578, which charter started landing. Land records the landing \
+         and asks GitHub for nothing."
+    );
+    assert!(!record.squash_is_charters(), "nothing is merged");
+}

@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import { EmptyState } from "./EmptyState";
 import { AskFirst, runExtensionAction } from "./ExtensionAction";
-import { LandAsk, PushAsk, askLand, memberOf } from "./ChangeActions";
+import { LandAsk, PushAsk, askLand } from "./ChangeActions";
 import { PanelList } from "./PanelList";
 import { RepoInstructionsTab } from "./RepoInstructionsTab";
 import { Preferences } from "./Preferences";
@@ -24,6 +24,7 @@ import { ProjectSettings, WorkspaceSettings } from "./ProjectSettings";
 import {
   commands,
   type ExtensionCommand,
+  type ChangeList,
   type ExtensionView,
   type LandQuestion,
   type MemoryView,
@@ -603,9 +604,10 @@ function Answer({
     );
   }
   const seen = acted === undefined ? answer.overreach : acted.said;
+  const lists: readonly ChangeList[] = (keeps ? answer.changes : undefined) ?? [];
   /** Land on a member row: its gates first, and a refusal beside the row; else the question. */
   const land = (row: PanelRow) => {
-    const member = memberOf(row.key);
+    const member = memberAt(lists, row.key);
     if (member === undefined || workspace === undefined || checking !== undefined) return;
     setChecking(row.key);
     void askLand(plane, workspace, member.change, member.repo).then((said) => {
@@ -619,8 +621,10 @@ function Answer({
       if ("ok" in said) setLanding({ change: member.change, question: said.ok });
     });
   };
+  // **Push and Land are the changes view's**, switched on by its kind; which list and which
+  // row each acts on is what the core sent beside the blocks (`change::view::ChangeAt`).
   const changeBlocks =
-    keeps && workspace !== undefined ? withLand(answer.blocks, checking) : answer.blocks;
+    keeps && workspace !== undefined ? withLand(answer.blocks, lists, checking) : answer.blocks;
   return (
     <>
       {refresh}
@@ -638,8 +642,10 @@ function Answer({
         onPress={from === null ? onPress : undefined}
         listHead={
           keeps && workspace !== undefined
-            ? (rows) => {
-                const change = rows.length > 0 ? memberOf(rows[0].key)?.change : undefined;
+            ? (at) => {
+                const list = lists.find((one) => one.at === at);
+                const change =
+                  list !== undefined && list.members.length > 0 ? list.change : undefined;
                 return change === undefined ? null : (
                   <button
                     type="button"
@@ -719,29 +725,45 @@ function Answer({
 
 /** The Land a changes view offers on each member row (#474): charter's own button, put on the
  *  row here in the window and never by an answer, and pressed through `ChangeActions`. */
-function withLand(blocks: readonly PanelBlock[], checking: string | undefined): PanelBlock[] {
-  return blocks.map((block) =>
-    block.kind !== "list"
-      ? block
-      : {
-          ...block,
-          rows: block.rows.map((row) =>
-            memberOf(row.key) === undefined
-              ? row
-              : {
-                  ...row,
-                  actions: [
-                    {
-                      id: "land",
-                      title: checking === row.key ? "Checking…" : "Land…",
-                      asks_first: true,
-                      deletes: false,
-                    },
-                  ],
+function withLand(
+  blocks: readonly PanelBlock[],
+  lists: readonly ChangeList[],
+  checking: string | undefined,
+): PanelBlock[] {
+  return blocks.map((block, at) => {
+    const list = lists.find((one) => one.at === at);
+    if (block.kind !== "list" || list === undefined) return block;
+    return {
+      ...block,
+      rows: block.rows.map((row) =>
+        list.members.some((member) => member.key === row.key)
+          ? {
+              ...row,
+              actions: [
+                {
+                  id: "land",
+                  title: checking === row.key ? "Checking…" : "Land…",
+                  asks_first: true,
+                  deletes: false,
                 },
-          ),
-        },
-  );
+              ],
+            }
+          : row,
+      ),
+    };
+  });
+}
+
+/** The change and repo of the member row keyed `key`, as the core sent them. */
+function memberAt(
+  lists: readonly ChangeList[],
+  key: string,
+): { change: string; repo: string } | undefined {
+  for (const list of lists) {
+    const member = list.members.find((one) => one.key === key);
+    if (member !== undefined) return { change: list.change, repo: member.repo };
+  }
+  return undefined;
 }
 
 /** An answer's blocks, each drawn with what a panel's is drawn with. */
@@ -757,7 +779,7 @@ function AnsweredBlocks({
   blocks: readonly PanelBlock[];
   label: string;
   /** What a list is headed by, from its rows: a change's Push (#474). */
-  listHead?: (rows: readonly PanelRow[]) => ReactNode;
+  listHead?: (at: number) => ReactNode;
   /** A refusal to say beside a row, in the core's words: a Land's (#474). */
   besideRow?: (row: PanelRow) => string | undefined;
   /** Run one of the extension's actions a row offers; `undefined` for charter's own views. */
@@ -790,7 +812,7 @@ function AnsweredBlocks({
           <Facts key={at} facts={block} />
         ) : (
           <Fragment key={at}>
-            {listHead?.(block.rows)}
+            {listHead?.(at)}
             <PanelList
               rows={block.rows}
               empty={block.empty}
