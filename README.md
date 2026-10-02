@@ -17,6 +17,23 @@ stay as history ([ADR 0044](docs/adr/0044-charter-apps-design-record-lives-in-ch
 
 **Status:** M0, walking skeleton. Not usable yet.
 
+## Supported platforms
+
+What charter is held to, the CI runner that covers each platform, and what that job proves.
+[`docs/platforms.md`](docs/platforms.md) is the same table with what it does not promise: no
+Intel macOS build, no `.rpm`, and no Windows until the port lands.
+
+| Platform | Floor | CI runner | What CI proves |
+|---|---|---|---|
+| macOS 27 | Apple silicon | `xcode-27` | Builds the app. The runner image is a preview, so its check is reported and not required |
+| macOS 26 | Apple silicon | `macos-latest` | Builds the app, and starts and drives it through every scenario test. The published macOS build is made here |
+| Ubuntu 26.04 LTS | x86_64 | `ubuntu-26.04` | Builds the app and holds its cold start to the 2 s limit |
+| Ubuntu 24.04 LTS | x86_64 | `ubuntu-24.04` | Every Rust and web test, the app build, the cold start, and every scenario test. The published `.deb` and AppImage are made here |
+| Fedora, the current release | x86_64 | `fedora:latest` | Builds the app against Fedora's own libraries, runs the core and CLI tests as a normal user, and starts the app |
+| Windows 11 | not supported yet | `windows-latest` | Nothing yet. The job is evidence for the port and allowed to fail. Windows 11 joins this list when the Windows port lands |
+| iOS 16.4 or later | no iOS app yet | — | Nothing. The floor any iOS client will be held to |
+| Desktop browsers, the current Chrome, Edge, Firefox and Safari | no browser client yet | — | Nothing. The floor any browser client will be held to |
+
 ## Layout
 
 | Path | What |

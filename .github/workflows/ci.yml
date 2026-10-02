@@ -78,10 +78,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-24.04]
+        # The desktops `docs/platforms.md` lists (FR-25): the two latest macOS majors and the
+        # two Ubuntu LTS releases. `macos-latest` is macOS 26 and `xcode-27` is the runner
+        # images' macOS 27, a preview; when macOS 27 becomes `macos-latest`, `xcode-27` here
+        # becomes `macos-26`. Only the `macos-latest` and `ubuntu-24.04` checks are required.
+        os: [macos-latest, xcode-27, ubuntu-24.04, ubuntu-26.04]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Which OS this runner really is, so a label that moved shows in the log.
+      - name: What this runner is
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then sw_vers; else cat /etc/os-release; fi
+          uname -m
       - name: Tauri's Linux build dependencies, and an X server and i3 to start it in
         if: runner.os == 'Linux'
         run: |
@@ -117,6 +126,64 @@ jobs:
       - name: Cold start on i3 under X11 with no session bus, as startx into i3
         if: runner.os == 'Linux'
         run: tools/coldstart-linux.sh i3-nobus
+
+  # Fedora, the current release, as `docs/platforms.md` lists it (FR-25). A container on the
+  # Ubuntu runner, because GitHub has no Fedora runner. What it proves: charter builds against
+  # Fedora's own WebKitGTK and toolchain libraries, the core's and the CLI's tests pass there,
+  # and the app it built starts and draws a window. It does not run the published AppImage.
+  #
+  # The tests run as a normal user, not the container's root: root reads a file whose mode
+  # says nobody may, and a test about refusing such a file would pass or fail for the wrong
+  # reason. The cold start is run for "it starts"; its limit is set wide, because the 2 s limit
+  # is held on the Ubuntu runners, not inside a container.
+  fedora:
+    name: fedora (build, core and cli tests, start)
+    runs-on: ubuntu-24.04
+    container:
+      image: fedora:latest
+    env:
+      CARGO_TARGET_DIR: /home/ci/target
+    steps:
+      - name: Fedora's build dependencies for Tauri, and a display to start the app in
+        run: |
+          dnf -y install --setopt=install_weak_deps=False \
+            gcc gcc-c++ make pkgconf-pkg-config perl git tar gzip xz which findutils procps-ng \
+            curl wget file openssl-devel webkit2gtk4.1-devel libxdo-devel \
+            libappindicator-gtk3-devel librsvg2-devel \
+            xorg-x11-server-Xvfb xauth dbus-daemon dbus-x11 mesa-dri-drivers
+          cat /etc/fedora-release
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+      # A user to build and test as, owning the checkout, with its own rustup.
+      - name: A normal user, with Rust
+        run: |
+          useradd --create-home --uid 1001 ci || useradd --create-home ci
+          chown -R ci: "$GITHUB_WORKSPACE"
+          runuser -u ci -- sh -c 'curl --proto =https --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none'
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            /home/ci/.cargo/registry
+            /home/ci/.cargo/git
+            /home/ci/target
+          key: fedora-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: fedora-
+      - name: Build the app
+        run: |
+          chown -R ci: /home/ci
+          runuser -u ci -- env HOME=/home/ci PATH="/home/ci/.cargo/bin:$PATH" sh -c \
+            'cd app && npm ci && npx tauri build --debug --no-bundle'
+      - name: The core's and the CLI's tests, as a normal user
+        run: |
+          runuser -u ci -- env HOME=/home/ci PATH="/home/ci/.cargo/bin:$PATH" \
+            cargo test --locked -p charter-core -p charter-cli --no-fail-fast
+      - name: The app starts and draws a window
+        run: |
+          runuser -u ci -- env HOME=/home/ci PATH="/home/ci/.cargo/bin:$PATH" \
+            APP=/home/ci/target/debug/charter-app LIMIT_MS=20000 CEILING_MS=30000 \
+            dbus-run-session -- tools/coldstart-linux.sh bare
 
   # What the Python charter answered, frozen: every scenario the old differential ran, and the
   # generated cases of the shell reader and the plane-root guards, replayed against this build
