@@ -17,6 +17,7 @@ macro_rules! tauri_context {
 }
 
 mod about;
+mod prof;
 mod alerts;
 mod autosave;
 mod changes;
@@ -1725,7 +1726,15 @@ pub fn run() {
         .plugin(tauri_plugin_wdio::init())
         .plugin(tauri_plugin_wdio_webdriver::init());
 
-    app.invoke_handler(commands.invoke_handler())
+    let inner = commands.invoke_handler();
+    app.invoke_handler(move |invoke| {
+        let name = invoke.message.command().to_owned();
+        let at = prof::now();
+        let t = std::time::Instant::now();
+        let r = inner(invoke);
+        prof::command(&name, at, t.elapsed());
+        r
+    })
         .menu(lifecycle::menu)
         .on_menu_event(|app, event| lifecycle::clicked(app, event.id().as_ref()))
         .on_window_event(|window, event| {
@@ -1745,6 +1754,7 @@ pub fn run() {
         })
         .setup(|app| {
             reached("setup");
+            prof::probe(app.handle().clone());
             // One charter per user even without a session bus (`instance.rs`). After the
             // single-instance plugin, which has already handed an ordinary second launch over;
             // before the window and before any plane, whose hook socket `hookwire` removes

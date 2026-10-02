@@ -1,3 +1,6 @@
+import { existsSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { browser, expect } from "@wdio/globals";
 import { READY, built, declareAProfile, writeShell } from "../harness.js";
 import { endChat, pressAndStart } from "../opening.js";
@@ -144,7 +147,38 @@ describe(`switching among ${OPEN} open projects`, function () {
   it("brings each one to the front through the switcher, and its chat's pane paints", async () => {
     // In the order they were opened: the one in front is the last one opened, so no switch is
     // ever to the project already there.
-    const switches = await measureSwitches(planes, ROUNDS, () => PAINTED, jobInTheWindow);
+    type Got = { ms: number; t0: number; marks: Record<string, number>; cmds: unknown[] };
+    const got: Got[] = [];
+    const job = async <T,>(plan: Parameters<typeof jobInTheWindow>[0]): Promise<T> => {
+      const r = await jobInTheWindow<T>(plan);
+      got.push(r as unknown as Got);
+      return r;
+    };
+    const switches = await measureSwitches(planes, ROUNDS, () => PAINTED, job);
+    const file = [join(tmpdir(), "charter-ipc-prof.jsonl"), "/tmp/charter-ipc-prof.jsonl"].find(
+      (one) => existsSync(one),
+    );
+    const rust = file
+      ? readFileSync(file, "utf8")
+          .split("\n")
+          .filter(Boolean)
+          .map((l) => JSON.parse(l) as { k: string; at: number; ms: number; c?: string; main?: boolean })
+      : [];
+    console.log(`PROF file ${file} lines ${rust.length}`);
+    got.forEach((one, i) => {
+      const end = one.t0 + one.ms + 30;
+      const near = rust
+        .filter((r) => r.at >= one.t0 - 20 && r.at <= end)
+        .map((r) =>
+          r.k === "cmd"
+            ? `${r.c}${r.main ? "@main" : ""}@${Math.round(r.at - one.t0)}+${r.ms.toFixed(1)}`
+            : `STALL@${Math.round(r.at - one.t0)}+${r.ms}`,
+        );
+      const marks = Object.fromEntries(
+        Object.entries(one.marks).map(([k, v]) => [k, Math.round(v - one.t0)]),
+      );
+      console.log(`PROF ${JSON.stringify({ i, ms: Math.round(one.ms), marks, js: one.cmds, rust: near })}`);
+    });
 
     logLine("project-switch.jsonl", { budgetMs: BUDGET_MS, ...switches });
     // In the job's own output too, where a reviewer reads it without downloading anything.

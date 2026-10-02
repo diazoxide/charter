@@ -1,5 +1,6 @@
 /// <reference types="vite/client" />
 import type { Terminal } from "@xterm/xterm";
+import { sent as profSent } from "./prof";
 import { drawWith, type Drawing, type Renderer } from "./renderer";
 import { onAMac } from "./tabKeys";
 
@@ -53,8 +54,13 @@ let job: Job = { running: false };
 export const measuring = Boolean(import.meta.env.VITE_E2E);
 
 /** A pane's terminal, now on screen. */
+let profMarks: Record<string, number> = {};
+function profMark(name: string): void {
+  profMarks[name] ??= performance.timeOrigin + performance.now();
+}
 export function paneOpened(session: number, terminal: Terminal): void {
   if (!measuring) return;
+  profMark("paneOpened");
   panes.set(session, { session, terminal, tail: "", chunks: 0, characters: 0 });
   terminal.onRender(() => {
     const pane = panes.get(session);
@@ -103,6 +109,7 @@ export function paneSent(session: number, text: string): (() => void) | undefine
   pane.chunks += 1;
   pane.characters += text.length;
   pane.firstChunkAt ??= performance.now();
+  profMark("firstChunk");
   const waiting = pane.waiting;
   if (!waiting || waiting.seen) return undefined;
   pane.tail = (pane.tail + text).slice(-TAIL);
@@ -350,6 +357,10 @@ async function work(plan: Plan): Promise<unknown> {
         };
       });
       const from = performance.now();
+      const t0 = performance.timeOrigin + from;
+      profSent.length = 0;
+      const marks: Record<string, number> = {};
+      profMarks = marks;
       row.click();
       const shown = await until(() =>
         document.querySelector(
@@ -367,6 +378,13 @@ async function work(plan: Plan): Promise<unknown> {
         openMs: listed - pressed,
         shownMs: shown - from,
         ms: at - from,
+        t0,
+        marks,
+        cmds: profSent.map((one) => ({
+          c: one.c,
+          went: Math.round(one.went - t0),
+          back: one.back === undefined ? null : Math.round(one.back - t0),
+        })),
       };
     }
 
