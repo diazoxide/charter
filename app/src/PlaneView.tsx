@@ -227,6 +227,14 @@ type Where = { tab: true; in?: string; prefer?: string } | { split: Direction };
  * in the scenario tests to trip over, and a hidden pane is a terminal being fitted to a box
  * with no size.
  *
+ * **And not kept drawn under React's `<Activity mode="hidden">` either, which was measured**
+ * (FR-27b, #620). Around this view's chrome only, with the queries scoped to the project in
+ * front, it held ten one-chat projects' views in memory for a peak web content footprint of
+ * 364 MB against 244 MB drawn this way, half as much again, where M2 is already expected to
+ * miss its budget. The switch it was meant to speed up moved by less than CI's own run-to-run
+ * spread. What a switch costs is drawing this view and starting the pane's terminal; what is
+ * kept small instead is the redrawing after that first draw (`fits.useRoom`, `saving.ts`).
+ *
  * **The palette is the window's, not a project's**, for the same reason turned round. It has
  * to be mounted before the core has said which project this launch opened — `F2` is a
  * keystroke it listens for itself — and mounted once, because it claims that key on the
