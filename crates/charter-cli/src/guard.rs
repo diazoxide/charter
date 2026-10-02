@@ -43,6 +43,7 @@
 
 use std::io::Write;
 use std::process::ExitCode;
+use std::time::Duration;
 
 use charter_core::handoffguard::Caller;
 use charter_core::toolgate::{self, Call, Plane};
@@ -124,7 +125,7 @@ pub fn pretooluse(payload: &str, now: Option<&str>) -> crate::hooks::Answered {
             permission_mode: permission_mode.as_deref(),
         },
     };
-    if let Some(verdict) = toolgate::verdict(&call, plane.as_ref()) {
+    if let Some(verdict) = judged_on_a_deep_stack(|| toolgate::verdict(&call, plane.as_ref())) {
         return crate::hooks::Answered {
             code: deny(&verdict),
             decision: charter_core::hookwire::Decision::Deny,
@@ -147,6 +148,75 @@ pub fn pretooluse(payload: &str, now: Option<&str>) -> crate::hooks::Answered {
     }
 }
 
+/// The stack the guards run on: far more than any of them needs.
+///
+/// A stack overflow is not a panic: it aborts the process before any hook can answer, and a
+/// guard that dies without answering is an allow. Each guard bounds how deep it reads (the
+/// floor's `MAX_DEPTH`), and this is the backstop beneath them all. Only the pages a guard
+/// touches are ever committed, so the reservation costs nothing a person could notice.
+const GUARD_STACK: usize = 256 * 1024 * 1024;
+
+/// How long the guards may take to answer one tool call before it is refused.
+///
+/// A harness gives a hook a deadline of its own and runs the tool when it passes, so a guard
+/// still reading then is an allow. So this is derived from the registry: seven tenths of what is
+/// left of the smallest `PreToolUse` timeout once the payload has had its own deadline to arrive.
+/// `the_guard_deadline_is_always_inside_the_harness_deadline` ties the two together.
+fn guard_deadline() -> Duration {
+    let smallest = charter_core::hookreg::HANDLERS
+        .iter()
+        .filter(|hook| hook.event == "PreToolUse")
+        .map(|hook| hook.timeout)
+        .min()
+        .unwrap_or(1);
+    Duration::from_secs(u64::from(smallest)).saturating_sub(crate::PAYLOAD_DEADLINE) * 7 / 10
+}
+
+/// What sets [`guard_deadline`] in milliseconds instead, in a debug build, for the test that
+/// reaches it.
+#[cfg(debug_assertions)]
+const DEADLINE_ON_PURPOSE_ENV: &str = "CHARTER_TEST_GUARD_DEADLINE_MS";
+
+/// The panic payload that says the guard ran out of time, rather than that it crashed.
+const UNANSWERED: &str = "the guard did not answer in time";
+
+fn deadline() -> Duration {
+    #[cfg(debug_assertions)]
+    if let Some(ms) = std::env::var(DEADLINE_ON_PURPOSE_ENV)
+        .ok()
+        .and_then(|ms| ms.parse().ok())
+    {
+        return Duration::from_millis(ms);
+    }
+    guard_deadline()
+}
+
+/// Runs `judge` on a thread with [`GUARD_STACK`] of stack, and waits at most [`deadline`] for
+/// its answer. A panic on that thread, a thread that cannot start, and an answer that does not
+/// come in time are all the panic hook's refusal ([`refuse_on_a_crash`]), which ends the
+/// process.
+fn judged_on_a_deep_stack<T: Send>(judge: impl FnOnce() -> T + Send) -> T {
+    std::thread::scope(|scope| {
+        let (answer, answered) = std::sync::mpsc::channel();
+        let started = std::thread::Builder::new()
+            .name("guard".into())
+            .stack_size(GUARD_STACK)
+            .spawn_scoped(scope, move || {
+                let _ = answer.send(judge());
+            });
+        if let Err(why) = started {
+            panic!("the guard's thread did not start: {why}");
+        }
+        match answered.recv_timeout(deadline()) {
+            Ok(verdict) => verdict,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => std::panic::panic_any(UNANSWERED),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("the guard's thread ended without answering")
+            }
+        }
+    })
+}
+
 /// From here on, a panic anywhere in this process is a refusal: exit 2, one line on stderr.
 ///
 /// **A crashed guard is otherwise an allow** (#349). A panic exits 101, or under the release
@@ -162,7 +232,7 @@ pub fn pretooluse(payload: &str, now: Option<&str>) -> crate::hooks::Answered {
 ///
 /// Only for a `PreToolUse` word. A crash on a reporting hook must never exit 2, which on `Stop`
 /// would keep a session from ending.
-pub(crate) fn refuse_on_a_crash(tell_the_host: fn(&str)) {
+pub(crate) fn refuse_on_a_crash(tell_the_host: fn(&str, bool)) {
     // The word this process answers, for the host's event log: the call is refused, and one
     // event says so (FD-9).
     // `args_os`, read before anything is installed: `args` panics on a word that is not
@@ -177,14 +247,23 @@ pub(crate) fn refuse_on_a_crash(tell_the_host: fn(&str)) {
             .map(|at| format!(" (at {}:{})", at.file(), at.line()))
             .unwrap_or_default();
         let mut err = std::io::stderr().lock();
-        let _ = writeln!(
-            err,
-            "charter guard: this tool call is refused because the guard crashed{at} before it \
-             could answer, and a guard that could not answer does not allow."
-        );
+        let unanswered = info.payload().downcast_ref::<&str>() == Some(&UNANSWERED);
+        if unanswered {
+            let _ = writeln!(
+                err,
+                "charter guard: this tool call is refused because the guard did not answer in \
+                 time, and a guard that could not answer does not allow."
+            );
+        } else {
+            let _ = writeln!(
+                err,
+                "charter guard: this tool call is refused because the guard crashed{at} before \
+                 it could answer, and a guard that could not answer does not allow."
+            );
+        }
         let _ = err.flush();
         drop(err);
-        tell_the_host(&word);
+        tell_the_host(&word, unanswered);
         std::process::exit(i32::from(DENY_EXIT));
     }));
 }
@@ -205,4 +284,29 @@ pub(crate) fn deny(verdict: &toolgate::Verdict) -> ExitCode {
     let _ = writeln!(std::io::stderr(), "{}", verdict.said());
     let _ = std::io::stderr().flush();
     ExitCode::from(DENY_EXIT)
+}
+
+#[cfg(test)]
+mod deadline_tests {
+    use super::*;
+
+    /// Whatever the registry says, the guard gives up before any harness does: the payload's
+    /// deadline and the guard's together stay inside every `PreToolUse` hook's timeout.
+    #[test]
+    fn the_guard_deadline_is_always_inside_the_harness_deadline() {
+        assert!(guard_deadline() > Duration::ZERO);
+        for hook in charter_core::hookreg::HANDLERS
+            .iter()
+            .filter(|hook| hook.event == "PreToolUse")
+        {
+            let harness = Duration::from_secs(u64::from(hook.timeout));
+            assert!(
+                crate::PAYLOAD_DEADLINE + guard_deadline() < harness,
+                "{}: {:?} + {:?} >= {harness:?}",
+                hook.name,
+                crate::PAYLOAD_DEADLINE,
+                guard_deadline()
+            );
+        }
+    }
 }

@@ -45,8 +45,12 @@
 //!   leading name is dropped from `words` before the table is read. The table entry alone would
 //!   have been a dead line: the lookup used to live under `elif base in ("gh", "glab")`.
 
+mod merge;
+mod token;
+
 use crate::credguard::git_subcommand;
 use crate::leakguard::{self, CHARTER_PROGS};
+use crate::livesub;
 use crate::shellseg;
 use crate::shellwrap::{self, base_lower};
 
@@ -138,12 +142,61 @@ fn version_tag_re() -> &'static Regex {
 /// `unattended` is the host's answer, passed in rather than read: the Python takes the whole hook
 /// payload and asks [`unattended`] of its `permission_mode`, and the core holds no globals.
 pub fn release_floor_reason(cmd: &str, unattended: bool) -> Option<String> {
+    floor(cmd, unattended, 0)
+}
+
+/// How many commands deep the floor reads a command inside a command — a shell's script, an
+/// alias's expansion, the words fed to a shell's stdin (#866).
+///
+/// Past it the line is refused as one the floor cannot read. No real command nests this deep,
+/// and without a bound a line nested thousands deep would exhaust the stack: a hook that dies
+/// without answering is an allow. The bound also keeps the cost linear in the line, since each
+/// level reads a shorter string than the one around it.
+pub const MAX_DEPTH: usize = 16;
+
+/// [`release_floor_reason`] at `depth` commands in.
+pub(crate) fn floor(cmd: &str, unattended: bool, depth: usize) -> Option<String> {
     if !unattended {
         return None;
     }
     let fix = RELEASE_FLOOR_FIX;
-    for toks in shellseg::segment_argv(cmd) {
-        let (prog, _env, argv) = shellwrap::split_env(&toks);
+    if depth > MAX_DEPTH {
+        return Some(format!("{fix}{}", merge::UNREADABLE));
+    }
+    let inner_floor = |inner: &str| floor(inner, unattended, depth + 1);
+    let segments = shellseg::segment_argv(cmd);
+    // A shell that reads its script from stdin is fed by the rest of the line (#866).
+    let a_shell_reads_stdin = segments
+        .iter()
+        .any(|toks| shellwrap::reads_script_from_stdin(toks));
+    // A substitution the shell runs, wherever it stands, even inside double quotes, read from
+    // the line as written: the words a substitution's own quotes split are not its body (#866).
+    if livesub::may_substitute(cmd) && livesub::live_substitution(cmd).is_some() {
+        for body in substitution_bodies(cmd) {
+            if let Some(said) = inner_floor(&body) {
+                return Some(said);
+            }
+        }
+    }
+    for toks in &segments {
+        // A string a shell runs is read as the command it is (#866).
+        let scripts = shellwrap::shell_scripts(toks)
+            .into_iter()
+            .chain(shellwrap::here_string_script(toks));
+        let fed = if a_shell_reads_stdin && !shellwrap::reads_script_from_stdin(toks) {
+            fed_lines(toks)
+        } else {
+            Vec::new()
+        };
+        for inner in scripts.chain(fed) {
+            if let Some(said) = inner_floor(&inner) {
+                return Some(said);
+            }
+        }
+        if let Some(why) = token::keychain_read_reason(toks) {
+            return Some(format!("{fix}{why}"));
+        }
+        let (prog, env, argv) = shellwrap::split_env(toks);
         // `GIT tag v1` is a tag — see A2's fold.
         let base = base_lower(&prog);
         let args: Vec<String> = argv.iter().skip(1).cloned().collect();
@@ -152,8 +205,18 @@ pub fn release_floor_reason(cmd: &str, unattended: bool) -> Option<String> {
             .filter(|a| !a.starts_with('-'))
             .cloned()
             .collect();
-        if base == "git" {
+        if base == "git" || base.starts_with("git-credential-") {
             let sub = git_subcommand(&args);
+            // A git alias defined on the line is read as what it stands for (#866).
+            match merge::git_alias(&args, &env, sub.as_deref()) {
+                merge::GitAlias::Resolved(inner) => {
+                    if let Some(said) = inner_floor(&inner) {
+                        return Some(said);
+                    }
+                }
+                merge::GitAlias::Unreadable => return Some(format!("{fix}{}", merge::UNREADABLE)),
+                merge::GitAlias::None => {}
+            }
             if sub.as_deref() == Some("tag") {
                 // `git tag` alone lists; a bare name is a CREATION — the choke point, since a tag
                 // that does not exist locally cannot be pushed.
@@ -181,32 +244,115 @@ pub fn release_floor_reason(cmd: &str, unattended: bool) -> Option<String> {
                     return Some(format!("{fix}This pushes what looks like a version tag."));
                 }
             }
+            // A push option that sets auto-merge, an alias that would publish, or a command that
+            // prints the forge token (#866).
+            let why = token::git_reason(&base, &args, sub.as_deref())
+                .or_else(|| merge::git_reason(&args, &env, sub.as_deref(), unattended, depth));
+            if let Some(why) = why {
+                return Some(format!("{fix}{why}"));
+            }
         } else if base == "gh" || base == "glab" || leakguard::is_charter(&prog, &args) {
             // **The reader had to widen with the set.** `PUBLISH_FORGE`'s charter row would be a
             // tuple nothing could reach if this branch were still `base in ("gh", "glab")`.
-            let name = if base == "gh" || base == "glab" {
+            let forge = base == "gh" || base == "glab";
+            let name = if forge {
                 base.clone()
             } else {
                 CHARTER_PROGS[0].to_string()
             };
             // `edm change land` and `python3 -m charter change land` put charter's own NAME in
             // `words` instead of in `prog` — and `-m` drops out with the other flags — so the
-            // pair sits one place further along and is put back on the same footing here.
-            let words: &[String] = match words.first() {
-                Some(w) if CHARTER_PROGS.contains(&w.to_lowercase().as_str()) => &words[1..],
-                _ => &words[..],
+            // pair sits one place further along and is put back on the same footing here. A
+            // forge CLI's words are read past its repository flag (#866).
+            let words: Vec<&str> = if forge {
+                merge::forge_words(&args).into_iter().map(|w| w.1).collect()
+            } else {
+                match words.first() {
+                    Some(w) if CHARTER_PROGS.contains(&w.to_lowercase().as_str()) => &words[1..],
+                    _ => &words[..],
+                }
+                .iter()
+                .map(String::as_str)
+                .collect()
             };
-            if words.len() >= 2
-                && PUBLISH_FORGE.contains(&(name.as_str(), words[0].as_str(), words[1].as_str()))
-            {
-                return Some(format!(
-                    "{fix}`{name} {} {}` publishes or lands code.",
-                    words[0], words[1]
-                ));
+            if let [noun, verb, ..] = words[..] {
+                // A CLI's own alias of a verb is that verb (#866).
+                let held = merge::canonical_verb(&name, noun, verb);
+                if PUBLISH_FORGE.contains(&(name.as_str(), noun, held)) {
+                    return Some(format!(
+                        "{fix}`{name} {noun} {verb}` publishes or lands code."
+                    ));
+                }
+            }
+            if forge {
+                let why = token::forge_reason(&args)
+                    .or_else(|| merge::forge_reason(&name, &args, cmd, unattended, depth));
+                if let Some(why) = why {
+                    return Some(format!("{fix}{why}"));
+                }
             }
         }
     }
     None
+}
+
+/// What a segment could print into a shell reading stdin: its words as one line, with and
+/// without the producer's own leading options (`echo -n`, `printf --`) and, for `printf`, its
+/// format; and each word that is a line of its own.
+fn fed_lines(toks: &[String]) -> Vec<String> {
+    let (prog, _env, argv) = shellwrap::split_env(toks);
+    let words = argv.get(1..).unwrap_or(&[]);
+    let past_options = words
+        .iter()
+        .position(|w| !w.starts_with('-'))
+        .map_or(&[][..], |at| &words[at..]);
+    let mut lines = vec![words.join(" "), past_options.join(" ")];
+    if base_lower(&prog) == "printf" {
+        lines.push(past_options.get(1..).unwrap_or(&[]).join(" "));
+    }
+    lines.extend(words.iter().filter(|w| w.contains(' ')).cloned());
+    lines.dedup();
+    lines
+}
+
+/// The bodies of the outermost command and process substitutions in a line: `$(…)`, `` `…` ``,
+/// `<(…)` and `>(…)`. Quoting is not read, so a substitution in single quotes is read too, which
+/// only ever refuses more; the caller asks only of a line where the shell runs one. Unbalanced, a
+/// body runs to the end of the line. A nested one is found when its body is read in turn.
+fn substitution_bodies(line: &str) -> Vec<String> {
+    let chars: Vec<char> = line.chars().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let opens = matches!(chars[i], '$' | '<' | '>')
+            && chars.get(i + 1) == Some(&'(')
+            && !(chars[i] == '$' && chars.get(i + 2) == Some(&'('));
+        if opens {
+            let mut depth = 1;
+            let mut j = i + 2;
+            while j < chars.len() && depth > 0 {
+                match chars[j] {
+                    '(' => depth += 1,
+                    ')' => depth -= 1,
+                    _ => {}
+                }
+                j += 1;
+            }
+            let end = if depth == 0 { j - 1 } else { j };
+            out.push(chars[i + 2..end].iter().collect());
+            i = j;
+            continue;
+        }
+        if chars[i] == '`' {
+            let close = chars[i + 1..].iter().position(|c| *c == '`');
+            let end = close.map_or(chars.len(), |at| i + 1 + at);
+            out.push(chars[i + 1..end].iter().collect());
+            i = end + 1;
+            continue;
+        }
+        i += 1;
+    }
+    out
 }
 
 #[cfg(test)]

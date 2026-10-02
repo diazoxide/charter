@@ -157,6 +157,14 @@ with it, each a backtick substitution in the program's place: generated rows 95,
 2235, 2291 and 2327. Every one of those answers moved toward refusing. No verdict of the leak
 guard, A5, A6 or A7 (`lr`, `hr`, `hrd`, `hl7`, `csh`, `fsh`) moved on any row.
 
+**And where the release floor refuses more ways an unattended run could merge (#866).** A forge
+API call that is not a read, and whose endpoint or flags charter cannot read off the command
+line, is now refused unattended, because charter cannot tell whether it merges. A call with a
+body and no endpoint is one of them, since a later CLI could read its words differently. Fourteen
+rows are such calls, so their `rfr` moved from `null` to that refusal: `shellseg-oracle.jsonl`
+rows 246 to 252 and 256, and generated rows 1061, 1451, 2119, 2202, 2387 and 2389. `rfr` is the
+only key that moved, and the attended answer (`rfa`) did not.
+
 ## The session recording
 
 Re-record with:

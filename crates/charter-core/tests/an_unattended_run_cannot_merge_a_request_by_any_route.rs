@@ -1,0 +1,567 @@
+//! The release floor's merge half, at the public seam: [`floorguard::release_floor_reason`].
+//!
+//! An unattended run may open a pull or merge request and may not merge one. That rule is about
+//! the ACT, so every way a forge CLI or git can perform the act is the same command to the floor:
+//! a merge endpoint, an auto-merge or merge-queue setting, and a call whose effect on a merge
+//! endpoint cannot be read off the command line are all refused unattended. Attended, every one
+//! of them is untouched, and the read-only calls an unattended run needs stay allowed.
+//!
+//! `crates/charter-cli/tests/the_floor_refuses_an_unattended_merge_through_the_hook.rs` puts the
+//! same command lines through the real `charter hook pretooluse`.
+
+use charter_core::floorguard::{MAX_DEPTH, release_floor_reason};
+
+/// Each command is refused unattended and allowed attended.
+fn refused_unattended_only(cmds: &[&str]) {
+    for cmd in cmds {
+        let said = release_floor_reason(cmd, true);
+        assert!(said.is_some(), "not refused unattended: {cmd}");
+        assert_eq!(release_floor_reason(cmd, false), None, "attended: {cmd}");
+    }
+}
+
+/// Each command is allowed unattended.
+fn allowed_unattended(cmds: &[&str]) {
+    for cmd in cmds {
+        assert_eq!(release_floor_reason(cmd, true), None, "{cmd}");
+    }
+}
+
+#[test]
+fn the_rest_merge_endpoint_is_refused_in_any_method_spelling_or_flag_order() {
+    charter_core::unsteered!();
+    refused_unattended_only(&[
+        "gh api -X PUT repos/o/r/pulls/12/merge",
+        "gh api repos/o/r/pulls/12/merge -X PUT",
+        "gh api -XPUT repos/o/r/pulls/12/merge",
+        "gh api --method PUT repos/o/r/pulls/12/merge",
+        "gh api --method=put /repos/o/r/pulls/12/merge -f merge_method=squash",
+        "gh api -X=PUT repos/{owner}/{repo}/pulls/12/merge",
+        "gh api -iX PUT repos/o/r/pulls/12/merge",
+        "gh api repos/o/r/pulls/12/merge -f sha=abc",
+        "gh api --hostname ghe.example -X PUT https://ghe.example/api/v3/repos/o/r/pulls/12/merge",
+        "gh api -X PUT repos/o/r/pulls/12/merge?x=1",
+        "gh api -X PUT repos/o/r/pulls/12/%6Derge",
+        "gh api -X PUT repos/o/r/pulls/12/MERGE/",
+        "gh api -H 'Accept: application/json' -X PUT -- repos/o/r/pulls/12/merge",
+        "glab api -X PUT projects/1/merge_requests/5/merge",
+        "glab api --method PUT projects/group%2Fproj/merge_requests/5/merge",
+        "glab api projects/:id/merge_requests/5/merge -X PUT -F squash=true",
+        "glab api -X PUT https://gitlab.example/api/v4/projects/1/merge_requests/5/merge",
+        "cd /tmp && gh api -X PUT repos/o/r/pulls/12/merge",
+        "FOO=1 gh api -X PUT repos/o/r/pulls/12/merge",
+    ]);
+}
+
+#[test]
+fn branch_merge_and_merge_train_endpoints_are_refused() {
+    charter_core::unsteered!();
+    refused_unattended_only(&[
+        "gh api -X POST repos/o/r/merges -f base=main -f head=feature",
+        "gh api repos/o/r/merges -f base=main -f head=feature",
+        "gh api -X POST repos/o/r/merge-upstream -f branch=main",
+        "glab api -X POST projects/:id/merge_trains/merge_requests/5",
+        "glab api -X POST projects/1/merge_requests/5/cancel_merge_when_pipeline_succeeds",
+    ]);
+}
+
+#[test]
+fn an_auto_merge_setting_in_a_request_update_is_refused() {
+    charter_core::unsteered!();
+    refused_unattended_only(&[
+        "glab api -X PUT projects/1/merge_requests/5 -f merge_when_pipeline_succeeds=true",
+        "glab api -X PUT projects/1/merge_requests/5 -F auto_merge=true",
+        "glab api -X PUT projects/1/merge_requests/5 --field=auto_merge=true",
+        "gh api -X PATCH repos/o/r -F allow_auto_merge=true",
+    ]);
+}
+
+#[test]
+fn an_api_call_whose_effect_on_a_merge_endpoint_cannot_be_read_is_refused() {
+    charter_core::unsteered!();
+    refused_unattended_only(&[
+        // The endpoint, or the method, is the shell's to fill in.
+        "gh api -X PUT \"$EP\"",
+        "gh api -X PUT \"repos/o/r/pulls/$N/$WHAT\" ",
+        "gh api -X \"$M\" repos/o/r/pulls/12/merge",
+        "gh api \"$EP\" -f sha=abc",
+        "glab api -X PUT `cat ep`",
+        // The body is a file or stdin, on a request.
+        "glab api -X PUT projects/1/merge_requests/5 --input body.json",
+        "gh api -X PUT repos/o/r/pulls/12/merge --input -",
+        // A flag the reader does not know could be anything.
+        "gh api --frobnicate PUT repos/o/r/pulls/12/merge",
+    ]);
+}
+
+#[test]
+fn a_graphql_merge_auto_merge_or_merge_queue_mutation_is_refused() {
+    charter_core::unsteered!();
+    refused_unattended_only(&[
+        "gh api graphql -f query='mutation { mergePullRequest(input: {pullRequestId: \"X\"}) { clientMutationId } }'",
+        "gh api graphql -f query='mutation($id: ID!) { enablePullRequestAutoMerge(input: {pullRequestId: $id}) { clientMutationId } }' -f id=X",
+        "gh api graphql -f query='mutation { enqueuePullRequest(input: {pullRequestId: \"X\"}) { clientMutationId } }'",
+        "gh api graphql -f query='mutation { mergeBranch(input: {repositoryId: \"R\", base: \"main\", head: \"f\"}) { clientMutationId } }'",
+        "gh api graphql --raw-field 'query=mutation M { mergePullRequest(input: {pullRequestId: \"X\"}) { clientMutationId } }'",
+        "gh api -X POST graphql -F query='mutation { mergePullRequest(input: {pullRequestId: \"X\"}) { clientMutationId } }'",
+        "gh api /graphql -f query='mutation { mergePullRequest(input: {pullRequestId: \"X\"}) { clientMutationId } }'",
+        "glab api graphql -f query='mutation { mergeRequestAccept(input: {projectPath: \"g/p\", iid: \"5\"}) { errors } }'",
+        "glab api graphql -f query='mutation { mergeRequestSetAutoMerge(input: {projectPath: \"g/p\", iid: \"5\"}) { errors } }'",
+    ]);
+}
+
+#[test]
+fn a_graphql_call_whose_query_cannot_be_read_is_refused() {
+    charter_core::unsteered!();
+    refused_unattended_only(&[
+        "gh api graphql -F query=@merge.graphql",
+        "gh api graphql --input q.json",
+        "gh api graphql --input - <<'EOF'\n{\"query\":\"mutation { mergePullRequest(input: {}) { clientMutationId } }\"}\nEOF",
+        "gh api graphql -f query=\"$Q\"",
+        "gh api graphql -f query='query { $REST }'",
+        "gh api graphql -f query=\"$(cat q.graphql)\"",
+        "gh api graphql -f id=X",
+    ]);
+}
+
+#[test]
+fn a_push_option_that_sets_auto_merge_is_refused() {
+    charter_core::unsteered!();
+    refused_unattended_only(&[
+        "git push -o merge_request.merge_when_pipeline_succeeds origin feat",
+        "git push -o merge_request.create -o merge_request.auto_merge origin feat",
+        "git push --push-option=merge_request.auto_merge origin feat",
+        "git push --push-option merge_request.merge_when_pipeline_succeeds origin feat",
+        "git push origin feat -omerge_request.auto_merge",
+        "git push -uo merge_request.auto_merge origin feat",
+        "git push -o \"$OPT\" origin feat",
+        "git -C /repo push -o merge_request.auto_merge origin feat",
+    ]);
+}
+
+#[test]
+fn a_push_option_that_sets_auto_merge_through_git_config_is_refused() {
+    charter_core::unsteered!();
+    refused_unattended_only(&[
+        "git -c push.pushOption=merge_request.auto_merge push origin feat",
+        "git -c push.pushoption=merge_request.merge_when_pipeline_succeeds push",
+        "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=push.pushOption GIT_CONFIG_VALUE_0=merge_request.auto_merge git push origin feat",
+        "GIT_CONFIG_PARAMETERS=\"'push.pushOption'='merge_request.auto_merge'\" git push",
+        "git config push.pushOption merge_request.auto_merge",
+        "git config --add push.pushOption merge_request.merge_when_pipeline_succeeds",
+        "git config set push.pushOption merge_request.auto_merge",
+    ]);
+}
+
+#[test]
+fn a_repository_flag_before_the_verb_does_not_hide_a_merge() {
+    charter_core::unsteered!();
+    refused_unattended_only(&[
+        "gh pr -R o/r merge 12",
+        "gh pr --repo o/r merge 12 --auto",
+        "gh -R o/r pr merge 12",
+        "glab mr -R g/p merge 5",
+        "glab mr --repo g/p merge 5",
+        "gh release -R o/r create v1",
+    ]);
+}
+
+#[test]
+fn a_verbs_own_alias_is_the_same_verb() {
+    charter_core::unsteered!();
+    refused_unattended_only(&["glab mr accept 5", "gh release new v1"]);
+}
+
+#[test]
+fn opening_a_request_with_auto_merge_set_is_refused() {
+    charter_core::unsteered!();
+    refused_unattended_only(&[
+        "glab mr create --fill --yes --auto-merge",
+        "glab mr create --auto-merge=true --fill",
+        "glab mr new --fill --auto-merge",
+    ]);
+}
+
+#[test]
+fn an_alias_that_would_merge_is_refused_when_it_is_made() {
+    charter_core::unsteered!();
+    refused_unattended_only(&[
+        "gh alias set m 'pr merge --auto'",
+        "gh alias set m 'api -X PUT repos/o/r/pulls/$1/merge'",
+        "gh alias set --shell m 'gh pr merge \"$1\"'",
+        "gh alias set m '!gh pr merge $1'",
+        "gh alias set m -",
+        "gh alias set m \"$EXP\"",
+        "gh alias import aliases.yml",
+        "glab alias set m 'mr merge'",
+        "glab alias set m 'mr accept'",
+    ]);
+}
+
+#[test]
+fn a_merge_inside_a_string_a_shell_runs_is_refused() {
+    charter_core::unsteered!();
+    refused_unattended_only(&[
+        "bash -c 'gh pr merge 12'",
+        "sh -c \"gh api -X PUT repos/o/r/pulls/12/merge\"",
+        "bash -lc 'git push -o merge_request.auto_merge origin feat'",
+        "eval gh pr merge 12",
+        "zsh -c 'gh release create v1'",
+    ]);
+    allowed_unattended(&["bash -c 'gh pr view 12'", "sh -c 'git push origin feat'"]);
+}
+
+#[test]
+fn read_only_api_calls_stay_allowed_unattended() {
+    charter_core::unsteered!();
+    allowed_unattended(&[
+        "gh api repos/o/r/pulls/12",
+        "gh api repos/o/r/pulls/12/merge",
+        "gh api -X GET repos/o/r/pulls/12/merge",
+        "gh api repos/o/r/commits/abc/check-runs --jq '.check_runs[].conclusion'",
+        "gh api -X GET repos/o/r/pulls -f state=open",
+        "gh api --paginate repos/o/r/pulls/12/files -q '.[].filename'",
+        "gh api \"repos/o/r/pulls/$N\"",
+        "gh api repos/o/merge-tool/pulls",
+        "glab api projects/:id/merge_requests/5",
+        "glab api projects/:id/merge_requests/5/pipelines",
+        "glab api projects/:id/merge_trains",
+        "gh api graphql -f query='query($n: Int!) { repository(owner: \"o\", name: \"r\") { pullRequest(number: $n) { mergeable mergeStateStatus autoMergeRequest { enabledAt } } } }' -F n=12",
+        "gh api graphql -f query='{ viewer { login } }'",
+        "glab api graphql -f query='query { project(fullPath: \"g/p\") { mergeRequest(iid: \"5\") { mergeStatus } } }'",
+    ]);
+}
+
+#[test]
+fn ordinary_writes_pushes_and_requests_stay_allowed_unattended() {
+    charter_core::unsteered!();
+    allowed_unattended(&[
+        "gh api -X POST repos/o/r/issues/12/comments -f body=hi",
+        "gh api -X POST repos/o/merge-tool/issues -f title=x",
+        "gh api -X PATCH repos/o/r/pulls/12 -f title=x",
+        "glab api -X POST projects/1/merge_requests -f source_branch=a -f target_branch=main -f title=x",
+        "glab api -X POST projects/1/merge_requests/5/notes -f body=hi",
+        "git push -o ci.skip origin feat",
+        "git push -o merge_request.create -o merge_request.target=main origin feat",
+        "git push --push-option=merge_request.title=x origin feat",
+        "git push origin feat",
+        "git -c push.pushOption=ci.skip push origin feat",
+        "git config push.pushOption ci.skip",
+        "git config --get push.pushOption",
+        "gh pr -R o/r view 12",
+        "gh pr create --title merge --body x",
+        "glab mr create --fill --yes",
+        "glab mr create --auto-merge=false --fill",
+        "glab mr --repo g/p view 5",
+        "gh alias set co 'pr checkout'",
+        "gh alias list",
+    ]);
+}
+
+#[test]
+fn a_git_alias_on_the_command_line_is_read_as_the_command_it_stands_for() {
+    charter_core::unsteered!();
+    refused_unattended_only(&[
+        "git -c alias.p='push -o merge_request.auto_merge' p origin feat",
+        "git -c alias.t=tag t v1.0.0",
+        "git -c alias.pt='push --tags' pt",
+        "git -c 'alias.p=!git push --tags' p",
+        "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.p GIT_CONFIG_VALUE_0=push git p -o merge_request.auto_merge",
+    ]);
+    allowed_unattended(&[
+        "git -c alias.st=status st",
+        "git -c alias.p=push p origin feat",
+    ]);
+}
+
+#[test]
+fn a_git_alias_that_would_publish_is_refused_when_it_is_made() {
+    charter_core::unsteered!();
+    refused_unattended_only(&[
+        "git config alias.p 'push -o merge_request.auto_merge'",
+        "git config --global alias.t tag",
+        "git config alias.p push",
+        "git config set alias.x '!git push --tags'",
+        "git config alias.x \"$EXP\"",
+    ]);
+    allowed_unattended(&[
+        "git config alias.co checkout",
+        "git config --get alias.co",
+        "git config alias.lg 'log --oneline'",
+    ]);
+}
+
+#[test]
+fn a_forge_alias_for_part_of_a_held_command_is_refused() {
+    charter_core::unsteered!();
+    refused_unattended_only(&[
+        "gh alias set p pr",
+        "gh alias set a api",
+        "gh alias set r release",
+        "gh alias set au auth",
+        "gh alias set t 'auth token'",
+        "glab alias set m mr",
+        "glab alias set a api",
+    ]);
+    allowed_unattended(&[
+        "gh alias set iv 'issue view'",
+        "glab alias set ci 'ci view'",
+    ]);
+}
+
+#[test]
+fn a_word_the_shell_expands_by_pattern_is_unreadable_on_a_write() {
+    charter_core::unsteered!();
+    refused_unattended_only(&[
+        "gh api -X PUT 'repos/o/r/pulls/12/merg?'",
+        "gh api -X PUT repos/o/r/pulls/12/m[e]rge",
+        "gh api -X PUT repos/o/r/pulls/12/{merge,x}",
+        "gh api -X PUT ~/merge",
+        "glab api -X PUT projects/1/merge_requests/5 -f 'auto_merg?=true'",
+        "git push -o 'merge_request.auto_merg?' origin feat",
+    ]);
+    allowed_unattended(&[
+        "gh api repos/o/r/pulls/{1,2}",
+        "gh api 'repos/o/r/pulls?state=open'",
+    ]);
+}
+
+#[test]
+fn a_shell_string_is_read_past_its_options_and_through_stdin() {
+    charter_core::unsteered!();
+    refused_unattended_only(&[
+        "bash -c -- 'gh pr merge 12'",
+        "bash -c -e 'gh pr merge 12'",
+        "bash -c -o pipefail 'gh pr merge 12'",
+        "bash <<< 'gh pr merge 12'",
+        "echo 'gh pr merge 12' | bash",
+        "printf '%s\\n' 'gh api -X PUT repos/o/r/pulls/12/merge' | sh",
+    ]);
+    allowed_unattended(&["echo hi | bash", "bash -c -- 'gh pr view 12'"]);
+}
+
+#[test]
+fn a_graphql_variable_the_shell_could_expand_or_outside_a_value_is_unreadable() {
+    charter_core::unsteered!();
+    refused_unattended_only(&[
+        "gh api graphql -f query=\"query(\\$n: Int!) { repository(owner: \\\"o\\\", name: \\\"r\\\") { pullRequest(number: $n) { id } } }\"",
+        "gh api graphql -f query='query($M: ID) { $M }'",
+        "gh api graphql -f query=\"query { viewer { login } }\"$X",
+    ]);
+    allowed_unattended(&[
+        "gh api graphql -f query='query($n: Int!, $o: String!) { repository(owner: $o, name: \"r\") { pullRequest(number: $n) { id } } }' -F n=\"$N\" -f o=\"$O\"",
+        "gh api graphql -f query=\"query(\\$n: Int!) { repository(owner: \\\"o\\\", name: \\\"r\\\") { pullRequest(number: \\$n) { id } } }\" -F n=12",
+        "gh api graphql -f query='query($ids: [ID!]!) { nodes(ids: $ids) { id } }' -f ids=X",
+    ]);
+}
+
+#[test]
+fn a_graphql_endpoint_in_any_path_spelling_is_read_as_graphql() {
+    charter_core::unsteered!();
+    refused_unattended_only(&[
+        "gh api graphql/. -f query='mutation { mergePullRequest(input: {pullRequestId: \"X\"}) { clientMutationId } }'",
+        "gh api graphql/x/.. -f query='mutation { mergePullRequest(input: {pullRequestId: \"X\"}) { clientMutationId } }'",
+    ]);
+}
+
+#[test]
+fn a_write_with_dot_segments_or_no_endpoint_is_unreadable() {
+    charter_core::unsteered!();
+    refused_unattended_only(&[
+        "gh api -X PUT repos/o/r/git/../pulls/12/merge",
+        "gh api -X PUT repos/o/r/./merges",
+        "gh api -X PUT",
+        "gh api -X PUT --hostname ghe.example",
+    ]);
+}
+
+#[test]
+fn a_body_from_a_file_on_a_repository_is_unreadable() {
+    charter_core::unsteered!();
+    refused_unattended_only(&[
+        "gh api -X PATCH repos/o/r --input settings.json",
+        "glab api -X PUT projects/1 --input settings.json",
+    ]);
+}
+
+#[test]
+fn a_write_merely_named_merge_is_not_a_merge() {
+    charter_core::unsteered!();
+    allowed_unattended(&[
+        "gh api -X PATCH repos/o/r/git/refs/heads/merge-fix -f sha=abc",
+        "gh api -X PUT repos/o/r/contents/docs/merge.md -f message=x -f content=eA==",
+        "gh api -X POST repos/o/r/git/refs -f ref=refs/heads/merge-fix -f sha=abc",
+        "glab api -X POST projects/1/repository/branches -f branch=merge-fix -f ref=main",
+    ]);
+}
+
+#[test]
+fn a_command_that_prints_the_forge_token_is_refused() {
+    charter_core::unsteered!();
+    refused_unattended_only(&[
+        "gh auth token",
+        "gh auth token --hostname github.com",
+        "gh auth token -u me",
+        "gh auth status -t",
+        "gh auth status --show-token",
+        "gh auth status --hostname github.com -t",
+        "gh auth status -at",
+        "gh auth git-credential get",
+        "gh config get oauth_token -h github.com",
+        "glab auth status --show-token",
+        "glab auth status -t",
+        "glab auth status --all -t",
+        "glab config get token",
+        "glab config get token --host gitlab.com",
+        "glab auth docker-helper get",
+        "git credential fill",
+        "bash -c 'gh auth token'",
+        "GH_HOST=github.com gh auth token",
+        "TOKEN=$(gh auth token) && echo ok",
+    ]);
+}
+
+#[test]
+fn reading_the_forge_login_without_its_token_stays_allowed() {
+    charter_core::unsteered!();
+    allowed_unattended(&[
+        "gh auth status",
+        "gh auth status --json hosts",
+        "glab auth status",
+        "glab config get editor",
+        "gh config get git_protocol",
+        "git credential reject",
+    ]);
+}
+
+#[test]
+fn nesting_past_the_floors_depth_is_unreadable() {
+    charter_core::unsteered!();
+    let at_the_cap = format!("{}echo hi", "eval ".repeat(MAX_DEPTH));
+    let past_the_cap = format!("{}echo hi", "eval ".repeat(MAX_DEPTH + 1));
+    let far_past = format!("{}echo hi", "eval ".repeat(40 * MAX_DEPTH));
+    allowed_unattended(&[at_the_cap.as_str(), "bash -c 'bash -c \"echo hi\"'"]);
+    refused_unattended_only(&[past_the_cap.as_str(), far_past.as_str()]);
+    let said = release_floor_reason(&far_past, true).expect("a refusal");
+    assert!(said.contains("cannot read"), "{said}");
+    let merge_inside = format!("{}gh pr merge 12", "eval ".repeat(4));
+    refused_unattended_only(&[merge_inside.as_str()]);
+}
+
+#[test]
+fn a_shell_script_is_read_past_options_that_take_a_value() {
+    charter_core::unsteered!();
+    refused_unattended_only(&[
+        "bash -euo pipefail -c 'gh pr merge 12'",
+        "bash --rcfile rc -c 'gh pr merge 12'",
+        "bash -co pipefail 'gh pr merge 12'",
+        "echo gh pr merge 12 | sh",
+    ]);
+}
+
+#[test]
+fn a_forge_alias_whose_noun_or_verb_the_caller_supplies_is_unreadable() {
+    charter_core::unsteered!();
+    refused_unattended_only(&["gh alias set x '$1 merge'", "gh alias set x 'pr $1'"]);
+    allowed_unattended(&["gh alias set v 'pr view $1'"]);
+}
+
+#[test]
+fn a_git_alias_from_the_environment_or_behind_global_options_is_read() {
+    charter_core::unsteered!();
+    refused_unattended_only(&[
+        "git --config-env alias.p=EXP p",
+        "git --config-env=alias.p=EXP p",
+        "git config alias.p '-c x.y=z push'",
+        "git config alias.p '-C dir tag'",
+    ]);
+}
+
+#[test]
+fn a_push_option_value_and_a_requests_sub_paths_are_not_over_read() {
+    charter_core::unsteered!();
+    allowed_unattended(&[
+        "git push -o 'merge_request.title=Fix [x]? *now* ~soon' origin feat",
+        "glab api -X POST projects/1/merge_requests/5/notes --input note.json",
+        "gh api -X POST repos/o/r/pulls/12/reviews --input review.json",
+        "gh api -X POST repos/o/r/pulls/12/comments -F \"$K=x\"",
+    ]);
+    refused_unattended_only(&[
+        "glab api -X PUT projects/1/merge_requests/5 --input body.json",
+        "git push -o \"$OPT\" origin feat",
+    ]);
+}
+
+#[test]
+fn a_command_that_reads_a_stored_secret_is_refused() {
+    charter_core::unsteered!();
+    refused_unattended_only(&[
+        "security find-generic-password -s github.com -w",
+        "security find-generic-password -a me -s x -g",
+        "security find-internet-password -s github.com -w",
+        "security find-generic-password -gs x",
+        "security dump-keychain -d",
+        "secret-tool lookup service gh",
+        "pass show forge/token",
+        "pass forge/token",
+        "gopass show forge/token",
+        "gopass forge/token",
+        "/usr/bin/security find-generic-password -s x -w",
+    ]);
+    allowed_unattended(&[
+        "security find-generic-password -s x",
+        "security list-keychains",
+        "pass ls",
+        "pass",
+        "gopass list",
+        "secret-tool store --label x service y",
+    ]);
+}
+
+#[test]
+fn a_command_substituted_inside_quotes_is_read() {
+    charter_core::unsteered!();
+    refused_unattended_only(&[
+        "echo \"$(gh pr merge 12)\"",
+        "x=\"$(gh pr merge 12)\"",
+        "echo \"`gh pr merge 12`\"",
+        "echo \"$(git tag v1.0.0)\"",
+        "echo \"done: $(gh release create v1)\"",
+        "cat <(gh pr merge 12)",
+        "echo \"$(echo \"$(gh pr merge 12)\")\"",
+    ]);
+    allowed_unattended(&["echo '$(gh pr merge 12)'", "echo \"$(gh pr view 12)\""]);
+}
+
+#[test]
+fn a_shell_option_this_reader_does_not_know_does_not_hide_the_script() {
+    charter_core::unsteered!();
+    refused_unattended_only(&[
+        "zsh --emulate sh -c 'gh pr merge 12'",
+        "bash --some-new-option value -c 'gh pr merge 12'",
+        "bash --some-new-switch -c 'gh pr merge 12'",
+    ]);
+    allowed_unattended(&["zsh --emulate sh -c 'echo hi'"]);
+}
+
+#[test]
+fn a_stdin_producers_own_options_do_not_hide_what_it_feeds() {
+    charter_core::unsteered!();
+    refused_unattended_only(&[
+        "echo -n gh pr merge 12 | sh",
+        "echo -e gh pr merge 12 | sh",
+        "echo -- gh pr merge 12 | sh",
+        "printf '%s ' gh pr merge 12 | sh",
+        "printf -- '%s\\n' gh pr merge 12 | bash",
+    ]);
+    allowed_unattended(&["echo -n hi | sh", "printf '%s ' a b | sh"]);
+}
+
+#[test]
+fn a_substitution_inside_a_push_option_value_is_unreadable() {
+    charter_core::unsteered!();
+    refused_unattended_only(&[
+        "git push -o \"merge_request.title=$(cat t)\" origin feat",
+        "git push -o \"ci.variable=`cat v`\" origin feat",
+    ]);
+}

@@ -1296,7 +1296,7 @@ const CORE_WARNS_ON_PURPOSE_ENV: &str = "CHARTER_TEST_CORE_WARNS";
 /// would otherwise hang the turn for good. Two seconds is well under the plugin's own 5 s
 /// hook timeout, so the harness's deadline is still the one that fires first, and no ordinary
 /// payload can reach this one.
-const PAYLOAD_DEADLINE: Duration = Duration::from_secs(2);
+pub(crate) const PAYLOAD_DEADLINE: Duration = Duration::from_secs(2);
 
 /// Reads the harness's payload, or gives up on it.
 ///
@@ -1320,6 +1320,9 @@ const UNKNOWN_HOOK_RULE: &str = "unknown-hook";
 
 /// The rule a tool call refused because its guard crashed is recorded under.
 pub(crate) const GUARD_CRASHED_RULE: &str = "guard-crashed";
+
+/// The rule a tool call refused because its guard did not answer in time is recorded under.
+const GUARD_UNANSWERED_RULE: &str = "guard-unanswered";
 
 /// One [`hookwire::ToolCall`] to the host, when a host is listening: the tool, the hash of its
 /// arguments, the decision and how long the hook took. Never the arguments themselves. A host
@@ -1382,13 +1385,18 @@ fn tell_the_host_about_the_tool_call(
     }
 }
 
-/// What a crashed `PreToolUse` guard tells the host from its panic hook: the call was refused,
-/// and why. The payload is not read again in a process that is going down.
-fn tell_the_host_about_a_crash(word: &str) {
+/// What a crashed `PreToolUse` guard, or one that did not answer in time, tells the host from its
+/// panic hook: the call was refused, and why. The payload is not read again in a process that is going down.
+fn tell_the_host_about_a_crash(word: &str, unanswered: bool) {
+    let rule = if unanswered {
+        GUARD_UNANSWERED_RULE
+    } else {
+        GUARD_CRASHED_RULE
+    };
     let answered = hooks::Answered {
         code: ExitCode::from(BLOCK),
         decision: hookwire::Decision::Deny,
-        rule: Some(GUARD_CRASHED_RULE.to_owned()),
+        rule: Some(rule.to_owned()),
     };
     tell_the_host_about_the_tool_call(word, "", &answered, Duration::ZERO);
 }
