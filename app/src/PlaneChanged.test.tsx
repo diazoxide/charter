@@ -44,6 +44,13 @@ let disk: Map<string, string>;
 let chatsOpen: unknown[];
 let updated: { session: number; files: string[] }[];
 
+/** The workspaces on disk, and the sidebar reads held back to answer late, oldest first: the
+ *  core reads the sidebar off the window's thread (SC-2), so an older read can answer after a
+ *  newer one. */
+let workspacesOnDisk: string[];
+let holdNextSidebar: boolean;
+let heldSidebars: (() => void)[];
+
 function todosPanel() {
   return {
     key: "charter/todos",
@@ -88,16 +95,24 @@ function core(): {
     if (cmd === "plane_at_launch") return { plane: PLANE, from: PLANE, why: null };
     if (cmd === "opened_chats") return chatsOpen;
     if (cmd === "chats_plane_updated") return updated;
-    if (cmd === "plane_sidebar")
-      return {
+    if (cmd === "plane_sidebar") {
+      const answer = {
         root: PLANE,
         personas: [],
         persona: null,
         unfiled: [],
-        workspaces: [
-          { name: "alpha", path: ALPHA, vision: "", todos: [...disk.values()], chats: [] },
-        ],
+        workspaces: workspacesOnDisk.map((name) => ({
+          name,
+          path: `${PLANE}/workspaces/${name}`,
+          vision: "",
+          todos: name === "alpha" ? [...disk.values()] : [],
+          chats: [],
+        })),
       };
+      if (!holdNextSidebar) return answer;
+      holdNextSidebar = false;
+      return new Promise((answered) => heldSidebars.push(() => answered(answer)));
+    }
     if (cmd === "workspace_panels")
       return {
         workspace: a.workspace,
@@ -144,6 +159,9 @@ beforeEach(() => {
   forgetThisLaunch();
   chatsOpen = [];
   updated = [];
+  workspacesOnDisk = ["alpha"];
+  holdNextSidebar = false;
+  heldSidebars = [];
   disk = new Map([
     ["m8-1", "M8.1 Ship the watcher"],
     ["m8-2", "M8.2 Test the watcher"],
@@ -268,6 +286,37 @@ describe("the readers of the plane, told what changed", () => {
     await settle();
     expect(asked.slice(before)).toEqual([]);
     expect(commits).toBe(drawn);
+  });
+
+  it("keep the newest sidebar when an older read of it answers last", async () => {
+    const { asked, changed } = core();
+    render(<App />);
+    await waitFor(() => expect(todoRows()).toHaveLength(2));
+    const workspaceTabs = () =>
+      within(screen.getByRole("tablist", { name: "Workspaces" }))
+        .queryAllByRole("tab")
+        .map((tab) => tab.textContent ?? "");
+    const drawn = (name: string) => workspaceTabs().some((tab) => tab.includes(name));
+    const todos: PlaneChange[] = [
+      { kind: "todos", workspace: "alpha", persona: null, path: "workspaces/alpha/todos/x.md" },
+    ];
+
+    // A read that is slow to answer: it was asked while `alpha` was still on disk.
+    const sidebar = count(asked, "plane_sidebar");
+    holdNextSidebar = true;
+    changed(PLANE, todos);
+    await waitFor(() => expect(heldSidebars).toHaveLength(1));
+    expect(count(asked, "plane_sidebar")).toBeGreaterThan(sidebar);
+
+    // `charter workspace rename alpha gamma`, read by the next one, which answers at once.
+    workspacesOnDisk = ["gamma"];
+    changed(PLANE, todos);
+    await waitFor(() => expect(drawn("gamma")).toBe(true));
+
+    heldSidebars[0]?.();
+    await settle();
+    expect(drawn("gamma")).toBe(true);
+    expect(drawn("alpha")).toBe(false);
   });
 
   it("read everything again when the core cannot say what changed", async () => {
