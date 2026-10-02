@@ -101,7 +101,7 @@ async function aChatIn(plane: string): Promise<string> {
 describe(`switching among ${OPEN} open projects`, function () {
   // On the describe, where WebdriverIO reads it (`e2e/budget.test.ts`). Nine opens through the
   // trust gate and nine chats are most of it; the thirty switches are seconds.
-  this.timeout(600_000);
+  this.timeout(1_800_000);
 
   /** The project the launch opened, which this spec never closes. */
   let first = "";
@@ -190,9 +190,13 @@ describe(`switching among ${OPEN} open projects`, function () {
     });
 
     const arms: [string, string][] = [
+      ["normal", ""],
       ["explorer hidden", "nav.explorer { display: none !important; }"],
-      ["explorer rows content-visibility", ".explorer li { content-visibility: auto; contain-intrinsic-size: auto 22px; }"],
-      ["explorer contain strict", "nav.explorer { contain: strict; }"],
+      ["chat rows hidden", ".explorer .here { display: none !important; }"],
+      ["explorer svg hidden", ".explorer svg { display: none !important; }"],
+      ["explorer guides gone", ".explorer li::before, .explorer li::after, .explorer .clone::before, .explorer .clone::after { content: none !important; }"],
+      ["explorer state marks hidden", ".explorer .state { display: none !important; }"],
+      ["explorer not a scroller", "nav.explorer { overflow: visible !important; }"],
       ["again normal", ""],
     ];
     for (const [name, css] of arms) {
@@ -203,9 +207,10 @@ describe(`switching among ${OPEN} open projects`, function () {
         el.textContent = text;
         document.head.append(el);
       }, css);
-      const arm = await measureSwitches(planes, ROUNDS, () => PAINTED, jobInTheWindow);
-      const launch = [0, 10, 20].map((i) => Math.round(arm.samples_ms[i]));
-      console.log(`PROF arm ${name}: p50 ${Math.round(arm.p50)} p95 ${Math.round(arm.p95)} launch ${launch.join(",")}`);
+      const arm = await measureSwitches(planes, 5, () => PAINTED, jobInTheWindow);
+      const launch = [0, 10, 20, 30, 40].map((i) => Math.round(arm.samples_ms[i]));
+      const rest = arm.samples_ms.filter((_, i) => i % 10 !== 0).sort((a, b) => a - b);
+      console.log(`PROF arm ${name}: p50 ${Math.round(arm.p50)} p95 ${Math.round(arm.p95)} launch ${launch.join(",")} fresh-median ${Math.round(rest[Math.floor(rest.length / 2)])}`);
     }
     await browser.execute(() => document.getElementById("prof-arm")?.remove());
     for (const plane of [planes[1], first]) {
