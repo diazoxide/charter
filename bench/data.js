@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790968661074,
+  "lastUpdate": 1790973453628,
   "repoUrl": "https://github.com/diazoxide/charter",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -42,6 +42,48 @@ window.BENCHMARK_DATA = {
             "value": 104.4088925,
             "unit": "ms",
             "extra": "median of 5 runs: 103.633, 104.332, 104.409, 104.813, 105.135 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0c8dfc58d02c260fe5efd7f577ede05b9b790add",
+          "message": "Every view is drawn from tokens, in both themes (DS-1) (#957)\n\n* Every view is drawn from tokens, in both themes (DS-1)\n\nA rendered token test: each of charter's own views and an extension's is\ndrawn in each built-in theme, and every element is checked for a colour\nin an inline style or SVG paint attribute, a var() that is not a token,\na token the theme in force does not set, and an arbitrary-value class.\nIt covers colours built at run time, which the source guard cannot see.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n\n* Token test draws every state of every view, and its loopholes are shut (DS-1 review)\n\nFixtures now reach every state a view tab draws: the changes view's\nPush, Land and a refused landing; bars and columns charts; every tone\nand row mark, with row actions; gone, refused and waiting views; heading\noffers; a revealed secret and an unreadable vault; memory edit and new\nmemory; a picked theme and a custom workspace colour.\n\nBoth guards share one definition of a colour (theme/literal.ts): every\nCSS named colour and the system colours, case-insensitively, and colours\ninside data URLs. The rendered checker reads var() in any case, holds an\nSVG paint's var() to the tokens and the theme, and refuses an arbitrary\nvalue behind a variant, \"!\", a modifier, or as a bare property. Each\nloophole has a probe that was seen red.\n\nOWN_MARKS is exported, and a test fails when a view in it has no state.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-02T23:49:08+04:00",
+          "tree_id": "991c7b248fe4fd1e7f774fc3e58e16c9825a26b1",
+          "url": "https://github.com/diazoxide/charter/commit/0c8dfc58d02c260fe5efd7f577ede05b9b790add"
+        },
+        "date": 1790973453199,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.5707875,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.564, 0.567, 0.571, 0.587, 0.591 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 17.112492500000002,
+            "unit": "ms",
+            "extra": "median of 5 runs: 17.046, 17.057, 17.112, 17.174, 17.300 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 104.62407300000001,
+            "unit": "ms",
+            "extra": "median of 5 runs: 103.450, 104.200, 104.624, 105.191, 105.457 ms"
           }
         ]
       }
