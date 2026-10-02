@@ -1,7 +1,9 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
-import { P } from "./prof";
+import { P, traceCommands } from "./prof";
+import { commands } from "./bindings";
+traceCommands(commands as unknown as Record<string, unknown>);
 import { attach } from "./bench";
 import { settleLayout } from "./regions";
 import { drawWindowText, listenForSizeKeys, onTextSizes, textSizes } from "./textSize";

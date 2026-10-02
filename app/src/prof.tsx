@@ -34,20 +34,22 @@ export function note(name: string): void {
 }
 
 // Every command the window sends while armed: its name, when it went, how long it took.
-const internals = (window as unknown as { __TAURI_INTERNALS__?: { invoke: (...a: unknown[]) => Promise<unknown> } }).__TAURI_INTERNALS__;
-if (internals) {
-  const invoke = internals.invoke.bind(internals);
-  internals.invoke = (...a: unknown[]) => {
-    const name = String(a[0]);
-    const went = performance.now();
-    const back = invoke(...a);
-    if (armed && !name.startsWith("plugin:")) {
-      const k = `ipc:${name}`;
-      void back.finally(() => note(`${k}=${Math.round(performance.now() - went)}ms`));
-      note(`${k}>`);
-    }
-    return back;
-  };
+export function traceCommands(all: Record<string, unknown>): void {
+  for (const [name, fn] of Object.entries(all)) {
+    if (typeof fn !== "function") continue;
+    all[name] = (...a: unknown[]) => {
+      const went = performance.now();
+      const back = (fn as (...b: unknown[]) => unknown)(...a);
+      if (armed && back instanceof Promise) {
+        note(`ipc:${name}>`);
+        back.then(
+          () => note(`ipc:${name}=${Math.round(performance.now() - went)}ms`),
+          () => undefined,
+        );
+      }
+      return back;
+    };
+  }
 }
 
 export function mark(name: string): void {
