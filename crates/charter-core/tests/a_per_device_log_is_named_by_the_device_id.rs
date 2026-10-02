@@ -35,6 +35,7 @@ fn plane() -> tempfile::TempDir {
 
 #[test]
 fn two_machines_with_the_same_hostname_write_separate_logs() {
+    charter_core::unsteered!();
     let plane = plane();
     let laptop_a = tempfile::tempdir().unwrap();
     let laptop_b = tempfile::tempdir().unwrap();
@@ -73,6 +74,7 @@ fn two_machines_with_the_same_hostname_write_separate_logs() {
 
 #[test]
 fn a_renamed_machine_keeps_one_log() {
+    charter_core::unsteered!();
     let plane = plane();
     let laptop = tempfile::tempdir().unwrap();
     let id = machine::device_id(laptop.path()).unwrap();
@@ -101,6 +103,7 @@ fn a_renamed_machine_keeps_one_log() {
 
 #[test]
 fn the_hostname_stays_on_a_claim_as_its_label() {
+    charter_core::unsteered!();
     let plane = plane();
     let laptop = tempfile::tempdir().unwrap();
     let id = machine::device_id(laptop.path()).unwrap();
@@ -134,6 +137,7 @@ fn the_hostname_stays_on_a_claim_as_its_label() {
 
 #[test]
 fn a_log_name_never_mints_a_device_id_and_names_the_host_until_one_is() {
+    charter_core::unsteered!();
     let laptop = tempfile::tempdir().unwrap();
 
     assert_eq!(
