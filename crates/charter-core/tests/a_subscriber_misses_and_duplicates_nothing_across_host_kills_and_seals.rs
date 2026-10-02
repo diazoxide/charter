@@ -8,6 +8,10 @@
 //! in the middle of a line it left half-written, and once more at random, and started again after
 //! each. Each time it dies the client loses its subscription too, as a client of a dead host
 //! does, and subscribes again from the cursor it holds.
+//!
+//! **And a client that reconnects at every poll misses nothing while segments are sealed**: the
+//! second test, over forty fresh logs, because a subscription looking for its segment races the
+//! host renaming it.
 
 use std::path::Path;
 use std::process::{Child, Command};

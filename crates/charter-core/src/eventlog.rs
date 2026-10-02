@@ -57,7 +57,8 @@ pub const EVENTS: &str = "events";
 /// The file in a device's directory the events are appended to.
 pub const FILE: &str = "events.jsonl";
 
-/// How far from the end [`Log::open`] reads to find the last event: far more than one line.
+/// How far into a segment, from its end or its start, charter reads to find its last or its
+/// first event: far more than one line.
 const TAIL: u64 = 64 * 1024;
 
 /// The file in a device's directory whose lock is the device's one writer. A file of its own,
@@ -91,12 +92,18 @@ impl Retention {
     };
 }
 
+/// What [`Log::on_seal`] is given.
+type SealHook = Box<dyn FnMut(&File) + Send>;
+
 /// The log of one device, open for appending. Holding it is being the device's one writer.
 pub struct Log {
     /// Held locked for as long as the `Log` lives.
     _lock: File,
     dir: PathBuf,
-    file: File,
+    /// The segment being written, `events.jsonl`. `None` once a seal renamed it and the next
+    /// one could not be opened yet: nothing is written until it is, so no line ever goes into
+    /// a segment already sealed.
+    file: Option<File>,
     device: String,
     retention: Retention,
     next: u64,
@@ -104,9 +111,18 @@ pub struct Log {
     good: u64,
     /// Whether a write failed partway, so the file may end in a torn line.
     torn: bool,
+    /// How long the segment grows before a seal is tried: [`Retention::segment_bytes`], and
+    /// further after a seal whose rename failed, so a failing rename is not retried at every
+    /// append.
+    seal_at: u64,
+    /// Told the segment being written after each seal ([`Log::on_seal`]).
+    on_seal: Option<SealHook>,
     /// A test's way to make the next write fail after this many bytes.
     #[cfg(test)]
     fail_after: Option<usize>,
+    /// A test's way to make the next opens of a new segment fail.
+    #[cfg(test)]
+    fail_opens: u32,
 }
 
 impl Log {
@@ -155,19 +171,26 @@ impl Log {
         let mut log = Log {
             _lock: lock,
             dir: dir.to_owned(),
-            file,
+            file: Some(file),
             device: device.to_owned(),
             retention,
             next,
             good,
             torn: false,
+            seal_at: retention.segment_bytes,
+            on_seal: None,
             #[cfg(test)]
             fail_after: None,
+            #[cfg(test)]
+            fail_opens: 0,
         };
-        if log.good >= retention.segment_bytes {
-            log.seal()?;
+        if log.good >= log.seal_at {
+            log.seal_or_warn();
         }
-        prune(dir, retention.keep, std::time::SystemTime::now())?;
+        // A segment that could not be deleted is kept a little longer, never a refusal to log.
+        if let Err(why) = prune(dir, retention.keep, std::time::SystemTime::now()) {
+            tracing::warn!(error = %why, "the event log could not delete an old segment");
+        }
         Ok(log)
     }
 
@@ -184,10 +207,13 @@ impl Log {
         kind: &str,
         body: serde_json::Value,
     ) -> io::Result<Event> {
+        // Before anything else, so an append with no segment open uses no seq.
+        self.live()?;
         if self.torn {
             // A write that failed partway may have left half a line, and the next line would
             // be glued to it: cut back to the last whole line first.
-            self.file.set_len(self.good)?;
+            let good = self.good;
+            self.live()?.set_len(good)?;
             self.torn = false;
         }
         let seq = self.next;
@@ -207,24 +233,74 @@ impl Log {
         // One `write_all` of one whole line on an append-mode file.
         #[cfg(test)]
         if let Some(after) = self.fail_after.take() {
-            let _ = self.file.write_all(&line[..after.min(line.len())]);
+            let _ = self.live()?.write_all(&line[..after.min(line.len())]);
             self.torn = true;
             return Err(io::Error::other("a write the test made fail"));
         }
-        if let Err(why) = self.file.write_all(&line) {
+        if let Err(why) = self.live()?.write_all(&line) {
             self.torn = true;
             return Err(why);
         }
         self.good += line.len() as u64;
         self.next = after(seq)?;
-        if self.good >= self.retention.segment_bytes {
-            // The event is written whatever sealing makes of it: a segment left unsealed is
-            // sealed at the next append or the next open.
-            if let Err(why) = self.seal() {
+        if self.good >= self.seal_at {
+            // The event is written whatever sealing makes of it.
+            self.seal_or_warn();
+        }
+        Ok(event)
+    }
+
+    /// Tells `hook` the segment being written each time a seal starts a new one, so whatever
+    /// holds its own handle on the log's file (an `fsync`er, FD-30) moves to the new segment.
+    /// Every event of the sealed segment is `fsync`ed before the seal, so nothing written
+    /// before the hook runs is left behind on the old handle.
+    pub fn on_seal(&mut self, hook: impl FnMut(&File) + Send + 'static) {
+        self.on_seal = Some(Box::new(hook));
+    }
+
+    /// The segment being written, opened again if a seal left none open.
+    fn live(&mut self) -> io::Result<&mut File> {
+        if self.file.is_none() {
+            let file = self.open_next()?;
+            self.file = Some(file);
+        }
+        self.file
+            .as_mut()
+            .ok_or_else(|| io::Error::other("no segment of the event log is open"))
+    }
+
+    /// Opens a new, empty `events.jsonl`, `fsync`s the directory so its name is durable, and
+    /// tells [`Log::on_seal`]'s hook.
+    fn open_next(&mut self) -> io::Result<File> {
+        #[cfg(test)]
+        if self.fail_opens > 0 {
+            self.fail_opens -= 1;
+            return Err(io::Error::other("an open the test made fail"));
+        }
+        let file = private_file(&self.dir.join(FILE))?;
+        sync_dir(&self.dir)?;
+        self.good = 0;
+        self.torn = false;
+        if let Some(hook) = self.on_seal.as_mut() {
+            hook(&file);
+        }
+        Ok(file)
+    }
+
+    /// [`Log::seal`], with a failure logged: the event before it is written either way. A
+    /// rename that failed is tried again only after another quarter of a segment.
+    fn seal_or_warn(&mut self) {
+        match self.seal() {
+            Ok(()) => self.seal_at = self.retention.segment_bytes,
+            Err(why) => {
+                if self.file.is_some() {
+                    self.seal_at = self
+                        .good
+                        .saturating_add((self.retention.segment_bytes / 4).max(1));
+                }
                 tracing::warn!(error = %why, "the event log could not seal its segment");
             }
         }
-        Ok(event)
     }
 
     /// Seals the segment being written as `events.<its first seq>.jsonl`, starts the next one,
@@ -233,14 +309,28 @@ impl Log {
     /// **The order is a subscriber's guarantee:** the sealed name appears only after its last
     /// line is written, so a reader that sees it can read the file to its end and be sure it
     /// has every line ([`Subscription::poll`]).
+    ///
+    /// **And a seal is durable:** the segment is `fsync`ed before its rename, and the
+    /// directory after the rename and after the next segment is made. Once the rename is done
+    /// the old file is never written again: if the next segment cannot be opened, appends
+    /// fail until it can ([`Log::live`]).
     fn seal(&mut self) -> io::Result<()> {
-        let Some(first) = first_seq(&mut self.file)? else {
+        let Some(file) = self.file.as_mut() else {
             return Ok(());
         };
+        let Some(first) = first_seq(file)? else {
+            return Ok(());
+        };
+        file.sync_data()?;
         std::fs::rename(self.dir.join(FILE), self.dir.join(sealed_name(first)))?;
-        self.file = private_file(&self.dir.join(FILE))?;
-        self.good = 0;
-        prune(&self.dir, self.retention.keep, std::time::SystemTime::now())
+        self.file = None;
+        sync_dir(&self.dir)?;
+        let next = self.open_next()?;
+        self.file = Some(next);
+        if let Err(why) = prune(&self.dir, self.retention.keep, std::time::SystemTime::now()) {
+            tracing::warn!(error = %why, "the event log could not delete an old segment");
+        }
+        Ok(())
     }
 }
 
@@ -250,6 +340,21 @@ impl Log {
     pub fn fail_the_next_write_after(&mut self, bytes: usize) {
         self.fail_after = Some(bytes);
     }
+
+    /// Makes the next `times` opens of a new segment fail, as a full directory would.
+    pub fn fail_the_next_opens(&mut self, times: u32) {
+        self.fail_opens = times;
+    }
+}
+
+/// `fsync`s the directory `dir`, so a name made or renamed in it survives a power loss. A
+/// directory cannot be opened as a file on Windows, where a rename is durable on its own.
+fn sync_dir(dir: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    File::open(dir)?.sync_all()?;
+    #[cfg(not(unix))]
+    let _ = dir;
+    Ok(())
 }
 
 fn unreadable(what: &str) -> io::Error {
@@ -378,8 +483,16 @@ fn last_seq(file: &mut File) -> io::Result<Option<u64>> {
     Ok(last_event(file)?.map(|event| event.seq))
 }
 
-/// The `seq` of the first event in `file`, read from its start.
+/// The `seq` of the first event in `file`: its first line's, read alone, or the first event
+/// in its first [`TAIL`] bytes where that line is not one.
 fn first_seq(file: &mut File) -> io::Result<Option<u64>> {
+    use std::io::BufRead;
+    file.seek(SeekFrom::Start(0))?;
+    let mut line = Vec::new();
+    io::BufReader::new((&*file).take(TAIL)).read_until(b'\n', &mut line)?;
+    if let Ok(event) = serde_json::from_slice::<Event>(&line) {
+        return Ok(Some(event.seq));
+    }
     file.seek(SeekFrom::Start(0))?;
     let mut head = Vec::new();
     file.take(TAIL).read_to_end(&mut head)?;
@@ -481,16 +594,16 @@ impl Subscription {
         loop {
             let mut reading = match self.reading.take() {
                 Some(reading) => reading,
-                None => match self.find(&mut got)? {
+                None => match self.find()? {
                     Some(reading) => reading,
                     None => return Ok(got),
                 },
             };
-            // Whether the segment is sealed is asked BEFORE it is read: its sealed name
-            // appears only after its last line was written, so what is read next is all of
-            // it. A segment not sealed yet is the live end, asked again at the next poll (by
-            // then with its first seq, read now, where it had none).
-            let sealed = reading.sealed || self.is_sealed(reading.first);
+            // Whether the segment is finished is asked BEFORE it is read: it is renamed only
+            // after its last line was written, so what is read next is all of it. A segment
+            // still being written is the live end, asked again at the next poll (by then with
+            // its first seq, read now, where it had none).
+            let sealed = reading.sealed || self.is_finished(reading.first)?;
             read_on(&mut reading, &mut self.last, &mut got)?;
             if !sealed {
                 self.reading = Some(reading);
@@ -500,59 +613,69 @@ impl Subscription {
         }
     }
 
-    /// Whether the segment whose first event is `first` has been sealed.
-    fn is_sealed(&self, first: Option<u64>) -> bool {
-        first.is_some_and(|first| self.dir.join(sealed_name(first)).exists())
+    /// Whether the live segment being read, whose first event is `first`, is no longer the
+    /// one being written: `events.jsonl` is now another file, or none. That holds whether the
+    /// segment is still there under its sealed name or was sealed and pruned between two
+    /// polls. Told by the first seq, not an inode, so it means the same on every platform:
+    /// two segments never begin with the same `seq`, and a new one begins empty.
+    fn is_finished(&self, first: Option<u64>) -> io::Result<bool> {
+        let Some(first) = first else {
+            // Nothing read yet, so nothing to tell it by; an empty segment is never sealed.
+            return Ok(false);
+        };
+        match File::open(self.dir.join(FILE)) {
+            Ok(mut now) => Ok(first_seq(&mut now)? != Some(first)),
+            Err(why) if why.kind() == io::ErrorKind::NotFound => Ok(true),
+            Err(why) => Err(why),
+        }
     }
 
     /// Opens the segment that holds the event after the cursor: the newest sealed segment not
-    /// yet read that begins at or before it, else the one being written. A cursor older than
-    /// every segment kept gets [`Delivery::Missed`] first.
-    fn find(&mut self, got: &mut Vec<Delivery>) -> io::Result<Option<Reading>> {
-        // The segment being written is opened BEFORE the sealed ones are listed. Listed first,
-        // a seal between the two would go unseen: the list would lack the segment just sealed
-        // and the open would find the new, later one, and every event in between would be
-        // skipped. Opened first, the file held is either listed as sealed by then, or it is
-        // still the newest segment there is.
-        let mut live = match File::open(self.dir.join(FILE)) {
-            Ok(file) => Some(file),
-            Err(why) if why.kind() == io::ErrorKind::NotFound => None,
-            Err(why) => return Err(why),
-        };
-        let sealed = segments(&self.dir)?;
-        let oldest = match (sealed.first(), live.as_mut()) {
-            (Some((first, _)), _) => Some(*first),
-            (None, Some(file)) => first_seq(file)?,
-            (None, None) => None,
-        };
-        if let Some(oldest) = oldest
-            && oldest > self.last.saturating_add(1)
-        {
-            got.push(Delivery::Missed {
-                after: self.last,
-                resumes_at: oldest,
-            });
-            self.last = oldest - 1;
+    /// yet read that begins at or before it; else, when the cursor falls in a hole before a
+    /// sealed segment (one pruned, or older than every one kept), the oldest sealed segment
+    /// not yet read; else the one being written. The gap itself is told by [`read_on`].
+    fn find(&mut self) -> io::Result<Option<Reading>> {
+        loop {
+            // The segment being written is opened BEFORE the sealed ones are listed. Listed
+            // first, a seal between the two would go unseen: the list would lack the segment
+            // just sealed and the open would find the new, later one, and every event in
+            // between would be skipped. Opened first, the file held is either listed as sealed
+            // by then, or it is still the newest segment there is.
+            let live = match File::open(self.dir.join(FILE)) {
+                Ok(file) => Some(file),
+                Err(why) if why.kind() == io::ErrorKind::NotFound => None,
+                Err(why) => return Err(why),
+            };
+            let sealed = segments(&self.dir)?;
+            let wanted = self.last.saturating_add(1);
+            let unread = |first: &u64| *first > self.past;
+            let next = sealed
+                .iter()
+                .rev()
+                .find(|(first, _)| unread(first) && *first <= wanted)
+                .or_else(|| sealed.iter().find(|(first, _)| unread(first)));
+            let Some((first, path)) = next else {
+                return Ok(live.map(|file| Reading {
+                    file,
+                    offset: 0,
+                    first: None,
+                    sealed: false,
+                }));
+            };
+            match File::open(path) {
+                Ok(file) => {
+                    return Ok(Some(Reading {
+                        file,
+                        offset: 0,
+                        first: Some(*first),
+                        sealed: true,
+                    }));
+                }
+                // Pruned since it was listed: list again.
+                Err(why) if why.kind() == io::ErrorKind::NotFound => continue,
+                Err(why) => return Err(why),
+            }
         }
-        let wanted = self.last.saturating_add(1);
-        if let Some((first, path)) = sealed
-            .iter()
-            .rev()
-            .find(|(first, _)| *first > self.past && *first <= wanted)
-        {
-            return Ok(Some(Reading {
-                file: File::open(path)?,
-                offset: 0,
-                first: Some(*first),
-                sealed: true,
-            }));
-        }
-        Ok(live.map(|file| Reading {
-            file,
-            offset: 0,
-            first: None,
-            sealed: false,
-        }))
     }
 }
 
@@ -574,6 +697,14 @@ fn read_on(reading: &mut Reading, last: &mut u64, got: &mut Vec<Delivery>) -> io
         reading.first.get_or_insert(event.seq);
         if event.seq <= *last {
             continue;
+        }
+        if event.seq > last.saturating_add(1) {
+            // Events between the cursor and this one are no longer kept: say so, never a
+            // silent gap (ADR 0066).
+            got.push(Delivery::Missed {
+                after: *last,
+                resumes_at: event.seq,
+            });
         }
         *last = event.seq;
         got.push(Delivery::Event(event));

@@ -1091,7 +1091,7 @@ fn sealed_segment(dir: &Path, seqs: std::ops::RangeInclusive<u64>, days_ago: u64
         })
         .collect();
     std::fs::create_dir_all(dir).unwrap();
-    std::fs::write(dir.join(format!("events.{first:020}.jsonl")), lines).unwrap();
+    std::fs::write(dir.join(sealed_name(first)), lines).unwrap();
 }
 
 #[test]
@@ -1156,5 +1156,119 @@ fn a_cursor_older_than_the_log_keeps_is_told_what_it_missed_and_carries_on_from_
             .unwrap()
             .iter()
             .any(|d| matches!(d, Delivery::Missed { .. }))
+    );
+}
+
+#[test]
+fn a_hole_in_the_middle_of_the_log_is_told_as_missed_never_skipped() {
+    let dir = tempfile::tempdir().unwrap();
+    // A clock that jumped: the first segment is dated recent, the middle one old.
+    sealed_segment(dir.path(), 1..=2, 1);
+    sealed_segment(dir.path(), 3..=4, 40);
+    sealed_segment(dir.path(), 5..=6, 1);
+    let mut log = Log::open(dir.path(), DEVICE).unwrap();
+    append_n(&mut log, 1);
+    let on_disk: Vec<u64> = read(dir.path()).unwrap().iter().map(|e| e.seq).collect();
+    let got = subscribe(dir.path(), 2).poll().unwrap();
+
+    assert_eq!(
+        on_disk,
+        vec![1, 2, 5, 6, 7],
+        "the middle segment was pruned"
+    );
+    assert_eq!(
+        got.first(),
+        Some(&Delivery::Missed {
+            after: 2,
+            resumes_at: 5
+        })
+    );
+    assert_eq!(seqs(&got), vec![5, 6, 7]);
+}
+
+#[test]
+fn a_reader_on_a_live_segment_sealed_and_pruned_between_polls_carries_on() {
+    let dir = tempfile::tempdir().unwrap();
+    let tiny = Retention {
+        segment_bytes: 300,
+        keep: std::time::Duration::from_millis(1),
+    };
+    let mut log = Log::open_with(dir.path(), DEVICE, tiny).unwrap();
+    append_n(&mut log, 1);
+    let mut subscription = subscribe(dir.path(), 0);
+    let first = seqs(&subscription.poll().unwrap());
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    append_n(&mut log, 1); // seals segment 1
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    append_n(&mut log, 5); // seals more, prunes segment 1
+    let mut later = Vec::new();
+    for _ in 0..5 {
+        later.extend(subscription.poll().unwrap());
+    }
+    let on_disk: Vec<u64> = read(dir.path()).unwrap().iter().map(|e| e.seq).collect();
+
+    assert_eq!(first, vec![1]);
+    assert!(
+        later.iter().any(|d| matches!(d, Delivery::Missed { .. }))
+            || seqs(&later).last() == on_disk.last(),
+        "stalled: later {:?}, on disk {on_disk:?}",
+        seqs(&later)
+    );
+}
+
+#[test]
+fn a_seal_whose_next_segment_cannot_be_opened_writes_nothing_more_into_the_sealed_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut log = Log::open_with(dir.path(), DEVICE, SMALL).unwrap();
+    // The seal's own open and the next append's retry both fail, as a full directory would.
+    log.fail_the_next_opens(2);
+
+    let sealed_by = append_n(&mut log, 2);
+    let refused = log.append(
+        Some("CHAT"),
+        Some("RUN"),
+        None,
+        "hook.stop",
+        serde_json::json!({}),
+    );
+    let after = append_n(&mut log, 1);
+
+    assert_eq!(sealed_by, vec![1, 2]);
+    assert!(refused.is_err(), "no segment is open to write to");
+    assert_eq!(after, vec![3], "the refused append used no seq");
+    let sealed = std::fs::read_to_string(dir.path().join(sealed_name(1))).unwrap();
+    assert_eq!(
+        sealed.lines().count(),
+        2,
+        "the sealed segment is never written again"
+    );
+    assert_eq!(
+        read(dir.path())
+            .unwrap()
+            .iter()
+            .map(|e| e.seq)
+            .collect::<Vec<_>>(),
+        vec![1, 2, 3]
+    );
+}
+
+#[test]
+fn a_seal_hands_its_hook_the_segment_the_next_events_go_to() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut log = Log::open_with(dir.path(), DEVICE, SMALL).unwrap();
+    let handed = std::sync::Arc::new(std::sync::Mutex::new(Vec::<File>::new()));
+    let keep = std::sync::Arc::clone(&handed);
+    log.on_seal(move |file| keep.lock().unwrap().push(file.try_clone().unwrap()));
+
+    append_n(&mut log, 3);
+
+    let handed = handed.lock().unwrap();
+    assert_eq!(handed.len(), 1, "one seal, after the second event");
+    let live = std::fs::metadata(dir.path().join(FILE)).unwrap().len();
+    assert!(live > 0);
+    assert_eq!(
+        handed[0].metadata().unwrap().len(),
+        live,
+        "the handle the hook got is the file the third event is in"
     );
 }
