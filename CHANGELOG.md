@@ -13,6 +13,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The event log keeps 30 days and can be followed from a cursor.** The host's event log
+  (`<data>/events/<device>/`) is now written in segments: at 16 MiB a segment is sealed as
+  `events.<first seq>.jsonl`, and a sealed segment whose newest event is more than 30 days old is
+  deleted when the log is opened or a segment sealed. A client subscribes from the last `seq` it
+  holds and gets every later event once and in order, across segments and across a host that was
+  killed and started again; a cursor older than what is kept is told what it missed (FD-24,
+  #661).
+
 - **Read any file of a worktree in charter.** A worktree's menu in the explorer has *Browse the
   files of …*: a tab listing the worktree's files, narrowed as you type, with the file you pick
   drawn beside the list in the light editor, charter's read-only CodeMirror 6 viewer with syntax
