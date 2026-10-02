@@ -68,7 +68,7 @@ import {
   type Project,
   type Ran,
 } from "./actions";
-import { usePlaneSaving, WAY_OUT, type WayOut } from "./saving";
+import { usePlaneSaving, useRepoSavingKept, WAY_OUT, type WayOut } from "./saving";
 import { curationSubjects, useCurations } from "./curations";
 import { LiveDialog, LiveMark } from "./LiveDialog";
 import { DeleteWorkspace } from "./DeleteWorkspace";
@@ -179,7 +179,7 @@ import type {
 } from "./bindings";
 import { AskFirst, runExtensionAction } from "./ExtensionAction";
 import { extensionsChanged, useExtensionsOn } from "./extensionsOn";
-import { projectThemeChanged } from "./projectTheme";
+import { projectThemeChanged, useProjectThemeKept } from "./projectTheme";
 import { inForce, onDrawn, TINTED_TABS, tintVariables } from "./theme/theme";
 import { hueOf } from "./theme/tint";
 import { handedFromNote, type HandedFrom } from "./handedFrom";
@@ -226,6 +226,13 @@ type Where = { tab: true; in?: string; prefer?: string } | { split: Direction };
  * `[role="tablist"][aria-label="Tabs"]` is a second tab strip for every query in this app and
  * in the scenario tests to trip over, and a hidden pane is a terminal being fitted to a box
  * with no size.
+ *
+ * **And not kept drawn under React's `<Activity mode="hidden">` either** (FR-27, #620). It was
+ * prototyped around this view's chrome only, on CI: the switch it was meant to speed up moved
+ * by less than CI's own spread from run to run, and what it costs in memory was not settled by
+ * the one reading taken. What a switch costs is drawing this view and starting the pane's
+ * terminal; what is kept small instead is the drawing again after that first draw
+ * (`fits.useRoom`, `saving.ts`, `projectTheme.ts`).
  *
  * **The palette is the window's, not a project's**, for the same reason turned round. It has
  * to be mounted before the core has said which project this launch opened — `F2` is a
@@ -982,6 +989,13 @@ export function PlaneView({
     () => surveyedCommands.filter((command) => on?.has(command.extension) ?? false),
     [on, surveyedCommands],
   );
+  // **This project's theme and its repos' save rows stay known while the window holds it**
+  // (FR-27), in front or not. The window reads both for the project in front, and an answer
+  // nothing holds is forgotten (`projectTheme.ts`, `saving.ts`): held here, a switch back draws
+  // them at once, rather than asking the core and drawing the whole window again when it
+  // replies.
+  useProjectThemeKept(plane, ofWorkspace);
+  useRepoSavingKept(plane, ofWorkspace);
   const workspaceState = useWorkspaceState(plane, ofWorkspace, rereadWorkspace, changesOnDisk);
   /** The plane root's own panels — its session records (SI-8d) — while it is focused. */
   const rootPanels = usePlaneRootPanels(plane, focused === OUTSIDE, changesOnDisk);

@@ -15,11 +15,13 @@ import { commands, type PlaneId } from "./bindings";
  * failed is read as that too — a project whose theme cannot be asked must not hold the window's
  * theme back.
  *
- * **Only what something on screen asks about is kept.** The window asks for the workspace in
- * front and a settings tab for its own, so the pairs change with every workspace switch, and a
- * workspace can be deleted. Each hook says it is interested while it is mounted; a pair nothing
- * is interested in any more is forgotten, so a change on disk re-asks what is on screen and not
- * every workspace ever focused.
+ * **Only what something mounted asks about is kept.** The window asks for the workspace in
+ * front, each project the window holds for the workspace it is on, in front or not (so a
+ * project switch finds its answer already here, FR-27), and a settings tab for its own. The
+ * pairs change with every workspace switch, and a workspace can be deleted. Each hook says it
+ * is interested while it is mounted; a pair nothing is interested in any more is forgotten, so a
+ * change on disk re-asks at most one pair per open project and settings tab, and not every
+ * workspace ever focused.
  */
 
 type Where = { plane: PlaneId; workspace: string | undefined };
@@ -104,6 +106,14 @@ export function useProjectTheme(
   return useSyncExternalStore(subscribe, () =>
     plane === undefined ? undefined : known.get(keyOf(plane, workspace)),
   );
+}
+
+/** Keeps what `plane` draws in `workspace` known while this is mounted, asking once, and draws
+ *  nothing: for a project behind the one in front, so that a switch back finds the answer
+ *  here rather than asking the core and drawing the window again when it replies (FR-27). An
+ *  answer redraws only the hooks that read it. */
+export function useProjectThemeKept(plane: PlaneId, workspace?: string): void {
+  useInterest(plane, workspace);
 }
 
 /** How many times `plane` has answered in `workspace`, asking once: a number that changes

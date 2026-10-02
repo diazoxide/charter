@@ -193,9 +193,18 @@ export function useRoom(holds: number): { strip: Ref; controls: Ref; width: numb
   const strip = useRef<Watched>({ element: null });
   const controls = useRef<Watched>({ element: null });
 
-  /** The room there is right now, from whichever of the two elements are there. */
+  /**
+   * The room there is right now, from whichever of the two elements are there.
+   *
+   * **Not while the strip itself is gone**, which is what a project's strips are whenever it is
+   * not in front (`PlaneView`). Zero is "unmeasured", and `fitting` draws every tab for it: a
+   * project with fifty chats came back to the front by drawing all fifty, measuring, and drawing
+   * again — the slowest switch of FR-27's ten. So the last width is kept, the strip comes back at
+   * it, and the measure on attach changes nothing unless the window was resized meanwhile.
+   */
   const measure = useCallback(() => {
-    const whole = strip.current.element?.clientWidth ?? 0;
+    if (!strip.current.element) return;
+    const whole = strip.current.element.clientWidth;
     const taken = controls.current.element?.offsetWidth ?? 0;
     setWidth(Math.max(0, whole - taken));
   }, []);
