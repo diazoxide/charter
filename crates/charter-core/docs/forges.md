@@ -183,6 +183,19 @@ taken for charter's.
   rule sets, so `--squash` is not charter's to choose there; GitLab's train takes `squash`
   (`Kind::queue_takes_squash`).
 
+### From the changes view
+
+The changes view's **Push** and **Land** buttons (#474) call the same functions in two steps,
+so the window can ask first. The question does nothing outward: `push::destinations` reads each
+member's repo, branch and its commit, destination and request base from its clone, and
+`land::verify` runs every gate above and names the request, the head its checks passed at, and
+whether it merges now, goes into the queue, or is only recorded. It writes no pending landing
+and asks no merge. The yes hands that answer back to `push::push_confirmed` or
+`land::land_verified`, which take every gate again and refuse, before anything is pushed or
+merged, when what they find is not what the operator confirmed (a destination or a branch's
+commit changed, a head moved, a queue appeared). Everything else, the pinning and the pending
+landing included, is the CLI's path unchanged.
+
 **Not behind the seam, and why:**
 
 | Call | Where | Why |

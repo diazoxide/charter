@@ -1085,7 +1085,7 @@ export const commands = {
 	 *  **Every refusal comes back as the core's sentence**, which names what refused and says what
 	 *  to do. The window draws it where the answer would have been.
 	 */
-	openView: (plane: PlaneId, from: string | null, view: string, key: string, workspace: string | null) => typedError<ViewAnswer, string>(__TAURI_INVOKE("open_view", { plane, from, view, key, workspace })),
+	openView: (plane: PlaneId, from: string | null, view: string, key: string, workspace: string | null) => typedError<ViewAnswer_Serialize, string>(__TAURI_INVOKE("open_view", { plane, from, view, key, workspace })),
 	/**
 	 *  Run `extension`'s action `action`, or say why charter will not.
 	 * 
@@ -1109,6 +1109,34 @@ export const commands = {
 	reopenedViews: (plane: PlaneId) => typedError<ViewTab[], string>(__TAURI_INVOKE("reopened_views", { plane })),
 	/**  What view tabs the window has open now, so the record brings them back at the next launch. */
 	windowViews: (plane: PlaneId, views: ViewTab[]) => typedError<null, string>(__TAURI_INVOKE("window_views", { plane, views })),
+	/**
+	 *  What Push would do to `change`: each member's repo, branch and destination, and each member
+	 *  that would not be pushed. Pushes nothing.
+	 * 
+	 *  On a blocking thread: it asks git in every member's clone.
+	 */
+	changePushQuestion: (plane: PlaneId, workspace: string, change: string) => typedError<PushQuestion, string>(__TAURI_INVOKE("change_push_question", { plane, workspace, change })),
+	/**
+	 *  Push `change` as the operator confirmed it: `charter change push`, refused when what it would
+	 *  push is no longer `confirmed`.
+	 * 
+	 *  On a blocking thread: it pushes, and opens or updates each member's request.
+	 */
+	changePush: (plane: PlaneId, workspace: string, change: string, confirmed: PushDestination[]) => typedError<string[], string>(__TAURI_INVOKE("change_push", { plane, workspace, change, confirmed })),
+	/**
+	 *  What Land would do to `repo` of `change`: every gate taken, and the request, the head its
+	 *  checks passed at and how it lands named, or the gate's refusal. Merges nothing.
+	 * 
+	 *  On a blocking thread: it asks the forge.
+	 */
+	changeLandQuestion: (plane: PlaneId, workspace: string, change: string, repo: string) => typedError<LandQuestion, string>(__TAURI_INVOKE("change_land_question", { plane, workspace, change, repo })),
+	/**
+	 *  Land the landing the operator confirmed: `charter change land`, refused when the request, its
+	 *  head or how it lands is no longer `confirmed`.
+	 * 
+	 *  On a blocking thread: it asks the forge to merge.
+	 */
+	changeLand: (plane: PlaneId, workspace: string, change: string, confirmed: LandQuestion, squash: boolean) => typedError<string[], string>(__TAURI_INVOKE("change_land", { plane, workspace, change, confirmed, squash })),
 	/**
 	 *  Every row `charter doctor` would print for this plane, run inside the app.
 	 * 
@@ -1348,6 +1376,24 @@ export type ByHand = {
 	 *  place starts.
 	 */
 	cwd: string | null,
+};
+
+/**
+ *  Where one change's member list is in a changes view, sent with its blocks
+ *  (`change::view::ChangeAt`): what Push and Land act on.
+ */
+export type ChangeList = {
+	/**  The index of its member list among the view's blocks. */
+	at: number,
+	change: string,
+	members: ChangeMember[],
+};
+
+/**  One member row of a [`ChangeList`]. */
+export type ChangeMember = {
+	/**  The row's key. */
+	key: string,
+	repo: string,
 };
 
 /**  Everything the chat's gauge draws. Every part is absent when charter does not know it. */
@@ -1674,6 +1720,9 @@ export type FirstRunFound = {
 	templates: TemplateRow[],
 };
 
+/**  A forge, as the window is told it. */
+export type ForgeKind = "github" | "gitlab";
+
 /**  One forge's CLI, as the first-run screen lists it. */
 export type ForgeRow = {
 	/**  The program (`gh`, `glab`). Its own login is `<cli> auth login`. */
@@ -1839,6 +1888,46 @@ export type InstructionStanding =
 { kind: "in-memory" } | 
 /**  It cannot, and why. */
 { kind: "left-out"; why: string };
+
+/**
+ *  What a Land would do, before it does any of it: the request, the head its checks passed at,
+ *  and how it lands. Handed back whole by the yes.
+ */
+export type LandQuestion = {
+	repo: string,
+	number: number,
+	url: string,
+	/**  The full head commit. */
+	head: string,
+	/**  Its first twelve characters, as the core's lines show a commit. */
+	head_short: string,
+	through: LandThrough,
+	forge: ForgeKind,
+	/**  What the forge calls a request: `pull request` or `merge request`. */
+	request: string,
+	/**  `#` or `!`. */
+	sigil: string,
+	/**  What the forge calls its queue: `merge queue` or `merge train`. */
+	queue: string,
+	/**  How it lands, in the core's sentence (`Verified::how`). */
+	how: string,
+	/**
+	 *  Whether squashing is charter's to ask for here (`Verified::squash_is_charters`): never
+	 *  offered where it would do nothing.
+	 */
+	squash: boolean,
+	/**  What the gates said on the way, such as the checks that passed, in the core's words. */
+	said: string[],
+};
+
+/**  How a verified landing goes (`land::Through`). */
+export type LandThrough = 
+/**  Charter merges it now. */
+"merge" | 
+/**  Into the forge's merge queue or merge train. */
+"queue" | 
+/**  It has merged at a head charter started landing, and is only recorded. */
+"record";
 
 /**
  *  What a launch had to go on, and what came of it.
@@ -2701,6 +2790,30 @@ export type ProjectTheme = {
 	local_left_out: string | null,
 };
 
+/**  One member's destination, as the question names it and the yes hands it back. */
+export type PushDestination = {
+	repo: string,
+	branch: string,
+	/**  The commit the branch is at in its clone: what the push sends. */
+	head: string,
+	/**  Its first twelve characters, as the core's lines show a commit. */
+	head_short: string,
+	/**  The HTTPS URL the branch is pushed to. */
+	to: string,
+	/**  The branch a request opened for it goes into, when charter can tell. */
+	base: string | null,
+	forge: ForgeKind,
+	/**  What its forge calls a request: `pull request` or `merge request`. */
+	request: string,
+};
+
+/**  What a Push would do, before it does any of it. */
+export type PushQuestion = {
+	destinations: PushDestination[],
+	/**  Each member that would not be pushed, in the core's words. */
+	not_pushed: string[],
+};
+
 /**  One repo the picker offers: what the operator reads to choose it. */
 export type ReachableRepo = {
 	/**  The name it is cloned under, and asked for by. */
@@ -3340,7 +3453,18 @@ export type VaultSummary = {
  *  the tab, with nothing to repair — and not as an error. A refusal (`Err`) is something the
  *  operator can act on: approve the extension again, make its program runnable.
  */
-export type ViewAnswer = { kind: "answered"; 
+export type ViewAnswer = ViewAnswer_Serialize | ViewAnswer_Deserialize;
+
+/**
+ *  What a view answered.
+ * 
+ *  **`Gone` is not a refusal, and the window must keep them apart.** A tab that came back at a
+ *  launch can name a persona that has since been deleted, or an extension that has since been
+ *  uninstalled; that tab is drawn as a view whose source has gone — a sentence in the middle of
+ *  the tab, with nothing to repair — and not as an error. A refusal (`Err`) is something the
+ *  operator can act on: approve the extension again, make its program runnable.
+ */
+export type ViewAnswer_Deserialize = ({ kind: "answered"; 
 /**  The blocks, in the panel vocabulary, parsed and re-emitted by the core. */
 blocks: PanelBlock[]; 
 /**
@@ -3354,9 +3478,46 @@ took_ms: number;
  *  declares it writes — the core's sentence, naming it (charter-app#341). Drawn above
  *  the answer as trouble; never a reason not to draw it.
  */
-overreach: string | null } | 
+overreach: string | null; 
+/**
+ *  Where each change's member list is among `blocks`, for the changes view's Push and
+ *  Land (#474). Absent from every other view.
+ */
+changes?: ChangeList[] | null }) & { why?: never } | 
 /**  What the view was about is not there any more, and why, in one sentence. */
-{ kind: "gone"; why: string };
+({ kind: "gone"; why: string }) & { blocks?: never; changes?: never; overreach?: never; took_ms?: never };
+
+/**
+ *  What a view answered.
+ * 
+ *  **`Gone` is not a refusal, and the window must keep them apart.** A tab that came back at a
+ *  launch can name a persona that has since been deleted, or an extension that has since been
+ *  uninstalled; that tab is drawn as a view whose source has gone — a sentence in the middle of
+ *  the tab, with nothing to repair — and not as an error. A refusal (`Err`) is something the
+ *  operator can act on: approve the extension again, make its program runnable.
+ */
+export type ViewAnswer_Serialize = ({ kind: "answered"; 
+/**  The blocks, in the panel vocabulary, parsed and re-emitted by the core. */
+blocks: PanelBlock[]; 
+/**
+ *  How long it took, gate and round trip together, in milliseconds. Drawn quietly
+ *  under the answer, because a producer that has become slow is worth noticing before
+ *  it becomes one that times out.
+ */
+took_ms: number; 
+/**
+ *  What changed in the plane while the extension answered, outside the paths it
+ *  declares it writes — the core's sentence, naming it (charter-app#341). Drawn above
+ *  the answer as trouble; never a reason not to draw it.
+ */
+overreach: string | null; 
+/**
+ *  Where each change's member list is among `blocks`, for the changes view's Push and
+ *  Land (#474). Absent from every other view.
+ */
+changes?: ChangeList[] | null }) & { why?: never } | 
+/**  What the view was about is not there any more, and why, in one sentence. */
+({ kind: "gone"; why: string }) & { blocks?: never; changes?: never; overreach?: never; took_ms?: never };
 
 /**
  *  A tab that holds a view, as the window and the record both know it (`reopen::View`).

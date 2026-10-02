@@ -19,8 +19,37 @@ use crate::forge::pr::State;
 use crate::panel::{Block, Detail, Empty, Fact, Mark, Row, Tone};
 use crate::shown;
 
+/// Where a change's member list is in a view, and what it names: what the window's Push and
+/// Land act on, sent with the blocks so the window reads nothing out of their words or keys.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChangeAt {
+    /// The index of its member list among the view's blocks.
+    pub at: usize,
+    pub change: String,
+    pub members: Vec<MemberAt>,
+}
+
+/// One member row of a [`ChangeAt`]: its row's key and its repo.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemberAt {
+    pub key: String,
+    pub repo: String,
+}
+
+/// A changes view: its blocks, and each change's list in them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Drawn {
+    pub blocks: Vec<Block>,
+    pub changes: Vec<ChangeAt>,
+}
+
 /// The changes of workspace `ws`, each read from the forge now.
 pub fn blocks(plane: &Path, ws: &str, now: DateTime<Utc>) -> Vec<Block> {
+    view(plane, ws, now).blocks
+}
+
+/// [`blocks`], with where each change's list is.
+pub fn view(plane: &Path, ws: &str, now: DateTime<Utc>) -> Drawn {
     let listing = store::read_all(plane, ws);
     let observed: Vec<(Record, Observation)> = listing
         .records
@@ -37,7 +66,7 @@ pub fn blocks(plane: &Path, ws: &str, now: DateTime<Utc>) -> Vec<Block> {
             .iter()
             .map(|(slug, why)| format!("{}: {why}", shown::short(slug))),
     );
-    drawn(ws, now, &troubles, &observed)
+    drawn_view(ws, now, &troubles, &observed)
 }
 
 /// The blocks for what was read: pure, so what the tab says is testable without a forge.
@@ -47,6 +76,17 @@ pub fn drawn(
     troubles: &[String],
     changes: &[(Record, Observation)],
 ) -> Vec<Block> {
+    drawn_view(ws, now, troubles, changes).blocks
+}
+
+/// [`drawn`], with where each change's list is.
+pub fn drawn_view(
+    ws: &str,
+    now: DateTime<Utc>,
+    troubles: &[String],
+    changes: &[(Record, Observation)],
+) -> Drawn {
+    let mut at = Vec::new();
     let mut out = vec![Block::Facts(vec![
         Fact {
             label: "workspace".into(),
@@ -76,7 +116,10 @@ pub fn drawn(
                 offer: None,
             },
         });
-        return out;
+        return Drawn {
+            blocks: out,
+            changes: at,
+        };
     }
     for (record, seen) in changes {
         let (merged, of) = seen.landed();
@@ -87,6 +130,18 @@ pub fn drawn(
                 shown::line(&record.why)
             ),
             tone: Tone::Default,
+        });
+        at.push(ChangeAt {
+            at: out.len(),
+            change: record.change.clone(),
+            members: seen
+                .members
+                .iter()
+                .map(|m| MemberAt {
+                    key: member_key(&record.change, &m.repo),
+                    repo: m.repo.clone(),
+                })
+                .collect(),
         });
         out.push(Block::List {
             rows: seen.members.iter().map(|m| row(record, m)).collect(),
@@ -100,7 +155,16 @@ pub fn drawn(
             },
         });
     }
-    out
+    Drawn {
+        blocks: out,
+        changes: at,
+    }
+}
+
+/// The key of `repo`'s row in change `slug`: `<slug>/<repo>`, unique in the view, since one
+/// repo can be a member of two changes.
+pub fn member_key(slug: &str, repo: &str) -> String {
+    format!("{slug}/{repo}")
 }
 
 /// One member's row: its repo and branch, its request, and its checks at the head.
@@ -159,7 +223,7 @@ fn row(record: &Record, m: &Observed) -> Row {
         detail.push(format!("checks: {}", shown::line(why)));
     }
     Row {
-        key: m.repo.clone(),
+        key: member_key(&record.change, &m.repo),
         text,
         note: Some(note),
         mark: Mark::Repo,
@@ -281,6 +345,43 @@ mod tests {
         assert_eq!(rows[0].tone, Tone::Plain);
         assert_eq!(rows[1].text, "web · change/api-2 · blocked by svc");
         assert_eq!(rows[1].note.as_deref(), Some("no request"));
+    }
+
+    #[test]
+    fn each_member_row_is_keyed_by_its_change_and_its_repo_so_a_landing_names_both() {
+        let seen = Observation {
+            at: at(),
+            members: vec![open(Ci::Passed)],
+        };
+        let rows = rows(&drawn("alpha", at(), &[], &[(record(), seen)]));
+        assert_eq!(rows[0].key, "api-2/svc");
+    }
+
+    #[test]
+    fn each_changes_list_is_named_with_its_change_and_each_members_row_and_repo() {
+        let seen = |members| Observation { at: at(), members };
+        let drawn = drawn_view(
+            "alpha",
+            at(),
+            &[],
+            &[(record(), seen(vec![open(Ci::Passed)]))],
+        );
+        assert_eq!(
+            drawn.changes,
+            vec![ChangeAt {
+                at: 2,
+                change: "api-2".into(),
+                members: vec![MemberAt {
+                    key: "api-2/svc".into(),
+                    repo: "svc".into()
+                }],
+            }]
+        );
+        assert!(matches!(drawn.blocks[2], Block::List { .. }));
+        assert!(
+            drawn_view("alpha", at(), &[], &[]).changes.is_empty(),
+            "the empty state is no change's list"
+        );
     }
 
     #[test]

@@ -124,6 +124,11 @@ pub(crate) enum ViewAnswer {
         /// declares it writes — the core's sentence, naming it (charter-app#341). Drawn above
         /// the answer as trouble; never a reason not to draw it.
         overreach: Option<String>,
+        /// Where each change's member list is among `blocks`, for the changes view's Push and
+        /// Land (#474). Absent from every other view.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[specta(optional)]
+        changes: Option<Vec<crate::changes::ChangeList>>,
     },
     /// What the view was about is not there any more, and why, in one sentence.
     Gone { why: String },
@@ -258,6 +263,7 @@ pub(crate) async fn open_view(
                 blocks: PanelBlock::answered(&answer.blocks, &answer.actions),
                 took_ms: millis(answer.gate + answer.round_trip),
                 overreach: answer.overreach,
+                changes: None,
             })
     })
     .await
@@ -453,6 +459,7 @@ fn built_in(
                 blocks: blocks.iter().map(PanelBlock::from).collect(),
                 took_ms: millis(began.elapsed()),
                 overreach: None,
+                changes: None,
             },
             None => ViewAnswer::Gone {
                 why: format!("This plane has no persona called {key} any more."),
@@ -467,6 +474,7 @@ fn built_in(
                 .collect(),
             took_ms: millis(began.elapsed()),
             overreach: None,
+            changes: None,
         }),
         // A workspace's cross-repo changes (#470), keyed by the workspace. This is the one
         // built-in view that asks a forge, and it is asked only here: when its tab is opened and
@@ -482,11 +490,18 @@ fn built_in(
                     why: format!("This plane has no workspace called {key} any more."),
                 });
             }
-            let blocks = charter_core::change::view::blocks(root, key, chrono::Utc::now());
+            let drawn = charter_core::change::view::view(root, key, chrono::Utc::now());
             Ok(ViewAnswer::Answered {
-                blocks: blocks.iter().map(PanelBlock::from).collect(),
+                blocks: drawn.blocks.iter().map(PanelBlock::from).collect(),
                 took_ms: millis(began.elapsed()),
                 overreach: None,
+                changes: Some(
+                    drawn
+                        .changes
+                        .into_iter()
+                        .map(crate::changes::ChangeList::from)
+                        .collect(),
+                ),
             })
         }
         other => Ok(ViewAnswer::Gone {

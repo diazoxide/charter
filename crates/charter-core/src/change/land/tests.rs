@@ -158,7 +158,6 @@ impl World {
             said.push('\n');
         };
         let repos: Vec<String> = repos.iter().map(|r| (*r).to_string()).collect();
-        let when = chrono::TimeZone::with_ymd_and_hms(&chrono::Utc, 2026, 10, 2, 9, 0, 0).unwrap();
         let transport = breaking.clone();
         let code = land_with(
             &self.plane,
@@ -168,11 +167,75 @@ impl World {
             how,
             &|repo: &Repo| repo.forge.backend_over(transport.clone()),
             "laptop",
-            when,
+            when(),
             &mut say,
         );
         (code, said, recorded)
     }
+
+    /// What the window asks before its Land button runs (#474): `repo`'s landing verified, every
+    /// forge question answered by `exchanges`.
+    fn verify(
+        &self,
+        repo: &str,
+        exchanges: Value,
+    ) -> (Result<Verified, u8>, String, Arc<Recorded>) {
+        let recorded = recording(exchanges);
+        let mut said = String::new();
+        let transport = recorded.clone();
+        let verified = verify_with(
+            &self.plane,
+            "alpha",
+            SLUG,
+            repo,
+            &|repo: &Repo| repo.forge.backend_over(transport.clone()),
+            "laptop",
+            when(),
+            &mut |line: Say| {
+                said.push_str(&line.to_string());
+                said.push('\n');
+            },
+        );
+        (verified, said, recorded)
+    }
+
+    /// The landing the operator confirmed as `confirmed`, as the window's Land runs it.
+    fn land_confirmed(
+        &self,
+        confirmed: &Verified,
+        how: How,
+        exchanges: Value,
+    ) -> (u8, String, Arc<Recorded>) {
+        let recorded = recording(exchanges);
+        let mut said = String::new();
+        let transport = recorded.clone();
+        let code = land_verified_with(
+            &self.plane,
+            "alpha",
+            SLUG,
+            confirmed,
+            how,
+            &|repo: &Repo| repo.forge.backend_over(transport.clone()),
+            "laptop",
+            when(),
+            &mut |line: Say| {
+                said.push_str(&line.to_string());
+                said.push('\n');
+            },
+        );
+        (code, said, recorded)
+    }
+}
+
+/// When every test's landing happens.
+fn when() -> chrono::DateTime<chrono::Utc> {
+    chrono::TimeZone::with_ymd_and_hms(&chrono::Utc, 2026, 10, 2, 9, 0, 0).unwrap()
+}
+
+/// The recorded transport over `exchanges`.
+fn recording(exchanges: Value) -> Arc<Recorded> {
+    let text = json!({"source": "the land tests", "exchanges": exchanges});
+    Arc::new(Recorded::parse(&text.to_string()).unwrap())
 }
 
 /// The recorded transport, which breaks the pending-landing directory when a request to `at`
@@ -1064,4 +1127,190 @@ fn a_merge_left_for_later_that_charter_cannot_note_is_said_and_exits_one() {
         ),
         "{said}"
     );
+}
+
+/// The landing `ready` describes, as `verify` names it: #7 at [`HEAD`], merged now.
+fn verified_merge() -> Verified {
+    Verified {
+        repo: "widget".into(),
+        number: 7,
+        url: "https://github.com/acme/widget/pull/7".into(),
+        head: HEAD.into(),
+        through: Through::Merge,
+        kind: crate::forge::Kind::GitHub,
+    }
+}
+
+#[test]
+fn verifying_a_landing_names_the_request_its_checked_head_and_how_it_lands_and_merges_nothing() {
+    let world = World::new();
+    world.clone("widget");
+    world.change(&[("widget", &[])]);
+
+    let (verified, said, recorded) = world.verify("widget", json!(ready("widget", 7)));
+
+    assert_eq!(verified, Ok(verified_merge()), "{said}");
+    // Every exchange recorded is a read; a merge call would be unrecorded and fail the run.
+    assert_eq!(recorded.unspent(), Vec::new(), "{said}");
+    assert!(world.log().is_empty());
+    assert!(
+        !pending::pendings(&world.plane, "alpha", SLUG).contains_key("widget"),
+        "verifying wrote a pending landing"
+    );
+
+    let mut queued = vec![github_request("widget", 7, "open", HEAD)];
+    queued.extend(github_passed("widget", HEAD));
+    queued.push(github_probe("widget", 7, true));
+    let (verified, said, _) = world.verify("widget", json!(queued));
+    assert_eq!(verified.map(|v| v.through), Ok(Through::Queue), "{said}");
+}
+
+#[test]
+fn verifying_a_blocked_member_says_the_named_refusal_and_merges_nothing() {
+    let world = World::new();
+    world.clone("widget");
+    world.clone("gadget");
+    world.change(&[("widget", &[]), ("gadget", &["widget"])]);
+    let exchanges = json!([
+        github_request("gadget", 8, "open", HEAD),
+        github_request("widget", 7, "open", HEAD),
+    ]);
+
+    let (verified, said, recorded) = world.verify("gadget", exchanges);
+
+    assert_eq!(verified, Err(REFUSED), "{said}");
+    assert_eq!(recorded.unspent(), Vec::new(), "{said}");
+    assert!(
+        said.contains("gadget: blocker widget has not landed (its request is open)"),
+        "{said}"
+    );
+}
+
+#[test]
+fn a_confirmed_landing_merges_at_the_head_the_operator_was_shown() {
+    let world = World::new();
+    world.clone("widget");
+    world.change(&[("widget", &[])]);
+    let mut exchanges = ready("widget", 7);
+    exchanges.push(github_merged("widget", 7, "merge"));
+    exchanges.push(github_request("widget", 7, "merged", HEAD));
+
+    let (code, said, recorded) =
+        world.land_confirmed(&verified_merge(), How::Merge, json!(exchanges));
+
+    assert_eq!((code, recorded.unspent()), (0, Vec::new()), "{said}");
+    assert_eq!(world.log().len(), 1);
+}
+
+#[test]
+fn a_confirmed_landing_whose_head_moved_since_the_operator_was_shown_it_merges_nothing() {
+    let world = World::new();
+    world.clone("widget");
+    world.change(&[("widget", &[])]);
+    // The new head has passed its checks too: it is still not the head the operator confirmed.
+    let mut exchanges = vec![github_request("widget", 7, "open", MOVED)];
+    exchanges.extend(github_passed("widget", MOVED));
+    exchanges.push(github_probe("widget", 7, false));
+
+    let (code, said, recorded) =
+        world.land_confirmed(&verified_merge(), How::Merge, json!(exchanges));
+
+    assert_eq!((code, recorded.unspent()), (REFUSED, Vec::new()), "{said}");
+    assert!(
+        said.contains(
+            "widget: this is not the landing you confirmed: you confirmed #7 at 6dcb09b5b578, \
+             merged now, and it is now #7 at 0123456789ab, merged now. Nothing was merged."
+        ),
+        "{said}"
+    );
+    assert!(world.log().is_empty());
+    assert!(!pending::pendings(&world.plane, "alpha", SLUG).contains_key("widget"));
+}
+
+#[test]
+fn a_landing_confirmed_as_a_merge_is_not_queued_when_its_branch_now_has_a_queue() {
+    let world = World::new();
+    world.clone("widget");
+    world.change(&[("widget", &[])]);
+    let mut exchanges = vec![github_request("widget", 7, "open", HEAD)];
+    exchanges.extend(github_passed("widget", HEAD));
+    exchanges.push(github_probe("widget", 7, true));
+
+    let (code, said, recorded) =
+        world.land_confirmed(&verified_merge(), How::Merge, json!(exchanges));
+
+    assert_eq!((code, recorded.unspent()), (REFUSED, Vec::new()), "{said}");
+    assert!(
+        said.contains("and it is now #7 at 6dcb09b5b578, into its merge queue"),
+        "{said}"
+    );
+}
+
+#[test]
+fn a_merge_charter_queued_is_verified_as_one_to_record_and_recorded_once_confirmed() {
+    let world = World::new();
+    world.clone("widget");
+    world.change(&[("widget", &[])]);
+    pending::append(
+        &world.plane,
+        "alpha",
+        "laptop",
+        &Pending::new(SLUG, "widget", 7, HEAD, Via::Queue, Stage::Asked, when()),
+    )
+    .unwrap();
+    let merged = json!([github_request("widget", 7, "merged", HEAD)]);
+
+    let (verified, said, _) = world.verify("widget", merged.clone());
+    let verified = verified.expect(&said);
+    assert_eq!(verified.through, Through::Record, "{said}");
+    assert!(world.log().is_empty(), "verifying recorded it");
+
+    let (code, said, recorded) = world.land_confirmed(&verified, How::Merge, merged);
+    assert_eq!((code, recorded.unspent()), (0, Vec::new()), "{said}");
+    assert_eq!(world.log().len(), 1);
+}
+
+#[test]
+fn a_verified_landing_says_how_it_lands_in_its_forges_words_and_whether_squash_is_charters() {
+    let github = verified_merge();
+    assert_eq!(
+        github.how(),
+        "charter merges it now, at 6dcb09b5b578 and no other."
+    );
+    assert!(github.squash_is_charters());
+
+    let queued = Verified {
+        through: Through::Queue,
+        ..verified_merge()
+    };
+    assert_eq!(
+        queued.how(),
+        "charter puts it in its merge queue at 6dcb09b5b578, and GitHub merges it once the \
+         merge queue's own checks pass."
+    );
+    assert!(
+        !queued.squash_is_charters(),
+        "GitHub's merge queue merges by its own rule's method"
+    );
+
+    let train = Verified {
+        kind: crate::forge::Kind::GitLab,
+        ..queued.clone()
+    };
+    assert!(train.how().contains("its merge train"), "{}", train.how());
+    assert!(
+        train.squash_is_charters(),
+        "GitLab's merge train takes squash"
+    );
+
+    let record = Verified {
+        through: Through::Record,
+        ..verified_merge()
+    };
+    assert_eq!(
+        record.how(),
+        "It has merged at 6dcb09b5b578, which charter started landing. Land records the landing \
+         and asks GitHub for nothing."
+    );
+    assert!(!record.squash_is_charters(), "nothing is merged");
 }

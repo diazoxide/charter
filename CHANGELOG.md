@@ -13,6 +13,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The changes view pushes a change and lands a member, and asks first.** Each change in the
+  changes tab has a **Push** button, and each member row a **Land** button. Push names every
+  repo, branch, commit and destination, and where each pull request or merge request goes, before
+  anything is pushed. Land runs every gate first: a refusal is shown beside the row in the same
+  words as `charter change land`, and otherwise it names the request, the head commit its
+  checks passed at, and whether charter merges it now or puts it in the merge queue or merge
+  train. Pressing Push or Land does exactly what was shown, and nothing if it has changed since
+  (#474).
+
 - **A chat keeps its id across a relaunch.** The app records each chat's id, the device that
   made it and its current run in `.charter/app/reopen.json`, so the event log names a reopened
   chat as the chat it was, and its first event after the relaunch is `run.started` with cause

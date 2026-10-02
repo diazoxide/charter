@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Brain,
   ChartColumn,
@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { EmptyState } from "./EmptyState";
 import { AskFirst, runExtensionAction } from "./ExtensionAction";
+import { LandAsk, PushAsk, askLand } from "./ChangeActions";
 import { PanelList } from "./PanelList";
 import { RepoInstructionsTab } from "./RepoInstructionsTab";
 import { Preferences } from "./Preferences";
@@ -23,7 +24,9 @@ import { ProjectSettings, WorkspaceSettings } from "./ProjectSettings";
 import {
   commands,
   type ExtensionCommand,
+  type ChangeList,
   type ExtensionView,
+  type LandQuestion,
   type MemoryView,
   type PanelBlock,
   type PanelPoint,
@@ -510,6 +513,12 @@ function Answer({
   // question's own sentence, so the red line is always about the last thing the operator did.
   const [acted, setActed] = useState<{ said: string | null }>();
   const [asking, setAsking] = useState<{ row: PanelRow; action: RowAction }>();
+  // **A change's Push and Land** (#474): which change's push is being asked about, which
+  // member's landing, which Land is still running its gates, and each refusal, by row.
+  const [pushing, setPushing] = useState<string>();
+  const [landing, setLanding] = useState<{ change: string; question: LandQuestion }>();
+  const [checking, setChecking] = useState<string>();
+  const [refusedAt, setRefusedAt] = useState<ReadonlyMap<string, string>>(new Map());
 
   useEffect(() => {
     if (keeps && round === 0 && kept.has(keptAs)) return;
@@ -523,6 +532,14 @@ function Answer({
     };
   }, [plane, from, id, key, workspace, keeps, keptAs, round, changed]);
 
+  /** Ask a kept view again: its Refresh, and what a push or landing that ran comes to. */
+  const askAgain = () => {
+    kept.delete(keptAs);
+    setRefusedAt(new Map());
+    setSaid(undefined);
+    setRound((n) => n + 1);
+  };
+
   /** Refresh, for a kept view: its only way to be asked again. */
   const refresh = keeps ? (
     <button
@@ -530,11 +547,7 @@ function Answer({
       className="panel-view view-refresh"
       // #190: WebKit leaves a button out of the tab sequence without `tabIndex`.
       tabIndex={0}
-      onClick={() => {
-        kept.delete(keptAs);
-        setSaid(undefined);
-        setRound((n) => n + 1);
-      }}
+      onClick={askAgain}
     >
       <RefreshCw className="node-icon" aria-hidden="true" />
       Refresh
@@ -591,6 +604,27 @@ function Answer({
     );
   }
   const seen = acted === undefined ? answer.overreach : acted.said;
+  const lists: readonly ChangeList[] = (keeps ? answer.changes : undefined) ?? [];
+  /** Land on a member row: its gates first, and a refusal beside the row; else the question. */
+  const land = (row: PanelRow) => {
+    const member = memberAt(lists, row.key);
+    if (member === undefined || workspace === undefined || checking !== undefined) return;
+    setChecking(row.key);
+    void askLand(plane, workspace, member.change, member.repo).then((said) => {
+      setChecking(undefined);
+      setRefusedAt((was) => {
+        const now = new Map(was);
+        if ("refused" in said) now.set(row.key, said.refused);
+        else now.delete(row.key);
+        return now;
+      });
+      if ("ok" in said) setLanding({ change: member.change, question: said.ok });
+    });
+  };
+  // **Push and Land are the changes view's**, switched on by its kind; which list and which
+  // row each acts on is what the core sent beside the blocks (`change::view::ChangeAt`).
+  const changeBlocks =
+    keeps && workspace !== undefined ? withLand(answer.blocks, lists, checking) : answer.blocks;
   return (
     <>
       {refresh}
@@ -602,13 +636,35 @@ function Answer({
         </p>
       )}
       <AnsweredBlocks
-        blocks={refreshed ?? answer.blocks}
+        blocks={refreshed ?? changeBlocks}
         label={title}
         offerFor={from === null ? offerFor : undefined}
         onPress={from === null ? onPress : undefined}
+        listHead={
+          keeps && workspace !== undefined
+            ? (at) => {
+                const list = lists.find((one) => one.at === at);
+                const change =
+                  list !== undefined && list.members.length > 0 ? list.change : undefined;
+                return change === undefined ? null : (
+                  <button
+                    type="button"
+                    className="panel-view change-push"
+                    tabIndex={0}
+                    onClick={() => setPushing(change)}
+                  >
+                    Push {change}…
+                  </button>
+                );
+              }
+            : undefined
+        }
+        besideRow={(row) => refusedAt.get(row.key)}
         onAct={
           from === null
-            ? undefined
+            ? keeps
+              ? (row) => land(row)
+              : undefined
             : (row, action) => {
                 if (action.asks_first) {
                   setAsking({ row, action });
@@ -637,11 +693,77 @@ function Answer({
           onCancel={() => setAsking(undefined)}
         />
       )}
+      {pushing !== undefined && workspace !== undefined && (
+        <PushAsk
+          plane={plane}
+          workspace={workspace}
+          change={pushing}
+          onClose={(ran) => {
+            setPushing(undefined);
+            if (ran) askAgain();
+          }}
+        />
+      )}
+      {landing !== undefined && workspace !== undefined && (
+        <LandAsk
+          plane={plane}
+          workspace={workspace}
+          change={landing.change}
+          question={landing.question}
+          onClose={(ran) => {
+            setLanding(undefined);
+            if (ran) askAgain();
+          }}
+        />
+      )}
       <p className="view-took">
         {from === null ? `read in ${answer.took_ms} ms` : `answered in ${answer.took_ms} ms`}
       </p>
     </>
   );
+}
+
+/** The Land a changes view offers on each member row (#474): charter's own button, put on the
+ *  row here in the window and never by an answer, and pressed through `ChangeActions`. */
+function withLand(
+  blocks: readonly PanelBlock[],
+  lists: readonly ChangeList[],
+  checking: string | undefined,
+): PanelBlock[] {
+  return blocks.map((block, at) => {
+    const list = lists.find((one) => one.at === at);
+    if (block.kind !== "list" || list === undefined) return block;
+    return {
+      ...block,
+      rows: block.rows.map((row) =>
+        list.members.some((member) => member.key === row.key)
+          ? {
+              ...row,
+              actions: [
+                {
+                  id: "land",
+                  title: checking === row.key ? "Checking…" : "Land…",
+                  asks_first: true,
+                  deletes: false,
+                },
+              ],
+            }
+          : row,
+      ),
+    };
+  });
+}
+
+/** The change and repo of the member row keyed `key`, as the core sent them. */
+function memberAt(
+  lists: readonly ChangeList[],
+  key: string,
+): { change: string; repo: string } | undefined {
+  for (const list of lists) {
+    const member = list.members.find((one) => one.key === key);
+    if (member !== undefined) return { change: list.change, repo: member.repo };
+  }
+  return undefined;
 }
 
 /** An answer's blocks, each drawn with what a panel's is drawn with. */
@@ -651,9 +773,15 @@ function AnsweredBlocks({
   onAct,
   offerFor,
   onPress,
+  listHead,
+  besideRow,
 }: {
   blocks: readonly PanelBlock[];
   label: string;
+  /** What a list is headed by, from its rows: a change's Push (#474). */
+  listHead?: (at: number) => ReactNode;
+  /** A refusal to say beside a row, in the core's words: a Land's (#474). */
+  besideRow?: (row: PanelRow) => string | undefined;
   /** Run one of the extension's actions a row offers; `undefined` for charter's own views. */
   onAct?: (row: PanelRow, action: RowAction) => void;
   /** The catalogue, for charter's own views only: an extension's rows run no charter verb. */
@@ -683,47 +811,60 @@ function AnsweredBlocks({
         ) : block.kind === "facts" ? (
           <Facts key={at} facts={block} />
         ) : (
-          <PanelList
-            key={at}
-            rows={block.rows}
-            empty={block.empty}
-            label={label}
-            open={open}
-            onOpen={setOpen}
-            onAct={onAct}
-            onRun={
-              onPress === undefined
-                ? undefined
-                : (runs, kept) => {
-                    // The catalogue's row or nothing, as a panel's rows are (`Panels.tsx`); a
-                    // double-click keeps what a single click previews (`actions.toKeep`).
-                    const offer = lookUp(runs);
-                    if (offer) onPress(kept ? toKeep(offer) : offer);
-                  }
-            }
-            wrap={
-              onPress === undefined
-                ? undefined
-                : (row, item) => {
-                    const memory = memoryKeyRun(row.runs);
-                    return memory === undefined ? (
-                      item
-                    ) : (
-                      /* Open, Edit | Delete (ADR 0065 Q12): this memory's rows. */
-                      <Menued
-                        key={row.key}
-                        on={{ on: "memory", key: memory }}
-                        offers={memories}
-                        onPress={onPress}
-                      >
-                        {item}
-                      </Menued>
-                    );
-                  }
-            }
-            // A tab has the room a side region does not, so a page is twenty rather than twelve.
-            page={20}
-          />
+          <Fragment key={at}>
+            {listHead?.(at)}
+            <PanelList
+              rows={block.rows}
+              empty={block.empty}
+              label={label}
+              open={open}
+              onOpen={setOpen}
+              onAct={onAct}
+              onRun={
+                onPress === undefined
+                  ? undefined
+                  : (runs, kept) => {
+                      // The catalogue's row or nothing, as a panel's rows are (`Panels.tsx`); a
+                      // double-click keeps what a single click previews (`actions.toKeep`).
+                      const offer = lookUp(runs);
+                      if (offer) onPress(kept ? toKeep(offer) : offer);
+                    }
+              }
+              wrap={
+                onPress === undefined && besideRow === undefined
+                  ? undefined
+                  : (row, item) => {
+                      const refused = besideRow?.(row);
+                      if (refused !== undefined) {
+                        return (
+                          <Fragment key={row.key}>
+                            {item}
+                            <li className="row-refusal trouble" role="alert">
+                              {refused}
+                            </li>
+                          </Fragment>
+                        );
+                      }
+                      const memory = onPress === undefined ? undefined : memoryKeyRun(row.runs);
+                      return memory === undefined || onPress === undefined ? (
+                        item
+                      ) : (
+                        /* Open, Edit | Delete (ADR 0065 Q12): this memory's rows. */
+                        <Menued
+                          key={row.key}
+                          on={{ on: "memory", key: memory }}
+                          offers={memories}
+                          onPress={onPress}
+                        >
+                          {item}
+                        </Menued>
+                      );
+                    }
+              }
+              // A tab has the room a side region does not, so a page is twenty rather than twelve.
+              page={20}
+            />
+          </Fragment>
         ),
       )}
     </>

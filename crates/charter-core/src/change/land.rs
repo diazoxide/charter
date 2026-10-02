@@ -248,6 +248,253 @@ pub fn land_with(
     now: DateTime<Utc>,
     say: &mut dyn FnMut(Say),
 ) -> u8 {
+    gated(
+        plane,
+        ws,
+        slug,
+        repos,
+        how,
+        backend_of,
+        host,
+        now,
+        Asked::Land(None),
+        &mut None,
+        say,
+    )
+}
+
+/// How a verified landing goes, as the operator is shown it before saying yes (#474).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Through {
+    /// Charter merges it now, at the verified head.
+    Merge,
+    /// Charter puts it in its branch's merge queue or merge train at the verified head.
+    Queue,
+    /// It has merged at a head charter started landing, and the landing is only recorded:
+    /// the forge is asked for nothing.
+    Record,
+}
+
+/// What [`verify`] found a landing would do: what the window's "asks first" names, and what
+/// its Land hands back so that nothing else is landed ([`land_verified`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Verified {
+    pub repo: String,
+    /// The request's number on its forge.
+    pub number: u64,
+    /// The request's web page, as its forge gave it.
+    pub url: String,
+    /// The head commit its checks passed at, in full.
+    pub head: String,
+    pub through: Through,
+    /// Its forge, which names the request and the queue in that forge's own words.
+    pub kind: crate::forge::Kind,
+}
+
+impl Verified {
+    /// How it lands, in one sentence naming the head and the forge's own words for its queue:
+    /// what the window's question says before the operator's yes.
+    pub fn how(&self) -> String {
+        let at = short(&self.head);
+        let forge = self.kind.display();
+        let noun = self.kind.queue_noun();
+        match self.through {
+            Through::Merge => format!("charter merges it now, at {at} and no other."),
+            Through::Queue => format!(
+                "charter puts it in its {noun} at {at}, and {forge} merges it once the {noun}'s \
+                 own checks pass."
+            ),
+            Through::Record => format!(
+                "It has merged at {at}, which charter started landing. Land records the landing \
+                 and asks {forge} for nothing."
+            ),
+        }
+    }
+
+    /// Whether squashing is charter's to ask for: a direct merge, or a queue that takes it
+    /// (`Kind::queue_takes_squash`). GitHub's merge queue merges by its rule's method, and a
+    /// landing only recorded merges nothing.
+    pub fn squash_is_charters(&self) -> bool {
+        match self.through {
+            Through::Merge => true,
+            Through::Queue => self.kind.queue_takes_squash(),
+            Through::Record => false,
+        }
+    }
+
+    /// The head as the core's lines show it: its first twelve characters.
+    pub fn head_short(&self) -> String {
+        short(&self.head)
+    }
+}
+
+/// What [`gated`] is asked to do once every gate has passed.
+enum Asked<'v> {
+    /// Land it; when the operator confirmed a [`Verified`], only that.
+    Land(Option<&'v Verified>),
+    /// Say what it would do, and do none of it.
+    Verify,
+}
+
+/// `charter change land`'s gates for `repo`, run and asked of no forge's merge: what the window
+/// names before its Land asks the operator (#474). `Err` carries the exit the gate refused
+/// with, its refusal said in the same words the CLI says.
+///
+/// It may record a blocker's landing that charter started and finds merged, exactly as
+/// [`land`] would; it never writes a pending landing and never asks a forge to merge.
+pub fn verify(
+    plane: &Path,
+    ws: &str,
+    slug: &str,
+    repo: &str,
+    now: DateTime<Utc>,
+    say: &mut dyn FnMut(Say),
+) -> Result<Verified, u8> {
+    verify_with(
+        plane,
+        ws,
+        slug,
+        repo,
+        &|repo: &Repo| repo.backend(),
+        &crate::dispatch::host(),
+        now,
+        say,
+    )
+}
+
+/// [`verify`], through `backend_of` and logging as `host`.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_with(
+    plane: &Path,
+    ws: &str,
+    slug: &str,
+    repo: &str,
+    backend_of: &dyn Fn(&Repo) -> Box<dyn ForgeBackend>,
+    host: &str,
+    now: DateTime<Utc>,
+    say: &mut dyn FnMut(Say),
+) -> Result<Verified, u8> {
+    let mut found = None;
+    let code = gated(
+        plane,
+        ws,
+        slug,
+        &[repo.to_string()],
+        How::Merge,
+        backend_of,
+        host,
+        now,
+        Asked::Verify,
+        &mut found,
+        say,
+    );
+    found.ok_or(if code == 0 { 1 } else { code })
+}
+
+/// Land the landing the operator confirmed, and nothing else: every gate is taken again, and
+/// when the request, its head or how it lands is not what `confirmed` says, it is refused
+/// before any forge is asked to merge (#474).
+pub fn land_verified(
+    plane: &Path,
+    ws: &str,
+    slug: &str,
+    confirmed: &Verified,
+    how: How,
+    now: DateTime<Utc>,
+    say: &mut dyn FnMut(Say),
+) -> u8 {
+    land_verified_with(
+        plane,
+        ws,
+        slug,
+        confirmed,
+        how,
+        &|repo: &Repo| repo.backend(),
+        &crate::dispatch::host(),
+        now,
+        say,
+    )
+}
+
+/// [`land_verified`], through `backend_of` and logging as `host`.
+#[allow(clippy::too_many_arguments)]
+pub fn land_verified_with(
+    plane: &Path,
+    ws: &str,
+    slug: &str,
+    confirmed: &Verified,
+    how: How,
+    backend_of: &dyn Fn(&Repo) -> Box<dyn ForgeBackend>,
+    host: &str,
+    now: DateTime<Utc>,
+    say: &mut dyn FnMut(Say),
+) -> u8 {
+    gated(
+        plane,
+        ws,
+        slug,
+        std::slice::from_ref(&confirmed.repo),
+        how,
+        backend_of,
+        host,
+        now,
+        Asked::Land(Some(confirmed)),
+        &mut None,
+        say,
+    )
+}
+
+/// How a landing is said in the refusal of one that is not what was confirmed.
+fn as_said(sigil: &str, number: u64, head: &str, through: Through, noun: &str) -> String {
+    let how = match through {
+        Through::Merge => "merged now".to_string(),
+        Through::Queue => format!("into its {noun}"),
+        Through::Record => "already merged, to be recorded".to_string(),
+    };
+    format!("{sigil}{number} at {}, {how}", short(head))
+}
+
+/// `Err` with the refusal when what the gates found is not the landing `confirmed` names.
+fn as_confirmed(
+    confirmed: &Verified,
+    found: &Verified,
+    sigil: &str,
+    noun: &str,
+) -> Result<(), String> {
+    if confirmed == found {
+        return Ok(());
+    }
+    Err(format!(
+        "{}: this is not the landing you confirmed: you confirmed {}, and it is now {}. Nothing \
+         was merged. Look at it again and confirm what it says now.",
+        named(&found.repo),
+        as_said(
+            sigil,
+            confirmed.number,
+            &confirmed.head,
+            confirmed.through,
+            noun
+        ),
+        as_said(sigil, found.number, &found.head, found.through, noun)
+    ))
+}
+
+/// The gates, then what `asked` says to do. Asked to verify, a landing every gate let through
+/// is put in `found`, and nothing is written or asked to merge.
+#[allow(clippy::too_many_arguments)]
+fn gated(
+    plane: &Path,
+    ws: &str,
+    slug: &str,
+    repos: &[String],
+    how: How,
+    backend_of: &dyn Fn(&Repo) -> Box<dyn ForgeBackend>,
+    host: &str,
+    now: DateTime<Utc>,
+    asked: Asked,
+    found: &mut Option<Verified>,
+    say: &mut dyn FnMut(Say),
+) -> u8 {
     let refuse = |say: &mut dyn FnMut(Say), why: String| {
         say(Say::Fail(why));
         REFUSED
@@ -371,6 +618,39 @@ pub fn land_with(
             );
         }
         State::Merged { commit } => {
+            let started = matches!(
+                evidence(
+                    &books.log,
+                    &books.pending,
+                    repo,
+                    At::Request(req.number, &req.head)
+                ),
+                Evidence::Started(_)
+            );
+            let this = Verified {
+                repo: repo.to_string(),
+                number: req.number,
+                url: req.url.clone(),
+                head: req.head.clone(),
+                through: Through::Record,
+                kind: me.on.forge.kind,
+            };
+            match asked {
+                // Only a landing charter started is one to record; the others are refused
+                // below, in the words `land` says them in.
+                Asked::Verify if started => {
+                    *found = Some(this);
+                    return 0;
+                }
+                Asked::Land(Some(confirmed)) => {
+                    if let Err(why) =
+                        as_confirmed(confirmed, &this, sigil, me.on.forge.kind.queue_noun())
+                    {
+                        return refuse(say, why);
+                    }
+                }
+                _ => {}
+            }
             return merged_already(&mut books, member, &me, &req, commit.as_deref(), say);
         }
     }
@@ -407,6 +687,30 @@ pub fn land_with(
             return 1;
         }
     };
+    let this = Verified {
+        repo: repo.to_string(),
+        number: req.number,
+        url: req.url.clone(),
+        head: req.head.clone(),
+        through: if queued {
+            Through::Queue
+        } else {
+            Through::Merge
+        },
+        kind: me.on.forge.kind,
+    };
+    match asked {
+        Asked::Verify => {
+            *found = Some(this);
+            return 0;
+        }
+        Asked::Land(Some(confirmed)) => {
+            if let Err(why) = as_confirmed(confirmed, &this, sigil, me.on.forge.kind.queue_noun()) {
+                return refuse(say, why);
+            }
+        }
+        Asked::Land(None) => {}
+    }
     let trailer = format!("{TRAILER}: {}", shown::line(slug));
     let merge_as = MergeAs {
         squash: how == How::Squash,

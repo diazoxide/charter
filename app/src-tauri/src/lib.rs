@@ -19,6 +19,7 @@ macro_rules! tauri_context {
 mod about;
 mod alerts;
 mod autosave;
+mod changes;
 mod chats;
 mod clipath;
 mod curation;
@@ -1797,6 +1798,7 @@ pub fn run() {
             // (charter-app#343): the built-ins hear what they declare, as any extension does.
             app.manage(heard::Heard::with_built_in(built_in.clone()));
             app.manage(views::Views::with_built_in(built_in));
+            app.manage(changes::Busy::default());
             // What each window is holding, and which of its projects it has in front. Empty
             // until a window says, and an empty answer means "not looking", so a notification
             // is sent rather than suppressed.

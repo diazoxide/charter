@@ -6,7 +6,14 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { ViewPane } from "./Views";
 import { catalogue, catalogued, type Offer } from "./actions";
 import { noTabs } from "./tabs";
-import type { ActionAnswer, ExtensionView, PanelBlock, RowAction, ViewAnswer } from "./bindings";
+import type {
+  ActionAnswer,
+  ExtensionView,
+  LandQuestion,
+  PanelBlock,
+  RowAction,
+  ViewAnswer,
+} from "./bindings";
 import type { ViewRef } from "./tabs";
 
 /**
@@ -674,5 +681,291 @@ describe("the + on a memory list's heading (SI-9c, ADR 0065 Q9)", () => {
       },
       { verb: "newMemory", scope: { kind: "shared" } },
     ]);
+  });
+});
+
+describe("a change's Push and Land (#474)", () => {
+  const HEAD = "6dcb09b5b57875f334f61aebed695e2e4193db5e";
+
+  /** A changes view of api-2 over widget and gadget, gadget needing widget. */
+  function changes(): ViewAnswer {
+    const member = (repo: string, note: string) => ({
+      key: `api-2/${repo}`,
+      text: `${repo} · change/api-2`,
+      note,
+      mark: "repo",
+      tone: "plain",
+      detail: null,
+      runs: null,
+      actions: [],
+    });
+    return {
+      kind: "answered",
+      blocks: [
+        { kind: "note", text: "api-2 · 0 of 2 merged · bump the api", tone: "default" },
+        {
+          kind: "list",
+          rows: [
+            member("widget", "#7 open · head 6dcb09b · checks PASSED"),
+            member("gadget", "#8 open · head 6dcb09b · checks PASSED"),
+          ],
+          empty: { headline: "No members yet", body: null, offer: null },
+        },
+      ],
+      took_ms: 40,
+      overreach: null,
+      changes: [
+        {
+          at: 1,
+          change: "api-2",
+          members: [
+            { key: "api-2/widget", repo: "widget" },
+            { key: "api-2/gadget", repo: "gadget" },
+          ],
+        },
+      ],
+    } as ViewAnswer;
+  }
+
+  const QUESTION: LandQuestion = {
+    repo: "widget",
+    number: 7,
+    url: "https://github.com/acme/widget/pull/7",
+    head: HEAD,
+    head_short: "6dcb09b5b578",
+    through: "merge",
+    forge: "github",
+    request: "pull request",
+    sigil: "#",
+    queue: "merge queue",
+    how: "charter merges it now, at 6dcb09b5b578 and no other.",
+    squash: true,
+    said: ["• widget: checks PASSED at 6dcb09b5b578 (1 check)"],
+  };
+
+  /** The core: the view, and `answers` for every other command, each call noted. */
+  function forge(answers: Record<string, (args: Record<string, unknown>) => unknown>) {
+    const calls: { cmd: string; args: Record<string, unknown> }[] = [];
+    mockIPC((cmd, args) => {
+      const given = (args ?? {}) as Record<string, unknown>;
+      calls.push({ cmd, args: given });
+      if (cmd === "open_view") return changes();
+      const answer = answers[cmd];
+      if (answer === undefined) return undefined;
+      const said = answer(given);
+      // A command's refusal reaches the window as its string, as Tauri hands it over.
+      if (said instanceof Error) throw said.message;
+      return said;
+    });
+    return { calls, called: (cmd: string) => calls.filter((c) => c.cmd === cmd) };
+  }
+
+  function open(ws: string) {
+    draw({ from: null, view: "changes", key: ws }, { title: `Changes · ${ws}`, workspace: ws });
+  }
+
+  it("shows a blocked member's refusal in the core's words beside its row, and merges nothing", async () => {
+    const { called } = forge({
+      change_land_question: () =>
+        new Error("gadget: blocker widget has not landed (its request is open)."),
+    });
+    open("land-blocked");
+    const gadget = (await screen.findByText("gadget · change/api-2")).closest("li");
+    if (gadget === null) throw new Error("no gadget row");
+
+    await userEvent.click(within(gadget).getByRole("button", { name: "Land…" }));
+
+    expect(
+      await screen.findByText("gadget: blocker widget has not landed (its request is open)."),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(called("change_land_question")[0].args).toMatchObject({
+      workspace: "land-blocked",
+      change: "api-2",
+      repo: "gadget",
+    });
+    expect(called("change_land")).toHaveLength(0);
+  });
+
+  it("asks first, naming the request, the head its checks passed at and that it merges now", async () => {
+    const { called } = forge({
+      change_land_question: () => QUESTION,
+      change_land: () => ["✓ merged #7 as e5bd3914e2e5, trailer Charter-Change: api-2"],
+    });
+    open("land-asks");
+    const widget = (await screen.findByText("widget · change/api-2")).closest("li");
+    if (widget === null) throw new Error("no widget row");
+    await userEvent.click(within(widget).getByRole("button", { name: "Land…" }));
+
+    const asking = await screen.findByRole("alertdialog");
+    expect(within(asking).getByText("Land widget's pull request #7?")).toBeInTheDocument();
+    expect(within(asking).getByText(HEAD)).toBeInTheDocument();
+    expect(within(asking).getByText("merged now, at 6dcb09b5b578")).toBeInTheDocument();
+    expect(called("change_land")).toHaveLength(0);
+    // Cancel has the focus: an Enter out of habit lands nothing.
+    expect(within(asking).getByRole("button", { name: "Cancel" })).toHaveFocus();
+
+    await userEvent.click(within(asking).getByRole("button", { name: "Land" }));
+
+    expect(
+      await within(asking).findByText("✓ merged #7 as e5bd3914e2e5, trailer Charter-Change: api-2"),
+    ).toBeInTheDocument();
+    expect(called("change_land")).toHaveLength(1);
+    expect(called("change_land")[0].args).toEqual({
+      plane: PLANE,
+      workspace: "land-asks",
+      change: "api-2",
+      confirmed: QUESTION,
+      squash: false,
+    });
+    // Closed after it ran, the view is read again.
+    await userEvent.click(within(asking).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(called("open_view")).toHaveLength(2));
+  });
+
+  it("says a branch with a merge queue goes into it, and offers no squash it cannot do", async () => {
+    const how =
+      "charter puts it in its merge queue at 6dcb09b5b578, and GitHub merges it once the merge queue's own checks pass.";
+    forge({
+      change_land_question: () => ({ ...QUESTION, through: "queue", how, squash: false }),
+    });
+    open("land-queue");
+    const widget = (await screen.findByText("widget · change/api-2")).closest("li");
+    if (widget === null) throw new Error("no widget row");
+    await userEvent.click(within(widget).getByRole("button", { name: "Land…" }));
+
+    const asking = await screen.findByRole("alertdialog");
+    expect(within(asking).getByText("into the merge queue")).toBeInTheDocument();
+    expect(within(asking).getByText(how)).toBeInTheDocument();
+    expect(within(asking).queryByRole("checkbox")).toBeNull();
+  });
+
+  it("asks again after a landing is refused, and hands back only what it shows now", async () => {
+    const MOVED = "0123456789abcdef0123456789abcdef01234567";
+    const moved = { ...QUESTION, head: MOVED, head_short: "0123456789ab" };
+    let asked = 0;
+    const { called } = forge({
+      change_land_question: () => (asked++ === 0 ? QUESTION : moved),
+      change_land: (args) =>
+        (args.confirmed as LandQuestion).head === HEAD
+          ? new Error("widget: this is not the landing you confirmed. Nothing was merged.")
+          : ["✓ merged #7 as e5bd3914e2e5"],
+    });
+    open("land-again");
+    const widget = (await screen.findByText("widget · change/api-2")).closest("li");
+    if (widget === null) throw new Error("no widget row");
+    await userEvent.click(within(widget).getByRole("button", { name: "Land…" }));
+    const asking = await screen.findByRole("alertdialog");
+    await userEvent.click(within(asking).getByRole("button", { name: "Land" }));
+
+    expect(
+      await within(asking).findByText(
+        "widget: this is not the landing you confirmed. Nothing was merged.",
+      ),
+    ).toBeInTheDocument();
+    expect(await within(asking).findByText(MOVED)).toBeInTheDocument();
+    await userEvent.click(within(asking).getByRole("button", { name: "Land" }));
+
+    expect(await within(asking).findByText("✓ merged #7 as e5bd3914e2e5")).toBeInTheDocument();
+    expect(called("change_land").map((c) => (c.args.confirmed as LandQuestion).head)).toEqual([
+      HEAD,
+      MOVED,
+    ]);
+  });
+
+  it("asks first naming each repo, branch and destination, and a second click pushes nothing more", async () => {
+    let finish: (lines: string[]) => void = () => {};
+    const destinations = [
+      {
+        repo: "widget",
+        branch: "change/api-2",
+        head: HEAD,
+        head_short: "6dcb09b5b578",
+        to: "https://github.com/acme/widget.git",
+        base: "main",
+        forge: "github",
+        request: "pull request",
+      },
+      {
+        repo: "gadget",
+        branch: "change/api-2",
+        head: HEAD,
+        head_short: "6dcb09b5b578",
+        to: "https://gitlab.com/acme/gadget.git",
+        base: "main",
+        forge: "gitlab",
+        request: "merge request",
+      },
+    ];
+    const { called } = forge({
+      change_push_question: () => ({ destinations, not_pushed: [] }),
+      change_push: () =>
+        new Promise<string[]>((done) => {
+          finish = done;
+        }),
+    });
+    open("push-asks");
+    await userEvent.click(await screen.findByRole("button", { name: "Push api-2…" }));
+
+    const asking = await screen.findByRole("alertdialog");
+    expect(
+      await within(asking).findByText(
+        /branch change\/api-2 at 6dcb09b5b578 → https:\/\/github.com\/acme\/widget.git, its pull request into main/,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(asking).getByText(
+        /branch change\/api-2 at 6dcb09b5b578 → https:\/\/gitlab.com\/acme\/gadget.git, its merge request into main/,
+      ),
+    ).toBeInTheDocument();
+    expect(called("change_push")).toHaveLength(0);
+
+    const push = within(asking).getByRole("button", { name: "Push" });
+    await userEvent.click(push);
+    await userEvent.click(push);
+    expect(push).toBeDisabled();
+    finish(["✓ widget opened → #7"]);
+
+    expect(await within(asking).findByText("✓ widget opened → #7")).toBeInTheDocument();
+    expect(called("change_push")).toHaveLength(1);
+    expect(called("change_push")[0].args).toMatchObject({
+      change: "api-2",
+      confirmed: destinations,
+    });
+  });
+
+  it("asks again after a push is refused, so the next Push hands back what is shown now", async () => {
+    const at = (head: string) => ({
+      destinations: [
+        {
+          repo: "widget",
+          branch: "change/api-2",
+          head,
+          head_short: head.slice(0, 12),
+          to: "https://github.com/acme/widget.git",
+          base: "main",
+          forge: "github" as const,
+          request: "pull request",
+        },
+      ],
+      not_pushed: [],
+    });
+    let asked = 0;
+    const { called } = forge({
+      change_push_question: () => (asked++ === 0 ? at(HEAD) : at("a1b2c3d4e5f6a1b2c3d4")),
+      change_push: () =>
+        new Error(
+          "what charter would push is not what you confirmed: widget's branch change/api-2 is now at a1b2c3d4e5f6. Nothing was pushed.",
+        ),
+    });
+    open("push-again");
+    await userEvent.click(await screen.findByRole("button", { name: "Push api-2…" }));
+    const asking = await screen.findByRole("alertdialog");
+    await within(asking).findByText(/at 6dcb09b5b578 →/);
+    await userEvent.click(within(asking).getByRole("button", { name: "Push" }));
+
+    expect(await within(asking).findByText(/not what you confirmed/)).toBeInTheDocument();
+    expect(await within(asking).findByText(/at a1b2c3d4e5f6 →/)).toBeInTheDocument();
+    expect(called("change_push_question")).toHaveLength(2);
   });
 });

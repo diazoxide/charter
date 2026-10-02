@@ -15,6 +15,11 @@ import { $, browser, expect } from "@wdio/globals";
  * again. What each forge answer draws is proved on stand-in `gh`/`glab` in charter-core
  * (`a_change_is_shown_with_each_members_request_and_checks.rs`).
  *
+ * Push and Land (#474) run their questions off the real core too: with no `origin`, Land's
+ * gates refuse beside the row and Push names the member it cannot push, both in the core's
+ * words, and nothing is pushed or merged. Push then land on a stand-in forge is proved through
+ * the same commands in the app crate (`changes::tests`).
+ *
  * **It leaves the window and the plane as it found them.**
  */
 
@@ -146,5 +151,30 @@ describe("a workspace's changes", function () {
     await $(PANE).$("button=Refresh").click();
 
     await thePaneSays("svc · change/api-2");
+  });
+
+  it("refuses a Land beside its row in the core's words, and asks nothing to merge", async () => {
+    await thePaneSays("svc · change/api-2");
+    await $(PANE).$("button=Land…").click();
+
+    const refusal = await $(PANE).$(".row-refusal");
+    await refusal.waitForExist({ timeout: 30_000 });
+    expect(await refusal.getText()).toMatch(/^svc: /);
+    expect(await $('[role="alertdialog"]').isExisting()).toBe(false);
+  });
+
+  it("names the member Push cannot push before anything runs, and Cancel pushes nothing", async () => {
+    await thePaneSays("svc · change/api-2");
+    await $(PANE).$("button=Push api-2…").click();
+
+    const asking = await $('[role="alertdialog"]');
+    await asking.waitForDisplayed({ timeout: 20_000 });
+    await browser.waitUntil(async () => (await asking.getText()).includes("svc: "), {
+      timeout: 30_000,
+      timeoutMsg: "the push question never named svc",
+    });
+    expect(await asking.$("button=Push").isEnabled()).toBe(false);
+    await asking.$("button=Cancel").click();
+    await asking.waitForExist({ timeout: 10_000, reverse: true });
   });
 });
