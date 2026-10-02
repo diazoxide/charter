@@ -180,7 +180,7 @@ is not yet known: it is the row most likely to break M1 (*At risk* above). A cha
 | L3 | 2 MB and 13 MB output bursts | the UI never freezes; input and other panes stay responsive | the same, on the burst's longest frame and the keystroke beside it | SC-16 |
 | L4 | synchronized-output animation | smooth, ≥ 30 fps (measured 52.4 and 52.0 draws a second against a 60 fps display, ADR 0026) | release absolute (`bench.mjs`) | SC-16 |
 | L5 | a hook call (`charter hook …`), p95, at 50,000 memories and the hot target | ≤ 50 ms. **Not yet measured** at that load | CI absolute, the exception in §1 (`stress`, KN-22's fixture) | KN-22 |
-| L6 | cold start to the first frame, no chats | ≤ 2 s | CI absolute on Linux (`app builds`: median of five ≤ 2 s, none past 2.5 s, as today); release absolute on macOS (#814) | FR-8 |
+| L6 | cold start to the first frame, no chats | ≤ 2 s | CI absolute on Linux (`app builds`: median of five ≤ 2 s; at most one past 2.5 s, reported and not gated; V39); release absolute on macOS (#814) | FR-8 |
 | L7 | reattach after the window restarts with `charterd` up: first paint of the focused pane, with the hot target's chats | ≤ 1 s (V7, FD-5's row) | CI relative (`bench`, through the host); release absolute (#814) | FD-5, FD-7 |
 | L8 | relaunch with the hot target's chats to put back: interactive | ≤ 3 s (SC-20's row) | CI relative (`bench`); release absolute (#814) | SC-20 |
 
@@ -394,3 +394,20 @@ None. Every point is inside V8, Q1, V7, ADR 0082 and the rows of the tickets thi
   measurement decides.
 - **`charter doctor --perf`**, showing these figures to the operator on their own machine, which is
   an OB ticket's.
+
+## ADR 0086, amended (2026-10-02)
+
+**Settled by V39:** *"the Linux cold-start gate ignores one outlier. It amends ADR 0086 row L6.
+The median of five must still be ≤ 2 s. At most one launch may go past the 2.5 s ceiling, and
+that one is reported, not gated. Two or more launches past the ceiling fail. Why: two red mains in
+one day, each from a single slow runner launch (2687 ms, 2537 ms) with medians of 1373 and
+1560 ms."*
+
+- **Row L6** now reads: median of five ≤ 2 s; at most one launch past 2.5 s, reported and not
+  gated. Two or more past it fail the job.
+- **§1's exception is unchanged in kind.** L6 is still held by its median. The ceiling stays as a
+  second check that catches a slow tail of two or more launches, which a median of five can hide.
+- **Where it lives:** `tools/coldstart-gate.mjs` decides, `tools/bench.mjs` prints the median,
+  the worst launch and the ceiling, and names the launch it let through. Its tests are
+  `tools/coldstart-gate.test.mjs`, run by the `web` job.
+- **Without `--ceiling`**, `bench.mjs` still holds every launch to the limit, as before.

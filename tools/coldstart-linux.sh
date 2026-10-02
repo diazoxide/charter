@@ -10,8 +10,9 @@
 # with a desktop portal it can activate and that cannot start.
 #
 # Each case launches the app once, discarded, and then five times, each on a fresh HOME and XDG
-# directories. It fails when the median of the five is past the 2 s limit, or any one of them is
-# past a 2.5 s ceiling (`tools/bench.mjs`). Not "every one under 2 s": this is a debug build on a
+# directories. It fails when the median of the five is past the 2 s limit, or two or more of them
+# are past a 2.5 s ceiling; one launch past it is reported, not gated (V39, ADR 0086 as amended;
+# `tools/coldstart-gate.mjs`). Not "every one under 2 s": this is a debug build on a
 # shared runner, where one launch in five went 63 ms over (main, run 36789430687) while the
 # others sat near 1.35 s. A release build would be the one users run, but it costs a full
 # `lto = true`, `codegen-units = 1` build — 6.5 min on this runner — where the debug build CI
