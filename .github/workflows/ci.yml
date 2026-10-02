@@ -141,6 +141,10 @@ jobs:
     runs-on: ubuntu-24.04
     container:
       image: fedora:latest
+      # An init that reaps, as every desktop has. Without it PID 1 is the runner's
+      # `tail -f /dev/null`, a killed orphan stays a zombie, and the executor's tests that a
+      # helper is stopped read the zombie as still running (seen on this job's first run).
+      options: --init
     env:
       CARGO_TARGET_DIR: /home/ci/target
     steps:
