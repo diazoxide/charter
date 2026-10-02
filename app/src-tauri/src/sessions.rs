@@ -730,17 +730,22 @@ mod tests {
         // re-arming loses nothing the operator had open.
         let sessions = Sessions::new();
         let mut pids = Vec::new();
+        // Each killed with the test whatever it asserts, so a failure cannot leave a program
+        // that ignores the hangup running for good (#923).
+        let mut _ends = Vec::new();
         for _ in 0..3 {
             let id = sessions
                 .open(
                     None,
-                    &opening("trap '' HUP; echo guarded; while :; do sleep 600; done"),
+                    &opening(&stand_in::stubborn("HUP", "echo guarded")),
                     &|_| {},
                 )
                 .expect("the session opens");
+            let pid = sessions.process_id(id).expect("a pid");
+            _ends.push(stand_in::Ends::group(pid));
             let (_view, seen) = watching(&sessions, id);
             until_seen(&seen, "guarded");
-            pids.push(sessions.process_id(id).expect("a pid"));
+            pids.push(pid);
         }
 
         assert_eq!(sessions.stop_every_program(), 3);
@@ -754,20 +759,24 @@ mod tests {
     #[test]
     fn ending_every_session_ends_their_programs_before_it_returns() {
         let sessions = Sessions::new();
+        let mut _ends = Vec::new();
         let programs: Vec<u32> = (0..5)
             .map(|_| {
                 let id = sessions
                     .open(
                         None,
-                        &opening("trap '' HUP; echo guarded; while :; do sleep 600; done"),
+                        &opening(&stand_in::stubborn("HUP", "echo guarded")),
                         &|_| {},
                     )
                     .expect("the session opens");
+                let pid = sessions
+                    .process_id(id)
+                    .expect("a running program has a pid");
+                // Killed with the test whatever it asserts (#923).
+                _ends.push(stand_in::Ends::group(pid));
                 let (_view, seen) = watching(&sessions, id);
                 until_seen(&seen, "guarded");
-                sessions
-                    .process_id(id)
-                    .expect("a running program has a pid")
+                pid
             })
             .collect();
 

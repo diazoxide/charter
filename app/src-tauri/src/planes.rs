@@ -2848,14 +2848,13 @@ mod tests {
     use crate::sessions::alive;
     use charter_core::halt::Actor;
 
-    /// A chat whose program ignores an interrupt and a hangup, so only the kill can end it.
+    /// A chat whose program ignores an interrupt and a hangup, so only the kill can end it —
+    /// and which ends on its own after [`stand_in::FIXTURE_LIFETIME_SECS`] if no kill comes,
+    /// rather than outliving the test by days (#923).
     #[cfg(unix)]
     fn an_agent_that_will_not_go_quietly() -> reopen::Chat {
         let mut chat = one_chat_on("/bin/sh").chats.remove(0);
-        chat.args = vec![
-            "-c".to_owned(),
-            "trap '' INT HUP; while :; do sleep 600; done".to_owned(),
-        ];
+        chat.args = vec!["-c".to_owned(), stand_in::stubborn("INT HUP", "")];
         chat.name = "agent".to_owned();
         chat
     }
@@ -2877,32 +2876,43 @@ mod tests {
         (planes, config)
     }
 
-    /// `count` chats started across `projects` in turn, and each one's program.
+    /// `count` chats started across `projects` in turn, each one's program, and the guards
+    /// that kill those programs with the test whatever it asserts (#923).
     #[cfg(unix)]
-    fn agents_across(planes: &Planes, projects: &[PlaneId], count: usize) -> Vec<u32> {
-        (0..count)
-            .map(|n| {
-                let held = planes.held(&projects[n % projects.len()]).expect("held");
-                let session = held
-                    .chats()
-                    .start(&an_agent_that_will_not_go_quietly(), A_PANE)
-                    .expect("the chat starts");
-                held.chats().sessions().process_id(session).expect("a pid")
-            })
-            .collect()
+    fn agents_across(
+        planes: &Planes,
+        projects: &[PlaneId],
+        count: usize,
+    ) -> (Vec<u32>, Vec<stand_in::Ends>) {
+        let mut programs = Vec::new();
+        let mut ends = Vec::new();
+        for n in 0..count {
+            let held = planes.held(&projects[n % projects.len()]).expect("held");
+            let session = held
+                .chats()
+                .start(&an_agent_that_will_not_go_quietly(), A_PANE)
+                .expect("the chat starts");
+            let pid = held.chats().sessions().process_id(session).expect("a pid");
+            ends.push(stand_in::Ends::group(pid));
+            programs.push(pid);
+        }
+        (programs, ends)
     }
 
-    /// Three projects, twenty agents across them, and the registry holding them.
+    /// Three projects, twenty agents across them, the registry holding them, and the guards
+    /// that kill them with the test.
     #[cfg(unix)]
-    fn twenty_agents_in_three_projects(dir: &Path) -> (Planes, PathBuf, Vec<PlaneId>, Vec<u32>) {
+    fn twenty_agents_in_three_projects(
+        dir: &Path,
+    ) -> (Planes, PathBuf, Vec<PlaneId>, Vec<u32>, Vec<stand_in::Ends>) {
         let (planes, config) = planes_with_a_config_home(dir);
         let projects: Vec<PlaneId> = ["one", "two", "three"]
             .iter()
             .map(|name| planes.open(&a_plane(&dir.join(name))))
             .collect();
-        let programs = agents_across(&planes, &projects, 20);
+        let (programs, ends) = agents_across(&planes, &projects, 20);
         assert!(programs.iter().all(|pid| alive(*pid)));
-        (planes, config, projects, programs)
+        (planes, config, projects, programs, ends)
     }
 
     fn outlived(programs: &[u32]) -> Vec<u32> {
@@ -2913,7 +2923,8 @@ mod tests {
     #[test]
     fn one_stop_ends_twenty_chats_across_three_projects_within_five_seconds() {
         let dir = tempfile::tempdir().expect("a directory");
-        let (planes, config, projects, programs) = twenty_agents_in_three_projects(dir.path());
+        let (planes, config, projects, programs, _ends) =
+            twenty_agents_in_three_projects(dir.path());
 
         let from = std::time::Instant::now();
         let stopped = planes.stop_every_agent(Actor::Window).expect("kept");
@@ -3011,6 +3022,7 @@ mod tests {
             .start(&an_agent_that_will_not_go_quietly(), A_PANE)
             .expect("a chat starts once re-armed");
         let pid = held.chats().sessions().process_id(session).expect("a pid");
+        let _ends = stand_in::Ends::group(pid);
         planes.let_go_of_all();
         assert!(!alive(pid));
     }
@@ -3027,7 +3039,7 @@ mod tests {
             .iter()
             .map(|name| planes.open(&a_plane(&dir.path().join(name))))
             .collect();
-        let programs = agents_across(&planes, &projects, 4);
+        let (programs, _ends) = agents_across(&planes, &projects, 4);
         let (ended, heard) = std::sync::mpsc::channel();
         let hearing = Arc::clone(&planes);
         let _watch = crate::killswitch::watch(planes.kill_switch(), move |moved| {

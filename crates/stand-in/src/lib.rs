@@ -224,8 +224,17 @@ pub fn stubborn_for(signals: &str, first: &str, secs: u32) -> String {
 /// ([`Ends::group`]), or one the fixture wrote down itself ([`Ends::named_in`]), read when the
 /// guard drops so a test that failed before reading it is still covered. The group is killed
 /// and then the pid itself, since a fixture that is not its group's leader is still named.
-/// A pid of 0 or 1 is never signalled: those are this process's own group and every process
-/// the user owns.
+///
+/// **And only while that pid still names the same process.** A guard usually drops after its
+/// fixture already ended — the passing case — and by then the kernel may have handed the pid
+/// to something else; on a machine running other sessions' work beside the tests, that is
+/// someone else's process. So the guard knows when its process started (asked of `ps` when it
+/// is made, or, for a marker, no earlier than the marker was written) and kills nothing if
+/// the process holding the pid now started later. With no process holding the pid at all,
+/// only the group is killed: what is left in it can only be the fixture's own children, since
+/// a pid is not handed out again while a group still bears it as its id.
+///
+/// A pid of 0 or 1 is never signalled: those are this process's own group and init.
 #[derive(Debug)]
 #[must_use = "a guard that is dropped at once kills its fixture at once"]
 pub struct Ends {
@@ -234,15 +243,29 @@ pub struct Ends {
 
 #[derive(Debug)]
 enum Target {
-    Pid(u32),
+    /// A pid, and the second its process started, when that could be asked.
+    Pid(u32, Option<u64>),
     NamedIn(PathBuf),
 }
 
+/// How far apart two readings of one process's start may be: `ps` answers its elapsed time to
+/// the second, and the reading and the clock it is subtracted from are not one instant.
+const SAME_START_SECS: u64 = 2;
+
 impl Ends {
-    /// Kill the group `pid` leads, and `pid` itself, when this drops.
+    /// Kill the group `pid` leads, and `pid` itself, when this drops — if `pid` still names
+    /// the process it names now.
     pub fn group(pid: u32) -> Self {
         Ends {
-            target: Target::Pid(pid),
+            target: Target::Pid(pid, started(pid)),
+        }
+    }
+
+    /// [`Ends::group`], for a process known to have started at `started` (seconds since the
+    /// epoch) rather than whatever holds `pid` now.
+    pub fn started_at(pid: u32, started: u64) -> Self {
+        Ends {
+            target: Target::Pid(pid, Some(started)),
         }
     }
 
@@ -257,32 +280,95 @@ impl Ends {
 
 impl Drop for Ends {
     fn drop(&mut self) {
-        let pid = match &self.target {
-            Target::Pid(pid) => Some(*pid),
-            Target::NamedIn(marker) => std::fs::read_to_string(marker)
-                .ok()
-                .and_then(|text| text.trim().parse().ok()),
-        };
-        if let Some(pid) = pid {
-            kill(pid);
+        match &self.target {
+            Target::Pid(pid, Some(at)) => kill_if(*pid, |now| now.abs_diff(*at) <= SAME_START_SECS),
+            // `ps` could not be asked when the guard was made: the process had ended already,
+            // or there is no `ps`. Nothing to tell a reused pid by, so only its group.
+            Target::Pid(pid, None) => kill_if(*pid, |_| false),
+            Target::NamedIn(marker) => {
+                let Ok(text) = std::fs::read_to_string(marker) else {
+                    return;
+                };
+                let Ok(pid) = text.trim().parse() else {
+                    return;
+                };
+                let written = std::fs::metadata(marker)
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs());
+                // The fixture is started, then writes its pid: a process that started after
+                // the marker was written is not the one that wrote it.
+                kill_if(pid, |now| {
+                    written.is_some_and(|written| now <= written + SAME_START_SECS)
+                });
+            }
         }
     }
 }
 
+/// Kill `pid`'s group, and `pid`, if the process holding `pid` now passes `same` on its start
+/// second; kill only the group if no process holds `pid`; and nothing otherwise.
 #[cfg(unix)]
-fn kill(pid: u32) {
+fn kill_if(pid: u32, same: impl Fn(u64) -> bool) {
     use rustix::process::{Pid, Signal, kill_process, kill_process_group};
-    let Some(pid) = i32::try_from(pid)
+    let Some(raw) = i32::try_from(pid)
         .ok()
         .filter(|&raw| raw > 1)
         .and_then(Pid::from_raw)
     else {
         return;
     };
-    // ESRCH is the ordinary answer: the fixture already ended, which is the passing case.
-    let _ = kill_process_group(pid, Signal::KILL);
-    let _ = kill_process(pid, Signal::KILL);
+    match started(pid) {
+        Some(now) if same(now) => {
+            // ESRCH is the ordinary answer: the fixture already ended, which is the passing case.
+            let _ = kill_process_group(raw, Signal::KILL);
+            let _ = kill_process(raw, Signal::KILL);
+        }
+        Some(_) => {}
+        None => {
+            let _ = kill_process_group(raw, Signal::KILL);
+        }
+    }
 }
 
 #[cfg(not(unix))]
-fn kill(_pid: u32) {}
+fn kill_if(_pid: u32, _same: impl Fn(u64) -> bool) {}
+
+/// The second the process holding `pid` started, from its elapsed time as `ps` reads it
+/// (`[[dd-]hh:]mm:ss`, the same on Linux and macOS); `None` if no process holds it.
+#[cfg(unix)]
+fn started(pid: u32) -> Option<u64> {
+    let out = std::process::Command::new("/bin/ps")
+        .args(["-o", "etime=", "-p", &pid.to_string()])
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    let elapsed = elapsed_secs(String::from_utf8_lossy(&out.stdout).trim())?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    Some(now.saturating_sub(elapsed))
+}
+
+#[cfg(not(unix))]
+fn started(_pid: u32) -> Option<u64> {
+    None
+}
+
+/// `[[dd-]hh:]mm:ss` in seconds.
+fn elapsed_secs(etime: &str) -> Option<u64> {
+    if etime.is_empty() {
+        return None;
+    }
+    let (days, clock) = match etime.split_once('-') {
+        Some((d, rest)) => (d.parse::<u64>().ok()?, rest),
+        None => (0, etime),
+    };
+    let mut secs = 0u64;
+    for part in clock.split(':') {
+        secs = secs * 60 + part.parse::<u64>().ok()?;
+    }
+    Some(days * 86_400 + secs)
+}

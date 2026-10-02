@@ -23,7 +23,8 @@ fn a_command_that_leaves_a_process_behind_fails_and_names_it() {
     let orphan = stderr.lines().find_map(|line| {
         let rest = line.trim().strip_prefix("pid ")?;
         let (pid, cmd) = rest.split_once(": ")?;
-        cmd.contains("sleep 47.923").then(|| pid.parse::<u32>().ok())?
+        cmd.contains("sleep 47.923")
+            .then(|| pid.parse::<u32>().ok())?
     });
     if let Some(pid) = orphan {
         drop(stand_in::Ends::group(pid));
@@ -35,7 +36,14 @@ fn a_command_that_leaves_a_process_behind_fails_and_names_it() {
 #[test]
 fn a_command_that_cleans_up_after_itself_keeps_its_own_status() {
     let said = Command::new(the_check())
-        .args(["--grace", "0", "--", "/bin/sh", "-c", "sleep 0.1 & wait; exit 3"])
+        .args([
+            "--grace",
+            "0",
+            "--",
+            "/bin/sh",
+            "-c",
+            "sleep 0.1 & wait; exit 3",
+        ])
         .output()
         .expect("the check runs");
 

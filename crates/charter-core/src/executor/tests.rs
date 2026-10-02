@@ -90,6 +90,11 @@ impl Rig {
 /// so it stays a test of the same thing, and a regression it catches takes this long to fail.
 const PATIENT: Duration = Duration::from_secs(30);
 
+/// How many 10 ms waits a program here polls for a file before it gives up and goes on —
+/// [`stand_in::FIXTURE_LIFETIME_SECS`] of them at least, so a test that never writes the file
+/// (it failed first) leaves no program polling for ever (#923).
+const TICKS: u32 = stand_in::FIXTURE_LIFETIME_SECS * 100;
+
 /// An executor that gives its programs [`PATIENT`].
 fn patient() -> Executor {
     Executor::default().with_deadline(PATIENT)
@@ -652,12 +657,18 @@ fn a_program_that_escapes_its_group_outlives_the_question_and_cannot_hold_charte
     rig.approved(&format!(
         "#!/bin/sh\nperl -e '$SIG{{PIPE}}=\"IGNORE\"; setpgrp(0,0); open(F,\">{escaped}\"); \
          print F $$; close F; $|=1; \
-         until(-e \"{release}\"){{print STDERR \"x\"; select(undef,undef,undef,0.001)}}' &\n\
-         while [ ! -s '{escaped}' ]; do sleep 0.01; done\n\
+         until(-e \"{release}\" || time > $^T + {bound}){{print STDERR \"x\"; \
+         select(undef,undef,undef,0.001)}}' &\n\
+         i=0; while [ ! -s '{escaped}' ] && [ $i -lt {ticks} ]; do sleep 0.01; i=$((i+1)); done\n\
          read line\nprintf '%s\\n' '{ANSWER}'\n",
         escaped = escaped.display(),
         release = release.display(),
+        bound = stand_in::FIXTURE_LIFETIME_SECS,
+        ticks = TICKS,
     ));
+    // The helper leaves the group, so nothing charter does ends it: this does, with the test,
+    // even when an assertion below fails before the release is written (#923).
+    let _ends = stand_in::Ends::named_in(&escaped);
     let executor = patient();
     let watchdog = PATIENT * 2;
 
@@ -710,7 +721,8 @@ fn a_program_that_escapes_its_group_outlives_the_question_and_cannot_hold_charte
 /// a `sleep 1` program took 4.2 s to answer with the rest of this module running beside it.
 fn waiting(pid: &Path, go: &Path) -> String {
     format!(
-        "#!/bin/sh\necho $$ > '{}'\nwhile [ ! -e '{}' ]; do sleep 0.02; done\nread line\n\
+        "#!/bin/sh\necho $$ > '{}'\ni=0; while [ ! -e '{}' ] && [ $i -lt {TICKS} ]; do sleep 0.01; \
+         i=$((i+1)); done\nread line\n\
          printf '%s\\n' '{ANSWER}'\n",
         pid.display(),
         go.display()
@@ -1299,11 +1311,14 @@ fn a_helper_that_holds_stdin_and_reads_slowly_cannot_hold_the_question_past_the_
     let escaped = rig.marker("escaped");
     rig.approved(&format!(
         "#!/bin/sh\nexec 3<&0\nperl -e 'setpgrp(0,0); open(F,\">{0}\"); print F $$; close F; \
-         while(1){{ sysread(STDIN,$b,1) or exit; sleep 1 }}' <&3 &\n\
-         while [ ! -s '{0}' ]; do sleep 0.01; done\n\
+         while(time < $^T + {1}){{ sysread(STDIN,$b,1) or exit; sleep 1 }}' <&3 &\n\
+         i=0; while [ ! -s '{0}' ] && [ $i -lt {TICKS} ]; do sleep 0.01; i=$((i+1)); done\n\
          printf '%s\\n' '{ANSWER}'\n",
-        escaped.display()
+        escaped.display(),
+        stand_in::FIXTURE_LIFETIME_SECS,
     ));
+    // It leaves the group, so only this ends it if the test fails before `kill_escaped`.
+    let _ends = stand_in::Ends::named_in(&escaped);
     let executor = std::sync::Arc::new(patient());
     // On a thread of its own, so that a regression reads as a failure with a sentence on it
     // rather than as a test run that never ends.
@@ -1954,7 +1969,8 @@ fn a_command_whose_stderr_something_it_started_still_holds_passes_nothing_on() {
     rig.talking(&format!(
         "#!/bin/sh\ne='{0}'/$$\n\
          perl -e 'setpgrp(0,0); open(F,\">$ARGV[0]\"); print F $$; close F; sleep 30' \"$e\" \
-         >/dev/null </dev/null &\nwhile [ ! -s \"$e\" ]; do sleep 0.01; done\nprintf 'out\\n'\n",
+         >/dev/null </dev/null &\ni=0; while [ ! -s \"$e\" ] && [ $i -lt {TICKS} ]; do sleep 0.01; \
+         i=$((i+1)); done\nprintf 'out\\n'\n",
         escaped.display()
     ));
 
@@ -2224,7 +2240,8 @@ fn an_event_waits_for_the_question_in_flight_rather_than_being_refused() {
     let go = rig.marker("go");
     rig.talking(&format!(
         "#!/bin/sh\nread line\ncase \"$line\" in\n*'\"event\"'*) printf '%s\\n' '{{\"charter\":2}}' ;;\n\
-         *) echo $$ > '{}'\nwhile [ ! -e '{}' ]; do sleep 0.01; done\n\
+         *) echo $$ > '{}'\ni=0; while [ ! -e '{}' ] && [ $i -lt {TICKS} ]; do sleep 0.01; \
+         i=$((i+1)); done\n\
          printf '%s\\n' '{{\"charter\":2,\"blocks\":[]}}' ;;\nesac\n",
         pid.display(),
         go.display()

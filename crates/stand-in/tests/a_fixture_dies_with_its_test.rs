@@ -120,10 +120,60 @@ fn a_stubborn_fixture_ignores_a_hangup_and_still_ends_on_its_own() {
 
     let deadline = Instant::now() + Duration::from_secs(10);
     while child.try_wait().expect("a status").is_none() {
-        assert!(
-            Instant::now() < deadline,
-            "the fixture outlived its bound"
-        );
+        assert!(Instant::now() < deadline, "the fixture outlived its bound");
         std::thread::sleep(Duration::from_millis(50));
     }
+}
+
+#[test]
+fn a_pid_in_a_marker_older_than_its_process_is_someone_else_s_and_is_left_alone() {
+    // A pid the kernel has handed out again since the fixture wrote it: the process holding it
+    // now started after the marker was written. Killing it would kill something this test
+    // never started — on a shared machine, another session's work.
+    use std::os::unix::process::CommandExt as _;
+    let dir = tempfile::tempdir().expect("a directory");
+    let mut someone_else = Command::new("/bin/sleep")
+        .arg("30")
+        .process_group(0)
+        .spawn()
+        .expect("sleep runs");
+    let _ours = stand_in::Ends::group(someone_else.id());
+    let marker = dir.path().join("pid");
+    std::fs::write(&marker, someone_else.id().to_string()).expect("the marker");
+    let an_hour_ago = Command::new("/usr/bin/touch")
+        .args(["-t", "202001010000"])
+        .arg(&marker)
+        .status()
+        .expect("touch runs");
+    assert!(an_hour_ago.success());
+
+    drop(stand_in::Ends::named_in(&marker));
+
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(
+        someone_else.try_wait().expect("a status").is_none(),
+        "a process that started after the marker was written was killed"
+    );
+}
+
+#[test]
+fn a_guard_whose_pid_was_handed_to_another_process_leaves_that_one_alone() {
+    // The same, for a guard handed the pid directly: it remembers when that process started,
+    // and a different start is a different process.
+    use std::os::unix::process::CommandExt as _;
+    let mut child = Command::new("/bin/sleep")
+        .arg("30")
+        .process_group(0)
+        .spawn()
+        .expect("sleep runs");
+    let pid = child.id();
+    let _ours = stand_in::Ends::group(pid);
+
+    drop(stand_in::Ends::started_at(pid, 0));
+
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(
+        child.try_wait().expect("a status").is_none(),
+        "the guard killed a process that started later than the one it was made for"
+    );
 }
