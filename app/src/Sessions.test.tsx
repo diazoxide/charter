@@ -371,8 +371,12 @@ describe("the Sessions panel", () => {
       expect(
         window.asked
           .filter((one) => one.cmd === "resume_session")
-          .map((one) => one.args.afterFailure),
-      ).toEqual([false, true]),
+          .map((one) => [one.args.afterFailure, one.args.insteadOf]),
+      ).toEqual([
+        [false, null],
+        // The same chat started again, so it keeps its id (ADR 0066's `fresh`).
+        [true, 7],
+      ]),
     );
     expect(
       await screen.findByText(/came back as a new chat: claude could not bring back/),

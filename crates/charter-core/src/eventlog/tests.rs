@@ -662,3 +662,169 @@ fn a_write_that_failed_partway_is_cut_back_before_the_next_event() {
     let text = std::fs::read_to_string(dir.path().join(FILE)).unwrap();
     assert_eq!(text.lines().count(), 2, "{text}");
 }
+
+const CHAT: &str = "01K6E8ZK6V4Q9T0N3M2B1C5D7F";
+const RUN: &str = "01K6E8ZK6V4Q9T0N3M2B1C5D7H";
+
+#[test]
+fn a_chat_reopened_after_a_relaunch_keeps_its_id_and_its_first_event_is_a_reopen_run() {
+    use crate::state::Event::{SessionStart, Stop};
+    let dir = tempfile::tempdir().unwrap();
+    let plane = Path::new("/planes/one");
+    {
+        let mut before = recorder(dir.path());
+        before.begin(plane, 7, CHAT, RUN, Began::Start).unwrap();
+        before
+            .report(plane, &report(7, Stop), Followed::No)
+            .unwrap();
+    }
+    let relaunched_at = read(dir.path()).unwrap().len();
+
+    // The next launch: a host with nothing in its memory, told by the record who chat 7 is.
+    let mut after = recorder(dir.path());
+    let again = "01K6E8ZK6V4Q9T0N3M2B1C5D7K";
+    after.begin(plane, 7, CHAT, again, Began::Reopen).unwrap();
+    after
+        .report(plane, &report(7, SessionStart), Followed::No)
+        .unwrap();
+
+    let events = read(dir.path()).unwrap();
+    let since: Vec<_> = events[relaunched_at..]
+        .iter()
+        .map(|e| {
+            (
+                e.kind.as_str(),
+                e.chat.as_deref(),
+                e.run.as_deref(),
+                e.body.get("cause").and_then(|c| c.as_str()),
+            )
+        })
+        .collect();
+    assert_eq!(
+        since,
+        vec![
+            ("run.started", Some(CHAT), Some(again), Some("reopen")),
+            ("hook.sessionstart", Some(CHAT), Some(again), None),
+        ],
+        "{events:#?}"
+    );
+    assert_eq!(
+        events[0].chat.as_deref(),
+        Some(CHAT),
+        "the same chat as before"
+    );
+}
+
+#[test]
+fn fresh_and_switch_each_begin_a_run_in_the_same_chat() {
+    use crate::state::Event::Stop;
+    let dir = tempfile::tempdir().unwrap();
+    let plane = Path::new("/planes/one");
+    let mut host = recorder(dir.path());
+    let runs = [
+        "01K6E8ZK6V4Q9T0N3M2B1C5D70",
+        "01K6E8ZK6V4Q9T0N3M2B1C5D71",
+        "01K6E8ZK6V4Q9T0N3M2B1C5D72",
+    ];
+
+    host.begin(plane, 3, CHAT, runs[0], Began::Start).unwrap();
+    host.begin(plane, 3, CHAT, runs[1], Began::Fresh).unwrap();
+    host.report(plane, &report(3, Stop), Followed::No).unwrap();
+    host.begin(plane, 3, CHAT, runs[2], Began::Switch).unwrap();
+    host.report(plane, &report(3, Stop), Followed::No).unwrap();
+
+    let events = read(dir.path()).unwrap();
+    let said: Vec<_> = events
+        .iter()
+        .map(|e| {
+            (
+                e.chat.as_deref().unwrap(),
+                e.run.as_deref().unwrap(),
+                e.body
+                    .get("cause")
+                    .and_then(|c| c.as_str())
+                    .unwrap_or(&e.kind),
+            )
+        })
+        .collect();
+    assert_eq!(
+        said,
+        vec![
+            (CHAT, runs[0], "start"),
+            (CHAT, runs[1], "fresh"),
+            (CHAT, runs[1], "hook.stop"),
+            (CHAT, runs[2], "switch"),
+            (CHAT, runs[2], "hook.stop"),
+        ]
+    );
+}
+
+#[test]
+fn a_new_run_ends_the_sub_agents_of_the_one_before() {
+    use crate::state::Event::Stop;
+    let dir = tempfile::tempdir().unwrap();
+    let plane = Path::new("/planes/one");
+    let mut host = recorder(dir.path());
+    let agent = |chat| crate::hookwire::Report {
+        agent: Some("a1".to_owned()),
+        ..report(chat, Stop)
+    };
+
+    host.begin(plane, 3, CHAT, RUN, Began::Start).unwrap();
+    host.report(plane, &agent(3), Followed::No).unwrap();
+    let next = "01K6E8ZK6V4Q9T0N3M2B1C5D7K";
+    host.begin(plane, 3, CHAT, next, Began::Switch).unwrap();
+    let after = host.report(plane, &agent(3), Followed::No).unwrap();
+
+    assert_eq!(
+        after.parent_run.as_deref(),
+        Some(next),
+        "the agent seen again is a child of the run now current, not of the one that ended"
+    );
+}
+
+#[test]
+fn a_chat_put_back_in_its_conversation_is_a_reopen_and_one_put_back_without_it_is_fresh() {
+    use crate::harness::SessionId;
+    use crate::reopen::{Fresh, Reopened};
+    let resumed =
+        Reopened::Resumed(SessionId::new("11111111-2222-4333-8444-555555555555").unwrap());
+    let on = |how: Reopened, harness| Began::at_relaunch(&how, harness);
+
+    assert_eq!(on(resumed, true), Began::Reopen);
+    assert_eq!(
+        on(Reopened::Fresh(Fresh::SessionNamedByTheOperator), true),
+        Began::Reopen,
+        "the operator's own arguments resume it"
+    );
+    assert_eq!(
+        on(Reopened::Fresh(Fresh::NoResumeForThisProgram), false),
+        Began::Reopen,
+        "a shell has no conversation to lose"
+    );
+    for lost in [
+        Fresh::WorkspaceRenamed,
+        Fresh::NoConversationRecorded,
+        Fresh::NoResumeForThisProgram,
+    ] {
+        assert_eq!(on(Reopened::Fresh(lost), true), Began::Fresh, "{lost:?}");
+    }
+}
+
+#[test]
+fn a_run_the_log_could_not_write_still_keeps_the_chat_under_its_id() {
+    use crate::state::Event::Stop;
+    let dir = tempfile::tempdir().unwrap();
+    let plane = Path::new("/planes/one");
+    let mut host = recorder(dir.path());
+
+    host.log.fail_the_next_write_after(3);
+    assert!(host.begin(plane, 3, CHAT, RUN, Began::Reopen).is_err());
+    let next = host.report(plane, &report(3, Stop), Followed::No).unwrap();
+
+    assert_eq!(
+        (next.chat.as_deref(), next.run.as_deref()),
+        (Some(CHAT), Some(RUN)),
+        "not a second id minted at the next line"
+    );
+}

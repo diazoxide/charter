@@ -354,6 +354,7 @@ fn open(held: &Arc<Held>, spec: &str, action: &str, size: Size) -> Result<Curati
         label: Some(label.clone()),
         from: None,
         renamed_from: None,
+        identity: charter_core::reopen::Identity::default(),
     };
     match when {
         ReadyToType::WhenItReportsItsStart => held.typed().hold(number, chosen.prompt),

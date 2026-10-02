@@ -92,6 +92,7 @@ fn one_chat() -> Record {
             label: None,
             from: None,
             renamed_from: None,
+            identity: charter_core::reopen::Identity::default(),
         }],
     }
 }

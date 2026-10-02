@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use charter_core::engine::Size;
+use charter_core::eventlog::Began;
 use charter_core::harness::{Harness, SessionId};
 use charter_core::reopen::{Chat, Record, Reopened, View};
 
@@ -102,6 +103,32 @@ pub type Recorder = Box<dyn Fn(&Record) + Send + Sync>;
 /// conversation charter chose for it. Everything the board needs to judge a report about it.
 pub type Starting = Box<dyn Fn(u32, Option<Harness>, Option<String>) + Send + Sync>;
 
+/// Told as each chat starts, BEFORE its program does, of the run the start begins: the chat's
+/// number, its id, the run's id and why it began (ADR 0066). What the event log is told.
+pub type Beginning = Box<dyn Fn(u32, &str, &str, Began) + Send + Sync>;
+
+/// Why a chat is being started, which is what decides why its run begins (ADR 0066).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Why {
+    /// A chat that was not open before: its first run, `start`.
+    New,
+    /// A chat a relaunch put back from the record: `reopen` or `fresh`, by how it came back
+    /// ([`Began::at_relaunch`]).
+    Relaunch,
+    /// A chat started again in the place of one whose harness could not bring its
+    /// conversation back (`lostOnResume`): the same chat, `fresh`.
+    Again,
+}
+
+/// The most chats that were closed this launch whose ids are remembered, for
+/// [`Chats::start_ready_instead_of`]. That asks about a chat the window closed a moment ago.
+const LET_GO_HELD: usize = 256;
+
+/// A new ULID, as the host mints a chat's id and each run's (ADR 0066).
+fn minted() -> String {
+    ulid::Ulid::generate().to_string()
+}
+
 /// One chat the app has open: what it was started as, how it came back, and the harness it
 /// actually runs.
 ///
@@ -124,6 +151,13 @@ pub struct Chats {
     sessions: Box<dyn SessionHost>,
     /// Told as each chat starts, before its program does.
     starting: Mutex<Option<Starting>>,
+    /// Told of the run each start begins, before its program runs (ADR 0066).
+    beginning: Mutex<Option<Beginning>>,
+    /// This device's id, the origin device of every chat minted here; `None` where the machine
+    /// store has none to give (ADR 0031), which a chat records as `unknown`.
+    device: Option<String>,
+    /// The ids of the chats closed this launch, by number, for a start in one's place.
+    let_go: Mutex<HashMap<u32, charter_core::reopen::Identity>>,
     /// Told when a chat that was announced turned out not to start.
     #[allow(clippy::type_complexity)]
     never_started: Mutex<Option<Box<dyn Fn(u32) + Send + Sync>>>,
@@ -185,6 +219,9 @@ impl Chats {
         Self {
             sessions: host,
             starting: Mutex::new(None),
+            beginning: Mutex::new(None),
+            device: None,
+            let_go: Mutex::new(HashMap::new()),
             never_started: Mutex::new(None),
             shipped: crate::Shipped::default(),
             open: Mutex::new(HashMap::new()),
@@ -207,6 +244,17 @@ impl Chats {
     /// needs in order to judge a report about it.
     pub fn when_one_starts(&self, tell: Starting) {
         *lock(&self.starting) = Some(tell);
+    }
+
+    /// Calls `tell` as each chat starts, BEFORE its program does, with the run that start
+    /// begins: the chat's id, which a relaunch keeps, a new run's id, and why (ADR 0066).
+    pub fn when_a_run_begins(&self, tell: Beginning) {
+        *lock(&self.beginning) = Some(tell);
+    }
+
+    /// Says which device this is: the origin device of every chat minted from now on.
+    pub fn on_device(&mut self, device: Option<String>) {
+        self.device = device;
     }
 
     /// Calls `tell` when a chat that was announced never started after all.
@@ -325,6 +373,41 @@ impl Chats {
         ready: &charter_core::start::Ready,
         size: Size,
     ) -> Result<u32, String> {
+        self.start_ready_as(chat, ready, size, Why::New)
+    }
+
+    /// [`Self::start_ready`], in the place of chat `instead_of`, whose harness could not bring
+    /// its conversation back (`lostOnResume`): **the same chat**, under its id, in a run that
+    /// begins `fresh` (ADR 0066). `instead_of` may already be closed, as the window closes its
+    /// tab first. A chat this launch never had is started as a new one.
+    pub fn start_ready_instead_of(
+        &self,
+        instead_of: u32,
+        chat: &Chat,
+        ready: &charter_core::start::Ready,
+        size: Size,
+    ) -> Result<u32, String> {
+        let was = lock(&self.open)
+            .get(&instead_of)
+            .map(|one| one.chat.identity.clone())
+            .or_else(|| lock(&self.let_go).get(&instead_of).cloned());
+        let Some(was) = was.filter(|was| was.id.is_some()) else {
+            return self.start_ready(chat, ready, size);
+        };
+        let again = Chat {
+            identity: charter_core::reopen::Identity { run: None, ..was },
+            ..chat.clone()
+        };
+        self.start_ready_as(&again, ready, size, Why::Again)
+    }
+
+    fn start_ready_as(
+        &self,
+        chat: &Chat,
+        ready: &charter_core::start::Ready,
+        size: Size,
+        why: Why,
+    ) -> Result<u32, String> {
         self.open_it(
             chat,
             ready.program.clone(),
@@ -339,6 +422,7 @@ impl Chats {
             size,
             // A chat on a profile is an agent, never the operator's shell.
             false,
+            why,
         )
     }
 
@@ -363,7 +447,7 @@ impl Chats {
         size: Size,
     ) -> Result<u32, String> {
         let Some(profile) = chat.profile.clone() else {
-            return self.start(chat, size);
+            return self.start_as(chat, size, false, Why::Relaunch);
         };
         let ready = charter_core::start::ready(
             &charter_core::start::Start {
@@ -386,7 +470,7 @@ impl Chats {
             how: chat.told(ready.how.clone()),
             ..ready
         };
-        self.start_ready(chat, &ready, size)
+        self.start_ready_as(chat, &ready, size, Why::Relaunch)
     }
 
     /// Starts a chat, and remembers what it was started as.
@@ -394,16 +478,22 @@ impl Chats {
     /// For a chat that is NOT on a profile — the operator's shell — where what runs is
     /// decided from the record alone.
     pub fn start(&self, chat: &Chat, size: Size) -> Result<u32, String> {
-        self.start_as(chat, size, false)
+        self.start_as(chat, size, false, Why::New)
     }
 
     /// [`Self::start`], for the shell the operator opens from the window: the one start the
     /// kill switch lets through while agents are stopped (OV-1, ADR 0071).
     pub fn start_operator_shell(&self, chat: &Chat, size: Size) -> Result<u32, String> {
-        self.start_as(chat, size, true)
+        self.start_as(chat, size, true, Why::New)
     }
 
-    fn start_as(&self, chat: &Chat, size: Size, operator_shell: bool) -> Result<u32, String> {
+    fn start_as(
+        &self,
+        chat: &Chat,
+        size: Size,
+        operator_shell: bool,
+        why: Why,
+    ) -> Result<u32, String> {
         // Before anything is resolved or run, as for a chat on a profile.
         let sandbox = Self::sandbox_off_profile(chat)?;
         let launch = chat.launch();
@@ -428,6 +518,7 @@ impl Chats {
             sandbox.as_ref(),
             size,
             operator_shell,
+            why,
         )
     }
 
@@ -496,7 +587,28 @@ impl Chats {
         sandbox: Option<&charter_core::sandbox::Applied>,
         size: Size,
         operator_shell: bool,
+        why: Why,
     ) -> Result<u32, String> {
+        // Who the chat is, and the run this start begins (ADR 0066). **The id is minted once**,
+        // when no record holds one, on this device, and a chat put back or started again keeps
+        // the one it had, with its origin device. Every start begins a run of its own.
+        let identity = match &chat.identity.id {
+            Some(_) => charter_core::reopen::Identity {
+                run: Some(minted()),
+                ..chat.identity.clone()
+            },
+            None => charter_core::reopen::Identity {
+                id: Some(minted()),
+                device: self.device.clone(),
+                run: Some(minted()),
+                resumed_from: chat.identity.resumed_from.clone(),
+            },
+        };
+        let cause = match why {
+            Why::New => Began::Start,
+            Why::Relaunch => Began::at_relaunch(&how, harness.is_some()),
+            Why::Again => Began::Fresh,
+        };
         // The profile's own command first — a wrapper reads its own words before it hands the
         // rest on (M8.3) — then the state hooks, then charter's own words: a chat's recorded
         // arguments may end in a positional prompt that nothing may come after.
@@ -545,6 +657,11 @@ impl Chats {
                     if let Some(starting) = lock(&self.starting).as_ref() {
                         starting(session, harness, conversation.clone());
                     }
+                    if let Some(beginning) = lock(&self.beginning).as_ref()
+                        && let (Some(chat), Some(run)) = (&identity.id, &identity.run)
+                    {
+                        beginning(session, chat, run, cause);
+                    }
                 },
             )
             .inspect_err(|_| {
@@ -567,6 +684,7 @@ impl Chats {
                 .as_deref()
                 .and_then(|id| charter_core::harness::SessionId::new(id).ok()),
             renamed_from: None,
+            identity,
             ..chat.clone()
         };
         lock(&self.open).insert(
@@ -583,7 +701,13 @@ impl Chats {
 
     /// Ends a chat. It is no longer one a quit would record.
     pub fn close(&self, session: u32) -> Result<(), String> {
-        lock(&self.open).remove(&session);
+        if let Some(gone) = lock(&self.open).remove(&session) {
+            let mut let_go = lock(&self.let_go);
+            if let_go.len() >= LET_GO_HELD {
+                let_go.clear();
+            }
+            let_go.insert(session, gone.chat.identity);
+        }
         let mut front = lock(&self.front);
         if *front == Some(session) {
             *front = None;
@@ -702,18 +826,33 @@ impl Chats {
     /// harness charter starts can produce: Claude Code's first report names the id charter
     /// chose, which moves nothing, and Codex and opencode name theirs inside the first turn,
     /// long after the start returned.
-    pub fn follow_conversation(&self, session: u32, id: &str) {
+    ///
+    /// `run` is the run the host began when the move was a `/clear` (ADR 0066's `clear`): the
+    /// chat's current run from now on, and so the one the record names.
+    pub fn follow_conversation(&self, session: u32, id: &str, run: Option<&str>) {
         let Ok(id) = SessionId::new(id) else { return };
         let mut open = lock(&self.open);
         let Some(one) = open.get_mut(&session) else {
             return;
         };
-        if one.harness.is_none() || one.chat.resume.as_ref() == Some(&id) {
+        if one.harness.is_none() {
             return;
         }
-        one.chat.resume = Some(id);
+        let mut moved = false;
+        if one.chat.resume.as_ref() != Some(&id) {
+            one.chat.resume = Some(id);
+            moved = true;
+        }
+        if let Some(run) = run
+            && one.chat.identity.run.as_deref() != Some(run)
+        {
+            one.chat.identity.run = Some(run.to_owned());
+            moved = true;
+        }
         drop(open);
-        self.write_it_down();
+        if moved {
+            self.write_it_down();
+        }
     }
 
     /// What the window says its view tabs are now. Written down when it differs from what was
@@ -1009,6 +1148,7 @@ mod tests {
                     label: None,
                     from: None,
                     renamed_from: None,
+                    identity: charter_core::reopen::Identity::default(),
                 },
                 Size {
                     columns: 80,
@@ -1074,6 +1214,7 @@ mod tests {
                     label: None,
                     from: None,
                     renamed_from: None,
+                    identity: charter_core::reopen::Identity::default(),
                 },
                 Size {
                     columns: 80,
@@ -1124,6 +1265,7 @@ mod tests {
                 label: None,
                 from: None,
                 renamed_from: None,
+                identity: charter_core::reopen::Identity::default(),
             },
             Size {
                 columns: 80,
@@ -1175,6 +1317,7 @@ mod tests {
                     label: None,
                     from: None,
                     renamed_from: None,
+                    identity: charter_core::reopen::Identity::default(),
                 },
                 Size {
                     columns: 80,
@@ -1240,6 +1383,7 @@ mod tests {
             label: None,
             from: None,
             renamed_from: None,
+            identity: charter_core::reopen::Identity::default(),
         }
     }
 
@@ -2596,6 +2740,191 @@ mod tests {
         let _ = chats.close(session);
     }
 
+    // ----- who a chat is beyond this clone, and its runs (ADR 0066, #834) -----
+
+    const CHAT_ID: &str = "01K6E8ZK6V4Q9T0N3M2B1C5D7F";
+    const DEVICE: &str = "01K6E8ZK6V4Q9T0N3M2B1C5D7G";
+    const ELSEWHERE: &str = "01K6E8ZK6V4Q9T0N3M2B1C5D7J";
+    const OLD_RUN: &str = "01K6E8ZK6V4Q9T0N3M2B1C5D7H";
+
+    type Begun = std::sync::Arc<Mutex<Vec<(u32, String, String, Began)>>>;
+
+    /// Chats on device [`DEVICE`] that keep every run they begin in the answer, oldest first.
+    fn beginning(chats: &mut Chats) -> Begun {
+        chats.on_device(Some(DEVICE.to_owned()));
+        let begun: Begun = std::sync::Arc::default();
+        let keep = std::sync::Arc::clone(&begun);
+        chats.when_a_run_begins(Box::new(move |session, chat, run, cause| {
+            lock(&keep).push((session, chat.to_owned(), run.to_owned(), cause));
+        }));
+        begun
+    }
+
+    fn a_ulid(id: Option<&String>) -> bool {
+        id.is_some_and(|id| id.parse::<ulid::Ulid>().is_ok())
+    }
+
+    #[test]
+    fn a_new_chat_is_given_an_id_on_this_device_and_a_first_run_the_record_holds() {
+        let mut chats = Chats::new();
+        let begun = beginning(&mut chats);
+
+        let session = chats.start(&chat("/bin/sh", "shell", None), SIZE).unwrap();
+
+        let identity = chats.record().chats[0].identity.clone();
+        assert!(a_ulid(identity.id.as_ref()), "{identity:?}");
+        assert_eq!(identity.device.as_deref(), Some(DEVICE));
+        assert!(a_ulid(identity.run.as_ref()), "{identity:?}");
+        assert_eq!(
+            *lock(&begun),
+            vec![(
+                session,
+                identity.id.clone().unwrap(),
+                identity.run.clone().unwrap(),
+                Began::Start
+            )]
+        );
+        let _ = chats.close(session);
+    }
+
+    #[test]
+    fn a_chat_put_back_after_a_relaunch_keeps_its_id_and_begins_a_reopen_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut chats = Chats::new();
+        let begun = beginning(&mut chats);
+        let was = charter_core::reopen::Identity {
+            id: Some(CHAT_ID.to_owned()),
+            device: Some(ELSEWHERE.to_owned()),
+            run: Some(OLD_RUN.to_owned()),
+            resumed_from: None,
+        };
+
+        let open = chats.put_back_here(
+            &Record {
+                chats: vec![Chat {
+                    identity: was.clone(),
+                    ..chat(&a_claude(dir.path()), "ide.7", Some(ID))
+                }],
+                ..Record::default()
+            },
+            SIZE,
+        );
+
+        let now = chats.record().chats[0].identity.clone();
+        assert_eq!(now.id.as_deref(), Some(CHAT_ID), "the same chat");
+        assert_eq!(
+            now.device.as_deref(),
+            Some(ELSEWHERE),
+            "the origin device is the one that minted it"
+        );
+        assert_ne!(now.run.as_deref(), Some(OLD_RUN), "a run of its own");
+        assert_eq!(
+            *lock(&begun),
+            vec![(
+                open[0].session,
+                CHAT_ID.to_owned(),
+                now.run.clone().unwrap(),
+                Began::Reopen
+            )]
+        );
+    }
+
+    #[test]
+    fn a_chat_recorded_before_ids_is_given_one_at_the_launch_that_reads_it_in_a_reopen_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut chats = Chats::new();
+        let begun = beginning(&mut chats);
+
+        chats.put_back_here(
+            &Record {
+                chats: vec![chat(&a_claude(dir.path()), "ide.7", Some(ID))],
+                ..Record::default()
+            },
+            SIZE,
+        );
+
+        let now = chats.record().chats[0].identity.clone();
+        assert!(a_ulid(now.id.as_ref()));
+        assert_eq!(now.device.as_deref(), Some(DEVICE));
+        assert_eq!(lock(&begun)[0].3, Began::Reopen, "ADR 0066's migration");
+    }
+
+    #[test]
+    fn a_chat_a_rename_left_without_its_conversation_comes_back_in_a_fresh_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut chats = Chats::new();
+        let begun = beginning(&mut chats);
+
+        chats.put_back_here(
+            &Record {
+                chats: vec![Chat {
+                    renamed_from: Some("alpha".to_owned()),
+                    identity: charter_core::reopen::Identity {
+                        id: Some(CHAT_ID.to_owned()),
+                        ..Default::default()
+                    },
+                    ..chat(&a_claude(dir.path()), "ide.7", None)
+                }],
+                ..Record::default()
+            },
+            SIZE,
+        );
+
+        assert_eq!(lock(&begun)[0].1, CHAT_ID);
+        assert_eq!(lock(&begun)[0].3, Began::Fresh);
+    }
+
+    #[test]
+    fn a_chat_started_again_in_place_of_one_that_lost_its_conversation_is_that_chat_in_a_fresh_run()
+    {
+        let mut chats = Chats::new();
+        let begun = beginning(&mut chats);
+        let first = chats.start(&chat("/bin/sh", "ide.7", None), SIZE).unwrap();
+        let was = chats.record().chats[0].identity.clone();
+        // The window closes the tab before it asks for the fresh start, so the chat it names
+        // may already be gone.
+        chats.close(first).unwrap();
+
+        let ready = charter_core::start::Ready {
+            program: "/bin/sh".to_owned(),
+            command: Vec::new(),
+            args: Vec::new(),
+            env: Vec::new(),
+            cwd: None,
+            harness: None,
+            session: None,
+            how: Reopened::Fresh(Fresh::NoConversationRecorded),
+            plugins: std::collections::BTreeMap::new(),
+            sandbox: None,
+            notices: Vec::new(),
+        };
+        let again = chats
+            .start_ready_instead_of(first, &chat("/bin/sh", "ide.7", None), &ready, SIZE)
+            .unwrap();
+
+        let now = chats.record().chats[0].identity.clone();
+        assert_eq!(now.id, was.id, "the same chat");
+        assert_ne!(now.run, was.run);
+        let last = lock(&begun).last().cloned().unwrap();
+        assert_eq!((last.0, last.3), (again, Began::Fresh));
+        let _ = chats.close(again);
+    }
+
+    #[test]
+    fn a_run_the_host_moved_the_chat_onto_is_the_one_the_record_holds() {
+        let dir = tempfile::tempdir().unwrap();
+        let (chats, wrote) = recorded();
+        let session = chats
+            .start(&chat(&a_claude(dir.path()), "ide.7", None), SIZE)
+            .unwrap();
+
+        chats.follow_conversation(session, ID, Some(OLD_RUN));
+
+        let last = lock(&wrote).last().cloned().expect("a record was written");
+        assert_eq!(last.chats[0].identity.run.as_deref(), Some(OLD_RUN));
+        let _ = chats.close(session);
+    }
+
     // ----- the conversation a chat is in now (Q10) -----
 
     #[test]
@@ -2606,7 +2935,7 @@ mod tests {
             .start(&chat(&a_claude(dir.path()), "ide.7", None), SIZE)
             .unwrap();
 
-        chats.follow_conversation(session, ID);
+        chats.follow_conversation(session, ID, None);
 
         let last = lock(&wrote).last().cloned().expect("a record was written");
         assert_eq!(last.chats[0].resume, Some(SessionId::new(ID).unwrap()));
@@ -2622,7 +2951,7 @@ mod tests {
             .unwrap();
         let before = lock(&wrote).len();
 
-        chats.follow_conversation(session, ID);
+        chats.follow_conversation(session, ID, None);
 
         assert_eq!(lock(&wrote).len(), before);
         let _ = chats.close(session);
@@ -2636,7 +2965,7 @@ mod tests {
         let session = chats.start(&chat("/bin/sh", "shell", None), SIZE).unwrap();
         let before = lock(&wrote).len();
 
-        chats.follow_conversation(session, ID);
+        chats.follow_conversation(session, ID, None);
 
         assert_eq!(lock(&wrote).len(), before);
         assert_eq!(chats.record().chats[0].resume, None);
@@ -2647,7 +2976,7 @@ mod tests {
     fn a_conversation_for_a_chat_that_is_not_open_invents_nothing() {
         let (chats, wrote) = recorded();
 
-        chats.follow_conversation(7, ID);
+        chats.follow_conversation(7, ID, None);
 
         assert!(lock(&wrote).is_empty());
         assert_eq!(chats.record(), Record::default());
@@ -2826,6 +3155,7 @@ mod tests {
             label: None,
             from: None,
             renamed_from: None,
+            identity: charter_core::reopen::Identity::default(),
         };
 
         let session = chats
@@ -2868,6 +3198,7 @@ mod tests {
             label: None,
             from: None,
             renamed_from: None,
+            identity: charter_core::reopen::Identity::default(),
         };
         assert_eq!(
             chat.harness(),
@@ -2940,6 +3271,7 @@ mod tests {
             label: None,
             from: None,
             renamed_from: None,
+            identity: charter_core::reopen::Identity::default(),
         };
         assert_eq!(
             chat.harness(),
@@ -3055,6 +3387,7 @@ mod tests {
             label: None,
             from: None,
             renamed_from: None,
+            identity: charter_core::reopen::Identity::default(),
         };
         let session = chats.start_ready(&chat, &ready, SIZE).expect("it runs");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);

@@ -2467,6 +2467,7 @@ mod tests {
             label: None,
             from: None,
             renamed_from: None,
+            identity: crate::reopen::Identity::default(),
         }
     }
 
@@ -3035,6 +3036,7 @@ mod tests {
                     label: None,
                     from: None,
                     renamed_from: None,
+                    identity: crate::reopen::Identity::default(),
                 }],
             },
         )

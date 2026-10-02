@@ -801,9 +801,9 @@ impl Planes {
         // Weak for the handoff's reason.
         held.hooks.when_it_follows({
             let held = Arc::downgrade(&held);
-            Arc::new(move |session, id| {
+            Arc::new(move |session, id, run| {
                 if let Some(held) = held.upgrade() {
-                    held.chats().follow_conversation(session, id);
+                    held.chats().follow_conversation(session, id, run);
                 }
             })
         });
@@ -1335,6 +1335,27 @@ impl Planes {
         );
         chats.arming_with(self.shipped.clone());
         chats.stopped_by(Arc::clone(&self.kill_switch));
+        // The origin device of every chat this project mints (ADR 0066). None where the machine
+        // store has no id to give: the chats still get ids, and their device reads `unknown`.
+        chats.on_device(
+            self.config
+                .as_deref()
+                .and_then(|config| charter_core::machine::device_id(config).ok()),
+        );
+        // Each run a start begins goes into the host's event log, before the chat's program
+        // can send its first hook line (ADR 0066, #834): a chat put back after a relaunch
+        // carries on under its id, and its first event is `run.started {cause: reopen}`.
+        if let Some(events) = &self.events {
+            let events = Arc::clone(events);
+            // The key the hook channel records this project's chats under.
+            let root = id.root().to_path_buf();
+            chats.when_a_run_begins(Box::new(move |session, chat, run, cause| {
+                let mut log = events.lock().unwrap_or_else(PoisonError::into_inner);
+                if let Err(why) = log.begin(&root, session, chat, run, cause) {
+                    tracing::warn!("charter: a run was not written to the event log ({why})");
+                }
+            }));
+        }
 
         // **Before a single session is started, because putting the record back starts them.**
         // A harness fires `SessionStart` at its own exec, and a board that learned the chat's
@@ -2459,6 +2480,7 @@ mod tests {
                 label: None,
                 from: None,
                 renamed_from: None,
+                identity: charter_core::reopen::Identity::default(),
             }],
             dealt: 0,
             relaunch_after_update: false,
@@ -2492,6 +2514,7 @@ mod tests {
                 label: None,
                 from: None,
                 renamed_from: None,
+                identity: charter_core::reopen::Identity::default(),
             })
             .collect();
         reopen::write(

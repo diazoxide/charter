@@ -144,6 +144,35 @@ pub struct Chat {
     /// again without it. `None` is every other chat, and every record written before this
     /// field — not a format change, for [`Self::pinned`]'s reason.
     pub renamed_from: Option<String>,
+    /// Who this chat is beyond this clone: its id, its origin device, its current run and the
+    /// chat it was resumed from (ADR 0066). See [`Identity`].
+    pub identity: Identity,
+}
+
+/// A chat's ids, as the record keeps them across a relaunch (ADR 0066, "What changes where").
+///
+/// **The number never leaves the clone, and the id is what leaves.** [`Chat::number`] is what
+/// the operator reads and what this machine's files are keyed on; these are what an event, an
+/// audit entry or a session record names the chat by, so they have to outlive the process that
+/// minted them, which is what riding the record does.
+///
+/// Every field is a ULID or `None`, and **`None` is honest for every record written before
+/// this**: an absent `id` reads as "mint one at this launch", which is what every chat before
+/// it was, and the record stays `version: 1` for [`Chat::pinned`]'s reason. A value off disk
+/// that is not a ULID reads as `None`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Identity {
+    /// The chat's id, minted once when the host first started it and never changed.
+    pub id: Option<String>,
+    /// The device id of the machine that minted [`Self::id`], where it had one: a fact about
+    /// the chat, never part of its key. `None` reads as `unknown`.
+    pub device: Option<String>,
+    /// The chat's current run: the one the host began when it last started the chat, or the
+    /// one it moved to since (a `/clear`).
+    pub run: Option<String>,
+    /// The chat a **Resume** from a session record started this one from (ADR 0064), by its
+    /// id. `None` is `unknown` or none: a record that names no chat id leaves it so.
+    pub resumed_from: Option<String>,
 }
 
 /// The chat a handoff came from, as the chat it opened keeps it.
@@ -700,6 +729,18 @@ pub fn conversation_of(plane_root: &Path, number: u32) -> std::io::Result<Option
         .and_then(|chat| chat.resume))
 }
 
+/// Who chat `number` is, as the app last recorded it in `plane_root`: its id and current run
+/// (ADR 0066), the way [`conversation_of`] answers its conversation. `None` where the record
+/// does not hold the chat; an [`Identity`] with no id is a chat recorded before ids, which is
+/// given one at the next launch.
+pub fn identity_of(plane_root: &Path, number: u32) -> std::io::Result<Option<Identity>> {
+    Ok(read_or_refusal(plane_root)?
+        .chats
+        .into_iter()
+        .find(|chat| chat.number == Some(number))
+        .map(|chat| chat.identity))
+}
+
 /// The longest name, in characters, an operator can give a chat.
 pub const MOST_LABEL: usize = 64;
 
@@ -911,6 +952,23 @@ struct ChatOnDisk {
     /// [`Chat::renamed_from`]. A value that is not a workspace name reads as absent.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     renamed_from: String,
+    /// The chat's ids — see [`Identity`]. Each is a ULID, absent when not known: every record
+    /// written before ids existed, and a chat no host has started yet. A value that is not a
+    /// ULID reads as absent.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    device: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    run: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    resumed_from: String,
+}
+
+/// `word` where it is a ULID, else nothing: an id off a file somebody else may have written is
+/// held to the one shape charter mints, in its canonical spelling.
+fn a_ulid(word: String) -> Option<String> {
+    ulid::Ulid::from_string(&word).ok().map(|id| id.to_string())
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -989,6 +1047,10 @@ impl From<&Record> for OnDisk {
                     label: chat.label.clone().unwrap_or_default(),
                     from: chat.from.as_ref().map(FromOnDisk::from),
                     renamed_from: chat.renamed_from.clone().unwrap_or_default(),
+                    id: chat.identity.id.clone().unwrap_or_default(),
+                    device: chat.identity.device.clone().unwrap_or_default(),
+                    run: chat.identity.run.clone().unwrap_or_default(),
+                    resumed_from: chat.identity.resumed_from.clone().unwrap_or_default(),
                 })
                 .collect(),
             dealt: highest_dealt(record),
@@ -1038,6 +1100,12 @@ impl From<ChatOnDisk> for Chat {
             from: chat.from.and_then(FromOnDisk::sound),
             renamed_from: Some(chat.renamed_from)
                 .filter(|name| crate::contain::workspace_name_ok(name)),
+            identity: Identity {
+                id: a_ulid(chat.id),
+                device: a_ulid(chat.device),
+                run: a_ulid(chat.run),
+                resumed_from: a_ulid(chat.resumed_from),
+            },
         }
     }
 }
@@ -1063,6 +1131,7 @@ mod tests {
             label: None,
             from: None,
             renamed_from: None,
+            identity: Identity::default(),
         }
     }
 
@@ -1346,6 +1415,83 @@ mod tests {
         assert_eq!(conversation(9), None, "a chat the record does not hold");
     }
 
+    const CHAT: &str = "01K6E8ZK6V4Q9T0N3M2B1C5D7F";
+    const DEVICE: &str = "01K6E8ZK6V4Q9T0N3M2B1C5D7G";
+    const RUN: &str = "01K6E8ZK6V4Q9T0N3M2B1C5D7H";
+    const RESUMED: &str = "01K6E8ZK6V4Q9T0N3M2B1C5D7J";
+
+    #[test]
+    fn a_chat_s_id_and_current_run_survive_a_quit_and_are_read_by_its_number() {
+        let plane = tempfile::tempdir().unwrap();
+        let identity = Identity {
+            id: Some(CHAT.to_owned()),
+            device: Some(DEVICE.to_owned()),
+            run: Some(RUN.to_owned()),
+            resumed_from: Some(RESUMED.to_owned()),
+        };
+        write(
+            plane.path(),
+            &Record {
+                chats: vec![
+                    Chat {
+                        number: Some(7),
+                        identity: identity.clone(),
+                        ..claude("ide.7", Some(ID))
+                    },
+                    Chat {
+                        number: Some(8),
+                        ..claude("ide.8", None)
+                    },
+                ],
+                ..Default::default()
+            },
+        )
+        .expect("the record is written");
+
+        assert_eq!(read(plane.path()).chats[0].identity, identity);
+        let of = |chat| identity_of(plane.path(), chat).expect("the record reads");
+        assert_eq!(of(7), Some(identity));
+        assert_eq!(
+            of(8),
+            Some(Identity::default()),
+            "a chat recorded before ids: one is minted at this launch"
+        );
+        assert_eq!(of(9), None, "a chat the record does not hold");
+    }
+
+    #[test]
+    fn a_record_written_before_chats_had_ids_writes_none_and_a_bad_id_reads_as_none() {
+        let plane = tempfile::tempdir().unwrap();
+        write(
+            plane.path(),
+            &Record {
+                chats: vec![claude("ide.7", None)],
+                ..Default::default()
+            },
+        )
+        .expect("the record is written");
+        let text = fs::read_to_string(path(plane.path())).unwrap();
+        for key in ["\"id\"", "\"device\"", "\"run\"", "\"resumed_from\""] {
+            assert!(!text.contains(key), "{key} is written only when known");
+        }
+
+        let written = text.replace(
+            "\"program\": \"claude\"",
+            &format!(
+                "\"program\": \"claude\", \"id\": \"-rf\", \"device\": \"\", \"run\": \"{RUN}\""
+            ),
+        );
+        fs::write(path(plane.path()), written).unwrap();
+        assert_eq!(
+            read(plane.path()).chats[0].identity,
+            Identity {
+                run: Some(RUN.to_owned()),
+                ..Identity::default()
+            },
+            "a value that is not a ULID is not one"
+        );
+    }
+
     #[test]
     fn a_chat_in_a_plane_with_no_record_is_in_no_conversation_charter_knows() {
         let plane = tempfile::tempdir().unwrap();
@@ -1521,6 +1667,7 @@ mod tests {
                 label: None,
                 from: None,
                 renamed_from: None,
+                identity: Identity::default(),
             }],
         }
     }

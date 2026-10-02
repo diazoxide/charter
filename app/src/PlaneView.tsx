@@ -2598,14 +2598,23 @@ export function PlaneView({
    * happened — *was resumed*, or *came back as a new chat: <why>* — from the same `reopened`
    * list a relaunch's chats are said from.
    *
-   * `afterFailure` is the second ask, for a chat whose harness could not bring the conversation
-   * back ({@link lostOnResume}): the same record, started fresh.
+   * `insteadOf` is the second ask, for a chat whose harness could not bring the conversation
+   * back ({@link lostOnResume}): the same record, started fresh, as the same chat (ADR 0066).
    */
   const resumeSession = useCallback(
-    async (path: string, afterFailure = false): Promise<Ran> => {
+    async (path: string, insteadOf?: number): Promise<Ran> => {
       const name = String(now.current.named.tabs + 1);
+      const afterFailure = insteadOf !== undefined;
       const said = await commands
-        .resumeSession(plane, path, name, afterFailure, STARTING_SIZE.columns, STARTING_SIZE.rows)
+        .resumeSession(
+          plane,
+          path,
+          name,
+          afterFailure,
+          insteadOf ?? null,
+          STARTING_SIZE.columns,
+          STARTING_SIZE.rows,
+        )
         .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
       if (said.status === "error") return { ok: false, refused: said.error };
       const chat = said.data;
@@ -2634,7 +2643,7 @@ export function PlaneView({
         if (tab !== undefined) change((tabs) => closeTab(tabs, tab, filedIn, isPinned));
         void commands.closeSession(plane, session);
         setReopened((was) => was.filter((one) => one.session !== session));
-        void resumeSession(watched.path, true);
+        void resumeSession(watched.path, session);
       } else if (state === "done" || state === "failed") {
         resuming.current.delete(session);
       } else {

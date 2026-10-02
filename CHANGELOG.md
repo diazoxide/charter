@@ -13,6 +13,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A chat keeps its id across a relaunch.** The app records each chat's id, the device that
+  made it and its current run in `.charter/app/reopen.json`, so the event log names a reopened
+  chat as the chat it was, and its first event after the relaunch is `run.started` with cause
+  `reopen`. A chat that comes back without its conversation, or that **Resume** starts again
+  after its harness could not find the conversation, begins a `fresh` run in the same chat
+  (ADR 0066, #834).
+
 - **A project switcher.** ⌘P (Ctrl+Shift+P off a Mac), the new button at the start of the
   project strip's controls, or *Switch project…* in the palette lists the projects open in the
   window, the last one you were in first and already selected, so the key and Enter take you

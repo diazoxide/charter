@@ -783,6 +783,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+ "ulid",
  "zbus",
 ]
 

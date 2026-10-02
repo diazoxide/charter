@@ -30,6 +30,7 @@ fn a_chat_on(profile: &str, persona: Option<&str>) -> Chat {
         label: None,
         from: None,
         renamed_from: None,
+        identity: charter_core::reopen::Identity::default(),
     }
 }
 
