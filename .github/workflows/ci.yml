@@ -74,23 +74,54 @@ jobs:
       - run: node --test "../tools/*.test.mjs"
 
   app:
-    name: app builds (${{ matrix.os }})
+    name: app builds (${{ matrix.os }}${{ matrix.evidence && ', evidence only' || '' }})
+    # The two newer images are evidence, like `windows`: reported, never a gate, because
+    # `release.yml` publishes a dev build only when this whole workflow succeeds, and a preview
+    # image breaking upstream must not stop that.
+    continue-on-error: ${{ matrix.evidence }}
     strategy:
       fail-fast: false
       matrix:
         # The desktops `docs/platforms.md` lists (FR-25): the two latest macOS majors and the
         # two Ubuntu LTS releases. `macos-latest` is macOS 26 and `xcode-27` is the runner
         # images' macOS 27, a preview; when macOS 27 becomes `macos-latest`, `xcode-27` here
-        # becomes `macos-26`. Only the `macos-latest` and `ubuntu-24.04` checks are required.
+        # becomes `macos-26`. `expect` is the OS version the row in `docs/platforms.md` says
+        # the label runs, and the first step warns when the label has moved off it.
+        # Only the `macos-latest` and `ubuntu-24.04` checks are required.
         os: [macos-latest, xcode-27, ubuntu-24.04, ubuntu-26.04]
+        include:
+          - os: macos-latest
+            expect: "26"
+            evidence: false
+          - os: xcode-27
+            expect: "27"
+            evidence: true
+          - os: ubuntu-24.04
+            expect: "24.04"
+            evidence: false
+          - os: ubuntu-26.04
+            expect: "26.04"
+            evidence: true
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # Which OS this runner really is, so a label that moved shows in the log.
+      # Which OS this runner image really is, and a warning when a label has moved off the
+      # version its row in `docs/platforms.md` names.
       - name: What this runner is
+        env:
+          EXPECT: ${{ matrix.expect }}
         run: |
-          if [ "$RUNNER_OS" = macOS ]; then sw_vers; else cat /etc/os-release; fi
+          if [ "$RUNNER_OS" = macOS ]; then
+            sw_vers
+            got=$(sw_vers -productVersion | cut -d. -f1)
+          else
+            cat /etc/os-release
+            got=$(. /etc/os-release && echo "$VERSION_ID")
+          fi
           uname -m
+          if [ "$got" != "$EXPECT" ]; then
+            echo "::warning::${{ matrix.os }} runs $got, but docs/platforms.md says it covers $EXPECT: update the row and this matrix"
+          fi
       - name: Tauri's Linux build dependencies, and an X server and i3 to start it in
         if: runner.os == 'Linux'
         run: |
@@ -99,7 +130,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master, 2026-09-12
         with:
           toolchain: stable
+      # Not on the newer images: rust-cache's key has the OS and architecture but not the image,
+      # so they would restore objects compiled on macOS 26 or Ubuntu 24.04 and only link them.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: ${{ !matrix.evidence }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
@@ -127,26 +161,37 @@ jobs:
         if: runner.os == 'Linux'
         run: tools/coldstart-linux.sh i3-nobus
 
-  # Fedora, the current release, as `docs/platforms.md` lists it (FR-25). A container on the
-  # Ubuntu runner, because GitHub has no Fedora runner. What it proves: charter builds against
-  # Fedora's own WebKitGTK and toolchain libraries, the core's and the CLI's tests pass there,
-  # and the app it built starts and draws a window. It does not run the published AppImage.
+  # Fedora 44, the current release, as `docs/platforms.md` lists it (FR-25). On each Fedora
+  # release bump the image here, `FEDORA` below, and the row in `docs/platforms.md` together.
+  # A container on the Ubuntu runner, because GitHub has no Fedora runner. What it proves:
+  # charter builds against Fedora's own WebKitGTK and toolchain libraries, the core's and the
+  # CLI's tests pass there, and the app it built starts and draws a window. It does not run the
+  # AppImage a release build makes.
+  #
+  # Evidence, like `windows`: reported, never a gate, because `release.yml` publishes a dev
+  # build only when this whole workflow succeeds.
   #
   # The tests run as a normal user, not the container's root: root reads a file whose mode
   # says nobody may, and a test about refusing such a file would pass or fail for the wrong
   # reason. The cold start is run for "it starts"; its limit is set wide, because the 2 s limit
-  # is held on the Ubuntu runners, not inside a container.
+  # is held on the Ubuntu runners, not inside a container. No build cache: it would be evicted
+  # within hours and saving it costs minutes, so only the crate registry is kept.
   fedora:
-    name: fedora (build, core and cli tests, start)
+    name: fedora (build, core and cli tests, start, evidence only)
+    continue-on-error: true
     runs-on: ubuntu-24.04
     container:
-      image: fedora:latest
+      image: fedora:44
       # An init that reaps, as every desktop has. Without it PID 1 is the runner's
       # `tail -f /dev/null`, a killed orphan stays a zombie, and the executor's tests that a
       # helper is stopped read the zombie as still running (seen on this job's first run).
       options: --init
     env:
       CARGO_TARGET_DIR: /home/ci/target
+      FEDORA: "44"
+      # rustup-init, pinned and checked against its published SHA-256.
+      RUSTUP_VERSION: 1.29.1
+      RUSTUP_SHA256: dda7234360b7f578ca8b0ddcb80145646fa61a67c1720a5abc7051b35c9fcb71
     steps:
       - name: Fedora's build dependencies for Tauri, and a display to start the app in
         run: |
@@ -156,6 +201,10 @@ jobs:
             libappindicator-gtk3-devel librsvg2-devel \
             xorg-x11-server-Xvfb xauth dbus-daemon dbus-x11 mesa-dri-drivers
           cat /etc/fedora-release
+          got=$(. /etc/os-release && echo "$VERSION_ID")
+          if [ "$got" != "$FEDORA" ]; then
+            echo "::warning::the image runs Fedora $got, but docs/platforms.md says Fedora $FEDORA: update the row and this job"
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -165,15 +214,19 @@ jobs:
         run: |
           useradd --create-home --uid 1001 ci || useradd --create-home ci
           chown -R ci: "$GITHUB_WORKSPACE"
-          runuser -u ci -- sh -c 'curl --proto =https --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none'
+          init=/tmp/rustup-init
+          curl --proto =https --tlsv1.2 -sSfo "$init" \
+            "https://static.rust-lang.org/rustup/archive/$RUSTUP_VERSION/x86_64-unknown-linux-gnu/rustup-init"
+          echo "$RUSTUP_SHA256  $init" | sha256sum -c -
+          chmod 755 "$init"
+          runuser -u ci -- env HOME=/home/ci "$init" -y --profile minimal --default-toolchain none
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            /home/ci/.cargo/registry
-            /home/ci/.cargo/git
-            /home/ci/target
-          key: fedora-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
-          restore-keys: fedora-
+            /home/ci/.cargo/registry/index
+            /home/ci/.cargo/registry/cache
+          key: fedora-registry-${{ hashFiles('Cargo.lock') }}
+          restore-keys: fedora-registry-
       - name: Build the app
         run: |
           chown -R ci: /home/ci

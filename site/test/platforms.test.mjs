@@ -1,11 +1,11 @@
 // The supported-platforms list is published twice, in `docs/platforms.md` (the site) and in the
-// README, and each row names the CI runner that covers it (FR-25). These tests keep the two copies
-// one list, and keep every runner the list names in `ci.yml`, so a row cannot claim coverage that
-// was taken out of CI.
+// README, and each row names the CI label it is covered on (FR-25). These tests keep the two
+// copies one list, and check that every CI label the table names is still used in `ci.yml`. They
+// do not check which job uses it, or what that job proves; the table's prose says that.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { platformTable, runnersOf, runnersInWorkflow } from "../src/platforms.mjs";
+import { platformTable, ciLabelsOf, ciLabelsInWorkflow } from "../src/platforms.mjs";
 
 const read = (path) => readFileSync(new URL(`../../${path}`, import.meta.url), "utf8");
 
@@ -15,32 +15,32 @@ test("the README carries the platforms page's table, row for row", () => {
   assert.deepEqual(platformTable(read("README.md")), table);
 });
 
-test("every CI runner the platforms table names is one ci.yml runs on", () => {
-  const named = runnersOf(platformTable(read("docs/platforms.md")));
-  assert.ok(named.length > 0, "the table names at least one runner");
-  const workflow = runnersInWorkflow(read(".github/workflows/ci.yml"));
+test("every CI label the platforms table names is still used in ci.yml", () => {
+  const named = ciLabelsOf(platformTable(read("docs/platforms.md")));
+  assert.ok(named.length > 0, "the table names at least one CI label");
+  const workflow = ciLabelsInWorkflow(read(".github/workflows/ci.yml"));
   assert.deepEqual(
-    named.filter((runner) => !workflow.includes(runner)),
+    named.filter((label) => !workflow.includes(label)),
     [],
   );
 });
 
 test("a table is read from the first header that starts with Platform", () => {
-  const text = "# T\n\nprose\n\n| Platform | CI runner |\n|---|---|\n| A | `x-1` |\n\nafter\n";
-  assert.deepEqual(platformTable(text), ["| Platform | CI runner |", "|---|---|", "| A | `x-1` |"]);
+  const text = "# T\n\nprose\n\n| Platform | CI label |\n|---|---|\n| A | `x-1` |\n\nafter\n";
+  assert.deepEqual(platformTable(text), ["| Platform | CI label |", "|---|---|", "| A | `x-1` |"]);
 });
 
-test("a runner is a backticked label in the CI runner column; a dash names none", () => {
+test("a CI label is a backticked name in the CI label column; a dash names none", () => {
   const table = [
-    "| Platform | CI runner | Proves |",
+    "| Platform | CI label | Proves |",
     "|---|---|---|",
-    "| A | `macos-latest`, `xcode-27` | `not-a-runner` |",
+    "| A | `macos-latest`, `xcode-27` | `not-a-label` |",
     "| B | — | x |",
   ];
-  assert.deepEqual(runnersOf(table), ["macos-latest", "xcode-27"]);
+  assert.deepEqual(ciLabelsOf(table), ["macos-latest", "xcode-27"]);
 });
 
-test("the workflow's runners are its runs-on labels, matrix entries and container images", () => {
+test("the workflow's CI labels are its runs-on labels, matrix entries and container images", () => {
   const yml = [
     "jobs:",
     "  a:",
@@ -55,7 +55,7 @@ test("the workflow's runners are its runs-on labels, matrix entries and containe
     "      image: fedora:latest",
     "    # os: [commented-out]",
   ].join("\n");
-  assert.deepEqual(runnersInWorkflow(yml).sort(), [
+  assert.deepEqual(ciLabelsInWorkflow(yml).sort(), [
     "fedora:latest",
     "macos-latest",
     "ubuntu-24.04",

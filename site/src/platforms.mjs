@@ -1,6 +1,7 @@
-// Reading the supported-platforms table (FR-25) out of a Markdown page, and the runners out of
-// a workflow, so a test can hold the README's copy to `docs/platforms.md` and every runner the
-// table names to `ci.yml`.
+// Reading the supported-platforms table (FR-25) out of a Markdown page, and the CI labels (the
+// GitHub Actions `runs-on` labels and container images) out of a workflow, so a test can hold the
+// README's copy to `docs/platforms.md` and check that every CI label the table names is still used
+// in `ci.yml`.
 
 /** The lines of the first Markdown table whose header row starts with `| Platform |`. */
 export function platformTable(text) {
@@ -11,10 +12,10 @@ export function platformTable(text) {
   return lines.slice(start, end === -1 ? lines.length : end).map((line) => line.trimEnd());
 }
 
-/** The backticked labels in the table's `CI runner` column, in order. */
-export function runnersOf(table) {
+/** The backticked labels in the table's `CI label` column, in order. */
+export function ciLabelsOf(table) {
   const cells = (line) => line.split("|").slice(1, -1).map((cell) => cell.trim());
-  const column = cells(table[0] ?? "").indexOf("CI runner");
+  const column = cells(table[0] ?? "").indexOf("CI label");
   if (column === -1) return [];
   return table
     .slice(2)
@@ -22,7 +23,7 @@ export function runnersOf(table) {
 }
 
 /** Every label the workflow runs on: `runs-on:` values, `os:` matrix lists and container images. */
-export function runnersInWorkflow(yml) {
+export function ciLabelsInWorkflow(yml) {
   const found = [];
   for (const raw of yml.split("\n")) {
     const line = raw.replace(/\s#.*$/, "").trim();

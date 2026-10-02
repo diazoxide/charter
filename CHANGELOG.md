@@ -14,8 +14,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - **The supported platforms are written down.** macOS 27 and 26 on Apple silicon, Ubuntu 26.04
-  and 24.04 LTS, and the current Fedora, each with the CI job that covers it and what that job
-  proves, are in the README and in `docs/platforms.md`. Windows 11 joins the list when the
+  and 24.04 LTS, and Fedora 44, each with the CI job that covers it and what that job proves,
+  are in the README and in `docs/platforms.md`. macOS 27, Ubuntu 26.04 and Fedora are covered
+  by evidence jobs, which report and never gate. Windows 11 joins the list when the
   Windows port lands; iOS 16.4 and the current desktop browsers are the floor for clients that
   do not exist yet (FR-25, #619).
 
