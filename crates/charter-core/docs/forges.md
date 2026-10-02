@@ -96,9 +96,10 @@ member's own repo's `origin`, and prints every repo, branch and destination befo
 anything. Each push is `git push <https-url> refs/heads/<branch>:refs/heads/<branch>`, through
 the forge CLI's credential helper and nothing else: no `+`, no `--force` of any spelling, so it
 can only create the branch or fast-forward it. The push's own command line turns off tags,
-push options and submodules, and a repo whose git config rewrites where pushes go is refused,
-so the destination printed is the one git uses. It commits nothing, and it pushes a repo whose
-`[repos.<name>] mode` is `off` too (ADR 0051, amended by ADR 0060 D4).
+push options and submodules. The destination printed is the one git pushes to: a repo whose
+git config would send the push elsewhere is refused, and the setting is named. It commits
+nothing, and it pushes a repo whose `[repos.<name>] mode` is `off` too (ADR 0051, amended by
+ADR 0060 D4).
 
 Then `by_head` finds the member's request in any state. When there is none, `open_or_update`
 opens one into the repo's default branch, titled `<slug>: <repo>`, with the change's `why` and
@@ -114,13 +115,13 @@ A row names its request the way the forge rendering the description resolves it:
 (`acme/widget#7` on GitHub, `acme/plat/widget!7` on GitLab, the full group path) for a request on
 the description's own host, and the request's URL for one on another host. A reference is
 looked up by the forge that renders it, so `acme/widget#7` in a GitLab description is GitLab's
-issue 7 of a GitLab project `acme/widget`, and a self-managed GitLab beside gitlab.com is a
+issue 7 of a GitLab repo `acme/widget`, and a self-managed GitLab beside gitlab.com is a
 different host too.
 
 **On GitLab** (GL-3b), the same steps are GitLab's merge request calls in the table above. A
-merge request in any state from the project's own branch is adopted, a draft included: only
+merge request in any state from the repo's own branch is adopted, a draft included: only
 its `description` is written, so it stays a draft and keeps its title. One from a fork with the
-same branch name is never adopted, written or merged; charter opens the project's own. A
+same branch name is never adopted, written or merged; charter opens the repo's own. A
 `"description": null` holds no block, and is named like any description without one. A
 self-managed GitLab is pushed to and asked at the host `charter.toml` declares for it.
 

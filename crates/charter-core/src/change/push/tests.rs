@@ -1,8 +1,8 @@
 //! `charter change push` against real clones, each with a local bare remote, and a GitHub
 //! backend over the recorded transport, which answers only the requests a test wrote down and
 //! fails every other one. Nothing reaches a network: each clone's `origin` is in the SSH form,
-//! and an `insteadOf` in its own config maps the HTTPS URL charter pushes to onto the bare
-//! repository, as `reposave`'s tests do.
+//! and `push_with`'s route hands git the bare repository in place of the HTTPS URL printed. No
+//! clone's own config rewrites a URL, since a clone whose config would is refused.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -27,6 +27,29 @@ struct World {
     _dir: tempfile::TempDir,
     plane: PathBuf,
     top: PathBuf,
+    /// The host of every forge request the last push sent, in order.
+    asked_hosts: std::cell::RefCell<Vec<String>>,
+}
+
+/// The recorded transport, noting the host of every request sent through it.
+struct NotingHosts {
+    recorded: Arc<Recorded>,
+    hosts: std::sync::Mutex<Vec<String>>,
+}
+
+impl crate::forge::transport::Transport for NotingHosts {
+    fn send(
+        &self,
+        forge: &crate::forge::Forge,
+        call: &crate::forge::transport::Call,
+    ) -> Result<crate::forge::transport::Reply, crate::forge::transport::NoAnswer> {
+        self.hosts.lock().unwrap().push(forge.host.clone());
+        self.recorded.send(forge, call)
+    }
+
+    fn check_auth(&self, forge: &crate::forge::Forge) -> Result<(), crate::forge::ForgeError> {
+        self.recorded.check_auth(forge)
+    }
 }
 
 impl World {
@@ -41,6 +64,7 @@ impl World {
             _dir: dir,
             plane,
             top,
+            asked_hosts: std::cell::RefCell::default(),
         }
     }
 
@@ -66,15 +90,6 @@ impl World {
         run(&bare, &["init", "-q", "--bare", "-b", "main", "."]);
         let ssh = format!("git@{host}:{namespace}/{repo}.git");
         run(&clone, &["remote", "add", "origin", &ssh]);
-        let base = format!("file://{}/", bare.parent().unwrap().display());
-        run(
-            &clone,
-            &[
-                "config",
-                &format!("url.{base}.insteadOf"),
-                &format!("https://{host}/{namespace}/"),
-            ],
-        );
         let at = bare.display().to_string();
         run(&clone, &["push", "-q", &at, "main"]);
         run(
@@ -96,6 +111,16 @@ impl World {
         crate::repos::clone_at(&self.plane, "alpha", repo)
             .expect("the clone is the workspace's")
             .path
+    }
+
+    /// The bare remote a printed `https://<host>/<namespace>/<repo>.git` stands for, as a
+    /// `file://` URL: every host's repos share one tree here, by namespace.
+    fn route(&self, https: &str) -> String {
+        let (_, path) = https
+            .strip_prefix("https://")
+            .and_then(|rest| rest.split_once('/'))
+            .unwrap_or_else(|| panic!("not an HTTPS destination: {https}"));
+        format!("file://{}/forge/{path}", self.top.display())
     }
 
     fn bare(&self, repo: &str) -> PathBuf {
@@ -140,7 +165,10 @@ impl World {
         let text = json!({"source": "GitHub REST API version 2022-11-28, pulls",
                           "exchanges": exchanges});
         let recorded = Arc::new(Recorded::parse(&text.to_string()).unwrap());
-        let transport = recorded.clone();
+        let transport = Arc::new(NotingHosts {
+            recorded: recorded.clone(),
+            hosts: std::sync::Mutex::default(),
+        });
         let mut said = String::new();
         let mut say = |line: Say| {
             said.push_str(&line.to_string());
@@ -151,8 +179,10 @@ impl World {
             "alpha",
             SLUG,
             &|repo: &Repo| repo.forge.backend_over(transport.clone()),
+            &|https: &str| self.route(https),
             &mut say,
         );
+        *self.asked_hosts.borrow_mut() = transport.hosts.lock().unwrap().clone();
         (code, said, recorded)
     }
 }
@@ -369,6 +399,7 @@ fn every_git_call_is_recorded_and_the_push_is_one_refspec_with_no_force() {
     assert_eq!(code, 0, "{said}");
     let asked = crate::worktree::git::tally::asked(&widget)[before..].to_vec();
     let refspec = format!("refs/heads/{BRANCH}:refs/heads/{BRANCH}");
+    let to = world.route("https://github.com/acme/widget.git");
     assert_eq!(
         asked,
         [
@@ -386,6 +417,17 @@ fn every_git_call_is_recorded_and_the_push_is_one_refspec_with_no_force() {
                 r"^(url\..*\.pushinsteadof|remote\..*\.pushurl)$"
             ],
             vec![
+                "-c",
+                "push.followTags=false",
+                "-c",
+                "push.pushOption=",
+                "-c",
+                "push.recurseSubmodules=no",
+                "ls-remote",
+                "--get-url",
+                to.as_str()
+            ],
+            vec![
                 "symbolic-ref",
                 "--quiet",
                 "--short",
@@ -399,7 +441,7 @@ fn every_git_call_is_recorded_and_the_push_is_one_refspec_with_no_force() {
                 "-c",
                 "push.recurseSubmodules=no",
                 "push",
-                "https://github.com/acme/widget.git",
+                to.as_str(),
                 refspec.as_str()
             ],
             vec![
@@ -596,6 +638,47 @@ fn a_repo_whose_config_sends_pushes_elsewhere_is_refused_and_nothing_is_pushed()
 }
 
 #[test]
+fn a_repo_whose_config_rewrites_the_url_it_pushes_to_is_refused_and_nothing_is_pushed() {
+    // An `insteadOf` rewrites a push's URL as well as a fetch's, so git would push somewhere
+    // other than the destination printed.
+    let world = World::new("schema = 1\n");
+    let widget = world.clone("widget");
+    let routed = world.route("https://github.com/acme/widget.git");
+    run(
+        &widget,
+        &["config", "url.file:///elsewhere/.insteadOf", &routed],
+    );
+    world.change(&[("widget", &[])]);
+    let (code, said, recorded) = world.push(json!([]));
+    assert_eq!(code, 1, "{said}");
+    assert_eq!(recorded.unspent(), Vec::new(), "{said}");
+    assert!(
+        said.contains("(url.file:///elsewhere/.insteadof), so it is not pushed"),
+        "{said}"
+    );
+    assert_eq!(world.remote_has("widget", BRANCH), None, "{said}");
+}
+
+#[test]
+fn charters_own_ssh_to_https_rewrite_does_not_stop_a_push() {
+    // `charter git-policy --apply` maps the forge's SSH forms onto its HTTPS URL. That rewrites
+    // no HTTPS URL, so the destination printed is still the one git pushes to.
+    let world = World::new("schema = 1\n");
+    let widget = world.clone("widget");
+    for ssh in ["git@github.com:", "ssh://git@github.com/"] {
+        run(
+            &widget,
+            &["config", "--add", "url.https://github.com/.insteadOf", ssh],
+        );
+    }
+    world.change(&[("widget", &[])]);
+    let (code, said, recorded) = lone_member(&world);
+    assert_eq!(code, 0, "{said}");
+    assert_eq!(recorded.unspent(), Vec::new(), "{said}");
+    assert!(world.remote_has("widget", BRANCH).is_some(), "{said}");
+}
+
+#[test]
 fn a_push_that_is_not_a_fast_forward_is_refused_and_the_remote_is_unchanged() {
     let world = World::new("schema = 1\n");
     let widget = world.clone("widget");
@@ -668,7 +751,7 @@ fn a_why_carrying_charters_marker_cannot_lock_the_block() {
         branch: BRANCH.into(),
         needs: vec![],
     });
-    let body = new_body(&record);
+    let body = new_body(&record, "github.com");
     let spliced = splice(&body, &block(&record, &|_| None, "github.com"));
     assert_eq!(spliced.as_deref(), Some(body.as_str()), "{body}");
     assert!(!body.contains("see <!--"), "{body}");

@@ -13,9 +13,9 @@
 //! `off` included: `off` governs saves, and this verb is run by hand over repos somebody named
 //! (ADR 0060 D4, ADR 0051 amended).
 //!
-//! **The destination printed is the one git uses.** A repo whose git config rewrites where a
-//! push goes (`url.*.pushInsteadOf`, `remote.*.pushurl`) is refused, and the push sets on its
-//! own command line that no tag, push option or submodule goes with the branch.
+//! **The destination printed is the one git pushes to.** A repo whose git config would send
+//! the push elsewhere is refused, naming the setting, and the push sets on its own command
+//! line that no tag, push option or submodule goes with the branch.
 //!
 //! **Fire and report.** One member's failure is said and the rest still run: a third member
 //! that is not a repo here is no reason to leave the first two unpushed. The exit is 1 when
@@ -97,8 +97,8 @@ pub struct Reached {
 
 impl Reached {
     /// How a description on `host` names this request. A reference (`acme/widget#7`,
-    /// `acme/plat/widget!7`) is resolved by the forge that renders it, against its own
-    /// projects, so it is written only into a description on the request's own host. On any
+    /// `acme/plat/widget!7`) is resolved by the forge that renders it, against its own repos,
+    /// so it is written only into a description on the request's own host. On any
     /// other host it would name somebody else's issue or nothing at all, and the request's
     /// URL is written instead.
     fn named_on(&self, host: &str) -> String {
@@ -195,10 +195,14 @@ pub fn splice(body: &str, block: &str) -> Option<String> {
     Some(out)
 }
 
-/// The description charter writes when it opens a request: the change's `why`, and its block
-/// with no request in it yet, so the splice that follows has its markers to find.
-fn new_body(record: &Record) -> String {
-    format!("{}\n\n{}", cell(&record.why), block(record, &|_| None, ""))
+/// The description charter writes when it opens a request on `host`: the change's `why`, and
+/// its block with no request in it yet, so the splice that follows has its markers to find.
+fn new_body(record: &Record, host: &str) -> String {
+    format!(
+        "{}\n\n{}",
+        cell(&record.why),
+        block(record, &|_| None, host)
+    )
 }
 
 /// Where one member goes, resolved from its repo before anything is pushed.
@@ -207,7 +211,10 @@ struct Plan {
     branch: String,
     clone: PathBuf,
     on: Repo,
+    /// The destination printed: the HTTPS URL the clone's `origin` names.
     https: String,
+    /// The URL git is handed: `https` itself, except under a test's route.
+    to: String,
     base: Option<String>,
 }
 
@@ -218,6 +225,7 @@ fn plan(
     slug: &str,
     repo: &str,
     branch: &str,
+    route: &dyn Fn(&str) -> String,
     say: &mut dyn FnMut(Say),
 ) -> Result<Plan, ()> {
     let Some(clone) = crate::repos::clone_at(plane, ws, repo) else {
@@ -298,6 +306,10 @@ fn plan(
             );
         }
     }
+    let to = route(&https);
+    if let Err(why) = git_pushes_to(&clone.path, &to) {
+        return fail(say, why);
+    }
     let base = crate::reposave::default_branch(plane, repo, &clone.path);
     Ok(Plan {
         repo: repo.to_string(),
@@ -305,21 +317,78 @@ fn plan(
         clone: clone.path,
         on,
         https,
+        to,
         base,
     })
 }
 
-/// `charter change push <slug>`, through each member's forge's own backend.
-pub fn push(plane: &Path, ws: &str, slug: &str, say: &mut dyn FnMut(Say)) -> u8 {
-    push_with(plane, ws, slug, &|repo: &Repo| repo.backend(), say)
+/// `Ok` when git, in `clone`, pushes to `to` itself; else why not, naming the setting.
+///
+/// A `url.<base>.insteadOf` rewrites the URL of a push as well as a fetch's, and git applies
+/// it to a URL given on the command line too, so the rewrite is read the way git makes it:
+/// `ls-remote --get-url`, under the same settings the push runs with, which rewrites and asks
+/// no network. (`pushInsteadOf` and `pushurl`, which only a push reads, are refused before this
+/// by [`PUSH_REWRITES`].)
+fn git_pushes_to(clone: &Path, to: &str) -> Result<(), String> {
+    let mut args: Vec<&str> = PUSH_ONLY_THE_BRANCH.to_vec();
+    args.extend(["ls-remote", "--get-url", to]);
+    let unread =
+        || "charter could not ask git where a push would go, so it is not pushed".to_string();
+    let run = git::run(clone, &args, git::READ).map_err(|_| unread())?;
+    if !run.ok() {
+        return Err(unread());
+    }
+    if run.out.trim() == to {
+        return Ok(());
+    }
+    // The settings that rewrite it: each `insteadOf` whose value begins the URL.
+    let keys: Vec<String> = git::run(
+        clone,
+        &["config", "--get-regexp", r"^url\..*\.insteadof$"],
+        git::READ,
+    )
+    .map(|run| {
+        run.out
+            .lines()
+            .filter_map(|l| l.split_once(' '))
+            .filter(|(_, value)| !value.is_empty() && to.starts_with(value))
+            .map(|(key, _)| shown::line(key))
+            .collect()
+    })
+    .unwrap_or_default();
+    let named = if keys.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", keys.join(", "))
+    };
+    Err(format!(
+        "its git config sends pushes somewhere other than the URL printed here{named}, so it \
+         is not pushed. Remove that setting to push it."
+    ))
 }
 
-/// [`push`], asking the backend `backend_of` builds for each member's repo.
+/// `charter change push <slug>`, through each member's forge's own backend.
+pub fn push(plane: &Path, ws: &str, slug: &str, say: &mut dyn FnMut(Say)) -> u8 {
+    push_with(
+        plane,
+        ws,
+        slug,
+        &|repo: &Repo| repo.backend(),
+        &|https: &str| https.to_string(),
+        say,
+    )
+}
+
+/// [`push`], asking the backend `backend_of` builds for each member's repo, and handing git
+/// the URL `route` makes of each printed destination. [`push`]'s route is the identity, so
+/// the URL printed is the URL git is handed. A test routes it to a local bare remote, since a
+/// clone's own config may not rewrite where a push goes.
 pub fn push_with(
     plane: &Path,
     ws: &str,
     slug: &str,
     backend_of: &dyn Fn(&Repo) -> Box<dyn ForgeBackend>,
+    route: &dyn Fn(&str) -> String,
     say: &mut dyn FnMut(Say),
 ) -> u8 {
     if !workspace_ok(plane, ws, say) {
@@ -340,7 +409,7 @@ pub fn push_with(
     let mut failed = 0usize;
     let mut plans = Vec::new();
     for m in &record.members {
-        match plan(plane, ws, slug, &m.repo, &m.branch, say) {
+        match plan(plane, ws, slug, &m.repo, &m.branch, route, say) {
             Ok(p) => plans.push(p),
             Err(()) => failed += 1,
         }
@@ -418,7 +487,7 @@ pub fn push_with(
                     &p.branch,
                     base,
                     &title,
-                    &new_body(&record),
+                    &new_body(&record, &p.on.forge.host),
                 ) {
                     Ok(opened) => (opened.pr, "opened", None),
                     Err(why) => {
@@ -519,7 +588,7 @@ fn pushed(p: &Plan, say: &mut dyn FnMut(Say)) -> bool {
     let refspec = format!("refs/heads/{0}:refs/heads/{0}", p.branch);
     let helper = forge::helper_for(&p.on.forge);
     let mut args: Vec<&str> = PUSH_ONLY_THE_BRANCH.to_vec();
-    args.extend(["push", p.https.as_str(), refspec.as_str()]);
+    args.extend(["push", p.to.as_str(), refspec.as_str()]);
     let run = match git::run_network(&p.clone, Some(&helper), &args) {
         Ok(run) => run,
         Err(unavailable) => {

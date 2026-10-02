@@ -64,6 +64,13 @@ of 5 is rejected. There is no atomicity. What replaces it:
 - a partial landing is shown as `PARTIALLY LANDED (n of m)` with the outstanding members named;
 - a change is never shown greener than its worst member.
 
+> **Amended 2026-10-02 (GL-3b, D-0015).** The cross-link block names a member's request by
+> reference (`acme/widget#7`, `acme/plat/widget!7`) only in a description on that request's own
+> host, and by the request's URL on any other host. The Python charter wrote the reference
+> everywhere, and a forge resolves a reference against its own repos, so on another host it
+> named somebody else's issue or nothing. A change whose members share one host gets the
+> Python block, byte for byte.
+
 A rebase merge is refused for charter's own landing, because it leaves no commit to carry the
 trailer and no single sha to revert.
 

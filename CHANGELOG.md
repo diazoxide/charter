@@ -26,9 +26,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   on gitlab.com and on a self-managed GitLab declared in `charter.toml`; a draft merge request
   is adopted and stays a draft, and one from a fork with the same branch name is never touched.
   When members are on different hosts, a member elsewhere is named by its request's link, so
-  a GitLab description never points at a GitHub number as if it were a GitLab one. The guard that stops a live substitution in `charter change
-  create` or `drop` now names `charter change push` as what writes the `why` into requests
-  (#471).
+  a GitLab description never points at a GitHub number as if it were a GitLab one. The guard
+  that stops a live substitution in `charter change create` or `drop` now names `charter
+  change push` as what writes the `why` into requests (#471).
 
 - **The first run lays your project out for the stack you work in.** Project templates for
   Rust, TypeScript, Python, Go, monorepos and docs-only repos each add an engineer and a
