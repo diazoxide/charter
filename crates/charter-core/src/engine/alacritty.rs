@@ -725,6 +725,13 @@ mod snapshot_tests {
     }
 
     #[test]
+    fn a_snapshot_after_the_alternate_screen_closes_keeps_the_regions_of_both_screens() {
+        // The case `any_output_is_redrawn_by_its_snapshot` found (#910).
+        assert_rebuilt(b"\x1b[?1049h\x1b[2;4r\x1b[?1049l");
+        assert_rebuilt(b"\x1b[3;9r\x1b[?1049h\x1b[2;4r\x1b[?1049l");
+    }
+
+    #[test]
     fn a_snapshot_places_the_cursor_from_the_top_of_the_scroll_region_in_origin_mode() {
         assert_rebuilt(b"\x1b[2;4r\x1b[?6h\x1b[2;3Hx");
     }
