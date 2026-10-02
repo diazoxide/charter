@@ -11,8 +11,9 @@
 //! the operator put there by hand.
 //!
 //! **Blocked is derived on each read.** A member's blocker counts as landed here when the
-//! forge reports its request merged. `charter change land` (#472) adds the other half of
-//! "landed" — the landing log, and the default branch still containing the logged commit.
+//! forge reports its request merged. `charter change land`'s own gate (`super::land`) reads
+//! the other half of "landed" too: the landing log, and the default branch still containing the
+//! logged commit.
 
 use std::collections::BTreeSet;
 use std::path::Path;

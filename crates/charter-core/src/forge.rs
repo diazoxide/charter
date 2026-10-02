@@ -105,6 +105,24 @@ impl Kind {
         }
     }
 
+    /// What this forge calls the queue a request lands through: GitHub's merge queue,
+    /// GitLab's merge train.
+    pub fn queue_noun(self) -> &'static str {
+        match self {
+            Kind::GitHub => "merge queue",
+            Kind::GitLab => "merge train",
+        }
+    }
+
+    /// Whether this forge's queue takes charter's squash: GitLab's merge train does; GitHub's
+    /// merge queue merges by the method its own rule sets.
+    pub fn queue_takes_squash(self) -> bool {
+        match self {
+            Kind::GitHub => false,
+            Kind::GitLab => true,
+        }
+    }
+
     /// What an owner is called on this forge.
     pub fn owner_noun(self) -> &'static str {
         match self {

@@ -10,8 +10,8 @@ use super::backend::{
 };
 use super::checks::{self, Checks};
 use super::pr::{
-    AutoMerge, GITHUB_METHODS, GITHUB_NOTHING_TO_WAIT_FOR, Opened, Pr, Request, State,
-    commit_named, first, is_ours, not_queued_when, pr_of, unknown_state,
+    AutoMerge, GITHUB_METHODS, GITHUB_NOTHING_TO_WAIT_FOR, MergeAs, MergedAt, Opened, Pr, Request,
+    State, commit_named, first, is_ours, not_queued_when, pr_of, unknown_state,
 };
 use super::transport::{Call, Field, Method, NoAnswer};
 use super::{
@@ -69,6 +69,38 @@ fn owner_name(path: &str) -> (&str, &str) {
 }
 
 impl GitHub {
+    /// The pull request's node id and whether its base branch has a merge queue, in one
+    /// question.
+    fn queue_probe(&self, caller: &Caller, path: &str, pr: &Pr) -> Result<Value, ForgeError> {
+        let (owner, name) = owner_name(path);
+        let number = pr.number.to_string();
+        let doing = format!(
+            "reading whether #{} of {path} lands through a merge queue",
+            pr.number
+        );
+        let answer = self.0.ask(
+            caller,
+            &Call::graphql(
+                graphql::merge_queue::QUERY,
+                vec![
+                    Field::text("owner", owner),
+                    Field::text("name", name),
+                    Field::typed("number", &number),
+                ],
+                LIST_TIMEOUT,
+            ),
+            &doing,
+        )?;
+        let found = &answer["data"]["repository"]["pullRequest"];
+        if !found.is_object() {
+            return Err(ForgeError::new(format!(
+                "{doing}: no pull request #{}",
+                pr.number
+            )));
+        }
+        Ok(found.clone())
+    }
+
     fn paged(
         &self,
         caller: &Caller,
@@ -505,6 +537,102 @@ impl Requests for GitHub {
             &GITHUB_NOTHING_TO_WAIT_FOR,
             &format!("asking {path} to auto-merge #{number}"),
         )
+    }
+
+    /// `isMergeQueueEnabled`: GitHub's own answer for the pull request's base branch, so a
+    /// queue that a ruleset turns on is seen as well as one a branch protection rule does.
+    fn lands_through_queue(
+        &self,
+        caller: &Caller,
+        path: &str,
+        pr: &Pr,
+    ) -> Result<bool, ForgeError> {
+        let found = self.queue_probe(caller, path, pr)?;
+        match found["isMergeQueueEnabled"].as_bool() {
+            Some(queued) => Ok(queued),
+            None => Err(ForgeError::new(format!(
+                "reading whether #{} of {path} lands through a merge queue: GitHub did not say",
+                pr.number
+            ))),
+        }
+    }
+
+    /// REST's merge, with `sha`: GitHub answers 409 and merges nothing when the head is no
+    /// longer that commit. The subject and body are charter's, so the trailer is on the commit.
+    fn merge_at(
+        &self,
+        caller: &Caller,
+        path: &str,
+        pr: &Pr,
+        head_sha: &str,
+        how: &MergeAs,
+    ) -> Result<MergedAt, ForgeError> {
+        let (owner, name) = owner_name(path);
+        let api = format!(
+            "repos/{}/{}/pulls/{}/merge",
+            quote(owner),
+            quote(name),
+            pr.number
+        );
+        let method = if how.squash { "squash" } else { "merge" };
+        let call = Call::write(
+            Method::Put,
+            api,
+            vec![
+                Field::text("merge_method", method),
+                Field::text("commit_title", &how.title),
+                Field::text("commit_message", &how.message),
+                Field::text("sha", head_sha),
+            ],
+        );
+        let doing = format!("merging pull request #{} of {path} ({method})", pr.number);
+        let answer = self.0.ask(caller, &call, &doing)?;
+        if answer["merged"] != Value::Bool(true) {
+            return Err(ForgeError::new(format!(
+                "{doing}: GitHub did not confirm a merge ({})",
+                answer["message"].as_str().unwrap_or("no message")
+            )));
+        }
+        Ok(MergedAt::Now)
+    }
+
+    /// `enqueuePullRequest` with `expectedHeadOid`. The queue merges by the method its own
+    /// rule sets and writes its own message, so `how` is not GitHub's to take here.
+    fn enqueue_at(
+        &self,
+        caller: &Caller,
+        path: &str,
+        pr: &Pr,
+        head_sha: &str,
+        _how: &MergeAs,
+    ) -> Result<(), ForgeError> {
+        let found = self.queue_probe(caller, path, pr)?;
+        let Some(id) = found["id"].as_str() else {
+            return Err(ForgeError::new(format!(
+                "reading #{} of {path}: GitHub named no pull request id",
+                pr.number
+            )));
+        };
+        let doing = format!(
+            "putting #{} of {path} in its merge queue at {head_sha}",
+            pr.number
+        );
+        let answer = self.0.ask(
+            caller,
+            &Call::graphql(
+                graphql::enqueue::QUERY,
+                vec![Field::text("id", id), Field::text("head", head_sha)],
+                LIST_TIMEOUT,
+            ),
+            &doing,
+        )?;
+        let entry = &answer["data"]["enqueuePullRequest"]["mergeQueueEntry"];
+        if entry["headCommit"]["oid"].as_str() != Some(head_sha) {
+            return Err(ForgeError::new(format!(
+                "{doing}: GitHub did not answer with an entry at that commit"
+            )));
+        }
+        Ok(())
     }
 
     /// By the commit alone: GitHub's check runs and commit statuses hang off the sha, not the

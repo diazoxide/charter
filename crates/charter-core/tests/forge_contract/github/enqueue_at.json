@@ -1,0 +1,71 @@
+{
+  "source": "GitHub GraphQL API: the enqueuePullRequest mutation (expectedHeadOid) and MergeQueueEntry (schema.graphql)",
+  "exchanges": [
+    {
+      "call": {
+        "endpoint": "graphql",
+        "fields": [
+          {
+            "text": [
+              "query",
+              "# Whether a pull request's base branch lands through a merge queue, and the pull request's node id.\nquery MergeQueue($owner: String!, $name: String!, $number: Int!) {\n  repository(owner: $owner, name: $name) {\n    pullRequest(number: $number) {\n      id\n      isMergeQueueEnabled\n    }\n  }\n}\n"
+            ]
+          },
+          {
+            "text": [
+              "owner",
+              "acme"
+            ]
+          },
+          {
+            "text": [
+              "name",
+              "api"
+            ]
+          },
+          {
+            "typed": [
+              "number",
+              "12"
+            ]
+          }
+        ]
+      },
+      "reply": {
+        "code": 0,
+        "out": "{\"data\": {\"repository\": {\"pullRequest\": {\"id\": \"PR_kwDOAbc\", \"isMergeQueueEnabled\": true}}}}",
+        "err": ""
+      }
+    },
+    {
+      "call": {
+        "endpoint": "graphql",
+        "fields": [
+          {
+            "text": [
+              "query",
+              "# Put a pull request in its base branch's merge queue, only while its head is still $head.\nmutation Enqueue($id: ID!, $head: GitObjectID!) {\n  enqueuePullRequest(input: { pullRequestId: $id, expectedHeadOid: $head }) {\n    mergeQueueEntry {\n      state\n      headCommit {\n        oid\n      }\n    }\n  }\n}\n"
+            ]
+          },
+          {
+            "text": [
+              "id",
+              "PR_kwDOAbc"
+            ]
+          },
+          {
+            "text": [
+              "head",
+              "6dcb09b5b57875f334f61aebed695e2e4193db5e"
+            ]
+          }
+        ]
+      },
+      "reply": {
+        "code": 0,
+        "out": "{\"data\": {\"enqueuePullRequest\": {\"mergeQueueEntry\": {\"state\": \"QUEUED\", \"headCommit\": {\"oid\": \"6dcb09b5b57875f334f61aebed695e2e4193db5e\"}}}}}",
+        "err": ""
+      }
+    }
+  ]
+}

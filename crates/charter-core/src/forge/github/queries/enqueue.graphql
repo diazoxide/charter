@@ -1,0 +1,11 @@
+# Put a pull request in its base branch's merge queue, only while its head is still $head.
+mutation Enqueue($id: ID!, $head: GitObjectID!) {
+  enqueuePullRequest(input: { pullRequestId: $id, expectedHeadOid: $head }) {
+    mergeQueueEntry {
+      state
+      headCommit {
+        oid
+      }
+    }
+  }
+}

@@ -128,6 +128,12 @@ Commits an agent makes with plain git are fine: the next save pushes them.
 - **Auto-merge:** the app requests it for the configured mode, preferring the repo's rebase,
   then merge-commit, then squash. An agent never does, which `floorguard` already enforces.
 
+  > **Amended 2026-10-02 (ADR 0060 D3, ruling Q16, #472).** A save only ever *requests*
+  > auto-merge. `charter change land` is the one command that merges: one member of a
+  > cross-repo change, attended only (`floorguard` refuses it unattended, as it refuses
+  > `gh pr merge`), at the head commit its checks passed on, directly or through the target
+  > branch's merge queue or merge train. It never requests auto-merge.
+
 **Auto-save lives in the app**, because there is no daemon (ADR 0025). When `autosave` is on:
 
 - **It saves:**

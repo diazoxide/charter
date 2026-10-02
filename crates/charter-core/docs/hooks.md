@@ -235,8 +235,8 @@ rule while one who reads a bare refusal files an issue.
   push tags, or `gh release create` / `gh pr merge` (and glab's equivalents).
   `bypassPermissions` means *stop asking me*, not *stop knowing things*, and a published
   version number can never be reused. The line runs between *opening* a request and
-  *merging* one: `gh pr create` is deliberately not on this list. The floor also refuses the
-  spelling `charter change land`, a cross-repo landing command this version does not have yet.
+  *merging* one: `gh pr create` is deliberately not on this list. The floor also refuses
+  `charter change land`, which merges one member of a cross-repo change: it is attended only.
 
 - **Forge body substitution.** A `gh`/`glab` command that publishes prose — `issue
   create|comment|edit`, `pr create|comment|edit|review`, `release create|edit`, `gist

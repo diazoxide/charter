@@ -47,3 +47,22 @@ pub struct AddProjectItem;
     response_derives = "Debug"
 )]
 pub struct SetProjectField;
+
+// A commit id, as GitHub's GraphQL spells it.
+type GitObjectID = String;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/forge/github/schema.graphql",
+    query_path = "src/forge/github/queries/merge_queue.graphql",
+    response_derives = "Debug"
+)]
+pub struct MergeQueue;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/forge/github/schema.graphql",
+    query_path = "src/forge/github/queries/enqueue.graphql",
+    response_derives = "Debug"
+)]
+pub struct Enqueue;

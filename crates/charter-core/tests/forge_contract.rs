@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use charter_core::forge::checks::{Checks, Ci};
-use charter_core::forge::pr::{AutoMerge, Opened, Pr, Request, State};
+use charter_core::forge::pr::{AutoMerge, MergeAs, MergedAt, Opened, Pr, Request, State};
 use charter_core::forge::recorded::Recorded;
 use charter_core::forge::{Caller, Capability, Forge, ForgeBackend, Reach, Support};
 use serde_json::{Value, json};
@@ -36,7 +36,7 @@ const SHA: &str = "6dcb09b5b57875f334f61aebed695e2e4193db5e";
 const MERGE: &str = "e5bd3914e2e596debea16f433f57875b5b90bcd6";
 
 /// Every case, by the seam method it covers. The parity test compares this with the traits.
-const CASES: [&str; 13] = [
+const CASES: [&str; 16] = [
     "owned",
     "reachable",
     "top_level",
@@ -46,6 +46,9 @@ const CASES: [&str; 13] = [
     "set_body",
     "by_head",
     "request_auto_merge",
+    "lands_through_queue",
+    "merge_at",
+    "enqueue_at",
     "checks_at",
     "open_on_branch",
     "ci_word",
@@ -285,6 +288,63 @@ mod cases {
         spent(&recorded);
     }
 
+    /// How every landing case asks to merge: a merge commit, carrying the trailer.
+    fn merge_as(kind: &str) -> MergeAs {
+        let sigil = charter_core::forge::Kind::parse(kind)
+            .unwrap()
+            .change_sigil();
+        MergeAs {
+            squash: false,
+            title: format!("api-2: api ({sigil}12)"),
+            message: "bump the api\n\nCharter-Change: api-2".to_string(),
+        }
+    }
+
+    pub fn lands_through_queue(kind: &str, how: How) {
+        let recorded = over(kind, "lands_through_queue", how);
+        let pr = Pr {
+            number: 12,
+            url: String::new(),
+        };
+        assert_eq!(
+            recorded
+                .backend
+                .lands_through_queue(&recorded.caller, "acme/api", &pr),
+            Ok(true)
+        );
+        spent(&recorded);
+    }
+
+    pub fn merge_at(kind: &str, how: How) {
+        let recorded = over(kind, "merge_at", how);
+        let pr = Pr {
+            number: 12,
+            url: String::new(),
+        };
+        assert_eq!(
+            recorded
+                .backend
+                .merge_at(&recorded.caller, "acme/api", &pr, SHA, &merge_as(kind)),
+            Ok(MergedAt::Now)
+        );
+        spent(&recorded);
+    }
+
+    pub fn enqueue_at(kind: &str, how: How) {
+        let recorded = over(kind, "enqueue_at", how);
+        let pr = Pr {
+            number: 12,
+            url: String::new(),
+        };
+        assert_eq!(
+            recorded
+                .backend
+                .enqueue_at(&recorded.caller, "acme/api", &pr, SHA, &merge_as(kind)),
+            Ok(())
+        );
+        spent(&recorded);
+    }
+
     pub fn checks_at(kind: &str, how: How) {
         let recorded = over(kind, "checks_at", how);
         let backend = &recorded.backend;
@@ -386,6 +446,21 @@ macro_rules! contract {
             fn request_auto_merge_queues_the_merge_at_the_pushed_commit() {
                 charter_core::unsteered!();
                 super::cases::request_auto_merge(stringify!($forge), super::How::$how);
+            }
+            #[test]
+            fn lands_through_queue_reads_whether_the_target_branch_has_a_queue() {
+                charter_core::unsteered!();
+                super::cases::lands_through_queue(stringify!($forge), super::How::$how);
+            }
+            #[test]
+            fn merge_at_merges_now_only_at_the_head_charter_read() {
+                charter_core::unsteered!();
+                super::cases::merge_at(stringify!($forge), super::How::$how);
+            }
+            #[test]
+            fn enqueue_at_puts_the_request_in_the_queue_only_at_the_head_charter_read() {
+                charter_core::unsteered!();
+                super::cases::enqueue_at(stringify!($forge), super::How::$how);
             }
             #[test]
             fn checks_at_counts_one_passing_check_at_the_head() {

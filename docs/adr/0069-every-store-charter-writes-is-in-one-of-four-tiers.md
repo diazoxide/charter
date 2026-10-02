@@ -278,6 +278,7 @@ relative to the plane root unless they start with `<config>` (the machine store)
 | 78 | `<config>/forge-accounts.json`, the forge accounts (ADR 0077, added 2026-10-01) | Machine | device-bound | yes | no |
 | 79 | `keyring charter/@forge/<host>/<id>`: a forge account's token (ADR 0077, added 2026-10-01) | Keyring | — | no | no |
 | 80 | `.charter-scan-allow.toml` in a repository a chat commits to (ADR 0074, SQ-17, added 2026-10-01) | Plane in a plane; elsewhere committed to that repository, which is tier None | — | remote in a plane; — elsewhere | no |
+| 81 | `workspaces/<ws>/changes/log/pending/<host>.jsonl`, pending landings (#472, added 2026-10-02) | Clone state | — | yes | no |
 
 Rows after 72 are numbered in the order their records merged. **Row numbers renumbered
 2026-10-01:** ADR 0078's amendment had numbered its four rows 73 to 76, which collided with rows

@@ -149,9 +149,17 @@ A member's pull request, or merge request on GitLab.
 _Avoid_: change (for a PR), MR/PR in UI text
 
 **Landed**:
-A member whose request the forge reports merged and whose merge commit, as charter's landing
-log recorded it, is still on the default branch.
+A member whose request the forge reports merged, that charter landed, and whose merge commit, as
+charter's landing log recorded it, is still on the default branch. A merge charter queued, or
+whose read-back failed, is landed once a later `charter change land` finds it merged at its
+**pending landing**'s head and logs it.
 _Avoid_: merged (a browser merge is merged but not logged), done
+
+**Pending landing**:
+Charter's evidence that it started landing a member: the request, the head its checks passed on
+and how (direct or queue), written before the forge is asked. Only a merge at that head is ever
+logged as charter's; a refused one is no evidence.
+_Avoid_: queued (a pending landing is also written for a direct merge), in flight
 
 **Inventory**:
 The plane's list of repos it can clone (`inventory/repos.json`), committed and shared. It only

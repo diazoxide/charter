@@ -2025,6 +2025,206 @@ fn a_changes_directory_it_cannot_list_is_named_beside_the_verdict() {
     assert!(r.detail.contains("cannot be checked"), "{}", r.detail);
 }
 
+/// A landing line in `ws`'s log, as `charter change land` writes one.
+fn landed(root: &Path, ws: &str, slug: &str, repo: &str) {
+    crate::change::landing::append(
+        root,
+        ws,
+        "laptop",
+        &crate::change::landing::Landing::new(
+            slug,
+            repo,
+            3,
+            "6dcb09b5b57875f334f61aebed695e2e4193db5e",
+            "e5bd3914e2e596debea16f433f57875b5b90bcd6",
+            chrono::Utc::now(),
+        ),
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_member_landed_ahead_of_its_blocker_is_a_fail() {
+    let (_t, root) = plane("");
+    clone_with(&root, "alpha", "svc", &["change/a"]);
+    clone_with(&root, "alpha", "web", &["change/a"]);
+    let mut rec = crate::change::Record::new("a", "why", "t", "2026-09-26T00:00:00+00:00");
+    for (repo, needs) in [("svc", vec![]), ("web", vec!["svc".to_string()])] {
+        rec.members.push(crate::change::Member {
+            repo: repo.into(),
+            branch: "change/a".into(),
+            needs,
+        });
+    }
+    crate::change::store::write(&root, "alpha", &rec).unwrap();
+    landed(&root, "alpha", "a", "web");
+    let r = one(&root, "changes");
+    assert_eq!(r.status, Status::Fail, "{r:?}");
+    assert!(
+        r.detail
+            .contains("alpha: web: landed while 'svc' had not, by charter's landing log"),
+        "{}",
+        r.detail
+    );
+
+    // Once the blocker is declared landed too, the order holds.
+    landed(&root, "alpha", "a", "svc");
+    let r = one(&root, "changes");
+    assert_eq!(r.status, Status::Ok, "{r:?}");
+}
+
+#[test]
+fn a_pushed_member_branch_the_default_branch_holds_with_no_landing_is_a_fail() {
+    let (_t, root) = plane("");
+    clone_with(&root, "alpha", "svc", &["change/a"]);
+    clone_with(&root, "alpha", "web", &["change/a"]);
+    change_record(
+        &root,
+        "alpha",
+        "a",
+        &[("svc", "change/a"), ("web", "change/a")],
+    );
+    for repo in ["svc", "web"] {
+        let dir = root.join("workspaces/alpha").join(repo);
+        git(
+            &dir,
+            &["update-ref", "refs/remotes/origin/main", "refs/heads/main"],
+        );
+        git(
+            &dir,
+            &[
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/main",
+            ],
+        );
+    }
+    // svc's branch was pushed and is in main: merged somewhere charter did not see. web's was
+    // never pushed, so a branch cut and not yet worked on is not read as a landing.
+    let svc = root.join("workspaces/alpha/svc");
+    git(
+        &svc,
+        &[
+            "update-ref",
+            "refs/remotes/origin/change/a",
+            "refs/heads/change/a",
+        ],
+    );
+    let r = one(&root, "changes");
+    assert_eq!(r.status, Status::Fail, "{r:?}");
+    assert!(
+        r.detail.contains(
+            "alpha: svc: branch change/a is in main and charter did not land it, so there is \
+             no landing to revert"
+        ),
+        "{}",
+        r.detail
+    );
+    assert!(!r.detail.contains("web:"), "{}", r.detail);
+
+    // A pending landing at a head the merged branch is not at is not this landing: no
+    // "Record it", since `land` would refuse to record it.
+    let pending = |head: &str, stage| {
+        crate::change::pending::append(
+            &root,
+            "alpha",
+            "laptop",
+            &crate::change::pending::Pending::new(
+                "a",
+                "svc",
+                3,
+                head,
+                crate::change::pending::Via::Queue,
+                stage,
+                chrono::Utc::now(),
+            ),
+        )
+        .unwrap();
+    };
+    pending(
+        "6dcb09b5b57875f334f61aebed695e2e4193db5e",
+        crate::change::pending::Stage::Asked,
+    );
+    let r = one(&root, "changes");
+    assert_eq!(r.status, Status::Fail, "{r:?}");
+    assert!(!r.detail.contains("Record it"), "{}", r.detail);
+    assert!(r.detail.contains("by hand"), "{}", r.detail);
+
+    // Charter started that landing at the head that merged and has not recorded it: the
+    // advice is to record it.
+    let head = crate::testgit::run(&svc, &["rev-parse", "refs/remotes/origin/change/a"])
+        .out
+        .trim()
+        .to_string();
+    pending(&head, crate::change::pending::Stage::Asked);
+    let r = one(&root, "changes");
+    assert_eq!(r.status, Status::Fail, "{r:?}");
+    assert!(
+        r.detail.contains(
+            "alpha: svc: branch change/a is in main, and charter started that landing and has \
+             not recorded it. Record it: charter change land a --repo svc"
+        ),
+        "{}",
+        r.detail
+    );
+    assert!(!r.detail.contains("by hand"), "{}", r.detail);
+
+    // A merge-later at that same head has merged: record it too.
+    pending(&head, crate::change::pending::Stage::MergeLater);
+    let r = one(&root, "changes");
+    assert!(
+        r.detail
+            .contains("Record it: charter change land a --repo svc"),
+        "{}",
+        r.detail
+    );
+
+    // Landed by charter: no divergence.
+    landed(&root, "alpha", "a", "svc");
+    let r = one(&root, "changes");
+    assert_eq!(r.status, Status::Ok, "{r:?}");
+}
+
+#[test]
+fn a_request_left_set_to_merge_later_is_a_fail_that_says_how_it_clears() {
+    let (_t, root) = plane("");
+    clone_with(&root, "alpha", "svc", &["change/a"]);
+    change_record(&root, "alpha", "a", &[("svc", "change/a")]);
+    crate::change::pending::append(
+        &root,
+        "alpha",
+        "laptop",
+        &crate::change::pending::Pending::new(
+            "a",
+            "svc",
+            3,
+            "6dcb09b5b57875f334f61aebed695e2e4193db5e",
+            crate::change::pending::Via::Direct,
+            crate::change::pending::Stage::MergeLater,
+            chrono::Utc::now(),
+        ),
+    )
+    .unwrap();
+    let r = one(&root, "changes");
+    assert_eq!(r.status, Status::Fail, "{r:?}");
+    assert!(
+        r.detail.contains(
+            "alpha: svc: request 3 was left set to merge later, at whatever head the branch \
+             has when a pipeline passes"
+        ),
+        "{}",
+        r.detail
+    );
+    assert!(
+        r.detail.contains(
+            "Cancel its auto-merge on the forge, then run charter change land a --repo svc \
+             again, or drop the member"
+        ),
+        "{}",
+        r.detail
+    );
+}
+
 #[test]
 fn the_changes_check_never_reaches_a_network() {
     let source = include_str!("changes.rs");

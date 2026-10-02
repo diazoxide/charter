@@ -84,7 +84,10 @@ by `tests/a_forge_cli_is_asked_exactly_what_python_asked.rs` and
 | `Requests::body` | `charter change push` (ADR 0060) | `GET pulls/{n}`, its `body` (`null` is empty) | `GET merge_requests/{iid}`, its `description` (`null` is empty) | strict | same |
 | `Requests::set_body` | `charter change push` | `PATCH pulls/{n}` with `body` alone | `PUT merge_requests/{iid}` with `description` alone | strict | same |
 | `Requests::request_auto_merge` | a PR-merge save | GraphQL `enablePullRequestAutoMerge` with `expectedHeadOid` | `PUT merge_requests/{iid}/merge` with `merge_when_pipeline_succeeds` and `sha`, only while a pipeline runs | strict | **gap 3** (#805) |
-| `Requests::checks_at` | `charter change show` | check runs **and** commit statuses at the sha, each read whole | the request's pipelines at the sha; the newest decides | strict, `UNKNOWN` on failure | same, by design |
+| `Requests::lands_through_queue` | `charter change land` (ruling Q16) | GraphQL `pullRequest.isMergeQueueEnabled` | `GET projects/{id}`, its `merge_trains_enabled` (absent below Premium is no) | strict | same |
+| `Requests::merge_at` | `charter change land` (ADR 0060 D3) | `PUT pulls/{n}/merge` with `merge_method`, `commit_title`, `commit_message` and `sha` | `PUT merge_requests/{iid}/merge` with `squash`, `sha` and `merge_commit_message`, **never** `merge_when_pipeline_succeeds` or `auto_merge` | strict | same |
+| `Requests::enqueue_at` | `charter change land` (ruling Q16) | GraphQL `enqueuePullRequest` with `expectedHeadOid` | `POST merge_trains/merge_requests/{iid}` with `squash` and `sha`, no `auto_merge` | strict | same, except the method (below) |
+| `Requests::checks_at` | `charter change show` and `land` | check runs **and** commit statuses at the sha, each read whole | the request's pipelines at the sha; the newest decides | strict, `UNKNOWN` on failure | same, by design |
 | `Requests::open_on_branch` | `gl-refresh` | `GET pulls?state=open&head={o}:{b}&per_page=1` | `GET merge_requests?state=opened&source_branch=…&per_page=100`, own project only | permissive | same (fixed here) |
 | `Requests::ci_word` | `gl-refresh` | GraphQL `statusCheckRollup.state` (5 values) | `GET pipelines?ref=…&per_page=1`, its `status` (13 values) | permissive | same |
 
@@ -128,6 +131,52 @@ self-managed GitLab is pushed to and asked at the host `charter.toml` declares f
 One member's failure costs only that member. A member that is not a repo in the workspace is
 refused by name. The exit is 1 when any member was not pushed, opened or written, as the Python
 charter answered, and 2 only when the whole command is refused.
+
+### `charter change land`
+
+`charter change land <slug> --repo <name>` merges one member of a cross-repo change (ADR 0060
+§2–§4 and D3, ruling Q16, #472). It is the one change verb that merges, and it is attended
+only: `floorguard::PUBLISH_FORGE` refuses it from a run nobody is watching, as it refuses
+`gh pr merge`.
+
+The gates come first, each refusal its own sentence and exit 2: one member named (`--repo`
+once), not by rebase; a member with a clone here and an open request (`by_head`); every member
+it `needs` landed, which is the forge reporting the blocker's request merged and charter having
+landed it: a landing-log line whose commit the clone's default branch (its `origin/` tracking
+ref, else the local branch) still holds, or a pending landing found merged at its head, which is
+logged then; and the checks `PASSED` at the request's head
+(`checks_at`), never at another commit.
+
+Then `lands_through_queue` decides the call. On GitLab a repo whose answer has no
+`merge_trains_enabled` (a token that cannot read its settings, a tier that does not report
+trains) is refused and nothing is merged: a direct merge there could skip a train.
+
+**Before the call, a pending landing is written** (`changes/log/pending/<host>.jsonl`, clone
+state): the request, the head, `direct` or `queue`. It is charter's evidence that it started
+this landing, and a later `land` records a merge it did not see happen only on that evidence.
+A refusal moves it to `refused`, so a later merge of the same head by somebody else is never
+taken for charter's.
+
+- **No queue:** `merge_at`, now, pinned to the head whose checks were read. GitHub's `sha` and
+  GitLab's `sha` make the forge refuse a head that moved, and charter, reading the request
+  again, names the move. The landing commit's message is charter's, so it carries
+  `Charter-Change: <slug>`. Charter never asks for auto-merge here: on GitLab
+  `merge_when_pipeline_succeeds` (or `auto_merge`) would merge whatever head the branch has when
+  a later pipeline passes. A GitLab that answers by setting it anyway has it cancelled at once,
+  the cancel confirmed by reading the merge request again, and the landing refused; a cancel
+  that fails is `MergedAt::Later`, kept as `merge-later` in the pending landing, and doctor names
+  it. After the merge the request is read again, and only a request the forge reports merged,
+  at that head, gets a line in the landing log. When that read-back fails, the next `land`
+  finds the merge and records it.
+- **A merge queue or merge train:** `enqueue_at`, pinned the same way (`expectedHeadOid`,
+  `sha`), and with no `auto_merge` on GitLab, so the merge request is added now or refused. The
+  queue runs its own checks and merges it later, so nothing is logged then. A later
+  `charter change land` of the member finds the request merged at the pending head and records
+  the landing. A request merged with no pending landing of charter's is never recorded, and as a
+  blocker it is refused as merged outside charter. A queue writes its own merge commit message
+  on both forges, so these landings carry no trailer. GitHub's queue merges by the method its
+  rule sets, so `--squash` is not charter's to choose there; GitLab's train takes `squash`
+  (`Kind::queue_takes_squash`).
 
 **Not behind the seam, and why:**
 

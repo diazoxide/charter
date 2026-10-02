@@ -1124,4 +1124,193 @@ mod prs {
         assert!(state(&repo, &four).unwrap_err().contains("HTTP 502"));
         assert!(state(&repo, &five).unwrap_err().contains("draft"));
     }
+
+    // -- charter change land: merging now, or through the queue, at one head --------------- //
+
+    fn landing() -> pr::MergeAs {
+        pr::MergeAs {
+            squash: false,
+            title: "@api-2: widget (#12)".into(),
+            message: "bump the api\n\nCharter-Change: api-2".into(),
+        }
+    }
+
+    #[test]
+    fn a_github_landing_merges_by_rest_with_sha_and_charters_message_as_literal_fields() {
+        charter_core::unsteered!();
+        if !in_child() {
+            return;
+        }
+        let scene = Scene::new("land-gh.test");
+        // The subject and body are `-f`, so a leading `@` is text, not a file to upload.
+        let merged = scene.answers(
+            "gh",
+            &[
+                "api",
+                "--hostname",
+                "land-gh.test",
+                "-X",
+                "PUT",
+                "repos/acme/widget/pulls/12/merge",
+                "-f",
+                "merge_method=merge",
+                "-f",
+                "commit_title=@api-2: widget (#12)",
+                "-f",
+                "commit_message=bump the api\n\nCharter-Change: api-2",
+                "-f",
+                &format!("sha={PUSHED}"),
+            ],
+            0,
+            r#"{"sha": "e5bd3914e2e596debea16f433f57875b5b90bcd6", "merged": true}"#,
+            "",
+        );
+        let repo = repo(&scene, "github", "acme/widget");
+        assert_eq!(
+            repo.backend().merge_at(
+                &Caller::command(),
+                &repo.path,
+                &twelve(&scene),
+                PUSHED,
+                &landing()
+            ),
+            Ok(pr::MergedAt::Now)
+        );
+        assert!(was_asked(&merged));
+    }
+
+    #[test]
+    fn a_github_landing_through_the_merge_queue_is_pinned_with_expected_head_oid() {
+        charter_core::unsteered!();
+        if !in_child() {
+            return;
+        }
+        let scene = Scene::new("land-mq.test");
+        let probe = include_str!("../src/forge/github/queries/merge_queue.graphql");
+        let enqueue = include_str!("../src/forge/github/queries/enqueue.graphql");
+        let probed = scene.answers(
+            "gh",
+            &[
+                "api",
+                "graphql",
+                "--hostname",
+                "land-mq.test",
+                "-f",
+                &format!("query={probe}"),
+                "-f",
+                "owner=acme",
+                "-f",
+                "name=widget",
+                "-F",
+                "number=12",
+            ],
+            0,
+            r#"{"data": {"repository": {"pullRequest": {"id": "PR_node12", "isMergeQueueEnabled": true}}}}"#,
+            "",
+        );
+        let queued = scene.answers(
+            "gh",
+            &[
+                "api",
+                "graphql",
+                "--hostname",
+                "land-mq.test",
+                "-f",
+                &format!("query={enqueue}"),
+                "-f",
+                "id=PR_node12",
+                "-f",
+                &format!("head={PUSHED}"),
+            ],
+            0,
+            &format!(
+                r#"{{"data": {{"enqueuePullRequest": {{"mergeQueueEntry": {{"state": "QUEUED", "headCommit": {{"oid": "{PUSHED}"}}}}}}}}}}"#
+            ),
+            "",
+        );
+        let repo = repo(&scene, "github", "acme/widget");
+        assert_eq!(
+            repo.backend().enqueue_at(
+                &Caller::command(),
+                &repo.path,
+                &twelve(&scene),
+                PUSHED,
+                &landing()
+            ),
+            Ok(())
+        );
+        assert!(was_asked(&probed) && was_asked(&queued));
+    }
+
+    #[test]
+    fn a_gitlab_landing_sends_sha_and_never_merge_when_pipeline_succeeds() {
+        charter_core::unsteered!();
+        if !in_child() {
+            return;
+        }
+        let scene = Scene::new("land-gl.test");
+        // The whole argv: a `merge_when_pipeline_succeeds` or `auto_merge` anywhere in it is a
+        // question nobody wrote down, which the stand-in answers with exit 99.
+        let merged = scene.answers(
+            "glab",
+            &[
+                "--hostname",
+                "land-gl.test",
+                "api",
+                "-X",
+                "PUT",
+                "projects/acme%2Fplat%2Fwidget/merge_requests/3/merge",
+                "-F",
+                "squash=false",
+                "-f",
+                &format!("sha={PUSHED}"),
+                "-f",
+                "merge_commit_message=@api-2: widget (#12)\n\nbump the api\n\nCharter-Change: api-2",
+            ],
+            0,
+            r#"{"iid": 3, "state": "merged", "merge_commit_sha": "e5bd3914e2e596debea16f433f57875b5b90bcd6"}"#,
+            "",
+        );
+        let trained = scene.answers(
+            "glab",
+            &[
+                "--hostname",
+                "land-gl.test",
+                "api",
+                "-X",
+                "POST",
+                "projects/acme%2Fplat%2Fwidget/merge_trains/merge_requests/3",
+                "-F",
+                "squash=false",
+                "-f",
+                &format!("sha={PUSHED}"),
+            ],
+            0,
+            r#"[{"id": 1, "merge_request": {"iid": 3}, "status": "idle"}]"#,
+            "",
+        );
+        let repo = repo(&scene, "gitlab", "acme/plat/widget");
+        let backend = repo.backend();
+        assert_eq!(
+            backend.merge_at(
+                &Caller::command(),
+                &repo.path,
+                &three(&scene),
+                PUSHED,
+                &landing()
+            ),
+            Ok(pr::MergedAt::Now)
+        );
+        assert_eq!(
+            backend.enqueue_at(
+                &Caller::command(),
+                &repo.path,
+                &three(&scene),
+                PUSHED,
+                &landing()
+            ),
+            Ok(())
+        );
+        assert!(was_asked(&merged) && was_asked(&trained));
+    }
 }

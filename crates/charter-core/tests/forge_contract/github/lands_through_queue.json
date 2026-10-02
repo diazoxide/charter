@@ -1,0 +1,41 @@
+{
+  "source": "GitHub GraphQL API: PullRequest.isMergeQueueEnabled (schema.graphql)",
+  "exchanges": [
+    {
+      "call": {
+        "endpoint": "graphql",
+        "fields": [
+          {
+            "text": [
+              "query",
+              "# Whether a pull request's base branch lands through a merge queue, and the pull request's node id.\nquery MergeQueue($owner: String!, $name: String!, $number: Int!) {\n  repository(owner: $owner, name: $name) {\n    pullRequest(number: $number) {\n      id\n      isMergeQueueEnabled\n    }\n  }\n}\n"
+            ]
+          },
+          {
+            "text": [
+              "owner",
+              "acme"
+            ]
+          },
+          {
+            "text": [
+              "name",
+              "api"
+            ]
+          },
+          {
+            "typed": [
+              "number",
+              "12"
+            ]
+          }
+        ]
+      },
+      "reply": {
+        "code": 0,
+        "out": "{\"data\": {\"repository\": {\"pullRequest\": {\"id\": \"PR_kwDOAbc\", \"isMergeQueueEnabled\": true}}}}",
+        "err": ""
+      }
+    }
+  ]
+}
