@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { listen } from "./here";
 
 import type { ChangeKind, PlaneChange, PlaneChanged, PlaneId } from "./bindings";
@@ -93,19 +93,23 @@ export function usePlaneChanged(planes: readonly PlaneId[], interest?: Interest)
   const [count, setCount] = useState(0);
   // The list by value: a fresh array from the caller each render must not re-register.
   const holding = planes.join("\n");
-  // And the interest by value, for the same reason.
-  const wanting = interest === undefined ? undefined : JSON.stringify(interest);
+  // The interest is read when an event arrives, not listened under: focusing another
+  // workspace changes it, and re-registering the listener then would be IPC per focus and a
+  // gap in which a change could go unheard. Focusing reads the workspace anyway.
+  const wanted = useRef(interest);
+  useEffect(() => {
+    wanted.current = interest;
+  });
 
   useEffect(() => {
     const mine = new Set(holding.split("\n"));
-    const wanted = wanting === undefined ? undefined : (JSON.parse(wanting) as Interest);
     let gone = false;
     let stop: (() => void) | undefined;
     void (async () => {
       try {
         const unlisten = await listen<PlaneChanged>("plane-changed", (event) => {
           if (gone || !mine.has(event.payload.plane)) return;
-          if (concerns(event.payload.changes, wanted)) setCount((was) => was + 1);
+          if (concerns(event.payload.changes, wanted.current)) setCount((was) => was + 1);
         });
         if (gone) unlisten();
         else stop = unlisten;
@@ -117,7 +121,7 @@ export function usePlaneChanged(planes: readonly PlaneId[], interest?: Interest)
       gone = true;
       stop?.();
     };
-  }, [holding, wanting]);
+  }, [holding]);
 
   return count;
 }
