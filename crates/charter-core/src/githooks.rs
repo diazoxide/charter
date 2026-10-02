@@ -23,7 +23,8 @@
 //!
 //! `core.hooksPath` replaces a repository's hooks directory, so a shim stands in for each hook
 //! in [`NAMES`], and each one runs the repository's own hook of the same name — after charter's
-//! check, for the two in [`CHECKED`]. Husky, the pre-commit framework and git-lfs keep working
+//! check, for the two in [`CHECKED`], and after charter stamps the message with the chat's
+//! provenance trailers, for [`COMMIT_MSG`] (GL-8, [`crate::provenance`]). Husky, the pre-commit framework and git-lfs keep working
 //! in a chat exactly as they do in a terminal.
 //!
 //! **Which directory is the repository's own is git's answer, not charter's**: the shim asks
@@ -56,6 +57,11 @@ pub const CHECKED: [&str; 2] = [PRE_COMMIT, PRE_MERGE_COMMIT];
 
 /// The hook git runs before it makes a merge commit, which never runs `pre-commit`.
 pub const PRE_MERGE_COMMIT: &str = "pre-merge-commit";
+
+/// The hook that hands charter the message git is about to commit, so an agent's own commit
+/// carries its provenance trailers (GL-8, V67, ADR 0074 amended). It never refuses a commit: a
+/// message charter could not stamp, or a `charter` that has gone, commits as it was written.
+pub const COMMIT_MSG: &str = "commit-msg";
 
 /// The hooks that get a shim, so the repository's own still runs. Every hook `githooks(5)`
 /// names but three, which run on every index or ref change and cost a shell and a `git` each
@@ -199,7 +205,8 @@ fn quoted(text: &str) -> String {
 /// its exit status is the hook's.
 ///
 /// When the `charter` that wrote it has gone, a checked hook refuses — a commit nothing scanned
-/// is not one charter lets through.
+/// is not one charter lets through. [`COMMIT_MSG`] runs `charter` with git's arguments and never
+/// refuses: a message it could not stamp is committed as it was written.
 fn shim(charter: &Path, hooks: &Path, name: &str) -> String {
     let charter = quoted(&charter.display().to_string());
     let hooks = quoted(&hooks.display().to_string());
@@ -210,6 +217,11 @@ fn shim(charter: &Path, hooks: &Path, name: &str) -> String {
   exit 1
 fi
 "$charter" {COMMAND} {name} || exit 1
+"#
+        )
+    } else if name == COMMIT_MSG {
+        format!(
+            r#"[ -x "$charter" ] && "$charter" {COMMAND} {name} "$@"
 "#
         )
     } else {
@@ -406,7 +418,7 @@ mod tests {
         let said = armed.root.join("said");
         script(
             &armed.root.join("charter"),
-            &format!("printf '%s\\n' \"$@\" > '{}'", said.display()),
+            &format!("printf '%s\\n' \"$@\" >> '{}'", said.display()),
         );
         testgit::run(&armed.repo, &["config", "core.hooksPath", ".husky"]);
         for name in ["pre-commit", "commit-msg"] {
@@ -421,7 +433,7 @@ mod tests {
         assert!(ran.status.success(), "{ran:?}");
         assert_eq!(
             std::fs::read_to_string(&said).unwrap(),
-            "git-hook\npre-commit\n"
+            "git-hook\npre-commit\ngit-hook\ncommit-msg\n.git/COMMIT_EDITMSG\n"
         );
         assert!(armed.mark("pre-commit").exists());
         assert!(armed.mark("commit-msg").exists());
@@ -500,9 +512,11 @@ mod tests {
         let ran = armed.git(&["merge", "-q", "--no-ff", "-m", "merge", "side"]);
 
         assert!(ran.status.success(), "{ran:?}");
-        assert_eq!(
-            std::fs::read_to_string(&said).unwrap(),
-            "git-hook\npre-merge-commit\n"
+        assert!(
+            std::fs::read_to_string(&said)
+                .unwrap()
+                .starts_with("git-hook\npre-merge-commit\n"),
+            "the check, then the message"
         );
     }
 
@@ -535,5 +549,64 @@ mod tests {
 
         assert!(!stale.exists());
         assert!(armed.hooks.dir().join("pre-push").exists());
+    }
+
+    #[test]
+    fn charter_writes_the_message_before_the_repositorys_own_commit_msg_reads_it() {
+        let armed = Armed::new(
+            "[ \"$2\" = commit-msg ] && printf '\\nAssisted-by: claude\\n' >> \"$3\"; exit 0",
+        );
+        let seen = armed.root.join("seen");
+        script(
+            &armed.repo.join(".git/hooks/commit-msg"),
+            &format!("cp \"$1\" '{}'", seen.display()),
+        );
+
+        let ran = armed.commit();
+
+        assert!(ran.status.success(), "{ran:?}");
+        assert!(
+            std::fs::read_to_string(&seen)
+                .unwrap()
+                .contains("Assisted-by: claude")
+        );
+        let body = armed.git(&["log", "-1", "--format=%B"]);
+        assert_eq!(
+            String::from_utf8_lossy(&body.stdout),
+            "x\n\nAssisted-by: claude\n\n"
+        );
+    }
+
+    #[test]
+    fn a_message_charter_could_not_stamp_is_still_committed() {
+        let armed = Armed::new("[ \"$2\" = commit-msg ] && exit 1; exit 0");
+
+        let ran = armed.commit();
+
+        assert!(ran.status.success(), "{ran:?}");
+    }
+
+    #[test]
+    fn a_commit_msg_whose_charter_has_gone_still_commits_and_the_repositorys_own_runs() {
+        let armed = Armed::new("exit 0");
+        script(
+            &armed.repo.join(".git/hooks/commit-msg"),
+            &format!("touch '{}'", armed.mark("commit-msg").display()),
+        );
+        armed.commit();
+        std::fs::remove_file(armed.root.join("charter")).unwrap();
+        std::fs::remove_file(armed.mark("commit-msg")).unwrap();
+        std::fs::write(armed.repo.join("f"), "y\n").unwrap();
+        armed.git(&["add", "f"]);
+
+        // pre-commit refuses a commit nothing scanned, so this one asks git to skip the check
+        // and runs the message hook alone, as `git commit --no-verify` would not: by hand.
+        let mut cmd = std::process::Command::new(armed.hooks.dir().join("commit-msg"));
+        std::fs::write(armed.root.join("msg"), "y\n").unwrap();
+        cmd.current_dir(&armed.repo).arg(armed.root.join("msg"));
+        let ran = crate::forklock::output(&mut cmd).unwrap();
+
+        assert!(ran.status.success(), "{ran:?}");
+        assert!(armed.mark("commit-msg").exists());
     }
 }

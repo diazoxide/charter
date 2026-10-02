@@ -394,15 +394,19 @@ enum Command {
         explain: bool,
     },
 
-    /// charter's check in a chat's git hooks (SQ-16): for `pre-commit` and `pre-merge-commit`, scans what the commit
-    /// adds for secrets and personal data, and refuses it on a finding.
+    /// charter's part of a chat's git hooks (SQ-16): for `pre-commit` and `pre-merge-commit`, scans what the commit
+    /// adds for secrets and personal data, and refuses it on a finding; for `commit-msg`,
+    /// stamps the message with the chat's provenance trailers (GL-8).
     ///
     /// Hidden: nobody types it. The hooks the app writes at every launch are its one caller,
     /// and they run the repository's own hook after it.
     #[command(name = "git-hook", hide = true)]
     GitHook {
-        /// The hook git is running: `pre-commit` or `pre-merge-commit`.
+        /// The hook git is running: `pre-commit`, `pre-merge-commit` or `commit-msg`.
         name: String,
+        /// git's own arguments to the hook: `commit-msg`'s message file.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
     },
 
     /// Open a chat in a workspace you name, already working on a brief you pass as a quoted
@@ -1867,6 +1871,10 @@ fn plane_command(command: &Command) -> Option<ExitCode> {
             if *pull && charter_core::planegit::pull(&root, &mut say) != 0 {
                 1
             } else {
+                // A chat's `charter save` is an agent run's, and carries its trailers (GL-8).
+                let provenance = charter_core::provenance::Provenance::in_chat(&root, &|name| {
+                    std::env::var(name).ok()
+                });
                 charter_core::planegit::save(
                     &charter_core::planegit::Request {
                         root: &root,
@@ -1874,6 +1882,7 @@ fn plane_command(command: &Command) -> Option<ExitCode> {
                         sign: *sign,
                         no_push: *no_push,
                         cwd: &cwd,
+                        provenance: provenance.as_ref(),
                     },
                     &mut say,
                 )
@@ -3062,8 +3071,8 @@ fn main() -> ExitCode {
         return shellguard::run(shims, harness, args);
     }
     // Needs no plane: it runs in whatever repository a chat commits to.
-    if let Command::GitHook { name } = &cli.command {
-        return githook::run(name);
+    if let Command::GitHook { name, args } = &cli.command {
+        return githook::run(name, args);
     }
     // Needs no plane either: it scans the repository it stands in.
     if let Command::Scan { explain } = &cli.command {

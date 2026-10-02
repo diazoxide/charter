@@ -1542,6 +1542,9 @@ pub struct Request<'a> {
     pub no_push: bool,
     /// Where the operator is standing — what the two refusals below are about.
     pub cwd: &'a Path,
+    /// The agent run this save is for, when a chat's `charter save` asked for it: its trailers
+    /// go on the commit (GL-8, V67). `None` for every save the operator or the app made.
+    pub provenance: Option<&'a crate::provenance::Provenance>,
 }
 
 /// `charter save`: [`save_as`] started from the command line.
@@ -2363,6 +2366,12 @@ fn commit_push(
     let msg = match request.message {
         Some(text) if !text.is_empty() => text.to_string(),
         _ => summary(&staged),
+    };
+    // The agent run's trailers (GL-8, V67), appended by charter itself and never through git's
+    // `--trailer`, which reads trailer configuration and reformats the message's own lines.
+    let msg = match request.provenance {
+        Some(p) => crate::provenance::append(&msg, &p.trailers(plane.assisted_by.value), None),
+        None => msg,
     };
     // Unsigned by default so a signer never hangs; `--sign` opts in. `-c` on the command line
     // beats the operator's global `commit.gpgsign = true`, which is the whole point: their

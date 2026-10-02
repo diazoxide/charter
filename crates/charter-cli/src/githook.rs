@@ -2,18 +2,27 @@
 //!
 //! For `pre-commit` and `pre-merge-commit`, the staged diff is scanned ([`charter_core::diffscan`]); a finding refuses
 //! the commit on standard error, masked, and tells the app, so the chat joins the needs-you
-//! queue. Every other hook has no check and answers success. The repository's own hook of the
+//! queue. For `commit-msg`, the message is stamped with the chat's provenance trailers
+//! ([`charter_core::provenance::stamp`]) and the hook always succeeds. Every other hook has no
+//! check and answers success. The repository's own hook of the
 //! same name is the shim's to run, after this ([`charter_core::githooks`]).
 
 use std::path::Path;
 use std::process::ExitCode;
 
-use charter_core::githooks::{CHECKED, PRE_COMMIT};
+use charter_core::githooks::{CHECKED, COMMIT_MSG, PRE_COMMIT};
 use charter_core::{diffscan, hookwire};
 
 /// Runs charter's check for hook `name` in the repository git ran it in: this process's
 /// working directory, which git sets to the top of the work tree.
-pub fn run(name: &str) -> ExitCode {
+pub fn run(name: &str, args: &[String]) -> ExitCode {
+    if name == COMMIT_MSG {
+        if let (Ok(top), Some(message)) = (std::env::current_dir(), args.first()) {
+            let message = top.join(message);
+            charter_core::provenance::stamp(&message, &top, &|n| std::env::var(n).ok());
+        }
+        return ExitCode::SUCCESS;
+    }
     if !CHECKED.contains(&name) {
         return ExitCode::SUCCESS;
     }
