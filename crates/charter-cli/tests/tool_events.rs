@@ -31,12 +31,15 @@ fn hook_with(
     let (tx, heard) = mpsc::channel();
     let tx = Mutex::new(tx);
     let _reading = listener.hear(Hearing {
-        each: Box::new(|_| {}),
+        each: Box::new(|_| Ok(())),
         answer: Box::new(|_, _| panic!("no ask")),
         noticed: Box::new(|_| {}),
         saved: Box::new(|_| {}),
-        refused: Box::new(|_| {}),
-        tool: Box::new(move |call| tx.lock().unwrap().send(call).unwrap()),
+        refused: Box::new(|_| Ok(())),
+        tool: Box::new(move |call| {
+            tx.lock().unwrap().send(call).unwrap();
+            Ok(())
+        }),
     });
     let mut child = Command::new(CHARTER)
         .args(["hook", word])
@@ -225,7 +228,7 @@ fn a_crashed_guard_with_its_stderr_closed_still_refuses_with_exit_2() {
 /// host issued the chat its token and went away.
 fn hook_with_no_host(word: &str, payload: &serde_json::Value) -> (i32, String, Vec<ToolCall>) {
     let dir = tempfile::tempdir().expect("a directory");
-    let path = dir.path().join("hooks.sock");
+    let path = dir.path().join(".charter/app/hooks.sock");
     let token = {
         let listener = Listener::bind(dir.path(), &path).expect("a socket");
         listener.tokens().issue(7).expect("a token")
@@ -297,16 +300,17 @@ fn a_tool_hook_answers_only_once_the_host_has_recorded_its_call() {
     let token = listener.tokens().issue(7).expect("a token");
     let recorded_at = std::sync::Arc::new(Mutex::new(None::<Instant>));
     let _reading = listener.hear(Hearing {
-        each: Box::new(|_| {}),
+        each: Box::new(|_| Ok(())),
         answer: Box::new(|_, _| panic!("no ask")),
         noticed: Box::new(|_| {}),
         saved: Box::new(|_| {}),
-        refused: Box::new(|_| {}),
+        refused: Box::new(|_| Ok(())),
         tool: Box::new({
             let recorded_at = std::sync::Arc::clone(&recorded_at);
             move |_| {
                 std::thread::sleep(Duration::from_millis(120));
                 *recorded_at.lock().unwrap() = Some(Instant::now());
+                Ok(())
             }
         }),
     });

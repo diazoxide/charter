@@ -16,12 +16,17 @@
 //! anything report on the live channel as the chat. A line is that chat's only if it is in that
 //! chat's file and checks under a key the host issued to that chat.
 //!
-//! **What it holds, stated plainly** (ADR 0068 §6). A process holding a chat's token can write
-//! lines as that chat, as it can on the live channel. It cannot write lines that read as another
-//! chat's. Lines removed from before a later line are a gap the drain finds; lines removed from
-//! the end, before a drain, are not found. A sandboxed chat is denied writing the whole
-//! directory (ADR 0067 §5's integrity class covers `.charter/app/`); the hooks of the harnesses
-//! charter sandboxes run outside the sandbox their tools run in, so they still reach it.
+//! **What it holds, stated plainly** (ADR 0068 §6, as amended by V63). A process holding a
+//! chat's token can write lines as that chat, as it can on the live channel. It cannot write
+//! lines that read as another chat's. A number missing below the highest one in the file is a
+//! gap the drain finds; lines removed from the end, or removed and then followed by new ones,
+//! are not found. A sandboxed chat is denied reading and writing the whole directory, keys
+//! included (ADR 0067 §5's integrity class); the hooks of the harnesses charter sandboxes run
+//! outside the sandbox their tools run in, so they still reach it.
+//!
+//! **Only where that denial reaches** ([`covered`]): a project's `.charter/app/spool/`. Beside
+//! a hook socket anywhere else (the fallback for a project whose path is too long for a
+//! socket) nothing is spooled and no key is written, and the hook says the line is lost.
 //!
 //! **Numbers are per key.** A key is one token, and a token is one start of a chat, so its
 //! sequence starts at 1 and every one of its lines is drained at the same start of the host:
@@ -29,7 +34,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
-use std::io::{self, BufRead, Read, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use super::{ChatToken, CommitRefused, Line, Report, ToolCall};
@@ -51,6 +56,38 @@ pub fn dir_for(socket: &Path) -> PathBuf {
     socket
         .parent()
         .map_or_else(|| PathBuf::from(DIR), |parent| parent.join(DIR))
+}
+
+/// Whether `dir` is a spool the chat sandbox's integrity denial covers: a project's
+/// `.charter/app/spool/` (ADR 0067 §5, `sandbox::Denied`). Nothing is spooled, and no key
+/// written, anywhere else (V63).
+pub fn covered(dir: &Path) -> bool {
+    let mut parts = dir.components().rev().map(|part| part.as_os_str());
+    parts.next() == Some(DIR.as_ref())
+        && parts.next() == Some("app".as_ref())
+        && parts.next() == Some(".charter".as_ref())
+}
+
+/// [`covered`], or the refusal a hook reports as the line lost.
+fn refused_unless_covered(dir: &Path) -> io::Result<()> {
+    if covered(dir) {
+        return Ok(());
+    }
+    Err(io::Error::new(
+        io::ErrorKind::PermissionDenied,
+        format!(
+            "{} is not a directory a sandboxed chat is denied, so nothing is spooled there",
+            dir.display()
+        ),
+    ))
+}
+
+/// Holds an exclusive lock on the spool directory itself while `keys.json` is read and
+/// rewritten, so two tokens issued at once never drop each other's key.
+fn keys_locked<T>(dir: &Path, act: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
+    let held = File::open(dir)?;
+    held.lock()?;
+    act()
 }
 
 /// Chat `chat`'s spool in `dir`.
@@ -150,26 +187,35 @@ fn open_spool(path: &Path) -> io::Result<File> {
 /// Appends `what`, chat `chat`'s line, to its spool in `dir`, under `token`'s key and the next
 /// number in that key's sequence, and answers the number.
 ///
-/// **Durable when it returns** (FD-9's widened acceptance): the line is `fsync`ed before this
-/// answers, so a hook that answers after it has an event that survives the host and the
-/// machine going down. The file is locked while the number is chosen and the line written, so
-/// two hooks of one chat running at once never take the same number.
+/// **Survives a host crash when it returns** (FD-9's widened acceptance): the line is
+/// `fsync`ed, and a new file's directory with it, before this answers. It is the operating
+/// system's ordinary `fsync`, which on macOS does not reach through the drive's own cache, so a
+/// power loss there can still lose it. The file is locked while the number is chosen and the
+/// line written, so two hooks of one chat running at once never take the same number.
+///
+/// Refused where the sandbox's integrity denial does not reach ([`covered`]).
 pub fn append(
     dir: &Path,
     chat: u32,
     token: &ChatToken,
     what: &impl serde::Serialize,
 ) -> io::Result<u64> {
+    refused_unless_covered(dir)?;
     private(dir)?;
     let key = SpoolKey::of(token);
     let id = key.id();
     let line = serde_json::to_string(what).map_err(io::Error::other)?;
-    let mut file = open_spool(&file_for(dir, chat))?;
+    let path = file_for(dir, chat);
+    let new = !path.exists();
+    let mut file = open_spool(&path)?;
+    if new {
+        rustix::fs::fsync(File::open(dir)?)?;
+    }
     file.lock()?;
-    let mut text = String::new();
-    file.read_to_string(&mut text)?;
-    let last = text
-        .lines()
+    let mut text = Vec::new();
+    file.read_to_end(&mut text)?;
+    let last = lines_of(&text)
+        .filter_map(Result::ok)
         .filter_map(|it| serde_json::from_str::<OnDisk>(it).ok())
         .filter(|it| it.key == id)
         .map(|it| it.seq)
@@ -189,7 +235,7 @@ pub fn append(
     .map_err(io::Error::other)?;
     bytes.push(b'\n');
     // A file a crash left ending in half a line: the new line starts on a line of its own.
-    if !text.is_empty() && !text.ends_with('\n') {
+    if !text.is_empty() && !text.ends_with(b"\n") {
         bytes.insert(0, b'\n');
     }
     file.write_all(&bytes)?;
@@ -200,31 +246,61 @@ pub fn append(
 /// Records, in `dir`'s `keys.json`, the key chat `chat`'s spool lines under `token` check with.
 ///
 /// Durable before it returns, and called before the token reaches the chat, so a line the
-/// chat spools can always be checked by the next host.
+/// chat spools can always be checked by the next host. Refused where the sandbox's integrity
+/// denial does not reach ([`covered`]): the key is a verifier at rest, owner-only, and a
+/// sandboxed chat may neither read nor write it (V63).
 pub fn remember(dir: &Path, chat: u32, token: &ChatToken) -> io::Result<()> {
+    refused_unless_covered(dir)?;
     private(dir)?;
     let key = SpoolKey::of(token);
-    let mut keys = read_keys(dir)?;
     let id = key.id();
-    if !keys.keys.iter().any(|held| held.id == id) {
-        keys.keys.push(Held {
-            id,
-            chat,
-            key: crate::extension::hex(&key.0),
-        });
-    }
-    write_keys(dir, &keys)
+    keys_locked(dir, || {
+        let mut keys = read_keys(dir)?;
+        if !keys.keys.iter().any(|held| held.id == id) {
+            keys.keys.push(Held {
+                id,
+                chat,
+                key: crate::extension::hex(&key.0),
+            });
+        }
+        write_keys(dir, &keys)
+    })
 }
 
+/// The keys in `dir`'s `keys.json`. A file that is not there, or that does not read as keys,
+/// holds none: a line under a key it lost is `no-key` at the drain, and nothing is stuck on it.
 fn read_keys(dir: &Path) -> io::Result<Keys> {
     match crate::contain::read_no_link(dir, &dir.join(KEYS)) {
-        Ok(bytes) => serde_json::from_slice(&bytes).map_err(io::Error::other),
-        Err(why) if why.kind() == io::ErrorKind::NotFound => Ok(Keys {
-            v: VERSION,
-            keys: Vec::new(),
-        }),
+        Ok(bytes) => Ok(serde_json::from_slice(&bytes).unwrap_or_else(|why| {
+            tracing::warn!(
+                "charter: {} does not read as spool keys ({why}); every line under them is \
+                 rejected as no-key",
+                dir.join(KEYS).display()
+            );
+            Keys::new()
+        })),
+        Err(why) if why.kind() == io::ErrorKind::NotFound => Ok(Keys::new()),
         Err(why) => Err(why),
     }
+}
+
+impl Keys {
+    fn new() -> Self {
+        Self {
+            v: VERSION,
+            keys: Vec::new(),
+        }
+    }
+}
+
+/// The lines of `bytes`, each as UTF-8 or the bytes it is: a line a crash tore through a
+/// character, or one somebody wrote that is not text, is one line that does not read, never
+/// the end of the file.
+fn lines_of(bytes: &[u8]) -> impl Iterator<Item = Result<&str, &[u8]>> {
+    bytes
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.iter().all(u8::is_ascii_whitespace))
+        .map(|line| std::str::from_utf8(line).map_err(|_| line))
 }
 
 fn write_keys(dir: &Path, keys: &Keys) -> io::Result<()> {
@@ -270,6 +346,18 @@ pub enum Drained {
     Spool { chat: u32, from: u64, to: u64 },
 }
 
+impl Drained {
+    /// The number of the chat whose spool it was found in.
+    pub fn chat(&self) -> u32 {
+        match self {
+            Self::Line { chat, .. }
+            | Self::Gap { chat, .. }
+            | Self::Rejected { chat, .. }
+            | Self::Spool { chat, .. } => *chat,
+        }
+    }
+}
+
 /// Why a line was rejected, in the words an event says it in.
 pub mod why {
     /// The line is not a spool line.
@@ -297,11 +385,10 @@ pub mod why {
 /// **Run before this host issues any token**, as a host does at its start: a line under a key
 /// `keys.json` does not hold when the drain begins is rejected (`no-key`).
 pub fn drain(dir: &Path, each: &mut dyn FnMut(Drained) -> io::Result<()>) -> io::Result<()> {
-    let keys = match read_keys(dir) {
-        Ok(keys) => keys,
-        Err(why) if why.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(why) => return Err(why),
-    };
+    if !dir.is_dir() {
+        return Ok(());
+    }
+    let keys = keys_locked(dir, || read_keys(dir))?;
     let taken: HashMap<String, Held> = keys
         .keys
         .iter()
@@ -327,9 +414,11 @@ pub fn drain(dir: &Path, each: &mut dyn FnMut(Drained) -> io::Result<()>) -> io:
         drain_one(dir, chat, &taken, each)?;
     }
     // Every key taken is drained: forget them, keeping any issued since.
-    let mut now = read_keys(dir)?;
-    now.keys.retain(|held| !taken.contains_key(&held.id));
-    write_keys(dir, &now)
+    keys_locked(dir, || {
+        let mut now = read_keys(dir)?;
+        now.keys.retain(|held| !taken.contains_key(&held.id));
+        write_keys(dir, &now)
+    })
 }
 
 fn drain_one(
@@ -338,19 +427,20 @@ fn drain_one(
     taken: &HashMap<String, Held>,
     each: &mut dyn FnMut(Drained) -> io::Result<()>,
 ) -> io::Result<()> {
-    let file = open_spool(&file_for(dir, chat))?;
+    let mut file = open_spool(&file_for(dir, chat))?;
     file.lock()?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
     // Per key, in the order keys first appear: its lines by number.
     let mut order: Vec<String> = Vec::new();
     let mut sequences: HashMap<String, BTreeMap<u64, Spooled>> = HashMap::new();
     let mut rejected = Vec::new();
-    for raw in io::BufReader::new(&file).lines() {
-        let raw = raw?;
-        if raw.trim().is_empty() {
-            continue;
-        }
+    for raw in lines_of(&bytes) {
         let reject = |seq, why| Drained::Rejected { chat, seq, why };
-        let Ok(disk) = serde_json::from_str::<OnDisk>(&raw) else {
+        let Ok(disk) = raw
+            .map_err(drop)
+            .and_then(|raw| serde_json::from_str::<OnDisk>(raw).map_err(drop))
+        else {
             rejected.push(reject(None, why::UNREADABLE));
             continue;
         };

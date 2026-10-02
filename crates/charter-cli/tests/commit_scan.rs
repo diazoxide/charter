@@ -44,12 +44,15 @@ impl Chat {
         let (tx, heard) = mpsc::channel();
         let tx = Mutex::new(tx);
         let reading = listener.hear(Hearing {
-            each: Box::new(|_| {}),
+            each: Box::new(|_| Ok(())),
             answer: Box::new(|_, _| panic!("no ask")),
             noticed: Box::new(|_| {}),
             saved: Box::new(|_| {}),
-            refused: Box::new(move |refused| tx.lock().unwrap().send(refused).unwrap()),
-            tool: Box::new(|_| {}),
+            refused: Box::new(move |refused| {
+                tx.lock().unwrap().send(refused).unwrap();
+                Ok(())
+            }),
+            tool: Box::new(|_| Ok(())),
         });
         let env = hooks.arm(vec![
             (SOCKET_ENV.into(), socket.clone().into_os_string()),

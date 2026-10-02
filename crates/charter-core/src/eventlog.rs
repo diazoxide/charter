@@ -729,12 +729,7 @@ impl Recorder {
         item: crate::hookwire::spool::Drained,
     ) -> io::Result<Event> {
         use crate::hookwire::spool::{Drained, Spooled};
-        let number = match &item {
-            Drained::Line { chat, .. }
-            | Drained::Gap { chat, .. }
-            | Drained::Rejected { chat, .. }
-            | Drained::Spool { chat, .. } => *chat,
-        };
+        let number = item.chat();
         let known = self.chats.get(&(plane.to_path_buf(), number)).cloned();
         let (kind, mut body) = match item {
             Drained::Line { seq, line, .. } => match (line, &known) {
@@ -743,6 +738,9 @@ impl Recorder {
                 }
                 (Spooled::Tool(call), Some(_)) => {
                     return self.tool_spooled(plane, &call, Instant::now(), Some(seq));
+                }
+                (Spooled::Refused(refused), Some(_)) => {
+                    return self.refused_spooled(plane, refused.chat, Some(seq));
                 }
                 (Spooled::Report(report), None) => (
                     format!("hook.{}", report.event.word()),
@@ -753,7 +751,7 @@ impl Recorder {
                     body["spooled"] = seq.into();
                     (tool_kind(&call), body)
                 }
-                (Spooled::Refused(_), _) => (
+                (Spooled::Refused(_), None) => (
                     COMMIT_REFUSED.to_owned(),
                     serde_json::json!({ "spooled": seq }),
                 ),
@@ -778,6 +776,28 @@ impl Recorder {
                 .append(Some(&who.chat), Some(&who.run), None, &kind, body),
             None => self.log.append(None, None, None, &kind, body),
         }
+    }
+
+    /// The event for a commit charter's git hook refused in chat `number` (SQ-16):
+    /// `hook.commit_refused`, under the chat's run. Metadata only: what was found is the
+    /// needs-you item's, never the log's.
+    pub fn refused(&mut self, plane: &Path, number: u32) -> io::Result<Event> {
+        self.refused_spooled(plane, number, None)
+    }
+
+    fn refused_spooled(
+        &mut self,
+        plane: &Path,
+        number: u32,
+        spooled: Option<u64>,
+    ) -> io::Result<Event> {
+        let who = self.identity(plane, number)?;
+        let mut body = serde_json::json!({});
+        if let Some(seq) = spooled {
+            body["spooled"] = seq.into();
+        }
+        self.log
+            .append(Some(&who.chat), Some(&who.run), None, COMMIT_REFUSED, body)
     }
 
     /// What makes this recorder's events durable: [`Durable::through`] after each write.

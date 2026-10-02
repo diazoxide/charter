@@ -50,16 +50,6 @@ pub fn tell(
     Err(no_channel())
 }
 
-/// [`send`]'s refusal, for a refused commit: no chat here is armed with charter's git hooks,
-/// so nothing calls this, and it says why all the same.
-pub fn tell_refused(
-    _path: &std::path::Path,
-    _token: Option<&ChatToken>,
-    _refused: &CommitRefused,
-) -> io::Result<()> {
-    Err(no_channel())
-}
-
 /// [`send`]'s refusal, for a saved session record: the record is written all the same, and
 /// `charter session record` says the tab will not close by itself.
 pub fn tell_saved(

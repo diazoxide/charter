@@ -23,11 +23,11 @@ fn call(chat: u32, id: &str) -> ToolCall {
 
 fn hearing(tool: Tooled) -> Hearing {
     Hearing {
-        each: Box::new(|_| {}),
+        each: Box::new(|_| Ok(())),
         answer: Box::new(|_, _| Answer::No { why: String::new() }),
         noticed: Box::new(|_| {}),
         saved: Box::new(|_| {}),
-        refused: Box::new(|_| {}),
+        refused: Box::new(|_| Ok(())),
         tool,
     }
 }
@@ -51,7 +51,7 @@ fn spooled_calls(socket: &std::path::Path) -> Vec<String> {
 #[test]
 fn a_line_the_host_takes_is_answered_only_once_its_hearer_has_recorded_it() {
     let dir = tempfile::tempdir().expect("a directory");
-    let path = dir.path().join("hooks.sock");
+    let path = dir.path().join(".charter/app/hooks.sock");
     let listener = Listener::bind(dir.path(), &path).expect("a socket");
     let token = listener.tokens().issue(1).expect("a token");
     let recorded = Arc::new(AtomicBool::new(false));
@@ -60,6 +60,7 @@ fn a_line_the_host_takes_is_answered_only_once_its_hearer_has_recorded_it() {
         Box::new(move |_| {
             std::thread::sleep(Duration::from_millis(60));
             recorded.store(true, Ordering::SeqCst);
+            Ok(())
         })
     }));
 
@@ -76,7 +77,7 @@ fn a_line_the_host_takes_is_answered_only_once_its_hearer_has_recorded_it() {
 #[test]
 fn a_line_no_host_takes_is_spooled_under_the_next_number() {
     let dir = tempfile::tempdir().expect("a directory");
-    let path = dir.path().join("hooks.sock");
+    let path = dir.path().join(".charter/app/hooks.sock");
     let token = {
         // A host issued the token and has gone, as an app that quit has.
         let listener = Listener::bind(dir.path(), &path).expect("a socket");
@@ -96,11 +97,12 @@ fn a_line_no_host_takes_is_spooled_under_the_next_number() {
 #[test]
 fn a_host_that_does_not_say_it_took_the_line_in_time_has_it_spooled() {
     let dir = tempfile::tempdir().expect("a directory");
-    let path = dir.path().join("hooks.sock");
+    let path = dir.path().join(".charter/app/hooks.sock");
     let listener = Listener::bind(dir.path(), &path).expect("a socket");
     let token = listener.tokens().issue(3).expect("a token");
     let _reading = listener.hear(hearing(Box::new(|_| {
         std::thread::sleep(Duration::from_secs(1));
+        Ok(())
     })));
 
     let began = std::time::Instant::now();
@@ -115,9 +117,45 @@ fn a_host_that_does_not_say_it_took_the_line_in_time_has_it_spooled() {
 }
 
 #[test]
+fn a_line_the_host_could_not_record_is_spooled() {
+    let dir = tempfile::tempdir().expect("a directory");
+    let path = dir.path().join(".charter/app/hooks.sock");
+    let listener = Listener::bind(dir.path(), &path).expect("a socket");
+    let token = listener.tokens().issue(6).expect("a token");
+    // The event log's disk is full.
+    let _reading = listener.hear(hearing(Box::new(|_| {
+        Err(std::io::Error::other("no space left on the device"))
+    })));
+
+    let delivered = deliver_tool(&path, Some(&token), &call(6, "full")).expect("spooled");
+
+    assert_eq!(delivered, Delivered::Spooled(1));
+    assert_eq!(spooled_calls(&path), ["full"]);
+}
+
+#[test]
+fn a_line_no_host_takes_outside_the_sandboxs_denial_is_lost_and_says_so() {
+    let dir = tempfile::tempdir().expect("a directory");
+    // A fallback channel: a socket beside no project's `.charter/app/`.
+    let path = dir
+        .path()
+        .join("charter-op-0123456789abcdef")
+        .join("hooks.sock");
+    let token = {
+        let listener = Listener::bind(dir.path(), &path).expect("a socket");
+        listener.tokens().issue(7).expect("a token")
+    };
+
+    let lost = deliver_tool(&path, Some(&token), &call(7, "a"));
+
+    assert!(lost.is_err(), "{lost:?}");
+    assert!(!spool::dir_for(&path).join("7.jsonl").exists());
+}
+
+#[test]
 fn a_line_with_no_token_and_no_host_is_lost_and_says_so() {
     let dir = tempfile::tempdir().expect("a directory");
-    let path = dir.path().join("hooks.sock");
+    let path = dir.path().join(".charter/app/hooks.sock");
 
     assert!(deliver_tool(&path, None, &call(4, "a")).is_err());
 }
@@ -126,7 +164,7 @@ fn a_line_with_no_token_and_no_host_is_lost_and_says_so() {
 #[test]
 fn a_host_restart_during_a_busy_turn_loses_no_event() {
     let dir = tempfile::tempdir().expect("a directory");
-    let path = dir.path().join("hooks.sock");
+    let path = dir.path().join(".charter/app/hooks.sock");
     let listener = Listener::bind(dir.path(), &path).expect("a socket");
     let token = listener.tokens().issue(5).expect("a token");
     let heard = Arc::new(Mutex::new(Vec::new()));
@@ -134,6 +172,7 @@ fn a_host_restart_during_a_busy_turn_loses_no_event() {
         let heard = Arc::clone(&heard);
         Box::new(move |call: ToolCall| {
             heard.lock().unwrap().push(call.call.unwrap_or_default());
+            Ok(())
         })
     }));
     let reading = Mutex::new(Some(reading));
