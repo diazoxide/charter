@@ -181,12 +181,13 @@ export function Palette({
       // **A project switch closes the palette in the same commit as the switch** (FR-27): it
       // cannot be refused, and closing after the switch's own answer was a second redraw of the
       // whole window, after the project in front had been drawn once already.
-      if (offer.does.verb === "selectProject") close();
+      const closesNow = offer.does.verb === "selectProject";
+      if (closesNow) close();
       void (async () => {
         const ran = await latest.current.onRun(offer);
         // A refusal is not an ending: the operator is still here, still choosing, and the
         // catalogue may now offer them the answer to it.
-        if (ran.ok && offer.does.verb !== "selectProject") close();
+        if (ran.ok && !closesNow) close();
       })();
     },
     [close, toTheProjects],

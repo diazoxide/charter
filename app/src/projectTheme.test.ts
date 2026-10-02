@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import { projectThemeChanged, useProjectTheme, useProjectThemeAnswers } from "./projectTheme";
+import {
+  projectThemeChanged,
+  useProjectTheme,
+  useProjectThemeAnswers,
+  useProjectThemeKept,
+} from "./projectTheme";
 
 /**
  * The window's store of what each project draws in each workspace (charter-app#273, #281). What
@@ -59,5 +64,28 @@ describe("the theme each workspace draws", () => {
     projectThemeChanged(PLANE);
     await waitFor(() => expect(alpha.result.current).toBe(2));
     expect(beta.result.current).toBe(2);
+  });
+
+  it("keeps a project's answer for a hook that only holds it, and redraws that hook for none", async () => {
+    // A project behind the one in front holds its theme so a switch back finds it (FR-27). Its
+    // view must not be drawn again each time the core answers what it already said.
+    const asked = core();
+    let renders = 0;
+    renderHook(() => {
+      renders += 1;
+      useProjectThemeKept(PLANE, "alpha");
+    });
+    await waitFor(() => expect(asked).toEqual(["alpha"]));
+    const front = renderHook(() => useProjectTheme(PLANE, "alpha"));
+    await waitFor(() => expect(front.result.current).toBe("charter-light"));
+    // The window asking found the answer held, and asked nothing more.
+    expect(asked).toEqual(["alpha"]);
+    const before = renders;
+
+    projectThemeChanged(PLANE);
+    await waitFor(() => expect(asked).toEqual(["alpha", "alpha"]));
+    await waitFor(() => expect(front.result.current).toBe("charter-light"));
+
+    expect(renders).toBe(before);
   });
 });

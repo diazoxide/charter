@@ -197,11 +197,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- **Switching projects is quicker, most of all into a project with many chats.** Its tab strip
-  comes back at the width it had instead of drawing every tab and then folding them away, the
-  palette closes in the same frame as the switch, and the project's theme and its repos' save
-  standing are drawn from what the window already knows, then checked again behind them, rather
-  than drawing the window a second and third time when the answers arrive (FR-27, #620).
+- **Fewer redraws when switching projects.** A project's tab strip comes back at the width it
+  had instead of drawing every tab and then folding them away, the palette closes in the same
+  frame as the switch, and the project's theme and its repos' save standing are drawn from what
+  the window already knows, then checked again behind them (FR-27, #620).
 
 - **A new project tracks the forge its repo is on, and asks when it cannot tell.** The first
   run, the New project dialog and `charter init` now follow one rule. The forge, and its owner or

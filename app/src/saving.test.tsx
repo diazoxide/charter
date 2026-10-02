@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import type { RepoSaving } from "./bindings";
-import { useRepoSaving } from "./saving";
+import { useRepoSaving, useRepoSavingKept } from "./saving";
 
 /**
  * The repos' save standing the title bar counts in, read for the project in front (charter-app
@@ -43,6 +43,8 @@ function core() {
 describe("the repos of the project in front, across a switch", () => {
   it("draws a project's last rows the moment it is back in front, and asks again behind them", async () => {
     const { waiting, answer } = core();
+    // The project behind holds its own rows, as its view does while the window holds it.
+    renderHook(() => useRepoSavingKept(ONE, "alpha"));
     const { result, rerender } = renderHook(({ plane }) => useRepoSaving(plane, "alpha"), {
       initialProps: { plane: ONE },
     });
@@ -63,6 +65,7 @@ describe("the repos of the project in front, across a switch", () => {
 
   it("draws what the core says once it says something new", async () => {
     const { waiting, answer } = core();
+    renderHook(() => useRepoSavingKept(ONE, "alpha"));
     const { result, rerender } = renderHook(({ plane }) => useRepoSaving(plane, "alpha"), {
       initialProps: { plane: ONE },
     });
@@ -75,5 +78,41 @@ describe("the repos of the project in front, across a switch", () => {
     await answer(ONE, [repo("svc", "saved")]);
 
     expect(result.current).toEqual([repo("svc", "saved")]);
+  });
+
+  it("forgets a project's rows once nothing holds them", async () => {
+    const { waiting, answer } = core();
+    const { result, rerender } = renderHook(({ plane }) => useRepoSaving(plane, "alpha"), {
+      initialProps: { plane: ONE },
+    });
+    await waitFor(() => expect(waiting.some((one) => one.plane === ONE)).toBe(true));
+    await answer(ONE, [repo("svc", "changed")]);
+
+    rerender({ plane: TWO });
+    await waitFor(() => expect(waiting.some((one) => one.plane === TWO)).toBe(true));
+    await answer(TWO, [repo("web", "saved")]);
+    rerender({ plane: ONE });
+
+    expect(result.current).toBeUndefined();
+  });
+
+  it("draws nothing again for an answer that says what is already drawn", async () => {
+    const { waiting, answer } = core();
+    let renders = 0;
+    const { result } = renderHook(() => {
+      renders += 1;
+      return useRepoSaving(ONE, "alpha");
+    });
+    await waitFor(() => expect(waiting.length).toBe(1));
+    await answer(ONE, [repo("svc", "changed")]);
+    expect(result.current).toEqual([repo("svc", "changed")]);
+
+    // Coming back to the window asks again (`useRereads`).
+    await act(async () => void window.dispatchEvent(new Event("focus")));
+    await waitFor(() => expect(waiting.length).toBe(1));
+    const asked = renders;
+    await answer(ONE, [repo("svc", "changed")]);
+
+    expect(renders).toBe(asked);
   });
 });

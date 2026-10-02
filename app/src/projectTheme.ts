@@ -108,6 +108,14 @@ export function useProjectTheme(
   );
 }
 
+/** Keeps what `plane` draws in `workspace` known while this is mounted, asking once, and draws
+ *  nothing: for a project behind the one in front, so that a switch back finds the answer
+ *  here rather than asking the core and drawing the window again when it replies (FR-27). An
+ *  answer redraws only the hooks that read it. */
+export function useProjectThemeKept(plane: PlaneId, workspace?: string): void {
+  useInterest(plane, workspace);
+}
+
 /** How many times `plane` has answered in `workspace`, asking once: a number that changes
  *  whenever what the window draws there was asked again — after a save, an approval or a
  *  removal, or a change on disk. */

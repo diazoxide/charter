@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { commands, type PlaneId, type PlaneSaving, type RepoSaving } from "./bindings";
 import { usePlaneChanged } from "./planeChanged";
 
@@ -91,25 +91,53 @@ function useRereads(setAsked: (next: (n: number) => number) => void): void {
   }, [setAsked]);
 }
 
+/** How many mounted hooks hold each project and workspace's repo rows (`useRepoSavingKept`). */
+const kept = new Map<string, number>();
+
+function keyOf(plane: PlaneId | undefined, workspace: string | undefined): string | undefined {
+  return plane === undefined || workspace === undefined ? undefined : `${plane}\u0000${workspace}`;
+}
+
+/**
+ * Keeps a project's repo rows while this is mounted, for a project behind the one in front: a
+ * switch back to it draws them at once (FR-27). It asks for nothing and draws nothing; the rows
+ * are {@link useRepoSaving}'s, and are forgotten once nothing holds them.
+ */
+export function useRepoSavingKept(plane: PlaneId, workspace: string | undefined): void {
+  const key = keyOf(plane, workspace);
+  useEffect(() => {
+    if (key === undefined) return;
+    kept.set(key, (kept.get(key) ?? 0) + 1);
+    return () => {
+      const left = (kept.get(key) ?? 1) - 1;
+      if (left > 0) kept.set(key, left);
+      else kept.delete(key);
+    };
+  }, [key]);
+}
+
 /**
  * **The workspace's repos' save standing, kept fresh** (charter-app#299): one row per clone,
  * read as {@link usePlaneSaving} reads the plane and at the same moments. `undefined` until
  * the first answer, and for no workspace at all — the strip of chats outside every workspace
  * has no repos.
+ *
+ * **The last answer for each project something holds, not only the one in front's** (FR-27):
+ * a project switched back to draws the rows it had at once and asks again behind them, rather
+ * than drawing none, waiting on `git status` per clone, and drawing the window again when it
+ * answers. An answer that says what is already drawn draws nothing.
  */
 export function useRepoSaving(
   plane: PlaneId | undefined,
   workspace: string | undefined,
 ): RepoSaving[] | undefined {
-  // **Every pair's last answer, not only the one in front's** (FR-27): a project switched back
-  // to draws the rows it had at once and asks again behind them, rather than drawing none,
-  // waiting on `git status` per clone, and redrawing the window when it answers. An answer
-  // the same as the rows already drawn redraws nothing.
   const [repos, setRepos] = useState<Readonly<Record<string, RepoSaving[]>>>({});
+  /** What is drawn, for an answer to be compared with before anything is set: an update that
+   *  changes nothing still draws the hook's owner once before React lets it go. */
+  const drawn = useRef(repos);
   const [asked, setAsked] = useState(0);
   const changed = usePlaneChanged(plane === undefined ? [] : [plane]);
-  const key =
-    plane === undefined || workspace === undefined ? undefined : `${plane}\u0000${workspace}`;
+  const key = keyOf(plane, workspace);
 
   useEffect(() => {
     if (plane === undefined || workspace === undefined || key === undefined) return;
@@ -117,8 +145,13 @@ export function useRepoSaving(
     void commands
       .workspaceSaving(plane, workspace)
       .then((answer) => {
-        if (!gone && answer.status === "ok" && Array.isArray(answer.data))
-          setRepos((was) => (same(was[key], answer.data) ? was : { ...was, [key]: answer.data }));
+        if (gone || answer.status !== "ok" || !Array.isArray(answer.data)) return;
+        const rows = answer.data;
+        if (same(drawn.current[key], rows)) return;
+        // Only what something still holds is kept, and the pair in front.
+        const still = Object.entries(drawn.current).filter(([one]) => one !== key && kept.has(one));
+        drawn.current = { ...Object.fromEntries(still), [key]: rows };
+        setRepos(drawn.current);
       })
       .catch(() => undefined);
     return () => {
