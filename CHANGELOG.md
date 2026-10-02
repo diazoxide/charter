@@ -302,6 +302,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   in the program's place, prefixes included. A live substitution in a body two shells read
   differently is searched too (#488).
 
+### Security
+
+- **The floor guard refuses more ways an unattended agent could merge.** When nobody is
+  watching (`bypassPermissions`), a forge API call to a merge endpoint, a setting that makes a
+  pull or merge request merge on its own later (auto-merge, a merge queue or train), and the
+  same command inside a string a shell runs are refused, as `gh pr merge` already was. A forge
+  API call whose effect on a merge charter cannot read is refused too. Reads, opening a request
+  and ordinary pushes are unchanged, and attended use is untouched.
+
 ## [0.4.2] - 2026-09-30
 
 0.4.2 is a hardening release: the release pipeline runs only the code it pinned, a chat starts from an allowlisted environment instead of the app's whole one, a plane save scans every file it commits for secrets, plane trust covers the tools a persona is granted, and hook calls are authenticated per chat.

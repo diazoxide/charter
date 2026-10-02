@@ -45,7 +45,10 @@
 //!   leading name is dropped from `words` before the table is read. The table entry alone would
 //!   have been a dead line: the lookup used to live under `elif base in ("gh", "glab")`.
 
+mod merge;
+
 use crate::credguard::git_subcommand;
+use crate::handoffguard;
 use crate::leakguard::{self, CHARTER_PROGS};
 use crate::shellseg;
 use crate::shellwrap::{self, base_lower};
@@ -143,7 +146,13 @@ pub fn release_floor_reason(cmd: &str, unattended: bool) -> Option<String> {
     }
     let fix = RELEASE_FLOOR_FIX;
     for toks in shellseg::segment_argv(cmd) {
-        let (prog, _env, argv) = shellwrap::split_env(&toks);
+        // V41: a string a shell runs (`bash -c '…'`, `eval …`) is read as the command it is.
+        if let Some(inner) = handoffguard::shell_string_of(&toks)
+            && let Some(said) = release_floor_reason(&inner, true)
+        {
+            return Some(said);
+        }
+        let (prog, env, argv) = shellwrap::split_env(&toks);
         // `GIT tag v1` is a tag — see A2's fold.
         let base = base_lower(&prog);
         let args: Vec<String> = argv.iter().skip(1).cloned().collect();
@@ -181,6 +190,10 @@ pub fn release_floor_reason(cmd: &str, unattended: bool) -> Option<String> {
                     return Some(format!("{fix}This pushes what looks like a version tag."));
                 }
             }
+            // V41: a push option that sets auto-merge, however git is handed it.
+            if let Some(why) = merge::git_reason(&args, &env, sub.as_deref()) {
+                return Some(format!("{fix}{why}"));
+            }
         } else if base == "gh" || base == "glab" || leakguard::is_charter(&prog, &args) {
             // **The reader had to widen with the set.** `PUBLISH_FORGE`'s charter row would be a
             // tuple nothing could reach if this branch were still `base in ("gh", "glab")`.
@@ -203,6 +216,22 @@ pub fn release_floor_reason(cmd: &str, unattended: bool) -> Option<String> {
                     "{fix}`{name} {} {}` publishes or lands code.",
                     words[0], words[1]
                 ));
+            }
+            if base == "gh" || base == "glab" {
+                // V41: the same table read past a repository flag and through each CLI's own
+                // spelling of the verb, then every other way the CLI can merge a request.
+                let forge: Vec<&str> = merge::forge_words(&args).into_iter().map(|w| w.1).collect();
+                if let [noun, verb, ..] = forge[..] {
+                    let canonical = merge::canonical_verb(&name, noun, verb);
+                    if PUBLISH_FORGE.contains(&(name.as_str(), noun, canonical)) {
+                        return Some(format!(
+                            "{fix}`{name} {noun} {verb}` publishes or lands code."
+                        ));
+                    }
+                }
+                if let Some(why) = merge::forge_reason(&name, &args) {
+                    return Some(format!("{fix}{why}"));
+                }
             }
         }
     }

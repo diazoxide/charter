@@ -301,7 +301,12 @@ pub fn disguised_handoff(line: &str) -> bool {
 /// the same reasoning that leaves `CD` unfolded in [`crate::planeroot`].
 pub fn shell_string(seg: &[Tok]) -> Option<String> {
     let toks: Vec<String> = seg.iter().map(|t| t.text.clone()).collect();
-    let (prog, _env, argv) = shellwrap::split_env(&toks);
+    shell_string_of(&toks)
+}
+
+/// [`shell_string`] over a segment's words, as [`shellseg::segment_argv`] gives them.
+pub fn shell_string_of(toks: &[String]) -> Option<String> {
+    let (prog, _env, argv) = shellwrap::split_env(toks);
     if shellwrap::basename(&prog) == "eval" {
         return Some(argv.iter().skip(1).cloned().collect::<Vec<_>>().join(" "));
     }
