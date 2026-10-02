@@ -496,11 +496,12 @@ export const commands = {
 	 *  (`charter_core::sessionresume`). The answer is the chat as the window draws it, whose
 	 *  `resumed` or `fresh` says which happened.
 	 * 
-	 *  `after_failure` is the window saying the chat it resumed this record into ended before its
-	 *  harness reported a session — the harness could not bring the conversation back — so the same
-	 *  record starts fresh this time, and says so.
+	 *  `instead_of` is the window saying the chat it resumed this record into, by its number, ended
+	 *  before its harness reported a session — the harness could not bring the conversation back —
+	 *  so the same record starts fresh this time, and says so. It is **the same chat**, under its
+	 *  id, in a run that begins `fresh` (ADR 0066), and not a second one. It may already be closed.
 	 */
-	resumeSession: (plane: PlaneId, path: string, name: string, afterFailure: boolean, columns: number, rows: number) => typedError<OpenChat, string>(__TAURI_INVOKE("resume_session", { plane, path, name, afterFailure, columns, rows })),
+	resumeSession: (plane: PlaneId, path: string, name: string, insteadOf: number | null, columns: number, rows: number) => typedError<OpenChat, string>(__TAURI_INVOKE("resume_session", { plane, path, name, insteadOf, columns, rows })),
 	/**
 	 *  The window came back into focus: fetch the plane's target branch, unless it was fetched a
 	 *  moment ago. Answers at once; what the fetch finds reaches the window as a plane change.

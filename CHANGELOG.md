@@ -13,6 +13,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A chat keeps its id across a relaunch.** The app records each chat's id, the device that
+  made it and its current run in `.charter/app/reopen.json`, so the event log names a reopened
+  chat as the chat it was, and its first event after the relaunch is `run.started` with cause
+  `reopen`. A chat that comes back without its conversation, or that **Resume** starts again
+  after its harness could not find the conversation, begins a `fresh` run in the same chat
+  (ADR 0066, #834).
+
 - **The supported platforms are written down.** macOS 27 and 26 on Apple silicon, Ubuntu 26.04
   and 24.04 LTS, and Fedora 44, each with the CI job that covers it and what that job proves,
   are in the README and in `docs/platforms.md`. macOS 27, Ubuntu 26.04 and Fedora are covered

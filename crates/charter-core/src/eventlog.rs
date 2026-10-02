@@ -297,15 +297,26 @@ pub enum Followed {
     Moved,
 }
 
-/// Why a run began (ADR 0066's `cause`), as far as this host can tell today.
+/// Why a run began: ADR 0066's `cause`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Began {
-    /// The chat's first run this host has seen.
+    /// The chat was created: its first run. Also a chat's first line when the host was never
+    /// told who it is, which no chat charter starts produces.
     Start,
     /// The board followed the chat onto another conversation.
     Clear,
     /// A sub-agent's first call: a child run of the run that was current.
     Child,
+    /// The app relaunched the chat and resumed its conversation (`reopen.json`'s `resume`).
+    Reopen,
+    /// A hibernated chat was resumed (SC-4).
+    Wake,
+    /// The chat was started again without its conversation: its harness could not find it
+    /// (`lostOnResume`), or a workspace rename dropped it.
+    Fresh,
+    /// An attribute of the run changed while the chat carried on: its harness, profile, model,
+    /// persona or sandbox.
+    Switch,
 }
 
 impl Began {
@@ -315,8 +326,36 @@ impl Began {
             Self::Start => "start",
             Self::Clear => "clear",
             Self::Child => "child",
+            Self::Reopen => "reopen",
+            Self::Wake => "wake",
+            Self::Fresh => "fresh",
+            Self::Switch => "switch",
         }
     }
+
+    /// Why a chat a relaunch put back begins a run, from how it came back: `reopen` when it
+    /// is in the conversation it had, or had none to lose (a program that is no harness), and
+    /// `fresh` when a harness chat came back without it.
+    ///
+    /// A chat whose own arguments name a session is `reopen`: the operator's words resume it,
+    /// and charter has no other answer to hold them to.
+    pub fn at_relaunch(how: &crate::reopen::Reopened, harness: bool) -> Began {
+        use crate::reopen::{Fresh, Reopened};
+        match how {
+            Reopened::Resumed(_) | Reopened::Fresh(Fresh::SessionNamedByTheOperator) => {
+                Self::Reopen
+            }
+            Reopened::Fresh(_) if !harness => Self::Reopen,
+            Reopened::Fresh(_) => Self::Fresh,
+        }
+    }
+}
+
+/// A run by its two ids, the chat's and its own: named, so a call cannot swap the two ULIDs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RunOf<'a> {
+    pub chat: &'a str,
+    pub run: &'a str,
 }
 
 /// Which end of a tool call a tool hook is on.
@@ -372,9 +411,12 @@ struct Under {
 /// the chat's number and token and nothing more, and the host maps the number to the chat's
 /// id and current run in its own memory.
 ///
-/// - A chat it has not seen yet is given an id and its first run, `cause: start`, at its first
-///   line, whatever the board made of that line. Only a chat charter started holds a token the
-///   channel admits, so such a line is from a chat this host started.
+/// - The host tells it each chat it starts ([`Recorder::begin`]): the chat's id, which the app
+///   keeps across a relaunch, and the run it begins, with why (`start`, `reopen`, `fresh`,
+///   `switch`, `wake`).
+/// - A chat it was never told of is given an id and its first run, `cause: start`, at its
+///   first line, whatever the board made of that line. Only a chat charter started holds a
+///   token the channel admits, so such a line is from a chat this host started.
 /// - A chat the board follows onto another conversation begins a run with `cause: clear`. A
 ///   line the board refused (a harness nested in the chat's shell, ADR 0024 C5) is `No` and
 ///   never does.
@@ -466,9 +508,22 @@ impl Recorder {
         report: &crate::hookwire::Report,
         followed: Followed,
     ) -> io::Result<Event> {
+        self.report_with(plane, report, followed, None)
+    }
+
+    /// [`Recorder::report`], with the run the host minted for a move (`cleared`): the run a
+    /// `/clear` begins is the host's, so the record can name it whether or not there is a log.
+    /// `None` mints one here.
+    pub fn report_with(
+        &mut self,
+        plane: &Path,
+        report: &crate::hookwire::Report,
+        followed: Followed,
+        cleared: Option<&str>,
+    ) -> io::Result<Event> {
         let known = self.chats.contains_key(&(plane.to_path_buf(), report.chat));
         let top = match followed {
-            Followed::Moved if known => self.new_run(plane, report.chat, Began::Clear)?,
+            Followed::Moved if known => self.new_run(plane, report.chat, Began::Clear, cleared)?,
             Followed::Moved | Followed::No | Followed::FirstNamed => {
                 self.identity(plane, report.chat)?
             }
@@ -625,7 +680,7 @@ impl Recorder {
         }
         let under = Under {
             chat: top.chat,
-            run: ulid::Ulid::generate().to_string(),
+            run: crate::reopen::mint(),
             parent: Some(top.run),
         };
         self.append(
@@ -640,11 +695,44 @@ impl Recorder {
         Ok(under)
     }
 
+    /// Begins run `run` of chat `number`, under the chat id `chat` ([`RunOf`]), for `cause`, and says so
+    /// in the log: what the host does when it starts a chat (ADR 0066, "A new run begins
+    /// exactly when…").
+    ///
+    /// **The id is the host's, never minted here**: the app keeps it in `reopen.json`, so a
+    /// chat put back after a relaunch is the chat it was, and its first event after the
+    /// relaunch is this run's `run.started`. Every sub-agent of the run before ends with it.
+    pub fn begin(
+        &mut self,
+        plane: &Path,
+        number: u32,
+        RunOf { chat, run }: RunOf<'_>,
+        cause: Began,
+    ) -> io::Result<Event> {
+        // Held before the line is written: a log that refuses the line must not leave the
+        // chat's next hook line to mint it a second id.
+        self.end_children(chat);
+        self.chats.insert(
+            (plane.to_path_buf(), number),
+            Identity {
+                chat: chat.to_owned(),
+                run: run.to_owned(),
+            },
+        );
+        self.log.append(
+            Some(chat),
+            Some(run),
+            None,
+            "run.started",
+            serde_json::json!({ "cause": cause.word() }),
+        )
+    }
+
     /// The chat's identity, giving it one and its first run when it has none.
     fn identity(&mut self, plane: &Path, number: u32) -> io::Result<Identity> {
         match self.chats.get(&(plane.to_path_buf(), number)) {
             Some(who) => Ok(who.clone()),
-            None => self.new_run(plane, number, Began::Start),
+            None => self.new_run(plane, number, Began::Start, None),
         }
     }
 
@@ -655,16 +743,23 @@ impl Recorder {
         self.stopped.retain(|(of, _)| of != chat);
     }
 
-    /// Begins a run of the chat for `cause`, and says so in the log.
-    fn new_run(&mut self, plane: &Path, number: u32, cause: Began) -> io::Result<Identity> {
+    /// Begins a run of the chat for `cause`, as `run` where the host minted it, and says so in
+    /// the log.
+    fn new_run(
+        &mut self,
+        plane: &Path,
+        number: u32,
+        cause: Began,
+        run: Option<&str>,
+    ) -> io::Result<Identity> {
         let key = (plane.to_path_buf(), number);
-        let chat = self.chats.get(&key).map_or_else(
-            || ulid::Ulid::generate().to_string(),
-            |who| who.chat.clone(),
-        );
+        let chat = self
+            .chats
+            .get(&key)
+            .map_or_else(crate::reopen::mint, |who| who.chat.clone());
         let who = Identity {
             chat,
-            run: ulid::Ulid::generate().to_string(),
+            run: run.map_or_else(crate::reopen::mint, str::to_owned),
         };
         self.log.append(
             Some(&who.chat),

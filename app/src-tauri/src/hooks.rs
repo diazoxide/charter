@@ -160,8 +160,9 @@ pub type SavedHeard = Arc<dyn Fn(SessionSaved) + Send + Sync + 'static>;
 pub type Heard = Arc<dyn Fn(&Report) + Send + Sync + 'static>;
 
 /// What is told that chat `session` is now in conversation `id`: the id its own harness
-/// reported, that the board adopted or followed.
-pub type Following = Arc<dyn Fn(u32, &str) + Send + Sync + 'static>;
+/// reported, that the board adopted or followed — and, where the move began a run (`/clear`,
+/// ADR 0066), that run's id, which is the chat's current run from now on.
+pub type Following = Arc<dyn Fn(u32, &str, Option<&str>) + Send + Sync + 'static>;
 
 /// What answers an ask, told which connection it came on.
 pub type Answering = Arc<dyn Fn(u64, Ask) -> Answer + Send + Sync + 'static>;
@@ -320,8 +321,13 @@ impl Hooks {
                 let events = Arc::clone(&events);
                 Box::new(move |report| {
                     let applied = apply(&board, &plane, &report);
+                    let followed = applied.followed();
+                    // The run a `/clear` begins is the host's, minted here, so the record
+                    // names it whether or not this machine keeps an event log (ADR 0066).
+                    let begun = (followed == charter_core::eventlog::Followed::Moved)
+                        .then(charter_core::reopen::mint);
                     record(&events, |log| {
-                        log.report(plane.root(), &report, applied.followed())
+                        log.report_with(plane.root(), &report, followed, begun.as_deref())
                     });
                     // Before the window is told, so the record already names the conversation
                     // by the time anything the move prompts could ask for it. Whether or not a
@@ -333,7 +339,7 @@ impl Hooks {
                             .unwrap_or_else(PoisonError::into_inner)
                             .clone();
                         if let Some(listener) = listener {
-                            listener(report.chat, &id);
+                            listener(report.chat, &id, begun.as_deref());
                         }
                     }
                     if let Some(what) = applied.moved {
@@ -689,23 +695,24 @@ fn apply(board: &Mutex<Board>, plane: &PlaneId, report: &Report) -> Applied {
 /// Writes one event into the host's log, when there is one. A write that fails is said in the
 /// app's log and lets the hook go: the harness was answered already, and a chat is never held
 /// up by a disk (ADR 0075 §7 keeps that for the audit, which is written from this log).
+///
+/// Answers the event as written, or nothing.
 fn record(
     events: &Mutex<Option<Events>>,
     write: impl FnOnce(
         &mut charter_core::eventlog::Recorder,
     ) -> std::io::Result<charter_core::eventlog::Event>,
-) {
+) -> Option<charter_core::eventlog::Event> {
     let held = events
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
-        .clone();
-    let Some(log) = held else {
-        return;
-    };
-    let mut log = log.lock().unwrap_or_else(PoisonError::into_inner);
-    if let Err(why) = write(&mut log) {
-        tracing::warn!("charter: a hook call was not written to the event log ({why})");
-    }
+        .clone()?;
+    let mut log = held.lock().unwrap_or_else(PoisonError::into_inner);
+    write(&mut log)
+        .inspect_err(|why| {
+            tracing::warn!("charter: a hook call was not written to the event log ({why})");
+        })
+        .ok()
 }
 
 /// The board, whether or not a thread panicked while holding it.
@@ -1163,6 +1170,120 @@ mod tests {
         assert_eq!(
             followed_after(&hooks, named("cleared"), Some(10)).as_deref(),
             Some("cleared")
+        );
+    }
+
+    #[test]
+    fn the_run_a_clear_begins_is_told_with_the_conversation_it_moved_to() {
+        // ADR 0066's `clear`: the event log begins the run, and the record has to hold it as
+        // the chat's current run, so it is told beside the conversation.
+        use charter_core::eventlog::{self, ArgsKey, Log, Recorder};
+        let dir = tempfile::tempdir().expect("a directory");
+        let at = Where {
+            within: dir.path().to_path_buf(),
+            socket: dir.path().join("app").join("hooks.sock"),
+        };
+        let plane: PlaneId = serde_json::from_str("\"/plane\"").expect("a plane id");
+        let hooks =
+            Hooks::listening_on(plane, &at, Arc::new(|_| {}), Arc::new(|_| {})).expect("listening");
+        let logs = dir.path().join("events");
+        hooks.record_into(Arc::new(Mutex::new(Recorder::new(
+            Log::open(&logs, "DEVICE").expect("a log"),
+            ArgsKey::open(&logs).expect("a key"),
+        ))));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let tx = Mutex::new(tx);
+        hooks.when_it_follows(Arc::new(move |chat, id, run| {
+            let _ = tx
+                .lock()
+                .unwrap()
+                .send((chat, id.to_owned(), run.map(str::to_owned)));
+        }));
+        hooks
+            .board()
+            .opened(7, Some(Harness::ClaudeCode), Some("chosen".to_owned()));
+        let socket = hooks.socket().expect("a socket");
+        let token = hooks.token_for(7);
+        let say = |conversation: &str| {
+            charter_core::hookwire::send(
+                socket,
+                Some(&token),
+                &Report {
+                    chat: 7,
+                    event: charter_core::state::Event::UserPromptSubmit,
+                    conversation: named(conversation),
+                    pid: Some(10),
+                    agent: None,
+                    detail: Default::default(),
+                },
+            )
+            .expect("sent");
+        };
+
+        say("chosen");
+        say("cleared");
+
+        let (chat, id, run) = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the move is told");
+        assert_eq!((chat, id.as_str()), (7, "cleared"));
+        let cleared: Vec<_> = eventlog::read(&logs)
+            .expect("the log reads")
+            .into_iter()
+            .filter(|event| event.kind == "run.started" && event.body["cause"] == "clear")
+            .map(|event| event.run)
+            .collect();
+        assert_eq!(cleared, vec![run], "the run the log began for the clear");
+    }
+
+    #[test]
+    fn a_clear_begins_a_run_the_record_is_told_even_with_no_event_log() {
+        // #856 review F5: the run is the host's, so `reopen.json` moves with it either way.
+        let dir = tempfile::tempdir().expect("a directory");
+        let at = Where {
+            within: dir.path().to_path_buf(),
+            socket: dir.path().join("app").join("hooks.sock"),
+        };
+        let plane: PlaneId = serde_json::from_str("\"/plane\"").expect("a plane id");
+        let hooks =
+            Hooks::listening_on(plane, &at, Arc::new(|_| {}), Arc::new(|_| {})).expect("listening");
+        let (tx, rx) = std::sync::mpsc::channel();
+        let tx = Mutex::new(tx);
+        hooks.when_it_follows(Arc::new(move |_, id, run| {
+            let _ = tx
+                .lock()
+                .unwrap()
+                .send((id.to_owned(), run.map(str::to_owned)));
+        }));
+        hooks
+            .board()
+            .opened(7, Some(Harness::ClaudeCode), Some("chosen".to_owned()));
+        let token = hooks.token_for(7);
+        for conversation in ["chosen", "cleared"] {
+            charter_core::hookwire::send(
+                hooks.socket().expect("a socket"),
+                Some(&token),
+                &Report {
+                    chat: 7,
+                    event: charter_core::state::Event::UserPromptSubmit,
+                    conversation: named(conversation),
+                    pid: Some(10),
+                    agent: None,
+                    detail: Default::default(),
+                },
+            )
+            .expect("sent");
+        }
+
+        let (id, run) = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the move is told");
+        assert_eq!(id, "cleared");
+        assert!(
+            run.as_deref()
+                .and_then(charter_core::reopen::a_ulid)
+                .is_some(),
+            "{run:?}"
         );
     }
 }

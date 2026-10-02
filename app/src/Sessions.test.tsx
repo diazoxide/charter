@@ -240,7 +240,7 @@ describe("the Sessions panel", () => {
 
     await waitFor(() => expect(tabNames()).toContain("steward 1"));
     const call = asked.find((one) => one.cmd === "resume_session");
-    expect(call?.args).toMatchObject({ plane: PLANE, path: NEWER, afterFailure: false });
+    expect(call?.args).toMatchObject({ plane: PLANE, path: NEWER, insteadOf: null });
     expect(await screen.findByText(/was resumed — conversation/)).toBeTruthy();
   });
 
@@ -369,10 +369,9 @@ describe("the Sessions panel", () => {
 
     await waitFor(() =>
       expect(
-        window.asked
-          .filter((one) => one.cmd === "resume_session")
-          .map((one) => one.args.afterFailure),
-      ).toEqual([false, true]),
+        window.asked.filter((one) => one.cmd === "resume_session").map((one) => one.args.insteadOf),
+        // The same chat started again, so it keeps its id (ADR 0066's `fresh`).
+      ).toEqual([null, 7]),
     );
     expect(
       await screen.findByText(/came back as a new chat: claude could not bring back/),
