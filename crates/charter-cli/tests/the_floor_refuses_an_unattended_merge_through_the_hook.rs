@@ -186,3 +186,70 @@ fn read_only_api_calls_and_ordinary_pushes_stay_allowed_unattended() {
         "glab mr create --fill --yes",
     ]);
 }
+
+#[test]
+fn a_git_alias_that_stands_for_a_publish_is_refused_unattended() {
+    Plane::new().refused_unattended_only(&[
+        "git -c alias.p='push -o merge_request.auto_merge' p origin feat",
+        "git -c alias.t=tag t v1.0.0",
+        "git config alias.p 'push -o merge_request.auto_merge'",
+        "git config alias.x '!git push --tags'",
+    ]);
+}
+
+#[test]
+fn a_forge_alias_for_part_of_a_held_command_is_refused_unattended() {
+    Plane::new().refused_unattended_only(&["gh alias set p pr", "glab alias set a api"]);
+}
+
+#[test]
+fn a_write_whose_words_the_shell_expands_is_refused_unattended() {
+    Plane::new().refused_unattended_only(&[
+        "gh api -X PUT repos/o/r/pulls/12/m[e]rge",
+        "gh api -X PUT repos/o/r/git/../pulls/12/merge",
+        "gh api -X PUT",
+        "gh api -X PATCH repos/o/r --input settings.json",
+    ]);
+}
+
+#[test]
+fn a_shell_script_is_read_past_its_options_and_through_stdin_unattended() {
+    Plane::new().refused_unattended_only(&[
+        "bash -c -- 'gh pr merge 12'",
+        "bash <<< 'gh pr merge 12'",
+        "echo 'gh pr merge 12' | bash",
+    ]);
+}
+
+#[test]
+fn a_graphql_query_the_shell_could_rewrite_is_refused_unattended() {
+    Plane::new().refused_unattended_only(&[
+        "gh api graphql -f query='query($M: ID) { $M }'",
+        "gh api graphql/. -f query='mutation { mergePullRequest(input: {pullRequestId: \"X\"}) { clientMutationId } }'",
+    ]);
+}
+
+#[test]
+fn a_command_that_prints_the_forge_token_is_refused_unattended() {
+    Plane::new().refused_unattended_only(&[
+        "gh auth token",
+        "gh auth token --hostname github.com",
+        "gh auth status --show-token",
+        "glab auth status -t",
+        "glab config get token --host gitlab.com",
+        "git credential fill",
+        "gh alias set t 'auth token'",
+    ]);
+}
+
+#[test]
+fn reads_that_are_merely_named_merge_and_the_login_without_its_token_stay_allowed_unattended() {
+    Plane::new().allowed_unattended(&[
+        "gh api -X PATCH repos/o/r/git/refs/heads/merge-fix -f sha=abc",
+        "gh auth status",
+        "glab auth status",
+        "glab config get editor",
+        "git config alias.co checkout",
+        "gh alias set co 'pr checkout'",
+    ]);
+}

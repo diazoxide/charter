@@ -46,9 +46,9 @@
 //!   have been a dead line: the lookup used to live under `elif base in ("gh", "glab")`.
 
 mod merge;
+mod token;
 
 use crate::credguard::git_subcommand;
-use crate::handoffguard;
 use crate::leakguard::{self, CHARTER_PROGS};
 use crate::shellseg;
 use crate::shellwrap::{self, base_lower};
@@ -145,14 +145,29 @@ pub fn release_floor_reason(cmd: &str, unattended: bool) -> Option<String> {
         return None;
     }
     let fix = RELEASE_FLOOR_FIX;
-    for toks in shellseg::segment_argv(cmd) {
-        // V41: a string a shell runs (`bash -c '…'`, `eval …`) is read as the command it is.
-        if let Some(inner) = handoffguard::shell_string_of(&toks)
-            && let Some(said) = release_floor_reason(&inner, true)
+    let segments = shellseg::segment_argv(cmd);
+    // A shell that reads its script from stdin is fed by the rest of the line (#866).
+    let fed = segments
+        .iter()
+        .any(|toks| shellwrap::reads_script_from_stdin(toks));
+    for toks in &segments {
+        // A string a shell runs is read as the command it is (#866).
+        for inner in shellwrap::shell_string(toks)
+            .into_iter()
+            .chain(shellwrap::here_string_script(toks))
         {
-            return Some(said);
+            if let Some(said) = release_floor_reason(&inner, unattended) {
+                return Some(said);
+            }
         }
-        let (prog, env, argv) = shellwrap::split_env(&toks);
+        if fed && !shellwrap::reads_script_from_stdin(toks) {
+            for word in toks.iter().filter(|w| w.contains(' ')) {
+                if let Some(said) = release_floor_reason(word, unattended) {
+                    return Some(said);
+                }
+            }
+        }
+        let (prog, env, argv) = shellwrap::split_env(toks);
         // `GIT tag v1` is a tag — see A2's fold.
         let base = base_lower(&prog);
         let args: Vec<String> = argv.iter().skip(1).cloned().collect();
@@ -161,8 +176,19 @@ pub fn release_floor_reason(cmd: &str, unattended: bool) -> Option<String> {
             .filter(|a| !a.starts_with('-'))
             .cloned()
             .collect();
-        if base == "git" {
+        if base == "git" || base.starts_with("git-credential-") {
             let sub = git_subcommand(&args);
+            // A git alias defined on the line is read as what it stands for (#866).
+            if let Some(resolved) = merge::git_alias(&args, &env, sub.as_deref()) {
+                match resolved {
+                    Ok(inner) => {
+                        if let Some(said) = release_floor_reason(&inner, unattended) {
+                            return Some(said);
+                        }
+                    }
+                    Err(why) => return Some(format!("{fix}{why}")),
+                }
+            }
             if sub.as_deref() == Some("tag") {
                 // `git tag` alone lists; a bare name is a CREATION — the choke point, since a tag
                 // that does not exist locally cannot be pushed.
@@ -190,46 +216,50 @@ pub fn release_floor_reason(cmd: &str, unattended: bool) -> Option<String> {
                     return Some(format!("{fix}This pushes what looks like a version tag."));
                 }
             }
-            // V41: a push option that sets auto-merge, however git is handed it.
-            if let Some(why) = merge::git_reason(&args, &env, sub.as_deref()) {
+            // A push option that sets auto-merge, an alias that would publish, or a command that
+            // prints the forge token (#866).
+            let why = token::git_reason(&base, &args, sub.as_deref())
+                .or_else(|| merge::git_reason(&args, &env, sub.as_deref(), unattended));
+            if let Some(why) = why {
                 return Some(format!("{fix}{why}"));
             }
         } else if base == "gh" || base == "glab" || leakguard::is_charter(&prog, &args) {
             // **The reader had to widen with the set.** `PUBLISH_FORGE`'s charter row would be a
             // tuple nothing could reach if this branch were still `base in ("gh", "glab")`.
-            let name = if base == "gh" || base == "glab" {
+            let forge = base == "gh" || base == "glab";
+            let name = if forge {
                 base.clone()
             } else {
                 CHARTER_PROGS[0].to_string()
             };
             // `edm change land` and `python3 -m charter change land` put charter's own NAME in
             // `words` instead of in `prog` — and `-m` drops out with the other flags — so the
-            // pair sits one place further along and is put back on the same footing here.
-            let words: &[String] = match words.first() {
-                Some(w) if CHARTER_PROGS.contains(&w.to_lowercase().as_str()) => &words[1..],
-                _ => &words[..],
-            };
-            if words.len() >= 2
-                && PUBLISH_FORGE.contains(&(name.as_str(), words[0].as_str(), words[1].as_str()))
-            {
-                return Some(format!(
-                    "{fix}`{name} {} {}` publishes or lands code.",
-                    words[0], words[1]
-                ));
-            }
-            if base == "gh" || base == "glab" {
-                // V41: the same table read past a repository flag and through each CLI's own
-                // spelling of the verb, then every other way the CLI can merge a request.
-                let forge: Vec<&str> = merge::forge_words(&args).into_iter().map(|w| w.1).collect();
-                if let [noun, verb, ..] = forge[..] {
-                    let canonical = merge::canonical_verb(&name, noun, verb);
-                    if PUBLISH_FORGE.contains(&(name.as_str(), noun, canonical)) {
-                        return Some(format!(
-                            "{fix}`{name} {noun} {verb}` publishes or lands code."
-                        ));
-                    }
+            // pair sits one place further along and is put back on the same footing here. A
+            // forge CLI's words are read past its repository flag (#866).
+            let words: Vec<&str> = if forge {
+                merge::forge_words(&args).into_iter().map(|w| w.1).collect()
+            } else {
+                match words.first() {
+                    Some(w) if CHARTER_PROGS.contains(&w.to_lowercase().as_str()) => &words[1..],
+                    _ => &words[..],
                 }
-                if let Some(why) = merge::forge_reason(&name, &args) {
+                .iter()
+                .map(String::as_str)
+                .collect()
+            };
+            if let [noun, verb, ..] = words[..] {
+                // A CLI's own alias of a verb is that verb (#866).
+                let held = merge::canonical_verb(&name, noun, verb);
+                if PUBLISH_FORGE.contains(&(name.as_str(), noun, held)) {
+                    return Some(format!(
+                        "{fix}`{name} {noun} {verb}` publishes or lands code."
+                    ));
+                }
+            }
+            if forge {
+                let why = token::forge_reason(&args)
+                    .or_else(|| merge::forge_reason(&name, &args, cmd, unattended));
+                if let Some(why) = why {
                     return Some(format!("{fix}{why}"));
                 }
             }

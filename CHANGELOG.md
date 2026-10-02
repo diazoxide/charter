@@ -306,10 +306,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **The floor guard refuses more ways an unattended agent could merge.** When nobody is
   watching (`bypassPermissions`), a forge API call to a merge endpoint, a setting that makes a
-  pull or merge request merge on its own later (auto-merge, a merge queue or train), and the
-  same command inside a string a shell runs are refused, as `gh pr merge` already was. A forge
-  API call whose effect on a merge charter cannot read is refused too. Reads, opening a request
-  and ordinary pushes are unchanged, and attended use is untouched.
+  pull or merge request merge on its own later (auto-merge, a merge queue or train), an alias
+  that stands for a held command or the start of one, and the same commands inside a script a
+  shell runs are refused, as `gh pr merge` already was. A forge API call whose effect on a merge
+  charter cannot read is refused too. Reads, opening a request and ordinary pushes are
+  unchanged, and attended use is untouched (#866).
+- **An unattended agent cannot print the forge token.** `gh auth token`, the auth-status and
+  config reads that show the token, and git's credential fill are refused when nobody is
+  watching, since a run holding the token could reach the forge where no guard sees it.
+  Attended use is untouched (#866).
 
 ## [0.4.2] - 2026-09-30
 

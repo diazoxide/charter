@@ -812,9 +812,137 @@ fn assignment_name(tok: &str) -> String {
     }
 }
 
+// ----------------------------------------------------------------------------------------
+// a string a shell runs
+// ----------------------------------------------------------------------------------------
+
+/// The programs that run a STRING as shell: `eval` runs its words, and these run `-c`'s.
+/// `_STRING_SHELLS`.
+pub const STRING_SHELLS: [&str; 5] = ["sh", "bash", "zsh", "dash", "ksh"];
+
+/// True when `prog` names one of [`STRING_SHELLS`], however it is spelled or cased.
+fn is_string_shell(prog: &str) -> bool {
+    STRING_SHELLS.contains(&base_lower(prog).as_str())
+}
+
+/// The text a segment hands a shell to run — `eval`'s words, or the script of a shell's `-c`,
+/// alone or in a cluster such as `-lc` — or `None`. `_shell_string`.
+///
+/// **The shell's name is folded and `eval` is not**, because only one of them is a file. On a
+/// filesystem that folds case (APFS, NTFS) `BASH -c '…'` runs `/bin/bash`, so a shell named in
+/// capitals runs its string as surely as one in lower case; the frozen Python compared the name
+/// as written and let it through. `eval` is a shell BUILTIN with no file behind it (none on
+/// macOS, and none in a Linux `PATH`), so `EVAL '…'` is "command not found" and runs nothing —
+/// the same reasoning that leaves `CD` unfolded in [`crate::planeroot`].
+///
+/// **The script is the first operand after the options**, as the shells read it: options and
+/// `--` may stand between `-c` and the script, and `-o`/`-O` take a value (#866). The frozen
+/// Python took the word straight after `-c`.
+pub fn shell_string(toks: &[String]) -> Option<String> {
+    let (prog, _env, argv) = split_env(toks);
+    if basename(&prog) == "eval" {
+        return Some(argv.iter().skip(1).cloned().collect::<Vec<_>>().join(" "));
+    }
+    if !is_string_shell(&prog) {
+        return None;
+    }
+    let (dash_c, operand) = shell_options(&argv);
+    if dash_c { operand.cloned() } else { None }
+}
+
+/// Past a shell's options: whether `-c` was among them, and the first operand after them.
+fn shell_options(argv: &[String]) -> (bool, Option<&String>) {
+    let mut dash_c = false;
+    let mut i = 1;
+    while let Some(a) = argv.get(i) {
+        if a == "--" {
+            i += 1;
+            break;
+        }
+        if is_dash_c_cluster(a) {
+            dash_c = true;
+        } else if matches!(a.as_str(), "-o" | "+o" | "-O" | "+O") {
+            i += 1;
+        } else if !(a.len() > 1 && (a.starts_with('-') || a.starts_with('+'))) {
+            break;
+        }
+        i += 1;
+    }
+    (dash_c, argv.get(i))
+}
+
+/// True when a segment is a shell reading its script from stdin: no `-c` and no script file.
+pub fn reads_script_from_stdin(toks: &[String]) -> bool {
+    let (prog, _env, argv) = split_env(toks);
+    if !is_string_shell(&prog) {
+        return false;
+    }
+    let (dash_c, operand) = shell_options(&argv);
+    !dash_c && (operand.is_none() || argv.iter().any(|a| a == "-s"))
+}
+
+/// The script a here-string hands a shell (`bash <<< '…'`), or `None`.
+pub fn here_string_script(toks: &[String]) -> Option<String> {
+    let at = toks.iter().position(|t| t == "<<<")?;
+    let (prog, _env, _argv) = split_env(&toks[..at]);
+    if is_string_shell(&prog) {
+        toks.get(at + 1).cloned()
+    } else {
+        None
+    }
+}
+
+/// `re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", arg)` — a `-c` alone or inside a letter cluster.
+///
+/// Hand-written rather than compiled: the class is ASCII by construction on both sides, so
+/// there is no `\w`/`\d` disagreement to measure and a regex would only hide the shape.
+fn is_dash_c_cluster(arg: &str) -> bool {
+    let mut chars = arg.chars();
+    if chars.next() != Some('-') {
+        return false;
+    }
+    let rest: Vec<char> = chars.collect();
+    rest.iter().all(|c| c.is_ascii_alphabetic()) && rest.contains(&'c')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_dash_c_cluster_is_a_shells_string_flag() {
+        assert!(is_dash_c_cluster("-c"));
+        assert!(is_dash_c_cluster("-lc"));
+        assert!(is_dash_c_cluster("-cx"));
+        assert!(!is_dash_c_cluster("-l"));
+        assert!(!is_dash_c_cluster("c"));
+        assert!(!is_dash_c_cluster("-c1"));
+    }
+
+    /// The script is the first operand past the shell's options, as the shell reads it.
+    #[test]
+    fn a_shell_string_is_the_first_operand_after_the_options() {
+        let w = |s: &[&str]| s.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        assert_eq!(shell_string(&w(&["bash", "-c", "x"])).as_deref(), Some("x"));
+        assert_eq!(
+            shell_string(&w(&["bash", "-c", "--", "x"])).as_deref(),
+            Some("x")
+        );
+        assert_eq!(
+            shell_string(&w(&["sh", "-c", "-e", "x"])).as_deref(),
+            Some("x")
+        );
+        assert_eq!(
+            shell_string(&w(&["bash", "-c", "-o", "pipefail", "x"])).as_deref(),
+            Some("x")
+        );
+        assert_eq!(
+            shell_string(&w(&["bash", "-lc", "x", "y"])).as_deref(),
+            Some("x")
+        );
+        assert_eq!(shell_string(&w(&["bash", "script.sh"])), None);
+        assert_eq!(shell_string(&w(&["bash", "-c"])), None);
+    }
 
     /// A flag token can be neither recorded as a variable nor found as one — the fact that makes
     /// the deleted `starts_with('-')` skip in [`exported_env`] dead code rather than a guard.

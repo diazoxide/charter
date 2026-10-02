@@ -77,9 +77,7 @@ pub const MEASURED_SUBAGENT_HARNESSES: [&str; 2] = ["claude-code", "codex"];
 /// `_SPELLING_MARKS`.
 pub const SPELLING_MARKS: &str = "$'\"\\{}?*[]";
 
-/// The programs that run a STRING as shell: `eval` runs its words, and these run `-c`'s.
-/// `_STRING_SHELLS`.
-pub const STRING_SHELLS: [&str; 5] = ["sh", "bash", "zsh", "dash", "ksh"];
+pub use crate::shellwrap::STRING_SHELLS;
 
 /// The redirection operators that READ — `hooks.py`'s `_REDIRECT_READS`.
 ///
@@ -290,54 +288,11 @@ pub fn disguised_handoff(line: &str) -> bool {
 // a string a shell runs
 // ----------------------------------------------------------------------------------------
 
-/// The text a segment hands a shell to run — `eval`'s words, or the argument of a shell's `-c`,
-/// alone or in a cluster such as `-lc` — or `None`. `_shell_string`.
-///
-/// **The shell's name is folded and `eval` is not**, because only one of them is a file. On a
-/// filesystem that folds case (APFS, NTFS) `BASH -c '…'` runs `/bin/bash`, so a shell named in
-/// capitals runs its string as surely as one in lower case; the frozen Python compared the name
-/// as written and let it through. `eval` is a shell BUILTIN with no file behind it (none on
-/// macOS, and none in a Linux `PATH`), so `EVAL '…'` is "command not found" and runs nothing —
-/// the same reasoning that leaves `CD` unfolded in [`crate::planeroot`].
+/// The text a segment hands a shell to run, or `None` — [`shellwrap::shell_string`] over the
+/// segment's words. `_shell_string`.
 pub fn shell_string(seg: &[Tok]) -> Option<String> {
     let toks: Vec<String> = seg.iter().map(|t| t.text.clone()).collect();
-    shell_string_of(&toks)
-}
-
-/// [`shell_string`] over a segment's words, as [`shellseg::segment_argv`] gives them.
-pub fn shell_string_of(toks: &[String]) -> Option<String> {
-    let (prog, _env, argv) = shellwrap::split_env(toks);
-    if shellwrap::basename(&prog) == "eval" {
-        return Some(argv.iter().skip(1).cloned().collect::<Vec<_>>().join(" "));
-    }
-    if !STRING_SHELLS.contains(&shellwrap::base_lower(&prog).as_str()) {
-        return None;
-    }
-    // Python's `enumerate(argv[1:-1], start=1)`: the LAST word can never be the flag, because
-    // the string it introduces has to come after it.
-    if argv.len() < 2 {
-        return None;
-    }
-    for (k, arg) in argv[1..argv.len() - 1].iter().enumerate() {
-        let k = k + 1;
-        if is_dash_c_cluster(arg) {
-            return Some(argv[k + 1].clone());
-        }
-    }
-    None
-}
-
-/// `re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", arg)` — a `-c` alone or inside a letter cluster.
-///
-/// Hand-written rather than compiled: the class is ASCII by construction on both sides, so
-/// there is no `\w`/`\d` disagreement to measure and a regex would only hide the shape.
-fn is_dash_c_cluster(arg: &str) -> bool {
-    let mut chars = arg.chars();
-    if chars.next() != Some('-') {
-        return false;
-    }
-    let rest: Vec<char> = chars.collect();
-    rest.iter().all(|c| c.is_ascii_alphabetic()) && rest.contains(&'c')
+    shellwrap::shell_string(&toks)
 }
 
 /// `text` with bash's backslash-newlines removed and every other whitespace character read as a
@@ -1262,16 +1217,6 @@ mod tests {
         );
         assert_eq!(as_the_shell_reads("a\\\nb"), "ab");
         assert_eq!(as_the_shell_reads("a\nb"), "a\nb");
-    }
-
-    #[test]
-    fn a_dash_c_cluster_is_a_shells_string_flag() {
-        assert!(is_dash_c_cluster("-c"));
-        assert!(is_dash_c_cluster("-lc"));
-        assert!(is_dash_c_cluster("-cx"));
-        assert!(!is_dash_c_cluster("-l"));
-        assert!(!is_dash_c_cluster("c"));
-        assert!(!is_dash_c_cluster("-c1"));
     }
 
     #[test]

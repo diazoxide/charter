@@ -1,5 +1,5 @@
 //! The floor's merge half: every way a forge CLI or git can merge a request, or set one to merge
-//! on its own later, is the same act to the floor as `gh pr merge` (V41).
+//! on its own later, is the same act to the floor as `gh pr merge` (#866).
 //!
 //! The rule is about the act, not one spelling of it. Unattended:
 //!
@@ -8,8 +8,8 @@
 //! * a forge API call whose effect on a merge **cannot be read off the command line** is refused
 //!   too. This fails closed: what charter cannot read, it treats as a merge;
 //! * a **push option that sets auto-merge** is refused, however git is handed it;
-//! * a forge CLI's own **aliases** of a verb, and an alias made to stand for a merge, are the
-//!   command they stand for.
+//! * an **alias** is the command it stands for, and making one that stands for a held command,
+//!   or for the start of one, is refused.
 //!
 //! A read is never refused. An API call that is a `GET` cannot merge anything, whatever endpoint
 //! it names, so an unattended run can still read a request, its checks and whether it merged.
@@ -18,6 +18,8 @@
 use std::sync::OnceLock;
 
 use regex::Regex;
+
+use crate::shellseg;
 
 /// The sentence a refusal of a merge or an auto-merge setting ends with.
 pub(super) const MERGES: &str =
@@ -30,6 +32,23 @@ pub(super) const UNREADABLE: &str =
 /// The sentence a refusal of an alias ends with.
 const ALIAS: &str = "An alias that would land code is the command it stands for.";
 
+/// True when a word speaks of merging: a merge, a merge train, auto-merge, merge-when-ready.
+pub(super) fn speaks_of_merging(word: &str) -> bool {
+    word.to_lowercase().contains("merg")
+}
+
+/// A word the shell fills in or expands, so its value is not on the command line: a parameter or
+/// command substitution, a glob, a brace expansion or a tilde.
+pub(super) fn opaque(word: &str) -> bool {
+    word.contains(['$', '`', '*', '?', '[', '~']) || brace_expansion_re().is_match(word)
+}
+
+/// `{a,b}` or `{1..3}`: a brace the shell expands. `{owner}` is a CLI placeholder, not one.
+fn brace_expansion_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"\{[^{}]*(,|\.\.)[^{}]*\}").expect("compiles"))
+}
+
 /// A forge CLI's spellings of a verb the floor already holds, mapped to that verb.
 pub(super) fn canonical_verb<'a>(name: &str, noun: &str, verb: &'a str) -> &'a str {
     match (name, noun, verb) {
@@ -38,6 +57,27 @@ pub(super) fn canonical_verb<'a>(name: &str, noun: &str, verb: &'a str) -> &'a s
         _ => verb,
     }
 }
+
+/// The commands, by their leading words, that an alias may not stand for or begin: the held
+/// verbs, the raw API, alias-making itself, and the commands that print the forge token.
+const HELD_PREFIXES: &[(&str, &[&str])] = &[
+    ("gh", &["pr", "merge"]),
+    ("gh", &["release", "create"]),
+    ("gh", &["release", "new"]),
+    ("gh", &["api"]),
+    ("gh", &["alias"]),
+    ("gh", &["auth"]),
+    ("gh", &["config", "get"]),
+    ("glab", &["mr", "merge"]),
+    ("glab", &["mr", "accept"]),
+    ("glab", &["mr", "create"]),
+    ("glab", &["mr", "new"]),
+    ("glab", &["release", "create"]),
+    ("glab", &["api"]),
+    ("glab", &["alias"]),
+    ("glab", &["auth"]),
+    ("glab", &["config", "get"]),
+];
 
 /// The positional words of a forge CLI's argv, with the value of a repository flag dropped, so
 /// the noun and verb are read where the CLI reads them. Answers each word with its index in
@@ -60,14 +100,21 @@ pub(super) fn forge_words(args: &[String]) -> Vec<(usize, &str)> {
 }
 
 /// The merge refusal for a `gh` or `glab` call, past the `PUBLISH_FORGE` table.
-pub(super) fn forge_reason(name: &str, args: &[String]) -> Option<String> {
+///
+/// `cmd` is the whole command line, which a GraphQL query's quoting is read from.
+pub(super) fn forge_reason(
+    name: &str,
+    args: &[String],
+    cmd: &str,
+    unattended: bool,
+) -> Option<String> {
     let words = forge_words(args);
     let first = words.first().map(|w| w.1);
     let second = words.get(1).map(|w| w.1);
     match (first, second) {
-        (Some("api"), _) => api_reason(&args[words[0].0 + 1..]).map(str::to_owned),
+        (Some("api"), _) => api_reason(&args[words[0].0 + 1..], cmd).map(str::to_owned),
         (Some("alias"), Some("import")) => Some(UNREADABLE.to_owned()),
-        (Some("alias"), Some("set")) => alias_reason(name, &args[words[1].0 + 1..]),
+        (Some("alias"), Some("set")) => alias_reason(name, &args[words[1].0 + 1..], unattended),
         (Some("mr"), Some("create" | "new")) if name == "glab" && sets_auto_merge(args) => {
             Some(MERGES.to_owned())
         }
@@ -79,32 +126,44 @@ pub(super) fn forge_reason(name: &str, args: &[String]) -> Option<String> {
 fn sets_auto_merge(args: &[String]) -> bool {
     args.iter().any(|a| match a.strip_prefix("--auto-merge") {
         Some("") => true,
-        Some(v) => match v.strip_prefix('=') {
-            Some(v) => !matches!(v, "0" | "f" | "F" | "false" | "FALSE" | "False"),
-            None => false,
-        },
+        Some(v) => v
+            .strip_prefix('=')
+            .is_some_and(|v| !matches!(v, "0" | "f" | "F" | "false" | "FALSE" | "False")),
         None => false,
     })
 }
 
-/// `gh alias set` / `glab alias set`: the alias is refused when what it stands for would be.
-fn alias_reason(name: &str, args: &[String]) -> Option<String> {
-    let shell = args.iter().any(|a| a == "--shell" || a == "-s");
+/// `gh alias set` / `glab alias set`: refused when what the alias stands for would be, or when
+/// it stands for the start of a held command, whose rest the caller would add.
+fn alias_reason(name: &str, args: &[String], unattended: bool) -> Option<String> {
     let positional: Vec<&String> = args.iter().filter(|a| !a.starts_with('-')).collect();
     let expansion = match (positional.first(), positional.get(1)) {
         (Some(_), Some(e)) => e.as_str(),
         // No expansion on the line, or `-` (stdin): it cannot be read.
         _ => return Some(UNREADABLE.to_owned()),
     };
-    if expansion.starts_with('$') || expansion.starts_with('`') {
+    // A shell alias runs a shell command this reader does not follow, and an expansion the shell
+    // fills in cannot be read.
+    let shell = args.iter().any(|a| a == "--shell" || a == "-s");
+    if shell || expansion.starts_with('!') || expansion.starts_with(['$', '`']) {
         return Some(UNREADABLE.to_owned());
     }
-    let cmd = match expansion.strip_prefix('!') {
-        Some(rest) => rest.to_owned(),
-        None if shell => expansion.to_owned(),
-        None => format!("{name} {expansion}"),
-    };
-    super::release_floor_reason(&cmd, true).map(|_| ALIAS.to_owned())
+    let expanded: Vec<String> = shellseg::segment_argv(expansion)
+        .into_iter()
+        .next()
+        .unwrap_or_default();
+    let words: Vec<&str> = forge_words(&expanded).into_iter().map(|w| w.1).collect();
+    let held = HELD_PREFIXES.iter().any(|(cli, prefix)| {
+        *cli == name
+            && !words.is_empty()
+            && (prefix.starts_with(&words[..]) || words.starts_with(prefix))
+    });
+    let cmd = format!("{name} {expansion}");
+    if words.is_empty() || held || super::release_floor_reason(&cmd, unattended).is_some() {
+        Some(ALIAS.to_owned())
+    } else {
+        None
+    }
 }
 
 /// `gh api` / `glab api` value flags, short and long.
@@ -126,14 +185,39 @@ const API_LONG_VALUE: &[&str] = &[
 ];
 const API_LONG_BOOL: &[&str] = &["paginate", "slurp", "include", "silent", "verbose", "help"];
 
+/// How an `api` call's field is sent: `-f` as a string, `-F` with its type inferred (and `@` read
+/// from a file).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FieldKind {
+    Raw,
+    Typed,
+}
+
+/// One `-f`/`-F` field, `key=value` as written.
+struct Field {
+    kind: FieldKind,
+    key: String,
+    value: String,
+}
+
+impl Field {
+    fn new(kind: FieldKind, written: &str) -> Self {
+        let (key, value) = written.split_once('=').unwrap_or((written, ""));
+        Self {
+            kind,
+            key: key.to_owned(),
+            value: value.to_owned(),
+        }
+    }
+}
+
 /// What one `api` call says about itself.
 #[derive(Default)]
 struct ApiCall {
     method: Option<String>,
     unknown_flag: bool,
     positionals: Vec<String>,
-    /// `-f`/`-F` values, `key=value` as written; the bool is true for a typed (`-F`) field.
-    fields: Vec<(bool, String)>,
+    fields: Vec<Field>,
     /// `--input` or `--form`: a body this reader does not see.
     opaque_body: bool,
 }
@@ -155,13 +239,10 @@ impl ApiCall {
                     None => (long, None),
                 };
                 if API_LONG_VALUE.contains(&name) {
-                    let value = match inline {
-                        Some(v) => Some(v),
-                        None => {
-                            i += 1;
-                            args.get(i - 1).cloned()
-                        }
-                    };
+                    let value = inline.or_else(|| {
+                        i += 1;
+                        args.get(i - 1).cloned()
+                    });
                     call.take(name, value);
                 } else if !API_LONG_BOOL.contains(&name) {
                     call.unknown_flag = true;
@@ -203,17 +284,19 @@ impl ApiCall {
     }
 
     fn take(&mut self, name: &str, value: Option<String>) {
+        let value = value.unwrap_or_default();
         match name {
-            "method" => self.method = Some(value.unwrap_or_default()),
-            "raw-field" => self.fields.push((false, value.unwrap_or_default())),
-            "field" => self.fields.push((true, value.unwrap_or_default())),
+            "method" => self.method = Some(value),
+            "raw-field" => self.fields.push(Field::new(FieldKind::Raw, &value)),
+            "field" => self.fields.push(Field::new(FieldKind::Typed, &value)),
             "input" | "form" => self.opaque_body = true,
             _ => {}
         }
     }
 
     /// True when the call is a read: an explicit `GET`/`HEAD`, or no method and no body, which
-    /// both CLIs send as a `GET`.
+    /// both CLIs send as a `GET`. A flag this reader does not know could change either, so a call
+    /// carrying one is not a read.
     fn is_read(&self) -> bool {
         if self.unknown_flag {
             return false;
@@ -223,11 +306,6 @@ impl ApiCall {
             None => self.fields.is_empty() && !self.opaque_body,
         }
     }
-}
-
-/// A word the shell fills in, so its value is not on the command line.
-fn opaque(s: &str) -> bool {
-    s.contains('$') || s.contains('`') || s.contains('*')
 }
 
 /// An endpoint as lower-case, percent-decoded path segments, with any scheme, host, query and
@@ -265,52 +343,54 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// True when a path names a merge endpoint: a segment that speaks of merging, other than the
-/// owner, repository or project it is under and GitLab's `merge_requests` collection itself.
+/// Where a path's repository or project ends: the segments after `repos/<owner>/<name>`,
+/// `repositories/<id>` or `projects/<id>`, or `None` when the path names none.
+fn under_repository(segs: &[String]) -> Option<&[String]> {
+    let at = segs
+        .iter()
+        .position(|s| matches!(s.as_str(), "repos" | "repositories" | "projects"))?;
+    let names = if segs[at] == "repos" { 2 } else { 1 };
+    Some(segs.get(at + 1 + names..).unwrap_or(&[]))
+}
+
+/// True when a path is a merge endpoint: a merge of a pull or merge request, a branch merge, or
+/// a merge train, by the forges' own endpoint shapes. A ref, file or branch that is merely named
+/// for a merge is not one. A path that names no repository is judged by any segment that speaks
+/// of merging, since its shape is not one this reader knows.
 fn is_merge_path(segs: &[String]) -> bool {
-    let mut skip = 0;
-    for s in segs {
-        if skip > 0 {
-            skip -= 1;
-            continue;
-        }
-        match s.as_str() {
-            "repos" => skip = 2,
-            "projects" | "groups" | "users" | "orgs" | "namespaces" => skip = 1,
-            "merge_requests" => {}
-            _ if s.contains("merg") => return true,
-            _ => {}
-        }
+    let Some(rest) = under_repository(segs) else {
+        return segs.iter().any(|s| speaks_of_merging(s));
+    };
+    match rest.first().map(String::as_str) {
+        Some("pulls" | "merge_requests") => rest.get(2).is_some_and(|s| speaks_of_merging(s)),
+        Some(collection) => speaks_of_merging(collection),
+        None => false,
     }
-    false
 }
 
 /// True when a path is under a pull or merge request, where a body could set auto-merge.
 fn is_request_path(segs: &[String]) -> bool {
-    segs.iter().any(|s| s == "merge_requests" || s == "pulls")
+    under_repository(segs)
+        .and_then(|rest| rest.first())
+        .is_some_and(|s| s == "pulls" || s == "merge_requests")
 }
 
 /// True when a path is a repository or project itself, whose settings include auto-merge.
 fn is_repository(segs: &[String]) -> bool {
-    let start = segs
-        .iter()
-        .position(|s| s == "repos" || s == "projects")
-        .unwrap_or(segs.len());
-    match segs.get(start).map(String::as_str) {
-        Some("repos") => segs.len() == start + 3,
-        Some("projects") => segs.len() == start + 2,
-        _ => false,
-    }
+    under_repository(segs).is_some_and(|rest| rest.is_empty())
 }
 
 /// The refusal for one `gh api` / `glab api` call, or `None` when it cannot merge.
-fn api_reason(args: &[String]) -> Option<&'static str> {
+fn api_reason(args: &[String], cmd: &str) -> Option<&'static str> {
     let call = ApiCall::parse(args);
     let read = call.is_read();
+    if !read && call.positionals.is_empty() {
+        return Some(UNREADABLE);
+    }
     for endpoint in &call.positionals {
         let segs = segments(endpoint);
-        if segs.last().is_some_and(|s| s == "graphql") {
-            if let Some(why) = graphql_reason(&call) {
+        if segs.iter().any(|s| s == "graphql") {
+            if let Some(why) = graphql_reason(&call, cmd) {
                 return Some(why);
             }
             continue;
@@ -318,23 +398,23 @@ fn api_reason(args: &[String]) -> Option<&'static str> {
         if read {
             continue;
         }
-        if opaque(endpoint) {
+        if opaque(endpoint) || segs.iter().any(|s| s == "." || s == "..") {
             return Some(UNREADABLE);
         }
         if is_merge_path(&segs) {
             return Some(MERGES);
         }
-        for (_, field) in &call.fields {
-            let key = field.split('=').next().unwrap_or("");
+        let settable = is_request_path(&segs) || is_repository(&segs);
+        for field in &call.fields {
             // A key the shell fills in could be an auto-merge setting where one can be set.
-            if opaque(key) && (is_request_path(&segs) || is_repository(&segs)) {
+            if opaque(&field.key) && settable {
                 return Some(UNREADABLE);
             }
-            if key.to_lowercase().contains("merg") {
+            if speaks_of_merging(&field.key) {
                 return Some(MERGES);
             }
         }
-        if call.opaque_body && is_request_path(&segs) {
+        if call.opaque_body && settable {
             return Some(UNREADABLE);
         }
     }
@@ -344,53 +424,109 @@ fn api_reason(args: &[String]) -> Option<&'static str> {
     None
 }
 
-/// `$name` in a GraphQL document.
+/// `$name` in a GraphQL document, with what stands before it and whether a `:` follows.
 fn variable_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"\$([A-Za-z_][A-Za-z0-9_]*)(\s*:)?").expect("compiles"))
+    RE.get_or_init(|| Regex::new(r"(\S?)\s*\$([A-Za-z_][A-Za-z0-9_]*)(\s*:)?").expect("compiles"))
 }
 
 /// The refusal for a GraphQL call, or `None` when its query is readable and changes no merge.
-fn graphql_reason(call: &ApiCall) -> Option<&'static str> {
+fn graphql_reason(call: &ApiCall, cmd: &str) -> Option<&'static str> {
     if call.opaque_body {
         return Some(UNREADABLE);
     }
     let mut query = String::new();
-    for (typed, field) in &call.fields {
-        let (key, value) = field.split_once('=').unwrap_or((field.as_str(), ""));
-        if !key.eq_ignore_ascii_case("query") {
+    for field in &call.fields {
+        if !field.key.eq_ignore_ascii_case("query") {
             continue;
         }
-        if *typed && value.starts_with('@') {
+        if field.kind == FieldKind::Typed && field.value.starts_with('@') {
             return Some(UNREADABLE);
         }
-        query.push_str(value);
+        query.push_str(&field.value);
         query.push('\n');
     }
     if !query.contains('{') || query.contains("$(") || query.contains("${") || query.contains('`') {
         return Some(UNREADABLE);
     }
-    // Every `$name` has to be a variable the document declares. One that is not is text the shell
-    // put there, and it could be anything.
-    let mut declared = Vec::new();
-    let mut used = Vec::new();
-    for m in variable_re().captures_iter(&query) {
-        let name = m.get(1).map_or("", |n| n.as_str());
-        if m.get(2).is_some() {
-            declared.push(name);
-        } else {
-            used.push(name);
-        }
-    }
-    let dollars = query.matches('$').count();
-    if dollars != declared.len() + used.len() || used.iter().any(|u| !declared.contains(u)) {
+    // The lexer keeps a `\$` that bash would unescape inside double quotes; the document has `$`.
+    let query = query.replace("\\$", "$");
+    if query.contains('$')
+        && (!variables_stand_in_value_positions(&query) || shell_expands_query(cmd))
+    {
         return Some(UNREADABLE);
     }
     let lower = query.to_lowercase();
-    if lower.contains("mutation") && (lower.contains("merg") || lower.contains("queue")) {
+    if lower.contains("mutation") && (speaks_of_merging(&lower) || lower.contains("queue")) {
         return Some(MERGES);
     }
     None
+}
+
+/// True when every `$` in a GraphQL document is a variable the document declares, declared in its
+/// operation's variable list and used only where a value goes. Anything else is text the shell
+/// could have put there.
+fn variables_stand_in_value_positions(query: &str) -> bool {
+    let mut declared = Vec::new();
+    let mut used = Vec::new();
+    let mut seen = 0;
+    for m in variable_re().captures_iter(query) {
+        seen += 1;
+        let before = m.get(1).map_or("", |b| b.as_str());
+        let name = m.get(2).map_or("", |n| n.as_str());
+        if m.get(3).is_some() {
+            if !matches!(before, "(" | ",") {
+                return false;
+            }
+            declared.push(name);
+        } else {
+            if !matches!(before, ":" | "[" | ",") {
+                return false;
+            }
+            used.push(name);
+        }
+    }
+    seen == query.matches('$').count() && used.iter().all(|u| declared.contains(u))
+}
+
+/// True when a `$` in a `query=` word of the command line is one the shell expands: written
+/// outside single quotes and not escaped. A line the lexer cannot read counts as one.
+fn shell_expands_query(cmd: &str) -> bool {
+    let Ok(toks) = shellseg::lex(cmd) else {
+        return true;
+    };
+    let chars: Vec<char> = cmd.chars().collect();
+    toks.iter()
+        .filter(|t| t.text.to_lowercase().contains("query=") && t.text.contains('$'))
+        .any(|t| {
+            let (Ok(start), Ok(end)) = (usize::try_from(t.start), usize::try_from(t.end)) else {
+                return true;
+            };
+            expanding_dollar(chars.get(start..end).unwrap_or(&[]))
+        })
+}
+
+/// True when the raw text of one word holds a `$` the shell expands.
+fn expanding_dollar(raw: &[char]) -> bool {
+    let mut single = false;
+    let mut double = false;
+    let mut i = 0;
+    while i < raw.len() {
+        let c = raw[i];
+        if single {
+            single = c != '\'';
+        } else if c == '\\' {
+            i += 1;
+        } else if c == '\'' && !double {
+            single = true;
+        } else if c == '"' {
+            double = !double;
+        } else if c == '$' {
+            return true;
+        }
+        i += 1;
+    }
+    false
 }
 
 /// True when a push option sets a request to merge: its key, past GitLab's `merge_request.`
@@ -401,7 +537,7 @@ fn is_merge_push_option(opt: &str) -> bool {
         .strip_prefix("merge_request.")
         .or_else(|| key.strip_prefix("mr."))
         .unwrap_or(&key);
-    key.contains("merg")
+    speaks_of_merging(key)
 }
 
 /// The refusal for one push option's value.
@@ -415,9 +551,61 @@ fn push_option_reason(opt: &str) -> Option<&'static str> {
     }
 }
 
+/// Shell-quotes one word, so a resolved alias is handed back as the words it was.
+fn quoted(word: &str) -> String {
+    format!("'{}'", word.replace('\'', r"'\''"))
+}
+
+/// A git alias defined on the line (`-c alias.<name>=…`) and run by this segment, resolved:
+/// `Ok` with the command it stands for, or `Err` with the refusal when it cannot be read (a
+/// shell alias, an expansion the shell fills in, or an alias from the `GIT_CONFIG_*`
+/// environment). `None` when the segment runs no such alias.
+pub(super) fn git_alias(
+    args: &[String],
+    env: &[String],
+    sub: Option<&str>,
+) -> Option<Result<String, &'static str>> {
+    let sub = sub?;
+    if env.iter().any(|e| {
+        e.split_once('=').is_some_and(|(k, v)| {
+            k.starts_with("GIT_CONFIG") && v.to_lowercase().starts_with("alias.")
+        })
+    }) {
+        return Some(Err(UNREADABLE));
+    }
+    let sub_at = args.iter().position(|a| a == sub)?;
+    let globals = &args[..sub_at];
+    let mut i = 0;
+    while i + 1 < globals.len() {
+        if globals[i] == "-c"
+            && let Some((key, expansion)) = globals[i + 1].split_once('=')
+            && let Some(name) = key.to_lowercase().strip_prefix("alias.")
+            && name == sub.to_lowercase()
+        {
+            if expansion.starts_with('!') || opaque(expansion) {
+                return Some(Err(UNREADABLE));
+            }
+            let mut words: Vec<String> = Vec::new();
+            words.extend(globals[..i].iter().map(|w| quoted(w)));
+            words.extend(globals[i + 2..].iter().map(|w| quoted(w)));
+            words.push(expansion.to_owned());
+            words.extend(args[sub_at + 1..].iter().map(|w| quoted(w)));
+            return Some(Ok(format!("git {}", words.join(" "))));
+        }
+        i += 1;
+    }
+    None
+}
+
 /// The merge refusal for a `git` call: a push option that sets auto-merge, given on the command
-/// line, through `-c`, through the `GIT_CONFIG_*` environment, or written into git's config.
-pub(super) fn git_reason(args: &[String], env: &[String], sub: Option<&str>) -> Option<String> {
+/// line, through `-c`, through the `GIT_CONFIG_*` environment, or written into git's config; and
+/// a git alias written into git's config that would publish.
+pub(super) fn git_reason(
+    args: &[String],
+    env: &[String],
+    sub: Option<&str>,
+    unattended: bool,
+) -> Option<String> {
     let sub_at = sub.and_then(|s| args.iter().position(|a| a == s));
     let globals = &args[..sub_at.unwrap_or(args.len())];
     let rest = sub_at.map_or(&[][..], |i| &args[i + 1..]);
@@ -457,17 +645,35 @@ pub(super) fn git_reason(args: &[String], env: &[String], sub: Option<&str>) -> 
                 .find_map(|o| push_option_reason(o))
                 .map(str::to_owned)
         }
-        Some("config") => {
-            let key_at = rest
-                .iter()
-                .position(|a| a.eq_ignore_ascii_case("push.pushoption"))?;
-            rest[key_at + 1..]
-                .iter()
-                .filter(|a| !a.starts_with('-'))
-                .find_map(|v| push_option_reason(v))
-                .map(str::to_owned)
-        }
+        Some("config") => config_write_reason(rest, unattended),
         _ => None,
+    }
+}
+
+/// The git subcommands an alias may not stand for or begin with, because the floor holds them.
+const HELD_GIT: &[&str] = &["push", "tag"];
+
+/// `git config` writing a push option that sets auto-merge, or an alias that would publish.
+fn config_write_reason(rest: &[String], unattended: bool) -> Option<String> {
+    let key_at = rest.iter().position(|a| {
+        let a = a.to_lowercase();
+        a == "push.pushoption" || a.starts_with("alias.")
+    })?;
+    let value = rest[key_at + 1..].iter().find(|a| !a.starts_with('-'))?;
+    if rest[key_at].eq_ignore_ascii_case("push.pushoption") {
+        return push_option_reason(value).map(str::to_owned);
+    }
+    if value.starts_with('!') || opaque(value) {
+        return Some(UNREADABLE.to_owned());
+    }
+    let first = value.split_whitespace().next().unwrap_or("");
+    let cmd = format!("git {value}");
+    if HELD_GIT.contains(&first.to_lowercase().as_str())
+        || super::release_floor_reason(&cmd, unattended).is_some()
+    {
+        Some(ALIAS.to_owned())
+    } else {
+        None
     }
 }
 
@@ -493,7 +699,7 @@ fn env_reason(env: &[String]) -> Option<&'static str> {
             .to_lowercase()
             .replace("merge_requests", "")
             .replace("merge_request", "");
-        if lower.contains("merg") {
+        if speaks_of_merging(&lower) {
             return Some(MERGES);
         }
     }
