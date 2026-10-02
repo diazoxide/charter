@@ -19,6 +19,7 @@ import { AskFirst, runExtensionAction } from "./ExtensionAction";
 import { LandAsk, PushAsk, askLand } from "./ChangeActions";
 import { PanelList } from "./PanelList";
 import { RepoInstructionsTab } from "./RepoInstructionsTab";
+import { FirstTaskTab, type FirstTaskDoes } from "./FirstTaskTab";
 import { Preferences } from "./Preferences";
 import { ProjectSettings, WorkspaceSettings } from "./ProjectSettings";
 import {
@@ -52,6 +53,9 @@ const WORKSPACE_SETTINGS = "workspace-settings";
 
 /** What `repoInstructionsView` names a workspace's repo instructions view (FR-18a). */
 const REPO_INSTRUCTIONS = "repo-instructions";
+
+/** What `firstTaskView` names the first task's view (FR-28). */
+const FIRST_TASK = "first-task";
 
 /**
  * **Views: what a tab shows when it does not show a chat** — ADR 0043 as amended
@@ -228,6 +232,7 @@ export function ViewPane({
   changed = 0,
   onMemorySaved,
   onCloseView,
+  firstTask,
 }: {
   plane: PlaneId;
   view: ViewRef;
@@ -260,6 +265,8 @@ export function ViewPane({
   onMemorySaved?: (from: ViewRef, memory: MemoryView) => void;
   /** Close the tab showing `view` — a new memory's Cancel. */
   onCloseView?: (view: ViewRef) => void;
+  /** What the first task's tab asks the plane to do: start a run, show a run's diff (FR-28). */
+  firstTask?: FirstTaskDoes;
 }) {
   // **What charter can do to the thing this tab is about, on its heading** (SI-3): a persona's
   // `persona.md` handed to the operator's editor and the persona deleted, a vault deleted. The
@@ -366,6 +373,15 @@ export function ViewPane({
             workspace={view.key}
             onClose={() => onCloseView?.(view)}
           />
+        ) : isFirstTask(view) ? (
+          /* The first task (FR-28): two runs of one task, each on a branch of its own, keyed by
+             the repo's clone the runs are cut from. */
+          <FirstTaskTab
+            key={`${plane}\u0000${view.key}`}
+            plane={plane}
+            clone={view.key}
+            does={firstTask}
+          />
         ) : isSaving(view) ? (
           /* The plane's save standing and its save button (charter-app#294). Keyed by the
              plane, so a pane that comes to show another project's starts from its own read. */
@@ -459,6 +475,11 @@ function isWorkspaceSettings(view: ViewRef): boolean {
 /** Whether `view` is a workspace's repo instructions (FR-18a). */
 function isRepoInstructions(view: ViewRef): boolean {
   return view.from === null && view.view === REPO_INSTRUCTIONS;
+}
+
+/** Whether `view` is the first task's view (FR-28). */
+function isFirstTask(view: ViewRef): boolean {
+  return view.from === null && view.view === FIRST_TASK;
 }
 
 /** Whether `view` is the Saving view (charter-app#294). */

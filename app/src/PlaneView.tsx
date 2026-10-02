@@ -124,6 +124,8 @@ import {
   offerView,
   repoInstructionsTitle,
   repoInstructionsView,
+  firstTaskTitle,
+  firstTaskView,
   panesOf,
   putViewBack,
   refileViews,
@@ -164,6 +166,7 @@ import { usePlaneEdits } from "./PlaneEdits";
 import { useMemoryEdits } from "./MemoryEdits";
 import { DRAFT, isMemory, memoryRefOf } from "./memories";
 import { ViewMark, ViewPane } from "./Views";
+import type { FirstTaskDoes } from "./FirstTaskTab";
 import { useTabStop } from "./roving";
 import { closeOnDelete, onAMac, renameOnF2 } from "./tabKeys";
 import { opensAShell } from "./shellKey";
@@ -1824,7 +1827,9 @@ export function PlaneView({
     // (FR-18a): a tab that asks nothing until the operator goes to it, so W10's budget —
     // the repo, the trust question and, only when there is a choice, the picker — is not
     // spent on it. Nothing is written until its own press.
-    const offerInstructions = () => {
+    // **The first task, offered the same way** (FR-28): a tab beside the first chat, so a
+    // partner session has the script one press away and nobody is asked anything for it.
+    const offerBeside = () => {
       if (instructions > 0)
         change((tabs) =>
           offerView(
@@ -1834,6 +1839,8 @@ export function PlaneView({
             workspace,
           ),
         );
+      if (cwd !== "")
+        change((tabs) => offerView(tabs, firstTaskView(cwd), firstTaskTitle(workspace), workspace));
     };
     // `ask`'s steps, written out so the state is set in the command's callback: the
     // `react-hooks/set-state-in-effect` rule reads a call in an effect body as synchronous
@@ -1869,12 +1876,12 @@ export function PlaneView({
             workspace,
           );
           if (refused === undefined) {
-            offerInstructions();
+            offerBeside();
             return;
           }
           setPickerTrouble(refused);
         } else setPickerTrouble(undefined);
-        offerInstructions();
+        offerBeside();
         setPicking({ options: options.data, where });
       })
       .catch((err: unknown) => setTrouble(String(err)));
@@ -2596,6 +2603,42 @@ export function PlaneView({
       return { ok: true };
     },
     [change, plane],
+  );
+
+  /**
+   * **What the first task's tab asks for** (FR-28): a run started by the core — on a branch of its
+   * own, with the task typed and unsent — whose tab goes on the strip it is filed under, in
+   * front; and a run's diff, in a shell tab in its branch's folder with the core's diff command
+   * run there.
+   */
+  const [firstTaskRuns, setFirstTaskRuns] = useState<FirstTaskDoes["runs"]>({});
+  const firstTaskDoes = useMemo<FirstTaskDoes>(
+    () => ({
+      runs: firstTaskRuns,
+      start: async (clone, profile, persona, run) => {
+        const started = await commands
+          .firstTaskRun(
+            plane,
+            clone,
+            profile,
+            persona,
+            run,
+            STARTING_SIZE.columns,
+            STARTING_SIZE.rows,
+          )
+          .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+        if (started.status === "error") return started.error;
+        const chat = started.data;
+        setFirstTaskRuns((was) => ({ ...was, [clone]: { ...was[clone], [run]: chat } }));
+        setStartedIn((was) => ({ ...was, [chat.session]: chat.workspace ?? OUTSIDE }));
+        change((tabs) =>
+          openTab(tabs, chat.session, chat.name, whoOf(chat.persona, chat.harness), chat.label),
+        );
+        return chat;
+      },
+      showDiff: (run) => openShell(run.folder, run.workspace ?? OUTSIDE, run.diff),
+    }),
+    [change, firstTaskRuns, openShell, plane],
   );
 
   /**
@@ -3813,6 +3856,7 @@ export function PlaneView({
                     onSaved: memoryEdits.onSaved,
                     onClose: closeView,
                   }}
+                  firstTask={firstTaskDoes}
                 />
               ) : tabs.order.some((id) => !isBackground(id)) ? (
                 // Chats are running — just not in the workspace being looked at. Saying
@@ -4777,6 +4821,7 @@ function LayoutPanes({
   onAsk,
   onVaultChanged,
   memory,
+  firstTask,
 }: {
   /** Which plane's sessions these panes are showing. A session number belongs to a plane,
    *  and every command a pane makes carries it. */
@@ -4815,6 +4860,8 @@ function LayoutPanes({
     onSaved: (from: ViewRef, memory: MemoryView) => void;
     onClose: (view: ViewRef) => void;
   };
+  /** What the first task's tab asks the plane to do (FR-28). */
+  firstTask: FirstTaskDoes;
 }) {
   if (layout.kind === "pane") {
     const content = layout.content;
@@ -4847,6 +4894,7 @@ function LayoutPanes({
               changed={memory.changed}
               onMemorySaved={memory.onSaved}
               onCloseView={memory.onClose}
+              firstTask={firstTask}
             />
           </div>
         </div>
@@ -4915,6 +4963,7 @@ function LayoutPanes({
               onAsk={onAsk}
               onVaultChanged={onVaultChanged}
               memory={memory}
+              firstTask={firstTask}
             />
           </Panel>
         </Fragment>

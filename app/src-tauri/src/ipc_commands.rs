@@ -51,6 +51,7 @@ macro_rules! app_commands {
                 firstrun::open_local_project,
                 firstrun::repo_instructions,
                 firstrun::import_instructions,
+                firsttask::first_task_run,
                 open_session,
                 close_session,
                 ignore_needs_you,

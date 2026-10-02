@@ -565,7 +565,9 @@ describe("the repo's agent instructions", () => {
     const strip = screen.getByRole("tablist", { name: "Tabs" });
     await within(strip).findByRole("tab", { selected: true });
     await waitFor(() => expect(calls("start_chat")).toHaveLength(1));
-    expect(within(strip).getAllByRole("tab")).toHaveLength(1);
+    // The chat, and the first task offered beside it (FR-28), and nothing else.
+    await within(strip).findByRole("tab", { name: /First task · widget/ });
+    expect(within(strip).getAllByRole("tab")).toHaveLength(2);
     expect(within(strip).queryByRole("tab", { name: /Memory from the repo/ })).toBeNull();
   });
 

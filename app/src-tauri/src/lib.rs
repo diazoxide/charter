@@ -26,6 +26,7 @@ mod curation;
 mod doctor;
 mod extensions;
 mod firstrun;
+mod firsttask;
 mod handoff;
 mod harness_plugins;
 mod heard;

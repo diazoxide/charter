@@ -315,6 +315,11 @@ export const commands = {
 	 */
 	importInstructions: (plane: PlaneId, workspace: string, chosen: ChosenInstruction[]) => typedError<number, string>(__TAURI_INVOKE("import_instructions", { plane, workspace, chosen })),
 	/**
+	 *  Starts run `run` (1 or 2) of the first task in the repo clone at `cwd`, on `profile`, as
+	 *  `persona`, with the task typed and unsent.
+	 */
+	firstTaskRun: (plane: PlaneId, cwd: string, profile: string, persona: string | null, run: number, columns: number, rows: number) => typedError<FirstTaskRun, string>(__TAURI_INVOKE("first_task_run", { plane, cwd, profile, persona, run, columns, rows })),
+	/**
 	 *  Starts a session, and remembers it as a chat so a quit can write it down. No program is
 	 *  the operator's shell.
 	 */
@@ -1718,6 +1723,29 @@ export type FirstRunFound = {
 	forges: ForgeRow[],
 	/**  The project templates this charter ships, in the order the screen lists them. */
 	templates: TemplateRow[],
+};
+
+/**
+ *  A run of the first task that started: what the window needs to put its tab on the strip and
+ *  to open its diff.
+ */
+export type FirstTaskRun = {
+	session: number,
+	/**  The chat's name, which is its number. */
+	name: string,
+	/**  What its tab says, which also named its branch: `first task 1`. */
+	label: string,
+	persona: string | null,
+	/**  The harness, by the word the plane calls it. */
+	harness: string | null,
+	/**  The workspace it is filed under. */
+	workspace: string | null,
+	/**  The branch it works on. */
+	branch: string,
+	/**  The branch's folder, where its diff is shown. */
+	folder: string,
+	/**  The command that shows the run's diff, run in `folder`. */
+	diff: string,
 };
 
 /**  A forge, as the window is told it. */
