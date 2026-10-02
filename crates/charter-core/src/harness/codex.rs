@@ -3,6 +3,7 @@
 
 use super::adapter::{HarnessAdapter, Sandbox};
 use super::{Harness, Kit, StateHooks};
+use crate::sandbox::Form;
 
 /// Codex's adapter.
 pub struct Codex;
@@ -105,6 +106,52 @@ impl HarnessAdapter for Codex {
     fn plugins(&self) -> &'static dyn crate::harness_plugin::Adapter {
         &crate::harness_plugin::CODEX
     }
+
+    /// Flags on the chat's line ([`crate::sandbox::codex`] has the measurements).
+    fn sandbox_compiler(&self) -> Option<crate::sandbox::Compiler> {
+        Some(|compiled| crate::sandbox::codex::flags(compiled).map(Form::Codex))
+    }
+
+    /// The sandbox's flags go last among the flags, where they win, and in front of the
+    /// subcommand, session id and first message that end the line. A flag of Codex's own in
+    /// the profile's command or the chat's own words can outrank them, so such a chat is
+    /// refused, naming where the flag is.
+    fn sandboxed_line(
+        &self,
+        form: &Form,
+        command: Vec<String>,
+        armed: Vec<String>,
+        charters: Vec<String>,
+    ) -> Result<Vec<String>, String> {
+        let Form::Codex(flags) = form else {
+            return Err(super::adapter::not_compiled_for(Harness::Codex));
+        };
+        for (words, named, fix) in [
+            (
+                &command,
+                "the profile's command names",
+                "Take it out of the profile's command.",
+            ),
+            (
+                &charters,
+                "the chat's own arguments name",
+                "Start it without that argument.",
+            ),
+        ] {
+            if let Some(flag) = crate::sandbox::codex::loosened_by(words) {
+                return Err(format!(
+                    "this plane runs every chat sandboxed, and {named} {flag}, which would run \
+                     {} outside the sandbox charter compiled for it, so nothing was started. \
+                     {fix}",
+                    Harness::Codex.title()
+                ));
+            }
+        }
+        let mut charters = charters;
+        let tail =
+            charters.split_off(charters.len() - crate::sandbox::codex::positional_tail(&charters));
+        Ok([command, armed, charters, flags.args.clone(), tail].concat())
+    }
 }
 
 /// The `-c` pairs that arm Codex's hooks on one session, out of [`crate::plugin::codex_handlers`].
@@ -198,21 +245,8 @@ mod tests {
     #[test]
     fn a_sandbox_compiled_for_another_harness_arms_no_codex_chat() {
         // ADR 0067, fail closed, held by the adapter seam itself.
-        let plane = tempfile::tempdir().expect("a plane");
-        std::fs::write(
-            plane.path().join("charter.toml"),
-            "[sandbox]\nmode = \"on\"\n",
-        )
-        .expect("charter.toml");
-        let machine = crate::sandbox::Machine {
-            env: crate::secrets::Env::of(&[]),
-            home: None,
-            os: crate::sandbox::Os::Linux,
-        };
-        let claude =
-            crate::sandbox::for_start(Harness::ClaudeCode, plane.path(), &machine, &|_| true)
-                .expect("starts")
-                .expect("sandboxed");
+        let (plane, claude) = crate::harness::testing::sandbox_compiled_for(Harness::ClaudeCode);
+        let claude = claude.expect("starts");
 
         let hooks = adapter().arm(
             kit(),

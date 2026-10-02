@@ -3,6 +3,7 @@
 
 use super::adapter::{HarnessAdapter, Sandbox};
 use super::{Harness, Kit, StateHooks, words};
+use crate::sandbox::Form;
 
 /// Claude Code's adapter.
 pub struct ClaudeCode;
@@ -36,6 +37,13 @@ impl HarnessAdapter for ClaudeCode {
         let Some(plugin) = kit.plugin else {
             return StateHooks::None;
         };
+        // Claude Code carries its sandbox in the same `--settings`. A form of another kind is
+        // not one, and the chat is armed with nothing rather than started without it.
+        let sandbox = match sandbox.applied().map(crate::sandbox::Applied::form) {
+            None => None,
+            Some(crate::sandbox::Form::ClaudeCode(settings)) => Some(settings),
+            Some(_) => return StateHooks::None,
+        };
         StateHooks::ThisSessionOnly {
             args: words([
                 "--plugin-dir",
@@ -45,9 +53,7 @@ impl HarnessAdapter for ClaudeCode {
                     kit.binary,
                     crate::footerclaim::status_line(cwd).free(),
                     plugins,
-                    sandbox
-                        .applied()
-                        .and_then(crate::sandbox::Applied::claude_settings),
+                    sandbox,
                 ),
             ]),
             env: vec![(
@@ -69,6 +75,27 @@ impl HarnessAdapter for ClaudeCode {
 
     fn plugins(&self) -> &'static dyn crate::harness_plugin::Adapter {
         &crate::harness_plugin::CLAUDE_CODE
+    }
+
+    /// A `sandbox` object and `permissions.deny` rules ([`crate::sandbox::claude`]).
+    fn sandbox_compiler(&self) -> Option<crate::sandbox::Compiler> {
+        Some(|compiled| crate::sandbox::claude::settings(compiled).map(Form::ClaudeCode))
+    }
+
+    /// The line as it is: Claude Code's sandbox rides in the `--settings` charter hands it (in
+    /// `armed`), which a project's settings cannot loosen (ADR 0067 §2). Its own flags are
+    /// not asked about yet.
+    fn sandboxed_line(
+        &self,
+        form: &Form,
+        command: Vec<String>,
+        armed: Vec<String>,
+        charters: Vec<String>,
+    ) -> Result<Vec<String>, String> {
+        match form {
+            Form::ClaudeCode(_) => Ok([command, armed, charters].concat()),
+            _ => Err(super::adapter::not_compiled_for(Harness::ClaudeCode)),
+        }
     }
 }
 
@@ -196,20 +223,8 @@ mod tests {
         // ADR 0067, fail closed: a Codex sandbox handed to the Claude Code adapter would
         // otherwise start a Claude Code chat with no sandbox at all. The adapter itself
         // refuses it, not only `Harness::state_hooks`.
-        let plane = tempfile::tempdir().expect("a plane");
-        std::fs::write(
-            plane.path().join("charter.toml"),
-            "[sandbox]\nmode = \"on\"\n",
-        )
-        .expect("charter.toml");
-        let machine = crate::sandbox::Machine {
-            env: crate::secrets::Env::of(&[]),
-            home: None,
-            os: crate::sandbox::Os::Linux,
-        };
-        let codex = crate::sandbox::for_start(Harness::Codex, plane.path(), &machine, &|_| true)
-            .expect("starts")
-            .expect("sandboxed");
+        let (plane, codex) = crate::harness::testing::sandbox_compiled_for(Harness::Codex);
+        let codex = codex.expect("starts");
 
         let hooks = adapter().arm(
             Kit {

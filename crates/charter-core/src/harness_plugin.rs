@@ -145,11 +145,19 @@ pub trait Adapter: Sync {
 }
 
 /// Every harness charter knows, in the registry's order ([`crate::profiles::KINDS`]).
-pub static ADAPTERS: [&dyn Adapter; 3] = [&CLAUDE_CODE, &OPENCODE, &CODEX];
+///
+/// Read through the one registry of harness adapters ([`crate::harness::Harness::adapter`]):
+/// each harness's plugin adapter is what its [`crate::harness::HarnessAdapter::plugins`]
+/// names, so there is no second list of harnesses here.
+pub fn adapters() -> impl Iterator<Item = &'static dyn Adapter> {
+    crate::profiles::KINDS
+        .iter()
+        .filter_map(|kind| adapter(kind.word))
+}
 
 /// The adapter for the harness `kind` names.
 pub fn adapter(kind: &str) -> Option<&'static dyn Adapter> {
-    ADAPTERS.iter().copied().find(|it| it.harness() == kind)
+    crate::harness::Harness::of_kind(kind).map(|harness| harness.adapter().plugins())
 }
 
 /// "plugins for <harness> are not supported yet — <why>", or none for an adapter that applies.
@@ -780,9 +788,8 @@ pub struct Group {
 /// Every harness, with what it has installed and what `choices` — a project's, or a project's in
 /// one workspace ([`Choices::read_in`]) — have each at.
 pub fn survey(choices: &Choices, env: &Env<'_>) -> Vec<Group> {
-    ADAPTERS
-        .iter()
-        .map(|&adapter| {
+    adapters()
+        .map(|adapter| {
             let (installed, trouble) = match adapter.installed(env) {
                 Ok(installed) => (installed, None),
                 Err(why) => (Vec::new(), Some(why)),
@@ -821,7 +828,7 @@ pub fn refusals_in(top: &toml::Table, file: &str, at: &str) -> Vec<String> {
     let mut out = Vec::new();
     for (harness, plugins) in table {
         let Some(adapter) = adapter(harness) else {
-            let known: Vec<&str> = ADAPTERS.iter().map(|it| it.harness()).collect();
+            let known: Vec<&str> = adapters().map(|it| it.harness()).collect();
             out.push(format!(
                 "[{at}{TABLE}.{}] in {file} is not a harness charter knows — one of: {}",
                 toml_key(harness),
