@@ -509,14 +509,21 @@ impl Subscription {
     /// yet read that begins at or before it, else the one being written. A cursor older than
     /// every segment kept gets [`Delivery::Missed`] first.
     fn find(&mut self, got: &mut Vec<Delivery>) -> io::Result<Option<Reading>> {
+        // The segment being written is opened BEFORE the sealed ones are listed. Listed first,
+        // a seal between the two would go unseen: the list would lack the segment just sealed
+        // and the open would find the new, later one, and every event in between would be
+        // skipped. Opened first, the file held is either listed as sealed by then, or it is
+        // still the newest segment there is.
+        let mut live = match File::open(self.dir.join(FILE)) {
+            Ok(file) => Some(file),
+            Err(why) if why.kind() == io::ErrorKind::NotFound => None,
+            Err(why) => return Err(why),
+        };
         let sealed = segments(&self.dir)?;
-        let oldest = match sealed.first() {
-            Some((first, _)) => Some(*first),
-            None => match File::open(self.dir.join(FILE)) {
-                Ok(mut file) => first_seq(&mut file)?,
-                Err(why) if why.kind() == io::ErrorKind::NotFound => None,
-                Err(why) => return Err(why),
-            },
+        let oldest = match (sealed.first(), live.as_mut()) {
+            (Some((first, _)), _) => Some(*first),
+            (None, Some(file)) => first_seq(file)?,
+            (None, None) => None,
         };
         if let Some(oldest) = oldest
             && oldest > self.last.saturating_add(1)
@@ -540,16 +547,12 @@ impl Subscription {
                 sealed: true,
             }));
         }
-        match File::open(self.dir.join(FILE)) {
-            Ok(file) => Ok(Some(Reading {
-                file,
-                offset: 0,
-                first: None,
-                sealed: false,
-            })),
-            Err(why) if why.kind() == io::ErrorKind::NotFound => Ok(None),
-            Err(why) => Err(why),
-        }
+        Ok(live.map(|file| Reading {
+            file,
+            offset: 0,
+            first: None,
+            sealed: false,
+        }))
     }
 }
 

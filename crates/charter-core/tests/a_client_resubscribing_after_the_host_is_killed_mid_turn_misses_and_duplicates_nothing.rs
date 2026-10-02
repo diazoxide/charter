@@ -203,3 +203,40 @@ fn a_client_resubscribing_after_the_host_is_killed_mid_turn_misses_and_duplicate
         "the run crossed many sealed segments: {sealed}"
     );
 }
+
+#[test]
+fn a_client_that_subscribes_again_at_every_poll_while_segments_are_sealed_misses_nothing() {
+    charter_core::unsteered!();
+    // A client that reconnects all the time: each poll is a new subscription from its cursor,
+    // so each one looks for its segment while the host is sealing them. A fresh log each round,
+    // because the first segment's seal is the one a subscription from 0 can race.
+    for round in 0..40 {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join("events").join(DEVICE);
+        let count = 60;
+        let mut writer = host(&dir, Some(count), false);
+        let mut seen = Vec::new();
+        let mut cursor = 0;
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while cursor < count {
+            assert!(
+                Instant::now() < deadline,
+                "round {round}: the client waited too long at {cursor}"
+            );
+            let mut subscription = subscribe(&dir, cursor);
+            for delivery in subscription.poll().unwrap() {
+                match delivery {
+                    Delivery::Event(event) => seen.push(event.seq),
+                    Delivery::Missed { after, resumes_at } => {
+                        panic!(
+                            "round {round}: nothing is old enough to be missed: {after}..{resumes_at}"
+                        )
+                    }
+                }
+            }
+            cursor = subscription.cursor();
+        }
+        assert!(writer.0.wait().unwrap().success());
+        assert_eq!(seen, (1..=count).collect::<Vec<_>>(), "round {round}");
+    }
+}
