@@ -1,4 +1,4 @@
-//! The landing log: `workspaces/<ws>/changes/log/<host>.jsonl` (ADR 0060 §2;
+//! The landing log: `workspaces/<ws>/changes/log/<device>.jsonl` (ADR 0060 §2;
 //! `docs/plane-format.md`, "the landing log").
 //!
 //! One line per landing charter made: *charter merged this commit, for this change*. It is
@@ -104,7 +104,8 @@ pub fn log_dir(plane: &Path, ws: &str) -> PathBuf {
     store::dir(plane, ws).join(LOG_DIRNAME)
 }
 
-/// `workspaces/<ws>/changes/log/<host>.jsonl`: this machine's log.
+/// `workspaces/<ws>/changes/log/<device>.jsonl`: this device's log, named by
+/// [`crate::dispatch::log_name`] (FD-25).
 pub fn log_path(plane: &Path, ws: &str, host: &str) -> PathBuf {
     log_dir(plane, ws).join(format!("{host}.jsonl"))
 }

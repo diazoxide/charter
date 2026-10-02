@@ -202,16 +202,25 @@ pub fn worktree_done(
     repo: String,
     piece: String,
 ) -> Result<(), String> {
-    declare_done(planes.held(&plane)?.root(), &workspace, &repo, &piece)
+    declare_done(
+        planes.held(&plane)?.root(),
+        planes.config(),
+        &workspace,
+        &repo,
+        &piece,
+    )
 }
 
-/// The declaration itself, against a root the registry has already vouched for.
-fn declare_done(plane: &Path, workspace: &str, repo: &str, piece: &str) -> Result<(), String> {
-    let who = charter_core::pieces::Who {
-        session: None,
-        persona: None,
-        host: charter_core::dispatch::host(),
-    };
+/// The declaration itself, against a root the registry has already vouched for. `config` is
+/// the machine store the device id is read from (FD-25).
+fn declare_done(
+    plane: &Path,
+    config: Option<&Path>,
+    workspace: &str,
+    repo: &str,
+    piece: &str,
+) -> Result<(), String> {
+    let who = window(config);
     charter_core::pieces::declare(
         plane,
         workspace,
@@ -225,13 +234,15 @@ fn declare_done(plane: &Path, workspace: &str, repo: &str, piece: &str) -> Resul
     .map_err(|why| why.to_string())
 }
 
-/// The window speaking for a branch it cut: no session or persona, and this machine's name, as
-/// `worktree_done` records it.
-fn window() -> charter_core::pieces::Who {
+/// The window speaking for a piece: no session or persona, this machine's name as the label,
+/// and the log named by the device id the store at `config` keeps (FD-25).
+fn window(config: Option<&Path>) -> charter_core::pieces::Who {
+    let host = charter_core::dispatch::host();
     charter_core::pieces::Who {
         session: None,
         persona: None,
-        host: charter_core::dispatch::host(),
+        log: charter_core::dispatch::log_name(config, &host),
+        host,
     }
 }
 
@@ -241,9 +252,9 @@ const UNLOGGED: &str = "charter could not record that it cut this branch, so it 
 
 /// Log a branch the window cut as `claimed`, and say what there is to say about it in the
 /// window's words: what the cut found (ADR 0072 §3), and a log that could not be written.
-fn claimed(plane: &Path, cut: &chatpiece::Cut) -> Vec<String> {
+fn claimed(plane: &Path, config: Option<&Path>, cut: &chatpiece::Cut) -> Vec<String> {
     let mut said: Vec<String> = cut.notes.iter().map(Note::in_window).collect();
-    if chatpiece::claim(plane, cut, &window(), chrono::Utc::now()).is_none() {
+    if chatpiece::claim(plane, cut, &window(config), chrono::Utc::now()).is_none() {
         said.push(UNLOGGED.to_string());
     }
     said
@@ -292,8 +303,15 @@ pub async fn worktree_add(
     branch: Option<String>,
 ) -> Result<NewBranch, String> {
     let root = planes.held(&plane)?.root().to_path_buf();
+    let config = planes.config().map(Path::to_path_buf);
     tauri::async_runtime::spawn_blocking(move || {
-        cut_branch(&root, &workspace, &repo, branch.as_deref())
+        cut_branch(
+            &root,
+            config.as_deref(),
+            &workspace,
+            &repo,
+            branch.as_deref(),
+        )
     })
     .await
     .map_err(|err| format!("charter could not cut the branch: {err}"))?
@@ -302,6 +320,7 @@ pub async fn worktree_add(
 /// The cut itself, against a root the registry has already vouched for.
 fn cut_branch(
     plane: &Path,
+    config: Option<&Path>,
     workspace: &str,
     repo: &str,
     branch: Option<&str>,
@@ -311,7 +330,7 @@ fn cut_branch(
         None => chatpiece::Naming::After(None),
     };
     let cut = chatpiece::cut(plane, workspace, repo, &naming).map_err(|why| why.in_window())?;
-    let warnings = claimed(plane, &cut);
+    let warnings = claimed(plane, config, &cut);
     Ok(NewBranch {
         piece: cut.piece,
         path: cut.path.display().to_string(),
@@ -336,6 +355,7 @@ fn cut_branch(
 /// a panic, so no cleanup runs and the branch and its folder stay (see `chatpiece::Held`).
 pub fn on_a_branch<T>(
     plane: &Path,
+    config: Option<&Path>,
     cwd: Option<&Path>,
     label: Option<&str>,
     new_branch: bool,
@@ -366,7 +386,7 @@ pub fn on_a_branch_cut<T>(
         Ok(started) => {
             let cut = held.keep();
             let mut said = vec![on_branch(&cut)];
-            said.extend(claimed(plane, &cut));
+            said.extend(claimed(plane, config, &cut));
             Ok((started, said))
         }
         Err(refused) => match held.take_back() {
@@ -556,10 +576,10 @@ mod tests {
             "cut by the core directly, so nothing claimed it and nothing is silent"
         );
 
-        declare_done(&root, "alpha", "thing", "piece").unwrap();
+        declare_done(&root, None, "alpha", "thing", "piece").unwrap();
 
         assert_eq!(pieces_of(&root, "alpha", "thing").unwrap()[0].said, "done");
-        let refused = declare_done(&root, "alpha", "thing", "nope").unwrap_err();
+        let refused = declare_done(&root, None, "alpha", "thing", "nope").unwrap_err();
         assert!(refused.contains("'nope' is not a worktree"), "{refused}");
     }
 
@@ -598,7 +618,7 @@ mod tests {
     fn a_chat_started_in_a_clone_starts_on_a_branch_of_its_own_and_is_told_which() {
         let (_dir, root, clone) = plane();
 
-        let (cwd, said) = on_a_branch(&root, Some(&clone), None, true, started_in).unwrap();
+        let (cwd, said) = on_a_branch(&root, None, Some(&clone), None, true, started_in).unwrap();
 
         assert_eq!(
             cwd,
@@ -623,7 +643,7 @@ mod tests {
     fn a_chat_told_to_share_the_clone_starts_in_the_clone() {
         let (_dir, root, clone) = plane();
 
-        let (cwd, said) = on_a_branch(&root, Some(&clone), None, false, started_in).unwrap();
+        let (cwd, said) = on_a_branch(&root, None, Some(&clone), None, false, started_in).unwrap();
 
         assert!(said.is_empty());
         assert_eq!(cwd, Some(clone));
@@ -636,7 +656,7 @@ mod tests {
         let workspace = root.join("workspaces/alpha");
 
         for cwd in [None, Some(workspace.as_path()), Some(root.as_path())] {
-            let (_, said) = on_a_branch(&root, cwd, None, true, started_in).unwrap();
+            let (_, said) = on_a_branch(&root, None, cwd, None, true, started_in).unwrap();
             assert!(said.is_empty(), "{cwd:?} is not a repo's clone");
         }
         assert!(pieces_of(&root, "alpha", "thing").unwrap().is_empty());
@@ -647,9 +667,14 @@ mod tests {
         let (_dir, root, clone) = plane();
 
         let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            on_a_branch(&root, Some(&clone), None, true, |_| -> Result<(), String> {
-                panic!("the start fell over")
-            })
+            on_a_branch(
+                &root,
+                None,
+                Some(&clone),
+                None,
+                true,
+                |_| -> Result<(), String> { panic!("the start fell over") },
+            )
         }));
 
         assert!(unwound.is_err());
@@ -663,6 +688,7 @@ mod tests {
 
         let refused = on_a_branch(
             &root,
+            None,
             Some(&clone),
             None,
             true,
@@ -690,7 +716,7 @@ mod tests {
     fn a_chat_that_was_refused_takes_its_branch_back_with_it() {
         let (_dir, root, clone) = plane();
 
-        let refused = on_a_branch(&root, Some(&clone), Some("fix login"), true, |_| {
+        let refused = on_a_branch(&root, None, Some(&clone), Some("fix login"), true, |_| {
             Err::<(), _>("agents are stopped".to_string())
         })
         .unwrap_err();
@@ -710,9 +736,9 @@ mod tests {
     #[test]
     fn a_branch_cut_from_the_window_is_refused_in_the_windows_words() {
         let (_dir, root, _clone) = plane();
-        cut_branch(&root, "alpha", "thing", Some("spike")).unwrap();
+        cut_branch(&root, None, "alpha", "thing", Some("spike")).unwrap();
 
-        let taken = cut_branch(&root, "alpha", "thing", Some("spike")).unwrap_err();
+        let taken = cut_branch(&root, None, "alpha", "thing", Some("spike")).unwrap_err();
 
         assert_eq!(
             taken,
@@ -725,9 +751,9 @@ mod tests {
     fn a_branch_cut_from_the_window_is_named_as_typed_and_logged() {
         let (_dir, root, _clone) = plane();
 
-        let cut = cut_branch(&root, "alpha", "thing", Some("spike")).unwrap();
-        let generated = cut_branch(&root, "alpha", "thing", None).unwrap();
-        let taken = cut_branch(&root, "alpha", "thing", Some("spike")).unwrap_err();
+        let cut = cut_branch(&root, None, "alpha", "thing", Some("spike")).unwrap();
+        let generated = cut_branch(&root, None, "alpha", "thing", None).unwrap();
+        let taken = cut_branch(&root, None, "alpha", "thing", Some("spike")).unwrap_err();
 
         assert_eq!(
             (cut.piece.as_str(), cut.branch.as_str()),

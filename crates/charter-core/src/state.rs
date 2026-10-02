@@ -8,6 +8,7 @@
 
 pub mod run;
 
+use crate::harness::model::{Ask, Began, Item, Said, Session, Turn};
 use crate::hookwire::Conversation;
 
 /// A chat's state, as the sidebar draws it.
@@ -48,12 +49,19 @@ pub enum Started {
 
 impl Started {
     /// Whether this is a session arriving, as opposed to something happening inside one.
+    ///
+    /// Read by the app's curation, which types a prompt only into a session that has just
+    /// begun. It is answered by the neutral model ([`Event::said`]), so the board and the
+    /// curation can never disagree about which `SessionStart` began a session.
     pub fn began_a_session(self) -> bool {
-        match self {
-            Self::Freshly | Self::Cleared | Self::Unsaid => true,
-            // The agent is still working, and the chat is still whatever it was.
-            Self::Compacted => false,
-        }
+        let detail = Detail {
+            started: self,
+            ..Detail::default()
+        };
+        matches!(
+            Event::SessionStart.said(detail),
+            Said::Session(Session::Began(_))
+        )
     }
 
     /// What Claude Code's `source` means, measured on 2.1.276 (`startup` seen live; the
@@ -137,6 +145,30 @@ impl Event {
             // reported: a tool call carries no chat state the app draws.
             _ => return None,
         })
+    }
+
+    /// What this hook word means in the neutral harness model (ADR 0073), with `detail`, what
+    /// its payload said beyond the event's name.
+    ///
+    /// The words are charter's own, the same for every harness: each adapter's hooks run
+    /// `charter hook <word>`, so this reading is not any one harness's. It sits beside the
+    /// words, so the model knows nothing of them.
+    pub fn said(self, detail: Detail) -> Said {
+        match self {
+            Self::SessionStart => Said::Session(match detail.started {
+                Started::Freshly | Started::Unsaid => Session::Began(Began::Fresh),
+                Started::Cleared => Session::Began(Began::Cleared),
+                Started::Compacted => Session::Compacted,
+            }),
+            Self::UserPromptSubmit => Said::Turn(Turn::Began),
+            Self::Notification => Said::Ask(Ask::default()),
+            Self::SubagentStop => Said::Item(Item::ChildEnded),
+            Self::Stop => Said::Turn(Turn::Ended),
+            Self::SessionEnd => Said::Session(match detail.ending {
+                Ending::Cleared => Session::ClearedAway,
+                Ending::ForGood => Session::Ended,
+            }),
+        }
     }
 
     /// The word `charter hook` takes for this event.
@@ -281,12 +313,17 @@ impl Chat {
 
     /// The same, with what the harness said about the event beyond its name.
     pub fn reported_from(&mut self, event: Event, detail: Detail) -> bool {
-        let Detail { started, ending } = detail;
+        self.heard(&event.said(detail))
+    }
+
+    /// The harness said `said`, in the neutral model (ADR 0073), at whatever level it runs.
+    /// Answers whether anything a reader can see changed.
+    pub fn heard(&mut self, said: &Said) -> bool {
         if self.ended {
             return false;
         }
         let was = self.seen();
-        match event {
+        match said {
             // A fresh chat, and every chat a relaunch puts back, wants a first prompt. It
             // has asked for nothing, and a launch that filled the queue would empty the
             // queue of its meaning.
@@ -297,14 +334,14 @@ impl Chat {
             // back to `waiting` while the agent was still working. A review found that, and
             // then found that guessing from "is a turn running" got `/clear` wrong in the
             // other direction. The payload says which, so nothing has to be guessed.
-            Event::SessionStart if !started.began_a_session() => {}
-            Event::SessionStart => {
+            Said::Session(Session::Compacted) => {}
+            Said::Session(Session::Began(_)) => {
                 self.state = State::Waiting;
                 self.asking = false;
             }
             // The turn that begins now is the one a waiting report is handed to, as context
             // (`handback`), so it is read and no longer waiting.
-            Event::UserPromptSubmit => {
+            Said::Turn(Turn::Began) => {
                 self.state = State::Running;
                 self.needs_you = false;
                 self.reports.clear();
@@ -313,7 +350,7 @@ impl Chat {
                 self.turns = self.turns.saturating_add(1);
             }
             // The turn has not ended, but it cannot go on without an answer.
-            Event::Notification => {
+            Said::Ask(_) => {
                 // Asked in the middle of a turn. After one has ended it is only a nudge.
                 self.asking = self.asking || self.state == State::Running;
                 self.state = State::Waiting;
@@ -329,7 +366,7 @@ impl Chat {
             // The case it would really have caught is the app MISSING a prompt event, and
             // there the guard gives the wrong answer: a turn has still ended, and the
             // operator still has the next move.
-            Event::Stop => {
+            Said::Turn(Turn::Ended) => {
                 self.state = State::Waiting;
                 self.needs_you = true;
                 self.asking = false;
@@ -337,17 +374,19 @@ impl Chat {
             // Emphatically not `Stop`: a dispatched sub-agent finishing does not end the
             // turn that dispatched it, and a fan-out would blink the chat out of `running`
             // several times over (`charter/hooks.py:stop`).
-            Event::SubagentStop => {}
+            Said::Item(Item::ChildEnded) => {}
             // **`/clear` ends a CONVERSATION, not the session** — measured on claude 2.1.276,
             // where typing it fires `SessionEnd(reason=clear)` and then
             // `SessionStart(source=clear)` from the same process. The `SessionStart` that
             // follows says what the chat is now.
-            Event::SessionEnd if ending == Ending::Cleared => {}
-            Event::SessionEnd => {
+            Said::Session(Session::ClearedAway) => {}
+            Said::Session(Session::Ended) => {
                 self.state = State::Done;
                 self.needs_you = false;
                 self.asking = false;
             }
+            // Neither is a state a reader is shown, at any level.
+            Said::Plan(_) | Said::Usage(_) => {}
         }
         was != self.seen()
     }
@@ -842,6 +881,108 @@ mod tests {
 
         assert_eq!(chat.state(), State::Unknown);
         assert!(!chat.needs_you());
+    }
+
+    use crate::harness::model::{Ask, Began, Item, Said, Session, Turn};
+
+    fn said_started(started: Started) -> Detail {
+        Detail {
+            started,
+            ..Detail::default()
+        }
+    }
+
+    fn said_ending(ending: Ending) -> Detail {
+        Detail {
+            ending,
+            ..Detail::default()
+        }
+    }
+
+    #[test]
+    fn a_session_start_is_a_session_beginning_unless_it_was_a_compaction() {
+        assert_eq!(
+            Event::SessionStart.said(said_started(Started::Freshly)),
+            Said::Session(Session::Began(Began::Fresh))
+        );
+        // Nothing said which is what a session start means when nothing says otherwise.
+        assert_eq!(
+            Event::SessionStart.said(said_started(Started::Unsaid)),
+            Said::Session(Session::Began(Began::Fresh))
+        );
+        assert_eq!(
+            Event::SessionStart.said(said_started(Started::Cleared)),
+            Said::Session(Session::Began(Began::Cleared))
+        );
+        assert_eq!(
+            Event::SessionStart.said(said_started(Started::Compacted)),
+            Said::Session(Session::Compacted)
+        );
+    }
+
+    #[test]
+    fn a_session_end_for_a_clear_is_not_the_session_ending() {
+        // Measured on claude 2.1.276: `/clear` fires `SessionEnd(reason=clear)` and then
+        // `SessionStart(source=clear)` from the same process.
+        assert_eq!(
+            Event::SessionEnd.said(said_ending(Ending::Cleared)),
+            Said::Session(Session::ClearedAway)
+        );
+        assert_eq!(
+            Event::SessionEnd.said(said_ending(Ending::ForGood)),
+            Said::Session(Session::Ended)
+        );
+    }
+
+    #[test]
+    fn a_prompt_begins_a_turn_and_stop_ends_it() {
+        assert_eq!(
+            Event::UserPromptSubmit.said(Detail::default()),
+            Said::Turn(Turn::Began)
+        );
+        assert_eq!(Event::Stop.said(Detail::default()), Said::Turn(Turn::Ended));
+    }
+
+    #[test]
+    fn a_notification_is_an_ask_with_no_options_said() {
+        assert_eq!(
+            Event::Notification.said(Detail::default()),
+            Said::Ask(Ask { options: vec![] })
+        );
+    }
+
+    #[test]
+    fn a_child_agent_finishing_is_an_item_of_the_turn_and_not_its_end() {
+        assert_eq!(
+            Event::SubagentStop.said(Detail::default()),
+            Said::Item(Item::ChildEnded)
+        );
+    }
+
+    #[test]
+    fn a_chat_moves_on_what_its_harness_said_in_the_neutral_model() {
+        // ADR 0073: the board reads the neutral model, so a level-3 adapter that says a turn
+        // began moves a chat exactly as a level-2 `UserPromptSubmit` does.
+        use crate::harness::model::{Ask, Said, Turn};
+        let mut chat = Chat::new();
+
+        assert!(chat.heard(&Said::Turn(Turn::Began)));
+        assert_eq!(chat.state(), State::Running);
+        assert!(chat.heard(&Said::Ask(Ask::default())));
+        assert!(chat.asking());
+        assert!(chat.needs_you());
+    }
+
+    #[test]
+    fn a_plan_or_usage_moves_no_chat() {
+        // Neither is a state the board draws, at any level.
+        use crate::harness::model::{Plan, Said, Turn, Usage};
+        let mut chat = Chat::new();
+        chat.heard(&Said::Turn(Turn::Began));
+
+        assert!(!chat.heard(&Said::Plan(Plan::default())));
+        assert!(!chat.heard(&Said::Usage(Usage::default())));
+        assert_eq!(chat.state(), State::Running);
     }
 
     #[test]

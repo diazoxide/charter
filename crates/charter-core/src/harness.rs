@@ -7,6 +7,17 @@
 
 use std::fmt;
 
+pub mod adapter;
+pub mod claude;
+pub mod codex;
+pub mod model;
+pub mod opencode;
+#[cfg(test)]
+pub(crate) mod testing;
+
+pub use adapter::HarnessAdapter;
+pub use claude::SMART_CLOSE_ALLOW;
+
 /// A harness session's id, held to a shape that cannot be read as a flag.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SessionId(String);
@@ -305,161 +316,8 @@ impl Harness {
         plugins: &crate::harness_plugin::Chosen,
         sandbox: Option<&crate::sandbox::Applied>,
     ) -> StateHooks {
-        // A sandbox compiled for another harness arms nothing, so the chat is refused rather
-        // than started without it (the app refuses one it is handed, too).
-        if sandbox.is_some_and(|applied| applied.harness() != self) {
-            return StateHooks::None;
-        }
-        let claude_sandbox = sandbox.and_then(crate::sandbox::Applied::claude_settings);
-        match self {
-            // **The bundled plugin, loaded for this session alone** (`crate::plugin` has the
-            // measurements). Its `hooks.json` holds every hook — the six that report state and
-            // the Bash guard — and names the binary by `$CHARTER_HOOK_BINARY`, so that is
-            // handed over in the environment. Without the plugin there is nothing to arm: a
-            // chat reads `unknown`, rather than being half-armed from a second place.
-            //
-            // `--settings` MERGES with the settings already in force rather than replacing
-            // them (measured on claude 2.1.276), and a key it names wins over the project's
-            // (measured on 2.1.280). It carries two keys: the Python charter's plugin turned
-            // off for this session, and the status line where charter may fill it.
-            Self::ClaudeCode => {
-                let Some(plugin) = kit.plugin else {
-                    return StateHooks::None;
-                };
-                StateHooks::ThisSessionOnly {
-                    args: words([
-                        "--plugin-dir",
-                        &plugin.display().to_string(),
-                        "--settings",
-                        &claude_code_settings(
-                            kit.binary,
-                            crate::footerclaim::status_line(cwd).free(),
-                            plugins,
-                            claude_sandbox,
-                        ),
-                    ]),
-                    env: vec![(
-                        crate::plugin::BINARY_ENV.to_owned(),
-                        kit.binary.display().to_string(),
-                    )],
-                    cannot_report: Vec::new(),
-                }
-            }
-            // **Measured on codex-cli 0.147.0, and it refutes what this arm used to say** —
-            // that Codex could only be armed in `~/.codex/config.toml` and could never say it
-            // was waiting. Every fact here was taken from the real binary driving a real turn
-            // against a stand-in model server, the TUI in a pane as the app runs it (#27):
-            //
-            // * `-c hooks.<Event>=[…]` arms a hook for ONE session. Codex lists its source as
-            //   "Session flags", and it runs BESIDE the operator's own `[[hooks.<Event>]]` for
-            //   the same event rather than replacing it — both fired. Nothing is written.
-            // * `SessionStart`, `UserPromptSubmit`, `Stop` and `SessionEnd` each fire with
-            //   `session_id` in the payload. `SessionStart` names a `source` (`startup`, and
-            //   `resume` with the SAME id on `codex resume <id>`); `SessionEnd` names a
-            //   `reason` (`other`, on `/quit`). `Stop` is "right before Codex ends its turn",
-            //   which is the falling edge `Stop` means for Claude Code.
-            // * There is no `Notification`. Codex tells a hook it is asking for approval only
-            //   through `PermissionRequest` — which fired exactly when the prompt appeared,
-            //   and not for a command that needed none — but that is a hook that DECIDES a
-            //   permission, and the app arms no such hook. So a Codex chat that stops
-            //   mid-turn for approval cannot say so.
-            // * **And there is no second way round it** (charter-app#52, read out of the same
-            //   0.147.0 binary the measurements above were taken on). The binary carries
-            //   eleven hook events and no more — `PreToolUse`, `PermissionRequest`,
-            //   `PostToolUse`, `PreCompact`, `PostCompact`, `SessionStart`, `SessionEnd`,
-            //   `UserPromptSubmit`, `SubagentStart`, `SubagentStop`, `Stop` — and the only
-            //   one that fires when the prompt appears is the one that decides it. The
-            //   `notify` program is not a second channel either: in 0.147.0 it is
-            //   `legacy_notify`, a shim over `Stop` whose one payload type is
-            //   `agent-turn-complete`, which is the falling edge `Stop` already gives. What
-            //   is left is `PreToolUse` without a matching `PostToolUse` for long enough —
-            //   which is a guess at timing over a harness's behaviour, and ADR 0018 admits
-            //   no state that did not come from a hook saying so.
-            // * `SessionStart` fires inside the FIRST TURN, not at launch (X1): an idle TUI
-            //   reported nothing at all until a prompt was typed.
-            // * A hook is inert until Codex trusts it. For these, the TUI itself asks at
-            //   startup — "Hooks need review … Trust all and continue / Continue without
-            //   trusting (hooks won't run)" — and Codex writes the answer into its own
-            //   `[hooks.state]`, keyed by event, position and a hash of the hook. The same
-            //   binary path arms the same hooks, so the operator is asked once and not once a
-            //   chat. Untrusted, they do not run and nothing says so (`codex exec`).
-            //
-            // Codex has no plugin here: the guard used to reach a Codex chat through the
-            // Python charter's Codex plugin, and now rides on the same `-c` flags as the state
-            // hooks, from the same registry ([`crate::plugin::CODEX`] out of [`crate::hookreg`]).
-            //
-            // And no plugin: Codex 0.147.0 takes a plugin's `enabled` from its `config.toml`
-            // alone and ignores the same key given with `-c` (measured, charter-app#274), so
-            // `plugins` is empty for it and nothing here would carry it.
-            //
-            // Its skills ride on the `SessionStart` hook above: Codex can take no skills
-            // directory for one session ([`Self::skills`]), so the chat is started with the
-            // bundle's in [`crate::skills::LISTED_ENV`], which a Codex hook inherits, and the
-            // briefing lists them.
-            //
-            // Its sandbox, where the plane turned it on, is not here: it rides on flags that go
-            // last among the flags on the chat's line ([`crate::sandbox::Applied::line`], and
-            // [`crate::sandbox::codex`] has the measurements). An unsandboxed Codex chat keeps
-            // Codex's own settings, as it did.
-            Self::Codex => StateHooks::ThisSessionOnly {
-                args: codex_session_flags(kit.binary),
-                env: kit
-                    .plugin
-                    .and_then(crate::skills::in_bundle)
-                    .map(|dir| {
-                        (
-                            crate::skills::LISTED_ENV.to_owned(),
-                            dir.display().to_string(),
-                        )
-                    })
-                    .into_iter()
-                    .collect(),
-                cannot_report: vec!["notification"],
-            },
-            // **The bundled shim, loaded for this session alone** ([`crate::opencode`] has the
-            // measurements, opencode 1.18.23). opencode reads a whole config from
-            // `OPENCODE_CONFIG_CONTENT` and concatenates its `plugin` list with every other
-            // config's, so naming the shim there loads it beside whatever the operator loads,
-            // writes nothing, and a project file cannot take it out. It runs the binary the
-            // environment names, as the Claude Code plugin's hooks do. `OPENCODE_PURE=0`
-            // because `1` would load no plugin at all; the flag that does the same is refused
-            // before the chat starts ([`crate::opencode::disarmed_by`]).
-            //
-            // No plugin choice: opencode has no switch that turns one plugin off.
-            //
-            // Its skills are the bundle's, handed to the shim as its option, which adds them to
-            // the skills opencode discovers for this process ([`Self::skills`]).
-            //
-            // It cannot report `SessionEnd`: quitting opencode fires no event and runs no exit
-            // handler in a plugin (measured). The app sees the process end.
-            Self::Opencode => {
-                let Some(shim) = kit
-                    .plugin
-                    .map(|plugin| plugin.join(crate::opencode::SHIM_IN_BUNDLE))
-                    .filter(|shim| shim.is_file())
-                else {
-                    return StateHooks::None;
-                };
-                StateHooks::ThisSessionOnly {
-                    args: Vec::new(),
-                    env: vec![
-                        (
-                            crate::plugin::BINARY_ENV.to_owned(),
-                            kit.binary.display().to_string(),
-                        ),
-                        (
-                            crate::opencode::CONFIG_ENV.to_owned(),
-                            crate::opencode::session_config(
-                                &shim,
-                                kit.plugin.and_then(crate::skills::in_bundle).as_deref(),
-                            ),
-                        ),
-                        (crate::opencode::PURE_ENV.to_owned(), "0".to_owned()),
-                    ],
-                    cannot_report: vec!["sessionend"],
-                }
-            }
-        }
+        // The adapter refuses a sandbox compiled for another harness ([`HarnessAdapter::arm`]).
+        self.adapter().arm(kit, cwd, plugins, sandbox)
     }
 
     /// Why a chat of this harness started with `command` and `env` would run without charter's
@@ -467,27 +325,21 @@ impl Harness {
     /// ([`crate::opencode::disarmed_by`]): Claude Code loads `--plugin-dir` whatever else it is
     /// told, and Codex's session flags are charter's own.
     pub fn disarmed_by(self, command: &[String], env: &[(String, String)]) -> Option<String> {
-        match self {
-            Self::ClaudeCode | Self::Codex => None,
-            Self::Opencode => crate::opencode::disarmed_by(command, env),
-        }
+        self.adapter().disarmed_by(command, env)
     }
 
     /// What the app arms a chat of this harness with, as `charter doctor` says it.
     pub fn armed_with(self) -> String {
+        self.adapter().armed_with()
+    }
+
+    /// The adapter that arms this harness at level 2 (ADR 0073 §3): the enum is their
+    /// registry, and every harness has one.
+    pub fn adapter(self) -> &'static dyn HarnessAdapter {
         match self {
-            Self::ClaudeCode => format!(
-                "the app arms each chat with its own plugin, {}",
-                crate::plugin::LOADED_AS
-            ),
-            Self::Codex => {
-                "the app arms each Codex chat with charter's hooks; Codex asks once to trust them"
-                    .to_owned()
-            }
-            Self::Opencode => {
-                "the app arms each opencode chat with charter's opencode plugin, for that chat alone"
-                    .to_owned()
-            }
+            Self::ClaudeCode => &claude::ADAPTER,
+            Self::Codex => &codex::ADAPTER,
+            Self::Opencode => &opencode::ADAPTER,
         }
     }
 
@@ -633,7 +485,7 @@ impl Harness {
 
     /// What the operator calls this harness: `Claude Code`, `Codex`, `opencode`.
     pub fn title(self) -> &'static str {
-        crate::harness_plugin::adapter(self.name()).map_or(self.name(), |a| a.title())
+        self.adapter().plugins().title()
     }
 
     /// What a chat on this harness cannot tell charter, in a sentence the chat shows — or
@@ -660,168 +512,6 @@ impl Harness {
     }
 }
 
-/// The settings a Claude Code chat is started with, as JSON on the argument.
-///
-/// On the argument and not in a file: a file would have to be written somewhere, cleaned up
-/// when the chat ends, and cleaned up again after an app that crashed. What is in it is a
-/// plugin id and a path — nothing secret, so `ps` showing it costs nothing.
-///
-/// **No hooks.** They are the bundled plugin's (`hooks/hooks.json`), so a chat has one place
-/// its hooks are declared and a hook is never armed twice.
-fn claude_code_settings(
-    binary: &std::path::Path,
-    may_fill_the_footer: bool,
-    plugins: &crate::harness_plugin::Chosen,
-    sandbox: Option<&crate::sandbox::claude::Settings>,
-) -> String {
-    let mut settings = serde_json::Map::new();
-    // The project's own choice of Claude Code's plugins first (charter-app#274, ADR 0050): a
-    // session `enabledPlugins` wins over the project's and the user's for the keys it names,
-    // and leaves every other plugin to them.
-    let mut enabled: serde_json::Map<String, serde_json::Value> = plugins
-        .iter()
-        .map(|(id, on)| (id.clone(), (*on).into()))
-        .collect();
-    // Then the pins, written last so nothing above can move them
-    // ([`crate::harness_plugin::CLAUDE_CODE`] holds them and says why). The operator's ruling of
-    // 2026-09-23: a chat the app starts turns the Python charter's plugin off for itself, so the
-    // project files that enable it for the operator's own terminal sessions do not give an app
-    // chat two sets of hooks and two `handoff` skills. And the bundled plugin pinned on: a
-    // project file can turn a `--plugin-dir` plugin off by its id, a chat can write that file,
-    // and the plugin carries the Bash guard. Measured on 2.1.280: this `true` wins over a
-    // project's `false`.
-    for pin in crate::harness_plugin::Adapter::pinned(&crate::harness_plugin::CLAUDE_CODE) {
-        enabled.insert(pin.id.to_owned(), pin.on.into());
-    }
-    settings.insert(
-        "enabledPlugins".to_owned(),
-        serde_json::Value::Object(enabled),
-    );
-    // **Only where nothing else fills it.** The key is one value and the flag is the last
-    // writer, so arming it where the operator has their own would stop theirs running
-    // ([`crate::footerclaim`], measured on 2.1.280). Where charter does not arm it, the chat
-    // records no turns and its `ctx`/`cache` gauge stays dark — which `doctor` reports.
-    if may_fill_the_footer {
-        settings.insert("statusLine".to_owned(), claude_code_status_line(binary));
-    }
-    // **The one command that ends a Smart close, pre-allowed, and nothing else** (SI-8e, the
-    // operator's ruling of 2026-09-28): a chat asked to write its record must not stop on a
-    // permission prompt for `charter session record`. One `allow` and no `ask`, `deny` or
-    // mode, because Claude Code merges a session's permission rules with the user's and the
-    // project's rather than replacing them, and its `deny` and `ask` outrank an `allow` — so
-    // the operator's own rules all still stand (measured on 2.1.283 in ADR 0064: a project
-    // `deny` still refused, a user `allow` still allowed, and a compound command that holds the
-    // record command beside another was still asked about).
-    let mut permissions = serde_json::json!({ "allow": [SMART_CLOSE_ALLOW] });
-    // **The sandbox, where the plane turned it on** (ADR 0067), and the deny rules that keep
-    // Claude Code's own Read and Edit tools out of what its sandbox denies a command
-    // ([`crate::sandbox::claude`]). A deny outranks the allow above, and they name different
-    // things. Absent otherwise, never `enabled: false`: an unsandboxed chat is left to the
-    // operator's own settings, as it was.
-    if let Some(sandbox) = sandbox {
-        settings.insert("sandbox".to_owned(), sandbox.sandbox.clone());
-        permissions["deny"] = serde_json::json!(sandbox.deny);
-    }
-    settings.insert("permissions".to_owned(), permissions);
-    serde_json::Value::Object(settings).to_string()
-}
-
-/// The permission rule a Claude Code chat the app starts carries: `charter session record`,
-/// with any arguments, runs without asking (SI-8e, ADR 0064).
-pub const SMART_CLOSE_ALLOW: &str = "Bash(charter session record *)";
-
-/// Claude Code's `statusLine`, pointed at `charter statusline` — for THIS session only.
-///
-/// **This is how a chat's `ctx`/`cache` history gets written at all, and without it the app's
-/// gauge is a renderer with nothing to render.** Claude Code hands `context_window` — the
-/// context percentage and the cache numbers — to its `statusLine` command and to nothing
-/// else: no hook payload carries them (charter ADR 0019, measured). `charter statusline`
-/// is the command that writes them down (`usage::record`), on every render, whether or not
-/// it draws anything. And since charter 0.57.0 (#895) nothing puts that command in a
-/// session's settings any more, while the app arms only hooks — so, measured on 2026-09-22,
-/// the operator's own plane had not had a turn recorded since 2026-09-04, and every chat the
-/// app started ran with no gauge on any surface.
-///
-/// **What the chat SEES does not change by default.** Inside the app `charter statusline`
-/// prints an empty line (ADR 0019 transposed, `charter-cli/src/statusline.rs`), which is
-/// the footer the app's chats were already meant to have — and ADR 0029's per-chat checkbox,
-/// which sets `CHARTER_FOOTER=show`, draws charter's footer instead. That checkbox was a
-/// switch on a command nothing invoked; this is what makes it one.
-///
-/// **It is armed only where the operator fills the line with nothing**, and that is the
-/// operator's own ruling of 2026-09-22. `--settings` merges key by key and `statusLine` is one
-/// key, so arming it over somebody's own command would stop theirs from running, silently, for
-/// every chat the app starts — measured on 2.1.280, four cells, one launch each
-/// ([`crate::footerclaim`], which holds the measurement and the rule). Where something else
-/// fills it, charter arms nothing, leaves their configuration alone, and lets `doctor` say why
-/// the gauge is dark. Nothing here wraps or chains their command: charter would then own its
-/// failures and its latency, every turn.
-///
-/// **What it costs otherwise, said:** nothing is written to any file, their own `claude` in a
-/// terminal is untouched, and a command costs one process per footer render — which Claude
-/// Code runs at startup and once per submitted turn, not on a timer (measured: zero
-/// invocations over thirty idle seconds).
-fn claude_code_status_line(binary: &std::path::Path) -> serde_json::Value {
-    serde_json::json!({
-        "type": "command",
-        "command": format!(
-            "{} statusline",
-            crate::plugin::shell_quoted(&binary.display().to_string())
-        ),
-    })
-}
-
-/// The `-c` pairs that arm Codex's hooks on one session, out of [`crate::plugin::codex_handlers`].
-///
-/// On the argument for the reason Claude Code's are: nothing is written, so nothing is left
-/// behind. Each value is TOML, because that is how Codex parses a `-c` value — and it is
-/// SERIALISED rather than formatted, since a value that fails to parse is not an error to
-/// Codex but a literal string, which it then rejects as the wrong type and refuses to start.
-///
-/// The command names the binary by its absolute path: Codex has no plugin root and no
-/// variable of charter's to expand, and a Codex hook runs through a shell just the same —
-/// measured, a single-quoted argument holding spaces arrived as one word.
-fn codex_session_flags(binary: &std::path::Path) -> Vec<String> {
-    crate::plugin::grouped(crate::plugin::codex_handlers())
-        .into_iter()
-        .flat_map(|(event, groups)| {
-            let groups: Vec<toml::Value> = groups
-                .into_iter()
-                .map(|(matcher, hooks)| {
-                    let hooks: Vec<toml::Value> = hooks
-                        .iter()
-                        .map(|hook| {
-                            let table: toml::Table = [
-                                ("type".to_owned(), toml::Value::from("command")),
-                                (
-                                    "command".to_owned(),
-                                    toml::Value::from(crate::plugin::command_at(binary, hook.name)),
-                                ),
-                                // Codex's own default is 600 seconds (its review screen says so).
-                                (
-                                    "timeout".to_owned(),
-                                    toml::Value::from(i64::from(hook.timeout)),
-                                ),
-                            ]
-                            .into_iter()
-                            .collect();
-                            toml::Value::Table(table)
-                        })
-                        .collect();
-                    let mut group = toml::Table::new();
-                    if let Some(matcher) = matcher {
-                        group.insert("matcher".to_owned(), toml::Value::from(matcher));
-                    }
-                    group.insert("hooks".to_owned(), toml::Value::Array(hooks));
-                    toml::Value::Table(group)
-                })
-                .collect();
-            let value = toml::Value::Array(groups);
-            ["-c".to_owned(), format!("hooks.{event}={value}")]
-        })
-        .collect()
-}
-
 fn words<const N: usize>(argv: [&str; N]) -> Vec<String> {
     argv.map(str::to_owned).to_vec()
 }
@@ -830,6 +520,55 @@ fn words<const N: usize>(argv: [&str; N]) -> Vec<String> {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn a_sandbox_compiled_for_one_harness_arms_no_chat_of_any_other() {
+        // ADR 0067, fail closed, for every pair: a chat handed another harness's sandbox
+        // would start without its own. opencode has no compiler, which is a typed answer.
+        let plugin = testing::bundled_plugin();
+        let kit = Kit {
+            binary: std::path::Path::new("/bin/charter"),
+            plugin: Some(&plugin),
+        };
+        let mut pairs = 0;
+        for from in Harness::ALL {
+            let (plane, applied) = testing::sandbox_compiled_for(from);
+            let applied = match applied {
+                Ok(applied) => applied,
+                Err(crate::sandbox::NotStarted::NoCompiler(harness)) => {
+                    assert_eq!((from, harness), (Harness::Opencode, Harness::Opencode));
+                    continue;
+                }
+                Err(other) => panic!("{from:?}: {other}"),
+            };
+            for to in Harness::ALL.into_iter().filter(|to| *to != from) {
+                assert_eq!(
+                    to.adapter()
+                        .arm(kit, Some(plane.path()), &BTreeMap::new(), Some(&applied)),
+                    StateHooks::None,
+                    "{from:?}'s sandbox armed a {to:?} chat"
+                );
+                assert!(
+                    to.adapter()
+                        .sandboxed_line(applied.form(), Vec::new(), Vec::new(), Vec::new())
+                        .is_err(),
+                    "{from:?}'s sandbox gave a {to:?} chat a line"
+                );
+                pairs += 1;
+            }
+        }
+        assert_eq!(
+            pairs, 4,
+            "Claude Code's and Codex's sandboxes, each to the two others"
+        );
+    }
+
+    #[test]
+    fn every_harness_is_armed_by_the_adapter_the_registry_names() {
+        for harness in Harness::ALL {
+            assert_eq!(harness.adapter().harness(), harness);
+        }
+    }
 
     #[test]
     fn every_harness_takes_escape_return_as_a_newline_in_its_input() {
@@ -1170,20 +909,8 @@ mod tests {
     /// The whole line of a Codex chat in a sandboxed plane — its hooks, then `charters` — and
     /// the flags its sandbox was compiled to.
     fn sandboxed_codex(charters: &[&str]) -> (Vec<String>, Vec<String>) {
-        let plane = tempfile::tempdir().expect("a plane");
-        std::fs::write(
-            plane.path().join("charter.toml"),
-            "[sandbox]\nmode = \"on\"\n",
-        )
-        .expect("charter.toml");
-        let machine = crate::sandbox::Machine {
-            env: crate::secrets::Env::of(&[]),
-            home: None,
-            os: crate::sandbox::Os::Linux,
-        };
-        let applied = crate::sandbox::for_start(Harness::Codex, plane.path(), &machine, &|_| true)
-            .expect("starts")
-            .expect("sandboxed");
+        let (plane, applied) = testing::sandbox_compiled_for(Harness::Codex);
+        let applied = applied.expect("starts");
         let crate::sandbox::Form::Codex(compiled) = applied.form() else {
             panic!("compiled for Codex");
         };
@@ -1268,21 +995,8 @@ mod tests {
     fn a_sandboxed_claude_code_chat_carries_its_sandbox_in_the_same_settings() {
         // One `--settings`: the sandbox and its deny rules beside the Smart close allow, which
         // stays, because a deny outranks an allow and the two name different things.
-        let plane = tempfile::tempdir().expect("a plane");
-        std::fs::write(
-            plane.path().join("charter.toml"),
-            "[sandbox]\nmode = \"on\"\n",
-        )
-        .expect("charter.toml");
-        let machine = crate::sandbox::Machine {
-            env: crate::secrets::Env::of(&[]),
-            home: None,
-            os: crate::sandbox::Os::Linux,
-        };
-        let applied =
-            crate::sandbox::for_start(Harness::ClaudeCode, plane.path(), &machine, &|_| true)
-                .expect("starts")
-                .expect("sandboxed");
+        let (plane, applied) = testing::sandbox_compiled_for(Harness::ClaudeCode);
+        let applied = applied.expect("starts");
         let crate::sandbox::Form::ClaudeCode(compiled) = applied.form() else {
             panic!("compiled for Claude Code");
         };
@@ -1722,10 +1436,6 @@ mod tests {
     }
 
     /// The plugin the app ships, in the repository: its skills, its shim, its hooks.
-    fn bundled_plugin() -> std::path::PathBuf {
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/src-tauri/plugin")
-    }
-
     fn env_of(hooks: StateHooks) -> BTreeMap<String, String> {
         let StateHooks::ThisSessionOnly { env, .. } = hooks else {
             panic!("armed per session");
@@ -1744,7 +1454,7 @@ mod tests {
 
     #[test]
     fn a_codex_chat_is_started_with_the_skills_its_briefing_lists() {
-        let plugin = bundled_plugin();
+        let plugin = testing::bundled_plugin();
         let env = env_of(Harness::Codex.state_hooks(
             Kit {
                 binary: std::path::Path::new("/bin/charter"),
@@ -1764,7 +1474,7 @@ mod tests {
     fn only_a_harness_that_cannot_load_the_skills_is_briefed_on_them() {
         // Claude Code and opencode discover the skills themselves; a listing on top would
         // tell the model about every skill twice.
-        let plugin = bundled_plugin();
+        let plugin = testing::bundled_plugin();
         let kit = Kit {
             binary: std::path::Path::new("/bin/charter"),
             plugin: Some(&plugin),
@@ -1777,7 +1487,7 @@ mod tests {
 
     #[test]
     fn an_opencode_chat_is_told_the_bundled_skills_through_the_shim() {
-        let plugin = bundled_plugin();
+        let plugin = testing::bundled_plugin();
         let env = env_of(Harness::Opencode.state_hooks(
             Kit {
                 binary: std::path::Path::new("/bin/charter"),

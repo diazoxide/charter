@@ -287,7 +287,7 @@ From a terminal or a chat, `charter worktree` (alias `wt`):
     charter wt remove <repo> <piece> [--force] [--delete-branch]
 
 `add` records a `claimed` line and `done`/`abandon` a declaration in
-`workspaces/<ws>/pieces/<host>.jsonl`. A piece that declared nothing is reported as silent,
+`workspaces/<ws>/pieces/<device>.jsonl`. A piece that declared nothing is reported as silent,
 with an age, in `list`, the footer and the session briefing. `remove` runs `git worktree
 remove`. It refuses a piece with uncommitted changes or commits no other ref reaches, and it
 names those files and commits, until `--force` says to discard them.

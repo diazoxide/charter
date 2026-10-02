@@ -21,6 +21,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   diff** opens a shell in that chat's branch with its diff. Nothing is written into your repo, and
   the task asks for nothing to be pushed (FR-28, #621).
 
+- **Link a chat to a work item.** A chat tab's menu and the palette have **Link to work item…**,
+  which asks for the item's tracker key (`github:github.com/owner/repo#12`, or a todo's
+  `todo:<workspace>/<todo>`), and **Unlink work item**. A linked chat shows `Work item: <key>`
+  in its tab's tooltip and in its pane's corner. A chat works on one work item at a time. The
+  link goes in the workspace's work link log, so it reaches your other devices when the
+  workspace is LIVE, and it follows a todo when that todo is promoted to an issue. A chat at
+  the project root is not offered it (V60, ADR 0088, FW-5, #732, #914).
+
 - **Promote a todo to an issue.** `charter ws todo promote <slug> --repo <repo>` opens an issue
   with the todo's title and text in one of the workspace's repos, on GitHub or GitLab, as you.
   It names the repo, whether it is public and the workspace label it adds (private repos only)
@@ -275,6 +283,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Per-machine logs are named by the device id, not the hostname.** The dispatch and skill
+  logs (`personas/_dispatch/`, `personas/_skills/`), the piece claim log, the landing log and
+  pending landings are now filed under this device's id from the machine store. Two machines
+  that share a hostname no longer write into one file, and renaming a machine no longer starts
+  a new one. The hostname stays as a label: a piece claim still says which machine made it.
+  Files an earlier version wrote under a hostname are still read; a later migration renames them
+  (FD-25, #662).
+
 - **Fewer redraws when switching projects.** A project's tab strip comes back at the width it
   had instead of drawing every tab and then folding them away, the palette closes in the same
   frame as the switch, and the project's theme and its repos' save standing are drawn from what
@@ -304,6 +320,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A memory or session record written by an agent shows up in its panel straight away.**
+  Before, a workspace's or persona's `memory/`, and the session records in `sessions/`, reached
+  the Memory, Personas and Sessions panels only when something else in the project changed.
+  Each panel now reads again only for the kind of change it draws, so a todo closed in one
+  workspace no longer re-reads another workspace's panels. Saving a memory re-reads only the
+  panels and views that show it. When auto-save is on and commits that memory, the window still
+  reads everything again after the commit (FD-10).
 - **`charter guard ask` never turns a command opencode denies into one it asks about.** opencode
   goes by the last rule that matches a command, so a rule added after `"*": "deny"` used to win
   over it, and a rule for a command that was denied exactly used to replace the deny. Now a
@@ -356,6 +379,26 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `runuser`, `script`, `source` or `.`, a program it cannot name, or the substitution standing
   in the program's place, prefixes included. A live substitution in a body two shells read
   differently is searched too (#488).
+
+### Security
+
+- **The floor guard refuses more ways an unattended agent could merge.** When nobody is
+  watching (`bypassPermissions`), a forge API call to a merge endpoint, a setting that makes a
+  pull or merge request merge on its own later (auto-merge, a merge queue or train), an alias
+  that stands for a held command or the start of one, and the same commands inside a script a
+  shell runs or a command substitution are refused, as `gh pr merge` already was. A forge API call whose effect on a merge
+  charter cannot read is refused too. Reads, opening a request and ordinary pushes are
+  unchanged, and attended use is untouched (#866).
+- **An unattended agent cannot print the forge token or read other stored secrets.** The CLIs'
+  token commands, the auth-status and config reads that show the token, git's credential fill,
+  and commands that read the OS keychain or a password store are refused when nobody is
+  watching, since a run holding a secret could act where no guard sees it. Attended use is
+  untouched (#866).
+- **A guard that cannot answer refuses the call.** The tool-call guards run with a deep stack and
+  a deadline inside the harness's own hook timeout, and the floor bounds how deep it reads a command inside a command, so a line
+  built to exhaust them is refused instead of slipping through when the hook dies (#866).
+- **The handoff guard finds a handoff in a shell's script past the shell's options**, including
+  options that take a value (#866).
 
 ## [0.4.2] - 2026-09-30
 

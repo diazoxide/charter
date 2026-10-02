@@ -57,7 +57,7 @@ on every machine. The generator pinned:
   never match a regeneration, and a fixture has no business carrying key bytes.
 - **Anything needing a forge, a network, a tty or tmux**: `charter discover`
   (`inventory/repos.json`), `charter version bump`, `charter change land`
-  (`changes/log/<host>.jsonl`), a real profile launch, and the 1Password vault provider.
+  (`changes/log/<device>.jsonl`), a real profile launch, and the 1Password vault provider.
   `docs/plane-format.md` documents each of those files; a test that needs one writes it
   through the same writer charter uses.
 

@@ -298,7 +298,7 @@ pub fn loosened_by(words: &[String]) -> Option<String> {
 
 /// How many of `words`, from the end, are positional: a subcommand, its session id and a first
 /// message, which charter's flags must stand in front of.
-pub(super) fn positional_tail(words: &[String]) -> usize {
+pub fn positional_tail(words: &[String]) -> usize {
     read(words)
         .iter()
         .rev()

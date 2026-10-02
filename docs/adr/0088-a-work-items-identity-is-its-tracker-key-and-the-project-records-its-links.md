@@ -258,6 +258,12 @@ acceptance test runs once #834 has landed.
 FD-25 (#662) is not a blocker. This log is keyed on the device id from its first line, so it has
 no hostname era to migrate.
 
+**Lifted, 2026-10-02.** #834 made a reopened chat keep its id, and V43 (#867) made a copied
+project's chats get new ids while a moved project keeps them, which #732's review asked for
+before any chat link line was written. The chat half of FW-5 is therefore unblocked, and the
+host's chat link writers ship with FW-5's chat-link PR (#916), offered in the window as V60
+rules. This note records that the block ended. It does not change the decision.
+
 ## ADR 0066, amended
 
 Its audit section's *"`target` names chats (and work items, FW-5) by id"* now reads:

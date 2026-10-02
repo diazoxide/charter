@@ -14,7 +14,12 @@
 //! - `workspaces/`, so a workspace made or deleted elsewhere is seen and watched in turn;
 //! - each `workspaces/<ws>/` (`workspace.json`, a clone arriving, `todos/` being created);
 //! - each `workspaces/<ws>/todos/`, which is the bug;
-//! - `personas/`, and each `personas/<name>/`, whose `persona.md` a chat reads at its start;
+//! - each `workspaces/<ws>/memory/` and `workspaces/<ws>/sessions/`, and the root's
+//!   `sessions/`: the Memory and Sessions panels' stores, so a memory an agent saves or a
+//!   session record a smart close writes reaches the panel without some other change having
+//!   to happen first (FD-10);
+//! - `personas/`, and each `personas/<name>/`, whose `persona.md` a chat reads at its start,
+//!   and each `personas/<name>/memory/`, which the Personas panel counts;
 //! - `.claude/` and `.claude/agents/`, the harness settings and sub-agents a chat reads at its
 //!   start — with the root's `CLAUDE.md`, what the window marks a chat for when it changes under
 //!   it (charter#369, [`charter_core::instructions`]).
@@ -29,9 +34,15 @@
 //! # One event, debounced
 //!
 //! `notify-debouncer-full` folds a burst — `git pull` landing ten todos, an editor's
-//! write-then-rename — into one batch, and a batch is one `plane-changed` carrying the plane.
-//! The window reads the plane again on it; it is never told *what* changed, because the answer
-//! to that is the plane, and the window already knows how to read it.
+//! write-then-rename — into one batch, and a batch is one `plane-changed` carrying the plane
+//! **and what changed in it**: each path, and what it is part of
+//! ([`charter_core::planechange`]) — a todo of `alpha`, a memory of `steward`, the root's
+//! session records. A panel reads again only on a change its answer is made of (FD-10), so a
+//! memory an agent saves no longer makes the sidebar list every workspace's todos once more.
+//!
+//! A batch this cannot place — a path outside the plane, an event notify could not name a path
+//! for, a rescan — is told as `changes: null`, "anything may have moved", and every reader
+//! reads again, as each one did before there were kinds.
 //!
 //! **An access is not a change.** notify's inotify backend watches `IN_OPEN`, and reading a
 //! todo opens it — so a window that re-read on every event would re-read because it re-read,
@@ -42,6 +53,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::Duration;
 
+use charter_core::planechange::{self, Change, Kind};
 use charter_core::workspaces::Plane;
 use notify::event::{MetadataKind, ModifyKind};
 use notify::{EventKind, RecursiveMode};
@@ -52,15 +64,68 @@ use crate::planes::PlaneId;
 /// The event the window is sent.
 pub(crate) const CHANGED: &str = "plane-changed";
 
-/// What `plane-changed` carries: which plane moved. Every window filters on it, as it filters
-/// `chat-moved`, because the app holds several planes and emits on the app.
+/// What `plane-changed` carries: which plane moved, and what moved in it. Every window filters
+/// on the plane, as it filters `chat-moved`, because the app holds several planes and emits on
+/// the app.
 #[derive(Debug, Clone, serde::Serialize, specta::Type)]
 pub struct PlaneChanged {
     pub plane: PlaneId,
+    /// Each changed path and what it is part of, or `null` when what changed is not known —
+    /// a batch this could not place, or auto-save having committed — and every reader reads
+    /// again.
+    pub changes: Option<Vec<PlaneChange>>,
 }
 
-/// Told whenever a plane changes on disk, whichever plane it is.
-pub type Changed = Arc<dyn Fn(PlaneId) + Send + Sync + 'static>;
+/// What one changed path is part of, as the window's readers divide the plane
+/// ([`charter_core::planechange::Kind`], which this mirrors for the bindings).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, specta::Type)]
+#[serde(rename_all = "lowercase")]
+pub enum ChangeKind {
+    Project,
+    Harness,
+    Workspace,
+    Todos,
+    Memory,
+    Sessions,
+    Persona,
+}
+
+/// One changed path ([`charter_core::planechange::Change`], mirrored for the bindings).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct PlaneChange {
+    pub kind: ChangeKind,
+    /// The workspace it is in, where it is in one.
+    pub workspace: Option<String>,
+    /// The persona it belongs to, where it belongs to one (`_shared` for the shared store).
+    pub persona: Option<String>,
+    /// Relative to the plane root, `/` between its parts.
+    pub path: String,
+}
+
+impl From<Change> for PlaneChange {
+    fn from(change: Change) -> Self {
+        Self {
+            kind: match change.kind {
+                Kind::Project => ChangeKind::Project,
+                Kind::Harness => ChangeKind::Harness,
+                Kind::Workspace => ChangeKind::Workspace,
+                Kind::Todos => ChangeKind::Todos,
+                Kind::Memory => ChangeKind::Memory,
+                Kind::Sessions => ChangeKind::Sessions,
+                Kind::Persona => ChangeKind::Persona,
+            },
+            workspace: change.workspace,
+            persona: change.persona,
+            path: change.path,
+        }
+    }
+}
+
+/// What a plane change says moved: the changes, or `None` for "not known, read everything".
+pub type What = Option<Vec<PlaneChange>>;
+
+/// Told whenever a plane changes on disk, whichever plane it is, and what changed in it.
+pub type Changed = Arc<dyn Fn(PlaneId, What) + Send + Sync + 'static>;
 
 /// How long a burst is folded for. Short enough that a todo closed in a terminal is off the
 /// panel within the second #264 asks for; long enough that a `git pull` is one read, not ten.
@@ -106,12 +171,16 @@ impl<W: notify::Watcher + Send + 'static> Watch<W> {
         }));
         let handle: Weak<Mutex<Inner<W>>> = Arc::downgrade(&inner);
         let at = root.to_path_buf();
+        // The platform reports paths as the disk spells them, which a root opened through a
+        // link (`/var` for `/private/var` on macOS) is not.
+        let spelled = root.canonicalize().ok();
         let tell = move |batch: DebounceEventResult| {
             let Ok(events) = batch else { return };
             let events: Vec<_> = events.iter().filter(|event| matters(&event.kind)).collect();
             if events.is_empty() {
                 return;
             }
+            let what = what_changed(&at, spelled.as_deref(), &events);
             // The set first, so a workspace made in this batch is watched before the window
             // reads it, and a change inside it straight after is not missed.
             //
@@ -141,7 +210,7 @@ impl<W: notify::Watcher + Send + 'static> Watch<W> {
             // Before the window hears it, so the reads it makes on `plane-changed` are of the
             // plane as it is now, not the shared standings from before (FD-11).
             charter_core::planegit::touch(&at);
-            changed(plane.clone());
+            changed(plane.clone(), what);
         };
         let debouncer = new_debouncer_opt(QUIET_FOR, None, tell, RecommendedCache::new(), config)?;
         {
@@ -202,6 +271,30 @@ impl<W: notify::Watcher> Inner<W> {
     }
 }
 
+/// What a batch changed, each path placed by [`planechange`] against the root as it was given
+/// or, failing that, as the disk spells it — or `None` when any one of them cannot be placed,
+/// an event names no path, or notify asks for a rescan (it dropped events it cannot name).
+fn what_changed(
+    root: &Path,
+    spelled: Option<&Path>,
+    events: &[&notify_debouncer_full::DebouncedEvent],
+) -> What {
+    if events
+        .iter()
+        .any(|event| event.paths.is_empty() || event.need_rescan())
+    {
+        return None;
+    }
+    let paths = || {
+        events
+            .iter()
+            .flat_map(|event| event.paths.iter().map(PathBuf::as_path))
+    };
+    let changes = planechange::of_batch(root, paths())
+        .or_else(|| spelled.and_then(|spelled| planechange::of_batch(spelled, paths())))?;
+    Some(changes.into_iter().map(PlaneChange::from).collect())
+}
+
 /// Whether an event is a change to the plane. Everything but an access is: reading a file
 /// changes nothing, and it is exactly what the window does when it is told. An access time
 /// moving is the same read seen from inotify's `IN_ATTRIB` under `relatime`.
@@ -229,10 +322,18 @@ fn wanted(root: &Path) -> HashSet<PathBuf> {
         for name in std::fs::read_dir(&personas).into_iter().flatten().flatten() {
             let persona = name.path();
             if a_dir(&persona) {
+                let memory = persona.join("memory");
+                if a_dir(&memory) {
+                    wanted.insert(memory);
+                }
                 wanted.insert(persona);
             }
         }
         wanted.insert(personas);
+    }
+    let records = root.join("sessions");
+    if a_dir(&records) {
+        wanted.insert(records);
     }
     for harness in [".claude", ".claude/agents"] {
         let dir = root.join(harness);
@@ -254,9 +355,11 @@ fn wanted(root: &Path) -> HashSet<PathBuf> {
         if !a_dir(&dir) {
             continue;
         }
-        let todos = dir.join("todos");
-        if a_dir(&todos) {
-            wanted.insert(todos);
+        for store in ["todos", "memory", "sessions"] {
+            let store = dir.join(store);
+            if a_dir(&store) {
+                wanted.insert(store);
+            }
         }
         wanted.insert(dir);
     }
@@ -314,13 +417,33 @@ mod tests {
     fn watching_on<W: notify::Watcher + Send + 'static>(
         root: &Path,
     ) -> (Watch<W>, mpsc::Receiver<PlaneId>) {
+        let (watch, told) = telling_on::<W>(root);
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            for (plane, _) in told {
+                if tx.send(plane).is_err() {
+                    return;
+                }
+            }
+        });
+        (watch, rx)
+    }
+
+    /// [`watching`], told what changed as well as which plane.
+    fn telling(root: &Path) -> (Watch<Source>, mpsc::Receiver<(PlaneId, What)>) {
+        telling_on::<Source>(root)
+    }
+
+    fn telling_on<W: notify::Watcher + Send + 'static>(
+        root: &Path,
+    ) -> (Watch<W>, mpsc::Receiver<(PlaneId, What)>) {
         let (tx, rx) = mpsc::channel();
         let tx = Mutex::new(tx);
         let watch = Watch::<W>::start_with(
             id(root),
             root,
-            Arc::new(move |plane| {
-                let _ = tx.lock().expect("sender").send(plane);
+            Arc::new(move |plane, what| {
+                let _ = tx.lock().expect("sender").send((plane, what));
             }),
             notify::Config::default().with_poll_interval(LOOK_EVERY),
         )
@@ -513,6 +636,120 @@ mod tests {
         assert!(matters(&EventKind::Create(CreateKind::File)));
     }
 
+    /// Waits for a batch naming `path`, and returns what it said that path is.
+    fn told_about(told: &mpsc::Receiver<(PlaneId, What)>, path: &str) -> PlaneChange {
+        let until = Instant::now() + PATIENCE;
+        while let Some(left) = until.checked_duration_since(Instant::now()) {
+            let (_, what) = told.recv_timeout(left).expect("told the plane changed");
+            // A batch the watcher could not place is told as `None`, and is not this test's
+            // business: the change it waits for comes in a batch of its own or the next one.
+            let Some(changes) = what else {
+                continue;
+            };
+            if let Some(found) = changes.into_iter().find(|change| change.path == path) {
+                return found;
+            }
+        }
+        panic!("never told about {path}");
+    }
+
+    fn event(kind: EventKind, paths: &[&Path]) -> notify_debouncer_full::DebouncedEvent {
+        let event = paths.iter().fold(notify::Event::new(kind), |event, path| {
+            event.add_path(path.to_path_buf())
+        });
+        notify_debouncer_full::DebouncedEvent::new(event, Instant::now())
+    }
+
+    #[test]
+    fn a_batch_is_told_as_unknown_when_an_event_names_no_path_or_asks_for_a_rescan() {
+        use notify::event::{CreateKind, Flag};
+        let root = Path::new("/home/dev/plane");
+        let todo = root.join("workspaces/alpha/todos/a.md");
+        let placed = event(EventKind::Create(CreateKind::File), &[&todo]);
+        let named = what_changed(root, None, &[&placed]).expect("placed");
+        assert_eq!(named.len(), 1);
+        assert_eq!(named[0].kind, ChangeKind::Todos);
+
+        let pathless = event(EventKind::Any, &[]);
+        assert_eq!(what_changed(root, None, &[&placed, &pathless]), None);
+
+        let mut rescan = event(EventKind::Other, &[&todo]);
+        rescan.event = rescan.event.set_flag(Flag::Rescan);
+        assert_eq!(what_changed(root, None, &[&placed, &rescan]), None);
+    }
+
+    #[test]
+    fn a_root_opened_through_a_link_places_paths_the_disk_spells_its_own_way() {
+        // macOS hands FSEvents paths as `/private/var/...` for a root opened as `/var/...`.
+        use notify::event::CreateKind;
+        let plane = plane_with_todos(&[]);
+        let real = plane.path().canonicalize().expect("canonical");
+        let links = tempfile::tempdir().expect("a place for the link");
+        let link = links.path().join("plane");
+        std::os::unix::fs::symlink(&real, &link).expect("a link to the plane");
+        let todo = real.join("workspaces/alpha/todos/a.md");
+        let written = event(EventKind::Create(CreateKind::File), &[&todo]);
+
+        assert_eq!(what_changed(&link, None, &[&written]), None);
+        let placed = what_changed(&link, Some(&real), &[&written]).expect("placed");
+        assert_eq!(placed[0].path, "workspaces/alpha/todos/a.md");
+        assert_eq!(placed[0].workspace.as_deref(), Some("alpha"));
+    }
+
+    #[test]
+    fn a_memory_an_agent_writes_in_a_workspace_is_told_as_that_workspaces_memory() {
+        // The stale-data gap: `memory/` was not watched, so a memory an agent saved did not
+        // reach the Memory panel until some other change happened to arrive.
+        let plane = plane_with_todos(&[]);
+        let root = plane.path().canonicalize().expect("canonical");
+        std::fs::create_dir_all(root.join("workspaces/alpha/memory")).expect("a journal");
+        let (_watch, told) = telling(&root);
+
+        std::fs::write(root.join("workspaces/alpha/memory/note.md"), "# note\n").expect("a memory");
+
+        let change = told_about(&told, "workspaces/alpha/memory/note.md");
+        assert_eq!(change.kind, ChangeKind::Memory);
+        assert_eq!(change.workspace.as_deref(), Some("alpha"));
+    }
+
+    #[test]
+    fn a_session_record_and_a_persona_memory_are_told_by_what_they_are() {
+        let plane = plane_with_todos(&[]);
+        let root = plane.path().canonicalize().expect("canonical");
+        std::fs::create_dir_all(root.join("sessions")).expect("the root's records");
+        std::fs::create_dir_all(root.join("workspaces/alpha/sessions")).expect("records");
+        std::fs::create_dir_all(root.join("personas/steward/memory")).expect("a persona");
+        let (_watch, told) = telling(&root);
+
+        std::fs::write(root.join("sessions/r.md"), "# r\n").expect("a root record");
+        let change = told_about(&told, "sessions/r.md");
+        assert_eq!(change.kind, ChangeKind::Sessions);
+        assert_eq!(change.workspace, None);
+
+        std::fs::write(root.join("workspaces/alpha/sessions/r.md"), "# r\n").expect("a record");
+        let change = told_about(&told, "workspaces/alpha/sessions/r.md");
+        assert_eq!(change.kind, ChangeKind::Sessions);
+        assert_eq!(change.workspace.as_deref(), Some("alpha"));
+
+        std::fs::write(root.join("personas/steward/memory/m.md"), "# m\n").expect("a memory");
+        let change = told_about(&told, "personas/steward/memory/m.md");
+        assert_eq!(change.kind, ChangeKind::Memory);
+        assert_eq!(change.persona.as_deref(), Some("steward"));
+    }
+
+    #[test]
+    fn a_todo_closed_is_told_as_a_todo_of_its_workspace() {
+        let plane = plane_with_todos(&["m8-1"]);
+        let root = plane.path().canonicalize().expect("canonical");
+        let (_watch, told) = telling(&root);
+
+        std::fs::remove_file(root.join("workspaces/alpha/todos/m8-1.md")).expect("closed");
+
+        let change = told_about(&told, "workspaces/alpha/todos/m8-1.md");
+        assert_eq!(change.kind, ChangeKind::Todos);
+        assert_eq!(change.workspace.as_deref(), Some("alpha"));
+    }
+
     #[test]
     fn the_watched_set_is_the_stores_the_panels_read_and_not_the_clones() {
         let plane = plane_with_todos(&[]);
@@ -523,6 +760,9 @@ mod tests {
         std::fs::create_dir_all(root.join("personas/steward/memory")).expect("a persona");
         std::fs::create_dir_all(root.join(".claude/agents")).expect("sub-agents");
         std::fs::create_dir_all(root.join(".claude/skills/x")).expect("a skill");
+        std::fs::create_dir_all(root.join("workspaces/alpha/memory/archive")).expect("a journal");
+        std::fs::create_dir_all(root.join("workspaces/alpha/sessions")).expect("records");
+        std::fs::create_dir_all(root.join("sessions")).expect("the root's records");
 
         let mut got: Vec<_> = wanted(root)
             .into_iter()
@@ -542,8 +782,12 @@ mod tests {
                 ".claude/agents",
                 "personas",
                 "personas/steward",
+                "personas/steward/memory",
+                "sessions",
                 "workspaces",
                 "workspaces/alpha",
+                "workspaces/alpha/memory",
+                "workspaces/alpha/sessions",
                 "workspaces/alpha/todos"
             ]
         );

@@ -133,7 +133,7 @@ fn tables(cmd: &str) -> Value {
     ];
     let mut marks: Vec<char> = handoffguard::SPELLING_MARKS.chars().collect();
     marks.sort_unstable();
-    let mut shells: Vec<&str> = handoffguard::STRING_SHELLS.to_vec();
+    let mut shells: Vec<&str> = shellwrap::STRING_SHELLS.to_vec();
     shells.sort_unstable();
     let mut reads: Vec<&str> = handoffguard::REDIRECT_READS.to_vec();
     reads.sort_unstable();

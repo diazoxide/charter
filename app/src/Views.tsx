@@ -47,6 +47,7 @@ import { PREFERENCES_VIEW, SAVING_VIEW, SETTINGS_VIEW, viewKey, type ViewRef } f
 import { VaultTab } from "./VaultTab";
 import { listedMemoryOffers, memoryKeyRun, toKeep, type Offer } from "./actions";
 import { factsChanged } from "./extensionFacts";
+import { usePlaneChanged } from "./planeChanged";
 
 /** What `workspaceSettingsView` names a workspace's settings view (charter-app#280). */
 const WORKSPACE_SETTINGS = "workspace-settings";
@@ -185,8 +186,9 @@ export function aboutOf(view: ViewRef, offered: readonly ExtensionView[]): strin
   return offered.find((one) => one.extension === view.from && one.id === view.view)?.about;
 }
 
-/** charter's own views' glyphs, by view. */
-const OWN_MARKS: Record<string, React.ComponentType<{ className?: string }>> = {
+/** charter's own views' glyphs, by view — and so the list of every view charter has, which
+ *  `theme/views.test.tsx` holds its token test to: a view added here is a view it must draw. */
+export const OWN_MARKS: Record<string, React.ComponentType<{ className?: string }>> = {
   persona: UserRound,
   vault: KeyRound,
   settings: Settings2,
@@ -268,6 +270,10 @@ export function ViewPane({
   /** What the first task's tab asks the plane to do: start a run, show a run's diff (FR-28). */
   firstTask?: FirstTaskDoes;
 }) {
+  // **The view follows the disk itself** (FD-10), on every change: the lists and memories
+  // charter's own views read are any of the plane's stores. Here and not in the window, so a
+  // memory an agent saves redraws this pane and not everything around it.
+  const onDisk = usePlaneChanged([plane]);
   // **What charter can do to the thing this tab is about, on its heading** (SI-3): a persona's
   // `persona.md` handed to the operator's editor and the persona deleted, a vault deleted. The
   // catalogue's rows, so the heading, the palette and a row's menu cannot disagree, and each
@@ -399,7 +405,7 @@ export function ViewPane({
             key={`${plane}\u0000${view.key}`}
             plane={plane}
             at={memoryAt}
-            changed={changed}
+            changed={changed + onDisk}
             onSaved={(memory) => onMemorySaved?.(view, memory)}
             onClose={() => onCloseView?.(view)}
           />
@@ -416,7 +422,7 @@ export function ViewPane({
             view={view}
             title={title}
             workspace={workspace}
-            changed={view.from === null ? changed : 0}
+            changed={view.from === null ? changed + onDisk : 0}
             offerFor={offerFor}
             onPress={onPress}
           />

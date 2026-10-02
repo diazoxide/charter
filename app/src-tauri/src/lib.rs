@@ -61,6 +61,7 @@ mod vaults;
 mod views;
 mod windowprefs;
 mod windows;
+mod worklinks;
 mod workspaces;
 mod worktrees;
 
@@ -1032,11 +1033,13 @@ async fn start_chat(
         None => None,
     };
     let held = planes.held(&plane)?;
+    let config = planes.config().map(std::path::Path::to_path_buf);
     tauri::async_runtime::spawn_blocking(move || {
         let named = label.clone();
         let show_footer = boxes.show_footer;
         let (mut started, said) = worktrees::on_a_branch(
             held.root(),
+            config.as_deref(),
             cwd.as_deref().map(std::path::Path::new),
             named.as_deref(),
             boxes.new_branch,
@@ -1912,13 +1915,14 @@ pub fn run() {
                 // chat made — and the window reads it again (charter-app#264).
                 .telling_changes({
                     let window = app.handle().clone();
-                    std::sync::Arc::new(move |plane: PlaneId| {
+                    std::sync::Arc::new(move |plane: PlaneId, changes: planewatch::What| {
                         windows::emit_for_plane(
                             &window,
                             &plane,
                             planewatch::CHANGED,
                             &planewatch::PlaneChanged {
                                 plane: plane.clone(),
+                                changes,
                             },
                         );
                     })

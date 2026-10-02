@@ -126,7 +126,7 @@ fn a_todo_promoted_to_a_github_issue_keeps_its_chat_link_and_is_one_item() {
                     label,
                 } => format!(
                     "sending to {} ({}, {})",
-                    target.path,
+                    target.repo.path_with_namespace,
                     about.visibility.word(),
                     label.as_deref().unwrap_or("no label")
                 ),
@@ -231,7 +231,13 @@ fn a_repo_that_takes_no_issue_is_refused_before_anything_is_sent() {
 fn the_repo_is_named_among_the_workspaces_or_is_its_only_one_on_a_forge() {
     let (tmp, _) = project(&["api", "web"]);
     let root = tmp.path();
-    assert_eq!(target(root, "alpha", Some("web")).unwrap().path, "acme/web");
+    assert_eq!(
+        target(root, "alpha", Some("web"))
+            .unwrap()
+            .repo
+            .path_with_namespace,
+        "acme/web"
+    );
     let many = target(root, "alpha", None).unwrap_err();
     assert!(
         many.contains("--repo") && many.contains("api, web"),
@@ -244,11 +250,30 @@ fn the_repo_is_named_among_the_workspaces_or_is_its_only_one_on_a_forge() {
     );
     let (one, _) = project(&["api"]);
     let only = target(one.path(), "alpha", None).unwrap();
-    assert_eq!(
-        (only.name.as_str(), only.path.as_str()),
-        ("api", "acme/api")
-    );
+    assert_eq!(only.name, "api");
     assert_eq!(only.forge, Forge::default_of(Kind::GitHub));
+}
+
+/// The target holds the repo as the inventory row reads, typed (#911): what `about` and the
+/// caller's sentence are given is that record, not fields dug out of the row's JSON.
+#[test]
+fn the_target_holds_the_repo_its_inventory_row_reads_as() {
+    let (tmp, _) = project(&["api"]);
+    let only = target(tmp.path(), "alpha", None).unwrap();
+    assert_eq!(
+        only.repo,
+        crate::forge::RepoRecord {
+            id: None,
+            name: "api".into(),
+            path_with_namespace: "acme/api".into(),
+            default_branch: None,
+            description: String::new(),
+            web_url: "https://github.com/acme/api".into(),
+            ssh_url: String::new(),
+            topics: Vec::new(),
+            forge: Kind::GitHub,
+        }
+    );
 }
 
 #[test]

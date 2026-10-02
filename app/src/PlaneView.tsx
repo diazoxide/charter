@@ -58,6 +58,7 @@ import {
   ROOT_TIP,
   showId,
   stoppedRows,
+  workItemSaid,
   PASS_THROUGH_BYTES,
   PASS_THROUGH_KEY,
   RENAMES_ON_F2,
@@ -83,6 +84,7 @@ import {
 } from "./sortable";
 import { NewWorkspace } from "./NewWorkspace";
 import { NewBranch } from "./NewBranch";
+import { LinkWorkItem } from "./LinkWorkItem";
 import { RenameWorkspace } from "./RenameWorkspace";
 import { cloneRepos } from "./repoClones";
 import { StartChat } from "./StartChat";
@@ -99,7 +101,14 @@ import {
   type Resuming,
 } from "./sessions";
 import { useExtensionFacts } from "./extensionFacts";
-import { usePlaneChanged } from "./planeChanged";
+import {
+  PLANE_SHAPE,
+  ROOT_PANELS,
+  SETTINGS,
+  SIDEBAR,
+  usePlaneChanged,
+  workspaceInterest,
+} from "./planeChanged";
 import { PlaneUpdatedMark, usePlaneUpdated, type PlaneUpdates } from "./PlaneUpdated";
 import { inSlots, SIDES, useArrangement } from "./regions";
 import { RegionFrame } from "./RegionFrame";
@@ -343,6 +352,14 @@ export function PlaneView({
   const [pickerTrouble, setPickerTrouble] = useState<string>();
   /** The chat tab whose name is open for editing on the strip, if one is (charter-app#254). */
   const [renaming, setRenaming] = useState<number>();
+  /** The work item each chat works on, by session, as the core answered (V60, ADR 0088). */
+  const [workItems, setWorkItems] = useState<Record<number, string>>({});
+  /** The chat tab the Link to work item dialog is asking about, while it is open. */
+  const [linkingWork, setLinkingWork] = useState<{
+    tab: number;
+    trouble?: string;
+    busy: boolean;
+  }>();
   /** Chats this launch could not start, by name and why. They are still recorded. */
   const [wouldNotStart, setWouldNotStart] = useState<[string, string][]>([]);
   /** What the core last said about where a chat is working, and which directory it was
@@ -371,9 +388,15 @@ export function PlaneView({
    */
   const [rereadWorkspace, setRereadWorkspace] = useState(0);
   /** Bumped when the core says this plane changed on disk (charter-app#264): a todo closed in
-   *  a terminal, a workspace another chat made. The sidebar and the focused workspace's panels
-   *  are read again on it. */
-  const changesOnDisk = usePlaneChanged([plane]);
+   *  a terminal, a workspace another chat made — any change to the plane's shape, never a
+   *  memory or a session record (`PLANE_SHAPE`). The sidebar and the panels count only the
+   *  kinds they are made of, below (FD-10). */
+  const changesOnDisk = usePlaneChanged([plane], PLANE_SHAPE);
+  /** The changes what this project has on and its theme are made of (FD-10). */
+  const settingsChanges = usePlaneChanged([plane], SETTINGS);
+  /** The same, counting only the changes the sidebar is made of (FD-10): a memory an agent
+   *  saves does not make it list every workspace's todos again. */
+  const sidebarChanges = usePlaneChanged([plane], SIDEBAR);
   /** The chats running on instructions the plane has changed since they started (charter#369),
    *  each marked on its tab. */
   const planeUpdates = usePlaneUpdated(plane, changesOnDisk);
@@ -381,12 +404,12 @@ export function PlaneView({
   // editor, from a `git pull` — is one of these, and what this project has on may have moved
   // with it (charter-app#253). Not at the mount: `useExtensionsOn` asks then.
   useEffect(() => {
-    if (changesOnDisk === 0) return;
+    if (settingsChanges === 0) return;
     extensionsChanged(plane);
     // And the theme it draws, which the same two files and each `workspace.json` pick
     // (charter-app#273, #281).
     projectThemeChanged(plane);
-  }, [changesOnDisk, plane]);
+  }, [settingsChanges, plane]);
   /** Whether the new-workspace dialog is up, why the last attempt made nothing, and whether
    *  charter is making one right now. */
   const [makingWorkspace, setMakingWorkspace] = useState(false);
@@ -744,8 +767,9 @@ export function PlaneView({
   // The sidebar is read from the plane, and re-read whenever the chats change: the plane is a
   // directory the operator also edits by hand and another charter process writes, so there is
   // nothing to invalidate a cache of it. `tabs` is the dependency because opening or ending a
-  // chat is what this window can change about the answer, and `changesOnDisk` because the core
-  // says when something else changed it (charter-app#264).
+  // chat is what this window can change about the answer, and `sidebarChanges` because the core
+  // says when something else changed it (charter-app#264) — a change of a kind the sidebar
+  // reads (FD-10).
   useEffect(() => {
     void commands
       .planeSidebar(plane)
@@ -796,7 +820,7 @@ export function PlaneView({
       })
       // A window with no readable plane still runs its panes; the header already says so.
       .catch(() => setSidebar(undefined));
-  }, [change, changesOnDisk, plane, replan, startedIn, tabs]);
+  }, [change, sidebarChanges, plane, replan, startedIn, tabs]);
 
   /**
    * What the machine store says this operator has pinned here, and what it says is gone.
@@ -999,9 +1023,13 @@ export function PlaneView({
   // replies.
   useProjectThemeKept(plane, ofWorkspace);
   useRepoSavingKept(plane, ofWorkspace);
-  const workspaceState = useWorkspaceState(plane, ofWorkspace, rereadWorkspace, changesOnDisk);
+  /** The changes the focused workspace's panels are made of (FD-10): its own, and the
+   *  personas'. A todo closed in another workspace does not read this one again. */
+  const workspaceChanges = usePlaneChanged([plane], workspaceInterest(ofWorkspace ?? ""));
+  const workspaceState = useWorkspaceState(plane, ofWorkspace, rereadWorkspace, workspaceChanges);
   /** The plane root's own panels — its session records (SI-8d) — while it is focused. */
-  const rootPanels = usePlaneRootPanels(plane, focused === OUTSIDE, changesOnDisk);
+  const rootChanges = usePlaneChanged([plane], ROOT_PANELS);
+  const rootPanels = usePlaneRootPanels(plane, focused === OUTSIDE, rootChanges);
   /** The badges and repo columns the extensions on here show (charter-app#340). */
   const facts = useExtensionFacts(plane, ofWorkspace);
   /** What `charter doctor` says about this project, run inside the app: the preflight when
@@ -2708,6 +2736,69 @@ export function PlaneView({
     }
   }, [change, filedIn, isPinned, plane, resumeSession, states]);
 
+  /**
+   * A chat's work link (V60, ADR 0088 §3). **What each chat works on is asked once per chat**,
+   * as it appears, and then follows what this window links and unlinks: the link is the
+   * project's, and the core's answer is what the tab and the pane draw.
+   */
+  const askedWorkItem = useRef(new Set<number>());
+  useEffect(() => {
+    for (const id of tabs.order) {
+      const session = chatOf(tabs, id);
+      if (session === undefined || askedWorkItem.current.has(session)) continue;
+      askedWorkItem.current.add(session);
+      void commands
+        .chatWorkItem(plane, session)
+        .then((said) => {
+          const item = said.status === "ok" ? said.data : null;
+          if (item !== null) setWorkItems((was) => ({ ...was, [session]: item }));
+        })
+        .catch(() => undefined);
+    }
+  }, [plane, tabs]);
+
+  /** Opens the dialog that asks which work item a chat tab's chat works on. */
+  const linkWorkItem = useCallback((id: number) => {
+    if (chatOf(now.current, id) === undefined) return;
+    setLinkingWork({ tab: id, busy: false });
+  }, []);
+
+  /** Links the dialog's chat to `key`, through `chat_work_link`; a refusal stays in the dialog. */
+  const saveWorkLink = useCallback(
+    async (id: number, key: string) => {
+      const session = chatOf(now.current, id);
+      if (session === undefined) return;
+      setLinkingWork({ tab: id, busy: true });
+      const said = await commands
+        .chatWorkLink(plane, session, key)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      if (said.status === "error") {
+        setLinkingWork({ tab: id, busy: false, trouble: said.error });
+        return;
+      }
+      setWorkItems((was) => ({ ...was, [session]: said.data }));
+      setLinkingWork(undefined);
+    },
+    [plane],
+  );
+
+  /** Ends a chat tab's chat's work link, through `chat_work_unlink`. */
+  const unlinkWorkItem = useCallback(
+    async (id: number): Promise<Ran> => {
+      const session = chatOf(now.current, id);
+      if (session === undefined) return { ok: false, refused: "That tab has no chat to unlink." };
+      const said = await commands
+        .chatWorkUnlink(plane, session)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      if (said.status === "error") return { ok: false, refused: said.error };
+      setWorkItems((was) =>
+        Object.fromEntries(Object.entries(was).filter(([one]) => Number(one) !== session)),
+      );
+      return { ok: true };
+    },
+    [plane],
+  );
+
   const doing = useMemo<Doing>(
     () => ({
       newChat: newTab,
@@ -2718,6 +2809,8 @@ export function PlaneView({
       closeTab: close,
       selectTab: bringToFront,
       renameTab: beginRename,
+      linkWorkItem,
+      unlinkWorkItem,
       pinTab,
       pinWorkspace,
       pinProject: windowDoes.pinProject,
@@ -2766,6 +2859,8 @@ export function PlaneView({
     }),
     [
       beginRename,
+      linkWorkItem,
+      unlinkWorkItem,
       bringToFront,
       cancelSmartClose,
       close,
@@ -2957,6 +3052,10 @@ export function PlaneView({
             curations,
             wrappingUp: [...wrapping],
             stopped,
+            workItems,
+            // A chat filed in a workspace; one at the project root, or outside the project, is
+            // offered no work link (ADR 0088 §4).
+            linkable: (session) => filedIn(session) !== OUTSIDE,
           }),
     [
       clones,
@@ -2989,6 +3088,8 @@ export function PlaneView({
       liveNames,
       stopped,
       wrapping,
+      workItems,
+      filedIn,
     ],
   );
 
@@ -3554,7 +3655,10 @@ export function PlaneView({
                                   title={
                                     panesOf(tabs, id).some((one) => wrapping.has(one.session))
                                       ? WRAPPING_UP
-                                      : handedFrom[chatOf(tabs, id) ?? -1]
+                                      : tabTip(
+                                          handedFrom[chatOf(tabs, id) ?? -1],
+                                          workItems[chatOf(tabs, id) ?? -1],
+                                        )
                                   }
                                   // F2 renames here rather than opening the palette (`RENAMES_ON_F2`), on a
                                   // tab that has a rename row — a chat's, and never a view's.
@@ -3843,6 +3947,7 @@ export function PlaneView({
                   states={states}
                   name={frontTab.name}
                   handedFrom={handedFrom}
+                  workItems={workItems}
                   byHand={byHand}
                   onByHand={answerByHand}
                   startNotes={startNotes}
@@ -3852,7 +3957,9 @@ export function PlaneView({
                   onAsk={(pane) => change((tabs) => stopWaiting(tabs, pane))}
                   onVaultChanged={reloadVaults}
                   memory={{
-                    changed: memoryEdits.changed + changesOnDisk,
+                    // The views follow the disk themselves (`ViewPane`), so a memory saved
+                    // redraws the views and not this whole window (FD-10).
+                    changed: memoryEdits.changed,
                     onSaved: memoryEdits.onSaved,
                     onClose: closeView,
                   }}
@@ -4001,6 +4108,17 @@ export function PlaneView({
           offers={found}
           onPress={press}
           onCancel={() => setPickingVault(false)}
+        />
+      )}
+
+      {linkingWork && (
+        <LinkWorkItem
+          chat={tabs.byId[linkingWork.tab]?.name ?? ""}
+          linked={workItems[chatOf(tabs, linkingWork.tab) ?? -1]}
+          trouble={linkingWork.trouble}
+          linking={linkingWork.busy}
+          onLink={(key) => void saveWorkLink(linkingWork.tab, key)}
+          onCancel={() => setLinkingWork(undefined)}
         />
       )}
 
@@ -4368,6 +4486,14 @@ function viewTabsOf(tabs: Tabs, pinnedViews: readonly string[]): ViewTab[] {
   });
 }
 
+/** A chat tab's tooltip: where a handed-off chat came from, and the work item it works on. */
+function tabTip(from: string | undefined, workItem: string | undefined): string | undefined {
+  const lines = [from, workItem === undefined ? undefined : workItemSaid(workItem)].filter(
+    (line): line is string => line !== undefined,
+  );
+  return lines.length === 0 ? undefined : lines.join("\n");
+}
+
 /**
  * One pane's frame: the terminal, and what charter draws over it in the pane's two corners —
  * side by side with the terminal, so neither is ever a child of the element xterm draws into.
@@ -4390,6 +4516,7 @@ function PaneFrame({
   moved,
   running,
   from,
+  workItem,
   byHand,
   onByHand,
   startNotes,
@@ -4403,6 +4530,8 @@ function PaneFrame({
   running: boolean;
   /** Where a handed-off chat came from, `↳ from steward 3 · ops`, in the chat's own corner. */
   from?: string;
+  /** The work item this chat works on, `Work item: <key>`, in the same corner (V60). */
+  workItem?: string;
   /** A harness started by hand in this shell tab, while its banner is up (ADR 0062). */
   byHand?: ByHandNote;
   onByHand: (open: boolean) => void;
@@ -4422,6 +4551,7 @@ function PaneFrame({
       <div className="pane-corner at-start">
         <ChatGauge usage={usage} />
         {from && <span className="pane-from">{from}</span>}
+        {workItem && <span className="pane-work-item">{workItemSaid(workItem)}</span>}
         {byHand && <ByHandBanner note={byHand} onAnswer={onByHand} />}
         {startNotes && <StartNotice notes={startNotes} onDismiss={onDismissStartNote} />}
       </div>
@@ -4812,6 +4942,7 @@ function LayoutPanes({
   states,
   name,
   handedFrom,
+  workItems,
   byHand,
   onByHand,
   startNotes,
@@ -4839,6 +4970,8 @@ function LayoutPanes({
   name: string;
   /** Where each handed-off chat came from, by session (charter-app#258). */
   handedFrom: Readonly<Record<number, string>>;
+  /** The work item each chat works on, by session (V60). */
+  workItems: Readonly<Record<number, string>>;
   /** A harness started by hand in a shell tab, by session, for its banner (ADR 0062). */
   byHand: Readonly<Record<number, ByHandNote>>;
   /** The banner answered: `open` asks for that harness as a chat, else it is put away. */
@@ -4907,6 +5040,7 @@ function LayoutPanes({
         moved={movedAt(states, content.session)}
         running={stateOf(states, content.session) === "running"}
         from={handedFrom[content.session]}
+        workItem={workItems[content.session]}
         byHand={byHand[content.session]}
         onByHand={(open) => onByHand(content.session, open)}
         startNotes={startNotes[content.session]}
@@ -4954,6 +5088,7 @@ function LayoutPanes({
               states={states}
               name={name}
               handedFrom={handedFrom}
+              workItems={workItems}
               byHand={byHand}
               onByHand={onByHand}
               startNotes={startNotes}
