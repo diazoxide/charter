@@ -1,7 +1,7 @@
 # A work item's identity is its tracker key, and the project records its links
 
-**Proposed 2026-10-02**, for program-map ticket FW-5 (#732), whose implementer stopped because no
-record fixed the commitments below. Its concept is **Workspace**: work items are views of a
+**Accepted 2026-10-02** by the operator (ruling V40), for program-map ticket FW-5 (#732), whose
+implementer stopped because no record fixed the commitments below. Its concept is **Workspace**: work items are views of a
 workspace, not a sixth concept. It follows these of the operator's rulings:
 
 - **V3:** *"One domain type, **Work item**, with trackers as backends (forges per FI4, Linear/Jira
@@ -35,8 +35,8 @@ It builds on [ADR 0066](0066-a-chat-is-a-ulid-a-run-is-a-stretch-of-its-conversa
 (chat ULIDs and the device id), [ADR 0069](0069-every-store-charter-writes-is-in-one-of-four-tiers.md)
 (storage tiers), [ADR 0070](0070-a-forge-is-one-seam-with-a-native-client-per-forge-and-gh-and-glab-are-its-fallback.md)
 (the forge seam and `ForgeRef`) and [ADR 0075](0075-an-audit-entry-is-metadata-in-a-store-of-its-own-and-telemetry-never-reads-it.md)
-(the audit's `target`). If accepted, it amends ADR 0066, ADR 0069 and ADR 0070, each in a section
-of its own below. FW-6a/b, FW-7, FW-9, FW-11a/b, OV-6 and AC-7 build on it.
+(the audit's `target`). It amends ADR 0066, ADR 0069 and ADR 0070, each in a section of its own
+below. FW-6a/b, FW-7, FW-9, FW-11a/b, OV-6 and AC-7 build on it.
 
 ## Where charter is today
 
@@ -166,7 +166,7 @@ workspace's log is committed with it, and a LOCAL one's stays in this clone and 
 clone state. **This departs from the piece claim log and the landing log**, which are Clone state
 even for a LIVE workspace. Those record what one clone did. This one records what FI6 layer 3
 says *"the plane records"*: links that must reach the operator's other devices and survive a new
-clone. So, if this record is accepted:
+clone. So:
 
 - the LIVE block gains `!/workspaces/<n>/work` and `!/workspaces/<n>/work/**`, and a LIVE
   workspace's staged paths gain `work`;
@@ -233,12 +233,15 @@ gives one a create.
 
 - **FW-5 builds** the neutral `WorkItem` and `TrackerKey` types, the key's parser and normaliser,
   the work link log with its fold and its aliases, `todo` as a tracker backend, and promote.
+- **FI4's item-to-item Link is a relation.** A closing PR or MR, blocked-by, and parent/child are
+  **relations** between work items in the neutral model, and FW-6a/b map them. "Work link" is
+  only what §3's log records, and "Link" alone stays the runner link's word (ADR 0078).
 - **The `WorkItems` area trait arrives with FW-5**, with one method, `create`, for both forges,
   because ADR 0070 §1 adds an area trait *"in the same PR as the first ticket that needs it, with
   both forges' implementations"*, and promote is that ticket. FW-6a and FW-6b map the rest of FI4
   onto it.
-- **The typed `RepoRecord` is split out of FW-5** into a ticket of its own (§ *ADR 0070,
-  amended*). A key needs only a repo's host and path, which FW-5 reads from the inventory row it
+- **The typed `RepoRecord` is split out of FW-5** into a ticket of its own,
+  [#857](https://github.com/diazoxide/charter/issues/857) (§ *ADR 0070, amended*). A key needs only a repo's host and path, which FW-5 reads from the inventory row it
   already has. `RepoRecord` is the `Repos` area's return type, which every inventory caller moves
   to. That is FG-3's area, not the work model's, and FW-5 already blocks seven tickets.
 - **`charter report` (#806) moves with FW-6a (#733)**, as ADR 0070's amendment 2 says. It files on
@@ -257,8 +260,8 @@ no hostname era to migrate.
 
 ## ADR 0066, amended
 
-Its audit section's *"`target` names chats (and work items, FW-5) by id"* reads, if this record is
-accepted: **`target` names chats by id, and work items by their tracker key (ADR 0088).** That is
+Its audit section's *"`target` names chats (and work items, FW-5) by id"* now reads:
+**`target` names chats by id, and work items by their tracker key (ADR 0088).** That is
 what ADR 0075 already says, and the two records then agree.
 
 ## ADR 0069, amended
@@ -274,8 +277,8 @@ records them. The FI7 cache it points into stays row 70, Machine and rebuildable
 
 ## ADR 0070, amended
 
-Its FG-3 amendment 5 ends *"FW-5 defines the typed record."* It reads, if this record is accepted:
-**the ticket split out of FW-5 for it defines the typed record (ADR 0088 §6).** Section 1's
+Its FG-3 amendment 5 ends *"FW-5 defines the typed record."* It now reads: **#857, split out of
+FW-5 for it, defines the typed record (ADR 0088 §6).** Section 1's
 `WorkItems` area gains its first method, `create`, in FW-5.
 
 ## What changes where
@@ -284,11 +287,11 @@ The code does not change with this record.
 
 | Where | Change |
 |---|---|
-| `docs/plane-format.md` | An entry for `workspaces/<ws>/work/<device>.jsonl`, **proposed, not yet written** (in this PR). The LIVE block, the staged paths and the `.gitattributes` block change in FW-5's PR, not before |
-| `CONTEXT.md` | On acceptance: **Tracker key** and **Work link**. "Link" alone stays the runner link's word; FI4's item-to-item Link (closing PR, blocked-by, parent/child) is called a **relation** in the neutral model, so the three never share a word |
-| ADR 0066, ADR 0069, ADR 0070 | Amended above, on acceptance. Their texts are left as they are, and this record is the amendment |
-| FW-5 (#732) | §6: the types, the key, the log, `todo` as a tracker, promote, and `WorkItems::create` for both forges. Blocked by #834 for its chat half (§7) |
-| New ticket | The typed `RepoRecord` for the `Repos` area (§6) |
+| `docs/plane-format.md` | An entry for `workspaces/<ws>/work/<device>.jsonl`, **accepted, not yet written** (in this PR). The LIVE block, the staged paths and the `.gitattributes` block change in FW-5's PR, which writes the log |
+| `CONTEXT.md` | Gains **Tracker key**, **Work link** and **Relation** (in this PR). "Link" alone stays the runner link's word; FI4's item-to-item Link (closing PR, blocked-by, parent/child) is called a **relation** in the neutral model, so the three never share a word |
+| ADR 0066, ADR 0069, ADR 0070 | Amended above. Their texts are left as they are, and this record is the amendment |
+| FW-5 (#732) | §6: the types, the key, the log, `todo` as a tracker, promote, and `WorkItems::create` for both forges. Blocked by #834 for its chat half only (§7), recorded on the issue |
+| #857 (new) | The typed `RepoRecord` for the `Repos` area (§6) |
 | FW-6a (#733), FW-6b (#734) | The rest of FI4 on `WorkItems`; #806 moves with FW-6a |
 | FW-7 (#735) | The cache keeps each item's `ForgeRef` beside its key, and writes `moved` aliases |
 | `charter workspace rename`, `fork` | `rename` writes `renamed` aliases; `fork` does not copy `work/` |
@@ -325,33 +328,30 @@ The code does not change with this record.
   `op` lines with a closed key set, as the piece claim log's are, so an alias can also carry
   `moved` and `renamed`, and an unlink is a line, not an absence.
 
-## Open questions for the operator
+## Ruled (V40, 2026-10-02)
 
-Each is a public commitment: a format in the project, a word on the command line, or a split of
-the program map. The recommendation comes first.
+Settled by V40: *"ADR 0088 is accepted with its four recommendations."* Each question this
+record put to the operator, with its decision:
 
-1. **The work-item key.** *Recommended:* `<tracker>:<locator>`, the locator being the forge's own
-   reference fully qualified by host (`github:github.com/owner/repo#12`,
-   `gitlab:gitlab.com/group/repo#12`, `gitlab:gitlab.com/group&3` for an epic), a todo's being
-   `todo:<workspace>/<file stem>`, extensions declaring a prefix of their own, and the forge's
-   `ForgeRef` beside the key, never in it or in the project (§1). A key that moves leaves an alias
-   (§2). *Alternatives:* the `ForgeRef`, or a ULID charter mints (*What was rejected*).
-2. **Where links are stored.** *Recommended:* an append-only log per device at
-   `workspaces/<ws>/work/<device>.jsonl` with four closed line shapes (workspace link, chat link,
-   unlink, alias), keys and chat ULIDs only, **committed when the workspace is LIVE and Clone state
-   when it is LOCAL**, with a `merge=union` line (§3). This departs from the piece claim and landing
-   logs, which are never committed, because FI6 layer 3 needs the links on every device.
-   *Alternative:* Clone state always, which keeps item identifiers out of git and loses the links
-   on a new clone or a second device.
-3. **Promote, and its word.** *Recommended:* `charter ws todo promote <slug> --repo <repo>`
-   (`--repo` optional with one forge repo): create the issue, append a `promoted` alias, close the
-   todo as `done` does with the journal line `Promoted todo: <title> → <key>`; the Work list shows
-   only the issue, and the todo's links reach it (§5). FW-5 adds `WorkItems::create` for both forges
-   to do it (§6).
-4. **The typed `RepoRecord`.** *Recommended:* split out of FW-5 into a ticket of its own, so that
-   ADR 0070's amendment 5 names that ticket (§6).
-5. **A chat at the project root.** *Recommended:* it cannot be linked in FW-5; a project-level log
-   waits for a ruling that asks for it (§4).
+1. **The work-item key.** Decided as recommended. V40 (a): *"A work item's key is
+   `<tracker>:<locator>`. Examples: `github:github.com/owner/repo#12`,
+   `gitlab:gitlab.com/group/repo#12`, `gitlab:gitlab.com/group&3` for an epic, and
+   `todo:<ws>/<file stem>` for a todo. The host is lowercased and keys are compared exactly.
+   Extensions declare their own prefix. `ForgeRef` travels beside the key and never goes into the
+   project. A moved key gets an alias line."* Applied in §1 and §2. Rejected: the `ForgeRef` as
+   the identity, and a ULID charter mints.
+2. **Where links are stored.** Decided as recommended. V40 (b): *"Links go in an append-only log
+   per device at `workspaces/<ws>/work/<device>.jsonl`. It holds keys and chat ULIDs only, uses
+   `merge=union`, is committed when the workspace is LIVE and is clone state when it is LOCAL."*
+   Applied in §3. Rejected: Clone state always.
+3. **Promote, and its word.** Decided as recommended. V40 (c): *"`charter ws todo promote <slug>
+   --repo <repo>` creates the issue (after saying which repo and whether it is public), writes the
+   alias, and closes the todo as `done` does."* Applied in §5.
+4. **The typed `RepoRecord`.** Decided as recommended. V40 (d): *"The typed `RepoRecord` gets its
+   own ticket."* That ticket is [#857](https://github.com/diazoxide/charter/issues/857), and ADR
+   0070's amendment 5 names it (§6).
+5. **A chat at the project root.** V40 does not rule it. FW-5 follows the recommendation, that a
+   project-root chat cannot be linked (§4), until a ruling asks otherwise.
 
-Two things are stated, not asked: `charter report` (#806) moves with FW-6a (#733) as ADR 0070's
-amendment 2 already rules, and #834 blocks FW-5's chat half (§7).
+Two things were stated, not asked, and stand: `charter report` (#806) moves with FW-6a (#733) as
+ADR 0070's amendment 2 rules, and #834 blocks FW-5's chat half only (§7), as #732 now records.

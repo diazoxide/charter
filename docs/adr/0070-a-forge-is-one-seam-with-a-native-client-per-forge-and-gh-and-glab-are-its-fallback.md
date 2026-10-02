@@ -492,6 +492,8 @@ above. Each holds until the ticket named, and the text above is left as accepted
    `reachable(&self, caller, owner: &Owner) -> Vec<RepoRecord>`. The neutral record the inventory
    already writes is a JSON object with forge-independent keys, so `owned` and `reachable` return
    `Vec<Value>` in that shape and take the owner as `&str`. FW-5 defines the typed record.
+   *Since ADR 0088 (V40): [#857](https://github.com/diazoxide/charter/issues/857), split out of
+   FW-5, defines it.*
 
 `Caller` carries the surface and the priority only. The account, the principal and the human join
 it with FW-1 and FD-27, and until then every `Caller` resolves to the CLI transport, as §4 says.
