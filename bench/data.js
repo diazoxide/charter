@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790975913750,
+  "lastUpdate": 1790979480599,
   "repoUrl": "https://github.com/diazoxide/charter",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -126,6 +126,48 @@ window.BENCHMARK_DATA = {
             "value": 101.7259865,
             "unit": "ms",
             "extra": "median of 5 runs: 101.139, 101.207, 101.726, 101.939, 102.950 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "85d00c8bf37956d42b97f28bd6b1fd213da21697",
+          "message": "bench: a throwaway profile still being written to no longer fails the gate (#1001)\n\nAfter the app exits, a WebKit helper can still be writing into the bench's\nthrowaway profile, and a single recursive rmSync then meets ENOTEMPTY. That\nturned main's ubuntu \"app builds\" job red while the cold start itself was\nwithin its limit. tools/cleanup.mjs removes the profile with retries; if it\nstill can't, it reports and leaves the directory behind. Cleanup is\nhousekeeping, not part of the measurement.\n\nRefs #954\n\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-03T02:02:03+04:00",
+          "tree_id": "456a119a62554a7a09c12e296fdca09e93e0b658",
+          "url": "https://github.com/diazoxide/charter/commit/85d00c8bf37956d42b97f28bd6b1fd213da21697"
+        },
+        "date": 1790979479686,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.6255135000000001,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.605, 0.613, 0.626, 0.627, 0.632 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.002759,
+            "unit": "ms",
+            "extra": "median of 5 runs: 15.928, 15.979, 16.003, 16.045, 16.444 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 103.099471,
+            "unit": "ms",
+            "extra": "median of 5 runs: 101.850, 101.853, 103.099, 103.178, 103.471 ms"
           }
         ]
       }
