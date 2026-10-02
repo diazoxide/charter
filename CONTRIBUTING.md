@@ -33,12 +33,38 @@ A good pull request:
 - **comes with a test** that fails without the change and passes with it, named for the
   behaviour it checks;
 - **passes what CI runs**: formatting, clippy with `-D warnings`, and the Rust and app tests;
-- **adds a line to [CHANGELOG.md](CHANGELOG.md)** under `## [Unreleased]` when people using
-  charter would notice the change;
+- **adds a changelog fragment, `changes/<slug>.md`,** when people using charter would notice
+  the change. It holds a `### Added`, `### Changed`, `### Fixed` or `### Security` heading (or
+  another of Keep a Changelog's) and the entry under it, written as it will read in
+  [CHANGELOG.md](CHANGELOG.md). Don't edit CHANGELOG.md itself: release prep folds the
+  fragments into it, so pull requests never conflict there. [`changes/README.md`](changes/README.md)
+  has an example;
 - **does one thing**, so it can be reviewed in one sitting.
 
 Coding agents are welcome to help write a contribution. The person who opens the pull request
 is responsible for it and signs it off.
+
+## How maintainers land work: trains
+
+A pull request from outside the maintainers is reviewed and merged on its own, as above.
+Maintainers batch work into **trains**, so CI runs once for many tickets instead of once per
+ticket:
+
+- **A ticket is a branch, not a pull request.** Push the ticket's branch
+  (`git push -u origin <branch>`) and open no pull request for it. A branch with no pull request
+  starts no CI: `ci.yml`, `docs.yml` and `stress.yml` run on `pull_request` and on a push to
+  `main` only.
+- **One commit per ticket.** Squash the ticket's work into one commit: a title line, a body,
+  `Closes #<n>` (or `Refs #<n>` when not every acceptance line is met) and any trailers. Rebase
+  it onto `origin/main` before handing it over.
+- **Run the checks locally before pushing**, because nothing runs them for a ticket branch:
+  `cargo fmt --all --check`, clippy with `-D warnings` on the crates you touched, and the test
+  files you touched or added. For app changes, also `npm ci`, then typecheck, lint, format and
+  the vitest files you touched. A change to recorded behaviour or the CLI also runs
+  `cargo test -p charter-cli --test recorded_behaviour`. README.md's "Develop" has the commands.
+- **A train is one pull request, `train/<date>-<n>`** (for example `train/2026-10-03-1`), that
+  stacks the tickets' commits on `main`. CI runs on it once, and it is merged **by rebase**, so
+  each ticket stays one commit on `main` and its `Closes #<n>` closes its issue.
 
 ## Sign your commits off (DCO)
 
