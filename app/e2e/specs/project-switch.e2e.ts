@@ -189,6 +189,23 @@ describe(`switching among ${OPEN} open projects`, function () {
       console.log(`PROF ${JSON.stringify({ i, ms: Math.round(one.ms), marks, js: one.cmds, rust: near, rows: one.rows, lags: one.lags })}`);
     });
 
+    for (const plane of [planes[1], first]) {
+      await job({ kind: "project switch", plane, sentinel: PAINTED });
+      const census = await browser.execute(() => {
+        const out: Record<string, number> = { all: document.querySelectorAll("*").length };
+        const walk = (el: Element, depth: number, path: string) => {
+          const n = el.querySelectorAll("*").length;
+          if (n < 60) return;
+          const name = `${path}>${el.tagName.toLowerCase()}${el.className && typeof el.className === "string" ? "." + el.className.split(" ").slice(0, 2).join(".") : ""}`;
+          out[name] = n;
+          if (depth < 7) for (const c of Array.from(el.children)) walk(c, depth + 1, depth < 2 ? "" : "…");
+        };
+        const main = document.querySelector("main");
+        if (main) walk(main, 0, "");
+        return out;
+      });
+      console.log(`PROF census ${plane === first ? "launch" : "fresh"} ${JSON.stringify(census)}`);
+    }
     logLine("project-switch.jsonl", { budgetMs: BUDGET_MS, ...switches });
     // In the job's own output too, where a reviewer reads it without downloading anything.
     console.log(`L9 project switch, ${BUDGET_MS} ms budget: ${JSON.stringify(switches)}`);
