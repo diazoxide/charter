@@ -732,7 +732,7 @@ mod tests {
         let mut pids = Vec::new();
         // Each killed with the test whatever it asserts, so a failure cannot leave a program
         // that ignores the hangup running for good (#923).
-        let mut _ends = Vec::new();
+        let mut ends = Vec::new();
         for _ in 0..3 {
             let id = sessions
                 .open(
@@ -742,7 +742,7 @@ mod tests {
                 )
                 .expect("the session opens");
             let pid = sessions.process_id(id).expect("a pid");
-            _ends.push(stand_in::Ends::group(pid));
+            ends.push(stand_in::Ends::group(pid));
             let (_view, seen) = watching(&sessions, id);
             until_seen(&seen, "guarded");
             pids.push(pid);
@@ -759,7 +759,7 @@ mod tests {
     #[test]
     fn ending_every_session_ends_their_programs_before_it_returns() {
         let sessions = Sessions::new();
-        let mut _ends = Vec::new();
+        let mut ends = Vec::new();
         let programs: Vec<u32> = (0..5)
             .map(|_| {
                 let id = sessions
@@ -773,7 +773,7 @@ mod tests {
                     .process_id(id)
                     .expect("a running program has a pid");
                 // Killed with the test whatever it asserts (#923).
-                _ends.push(stand_in::Ends::group(pid));
+                ends.push(stand_in::Ends::group(pid));
                 let (_view, seen) = watching(&sessions, id);
                 until_seen(&seen, "guarded");
                 pid

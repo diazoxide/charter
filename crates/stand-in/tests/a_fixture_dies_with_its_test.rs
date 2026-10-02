@@ -92,9 +92,26 @@ fn a_group_named_in_a_marker_is_killed_by_the_pid_written_there() {
 }
 
 #[test]
-fn a_marker_never_written_is_nothing_to_kill() {
+fn a_marker_never_written_or_holding_no_pid_is_nothing_to_kill() {
+    use std::os::unix::process::CommandExt as _;
     let dir = tempfile::tempdir().expect("a directory");
+    let mut bystander = Command::new("/bin/sleep")
+        .arg("30")
+        .process_group(0)
+        .spawn()
+        .expect("sleep runs");
+    let _ours = stand_in::Ends::group(bystander.id());
+    let garbled = dir.path().join("garbled");
+    std::fs::write(&garbled, "not a pid").expect("the marker");
+
     drop(stand_in::Ends::named_in(dir.path().join("never")));
+    drop(stand_in::Ends::named_in(&garbled));
+
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(
+        bystander.try_wait().expect("a status").is_none(),
+        "a guard with no pid to read killed something"
+    );
 }
 
 #[test]
@@ -140,12 +157,12 @@ fn a_pid_in_a_marker_older_than_its_process_is_someone_else_s_and_is_left_alone(
     let _ours = stand_in::Ends::group(someone_else.id());
     let marker = dir.path().join("pid");
     std::fs::write(&marker, someone_else.id().to_string()).expect("the marker");
-    let an_hour_ago = Command::new("/usr/bin/touch")
+    let in_2020 = Command::new("/usr/bin/touch")
         .args(["-t", "202001010000"])
         .arg(&marker)
         .status()
         .expect("touch runs");
-    assert!(an_hour_ago.success());
+    assert!(in_2020.success());
 
     drop(stand_in::Ends::named_in(&marker));
 
@@ -175,5 +192,36 @@ fn a_guard_whose_pid_was_handed_to_another_process_leaves_that_one_alone() {
     assert!(
         child.try_wait().expect("a status").is_none(),
         "the guard killed a process that started later than the one it was made for"
+    );
+}
+
+/// Now, in seconds since the epoch.
+fn now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("a clock after 1970")
+        .as_secs()
+}
+
+#[test]
+fn a_guard_that_cannot_ask_when_a_live_process_started_kills_nothing() {
+    // `ps` would not start: out of processes or descriptors, or not there at all. The pid is
+    // held by SOME process, and with no way to tell whether it is still the fixture, the guard
+    // leaves it — a leak is a CI failure, a wrong kill is someone else's work gone.
+    use std::os::unix::process::CommandExt as _;
+    let mut child = Command::new("/bin/sleep")
+        .arg("30")
+        .process_group(0)
+        .spawn()
+        .expect("sleep runs");
+    let pid = child.id();
+    let _ours = stand_in::Ends::group(pid);
+
+    drop(stand_in::Ends::started_at(pid, now()).asking_ps("/definitely/not/ps"));
+
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(
+        child.try_wait().expect("a status").is_none(),
+        "a guard that could not read the start time killed the process anyway"
     );
 }

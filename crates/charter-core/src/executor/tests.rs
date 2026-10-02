@@ -90,10 +90,24 @@ impl Rig {
 /// so it stays a test of the same thing, and a regression it catches takes this long to fail.
 const PATIENT: Duration = Duration::from_secs(30);
 
-/// How many 10 ms waits a program here polls for a file before it gives up and goes on —
-/// [`stand_in::FIXTURE_LIFETIME_SECS`] of them at least, so a test that never writes the file
-/// (it failed first) leaves no program polling for ever (#923).
+/// How many 10 ms waits a program here polls for a file before it gives up and goes on, so a
+/// test that never writes the file (it failed first) leaves no program polling for ever (#923).
+///
+/// **A count, not a clock**: `/bin/sh` has no clock of its own without a `date` on `PATH`. So
+/// the bound is [`stand_in::FIXTURE_LIFETIME_SECS`] of sleeping and more of forking — each wait
+/// starts a `sleep`, which costs as much again or more — about 6 to 10 minutes in all.
 const TICKS: u32 = stand_in::FIXTURE_LIFETIME_SECS * 100;
+
+/// Kills, when it drops, every helper whose pid is written in a marker in this directory.
+struct EveryMarkerIn(PathBuf);
+
+impl Drop for EveryMarkerIn {
+    fn drop(&mut self) {
+        for marker in std::fs::read_dir(&self.0).into_iter().flatten().flatten() {
+            drop(stand_in::Ends::named_in(marker.path()));
+        }
+    }
+}
 
 /// An executor that gives its programs [`PATIENT`].
 fn patient() -> Executor {
@@ -1966,6 +1980,9 @@ fn a_command_whose_stderr_something_it_started_still_holds_passes_nothing_on() {
     let rig = Rig::new();
     let escaped = rig.marker("escaped");
     std::fs::create_dir(&escaped).expect("a directory for the markers");
+    // The helpers leave the group, so charter's kill never reaches them: each one is killed
+    // by the pid in its marker when the test ends, even if it fails first (#923).
+    let _ends = EveryMarkerIn(escaped.clone());
     rig.talking(&format!(
         "#!/bin/sh\ne='{0}'/$$\n\
          perl -e 'setpgrp(0,0); open(F,\">$ARGV[0]\"); print F $$; close F; sleep 30' \"$e\" \

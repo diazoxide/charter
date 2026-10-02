@@ -61,3 +61,43 @@ fn a_command_that_cleans_up_after_itself_keeps_its_own_status() {
         assert_eq!(said.status.code(), Some(3), "{stderr}");
     }
 }
+
+#[test]
+fn a_check_that_cannot_list_the_processes_fails_rather_than_passing_blind() {
+    // A `ps` that fails, or answers nothing, must not read as "nothing was left behind".
+    let dir = tempfile::tempdir().expect("a directory");
+    for (name, ps) in [
+        ("failing", "#!/bin/sh\nexit 1\n"),
+        ("silent", "#!/bin/sh\nexit 0\n"),
+    ] {
+        let bin = dir.path().join(name);
+        std::fs::create_dir(&bin).expect("a bin directory");
+        stand_in::program(&bin, "ps", ps);
+        let path = format!(
+            "{}:{}",
+            bin.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+
+        let said = Command::new(the_check())
+            .args(["--grace", "0", "--", "true"])
+            .env("PATH", path)
+            .output()
+            .expect("the check runs");
+
+        let stderr = String::from_utf8_lossy(&said.stderr);
+        assert_eq!(said.status.code(), Some(3), "a {name} ps: {stderr}");
+        assert!(stderr.contains("nothing was checked"), "{stderr}");
+    }
+}
+
+#[test]
+fn a_grace_with_no_value_is_a_usage_error() {
+    let said = Command::new(the_check())
+        .arg("--grace")
+        .output()
+        .expect("the check runs");
+
+    assert_eq!(said.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&said.stderr).contains("usage:"));
+}

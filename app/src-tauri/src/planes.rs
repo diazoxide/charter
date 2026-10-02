@@ -2876,16 +2876,11 @@ mod tests {
         (planes, config)
     }
 
-    /// `count` chats started across `projects` in turn, each one's program, and the guards
-    /// that kill those programs with the test whatever it asserts (#923).
+    /// `count` chats started across `projects` in turn, each one's program held by a guard
+    /// that kills it with the test whatever it asserts (#923); [`stand_in::Ends::pid`] names it.
     #[cfg(unix)]
-    fn agents_across(
-        planes: &Planes,
-        projects: &[PlaneId],
-        count: usize,
-    ) -> (Vec<u32>, Vec<stand_in::Ends>) {
-        let mut programs = Vec::new();
-        let mut ends = Vec::new();
+    fn agents_across(planes: &Planes, projects: &[PlaneId], count: usize) -> Vec<stand_in::Ends> {
+        let mut agents = Vec::new();
         for n in 0..count {
             let held = planes.held(&projects[n % projects.len()]).expect("held");
             let session = held
@@ -2893,38 +2888,39 @@ mod tests {
                 .start(&an_agent_that_will_not_go_quietly(), A_PANE)
                 .expect("the chat starts");
             let pid = held.chats().sessions().process_id(session).expect("a pid");
-            ends.push(stand_in::Ends::group(pid));
-            programs.push(pid);
+            agents.push(stand_in::Ends::group(pid));
         }
-        (programs, ends)
+        agents
     }
 
-    /// Three projects, twenty agents across them, the registry holding them, and the guards
-    /// that kill them with the test.
+    /// Three projects, twenty agents across them, and the registry holding them.
     #[cfg(unix)]
     fn twenty_agents_in_three_projects(
         dir: &Path,
-    ) -> (Planes, PathBuf, Vec<PlaneId>, Vec<u32>, Vec<stand_in::Ends>) {
+    ) -> (Planes, PathBuf, Vec<PlaneId>, Vec<stand_in::Ends>) {
         let (planes, config) = planes_with_a_config_home(dir);
         let projects: Vec<PlaneId> = ["one", "two", "three"]
             .iter()
             .map(|name| planes.open(&a_plane(&dir.join(name))))
             .collect();
-        let (programs, ends) = agents_across(&planes, &projects, 20);
-        assert!(programs.iter().all(|pid| alive(*pid)));
-        (planes, config, projects, programs, ends)
+        let agents = agents_across(&planes, &projects, 20);
+        assert!(agents.iter().filter_map(stand_in::Ends::pid).all(alive));
+        (planes, config, projects, agents)
     }
 
-    fn outlived(programs: &[u32]) -> Vec<u32> {
-        programs.iter().copied().filter(|pid| alive(*pid)).collect()
+    fn outlived(agents: &[stand_in::Ends]) -> Vec<u32> {
+        agents
+            .iter()
+            .filter_map(stand_in::Ends::pid)
+            .filter(|pid| alive(*pid))
+            .collect()
     }
 
     #[cfg(unix)]
     #[test]
     fn one_stop_ends_twenty_chats_across_three_projects_within_five_seconds() {
         let dir = tempfile::tempdir().expect("a directory");
-        let (planes, config, projects, programs, _ends) =
-            twenty_agents_in_three_projects(dir.path());
+        let (planes, config, projects, programs) = twenty_agents_in_three_projects(dir.path());
 
         let from = std::time::Instant::now();
         let stopped = planes.stop_every_agent(Actor::Window).expect("kept");
@@ -3039,7 +3035,7 @@ mod tests {
             .iter()
             .map(|name| planes.open(&a_plane(&dir.path().join(name))))
             .collect();
-        let (programs, _ends) = agents_across(&planes, &projects, 4);
+        let programs = agents_across(&planes, &projects, 4);
         let (ended, heard) = std::sync::mpsc::channel();
         let hearing = Arc::clone(&planes);
         let _watch = crate::killswitch::watch(planes.kill_switch(), move |moved| {
