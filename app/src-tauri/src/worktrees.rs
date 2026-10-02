@@ -361,13 +361,14 @@ pub fn on_a_branch<T>(
     new_branch: bool,
     start: impl FnOnce(Option<PathBuf>) -> Result<T, String>,
 ) -> Result<(T, Vec<String>), String> {
-    on_a_branch_cut(plane, cwd, label, new_branch, |cwd, _| start(cwd))
+    on_a_branch_cut(plane, config, cwd, label, new_branch, |cwd, _| start(cwd))
 }
 
 /// [`on_a_branch`], with `start` also handed the branch it cut, when it cut one: what a caller
 /// needs to say what the branch was cut from (the first task's diff, FR-28).
 pub fn on_a_branch_cut<T>(
     plane: &Path,
+    config: Option<&Path>,
     cwd: Option<&Path>,
     label: Option<&str>,
     new_branch: bool,

@@ -59,9 +59,11 @@ pub async fn first_task_run(
     rows: u16,
 ) -> Result<FirstTaskRun, String> {
     let held = planes.held(&plane)?;
+    let config = planes.config().map(Path::to_path_buf);
     tauri::async_runtime::spawn_blocking(move || {
         start(
             &held,
+            config.as_deref(),
             Path::new(&cwd),
             profile,
             persona,
@@ -76,6 +78,7 @@ pub async fn first_task_run(
 /// [`first_task_run`], against a plane the registry has already vouched for.
 pub fn start(
     held: &Arc<Held>,
+    config: Option<&Path>,
     cwd: &Path,
     profile: String,
     persona: Option<String>,
@@ -98,8 +101,13 @@ pub fn start(
     }
     let label = firsttask::label(run);
     let runner = persona.clone();
-    let ((started, branch, folder, diff), _said) =
-        crate::worktrees::on_a_branch_cut(&root, Some(cwd), Some(&label), true, |dir, cut| {
+    let ((started, branch, folder, diff), _said) = crate::worktrees::on_a_branch_cut(
+        &root,
+        config,
+        Some(cwd),
+        Some(&label),
+        true,
+        |dir, cut| {
             let cut = cut.ok_or("charter cut no branch for the chat, so nothing was started.")?;
             // Asked before the chat starts, while the branch is still exactly what it was cut
             // from; a refusal here takes the branch back like any other.
@@ -123,7 +131,8 @@ pub fn start(
                 cut.path.clone(),
                 firsttask::diff_command(&from),
             ))
-        })?;
+        },
+    )?;
     let workspace = charter_core::workspaces::Plane::open(&root)
         .workspace_of(started.ready.cwd.as_deref().unwrap_or(folder.as_path()));
     Ok(FirstTaskRun {
@@ -241,7 +250,8 @@ mod tests {
         let id = planes.open(&project.root);
         let held = planes.held(&id).expect("held");
 
-        let run = start(&held, &project.clone, "work".into(), None, 1, SIZE).expect("it starts");
+        let run =
+            start(&held, None, &project.clone, "work".into(), None, 1, SIZE).expect("it starts");
 
         assert_eq!(run.label, "first task 1");
         assert_eq!(run.branch, "first-task-1");
@@ -280,6 +290,7 @@ mod tests {
 
         let refused = start(
             &held,
+            None,
             &project.root.join("workspaces/shop"),
             "work".into(),
             None,
@@ -299,7 +310,7 @@ mod tests {
         let id = planes.open(&project.root);
         let held = planes.held(&id).expect("held");
 
-        let refused = start(&held, &project.clone, "work".into(), None, 2, SIZE).unwrap_err();
+        let refused = start(&held, None, &project.clone, "work".into(), None, 2, SIZE).unwrap_err();
 
         assert!(refused.contains("with Claude Code or Codex"), "{refused}");
         assert!(held.chats().open_now().is_empty());
@@ -327,7 +338,7 @@ mod tests {
         let id = planes.open(&project.root);
         let held = planes.held(&id).expect("held");
 
-        let refused = start(&held, &project.clone, "work".into(), None, 3, SIZE).unwrap_err();
+        let refused = start(&held, None, &project.clone, "work".into(), None, 3, SIZE).unwrap_err();
 
         assert!(refused.contains("has 2 chats"), "{refused}");
     }
