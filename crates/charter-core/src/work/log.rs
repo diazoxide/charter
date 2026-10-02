@@ -226,10 +226,14 @@ pub enum Place<'a> {
 /// - **A chat at the project root is refused** (ADR 0088 §4, Q5's recommendation): it is in no
 ///   workspace, and work items are a workspace's Work section (FI5), so there is no log for its
 ///   link until a ruling gives the project one.
-/// - **A chat already linked to `item`, after both are resolved, writes nothing**, so a window
-///   that links twice does not grow a log that is committed when the workspace is LIVE.
+/// - **A chat already linked to `item` by this workspace's log, after both are resolved, writes
+///   nothing**, so a window that links twice does not grow a log that is committed when the
+///   workspace is LIVE. The same item linked from another workspace is written there, so that
+///   workspace's Work list holds it.
 /// - **A chat linked to another item gets one link line and no unlink**: a chat's link is its
 ///   last line (V3: zero or one), so the new line replaces the old link.
+/// - **The fold is read again after the line is written**, and a link it does not show is an
+///   error, never a success (see [`unlink_chat`]).
 pub fn link_chat(
     root: &Path,
     place: Place<'_>,
@@ -238,12 +242,22 @@ pub fn link_chat(
     item: TrackerKey,
     chat: &str,
 ) -> io::Result<()> {
-    let ws = in_a_workspace(place)?;
+    let ws = in_a_workspace(place, "linked to")?;
     let folded = fold(root);
-    if folded.chat_link(chat) == Some(folded.resolve(&item)) {
+    let wanted = folded.resolve(&item);
+    if folded
+        .chat_link_in(chat)
+        .is_some_and(|(written_in, linked)| written_in == ws && linked == wanted)
+    {
         return Ok(());
     }
-    append(root, ws, device, ts, &Op::link_chat(item, chat))
+    append(root, ws, device, ts, &Op::link_chat(item, chat))?;
+    if fold(root).chat_link(chat) != Some(wanted.clone()) {
+        return Err(io::Error::other(format!(
+            "the chat was not linked to {wanted}: another log holds a later line for it"
+        )));
+    }
+    Ok(())
 }
 
 /// End chat `chat`'s link, in this device's log of the workspace the chat is in now, and answer
@@ -251,8 +265,12 @@ pub fn link_chat(
 ///
 /// The unlink names the item the chat's link resolves to, so it ends that link and only that
 /// one (D-0015). It is written where the chat is now, not where its link was written: a chat's
-/// link is its last line across every workspace's log (§3), so either ends it. A chat at the
-/// project root is refused, as [`link_chat`] refuses it.
+/// link is its last line across every workspace's log (§3), so either ends it — **when the fold
+/// orders it after the link**. A line is never dated before the last line of the log it goes in,
+/// so a clock that stepped back cannot put an unlink before the link it ends in one log; a link
+/// in another workspace's log in the same second can still sort after it, so the fold is read
+/// again and an unlink that ended nothing is an error. A chat at the project root is refused, as
+/// [`link_chat`] refuses it.
 pub fn unlink_chat(
     root: &Path,
     place: Place<'_>,
@@ -260,21 +278,30 @@ pub fn unlink_chat(
     ts: DateTime<Utc>,
     chat: &str,
 ) -> io::Result<Option<TrackerKey>> {
-    let ws = in_a_workspace(place)?;
+    let ws = in_a_workspace(place, "unlinked from")?;
     let Some(item) = fold(root).chat_link(chat) else {
         return Ok(None);
     };
     append(root, ws, device, ts, &Op::unlink_chat(item.clone(), chat))?;
+    if fold(root).chat_link(chat).is_some() {
+        return Err(io::Error::other(format!(
+            "the chat was not unlinked from {item}: another log holds a line for it in the same \
+             second or later, so the link still stands. Try again in a moment"
+        )));
+    }
     Ok(Some(item))
 }
 
-/// The workspace a chat at `place` is in, or the refusal for one at the project root.
-fn in_a_workspace(place: Place<'_>) -> io::Result<&str> {
+/// The workspace a chat at `place` is in, or the refusal for one at the project root, which
+/// says what it could not be (`linked to`, `unlinked from`).
+fn in_a_workspace<'a>(place: Place<'a>, could_not_be: &str) -> io::Result<&'a str> {
     match place {
         Place::ProjectRoot => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "a chat at the project root is in no workspace, so it cannot be linked to a work \
-             item: open the chat in the workspace the item belongs to",
+            format!(
+                "a chat at the project root is in no workspace, so it cannot be {could_not_be} \
+                 a work item: open the chat in the workspace the item belongs to"
+            ),
         )),
         Place::Workspace(ws) => Ok(ws),
     }
@@ -349,6 +376,9 @@ fn write(root: &Path, ws: &str, device: &str, ts: DateTime<Utc>, op: &Op) -> io:
     }
     let path = check_writable(root, ws, device)?;
     std::fs::create_dir_all(dir_for(root, ws))?;
+    // Never dated before the log's last line, so a clock that stepped back cannot reorder this
+    // device's own lines in the fold (which sorts by `ts` first).
+    let ts = last_ts(&path).map_or(ts, |last| ts.max(last));
     let mut options = std::fs::OpenOptions::new();
     options.append(true).create(true);
     #[cfg(unix)]
@@ -360,6 +390,15 @@ fn write(root: &Path, ws: &str, device: &str, ts: DateTime<Utc>, op: &Op) -> io:
     let line = format!("{}\n", op.to_line(ts));
     // One write of one whole line, so the union merge driver always keeps whole lines.
     file.write_all(line.as_bytes())
+}
+
+/// The `ts` of the last line in the log at `path`, where it has one that reads.
+fn last_ts(path: &Path) -> Option<DateTime<Utc>> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let line: Value =
+        serde_json::from_str(text.lines().rev().find(|l| !l.trim().is_empty())?).ok()?;
+    let ts = chrono::NaiveDateTime::parse_from_str(line.get("ts")?.as_str()?, TS).ok()?;
+    Some(ts.and_utc())
 }
 
 /// Every workspace's log, folded.
@@ -419,6 +458,13 @@ impl Fold {
     /// The item chat `chat` is linked to, through its aliases, or `None`.
     pub fn chat_link(&self, chat: &str) -> Option<TrackerKey> {
         self.chats.get(chat).map(|(_, item)| self.resolve(item))
+    }
+
+    /// The workspace whose log wrote chat `chat`'s current link, and the item, resolved.
+    pub fn chat_link_in(&self, chat: &str) -> Option<(&str, TrackerKey)> {
+        self.chats
+            .get(chat)
+            .map(|(ws, item)| (ws.as_str(), self.resolve(item)))
     }
 
     /// Every chat linked to `item`, which is resolved first.

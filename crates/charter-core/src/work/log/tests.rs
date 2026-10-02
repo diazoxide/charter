@@ -430,6 +430,64 @@ fn a_chat_at_the_project_root_cannot_be_unlinked_either() {
     let root = p.path();
     let refused = unlink_chat(root, Place::ProjectRoot, DEVICE, at(1), CHAT).unwrap_err();
     assert!(refused.to_string().contains("in no workspace"), "{refused}");
+    assert!(refused.to_string().contains("unlinked"), "{refused}");
+}
+
+#[test]
+fn relinking_the_same_item_from_another_workspace_writes_a_line_there() {
+    let p = project();
+    let root = p.path();
+    link_chat(
+        root,
+        Place::Workspace("alpha"),
+        DEVICE,
+        at(1),
+        issue(),
+        CHAT,
+    )
+    .unwrap();
+    // The chat now stands in beta: beta's Work list shows the item only if beta's log says so.
+    link_chat(root, Place::Workspace("beta"), DEVICE, at(2), issue(), CHAT).unwrap();
+    assert_eq!(lines_of(root, "beta", DEVICE).len(), 1);
+    let folded = fold(root);
+    assert_eq!(folded.items_of("beta"), vec![issue()]);
+    assert_eq!(folded.chat_link(CHAT), Some(issue()));
+}
+
+#[test]
+fn a_clock_that_stepped_back_never_writes_a_ts_earlier_than_the_logs_last_line() {
+    let p = project();
+    let root = p.path();
+    link_chat(
+        root,
+        Place::Workspace("alpha"),
+        DEVICE,
+        at(10),
+        issue(),
+        CHAT,
+    )
+    .unwrap();
+
+    let ended = unlink_chat(root, Place::Workspace("alpha"), DEVICE, at(5), CHAT).unwrap();
+    assert_eq!(ended, Some(issue()));
+    assert_eq!(
+        lines_of(root, "alpha", DEVICE)[1]["ts"],
+        "2026-10-02T08:00:10Z"
+    );
+    assert_eq!(fold(root).chat_link(CHAT), None);
+}
+
+#[test]
+fn an_unlink_the_fold_would_order_before_the_link_is_refused_and_never_said_to_have_ended_it() {
+    let p = project();
+    let root = p.path();
+    // Linked in beta, unlinked from alpha in the same second: the fold breaks that tie by the
+    // workspace's name, so alpha's unlink sorts before beta's link and ends nothing.
+    link_chat(root, Place::Workspace("beta"), DEVICE, at(5), issue(), CHAT).unwrap();
+
+    let refused = unlink_chat(root, Place::Workspace("alpha"), DEVICE, at(5), CHAT).unwrap_err();
+    assert!(refused.to_string().contains("not unlinked"), "{refused}");
+    assert_eq!(fold(root).chat_link(CHAT), Some(issue()));
 }
 
 #[test]

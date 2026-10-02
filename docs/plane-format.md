@@ -1366,12 +1366,20 @@ and an archived one is where `memstore.archive` would have put it (ADR 0065).
   - `charter ws todo promote`: a `promoted` alias (`charter_core::work::promote`);
   - the app's host, for the window: a chat's link and unlink (`log::link_chat` and
     `log::unlink_chat`, called by `chat_work_link` and `chat_work_unlink` in
-    `app/src-tauri/src/worklinks.rs`). The line goes in this device's log of the workspace the
-    window files the chat under, and names the chat by its ULID, which V43 keeps across a
-    relaunch and a move and mints again in a copy. Linking a chat to the item it already works
-    on, after both are resolved, writes nothing. An unlink names the item the chat's link
-    resolves to, and a chat with no link writes nothing. A project-root chat is refused both
-    (ADR 0088 §4). No control in the window calls them yet (#914).
+    `app/src-tauri/src/worklinks.rs`), which the window offers as **Link to work item…** and
+    **Unlink work item** on a chat tab's menu and in the palette (V60). The line goes in this
+    device's log of the workspace the window files the chat under, and names the chat by its
+    ULID, which V43 keeps across a relaunch and a move and mints again in a copy. Linking a chat
+    to the item it already works on, after both are resolved, writes nothing when that
+    workspace's log holds the link, and writes a line when another workspace's does, so this
+    workspace's items hold it. An unlink names the item the chat's link resolves to, and a chat
+    with no link writes nothing. A chat at the project root, or working outside the project, is
+    refused both (ADR 0088 §4).
+
+  **A line is never dated before the last line of the log it goes in**, so a clock that stepped
+  back cannot reorder one device's own lines. After a chat's link or unlink is written the logs
+  are folded again, and a line the fold does not honour, such as an unlink in the same second as
+  a link in another workspace's log that sorts after it, is reported as refused, never as done.
 
   The Work list's workspace links, `workspace rename`'s `renamed` aliases and the item cache's
   `moved` aliases (FW-7) are **decided, not yet written**.

@@ -8,12 +8,12 @@
 //!
 //! - **Where a chat is** is where the window's sidebar files it: the workspace its directory is
 //!   in ([`charter_core::workspaces::Plane::workspace_of`]). A chat filed at the project root
-//!   cannot be linked (ADR 0088 §4), and neither can a shell.
+//!   cannot be linked (ADR 0088 §4), and one working outside the project is told that instead.
 //! - **The item is a tracker key in its normal form** (ADR 0088 §1), as the Work list (FW-9)
 //!   will hand it over. One that is not is refused, never rewritten (#861's D-0007).
 //!
-//! **No control in the window calls these yet.** Where the window offers a chat's work link,
-//! and in what words, is not fixed by ADR 0088, and is the operator's to rule (#914).
+//! The window offers them as **Link to work item…** and **Unlink work item** on a chat's tab menu
+//! and in the palette, and shows **Work item: `<key>`** on a linked chat (V60, #914).
 
 use std::path::Path;
 
@@ -68,33 +68,61 @@ pub fn chat_work_item(
     item_of(held.root(), held.chats(), session)
 }
 
-/// Who the chat in `session` is, and where it is: its ULID and its place.
-struct Subject {
-    chat: String,
-    workspace: Option<String>,
+/// The chat a work link is about: its ULID and where the window files it.
+struct LinkedChat {
+    id: String,
+    place: Filed,
 }
 
-impl Subject {
-    fn of(root: &Path, chats: &Chats, session: u32) -> Result<Subject, String> {
-        let Some((id, cwd)) = chats.identity_of(session) else {
+/// Where the window files a chat, for its work link.
+enum Filed {
+    Workspace(String),
+    /// At the project root: in no workspace on purpose (ADR 0088 §4).
+    ProjectRoot,
+    /// Working in a directory outside the project altogether.
+    Outside,
+}
+
+impl LinkedChat {
+    fn of(root: &Path, chats: &Chats, session: u32) -> Result<LinkedChat, String> {
+        let Some(at) = chats.chat_at(session) else {
             return Err(format!("charter has no chat {session} open."));
         };
-        let Some(chat) = id else {
+        let Some(id) = at.id else {
             return Err(format!(
                 "chat {session} has no id yet, so it cannot have a work link."
             ));
         };
-        let workspace = cwd
-            .as_deref()
-            .and_then(|cwd| charter_core::workspaces::Plane::open(root).workspace_of(cwd));
-        Ok(Subject { chat, workspace })
+        let place = match at.cwd.as_deref() {
+            None => Filed::ProjectRoot,
+            Some(cwd) => match charter_core::workspaces::Plane::open(root).workspace_of(cwd) {
+                Some(ws) => Filed::Workspace(ws),
+                None if inside(root, cwd) => Filed::ProjectRoot,
+                None => Filed::Outside,
+            },
+        };
+        Ok(LinkedChat { id, place })
     }
 
-    fn place(&self) -> Place<'_> {
-        self.workspace
-            .as_deref()
-            .map_or(Place::ProjectRoot, Place::Workspace)
+    /// The core's place for this chat, or the refusal for one outside the project, saying what
+    /// it could not be (`linked to`, `unlinked from`).
+    fn place(&self, could_not_be: &str) -> Result<Place<'_>, String> {
+        match &self.place {
+            Filed::Workspace(ws) => Ok(Place::Workspace(ws)),
+            Filed::ProjectRoot => Ok(Place::ProjectRoot),
+            Filed::Outside => Err(format!(
+                "this chat works outside the project, so it is in no workspace and cannot be \
+                 {could_not_be} a work item: open a chat in the workspace the item belongs to."
+            )),
+        }
     }
+}
+
+/// Whether `cwd` is inside the project at `root`, both sides resolved.
+fn inside(root: &Path, cwd: &Path) -> bool {
+    let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let cwd = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+    cwd.starts_with(root)
 }
 
 /// This device's id, which names the log a line goes in. None is refused, never replaced by a
@@ -106,6 +134,11 @@ fn device(chats: &Chats) -> Result<&str, String> {
     })
 }
 
+/// A key as the window is handed it.
+fn said(item: TrackerKey) -> String {
+    item.as_str().to_owned()
+}
+
 fn link(
     root: &Path,
     chats: &Chats,
@@ -114,13 +147,11 @@ fn link(
     ts: chrono::DateTime<chrono::Utc>,
 ) -> Result<String, String> {
     let item = TrackerKey::parse(item)?;
-    let subject = Subject::of(root, chats, session)?;
+    let chat = LinkedChat::of(root, chats, session)?;
     let device = device(chats)?;
-    log::link_chat(root, subject.place(), device, ts, item, &subject.chat)
+    log::link_chat(root, chat.place("linked to")?, device, ts, item, &chat.id)
         .map_err(|why| why.to_string())?;
-    log::fold(root)
-        .chat_link(&subject.chat)
-        .map(|item| item.as_str().to_owned())
+    item_of(root, chats, session)?
         .ok_or_else(|| "the work link was written but does not read back.".to_owned())
 }
 
@@ -130,18 +161,16 @@ fn unlink(
     session: u32,
     ts: chrono::DateTime<chrono::Utc>,
 ) -> Result<Option<String>, String> {
-    let subject = Subject::of(root, chats, session)?;
+    let chat = LinkedChat::of(root, chats, session)?;
     let device = device(chats)?;
-    log::unlink_chat(root, subject.place(), device, ts, &subject.chat)
-        .map(|ended| ended.map(|item| item.as_str().to_owned()))
+    log::unlink_chat(root, chat.place("unlinked from")?, device, ts, &chat.id)
+        .map(|ended| ended.map(said))
         .map_err(|why| why.to_string())
 }
 
 fn item_of(root: &Path, chats: &Chats, session: u32) -> Result<Option<String>, String> {
-    let subject = Subject::of(root, chats, session)?;
-    Ok(log::fold(root)
-        .chat_link(&subject.chat)
-        .map(|item| item.as_str().to_owned()))
+    let chat = LinkedChat::of(root, chats, session)?;
+    Ok(log::fold(root).chat_link(&chat.id).map(said))
 }
 
 #[cfg(test)]

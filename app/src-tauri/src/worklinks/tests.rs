@@ -97,6 +97,7 @@ fn a_chat_filed_at_the_project_root_is_refused_and_nothing_is_written() {
     assert!(refused.contains("in no workspace"), "{refused}");
     let refused = unlink(&root, &chats, session, at(2)).unwrap_err();
     assert!(refused.contains("in no workspace"), "{refused}");
+    assert!(refused.contains("unlinked"), "{refused}");
     for ws in ["alpha", "beta"] {
         assert!(!dir_for(&root, ws).exists());
     }
@@ -179,4 +180,19 @@ fn a_session_charter_does_not_have_open_is_refused() {
 
     let refused = link(&root, &chats, 42, ISSUE, at(1)).unwrap_err();
     assert!(refused.contains("no chat 42"), "{refused}");
+}
+
+#[test]
+fn a_chat_working_outside_the_project_is_told_so_and_not_that_it_is_at_the_project_root() {
+    let (_dir, root) = project();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let chats = chats_on(Some(DEVICE));
+    let (session, _) = started_in(&chats, elsewhere.path());
+
+    let refused = link(&root, &chats, session, ISSUE, at(1)).unwrap_err();
+    assert!(refused.contains("outside the project"), "{refused}");
+    assert!(!refused.contains("project root"), "{refused}");
+    let refused = unlink(&root, &chats, session, at(2)).unwrap_err();
+    assert!(refused.contains("outside the project"), "{refused}");
+    assert!(refused.contains("unlinked"), "{refused}");
 }

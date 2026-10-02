@@ -57,6 +57,11 @@ function doing(): Doing & { calls: string[] } {
     closeTab: note("closeTab"),
     selectTab: note("selectTab"),
     renameTab: note("renameTab"),
+    linkWorkItem: note("linkWorkItem"),
+    unlinkWorkItem: async (...args: unknown[]) => {
+      note("unlinkWorkItem")(...args);
+      return { ok: true };
+    },
     focusWorkspace: note("focusWorkspace"),
     createWorkspace: note("createWorkspace"),
     removeWorkspace: note("removeWorkspace"),
@@ -1311,6 +1316,67 @@ describe("renaming a chat (charter-app#254)", () => {
   });
 });
 
+describe("a chat's work link (V60, ADR 0088)", () => {
+  const tabs = openTab(openTab(noTabs(), 7, "3", "steward"), 8, "4", "steward");
+  const [first, second] = tabs.order;
+  const inAWorkspace = (session: number) => session === 7;
+
+  it("offers Link to work item… on a chat in a workspace, naming the chat in its note", () => {
+    const offers = catalogue(now({ tabs, linkable: inAWorkspace }));
+    const row = by(offers, `tab.worklink:${first}`);
+
+    expect(row?.title).toBe("Link to work item…");
+    expect(row?.available).toBe(true);
+    expect(row?.note).toBe("Chat steward 3");
+    expect(row?.does).toEqual({ verb: "linkWorkItem", tab: first });
+    expect(by(offers, `tab.workunlink:${first}`)).toBeUndefined();
+  });
+
+  it("offers Unlink work item only on a linked chat, and names the item", () => {
+    const offers = catalogue(
+      now({ tabs, linkable: inAWorkspace, workItems: { 7: "github:github.com/acme/api#12" } }),
+    );
+    const row = by(offers, `tab.workunlink:${first}`);
+
+    expect(row?.title).toBe("Unlink work item");
+    expect(row?.note).toBe("Chat steward 3 · Work item: github:github.com/acme/api#12");
+    expect(row?.does).toEqual({ verb: "unlinkWorkItem", tab: first });
+    // Linking again is still offered: it replaces the link.
+    expect(by(offers, `tab.worklink:${first}`)?.available).toBe(true);
+  });
+
+  it("offers neither on a chat at the project root", () => {
+    const offers = catalogue(
+      now({ tabs, linkable: inAWorkspace, workItems: { 8: "github:github.com/acme/api#12" } }),
+    );
+
+    expect(by(offers, `tab.worklink:${second}`)).toBeUndefined();
+    expect(by(offers, `tab.workunlink:${second}`)).toBeUndefined();
+  });
+
+  it("is on the chat tab's menu, above the line", () => {
+    expect(menuOn({ on: "chat", tab: 3 }).above).toEqual(
+      expect.arrayContaining(["tab.worklink:3", "tab.workunlink:3"]),
+    );
+  });
+
+  it("runs through the window's hands", async () => {
+    const hands = {
+      linkWorkItem: vi.fn(),
+      unlinkWorkItem: vi.fn(async () => ({ ok: true }) as const),
+    } as unknown as Doing;
+    const offers = catalogue(
+      now({ tabs, linkable: inAWorkspace, workItems: { 7: "todo:alpha/20261002-080000-x" } }),
+    );
+
+    run(offers, `tab.worklink:${first}`, hands);
+    await run(offers, `tab.workunlink:${first}`, hands);
+
+    expect(hands.linkWorkItem).toHaveBeenCalledWith(first);
+    expect(hands.unlinkWorkItem).toHaveBeenCalledWith(first);
+  });
+});
+
 describe("the catalogue as the tabs change", () => {
   it("grows a row per tab as tabs open", () => {
     let tabs: Tabs = noTabs();
@@ -1671,16 +1737,16 @@ describe("the palette at fifty chats", () => {
       return offers.lookups;
     }
 
-    it("asks for five rows per tab and never walks the list", () => {
+    it("asks for seven rows per tab and never walks the list", () => {
       const offers = new Counting(loaded().map((offer) => [offer.id, offer]));
 
-      // 50 tabs × the five ids a chat menu lists. **Not fifty scans of 291 rows**, which is
+      // 50 tabs × the seven ids a chat menu lists (the two work link rows are V60's). **Not fifty scans of 291 rows**, which is
       // what this cost before the lookup was built once for the window — and the number that
       // does not move when the catalogue grows again.
-      expect(strip(offers)).toBe(250);
+      expect(strip(offers)).toBe(350);
     });
 
-    it("is the same 250 whether the catalogue carries the pieces or not", () => {
+    it("is the same 350 whether the catalogue carries the pieces or not", () => {
       // The property, not the timing: the cost of a menu is flat in the length of the list it
       // reads. A scan is not, which is why #174's hundred rows needed this first.
       const small = new Counting(
@@ -1689,7 +1755,7 @@ describe("the palette at fifty chats", () => {
         ),
       );
 
-      expect(strip(small)).toBe(250);
+      expect(strip(small)).toBe(350);
     });
   });
 });

@@ -58,6 +58,7 @@ import {
   ROOT_TIP,
   showId,
   stoppedRows,
+  workItemSaid,
   PASS_THROUGH_BYTES,
   PASS_THROUGH_KEY,
   RENAMES_ON_F2,
@@ -83,6 +84,7 @@ import {
 } from "./sortable";
 import { NewWorkspace } from "./NewWorkspace";
 import { NewBranch } from "./NewBranch";
+import { LinkWorkItem } from "./LinkWorkItem";
 import { RenameWorkspace } from "./RenameWorkspace";
 import { cloneRepos } from "./repoClones";
 import { StartChat } from "./StartChat";
@@ -340,6 +342,14 @@ export function PlaneView({
   const [pickerTrouble, setPickerTrouble] = useState<string>();
   /** The chat tab whose name is open for editing on the strip, if one is (charter-app#254). */
   const [renaming, setRenaming] = useState<number>();
+  /** The work item each chat works on, by session, as the core answered (V60, ADR 0088). */
+  const [workItems, setWorkItems] = useState<Record<number, string>>({});
+  /** The chat tab the Link to work item dialog is asking about, while it is open. */
+  const [linkingWork, setLinkingWork] = useState<{
+    tab: number;
+    trouble?: string;
+    busy: boolean;
+  }>();
   /** Chats this launch could not start, by name and why. They are still recorded. */
   const [wouldNotStart, setWouldNotStart] = useState<[string, string][]>([]);
   /** What the core last said about where a chat is working, and which directory it was
@@ -2665,6 +2675,69 @@ export function PlaneView({
     }
   }, [change, filedIn, isPinned, plane, resumeSession, states]);
 
+  /**
+   * A chat's work link (V60, ADR 0088 §3). **What each chat works on is asked once per chat**,
+   * as it appears, and then follows what this window links and unlinks: the link is the
+   * project's, and the core's answer is what the tab and the pane draw.
+   */
+  const askedWorkItem = useRef(new Set<number>());
+  useEffect(() => {
+    for (const id of tabs.order) {
+      const session = chatOf(tabs, id);
+      if (session === undefined || askedWorkItem.current.has(session)) continue;
+      askedWorkItem.current.add(session);
+      void commands
+        .chatWorkItem(plane, session)
+        .then((said) => {
+          const item = said.status === "ok" ? said.data : null;
+          if (item !== null) setWorkItems((was) => ({ ...was, [session]: item }));
+        })
+        .catch(() => undefined);
+    }
+  }, [plane, tabs]);
+
+  /** Opens the dialog that asks which work item a chat tab's chat works on. */
+  const linkWorkItem = useCallback((id: number) => {
+    if (chatOf(now.current, id) === undefined) return;
+    setLinkingWork({ tab: id, busy: false });
+  }, []);
+
+  /** Links the dialog's chat to `key`, through `chat_work_link`; a refusal stays in the dialog. */
+  const saveWorkLink = useCallback(
+    async (id: number, key: string) => {
+      const session = chatOf(now.current, id);
+      if (session === undefined) return;
+      setLinkingWork({ tab: id, busy: true });
+      const said = await commands
+        .chatWorkLink(plane, session, key)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      if (said.status === "error") {
+        setLinkingWork({ tab: id, busy: false, trouble: said.error });
+        return;
+      }
+      setWorkItems((was) => ({ ...was, [session]: said.data }));
+      setLinkingWork(undefined);
+    },
+    [plane],
+  );
+
+  /** Ends a chat tab's chat's work link, through `chat_work_unlink`. */
+  const unlinkWorkItem = useCallback(
+    async (id: number): Promise<Ran> => {
+      const session = chatOf(now.current, id);
+      if (session === undefined) return { ok: false, refused: "That tab has no chat to unlink." };
+      const said = await commands
+        .chatWorkUnlink(plane, session)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      if (said.status === "error") return { ok: false, refused: said.error };
+      setWorkItems((was) =>
+        Object.fromEntries(Object.entries(was).filter(([one]) => Number(one) !== session)),
+      );
+      return { ok: true };
+    },
+    [plane],
+  );
+
   const doing = useMemo<Doing>(
     () => ({
       newChat: newTab,
@@ -2675,6 +2748,8 @@ export function PlaneView({
       closeTab: close,
       selectTab: bringToFront,
       renameTab: beginRename,
+      linkWorkItem,
+      unlinkWorkItem,
       pinTab,
       pinWorkspace,
       pinProject: windowDoes.pinProject,
@@ -2723,6 +2798,8 @@ export function PlaneView({
     }),
     [
       beginRename,
+      linkWorkItem,
+      unlinkWorkItem,
       bringToFront,
       cancelSmartClose,
       close,
@@ -2914,6 +2991,10 @@ export function PlaneView({
             curations,
             wrappingUp: [...wrapping],
             stopped,
+            workItems,
+            // A chat filed in a workspace; one at the project root, or outside the project, is
+            // offered no work link (ADR 0088 §4).
+            linkable: (session) => filedIn(session) !== OUTSIDE,
           }),
     [
       clones,
@@ -2946,6 +3027,8 @@ export function PlaneView({
       liveNames,
       stopped,
       wrapping,
+      workItems,
+      filedIn,
     ],
   );
 
@@ -3511,7 +3594,10 @@ export function PlaneView({
                                   title={
                                     panesOf(tabs, id).some((one) => wrapping.has(one.session))
                                       ? WRAPPING_UP
-                                      : handedFrom[chatOf(tabs, id) ?? -1]
+                                      : tabTip(
+                                          handedFrom[chatOf(tabs, id) ?? -1],
+                                          workItems[chatOf(tabs, id) ?? -1],
+                                        )
                                   }
                                   // F2 renames here rather than opening the palette (`RENAMES_ON_F2`), on a
                                   // tab that has a rename row — a chat's, and never a view's.
@@ -3800,6 +3886,7 @@ export function PlaneView({
                   states={states}
                   name={frontTab.name}
                   handedFrom={handedFrom}
+                  workItems={workItems}
                   byHand={byHand}
                   onByHand={answerByHand}
                   startNotes={startNotes}
@@ -3957,6 +4044,17 @@ export function PlaneView({
           offers={found}
           onPress={press}
           onCancel={() => setPickingVault(false)}
+        />
+      )}
+
+      {linkingWork && (
+        <LinkWorkItem
+          chat={tabs.byId[linkingWork.tab]?.name ?? ""}
+          linked={workItems[chatOf(tabs, linkingWork.tab) ?? -1]}
+          trouble={linkingWork.trouble}
+          linking={linkingWork.busy}
+          onLink={(key) => void saveWorkLink(linkingWork.tab, key)}
+          onCancel={() => setLinkingWork(undefined)}
         />
       )}
 
@@ -4340,12 +4438,21 @@ function viewTabsOf(tabs: Tabs, pinnedViews: readonly string[]): ViewTab[] {
  * of its own, and a pane with a gauge was then a row shorter than one without — the operator:
  * *"its changing harness container sizes"*. A pane's size is the layout's business alone.
  */
+/** A chat tab's tooltip: where a handed-off chat came from, and the work item it works on. */
+function tabTip(from: string | undefined, workItem: string | undefined): string | undefined {
+  const lines = [from, workItem === undefined ? undefined : workItemSaid(workItem)].filter(
+    (line): line is string => line !== undefined,
+  );
+  return lines.length === 0 ? undefined : lines.join("\n");
+}
+
 function PaneFrame({
   plane,
   session,
   moved,
   running,
   from,
+  workItem,
   byHand,
   onByHand,
   startNotes,
@@ -4359,6 +4466,8 @@ function PaneFrame({
   running: boolean;
   /** Where a handed-off chat came from, `↳ from steward 3 · ops`, in the chat's own corner. */
   from?: string;
+  /** The work item this chat works on, `Work item: <key>`, in the same corner (V60). */
+  workItem?: string;
   /** A harness started by hand in this shell tab, while its banner is up (ADR 0062). */
   byHand?: ByHandNote;
   onByHand: (open: boolean) => void;
@@ -4378,6 +4487,7 @@ function PaneFrame({
       <div className="pane-corner at-start">
         <ChatGauge usage={usage} />
         {from && <span className="pane-from">{from}</span>}
+        {workItem && <span className="pane-from">{workItemSaid(workItem)}</span>}
         {byHand && <ByHandBanner note={byHand} onAnswer={onByHand} />}
         {startNotes && <StartNotice notes={startNotes} onDismiss={onDismissStartNote} />}
       </div>
@@ -4768,6 +4878,7 @@ function LayoutPanes({
   states,
   name,
   handedFrom,
+  workItems,
   byHand,
   onByHand,
   startNotes,
@@ -4794,6 +4905,8 @@ function LayoutPanes({
   name: string;
   /** Where each handed-off chat came from, by session (charter-app#258). */
   handedFrom: Readonly<Record<number, string>>;
+  /** The work item each chat works on, by session (V60). */
+  workItems: Readonly<Record<number, string>>;
   /** A harness started by hand in a shell tab, by session, for its banner (ADR 0062). */
   byHand: Readonly<Record<number, ByHandNote>>;
   /** The banner answered: `open` asks for that harness as a chat, else it is put away. */
@@ -4859,6 +4972,7 @@ function LayoutPanes({
         moved={movedAt(states, content.session)}
         running={stateOf(states, content.session) === "running"}
         from={handedFrom[content.session]}
+        workItem={workItems[content.session]}
         byHand={byHand[content.session]}
         onByHand={(open) => onByHand(content.session, open)}
         startNotes={startNotes[content.session]}
@@ -4906,6 +5020,7 @@ function LayoutPanes({
               states={states}
               name={name}
               handedFrom={handedFrom}
+              workItems={workItems}
               byHand={byHand}
               onByHand={onByHand}
               startNotes={startNotes}
