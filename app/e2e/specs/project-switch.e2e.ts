@@ -189,6 +189,25 @@ describe(`switching among ${OPEN} open projects`, function () {
       console.log(`PROF ${JSON.stringify({ i, ms: Math.round(one.ms), marks, js: one.cmds, rust: near, rows: one.rows, lags: one.lags })}`);
     });
 
+    for (const [name, text] of [
+      ["normal", ""],
+      ["both opacity 1", ".explorer .chat { opacity: 1 !important; } .explorer .here .state { opacity: 1 !important; }"],
+      ["normal again", ""],
+      ["both opacity 1 again", ".explorer .chat { opacity: 1 !important; } .explorer .here .state { opacity: 1 !important; }"],
+    ] as [string, string][]) {
+      await browser.execute((t: string) => {
+        document.getElementById("prof-arm")?.remove();
+        const el = document.createElement("style");
+        el.id = "prof-arm";
+        el.textContent = t;
+        document.head.append(el);
+      }, text);
+      const arm = await measureSwitches(planes, 5, () => PAINTED, jobInTheWindow);
+      const launch = [0, 10, 20, 30, 40].map((i) => Math.round(arm.samples_ms[i]));
+      const rest = arm.samples_ms.filter((_, i) => i % 10 !== 0).sort((a, b) => a - b);
+      console.log(`PROF arm ${name}: p95 ${Math.round(arm.p95)} launch ${launch.join(",")} fresh-median ${Math.round(rest[Math.floor(rest.length / 2)])}`);
+    }
+    await browser.execute(() => document.getElementById("prof-arm")?.remove());
     for (const plane of [planes[1], first]) {
       await job({ kind: "project switch", plane, sentinel: PAINTED });
       const census = await browser.execute(() => {
@@ -209,15 +228,12 @@ describe(`switching among ${OPEN} open projects`, function () {
     // The launch project is in front now (the census's last switch). A microbench of its chat rows.
     const css: [string, string][] = [
       ["base", ""],
-      ["svg hidden", ".explorer .here svg { display: none !important; }"],
-      ["guides gone", ".explorer .here li::before, .explorer .here li::after { content: none !important; }"],
       ["state hidden", ".explorer .here .state { display: none !important; }"],
-      ["state no transition", ".explorer .here .state { transition: none !important; }"],
-      ["harness hidden", ".explorer .here .harness, .explorer .here .persona { display: none !important; }"],
-      ["name hidden", ".explorer .here .session { display: none !important; }"],
-      ["button block", ".explorer .here .chat { display: block !important; min-width: 0 !important; }"],
-      ["system font", ".explorer .here * { font-family: system-ui !important; }"],
-      ["no title attrs", ""],
+      ["row opacity 1", ".explorer .chat { opacity: 1 !important; }"],
+      ["mark opacity 1", ".explorer .here .state { opacity: 1 !important; }"],
+      ["both opacity 1", ".explorer .chat { opacity: 1 !important; } .explorer .here .state { opacity: 1 !important; }"],
+      ["mark solid", ".explorer .here .state-unknown { border-style: solid !important; }"],
+      ["both opacity 1, solid", ".explorer .chat { opacity: 1 !important; } .explorer .here .state { opacity: 1 !important; } .explorer .here .state-unknown { border-style: solid !important; }"],
       ["base again", ""],
     ];
     const bench = await browser.execute(async (armsText: string) => {
@@ -226,6 +242,13 @@ describe(`switching among ${OPEN} open projects`, function () {
       const here = document.querySelector<HTMLElement>(".explorer .here");
       if (!here) return { error: "no .here", rows: 0 };
       const out: Record<string, string> = { rows: String(here.children.length) };
+      const idle: number[] = [];
+      for (let k = 0; k < 9; k++) {
+        const t0 = await frame();
+        await frame();
+        idle.push((await frame()) - t0);
+      }
+      out.idle2frames = idle.sort((a, b) => a - b)[4].toFixed(1);
       for (const [name, text] of arms) {
         document.getElementById("prof-arm")?.remove();
         const el = document.createElement("style");
