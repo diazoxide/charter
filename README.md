@@ -67,11 +67,16 @@ cargo fmt --all --check
 cargo clippy --all-targets -- -D warnings    # core and cli
 cargo test
 cargo deny check                             # licences and advisories (brew install cargo-deny)
+tools/no-orphans.sh -- cargo test --workspace   # and that no test left a process running
 
 cd app
 npm run typecheck && npm run lint && npm run format:check && npm test
 npx tauri build --debug --no-bundle          # the app crate, with its frontend built first
 ```
+
+`tools/no-orphans.sh` counts every process of yours that started while the suite ran and is still
+running after it, so on a machine doing other work it names that work too. CI runs it with
+`--reap`, which also kills each one by pid; leave that off on a shared machine.
 
 charter's website and docs, with the link check and the check that every page in `docs/` is in the
 sidebar, which CI runs on every pull request:

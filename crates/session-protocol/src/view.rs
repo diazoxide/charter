@@ -29,6 +29,27 @@ pub const VIEW: u8 = 0x01;
 const MOST_CHUNK_BYTES: usize = 16 * 1024;
 
 /// How much one view may hold, and when it pauses.
+///
+/// **The defaults were re-measured by SC-16 and kept** (`charter-session-bench`, over a
+/// `charterd.sock`, a client drawing at the window's measured 28 MB/s, ADR 0026; macOS, M-series,
+/// 2026-10-02, three runs each). On the local link:
+///
+/// | high / low | keystroke in a flooding pane | 2 MB burst | keystroke beside ten floods |
+/// |---|---|---|---|
+/// | 16 / 4 KiB | 9.4 ms | 75.8 ms | 0.1 ms |
+/// | 32 / 8 KiB | 9.8 ms | 76.0 ms | 0.1 ms |
+/// | **64 / 16 KiB** | **10.6 ms** | **76.0 ms** | **0.1 ms** |
+/// | 128 / 32 KiB | 12.4 ms | 75.6 ms | 0.1 ms |
+/// | 256 / 64 KiB | 15.5 ms | 75.4 ms | 0.1 ms |
+///
+/// The burst is the client's drawing speed at every size, so a higher watermark buys nothing
+/// locally and costs a keystroke typed into a flooding pane what it adds in flight. A lower one
+/// saves at most 1.2 ms. The queue is the rest of that keystroke's wait: a full 1 MiB queue
+/// measured 36.7 ms, inside L1's 50 ms, where 2 MiB measured 74 ms and 512 KiB 17.4 ms.
+///
+/// **A long link wants more in flight.** At 20 ms round trip, a 2 MB burst took 820 ms at 64 KiB
+/// and 350 ms at 256 KiB, and the flooding pane's keystroke 100 ms against 71 ms. These are the
+/// local link's limits; a remote link sizes its own (#930).
 #[derive(Debug, Clone, Copy)]
 pub struct Limits {
     /// Bytes queued for the view and not yet written. Past it, the view has fallen behind.

@@ -405,7 +405,7 @@ fn a_chat_gets_exactly_the_installed_plugins_a_file_decided_and_the_pins() {
 
 #[test]
 fn every_harness_charter_knows_has_an_adapter_and_says_whether_it_applies() {
-    let words: Vec<&str> = ADAPTERS.iter().map(|it| it.harness()).collect();
+    let words: Vec<&str> = adapters().map(|it| it.harness()).collect();
     assert_eq!(words, ["claude", "opencode", "codex"]);
     assert!(matches!(CLAUDE_CODE.support(), Support::PerChat));
     for adapter in [&CODEX as &dyn Adapter, &OPENCODE] {

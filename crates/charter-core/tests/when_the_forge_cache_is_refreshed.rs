@@ -431,6 +431,9 @@ fn a_refresh_is_spawned_once_and_the_next_trigger_finds_it_in_flight() {
     let Refreshing::Started { pid } = first else {
         panic!("the first trigger did not start a refresh: {first:?}");
     };
+    // The refresh leads a group of its own, detached from this test: killed with it however
+    // the assertions below end (#923).
+    let _ends = stand_in::Ends::group(pid);
     assert!(
         matches!(second, Refreshing::Declined(Decided::CoolingDown { .. })),
         "the second trigger started another refresh: {second:?}"
@@ -454,10 +457,6 @@ fn a_refresh_is_spawned_once_and_the_next_trigger_finds_it_in_flight() {
         ran.trim(),
         format!("gl-refresh alpha|{}", root.display()),
         "the refresh was not keyed to the workspace and the plane it was asked for"
-    );
-    let _ = rustix::process::kill_process(
-        rustix::process::Pid::from_raw(pid as i32).expect("a pid"),
-        rustix::process::Signal::KILL,
     );
 }
 

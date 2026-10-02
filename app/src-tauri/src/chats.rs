@@ -89,6 +89,14 @@ pub struct Open {
     pub from: Option<charter_core::reopen::HandedFrom>,
 }
 
+/// Who an open chat is beyond this launch, and the directory it works in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatAt {
+    /// Its ULID (ADR 0066), `None` only for a chat that has not been given one.
+    pub id: Option<String>,
+    pub cwd: Option<PathBuf>,
+}
+
 /// The most chats one record may start at a launch. The product's scale is fifty (the
 /// spec's limits table); this is only a backstop against a record nobody meant.
 const MOST_AT_ONCE: usize = 200;
@@ -256,6 +264,23 @@ impl Chats {
     /// Says which device this is: the origin device of every chat minted from now on.
     pub fn on_device(&mut self, device: Option<String>) {
         self.device = device;
+    }
+
+    /// This device's id, as [`Self::on_device`] gave it, or `None` where the machine store has
+    /// none. It names the work link log a chat's link goes in (ADR 0088 §3).
+    pub fn device(&self) -> Option<&str> {
+        self.device.as_deref()
+    }
+
+    /// Who the chat in `session` is and where it works, or `None` for a session charter does
+    /// not have open.
+    pub fn chat_at(&self, session: u32) -> Option<ChatAt> {
+        let open = lock(&self.open);
+        let one = open.get(&session)?;
+        Some(ChatAt {
+            id: one.chat.identity.id.clone(),
+            cwd: one.chat.cwd.clone(),
+        })
     }
 
     /// Calls `tell` when a chat that was announced never started after all.

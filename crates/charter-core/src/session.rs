@@ -1234,7 +1234,13 @@ mod tests {
 
     #[test]
     fn dropping_a_session_ends_programs_it_started_even_ones_ignoring_hangup() {
-        let session = sh("trap '' HUP; (trap '' HUP; sleep 600) & echo \"grandchild=$!\"; wait");
+        let session = sh(&format!(
+            "trap '' HUP; (trap '' HUP; sleep {}) & echo \"grandchild=$!\"; wait",
+            stand_in::FIXTURE_LIFETIME_SECS
+        ));
+        // Killed with the test whatever it asserts, so a failure here cannot leave a program
+        // that ignores the hangup running for good (#923).
+        let _ends = stand_in::Ends::group(session.process_id().expect("a pid"));
         let screen = screen_until(&session, shows("grandchild="));
         let grandchild: u32 = screen
             .lines
@@ -1491,9 +1497,10 @@ mod tests {
         // Quitting the app cannot leave a thread to do this: the process is about to go. The
         // program here survives the hangup, so only the kill that follows it can end it — and
         // it says so once it does, because until then a hangup would end it after all.
-        let session = sh("trap '' HUP; echo guarded; while :; do sleep 600; done");
-        screen_until(&session, shows("guarded"));
+        let session = sh(&stand_in::stubborn("HUP", "echo guarded"));
         let pid = session.process_id().expect("a running program has a pid");
+        let _ends = stand_in::Ends::group(pid);
+        screen_until(&session, shows("guarded"));
 
         session.end();
 
@@ -1526,9 +1533,10 @@ mod tests {
     fn a_stopped_session_s_program_is_gone_and_its_last_screen_stays() {
         // The kill switch (OV-1) ends the program and keeps the tab: the chat reads as one
         // whose program ended, with what it last printed still there to read.
-        let session = sh("trap '' HUP; echo guarded; while :; do sleep 600; done");
-        screen_until(&session, shows("guarded"));
+        let session = sh(&stand_in::stubborn("HUP", "echo guarded"));
         let pid = session.process_id().expect("a running program has a pid");
+        let _ends = stand_in::Ends::group(pid);
+        screen_until(&session, shows("guarded"));
 
         session.stopper().stop();
 

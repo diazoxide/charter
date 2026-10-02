@@ -931,6 +931,18 @@ export const commands = {
 	/**  Forget a todo: it goes, and nothing is journalled. */
 	todoForget: (plane: PlaneId, workspace: string, slug: string) => typedError<string, string>(__TAURI_INVOKE("todo_forget", { plane, workspace, slug })),
 	/**
+	 *  Link the chat in `session` to `item`, and answer the item it now works on, read through its
+	 *  aliases.
+	 */
+	chatWorkLink: (plane: PlaneId, session: number, item: string) => typedError<string, string>(__TAURI_INVOKE("chat_work_link", { plane, session, item })),
+	/**
+	 *  End the work link of the chat in `session`, and answer the item it worked on, or `null` when
+	 *  it had none and nothing was written.
+	 */
+	chatWorkUnlink: (plane: PlaneId, session: number) => typedError<string | null, string>(__TAURI_INVOKE("chat_work_unlink", { plane, session })),
+	/**  The work item the chat in `session` works on, read through its aliases, or `null`. */
+	chatWorkItem: (plane: PlaneId, session: number) => typedError<string | null, string>(__TAURI_INVOKE("chat_work_item", { plane, session })),
+	/**
 	 *  One memory, for its tab. `null` is a memory that is not there any more — a tab put back at a
 	 *  launch can name one archived since — which the tab draws as a view whose source has gone.
 	 */
@@ -1377,6 +1389,12 @@ export type ByHand = {
 	 */
 	cwd: string | null,
 };
+
+/**
+ *  What one changed path is part of, as the window's readers divide the plane
+ *  ([`charter_core::planechange::Kind`], which this mirrors for the bindings).
+ */
+export type ChangeKind = "project" | "harness" | "workspace" | "todos" | "memory" | "sessions" | "persona";
 
 /**
  *  Where one change's member list is in a changes view, sent with its blocks
@@ -2527,12 +2545,30 @@ export type PlaneAlerts = {
 	stopped: string | null,
 };
 
+/**  One changed path ([`charter_core::planechange::Change`], mirrored for the bindings). */
+export type PlaneChange = {
+	kind: ChangeKind,
+	/**  The workspace it is in, where it is in one. */
+	workspace: string | null,
+	/**  The persona it belongs to, where it belongs to one (`_shared` for the shared store). */
+	persona: string | null,
+	/**  Relative to the plane root, `/` between its parts. */
+	path: string,
+};
+
 /**
- *  What `plane-changed` carries: which plane moved. Every window filters on it, as it filters
- *  `chat-moved`, because the app holds several planes and emits on the app.
+ *  What `plane-changed` carries: which plane moved, and what moved in it. Every window filters
+ *  on the plane, as it filters `chat-moved`, because the app holds several planes and emits on
+ *  the app.
  */
 export type PlaneChanged = {
 	plane: PlaneId,
+	/**
+	 *  Each changed path and what it is part of, or `null` when what changed is not known —
+	 *  a batch this could not place, or auto-save having committed — and every reader reads
+	 *  again.
+	 */
+	changes: PlaneChange[] | null,
 };
 
 /**

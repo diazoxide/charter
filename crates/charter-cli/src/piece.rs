@@ -78,6 +78,7 @@ pub fn run(here: &Here, command: WorktreeCommand) -> Result<u8, String> {
         session: here.ids.session.clone(),
         persona: here.active_persona(None),
         host: charter_core::dispatch::host(),
+        log: charter_core::dispatch::this_log_name(),
     };
     let mut say = crate::speak;
     let code = match command {

@@ -411,3 +411,48 @@ one day, each from a single slow runner launch (2687 ms, 2537 ms) with medians o
   the worst launch and the ceiling, and names the launch it let through. Its tests are
   `tools/coldstart-gate.test.mjs`, run by the `web` job.
 - **Without `--ceiling`**, `bench.mjs` still holds every launch to the limit, as before.
+
+## ADR 0086, amended for SC-16 (2026-10-02)
+
+**Settled by V62:** *"ADR 0086 is amended for SC-16. The latency gate measures each PR against
+main built in the same job, in alternating rounds, and fails only on a sustained, repeated
+slowdown above 20%. It is evidence only (reported, never gating) until five main runs show a tight
+spread, then it becomes a required check. github-action-benchmark keeps main's history for the
+graphs."*
+
+**Why.** §1's rule held a pull request to the last value main recorded, on another runner. The
+same build on two ubuntu-24.04 runners can differ by more than the 20% the rule draws its line
+at, so one stored value is a coin toss at that line. main built and run in turn in the same job
+shares the runner's speed with the change, and the speed cancels out of their ratio. In SC-16's
+first runs, main against itself in one job came to ratios of 0.997 to 1.031.
+
+**What changes in §1, for the rows the `bench` job holds:**
+
+- **The baseline** is main as it is when the pull request is measured: the merge commit's first
+  parent, built in the job. The change's bench source is built against main's crate and lockfile,
+  so both sides run the same scenarios and only the code under them differs. When main's crate
+  cannot build the change's bench, the row has no baseline and is reported only.
+- **The statistic.** Each run's value is the median of its own samples (200 keystrokes, 40 bursts
+  of 2 MB, 10 of 13 MB). A pass is five rounds, each one run of each build, in alternating order,
+  after one discarded run of each. A row's ratio is the median of its rounds' ratios, the change
+  over main.
+- **"Sustained, repeated":** a row fails only when its ratio is past 1.20, all its rounds but at
+  most one are past 1.20, and a second pass of its own says the same. One pass past it is
+  reported as unconfirmed and passes.
+- **Too noisy to judge:** a row passes, reported as noisy, when main's own rounds, with the
+  slowest and the fastest set aside, spread by more than 20%.
+- **Evidence first.** The job is `continue-on-error` and is not a required check. Once five runs on
+  main show a tight spread, the gate becomes a required check (#932). §1's spread of about 7% is
+  the starting value for "tight".
+- **github-action-benchmark** keeps main's history: each push to main appends the rows' medians to
+  the `benchmarks` branch, and that is the only job with `contents: write`. It no longer decides a
+  pull request.
+
+`tools/latency-gate.mjs` decides and `tools/latency-gate.test.mjs` tests it. `tools/bench.mjs
+--only host --baseline` runs the rounds, and `charter-session-bench`
+(`crates/session-protocol`) measures.
+
+**The rows.** SC-16's job measures L1 and L3 at the session layer: a keystroke under ten flooding
+panes, and 2 MB and 13 MB bursts, over a `charterd.sock` with no window. Their window half (keystroke
+to screen, the burst's longest frame) stays release absolute. L2, M6 and L9's CI relative halves
+go to #931. The other `bench` rows, L7 and L8, stay with FD-5 and SC-20.

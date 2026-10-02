@@ -931,6 +931,15 @@ pub fn device_id(config_root: &Path) -> io::Result<String> {
         .ok_or_else(|| io::Error::other("the machine store kept no device id"))
 }
 
+/// This device's id if one has been minted, and `None` otherwise: never mints one.
+///
+/// For a writer that only names a file by it (FD-25): a hook or a `charter` command must not
+/// write the machine store as a side effect of appending a log line, and the id is minted at
+/// the first launch that finds none (ADR 0066).
+pub fn known_device_id(config_root: &Path) -> Option<String> {
+    read(config_root).store.device.map(|device| device.id)
+}
+
 /// This device's id, from the config home's machine store, minting it the first time: the one
 /// lookup a `charter` command makes for it. Refused, in words, where there is no config home or
 /// the store keeps none.

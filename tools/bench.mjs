@@ -12,6 +12,10 @@
 //                                        # launch on a fresh profile; fails when the median is
 //                                        # past the limit or two launches are past the ceiling
 //                                        # (one past it is reported, not gated)
+//   node tools/bench.mjs --skip-build --only host --baseline <main's charter-session-bench>
+//                                        # CI's latency gate (SC-16): the session layer with no
+//                                        # window, main's build and the change's interleaved;
+//                                        # fails on a sustained regression past 20%
 //
 // Windows open and close on screen while it runs, and each is brought to the front: WebKit
 // draws nothing in a covered window, and nothing at all while the display sleeps (which
@@ -36,6 +40,7 @@ import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 
 import { coldStartGate } from "./coldstart-gate.mjs";
+import { latencyGate } from "./latency-gate.mjs";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const APP = join(ROOT, "app");
@@ -65,6 +70,13 @@ const { values: options } = parseArgs({
     // it pays what a new profile pays — Mesa compiling WebKit's shaders into
     // `~/.cache/mesa_shader_cache`, about half a second — instead of reading the last launch's.
     "fresh-profile": { type: "boolean", default: false },
+    // The session layer's bench (`charter-session-bench`), when it is not this tree's build.
+    "host-bench": { type: "string" },
+    // main's build of the same bench: with it, `host` is the relative gate (SC-16), main's
+    // build and this one run in turn, and a sustained regression past 20% fails the run.
+    baseline: { type: "string" },
+    // Interleaved rounds per pass, each one run of each build.
+    rounds: { type: "string", default: "5" },
   },
 });
 const only = new Set(options.only.split(","));
@@ -103,7 +115,14 @@ const SHIPPED = join(ROOT, "target", "bench", "charter-app-shipped");
 const COLD_START_APP = options.app ? resolve(options.app) : SHIPPED;
 
 if (!options["skip-build"]) {
-  run("cargo", ["build", "--release", "-p", "fake-harness", "-p", "charter-cli"], { cwd: ROOT });
+  run(
+    "cargo",
+    [
+      "build", "--release", "-p", "fake-harness", "-p", "charter-cli",
+      "-p", "charter-session-protocol", "--features", "charter-session-protocol/bench",
+    ],
+    { cwd: ROOT },
+  );
   run("npx", ["tauri", "build", "--no-bundle"], { cwd: APP });
   cpSync(join(RELEASE, "charter-app"), SHIPPED);
   run(
@@ -516,7 +535,87 @@ function windowArm(arm) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// The session layer, with no window: `charter-session-bench` runs a host and a client over a
+// `charterd.sock` of their own and prints each row's median in ms (L1's keystroke under ten
+// flooding panes, L3's 2 MB and 13 MB bursts). With `--baseline`, it is CI's relative gate
+// (SC-16): main's build and this one, in the same job, round after round in alternating
+// order, so the runner's own speed cancels out of the ratio `tools/latency-gate.mjs` judges.
 
+function hostOnce(bench) {
+  const done = spawnSync(bench, ["--corpus", CORPUS], { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] });
+  if (done.status !== 0) throw new Error(`${bench} failed: ${done.status}`);
+  return Object.fromEntries(JSON.parse(done.stdout).map((row) => [row.name, row]));
+}
+
+function hostPass(head, base, rounds) {
+  // One run of each, thrown away: the first run of a binary pays for a cold page cache.
+  hostOnce(base);
+  hostOnce(head);
+  const byRow = {};
+  for (let round = 0; round < rounds; round++) {
+    // Alternating which goes first, so a runner that slows down or speeds up as the job goes
+    // on is not read as one build being slower than the other.
+    const [first, second] = round % 2 ? [head, base] : [base, head];
+    const one = hostOnce(first);
+    const other = hostOnce(second);
+    const [ofHead, ofBase] = round % 2 ? [one, other] : [other, one];
+    for (const [name, row] of Object.entries(ofHead)) {
+      byRow[name] ??= [];
+      if (ofBase[name]) byRow[name].push({ base: ofBase[name].value, head: row.value });
+    }
+  }
+  return byRow;
+}
+
+function hostArm() {
+  const head = options["host-bench"] ? resolve(options["host-bench"]) : join(RELEASE, "charter-session-bench");
+  const rounds = Number(options.rounds);
+  if (!options.baseline) {
+    const runs = Array.from({ length: rounds }, () => hostOnce(head));
+    return {
+      rows: Object.fromEntries(
+        Object.keys(runs[0]).map((name) => {
+          const values = runs.map((run) => run[name].value).sort((a, b) => a - b);
+          return [name, { unit: "ms", value: values[Math.floor(values.length / 2)], runs: values }];
+        }),
+      ),
+    };
+  }
+  const base = resolve(options.baseline);
+  const passes = [hostPass(head, base, rounds)];
+  const judge = () =>
+    Object.fromEntries(
+      Object.keys(passes[0]).map((name) => [name, latencyGate({ passes: passes.map((pass) => pass[name] ?? []) })]),
+    );
+  let verdicts = judge();
+  // A regression is confirmed by a second pass of its own before it fails anything: one pass
+  // can land on a slow minute of the runner's, two in a row past 20% is the change.
+  if (Object.values(verdicts).some((one) => one.verdict === "confirm")) {
+    passes.push(hostPass(head, base, rounds));
+    verdicts = judge();
+  }
+  return { passes, verdicts };
+}
+
+/** The gate's verdicts as a table, for the log and for the job's summary page. */
+function hostTable({ passes, verdicts }) {
+  const lines = [
+    "| row | main (ms) | this change (ms) | ratio, median of rounds | main's own spread | verdict |",
+    "|---|---|---|---|---|---|",
+  ];
+  for (const [name, verdict] of Object.entries(verdicts)) {
+    const last = passes.at(-1)[name] ?? [];
+    const ms = (pick) => last.map((round) => round[pick].toFixed(3)).join(", ") || "—";
+    lines.push(
+      `| ${name} | ${ms("base")} | ${ms("head")} | ${verdict.ratio ?? "—"} | ${verdict.spread ?? "—"} | ${verdict.verdict}${verdict.unconfirmed ? " (one pass past 20%, not confirmed)" : ""} |`,
+    );
+  }
+  return lines.join("\n");
+}
+
+// ---------------------------------------------------------------------------------------------
+
+if (only.has("host")) results.host = hostArm();
 if (only.has("coldstart")) results.coldStart = await coldStart();
 // The same launch with a record to put back: the app starts one program per chat in
 // `setup`, before the window, so reopening lands inside what a person experiences as the
@@ -544,6 +643,33 @@ if (only.has("window")) {
 writeFileSync(join(OUT, "results.json"), `${JSON.stringify(results, null, 2)}\n`);
 console.log(`\n${JSON.stringify(results, null, 2)}\n\nWritten to ${join(OUT, "results.json")}`);
 if (!existsSync(COLD_START_APP) && only.has("coldstart")) console.log("(cold start needs a build first)");
+if (results.host?.rows) {
+  // main's record (ADR 0086 §1): github-action-benchmark's `customSmallerIsBetter` shape.
+  const record = Object.entries(results.host.rows).map(([name, row]) => ({
+    name,
+    unit: row.unit,
+    value: row.value,
+    extra: `median of ${row.runs.length} runs: ${row.runs.map((ms) => ms.toFixed(3)).join(", ")} ms`,
+  }));
+  writeFileSync(join(OUT, "host-bench.json"), `${JSON.stringify(record, null, 2)}\n`);
+  console.log(`\nmain's record: ${join(OUT, "host-bench.json")}`);
+}
+if (results.host?.verdicts) {
+  const table = hostTable(results.host);
+  console.log(`\nthe session layer against main, the same job (SC-16):\n${table}`);
+  if (process.env.GITHUB_STEP_SUMMARY) {
+    writeFileSync(
+      process.env.GITHUB_STEP_SUMMARY,
+      `### Latency against main, measured in this job\n\n${table}\n\n` +
+        "Each cell is one run's median. A row fails only when the median of its rounds' ratios is past " +
+        "1.20, at least all but one round is past it, and a second pass agrees (`tools/latency-gate.mjs`).\n",
+      { flag: "a" },
+    );
+  }
+  const regressed = Object.entries(results.host.verdicts).filter(([, one]) => one.verdict === "regressed");
+  for (const [name, one] of regressed) console.log(`::error::${name} is ${Math.round((one.ratio - 1) * 100)}% slower than main, in two passes`);
+  if (regressed.length > 0) process.exitCode = 1;
+}
 if (options.limit && results.coldStart) {
   // Without a ceiling, every held launch, not the p50: with five launches a p50 lets two of them
   // pass the limit unseen, and a person feels each launch. With one, `coldStartGate` says how.

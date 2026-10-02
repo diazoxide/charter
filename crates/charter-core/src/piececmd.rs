@@ -109,7 +109,7 @@ pub fn add(
     if pieces::record(plane, ws, Event::Claimed, repo, piece, None, who, now).is_none() {
         say(Say::Warn(format!(
             "the piece log could not be written, so this claim is not recorded: {}",
-            shown(plane, &pieces::log_path(plane, ws, &who.host))
+            shown(plane, &pieces::log_path(plane, ws, who.file()))
         )));
     }
     for warning in &added.warnings {

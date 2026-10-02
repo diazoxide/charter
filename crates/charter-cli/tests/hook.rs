@@ -1116,6 +1116,9 @@ fn a_session_starting_where_no_app_is_open_refreshes_the_forge_cache() {
     // be decided. Before this, such a plane's CI column said "nothing has fetched this
     // checkout" for ever.
     let plane = a_plane_with_a_clone();
+    // The refresh the hook starts is detached into a group of its own: killed with the test
+    // by the pid its lock names, however the assertions below end (#923).
+    let _ends = stand_in::Ends::named_in(plane.path().join(charter_core::glrefresh::LOCK));
 
     let code = hook_in(plane.path(), "sessionstart", &[]);
 

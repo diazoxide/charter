@@ -149,6 +149,7 @@ fn a_chat_that_started_is_logged_as_having_claimed_its_branch() {
         session: None,
         persona: None,
         host: "here".into(),
+        log: "here".into(),
     };
     let then = chrono::Utc::now() - chrono::Duration::days(3);
 

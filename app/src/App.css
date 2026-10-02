@@ -1020,6 +1020,23 @@ button.show-more:focus-visible {
   opacity: 0.92;
 }
 
+/* **The work item a chat works on** (V60, ADR 0088): `Work item: <key>`, in the same corner and
+   in the same quiet box as where a handed-off chat came from, for the same reason. Its own class,
+   so the two can part ways without one rule serving both. */
+.pane-work-item {
+  max-width: 24rem;
+  overflow: hidden;
+  padding: 0 0.35rem;
+  font-size: 0.72rem;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-muted);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  opacity: 0.92;
+}
+
 /* **A harness started by hand in a shell tab** (ADR 0062): one line in the pane's top-left
    corner, over the terminal and taking no row, for the gauge's reason — a pane does not change
    height because charter has something to say. Bordered in the waiting colour so it reads as

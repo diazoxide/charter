@@ -779,6 +779,10 @@ impl<T: EventListener> Handler for PaneRules<'_, T> {
         let closing = mode == ALTERNATE_SCREEN && self.screen() != MAIN;
         self.0.unset_private_mode(mode);
         if closing {
+            // The region it had goes with it: opening it again starts with the whole screen,
+            // so nothing can use that region again, and a snapshot of the main screen, which
+            // does not open the alternate one, could not carry it (#910).
+            self.1.scroll_regions[ALTERNATE] = ScrollRegion::whole(self.0.screen_lines());
             self.use_region();
         }
         // Closing the alternate screen restores the cursor in xterm.js, even when it is not

@@ -115,7 +115,7 @@ impl Worker {
                     &poked,
                     &stopping,
                     &mid_turn,
-                    &|| changed(plane.clone()),
+                    &|| changed(plane.clone(), None),
                     &told,
                 );
             });
@@ -720,7 +720,7 @@ mod tests {
         let worker = Worker::start(
             PlaneId::for_tests(dir.path()),
             dir.path().to_path_buf(),
-            Arc::new(|_| {}),
+            Arc::new(|_, _| {}),
             Arc::new(|_, _| {}),
         );
         let held_by_a_chat = worker.poker();
