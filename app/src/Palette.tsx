@@ -140,11 +140,6 @@ export function Palette({
     if (back instanceof HTMLElement && back.isConnected) back.focus();
   }, []);
 
-  /**
-   * Runs a row and leaves if it ran. What Enter does, what a click does, and what the second
-   * `F2` does — one function, so the chord can never become a second implementation of a row
-   * the catalogue already describes.
-   */
   /** Lists only the projects, from a fresh box: what was typed was typed at the other list. */
   const toTheProjects = useCallback(() => {
     setScope("projects");
@@ -163,6 +158,11 @@ export function Palette({
     toTheProjects();
   }, [onOpened, toTheProjects]);
 
+  /**
+   * Runs a row and leaves if it ran. What Enter does, what a click does, and what the second
+   * `F2` does — one function, so the chord can never become a second implementation of a row
+   * the catalogue already describes.
+   */
   const runOffer = useCallback(
     (offer: Offer) => {
       if (!offer.available) {
