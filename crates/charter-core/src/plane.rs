@@ -246,15 +246,50 @@ pub fn state_dir(root: &Path) -> PathBuf {
 }
 
 /// A project clone's key (ADR 0079 §8): the first 16 hex characters of the SHA-256 of the
-/// clone's canonical root path. Canonicalised here, so a root reached through a link keys as
-/// the directory it is; a root that cannot be resolved keys as spelled.
-pub fn clone_key(root: &Path) -> String {
-    use sha2::Digest;
-    let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
-    let digest = sha2::Sha256::digest(root.as_os_str().as_encoded_bytes());
-    let mut key = crate::extension::hex(&digest);
-    key.truncate(16);
-    key
+/// clone's canonical root path, over the path's own bytes (`OsStr::as_encoded_bytes`).
+///
+/// **The one hash of a clone's identity.** The search index keys its directory on it (ADR
+/// 0079), the reopen record says which clone wrote it by it (V43), and a save branch's default
+/// name takes its first six characters ([`crate::planesave::Plane::save_branch_or_default`]),
+/// which is short because it is a branch name a person reads, not because it is another hash.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CloneKey(String);
+
+impl CloneKey {
+    /// The key of the clone at `root`, canonicalised here. A root that cannot be resolved keys
+    /// as spelled.
+    pub fn of(root: &Path) -> Self {
+        let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+        Self::of_canonical(&root)
+    }
+
+    /// The key of `root`, which the caller has already canonicalised.
+    pub fn of_canonical(root: &Path) -> Self {
+        use sha2::Digest;
+        let digest = sha2::Sha256::digest(root.as_os_str().as_encoded_bytes());
+        let mut key = crate::extension::hex(&digest);
+        key.truncate(16);
+        Self(key)
+    }
+
+    /// `word` where it is a key charter would write: 16 lowercase hex characters.
+    pub fn parse(word: &str) -> Option<Self> {
+        let ok = word.len() == 16
+            && word
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+        ok.then(|| Self(word.to_owned()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for CloneKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
 }
 
 /// `root.py:_plane_of`: the plane a found marker really belongs to.

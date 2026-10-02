@@ -24,7 +24,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   directory (`cp -R`, rsync, a backup restore) used to carry its original's chat ids, so the two
   clones' events named one chat. The record now says which clone and device wrote it, and the
   first launch of a copy, at another path or on another machine, gives every chat a new id. A
-  moved project keeps its ids. A copy whose original has been deleted keeps them too (V43,
+  moved project keeps its ids. Opening the project on another machine, or after the machine
+  store is reset, also gives its chats new ids. A copy keeps its ids only when its original has
+  been deleted and was never opened on this machine (V43,
   amending ADR 0066).
 
 - **The supported platforms are written down.** macOS 27 and 26 on Apple silicon, Ubuntu 26.04

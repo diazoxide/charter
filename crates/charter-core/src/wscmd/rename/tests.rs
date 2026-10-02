@@ -148,7 +148,7 @@ fn a_plane() -> Plane {
             ],
             dealt: 2,
             relaunch_after_update: false,
-            clone: None,
+            seat: None,
         },
     )
     .unwrap();

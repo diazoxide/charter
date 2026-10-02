@@ -117,7 +117,7 @@ struct Records {
     /// The clone and the device this app writes the record from (V43), stamped onto every
     /// record it writes, so the next launch can tell whether it is still in this clone, on
     /// this device — or in a copy, or a move ([`reopen::arrive`]).
-    clone: reopen::CloneMark,
+    seat: reopen::Seat,
 }
 
 impl Records {
@@ -136,7 +136,7 @@ impl Records {
             return;
         }
         let record = reopen::Record {
-            clone: Some(self.clone.clone()),
+            seat: Some(self.seat.clone()),
             ..record.clone()
         };
         if let Err(why) = reopen::write(&self.root, &record) {
@@ -149,6 +149,22 @@ impl Records {
             return;
         }
         self.vouch();
+    }
+
+    /// Every project this machine remembers opening (the machine store's recents), which is
+    /// where a launch looks for the clone a copy was made from once the copy's original has
+    /// moved (V43, D-V43x). Every open is remembered before its record is put back, so every
+    /// launch registers its clone here. Empty where there is no store (ADR 0031).
+    fn known(&self) -> Vec<PathBuf> {
+        let Some(config) = self.config.as_deref() else {
+            return Vec::new();
+        };
+        machine::read(config)
+            .store
+            .recents
+            .into_iter()
+            .map(|recent| recent.plane)
+            .collect()
     }
 
     /// Re-fingerprints the plane, because charter itself just changed what opening it would
@@ -370,7 +386,8 @@ impl Held {
         // get ids of their own before any of them starts, and are written with them once
         // they are back, so no two clones ever hold one chat's id.
         let record = record.map(|record| {
-            let (arrival, record) = reopen::arrive(record, &self.records.clone);
+            let (arrival, record) =
+                reopen::arrive(record, &self.records.seat, &self.records.known());
             if arrival == reopen::Arrival::Copied {
                 tracing::info!(
                     "charter: plane {} is a copy of another clone; its chats get new ids",
@@ -1354,7 +1371,7 @@ impl Planes {
             root: root.clone(),
             config: self.config.clone(),
             allowed: AtomicBool::new(false),
-            clone: reopen::CloneMark::of(&root, device.clone()),
+            seat: reopen::Seat::of(&root, device.clone()),
         });
         let writes = Arc::clone(&records);
         let mut chats = Chats::on_host(
@@ -2506,7 +2523,7 @@ mod tests {
             }],
             dealt: 0,
             relaunch_after_update: false,
-            clone: None,
+            seat: None,
         }
     }
 
@@ -2619,7 +2636,7 @@ mod tests {
             root: root.clone(),
             config: Some(config.clone()),
             allowed: AtomicBool::new(true),
-            clone: reopen::CloneMark::of(&root, None),
+            seat: reopen::Seat::of(&root, None),
         };
 
         // A record that appeared behind charter's back is exactly what the question is for.
@@ -2651,7 +2668,7 @@ mod tests {
             root: root.clone(),
             config: Some(config.clone()),
             allowed: AtomicBool::new(true),
-            clone: reopen::CloneMark::of(&root, None),
+            seat: reopen::Seat::of(&root, None),
         };
 
         records.write(&one_chat_on("/bin/true"));
@@ -5625,9 +5642,9 @@ mod tests {
             run: Some(OLD_RUN.to_owned()),
             ..Default::default()
         };
-        record.clone = on_disk(root).clone;
+        record.seat = on_disk(root).seat;
         assert!(
-            record.clone.is_some(),
+            record.seat.is_some(),
             "the app records the clone it writes from"
         );
         reopen::write(root, &record).expect("the record is written");
@@ -5650,8 +5667,8 @@ mod tests {
         let id = back.chats[0].identity.id.clone().expect("an id");
         assert_ne!(id, CHAT_ID, "the copy's chat has an id of its own");
         assert_eq!(
-            back.clone.map(|clone| clone.key),
-            Some(charter_core::plane::clone_key(&copy))
+            back.seat.map(|seat| seat.key),
+            Some(charter_core::plane::CloneKey::of(&copy))
         );
         assert_eq!(
             on_disk(&original).chats[0].identity.id.as_deref(),
@@ -5679,8 +5696,55 @@ mod tests {
         let back = on_disk(&after);
         assert_eq!(back.chats[0].identity.id.as_deref(), Some(CHAT_ID));
         assert_eq!(
-            back.clone.map(|clone| clone.key),
-            Some(charter_core::plane::clone_key(&after))
+            back.seat.map(|seat| seat.key),
+            Some(charter_core::plane::CloneKey::of(&after))
+        );
+    }
+
+    /// Opens `root` as a launch on the machine whose store is `config` does, puts its record
+    /// back, and quits.
+    #[cfg(unix)]
+    fn relaunched_on(config: &Path, root: &Path) {
+        let planes = Planes::telling(
+            Arc::new(|_: Moved| {}),
+            crate::Shipped::default(),
+            Some(config.to_path_buf()),
+        );
+        let plane = planes.open(root);
+        let held = planes.held(&plane).expect("it is held");
+        held.reopen(STARTING, reopen::read_or_refusal(root), Choice::ReopenAll);
+        planes.let_go_of_all();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_copy_whose_original_was_moved_after_it_is_found_through_the_projects_this_machine_opened()
+    {
+        // `cp -R a b; mv a c`: `a` is gone, so only the machine's own list of the projects it
+        // opened can say that `c` still holds the chats `b` carries (V43, D-V43x).
+        let dir = tempfile::tempdir().expect("a directory");
+        let config = dir.path().join("config-home");
+        std::fs::create_dir_all(&config).expect("a config home");
+        let a = a_plane(&dir.path().join("a"));
+        relaunched_on(&config, &a);
+        let mut record = one_chat_on("/bin/cat");
+        record.chats[0].identity.id = Some(CHAT_ID.to_owned());
+        record.seat = on_disk(&a).seat;
+        reopen::write(&a, &record).expect("the record is written");
+        let b = a_plane(&dir.path().join("b"));
+        std::fs::create_dir_all(b.join(".charter/app")).expect("its state directory");
+        std::fs::copy(reopen::path(&a), reopen::path(&b)).expect("copied");
+        let c = dir.path().join("c");
+        std::fs::rename(&a, &c).expect("moved");
+
+        relaunched_on(&config, &c);
+        relaunched_on(&config, &b);
+
+        assert_eq!(on_disk(&c).chats[0].identity.id.as_deref(), Some(CHAT_ID));
+        let copy = on_disk(&b).chats[0].identity.id.clone();
+        assert!(
+            copy.is_some() && copy.as_deref() != Some(CHAT_ID),
+            "the copy kept its original's id: {copy:?}"
         );
     }
 

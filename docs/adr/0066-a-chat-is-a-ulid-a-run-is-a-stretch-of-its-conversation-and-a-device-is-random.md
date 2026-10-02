@@ -32,7 +32,8 @@ it.
 ### A chat is a ULID and its origin device, and the number is what the window calls it
 
 **A chat's id is a [ULID](https://github.com/ulid/spec)**, minted once when the chat is created,
-and never changed. (Once per clone and device since V43: see *ADR 0066, amended*, below.) The **origin device** is recorded beside it: the device id (below) of the
+and never changed. (Once per clone and device since V43: see *ADR 0066, amended*,
+below.) The **origin device** is recorded beside it: the device id (below) of the
 machine that created the chat. The origin device is a fact about the chat, not part of its key.
 80 random bits per millisecond make a collision between two devices negligible, and a key that
 contained a device would carry a stale device once RR-4 moves the chat.
@@ -358,10 +359,11 @@ What changes is that a clone no longer trusts an id it did not mint:
   | The record says | And | It is | The ids |
   |---|---|---|---|
   | no `clone` | | a record from before V43 | kept; `clone` adopts this clone |
-  | another device | | a copy, even at the same path | minted again, on this device |
+  | another device | nothing is read | a copy, even at the same path | minted again, on this device |
   | this clone and device | | the same clone | kept |
-  | another clone-key | the old root's record holds one of these chats' ids | a copy | minted again, on this device |
-  | another clone-key | the old root is gone, or holds none of them | a move | kept; `clone` is rewritten |
+  | another clone-key | its root is this very directory (same device and inode) | the same clone under another path | kept; `clone` takes this spelling |
+  | another clone-key | the old root, or a project this machine remembers opening, holds one of these chats' ids | a copy | minted again, on this device |
+  | another clone-key | no other clone it can reach holds them | a move | kept; `clone` is rewritten |
 
   A device unknown on either side (ADR 0031) decides nothing, and the clone-key does. One shared
   id is enough to call it a copy: the original may have opened or closed other chats since.
@@ -369,11 +371,33 @@ What changes is that a clone no longer trusts an id it did not mint:
   `resumed_from`. Only `id`, `device` and `run` are the original's. `run` is cleared, and the
   start that puts the chat back begins the copy's first run.
 
-**What it cannot tell.** A copy whose original was deleted, or sits on a volume that is not
-mounted, reads as a move and keeps its ids. That is accepted. No live clone holds those ids then,
-so nothing merges from that launch on. Records the original wrote before it went still name
-them, and they name the same chat's history up to the copy, which is true.
+**Implementation note, D-V43x: where a launch looks besides the old root.** After
+`cp -R a b; mv a c`, `a` is gone and only `c` holds the chats `b` carries. So a launch on another
+clone-key also reads the record of every project this machine remembers opening: the machine
+store's recents (`machine.json`, ADR 0069 row 49), which every open adds to before its record is
+put back. That list is the machine-local registry of known clones, so no new store is added and
+no tier row changes. A root that is gone, or is this same directory, is not read. Whichever of
+`b` and `c` launches first keeps the ids, and the other mints new ones.
+
+**What it cannot tell.** A copy whose original is unreachable (deleted, or on a volume that is not
+mounted) **and** is not among the projects this machine remembers (never opened here, forgotten,
+or past the recents bound) reads as a move and keeps its ids. That is accepted: on this machine
+the evidence is gone. Records the original wrote before it went still name those ids.
+
+**What deciding by the device first costs.** V43 names the device id as what catches a same-path
+copy to another machine, so another device always means a copy, and nothing is read to check.
+New ids are therefore also minted when:
+
+- the project moves to another machine;
+- the machine store is reset, which mints a new device id;
+- a different `CHARTER_CONFIG_HOME` opens the same project (a dev or isolated build).
+
+Each of those starts the chats a new history under new ids. None of them merges two.
 
 **What it does not do.** It turns no chat-link writer on. ADR 0088 §7 keeps them off, and this
 amendment only makes the ids they will write trustworthy. It does not bump the record's
 `version`: an absent `clone` reads as a record from before V43, for `pinned`'s reason.
+
+**Why it is amended in place.** V43 changes one sentence of this record's own decision and adds
+no decision of another area, so it is recorded here, where that sentence is read. This record
+already carries its ruling in place (*Ruled (V21)*, above).

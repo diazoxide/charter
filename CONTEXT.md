@@ -205,6 +205,25 @@ store there is syncable or device-bound. **Keyring** is the operating system's c
 A derived store is also marked rebuildable (ADR 0069).
 _Avoid_: app data (for the Machine tier as a whole), cache (for clone state), local state
 
+**Clone-key**:
+A project clone's identity on a machine: the first 16 hex characters of the SHA-256 of the
+clone's canonical root path. It keys the search index (ADR 0079) and the reopen record's
+`clone` (V43), and a save branch's default name takes its first six. A clone's own word for
+itself, never committed, and different in every copy.
+_Avoid_: clone id, plane hash, install id
+
+**Copy** (of a project):
+A second clone made from a project's directory, `.charter/` and all: `cp -R`, rsync, a backup
+restored beside the original, or the same path on another machine. Its first launch finds that
+another clone still holds its chats, or that another device wrote its record, and gives every
+chat a new id (V43). A `git clone` is not a copy in this sense: it carries no `.charter/`.
+_Avoid_: fork (that is a workspace's), duplicate
+
+**Move** (of a project):
+The same clone at a new path on the same machine. Its first launch finds no other clone holding
+its chats, so the chats keep their ids and the record names the new clone-key (V43).
+_Avoid_: rename (that is a workspace's), relocation
+
 ### Runs and devices
 
 **Run**:

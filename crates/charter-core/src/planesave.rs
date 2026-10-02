@@ -56,12 +56,13 @@ impl Plane {
     /// machine's name, as the dispatch log names it ([`crate::dispatch::host`]), and six hex
     /// digits of a hash of the plane's own path. The path is what keeps two clones apart: two
     /// on one machine, or two machines with one name, never share a save branch.
+    ///
+    /// The six digits are the first six of the clone's [`crate::plane::CloneKey`], so one hash
+    /// names a clone everywhere; a branch name is just the shorter spelling of it.
     pub fn save_branch_or_default(&self, root: &std::path::Path) -> String {
-        use sha2::Digest;
         self.save_branch.value.clone().unwrap_or_else(|| {
-            let at = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-            let digest = sha2::Sha256::digest(at.to_string_lossy().as_bytes());
-            let clone: String = digest.iter().take(3).map(|b| format!("{b:02x}")).collect();
+            let key = crate::plane::CloneKey::of(root);
+            let clone = &key.as_str()[..6];
             format!("charter/save/{}-{clone}", crate::dispatch::host())
         })
     }

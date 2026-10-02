@@ -395,11 +395,11 @@ fn section<'a>(text: &'a str, heading: &str) -> &'a str {
     &body[..end]
 }
 
+/// V43 put the clone-key and the device id in `app/reopen.json`. It is still the reopen record
+/// V2 names, which ADR 0069 makes Clone state: the key says which clone it belongs to, and a
+/// copy that carries it is told apart rather than trusted.
 #[test]
 fn the_reopen_record_with_its_clone_key_is_still_clone_state() {
-    // V43 put the clone-key and the device id in `app/reopen.json`. It is still the reopen
-    // record V2 names, which ADR 0069 makes Clone state: the key says which clone it belongs
-    // to, and a copy that carries it is told apart rather than trusted.
     charter_core::unsteered!();
     let doc = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/plane-format.md");
     let text = std::fs::read_to_string(&doc).expect("docs/plane-format.md is readable");
