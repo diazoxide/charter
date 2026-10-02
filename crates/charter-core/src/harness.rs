@@ -11,6 +11,9 @@ pub mod adapter;
 pub mod claude;
 pub mod codex;
 pub mod model;
+pub mod opencode;
+#[cfg(test)]
+pub(crate) mod testing;
 
 pub use adapter::HarnessAdapter;
 pub use claude::SMART_CLOSE_ALLOW;
@@ -313,62 +316,8 @@ impl Harness {
         plugins: &crate::harness_plugin::Chosen,
         sandbox: Option<&crate::sandbox::Applied>,
     ) -> StateHooks {
-        // A sandbox compiled for another harness arms nothing, so the chat is refused rather
-        // than started without it (the app refuses one it is handed, too).
-        if sandbox.is_some_and(|applied| applied.harness() != self) {
-            return StateHooks::None;
-        }
-        match self {
-            // Claude Code is armed by its adapter ([`claude::ADAPTER`]): the bundled plugin,
-            // loaded for this session alone, and the session's own `--settings`.
-            Self::ClaudeCode => claude::ADAPTER.arm(kit, cwd, plugins, sandbox),
-            // Codex is armed by its adapter ([`codex::ADAPTER`]): charter's hooks on its own
-            // `-c hooks.<Event>=…` session flags.
-            Self::Codex => codex::ADAPTER.arm(kit, cwd, plugins, sandbox),
-            // **The bundled shim, loaded for this session alone** ([`crate::opencode`] has the
-            // measurements, opencode 1.18.23). opencode reads a whole config from
-            // `OPENCODE_CONFIG_CONTENT` and concatenates its `plugin` list with every other
-            // config's, so naming the shim there loads it beside whatever the operator loads,
-            // writes nothing, and a project file cannot take it out. It runs the binary the
-            // environment names, as the Claude Code plugin's hooks do. `OPENCODE_PURE=0`
-            // because `1` would load no plugin at all; the flag that does the same is refused
-            // before the chat starts ([`crate::opencode::disarmed_by`]).
-            //
-            // No plugin choice: opencode has no switch that turns one plugin off.
-            //
-            // Its skills are the bundle's, handed to the shim as its option, which adds them to
-            // the skills opencode discovers for this process ([`Self::skills`]).
-            //
-            // It cannot report `SessionEnd`: quitting opencode fires no event and runs no exit
-            // handler in a plugin (measured). The app sees the process end.
-            Self::Opencode => {
-                let Some(shim) = kit
-                    .plugin
-                    .map(|plugin| plugin.join(crate::opencode::SHIM_IN_BUNDLE))
-                    .filter(|shim| shim.is_file())
-                else {
-                    return StateHooks::None;
-                };
-                StateHooks::ThisSessionOnly {
-                    args: Vec::new(),
-                    env: vec![
-                        (
-                            crate::plugin::BINARY_ENV.to_owned(),
-                            kit.binary.display().to_string(),
-                        ),
-                        (
-                            crate::opencode::CONFIG_ENV.to_owned(),
-                            crate::opencode::session_config(
-                                &shim,
-                                kit.plugin.and_then(crate::skills::in_bundle).as_deref(),
-                            ),
-                        ),
-                        (crate::opencode::PURE_ENV.to_owned(), "0".to_owned()),
-                    ],
-                    cannot_report: vec!["sessionend"],
-                }
-            }
-        }
+        // The adapter refuses a sandbox compiled for another harness ([`HarnessAdapter::arm`]).
+        self.adapter().arm(kit, cwd, plugins, sandbox)
     }
 
     /// Why a chat of this harness started with `command` and `env` would run without charter's
@@ -376,22 +325,21 @@ impl Harness {
     /// ([`crate::opencode::disarmed_by`]): Claude Code loads `--plugin-dir` whatever else it is
     /// told, and Codex's session flags are charter's own.
     pub fn disarmed_by(self, command: &[String], env: &[(String, String)]) -> Option<String> {
-        match self {
-            Self::ClaudeCode => claude::ADAPTER.disarmed_by(command, env),
-            Self::Codex => codex::ADAPTER.disarmed_by(command, env),
-            Self::Opencode => crate::opencode::disarmed_by(command, env),
-        }
+        self.adapter().disarmed_by(command, env)
     }
 
     /// What the app arms a chat of this harness with, as `charter doctor` says it.
     pub fn armed_with(self) -> String {
+        self.adapter().armed_with()
+    }
+
+    /// The adapter that arms this harness at level 2 (ADR 0073 §3): the enum is their
+    /// registry, and every harness has one.
+    pub fn adapter(self) -> &'static dyn HarnessAdapter {
         match self {
-            Self::ClaudeCode => claude::ADAPTER.armed_with(),
-            Self::Codex => codex::ADAPTER.armed_with(),
-            Self::Opencode => {
-                "the app arms each opencode chat with charter's opencode plugin, for that chat alone"
-                    .to_owned()
-            }
+            Self::ClaudeCode => &claude::ADAPTER,
+            Self::Codex => &codex::ADAPTER,
+            Self::Opencode => &opencode::ADAPTER,
         }
     }
 
@@ -537,7 +485,7 @@ impl Harness {
 
     /// What the operator calls this harness: `Claude Code`, `Codex`, `opencode`.
     pub fn title(self) -> &'static str {
-        crate::harness_plugin::adapter(self.name()).map_or(self.name(), |a| a.title())
+        self.adapter().plugins().title()
     }
 
     /// What a chat on this harness cannot tell charter, in a sentence the chat shows — or
@@ -572,6 +520,55 @@ fn words<const N: usize>(argv: [&str; N]) -> Vec<String> {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn a_sandbox_compiled_for_one_harness_arms_no_chat_of_any_other() {
+        // ADR 0067, fail closed, for every pair: a chat handed another harness's sandbox
+        // would start without its own. opencode has no compiler, which is a typed answer.
+        let plugin = testing::bundled_plugin();
+        let kit = Kit {
+            binary: std::path::Path::new("/bin/charter"),
+            plugin: Some(&plugin),
+        };
+        let mut pairs = 0;
+        for from in Harness::ALL {
+            let (plane, applied) = testing::sandbox_compiled_for(from);
+            let applied = match applied {
+                Ok(applied) => applied,
+                Err(crate::sandbox::NotStarted::NoCompiler(harness)) => {
+                    assert_eq!((from, harness), (Harness::Opencode, Harness::Opencode));
+                    continue;
+                }
+                Err(other) => panic!("{from:?}: {other}"),
+            };
+            for to in Harness::ALL.into_iter().filter(|to| *to != from) {
+                assert_eq!(
+                    to.adapter()
+                        .arm(kit, Some(plane.path()), &BTreeMap::new(), Some(&applied)),
+                    StateHooks::None,
+                    "{from:?}'s sandbox armed a {to:?} chat"
+                );
+                assert!(
+                    to.adapter()
+                        .sandboxed_line(applied.form(), Vec::new(), Vec::new(), Vec::new())
+                        .is_err(),
+                    "{from:?}'s sandbox gave a {to:?} chat a line"
+                );
+                pairs += 1;
+            }
+        }
+        assert_eq!(
+            pairs, 4,
+            "Claude Code's and Codex's sandboxes, each to the two others"
+        );
+    }
+
+    #[test]
+    fn every_harness_is_armed_by_the_adapter_the_registry_names() {
+        for harness in Harness::ALL {
+            assert_eq!(harness.adapter().harness(), harness);
+        }
+    }
 
     #[test]
     fn every_harness_takes_escape_return_as_a_newline_in_its_input() {
@@ -912,20 +909,8 @@ mod tests {
     /// The whole line of a Codex chat in a sandboxed plane — its hooks, then `charters` — and
     /// the flags its sandbox was compiled to.
     fn sandboxed_codex(charters: &[&str]) -> (Vec<String>, Vec<String>) {
-        let plane = tempfile::tempdir().expect("a plane");
-        std::fs::write(
-            plane.path().join("charter.toml"),
-            "[sandbox]\nmode = \"on\"\n",
-        )
-        .expect("charter.toml");
-        let machine = crate::sandbox::Machine {
-            env: crate::secrets::Env::of(&[]),
-            home: None,
-            os: crate::sandbox::Os::Linux,
-        };
-        let applied = crate::sandbox::for_start(Harness::Codex, plane.path(), &machine, &|_| true)
-            .expect("starts")
-            .expect("sandboxed");
+        let (plane, applied) = testing::sandbox_compiled_for(Harness::Codex);
+        let applied = applied.expect("starts");
         let crate::sandbox::Form::Codex(compiled) = applied.form() else {
             panic!("compiled for Codex");
         };
@@ -1010,21 +995,8 @@ mod tests {
     fn a_sandboxed_claude_code_chat_carries_its_sandbox_in_the_same_settings() {
         // One `--settings`: the sandbox and its deny rules beside the Smart close allow, which
         // stays, because a deny outranks an allow and the two name different things.
-        let plane = tempfile::tempdir().expect("a plane");
-        std::fs::write(
-            plane.path().join("charter.toml"),
-            "[sandbox]\nmode = \"on\"\n",
-        )
-        .expect("charter.toml");
-        let machine = crate::sandbox::Machine {
-            env: crate::secrets::Env::of(&[]),
-            home: None,
-            os: crate::sandbox::Os::Linux,
-        };
-        let applied =
-            crate::sandbox::for_start(Harness::ClaudeCode, plane.path(), &machine, &|_| true)
-                .expect("starts")
-                .expect("sandboxed");
+        let (plane, applied) = testing::sandbox_compiled_for(Harness::ClaudeCode);
+        let applied = applied.expect("starts");
         let crate::sandbox::Form::ClaudeCode(compiled) = applied.form() else {
             panic!("compiled for Claude Code");
         };
@@ -1464,10 +1436,6 @@ mod tests {
     }
 
     /// The plugin the app ships, in the repository: its skills, its shim, its hooks.
-    fn bundled_plugin() -> std::path::PathBuf {
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/src-tauri/plugin")
-    }
-
     fn env_of(hooks: StateHooks) -> BTreeMap<String, String> {
         let StateHooks::ThisSessionOnly { env, .. } = hooks else {
             panic!("armed per session");
@@ -1486,7 +1454,7 @@ mod tests {
 
     #[test]
     fn a_codex_chat_is_started_with_the_skills_its_briefing_lists() {
-        let plugin = bundled_plugin();
+        let plugin = testing::bundled_plugin();
         let env = env_of(Harness::Codex.state_hooks(
             Kit {
                 binary: std::path::Path::new("/bin/charter"),
@@ -1506,7 +1474,7 @@ mod tests {
     fn only_a_harness_that_cannot_load_the_skills_is_briefed_on_them() {
         // Claude Code and opencode discover the skills themselves; a listing on top would
         // tell the model about every skill twice.
-        let plugin = bundled_plugin();
+        let plugin = testing::bundled_plugin();
         let kit = Kit {
             binary: std::path::Path::new("/bin/charter"),
             plugin: Some(&plugin),
@@ -1519,7 +1487,7 @@ mod tests {
 
     #[test]
     fn an_opencode_chat_is_told_the_bundled_skills_through_the_shim() {
-        let plugin = bundled_plugin();
+        let plugin = testing::bundled_plugin();
         let env = env_of(Harness::Opencode.state_hooks(
             Kit {
                 binary: std::path::Path::new("/bin/charter"),

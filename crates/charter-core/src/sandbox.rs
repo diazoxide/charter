@@ -590,15 +590,6 @@ impl Applied {
         &self.form
     }
 
-    /// The settings a Claude Code chat carries it in, or `None` for a harness that carries it
-    /// on its line ([`Self::line`]).
-    pub fn claude_settings(&self) -> Option<&claude::Settings> {
-        match &self.form {
-            Form::ClaudeCode(settings) => Some(settings),
-            Form::Codex(_) => None,
-        }
-    }
-
     /// The chat's whole line under this sandbox — the profile's `command`, then `armed`, the
     /// arguments that arm the harness, then `charters`, charter's own words — or the one
     /// sentence saying why it may not start.
@@ -613,37 +604,9 @@ impl Applied {
         armed: Vec<String>,
         charters: Vec<String>,
     ) -> Result<Vec<String>, String> {
-        let flags = match &self.form {
-            // Not asked of Claude Code's flags yet: its sandbox rides in the `--settings`
-            // charter hands it (in `armed`), which a project's settings cannot loosen
-            // (ADR 0067 §2).
-            Form::ClaudeCode(_) => return Ok([command, armed, charters].concat()),
-            Form::Codex(flags) => flags,
-        };
-        for (words, named, fix) in [
-            (
-                &command,
-                "the profile's command names",
-                "Take it out of the profile's command.",
-            ),
-            (
-                &charters,
-                "the chat's own arguments name",
-                "Start it without that argument.",
-            ),
-        ] {
-            if let Some(flag) = codex::loosened_by(words) {
-                return Err(format!(
-                    "this plane runs every chat sandboxed, and {named} {flag}, which would run \
-                     {} outside the sandbox charter compiled for it, so nothing was started. \
-                     {fix}",
-                    self.harness.title()
-                ));
-            }
-        }
-        let mut charters = charters;
-        let tail = charters.split_off(charters.len() - codex::positional_tail(&charters));
-        Ok([command, armed, charters, flags.args.clone(), tail].concat())
+        self.harness
+            .adapter()
+            .sandboxed_line(&self.form, command, armed, charters)
     }
 }
 
@@ -657,14 +620,11 @@ pub enum Form {
 /// A harness's compiler.
 pub type Compiler = fn(&Compiled) -> Result<Form, Uncompilable>;
 
-/// The compiler for `harness`, or none where charter has not written one yet. **The one match
-/// on the harness**: a harness gains a sandbox by gaining an arm here and a [`Form`] variant.
+/// The compiler for `harness`, or none where charter has not written one yet: its adapter's
+/// ([`crate::harness::HarnessAdapter::sandbox_compiler`]). A harness gains a sandbox by its
+/// adapter gaining a compiler and a [`Form`] variant.
 pub fn compiler(harness: Harness) -> Option<Compiler> {
-    match harness {
-        Harness::ClaudeCode => Some(|compiled| claude::settings(compiled).map(Form::ClaudeCode)),
-        Harness::Codex => Some(|compiled| codex::flags(compiled).map(Form::Codex)),
-        Harness::Opencode => None,
-    }
+    harness.adapter().sandbox_compiler()
 }
 
 /// The indefinite article a sentence puts before `word`.

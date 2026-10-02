@@ -8,8 +8,11 @@
 //! in charter's words ([`crate::state::Event::said`] reads them), what would run it unarmed,
 //! and which of its own plugins it can be handed.
 //!
-//! One adapter per harness, and [`super::Harness`] is their registry: Claude Code's is
-//! [`super::claude::ADAPTER`].
+//! One adapter per harness, and [`super::Harness::adapter`] is their registry:
+//! [`super::claude::ADAPTER`], [`super::codex::ADAPTER`] and [`super::opencode::ADAPTER`]. An
+//! adapter also compiles a plane's sandbox for its harness, where charter has written that
+//! compiler (ADR 0067): [`HarnessAdapter::sandbox_compiler`] and
+//! [`HarnessAdapter::sandboxed_line`].
 
 use super::{Harness, Kit, StateHooks};
 
@@ -55,6 +58,26 @@ pub trait HarnessAdapter: Sync {
         None
     }
 
+    /// This harness's sandbox compiler (ADR 0067), or `None` where charter has not written one
+    /// yet, which refuses every chat of it in a sandboxed plane
+    /// ([`crate::sandbox::NotStarted::NoCompiler`]).
+    fn sandbox_compiler(&self) -> Option<crate::sandbox::Compiler>;
+
+    /// The chat's whole line under `form`, the sandbox [`Self::sandbox_compiler`] compiled: the
+    /// profile's `command`, then `armed` (what [`Self::arm`] gave), then `charters`, charter's
+    /// own words — or the one sentence saying why it may not start. Only
+    /// [`crate::sandbox::Applied::line`] asks, with the form compiled for this harness.
+    ///
+    /// **Fail closed.** A form this adapter did not compile, and a flag in the chat's own words
+    /// that would outrank the sandbox, each refuse the chat.
+    fn sandboxed_line(
+        &self,
+        form: &crate::sandbox::Form,
+        command: Vec<String>,
+        armed: Vec<String>,
+        charters: Vec<String>,
+    ) -> Result<Vec<String>, String>;
+
     /// What the app arms a chat of this harness with, as `charter doctor` says it.
     fn armed_with(&self) -> String;
 
@@ -74,4 +97,13 @@ impl<'a> Sandbox<'a> {
     pub fn applied(self) -> Option<&'a crate::sandbox::Applied> {
         self.0
     }
+}
+
+/// Why a chat handed a sandbox form its adapter did not compile is not started: the sentence
+/// [`HarnessAdapter::sandboxed_line`] refuses it with.
+pub(super) fn not_compiled_for(harness: Harness) -> String {
+    format!(
+        "the sandbox this {} chat was handed was not compiled for it, so nothing was started",
+        harness.title()
+    )
 }
