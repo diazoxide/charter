@@ -118,7 +118,7 @@ describe("what a menu lists", () => {
       },
     );
 
-    expect(shown.above).toEqual(["Merge worktree fix-it into svc"]);
+    expect(shown.above).toEqual(["Browse the files of fix-it", "Merge worktree fix-it into svc"]);
     expect(shown.below).toEqual(["Remove worktree fix-it in svc"]);
   });
 

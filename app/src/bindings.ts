@@ -753,6 +753,10 @@ export const commands = {
 	 *  host. Refused, in the core's words, for a piece git no longer has.
 	 */
 	worktreeDone: (plane: PlaneId, workspace: string, repo: string, piece: string) => typedError<null, string>(__TAURI_INVOKE("worktree_done", { plane, workspace, repo, piece })),
+	/**  The files of a piece, relative to it: what git tracks and what it does not ignore. */
+	pieceFiles: (plane: PlaneId, workspace: string, repo: string, piece: string) => typedError<string[], string>(__TAURI_INVOKE("piece_files", { plane, workspace, repo, piece })),
+	/**  One file of a piece, by its path relative to the piece. Refused for a path that leaves it. */
+	pieceFile: (plane: PlaneId, workspace: string, repo: string, piece: string, path: string) => typedError<PieceFile, string>(__TAURI_INVOKE("piece_file", { plane, workspace, repo, piece, path })),
 	/**  Which channel this machine takes charter from: `stable` or `dev`. */
 	updateChannel: () => __TAURI_INVOKE<string>("update_channel"),
 	/**  Put this machine on a channel. A word charter does not know is refused, not guessed at. */
@@ -2492,6 +2496,15 @@ export type Piece = {
 	 */
 	said: string,
 };
+
+/**  One file of a piece, as the light editor draws it. */
+export type PieceFile = 
+/**  Text, to draw. */
+{ kind: "text"; text: string } | 
+/**  A file git would call binary, by its size in bytes. */
+{ kind: "binary"; bytes: number } | 
+/**  Past the largest file the light editor draws (5 MiB), by its size in bytes. */
+{ kind: "too-large"; bytes: number };
 
 /**  What the plane's pin says against this charter. */
 export type PinReport = {

@@ -551,6 +551,22 @@ describe("the one list of actions", () => {
     expect(hands.calls).toEqual(["removeWorktree:svc/fix-it,true"]);
   });
 
+  it("offers each piece of the focused workspace's files, in the light editor (RC-5)", () => {
+    const cut = { workspace: "alpha", repo: "svc", piece: "fix-it" };
+    const offers = catalogue(now({ plane: "/plane", pieces: [cut] }));
+
+    const files = by(offers, "worktree.files:svc/fix-it");
+    expect(files?.title).toBe("Browse the files of fix-it");
+    expect(files?.does).toEqual({
+      verb: "openView",
+      view: { from: null, view: "piece-files", key: "alpha/svc/fix-it" },
+      title: "Files · fix-it",
+    });
+
+    const planeless = catalogue(now({ plane: undefined, pieces: [cut] }));
+    expect(by(planeless, "worktree.files:svc/fix-it")?.available).toBe(false);
+  });
+
   it("offers to mark each piece of the focused workspace done, above the line", () => {
     // charter#368: a declaration is one line in the piece log. It names its piece, as the
     // merge beside it does, and it is not destructive, so nothing asks first.
@@ -1127,6 +1143,7 @@ describe("carrying out a row", () => {
         "mergeWorktree:svc/fix-it",
         "declareWorktreeDone:svc/fix-it",
         "openView:charter/persona/steward,steward",
+        "openView:charter/piece-files/alpha/svc/fix-it,Files · fix-it",
         "openView:charter/vault/ops,ops",
         "openView:charter/changes/alpha,Changes · alpha",
         // SI-9c: a new memory in each store the window lists, and the shared list.
@@ -1694,8 +1711,9 @@ describe("the palette at fifty chats", () => {
     // the shared store, and the shared list's own row.
     // 481 since GL-1: New branch… in each of the ten clones.
     // 482 since FR-27: Switch project…, one row however many projects the window holds.
+    // 532 since RC-5: Browse the files of each of the 50 pieces.
     // This window has no todos loaded, so no `todo.` rows.
-    expect(offers).toHaveLength(482);
+    expect(offers).toHaveLength(532);
   });
 
   /**

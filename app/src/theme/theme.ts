@@ -124,6 +124,14 @@ export const TOKENS = [
   "danger.text",
   "danger.wash",
 
+  // A diff in the light editor's merge view (RC-5): the wash on a line git reported changed,
+  // on the base side and on the head side, and the stronger mark on the words that changed
+  // inside it. Washes, so the text drawn over them keeps the terminal's own contrast.
+  "diff.deleted",
+  "diff.inserted",
+  "diff.deleted-text",
+  "diff.inserted-text",
+
   // What a chat, or a check on a branch, is doing. `waiting-glow` is the ring around a chat
   // that wants the operator — a colour and not a shadow recipe, so a theme can turn it off by
   // making it transparent.

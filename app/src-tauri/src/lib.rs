@@ -43,6 +43,7 @@ mod opener;
 mod panels;
 mod panics;
 mod personas;
+mod piecefiles;
 mod pin;
 mod planes;
 mod planewatch;
