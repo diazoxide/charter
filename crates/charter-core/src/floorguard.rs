@@ -50,6 +50,7 @@ mod token;
 
 use crate::credguard::git_subcommand;
 use crate::leakguard::{self, CHARTER_PROGS};
+use crate::livesub;
 use crate::shellseg;
 use crate::shellwrap::{self, base_lower};
 
@@ -168,24 +169,28 @@ pub(crate) fn floor(cmd: &str, unattended: bool, depth: usize) -> Option<String>
     let a_shell_reads_stdin = segments
         .iter()
         .any(|toks| shellwrap::reads_script_from_stdin(toks));
-    for toks in &segments {
-        // A string a shell runs is read as the command it is (#866).
-        for inner in shellwrap::shell_string(toks)
-            .into_iter()
-            .chain(shellwrap::here_string_script(toks))
-        {
-            if let Some(said) = inner_floor(&inner) {
+    // A substitution the shell runs, wherever it stands, even inside double quotes, read from
+    // the line as written: the words a substitution's own quotes split are not its body (#866).
+    if livesub::may_substitute(cmd) && livesub::live_substitution(cmd).is_some() {
+        for body in substitution_bodies(cmd) {
+            if let Some(said) = inner_floor(&body) {
                 return Some(said);
             }
         }
-        if a_shell_reads_stdin && !shellwrap::reads_script_from_stdin(toks) {
-            // What this segment could print into that shell: its words as one line, and each
-            // word that is a line of its own.
-            let joined = toks.iter().skip(1).cloned().collect::<Vec<_>>().join(" ");
-            for script in std::iter::once(&joined).chain(toks.iter().filter(|w| w.contains(' '))) {
-                if let Some(said) = inner_floor(script) {
-                    return Some(said);
-                }
+    }
+    for toks in &segments {
+        // A string a shell runs is read as the command it is (#866).
+        let scripts = shellwrap::shell_scripts(toks)
+            .into_iter()
+            .chain(shellwrap::here_string_script(toks));
+        let fed = if a_shell_reads_stdin && !shellwrap::reads_script_from_stdin(toks) {
+            fed_lines(toks)
+        } else {
+            Vec::new()
+        };
+        for inner in scripts.chain(fed) {
+            if let Some(said) = inner_floor(&inner) {
+                return Some(said);
             }
         }
         if let Some(why) = token::keychain_read_reason(toks) {
@@ -289,6 +294,65 @@ pub(crate) fn floor(cmd: &str, unattended: bool, depth: usize) -> Option<String>
         }
     }
     None
+}
+
+/// What a segment could print into a shell reading stdin: its words as one line, with and
+/// without the producer's own leading options (`echo -n`, `printf --`) and, for `printf`, its
+/// format; and each word that is a line of its own.
+fn fed_lines(toks: &[String]) -> Vec<String> {
+    let (prog, _env, argv) = shellwrap::split_env(toks);
+    let words = argv.get(1..).unwrap_or(&[]);
+    let past_options = words
+        .iter()
+        .position(|w| !w.starts_with('-'))
+        .map_or(&[][..], |at| &words[at..]);
+    let mut lines = vec![words.join(" "), past_options.join(" ")];
+    if base_lower(&prog) == "printf" {
+        lines.push(past_options.get(1..).unwrap_or(&[]).join(" "));
+    }
+    lines.extend(words.iter().filter(|w| w.contains(' ')).cloned());
+    lines.dedup();
+    lines
+}
+
+/// The bodies of the outermost command and process substitutions in a line: `$(…)`, `` `…` ``,
+/// `<(…)` and `>(…)`. Quoting is not read, so a substitution in single quotes is read too, which
+/// only ever refuses more; the caller asks only of a line where the shell runs one. Unbalanced, a
+/// body runs to the end of the line. A nested one is found when its body is read in turn.
+fn substitution_bodies(line: &str) -> Vec<String> {
+    let chars: Vec<char> = line.chars().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let opens = matches!(chars[i], '$' | '<' | '>')
+            && chars.get(i + 1) == Some(&'(')
+            && !(chars[i] == '$' && chars.get(i + 2) == Some(&'('));
+        if opens {
+            let mut depth = 1;
+            let mut j = i + 2;
+            while j < chars.len() && depth > 0 {
+                match chars[j] {
+                    '(' => depth += 1,
+                    ')' => depth -= 1,
+                    _ => {}
+                }
+                j += 1;
+            }
+            let end = if depth == 0 { j - 1 } else { j };
+            out.push(chars[i + 2..end].iter().collect());
+            i = j;
+            continue;
+        }
+        if chars[i] == '`' {
+            let close = chars[i + 1..].iter().position(|c| *c == '`');
+            let end = close.map_or(chars.len(), |at| i + 1 + at);
+            out.push(chars[i + 1..end].iter().collect());
+            i = end + 1;
+            continue;
+        }
+        i += 1;
+    }
+    out
 }
 
 #[cfg(test)]

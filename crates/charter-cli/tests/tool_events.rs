@@ -124,6 +124,21 @@ fn a_guard_that_crashed_tells_the_host_it_refused() {
 }
 
 #[test]
+fn a_guard_that_did_not_answer_in_time_tells_the_host_it_refused_for_that_reason() {
+    let slow = format!("{}1{}", "$((".repeat(3000), "))".repeat(3000));
+    let (code, _, heard) = hook_with(
+        "pretooluse",
+        &serde_json::json!({"tool_name": "Bash", "tool_input": {"command": slow}}),
+        &[("CHARTER_TEST_GUARD_DEADLINE_MS", "200")],
+    );
+
+    assert_eq!(code, 2, "a guard out of time refuses");
+    let heard = heard.expect("the host heard the refusal");
+    assert_eq!(heard.decision, Decision::Deny);
+    assert_eq!(heard.rule.as_deref(), Some("guard-unanswered"));
+}
+
+#[test]
 fn a_tool_hook_word_this_binary_does_not_answer_tells_the_host_it_refused() {
     let (code, _, heard) = hook(
         "pretooluse-nonesuch",

@@ -839,25 +839,56 @@ fn is_string_shell(prog: &str) -> bool {
 /// `--` may stand between `-c` and the script, and `-o`/`-O` take a value (#866). The frozen
 /// Python took the word straight after `-c`.
 pub fn shell_string(toks: &[String]) -> Option<String> {
-    let (prog, _env, argv) = split_env(toks);
-    if basename(&prog) == "eval" {
-        return Some(argv.iter().skip(1).cloned().collect::<Vec<_>>().join(" "));
-    }
-    if !is_string_shell(&prog) {
-        return None;
-    }
-    let (dash_c, operand) = shell_options(&argv);
-    if dash_c { operand.cloned() } else { None }
+    shell_scripts(toks).into_iter().next()
 }
 
-/// A shell's long options that take the next word as their value.
-const SHELL_LONG_VALUE: [&str; 2] = ["--rcfile", "--init-file"];
+/// Every script a segment could hand a shell: [`shell_string`]'s, and another where a long
+/// option this reader does not know is taken to consume the next word. A shell's long options
+/// differ by shell and by version, so both readings are kept and a guard asks of each.
+pub fn shell_scripts(toks: &[String]) -> Vec<String> {
+    let (prog, _env, argv) = split_env(toks);
+    if basename(&prog) == "eval" {
+        return vec![argv.iter().skip(1).cloned().collect::<Vec<_>>().join(" ")];
+    }
+    if !is_string_shell(&prog) {
+        return Vec::new();
+    }
+    let mut out: Vec<String> = Vec::new();
+    for unknown_takes_a_value in [false, true] {
+        if let (true, Some(script)) = shell_options(&argv, unknown_takes_a_value)
+            && !out.contains(script)
+        {
+            out.push(script.clone());
+        }
+    }
+    out
+}
+
+/// The long options the shells document as taking the next word as their value.
+const SHELL_LONG_VALUE: [&str; 3] = ["--rcfile", "--init-file", "--emulate"];
+
+/// The long options the shells document as taking no value.
+const SHELL_LONG_SWITCH: [&str; 12] = [
+    "--login",
+    "--norc",
+    "--noprofile",
+    "--posix",
+    "--verbose",
+    "--restricted",
+    "--noediting",
+    "--debugger",
+    "--dump-strings",
+    "--dump-po-strings",
+    "--pretty-print",
+    "--interactive",
+];
 
 /// Past a shell's options: whether `-c` was among them, and the first operand after them.
 ///
 /// A long option that takes a value consumes it, and so does a cluster holding `o` or `O`
-/// (`-o pipefail`, `-euo pipefail`, `-co pipefail`), since that letter takes the next word.
-fn shell_options(argv: &[String]) -> (bool, Option<&String>) {
+/// (`-o pipefail`, `-euo pipefail`, `-co pipefail`), since that letter takes the next word. A
+/// long option in neither list consumes the next word when `unknown_takes_a_value` says so.
+fn shell_options(argv: &[String], unknown_takes_a_value: bool) -> (bool, Option<&String>) {
     let mut dash_c = false;
     let mut i = 1;
     while let Some(a) = argv.get(i) {
@@ -865,8 +896,10 @@ fn shell_options(argv: &[String]) -> (bool, Option<&String>) {
             i += 1;
             break;
         }
-        if SHELL_LONG_VALUE.contains(&a.as_str()) {
-            i += 2;
+        if a.starts_with("--") && !a.contains('=') {
+            let takes = SHELL_LONG_VALUE.contains(&a.as_str())
+                || (unknown_takes_a_value && !SHELL_LONG_SWITCH.contains(&a.as_str()));
+            i += if takes { 2 } else { 1 };
             continue;
         }
         let Some(cluster) = a.strip_prefix(['-', '+']).filter(|c| !c.is_empty()) else {
@@ -889,7 +922,7 @@ pub fn reads_script_from_stdin(toks: &[String]) -> bool {
     if !is_string_shell(&prog) {
         return false;
     }
-    let (dash_c, operand) = shell_options(&argv);
+    let (dash_c, operand) = shell_options(&argv, false);
     !dash_c && (operand.is_none() || argv.iter().any(|a| a == "-s"))
 }
 

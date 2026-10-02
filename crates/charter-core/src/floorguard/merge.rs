@@ -570,10 +570,11 @@ fn is_merge_push_option(opt: &str) -> bool {
     speaks_of_merging(key)
 }
 
-/// The refusal for one push option. Only its key decides: a key the shell fills in cannot be
-/// read, and a value such as a request's title sets nothing.
+/// The refusal for one push option. Its key decides, since a value such as a request's title
+/// sets nothing; a key the shell fills in, or a value a substitution writes, cannot be read.
 fn push_option_reason(opt: &str) -> Option<&'static str> {
-    if opaque(opt.split('=').next().unwrap_or("")) {
+    // A substitution in the value runs a command whose output is the option.
+    if opaque(opt.split('=').next().unwrap_or("")) || opt.contains("$(") || opt.contains('`') {
         Some(UNREADABLE)
     } else if is_merge_push_option(opt) {
         Some(MERGES)

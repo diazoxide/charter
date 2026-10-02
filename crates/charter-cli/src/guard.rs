@@ -159,11 +159,20 @@ const GUARD_STACK: usize = 256 * 1024 * 1024;
 /// How long the guards may take to answer one tool call before it is refused.
 ///
 /// A harness gives a hook a deadline of its own and runs the tool when it passes, so a guard
-/// that is still reading is an allow. This is far below any harness's deadline and far above
-/// anything a real command line costs.
-const GUARD_DEADLINE: Duration = Duration::from_secs(20);
+/// still reading then is an allow. So this is derived from the registry: seven tenths of what is
+/// left of the smallest `PreToolUse` timeout once the payload has had its own deadline to arrive.
+/// `the_guard_deadline_is_always_inside_the_harness_deadline` ties the two together.
+fn guard_deadline() -> Duration {
+    let smallest = charter_core::hookreg::HANDLERS
+        .iter()
+        .filter(|hook| hook.event == "PreToolUse")
+        .map(|hook| hook.timeout)
+        .min()
+        .unwrap_or(1);
+    Duration::from_secs(u64::from(smallest)).saturating_sub(crate::PAYLOAD_DEADLINE) * 7 / 10
+}
 
-/// What sets [`GUARD_DEADLINE`] in milliseconds instead, in a debug build, for the test that
+/// What sets [`guard_deadline`] in milliseconds instead, in a debug build, for the test that
 /// reaches it.
 #[cfg(debug_assertions)]
 const DEADLINE_ON_PURPOSE_ENV: &str = "CHARTER_TEST_GUARD_DEADLINE_MS";
@@ -179,7 +188,7 @@ fn deadline() -> Duration {
     {
         return Duration::from_millis(ms);
     }
-    GUARD_DEADLINE
+    guard_deadline()
 }
 
 /// Runs `judge` on a thread with [`GUARD_STACK`] of stack, and waits at most [`deadline`] for
@@ -223,7 +232,7 @@ fn judged_on_a_deep_stack<T: Send>(judge: impl FnOnce() -> T + Send) -> T {
 ///
 /// Only for a `PreToolUse` word. A crash on a reporting hook must never exit 2, which on `Stop`
 /// would keep a session from ending.
-pub(crate) fn refuse_on_a_crash(tell_the_host: fn(&str)) {
+pub(crate) fn refuse_on_a_crash(tell_the_host: fn(&str, bool)) {
     // The word this process answers, for the host's event log: the call is refused, and one
     // event says so (FD-9).
     // `args_os`, read before anything is installed: `args` panics on a word that is not
@@ -238,7 +247,8 @@ pub(crate) fn refuse_on_a_crash(tell_the_host: fn(&str)) {
             .map(|at| format!(" (at {}:{})", at.file(), at.line()))
             .unwrap_or_default();
         let mut err = std::io::stderr().lock();
-        if info.payload().downcast_ref::<&str>() == Some(&UNANSWERED) {
+        let unanswered = info.payload().downcast_ref::<&str>() == Some(&UNANSWERED);
+        if unanswered {
             let _ = writeln!(
                 err,
                 "charter guard: this tool call is refused because the guard did not answer in \
@@ -253,7 +263,7 @@ pub(crate) fn refuse_on_a_crash(tell_the_host: fn(&str)) {
         }
         let _ = err.flush();
         drop(err);
-        tell_the_host(&word);
+        tell_the_host(&word, unanswered);
         std::process::exit(i32::from(DENY_EXIT));
     }));
 }
@@ -274,4 +284,29 @@ pub(crate) fn deny(verdict: &toolgate::Verdict) -> ExitCode {
     let _ = writeln!(std::io::stderr(), "{}", verdict.said());
     let _ = std::io::stderr().flush();
     ExitCode::from(DENY_EXIT)
+}
+
+#[cfg(test)]
+mod deadline_tests {
+    use super::*;
+
+    /// Whatever the registry says, the guard gives up before any harness does: the payload's
+    /// deadline and the guard's together stay inside every `PreToolUse` hook's timeout.
+    #[test]
+    fn the_guard_deadline_is_always_inside_the_harness_deadline() {
+        assert!(guard_deadline() > Duration::ZERO);
+        for hook in charter_core::hookreg::HANDLERS
+            .iter()
+            .filter(|hook| hook.event == "PreToolUse")
+        {
+            let harness = Duration::from_secs(u64::from(hook.timeout));
+            assert!(
+                crate::PAYLOAD_DEADLINE + guard_deadline() < harness,
+                "{}: {:?} + {:?} >= {harness:?}",
+                hook.name,
+                crate::PAYLOAD_DEADLINE,
+                guard_deadline()
+            );
+        }
+    }
 }

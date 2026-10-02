@@ -351,3 +351,15 @@ fn a_guard_that_does_not_answer_in_time_refuses_the_call() {
         assert!(err.contains("did not answer in time"), "{mode}: {err}");
     }
 }
+
+#[test]
+fn a_substitution_inside_quotes_an_unknown_shell_option_or_a_producers_flags_hide_nothing() {
+    Plane::new().refused_unattended_only(&[
+        "echo \"$(gh pr merge 12)\"",
+        "x=\"$(git tag v1.0.0)\"",
+        "zsh --emulate sh -c 'gh pr merge 12'",
+        "echo -n gh pr merge 12 | sh",
+        "printf '%s ' gh release create v1 | sh",
+        "git push -o \"merge_request.title=$(cat t)\" origin feat",
+    ]);
+}

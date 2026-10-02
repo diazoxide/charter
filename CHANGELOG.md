@@ -308,7 +308,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   watching (`bypassPermissions`), a forge API call to a merge endpoint, a setting that makes a
   pull or merge request merge on its own later (auto-merge, a merge queue or train), an alias
   that stands for a held command or the start of one, and the same commands inside a script a
-  shell runs are refused, as `gh pr merge` already was. A forge API call whose effect on a merge
+  shell runs or a command substitution are refused, as `gh pr merge` already was. A forge API call whose effect on a merge
   charter cannot read is refused too. Reads, opening a request and ordinary pushes are
   unchanged, and attended use is untouched (#866).
 - **An unattended agent cannot print the forge token or read other stored secrets.** The CLIs'
@@ -316,8 +316,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and commands that read the OS keychain or a password store are refused when nobody is
   watching, since a run holding a secret could act where no guard sees it. Attended use is
   untouched (#866).
-- **A guard that cannot answer refuses the call.** The tool-call guards run with a deadline and
-  a deep stack, and the floor bounds how deep it reads a command inside a command, so a line
+- **A guard that cannot answer refuses the call.** The tool-call guards run with a deep stack and
+  a deadline inside the harness's own hook timeout, and the floor bounds how deep it reads a command inside a command, so a line
   built to exhaust them is refused instead of slipping through when the hook dies (#866).
 - **The handoff guard finds a handoff in a shell's script past the shell's options**, including
   options that take a value (#866).

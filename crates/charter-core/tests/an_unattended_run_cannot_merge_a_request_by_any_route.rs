@@ -517,3 +517,51 @@ fn a_command_that_reads_a_stored_secret_is_refused() {
         "secret-tool store --label x service y",
     ]);
 }
+
+#[test]
+fn a_command_substituted_inside_quotes_is_read() {
+    charter_core::unsteered!();
+    refused_unattended_only(&[
+        "echo \"$(gh pr merge 12)\"",
+        "x=\"$(gh pr merge 12)\"",
+        "echo \"`gh pr merge 12`\"",
+        "echo \"$(git tag v1.0.0)\"",
+        "echo \"done: $(gh release create v1)\"",
+        "cat <(gh pr merge 12)",
+        "echo \"$(echo \"$(gh pr merge 12)\")\"",
+    ]);
+    allowed_unattended(&["echo '$(gh pr merge 12)'", "echo \"$(gh pr view 12)\""]);
+}
+
+#[test]
+fn a_shell_option_this_reader_does_not_know_does_not_hide_the_script() {
+    charter_core::unsteered!();
+    refused_unattended_only(&[
+        "zsh --emulate sh -c 'gh pr merge 12'",
+        "bash --some-new-option value -c 'gh pr merge 12'",
+        "bash --some-new-switch -c 'gh pr merge 12'",
+    ]);
+    allowed_unattended(&["zsh --emulate sh -c 'echo hi'"]);
+}
+
+#[test]
+fn a_stdin_producers_own_options_do_not_hide_what_it_feeds() {
+    charter_core::unsteered!();
+    refused_unattended_only(&[
+        "echo -n gh pr merge 12 | sh",
+        "echo -e gh pr merge 12 | sh",
+        "echo -- gh pr merge 12 | sh",
+        "printf '%s ' gh pr merge 12 | sh",
+        "printf -- '%s\\n' gh pr merge 12 | bash",
+    ]);
+    allowed_unattended(&["echo -n hi | sh", "printf '%s ' a b | sh"]);
+}
+
+#[test]
+fn a_substitution_inside_a_push_option_value_is_unreadable() {
+    charter_core::unsteered!();
+    refused_unattended_only(&[
+        "git push -o \"merge_request.title=$(cat t)\" origin feat",
+        "git push -o \"ci.variable=`cat v`\" origin feat",
+    ]);
+}

@@ -333,9 +333,10 @@ pub fn shell_string_handoff(cmd: &str) -> bool {
     };
     let toks = shellseg::split_punctuation(toks);
     heredoc::segments_of(&toks).iter().any(|(seg, _before)| {
-        shell_string(seg).is_some_and(|inner| {
-            is_handoff(&as_the_shell_reads(&inner)) || disguised_handoff(&inner)
-        })
+        let words: Vec<String> = seg.iter().map(|t| t.text.clone()).collect();
+        shellwrap::shell_scripts(&words)
+            .iter()
+            .any(|inner| is_handoff(&as_the_shell_reads(inner)) || disguised_handoff(inner))
     })
 }
 
@@ -1226,6 +1227,8 @@ mod tests {
             "bash --rcfile rc -c 'charter handoff beta <<BRIEF\nx\nBRIEF'",
             "bash -c -- 'charter handoff beta <<BRIEF\nx\nBRIEF'",
             "bash -co pipefail 'charter handoff beta <<BRIEF\nx\nBRIEF'",
+            "zsh --emulate sh -c 'charter handoff beta <<BRIEF\nx\nBRIEF'",
+            "bash --some-new-option value -c 'charter handoff beta <<BRIEF\nx\nBRIEF'",
         ] {
             assert!(shell_string_handoff(cmd), "{cmd}");
         }
