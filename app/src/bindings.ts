@@ -456,6 +456,9 @@ export const commands = {
 	 *  from the sessions. What files one under a workspace is the directory it works in, because
 	 *  nothing on the plane records a chat: `.charter/frame/` belongs to the tmux frame and the
 	 *  app stays out of it.
+	 * 
+	 *  On a blocking thread and never the one that draws: it reads every workspace's todos, and a
+	 *  plane with dozens of workspaces would hold the window while it did (SC-2).
 	 */
 	planeSidebar: (plane: PlaneId) => typedError<Sidebar, string>(__TAURI_INVOKE("plane_sidebar", { plane })),
 	/**
@@ -470,12 +473,14 @@ export const commands = {
 	 *  process's working directory — `plane::resolve`, the singleton ADR 0034 removed — so a
 	 *  window showing a project the launch had not opened drew the workspaces of the one it had.
 	 *  A workspace name means nothing without its project; two projects can both have an `alpha`.
+	 * 
+	 *  On a blocking thread: it reads every todo, memory and session record of the workspace.
 	 */
 	workspacePanels: (plane: PlaneId, workspace: string) => typedError<Panels, string>(__TAURI_INVOKE("workspace_panels", { plane, workspace })),
 	/**
 	 *  The plane root's panels (SI-1, SI-8d): its session records, as the Sessions panel draws them.
 	 *  A command of its own because the plane root is not a workspace, and `workspace_panels` asks
-	 *  for one by name.
+	 *  for one by name. On a blocking thread, as it reads every record.
 	 */
 	planeRootPanels: (plane: PlaneId) => typedError<PlaneRootPanels, string>(__TAURI_INVOKE("plane_root_panels", { plane })),
 	/**

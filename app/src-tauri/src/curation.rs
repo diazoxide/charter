@@ -124,13 +124,17 @@ pub struct Curating {
 // comment, because the generated bindings carry those.
 #[tauri::command]
 #[specta::specta]
-pub fn curation_offers(
+// On a blocking thread: each subject's list is read out of its personas' curation files (SC-2).
+pub async fn curation_offers(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
     subjects: Vec<String>,
 ) -> Result<Curations, String> {
     let root = planes.held(&plane)?.root().to_path_buf();
-    Ok(offers(&root, &subjects))
+    crate::off_the_window("reading the curation actions", move || {
+        Ok(offers(&root, &subjects))
+    })
+    .await
 }
 
 /// Opens a chat for one curation action on one subject, with the action's prompt typed into it

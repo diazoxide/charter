@@ -767,10 +767,17 @@ export function PlaneView({
   // chat is what this window can change about the answer, and `sidebarChanges` because the core
   // says when something else changed it (charter-app#264) — a change of a kind the sidebar
   // reads (FD-10).
+  //
+  // **Only the newest read is drawn.** The core reads the sidebar off the window's thread
+  // (SC-2), so two reads can answer in either order, and one asked before a workspace was
+  // renamed must not put it back after the read that saw the rename. `gone` is set when a
+  // newer read is asked, which is when this effect runs again.
   useEffect(() => {
+    let gone = false;
     void commands
       .planeSidebar(plane)
       .then((answer) => {
+        if (gone) return;
         // Only an `ok` answer WITH a body is used. Both halves are load-bearing: the
         // state updater below runs on the NEXT render, outside this promise, so nothing
         // here catches a throw from it — and an answer whose `data` is absent reads as
@@ -816,7 +823,12 @@ export function PlaneView({
         );
       })
       // A window with no readable plane still runs its panes; the header already says so.
-      .catch(() => setSidebar(undefined));
+      .catch(() => {
+        if (!gone) setSidebar(undefined);
+      });
+    return () => {
+      gone = true;
+    };
   }, [change, sidebarChanges, plane, replan, startedIn, tabs]);
 
   /**
