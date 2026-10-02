@@ -1,5 +1,6 @@
 import { useEffect, useId, useState } from "react";
 import * as RadioGroup from "@radix-ui/react-radio-group";
+import { ApprovalSentence, ProfileMeta } from "./ProfileApproval";
 import {
   commands,
   type FirstTaskRun,
@@ -13,9 +14,6 @@ const RUNS = [1, 2] as const;
 
 /** What each chat is called on the tab: ADR 0072's first-hour words, so "chat" and not "run". */
 const ORDINAL: Record<number, string> = { 1: "First chat", 2: "Second chat" };
-
-/** The harness charter cannot type a prompt into (`Harness::ready_to_type`). */
-const UNTYPED = "opencode";
 
 /** What the plane does for the tab: starts a run and puts its chat's tab on the strip, and
  *  opens a run's diff. */
@@ -47,9 +45,9 @@ export interface FirstTaskDoes {
  * learned, and the second run starts with that lesson in its briefing, whichever harness it is on,
  * because the lesson is kept in the project and not in a harness.
  *
- * A profile whose command is not approved yet shows the command in full and is approved by the
- * press that starts the run — the picker's approval, with the same words in front of the operator
- * (ADR 0022).
+ * A profile whose command is not approved yet is approved by the press that starts the chat, and
+ * only with the picker's own sentence, command and mark in front of the operator
+ * (`ProfileApproval.tsx`): the operator's ruling V69, on ADR 0022.
  */
 export function FirstTaskTab({
   plane,
@@ -179,7 +177,7 @@ export function FirstTaskTab({
                         className="dot"
                         value={one.name}
                         id={`${labelId}-${one.name}`}
-                        disabled={one.kind === UNTYPED}
+                        disabled={!one.ready_to_type}
                         aria-describedby={`${labelId}-${one.name}-says`}
                       >
                         <RadioGroup.Indicator className="dot-mark" />
@@ -187,12 +185,16 @@ export function FirstTaskTab({
                       <label className="who" htmlFor={`${labelId}-${one.name}`}>
                         {one.name}
                       </label>
-                      <span className="meta" id={`${labelId}-${one.name}-says`}>
-                        <span className="what">{profileSays(one)}</span>
-                      </span>
+                      <ProfileMeta row={one} id={`${labelId}-${one.name}-says`}>
+                        {!one.ready_to_type && (
+                          <span className="what">charter cannot type the task into it</span>
+                        )}
+                      </ProfileMeta>
                     </div>
                   ))}
                 </RadioGroup.Root>
+                {/* The picker's own sentence, before the press that approves (V69). */}
+                <ApprovalSentence row={profile} />
                 <div className="doing">
                   <button
                     type="button"
@@ -229,16 +231,10 @@ export function suggested(
   run: number,
   first?: { kind: string; name: string },
 ): string | undefined {
-  const typed = profiles.filter((one) => one.kind !== UNTYPED);
+  const typed = profiles.filter((one) => one.ready_to_type);
   const byDefault = typed.find((one) => one.is_default) ?? typed[0];
   if (run === 1 || first === undefined) return byDefault?.name;
   const other =
     typed.find((one) => one.kind !== first.kind) ?? typed.find((one) => one.name !== first.name);
   return (other ?? byDefault)?.name;
-}
-
-function profileSays(row: ProfileRow): string {
-  if (row.kind === UNTYPED) return "charter cannot type the task into opencode";
-  if (row.approval !== null) return `starting it approves its command: ${row.shown}`;
-  return row.shown;
 }

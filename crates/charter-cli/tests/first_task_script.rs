@@ -56,19 +56,72 @@ fn git(dir: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
-/// A repo nobody has opened in charter: one commit, one README, no remote.
-fn fresh_repo(at: &Path) -> PathBuf {
+/// A repo nobody has opened in charter: one commit holding `files`, no remote.
+fn fresh_repo(at: &Path, files: &[(&str, &str)]) -> PathBuf {
     let repo = at.join("shop");
     std::fs::create_dir_all(&repo).expect("a directory");
     git(&repo, &["init", "-q", "-b", "main", "."]);
-    std::fs::write(repo.join("README.md"), "# shop\n").expect("a README");
+    for (name, text) in files {
+        std::fs::write(repo.join(name), text).expect("a file");
+    }
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-q", "-m", "start"]);
     repo
 }
 
-/// The `charter` binary as a run's chat runs it: in the run's directory, as the persona the
-/// chat was started as, with nothing of this test's own environment.
+/// What a chat's diff command prints, run by a shell in the chat's folder as the guide's shell
+/// tab runs it.
+fn diff_of(tree: &Path, commit: &str) -> String {
+    let command = firsttask::diff_command(commit);
+    let out = Command::new("sh")
+        .arg("-c")
+        .arg(&command)
+        .current_dir(tree)
+        .envs(WHO)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .output()
+        .expect("sh runs");
+    assert!(
+        out.status.success(),
+        "{command}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// A local project made by the first run, with `repo` taken into it, and a branch cut for each
+/// of the task's chats: `(root, clone, [(cut, the commit it was cut from)])`.
+fn first_run_with_two_chats(
+    base: &Path,
+    repo: &Path,
+) -> (PathBuf, PathBuf, Vec<(chatpiece::Cut, String)>) {
+    let root = firstrun::ensure_local_plane(
+        &base.join("config"),
+        ForgeFrom::Named(charter_core::forge::Kind::GitHub),
+    )
+    .expect("a local project");
+    let taken = firstrun::take_in(&root, repo).expect("the repo is taken in");
+    let (workspace, clone) = chatpiece::clone_at(&root, &taken.clone).expect("a clone");
+    let chats = [1, 2]
+        .into_iter()
+        .map(|run| {
+            let cut = chatpiece::cut(
+                &root,
+                &workspace,
+                &clone,
+                &Naming::After(Some(firsttask::label(run))),
+            )
+            .expect("a branch for the chat");
+            let from = firsttask::cut_from(&cut.path).expect("the commit it was cut from");
+            (cut, from)
+        })
+        .collect();
+    (root, taken.clone, chats)
+}
+
+/// The `charter` binary as a chat runs it: in the chat's directory, with nothing of this test's
+/// own environment, so its persona is the project's default.
 fn charter_in_a_run(cwd: &Path, home: &Path, args: &[&str], stdin: &str) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_charter"))
         .args(args)
@@ -78,7 +131,6 @@ fn charter_in_a_run(cwd: &Path, home: &Path, args: &[&str], stdin: &str) -> Outp
         .env("HOME", home)
         .envs(WHO)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("CHARTER_PERSONA", "steward")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -103,31 +155,13 @@ fn the_first_task_runs_twice_on_a_fresh_repo_and_the_second_run_starts_knowing_w
     let base = std::fs::canonicalize(tmp.path()).expect("the directory resolves");
     let home = base.join("home");
     std::fs::create_dir_all(&home).expect("a home");
-    let repo = fresh_repo(&base);
+    let repo = fresh_repo(&base, &[("README.md", "# shop\n")]);
 
-    // The first run (FR-4): a local project nobody was asked about, and the repo in a
-    // workspace of its own.
-    let root = firstrun::ensure_local_plane(
-        &base.join("config"),
-        ForgeFrom::Named(charter_core::forge::Kind::GitHub),
-    )
-    .expect("a local project");
-    let taken = firstrun::take_in(&root, &repo).expect("the repo is taken in");
-    let (workspace, clone) = chatpiece::clone_at(&root, &taken.clone).expect("a clone");
-
-    // Each run's chat on a branch of its own, cut as the app cuts one for a labelled chat.
-    let runs: Vec<chatpiece::Cut> = [1, 2]
-        .into_iter()
-        .map(|run| {
-            chatpiece::cut(
-                &root,
-                &workspace,
-                &clone,
-                &Naming::After(Some(firsttask::label(run))),
-            )
-            .expect("a branch for the run")
-        })
-        .collect();
+    // The first run (FR-4) makes a local project nobody was asked about and takes the repo
+    // into a workspace of its own; each chat is on a branch of its own, cut as the app cuts
+    // one for a labelled chat.
+    let (_root, clone, chats) = first_run_with_two_chats(&base, &repo);
+    let runs: Vec<&chatpiece::Cut> = chats.iter().map(|(cut, _)| cut).collect();
     assert_eq!(
         runs.iter()
             .map(|cut| cut.branch.as_str())
@@ -173,17 +207,20 @@ fn the_first_task_runs_twice_on_a_fresh_repo_and_the_second_run_starts_knowing_w
     )
     .expect("run 2's change");
 
-    // Both diffs open, each showing its own run's change and not the other's.
-    for (cut, own, other) in [
-        (&runs[0], "Run `make test`.", "runs every check"),
-        (&runs[1], "runs every check", "Run `make test`."),
+    // The branch the chats were cut from moves on. Neither chat's diff shows it.
+    std::fs::write(clone.join("UPSTREAM.md"), "moved on\n").expect("an upstream change");
+    git(&clone, &["add", "-A"]);
+    git(&clone, &["commit", "-q", "-m", "upstream"]);
+
+    // Both diffs open, each showing its own chat's change and not the other's.
+    for ((cut, from), own, other) in [
+        (&chats[0], "Run `make test`.", "runs every check"),
+        (&chats[1], "runs every check", "Run `make test`."),
     ] {
-        let command = firsttask::diff_command(&cut.base);
-        let words: Vec<&str> = command.split(' ').collect();
-        assert_eq!(words[0], "git", "{command}");
-        let diff = git(&cut.path, &words[1..]);
+        let diff = diff_of(&cut.path, from);
         assert!(diff.contains(own), "{}: {diff}", cut.branch);
         assert!(!diff.contains(other), "{}: {diff}", cut.branch);
+        assert!(!diff.contains("moved on"), "{}: {diff}", cut.branch);
     }
 
     // And the repo the operator opened was never written to.
@@ -191,4 +228,24 @@ fn the_first_task_runs_twice_on_a_fresh_repo_and_the_second_run_starts_knowing_w
         std::fs::read_to_string(repo.join("README.md")).expect("the README"),
         "# shop\n"
     );
+}
+
+#[test]
+fn a_chat_that_makes_the_readme_a_repo_had_none_of_shows_it_in_its_diff() {
+    let tmp = tempfile::tempdir().expect("a directory");
+    let base = std::fs::canonicalize(tmp.path()).expect("the directory resolves");
+    let repo = fresh_repo(&base, &[("main.go", "package main\n")]);
+    let (_root, _clone, chats) = first_run_with_two_chats(&base, &repo);
+    let (cut, from) = &chats[0];
+
+    // The task says to make a README when there is none: a file git does not track yet.
+    std::fs::write(
+        cut.path.join("README.md"),
+        "# shop\n\n## How to check a change\n\nRun `go test ./...`.\n",
+    )
+    .expect("the chat's new README");
+
+    let diff = diff_of(&cut.path, from);
+    assert!(diff.contains("+++ b/README.md"), "{diff}");
+    assert!(diff.contains("go test ./..."), "{diff}");
 }

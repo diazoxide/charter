@@ -196,6 +196,7 @@ const PROFILES = [
     shown: "claude",
     source: "built-in",
     is_default: true,
+    ready_to_type: true,
     approval: null,
   },
 ];

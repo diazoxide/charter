@@ -17,13 +17,16 @@
 //! - [`prompt`]: the task, typed into each run's chat and never sent (ADR 0061's rule for a
 //!   prompt charter types);
 //! - [`label`]: what each run's chat is called, which names its branch;
-//! - [`diff_command`]: what shows a run's diff, in a shell tab in its branch's folder.
+//! - [`cut_from`] and [`diff_command`]: the commit a chat's branch was cut from, and what shows
+//!   the chat's diff against it, in a shell tab in its branch's folder.
 //!
 //! **The task writes only in the run's own branch.** Each run's chat starts in a piece cut off
 //! the workspace's clone (GL-1), the clone is charter's copy and not the operator's repo
 //! (FR-4), and the prompt asks for nothing to be pushed or published.
 
-use crate::worktree::Base;
+use std::path::Path;
+
+use crate::worktree::git;
 
 /// How many runs the script has: the same task, twice.
 pub const RUNS: u8 = 2;
@@ -53,15 +56,41 @@ pub fn prompt() -> String {
         .to_owned()
 }
 
-/// The command that shows a run's diff: everything its branch changed since the branch it was
-/// cut from, committed or not, run in the run's folder.
+/// The commit the branch in `tree` was cut from: its `HEAD`, asked right after the cut, before
+/// the chat has written anything. A commit and not the branch it came from, so a diff against
+/// it shows only what the chat did, however far that branch has moved since.
+pub fn cut_from(tree: &Path) -> Result<String, String> {
+    let said =
+        git::run(tree, &["rev-parse", "--verify", "HEAD^{commit}"], git::READ).map_err(|why| {
+            format!(
+                "charter could not ask git where {} starts ({why}).",
+                tree.display()
+            )
+        })?;
+    let sha = said.line();
+    if !said.ok() || sha.is_empty() || !sha.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(format!(
+            "git did not say which commit {} starts at: {}",
+            tree.display(),
+            said.err.trim()
+        ));
+    }
+    Ok(sha.to_owned())
+}
+
+/// The command that shows a chat's diff: everything its branch changed since `commit`, the one
+/// [`cut_from`] answered — committed or not, and **files it added that git does not track
+/// yet**, which `git diff` alone leaves out. `git add -N` records only that those files exist
+/// (intent to add), so the diff shows them whole; nothing is staged, and nothing is
+/// committed. Run in the chat's own folder.
 ///
-/// The command is typed into a shell, and a branch name git accepts can still hold `$`, `;` or
-/// a backtick, so the base is quoted as one shell word; the `--` after it keeps it a revision
-/// even when a file of the same name is in the tree.
-pub fn diff_command(base: &Base) -> String {
-    let (Base::Branch(from) | Base::Detached(from)) = base;
-    format!("git diff {} --", crate::shellseg::shell_quote(from))
+/// `commit` is quoted as one shell word all the same: the command is typed into a shell, and
+/// the quoting costs nothing for a commit id.
+pub fn diff_command(commit: &str) -> String {
+    format!(
+        "git add -N -A && git diff {} --",
+        crate::shellseg::shell_quote(commit)
+    )
 }
 
 #[cfg(test)]
@@ -100,22 +129,18 @@ mod tests {
     }
 
     #[test]
-    fn a_runs_diff_is_against_the_branch_or_the_commit_it_was_cut_from() {
+    fn a_chats_diff_is_against_the_commit_it_was_cut_from_and_shows_new_files() {
         assert_eq!(
-            diff_command(&Base::Branch("main".into())),
-            "git diff main --"
-        );
-        assert_eq!(
-            diff_command(&Base::Detached("1a2b3c4".into())),
-            "git diff 1a2b3c4 --"
+            diff_command("1a2b3c4d"),
+            "git add -N -A && git diff 1a2b3c4d --"
         );
     }
 
     #[test]
-    fn a_branch_name_the_shell_would_read_is_one_quoted_word() {
+    fn anything_the_shell_would_read_is_one_quoted_word() {
         assert_eq!(
-            diff_command(&Base::Branch("x$(rm -rf ~);y".into())),
-            "git diff 'x$(rm -rf ~);y' --"
+            diff_command("x$(rm -rf ~);y"),
+            "git add -N -A && git diff 'x$(rm -rf ~);y' --"
         );
     }
 }

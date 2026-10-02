@@ -1,5 +1,6 @@
 import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { wordsOutsideTheFirstHour } from "./firstHour";
 import { cleanup, render as renderBare, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
@@ -49,6 +50,7 @@ const profile = (name: string, kind: string, approval: string | null, isDefault 
   source: "built-in",
   is_default: isDefault,
   approval,
+  ready_to_type: kind !== "opencode",
 });
 
 const START_OPTIONS = {
@@ -81,7 +83,7 @@ function aRun(run: number, harness: string) {
     workspace: "widget",
     branch: `first-task-${run}`,
     folder: `${LOCAL}/workspaces/widget/.worktrees/widget/first-task-${run}`,
-    diff: "git diff main --",
+    diff: "git add -N -A && git diff 1a2b3c4d --",
   };
 }
 
@@ -149,7 +151,7 @@ describe("the first task", () => {
     await person.type(await screen.findByLabelText("Or type the repo's path"), REPO);
     await person.click(screen.getByRole("button", { name: "Open" }));
 
-    await vi.waitFor(() => expect(calls("start_chat")).toHaveLength(1));
+    await waitFor(() => expect(calls("start_chat")).toHaveLength(1));
     const strip = screen.getByRole("tablist", { name: "Tabs" });
     const offer = await within(strip).findByRole("tab", { name: /First task · widget/ });
     // Beside the chat, not in front of it: the chat is what the operator came for.
@@ -167,7 +169,7 @@ describe("the first task", () => {
     await waitFor(() => expect(within(run1).getByRole("radio", { name: "claude" })).toBeChecked());
     await person.click(within(pane).getByRole("button", { name: "Start the first chat" }));
 
-    await vi.waitFor(() => expect(calls("first_task_run")).toHaveLength(1));
+    await waitFor(() => expect(calls("first_task_run")).toHaveLength(1));
     expect(calls("first_task_run")[0].args).toEqual({
       plane: LOCAL,
       cwd: CLONE,
@@ -191,13 +193,19 @@ describe("the first task", () => {
     render(<App />);
     const { person, pane: first, strip } = await openTheFirstTask();
     await person.click(within(first).getByRole("button", { name: "Start the first chat" }));
-    await vi.waitFor(() => expect(calls("first_task_run")).toHaveLength(1));
+    await waitFor(() => expect(calls("first_task_run")).toHaveLength(1));
     const pane = await backToTheTask(person, strip);
 
     const run2 = within(pane).getByRole("radiogroup", { name: "Second chat" });
     expect(within(run2).getByRole("radio", { name: "codex" })).toBeChecked();
-    // The command it approves is in front of the operator before the press.
-    expect(within(run2).getByText(/starting it approves its command: codex/)).toBeInTheDocument();
+    // The picker's own sentence, command and mark are in front of the operator before the press
+    // (V69).
+    const sentence = within(pane).getByRole("alert");
+    expect(sentence).toHaveTextContent(
+      "charter has not run this profile before. It would run: codex",
+    );
+    expect(within(sentence).getByText("codex").tagName).toBe("CODE");
+    expect(within(run2).getByText("new")).toHaveClass("needs-approval");
     // It says what the second run starts knowing.
     expect(
       within(pane).getByText(/lesson the first chat recorded is in its memory/),
@@ -206,7 +214,7 @@ describe("the first task", () => {
       within(pane).getByRole("button", { name: "Approve and start the second chat" }),
     );
 
-    await vi.waitFor(() => expect(calls("first_task_run")).toHaveLength(2));
+    await waitFor(() => expect(calls("first_task_run")).toHaveLength(2));
     expect(calls("approve_profile")[0].args).toEqual({
       plane: LOCAL,
       name: "codex",
@@ -230,13 +238,39 @@ describe("the first task", () => {
     const { pane } = await openTheFirstTask();
     await within(pane).findAllByRole("radio", { name: "codex" });
 
-    // ADR 0072 / V6: none of the words outside the first hour's budget in what the tab says.
-    const own = [...pane.querySelectorAll("p, h2, h3, button")]
-      .map((one) => one.textContent ?? "")
-      .join(" ");
-    expect(own).not.toMatch(
-      /\b(plane|piece|worktree|runs?|harness|profile|mode|curation|change|repository)\b/i,
+    // ADR 0072 §3: the whole pane, but the commands it shows and the picker's approval
+    // sentence, whose words are the operator's ruling (V69).
+    const said = pane.cloneNode(true) as HTMLElement;
+    said.querySelectorAll("code, .approve").forEach((one) => one.remove());
+    expect(wordsOutsideTheFirstHour(said.textContent ?? "")).toEqual([]);
+  });
+
+  it("says when a command changed since it was approved, as the picker does", async () => {
+    core((cmd) =>
+      cmd === "start_options"
+        ? {
+            ...START_OPTIONS,
+            profiles: [
+              profile("claude", "claude", null, true),
+              profile("codex", "codex", "changed"),
+            ],
+          }
+        : undefined,
     );
+    render(<App />);
+    const { pane } = await openTheFirstTask();
+
+    const run1 = within(pane).getByRole("radiogroup", { name: "First chat" });
+    await userEvent.setup().click(within(run1).getByRole("radio", { name: "codex" }));
+
+    const sentence = await within(pane).findByText(/as it now stands/);
+    expect(sentence).toHaveTextContent(
+      "charter has not run this profile as it now stands. It would run: codex",
+    );
+    expect(within(run1).getByText("changed")).toHaveClass("needs-approval");
+    expect(
+      within(pane).getByRole("button", { name: "Approve and start the first chat" }),
+    ).toBeEnabled();
   });
 
   it("never offers a profile charter cannot type the task into", async () => {
@@ -246,9 +280,7 @@ describe("the first task", () => {
 
     const run1 = within(pane).getByRole("radiogroup", { name: "First chat" });
     expect(within(run1).getByRole("radio", { name: "opencode" })).toBeDisabled();
-    expect(
-      within(run1).getByText("charter cannot type the task into opencode"),
-    ).toBeInTheDocument();
+    expect(within(run1).getByText("charter cannot type the task into it")).toBeInTheDocument();
   });
 
   it("shows a run's diff in a shell in its branch's folder", async () => {
@@ -256,18 +288,20 @@ describe("the first task", () => {
     render(<App />);
     const { person, pane: first, strip } = await openTheFirstTask();
     await person.click(within(first).getByRole("button", { name: "Start the first chat" }));
-    await vi.waitFor(() => expect(calls("first_task_run")).toHaveLength(1));
+    await waitFor(() => expect(calls("first_task_run")).toHaveLength(1));
     const pane = await backToTheTask(person, strip);
 
     await person.click(await within(pane).findByRole("button", { name: "Show its diff" }));
 
-    await vi.waitFor(() => expect(calls("send_input")).toHaveLength(1));
+    await waitFor(() => expect(calls("send_input")).toHaveLength(1));
     expect(calls("open_session")[0].args).toMatchObject({
       plane: LOCAL,
       program: null,
       cwd: `${LOCAL}/workspaces/widget/.worktrees/widget/first-task-1`,
     });
-    expect(calls("send_input")[0].args).toMatchObject({ text: "git diff main --\n" });
+    expect(calls("send_input")[0].args).toMatchObject({
+      text: "git add -N -A && git diff 1a2b3c4d --\n",
+    });
   });
 
   it("says in full why a run did not start", async () => {
@@ -281,7 +315,7 @@ describe("the first task", () => {
 
     await person.click(within(pane).getByRole("button", { name: "Start the first chat" }));
 
-    expect(await within(pane).findByRole("alert")).toHaveTextContent(why);
+    expect(await within(pane).findByText(why)).toHaveAttribute("role", "alert");
     expect(within(pane).getByRole("button", { name: "Start the first chat" })).toBeEnabled();
   });
 });

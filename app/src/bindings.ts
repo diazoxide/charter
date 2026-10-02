@@ -2706,6 +2706,12 @@ export type ProfileRow = {
 	 *  runs; absent when charter has already recorded running exactly this.
 	 */
 	approval: string | null,
+	/**
+	 *  Whether charter can type a prompt into a chat on it once its harness has started
+	 *  (`Harness::ready_to_type`): what a surface that types one, such as the first task
+	 *  (FR-28), offers it by.
+	 */
+	ready_to_type: boolean,
 };
 
 /**

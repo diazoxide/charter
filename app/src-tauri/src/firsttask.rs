@@ -70,7 +70,7 @@ pub async fn first_task_run(
         )
     })
     .await
-    .map_err(|why| format!("charter could not start the run: {why}"))?
+    .map_err(|why| format!("charter could not start the chat: {why}"))?
 }
 
 /// [`first_task_run`], against a plane the registry has already vouched for.
@@ -100,7 +100,10 @@ pub fn start(
     let runner = persona.clone();
     let ((started, branch, folder, diff), _said) =
         crate::worktrees::on_a_branch_cut(&root, Some(cwd), Some(&label), true, |dir, cut| {
-            let cut = cut.ok_or("charter cut no branch for the run, so nothing was started.")?;
+            let cut = cut.ok_or("charter cut no branch for the chat, so nothing was started.")?;
+            // Asked before the chat starts, while the branch is still exactly what it was cut
+            // from; a refusal here takes the branch back like any other.
+            let from = firsttask::cut_from(&cut.path)?;
             let started = curation::start_typed(
                 held,
                 ChatTyped {
@@ -118,7 +121,7 @@ pub fn start(
                 started,
                 cut.branch.clone(),
                 cut.path.clone(),
-                firsttask::diff_command(&cut.base),
+                firsttask::diff_command(&from),
             ))
         })?;
     let workspace = charter_core::workspaces::Plane::open(&root)
@@ -244,7 +247,16 @@ mod tests {
         assert_eq!(run.branch, "first-task-1");
         assert_eq!(run.harness.as_deref(), Some("claude"));
         assert_eq!(run.workspace.as_deref(), Some("shop"));
-        assert_eq!(run.diff, "git diff main --");
+        // Against the commit the branch was cut from, not the clone's moving `main`.
+        let head = charter_core::forklock::output(
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&project.clone)
+                .args(["rev-parse", "HEAD"]),
+        )
+        .unwrap();
+        let head = String::from_utf8_lossy(&head.stdout).trim().to_owned();
+        assert_eq!(run.diff, format!("git add -N -A && git diff {head} --"));
         let folder = Path::new(&run.folder);
         assert!(folder.join("README.md").is_file(), "{}", run.folder);
         let opened = held
@@ -296,8 +308,16 @@ mod tests {
                 .root
                 .join("workspaces/shop/.worktrees/shop/first-task-2")
                 .exists(),
-            "the branch was taken back"
+            "the branch's folder was taken back"
         );
+        let branches = charter_core::forklock::output(
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&project.clone)
+                .args(["branch", "--list", "first-task-2"]),
+        )
+        .unwrap();
+        assert!(branches.stdout.is_empty(), "the branch was taken back");
     }
 
     #[test]
