@@ -173,3 +173,90 @@ fn listing_a_piece_runs_no_program_its_repos_config_names() {
         "the fsmonitor the repo's config names ran"
     );
 }
+
+#[test]
+fn an_ignored_file_is_not_offered_and_does_not_open_by_name() {
+    charter_core::unsteered!();
+    // ADR 0084 §2's "what a review can show", and ADR 0052's line: what opens is what the
+    // file list offers. An ignored `.env` holds the kind of value the vault keeps out of the
+    // window.
+    let f = support::plane_with_clone("thing");
+    let piece = cut(&f, "piece");
+    std::fs::write(piece.join(".gitignore"), ".env\n").unwrap();
+    std::fs::write(piece.join(".env"), "API_TOKEN=sk-live-0123456789abcdef\n").unwrap();
+
+    let files = piecefiles::list(&f.plane, &f.ws, &f.repo, "piece").unwrap();
+    let refused = piecefiles::open(&f.plane, &f.ws, &f.repo, "piece", ".env");
+
+    assert!(!files.contains(&".env".to_string()), "{files:?}");
+    let said = refused.expect_err("an ignored file opened").to_string();
+    assert!(said.contains(".env"), "{said}");
+    assert!(
+        !said.contains("sk-live"),
+        "the refusal carries the value: {said}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_link_to_an_ignored_file_does_not_open_it() {
+    charter_core::unsteered!();
+    let f = support::plane_with_clone("thing");
+    let piece = cut(&f, "piece");
+    std::fs::write(piece.join(".gitignore"), ".env\n").unwrap();
+    std::fs::write(piece.join(".env"), "API_TOKEN=sk-live-0123456789abcdef\n").unwrap();
+    std::os::unix::fs::symlink(".env", piece.join("settings.txt")).unwrap();
+
+    let refused = piecefiles::open(&f.plane, &f.ws, &f.repo, "piece", "settings.txt");
+
+    assert!(refused.is_err(), "{refused:?}");
+}
+
+#[test]
+fn a_git_directory_anywhere_in_the_path_is_refused() {
+    charter_core::unsteered!();
+    let f = support::plane_with_clone("thing");
+    let piece = cut(&f, "piece");
+    // A nested repo the worktree does not track: its `.git` is git's, not the branch's.
+    let nested = piece.join("sub");
+    std::fs::create_dir_all(&nested).unwrap();
+    support::git(&nested, &["init", "-q", "."]);
+    std::fs::write(nested.join("note.txt"), "hello\n").unwrap();
+
+    let refused = piecefiles::open(&f.plane, &f.ws, &f.repo, "piece", "sub/.git/config");
+
+    assert!(refused.is_err(), "{refused:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_linked_directory_that_leaves_the_piece_is_refused() {
+    charter_core::unsteered!();
+    let f = support::plane_with_clone("thing");
+    let piece = cut(&f, "piece");
+    let outside = f.plane.join("elsewhere");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join("secret.txt"), "not the piece's\n").unwrap();
+    std::os::unix::fs::symlink(&outside, piece.join("docs")).unwrap();
+
+    let refused = piecefiles::open(&f.plane, &f.ws, &f.repo, "piece", "docs/secret.txt");
+
+    assert!(refused.is_err(), "{refused:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_fifo_is_not_a_file_and_does_not_hang_the_open() {
+    charter_core::unsteered!();
+    let f = support::plane_with_clone("thing");
+    let piece = cut(&f, "piece");
+    let made = charter_core::forklock::output(
+        std::process::Command::new("mkfifo").arg(piece.join("pipe")),
+    )
+    .unwrap();
+    assert!(made.status.success(), "{made:?}");
+
+    let refused = piecefiles::open(&f.plane, &f.ws, &f.repo, "piece", "pipe");
+
+    assert!(refused.is_err(), "{refused:?}");
+}

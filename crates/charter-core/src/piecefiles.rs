@@ -56,6 +56,11 @@ pub enum Refused {
     NotInPiece(String),
     #[error("'{0}' is not in the worktree any more")]
     NotThere(String),
+    #[error(
+        "'{0}' is not one of the worktree's files: the light editor opens what git tracks there \
+         and what it does not ignore"
+    )]
+    NotOffered(String),
     #[error("'{0}' is not a file")]
     NotAFile(String),
     #[error("charter could not read '{what}': {why}")]
@@ -68,9 +73,13 @@ pub enum Refused {
 /// What `git ls-files` answers, which is what a review of the branch can show: an ignored
 /// build output is not offered.
 pub fn list(plane: &Path, ws: &str, repo: &str, piece: &str) -> Result<Vec<String>, Refused> {
-    let folder = folder_of(plane, ws, repo, piece)?;
+    files_in(&folder_of(plane, ws, repo, piece)?, piece)
+}
+
+/// [`list`], for a folder already found.
+fn files_in(folder: &Path, piece: &str) -> Result<Vec<String>, Refused> {
     let listed = git::run(
-        &folder,
+        folder,
         &[
             "--no-optional-locks",
             "ls-files",
@@ -102,9 +111,10 @@ pub fn list(plane: &Path, ws: &str, repo: &str, piece: &str) -> Result<Vec<Strin
 
 /// One file of the piece, by its path relative to the piece.
 ///
-/// Refused when the path is empty, absolute, walks up, names the `.git` entry, or resolves
-/// (through a link) to somewhere outside the piece. A link to another file of the same piece
-/// opens, as `CLAUDE.md` linked to `AGENTS.md` does in many repos.
+/// Only a path [`list`] offers opens, and through a link only a file it offers too. Refused as
+/// well when the path is empty, absolute, walks up, has a `.git` component, or resolves
+/// (through a link) to somewhere outside the piece. A link to another offered file of the same
+/// piece opens, as `CLAUDE.md` linked to `AGENTS.md` does in many repos.
 pub fn open(
     plane: &Path,
     ws: &str,
@@ -114,6 +124,15 @@ pub fn open(
 ) -> Result<Opened, Refused> {
     let folder = folder_of(plane, ws, repo, piece)?;
     let relative = inside(path)?;
+    // **Only what the list offers opens** (ADR 0084 §2, ADR 0052): a file git tracks, or one
+    // it does not track and does not ignore. An ignored `.env`, or a secret materialised into
+    // the worktree, is not something a review shows, and `piece_file` hands the window no
+    // value the vault keeps out of it. One more git call per open.
+    let offered = files_in(&folder, piece)?;
+    let offers = |relative: &Path| offered.binary_search(&slashed(relative)).is_ok();
+    if !offers(relative) {
+        return Err(Refused::NotOffered(path.to_string()));
+    }
     let base = std::fs::canonicalize(&folder).map_err(|e| Refused::Unreadable {
         what: piece.to_string(),
         why: e.to_string(),
@@ -132,6 +151,10 @@ pub fn open(
     };
     if resolved == base || !resolved.starts_with(&base) || names_git(&resolved, &base) {
         return Err(Refused::NotInPiece(path.to_string()));
+    }
+    // A link opens only a file the list offers too: one to an ignored file is refused.
+    if !resolved.strip_prefix(&base).is_ok_and(offers) {
+        return Err(Refused::NotOffered(path.to_string()));
     }
     // The resolved path has no link on it, so the open refuses one planted since.
     let mut file = crate::contain::open_no_link(&base, &resolved).map_err(|e| {
@@ -207,12 +230,23 @@ fn inside(path: &str) -> Result<&Path, Refused> {
     }
 }
 
-/// Whether a resolved path is the piece's `.git` entry or inside it. In a worktree `.git` is a
-/// file naming the clone's git directory, and it is git's, not the branch's.
+/// Whether a resolved path is, or is inside, a `.git` entry at any depth: the worktree's own
+/// (in a worktree `.git` is a file naming the clone's git directory) or a nested repo's. Either
+/// is git's, not the branch's.
 fn names_git(resolved: &Path, base: &Path) -> bool {
     resolved
         .strip_prefix(base)
-        .ok()
-        .and_then(|below| below.components().next())
-        .is_some_and(|first| first.as_os_str() == ".git")
+        .is_ok_and(|below| below.components().any(|step| step.as_os_str() == ".git"))
+}
+
+/// A relative path as git's file list spells it: its plain components joined by `/`.
+fn slashed(relative: &Path) -> String {
+    relative
+        .components()
+        .filter_map(|step| match step {
+            Component::Normal(name) => Some(name.to_string_lossy()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/")
 }
