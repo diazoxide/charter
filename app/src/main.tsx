@@ -1,7 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
-import { traceCommands } from "./prof";
+import { traceCommands, onRender } from "./prof";
 import { commands } from "./bindings";
 traceCommands(commands as unknown as Record<string, unknown>);
 import { attach } from "./bench";
@@ -35,7 +35,9 @@ attach();
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    <App />
+    <React.Profiler id="App" onRender={onRender}>
+      <App />
+    </React.Profiler>
   </React.StrictMode>,
 );
 

@@ -147,13 +147,16 @@ describe(`switching among ${OPEN} open projects`, function () {
   it("brings each one to the front through the switcher, and its chat's pane paints", async () => {
     // In the order they were opened: the one in front is the last one opened, so no switch is
     // ever to the project already there.
-    type Got = { ms: number; t0: number; marks: Record<string, number>; cmds: unknown[] };
+    type Got = { ms: number; t0: number; marks: Record<string, number>; cmds: unknown[]; rows: string[]; lags: string[] };
     const got: Got[] = [];
     const job = async <T,>(plan: Parameters<typeof jobInTheWindow>[0]): Promise<T> => {
       const r = await jobInTheWindow<T>(plan);
       got.push(r as unknown as Got);
       return r;
     };
+    console.log(
+      `PROF launch project sessions ${(await ask<number[]>("running_sessions", { plane: first })).length}, tabs ${await browser.execute(() => document.querySelectorAll('[role="tablist"][aria-label="Tabs"] [role="tab"]').length)}`,
+    );
     const switches = await measureSwitches(planes, ROUNDS, () => PAINTED, job);
     const file = [join(tmpdir(), "charter-ipc-prof.jsonl"), "/tmp/charter-ipc-prof.jsonl"].find(
       (one) => existsSync(one),
@@ -162,7 +165,13 @@ describe(`switching among ${OPEN} open projects`, function () {
       ? readFileSync(file, "utf8")
           .split("\n")
           .filter(Boolean)
-          .map((l) => JSON.parse(l) as { k: string; at: number; ms: number; c?: string; main?: boolean })
+          .flatMap((l) => {
+            try {
+              return [JSON.parse(l) as { k: string; at: number; ms: number; c?: string; main?: boolean }];
+            } catch {
+              return [];
+            }
+          })
       : [];
     console.log(`PROF file ${file} lines ${rust.length}`);
     got.forEach((one, i) => {
@@ -177,7 +186,7 @@ describe(`switching among ${OPEN} open projects`, function () {
       const marks = Object.fromEntries(
         Object.entries(one.marks).map(([k, v]) => [k, Math.round(v - one.t0)]),
       );
-      console.log(`PROF ${JSON.stringify({ i, ms: Math.round(one.ms), marks, js: one.cmds, rust: near })}`);
+      console.log(`PROF ${JSON.stringify({ i, ms: Math.round(one.ms), marks, js: one.cmds, rust: near, rows: one.rows, lags: one.lags })}`);
     });
 
     logLine("project-switch.jsonl", { budgetMs: BUDGET_MS, ...switches });

@@ -19,3 +19,53 @@ export function traceCommands(all: Record<string, unknown>): void {
     };
   }
 }
+
+const epoch = () => performance.timeOrigin + performance.now();
+export const prof = {
+  armed: false,
+  marks: {} as Record<string, number>,
+  rows: [] as { id: string; phase: string; actual: number; start: number; commit: number }[],
+  lags: [] as { at: number; ms: number }[],
+};
+export function mark(name: string): void {
+  if (!prof.armed) return;
+  let k = name;
+  let n = 1;
+  while (k in prof.marks) k = `${name}#${++n}`;
+  prof.marks[k] = epoch();
+}
+export function arm(): void {
+  prof.armed = true;
+  prof.marks = {};
+  prof.rows = [];
+  prof.lags = [];
+  let last = epoch();
+  const tick = () => {
+    if (!prof.armed) return;
+    const now = epoch();
+    if (now - last > 6) prof.lags.push({ at: last, ms: now - last });
+    last = now;
+    setTimeout(tick, 0);
+  };
+  setTimeout(tick, 0);
+}
+export function disarm(): void {
+  prof.armed = false;
+}
+export function onRender(
+  id: string,
+  phase: string,
+  actual: number,
+  _base: number,
+  start: number,
+  commit: number,
+): void {
+  if (prof.armed)
+    prof.rows.push({
+      id,
+      phase,
+      actual,
+      start: performance.timeOrigin + start,
+      commit: performance.timeOrigin + commit,
+    });
+}

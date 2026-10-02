@@ -1,3 +1,4 @@
+import { mark as profMark } from "./prof";
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { Channel } from "@tauri-apps/api/core";
 import { FitAddon } from "@xterm/addon-fit";
@@ -63,6 +64,7 @@ export function SessionPane({
   useEffect(() => {
     const where = holder.current;
     if (!where) return;
+    profMark("paneEffect");
 
     const pane = new Terminal({
       // The machine's terminal text size (charter-app#283), 13px unless the operator changed it.
@@ -106,7 +108,9 @@ export function SessionPane({
       }
       return true;
     });
+    profMark("openStart");
     pane.open(where);
+    profMark("openDone");
     // **The wheel scrolls by the distance moved** (SI-4), in the history and to a program that
     // tracks the mouse alike — not xterm's own answer, which is slow to start (`wheel.ts`).
     const wheeling = scrollByDistance(pane, where);
@@ -185,6 +189,7 @@ export function SessionPane({
     // The pane's own size first: a session nobody is showing keeps whatever size it had.
     void (async () => {
       fit.fit();
+      profMark("watchSent");
       const opened = await commands
         .watchSession(plane, session, output)
         .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
@@ -196,6 +201,7 @@ export function SessionPane({
         void commands.unwatchSession(plane, session, opened.data.view);
         return;
       }
+      profMark("watchBack");
       view = opened.data.view;
       // The core keeps the history; the pane keeps the same, so scrolling back shows what the
       // session has rather than what this terminal happens to have seen.
@@ -206,6 +212,7 @@ export function SessionPane({
       for (const held of waiting.splice(0)) pane.write(held.text, held.written);
       // Now that the screen is drawn, the pane's own size applies again.
       fit.fit();
+      profMark("watchDone");
     })();
 
     return () => {

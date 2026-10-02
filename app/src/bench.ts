@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 import type { Terminal } from "@xterm/xterm";
-import { sent as profSent } from "./prof";
+import { sent as profSent, prof, arm, disarm } from "./prof";
 import { drawWith, type Drawing, type Renderer } from "./renderer";
 import { onAMac } from "./tabKeys";
 
@@ -361,6 +361,7 @@ async function work(plan: Plan): Promise<unknown> {
       profSent.length = 0;
       const marks: Record<string, number> = {};
       profMarks = marks;
+      arm();
       row.click();
       const shown = await until(() =>
         document.querySelector(
@@ -379,7 +380,9 @@ async function work(plan: Plan): Promise<unknown> {
         shownMs: shown - from,
         ms: at - from,
         t0,
-        marks,
+        marks: { ...marks, ...prof.marks },
+        rows: (disarm(), prof.rows.map((r) => `${r.phase[0]}:${Math.round(r.actual)}@${Math.round(r.start - t0)}-${Math.round(r.commit - t0)}`)),
+        lags: prof.lags.map((l) => `${Math.round(l.at - t0)}+${Math.round(l.ms)}`),
         cmds: profSent.map((one) => ({
           c: one.c,
           went: Math.round(one.went - t0),

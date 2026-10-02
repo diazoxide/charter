@@ -14,7 +14,10 @@ pub fn path() -> std::path::PathBuf {
     std::env::temp_dir().join("charter-ipc-prof.jsonl")
 }
 
+static WRITING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub fn line(text: String) {
+    let _held = WRITING.lock();
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
