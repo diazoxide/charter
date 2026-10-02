@@ -61,7 +61,8 @@ on:
 concurrency:
   # No `cancel-in-progress`: a cancelled publish can leave the dev release holding half of one
   # build's assets. Two dev builds queue instead, and the later one's assets win.
-  group: release-${{ github.event.workflow_run.head_branch || github.ref }}
+  # A run started by the nightly ci publishes nothing; it must not displace a pending dev publish.
+  group: release-${{ github.event.workflow_run.event == 'schedule' && 'nightly' || github.event.workflow_run.head_branch || github.ref }}
 
 permissions:
   contents: read
@@ -205,6 +206,12 @@ jobs:
             exit 1
           fi
           { echo "### What $VERSION brought"; echo; echo "$notes"; } >> "$GITHUB_STEP_SUMMARY"
+      # Release prep folds `changes/` into CHANGELOG.md (`docs/updating.md`). A fragment still
+      # there would be missing from the release notes and from About in the build, so it is
+      # refused here too. The runner image's own Node runs it: the script needs nothing else.
+      - name: A stable tag has no changelog fragment left to fold
+        if: steps.plan.outputs.channel == 'stable'
+        run: node tools/changelog-fold.mjs --check
 
       # Everything a publish needs that a human has to provide, checked BEFORE twenty minutes
       # of building, each failure naming the one thing to do. See docs/updating.md.
@@ -321,6 +328,14 @@ jobs:
 
       - run: npm ci
         working-directory: app
+
+      # A dev build is a prerelease of the next version, and About shows `## [Unreleased]` for
+      # it (`about.rs`). What has merged since the last release is in `changes/` until release
+      # prep folds it, so the build folds it into its own copy of CHANGELOG.md before anything
+      # compiles that copy in. Nothing is committed. A stable tag has none left (`plan`).
+      - name: Unreleased changelog fragments, into this build's CHANGELOG.md
+        if: needs.plan.outputs.channel != 'stable'
+        run: node tools/changelog-fold.mjs
 
       - name: What this build is called
         id: names

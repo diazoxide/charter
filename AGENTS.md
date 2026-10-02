@@ -54,6 +54,12 @@ in `diazoxide/charter-plane` as history (ADR 0044). A new decision is the next n
   no arbitrary Tailwind values, and a test fails the build on either.
   `docs/design-system.md` says why.
 
+- **A change people would notice gets a changelog fragment, never a CHANGELOG.md edit.** Add
+  `changes/<slug>.md` with a `### Added` / `### Changed` / `### Fixed` / `### Security` heading
+  and the entry under it, as it will read in CHANGELOG.md (`changes/README.md`). Release prep
+  folds the fragments in with `node tools/changelog-fold.mjs`; editing CHANGELOG.md's
+  `## [Unreleased]` directly makes every open pull request conflict on it.
+
 ## Checks
 
 Run what CI runs before pushing (commands in `README.md`). Clippy runs with `-D warnings`.

@@ -173,11 +173,14 @@ moves.
 
 ## Cutting a stable release
 
-What a release brought is written in `CHANGELOG.md` (Keep a Changelog), under `## [Unreleased]`,
-as it merges. Cutting the release is one PR and one tag:
+What a release brought is written as it merges, one changelog fragment per pull request in
+`changes/` (see `changes/README.md`), and folded into `CHANGELOG.md` (Keep a Changelog) under
+`## [Unreleased]` when the release is prepared. Cutting the release is one PR and one tag:
 
 ```sh
 # 1. one PR, merged:
+#    - `node tools/changelog-fold.mjs`: every fragment in changes/ goes under `## [Unreleased]`,
+#      first under its heading, and is deleted
 #    - CHANGELOG.md: rename `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD`, put an empty
 #      `## [Unreleased]` above it, and point the link references at the bottom at the new
 #      tag (`[Unreleased]: …/compare/vX.Y.Z...HEAD`, `[X.Y.Z]: …/releases/tag/vX.Y.Z`)
@@ -195,13 +198,15 @@ into it. The release page puts **how to install** above it (`.github/release-ins
 tag and version filled in), because the page is where a first install starts. Lead the section
 with a short paragraph saying what the release is, before `### Added`: that paragraph is the
 headline on the release page and in About alike. So the workflow refuses a tag whose version has no section in `CHANGELOG.md`, or an
-empty one, before it builds anything, beside refusing a tag that disagrees with `Cargo.toml`. To
+empty one, or whose `changes/` still holds a fragment nobody folded, before it builds anything,
+beside refusing a tag that disagrees with `Cargo.toml`. To
 see what a tag would publish, run `cargo run -p changelog -- X.Y.Z` on the merged `main`.
 
 Between releases a test (`about.rs`) holds the crate version to the changelog: it has its own
 section, or it is newer than every released version and `## [Unreleased]` is there. A test also
 holds `tauri.conf.json` to `Cargo.toml`. A dev build shows `[Unreleased]` in About, as a dev build
-of the next version; its release note stays the one-line "dev build of <sha>".
+of the next version, with the fragments in `changes/` folded into its copy before it is built
+(nothing is committed); its release note stays the one-line "dev build of <sha>".
 
 ## What a first-time installer sees on macOS
 
