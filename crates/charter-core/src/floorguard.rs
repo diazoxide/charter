@@ -188,7 +188,7 @@ pub(crate) fn floor(cmd: &str, unattended: bool, depth: usize) -> Option<String>
                 }
             }
         }
-        if let Some(why) = token::stored_secret_reason(toks) {
+        if let Some(why) = token::keychain_read_reason(toks) {
             return Some(format!("{fix}{why}"));
         }
         let (prog, env, argv) = shellwrap::split_env(toks);

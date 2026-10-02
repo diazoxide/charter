@@ -62,7 +62,7 @@ pub(super) fn git_reason(base: &str, args: &[String], sub: Option<&str>) -> Opti
 }
 
 /// The sentence a refusal of a command that reads a stored secret ends with.
-const READS_A_SECRET: &str = "This reads a stored secret, and a run that holds it can act \
+const READS_A_STORE: &str = "This reads a stored secret, and a run that holds it can act \
      where no guard sees what it does.";
 
 /// `security` options that take a value, so a cluster ends at one.
@@ -78,7 +78,7 @@ const PASS_QUIET: &[&str] = &[
 /// The refusal for a command that reads a secret from the operating system's or a password
 /// manager's store: the macOS keychain asked for a password or dumped, the freedesktop secret
 /// service looked up, or a `pass`/`gopass` entry shown (#866).
-pub(super) fn stored_secret_reason(toks: &[String]) -> Option<&'static str> {
+pub(super) fn keychain_read_reason(toks: &[String]) -> Option<&'static str> {
     let (prog, _env, argv) = crate::shellwrap::split_env(toks);
     let base = crate::shellwrap::base_lower(&prog);
     let args = argv.get(1..).unwrap_or(&[]);
@@ -104,5 +104,5 @@ pub(super) fn stored_secret_reason(toks: &[String]) -> Option<&'static str> {
         "pass" | "gopass" => first.is_some_and(|w| !PASS_QUIET.contains(&w)),
         _ => false,
     };
-    reads.then_some(READS_A_SECRET)
+    reads.then_some(READS_A_STORE)
 }
