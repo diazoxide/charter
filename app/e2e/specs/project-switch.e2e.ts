@@ -189,6 +189,25 @@ describe(`switching among ${OPEN} open projects`, function () {
       console.log(`PROF ${JSON.stringify({ i, ms: Math.round(one.ms), marks, js: one.cmds, rust: near, rows: one.rows, lags: one.lags })}`);
     });
 
+    const arms: [string, string][] = [
+      ["explorer hidden", "nav.explorer { display: none !important; }"],
+      ["explorer rows content-visibility", ".explorer li { content-visibility: auto; contain-intrinsic-size: auto 22px; }"],
+      ["explorer contain strict", "nav.explorer { contain: strict; }"],
+      ["again normal", ""],
+    ];
+    for (const [name, css] of arms) {
+      await browser.execute((text: string) => {
+        document.getElementById("prof-arm")?.remove();
+        const el = document.createElement("style");
+        el.id = "prof-arm";
+        el.textContent = text;
+        document.head.append(el);
+      }, css);
+      const arm = await measureSwitches(planes, ROUNDS, () => PAINTED, jobInTheWindow);
+      const launch = [0, 10, 20].map((i) => Math.round(arm.samples_ms[i]));
+      console.log(`PROF arm ${name}: p50 ${Math.round(arm.p50)} p95 ${Math.round(arm.p95)} launch ${launch.join(",")}`);
+    }
+    await browser.execute(() => document.getElementById("prof-arm")?.remove());
     for (const plane of [planes[1], first]) {
       await job({ kind: "project switch", plane, sentinel: PAINTED });
       const census = await browser.execute(() => {
