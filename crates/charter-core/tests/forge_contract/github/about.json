@@ -1,0 +1,21 @@
+{
+  "source": "GitHub REST API version 2022-11-28, docs.github.com/en/rest, repos: Get a repository (visibility, has_issues, permissions)",
+  "exchanges": [
+    {
+      "call": {
+        "endpoint": {
+          "rest": {
+            "method": null,
+            "path": "repos/acme/api"
+          }
+        },
+        "fields": []
+      },
+      "reply": {
+        "code": 0,
+        "out": "{\"id\": 7, \"full_name\": \"acme/api\", \"private\": true, \"visibility\": \"private\", \"has_issues\": true, \"permissions\": {\"admin\": false, \"maintain\": false, \"push\": true, \"triage\": true, \"pull\": true}}",
+        "err": ""
+      }
+    }
+  ]
+}

@@ -858,11 +858,12 @@ pub const MERGE_RULES_END: &str = "# <<< charter merge rules <<<";
 
 /// The files a plane only ever grows by whole lines, merged by git's `union` driver so two
 /// machines appending to them never conflict (`docs/plane-format.md`, `.gitattributes`).
-const MERGE_RULES: [&str; 6] = [
+const MERGE_RULES: [&str; 7] = [
     "personas/_dispatch/*.jsonl merge=union",
     "personas/_skills/*.jsonl merge=union",
     "workspaces/*/pieces/*.jsonl merge=union",
     "workspaces/*/changes/log/*.jsonl merge=union",
+    "workspaces/*/work/*.jsonl merge=union",
     "personas/*/memory/MEMORY.md merge=union",
     "workspaces/*/memory/MEMORY.md merge=union",
 ];

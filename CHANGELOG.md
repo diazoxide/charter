@@ -13,6 +13,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Promote a todo to an issue.** `charter ws todo promote <slug> --repo <repo>` opens an issue
+  with the todo's title and text in one of the workspace's repos, on GitHub or GitLab, as you.
+  It names the repo and whether it is public before it sends anything, and refuses a repo that
+  takes no issue from your account. The todo is then closed, journalled as `Promoted todo:
+  <title> → <issue>`, and an alias in the workspace's new work link log
+  (`workspaces/<ws>/work/<device>.jsonl`, committed with a LIVE workspace) makes every link on
+  the todo reach the issue. The Work list shows the issue once, not the issue and the todo
+  (ADR 0088, FW-5, #732).
+
 - **The changes view pushes a change and lands a member, and asks first.** Each change in the
   changes tab has a **Push** button, and each member row a **Land** button. Push names every
   repo, branch, commit and destination, and where each pull request or merge request goes, before

@@ -231,6 +231,87 @@ pub trait Repos {
         repo: &RepoRecord,
         git_ref: Option<&str>,
     ) -> Result<Vec<String>, ForgeError>;
+
+    /// Whether the repo at `path` is public, and whether this account can open an issue there
+    /// (FI14). Read before anything is sent to it: `charter ws todo promote` names both first
+    /// (ADR 0088 §5). Strict.
+    fn about(&self, caller: &Caller, path: &str) -> Result<About, ForgeError>;
+}
+
+/// What [`Repos::about`] answers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct About {
+    pub visibility: Visibility,
+    pub issues: Issues,
+}
+
+/// Who can read a repo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Visibility {
+    /// Everyone.
+    Public,
+    /// Everyone signed in to the instance: GitLab's `internal`, GitHub Enterprise's.
+    Internal,
+    /// Only those given access.
+    Private,
+}
+
+impl Visibility {
+    /// The forge's own word for it.
+    pub fn word(self) -> &'static str {
+        match self {
+            Visibility::Public => "public",
+            Visibility::Internal => "internal",
+            Visibility::Private => "private",
+        }
+    }
+
+    /// Read off a forge's `visibility` field. A word charter does not know is `None`, never a
+    /// guess: a promote must not tell the operator a repo is private when it is not.
+    pub fn parse(word: &str) -> Option<Visibility> {
+        [
+            Visibility::Public,
+            Visibility::Internal,
+            Visibility::Private,
+        ]
+        .into_iter()
+        .find(|v| v.word() == word)
+    }
+}
+
+/// Whether this account can open an issue in a repo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Issues {
+    /// It can.
+    Open,
+    /// The repo has its issues turned off.
+    Off,
+    /// The repo takes issues, but not from this account.
+    NoRight,
+}
+
+/// Work items: issues, epics and the rest of FI4 (ADR 0070 §1, ADR 0088 §6). FW-5 brings the
+/// area with its first method; FW-6a and FW-6b map the rest of the neutral model onto it.
+pub trait WorkItems {
+    /// Open an issue in the repo at `path`, as `caller`. The answer names it by its tracker key,
+    /// with the forge's own id beside it. Strict.
+    fn create(
+        &self,
+        caller: &Caller,
+        path: &str,
+        new: &NewWorkItem,
+    ) -> Result<crate::work::WorkItem, ForgeError>;
+}
+
+/// A new issue, in the neutral model.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NewWorkItem {
+    pub title: String,
+    pub body: String,
+    /// The workspace whose FI6 layer-2 label the issue carries, when that label is on for the
+    /// repo. Each forge spells it: `ws:<name>` on GitHub, the scoped `charter::ws::<name>` on
+    /// GitLab.
+    pub workspace_label: Option<String>,
 }
 
 /// Pull requests, merge requests on GitLab: opening, reading, merging and their checks.
@@ -516,9 +597,9 @@ pub enum Fallback {
 }
 
 /// Everything a forge backend answers. It grows as each area lands (ADR 0070 §1).
-pub trait ForgeBackend: Repos + Requests + Capabilities + Send + Sync {}
+pub trait ForgeBackend: Repos + Requests + Capabilities + WorkItems + Send + Sync {}
 
-impl<T: Repos + Requests + Capabilities + Send + Sync> ForgeBackend for T {}
+impl<T: Repos + Requests + Capabilities + WorkItems + Send + Sync> ForgeBackend for T {}
 
 impl Forge {
     /// This forge's backend, over the transport every call takes today: its CLI.

@@ -131,7 +131,9 @@ fn live_line(line: &str) -> Option<String> {
 /// `…/memory` alone re-includes the directory entry and none of the files inside it.
 ///
 /// `sessions` is the workspace's session records (ADR 0064): they follow the workspace, LIVE
-/// or LOCAL, like its memory and todos.
+/// or LOCAL, like its memory and todos. So does `work`, the work link log (ADR 0088 §3): unlike
+/// the piece claim log and the landing log, it records links that must reach the operator's
+/// other devices.
 ///
 /// `changes` needs the pair **and a third line that re-ignores `changes/log`**, and that
 /// asymmetry is the design of the store rather than an exception to it: a change record holds
@@ -152,6 +154,8 @@ pub fn live_block<'a>(names: impl IntoIterator<Item = &'a str>) -> String {
             format!("!/workspaces/{n}/memory/**"),
             format!("!/workspaces/{n}/todos"),
             format!("!/workspaces/{n}/todos/**"),
+            format!("!/workspaces/{n}/work"),
+            format!("!/workspaces/{n}/work/**"),
             format!("!/workspaces/{n}/sessions"),
             format!("!/workspaces/{n}/sessions/**"),
             format!("!/workspaces/{n}/changes"),
@@ -306,6 +310,7 @@ pub fn meta_paths(root: &Path, name: &str) -> Vec<String> {
         "workspace.md",
         "memory",
         "todos",
+        crate::work::log::DIR_NAME,
         crate::sessionrecord::DIR,
     ]
     .into_iter()
@@ -584,6 +589,10 @@ mod tests {
         assert!(block.contains("!/workspaces/beta/memory\n!/workspaces/beta/memory/**"));
         assert!(block.contains("!/workspaces/beta/todos\n!/workspaces/beta/todos/**"));
         assert!(
+            block.contains("!/workspaces/beta/work\n!/workspaces/beta/work/**"),
+            "a LIVE workspace's work link log is committed with it (ADR 0088 §3)"
+        );
+        assert!(
             block.contains("!/workspaces/beta/changes/**\n/workspaces/beta/changes/log/"),
             "the log is re-ignored, and only after its parent is re-included"
         );
@@ -735,6 +744,18 @@ mod tests {
             meta_paths(dir.path(), "beta"),
             vec!["workspaces/beta/workspace.md", "workspaces/beta/memory"],
             "a path git was never given is one `git rm --cached` fails the whole call on"
+        );
+    }
+
+    #[test]
+    fn a_live_workspaces_work_link_log_is_staged_with_its_todos() {
+        let dir = plane();
+        let ws = dir.path().join("workspaces").join("beta");
+        std::fs::create_dir_all(ws.join("todos")).unwrap();
+        std::fs::create_dir_all(ws.join("work")).unwrap();
+        assert_eq!(
+            meta_paths(dir.path(), "beta"),
+            vec!["workspaces/beta/todos", "workspaces/beta/work"]
         );
     }
 

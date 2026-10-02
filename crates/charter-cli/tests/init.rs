@@ -250,6 +250,7 @@ personas/_dispatch/*.jsonl merge=union
 personas/_skills/*.jsonl merge=union
 workspaces/*/pieces/*.jsonl merge=union
 workspaces/*/changes/log/*.jsonl merge=union
+workspaces/*/work/*.jsonl merge=union
 personas/*/memory/MEMORY.md merge=union
 workspaces/*/memory/MEMORY.md merge=union
 # <<< charter merge rules <<<

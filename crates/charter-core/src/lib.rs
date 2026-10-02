@@ -135,6 +135,7 @@ pub mod usage;
 pub mod version;
 pub mod windowprefs;
 pub mod wiring;
+pub mod work;
 pub mod workspaces;
 pub mod worktree;
 pub mod wscmd;

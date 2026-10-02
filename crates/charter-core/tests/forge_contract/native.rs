@@ -98,11 +98,35 @@ fn json_of(field: &Field) -> (String, Value) {
     }
 }
 
+/// A write's JSON body: each field a key, and a `name[]` field one more element of list `name`,
+/// as `gh api` builds it.
+fn body_of(fields: &[Field]) -> serde_json::Map<String, Value> {
+    let mut body = serde_json::Map::new();
+    for field in fields {
+        let (name, value) = json_of(field);
+        match name.strip_suffix("[]") {
+            Some(list) => body
+                .entry(list.to_string())
+                .or_insert_with(|| Value::Array(Vec::new()))
+                .as_array_mut()
+                .expect("a list field")
+                .push(value),
+            None => {
+                body.insert(name, value);
+            }
+        }
+    }
+    body
+}
+
 /// The HTTP request a recorded call is, read from the recording.
 fn expected(call: &Call) -> Exactly {
     assert!(
-        call.fields.iter().all(|f| !json_of(f).0.contains('[')),
-        "a recording here names no nested field"
+        call.fields.iter().all(|f| {
+            let name = json_of(f).0;
+            !name.trim_end_matches("[]").contains('[')
+        }),
+        "a recording here names no nested field but a list"
     );
     match &call.endpoint {
         Endpoint::Graphql => {
@@ -131,7 +155,7 @@ fn expected(call: &Call) -> Exactly {
         } => Exactly {
             method: method.word().parse().unwrap(),
             path_and_query: format!("/{path}"),
-            body: Some(Value::Object(call.fields.iter().map(json_of).collect())),
+            body: Some(Value::Object(body_of(&call.fields))),
         },
     }
 }
