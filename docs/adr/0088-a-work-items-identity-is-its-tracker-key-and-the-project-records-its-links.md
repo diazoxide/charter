@@ -328,6 +328,14 @@ The code does not change with this record.
   `op` lines with a closed key set, as the piece claim log's are, so an alias can also carry
   `moved` and `renamed`, and an unlink is a line, not an absence.
 
+## Erratum (implementation, FW-5 #861)
+
+Recorded by FW-5's implementer and not a change to the decision. §3's fold order, *"sorted by
+`ts`, then by file name, then by line"*, leaves one tie: two workspaces' logs share a file name,
+because each is named by the same device id, so two lines with the same `ts` and the same line
+number in the same-named file of two workspaces are not ordered by it. The fold keeps §3's order
+and breaks that tie, and only that tie, by the workspace's name.
+
 ## Ruled (V40, 2026-10-02)
 
 Settled by V40: *"ADR 0088 is accepted with its four recommendations."* Each question this

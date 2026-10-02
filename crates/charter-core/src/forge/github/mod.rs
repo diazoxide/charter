@@ -351,7 +351,9 @@ impl Repos for GitHub {
         .ok_or_else(|| ForgeError::new(format!("{doing}: GitHub named no visibility")))?;
         // Anyone who can read a repo can open an issue in it, unless its issues are off. A
         // `permissions` block that denies reading is the account's own answer.
-        let issues = if repo["has_issues"].as_bool() == Some(false) {
+        let issues = if repo["archived"].as_bool() == Some(true) {
+            Issues::Archived
+        } else if repo["has_issues"].as_bool() == Some(false) {
             Issues::Off
         } else if repo["permissions"]["pull"].as_bool() == Some(false) {
             Issues::NoRight
@@ -378,7 +380,7 @@ impl WorkItems for GitHub {
                 labels: new
                     .workspace_label
                     .iter()
-                    .map(|ws| format!("ws:{ws}"))
+                    .map(|ws| super::backend::workspace_label(Kind::GitHub, ws))
                     .collect(),
                 ..work::NewIssue::default()
             },
@@ -394,7 +396,7 @@ impl WorkItems for GitHub {
         let [owner, repo, ..] = parts.as_slice() else {
             return Err(unnamed());
         };
-        let key = crate::work::TrackerKey::github(host, &format!("{owner}/{repo}"), issue.number)
+        let key = crate::work::TrackerKey::github(&host, &format!("{owner}/{repo}"), issue.number)
             .map_err(|why| ForgeError::new(format!("{doing}: {why}")))?;
         Ok(crate::work::WorkItem {
             key,

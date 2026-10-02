@@ -38,8 +38,13 @@ pub struct Target {
 /// What [`promote`] tells its caller as it goes.
 #[derive(Debug)]
 pub enum Step<'a> {
-    /// About to send the todo's title and text to `target`, whose readers `about` names.
-    Sending { target: &'a Target, about: About },
+    /// About to send the todo's title and text to `target`, whose readers `about` names, with
+    /// the workspace label the issue will carry, if any, as the forge spells it.
+    Sending {
+        target: &'a Target,
+        about: About,
+        label: Option<String>,
+    },
     /// The issue exists. Said at once, so that an issue a later step fails to link is not lost.
     Created(&'a WorkItem),
 }
@@ -50,6 +55,8 @@ pub struct Promoted {
     pub title: String,
     pub todo: TrackerKey,
     pub item: WorkItem,
+    /// The journal entry the todo was closed with, as `ws todo done` writes one.
+    pub journal: std::path::PathBuf,
 }
 
 /// The repo `repo` names among workspace `ws`'s repos, or the one repo it has on a forge.
@@ -141,6 +148,11 @@ fn names(names: &[String]) -> String {
 
 /// Promote todo `slug` of `ws` to an issue in `target`, through `backend` as `caller`, and write
 /// the alias to device `device`'s log. `now` is the local clock's, as `ws todo` stamps a todo.
+///
+/// **Everything that can refuse is asked before the issue exists**: the todo, whether it was
+/// promoted already, whether an alias from it could close a cycle, whether this device's log can
+/// be written at all (its id, the workspace's name, containment), and the repo itself. An issue
+/// is the one step that cannot be undone, so nothing that could have refused it comes after.
 #[allow(clippy::too_many_arguments)]
 pub fn promote(
     ws: &Workspace,
@@ -172,45 +184,67 @@ pub fn promote(
         .find(|t| t.slug == stem)
         .ok_or_else(|| format!("no todo '{slug}' in workspace '{}'.", ws.name()))?;
     let todo_key = TrackerKey::todo(ws.name(), &stem)?;
-    if log::fold(root).is_aliased(&todo_key) {
+    let folded = log::fold(root);
+    if folded.is_aliased(&todo_key) {
         return Err(format!(
             "'{}' was already promoted to {}; it is closed at the next `charter ws todo`",
             todo.title,
-            log::fold(root).resolve(&todo_key)
+            folded.resolve(&todo_key)
         ));
     }
+    if folded.is_reached(&todo_key) {
+        return Err(format!(
+            "another key already resolves to {todo_key}, so an alias from it would close a \
+             cycle; nothing was sent. `charter doctor` shows the work links"
+        ));
+    }
+    log::check_writable(root, ws.name(), device)
+        .map_err(|e| format!("the work link log cannot be written, so nothing was sent: {e}"))?;
+    let host = super::key::normal_host(&target.forge.host)?;
 
     let about = backend
         .about(caller, &target.path)
         .map_err(|e| e.to_string())?;
-    match about.issues {
-        Issues::Open => {}
-        Issues::Off => {
-            return Err(format!(
-                "{} has its issues turned off, so the todo stays a todo",
-                target.path
-            ));
-        }
-        Issues::NoRight => {
-            return Err(format!(
-                "this account cannot open an issue in {}, so the todo stays a todo",
-                target.path
-            ));
-        }
+    let refusal = match about.issues {
+        Issues::Open => None,
+        Issues::Off => Some("has its issues turned off"),
+        Issues::NoRight => Some("takes no issue from this account"),
+        Issues::Archived => Some("is archived"),
+    };
+    if let Some(why) = refusal {
+        return Err(format!(
+            "{} {why}, so nothing was sent and the todo stays a todo",
+            target.path
+        ));
     }
-    tell(Step::Sending { target, about });
+    // FI6: the layer-2 label is on for a private repo only (D-FW5a: `internal` is read as
+    // public, since everyone on the instance reads it).
+    let labelled = about.visibility == Visibility::Private;
+    tell(Step::Sending {
+        target,
+        about,
+        label: labelled
+            .then(|| crate::forge::backend::workspace_label(target.forge.kind, ws.name())),
+    });
     let new = NewWorkItem {
         title: todo.title.clone(),
-        body: todo.body.clone(),
-        // FI6: the layer-2 label is on by default for a private repo and off for a public one.
-        workspace_label: (about.visibility != Visibility::Public).then(|| ws.name().to_string()),
+        body: body_of(&todo.title, &todo.body),
+        workspace_label: labelled.then(|| ws.name().to_string()),
     };
     let item = backend
         .create(caller, &target.path, &new)
         .map_err(|e| e.to_string())?;
     tell(Step::Created(&item));
+    if item.key.host() != Some(host.as_str()) {
+        return Err(format!(
+            "{} was opened at {}, but charter asked {host}, so its key is not trusted and no \
+             alias was written. The todo is still open",
+            item.key, item.url
+        ));
+    }
 
-    log::append_alias(
+    log::append_alias_over(
+        &folded,
         root,
         ws.name(),
         device,
@@ -225,7 +259,7 @@ pub fn promote(
             item.key
         )
     })?;
-    close(ws, &stem, &todo.title, &item.key, now).map_err(|e| {
+    let journal = close(ws, &stem, &todo.title, &item.key, now).map_err(|e| {
         format!(
             "{} was opened and linked, but the todo could not be closed: {e}. The next `charter \
              ws todo` closes it",
@@ -236,7 +270,21 @@ pub fn promote(
         title: todo.title,
         todo: todo_key,
         item,
+        journal,
     })
+}
+
+/// The issue's body: the todo's text, without the title line it starts with, since the title is
+/// the issue's own.
+fn body_of(title: &str, text: &str) -> String {
+    let mut lines = text.lines();
+    match lines.next() {
+        Some(first) if first.trim() == title.trim() => lines
+            .skip_while(|l| l.trim().is_empty())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => text.to_string(),
+    }
 }
 
 /// A stamp on the local clock, as `ws todo` takes one, as the UTC instant a log line holds. A
@@ -260,10 +308,11 @@ fn close(
     title: &str,
     to: &TrackerKey,
     now: chrono::NaiveDateTime,
-) -> std::io::Result<()> {
+) -> std::io::Result<std::path::PathBuf> {
     // The journal entry first, while the todo is still there to name.
-    ws.remember(&journal_line(title, to), now)?;
-    ws.forget_todo(stem)
+    let journal = ws.remember(&journal_line(title, to), now)?;
+    ws.forget_todo(stem)?;
+    Ok(journal)
 }
 
 /// Close every open todo of `ws` whose key already has an alias: a promote that stopped after

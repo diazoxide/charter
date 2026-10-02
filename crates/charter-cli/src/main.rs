@@ -2852,10 +2852,7 @@ fn promote_todo(
             return 1;
         }
     };
-    let device = match charter_core::machine::config_root()
-        .ok_or_else(|| "there is no config home to keep this device's id in".to_string())
-        .and_then(|config| charter_core::machine::device_id(&config).map_err(|e| e.to_string()))
-    {
+    let device = match charter_core::machine::this_device_id() {
         Ok(device) => device,
         Err(why) => {
             voice::err(&format!(
@@ -2866,19 +2863,21 @@ fn promote_todo(
     };
     let backend = target.forge.backend();
     let mut tell = |step: Step<'_>| match step {
-        Step::Sending { target, about } => {
-            let readers = match about.visibility {
-                charter_core::forge::backend::Visibility::Public => {
-                    "PUBLIC: everyone can read what is sent"
-                }
-                charter_core::forge::backend::Visibility::Internal => {
-                    "internal: everyone signed in to the instance can read it"
-                }
-                charter_core::forge::backend::Visibility::Private => "private",
+        Step::Sending {
+            target,
+            about,
+            label,
+        } => {
+            let label = match label {
+                Some(label) => format!(", labelled {label}"),
+                None => ", with no workspace label".to_string(),
             };
             voice::info(&format!(
-                "Opening an issue in {} ({} at {}, {readers}) with the todo's title and text.",
-                target.name, target.path, target.forge.host
+                "Opening an issue in {} ({} at {}, {}) with the todo's title and text{label}.",
+                target.name,
+                target.path,
+                target.forge.host,
+                about.visibility.readers()
             ));
         }
         Step::Created(item) => voice::info(&format!("  Opened {} — {}", item.key, item.url)),
@@ -2894,9 +2893,11 @@ fn promote_todo(
         &mut tell,
     ) {
         Ok(done) => {
+            // The close is `ws todo done`'s, so it says what `done` says about the journal.
+            memory::said_remembered(plane, ws.name(), &done.journal, false);
             voice::ok(&format!(
-                "Promoted '{}' in '{}' to {} — the todo is closed, and its links now reach the \
-                 issue.",
+                "Promoted '{}' in '{}' to {} — the todo is closed, and its work links now reach \
+                 the issue.",
                 done.title,
                 ws.name(),
                 done.item.key

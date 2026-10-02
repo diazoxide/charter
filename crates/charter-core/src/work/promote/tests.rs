@@ -105,7 +105,7 @@ fn a_todo_promoted_to_a_github_issue_keeps_its_chat_link_and_is_one_item() {
     let (backend, recorded) = github(json!([
         about("private", true),
         created(json!([{"text": ["title", "Port the picker"]},
-                        {"text": ["body", "Port the picker\n\nThe old one is slow."]},
+                        {"text": ["body", "The old one is slow."]},
                         {"text": ["labels[]", "ws:alpha"]}]))
     ]));
     let target = target(root, "alpha", Some("api")).unwrap();
@@ -120,9 +120,16 @@ fn a_todo_promoted_to_a_github_issue_keeps_its_chat_link_and_is_one_item() {
         stamp(2),
         &mut |step| {
             told.push(match step {
-                Step::Sending { target, about } => {
-                    format!("sending to {} ({})", target.path, about.visibility.word())
-                }
+                Step::Sending {
+                    target,
+                    about,
+                    label,
+                } => format!(
+                    "sending to {} ({}, {})",
+                    target.path,
+                    about.visibility.word(),
+                    label.as_deref().unwrap_or("no label")
+                ),
                 Step::Created(item) => format!("created {}", item.key),
             })
         },
@@ -134,7 +141,7 @@ fn a_todo_promoted_to_a_github_issue_keeps_its_chat_link_and_is_one_item() {
     assert_eq!(
         told,
         [
-            "sending to acme/api (private)",
+            "sending to acme/api (private, ws:alpha)",
             "created github:github.com/acme/api#12"
         ],
         "the repo and whether it is public are said before anything is sent"
@@ -171,7 +178,7 @@ fn a_public_repo_is_named_as_public_and_its_issue_carries_no_workspace_label() {
     let (backend, recorded) = github(json!([
         about("public", true),
         created(json!([{"text": ["title", "Port the picker"]},
-                        {"text": ["body", "Port the picker\n\nThe old one is slow."]}]))
+                        {"text": ["body", "The old one is slow."]}]))
     ]));
     let target = target(tmp.path(), "alpha", None).unwrap();
     let mut public = None;
@@ -184,8 +191,9 @@ fn a_public_repo_is_named_as_public_and_its_issue_carries_no_workspace_label() {
         DEVICE,
         stamp(2),
         &mut |step| {
-            if let Step::Sending { about, .. } = step {
+            if let Step::Sending { about, label, .. } = step {
                 public = Some(about.visibility == Visibility::Public);
+                assert_eq!(label, None);
             }
         },
     )
@@ -303,4 +311,119 @@ fn a_todo_already_promoted_is_not_promoted_twice() {
     .unwrap_err();
     assert!(refused.contains("already promoted"), "{refused}");
     assert_eq!(recorded.unspent(), Vec::new());
+}
+
+/// Promote `stem` over `exchanges`, answering the refusal and whether every exchange was asked.
+fn refused_over(tmp: &tempfile::TempDir, ws: &Workspace, stem: &str, exchanges: Value) -> String {
+    let (backend, recorded) = github(exchanges);
+    let target = target(tmp.path(), "alpha", Some("api")).unwrap();
+    let refused = promote(
+        ws,
+        stem,
+        &target,
+        backend.as_ref(),
+        &Caller::command(),
+        DEVICE,
+        stamp(2),
+        &mut |_| {},
+    )
+    .unwrap_err();
+    assert_eq!(
+        recorded.unspent(),
+        Vec::new(),
+        "every recorded exchange was asked"
+    );
+    refused
+}
+
+#[cfg(unix)]
+#[test]
+fn a_log_that_cannot_be_written_refuses_before_any_issue_exists() {
+    let (tmp, ws) = project(&["api"]);
+    let stem = the_picker(&ws);
+    let outside = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(outside.path(), log::dir_for(tmp.path(), "alpha")).unwrap();
+    // Nothing is recorded: the repo is not even read, and no issue is POSTed.
+    let refused = refused_over(&tmp, &ws, &stem, json!([]));
+    assert!(refused.contains("nothing was sent"), "{refused}");
+    assert_eq!(ws.todos().unwrap().len(), 1);
+    assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn a_device_id_that_is_not_one_refuses_before_any_issue_exists() {
+    let (tmp, ws) = project(&["api"]);
+    let stem = the_picker(&ws);
+    let (backend, recorded) = github(json!([]));
+    let target = target(tmp.path(), "alpha", None).unwrap();
+    let refused = promote(
+        &ws,
+        &stem,
+        &target,
+        backend.as_ref(),
+        &Caller::command(),
+        "my-laptop",
+        stamp(2),
+        &mut |_| {},
+    )
+    .unwrap_err();
+    assert!(refused.contains("not a device id"), "{refused}");
+    assert_eq!(recorded.unspent(), Vec::new());
+}
+
+#[test]
+fn an_archived_repo_is_refused_before_anything_is_sent() {
+    let (tmp, ws) = project(&["api"]);
+    let stem = the_picker(&ws);
+    let archived = exchange(
+        None,
+        "repos/acme/api",
+        json!([]),
+        json!({"visibility": "private", "archived": true, "has_issues": true}),
+    );
+    let refused = refused_over(&tmp, &ws, &stem, json!([archived]));
+    assert!(refused.contains("is archived"), "{refused}");
+}
+
+#[test]
+fn an_internal_repo_gets_no_workspace_label() {
+    let (tmp, ws) = project(&["api"]);
+    let stem = the_picker(&ws);
+    let (backend, recorded) = github(json!([
+        about("internal", true),
+        created(json!([{"text": ["title", "Port the picker"]},
+                        {"text": ["body", "The old one is slow."]}]))
+    ]));
+    let target = target(tmp.path(), "alpha", None).unwrap();
+    promote(
+        &ws,
+        &stem,
+        &target,
+        backend.as_ref(),
+        &Caller::command(),
+        DEVICE,
+        stamp(2),
+        &mut |_| {},
+    )
+    .unwrap();
+    assert_eq!(recorded.unspent(), Vec::new());
+}
+
+#[test]
+fn an_issue_keyed_on_a_host_charter_did_not_ask_is_not_aliased() {
+    let (tmp, ws) = project(&["api"]);
+    let stem = the_picker(&ws);
+    let elsewhere = exchange(
+        Some("POST"),
+        "repos/acme/api/issues",
+        json!([{"text": ["title", "Port the picker"]},
+               {"text": ["body", "The old one is slow."]},
+               {"text": ["labels[]", "ws:alpha"]}]),
+        json!({"id": 1, "node_id": "I_1", "number": 12, "title": "Port the picker",
+               "state": "open", "html_url": "https://evil.example/acme/api/issues/12"}),
+    );
+    let refused = refused_over(&tmp, &ws, &stem, json!([about("private", true), elsewhere]));
+    assert!(refused.contains("not trusted"), "{refused}");
+    assert_eq!(ws.todos().unwrap().len(), 1, "the todo stays open");
+    assert!(!log::fold(tmp.path()).is_aliased(&TrackerKey::todo("alpha", &stem).unwrap()));
 }

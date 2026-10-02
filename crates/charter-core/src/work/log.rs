@@ -255,7 +255,22 @@ pub fn append_alias(
     to: TrackerKey,
     cause: Cause,
 ) -> io::Result<()> {
-    let folded = fold(root);
+    append_alias_over(&fold(root), root, ws, device, ts, from, to, cause)
+}
+
+/// [`append_alias`], checked against a fold the caller already holds, so that one decision reads
+/// the log once.
+#[allow(clippy::too_many_arguments)]
+pub fn append_alias_over(
+    folded: &Fold,
+    root: &Path,
+    ws: &str,
+    device: &str,
+    ts: DateTime<Utc>,
+    from: TrackerKey,
+    to: TrackerKey,
+    cause: Cause,
+) -> io::Result<()> {
     if from == to || folded.resolve(&to) == from || folded.passes(&to, &from) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -265,29 +280,38 @@ pub fn append_alias(
     write(root, ws, device, ts, &Op::Alias { from, to, cause })
 }
 
-fn write(root: &Path, ws: &str, device: &str, ts: DateTime<Utc>, op: &Op) -> io::Result<()> {
-    use std::io::Write;
+/// Everything [`append`] would check before it writes a line to device `device`'s log in
+/// workspace `ws`, asked before anything else is done: the device id, the workspace's name and
+/// containment of the file. A caller about to do something it cannot undo, such as opening an
+/// issue, asks this first, so that a log it could never have written refuses it up front.
+pub fn check_writable(root: &Path, ws: &str, device: &str) -> io::Result<PathBuf> {
     let refused = |why: String| io::Error::new(io::ErrorKind::InvalidInput, why);
     if chat_id(device).is_none() {
         return Err(refused(format!(
             "{device:?} is not a device id: the work link log is named by this device's id"
         )));
     }
-    if let Some(chat) = op.chat()
-        && chat_id(chat).is_none()
-    {
-        return Err(refused(format!(
-            "{chat:?} is not a chat id: a work link names a chat by its ULID"
-        )));
-    }
     if !crate::contain::segment_ok(ws) {
         return Err(refused(format!("{ws:?} is not a workspace name")));
     }
-    let dir = dir_for(root, ws);
-    let path = dir.join(format!("{device}.jsonl"));
+    let path = dir_for(root, ws).join(format!("{device}.jsonl"));
     crate::contain::writable(root, &path)
         .map_err(|why| io::Error::new(io::ErrorKind::PermissionDenied, why.to_string()))?;
-    std::fs::create_dir_all(&dir)?;
+    Ok(path)
+}
+
+fn write(root: &Path, ws: &str, device: &str, ts: DateTime<Utc>, op: &Op) -> io::Result<()> {
+    use std::io::Write;
+    if let Some(chat) = op.chat()
+        && chat_id(chat).is_none()
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{chat:?} is not a chat id: a work link names a chat by its ULID"),
+        ));
+    }
+    let path = check_writable(root, ws, device)?;
+    std::fs::create_dir_all(dir_for(root, ws))?;
     let mut options = std::fs::OpenOptions::new();
     options.append(true).create(true);
     #[cfg(unix)]
@@ -304,13 +328,13 @@ fn write(root: &Path, ws: &str, device: &str, ts: DateTime<Utc>, op: &Op) -> io:
 /// Every workspace's log, folded.
 #[derive(Debug, Default)]
 pub struct Fold {
-    /// Each chat's last link or unlink: the workspace whose log said it, and the item, or
-    /// `None` after an unlink.
-    chats: BTreeMap<String, (String, Option<TrackerKey>)>,
-    /// Each workspace's own links, as written (unresolved).
+    /// Each chat's current link: the workspace whose log wrote it, and the item, resolved.
+    chats: BTreeMap<String, (String, TrackerKey)>,
+    /// Each workspace's own links, resolved.
     held: BTreeMap<String, BTreeSet<TrackerKey>>,
     aliases: BTreeMap<TrackerKey, TrackerKey>,
-    skipped: usize,
+    /// Lines skipped, by `<workspace>/<file>`.
+    skipped: BTreeMap<String, usize>,
 }
 
 impl Fold {
@@ -349,19 +373,24 @@ impl Fold {
         self.aliases.contains_key(key)
     }
 
+    /// Whether some alias leads to `key`. An alias from `key` to anything could then close a
+    /// cycle, so a promote asks this before it opens an issue it could not alias.
+    pub fn is_reached(&self, key: &TrackerKey) -> bool {
+        self.aliases.values().any(|to| to == key)
+    }
+
     /// The item chat `chat` is linked to, through its aliases, or `None`.
     pub fn chat_link(&self, chat: &str) -> Option<TrackerKey> {
-        let (_, item) = self.chats.get(chat)?;
-        item.as_ref().map(|item| self.resolve(item))
+        self.chats.get(chat).map(|(_, item)| self.resolve(item))
     }
 
     /// Every chat linked to `item`, which is resolved first.
     pub fn chats_on(&self, item: &TrackerKey) -> Vec<String> {
         let item = self.resolve(item);
         self.chats
-            .iter()
-            .filter(|(chat, _)| self.chat_link(chat).as_ref() == Some(&item))
-            .map(|(chat, _)| chat.clone())
+            .keys()
+            .filter(|chat| self.chat_link(chat).as_ref() == Some(&item))
+            .cloned()
             .collect()
     }
 
@@ -376,22 +405,11 @@ impl Fold {
             .map(|item| self.resolve(item))
             .collect();
         for (written_in, item) in self.chats.values() {
-            if written_in == ws
-                && let Some(item) = item
-            {
+            if written_in == ws {
                 out.insert(self.resolve(item));
             }
         }
         out.into_iter().collect()
-    }
-
-    /// The chats whose current link was written in workspace `ws`'s log.
-    pub fn chats_in(&self, ws: &str) -> Vec<String> {
-        self.chats
-            .iter()
-            .filter(|(_, (written_in, item))| written_in == ws && item.is_some())
-            .map(|(chat, _)| chat.clone())
-            .collect()
     }
 
     /// Every key an alias cycle holds, which a merge of two devices' logs can make and
@@ -406,27 +424,44 @@ impl Fold {
 
     /// How many lines were not one of the four key sets, and were skipped.
     pub fn skipped(&self) -> usize {
-        self.skipped
+        self.skipped.values().sum()
+    }
+
+    /// The skipped lines, by the file they are in (`<workspace>/<file>`).
+    pub fn skipped_in(&self) -> &BTreeMap<String, usize> {
+        &self.skipped
     }
 }
 
-/// Every workspace's log under `root`, folded. Read best-effort: an unreadable file or
-/// directory holds nothing, and a line that is not one of the four key sets is skipped and
-/// counted.
+/// Every workspace's log under `root`, folded. Read best-effort: a directory or file containment
+/// refuses, or one that cannot be read, holds nothing, and a line that is not one of the four key
+/// sets is skipped and counted.
+///
+/// Lines are taken in ADR 0088 §3's order, `ts`, then file name, then line; a tie that order
+/// leaves, the same file name and line in two workspaces, goes to the workspace's name. Aliases
+/// are read first, so an unlink matches the item it names after both are resolved.
 pub fn fold(root: &Path) -> Fold {
-    let mut lines: Vec<(String, String, String, usize, Op)> = Vec::new();
+    let mut lines: Vec<(String, String, usize, String, Op)> = Vec::new();
     let mut out = Fold::default();
-    let Ok(workspaces) = std::fs::read_dir(root.join("workspaces")) else {
+    let workspaces_dir = root.join("workspaces");
+    if crate::contain::readable(root, &workspaces_dir).is_err() {
+        return out;
+    }
+    let Ok(workspaces) = std::fs::read_dir(&workspaces_dir) else {
         return out;
     };
     for ws in workspaces.flatten() {
         let ws_name = ws.file_name().to_string_lossy().into_owned();
-        let Ok(files) = std::fs::read_dir(ws.path().join(DIR_NAME)) else {
+        let dir = ws.path().join(DIR_NAME);
+        if crate::contain::readable(root, &dir).is_err() {
+            continue;
+        }
+        let Ok(files) = std::fs::read_dir(&dir) else {
             continue;
         };
         for file in files.flatten() {
             let name = file.file_name().to_string_lossy().into_owned();
-            if !name.ends_with(".jsonl") {
+            if !name.ends_with(".jsonl") || crate::contain::readable(root, &file.path()).is_err() {
                 continue;
             }
             let Ok(text) = std::fs::read_to_string(file.path()) else {
@@ -441,35 +476,49 @@ pub fn fold(root: &Path) -> Fold {
                     .as_ref()
                     .and_then(Op::of_line)
                 {
-                    Some((ts, op)) => lines.push((ts, name.clone(), ws_name.clone(), n, op)),
-                    None => out.skipped += 1,
+                    Some((ts, op)) => lines.push((ts, name.clone(), n, ws_name.clone(), op)),
+                    None => *out.skipped.entry(format!("{ws_name}/{name}")).or_default() += 1,
                 }
             }
         }
     }
-    lines.sort_by(|a, b| (&a.0, &a.1, &a.2, a.3).cmp(&(&b.0, &b.1, &b.2, b.3)));
-    for (_, _, ws, _, op) in lines {
+    lines.sort_by(|a, b| (&a.0, &a.1, a.2, &a.3).cmp(&(&b.0, &b.1, b.2, &b.3)));
+    for (_, _, _, _, op) in &lines {
+        if let Op::Alias { from, to, .. } = op {
+            out.aliases.insert(from.clone(), to.clone());
+        }
+    }
+    for (_, _, _, ws, op) in lines {
         match op {
             Op::Link {
                 item,
                 chat: Some(chat),
             } => {
-                out.chats.insert(chat, (ws, Some(item)));
+                let item = out.resolve(&item);
+                out.chats.insert(chat, (ws, item));
             }
             Op::Unlink {
-                chat: Some(chat), ..
+                item,
+                chat: Some(chat),
             } => {
-                out.chats.insert(chat, (ws, None));
+                let item = out.resolve(&item);
+                if out
+                    .chats
+                    .get(&chat)
+                    .is_some_and(|(_, linked)| *linked == item)
+                {
+                    out.chats.remove(&chat);
+                }
             }
             Op::Link { item, chat: None } => {
+                let item = out.resolve(&item);
                 out.held.entry(ws).or_default().insert(item);
             }
             Op::Unlink { item, chat: None } => {
+                let item = out.resolve(&item);
                 out.held.entry(ws).or_default().remove(&item);
             }
-            Op::Alias { from, to, .. } => {
-                out.aliases.insert(from, to);
-            }
+            Op::Alias { .. } => {}
         }
     }
     out

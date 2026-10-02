@@ -180,22 +180,22 @@ impl Repos for GitLab {
     fn about(&self, caller: &Caller, path: &str) -> Result<About, ForgeError> {
         let api = format!("projects/{}", quote(path));
         let doing = format!("reading {path}");
-        let project = self.0.ask(caller, &Call::get(&api, LIST_TIMEOUT), &doing)?;
-        let visibility = project["visibility"]
+        let repo = self.0.ask(caller, &Call::get(&api, LIST_TIMEOUT), &doing)?;
+        let visibility = repo["visibility"]
             .as_str()
             .and_then(Visibility::parse)
             .ok_or_else(|| ForgeError::new(format!("{doing}: GitLab named no visibility")))?;
         // `issues_access_level` is `disabled`, `private` (members only) or `enabled`; the older
-        // `issues_enabled` says only whether they are on. A member has an access level in
-        // `permissions`, through the project or its group.
-        let member = ["project_access", "group_access"].iter().any(|via| {
-            project["permissions"][via]["access_level"]
-                .as_u64()
-                .is_some()
-        });
-        let issues = match project["issues_access_level"].as_str() {
+        // `issues_enabled` says only whether they are on. A member of the repo has an access
+        // level in `permissions`, given on the repo itself (`project_access`, GitLab's word) or
+        // through its group.
+        let member = ["project_access", "group_access"]
+            .iter()
+            .any(|via| repo["permissions"][via]["access_level"].as_u64().is_some());
+        let issues = match repo["issues_access_level"].as_str() {
+            _ if repo["archived"].as_bool() == Some(true) => Issues::Archived,
             Some("disabled") => Issues::Off,
-            _ if project["issues_enabled"].as_bool() == Some(false) => Issues::Off,
+            _ if repo["issues_enabled"].as_bool() == Some(false) => Issues::Off,
             Some("private") if !member => Issues::NoRight,
             _ => Issues::Open,
         };
@@ -215,8 +215,10 @@ impl WorkItems for GitLab {
             Field::text("description", &new.body),
         ];
         if let Some(ws) = &new.workspace_label {
-            // A scoped label (FI6), so a second workspace's label replaces it on the board.
-            fields.push(Field::text("labels", &format!("charter::ws::{ws}")));
+            fields.push(Field::text(
+                "labels",
+                &super::backend::workspace_label(Kind::GitLab, ws),
+            ));
         }
         let doing = format!("opening an issue in {path}");
         let call = Call::write(
@@ -236,7 +238,7 @@ impl WorkItems for GitLab {
                 "{doing}: GitLab's answer names no page and reference charter can key the issue by"
             )));
         };
-        let key = crate::work::TrackerKey::gitlab_issue(host, place, iid)
+        let key = crate::work::TrackerKey::gitlab_issue(&host, place, iid)
             .map_err(|why| ForgeError::new(format!("{doing}: {why}")))?;
         let forge_ref = issue["id"].as_u64().map(|id| ForgeRef(id.to_string()));
         Ok(crate::work::WorkItem {

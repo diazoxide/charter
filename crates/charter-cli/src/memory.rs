@@ -682,6 +682,14 @@ pub fn workspace_remember(
             return Ok(1);
         }
     };
+    said_remembered(plane, name, &path, no_sync);
+    Ok(0)
+}
+
+/// What charter says once a memory is written to workspace `name`'s journal at `path`: where it
+/// went, and whether it stays on this disk or is shared. `ws todo done` says it through
+/// [`workspace_remember`], and `ws todo promote` says it for the same close.
+pub fn said_remembered(plane: &Plane, name: &str, path: &std::path::Path, no_sync: bool) {
     voice::ok(&format!(
         "Remembered in '{name}' → workspaces/{name}/memory/{}",
         path.file_name().unwrap_or_default().to_string_lossy()
@@ -696,7 +704,6 @@ pub fn workspace_remember(
     } else {
         reactive(plane);
     }
-    Ok(0)
 }
 
 /// `workspace recall` — search the journal, or list it in filename order.

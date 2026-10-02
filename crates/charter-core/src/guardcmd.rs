@@ -31,6 +31,10 @@ pub const HANDOFF_PATTERN: &str = settings::HANDOFF_PATTERN;
 /// The pattern a report's consent rule names; `charter guard report` writes it.
 pub const REPORT_PATTERN: &str = settings::REPORT_PATTERN;
 
+/// The pattern a todo promote's consent rule names (V42). `charter init` and `reinit` write it;
+/// it has no `charter guard` verb of its own, and `charter guard ask` writes it by hand.
+pub const PROMOTE_PATTERN: &str = settings::PROMOTE_PATTERN;
+
 /// The tools a Claude Code rule can name bare or as `Tool(pattern)`.
 const RULE_TOOLS: [&str; 9] = [
     "Bash",

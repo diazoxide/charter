@@ -40,7 +40,10 @@ impl TrackerKey {
     /// A key as the project holds it, refused unless it is one charter could have written.
     ///
     /// A reserved tracker's locator is held to its grammar above. An extension's tracker owns
-    /// its own grammar, under ADR 0088's three rules: one line, no whitespace, and not empty.
+    /// its own grammar, under ADR 0088's three rules: one line, no whitespace, and the item's
+    /// own reference qualified by the site it lives on (`<site>/<reference>`). Every key holds
+    /// printable characters only: no control character, ESC included, and no invisible
+    /// formatting character, so a key read off a log line prints as what it is.
     pub fn parse(text: &str) -> Result<TrackerKey, String> {
         let refused = |why: &str| Err(format!("{text:?} is not a tracker key: {why}"));
         let Some((tracker, locator)) = text.split_once(':') else {
@@ -52,11 +55,16 @@ impl TrackerKey {
         if locator.is_empty() || locator.chars().any(char::is_whitespace) {
             return refused("a locator is one word, with no whitespace");
         }
+        if locator.chars().any(crate::panel::undrawable) {
+            return refused("a locator holds printable characters only");
+        }
         let ok = match tracker {
             "github" | "forgejo" => forge_locator(locator, '#', Some(2)),
             "gitlab" => forge_locator(locator, '#', None) || forge_locator(locator, '&', None),
             "todo" => todo_locator(locator),
-            _ => true,
+            _ => locator
+                .split_once('/')
+                .is_some_and(|(site, reference)| !site.is_empty() && !reference.is_empty()),
         };
         if !ok {
             return refused(&format!("not a `{tracker}` locator"));
@@ -113,6 +121,15 @@ impl TrackerKey {
         self.0.split_once(':').map_or("", |(_, locator)| locator)
     }
 
+    /// A forge key's host, port included: the locator's first segment. `None` for a todo, and
+    /// for an extension's key, whose locator is its own.
+    pub fn host(&self) -> Option<&str> {
+        match self.tracker() {
+            "github" | "gitlab" | "forgejo" => self.locator().split_once('/').map(|(h, _)| h),
+            _ => None,
+        }
+    }
+
     /// The workspace and the file stem of a todo's key; `None` for any other tracker.
     pub fn todo_parts(&self) -> Option<(&str, &str)> {
         if self.tracker() != "todo" {
@@ -141,9 +158,29 @@ fn forge_locator(locator: &str, sigil: char, segments: Option<usize>) -> bool {
     let parts: Vec<&str> = path.split('/').collect();
     let path_ok = parts
         .iter()
-        .all(|p| !p.is_empty() && !p.contains(['#', '&']))
+        .all(|p| !p.is_empty() && *p != "." && *p != ".." && !p.contains(['#', '&']))
         && segments.is_none_or(|n| parts.len() == n);
     path_ok && normal_host(host).as_deref() == Ok(host) && number_ok(number)
+}
+
+/// Whether an extension may declare `prefix` as its tracker, beside the prefixes `held` by the
+/// extensions already installed (ADR 0088 §1): the tracker grammar, none of [`RESERVED`], and
+/// not one another extension holds. An install that is refused here installs nothing.
+pub fn claim_prefix(prefix: &str, held: &[&str]) -> Result<(), String> {
+    if !tracker_ok(prefix) {
+        return Err(format!(
+            "{prefix:?} is not a tracker prefix: a lowercase letter, then letters, digits or `-`"
+        ));
+    }
+    if RESERVED.contains(&prefix) {
+        return Err(format!("the tracker prefix `{prefix}` is charter's own"));
+    }
+    if held.contains(&prefix) {
+        return Err(format!(
+            "the tracker prefix `{prefix}` is already declared by another extension"
+        ));
+    }
+    Ok(())
 }
 
 /// A workspace name and a file stem, each one path segment.
@@ -178,11 +215,16 @@ pub fn normal_host(host: &str) -> Result<String, String> {
 
 /// The host, port included, and the path segments of an item's web page, as a forge's answer
 /// names it: where a backend reads a key's host and path in the forge's own spelling.
-pub(crate) fn page_of(url: &str) -> Option<(&str, Vec<&str>)> {
-    let rest = url
-        .strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"))?;
+///
+/// A scheme's own default port is dropped: `:443` for HTTPS (by [`normal_host`] too) and `:80`
+/// for HTTP.
+pub(crate) fn page_of(url: &str) -> Option<(String, Vec<&str>)> {
+    let (rest, default_port) = match url.strip_prefix("https://") {
+        Some(rest) => (rest, ":443"),
+        None => (url.strip_prefix("http://")?, ":80"),
+    };
     let (host, path) = rest.split_once('/')?;
+    let host = host.strip_suffix(default_port).unwrap_or(host).to_string();
     let path = path.split(['?', '#']).next().unwrap_or_default();
     Some((host, path.split('/').filter(|s| !s.is_empty()).collect()))
 }
@@ -289,12 +331,61 @@ mod tests {
     }
 
     #[test]
+    fn a_key_holds_only_printable_characters_and_no_dot_segments() {
+        for bad in [
+            "github:github.com/o/r\u{1b}[2J#1",
+            "linear:acme/TEAM-1\u{7}",
+            "linear:acme/TEAM\u{202e}-1",
+            "gitlab:gitlab.com/g/../r#1",
+            "gitlab:gitlab.com/./r#1",
+            "github:github.com/../r#1",
+            "github:github.com/o/..#1",
+        ] {
+            assert!(TrackerKey::parse(bad).is_err(), "{bad:?} was accepted");
+        }
+        assert!(TrackerKey::github("github.com", "o/..", 1).is_err());
+    }
+
+    #[test]
+    fn an_extensions_locator_is_its_reference_qualified_by_its_site() {
+        assert!(TrackerKey::parse("linear:TEAM-123").is_err(), "no site");
+        assert!(TrackerKey::parse("linear:/TEAM-123").is_err());
+        assert!(TrackerKey::parse("linear:acme/").is_err());
+        assert!(TrackerKey::parse("jira:acme.atlassian.net/KEY-7").is_ok());
+    }
+
+    #[test]
+    fn an_extension_may_not_claim_a_reserved_prefix_or_one_already_held() {
+        assert_eq!(claim_prefix("linear", &["jira"]), Ok(()));
+        for reserved in RESERVED {
+            assert!(claim_prefix(reserved, &[]).is_err(), "{reserved}");
+        }
+        assert!(claim_prefix("jira", &["jira"]).is_err());
+        assert!(claim_prefix("Linear", &[]).is_err(), "the tracker grammar");
+    }
+
+    #[test]
+    fn a_forge_keys_host_is_its_locators_first_segment() {
+        let key = TrackerKey::parse("gitlab:git.example.com:8443/g/r#1").unwrap();
+        assert_eq!(key.host(), Some("git.example.com:8443"));
+        assert_eq!(TrackerKey::todo("a", "b").unwrap().host(), None);
+    }
+
+    #[test]
     fn a_page_names_its_host_with_its_port_and_its_path() {
         assert_eq!(
             page_of("https://GHE.example.com:8443/o/r/issues/3?x#y"),
-            Some(("GHE.example.com:8443", vec!["o", "r", "issues", "3"]))
+            Some((
+                "GHE.example.com:8443".to_string(),
+                vec!["o", "r", "issues", "3"]
+            ))
         );
         assert_eq!(page_of("github.com/o/r"), None);
+        assert_eq!(
+            page_of("http://ghe.internal:80/o/r").map(|(h, _)| h),
+            Some("ghe.internal".to_string()),
+            "HTTP's default port is dropped as HTTPS's is"
+        );
     }
 
     #[test]

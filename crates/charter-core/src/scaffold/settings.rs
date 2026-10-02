@@ -1,6 +1,7 @@
 //! The things `init` puts in harness settings files the plane commits, each only when it is
 //! absent: `$CHARTER_HARNESS` in `.claude/settings.json`'s `env`, the ask rules for
-//! `charter handoff *` and `charter report *--yes*` in `.claude/settings.json` and
+//! `charter handoff *`, `charter report *--yes*` and `charter *todo*promote*` in
+//! `.claude/settings.json` and
 //! `opencode.json`, and the plane-root guard hook in `.claude/settings.json`.
 //!
 //! A port of `charter/commands.py`'s `ensure_env_var`, `add_permission_rule`,
@@ -39,6 +40,16 @@ pub const REPORT_PATTERN: &str = "charter report *--yes*";
 
 /// The same pattern as Claude Code's rule syntax.
 pub const REPORT_RULE: &str = "Bash(charter report *--yes*)";
+
+/// The pattern a todo promote's consent rule names (V42): `charter`, then `todo`, then
+/// `promote`, with anything between. So it holds for `ws` and `workspace`, and for a `-w` or
+/// `--repo` before or after the verb, which `ws todo` reads by position. It also asks for a
+/// todo whose text says "promote" after "todo"; asking once too often is the safe side of a
+/// command that sends a todo's text to a forge.
+pub const PROMOTE_PATTERN: &str = "charter *todo*promote*";
+
+/// The same pattern as Claude Code's rule syntax.
+pub const PROMOTE_RULE: &str = "Bash(charter *todo*promote*)";
 
 /// The one hook charter wires itself (`commands._GUARD_HOOK`).
 pub fn guard_hook() -> Value {

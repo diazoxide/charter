@@ -266,6 +266,15 @@ impl Visibility {
         }
     }
 
+    /// Who can read what is sent there, as charter says it before it sends.
+    pub fn readers(self) -> &'static str {
+        match self {
+            Visibility::Public => "PUBLIC: everyone can read what is sent",
+            Visibility::Internal => "internal: everyone signed in to the instance can read it",
+            Visibility::Private => "private",
+        }
+    }
+
     /// Read off a forge's `visibility` field. A word charter does not know is `None`, never a
     /// guess: a promote must not tell the operator a repo is private when it is not.
     pub fn parse(word: &str) -> Option<Visibility> {
@@ -288,6 +297,17 @@ pub enum Issues {
     Off,
     /// The repo takes issues, but not from this account.
     NoRight,
+    /// The repo is archived: read-only, so it takes no issue at all.
+    Archived,
+}
+
+/// The FI6 layer-2 label for workspace `ws`, as forge `kind` spells it: `ws:<name>` on GitHub,
+/// the scoped `charter::ws::<name>` on GitLab, so a second workspace's label replaces it there.
+pub fn workspace_label(kind: Kind, ws: &str) -> String {
+    match kind {
+        Kind::GitHub => format!("ws:{ws}"),
+        Kind::GitLab => format!("charter::ws::{ws}"),
+    }
 }
 
 /// Work items: issues, epics and the rest of FI4 (ADR 0070 §1, ADR 0088 §6). FW-5 brings the
@@ -309,8 +329,7 @@ pub struct NewWorkItem {
     pub title: String,
     pub body: String,
     /// The workspace whose FI6 layer-2 label the issue carries, when that label is on for the
-    /// repo. Each forge spells it: `ws:<name>` on GitHub, the scoped `charter::ws::<name>` on
-    /// GitLab.
+    /// repo, spelled by [`workspace_label`].
     pub workspace_label: Option<String>,
 }
 

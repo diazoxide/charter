@@ -282,6 +282,10 @@ fn a_line_with_any_other_key_set_op_or_cause_is_skipped_and_counted() {
     std::fs::write(&file, text).unwrap();
     let folded = fold(root);
     assert_eq!(folded.skipped(), 9, "the blank line is not a line");
+    assert_eq!(
+        folded.skipped_in().iter().collect::<Vec<_>>(),
+        [(&format!("alpha/{DEVICE}.jsonl"), &9)]
+    );
     assert_eq!(folded.chat_link(CHAT), Some(todo()));
     assert!(folded.items_of("alpha").contains(&todo()));
 }
@@ -323,4 +327,65 @@ fn a_chat_at_the_project_root_cannot_be_linked_and_one_in_a_workspace_can() {
 
     link_chat(root, Place::Workspace("alpha"), DEVICE, at(2), todo(), CHAT).unwrap();
     assert_eq!(fold(root).chat_link(CHAT), Some(todo()));
+}
+
+#[test]
+fn an_unlink_ends_the_link_whose_item_it_names_after_both_are_resolved() {
+    let p = project();
+    let root = p.path();
+    append(root, "alpha", DEVICE, at(1), &Op::link(todo())).unwrap();
+    append(root, "alpha", DEVICE, at(2), &Op::link_chat(todo(), CHAT)).unwrap();
+    append_alias(
+        root,
+        "alpha",
+        DEVICE,
+        at(3),
+        todo(),
+        issue(),
+        Cause::Promoted,
+    )
+    .unwrap();
+    // A chat unlink naming some other item ends nothing.
+    let other = key("github:github.com/acme/api#99");
+    append(root, "alpha", DEVICE, at(4), &Op::unlink_chat(other, CHAT)).unwrap();
+    assert_eq!(fold(root).chat_link(CHAT), Some(issue()));
+    // An unlink naming the todo, written after it was promoted, ends the links too: both sides
+    // are resolved before they are compared.
+    append(root, "alpha", DEVICE, at(5), &Op::unlink(todo())).unwrap();
+    append(
+        root,
+        "alpha",
+        DEVICE,
+        at(6),
+        &Op::unlink_chat(issue(), CHAT),
+    )
+    .unwrap();
+    let folded = fold(root);
+    assert_eq!(folded.chat_link(CHAT), None);
+    assert_eq!(folded.items_of("alpha"), Vec::<TrackerKey>::new());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_log_that_resolves_out_of_the_project_is_neither_read_nor_written() {
+    let p = project();
+    let root = p.path();
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(
+        outside.path().join(format!("{DEVICE}.jsonl")),
+        format!(
+            "{{\"v\":1,\"ts\":\"2026-10-02T08:00:01Z\",\"op\":\"link\",\"item\":\"{}\",\
+             \"chat\":\"{CHAT}\"}}\n",
+            todo()
+        ),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(outside.path(), dir_for(root, "alpha")).unwrap();
+    assert_eq!(
+        fold(root).chat_link(CHAT),
+        None,
+        "not read through the link"
+    );
+    assert!(check_writable(root, "alpha", DEVICE).is_err());
+    assert!(append(root, "alpha", DEVICE, at(2), &Op::link(todo())).is_err());
 }

@@ -28,8 +28,18 @@ const ISSUE: &str = "{\"id\": 1012, \"node_id\": \"I_kwDOAcme12\", \"number\": 1
                      \"title\": \"Port the picker\", \"state\": \"open\", \
                      \"html_url\": \"https://github.com/acme/api/issues/12\"}";
 
+const GITLAB_ISSUE: &str = "{\"id\": 84012, \"iid\": 12, \"title\": \"Port the picker\", \
+                            \"web_url\": \"https://gitlab.com/acme/api/-/issues/12\", \
+                            \"references\": {\"full\": \"acme/api#12\"}}";
+
 impl World {
     fn new(visibility: &str) -> World {
+        World::on("github", visibility)
+    }
+
+    /// A project whose one repo `api` is on `forge`, a stand-in for that forge's CLI answering
+    /// its read of the repo as `visibility` and its issue create.
+    fn on(forge: &str, visibility: &str) -> World {
         let tmp = tempfile::tempdir().unwrap();
         let base = std::fs::canonicalize(tmp.path()).unwrap();
         let root = base.join("plane");
@@ -47,8 +57,11 @@ impl World {
         .unwrap();
         std::fs::write(
             root.join("inventory/repos.json"),
-            "{\"group\": \"acme\", \"repos\": [{\"name\": \"api\", \"path_with_namespace\": \
-             \"acme/api\", \"forge\": \"github\", \"web_url\": \"https://github.com/acme/api\"}]}\n",
+            format!(
+                "{{\"group\": \"acme\", \"repos\": [{{\"name\": \"api\", \
+                 \"path_with_namespace\": \"acme/api\", \"forge\": \"{forge}\", \
+                 \"web_url\": \"https://{forge}.com/acme/api\"}}]}}\n"
+            ),
         )
         .unwrap();
         let log = base.join("gh-calls.log");
@@ -57,15 +70,29 @@ impl World {
              echo '=== call' >> '{log}'\n\
              for a in \"$@\"; do printf '%s\\n' \"$a\" >> '{log}'; done\n\
              case \"$*\" in\n\
-             \"api --hostname github.com repos/acme/api\") echo '{repo}'; exit 0;;\n\
-             \"api --hostname github.com -X POST repos/acme/api/issues \"*) echo '{ISSUE}'; exit 0;;\n\
+             {cases}\
              esac\n\
-             echo 'gh: unexpected call' >&2\n\
+             echo 'unexpected call' >&2\n\
              exit 1\n",
             log = log.display(),
-            repo = repo_answer(visibility),
+            cases = match forge {
+                "github" => format!(
+                    "\"api --hostname github.com repos/acme/api\") echo '{}'; exit 0;;\n\
+                     \"api --hostname github.com -X POST repos/acme/api/issues \"*) \
+                     echo '{ISSUE}'; exit 0;;\n",
+                    repo_answer(visibility)
+                ),
+                _ => format!(
+                    "\"--hostname gitlab.com api projects/acme%2Fapi\") \
+                     echo '{{\"visibility\": \"{visibility}\", \"issues_access_level\": \
+                     \"enabled\"}}'; exit 0;;\n\
+                     \"--hostname gitlab.com api -X POST projects/acme%2Fapi/issues \"*) \
+                     echo '{GITLAB_ISSUE}'; exit 0;;\n"
+                ),
+            },
         );
-        stand_in::program(&bin, "gh", &script);
+        let cli = if forge == "github" { "gh" } else { "glab" };
+        stand_in::program(&bin, cli, &script);
         World {
             _tmp: tmp,
             root,
@@ -154,6 +181,19 @@ fn a_promote_names_the_repo_and_its_readers_opens_the_issue_and_closes_the_todo(
         .find("Opened github:github.com/acme/api#12")
         .unwrap_or_else(|| panic!("the issue's key is said: {said}"));
     assert!(named < opened, "named before it is sent: {said}");
+    assert!(
+        said.contains("with the todo's title and text, labelled ws:alpha."),
+        "the label is named: {said}"
+    );
+    assert!(
+        said.contains("Remembered in 'alpha' → workspaces/alpha/memory/")
+            && said.contains("'alpha' is LOCAL (private) — memory stays on disk"),
+        "the close says what `done` says: {said}"
+    );
+    assert!(
+        said.contains("its work links now reach the issue"),
+        "{said}"
+    );
 
     let calls = w.calls();
     let read = calls.find("repos/acme/api\n").expect("the repo was read");
@@ -249,4 +289,27 @@ fn a_repo_that_is_not_the_workspaces_is_refused_before_the_forge_is_asked() {
     );
     assert_eq!(w.calls(), "");
     assert_eq!(w.todos().len(), 1, "the todo stays open");
+}
+
+#[test]
+fn a_gitlab_issue_is_opened_with_glabs_own_argv_and_its_scoped_label() {
+    let w = World::on("gitlab", "private");
+    let stem = w.the_picker();
+    let o = w.charter(&["ws", "todo", "-w", "alpha", "promote", &stem]);
+    let said = format!("{}{}", out(&o), err(&o));
+    assert!(o.status.success(), "{said}");
+    assert!(
+        said.contains("Opened gitlab:gitlab.com/acme/api#12"),
+        "{said}"
+    );
+    assert!(said.contains("labelled charter::ws::alpha."), "{said}");
+    let calls = w.calls();
+    assert!(
+        calls.contains(
+            "=== call\n--hostname\ngitlab.com\napi\n-X\nPOST\nprojects/acme%2Fapi/issues\n\
+             -f\ntitle=Port the picker\n-f\ndescription=\n-f\nlabels=charter::ws::alpha\n"
+        ),
+        "glab is asked exactly this: {calls}"
+    );
+    assert_eq!(w.todos(), Vec::<String>::new());
 }

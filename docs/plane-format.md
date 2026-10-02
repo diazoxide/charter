@@ -1369,8 +1369,9 @@ and an archived one is where `memstore.archive` would have put it (ADR 0065).
   project's chat ids (FW-5 #732), and a project-root chat is refused a link (ADR 0088 §4).
 - **Read by:** `charter_core::work::log::fold`, for the Work list (`work::list::of`, which the
   board, FW-9, will draw), `charter ws todo` (which finishes closing a promoted todo whose
-  close a crash cut short), and `charter doctor`'s `work links` row, shown only when a line was
-  skipped or an alias cycle was found.
+  close a crash cut short), and `charter doctor`'s `work links` row, shown only when there is
+  something to report: a todo a promote aliased but did not close, skipped lines (named by
+  file), or an alias cycle.
 - **Git:** committed when LIVE: the LIVE block holds `!/workspaces/<n>/work` and
   `!/workspaces/<n>/work/**`, a LIVE workspace's staged paths hold `work`, and the
   `.gitattributes` block holds `workspaces/*/work/*.jsonl merge=union`. Gitignored when LOCAL, by
@@ -1380,12 +1381,14 @@ and an archived one is where `memstore.archive` would have put it (ADR 0065).
   §1) and `chat` a chat's ULID in its canonical spelling. A line with any other key set, `v`,
   `op`, `cause` or `ts`, or a key or chat id that does not parse, is skipped and counted.
   Readers fold every file in every workspace's `work/`, sorted by `ts`, then file name, then
-  workspace, then line. A line never holds an item's title, body, labels, state or forge id, nor
+  line, a tie that leaves going to the workspace's name (ADR 0088's implementation erratum). A line never holds an item's title, body, labels, state or forge id, nor
   the local principal.
-- **The fold:** a chat's link is its last chat link or unlink across every workspace's log. A
-  workspace's items are its own links, less those it unlinked, plus the item of each chat whose
-  current link its log wrote. Every key is read through its aliases first; a cycle a merge made
-  stops before the first key it would repeat.
+- **The fold:** every key is read through its aliases first; a cycle a merge made stops before
+  the first key it would repeat. A chat's link is its last chat link across every workspace's
+  log, ended by a later chat unlink naming the same item once both are resolved. A workspace's
+  items are its own links, less those a later unlink names, plus the item of each chat whose
+  current link its log wrote. Every directory and file is read through containment, and one
+  that resolves out of the project is not read.
 
 | Line | Keys | Meaning |
 |---|---|---|
@@ -3278,10 +3281,14 @@ same bound.
 (`charter/commands.py:1354`) is written verbatim; an `mcp__…` pattern with a wildcard or
 arguments raises `UnexpressibleRule` and nothing is written.
 
-**Default ask rules** (charter-app): `init` writes two, `Bash(charter handoff *)` and
-`Bash(charter report *--yes*)`. The second is new in charter-app (ADR 0059, amended
-2026-09-26), and `reinit` adds it to a plane that predates it. `opencode.json` gets the same
-two globs. A **project template** (FR-17) adds its stack's guard defaults the same way,
+**Default ask rules** (charter-app): `init` writes three, `Bash(charter handoff *)`,
+`Bash(charter report *--yes*)` and `Bash(charter *todo*promote*)`. The second is new in
+charter-app (ADR 0059, amended 2026-09-26), the third with `charter ws todo promote` (V42,
+ADR 0088 §5): `charter`, then `todo`, then `promote`, with anything between, so it holds for
+`ws` and `workspace` and for a `-w` or `--repo` on either side of the verb. `reinit` adds the
+second and third to a plane that predates them. `opencode.json` gets the same globs, each
+placed so that no allow or ask that matches the same command comes after it (opencode's last
+match wins). A **project template** (FR-17) adds its stack's guard defaults the same way,
 through `charter guard ask`'s writer (every harness with command permissions or none, then
 every workspace layer). Codex's command rules live in `CODEX_HOME` or a trusted project's `.codex/rules`, which charter does not write, so charter's own guard applies there:
 the commands that publish or deploy, such as `Bash(cargo publish *)` for Rust or
