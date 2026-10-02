@@ -907,6 +907,7 @@ fn an_operators_untracked_cache_setting_is_never_overridden_by_any_read_or_save(
             sign: false,
             no_push: true,
             cwd: &fx.plane,
+            provenance: None,
         },
         &mut |line: Say| said.push_str(&format!("{line}\n")),
     );

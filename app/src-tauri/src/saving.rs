@@ -221,6 +221,7 @@ pub fn save_as(
             sign: false,
             no_push: false,
             cwd: root,
+            provenance: None,
         },
         trigger,
         &mut say,

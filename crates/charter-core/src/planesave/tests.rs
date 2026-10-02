@@ -482,3 +482,85 @@ fn the_repos_auto_save_can_reach_are_every_table_in_either_file_sorted_and_once(
             .is_empty()
     );
 }
+
+#[test]
+fn assisted_by_is_the_full_form_until_a_file_says_llm_for_the_plane_or_a_repo() {
+    use crate::provenance::Form;
+    let none = settings("", "");
+    assert_eq!(none.plane.assisted_by.value, Form::Full);
+    assert_eq!(none.repo("api").assisted_by.value, Form::Full);
+    let said = settings(
+        "[plane]\nassisted_by = \"llm\"\n[repos.api]\nassisted_by = \"llm\"\n",
+        "",
+    );
+    assert_eq!(
+        said.plane.assisted_by,
+        Resolved {
+            value: Form::Llm,
+            source: Source::Shared
+        }
+    );
+    assert_eq!(said.repo("api").assisted_by.value, Form::Llm);
+    assert_eq!(
+        settings("[repos.api]\nassisted_by = \"llm\"\n", "")
+            .repo("web")
+            .assisted_by
+            .value,
+        Form::Full,
+        "per repo"
+    );
+}
+
+#[test]
+fn an_assisted_by_charter_cannot_read_is_named_and_a_good_one_is_not() {
+    assert_eq!(
+        refusals(
+            "[repos.api]\nassisted_by = \"none\"\n",
+            false,
+            "charter.toml"
+        ),
+        ["repos.api.assisted_by in charter.toml is not a form of Assisted-by — full or llm"]
+    );
+    assert!(
+        refusals(
+            "[plane]\nassisted_by = \"llm\"\n[repos.api]\nassisted_by = \"full\"\n",
+            false,
+            "charter.toml"
+        )
+        .is_empty()
+    );
+}
+
+#[test]
+fn a_repo_with_no_assisted_by_of_its_own_follows_the_planes() {
+    use crate::provenance::Form;
+    let got = settings(
+        "[plane]\nassisted_by = \"llm\"\n[repos.web]\nassisted_by = \"full\"\n",
+        "",
+    );
+    assert_eq!(
+        got.repo("api").assisted_by,
+        Resolved {
+            value: Form::Llm,
+            source: Source::Shared
+        },
+        "no table of its own"
+    );
+    assert_eq!(
+        got.repo("web").assisted_by.value,
+        Form::Full,
+        "its own wins"
+    );
+}
+
+#[test]
+fn assisted_by_is_read_in_any_case() {
+    use crate::provenance::Form;
+    let got = settings(
+        "[plane]\nassisted_by = \"LLM\"\n[repos.api]\nassisted_by = \"Full\"\n",
+        "",
+    );
+    assert_eq!(got.plane.assisted_by.value, Form::Llm);
+    assert_eq!(got.repo("api").assisted_by.value, Form::Full);
+    assert!(refusals("[plane]\nassisted_by = \"LLM\"\n", false, "charter.toml").is_empty());
+}

@@ -89,6 +89,7 @@ pub mod profiles;
 pub mod profiletrust;
 pub mod programs;
 pub mod proseguard;
+pub mod provenance;
 pub mod pyjson;
 pub mod pypath;
 pub mod pyrepr;

@@ -28,6 +28,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   or one past 5 MiB is named rather than drawn. The diff view the Review tab will use is built
   on the same component (RC-5, #706).
 
+- **Agent commits say who made them.** A commit an agent makes in a chat, with its own
+  `git commit` in a workspace repo or with `charter save` in the project, ends with git
+  trailers: `Assisted-by: <harness>:<model>`, `Charter-Chat: <chat id>`,
+  `Charter-Persona: <persona>`, and `Charter-Change: <change>` when its branch is a change's. A
+  trailer charter does not know is left out, a commit you make by hand gets none, and your own
+  `Co-Authored-By` lines stay. Set `assisted_by = "llm"` under `[plane]` or `[repos.<name>]` for
+  the Linux kernel's bare `Assisted-by: LLM` (V67, GL-8, #702).
+
 - **Link a chat to a work item.** A chat tab's menu and the palette have **Link to work item…**,
   which asks for the item's tracker key (`github:github.com/owner/repo#12`, or a todo's
   `todo:<workspace>/<todo>`), and **Unlink work item**. A linked chat shows `Work item: <key>`

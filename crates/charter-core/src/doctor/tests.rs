@@ -524,7 +524,7 @@ fn a_save_setting_charter_does_not_read_is_named() {
     assert_eq!(
         r.detail,
         "plane.mod in charter.toml is not read — [plane] holds mode, branch, save_branch, sign, \
-         autosave, autosave_after and worktrees"
+         autosave, autosave_after, assisted_by and worktrees"
     );
 }
 

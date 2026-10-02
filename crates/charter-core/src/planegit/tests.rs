@@ -125,6 +125,7 @@ impl Fixture {
             sign: false,
             no_push: false,
             cwd: &self.root,
+            provenance: None,
         })
     }
 
@@ -207,6 +208,7 @@ fn what_is_about_to_be_committed_is_broken_down_by_directory_before_it_is() {
         sign: false,
         no_push: true,
         cwd: &fixture.root,
+        provenance: None,
     });
 
     assert_eq!(code, 0, "{said}");
@@ -248,6 +250,7 @@ fn an_unbounded_stage_from_a_linked_worktree_of_the_plane_is_refused() {
         sign: false,
         no_push: true,
         cwd: &worktree,
+        provenance: None,
     });
 
     assert_eq!(code, 1, "{said}");
@@ -293,6 +296,7 @@ fn a_scoped_stage_from_a_linked_worktree_is_still_allowed() {
             sign: false,
             no_push: true,
             cwd: &worktree,
+            provenance: None,
         },
         &crate::planesave::Settings::read(&fixture.root).plane,
         &["add", "--", "personas/steward/memory/m.md"],
@@ -319,6 +323,7 @@ fn an_unbounded_stage_from_a_plane_nested_in_the_workspaces_is_refused() {
         sign: false,
         no_push: true,
         cwd: &inner,
+        provenance: None,
     });
 
     assert_eq!(code, 1, "{said}");
@@ -357,6 +362,7 @@ fn a_held_index_lock_is_a_refusal_and_the_word_clean_never_appears() {
         sign: false,
         no_push: true,
         cwd: &fixture.root,
+        provenance: None,
     });
 
     assert_eq!(code, 1, "{said}");
@@ -378,6 +384,7 @@ fn a_clean_tree_says_there_is_nothing_to_save_and_commits_nothing() {
         sign: false,
         no_push: true,
         cwd: &fixture.root,
+        provenance: None,
     });
 
     assert_eq!(code, 0, "{said}");
@@ -400,6 +407,7 @@ fn a_plane_that_is_not_a_git_repository_is_told_so_rather_than_reported_saved() 
             sign: false,
             no_push: true,
             cwd: &root,
+            provenance: None,
         },
         &mut say,
     );
@@ -429,6 +437,7 @@ fn a_secret_shaped_value_in_a_memory_file_stops_the_save_and_is_never_echoed() {
         sign: false,
         no_push: true,
         cwd: &fixture.root,
+        provenance: None,
     });
 
     assert_eq!(code, 1, "{said}");
@@ -454,6 +463,7 @@ impl Fixture {
             sign: false,
             no_push: true,
             cwd: &self.root,
+            provenance: None,
         })
     }
 }
@@ -669,6 +679,7 @@ fn a_memory_file_that_leads_out_of_the_plane_is_refused_rather_than_read_through
         sign: false,
         no_push: true,
         cwd: &fixture.root,
+        provenance: None,
     });
 
     assert_eq!(code, 1, "{said}");
@@ -700,6 +711,7 @@ fn a_memory_file_that_is_a_link_is_refused_even_when_it_lands_back_inside_the_pl
         sign: false,
         no_push: true,
         cwd: &fixture.root,
+        provenance: None,
     });
 
     assert_eq!(code, 1, "{said}");
@@ -742,6 +754,7 @@ fn a_secret_staged_and_then_cleaned_out_of_the_working_tree_is_still_refused() {
         sign: false,
         no_push: true,
         cwd: &fixture.root,
+        provenance: None,
     });
 
     assert_eq!(code, 1, "{said}");
@@ -774,6 +787,7 @@ fn a_staged_path_git_would_quote_is_examined_rather_than_skipped() {
         sign: false,
         no_push: true,
         cwd: &fixture.root,
+        provenance: None,
     });
 
     assert_eq!(code, 1, "{said}");
@@ -798,6 +812,7 @@ fn a_staged_memory_file_that_is_not_utf8_is_examined_rather_than_skipped() {
         sign: false,
         no_push: true,
         cwd: &fixture.root,
+        provenance: None,
     });
 
     assert_eq!(code, 1, "{said}");
@@ -838,6 +853,7 @@ fn the_signer_is_never_asked_even_when_the_operator_signs_every_commit() {
         sign: false,
         no_push: true,
         cwd: &fixture.root,
+        provenance: None,
     });
 
     assert_eq!(code, 0, "{said}");
@@ -1022,6 +1038,7 @@ fn a_save_asked_to_sign_that_has_to_rebase_signs_the_commit_it_replays() {
             sign: true,
             no_push: false,
             cwd: &fixture.root,
+            provenance: None,
         });
 
         assert_eq!(code, 0, "{said}");
@@ -1712,6 +1729,7 @@ fn a_commit_left_unpushed_is_pushed_by_the_next_save_even_with_nothing_new_to_co
         sign: false,
         no_push: false,
         cwd: &fixture.root,
+        provenance: None,
     });
 
     assert_eq!(code, 0, "{said}");
@@ -1766,6 +1784,7 @@ fn a_plane_that_says_sign_asks_the_signer_without_being_told_on_the_command_line
             sign: false,
             no_push: true,
             cwd: &fixture.root,
+            provenance: None,
         });
 
         assert_eq!(code, 0, "{said}");
@@ -1820,6 +1839,7 @@ fn a_save_with_no_message_says_what_changed_in_the_planes_own_words() {
         sign: false,
         no_push: true,
         cwd: &fixture.root,
+        provenance: None,
     });
 
     assert_eq!(code, 0, "{said}");
@@ -1840,6 +1860,7 @@ fn one_file_is_one_file() {
         sign: false,
         no_push: true,
         cwd: &fixture.root,
+        provenance: None,
     });
     assert_eq!(
         fixture.head_subject(),
@@ -1983,6 +2004,7 @@ fn a_refusal_is_journalled_in_its_own_words() {
             sign: false,
             no_push: false,
             cwd: &root,
+            provenance: None,
         },
         &mut say,
     );
@@ -2840,6 +2862,7 @@ fn once_the_merge_is_finished_the_save_goes_ahead() {
         sign: false,
         no_push: true,
         cwd: &fixture.root,
+        provenance: None,
     });
 
     assert_eq!(code, 0, "{said}");
@@ -3115,4 +3138,119 @@ fn the_untracked_cache_is_asked_for_only_where_the_operators_config_says_nothing
 
     run(&fixture.root, &["config", "core.untrackedCache", "keep"]);
     assert_eq!(git::untracked_cache(&fixture.root), None);
+}
+
+// --------------------------------------------------------------------------------------- //
+// provenance trailers (GL-8, V67)                                                           //
+// --------------------------------------------------------------------------------------- //
+
+fn an_agent_run() -> crate::provenance::Provenance {
+    crate::provenance::Provenance {
+        harness: Some("claude-code".into()),
+        model: Some("claude-opus-5-5".into()),
+        chat: Some("01J9ZQ3W5Y7X8V6T4R2P0N1M3K".into()),
+        persona: Some("steward".into()),
+        change: None,
+    }
+}
+
+impl Fixture {
+    fn save_for(&self, message: &str, provenance: Option<&crate::provenance::Provenance>) -> u8 {
+        std::fs::write(self.root.join("notes.md"), message).unwrap();
+        let (code, said) = self.save(Request {
+            root: &self.root,
+            message: Some(message),
+            sign: false,
+            no_push: true,
+            cwd: &self.root,
+            provenance,
+        });
+        assert_eq!(code, 0, "{said}");
+        code
+    }
+
+    /// HEAD's trailers, as git itself parses them.
+    fn head_trailers(&self) -> String {
+        run(
+            &self.root,
+            &["log", "-1", "--format=%(trailers:only,unfold)"],
+        )
+        .trim()
+        .to_owned()
+    }
+}
+
+#[test]
+fn a_save_an_agent_run_asked_for_carries_its_trailers_after_the_operators_own() {
+    let fixture = Fixture::plane();
+    let run_ = an_agent_run();
+    fixture.save_for(
+        "memory: one lesson\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+        Some(&run_),
+    );
+    assert_eq!(
+        fixture.head_trailers(),
+        "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n\
+         Assisted-by: claude-code:claude-opus-5-5\n\
+         Charter-Chat: 01J9ZQ3W5Y7X8V6T4R2P0N1M3K\n\
+         Charter-Persona: steward"
+    );
+    assert_eq!(fixture.head_subject(), "memory: one lesson");
+}
+
+#[test]
+fn a_save_nobody_ran_for_an_agent_carries_no_trailer() {
+    let fixture = Fixture::plane();
+    fixture.save_for("by hand", None);
+    assert_eq!(fixture.head_trailers(), "");
+}
+
+#[test]
+fn a_plane_that_follows_the_kernel_says_assisted_by_llm() {
+    let fixture = Fixture::plane();
+    std::fs::write(
+        fixture.root.join("charter.toml"),
+        "[plane]\nname = \"fixture\"\nassisted_by = \"llm\"\n",
+    )
+    .unwrap();
+    let run_ = an_agent_run();
+    fixture.save_for("a save", Some(&run_));
+    assert!(
+        fixture
+            .head_trailers()
+            .starts_with("Assisted-by: LLM\nCharter-Chat: "),
+        "{}",
+        fixture.head_trailers()
+    );
+}
+
+#[test]
+fn a_projects_trailer_config_runs_nothing_and_the_agents_own_lines_stay_as_written() {
+    let fixture = Fixture::plane();
+    let ran = fixture.root.parent().unwrap().join("trailer command ran");
+    run(
+        &fixture.root,
+        &[
+            "config",
+            "trailer.foo.command",
+            &format!("touch '{}'; echo v", ran.display()),
+        ],
+    );
+    run(
+        &fixture.root,
+        &["config", "trailer.Assisted-by.ifexists", "replace"],
+    );
+    let run_ = an_agent_run();
+    fixture.save_for(
+        "a save\n\nCo-authored-by:x\nRefs:\nhttps://example.com/a",
+        Some(&run_),
+    );
+
+    assert!(!ran.exists(), "a trailer command ran");
+    let body = run(&fixture.root, &["log", "-1", "--format=%B"]);
+    assert!(
+        body.starts_with("a save\n\nCo-authored-by:x\nRefs:\nhttps://example.com/a\nAssisted-by: "),
+        "{body}"
+    );
+    assert!(!body.contains("foo:"), "{body}");
 }

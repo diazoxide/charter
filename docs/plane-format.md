@@ -541,7 +541,8 @@ Paths derived from the root (all in `derive`, `charter/config.py:661`) that land
 | `[plane].sign` | bool | optional; default `false` | **charter-app only.** Sign save commits. (ADR 0051 also has a push refused for an unsigned commit tell the operator to set this; that hint is not built.) | stable | ADR 0051; `crates/charter-core/src/planesave.rs`, `crates/charter-core/src/planegit.rs` |
 | `[plane].autosave` | bool | optional; default `true` | **charter-app only.** Save by itself: after `autosave_after` of quiet, when a session ends, and when the app quits (the push gets about five seconds; the next launch pushes what was left). Also fast-forwards a clean tree from the remote every five minutes and on window focus; with `false`, incoming commits are shown, not pulled. | stable | ADR 0051; `crates/charter-core/src/autosave.rs`, `app/src-tauri/src/autosave.rs` |
 | `[plane].autosave_after` | str | optional; default `"30s"`; a whole number followed by `s` or `m` | **charter-app only.** The quiet period after the last change before an auto-save. | stable | ADR 0051; `crates/charter-core/src/planesave.rs`, `crates/charter-core/src/autosave.rs` |
-| `[repos.<name>]` | table | optional, one per repo | **charter-app only.** How a workspace repo is saved. `<name>` is the repo's `name` in `inventory/repos.json`, so one table governs every workspace's clone of it. Takes the same keys as `[plane]` (`mode`, `branch`, `sign`, `autosave`, `autosave_after`) except `save_branch`, with the defaults `mode = "off"` (charter never commits, pushes or opens a PR for a repo until its mode says how — ADR 0051, amended 2026-09-25) and `autosave = false`. A save commits on the branch the clone is on and `pr` opens its PR from that branch into `branch` (default: the repo's `default_branch`); on that default branch, a PR mode first creates `charter/<workspace>/<short-sha>`. It never runs while a session in that workspace is mid-turn. | stable | ADR 0051; `crates/charter-core/src/reposave.rs` |
+| `[plane].assisted_by` | str | optional; default `"full"`; one of `full`, `llm`, in any case; a `[repos.<name>]` that does not set it follows this one | How a commit an agent run made spells its `Assisted-by` trailer: `full` is `<harness>:<model>`, `llm` is the kernel's bare `LLM`. See *Provenance trailers* below. | stable | V67; `crates/charter-core/src/planesave.rs`, `crates/charter-core/src/provenance.rs` |
+| `[repos.<name>]` | table | optional, one per repo | **charter-app only.** How a workspace repo is saved. `<name>` is the repo's `name` in `inventory/repos.json`, so one table governs every workspace's clone of it. Takes the same keys as `[plane]` (`mode`, `branch`, `sign`, `autosave`, `autosave_after`, `assisted_by`) except `save_branch`, with the defaults `mode = "off"` (charter never commits, pushes or opens a PR for a repo until its mode says how — ADR 0051, amended 2026-09-25) and `autosave = false`. A save commits on the branch the clone is on and `pr` opens its PR from that branch into `branch` (default: the repo's `default_branch`); on that default branch, a PR mode first creates `charter/<workspace>/<short-sha>`. It never runs while a session in that workspace is mid-turn. | stable | ADR 0051; `crates/charter-core/src/reposave.rs` |
 | any other key in `[plane]` or `[repos.<name>]` | — | — | Refused by the Project settings tab's save, ignored by readers. | stable | ADR 0051; `crates/charter-core/src/planesave.rs` `refusals` |
 | `[charter].version` | str | optional | The version lock. Reported **as written** (even if malformed); must match `^\d+\.\d+\.\d+$` before it is acted on. | stable | `charter/instance.py:321`, `charter/instance.py:290` |
 | `[update].channel` | str | default `"stable"`; closed set `stable`,`dev` | Which charter this plane tracks. Unknown → `stable`; the matched **constant** is stored, never the file's string. | stable | `charter/instance.py:2948`, `charter/instance.py:2936` |
@@ -1955,6 +1956,62 @@ and an archived one is where `memstore.archive` would have put it (ADR 0065).
 - **Beside it:** charter's own entry, the same in every repository: an `email` in a file named
   `Cargo.toml`, `package.json`, `.mailmap`, `AUTHORS`, `CONTRIBUTORS` or `CHANGELOG` (the last
   three also `.md` and `.txt`), at any depth.
+
+### Provenance trailers — in the message of every commit an agent run makes (any repository)
+
+- **Format:** git trailers, `git interpret-trailers` syntax, in the commit message's last
+  paragraph, in this order. Ruling V67 (#702, GL-8).
+
+  ```text
+  Assisted-by: <harness>:<model>
+  Charter-Chat: <chat ULID>
+  Charter-Persona: <persona>
+  Charter-Change: <change slug>
+  ```
+
+  - `Assisted-by` is the Linux kernel's original form (`Documentation/process/coding-assistants.rst`,
+    78d979db6cef). `<harness>` is one of `claude-code`, `codex` and `opencode` (V67(b)), taken
+    from the kind of the harness profile the chat was started on, never from the program it
+    runs. `<model>` is the model as its provider names it. When charter does not know the model, the
+    value is `<harness>` alone, with no colon. With `assisted_by = "llm"` (below) it is
+    `Assisted-by: LLM`, the kernel's form since 816d9992d9ed.
+  - `Charter-Chat` names the chat by its ULID (ADR 0066), never by its number.
+  - `Charter-Persona` is the persona the chat adopted.
+  - `Charter-Change` is the change whose record has a member for this repo on the branch the
+    commit is on (ADR 0060).
+  - A trailer whose value charter does not know is left out. A value that is not one word of
+    printable ASCII, or is longer than 100 characters, counts as unknown. A line already in the
+    message is not added again, so an amend carries each trailer once.
+  - **charter only appends.** Every byte the message already had stays as written, including
+    the agent's own trailers (`Co-authored-by:x` is not reformatted) and a `---` line, which is
+    text and not a patch divider. The lines go after the message's last line of text, joining
+    its trailer block when that paragraph is one, and after a blank line otherwise. In an
+    edited message they go before the closing comment lines, and nothing below git's scissors
+    line is touched. `git interpret-trailers` is not run, so a repository's `trailer.*`
+    configuration is neither read nor run.
+  - There is no on-behalf-of trailer. The human is the commit's author.
+  - **A claim, not proof.** The agent writes its own commit message, so it can type any of these
+    lines, change them, or make a commit the hook never sees. Treat them as what the agent run
+    says about itself, for reading history. Nothing should take them as a security signal or as
+    evidence of who made a change.
+- **Status:** **stable**. These are public: they are written into the history of every repository
+  an agent commits to, and are hard to take back.
+- **Tier:** None — they live in the repository's own history, and charter keeps no copy.
+- **Written by:**
+  - a chat's `commit-msg` hook, for every commit the agent makes itself in a chat whose git runs
+    charter's hooks (ADR 0074 as amended by V67). `charter git-hook commit-msg` reads the chat
+    from `$CHARTER_SESSION_ID` and the app's record (`charter_core::provenance::stamp`). It
+    never refuses a commit, and a `charter` that has gone leaves the message as written;
+  - `charter save`, when it is run inside a chat, for the project save it commits
+    (`charter_core::planegit`).
+- **Never written** on a commit the operator makes by hand: their terminal is not armed, a
+  save from the window's button or from auto-save is the app's, and a shell tab is no harness.
+- **Spelled per repo:** `[plane].assisted_by` and `[repos.<name>].assisted_by`, `"full"` (the
+  default) or `"llm"` in any case, in `charter.toml` (see the table above). A `[repos.<name>]`
+  that does not set it follows `[plane].assisted_by`. A repository the project does not hold gets
+  the full form.
+- **Read by:** nothing in charter yet. `git log --format='%(trailers)'` and
+  `git interpret-trailers --parse` read them.
 
 ### `workspaces/<ws>/.worktrees/<repo>/<piece>/` — pieces
 
