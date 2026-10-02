@@ -2,6 +2,7 @@ import { Fragment, Suspense, lazy, useEffect, useMemo, useState, type ReactNode 
 import {
   Brain,
   ChartColumn,
+  Download,
   FileCode,
   FileText,
   FolderGit2,
@@ -20,6 +21,7 @@ import { EmptyState } from "./EmptyState";
 import { AskFirst, runExtensionAction } from "./ExtensionAction";
 import { LandAsk, PushAsk, askLand } from "./ChangeActions";
 import { PanelList } from "./PanelList";
+import { HarnessSetupTab } from "./HarnessSetupTab";
 import { RepoInstructionsTab } from "./RepoInstructionsTab";
 import { Preferences } from "./Preferences";
 import { ProjectSettings, WorkspaceSettings } from "./ProjectSettings";
@@ -56,6 +58,9 @@ const WORKSPACE_SETTINGS = "workspace-settings";
 
 /** What `repoInstructionsView` names a workspace's repo instructions view (FR-18a). */
 const REPO_INSTRUCTIONS = "repo-instructions";
+
+/** What `harnessSetupView` names the harness setup view (FR-29). */
+const HARNESS_SETUP_VIEW = "harness-setup";
 
 /**
  * **Views: what a tab shows when it does not show a chat** — ADR 0043 as amended
@@ -198,6 +203,7 @@ export const OWN_MARKS: Record<string, React.ComponentType<{ className?: string 
   [SHARED_MEMORY_VIEW.view]: Brain,
   [WORKSPACE_SETTINGS]: Settings2,
   [REPO_INSTRUCTIONS]: FileText,
+  [HARNESS_SETUP_VIEW]: Download,
   preferences: SlidersHorizontal,
   "piece-files": FolderGit2,
   "piece-file": FileCode,
@@ -378,6 +384,15 @@ export function ViewPane({
             workspace={view.key}
             onClose={() => onCloseView?.(view)}
           />
+        ) : isHarnessSetup(view) ? (
+          /* No harness found (FR-29): each one's installer, run in a shell tab on a press.
+             Keyed by both, as the repo's instructions are. */
+          <HarnessSetupTab
+            key={`${plane}\u0000${view.key}`}
+            plane={plane}
+            cwd={view.key}
+            workspace={workspace ?? ""}
+          />
         ) : isSaving(view) ? (
           /* The plane's save standing and its save button (charter-app#294). Keyed by the
              plane, so a pane that comes to show another project's starts from its own read. */
@@ -506,6 +521,11 @@ function isWorkspaceSettings(view: ViewRef): boolean {
 /** Whether `view` is a workspace's repo instructions (FR-18a). */
 function isRepoInstructions(view: ViewRef): boolean {
   return view.from === null && view.view === REPO_INSTRUCTIONS;
+}
+
+/** Whether `view` is the harness setup view (FR-29). */
+function isHarnessSetup(view: ViewRef): boolean {
+  return view.from === null && view.view === HARNESS_SETUP_VIEW;
 }
 
 /** Whether `view` is the Saving view (charter-app#294). */

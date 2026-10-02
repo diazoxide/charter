@@ -70,6 +70,7 @@ import {
   type Ran,
 } from "./actions";
 import { usePlaneSaving, useRepoSavingKept, WAY_OUT, type WayOut } from "./saving";
+import { HARNESS_SETUP, type HarnessSetupAsk } from "./harnessSetup";
 import { curationSubjects, useCurations } from "./curations";
 import { LiveDialog, LiveMark } from "./LiveDialog";
 import { DeleteWorkspace } from "./DeleteWorkspace";
@@ -131,6 +132,8 @@ import {
   openTabBehind,
   openView,
   offerView,
+  harnessSetupTitle,
+  harnessSetupView,
   repoInstructionsTitle,
   repoInstructionsView,
   panesOf,
@@ -215,6 +218,10 @@ const NONE: readonly never[] = [];
  *  on, where something already knows which one is wanted: a harness started by hand in a shell
  *  tab, opened as a chat instead (ADR 0062). */
 type Where = { tab: true; in?: string; prefer?: string } | { split: Direction };
+
+/** What a new shell tab has typed into it: a line spelled out (FR-4's `gh auth login`), or a
+ *  harness whose compiled-in installer the core types itself (FR-29, V65). */
+type Typed = { line: string; installer?: undefined } | { installer: string; line?: undefined };
 
 /**
  * One project, with everything that belongs to it.
@@ -1389,7 +1396,7 @@ export function PlaneView({
    * from the record reads the same: a chat's name is what its tab is drawn from at a relaunch.
    */
   const openShell = useCallback(
-    (cwd: string | null, filed: string, typed?: string) => {
+    (cwd: string | null, filed: string, typed?: Typed) => {
       const name = `shell ${now.current.named.tabs + 1}`;
       void commands
         .openSession(plane, null, [], cwd, name, STARTING_SIZE.columns, STARTING_SIZE.rows)
@@ -1403,8 +1410,16 @@ export function PlaneView({
           setStartedIn((was) => ({ ...was, [session]: filed }));
           change((tabs) => openTab(tabs, session, name));
           // A command typed in for the operator, run as if they had typed it: the shell reads
-          // it once it is up, and the tab is theirs to leave.
-          if (typed !== undefined) void commands.sendInput(plane, session, `${typed}\n`);
+          // it once it is up, and the tab is theirs to leave. A harness's installer is named,
+          // never spelled: the core types its own compiled-in line (FR-29, V65).
+          if (typed?.line !== undefined) void commands.sendInput(plane, session, `${typed.line}\n`);
+          else if (typed?.installer !== undefined)
+            void commands
+              .typeInstaller(plane, session, typed.installer)
+              .then((said) => {
+                if (said.status === "error") setTrouble(said.error);
+              })
+              .catch((err: unknown) => setTrouble(String(err)));
         })
         .catch((err: unknown) => setTrouble(String(err)));
     },
@@ -1422,7 +1437,7 @@ export function PlaneView({
     if (shellAsked === undefined || root === undefined) return;
     if (shellHandled.current === shellAsked.at) return;
     shellHandled.current = shellAsked.at;
-    openShell(root, OUTSIDE, shellAsked.typed);
+    openShell(root, OUTSIDE, { line: shellAsked.typed });
   }, [openShell, root, shellAsked]);
 
   /** A shell tab where a new chat would start — or in `workspace`'s own directory, filed under
@@ -1463,6 +1478,28 @@ export function PlaneView({
     window.addEventListener(WAY_OUT, out);
     return () => window.removeEventListener(WAY_OUT, out);
   }, [newTabIn, openShell, plane, sidebar]);
+
+  /**
+   * **The harness setup tab's two asks** (FR-29): a harness's installer, typed by the core
+   * into a shell tab at the project's root, or the picker to start a chat in the directory the
+   * tab is about, on the harness it names, once one is installed.
+   */
+  useEffect(() => {
+    const asked = (event: Event) => {
+      const wanted = (event as CustomEvent<HarnessSetupAsk>).detail;
+      if (wanted.plane !== plane) return;
+      if (wanted.way === "chat") {
+        void ask({ tab: true, in: wanted.cwd, prefer: wanted.harness });
+        return;
+      }
+      // At the project's root, as FR-4's sign-in is, and never in the fresh clone: its own
+      // shell hooks (direnv, mise) have nothing to do with installing a harness.
+      // Filed on the workspace's strip, beside the setup tab the operator comes back to.
+      if (root !== undefined) openShell(root, wanted.workspace, { installer: wanted.harness });
+    };
+    window.addEventListener(HARNESS_SETUP, asked);
+    return () => window.removeEventListener(HARNESS_SETUP, asked);
+  }, [ask, openShell, plane, root]);
 
   /**
    * A harness started by hand in one of this project's shell tabs (ADR 0062): the core says so,
@@ -1846,7 +1883,7 @@ export function PlaneView({
     if (firstChatAsked === undefined || firstChatHandled.current === firstChatAsked.at) return;
     if (!sidebar?.workspaces.some((ws) => ws.name === firstChatAsked.workspace)) return;
     firstChatHandled.current = firstChatAsked.at;
-    const { workspace, cwd, harness, instructions } = firstChatAsked;
+    const { workspace, cwd, harness, noneInstalled, instructions } = firstChatAsked;
     const where: Where = { tab: true, in: cwd };
     // **The repo's agent instructions, offered beside the chat and not in front of it**
     // (FR-18a): a tab that asks nothing until the operator goes to it, so W10's budget —
@@ -1874,6 +1911,16 @@ export function PlaneView({
           return;
         }
         focusWorkspace(workspace);
+        // **No harness on this machine** (FR-29): the picker would list harnesses none of
+        // which can start, so the first chat is the setup tab — each one's official installer,
+        // run in a shell tab on a press — in front, and the picker comes from its Start a chat.
+        if (noneInstalled) {
+          change((tabs) =>
+            openView(tabs, harnessSetupView(cwd), harnessSetupTitle(workspace), workspace),
+          );
+          offerInstructions();
+          return;
+        }
         // **Nothing to pick, so nothing is asked** (FR-4, W10's interrupt budget): one
         // harness signed in on this machine, and a profile of it that needs no approval. The
         // picker still comes up whenever there is a choice or a command to approve (ADR 0022).
@@ -4202,6 +4249,9 @@ export type FirstChat = {
   /** The one harness signed in on this machine, which the chat starts on without the picker;
    *  `null` when there is a choice to make. */
   harness: string | null;
+  /** Whether no harness is installed on this machine: the first chat is then the harness
+   *  setup tab instead of the picker (FR-29). */
+  noneInstalled: boolean;
   /** How many of the repo's agent instruction files can go into the workspace's memory
    *  (FR-18a): offered in a tab beside the chat when there are any. */
   instructions: number;

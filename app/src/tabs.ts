@@ -112,6 +112,21 @@ export function repoInstructionsTitle(workspace: string): string {
   return `Memory from the repo · ${workspace}`;
 }
 
+/**
+ * **Setting up a harness** (FR-29, W10's "no harness found"): each harness's official installer,
+ * run in a shell tab on a press, and a local model server already on the machine. Keyed by the
+ * directory the first chat would start in — the repo's clone — so the shell and the chat it
+ * leads to start there, and filed on that workspace's strip.
+ */
+export function harnessSetupView(cwd: string): ViewRef {
+  return { from: null, view: "harness-setup", key: cwd };
+}
+
+/** What the harness setup tab is called. */
+export function harnessSetupTitle(workspace: string): string {
+  return `Set up a harness · ${workspace}`;
+}
+
 /** What a workspace's settings tab is called. */
 export function workspaceSettingsTitle(workspace: string): string {
   return `Workspace settings · ${workspace}`;

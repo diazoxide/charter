@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 use charter_core::firstrun;
 use charter_core::forge::{Forge, Kind};
+use charter_core::noharness;
 use charter_core::repoinstructions::{self, Standing};
 
 use crate::opener::Opened;
@@ -26,6 +27,22 @@ pub struct HarnessRow {
     /// Whether a sign-in was found. `false` is not a refusal: the harness asks for its own
     /// login when its chat starts.
     pub signed_in: bool,
+    /// Its vendor's own installer, word for word, which the harness setup tab types into a
+    /// shell tab when the operator presses Install (FR-29).
+    pub installer: String,
+    /// The vendor's install page the command is from.
+    pub installer_page: String,
+}
+
+/// A local model server found answering on this machine (FR-29's local model fallback).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct LocalModelRow {
+    /// What the screen calls it (`Ollama`, `LM Studio`).
+    pub title: String,
+    /// The base URL a harness is pointed at.
+    pub base_url: String,
+    /// The harness that can use it with no account (`opencode`).
+    pub harness: String,
 }
 
 /// One forge's CLI, as the first-run screen lists it.
@@ -62,6 +79,39 @@ pub struct FirstRunFound {
     pub forges: Vec<ForgeRow>,
     /// The project templates this charter ships, in the order the screen lists them.
     pub templates: Vec<TemplateRow>,
+    /// The local model servers answering on this machine: the fallback for somebody with no
+    /// harness account (FR-29).
+    pub local_models: Vec<LocalModelRow>,
+}
+
+/// One row per harness, as the first run and the harness setup tab list them.
+fn harness_rows(found: &[firstrun::HarnessFound]) -> Vec<HarnessRow> {
+    found
+        .iter()
+        .map(|found| {
+            let installer = noharness::installer(found.harness);
+            HarnessRow {
+                name: found.harness.name().to_owned(),
+                title: found.harness.title().to_owned(),
+                installed: found.program.is_some(),
+                signed_in: found.signed_in,
+                installer: installer.command.to_owned(),
+                installer_page: installer.page.to_owned(),
+            }
+        })
+        .collect()
+}
+
+/// One row per local model server that answered.
+fn local_model_rows(answered: &[noharness::LocalServer]) -> Vec<LocalModelRow> {
+    answered
+        .iter()
+        .map(|server| LocalModelRow {
+            title: server.title.to_owned(),
+            base_url: server.base_url.to_owned(),
+            harness: noharness::LOCAL_MODEL_HARNESS.name().to_owned(),
+        })
+        .collect()
 }
 
 /// Which project template the repo's project is laid out from: `charter_core::firstrun::Choice`
@@ -134,6 +184,9 @@ pub struct OpenedRepo {
     /// first chat starts on it without the picker (W10's interrupt budget). `null` when there
     /// is a choice to make.
     pub harness: Option<String>,
+    /// Whether no harness is installed on this machine: the first chat is then the harness
+    /// setup tab, with each one's official installer, instead of the picker (FR-29).
+    pub none_installed: bool,
     /// How many of the repo's agent instruction files can be added to the workspace's memory
     /// (FR-18a): the window offers them in a tab beside the first chat when there are any.
     pub instructions: u32,
@@ -187,6 +240,59 @@ pub struct ChosenInstruction {
     pub text: String,
 }
 
+/// What the harness setup tab shows (FR-29): the harnesses and the local model servers, and
+/// not the forge CLIs, whose sign-in checks are subprocesses the tab has no use for.
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+pub struct HarnessSetupFound {
+    pub harnesses: Vec<HarnessRow>,
+    pub local_models: Vec<LocalModelRow>,
+}
+
+/// Which harnesses are installed and signed in, and which local model servers answer: the
+/// harness setup tab's look at the machine, and its Check again (FR-29). On a blocking thread,
+/// for the local probes.
+#[tauri::command]
+#[specta::specta]
+pub async fn harness_setup_found() -> Result<HarnessSetupFound, String> {
+    tauri::async_runtime::spawn_blocking(|| HarnessSetupFound {
+        harnesses: harness_rows(&firstrun::harnesses_here()),
+        local_models: local_model_rows(&noharness::local_models_here()),
+    })
+    .await
+    .map_err(|err| format!("charter could not look at this machine: {err}"))
+}
+
+/// Types harness `harness`'s official installer into shell session `session`, and runs it
+/// (FR-29, ruling V65).
+///
+/// **The window names the harness, never the command.** The line is charter's own,
+/// compiled in (`charter_core::noharness::installer`) and shown word for word on the tab
+/// before the press, so no text from a project, a plane or the window can reach the shell
+/// through here. A word that is not a harness charter starts is refused, and nothing is typed.
+#[tauri::command]
+#[specta::specta]
+pub fn type_installer(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    session: u32,
+    harness: String,
+) -> Result<(), String> {
+    let line = installer_line(&harness)?;
+    planes
+        .held(&plane)?
+        .operator_input(session, line.as_bytes())
+}
+
+/// The line [`type_installer`] types for `harness`: its installer and a newline.
+fn installer_line(harness: &str) -> Result<String, String> {
+    let Some(harness) = charter_core::harness::Harness::of_kind(harness) else {
+        return Err(format!(
+            "{harness:?} is not a harness charter starts, so there is no installer to type"
+        ));
+    };
+    Ok(format!("{}\n", noharness::installer(harness).command))
+}
+
 /// Which harnesses are installed and signed in, and whether `gh` and `glab` are logged in.
 ///
 /// **On a blocking thread**: `gh auth status` and `glab auth status` are subprocesses with a
@@ -195,15 +301,7 @@ pub struct ChosenInstruction {
 #[specta::specta]
 pub async fn first_run_found() -> Result<FirstRunFound, String> {
     tauri::async_runtime::spawn_blocking(|| {
-        let harnesses = firstrun::harnesses_here()
-            .into_iter()
-            .map(|found| HarnessRow {
-                name: found.harness.name().to_owned(),
-                title: found.harness.title().to_owned(),
-                installed: found.program.is_some(),
-                signed_in: found.signed_in,
-            })
-            .collect();
+        let harnesses = harness_rows(&firstrun::harnesses_here());
         let forges = forge_rows(
             &|kind| charter_core::forge::find_cli(kind.cli()).is_some(),
             &|kind| Forge::default_of(kind).check_auth().is_ok(),
@@ -212,6 +310,7 @@ pub async fn first_run_found() -> Result<FirstRunFound, String> {
             harnesses,
             forges,
             templates: templates(),
+            local_models: local_model_rows(&noharness::local_models_here()),
         }
     })
     .await
@@ -244,14 +343,16 @@ pub async fn open_repo(
             Taken::In(root, taken) => (root, taken),
             Taken::AsksForge(why) => return Ok(Err(why)),
         };
-        let harness = firstrun::only_ready(&firstrun::harnesses_here());
+        let here = firstrun::harnesses_here();
+        let harness = firstrun::only_ready(&here);
+        let none_installed = noharness::none_installed(&here);
         // Counted, not written: the tab that offers them is where the operator says yes.
         let instructions = offered(&root, &taken.workspace);
-        Ok::<_, String>(Ok((root, taken, harness, instructions)))
+        Ok::<_, String>(Ok((root, taken, harness, none_installed, instructions)))
     })
     .await
     .map_err(|err| format!("charter could not open the repo: {err}"))??;
-    let (root, taken, harness, instructions) = match made {
+    let (root, taken, harness, none_installed, instructions) = match made {
         Ok(made) => made,
         Err(why) => {
             return Ok(RepoAnswer {
@@ -267,6 +368,7 @@ pub async fn open_repo(
             workspace: taken.workspace,
             cwd: taken.clone.display().to_string(),
             harness: harness.map(|one| one.name().to_owned()),
+            none_installed,
             instructions,
             template: taken.template,
         }),
@@ -566,6 +668,58 @@ mod tests {
             [Kind::GitLab],
             "gh is not installed, so not asked"
         );
+    }
+
+    /// FR-29: a harness that is not installed is listed with its vendor's own installer, so
+    /// the setup tab can type it into a shell tab.
+    #[test]
+    fn every_harness_row_carries_its_vendors_installer() {
+        let found = [firstrun::HarnessFound {
+            harness: charter_core::harness::Harness::Opencode,
+            program: None,
+            signed_in: false,
+        }];
+
+        let rows = harness_rows(&found);
+
+        assert_eq!(
+            rows[0].installer,
+            "curl -fsSL https://opencode.ai/install | bash"
+        );
+        assert_eq!(rows[0].installer_page, "https://opencode.ai/docs/");
+        assert!(!rows[0].installed);
+    }
+
+    /// FR-29's local model fallback: a server that answered is named with the harness that
+    /// can use it with no account.
+    #[test]
+    fn a_local_model_server_that_answered_is_offered_to_opencode() {
+        let rows = local_model_rows(&[noharness::LOCAL_SERVERS[0]]);
+
+        assert_eq!(
+            rows,
+            [LocalModelRow {
+                title: "Ollama".to_owned(),
+                base_url: "http://127.0.0.1:11434/v1".to_owned(),
+                harness: "opencode".to_owned(),
+            }]
+        );
+    }
+
+    /// V65: the line typed is the compiled-in installer of the harness named, and nothing
+    /// else is ever typed.
+    #[test]
+    fn the_installer_typed_is_the_compiled_in_one_for_the_harness_named() {
+        assert_eq!(
+            installer_line("codex").as_deref(),
+            Ok("curl -fsSL https://chatgpt.com/codex/install.sh | sh\n")
+        );
+        assert_eq!(
+            installer_line("claude").as_deref(),
+            Ok("curl -fsSL https://claude.ai/install.sh | bash\n")
+        );
+        let refused = installer_line("rm -rf ~").expect_err("not a harness");
+        assert!(refused.contains("not a harness"), "{refused}");
     }
 
     /// A repo with one commit, made from charter-core's git template so it never asks the

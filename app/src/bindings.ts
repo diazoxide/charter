@@ -276,6 +276,22 @@ export const commands = {
 	 */
 	firstRunFound: () => typedError<FirstRunFound, string>(__TAURI_INVOKE("first_run_found")),
 	/**
+	 *  Which harnesses are installed and signed in, and which local model servers answer: the
+	 *  harness setup tab's look at the machine, and its Check again (FR-29). On a blocking thread,
+	 *  for the local probes.
+	 */
+	harnessSetupFound: () => typedError<HarnessSetupFound, string>(__TAURI_INVOKE("harness_setup_found")),
+	/**
+	 *  Types harness `harness`'s official installer into shell session `session`, and runs it
+	 *  (FR-29, ruling V65).
+	 * 
+	 *  **The window names the harness, never the command.** The line is charter's own,
+	 *  compiled in (`charter_core::noharness::installer`) and shown word for word on the tab
+	 *  before the press, so no text from a project, a plane or the window can reach the shell
+	 *  through here. A word that is not a harness charter starts is refused, and nothing is typed.
+	 */
+	typeInstaller: (plane: PlaneId, session: number, harness: string) => typedError<null, string>(__TAURI_INVOKE("type_installer", { plane, session, harness })),
+	/**
 	 *  Opens `path`, a repo, into this machine's local plane: the plane is made when there is
 	 *  none, laid out from the project template `template` names (FR-17), the repo is cloned into
 	 *  a workspace named after it, and the plane is opened **through the trust gate**, exactly as
@@ -1740,6 +1756,11 @@ export type FirstRunFound = {
 	forges: ForgeRow[],
 	/**  The project templates this charter ships, in the order the screen lists them. */
 	templates: TemplateRow[],
+	/**
+	 *  The local model servers answering on this machine: the fallback for somebody with no
+	 *  harness account (FR-29).
+	 */
+	local_models: LocalModelRow[],
 };
 
 /**  A forge, as the window is told it. */
@@ -1844,6 +1865,22 @@ export type HarnessRow = {
 	 *  login when its chat starts.
 	 */
 	signed_in: boolean,
+	/**
+	 *  Its vendor's own installer, word for word, which the harness setup tab types into a
+	 *  shell tab when the operator presses Install (FR-29).
+	 */
+	installer: string,
+	/**  The vendor's install page the command is from. */
+	installer_page: string,
+};
+
+/**
+ *  What the harness setup tab shows (FR-29): the harnesses and the local model servers, and
+ *  not the forge CLIs, whose sign-in checks are subprocesses the tab has no use for.
+ */
+export type HarnessSetupFound = {
+	harnesses: HarnessRow[],
+	local_models: LocalModelRow[],
 };
 
 /**  Where one of a vault's identity variables is read from now (#237). */
@@ -2010,6 +2047,16 @@ export type LiveSwitched = {
 	said: string[],
 	/**  Why the plane was not saved after the switch: refused, or not asked yet how it saves. */
 	notSaved: string | null,
+};
+
+/**  A local model server found answering on this machine (FR-29's local model fallback). */
+export type LocalModelRow = {
+	/**  What the screen calls it (`Ollama`, `LM Studio`). */
+	title: string,
+	/**  The base URL a harness is pointed at. */
+	base_url: string,
+	/**  The harness that can use it with no account (`opencode`). */
+	harness: string,
 };
 
 /**  What a Delete did, and what its Undo hands back. */
@@ -2245,6 +2292,11 @@ export type OpenedRepo = {
 	 *  is a choice to make.
 	 */
 	harness: string | null,
+	/**
+	 *  Whether no harness is installed on this machine: the first chat is then the harness
+	 *  setup tab, with each one's official installer, instead of the picker (FR-29).
+	 */
+	none_installed: boolean,
 	/**
 	 *  How many of the repo's agent instruction files can be added to the workspace's memory
 	 *  (FR-18a): the window offers them in a tab beside the first chat when there are any.

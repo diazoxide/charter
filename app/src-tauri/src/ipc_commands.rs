@@ -46,6 +46,8 @@ macro_rules! app_commands {
                 windows::show_window_holding,
                 opener::create_project,
                 firstrun::first_run_found,
+                firstrun::harness_setup_found,
+                firstrun::type_installer,
                 firstrun::open_repo,
                 firstrun::template_that_fits,
                 firstrun::open_local_project,

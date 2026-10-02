@@ -587,6 +587,29 @@ const INSTRUCTIONS: InstructionFile[] = [
 
 /** What the core answers, by command; a function to answer from the arguments, an `Error` to
  *  refuse with its message. */
+/** A machine with no harness, and Ollama answering on loopback (FR-29). */
+const NO_HARNESS = {
+  harnesses: [
+    {
+      name: "claude",
+      title: "Claude Code",
+      installed: false,
+      signed_in: false,
+      installer: "curl -fsSL https://claude.ai/install.sh | bash",
+      installer_page: "https://code.claude.com/docs/en/setup",
+    },
+    {
+      name: "codex",
+      title: "Codex",
+      installed: false,
+      signed_in: false,
+      installer: "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
+      installer_page: "https://github.com/openai/codex",
+    },
+  ],
+  local_models: [{ title: "Ollama", base_url: "http://127.0.0.1:11434/v1", harness: "opencode" }],
+};
+
 type Answers = Record<string, unknown>;
 
 /** The core answering every question a view asks, as an ordinary plane would. */
@@ -606,6 +629,7 @@ const ORDINARY: Answers = {
   memory_read: MEMORY,
   workspace_settings: WORKSPACE_FILE,
   repo_instructions: INSTRUCTIONS,
+  harness_setup_found: NO_HARNESS,
   extensions_on: [],
 };
 
@@ -739,6 +763,22 @@ const STATES: State[] = [
     name: "a workspace's repo instructions",
     view: { from: null, view: "repo-instructions", key: WORKSPACE },
     drawn: /AGENTS\.md/,
+  },
+  {
+    name: "the harness setup, with no harness",
+    view: { from: null, view: "harness-setup", key: "/home/dev/web" },
+    drawn: /^No harness found$/,
+  },
+  {
+    name: "the harness setup, once one is installed",
+    view: { from: null, view: "harness-setup", key: "/home/dev/web" },
+    answers: {
+      harness_setup_found: {
+        harnesses: [{ ...NO_HARNESS.harnesses[0], installed: true }],
+        local_models: [],
+      },
+    },
+    drawn: /^A harness is installed$/,
   },
   { name: "Preferences", view: { from: null, view: "preferences", key: "" }, drawn: /^Text$/ },
   {
