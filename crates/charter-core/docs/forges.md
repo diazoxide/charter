@@ -196,6 +196,17 @@ merged, when what they find is not what the operator confirmed (a destination or
 commit changed, a head moved, a queue appeared). Everything else, the pinning and the pending
 landing included, is the CLI's path unchanged.
 
+### `charter change revert`
+
+`charter change revert <slug>` (ADR 0060 §8, #473) asks no forge at all, so it is the same for
+a GitHub member and a GitLab one. It seeds a new change, `revert-<slug>`: in each member the
+landing log records, it branches `change/revert-<slug>` off the default branch (its `origin/`
+tracking ref, else the local branch) and runs `git revert` of the logged commit there, with
+`-m 1` only when git says the commit has two parents. The revert reaches a forge only when
+someone runs `charter change push` and `charter change land` on it, through the same gates
+and the same attended-only floor as any change. A request merged with no landing-log line is
+named as a person's to revert; charter does not guess its commit from the forge or a branch.
+
 **Not behind the seam, and why:**
 
 | Call | Where | Why |

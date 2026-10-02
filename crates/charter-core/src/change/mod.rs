@@ -12,6 +12,8 @@
 //! - [`land`]: `charter change land`, the one that merges: one member, at the head its checks
 //!   passed on.
 //! - [`landing`]: the landing log `land` appends to.
+//! - [`revert`]: `charter change revert`, which seeds a new change reverting what `land`
+//!   landed, and asks no forge.
 //!
 //! Words, because "change" already means one pull request in parts of `forge`: a **change** is
 //! the cross-repo object, a **member** one repo's part of it, and a member's pull or merge
@@ -24,6 +26,7 @@ pub mod observe;
 pub mod pending;
 pub mod push;
 mod record;
+pub mod revert;
 pub mod store;
 pub mod view;
 

@@ -38,7 +38,7 @@ pub(super) fn named(value: &str) -> String {
     shown::short(value)
 }
 
-fn now_iso(now: DateTime<Utc>) -> String {
+pub(super) fn now_iso(now: DateTime<Utc>) -> String {
     now.format("%Y-%m-%dT%H:%M:%S+00:00").to_string()
 }
 
@@ -143,7 +143,7 @@ pub(super) fn load(
 
 /// Write it back: an ordering that cannot be true refuses the request (2), a path charter
 /// must not write is an error about the plane (1).
-fn save(plane: &Path, ws: &str, record: &Record, say: &mut dyn FnMut(Say)) -> u8 {
+pub(super) fn save(plane: &Path, ws: &str, record: &Record, say: &mut dyn FnMut(Say)) -> u8 {
     match store::write(plane, ws, record) {
         Ok(_) => 0,
         Err(WriteError::Record(e)) => {

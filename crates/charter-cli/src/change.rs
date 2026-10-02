@@ -1,5 +1,6 @@
 //! `charter change` — the command line over [`charter_core::change::cmd`],
-//! [`charter_core::change::push`] and [`charter_core::change::land`] (ADR 0060).
+//! [`charter_core::change::push`], [`charter_core::change::land`] and
+//! [`charter_core::change::revert`] (ADR 0060).
 //!
 //! Every member is named by hand. There is no `--all` and no pattern, and
 //! `tests/change.rs` asserts it.
@@ -96,6 +97,17 @@ pub enum ChangeCommand {
         #[arg(short = 'w', long = "workspace")]
         workspace: Option<String>,
     },
+    /// Seed a new change, revert-<change>, that reverts every member charter landed: in each
+    /// member's clone, a branch off the default branch carrying `git revert` of the commit the
+    /// landing log names. Pushes nothing and merges nothing: push and land it like any other
+    /// change. A member with no landing record is named as a person's to revert, and a logged
+    /// commit the default branch no longer holds is refused by name.
+    Revert {
+        change: String,
+        /// The workspace (default: the active one).
+        #[arg(short = 'w', long = "workspace")]
+        workspace: Option<String>,
+    },
     /// Delete the change record. Branches, requests and the landing log are untouched.
     Forget {
         change: String,
@@ -184,6 +196,14 @@ pub fn run(here: &Here, command: ChangeCommand) -> Result<u8, String> {
                 &mut say,
             )
         }
+        ChangeCommand::Revert { change, workspace } => charter_core::change::revert::revert(
+            &root,
+            &ws(workspace.as_deref())?,
+            &change,
+            &cmd::author(&root),
+            now,
+            &mut say,
+        ),
         ChangeCommand::Forget { change, workspace } => {
             cmd::forget(&root, &ws(workspace.as_deref())?, &change, &mut say)
         }

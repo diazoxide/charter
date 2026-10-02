@@ -980,7 +980,7 @@ fn blockers_landed(
 }
 
 /// What may be handed to git as a commit.
-fn sha_ok(sha: &str) -> bool {
+pub(super) fn sha_ok(sha: &str) -> bool {
     (7..=64).contains(&sha.len())
         && sha
             .bytes()

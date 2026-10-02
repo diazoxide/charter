@@ -1595,7 +1595,9 @@ and an archived one is where `memstore.archive` would have put it (ADR 0065).
 - **Read by:** `change.read_landings` (`charter/change.py:217`), `change.landings`
   (`charter/change.py:189`), `commands_change.landings` (`charter/commands_change.py:1109`),
   `change.declared_landings` (`charter/change.py:244`). In this app:
-  `change::landing::landings`, for the land gate's blockers and doctor's `changes` row.
+  `change::landing::landings`, for the land gate's blockers, doctor's `changes` row, and
+  `charter change revert`, which reverts each member at its line's `merge` commit and refuses a
+  `merge` that is not a commit id (`[0-9a-f]{7,64}`) before it reaches git.
 - **Git:** committed **never** — `/workspaces/<ws>/changes/log/` re-ignored inside the LIVE
   block (`charter/workspace.py:1401`), and `_ws_meta_paths` stages `changes/` only when
   `change.has_records` is true (`charter/commands_workspace.py:1119`).
@@ -1631,7 +1633,8 @@ and an archived one is where `memstore.archive` would have put it (ADR 0065).
   queue, `refused` when the forge refused, `merge-later` when GitLab set the request to merge
   later and charter could not undo it.
 - **Read by:** `change::pending::pendings`, for `charter change land` (its own member, and
-  its blockers) and doctor's `changes` row. The latest line per member, by `ts`, wins; a line
+  its blockers), doctor's `changes` row, and `charter change revert`, which names a member
+  charter started landing and has not logged. The latest line per member, by `ts`, wins; a line
   that is not exactly the seven fields below (`PENDING_FIELDS`) is skipped. A line is
   evidence only while it stands (every stage but `refused`) and names the landing asked about:
   `land` matches the request and its head, doctor the head of the member's pushed branch.

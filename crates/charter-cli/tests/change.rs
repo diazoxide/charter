@@ -1,4 +1,4 @@
-//! `charter change create|add|drop|list|show|forget|push|land`: a cross-repo change declared
+//! `charter change create|add|drop|list|show|forget|push|land|revert`: a cross-repo change declared
 //! and read through the binary, with no network (charter#467, ADR 0060). `push`'s and `land`'s
 //! forge halves are tested in `charter_core::change::push` and `::land`, against real clones
 //! and a recorded forge; what is here is the part that never reaches one, and the floor.
@@ -773,4 +773,35 @@ fn show_with_no_forge_to_ask_still_prints_the_record_and_says_it_could_not_ask()
     assert!(out.contains("read from the forge at"), "{out}");
     assert!(out.contains("svc  could not ask:"), "{out}");
     assert!(!out.contains("PASSED"), "{out}");
+}
+
+// ---- revert ---------------------------------------------------------------------------------
+
+#[test]
+fn revert_of_a_change_charter_landed_nothing_of_is_refused_and_creates_nothing() {
+    let plane = Plane::new();
+    plane.ok(&["create", "api-2", "--why", "bump"]);
+    plane.ok(&["add", "api-2", "svc"]);
+    let (code, _, err) = plane.change(&["revert", "api-2"]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("nothing to revert"), "{err}");
+    assert!(!plane.record("revert-api-2").exists());
+}
+
+#[test]
+fn revert_has_no_force_and_no_all_and_says_it_merges_nothing() {
+    let plane = Plane::new();
+    plane.ok(&["create", "api-2", "--why", "bump"]);
+    for flag in ["--force", "--all"] {
+        let (code, _, err) = plane.change(&["revert", "api-2", flag]);
+        assert_ne!(code, 0, "{flag} parsed");
+        assert!(err.contains(flag), "{err}");
+    }
+    let help = plane.charter(&["change", "revert", "--help"]);
+    let help = String::from_utf8_lossy(&help.stdout);
+    assert!(help.contains("merges nothing"), "{help}");
+    assert!(
+        !help.contains("--force") && !help.contains("--all"),
+        "{help}"
+    );
 }
