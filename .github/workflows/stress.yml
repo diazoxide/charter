@@ -6,6 +6,9 @@ name: stress
 # is GitHub's own filter on the one job it is meant for, with no action and no job of ours
 # deciding it.
 #
+# **Since V70 a pull request does not run `fifty tabs` at all**: it is evidence only, and
+# evidence-only jobs run on `main` and nightly. The filter still decides `standing`.
+#
 # **Every push to `main` runs it, unfiltered.** That is the record for each merge, and it is
 # the backstop for everything below: a list that turns out too narrow costs a regression
 # found one merge later, never one that is not found.
@@ -112,9 +115,12 @@ on:
       # start it, but no pane in this spec does: `writeShell` starts the fake harness with
       # no `--hook`, and the fake harness runs no `statusLine`. A charter-cli that does not
       # compile is the required `rust` job's red, not this one's.
+  # Nightly, for `fifty tabs`, which no pull request runs any more (V70, as in `ci.yml`).
+  schedule:
+    - cron: "41 2 * * *"
 
 concurrency:
-  group: stress-${{ github.ref }}
+  group: stress-${{ github.event_name == 'schedule' && 'nightly' || github.ref }}
   # `ci.yml`'s reason: a PR's newest push supersedes the last, and a merge's run on `main` is
   # the only record that commit gets.
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -146,6 +152,9 @@ jobs:
     # tab it stopped on. STRESS=1 also starts the app under launchd's open-file limit
     # (`launchedUnderLaunchdsLimit` in `e2e/harness.ts`).
     name: fifty tabs, then two hundred (${{ matrix.os }}, evidence only)
+    # Evidence only, so on `main` and nightly, never on a pull request (V70, as in `ci.yml`).
+    # The `paths:` filter above now decides only whether a pull request runs `standing`.
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'schedule'
     continue-on-error: true
     strategy:
       fail-fast: false

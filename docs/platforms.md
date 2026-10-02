@@ -2,8 +2,9 @@
 
 These are the platforms charter is held to. Each row names the CI label (the GitHub Actions
 image) it is covered on and what that job proves, because "supported" should mean "tested", and
-where a row is not tested it says so. A row marked **evidence** is reported on every pull request
-and never gates a merge or a release, like the `windows` job. The same table is in the README. A
+where a row is not tested it says so. A row marked **evidence** is reported on every push to `main`
+and every night, not on a pull request, and never gates a merge or a release, like the `windows`
+job. The same table is in the README. A
 test (`site/test/platforms.test.mjs`) fails when the two copies differ, or when a CI label the
 table names is no longer used in `.github/workflows/ci.yml`; it does not check which job uses it.
 

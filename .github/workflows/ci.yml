@@ -4,9 +4,27 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Nightly, for the evidence-only jobs below, which no pull request runs (V70). The gating jobs
+  # run too, so each night is a whole record of `main` on that day's runner images and stable
+  # toolchain. `release.yml` publishes a dev build only for a run started by a push, so a
+  # nightly publishes nothing.
+  schedule:
+    - cron: "41 2 * * *"
+
+# **Evidence-only jobs run on `main` and nightly, never on a pull request (V70).** `windows`,
+# `fedora` and `app-evidence` (the preview images) report and never gate: none is a required
+# check, and each has `continue-on-error`. Each carries
+#
+#     if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'schedule'
+#
+# so a pull request queues only what can block it. A job skipped by `if:` concludes `skipped`,
+# which counts as passing, both for a check and for the run's own conclusion; and none of these
+# names is in branch protection, so a pull request waits on nothing it no longer runs. `bench`
+# is evidence only too, but V62 has it measure each pull request against main, so it stays.
 
 concurrency:
-  group: ci-${{ github.ref }}
+  # The nightly run keeps a group of its own, so it never displaces a merge's pending run on main.
+  group: ci-${{ github.event_name == 'schedule' && 'nightly' || github.ref }}
   # Superseding a PR's run is right: only the newest push is a claim about that branch.
   # Superseding a run on `main` is NOT: every merge's run is the record for that commit, and
   # `main` is protected by eight required checks. Cancelling it leaves the commit with no
@@ -101,6 +119,8 @@ jobs:
   # own session code are not in it: `stress` and the release scale run (#814) measure those.
   bench:
     name: latency against main (session layer, evidence only)
+    # A pull request's measurement and a push's record; a nightly has nothing to measure.
+    if: github.event_name != 'schedule'
     continue-on-error: true
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -232,37 +252,30 @@ jobs:
           comment-on-alert: false
           summary-always: true
 
+  # The desktops `docs/platforms.md` lists (FR-25): the two latest macOS majors and the two
+  # Ubuntu LTS releases, in two jobs with one list of steps. `macos-latest` is macOS 26 and
+  # `xcode-27` is the runner images' macOS 27, a preview; when macOS 27 becomes `macos-latest`,
+  # `xcode-27` here becomes `macos-26`. `expect` is the OS version the row in
+  # `docs/platforms.md` says the label runs, and the first step warns when the label has moved
+  # off it. Only the `macos-latest` and `ubuntu-24.04` checks are required, and they are `app`.
+  #
+  # Two jobs, not one matrix, because a job's `if:` cannot see `matrix`, and a matrix `exclude`
+  # computed per event is undone by `include`, which adds an excluded entry back.
   app:
     name: app builds (${{ matrix.os }}${{ matrix.evidence && ', evidence only' || '' }})
-    # The two newer images are evidence, like `windows`: reported, never a gate, because
-    # `release.yml` publishes a dev build only when this whole workflow succeeds, and a preview
-    # image breaking upstream must not stop that.
-    continue-on-error: ${{ matrix.evidence }}
     strategy:
       fail-fast: false
       matrix:
-        # The desktops `docs/platforms.md` lists (FR-25): the two latest macOS majors and the
-        # two Ubuntu LTS releases. `macos-latest` is macOS 26 and `xcode-27` is the runner
-        # images' macOS 27, a preview; when macOS 27 becomes `macos-latest`, `xcode-27` here
-        # becomes `macos-26`. `expect` is the OS version the row in `docs/platforms.md` says
-        # the label runs, and the first step warns when the label has moved off it.
-        # Only the `macos-latest` and `ubuntu-24.04` checks are required.
-        os: [macos-latest, xcode-27, ubuntu-24.04, ubuntu-26.04]
+        os: [macos-latest, ubuntu-24.04]
         include:
           - os: macos-latest
             expect: "26"
             evidence: false
-          - os: xcode-27
-            expect: "27"
-            evidence: true
           - os: ubuntu-24.04
             expect: "24.04"
             evidence: false
-          - os: ubuntu-26.04
-            expect: "26.04"
-            evidence: true
     runs-on: ${{ matrix.os }}
-    steps:
+    steps: &app-steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Which OS this runner image really is, and a warning when a label has moved off the
       # version its row in `docs/platforms.md` names.
@@ -320,6 +333,27 @@ jobs:
         if: runner.os == 'Linux'
         run: tools/coldstart-linux.sh i3-nobus
 
+  # The two newer images are evidence, like `windows`: reported, never a gate, because
+  # `release.yml` publishes a dev build only when this whole workflow succeeds, and a preview
+  # image breaking upstream must not stop that. On `main` and nightly only (V70).
+  app-evidence:
+    name: app builds (${{ matrix.os }}${{ matrix.evidence && ', evidence only' || '' }})
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'schedule'
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [xcode-27, ubuntu-26.04]
+        include:
+          - os: xcode-27
+            expect: "27"
+            evidence: true
+          - os: ubuntu-26.04
+            expect: "26.04"
+            evidence: true
+    runs-on: ${{ matrix.os }}
+    steps: *app-steps
+
   # Fedora 44, the current release, as `docs/platforms.md` lists it (FR-25). On each Fedora
   # release bump the image here, `FEDORA` below, and the row in `docs/platforms.md` together.
   # A container on the Ubuntu runner, because GitHub has no Fedora runner. What it proves:
@@ -328,7 +362,7 @@ jobs:
   # AppImage a release build makes.
   #
   # Evidence, like `windows`: reported, never a gate, because `release.yml` publishes a dev
-  # build only when this whole workflow succeeds.
+  # build only when this whole workflow succeeds. On `main` and nightly only (V70).
   #
   # The tests run as a normal user, not the container's root: root reads a file whose mode
   # says nobody may, and a test about refusing such a file would pass or fail for the wrong
@@ -337,6 +371,7 @@ jobs:
   # within hours and saving it costs minutes, so only the crate registry is kept.
   fedora:
     name: fedora (build, core and cli tests, start, evidence only)
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'schedule'
     continue-on-error: true
     runs-on: ubuntu-24.04
     container:
@@ -531,8 +566,10 @@ jobs:
     # **Not a gate, and not one of the eight required checks.** The same reasoning `fifty
     # tabs` gives in `stress.yml`, and more of it: a required check on a platform with no
     # port would block every merge in the repo — including the ports that would make it
-    # green. It runs on every PR, it reports, and it is allowed to fail.
+    # green. It reports, and it is allowed to fail. It runs on `main` and nightly, not on a
+    # pull request (V70).
     name: windows (build, test, evidence only)
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'schedule'
     continue-on-error: true
     runs-on: windows-latest
     defaults:
