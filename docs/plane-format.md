@@ -1557,8 +1557,9 @@ and an archived one is where `memstore.archive` would have put it (ADR 0065).
   `change.record_landing` (`charter/change.py:156`) is a second writer with the same shape
   — see the Appendix. In this app: `change::landing::append`, from `charter change land`
   (`crates/charter-core/src/change/land.rs`) once the read-back confirms the merge at the head
-  the checks passed on, or, for a member landed through a merge queue or merge train, from a
-  later `charter change land` that finds it merged.
+  the checks passed on, or from a later `charter change land` that finds merged, at that head,
+  a request charter's pending landing (below) says it asked for: one queued, or one whose
+  read-back failed.
 - **Read by:** `change.read_landings` (`charter/change.py:217`), `change.landings`
   (`charter/change.py:189`), `commands_change.landings` (`charter/commands_change.py:1109`),
   `change.declared_landings` (`charter/change.py:244`). In this app:
@@ -1583,6 +1584,35 @@ and an archived one is where `memstore.archive` would have put it (ADR 0065).
 | `number` | int | required | the request number charter merged | stable | `charter/commands_change.py:1093` |
 | `merge` | string | required | sha of the merge commit charter created | stable | `charter/change.py:113` |
 | `head` | string | required | the member branch tip it was created from | stable | `charter/change.py:113` |
+
+### `workspaces/<ws>/changes/log/pending/<host>.jsonl` — pending landings
+
+- **Format:** JSON Lines, one object per line, `O_APPEND`, no lock; keys sorted, ASCII only.
+- **Status:** stable — written by one `charter change land` and read by a later one and by
+  doctor; never committed. New in this app (#472, D-472a); the Python charter has no such file,
+  and its landing-log reader, which reads `log/*.jsonl`, never reads this directory.
+- **Tier:** Clone state — never committed, and not derived: it is this clone's evidence that
+  charter started a landing. Deleting it costs only that: a merge charter queued and has not
+  yet recorded is then never recorded as charter's.
+- **Written by:** `change::pending::append`, from `charter change land`
+  (`crates/charter-core/src/change/land.rs`): `asked` before it asks the forge to merge or to
+  queue, `refused` when the forge refused, `merge-later` when GitLab set the request to merge
+  later and charter could not undo it.
+- **Read by:** `change::pending::pendings`, for `charter change land` (its own member, and
+  its blockers) and doctor's `changes` row. The latest line per member, by `ts`, wins; a line
+  that is not exactly the seven fields below is skipped.
+- **Git:** committed **never** — under `/workspaces/<ws>/changes/log/`, which the LIVE block
+  re-ignores.
+
+| Field | Type | Required / default | Meaning | Status | Source |
+|---|---|---|---|---|---|
+| `ts` | string | required | UTC ISO-8601 seconds | stable | `change::pending` |
+| `change` | string | required | the change's slug | stable | `change::pending` |
+| `repo` | string | required | the member | stable | `change::pending` |
+| `number` | int | required | the request charter asked the forge to land | stable | `change::pending` |
+| `head` | string | required | the head commit the checks passed on, which the call was pinned to | stable | `change::pending` |
+| `via` | string | required | `direct` or `queue` | stable | `change::pending` |
+| `stage` | string | required | `asked`, `refused` or `merge-later` | stable | `change::pending` |
 
 ### `workspaces/<ws>/pieces/<host>.jsonl` — the piece claim log
 

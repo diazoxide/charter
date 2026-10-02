@@ -10,8 +10,9 @@
 //!
 //! 1. one member named, and not by rebase;
 //! 2. it is a member, with a clone here and a request that is open;
-//! 3. every member it `needs` has landed: the forge reports its request merged, and where
-//!    charter logged the landing, this clone's default branch still holds the logged commit;
+//! 3. every member it `needs` has landed: the forge reports its request merged, and charter
+//!    landed it ([`evidence`]): the landing log has it and this clone's default branch still
+//!    holds the logged commit, or a pending landing of charter's is found merged at its head;
 //! 4. the checks at the request's head are `PASSED`, read at that exact commit.
 //!
 //! **The merge is pinned to that head.** The forge's own guard (`sha` on GitHub's and GitLab's
@@ -22,13 +23,16 @@
 //!
 //! **Through the queue where there is one (Q16).** When the target branch has a merge queue
 //! (GitHub) or a merge train (GitLab), the request is put in it at the verified head and the
-//! forge merges it once the queue's own checks pass. Nothing is logged then, because nothing
-//! has merged. Run again after it merged, `land` records that landing, after the same gates.
-//! Where there is no queue, charter merges it now, which is what "auto-merge when green" comes
-//! to when green has just been read.
+//! forge merges it once the queue's own checks pass. Where there is none, charter merges it
+//! now, which is what "auto-merge when green" comes to when green has just been read. Where
+//! GitLab cannot say whether there is a train, nothing is merged.
 //!
-//! **Logged only once confirmed.** After a merge charter reads the request again; only a
-//! request the forge reports merged, at the head charter verified, gets a landing line.
+//! **Recorded only on evidence that charter started it (D-472a).** Before the forge is asked,
+//! a pending landing goes into [`super::pending`]. A direct merge the read-back confirms is
+//! logged at once. A queued one, or one whose read-back failed, is logged by a later `land`
+//! that finds the request merged at the pending head. A request merged with no pending landing
+//! (a person in the browser, an admin, a merge from before the queue existed) is never
+//! recorded as charter's.
 //!
 //! **Attended only.** `floorguard::PUBLISH_FORGE` refuses `charter change land` from a run
 //! nobody is watching, exactly as it refuses `gh pr merge`.
@@ -38,10 +42,11 @@ use std::path::Path;
 use chrono::{DateTime, Utc};
 
 use super::cmd::{REFUSED, load, named, workspace_ok};
-use super::landing::{self, Landing};
+use super::landing::{self, Landing, Landings};
+use super::pending::{self, Pending, Pendings, Stage, Via};
 use super::record::{Member, Record};
 use crate::forge::checks::{Checks, Ci};
-use crate::forge::pr::{MergeAs, Pr, Repo, Request, State};
+use crate::forge::pr::{MergeAs, MergedAt, Pr, Repo, Request, State};
 use crate::forge::{Caller, ForgeBackend};
 use crate::repocmd::Say;
 use crate::shown;
@@ -60,6 +65,12 @@ pub enum How {
     /// Refused, with the reason: a rebase leaves no commit of charter's to carry the trailer
     /// and no single commit to revert.
     Rebase,
+}
+
+/// A forge's or git's own words, contained to one line. Not clipped to a row's width: the
+/// reason a merge did not happen is the one thing the reader needs whole.
+fn forge_said(words: &str) -> String {
+    shown::one_line(words, super::record::TEXT_LIMIT)
 }
 
 /// The first twelve characters of a commit, contained.
@@ -145,12 +156,69 @@ fn reach(
         ));
     };
     let on = Repo::of_clone(plane, &clone.path)
-        .map_err(|why| format!("{}: {}", named(repo), shown::line(&why)))?;
+        .map_err(|why| format!("{}: {}", named(repo), forge_said(&why)))?;
     Ok(Reached {
         backend: backend_of(&on),
         clone: clone.path,
         on,
     })
+}
+
+/// What charter's own records say about a member's landing: the one definition the land gate
+/// and doctor share (D-472a).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Evidence<'a> {
+    /// The landing log has it.
+    Logged(&'a Landing),
+    /// Charter started a landing and has not seen it merge.
+    Started(&'a Pending),
+    /// Charter has no record of landing it.
+    None,
+}
+
+/// What `log` and `pending` say about `repo`. A landing in the log wins; a pending line that
+/// was refused is no evidence.
+pub fn evidence<'a>(log: &'a Landings, pending: &'a Pendings, repo: &str) -> Evidence<'a> {
+    if let Some(line) = log.get(repo) {
+        return Evidence::Logged(line);
+    }
+    match pending.get(repo) {
+        Some(p) if p.stage != Stage::Refused => Evidence::Started(p),
+        _ => Evidence::None,
+    }
+}
+
+/// The records a landing reads and writes, for one change in one workspace.
+struct Books<'p> {
+    plane: &'p Path,
+    ws: &'p str,
+    slug: &'p str,
+    host: &'p str,
+    now: DateTime<Utc>,
+    log: Landings,
+    pending: Pendings,
+}
+
+impl Books<'_> {
+    /// Log `req`'s merge as `commit`, for `repo`: what a confirmed merge, or a pending landing
+    /// found merged, comes to. `false` when the log could not be written.
+    fn log(&mut self, repo: &str, req: &Request, commit: &str) -> bool {
+        let line = Landing::new(self.slug, repo, req.number, &req.head, commit, self.now);
+        if landing::append(self.plane, self.ws, self.host, &line).is_none() {
+            return false;
+        }
+        self.log.insert(repo.to_string(), line);
+        true
+    }
+
+    /// Append `line` to the pending file. `false` when it could not be written.
+    fn pend(&mut self, line: Pending) -> bool {
+        if pending::append(self.plane, self.ws, self.host, &line).is_none() {
+            return false;
+        }
+        self.pending.insert(line.repo.clone(), line);
+        true
+    }
 }
 
 /// [`land`], asking the backend `backend_of` builds for each member's repo, and logging as
@@ -199,9 +267,9 @@ pub fn land_with(
             format!(
                 "charter does not land by rebase. A rebase merge replays the author's own \
                  commits and charter authors none of them, so there is no commit to carry \
-                 `{TRAILER}: {}` and no single commit for `charter change revert` to run \
-                 against. Use the default merge or --squash; a repo that permits only rebase is \
-                 one a person lands by hand.",
+                 `{TRAILER}: {}` and no single commit a revert could undo. Use the default \
+                 merge or --squash; a repo that permits only rebase is one a person lands by \
+                 hand.",
                 named(slug)
             ),
         );
@@ -237,6 +305,15 @@ pub fn land_with(
     let caller = Caller::command();
     let sigil = me.on.forge.kind.change_sigil();
     let path = me.on.path.as_str();
+    let mut books = Books {
+        plane,
+        ws,
+        slug,
+        host,
+        now,
+        log: landing::landings(plane, ws, slug),
+        pending: pending::pendings(plane, ws, slug),
+    };
 
     // Gate: the member has a request, and it is open.
     let req = match me.backend.by_head(&caller, path, &member.branch) {
@@ -256,7 +333,7 @@ pub fn land_with(
             say(Say::Fail(format!(
                 "{}: charter could not ask for its request: {}",
                 named(repo),
-                shown::line(&why.to_string())
+                forge_said(&why.to_string())
             )));
             return 1;
         }
@@ -265,7 +342,6 @@ pub fn land_with(
         number: req.number,
         url: req.url.clone(),
     };
-    let log = landing::landings(plane, ws, slug);
     match &req.state {
         State::Open => {}
         State::Closed => {
@@ -282,14 +358,12 @@ pub fn land_with(
             );
         }
         State::Merged { commit } => {
-            return merged_already(
-                plane, ws, &record, member, &me, &req, commit, &log, backend_of, host, now, say,
-            );
+            return merged_already(&mut books, member, &me, &req, commit.as_deref(), say);
         }
     }
 
     // Gate: every blocker has landed.
-    if let Err(code) = blockers_landed(plane, ws, &record, member, &log, backend_of, say) {
+    if let Err(code) = blockers_landed(&mut books, &record, member, backend_of, say) {
         return code;
     }
 
@@ -312,10 +386,10 @@ pub fn land_with(
         Ok(queued) => queued,
         Err(why) => {
             say(Say::Fail(format!(
-                "{}: charter could not read how {sigil}{} lands: {}. Nothing was merged.",
+                "{}: charter could not tell how {sigil}{} lands: {}. Nothing was merged.",
                 named(repo),
                 req.number,
-                shown::line(&why.to_string())
+                forge_said(&why.to_string())
             )));
             return 1;
         }
@@ -331,52 +405,79 @@ pub fn land_with(
         ),
         message: format!("{}\n\n{trailer}", shown::line(&record.why)),
     };
+    // The evidence that charter started this landing, written before the forge is asked: it
+    // is what lets a later `land` record a merge it did not see happen, and nothing else may.
+    let via = if queued { Via::Queue } else { Via::Direct };
+    let started = Pending::new(slug, repo, req.number, &req.head, via, Stage::Asked, now);
+    if !books.pend(started.clone()) {
+        say(Say::Fail(format!(
+            "{}: charter could not write its pending landing, so it did not ask the forge. \
+             Nothing was merged.",
+            named(repo)
+        )));
+        return 1;
+    }
     let asked = if queued {
         me.backend
             .enqueue_at(&caller, path, &pr, &req.head, &merge_as)
+            .map(|()| MergedAt::Now)
     } else {
         me.backend
             .merge_at(&caller, path, &pr, &req.head, &merge_as)
     };
-    if let Err(why) = asked {
-        // The forge's refusal is the evidence. Whether the head moved is asked again, so the
-        // refusal names it in charter's words whichever words the forge used.
-        if let Ok(Some(now_at)) = me.backend.by_head(&caller, path, &member.branch)
-            && now_at.head != req.head
-        {
-            return refuse(
-                say,
-                format!(
-                    "{}: the head moved since the check: checks PASSED at {}, and the branch \
-                     is now at {}. Nothing was merged. Land it again once the checks at the new \
-                     head have passed.",
-                    named(repo),
-                    short(&req.head),
-                    short(&now_at.head)
-                ),
-            );
+    let asked = match asked {
+        Ok(asked) => asked,
+        Err(why) => {
+            books.pend(started.at(Stage::Refused, now));
+            // The forge's refusal is the evidence. Whether the head moved is asked again, so
+            // the refusal names it in charter's words whichever words the forge used.
+            if let Ok(Some(now_at)) = me.backend.by_head(&caller, path, &member.branch)
+                && now_at.head != req.head
+            {
+                return refuse(
+                    say,
+                    format!(
+                        "{}: the head moved since the check: checks PASSED at {}, and the \
+                         branch is now at {}. Nothing was merged. Land it again once the checks \
+                         at the new head have passed.",
+                        named(repo),
+                        short(&req.head),
+                        short(&now_at.head)
+                    ),
+                );
+            }
+            say(Say::Fail(format!(
+                "{}: {}. Nothing was merged.",
+                named(repo),
+                forge_said(&why.to_string())
+            )));
+            return 1;
         }
+    };
+    if let MergedAt::Later(why) = asked {
+        books.pend(started.at(Stage::MergeLater, now));
         say(Say::Fail(format!(
-            "{}: {}. Nothing was merged.",
+            "{}: {}. It will merge whatever head the branch has when a pipeline passes, not \
+             the one charter checked. Cancel its auto-merge on GitLab.",
             named(repo),
-            shown::line(&why.to_string())
+            forge_said(&why)
         )));
         return 1;
     }
     if queued {
-        let noun = me.on.forge.kind.queue_noun();
+        let kind = me.on.forge.kind;
+        let noun = kind.queue_noun();
         say(Say::Done(format!(
             "queued {sigil}{} in its {noun} at {}: the forge merges it once the {noun}'s own \
              checks pass.",
             req.number,
             short(&req.head)
         )));
-        if how == How::Squash && me.on.forge.kind == crate::forge::Kind::GitHub {
-            say(Say::Warn(
-                "GitHub's merge queue lands by the method its own rule sets, so --squash was \
-                 not GitHub's to take."
-                    .into(),
-            ));
+        if how == How::Squash && !kind.queue_takes_squash() {
+            say(Say::Warn(format!(
+                "this {noun} lands by the method its own rule sets, so --squash was not \
+                 charter's to choose."
+            )));
         }
         say(Say::Info(format!(
             "Nothing is recorded until it has merged. Then run: charter change land {} --repo {}",
@@ -387,6 +488,11 @@ pub fn land_with(
     }
 
     // The read-back: only what the forge confirms is logged.
+    let again = format!(
+        "Run charter change land {} --repo {} again to record it once the forge shows it merged.",
+        named(slug),
+        named(repo)
+    );
     let confirmed = match me.backend.by_head(&caller, path, &member.branch) {
         Ok(Some(Request {
             state: State::Merged { commit: Some(c) },
@@ -395,24 +501,24 @@ pub fn land_with(
         })) if head == req.head => c,
         Ok(_) => {
             say(Say::Fail(format!(
-                "{}: the forge did not confirm the merge on a read-back, so nothing was recorded.",
+                "{}: the forge did not confirm the merge on a read-back, so nothing was \
+                 recorded yet. {again}",
                 named(repo)
             )));
             return 1;
         }
         Err(why) => {
             say(Say::Fail(format!(
-                "{}: merged, but the read-back failed ({}), so nothing was recorded.",
+                "{}: the read-back failed ({}), so nothing was recorded yet. {again}",
                 named(repo),
-                shown::line(&why.to_string())
+                forge_said(&why.to_string())
             )));
             return 1;
         }
     };
-    let line = Landing::new(slug, repo, req.number, &req.head, &confirmed, now);
-    if landing::append(plane, ws, host, &line).is_none() {
+    if !books.log(repo, &req, &confirmed) {
         say(Say::Fail(format!(
-            "{}: merged {sigil}{} as {}, but the landing log could not be written.",
+            "{}: merged {sigil}{} as {}, but the landing log could not be written. {again}",
             named(repo),
             req.number,
             short(&confirmed)
@@ -428,100 +534,76 @@ pub fn land_with(
     0
 }
 
-/// A request already merged: landed and logged, landed by its queue and now recorded, or
-/// merged by somebody else.
-#[allow(clippy::too_many_arguments)]
+/// A request already merged: in the landing log, started by charter and now recorded, or
+/// merged by somebody else, which is never recorded as charter's.
 fn merged_already(
-    plane: &Path,
-    ws: &str,
-    record: &Record,
+    books: &mut Books,
     member: &Member,
     me: &Reached,
     req: &Request,
-    commit: &Option<String>,
-    log: &std::collections::BTreeMap<String, Landing>,
-    backend_of: &dyn Fn(&Repo) -> Box<dyn ForgeBackend>,
-    host: &str,
-    now: DateTime<Utc>,
+    commit: Option<&str>,
     say: &mut dyn FnMut(Say),
 ) -> u8 {
     let repo = member.repo.as_str();
     let sigil = me.on.forge.kind.change_sigil();
-    let caller = Caller::command();
-    let path = me.on.path.as_str();
-    let pr = Pr {
-        number: req.number,
-        url: req.url.clone(),
-    };
-    if let Some(line) = log.get(repo) {
-        say(Say::Fail(format!(
-            "{}: {sigil}{} is already landed: charter recorded it as {}. Nothing to land.",
-            named(repo),
-            req.number,
-            short(&line.merge)
-        )));
-        return REFUSED;
-    }
-    let queued = match me.backend.lands_through_queue(&caller, path, &pr) {
-        Ok(queued) => queued,
-        Err(why) => {
+    match evidence(&books.log, &books.pending, repo) {
+        Evidence::Logged(line) => {
             say(Say::Fail(format!(
-                "{}: charter could not read how {sigil}{} lands: {}",
+                "{}: {sigil}{} is already landed, and the landing log has it as {}. Nothing to \
+                 land.",
                 named(repo),
                 req.number,
-                shown::line(&why.to_string())
+                short(&line.merge)
             )));
-            return 1;
+            REFUSED
         }
-    };
-    let Some(commit) = commit.as_deref().filter(|_| queued) else {
-        say(Say::Fail(format!(
-            "{}: {sigil}{} is already merged, and not by charter, so there is no landing of \
-             charter's to record. Nothing to land.",
-            named(repo),
-            req.number
-        )));
-        return REFUSED;
-    };
-    // The same gates as a landing: the queue merged what charter put in it only if they hold.
-    if let Err(code) = blockers_landed(plane, ws, record, member, log, backend_of, say) {
-        return code;
+        Evidence::Started(p) if p.started(req.number, &req.head) => {
+            let Some(commit) = commit else {
+                say(Say::Fail(format!(
+                    "{}: {sigil}{} is merged, and the forge names no commit it merged as, so \
+                     nothing was recorded.",
+                    named(repo),
+                    req.number
+                )));
+                return 1;
+            };
+            let via = p.via;
+            if !books.log(repo, req, commit) {
+                say(Say::Fail(format!(
+                    "{}: the landing log could not be written, so nothing was recorded.",
+                    named(repo)
+                )));
+                return 1;
+            }
+            let how = match via {
+                Via::Queue => format!("its {}", me.on.forge.kind.queue_noun()),
+                Via::Direct => "charter".to_string(),
+            };
+            say(Say::Done(format!(
+                "recorded the landing {how} made: {sigil}{} merged as {} at {}",
+                req.number,
+                short(commit),
+                short(&req.head)
+            )));
+            0
+        }
+        _ => {
+            say(Say::Fail(format!(
+                "{}: {sigil}{} is already merged, and not by charter: charter has no record of \
+                 starting that landing, so it records none. Nothing to land.",
+                named(repo),
+                req.number
+            )));
+            REFUSED
+        }
     }
-    let checks = me.backend.checks_at(&caller, path, &req.head, req.number);
-    if checks.ci != Ci::Passed {
-        say(Say::Fail(format!(
-            "{}: merged by its {}, and {} Nothing was recorded.",
-            named(repo),
-            me.on.forge.kind.queue_noun(),
-            not_passed(&checks, &req.head)
-        )));
-        return REFUSED;
-    }
-    let line = Landing::new(&record.change, repo, req.number, &req.head, commit, now);
-    if landing::append(plane, ws, host, &line).is_none() {
-        say(Say::Fail(format!(
-            "{}: the landing log could not be written, so nothing was recorded.",
-            named(repo)
-        )));
-        return 1;
-    }
-    say(Say::Done(format!(
-        "recorded the landing its {} made: {sigil}{} merged as {} at {}",
-        me.on.forge.kind.queue_noun(),
-        req.number,
-        short(commit),
-        short(&req.head)
-    )));
-    0
 }
 
 /// `Ok` when every member `member` needs has landed; else the refusal said, and its code.
 fn blockers_landed(
-    plane: &Path,
-    ws: &str,
+    books: &mut Books,
     record: &Record,
     member: &Member,
-    log: &std::collections::BTreeMap<String, Landing>,
     backend_of: &dyn Fn(&Repo) -> Box<dyn ForgeBackend>,
     say: &mut dyn FnMut(Say),
 ) -> Result<(), u8> {
@@ -535,14 +617,14 @@ fn blockers_landed(
             )));
             return Err(REFUSED);
         };
-        let reached = match reach(plane, ws, need, backend_of) {
+        let reached = match reach(books.plane, books.ws, need, backend_of) {
             Ok(reached) => reached,
             Err(why) => {
                 say(Say::Fail(format!("{}: blocker {why}", named(repo))));
                 return Err(REFUSED);
             }
         };
-        match member_landed(plane, blocker, &reached, log) {
+        match member_landed(books, blocker, &reached) {
             Ok(None) => {}
             Ok(Some(why)) => {
                 say(Say::Fail(format!(
@@ -557,7 +639,7 @@ fn blockers_landed(
                     "{}: charter could not read blocker {}: {}",
                     named(repo),
                     named(need),
-                    shown::line(&why)
+                    forge_said(&why)
                 )));
                 return Err(1);
             }
@@ -575,14 +657,14 @@ fn sha_ok(sha: &str) -> bool {
 }
 
 /// Whether `m` has landed: `Ok(None)` when it has, `Ok(Some(why not))`, or `Err` when the
-/// forge could not be asked. Both halves: the forge must say merged, and where charter logged
-/// the landing, the clone's default branch must still hold the logged commit. Merged with no
-/// log line is landed, outside charter, which doctor names.
+/// forge could not be asked. The forge must say merged, and charter must have landed it
+/// ([`evidence`]): a logged landing whose commit the clone's default branch still holds, or a
+/// pending one found merged at its head, which is logged now. A blocker merged with neither
+/// was merged outside charter, and its order cannot be vouched for.
 fn member_landed(
-    plane: &Path,
+    books: &mut Books,
     m: &Member,
     reached: &Reached,
-    log: &std::collections::BTreeMap<String, Landing>,
 ) -> Result<Option<String>, String> {
     let req = reached
         .backend
@@ -591,24 +673,45 @@ fn member_landed(
     let Some(req) = req else {
         return Ok(Some("it has no request".into()));
     };
-    match req.state {
+    let commit = match &req.state {
         State::Open => return Ok(Some("its request is open".into())),
         State::Closed => return Ok(Some("its request is REJECTED".into())),
-        State::Merged { .. } => {}
-    }
-    let Some(line) = log.get(&m.repo) else {
-        return Ok(None);
+        State::Merged { commit } => commit.clone(),
+    };
+    let merge = match evidence(&books.log, &books.pending, &m.repo) {
+        Evidence::Logged(line) => line.merge.clone(),
+        Evidence::Started(p) if p.started(req.number, &req.head) => {
+            let Some(commit) = commit else {
+                return Ok(Some(
+                    "merged, and the forge names no commit it merged as".into(),
+                ));
+            };
+            if !books.log(&m.repo, &req, &commit) {
+                return Ok(Some(
+                    "merged, and the landing log could not be written".into(),
+                ));
+            }
+            return Ok(None);
+        }
+        _ => {
+            return Ok(Some(format!(
+                "merged outside charter: charter has no record of landing it, so it cannot \
+                 vouch for the order. A person decides whether {} lands without it",
+                shown::line(&m.repo)
+            )));
+        }
     };
     // The log is never committed, which makes it local rather than trustworthy: a hand edit
     // reaches here, and then a git argv.
-    if !sha_ok(&line.merge) {
+    if !sha_ok(&merge) {
         return Ok(Some(format!(
             "merged, but the landing log's commit {} is not a commit id, and charter will not \
              hand it to git",
-            shown::short(&line.merge)
+            shown::short(&merge)
         )));
     }
-    let Some(default) = crate::reposave::default_branch(plane, &m.repo, &reached.clone) else {
+    let Some(default) = crate::reposave::default_branch(books.plane, &m.repo, &reached.clone)
+    else {
         return Ok(Some(
             "merged, but charter cannot tell this clone's default branch".into(),
         ));
@@ -616,7 +719,7 @@ fn member_landed(
     let holds = |at: &str| {
         git::run(
             &reached.clone,
-            &["merge-base", "--is-ancestor", &line.merge, at],
+            &["merge-base", "--is-ancestor", &merge, at],
             git::READ,
         )
         .is_ok_and(|run| run.ok())
@@ -627,7 +730,7 @@ fn member_landed(
     Ok(Some(format!(
         "merged as {}, which this clone's {} does not contain: reverted, or not fetched since. \
          `git fetch` in it, then land again",
-        short(&line.merge),
+        short(&merge),
         shown::line(&default)
     )))
 }

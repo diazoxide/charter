@@ -21,6 +21,7 @@ pub mod cmd;
 pub mod land;
 pub mod landing;
 pub mod observe;
+pub mod pending;
 pub mod push;
 mod record;
 pub mod store;

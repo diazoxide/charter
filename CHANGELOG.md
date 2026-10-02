@@ -25,12 +25,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   blocker not landed, checks failed, running, not run or unreadable at that commit, a branch
   that moved after the checks were read, or more than one member named. Where the target
   branch has a merge queue (GitHub) or a merge train (GitLab), the request goes into it at that
-  commit, and running `land` again after it merged records the landing. It never turns on
-  auto-merge. The landing commit carries a `Charter-Change:` trailer where the forge lets
+  commit, and running `land` again after it merged records the landing. A merge charter did
+  not start, in the browser or before a queue existed, is never recorded as charter's. It never
+  turns on auto-merge. The landing commit carries a `Charter-Change:` trailer where the forge lets
   charter write the message, and a line goes into the change's landing log once the forge
   confirms the merge. Like `gh pr merge`, it is refused in a session nobody is watching.
-  `charter doctor` now also names a member landed ahead of one it needs, and a member's pushed
-  branch merged outside charter (#472).
+  `charter doctor` now also names a member landed ahead of one it needs, a member's pushed
+  branch merged outside charter, and a request GitLab was left set to merge later (#472).
 
 - **`charter change push` pushes a cross-repo change.** For each member it prints the repo,
   the branch and where it goes, then pushes the branch, opens its pull request into the repo's

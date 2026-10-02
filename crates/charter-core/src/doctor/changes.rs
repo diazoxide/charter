@@ -7,21 +7,24 @@
 //!
 //! **Read from what is on this disk; nothing is asked of a remote.** This runs from the
 //! SessionStart hook. The git it runs is local ref listings and reads, every argument a
-//! literal (`refs/heads/`, `refs/remotes/origin/HEAD`), so no value out of a record reaches an
-//! argv: branch names are compared here.
+//! literal or the default branch charter already knows for the repo, so no value out of a
+//! record reaches an argv: branch names are compared here.
 //!
 //! **An unreadable record is FAIL, and it is kept apart from a divergence**: "charter cannot
 //! read this file" and "git disagrees with this file" send the reader to two different places.
 //!
-//! **Two divergences need the landing log** (#472), and both are FAIL, since charter can see
-//! them (ADR 0013 rule 2):
+//! **Three divergences need charter's landing records** (#472), and all are FAIL, since charter
+//! can see them (ADR 0013 rule 2):
 //!
 //! - **landed out of order:** the log declares a member landed while a member it needs has no
 //!   landing. Charter refuses that landing and cannot stop a person merging in the browser;
 //!   this is the half that says so.
 //! - **merged outside charter:** the member's pushed branch (`refs/remotes/origin/<branch>`)
 //!   is already in the clone's default branch, and the log has no landing for it, so there is
-//!   no landing commit for `charter change revert` to run against. A branch never pushed is
+//!   no landing commit for a revert to undo. When charter's pending landing says it started
+//!   that landing, the advice is to record it with `land`, not to revert by hand.
+//! - **left to merge later:** GitLab set a request to merge later and charter could not undo
+//!   it, so whatever head the branch has when a pipeline passes will merge. A branch never pushed is
 //!   not read as merged: a branch cut and not yet worked on is in the default branch too.
 //!   A squash merge leaves no trace on this disk, so this can under-report, never invent.
 
@@ -30,7 +33,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::fsx::{self, Unread};
 use super::git::git_in;
 use super::{Doctor, Row};
-use crate::change::{Record, landing, store};
+use crate::change::pending::{self, Stage};
+use crate::change::{Record, land, landing, store};
 use crate::shown;
 
 const NAME: &str = "changes";
@@ -164,9 +168,9 @@ fn stray_branches(
     Ok(out)
 }
 
-/// Where the landing log and git disagree about a change's members: a member landed while a
-/// member it needs had not, and a member's pushed branch already in the default branch with
-/// no landing declared.
+/// Where charter's landing records and git disagree about a change's members: a member landed
+/// while a member it needs had not, a request left set to merge later, and a member's pushed
+/// branch already in the default branch that charter has not recorded landing.
 fn landing_divergences(
     root: &std::path::Path,
     ws: &str,
@@ -174,11 +178,12 @@ fn landing_divergences(
 ) -> Result<Vec<String>, String> {
     let mut out = Vec::new();
     for record in records {
-        let declared = landing::landings(root, ws, &record.change);
+        let log = landing::landings(root, ws, &record.change);
+        let pending = pending::pendings(root, ws, &record.change);
         let landed: BTreeSet<String> = record
             .members
             .iter()
-            .filter(|m| declared.contains_key(&m.repo))
+            .filter(|m| log.contains_key(&m.repo))
             .map(|m| m.repo.clone())
             .collect();
         for (repo, waiting) in record.blocked(&landed) {
@@ -197,39 +202,32 @@ fn landing_divergences(
             ));
         }
         for m in &record.members {
-            if declared.contains_key(&m.repo) {
+            let started = match land::evidence(&log, &pending, &m.repo) {
+                land::Evidence::Logged(_) => continue,
+                land::Evidence::Started(p) => Some(p),
+                land::Evidence::None => None,
+            };
+            if let Some(p) = started.filter(|p| p.stage == Stage::MergeLater) {
+                out.push(format!(
+                    "{}: request {} was left set to merge later, at whatever head the branch \
+                     has when a pipeline passes, not the one charter checked. Cancel its \
+                     auto-merge on the forge.",
+                    shown::short(&m.repo),
+                    p.number
+                ));
                 continue;
             }
             let Some(clone) = crate::repos::clone_at(root, ws, &m.repo) else {
                 continue;
             };
-            let default = git_in(
-                &clone.path,
-                &[
-                    "symbolic-ref",
-                    "--quiet",
-                    "--short",
-                    "refs/remotes/origin/HEAD",
-                ],
-            )?;
-            let Some(default) = default
-                .ok()
-                .then(|| {
-                    default
-                        .out
-                        .trim()
-                        .strip_prefix("origin/")
-                        .map(str::to_owned)
-                })
-                .flatten()
-            else {
+            let Some(default) = crate::reposave::default_branch(root, &m.repo, &clone.path) else {
                 continue;
             };
             let merged = git_in(
                 &clone.path,
                 &[
                     "for-each-ref",
-                    "--merged=refs/remotes/origin/HEAD",
+                    &format!("--merged=refs/remotes/origin/{default}"),
                     "--format=%(refname)",
                     "refs/remotes/origin/",
                 ],
@@ -238,16 +236,28 @@ fn landing_divergences(
                 continue;
             }
             let pushed = format!("refs/remotes/origin/{}", m.branch);
-            if merged.out.lines().any(|l| l.trim() == pushed) {
-                out.push(format!(
-                    "{}: branch {} is in {} and charter did not land it, so there is no \
-                     landing to revert and no Charter-Change trailer. A person has to revert \
-                     this member by hand.",
-                    shown::short(&m.repo),
-                    shown::short(&m.branch),
-                    shown::short(&default)
-                ));
+            if !merged.out.lines().any(|l| l.trim() == pushed) {
+                continue;
             }
+            let (repo, branch, default) = (
+                shown::short(&m.repo),
+                shown::short(&m.branch),
+                shown::short(&default),
+            );
+            out.push(if started.is_some() {
+                format!(
+                    "{repo}: branch {branch} is in {default}, and charter started that landing \
+                     and has not recorded it. Record it: charter change land {} --repo {repo}",
+                    shown::short(&record.change)
+                )
+            } else {
+                format!(
+                    "{repo}: branch {branch} is in {default} and charter did not land it, so \
+                     there is no landing to revert and no {} trailer. A person has to revert \
+                     this member by hand.",
+                    land::TRAILER
+                )
+            });
         }
     }
     Ok(out)

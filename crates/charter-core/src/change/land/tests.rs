@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::change::landing::{self, LOG_FIELDS};
+use crate::change::pending::{self, Pending, Stage, Via};
 use crate::change::{Exclusion, Member, Record, store};
 use crate::forge::recorded::Recorded;
 
@@ -117,6 +118,7 @@ impl World {
         };
         files
             .filter_map(Result::ok)
+            .filter(|f| f.path().extension().is_some_and(|e| e == "jsonl"))
             .flat_map(|f| {
                 std::fs::read_to_string(f.path())
                     .unwrap()
@@ -535,6 +537,20 @@ fn a_head_that_moved_since_the_check_is_refused_and_nothing_is_logged() {
         "{said}"
     );
     assert!(world.log().is_empty());
+
+    // The refused landing is no evidence: a later merge of that head by somebody else is not
+    // recorded as charter's.
+    let (code, said, _) = world.land(
+        &["widget"],
+        How::Merge,
+        json!([github_request("widget", 7, "merged", HEAD)]),
+    );
+    assert_eq!(code, REFUSED, "{said}");
+    assert!(
+        said.contains("already merged, and not by charter"),
+        "{said}"
+    );
+    assert!(world.log().is_empty());
 }
 
 #[test]
@@ -578,9 +594,31 @@ fn a_merge_the_read_back_does_not_confirm_is_not_logged() {
         said.contains("did not confirm the merge on a read-back"),
         "{said}"
     );
+    assert!(
+        said.contains("Run charter change land api-2 --repo widget again to record it"),
+        "{said}"
+    );
     assert!(world.log().is_empty());
 
-    // Merged, but at a head other than the one charter verified: not charter's landing.
+    // The next run finds it merged at the head charter asked for, and records it.
+    let (code, said, recorded) = world.land(
+        &["widget"],
+        How::Merge,
+        json!([github_request("widget", 7, "merged", HEAD)]),
+    );
+    assert_eq!((code, recorded.unspent()), (0, Vec::new()), "{said}");
+    assert!(
+        said.contains("recorded the landing charter made: #7 merged as e5bd3914e2e5"),
+        "{said}"
+    );
+    assert_eq!(world.log().len(), 1);
+}
+
+#[test]
+fn a_merge_at_another_head_than_the_one_verified_is_never_logged() {
+    let world = World::new();
+    world.clone("widget");
+    world.change(&[("widget", &[])]);
     let mut exchanges = ready("widget", 7);
     exchanges.push(github_merged("widget", 7, "merge"));
     exchanges.push(github_request("widget", 7, "merged", MOVED));
@@ -616,10 +654,9 @@ fn a_member_whose_branch_has_a_merge_queue_is_queued_at_its_head_and_logged_once
     );
     assert!(world.log().is_empty(), "nothing has merged yet");
 
-    // Once the queue merged it, landing it again records it, after the same gates.
-    let mut exchanges = vec![github_request("widget", 7, "merged", HEAD)];
-    exchanges.push(github_probe("widget", 7, true));
-    exchanges.extend(github_passed("widget", HEAD));
+    // Once the queue merged it, landing it again records it: charter's pending landing is
+    // the evidence it was charter's.
+    let exchanges = vec![github_request("widget", 7, "merged", HEAD)];
     let (code, said, recorded) = world.land(&["widget"], How::Merge, json!(exchanges));
     assert_eq!((code, recorded.unspent()), (0, Vec::new()), "{said}");
     assert!(
@@ -636,29 +673,113 @@ fn a_member_whose_branch_has_a_merge_queue_is_queued_at_its_head_and_logged_once
     );
     assert_eq!(code, REFUSED, "{said}");
     assert!(
-        said.contains("already landed: charter recorded it as e5bd3914e2e5"),
+        said.contains("already landed, and the landing log has it as e5bd3914e2e5"),
         "{said}"
     );
 }
 
 #[test]
-fn a_request_merged_outside_charter_with_no_queue_is_not_recorded() {
+fn a_request_merged_with_no_pending_landing_of_charters_is_never_recorded() {
     let world = World::new();
     world.clone("widget");
     world.change(&[("widget", &[])]);
-    let exchanges = json!([
-        github_request("widget", 7, "merged", HEAD),
-        github_probe("widget", 7, false),
-    ]);
 
-    let (code, said, recorded) = world.land(&["widget"], How::Merge, exchanges);
-
+    // Merged in the browser, or by a queue charter never put it in.
+    let (code, said, recorded) = world.land(
+        &["widget"],
+        How::Merge,
+        json!([github_request("widget", 7, "merged", HEAD)]),
+    );
     assert_eq!((code, recorded.unspent()), (REFUSED, Vec::new()), "{said}");
     assert!(
         said.contains("#7 is already merged, and not by charter"),
         "{said}"
     );
+
+    // A pending landing at another head is not this one.
+    pending::append(
+        &world.plane,
+        "alpha",
+        "laptop",
+        &Pending::new(
+            SLUG,
+            "widget",
+            7,
+            MOVED,
+            Via::Queue,
+            Stage::Asked,
+            chrono::Utc::now(),
+        ),
+    )
+    .unwrap();
+    let (code, said, _) = world.land(
+        &["widget"],
+        How::Merge,
+        json!([github_request("widget", 7, "merged", HEAD)]),
+    );
+    assert_eq!(code, REFUSED, "{said}");
+    assert!(
+        said.contains("already merged, and not by charter"),
+        "{said}"
+    );
     assert!(world.log().is_empty());
+}
+
+#[test]
+fn a_blocker_merged_outside_charter_is_refused_by_name() {
+    let world = World::new();
+    world.clone("widget");
+    world.clone("gadget");
+    world.change(&[("widget", &[]), ("gadget", &["widget"])]);
+    let exchanges = json!([
+        github_request("gadget", 8, "open", HEAD),
+        github_request("widget", 7, "merged", HEAD),
+    ]);
+
+    let (code, said, recorded) = world.land(&["gadget"], How::Merge, exchanges);
+
+    assert_eq!((code, recorded.unspent()), (REFUSED, Vec::new()), "{said}");
+    assert!(
+        said.contains("gadget: blocker widget has not landed (merged outside charter:"),
+        "{said}"
+    );
+}
+
+#[test]
+fn a_blocker_charter_queued_and_found_merged_is_recorded_and_lets_its_dependent_land() {
+    let world = World::new();
+    world.clone("widget");
+    world.clone("gadget");
+    world.change(&[("widget", &[]), ("gadget", &["widget"])]);
+    pending::append(
+        &world.plane,
+        "alpha",
+        "laptop",
+        &Pending::new(
+            SLUG,
+            "widget",
+            7,
+            HEAD,
+            Via::Queue,
+            Stage::Asked,
+            chrono::Utc::now(),
+        ),
+    )
+    .unwrap();
+    let mut exchanges = vec![
+        github_request("gadget", 8, "open", HEAD),
+        github_request("widget", 7, "merged", HEAD),
+    ];
+    exchanges.extend(github_passed("gadget", HEAD));
+    exchanges.push(github_probe("gadget", 8, false));
+    exchanges.push(github_merged("gadget", 8, "merge"));
+    exchanges.push(github_request("gadget", 8, "merged", HEAD));
+
+    let (code, said, recorded) = world.land(&["gadget"], How::Merge, json!(exchanges));
+
+    assert_eq!((code, recorded.unspent()), (0, Vec::new()), "{said}");
+    let repos: Vec<Value> = world.log().iter().map(|l| l["repo"].clone()).collect();
+    assert_eq!(repos, vec![json!("widget"), json!("gadget")], "{said}");
 }
 
 // ---- GitLab ----------------------------------------------------------------------------------
@@ -734,6 +855,11 @@ fn on_gitlab_a_merge_set_to_happen_later_is_cancelled_and_not_logged() {
         json!([]),
         json!({"iid": 9, "state": "opened", "merge_when_pipeline_succeeds": false}),
     ));
+    // The cancel is confirmed by reading the merge request again.
+    exchanges.push(get(
+        "projects/acme%2Fwidget/merge_requests/9",
+        json!({"iid": 9, "state": "opened", "merge_when_pipeline_succeeds": false}),
+    ));
     exchanges.push(gitlab_request(9, "opened", HEAD));
 
     let (code, said, recorded) = world.land(&["widget"], How::Merge, json!(exchanges));
@@ -745,6 +871,67 @@ fn on_gitlab_a_merge_set_to_happen_later_is_cancelled_and_not_logged() {
         ),
         "{said}"
     );
+    assert!(world.log().is_empty());
+    assert_eq!(
+        pending::pendings(&world.plane, "alpha", SLUG)["widget"].stage,
+        Stage::Refused
+    );
+}
+
+#[test]
+fn on_gitlab_a_merge_left_to_happen_later_is_said_and_kept_for_doctor() {
+    let world = World::new();
+    world.clone_on("gitlab.com", "acme", "widget");
+    world.change(&[("widget", &[])]);
+    let mut exchanges = gitlab_ready(9, false);
+    exchanges.push(write(
+        "PUT",
+        "projects/acme%2Fwidget/merge_requests/9/merge",
+        gitlab_merge_fields(9),
+        json!({"iid": 9, "state": "opened", "merge_when_pipeline_succeeds": true}),
+    ));
+    exchanges.push(refused(
+        "projects/acme%2Fwidget/merge_requests/9/cancel_merge_when_pipeline_succeeds",
+        Some("POST"),
+        json!([]),
+        "403 Forbidden",
+    ));
+
+    let (code, said, recorded) = world.land(&["widget"], How::Merge, json!(exchanges));
+
+    assert_eq!((code, recorded.unspent()), (1, Vec::new()), "{said}");
+    assert!(
+        said.contains(
+            "GitLab set !9 to merge later, and charter could not cancel that (403 Forbidden)"
+        ),
+        "{said}"
+    );
+    assert!(said.contains("Cancel its auto-merge on GitLab"), "{said}");
+    assert!(world.log().is_empty());
+    assert_eq!(
+        pending::pendings(&world.plane, "alpha", SLUG)["widget"].stage,
+        Stage::MergeLater
+    );
+}
+
+#[test]
+fn on_gitlab_a_repo_that_does_not_say_whether_it_has_a_merge_train_is_not_merged() {
+    let world = World::new();
+    world.clone_on("gitlab.com", "acme", "widget");
+    world.change(&[("widget", &[])]);
+    let mut exchanges = gitlab_ready(9, false);
+    exchanges.pop();
+    exchanges.push(get("projects/acme%2Fwidget", json!({"id": 3})));
+
+    let (code, said, recorded) = world.land(&["widget"], How::Merge, json!(exchanges));
+
+    assert_eq!((code, recorded.unspent()), (1, Vec::new()), "{said}");
+    assert!(said.contains("GitLab did not say"), "{said}");
+    assert!(
+        said.contains("will not merge directly where a train may exist"),
+        "{said}"
+    );
+    assert!(said.contains("Nothing was merged"), "{said}");
     assert!(world.log().is_empty());
 }
 

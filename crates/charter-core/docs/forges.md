@@ -141,29 +141,42 @@ only: `floorguard::PUBLISH_FORGE` refuses it from a run nobody is watching, as i
 
 The gates come first, each refusal its own sentence and exit 2: one member named (`--repo`
 once), not by rebase; a member with a clone here and an open request (`by_head`); every member
-it `needs` landed, which is the forge reporting the blocker's request merged and, where the
-landing log has a line for it, the clone's default branch (its `origin/` tracking ref, else the
-local branch) still holding the logged commit; and the checks `PASSED` at the request's head
+it `needs` landed, which is the forge reporting the blocker's request merged and charter having
+landed it: a landing-log line whose commit the clone's default branch (its `origin/` tracking
+ref, else the local branch) still holds, or a pending landing found merged at its head, which is
+logged then; and the checks `PASSED` at the request's head
 (`checks_at`), never at another commit.
 
-Then `lands_through_queue` decides the call:
+Then `lands_through_queue` decides the call. On GitLab a repo whose answer has no
+`merge_trains_enabled` (a token that cannot read its settings, a tier that does not report
+trains) is refused and nothing is merged: a direct merge there could skip a train.
+
+**Before the call, a pending landing is written** (`changes/log/pending/<host>.jsonl`, clone
+state): the request, the head, `direct` or `queue`. It is charter's evidence that it started
+this landing, and a later `land` records a merge it did not see happen only on that evidence.
+A refusal moves it to `refused`, so a later merge of the same head by somebody else is never
+taken for charter's.
 
 - **No queue:** `merge_at`, now, pinned to the head whose checks were read. GitHub's `sha` and
   GitLab's `sha` make the forge refuse a head that moved, and charter, reading the request
   again, names the move. The landing commit's message is charter's, so it carries
   `Charter-Change: <slug>`. Charter never asks for auto-merge here: on GitLab
   `merge_when_pipeline_succeeds` (or `auto_merge`) would merge whatever head the branch has when
-  a later pipeline passes, and a GitLab that answers by setting it anyway has it cancelled at
-  once and the landing refused. After the merge the request is read again, and only a request
-  the forge reports merged, at that head, gets a line in the landing log.
+  a later pipeline passes. A GitLab that answers by setting it anyway has it cancelled at once,
+  the cancel confirmed by reading the merge request again, and the landing refused; a cancel
+  that fails is `MergedAt::Later`, kept as `merge-later` in the pending landing, and doctor names
+  it. After the merge the request is read again, and only a request the forge reports merged,
+  at that head, gets a line in the landing log. When that read-back fails, the next `land`
+  finds the merge and records it.
 - **A merge queue or merge train:** `enqueue_at`, pinned the same way (`expectedHeadOid`,
   `sha`), and with no `auto_merge` on GitLab, so the merge request is added now or refused. The
   queue runs its own checks and merges it later, so nothing is logged then. A later
-  `charter change land` of the member finds the request merged and records the landing, after
-  the same blocker and check gates; on a repo with no queue, a request merged by somebody else
-  is never recorded as charter's. GitHub's queue merges by the method its rule sets and writes
-  its own message, so `--squash` and the trailer are not GitHub's to take there; GitLab's train
-  takes `squash`.
+  `charter change land` of the member finds the request merged at the pending head and records
+  the landing. A request merged with no pending landing of charter's is never recorded, and as a
+  blocker it is refused as merged outside charter. A queue writes its own merge commit message
+  on both forges, so these landings carry no trailer. GitHub's queue merges by the method its
+  rule sets, so `--squash` is not charter's to choose there; GitLab's train takes `squash`
+  (`Kind::queue_takes_squash`).
 
 **Not behind the seam, and why:**
 

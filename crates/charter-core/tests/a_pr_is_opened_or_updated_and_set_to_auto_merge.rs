@@ -1174,7 +1174,7 @@ mod prs {
                 PUSHED,
                 &landing()
             ),
-            Ok(())
+            Ok(pr::MergedAt::Now)
         );
         assert!(was_asked(&merged));
     }
@@ -1299,7 +1299,7 @@ mod prs {
                 PUSHED,
                 &landing()
             ),
-            Ok(())
+            Ok(pr::MergedAt::Now)
         );
         assert_eq!(
             backend.enqueue_at(

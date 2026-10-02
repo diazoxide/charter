@@ -80,6 +80,16 @@ pub struct MergeAs {
     pub message: String,
 }
 
+/// What `merge_at` got the forge to do, when it did not refuse.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MergedAt {
+    /// Merged now, at the head charter named.
+    Now,
+    /// The forge set the request to merge later instead, and charter could not undo that, in
+    /// these words. Whatever head the branch has when a later pipeline passes is what merges.
+    Later(String),
+}
+
 /// What `request_auto_merge` got the forge to do.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AutoMerge {

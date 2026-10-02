@@ -25,7 +25,7 @@ use serde_json::Value;
 
 use super::checks::Checks;
 use super::cli::Cli;
-use super::pr::{AutoMerge, MergeAs, Opened, Pr, Request, State};
+use super::pr::{AutoMerge, MergeAs, MergedAt, Opened, Pr, Request, State};
 use super::transport::{Call, NoAnswer, Reply, Transport};
 use super::{Forge, ForgeError, Kind, Raised};
 
@@ -282,7 +282,8 @@ pub trait Requests {
     -> Result<bool, ForgeError>;
 
     /// Merge `pr` now, as `how` says, and only while its head is `head_sha`: the forge's own
-    /// guard refuses a head that moved (ADR 0060 D3). It never asks the forge to merge later.
+    /// guard refuses a head that moved (ADR 0060 D3). It never asks the forge to merge later;
+    /// [`MergedAt::Later`] is a forge that did so anyway and could not be undone.
     fn merge_at(
         &self,
         caller: &Caller,
@@ -290,7 +291,7 @@ pub trait Requests {
         pr: &Pr,
         head_sha: &str,
         how: &MergeAs,
-    ) -> Result<(), ForgeError>;
+    ) -> Result<MergedAt, ForgeError>;
 
     /// Put `pr` in its target branch's queue, only while its head is `head_sha` (ruling Q16).
     /// `Ok` once the forge's answer names the entry.

@@ -27,6 +27,9 @@ pub const LOG_FIELDS: [&str; 6] = ["change", "head", "merge", "number", "repo", 
 /// The directory, relative to the change store.
 pub const LOG_DIRNAME: &str = "log";
 
+/// The last landing declared for each member, by repo.
+pub type Landings = BTreeMap<String, Landing>;
+
 /// One landing charter made.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Landing {
@@ -115,7 +118,7 @@ pub fn append(plane: &Path, ws: &str, host: &str, landing: &Landing) -> Option<P
 /// The last landing declared for each member of `slug`, by its `ts`, read from every host's
 /// log: a change worked from two machines is still one change. A line that is not a landing,
 /// and a file or directory containment refuses, is skipped: this is bookkeeping beside git.
-pub fn landings(plane: &Path, ws: &str, slug: &str) -> BTreeMap<String, Landing> {
+pub fn landings(plane: &Path, ws: &str, slug: &str) -> Landings {
     let dir = log_dir(plane, ws);
     let mut out = BTreeMap::new();
     if contain::readable(plane, &dir).is_err() {

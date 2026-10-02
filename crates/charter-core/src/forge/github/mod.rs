@@ -10,8 +10,8 @@ use super::backend::{
 };
 use super::checks::{self, Checks};
 use super::pr::{
-    AutoMerge, GITHUB_METHODS, GITHUB_NOTHING_TO_WAIT_FOR, MergeAs, Opened, Pr, Request, State,
-    commit_named, first, is_ours, not_queued_when, pr_of, unknown_state,
+    AutoMerge, GITHUB_METHODS, GITHUB_NOTHING_TO_WAIT_FOR, MergeAs, MergedAt, Opened, Pr, Request,
+    State, commit_named, first, is_ours, not_queued_when, pr_of, unknown_state,
 };
 use super::transport::{Call, Field, Method, NoAnswer};
 use super::{
@@ -566,7 +566,7 @@ impl Requests for GitHub {
         pr: &Pr,
         head_sha: &str,
         how: &MergeAs,
-    ) -> Result<(), ForgeError> {
+    ) -> Result<MergedAt, ForgeError> {
         let (owner, name) = owner_name(path);
         let api = format!(
             "repos/{}/{}/pulls/{}/merge",
@@ -593,7 +593,7 @@ impl Requests for GitHub {
                 answer["message"].as_str().unwrap_or("no message")
             )));
         }
-        Ok(())
+        Ok(MergedAt::Now)
     }
 
     /// `enqueuePullRequest` with `expectedHeadOid`. The queue merges by the method its own

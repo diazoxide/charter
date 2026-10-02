@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use charter_core::forge::checks::{Checks, Ci};
-use charter_core::forge::pr::{AutoMerge, MergeAs, Opened, Pr, Request, State};
+use charter_core::forge::pr::{AutoMerge, MergeAs, MergedAt, Opened, Pr, Request, State};
 use charter_core::forge::recorded::Recorded;
 use charter_core::forge::{Caller, Capability, Forge, ForgeBackend, Reach, Support};
 use serde_json::{Value, json};
@@ -325,7 +325,7 @@ mod cases {
             recorded
                 .backend
                 .merge_at(&recorded.caller, "acme/api", &pr, SHA, &merge_as(kind)),
-            Ok(())
+            Ok(MergedAt::Now)
         );
         spent(&recorded);
     }

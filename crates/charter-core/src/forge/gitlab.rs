@@ -9,7 +9,7 @@ use super::backend::{
 };
 use super::checks::{self, Checks};
 use super::pr::{
-    AutoMerge, GITLAB_ACTIVE, GITLAB_NOT_MERGEABLE, MergeAs, Opened, Pr, Request, State,
+    AutoMerge, GITLAB_ACTIVE, GITLAB_NOT_MERGEABLE, MergeAs, MergedAt, Opened, Pr, Request, State,
     commit_named, is_ours, not_queued_when, own_mr, pr_of, unknown_state,
 };
 use super::transport::{Call, Field, Method};
@@ -20,6 +20,11 @@ use super::{
 
 /// The GitLab backend.
 pub(super) struct GitLab(pub(super) Asker);
+
+/// Whether a merge request record says GitLab will merge it later, by either spelling.
+fn set_to_merge_later(record: &Value) -> bool {
+    truthy(&record["merge_when_pipeline_succeeds"]) || truthy(&record["auto_merge_enabled"])
+}
 
 /// GitLab's pipeline `status` → charter's neutral vocabulary. Python's `gitlab._CI_MAP`, plus
 /// the two statuses GitLab added after it (GitLab 19.4 `doc/api/pipelines.md`, the `status`
@@ -354,20 +359,28 @@ impl Requests for GitLab {
         )
     }
 
-    /// The repo's `merge_trains_enabled`. GitLab names it only where merge trains exist
-    /// (Premium and Ultimate), so a repo that does not name it has none.
+    /// The repo's `merge_trains_enabled`. **A repo that does not name it fails closed**: the
+    /// field is missing when the token cannot read the repo's settings or the GitLab tier does
+    /// not report it, and merging directly where a train may exist would skip the train.
     fn lands_through_queue(
         &self,
         caller: &Caller,
         path: &str,
         _pr: &Pr,
     ) -> Result<bool, ForgeError> {
-        let project = format!("projects/{}", quote(path));
+        let repo = format!("projects/{}", quote(path));
         let doing = format!("reading whether {path} lands through a merge train");
         let settings = self
             .0
-            .ask(caller, &Call::get(&project, LIST_TIMEOUT), &doing)?;
-        Ok(settings["merge_trains_enabled"] == Value::Bool(true))
+            .ask(caller, &Call::get(&repo, LIST_TIMEOUT), &doing)?;
+        settings["merge_trains_enabled"].as_bool().ok_or_else(|| {
+            ForgeError::new(format!(
+                "{doing}: GitLab did not say. Its answer has no merge_trains_enabled, which \
+                 GitLab leaves out for a token that cannot read the repo's settings and on a \
+                 tier that does not report merge trains. Charter will not merge directly where a \
+                 train may exist, so this member is landed by a person"
+            ))
+        })
     }
 
     /// The merge call with `sha`, and **no** `merge_when_pipeline_succeeds` or `auto_merge`:
@@ -385,7 +398,7 @@ impl Requests for GitLab {
         pr: &Pr,
         head_sha: &str,
         how: &MergeAs,
-    ) -> Result<(), ForgeError> {
+    ) -> Result<MergedAt, ForgeError> {
         let mr = format!("projects/{}/merge_requests/{}", quote(path), pr.number);
         let message = format!("{}\n\n{}", how.title, how.message);
         let mut fields = vec![
@@ -403,31 +416,48 @@ impl Requests for GitLab {
             &doing,
         )?;
         if answer["state"] == "merged" {
-            return Ok(());
+            return Ok(MergedAt::Now);
         }
-        let later = truthy(&answer["merge_when_pipeline_succeeds"])
-            || truthy(&answer["auto_merge_enabled"]);
-        if later {
-            let cancel = Call::write(
-                Method::Post,
-                format!("{mr}/cancel_merge_when_pipeline_succeeds"),
-                Vec::new(),
-            );
-            let not_cancelled =
-                |why: &str| format!("and charter could not cancel it ({why}): cancel it on GitLab");
-            let after = match self.0.said(caller, &cancel) {
-                Ok(Ok(())) => "and charter cancelled that".to_string(),
-                Ok(Err(why)) => not_cancelled(&why),
-                Err(no) => not_cancelled(no.said()),
-            };
+        if !set_to_merge_later(&answer) {
             return Err(ForgeError::new(format!(
-                "{doing}: GitLab set it to merge later instead of merging it, {after}"
+                "{doing}: GitLab did not confirm a merge (state {:?})",
+                answer["state"].as_str().unwrap_or("unknown")
             )));
         }
-        Err(ForgeError::new(format!(
-            "{doing}: GitLab did not confirm a merge (state {:?})",
-            answer["state"].as_str().unwrap_or("unknown")
-        )))
+        let cancel = Call::write(
+            Method::Post,
+            format!("{mr}/cancel_merge_when_pipeline_succeeds"),
+            Vec::new(),
+        );
+        if let Err(why) = match self.0.said(caller, &cancel) {
+            Ok(said) => said,
+            Err(no) => Err(no.said().to_string()),
+        } {
+            return Ok(MergedAt::Later(format!(
+                "GitLab set !{} to merge later, and charter could not cancel that ({why})",
+                pr.number
+            )));
+        }
+        // Confirmed by reading it again, not by the cancel's answer alone.
+        let read = format!(
+            "reading !{} of {path} after cancelling its merge",
+            pr.number
+        );
+        match self.0.ask(caller, &Call::get(&mr, LIST_TIMEOUT), &read) {
+            Ok(after) if !set_to_merge_later(&after) => Err(ForgeError::new(format!(
+                "{doing}: GitLab set it to merge later instead of merging it, and charter \
+                 cancelled that"
+            ))),
+            Ok(_) => Ok(MergedAt::Later(format!(
+                "GitLab set !{} to merge later, and it is still set after charter cancelled it",
+                pr.number
+            ))),
+            Err(why) => Ok(MergedAt::Later(format!(
+                "GitLab set !{} to merge later, and charter could not confirm the cancel ({})",
+                pr.number,
+                why.said()
+            ))),
+        }
     }
 
     /// Added to the merge train with `sha` and no `auto_merge`, so GitLab adds it now or

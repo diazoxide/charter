@@ -127,17 +127,30 @@ as needing a person.
   attended-only, and an agent still never merges. This makes `forge::pr`'s "Nothing here
   merges" false once T7 lands, and T7 updates that module's doc.
 
-  > **Amended 2026-10-02, by the operator's ruling Q16 (#472).** Where a member's target
-  > branch has a merge queue (GitHub) or a merge train (GitLab), `land` puts the request in it,
-  > after the same two gates and pinned to the same verified head (`expectedHeadOid`, `sha`),
-  > instead of merging directly. The queue runs its own checks and merges later, so nothing is
-  > logged then; a later `charter change land` of that member finds the request merged and
-  > logs the landing after the same gates. On a repo with no queue a request merged by
-  > somebody else is still never logged as charter's. D3's reasoning stands everywhere else:
-  > with no queue, `land` merges directly, never through auto-merge, which on GitLab
-  > (`merge_when_pipeline_succeeds`) would merge whatever head the branch has when a later
-  > pipeline passes. A queue's merge carries no `Charter-Change:` trailer where the queue
-  > writes its own message (GitHub), so a missing trailer is not one of doctor's divergences.
+  > **Amended 2026-10-02, by the operator's ruling Q16 (#472).**
+  >
+  > *What Q16 rules:* where a member's target branch has a merge queue (GitHub) or a merge
+  > train (GitLab), `land` lands it through that queue instead of merging directly. Everything
+  > else in D3 stands: the same two gates first, the same verified head (`expectedHeadOid` and
+  > `sha` pin the queue entry to it), and, where there is no queue, a direct merge and never
+  > auto-merge, which on GitLab (`merge_when_pipeline_succeeds`) would merge whatever head the
+  > branch has when a later pipeline passes.
+  >
+  > *Implementation decisions, not rulings* (recorded in #855):
+  >
+  > - **D-472a, which supersedes D-0023.** A landing is recorded only on evidence that
+  >   charter started it. Before the forge is asked, `land` appends a pending landing
+  >   (`workspaces/<ws>/changes/log/pending/<host>.jsonl`, clone state, never committed). A
+  >   queued member, or one whose read-back failed, is logged by a later `land` that finds the
+  >   request merged at that pending head. A request merged with no pending landing (a person,
+  >   an admin, a merge from before the queue existed) is never logged as charter's, and as a
+  >   blocker it is refused as merged outside charter. The land gate and doctor read one
+  >   definition of this.
+  > - **A GitLab repo that does not say whether it has a merge train is not merged**, since a
+  >   direct merge there could skip a train.
+  > - **D-0028.** A queue writes its own merge commit message, on GitHub's merge queue and on
+  >   GitLab's merge train alike, so those landings carry no `Charter-Change:` trailer, and a
+  >   missing trailer is not one of doctor's divergences.
 - **D4: `charter change push` ignores a repo's `mode = "off"`.** ADR 0051's `off` governs
   *saves*, which commit a developer's work nobody asked to commit. `change push` is an explicit
   verb over repos someone named by hand, and it commits nothing. It prints every repo, branch and
