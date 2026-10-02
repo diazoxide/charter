@@ -606,6 +606,35 @@ const ORDINARY: Answers = {
   memory_read: MEMORY,
   workspace_settings: WORKSPACE_FILE,
   repo_instructions: INSTRUCTIONS,
+  start_options: {
+    profiles: [
+      {
+        name: "claude",
+        kind: "claude",
+        shown: "claude",
+        source: "built-in",
+        is_default: true,
+        approval: null,
+        ready_to_type: true,
+      },
+      {
+        name: "codex",
+        kind: "codex",
+        shown: "codex",
+        source: "built-in",
+        is_default: false,
+        approval: "new",
+        ready_to_type: true,
+      },
+    ],
+    refused: [],
+    personas: ["steward"],
+    persona: "steward",
+    ignore_fix: null,
+    declares_none: true,
+  },
+  piece_files: ["README.md", "src/main.rs"],
+  piece_file: { kind: "text", text: "fn main() {}\n" },
   extensions_on: [],
 };
 
@@ -739,6 +768,21 @@ const STATES: State[] = [
     name: "a workspace's repo instructions",
     view: { from: null, view: "repo-instructions", key: WORKSPACE },
     drawn: /AGENTS\.md/,
+  },
+  {
+    name: "the first task, a command to approve",
+    view: { from: null, view: "first-task", key: `/plane/workspaces/${WORKSPACE}/${WORKSPACE}` },
+    drawn: /Second chat/,
+  },
+  {
+    name: "a piece's files",
+    view: { from: null, view: "piece-files", key: `${WORKSPACE}/${WORKSPACE}/chat-1` },
+    drawn: /src\/main\.rs/,
+  },
+  {
+    name: "a file of a piece",
+    view: { from: null, view: "piece-file", key: `${WORKSPACE}/${WORKSPACE}/chat-1/src/main.rs` },
+    drawn: /fn main/,
   },
   { name: "Preferences", view: { from: null, view: "preferences", key: "" }, drawn: /^Text$/ },
   {
