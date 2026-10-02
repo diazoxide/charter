@@ -10,9 +10,10 @@
 //!
 //! The parent searches everything the run wrote, every file under the run directory and the
 //! child's standard output and error, for the canary. It also checks the run did what it says:
-//! the log holds the native transport's request lines, and the recorded forge was sent the
-//! token, so a quiet log or an unauthenticated run cannot pass for a clean one. The canary is
-//! not shaped like a credential, so the log's own redaction could not hide a leak from this.
+//! the log holds the run's own lines, the network log (OB-15) lists the native requests, and
+//! the recorded forge was sent the token, so a quiet log or an unauthenticated run cannot pass
+//! for a clean one. The canary is not shaped like a credential, so the log's own redaction
+//! could not hide a leak from this.
 //!
 //! OB-11's crash reports (minidumps) do not exist yet; a panic's report is what it writes to
 //! standard error, which this searches. When OB-11 lands, its minidump joins the search.
@@ -212,6 +213,9 @@ fn a_forge_token_appears_in_no_log_record_or_crash_report() {
             .env_clear()
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())
             .env("HOME", run.path())
+            // The run's own tree is the fence, so the network log under `HOME` is written: an
+            // emptied environment has no `TMPDIR`, and the default fence would miss it.
+            .env(charter_core::fence::VAR, run.path())
             .env("RUST_BACKTRACE", "1")
             .env("RUST_LOG", "trace")
             .env("CHARTER_LOG_DIR", &logs)
@@ -237,8 +241,13 @@ fn a_forge_token_appears_in_no_log_record_or_crash_report() {
         .map(|p| std::fs::read_to_string(p).unwrap_or_default())
         .collect();
     assert!(
-        log_text.contains("forge request") && log_text.contains("a forge operation answered"),
+        log_text.contains("a forge operation answered"),
         "the log holds no record of the run:\n{log_text}"
+    );
+    let network_log = charter_core::netlog::dir(&run.path().join(".config"));
+    assert!(
+        written.iter().any(|p| p.starts_with(&network_log)),
+        "the network log (OB-15) listed none of the native requests, so it was not searched"
     );
     assert!(
         written

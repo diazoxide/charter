@@ -13,6 +13,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A local network log.** charter's forge calls, through its own client or through `gh` and
+  `glab`, `charter report`'s filing and the updater's reads are listed in
+  `~/.config/charter/network-log/`, a file a day, kept for 30 days. Each line says which feature
+  called which host, with the method, the path with names masked, the status and the time it
+  took, and whether it went to Charter or to a third party. It never holds a body, a header, a
+  token, a query or the names in a path, and nothing sends it anywhere. Without an account, and
+  unless you send a report, the only Charter addresses it lists are the updater's.
 - **Read any file of a worktree in charter.** A worktree's menu in the explorer has *Browse the
   files of …*: a tab listing the worktree's files, narrowed as you type, with the file you pick
   drawn beside the list in the light editor, charter's read-only CodeMirror 6 viewer with syntax

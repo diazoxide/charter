@@ -156,10 +156,19 @@ pub async fn look<R: Runtime>(app: tauri::AppHandle<R>) {
 
 /// The check itself, with no emitting in it, so the decision and the telling are separable.
 async fn offer<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<Option<Offer>, String> {
-    may_update(app)?;
     let channel = channel_now();
-    let endpoint = channel
-        .endpoint()
+    offer_from(app, channel, &channel.endpoint()).await
+}
+
+/// [`offer`], asking `endpoint` for `channel`'s manifest: the channel's own in the app, and a
+/// manifest on loopback in a test.
+async fn offer_from<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+    channel: Channel,
+    endpoint: &str,
+) -> Result<Option<Offer>, String> {
+    may_update(app)?;
+    let url = endpoint
         .parse()
         .map_err(|why| format!("charter's update endpoint is not a url: {why}"))?;
     let updater = app
@@ -167,11 +176,15 @@ async fn offer<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<Option<Offer>, S
         // **The endpoint, every time.** `tauri.conf.json` names the stable one so a build can
         // never be pointed at nothing, and this replaces it with the channel's — which is why
         // switching channels takes effect at the next check rather than at the next launch.
-        .endpoints(vec![endpoint])
+        .endpoints(vec![url])
         .map_err(|why| format!("charter's update endpoint was refused: {why}"))?
         .build()
         .map_err(|why| format!("charter's updater could not be built: {why}"))?;
-    let found = updater.check().await.map_err(|why| {
+    let started = std::time::Instant::now();
+    let found = updater.check().await;
+    // The network log (OB-15): one of the only Charter reads a run without an account makes.
+    charter_core::netlog::updater_read(endpoint, came_back(&found), started.elapsed());
+    let found = found.map_err(|why| {
         format!(
             "charter could not reach the {} channel: {why}",
             channel.name()
@@ -183,6 +196,22 @@ async fn offer<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<Option<Offer>, S
         channel: channel.name().to_owned(),
         notes: update.body.clone().unwrap_or_default(),
     }))
+}
+
+/// Whether an updater request was answered, for the network log: everything but a request
+/// that never reached a server or never got a reply. A manifest or bundle refused for its
+/// signature or its version was answered, and then refused here.
+fn came_back<T>(result: &Result<T, tauri_plugin_updater::Error>) -> bool {
+    use tauri_plugin_updater::Error;
+    !matches!(
+        result,
+        Err(Error::Reqwest(_)
+            | Error::Network(_)
+            | Error::ReleaseNotFound
+            | Error::InsecureTransportProtocol
+            | Error::UrlParse(_)
+            | Error::EmptyEndpoints)
+    )
 }
 
 /// A notification, because the window is often hidden — closing it hides it (ADR 0025).
@@ -231,7 +260,14 @@ pub async fn install<R: Runtime>(app: tauri::AppHandle<R>) {
             })
             .build()
             .map_err(|why| format!("charter's updater could not be built: {why}"))?;
-        let Some(update) = updater.check().await.map_err(|why| {
+        let started = std::time::Instant::now();
+        let found = updater.check().await;
+        charter_core::netlog::updater_read(
+            &channel.endpoint(),
+            came_back(&found),
+            started.elapsed(),
+        );
+        let Some(update) = found.map_err(|why| {
             format!(
                 "charter could not reach the {} channel: {why}",
                 channel.name()
@@ -242,9 +278,16 @@ pub async fn install<R: Runtime>(app: tauri::AppHandle<R>) {
         };
         // The signature is verified inside this call, over the bytes that were downloaded,
         // before anything is unpacked. Nothing here can turn that off and nothing here tries.
-        update
-            .download_and_install(|_, _| {}, || {})
-            .await
+        let started = std::time::Instant::now();
+        let installed = update.download_and_install(|_, _| {}, || {}).await;
+        // The signed bundle the manifest named. A bundle refused for its signature was
+        // still downloaded, so it is listed as answered.
+        charter_core::netlog::updater_read(
+            update.download_url.as_str(),
+            came_back(&installed),
+            started.elapsed(),
+        );
+        installed
             .map_err(|why| format!("charter {} could not be installed: {why}", update.version))?;
         Ok::<String, String>(update.version.clone())
     }
@@ -359,6 +402,74 @@ fn restarting(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Set in the child [`the_real_check_lists_its_read_in_the_network_log`] runs in.
+    const NETLOG_CHILD: &str = "CHARTER_TEST_UPDATER_NETLOG_CHILD";
+
+    /// A key that passes [`pubkey_usable`]'s shape check, for a check nothing installs from.
+    const A_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXkgZm9yIGEgdGVzdApSV1FBQVFJREJBVUdCd2dKQ2dzTURRNFBFQkVTRXhRVkZoY1lHUm9iSEIwZUh5QWhJaU1rSlNZbgo=";
+
+    /// A manifest server on loopback that answers each request with an older version than this
+    /// one, and says how many it answered.
+    fn manifest_server() -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+        let url = format!("http://{}/latest.json", listener.local_addr().unwrap());
+        let served = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = served.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut stream = stream;
+                let mut buf = [0u8; 4096];
+                let _ = stream.read(&mut buf);
+                let body = r#"{"version":"0.0.1","notes":"","pub_date":"2020-01-01T00:00:00Z","url":"http://127.0.0.1:1/x","signature":"x"}"#;
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        });
+        (url, served)
+    }
+
+    /// OB-15: the update check the timer and the window run, `offer`'s own path, lists its read
+    /// in the network log as the updater's. It runs in a child with a machine store of its own.
+    #[test]
+    fn the_real_check_lists_its_read_in_the_network_log() {
+        if std::env::var_os(NETLOG_CHILD).is_none() {
+            let store = tempfile::tempdir().expect("a machine store");
+            charter_core::testrun::rerun(
+                &["updates::tests::the_real_check_lists_its_read_in_the_network_log"],
+                &[
+                    (NETLOG_CHILD, std::ffi::OsStr::new("1")),
+                    (charter_core::machine::HOME_VAR, store.path().as_os_str()),
+                    ("XDG_CONFIG_HOME", std::ffi::OsStr::new("")),
+                ],
+            );
+            let lines = charter_core::netlog::entries(store.path());
+            assert_eq!(lines.len(), 1, "{lines:?}");
+            let line = &lines[0];
+            assert_eq!(line.feature, charter_core::netlog::Feature::Updater);
+            assert!(line.host.starts_with("127.0.0.1:"), "{line:?}");
+            assert_eq!((line.method.as_str(), line.answered), ("GET", true));
+            return;
+        }
+        let (url, served) = manifest_server();
+        let mut context = tauri_context!(test = true);
+        context.config_mut().plugins.0.insert(
+            "updater".into(),
+            serde_json::json!({ "pubkey": A_KEY, "endpoints": [url] }),
+        );
+        let app = tauri::test::mock_builder()
+            .plugin(tauri_plugin_updater::Builder::new().build())
+            .build(context)
+            .expect("the app builds with its updater");
+        let found = tauri::async_runtime::block_on(offer_from(app.handle(), Channel::Stable, &url));
+        assert!(matches!(found, Ok(None)), "{found:?}");
+        assert_eq!(served.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
 
     /// `tauri.conf.json`, as the build reads it.
     fn config() -> serde_json::Value {
