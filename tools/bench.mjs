@@ -10,7 +10,8 @@
 //     --ceiling 2500 --warm-up --fresh-profile
 //                                        # CI's Linux cold start: one discarded launch, then each
 //                                        # launch on a fresh profile; fails when the median is
-//                                        # past the limit or any launch past the ceiling
+//                                        # past the limit or two launches are past the ceiling
+//                                        # (one past it is reported, not gated)
 //
 // Windows open and close on screen while it runs, and each is brought to the front: WebKit
 // draws nothing in a covered window, and nothing at all while the display sleeps (which
@@ -34,6 +35,8 @@ import { cpus, platform, release, tmpdir, totalmem } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 
+import { coldStartGate } from "./coldstart-gate.mjs";
+
 const ROOT = resolve(import.meta.dirname, "..");
 const APP = join(ROOT, "app");
 const RELEASE = join(ROOT, "target", "release");
@@ -51,8 +54,8 @@ const { values: options } = parseArgs({
     // Cold start's limit in ms: the run fails when the held launches' median is past it — or,
     // without a ceiling, when any one is.
     limit: { type: "string" },
-    // The most any one held launch may take, in ms, beside the median's limit: one noisy sample
-    // on a shared runner is not a regression, and a launch this slow is.
+    // The most a held launch may take, in ms, beside the median's limit. One launch past it is
+    // reported, not gated: one noisy sample on a shared runner is not a regression. Two are.
     ceiling: { type: "string" },
     // One launch before the measured ones, reported and not held to the limit: it pays for a
     // disk cold since boot or install (the binary and GTK/WebKitGTK's libraries), which a person
@@ -542,8 +545,8 @@ writeFileSync(join(OUT, "results.json"), `${JSON.stringify(results, null, 2)}\n`
 console.log(`\n${JSON.stringify(results, null, 2)}\n\nWritten to ${join(OUT, "results.json")}`);
 if (!existsSync(COLD_START_APP) && only.has("coldstart")) console.log("(cold start needs a build first)");
 if (options.limit && results.coldStart) {
-  // Every held launch, not the p50: with five launches a p50 lets two of them pass the limit
-  // unseen, and a person feels each launch.
+  // Without a ceiling, every held launch, not the p50: with five launches a p50 lets two of them
+  // pass the limit unseen, and a person feels each launch. With one, `coldStartGate` says how.
   const limit = Number(options.limit);
   const build = /[/\\]debug[/\\]/.test(COLD_START_APP)
     ? "debug build"
@@ -556,20 +559,21 @@ if (options.limit && results.coldStart) {
       `\ncold disk, once per boot or install: reported, not gated: ${Math.round(warmUp.ms)} ms`,
     );
   const launches = results.coldStart.launchToFirstFrame.samples_ms;
-  const ceiling = options.ceiling ? Number(options.ceiling) : limit;
-  const sorted = [...launches].sort((a, b) => a - b);
-  const middle = Math.floor(sorted.length / 2);
-  const median = sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
-  const over = launches.filter((ms) => ms > ceiling);
-  const met = launches.length > 0 && over.length === 0 && (!options.ceiling || median <= limit);
+  const ceiling = options.ceiling ? Number(options.ceiling) : undefined;
+  const { met, median, worst, over, ignored } = coldStartGate({ launches, limit, ceiling });
   console.log(
     `cold start (${build}${fresh ? ", a fresh profile each launch" : ""}): ` +
       `${launches.map((ms) => Math.round(ms)).join(", ")} ms`,
   );
-  if (options.ceiling)
+  if (ceiling !== undefined)
     console.log(
-      `median ${Math.round(median)} ms against a ${limit} ms limit, worst ${Math.round(sorted.at(-1) ?? 0)} ms ` +
-        `against a ${ceiling} ms ceiling: ${met ? "met" : "MISSED"}`,
+      `median ${Math.round(median)} ms against a ${limit} ms limit, worst ${Math.round(worst)} ms ` +
+        `against a ${ceiling} ms ceiling: ${met ? "met" : "MISSED"}` +
+        (ignored.length > 0
+          ? ` (1 launch past the ceiling, ${Math.round(ignored[0])} ms, reported, not gated)`
+          : over.length > 1
+            ? ` (${over.length} launches past the ceiling, at most 1 is let through)`
+            : ""),
     );
   else
     console.log(

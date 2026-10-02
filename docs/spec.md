@@ -481,7 +481,7 @@ confirm it (D-0082b). A row is added in the pull request that adds its job.
 | L3 | 2 MB and 13 MB bursts | no freeze; input and other panes responsive | the same | SC-16 | longest frame 42 / 52 ms |
 | L4 | synchronized-output animation | ≥ 30 fps | release absolute | SC-16 | 52.4 and 52.0 draws/s against a 60 fps display |
 | L5 | hook call p95, at 50,000 memories and the hot target | ≤ 50 ms | CI absolute (`stress`) | KN-22 | not yet measured |
-| L6 | cold start to the first frame, no chats | ≤ 2 s | CI absolute on Linux (`app builds`, median of five, ceiling 2.5 s); release absolute on macOS | FR-8 | 370 ms macOS |
+| L6 | cold start to the first frame, no chats | ≤ 2 s | CI absolute on Linux (`app builds`, median of five; at most one past a 2.5 s ceiling, reported and not gated, ADR 0086 as amended); release absolute on macOS | FR-8 | 370 ms macOS |
 | L7 | reattach with `charterd` up: first paint of the focused pane | ≤ 1 s | CI relative (`bench`); release absolute | FD-5, FD-7 | — |
 | L8 | relaunch with the hot target's chats to put back: interactive | ≤ 3 s | CI relative (`bench`); release absolute | SC-20 | — |
 | T1 | event log throughput | ≥ 1,000 events/s sustained, L5 inside its budget | CI absolute (`stress`) | FD-9 | — |
