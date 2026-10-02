@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790979480599,
+  "lastUpdate": 1790980235912,
   "repoUrl": "https://github.com/diazoxide/charter",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -168,6 +168,48 @@ window.BENCHMARK_DATA = {
             "value": 103.099471,
             "unit": "ms",
             "extra": "median of 5 runs: 101.850, 101.853, 103.099, 103.178, 103.471 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "fe47ef5d2195bc2c4768749747ec5efd6e3f8f97",
+          "message": "theme guards: a token-only color-mix dims, and the worktree views are drawn (#1020)\n\nMain's web job is red on two tests. Each comes from two PRs that merged separately:\n\n- #974 dims explorer rows with color-mix(in srgb, currentcolor N%,\n  transparent), and #957's colour-literal guard refuses every colour\n  function. A mix of only currentcolor, transparent and var(--token) adds\n  no colour of its own, so both guards (the stylesheet one and the\n  rendered one) now let it through. A mix with a hex, rgb() or named\n  colour inside it is still refused, and probes cover both cases.\n- #950 added the piece-files and piece-file view kinds, and #957's\n  guard requires every view to have a drawn state. Both now have one.\n\nCloses #1017\n\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-03T02:24:24+04:00",
+          "tree_id": "a182c06294779ba39a19b7a258258f7a98272558",
+          "url": "https://github.com/diazoxide/charter/commit/fe47ef5d2195bc2c4768749747ec5efd6e3f8f97"
+        },
+        "date": 1790980235517,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.42856700000000003,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.404, 0.406, 0.429, 0.442, 0.444 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.6733015,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.473, 16.629, 16.673, 16.686, 16.726 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 102.13193050000001,
+            "unit": "ms",
+            "extra": "median of 5 runs: 100.632, 101.826, 102.132, 102.266, 102.397 ms"
           }
         ]
       }
