@@ -379,6 +379,157 @@ pub fn push(plane: &Path, ws: &str, slug: &str, say: &mut dyn FnMut(Say)) -> u8 
     )
 }
 
+/// Where one member would be pushed, as the window names it before its Push asks the operator
+/// (#474), and as the operator's yes hands it back ([`push_confirmed`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Destination {
+    pub repo: String,
+    pub branch: String,
+    /// The HTTPS URL the clone's `origin` names: where the branch goes.
+    pub to: String,
+    /// The branch a request opened for it would go into, when charter can tell.
+    pub base: Option<String>,
+    /// Its forge, which names its request in that forge's own words.
+    pub kind: crate::forge::Kind,
+}
+
+impl From<&Plan> for Destination {
+    fn from(p: &Plan) -> Self {
+        Destination {
+            repo: p.repo.clone(),
+            branch: p.branch.clone(),
+            to: p.https.clone(),
+            base: p.base.clone(),
+            kind: p.on.forge.kind,
+        }
+    }
+}
+
+/// Where each member of `slug` would be pushed, read from its clone with no network and
+/// nothing pushed: what the window's "asks first" names (#474). A member that would not be
+/// pushed is left out and said, in the words `charter change push` says it in. `Err` is the
+/// refusal of the whole command (no such change, no members), already said.
+pub fn destinations(
+    plane: &Path,
+    ws: &str,
+    slug: &str,
+    say: &mut dyn FnMut(Say),
+) -> Result<Vec<Destination>, u8> {
+    destinations_with(plane, ws, slug, &|https: &str| https.to_string(), say)
+}
+
+/// [`destinations`], under `route` ([`push_with`]'s).
+pub fn destinations_with(
+    plane: &Path,
+    ws: &str,
+    slug: &str,
+    route: &dyn Fn(&str) -> String,
+    say: &mut dyn FnMut(Say),
+) -> Result<Vec<Destination>, u8> {
+    let (_, plans, _) = planned(plane, ws, slug, route, say)?;
+    Ok(plans.iter().map(Destination::from).collect())
+}
+
+/// Push `slug` as the operator confirmed it, and only so: when what [`destinations`] finds now
+/// is not `confirmed`, the push is refused, naming what changed, before anything is pushed.
+pub fn push_confirmed(
+    plane: &Path,
+    ws: &str,
+    slug: &str,
+    confirmed: &[Destination],
+    say: &mut dyn FnMut(Say),
+) -> u8 {
+    push_confirmed_with(
+        plane,
+        ws,
+        slug,
+        confirmed,
+        &|repo: &Repo| repo.backend(),
+        &|https: &str| https.to_string(),
+        say,
+    )
+}
+
+/// [`push_confirmed`], through `backend_of` and under `route` ([`push_with`]'s).
+pub fn push_confirmed_with(
+    plane: &Path,
+    ws: &str,
+    slug: &str,
+    confirmed: &[Destination],
+    backend_of: &dyn Fn(&Repo) -> Box<dyn ForgeBackend>,
+    route: &dyn Fn(&str) -> String,
+    say: &mut dyn FnMut(Say),
+) -> u8 {
+    pushing(plane, ws, slug, backend_of, route, Some(confirmed), say)
+}
+
+/// What differs between what the operator `confirmed` and what charter would push `now`, one
+/// phrase per member, or nothing when they are the same.
+fn changed_since(confirmed: &[Destination], now: &[Destination]) -> Vec<String> {
+    let mut out = Vec::new();
+    for d in now {
+        match confirmed.iter().find(|c| c.repo == d.repo) {
+            None => out.push(format!("{} is pushed too", named(&d.repo))),
+            Some(c) if c.to != d.to => out.push(format!(
+                "{} now goes to {}",
+                named(&d.repo),
+                shown::line(&d.to)
+            )),
+            Some(c) if c.branch != d.branch => out.push(format!(
+                "{} now pushes branch {}",
+                named(&d.repo),
+                named(&d.branch)
+            )),
+            Some(c) if c.base != d.base => out.push(format!(
+                "{}'s request now goes into {}",
+                named(&d.repo),
+                d.base
+                    .as_deref()
+                    .map_or_else(|| "a branch charter cannot tell".into(), shown::line)
+            )),
+            Some(_) => {}
+        }
+    }
+    for c in confirmed {
+        if !now.iter().any(|d| d.repo == c.repo) {
+            out.push(format!("{} would not be pushed", named(&c.repo)));
+        }
+    }
+    out
+}
+
+/// The change's record and each member's plan, with how many members have none (each said);
+/// `Err` when the whole command is refused.
+fn planned(
+    plane: &Path,
+    ws: &str,
+    slug: &str,
+    route: &dyn Fn(&str) -> String,
+    say: &mut dyn FnMut(Say),
+) -> Result<(Record, Vec<Plan>, usize), u8> {
+    if !workspace_ok(plane, ws, say) {
+        return Err(1);
+    }
+    let record = load(plane, ws, slug, say)?;
+    if record.members.is_empty() {
+        say(Say::Fail(format!("change {} has no members.", named(slug))));
+        say(Say::Info(format!(
+            "Add one: charter change add {} <repo>",
+            named(slug)
+        )));
+        return Err(REFUSED);
+    }
+    let mut failed = 0usize;
+    let mut plans = Vec::new();
+    for m in &record.members {
+        match plan(plane, ws, slug, &m.repo, &m.branch, route, say) {
+            Ok(p) => plans.push(p),
+            Err(()) => failed += 1,
+        }
+    }
+    Ok((record, plans, failed))
+}
+
 /// [`push`], asking the backend `backend_of` builds for each member's repo, and handing git
 /// the URL `route` makes of each printed destination. [`push`]'s route is the identity, so
 /// the URL printed is the URL git is handed. A test routes it to a local bare remote, since a
@@ -391,27 +542,39 @@ pub fn push_with(
     route: &dyn Fn(&str) -> String,
     say: &mut dyn FnMut(Say),
 ) -> u8 {
-    if !workspace_ok(plane, ws, say) {
-        return 1;
-    }
-    let record = match load(plane, ws, slug, say) {
-        Ok(record) => record,
+    pushing(plane, ws, slug, backend_of, route, None, say)
+}
+
+/// The push, of what the operator `confirmed` when there is a confirmation.
+fn pushing(
+    plane: &Path,
+    ws: &str,
+    slug: &str,
+    backend_of: &dyn Fn(&Repo) -> Box<dyn ForgeBackend>,
+    route: &dyn Fn(&str) -> String,
+    confirmed: Option<&[Destination]>,
+    say: &mut dyn FnMut(Say),
+) -> u8 {
+    let (record, plans, mut failed) = match planned(plane, ws, slug, route, say) {
+        Ok(planned) => planned,
         Err(code) => return code,
     };
-    if record.members.is_empty() {
-        say(Say::Fail(format!("change {} has no members.", named(slug))));
-        say(Say::Info(format!(
-            "Add one: charter change add {} <repo>",
-            named(slug)
-        )));
-        return REFUSED;
-    }
-    let mut failed = 0usize;
-    let mut plans = Vec::new();
-    for m in &record.members {
-        match plan(plane, ws, slug, &m.repo, &m.branch, route, say) {
-            Ok(p) => plans.push(p),
-            Err(()) => failed += 1,
+    if let Some(confirmed) = confirmed {
+        let now: Vec<Destination> = plans.iter().map(Destination::from).collect();
+        let changed = changed_since(confirmed, &now);
+        if !changed.is_empty() {
+            say(Say::Fail(format!(
+                "what charter would push is not what you confirmed: {}. Nothing was pushed. \
+                 Look at it again and confirm what it says now.",
+                changed.join("; ")
+            )));
+            return REFUSED;
+        }
+        if now.is_empty() {
+            say(Say::Fail(
+                "no member of this change can be pushed, so nothing was pushed.".into(),
+            ));
+            return 1;
         }
     }
     let names: Vec<String> = plans.iter().map(|p| shown::line(&p.repo)).collect();

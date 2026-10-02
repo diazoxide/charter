@@ -105,6 +105,15 @@ impl Kind {
         }
     }
 
+    /// What this forge calls a request, in the words its own pages use: a GitHub pull
+    /// request, a GitLab merge request.
+    pub fn request_noun(self) -> &'static str {
+        match self {
+            Kind::GitHub => "pull request",
+            Kind::GitLab => "merge request",
+        }
+    }
+
     /// What this forge calls the queue a request lands through: GitHub's merge queue,
     /// GitLab's merge train.
     pub fn queue_noun(self) -> &'static str {

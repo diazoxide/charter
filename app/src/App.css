@@ -4935,3 +4935,11 @@ h2.sidebar-title .node-icon {
   background: var(--danger-surface);
   color: var(--danger-text);
 }
+
+/* A Land's refusal beside its member's row (#474): the core's sentence, under the row it is
+   about, in the trouble colour the rest of the view uses. */
+.panel-row + .row-refusal {
+  list-style: none;
+  margin: 0 0 0.25rem 1.5rem;
+  font-size: 0.8rem;
+}

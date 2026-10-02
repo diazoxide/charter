@@ -1110,6 +1110,34 @@ export const commands = {
 	/**  What view tabs the window has open now, so the record brings them back at the next launch. */
 	windowViews: (plane: PlaneId, views: ViewTab[]) => typedError<null, string>(__TAURI_INVOKE("window_views", { plane, views })),
 	/**
+	 *  What Push would do to `change`: each member's repo, branch and destination, and each member
+	 *  that would not be pushed. Pushes nothing.
+	 * 
+	 *  On a blocking thread: it asks git in every member's clone.
+	 */
+	changePushQuestion: (plane: PlaneId, workspace: string, change: string) => typedError<PushQuestion, string>(__TAURI_INVOKE("change_push_question", { plane, workspace, change })),
+	/**
+	 *  Push `change` as the operator confirmed it: `charter change push`, refused when what it would
+	 *  push is no longer `confirmed`.
+	 * 
+	 *  On a blocking thread: it pushes, and opens or updates each member's request.
+	 */
+	changePush: (plane: PlaneId, workspace: string, change: string, confirmed: PushDestination[]) => typedError<string[], string>(__TAURI_INVOKE("change_push", { plane, workspace, change, confirmed })),
+	/**
+	 *  What Land would do to `repo` of `change`: every gate taken, and the request, the head its
+	 *  checks passed at and how it lands named, or the gate's refusal. Merges nothing.
+	 * 
+	 *  On a blocking thread: it asks the forge.
+	 */
+	changeLandQuestion: (plane: PlaneId, workspace: string, change: string, repo: string) => typedError<LandQuestion, string>(__TAURI_INVOKE("change_land_question", { plane, workspace, change, repo })),
+	/**
+	 *  Land the landing the operator confirmed: `charter change land`, refused when the request, its
+	 *  head or how it lands is no longer `confirmed`.
+	 * 
+	 *  On a blocking thread: it asks the forge to merge.
+	 */
+	changeLand: (plane: PlaneId, workspace: string, change: string, confirmed: LandQuestion, squash: boolean) => typedError<string[], string>(__TAURI_INVOKE("change_land", { plane, workspace, change, confirmed, squash })),
+	/**
 	 *  Every row `charter doctor` would print for this plane, run inside the app.
 	 * 
 	 *  On a blocking thread: every git question a row asks has a five-second deadline
@@ -1839,6 +1867,33 @@ export type InstructionStanding =
 { kind: "in-memory" } | 
 /**  It cannot, and why. */
 { kind: "left-out"; why: string };
+
+/**
+ *  What a Land would do, before it does any of it: the request, the head its checks passed at,
+ *  and how it lands. Handed back whole by the yes.
+ */
+export type LandQuestion = {
+	repo: string,
+	number: number,
+	url: string,
+	/**  The full head commit. */
+	head: string,
+	/**
+	 *  `merge` (charter merges it now), `queue` (into the forge's queue) or `record` (it has
+	 *  merged at a head charter started landing, and is only recorded).
+	 */
+	through: string,
+	/**  `github` or `gitlab`. */
+	forge: string,
+	/**  What the forge calls a request: `pull request` or `merge request`. */
+	request: string,
+	/**  `#` or `!`. */
+	sigil: string,
+	/**  What the forge calls its queue: `merge queue` or `merge train`. */
+	queue: string,
+	/**  What the gates said on the way, such as the checks that passed, in the core's words. */
+	said: string[],
+};
 
 /**
  *  What a launch had to go on, and what came of it.
@@ -2699,6 +2754,27 @@ export type ProjectTheme = {
 	 *  `Said::local_left_out`.
 	 */
 	local_left_out: string | null,
+};
+
+/**  One member's destination, as the question names it and the yes hands it back. */
+export type PushDestination = {
+	repo: string,
+	branch: string,
+	/**  The HTTPS URL the branch is pushed to. */
+	to: string,
+	/**  The branch a request opened for it goes into, when charter can tell. */
+	base: string | null,
+	/**  `github` or `gitlab`. */
+	forge: string,
+	/**  What its forge calls a request: `pull request` or `merge request`. */
+	request: string,
+};
+
+/**  What a Push would do, before it does any of it. */
+export type PushQuestion = {
+	destinations: PushDestination[],
+	/**  Each member that would not be pushed, in the core's words. */
+	not_pushed: string[],
 };
 
 /**  One repo the picker offers: what the operator reads to choose it. */

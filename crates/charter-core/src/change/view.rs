@@ -103,6 +103,18 @@ pub fn drawn(
     out
 }
 
+/// The key of `repo`'s row in change `slug`: `<slug>/<repo>`. The window's Land reads both
+/// back out of it ([`member_of`]), and a slug never holds a `/` (`name_ok`), so the first one
+/// is where they part.
+pub fn member_key(slug: &str, repo: &str) -> String {
+    format!("{slug}/{repo}")
+}
+
+/// The change and the repo a member row's key names, as [`member_key`] made it.
+pub fn member_of(key: &str) -> Option<(&str, &str)> {
+    key.split_once('/')
+}
+
 /// One member's row: its repo and branch, its request, and its checks at the head.
 fn row(record: &Record, m: &Observed) -> Row {
     let short = |sha: &str| -> String { shown::line(sha).chars().take(7).collect() };
@@ -159,7 +171,7 @@ fn row(record: &Record, m: &Observed) -> Row {
         detail.push(format!("checks: {}", shown::line(why)));
     }
     Row {
-        key: m.repo.clone(),
+        key: member_key(&record.change, &m.repo),
         text,
         note: Some(note),
         mark: Mark::Repo,
@@ -281,6 +293,17 @@ mod tests {
         assert_eq!(rows[0].tone, Tone::Plain);
         assert_eq!(rows[1].text, "web · change/api-2 · blocked by svc");
         assert_eq!(rows[1].note.as_deref(), Some("no request"));
+    }
+
+    #[test]
+    fn each_member_row_is_keyed_by_its_change_and_its_repo_so_a_landing_names_both() {
+        let seen = Observation {
+            at: at(),
+            members: vec![open(Ci::Passed)],
+        };
+        let rows = rows(&drawn("alpha", at(), &[], &[(record(), seen)]));
+        assert_eq!(rows[0].key, "api-2/svc");
+        assert_eq!(member_of(&rows[0].key), Some(("api-2", "svc")));
     }
 
     #[test]

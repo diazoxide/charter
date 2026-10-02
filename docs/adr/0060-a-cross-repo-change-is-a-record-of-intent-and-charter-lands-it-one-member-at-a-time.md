@@ -102,6 +102,18 @@ surface is. Its blocks come from the core. Forge state is read when the tab open
 Refresh press, never on a render or a workspace switch, and the age of the read is shown.
 Every value from the record goes through containment before it is laid out.
 
+> **Amended 2026-10-02 (#474): the view's Push and Land.** Implementation decisions, not
+> rulings, recorded in the PR that closes #474:
+>
+> - Each button asks the core twice. The question (`push::destinations`, `land::verify`) runs
+>   with no push and no merge and names exactly what would happen: each repo, branch and
+>   destination; or the request, the head its checks passed at, and merge now, into the queue,
+>   or record only. The yes hands that answer back, and `push_confirmed` / `land_verified` take
+>   every gate again and refuse, before anything outward runs, when it is no longer true.
+> - Landing stays attended only. The window's IPC is the attended path; a chat's only way to
+>   land is the `charter` binary, which `floorguard::PUBLISH_FORGE` refuses unattended.
+> - A member row's key is `<change>/<repo>`, which is how the window's Land names both.
+
 **8. A revert is a new change (§3.7).** `charter change revert <slug>` seeds `revert-<slug>`.
 Each landed member gets a branch carrying `git revert` of the logged sha, with `-m 1` only when
 git says the sha has more than one parent. The new change is then pushed, checked and landed

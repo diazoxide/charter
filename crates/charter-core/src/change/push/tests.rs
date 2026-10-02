@@ -162,6 +162,31 @@ impl World {
     /// `charter change push`, every forge question answered by `exchanges`. The exit code,
     /// what was said, and the recording, to check nothing recorded went unasked.
     fn push(&self, exchanges: Value) -> (u8, String, Arc<Recorded>) {
+        self.push_as(None, exchanges)
+    }
+
+    /// What the window names before its Push asks the operator (#474), and what was said.
+    fn destinations(&self) -> (Result<Vec<Destination>, u8>, String) {
+        let mut said = String::new();
+        let found = destinations_with(
+            &self.plane,
+            "alpha",
+            SLUG,
+            &|https: &str| self.route(https),
+            &mut |line: Say| {
+                said.push_str(&line.to_string());
+                said.push('\n');
+            },
+        );
+        (found, said)
+    }
+
+    /// [`World::push`], or, given what the operator `confirmed`, the window's Push.
+    fn push_as(
+        &self,
+        confirmed: Option<&[Destination]>,
+        exchanges: Value,
+    ) -> (u8, String, Arc<Recorded>) {
         let text = json!({"source": "GitHub REST API version 2022-11-28, pulls",
                           "exchanges": exchanges});
         let recorded = Arc::new(Recorded::parse(&text.to_string()).unwrap());
@@ -174,14 +199,20 @@ impl World {
             said.push_str(&line.to_string());
             said.push('\n');
         };
-        let code = push_with(
-            &self.plane,
-            "alpha",
-            SLUG,
-            &|repo: &Repo| repo.forge.backend_over(transport.clone()),
-            &|https: &str| self.route(https),
-            &mut say,
-        );
+        let backend_of = |repo: &Repo| repo.forge.backend_over(transport.clone());
+        let route = |https: &str| self.route(https);
+        let code = match confirmed {
+            None => push_with(&self.plane, "alpha", SLUG, &backend_of, &route, &mut say),
+            Some(confirmed) => push_confirmed_with(
+                &self.plane,
+                "alpha",
+                SLUG,
+                confirmed,
+                &backend_of,
+                &route,
+                &mut say,
+            ),
+        };
         *self.asked_hosts.borrow_mut() = transport.hosts.lock().unwrap().clone();
         (code, said, recorded)
     }
@@ -787,3 +818,107 @@ fn the_descriptions_line_endings_and_trailing_newline_are_kept_outside_the_block
 }
 
 mod gitlab;
+
+fn destination(repo: &str) -> Destination {
+    Destination {
+        repo: repo.into(),
+        branch: BRANCH.into(),
+        to: format!("https://github.com/acme/{repo}.git"),
+        base: Some("main".into()),
+        kind: crate::forge::Kind::GitHub,
+    }
+}
+
+#[test]
+fn each_members_destination_is_named_for_the_window_and_nothing_is_pushed_or_asked() {
+    let world = World::new("schema = 1\n");
+    world.clone("widget");
+    world.clone("gadget");
+    world.change(&[("widget", &[]), ("gadget", &["widget"])]);
+
+    let (found, said) = world.destinations();
+
+    assert_eq!(
+        found,
+        Ok(vec![destination("widget"), destination("gadget")]),
+        "{said}"
+    );
+    assert_eq!(world.remote_has("widget", BRANCH), None, "{said}");
+    assert_eq!(world.remote_has("gadget", BRANCH), None, "{said}");
+}
+
+#[test]
+fn a_member_that_will_not_be_pushed_is_said_in_the_cores_words_beside_the_destinations() {
+    let world = World::new("schema = 1\n");
+    world.clone("widget");
+    world.change(&[("widget", &[]), ("gadget", &["widget"])]);
+
+    let (found, said) = world.destinations();
+
+    assert_eq!(found, Ok(vec![destination("widget")]), "{said}");
+    assert!(
+        said.contains("gadget: not a repo in workspace 'alpha', so it is not pushed."),
+        "{said}"
+    );
+}
+
+#[test]
+fn a_push_of_the_destinations_the_operator_confirmed_pushes_them() {
+    let world = World::new("schema = 1\n");
+    world.clone("widget");
+    world.clone("gadget");
+    world.change(&[("widget", &[]), ("gadget", &["widget"])]);
+    let [w1, w2] = opened("widget", 7, NEW_BODY);
+    let [g1, g2] = opened("gadget", 9, NEW_BODY);
+    let confirmed = [destination("widget"), destination("gadget")];
+
+    let (code, said, recorded) = world.push_as(
+        Some(&confirmed),
+        json!([
+            none_from_the_branch("widget"),
+            w1,
+            w2,
+            none_from_the_branch("gadget"),
+            g1,
+            g2,
+            body_is("gadget", 9, NEW_BODY),
+            body_set("gadget", 9, BOTH),
+            body_is("widget", 7, NEW_BODY),
+            body_set("widget", 7, BOTH),
+        ]),
+    );
+
+    assert_eq!((code, recorded.unspent()), (0, Vec::new()), "{said}");
+    assert!(world.remote_has("widget", BRANCH).is_some());
+}
+
+#[test]
+fn a_push_whose_destinations_changed_since_the_operator_confirmed_them_pushes_nothing() {
+    let world = World::new("schema = 1\n");
+    let widget = world.clone("widget");
+    world.clone("gadget");
+    world.change(&[("widget", &[]), ("gadget", &["widget"])]);
+    let confirmed = [destination("widget"), destination("gadget")];
+    // After the question was asked, widget's origin is pointed somewhere else.
+    run(
+        &widget,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "git@github.com:elsewhere/widget.git",
+        ],
+    );
+
+    let (code, said, recorded) = world.push_as(Some(&confirmed), json!([]));
+
+    assert_eq!((code, recorded.unspent()), (REFUSED, Vec::new()), "{said}");
+    assert!(
+        said.contains(
+            "what charter would push is not what you confirmed: widget now goes to \
+             https://github.com/elsewhere/widget.git. Nothing was pushed."
+        ),
+        "{said}"
+    );
+    assert_eq!(world.remote_has("gadget", BRANCH), None, "{said}");
+}
