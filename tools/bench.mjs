@@ -39,6 +39,7 @@ import { cpus, platform, release, tmpdir, totalmem } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 
+import { removeProfile } from "./cleanup.mjs";
 import { coldStartGate } from "./coldstart-gate.mjs";
 import { latencyGate } from "./latency-gate.mjs";
 
@@ -285,7 +286,7 @@ async function launchOnce(cwd, profile) {
   app.kill("SIGTERM");
   await ended;
   await sleep(500);
-  if (profile) rmSync(profile.HOME, { recursive: true, force: true });
+  if (profile) await removeProfile(profile.HOME);
   return { ms: own.at - from, appMs: own.appMs };
 }
 
