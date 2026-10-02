@@ -67,10 +67,17 @@ export function paneOpened(session: number, terminal: Terminal): void {
   awaited?.(session);
 }
 
-/** A pane's terminal, gone from the screen. */
-export function paneClosed(session: number): void {
+/**
+ * A pane's terminal, gone from the screen.
+ *
+ * **Only if it is still the pane this module holds for that session.** Every project numbers
+ * its chats from one, so a project switch can open another project's session 1 in the same
+ * commit that closes this one's — and a close that went by the number alone would take the new
+ * pane out from under a job waiting on it (FR-27).
+ */
+export function paneClosed(session: number, terminal: Terminal): void {
   if (!measuring) return;
-  panes.delete(session);
+  if (panes.get(session)?.terminal === terminal) panes.delete(session);
 }
 
 /** What the pane's renderer turned out to be. */
@@ -317,12 +324,15 @@ async function work(plan: Plan): Promise<unknown> {
         document.getElementById(`palette-row-project.select:${plan.plane}`),
       );
       // Every pane on screen is the project in front's, and every one of them goes: so the
-      // pane being timed is the first to open after the press, whatever its session.
-      const opened = new Promise<number>((found) => {
+      // pane being timed is the first to open after the press, whatever its session. **It is
+      // armed the moment it opens**, inside `paneOpened`, because the history it is sent can
+      // arrive while this job is still waiting for the tab — and text that went by before the
+      // pane was armed is a sentinel this job would wait for forever.
+      const opened = new Promise<{ session: number; seen: Promise<number> }>((found) => {
         awaited = (session) => {
           awaited = undefined;
           subject = session;
-          found(session);
+          found({ session, seen: painted(session, plan.sentinel) });
         };
       });
       const from = performance.now();
@@ -334,14 +344,11 @@ async function work(plan: Plan): Promise<unknown> {
       ).then(
         () => new Promise<number>((done) => requestAnimationFrame(() => done(performance.now()))),
       );
-      const session = await Promise.race([opened, sleep(30_000).then(() => undefined)]);
-      if (session === undefined) throw new Error(`project ${plan.plane} showed no pane`);
-      const at = await Promise.race([
-        painted(session, plan.sentinel),
-        sleep(30_000).then(() => undefined),
-      ]);
+      const came = await Promise.race([opened, sleep(30_000).then(() => undefined)]);
+      if (came === undefined) throw new Error(`project ${plan.plane} showed no pane`);
+      const at = await Promise.race([came.seen, sleep(30_000).then(() => undefined)]);
       if (at === undefined) throw new Error(`the pane never painted ${plan.sentinel}`);
-      return { session, shownMs: shown - from, ms: at - from };
+      return { session: came.session, shownMs: shown - from, ms: at - from };
     }
 
     case "switch":

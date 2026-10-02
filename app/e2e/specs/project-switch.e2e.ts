@@ -37,6 +37,14 @@ import {
 
 const TABS = '[role="tablist"][aria-label="Tabs"]';
 
+/**
+ * What a switched-to pane is waited for: the last word of `READY`, which every scenario chat
+ * prints. A pane that comes back on screen is sent the screen as it already is (`watch_session`)
+ * rather than the bytes the program wrote, and a screen redrawn need not spell the space between
+ * two words as a space — one word is the same text either way.
+ */
+const PAINTED = READY.split(" ").at(-1) ?? READY;
+
 /** How many times each project is switched to. */
 const ROUNDS = 3;
 
@@ -159,7 +167,7 @@ describe(`switching among ${OPEN} open projects`, function () {
   it("brings each one to the front through the switcher, and its chat's pane paints", async () => {
     // In the order they were opened: the one in front is the last one opened, so no switch is
     // ever to the project already there.
-    const switches = await measureSwitches(planes, ROUNDS, () => READY, job);
+    const switches = await measureSwitches(planes, ROUNDS, () => PAINTED, job);
 
     logLine("project-switch.jsonl", { budgetMs: BUDGET_MS, ...switches });
     // In the job's own output too, where a reviewer reads it without downloading anything.

@@ -221,7 +221,7 @@ export function SessionPane({
       pane.dispose();
       terminal.current = undefined;
       setFinding(null);
-      bench.paneClosed(session);
+      bench.paneClosed(session, pane);
     };
   }, [plane, session]);
 
