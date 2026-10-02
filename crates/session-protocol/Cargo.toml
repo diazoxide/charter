@@ -19,16 +19,24 @@ futures = "0.3"
 bytes = "1"
 # The multiplexer (ADR 0068 §4): Yamux, per-stream credit over one ordered byte stream.
 yamux = "0.14"
-# Each scope's credential (FD-6): minted from the OS generator, compared in constant time,
-# written by a rename from a `0600` temporary file. The same crates charter-core mints and
-# checks a chat's token with.
+# Each scope's credential (FD-6): minted from the OS generator, proved by an HMAC-SHA256 over
+# a fresh challenge, compared in constant time, written by a rename from a `0600` temporary
+# file. The same crates charter-core mints and checks a chat's token and keys its MACs with.
 getrandom = "0.4"
 subtle = "2"
+hmac = "0.13"
+sha2 = "0.11"
 tempfile.workspace = true
 
 [target."cfg(unix)".dependencies]
-# The host's own uid, which a local connection's peer must be (FD-6).
-rustix = { version = "1", features = ["process"] }
+# Whether a connection's peer, and the credentials' directory and files, are this user's alone
+# (FD-6): the same checks as each plane's hook socket.
+charter-same-user.workspace = true
+
+[features]
+# `link::serve_any`: serve a link over any stream, skipping the uid check. For this crate's own
+# tests only, which turn it on from `[dev-dependencies]`, so no build of the host has it.
+any-stream = []
 
 [features]
 # `charter-session-bench`'s runtime, the one the crate's tests use (SC-16). Only the bench asks for
@@ -40,6 +48,7 @@ name = "charter-session-bench"
 required-features = ["bench"]
 
 [dev-dependencies]
+charter-session-protocol = { path = ".", features = ["any-stream"] }
 # The heap of the test process, measured, so a memory bound is a measured one.
 dhat = "0.3"
 # The multiplexer's own constants, for the bounds the tests compute.

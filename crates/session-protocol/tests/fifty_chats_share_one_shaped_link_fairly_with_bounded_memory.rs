@@ -24,7 +24,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bytes::Bytes;
-use charter_session_protocol::auth::{Credentials, Scope};
+use charter_session_protocol::auth::Scope;
 use charter_session_protocol::link;
 use charter_session_protocol::version::{Speaks, Version};
 use charter_session_protocol::view::{Attacher, Chunk, Limits, ViewId, Viewer};
@@ -32,9 +32,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream, ReadHalf, WriteHalf, 
 use tokio::sync::mpsc;
 use tokio::time::{Instant, sleep, sleep_until};
 
-/// One start of the host's credentials, which every link in these tests is admitted with.
-static HELD: std::sync::LazyLock<Credentials> =
-    std::sync::LazyLock::new(|| Credentials::mint().unwrap());
+mod common;
+use common::HELD;
 
 const CHATS: u32 = 50;
 const ROUND_TRIP: Duration = Duration::from_millis(150);
@@ -126,7 +125,7 @@ async fn every_needs_you_gets_through_fifty_busy_terminals_and_the_heap_stays_bo
     let (client_end, host_end) = shaped_link();
     let (client, host) = tokio::join!(
         link::connect(client_end, v1(), Scope::LocalUi, HELD.of(Scope::LocalUi)),
-        link::serve(host_end, v1(), &HELD)
+        link::serve_any(host_end, v1(), &HELD)
     );
     let (mut client, mut host) = (client.unwrap(), host.unwrap());
     let limits = Limits::default();

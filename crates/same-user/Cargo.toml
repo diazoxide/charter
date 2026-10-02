@@ -1,0 +1,24 @@
+[package]
+name = "charter-same-user"
+description = "Is the other end, or this file, this user's alone: the peer-uid check and the private directory and file every charter socket and credential rests on"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+thiserror.workspace = true
+
+[target."cfg(unix)".dependencies]
+# The peer's uid on a unix socket: `SO_PEERCRED` on Linux, `getpeereid` on macOS. The
+# standard library's `peer_cred` is unstable, rustix has the Linux half only, and the
+# workspace denies `unsafe`. The version portable-pty already links, so the tree gains no crate.
+nix = { version = "0.28", default-features = false, features = ["socket", "user"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

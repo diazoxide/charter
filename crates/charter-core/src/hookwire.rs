@@ -1000,7 +1000,7 @@ pub struct Listener {
     path: std::path::PathBuf,
     tokens: std::sync::Arc<ChatTokens>,
     /// The only uid a connection is read from: this process's own, as it binds (FD-6).
-    owner: u32,
+    owner: charter_same_user::Uid,
 }
 
 #[cfg(unix)]
@@ -1053,7 +1053,7 @@ impl Listener {
             socket,
             path: path.to_path_buf(),
             tokens: std::sync::Arc::default(),
-            owner: rustix::process::geteuid().as_raw(),
+            owner: charter_same_user::Uid::effective(),
         })
     }
 
@@ -1061,7 +1061,7 @@ impl Listener {
     /// second user to connect as: told it belongs to another uid, the test's own connection
     /// is the other user's.
     #[cfg(test)]
-    fn owned_by(mut self, uid: u32) -> Self {
+    fn owned_by(mut self, uid: charter_same_user::Uid) -> Self {
         self.owner = uid;
         self
     }
@@ -1160,8 +1160,15 @@ impl Listener {
                 // `0600` in a `0700` directory, which keeps every other user out already; this
                 // still holds if either is ever wrong. A peer of another uid, or one the socket
                 // will not name, is closed unread, before the chat's token is even looked at.
-                if let Err(refused) = peer_is(&connection, self.owner) {
-                    tracing::warn!("charter: the hook channel refused a connection: {refused}");
+                if let Err(refused) = charter_same_user::admit_peer(
+                    charter_same_user::peer_of(&connection),
+                    self.owner,
+                ) {
+                    if let Some(also) = REFUSALS.say() {
+                        tracing::warn!(
+                            "charter: the hook channel refused a connection: {refused}{also}"
+                        );
+                    }
                     continue;
                 }
                 // **A thread per connection, and this used to be one thread for all of
@@ -1201,25 +1208,6 @@ impl Listener {
     }
 }
 
-/// `Ok` when the peer on `connection` runs as `owner`, and otherwise why not: another uid,
-/// or a peer the socket would not identify. `charterd.sock` makes the same check
-/// (`charter_session_protocol::local`).
-#[cfg(unix)]
-fn peer_is(connection: &std::os::unix::net::UnixStream, owner: u32) -> io::Result<()> {
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    let peer = nix::sys::socket::getsockopt(connection, nix::sys::socket::sockopt::PeerCredentials)
-        .map(|credentials| credentials.uid());
-    #[cfg(not(any(target_os = "linux", target_os = "android")))]
-    let peer = nix::unistd::getpeereid(connection).map(|(uid, _)| uid.as_raw());
-    match peer.map_err(io::Error::from)? {
-        uid if uid == owner => Ok(()),
-        uid => Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            format!("its peer runs as uid {uid}, and this channel serves uid {owner} only"),
-        )),
-    }
-}
-
 /// Makes `directory`, and makes sure nobody else on the machine may enter it.
 ///
 /// **The directory, not only the socket, and the mode is set as it is CREATED.** Between a
@@ -1232,31 +1220,61 @@ fn peer_is(connection: &std::os::unix::net::UnixStream, owner: u32) -> io::Resul
 /// DISCARDED the result of tightening it. Every step here is checked, and a path that is
 /// already something else — a symlink, a file, a directory somebody else owns — is refused
 /// rather than used.
+///
+/// The checks are `charter_same_user::private_directory`'s, the same ones the credentials of
+/// `charterd`'s client scopes sit behind (FD-6), so the two cannot drift: the directory is
+/// checked and tightened through one descriptor opened without following a link, and one
+/// another uid owns is refused before anything about it is changed.
 #[cfg(unix)]
 fn private_directory(directory: &std::path::Path) -> io::Result<()> {
-    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    charter_same_user::private_directory(directory)
+}
 
-    if let Some(above) = directory.parent() {
-        std::fs::create_dir_all(above)?;
+/// The hook channel's refusals, said in the log at most once per [`A_REFUSAL_IS_SAID_EVERY`].
+///
+/// A refusal is something to know about, and a client that connects in a loop must not be
+/// able to fill the log with them, so the ones in between are counted and the next line that is
+/// said gives the count.
+#[cfg(unix)]
+static REFUSALS: RateLimited = RateLimited::new();
+
+/// How often a refusal on the hook channel is said in the log at most.
+#[cfg(unix)]
+const A_REFUSAL_IS_SAID_EVERY: std::time::Duration = std::time::Duration::from_secs(10);
+
+#[cfg(unix)]
+struct RateLimited {
+    state: std::sync::Mutex<(Option<std::time::Instant>, u64)>,
+}
+
+#[cfg(unix)]
+impl RateLimited {
+    const fn new() -> Self {
+        RateLimited {
+            state: std::sync::Mutex::new((None, 0)),
+        }
     }
-    match std::fs::DirBuilder::new().mode(0o700).create(directory) {
-        Ok(()) => return Ok(()),
-        // Ours from a previous run, or somebody else's. The checks below decide which.
-        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
-        Err(err) => return Err(err),
+
+    /// `Some` with what to add to the line when this one is to be said (how many were not
+    /// since the last), and `None` when it is one of the ones counted instead.
+    fn say(&self) -> Option<String> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let now = std::time::Instant::now();
+        let (last, held) = &mut *state;
+        if last.is_some_and(|last| now.duration_since(last) < A_REFUSAL_IS_SAID_EVERY) {
+            *held += 1;
+            return None;
+        }
+        *last = Some(now);
+        let also = match std::mem::take(held) {
+            0 => String::new(),
+            n => format!(" ({n} more refused since the last line)"),
+        };
+        Some(also)
     }
-    // `symlink_metadata`, so a symlink pointing at a directory is not mistaken for one:
-    // `set_permissions` would follow it and tighten whatever it aims at instead.
-    let found = std::fs::symlink_metadata(directory)?;
-    if !found.is_dir() {
-        return Err(io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            format!("{} is not a directory", directory.display()),
-        ));
-    }
-    // Checked, not discarded: this fails for a directory charter does not own, which is
-    // exactly the case worth refusing to start the channel over.
-    std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700))
 }
 
 /// How long one connection has to say its piece.
@@ -1344,10 +1362,12 @@ fn serve(
         // app's log (#647); the token is not.
         let chat = line.chat();
         if !tokens.admits(chat, token.as_deref()) {
-            tracing::warn!(
-                "charter: a line on the hook channel for chat {chat} did not carry that chat's \
-                 token, so it was dropped"
-            );
+            if let Some(also) = REFUSALS.say() {
+                tracing::warn!(
+                    "charter: a line on the hook channel for chat {chat} did not carry that \
+                     chat's token, so it was dropped{also}"
+                );
+            }
             return;
         }
         // The first line waits for the connections that arrived before this one (FD-9).
@@ -3210,10 +3230,12 @@ mod tests {
         // connection is the other user's: it carries the right token, and is still dropped.
         let dir = tempfile::tempdir().expect("a directory");
         let path = dir.path().join("hooks.sock");
-        let ours = rustix::process::geteuid().as_raw();
+        let ours = charter_same_user::Uid::effective();
         let listener = Listener::bind(dir.path(), &path)
             .expect("a socket")
-            .owned_by(ours.wrapping_add(1));
+            .owned_by(charter_same_user::Uid::from_raw(
+                ours.as_raw().wrapping_add(1),
+            ));
         let seven = listener.tokens().issue(7).expect("a token");
         let (tx, rx) = mpsc::channel();
         let _reading = listener.each(Box::new(move |report| {
@@ -3230,13 +3252,28 @@ mod tests {
     }
 
     #[test]
+    fn refusals_are_said_once_per_interval_and_the_rest_are_counted() {
+        let refusals = RateLimited::new();
+        assert_eq!(refusals.say().as_deref(), Some(""));
+        for _ in 0..1000 {
+            assert_eq!(refusals.say(), None);
+        }
+        // Past the interval the next one is said, with the count of the ones that were not.
+        refusals.state.lock().unwrap().0 =
+            std::time::Instant::now().checked_sub(A_REFUSAL_IS_SAID_EVERY);
+        assert_eq!(
+            refusals.say().as_deref(),
+            Some(" (1000 more refused since the last line)")
+        );
+    }
+
+    #[test]
     fn a_connection_from_the_listeners_own_uid_with_its_token_is_read() {
         let dir = tempfile::tempdir().expect("a directory");
         let path = dir.path().join("hooks.sock");
-        let ours = rustix::process::geteuid().as_raw();
         let listener = Listener::bind(dir.path(), &path)
             .expect("a socket")
-            .owned_by(ours);
+            .owned_by(charter_same_user::Uid::effective());
         let seven = listener.tokens().issue(7).expect("a token");
         let (tx, rx) = mpsc::channel();
         let _reading = listener.each(Box::new(move |report| {

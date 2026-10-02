@@ -30,12 +30,11 @@ fn minting_writes_one_private_file_per_scope_that_a_client_reads_back() {
         assert_eq!(mode(&file), 0o600, "{scope}");
         let read = Credential::read(&dir, scope).unwrap();
         assert_eq!(&read, held.of(scope), "{scope}");
-        assert!(held.admits(scope, &read));
     }
 }
 
 #[test]
-fn a_new_start_rotates_every_credential_and_the_old_ones_stop_counting() {
+fn a_new_start_rotates_every_credential_and_what_the_files_hold_is_the_new_start() {
     let home = tempfile::tempdir().unwrap();
     let dir = home.path().join("charterd");
     let before = Credentials::mint_into(&dir).unwrap();
@@ -45,9 +44,9 @@ fn a_new_start_rotates_every_credential_and_the_old_ones_stop_counting() {
 
     let new = Credential::read(&dir, Scope::Approval).unwrap();
     assert_ne!(old, new);
-    assert!(!after.admits(Scope::Approval, &old));
-    assert!(after.admits(Scope::Approval, &new));
-    assert!(before.admits(Scope::Approval, &old));
+    assert_ne!(after.of(Scope::Approval), &old);
+    assert_eq!(after.of(Scope::Approval), &new);
+    assert_eq!(before.of(Scope::Approval), &old);
 }
 
 #[test]

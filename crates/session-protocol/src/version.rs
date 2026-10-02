@@ -39,7 +39,9 @@ pub type Negotiated<S> = Join<Chain<Cursor<BytesMut>, ReadHalf<S>>, WriteHalf<S>
 /// What every message of the negotiation opens with.
 pub const MAGIC: &[u8; 8] = b"\x89CSP\r\n\x1a\n";
 
-/// How long either end waits for the other's half of the handshake.
+/// How long either end waits for the other's half of the handshake. [`crate::link`] holds one
+/// deadline of this length over the whole of it: the version, the admission and the control
+/// lane together.
 pub const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// The longest hello or answer either end reads. A real one is a few dozen bytes.
@@ -128,8 +130,17 @@ pub async fn offer<S: AsyncRead + AsyncWrite>(
     io: S,
     speaks: &Speaks,
 ) -> Result<(Version, Negotiated<S>), Refused> {
+    within_the_deadline(offer_unbounded(io, speaks)).await
+}
+
+/// [`offer`] with no deadline of its own, for a caller that holds one over the whole handshake
+/// ([`crate::link::connect`]).
+pub(crate) async fn offer_unbounded<S: AsyncRead + AsyncWrite>(
+    io: S,
+    speaks: &Speaks,
+) -> Result<(Version, Negotiated<S>), Refused> {
     let (mut reads, mut writes) = split(io);
-    let (version, left) = within_the_deadline(offer_now(&mut reads, &mut writes, speaks)).await?;
+    let (version, left) = offer_now(&mut reads, &mut writes, speaks).await?;
     Ok((version, join(Cursor::new(left).chain(reads), writes)))
 }
 
@@ -140,8 +151,17 @@ pub async fn answer<S: AsyncRead + AsyncWrite>(
     io: S,
     speaks: &Speaks,
 ) -> Result<(Version, Negotiated<S>), Refused> {
+    within_the_deadline(answer_unbounded(io, speaks)).await
+}
+
+/// [`answer`] with no deadline of its own, for a caller that holds one over the whole
+/// handshake ([`crate::link::serve`]).
+pub(crate) async fn answer_unbounded<S: AsyncRead + AsyncWrite>(
+    io: S,
+    speaks: &Speaks,
+) -> Result<(Version, Negotiated<S>), Refused> {
     let (mut reads, mut writes) = split(io);
-    let (version, left) = within_the_deadline(answer_now(&mut reads, &mut writes, speaks)).await?;
+    let (version, left) = answer_now(&mut reads, &mut writes, speaks).await?;
     Ok((version, join(Cursor::new(left).chain(reads), writes)))
 }
 

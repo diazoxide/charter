@@ -2,14 +2,13 @@
 //! any number of streams either end opens, each with its own flow control (ADR 0068 §4).
 
 use bytes::Bytes;
-use charter_session_protocol::auth::{Credentials, Scope};
+use charter_session_protocol::auth::Scope;
 use charter_session_protocol::link::{self, LinkError};
 use charter_session_protocol::version::{Refused, Speaks, Version};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, duplex};
 
-/// One start of the host's credentials, which every link in these tests is admitted with.
-static HELD: std::sync::LazyLock<Credentials> =
-    std::sync::LazyLock::new(|| Credentials::mint().unwrap());
+mod common;
+use common::HELD;
 
 fn v1() -> Speaks {
     Speaks::new([Version { major: 1, minor: 0 }])
@@ -20,7 +19,7 @@ async fn control_frames_arrive_whole_and_in_order_both_ways() {
     let (a, b) = duplex(64 * 1024);
     let (client, host) = tokio::join!(
         link::connect(a, v1(), Scope::LocalUi, HELD.of(Scope::LocalUi)),
-        link::serve(b, v1(), &HELD)
+        link::serve_any(b, v1(), &HELD)
     );
     let (mut client, mut host) = (client.unwrap(), host.unwrap());
     assert_eq!(client.version(), Version { major: 1, minor: 0 });
@@ -55,7 +54,7 @@ async fn a_stream_one_end_opens_is_one_the_other_end_accepts() {
     let (a, b) = duplex(64 * 1024);
     let (client, host) = tokio::join!(
         link::connect(a, v1(), Scope::LocalUi, HELD.of(Scope::LocalUi)),
-        link::serve(b, v1(), &HELD)
+        link::serve_any(b, v1(), &HELD)
     );
     let (mut client, mut host) = (client.unwrap(), host.unwrap());
 
@@ -90,7 +89,7 @@ async fn a_refused_negotiation_starts_no_link() {
             Scope::LocalUi,
             HELD.of(Scope::LocalUi)
         ),
-        link::serve(b, v1(), &HELD)
+        link::serve_any(b, v1(), &HELD)
     );
     assert!(matches!(
         client.err().unwrap(),
@@ -107,7 +106,7 @@ async fn a_control_frame_past_the_limit_is_refused_and_the_lane_stays_usable() {
     let (a, b) = duplex(64 * 1024);
     let (client, host) = tokio::join!(
         link::connect(a, v1(), Scope::LocalUi, HELD.of(Scope::LocalUi)),
-        link::serve(b, v1(), &HELD)
+        link::serve_any(b, v1(), &HELD)
     );
     let (mut client, mut host) = (client.unwrap(), host.unwrap());
     let too_big = Bytes::from(vec![0u8; link::MOST_CONTROL_FRAME_BYTES + 1]);

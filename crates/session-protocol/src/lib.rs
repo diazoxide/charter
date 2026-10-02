@@ -8,12 +8,14 @@
 //! Four layers, each in its own module, and one check before them:
 //!
 //! 0. `local` (unix only): on `charterd.sock`, a connection from another uid is closed before
-//!    a byte of it is read (FD-6).
+//!    a byte of it is read, and only what passed is a `local::SameUser`, the one thing the
+//!    host's `link::serve` takes (FD-6).
 //! 1. [`version`]: before anything else, the two ends agree on one version, and refuse when
 //!    they share no major, or when the other end has not finished its half within
-//!    [`version::HANDSHAKE_TIMEOUT`]. It fails closed.
-//! 2. [`auth`]: the client is admitted as one client scope, by that scope's credential, or
-//!    refused. There is no anonymous scope, and a [`link::Link`] exists only once admitted
+//!    [`version::HANDSHAKE_TIMEOUT`], one deadline over this step and the two after it. It
+//!    fails closed.
+//! 2. [`auth`]: the client is admitted as one client scope, by a proof over a fresh challenge
+//!    that it holds that scope's credential, or refused. The credential never crosses the wire. There is no anonymous scope, and a [`link::Link`] exists only once admitted
 //!    (FD-6, ADR 0068 §5).
 //! 3. [`link`]: the stream is multiplexed with Yamux into a **control lane** (length-delimited
 //!    frames, the commands and events) and any number of streams, each with **its own credit

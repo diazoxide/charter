@@ -130,10 +130,8 @@ workspace = true
 # directly (the one exception is `executor::inherit_nothing_else`; see CLAUDE.md). `system` is
 # for `uname`: the dispatch and skill logs are one file per machine, named by its host.
 rustix = { version = "1", features = ["fs", "process", "system", "termios"] }
-# The peer's uid on a unix socket (FD-6): `SO_PEERCRED` on Linux, `getpeereid` on macOS.
-# The standard library's `peer_cred` is unstable and rustix has the Linux half only. The
-# version portable-pty already links, so the tree gains no crate.
-nix = { version = "0.28", default-features = false, features = ["socket", "user"] }
+# Whether a hook socket's peer and its directory are this user's alone (FD-6).
+charter-same-user.workspace = true
 # The system calls in the executor's one audited `pre_exec` (`fcntl`, and `close_range` on
 # Linux), made there because nothing that allocates may run in a forked child. Already in this
 # workspace's lockfile.
