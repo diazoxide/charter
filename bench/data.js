@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790973453628,
+  "lastUpdate": 1790975913750,
   "repoUrl": "https://github.com/diazoxide/charter",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -84,6 +84,48 @@ window.BENCHMARK_DATA = {
             "value": 104.62407300000001,
             "unit": "ms",
             "extra": "median of 5 runs: 103.450, 104.200, 104.624, 105.191, 105.457 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4ab28aca7ab92e55366185d172a54c7813cc67a2",
+          "message": "First switch into a busy project: the explorer's chat rows paint without layers of their own (#891) (#974)\n\n* A chat's explorer row and state mark paint without layers of their own (#891)\n\nThe first switch of each round into the launch project set L9's p95.\nProfiling on CI (#912) showed the core answers watch_session and\nunwatch_session in under 5 ms on the main thread, with no stall: the\ntime was the WebView's own paint of the project's fifty explorer chat\nrows. Each row had opacity 0.85 and its unknown mark opacity 0.5 inside\nit, two nested transparency layers per row, and the mark a dashed round\nborder. The dimming is now mixed into the colour and the unknown ring is\ntwo solid arcs, still a different shape from done's whole ring.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n\n* paint.test.ts scans every per-chat rule; unreported and the row icon mixed too (#891 review)\n\nThe test read only the first rule with the exact selector, so a later\nor grouped rule, filter: opacity(), a dashed border on another state\nselector or a deleted fallback all passed. It now scans every rule\nwhose selector list names a per-chat element, rejects opacity, filter\nopacity() and dashed or dotted borders in each, and wants a plain\ndeclaration before each color-mix one. .explorer .unreported and a\nrow's icon are dimmed in their colour too.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-03T01:00:35+04:00",
+          "tree_id": "33e9f65a14472c61656677d24ec7bde95b6999e5",
+          "url": "https://github.com/diazoxide/charter/commit/4ab28aca7ab92e55366185d172a54c7813cc67a2"
+        },
+        "date": 1790975913298,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.49838499999999997,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.492, 0.498, 0.498, 0.506, 0.511 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.276179499999998,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.238, 16.239, 16.276, 16.283, 16.354 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.7259865,
+            "unit": "ms",
+            "extra": "median of 5 runs: 101.139, 101.207, 101.726, 101.939, 102.950 ms"
           }
         ]
       }
