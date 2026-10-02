@@ -91,6 +91,24 @@ operation, and a backup skips it) and **legacy** (only the retired Python charte
 and charter-app at most keeps it consistent). Clone state or Machine with none of the three
 marks is what FR-10 backs up.
 
+**Transient stores are collected** (SC-7). When the app opens a plane that is not already open
+in it, `charter_core::retention::on_open` removes, from that plane only:
+
+- a `.charter/sessions/<sid>.<ending>` marker last written 30 days or more before
+  (`retention::KEEP_FOR`) — every ending but `.tools` and `.gate`, which go sooner (below);
+- a `.charter/persona-state/trace/<session>.jsonl` trace last appended to 30 days or more
+  before;
+- a `.charter/reports/<id>.json` draft the Python charter left, last written 30 days or more
+  before.
+
+It keeps the files of every chat the plane's reopen record (`.charter/app/reopen.json`) will
+bring back, however old: those keyed on the chat's number or on the conversation it resumes.
+If the record cannot be read, or was written before chats kept their numbers, it collects only
+the report drafts. It removes only plain files whose name is one charter writes, never
+through a link, and never touches anything else in `.charter/` — the hook spool under `app/`,
+the event log, `terminals/`, `persona-state/ephemeral/` and the rest are not its business.
+The age is the file's modification time, so a file a chat still writes stays.
+
 A tier line is `**Tier:** <tier>[, <mark>…]`, optionally followed by ` — ` and a reason. The tier
 and marks carry no punctuation of their own: a line with no reason has no full stop. A new
 store lands in this document with its tier, under its own heading or as a row of a table whose
@@ -1570,6 +1588,8 @@ and an archived one is where `memstore.archive` would have put it (ADR 0065).
   while that chat is being smart-closed, so a line sent twice closes it once.
 - **Git:** ignored — the plane root's by `/.charter/`, a workspace's by `/workspaces/*/*`,
   which the LIVE block never un-ignores it from.
+- **Collected (charter-app):** the plane root's, with the other `.charter/sessions/` markers,
+  30 days after it was written (`retention::on_open`); a workspace's is not collected.
 
 ### `workspaces/<ws>/changes/<slug>.json` — a cross-repo change
 
@@ -2763,6 +2783,9 @@ handoff row (`charter/dispatch.py:170` docstring).
   `ts` = **local naive** `datetime.now().isoformat(timespec="seconds")` and `event`; other
   fields are the call's kwargs with `None` dropped, in insertion order (**not** sorted —
   unlike the `_dispatch` store). `<session>` is `session.bucket()`.
+- **Collected (charter-app):** when the app opens the plane, a trace last appended to 30 days
+  or more before is removed, unless a chat the plane's reopen record will bring back is its
+  session (`retention::on_open`). `nosession.jsonl` follows the same rule.
 
 ---
 
@@ -2786,6 +2809,9 @@ handoff row (`charter/dispatch.py:170` docstring).
   `occurrences` incremented (`:351`). Caps: 25 distinct pending reports
   (`charter/report.py:38`, `:359`), unsent drafts older than 30 days pruned on write
   (`:43`, `:325`).
+- **Collected (charter-app):** nothing here writes these any more, so when the app opens the
+  plane it removes every `<16 lowercase hex>.json` last written 30 days or more before, sent or
+  not (`retention::on_open`).
 
 | Field | Type | Required / default | Meaning | Status | Source |
 |---|---|---|---|---|---|
@@ -3814,6 +3840,11 @@ plane's `.gitignore` (`charter/commands.py:1096` in `_GITIGNORE_BASELINE`,
 
 **Tier:** Clone state, transient — every file below, unless its entry says otherwise.
 
+*Collected (charter-app):* when the app opens a plane, every marker here last written 30 days
+or more before is removed, except a `.tools` ceiling and its `.gate` (collected at 7 days, see
+their entry) and the markers of a chat the plane's reopen record will bring back
+(`retention::on_open`; the rule is under [Every store has a tier](#every-store-has-a-tier)).
+
 ### `sessions/<sid>.workspace`
 - **Format:** plain text, one workspace name + `\n`
 - **Status:** **stable** — written by `charter ws use` / the reconcile path, read by every
@@ -3831,7 +3862,9 @@ plane's `.gitignore` (`charter/commands.py:1096` in `_GITIGNORE_BASELINE`,
 - **Encoding:** value + trailing `\n`; non-atomic `write_for`; read is `.read_text().strip()`,
   empty → "no pointer"; name is re-validated on read (`instance.workspace_name_ok`).
 - **Lifetime:** pruned when older than 30 days on any `set_active`
-  (`_SESSION_MAX_AGE`, `charter/workspace.py:45`, sweep at `charter/workspace.py:887`).
+  (`_SESSION_MAX_AGE`, `charter/workspace.py:45`, sweep at `charter/workspace.py:887`), and
+  in charter-app also when the app opens the plane, unless a chat it will reopen is keyed on
+  it (`retention::on_open`, see [Every store has a tier](#every-store-has-a-tier)).
 
 ### `sessions/<sid>.lock`
 - **Format:** plain text, workspace name + `\n`

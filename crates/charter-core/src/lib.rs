@@ -98,6 +98,7 @@ pub mod repoinstructions;
 pub mod report;
 pub mod repos;
 pub mod reposave;
+pub mod retention;
 pub mod rewrite;
 pub mod roster;
 pub mod sandbox;

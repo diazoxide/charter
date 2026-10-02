@@ -787,6 +787,10 @@ impl Planes {
         if let Some(already) = open.get(&id) {
             return already.id.clone();
         }
+        // The per-session files no chat has written for a month (SC-7). Below the line above,
+        // so it runs only when no chat of this plane is running in this app — the chats its
+        // reopen record will bring back are what it keeps.
+        charter_core::retention::on_open(&root, std::time::SystemTime::now());
         let held = Arc::new(self.hold(id.clone(), root));
         // A handoff from one of this plane's chats is answered by this plane, which is the
         // only one holding the asking chat's record. A `Weak`, because the plane holds the
@@ -2453,6 +2457,42 @@ mod tests {
         planes().open(&root);
 
         assert!(!stale.exists(), "the leftover is still there");
+    }
+
+    /// SC-7: opening a plane collects the per-session files no chat has written for
+    /// `retention::KEEP_FOR` — and a plane already open, whose chats are running, is not swept.
+    #[test]
+    fn opening_a_plane_collects_a_month_old_session_marker_once() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        let sessions = root.join(".charter/sessions");
+        let old = |path: &std::path::Path| {
+            std::fs::create_dir_all(&sessions).expect("the sessions directory");
+            std::fs::write(path, "2").expect("a marker");
+            std::fs::File::options()
+                .write(true)
+                .open(path)
+                .and_then(|file| {
+                    file.set_modified(
+                        std::time::SystemTime::now() - 2 * charter_core::retention::KEEP_FOR,
+                    )
+                })
+                .expect("made old");
+        };
+        let gone = sessions.join("0cb42edd.memnudge");
+        old(&gone);
+        let planes = planes();
+
+        planes.open(&root);
+
+        assert!(!gone.exists(), "the month-old marker is still there");
+
+        let while_open = sessions.join("5.workspace");
+        old(&while_open);
+
+        planes.open(&root);
+
+        assert!(while_open.exists(), "a plane already open was swept");
     }
 
     #[test]

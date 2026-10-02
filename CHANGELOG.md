@@ -275,6 +275,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A project's per-chat files no longer pile up.** When the app opens a project, it removes
+  the per-chat markers in `.charter/sessions/`, the chat traces in
+  `.charter/persona-state/trace/` and the old report drafts in `.charter/reports/` that nothing
+  has written for 30 days. The files of every chat the app is about to reopen are kept, however
+  old (SC-7, #682).
+
 - **Per-machine logs are named by the device id, not the hostname.** The dispatch and skill
   logs (`personas/_dispatch/`, `personas/_skills/`), the piece claim log, the landing log and
   pending landings are now filed under this device's id from the machine store. Two machines
