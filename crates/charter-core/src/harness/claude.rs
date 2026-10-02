@@ -1,7 +1,7 @@
 //! Claude Code's adapter (ADR 0073, FD-13): the bundled plugin, loaded for one chat alone, with
 //! the session's own `--settings`.
 
-use super::adapter::HarnessAdapter;
+use super::adapter::{HarnessAdapter, Sandbox};
 use super::{Harness, Kit, StateHooks, words};
 
 /// Claude Code's adapter.
@@ -26,12 +26,12 @@ impl HarnessAdapter for ClaudeCode {
     /// 2.1.280). It carries the plugin pins, the project's plugin choice, the status line where
     /// charter may fill it, Smart close's one allow, and the sandbox where the plane turned it
     /// on.
-    fn arm(
+    fn arm_under(
         &self,
         kit: Kit<'_>,
         cwd: Option<&std::path::Path>,
         plugins: &crate::harness_plugin::Chosen,
-        sandbox: Option<&crate::sandbox::Applied>,
+        sandbox: Sandbox<'_>,
     ) -> StateHooks {
         let Some(plugin) = kit.plugin else {
             return StateHooks::None;
@@ -45,7 +45,9 @@ impl HarnessAdapter for ClaudeCode {
                     kit.binary,
                     crate::footerclaim::status_line(cwd).free(),
                     plugins,
-                    sandbox.and_then(crate::sandbox::Applied::claude_settings),
+                    sandbox
+                        .applied()
+                        .and_then(crate::sandbox::Applied::claude_settings),
                 ),
             ]),
             env: vec![(
@@ -187,6 +189,38 @@ mod tests {
 
     fn adapter() -> &'static dyn HarnessAdapter {
         &ADAPTER
+    }
+
+    #[test]
+    fn a_sandbox_compiled_for_another_harness_arms_no_claude_code_chat() {
+        // ADR 0067, fail closed: a Codex sandbox handed to the Claude Code adapter would
+        // otherwise start a Claude Code chat with no sandbox at all. The adapter itself
+        // refuses it, not only `Harness::state_hooks`.
+        let plane = tempfile::tempdir().expect("a plane");
+        std::fs::write(
+            plane.path().join("charter.toml"),
+            "[sandbox]\nmode = \"on\"\n",
+        )
+        .expect("charter.toml");
+        let machine = crate::sandbox::Machine {
+            env: crate::secrets::Env::of(&[]),
+            home: None,
+            os: crate::sandbox::Os::Linux,
+        };
+        let codex = crate::sandbox::for_start(Harness::Codex, plane.path(), &machine, &|_| true)
+            .expect("starts")
+            .expect("sandboxed");
+
+        let hooks = adapter().arm(
+            Kit {
+                binary: std::path::Path::new("/bin/charter"),
+                plugin: Some(std::path::Path::new("/app/plugin")),
+            },
+            Some(plane.path()),
+            &crate::harness_plugin::Chosen::new(),
+            Some(&codex),
+        );
+        assert_eq!(hooks, StateHooks::None);
     }
 
     #[test]

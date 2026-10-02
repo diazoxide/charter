@@ -2,8 +2,8 @@
 //! charter's words and not any one harness's.
 //!
 //! Every level speaks it. At level 2 a harness's own hooks report in charter's hook words
-//! (`charter hook stop`, the words [`crate::state::Event`] parses), and [`Said::of_hook`] reads
-//! one of those into this model. At level 3 a protocol client (HP-2 for ACP, HP-3 for a
+//! (`charter hook stop`, the words [`crate::state::Event`] parses), and
+//! [`crate::state::Event::said`] reads one of those into this model. At level 3 a protocol client (HP-2 for ACP, HP-3 for a
 //! harness's own protocol) will produce the same values, so nothing that reads a chat's state
 //! has to know which level or which harness it came from.
 //!
@@ -12,8 +12,6 @@
 //! the first four today. A plan and usage have no hook that reports them as a state charter
 //! draws; they are here so that a level-3 adapter has a place to put them, and the chat board
 //! moves on none of them.
-
-use crate::state::{Detail, Ending, Event, Started};
 
 /// One thing a harness said about a chat.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,111 +93,4 @@ pub struct Usage {
     pub output_tokens: Option<u64>,
     /// How much of the context window is used, as a whole percentage.
     pub context_percent: Option<u8>,
-}
-
-impl Said {
-    /// What a level-2 hook report means: `event` is the word `charter hook` was run with, and
-    /// `detail` what its payload said beyond the event's name.
-    ///
-    /// The words are charter's own, the same for every harness: each adapter's hooks run
-    /// `charter hook <word>`, so this reading is not any one harness's.
-    pub fn of_hook(event: Event, detail: Detail) -> Self {
-        match event {
-            Event::SessionStart => Self::Session(match detail.started {
-                Started::Freshly | Started::Unsaid => Session::Began(Began::Fresh),
-                Started::Cleared => Session::Began(Began::Cleared),
-                Started::Compacted => Session::Compacted,
-            }),
-            Event::UserPromptSubmit => Self::Turn(Turn::Began),
-            Event::Notification => Self::Ask(Ask::default()),
-            Event::SubagentStop => Self::Item(Item::ChildEnded),
-            Event::Stop => Self::Turn(Turn::Ended),
-            Event::SessionEnd => Self::Session(match detail.ending {
-                Ending::Cleared => Session::ClearedAway,
-                Ending::ForGood => Session::Ended,
-            }),
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn started(started: Started) -> Detail {
-        Detail {
-            started,
-            ..Detail::default()
-        }
-    }
-
-    fn ending(ending: Ending) -> Detail {
-        Detail {
-            ending,
-            ..Detail::default()
-        }
-    }
-
-    #[test]
-    fn a_session_start_is_a_session_beginning_unless_it_was_a_compaction() {
-        assert_eq!(
-            Said::of_hook(Event::SessionStart, started(Started::Freshly)),
-            Said::Session(Session::Began(Began::Fresh))
-        );
-        // Nothing said which is what a session start means when nothing says otherwise.
-        assert_eq!(
-            Said::of_hook(Event::SessionStart, started(Started::Unsaid)),
-            Said::Session(Session::Began(Began::Fresh))
-        );
-        assert_eq!(
-            Said::of_hook(Event::SessionStart, started(Started::Cleared)),
-            Said::Session(Session::Began(Began::Cleared))
-        );
-        assert_eq!(
-            Said::of_hook(Event::SessionStart, started(Started::Compacted)),
-            Said::Session(Session::Compacted)
-        );
-    }
-
-    #[test]
-    fn a_session_end_for_a_clear_is_not_the_session_ending() {
-        // Measured on claude 2.1.276: `/clear` fires `SessionEnd(reason=clear)` and then
-        // `SessionStart(source=clear)` from the same process.
-        assert_eq!(
-            Said::of_hook(Event::SessionEnd, ending(Ending::Cleared)),
-            Said::Session(Session::ClearedAway)
-        );
-        assert_eq!(
-            Said::of_hook(Event::SessionEnd, ending(Ending::ForGood)),
-            Said::Session(Session::Ended)
-        );
-    }
-
-    #[test]
-    fn a_prompt_begins_a_turn_and_stop_ends_it() {
-        assert_eq!(
-            Said::of_hook(Event::UserPromptSubmit, Detail::default()),
-            Said::Turn(Turn::Began)
-        );
-        assert_eq!(
-            Said::of_hook(Event::Stop, Detail::default()),
-            Said::Turn(Turn::Ended)
-        );
-    }
-
-    #[test]
-    fn a_notification_is_an_ask_with_no_options_said() {
-        assert_eq!(
-            Said::of_hook(Event::Notification, Detail::default()),
-            Said::Ask(Ask { options: vec![] })
-        );
-    }
-
-    #[test]
-    fn a_child_agent_finishing_is_an_item_of_the_turn_and_not_its_end() {
-        assert_eq!(
-            Said::of_hook(Event::SubagentStop, Detail::default()),
-            Said::Item(Item::ChildEnded)
-        );
-    }
 }

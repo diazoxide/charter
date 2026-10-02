@@ -8,7 +8,7 @@
 
 pub mod run;
 
-use crate::harness::model::{Item, Said, Session, Turn};
+use crate::harness::model::{Ask, Began, Item, Said, Session, Turn};
 use crate::hookwire::Conversation;
 
 /// A chat's state, as the sidebar draws it.
@@ -49,12 +49,19 @@ pub enum Started {
 
 impl Started {
     /// Whether this is a session arriving, as opposed to something happening inside one.
+    ///
+    /// Read by the app's curation, which types a prompt only into a session that has just
+    /// begun. It is answered by the neutral model ([`Event::said`]), so the board and the
+    /// curation can never disagree about which `SessionStart` began a session.
     pub fn began_a_session(self) -> bool {
-        match self {
-            Self::Freshly | Self::Cleared | Self::Unsaid => true,
-            // The agent is still working, and the chat is still whatever it was.
-            Self::Compacted => false,
-        }
+        let detail = Detail {
+            started: self,
+            ..Detail::default()
+        };
+        matches!(
+            Event::SessionStart.said(detail),
+            Said::Session(Session::Began(_))
+        )
     }
 
     /// What Claude Code's `source` means, measured on 2.1.276 (`startup` seen live; the
@@ -138,6 +145,30 @@ impl Event {
             // reported: a tool call carries no chat state the app draws.
             _ => return None,
         })
+    }
+
+    /// What this hook word means in the neutral harness model (ADR 0073), with `detail`, what
+    /// its payload said beyond the event's name.
+    ///
+    /// The words are charter's own, the same for every harness: each adapter's hooks run
+    /// `charter hook <word>`, so this reading is not any one harness's. It sits beside the
+    /// words, so the model knows nothing of them.
+    pub fn said(self, detail: Detail) -> Said {
+        match self {
+            Self::SessionStart => Said::Session(match detail.started {
+                Started::Freshly | Started::Unsaid => Session::Began(Began::Fresh),
+                Started::Cleared => Session::Began(Began::Cleared),
+                Started::Compacted => Session::Compacted,
+            }),
+            Self::UserPromptSubmit => Said::Turn(Turn::Began),
+            Self::Notification => Said::Ask(Ask::default()),
+            Self::SubagentStop => Said::Item(Item::ChildEnded),
+            Self::Stop => Said::Turn(Turn::Ended),
+            Self::SessionEnd => Said::Session(match detail.ending {
+                Ending::Cleared => Session::ClearedAway,
+                Ending::ForGood => Session::Ended,
+            }),
+        }
     }
 
     /// The word `charter hook` takes for this event.
@@ -282,7 +313,7 @@ impl Chat {
 
     /// The same, with what the harness said about the event beyond its name.
     pub fn reported_from(&mut self, event: Event, detail: Detail) -> bool {
-        self.heard(&Said::of_hook(event, detail))
+        self.heard(&event.said(detail))
     }
 
     /// The harness said `said`, in the neutral model (ADR 0073), at whatever level it runs.
@@ -850,6 +881,82 @@ mod tests {
 
         assert_eq!(chat.state(), State::Unknown);
         assert!(!chat.needs_you());
+    }
+
+    use crate::harness::model::{Ask, Began, Item, Said, Session, Turn};
+
+    fn said_started(started: Started) -> Detail {
+        Detail {
+            started,
+            ..Detail::default()
+        }
+    }
+
+    fn said_ending(ending: Ending) -> Detail {
+        Detail {
+            ending,
+            ..Detail::default()
+        }
+    }
+
+    #[test]
+    fn a_session_start_is_a_session_beginning_unless_it_was_a_compaction() {
+        assert_eq!(
+            Event::SessionStart.said(said_started(Started::Freshly)),
+            Said::Session(Session::Began(Began::Fresh))
+        );
+        // Nothing said which is what a session start means when nothing says otherwise.
+        assert_eq!(
+            Event::SessionStart.said(said_started(Started::Unsaid)),
+            Said::Session(Session::Began(Began::Fresh))
+        );
+        assert_eq!(
+            Event::SessionStart.said(said_started(Started::Cleared)),
+            Said::Session(Session::Began(Began::Cleared))
+        );
+        assert_eq!(
+            Event::SessionStart.said(said_started(Started::Compacted)),
+            Said::Session(Session::Compacted)
+        );
+    }
+
+    #[test]
+    fn a_session_end_for_a_clear_is_not_the_session_ending() {
+        // Measured on claude 2.1.276: `/clear` fires `SessionEnd(reason=clear)` and then
+        // `SessionStart(source=clear)` from the same process.
+        assert_eq!(
+            Event::SessionEnd.said(said_ending(Ending::Cleared)),
+            Said::Session(Session::ClearedAway)
+        );
+        assert_eq!(
+            Event::SessionEnd.said(said_ending(Ending::ForGood)),
+            Said::Session(Session::Ended)
+        );
+    }
+
+    #[test]
+    fn a_prompt_begins_a_turn_and_stop_ends_it() {
+        assert_eq!(
+            Event::UserPromptSubmit.said(Detail::default()),
+            Said::Turn(Turn::Began)
+        );
+        assert_eq!(Event::Stop.said(Detail::default()), Said::Turn(Turn::Ended));
+    }
+
+    #[test]
+    fn a_notification_is_an_ask_with_no_options_said() {
+        assert_eq!(
+            Event::Notification.said(Detail::default()),
+            Said::Ask(Ask { options: vec![] })
+        );
+    }
+
+    #[test]
+    fn a_child_agent_finishing_is_an_item_of_the_turn_and_not_its_end() {
+        assert_eq!(
+            Event::SubagentStop.said(Detail::default()),
+            Said::Item(Item::ChildEnded)
+        );
     }
 
     #[test]
