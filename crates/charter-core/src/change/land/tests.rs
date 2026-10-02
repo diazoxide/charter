@@ -558,7 +558,7 @@ fn a_blocker_whose_logged_merge_the_default_branch_no_longer_holds_has_not_lande
     world.clone("widget");
     world.clone("gadget");
     world.change(&[("widget", &[]), ("gadget", &["widget"])]);
-    // A commit no branch of the clone holds: reverted, or never fetched.
+    // A commit no branch of the clone holds: rewritten, or never fetched.
     a_landing(&world, "widget", MOVED);
     let exchanges = json!([
         github_request("gadget", 8, "open", HEAD),
