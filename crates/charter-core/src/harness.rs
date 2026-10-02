@@ -9,6 +9,7 @@ use std::fmt;
 
 pub mod adapter;
 pub mod claude;
+pub mod codex;
 pub mod model;
 
 pub use adapter::HarnessAdapter;
@@ -321,77 +322,9 @@ impl Harness {
             // Claude Code is armed by its adapter ([`claude::ADAPTER`]): the bundled plugin,
             // loaded for this session alone, and the session's own `--settings`.
             Self::ClaudeCode => claude::ADAPTER.arm(kit, cwd, plugins, sandbox),
-            // **Measured on codex-cli 0.147.0, and it refutes what this arm used to say** —
-            // that Codex could only be armed in `~/.codex/config.toml` and could never say it
-            // was waiting. Every fact here was taken from the real binary driving a real turn
-            // against a stand-in model server, the TUI in a pane as the app runs it (#27):
-            //
-            // * `-c hooks.<Event>=[…]` arms a hook for ONE session. Codex lists its source as
-            //   "Session flags", and it runs BESIDE the operator's own `[[hooks.<Event>]]` for
-            //   the same event rather than replacing it — both fired. Nothing is written.
-            // * `SessionStart`, `UserPromptSubmit`, `Stop` and `SessionEnd` each fire with
-            //   `session_id` in the payload. `SessionStart` names a `source` (`startup`, and
-            //   `resume` with the SAME id on `codex resume <id>`); `SessionEnd` names a
-            //   `reason` (`other`, on `/quit`). `Stop` is "right before Codex ends its turn",
-            //   which is the falling edge `Stop` means for Claude Code.
-            // * There is no `Notification`. Codex tells a hook it is asking for approval only
-            //   through `PermissionRequest` — which fired exactly when the prompt appeared,
-            //   and not for a command that needed none — but that is a hook that DECIDES a
-            //   permission, and the app arms no such hook. So a Codex chat that stops
-            //   mid-turn for approval cannot say so.
-            // * **And there is no second way round it** (charter-app#52, read out of the same
-            //   0.147.0 binary the measurements above were taken on). The binary carries
-            //   eleven hook events and no more — `PreToolUse`, `PermissionRequest`,
-            //   `PostToolUse`, `PreCompact`, `PostCompact`, `SessionStart`, `SessionEnd`,
-            //   `UserPromptSubmit`, `SubagentStart`, `SubagentStop`, `Stop` — and the only
-            //   one that fires when the prompt appears is the one that decides it. The
-            //   `notify` program is not a second channel either: in 0.147.0 it is
-            //   `legacy_notify`, a shim over `Stop` whose one payload type is
-            //   `agent-turn-complete`, which is the falling edge `Stop` already gives. What
-            //   is left is `PreToolUse` without a matching `PostToolUse` for long enough —
-            //   which is a guess at timing over a harness's behaviour, and ADR 0018 admits
-            //   no state that did not come from a hook saying so.
-            // * `SessionStart` fires inside the FIRST TURN, not at launch (X1): an idle TUI
-            //   reported nothing at all until a prompt was typed.
-            // * A hook is inert until Codex trusts it. For these, the TUI itself asks at
-            //   startup — "Hooks need review … Trust all and continue / Continue without
-            //   trusting (hooks won't run)" — and Codex writes the answer into its own
-            //   `[hooks.state]`, keyed by event, position and a hash of the hook. The same
-            //   binary path arms the same hooks, so the operator is asked once and not once a
-            //   chat. Untrusted, they do not run and nothing says so (`codex exec`).
-            //
-            // Codex has no plugin here: the guard used to reach a Codex chat through the
-            // Python charter's Codex plugin, and now rides on the same `-c` flags as the state
-            // hooks, from the same registry ([`crate::plugin::CODEX`] out of [`crate::hookreg`]).
-            //
-            // And no plugin: Codex 0.147.0 takes a plugin's `enabled` from its `config.toml`
-            // alone and ignores the same key given with `-c` (measured, charter-app#274), so
-            // `plugins` is empty for it and nothing here would carry it.
-            //
-            // Its skills ride on the `SessionStart` hook above: Codex can take no skills
-            // directory for one session ([`Self::skills`]), so the chat is started with the
-            // bundle's in [`crate::skills::LISTED_ENV`], which a Codex hook inherits, and the
-            // briefing lists them.
-            //
-            // Its sandbox, where the plane turned it on, is not here: it rides on flags that go
-            // last among the flags on the chat's line ([`crate::sandbox::Applied::line`], and
-            // [`crate::sandbox::codex`] has the measurements). An unsandboxed Codex chat keeps
-            // Codex's own settings, as it did.
-            Self::Codex => StateHooks::ThisSessionOnly {
-                args: codex_session_flags(kit.binary),
-                env: kit
-                    .plugin
-                    .and_then(crate::skills::in_bundle)
-                    .map(|dir| {
-                        (
-                            crate::skills::LISTED_ENV.to_owned(),
-                            dir.display().to_string(),
-                        )
-                    })
-                    .into_iter()
-                    .collect(),
-                cannot_report: vec!["notification"],
-            },
+            // Codex is armed by its adapter ([`codex::ADAPTER`]): charter's hooks on its own
+            // `-c hooks.<Event>=…` session flags.
+            Self::Codex => codex::ADAPTER.arm(kit, cwd, plugins, sandbox),
             // **The bundled shim, loaded for this session alone** ([`crate::opencode`] has the
             // measurements, opencode 1.18.23). opencode reads a whole config from
             // `OPENCODE_CONFIG_CONTENT` and concatenates its `plugin` list with every other
@@ -445,7 +378,7 @@ impl Harness {
     pub fn disarmed_by(self, command: &[String], env: &[(String, String)]) -> Option<String> {
         match self {
             Self::ClaudeCode => claude::ADAPTER.disarmed_by(command, env),
-            Self::Codex => None,
+            Self::Codex => codex::ADAPTER.disarmed_by(command, env),
             Self::Opencode => crate::opencode::disarmed_by(command, env),
         }
     }
@@ -454,10 +387,7 @@ impl Harness {
     pub fn armed_with(self) -> String {
         match self {
             Self::ClaudeCode => claude::ADAPTER.armed_with(),
-            Self::Codex => {
-                "the app arms each Codex chat with charter's hooks; Codex asks once to trust them"
-                    .to_owned()
-            }
+            Self::Codex => codex::ADAPTER.armed_with(),
             Self::Opencode => {
                 "the app arms each opencode chat with charter's opencode plugin, for that chat alone"
                     .to_owned()
@@ -632,57 +562,6 @@ impl Harness {
             ),
         }
     }
-}
-
-/// The `-c` pairs that arm Codex's hooks on one session, out of [`crate::plugin::codex_handlers`].
-///
-/// On the argument for the reason Claude Code's are: nothing is written, so nothing is left
-/// behind. Each value is TOML, because that is how Codex parses a `-c` value — and it is
-/// SERIALISED rather than formatted, since a value that fails to parse is not an error to
-/// Codex but a literal string, which it then rejects as the wrong type and refuses to start.
-///
-/// The command names the binary by its absolute path: Codex has no plugin root and no
-/// variable of charter's to expand, and a Codex hook runs through a shell just the same —
-/// measured, a single-quoted argument holding spaces arrived as one word.
-fn codex_session_flags(binary: &std::path::Path) -> Vec<String> {
-    crate::plugin::grouped(crate::plugin::codex_handlers())
-        .into_iter()
-        .flat_map(|(event, groups)| {
-            let groups: Vec<toml::Value> = groups
-                .into_iter()
-                .map(|(matcher, hooks)| {
-                    let hooks: Vec<toml::Value> = hooks
-                        .iter()
-                        .map(|hook| {
-                            let table: toml::Table = [
-                                ("type".to_owned(), toml::Value::from("command")),
-                                (
-                                    "command".to_owned(),
-                                    toml::Value::from(crate::plugin::command_at(binary, hook.name)),
-                                ),
-                                // Codex's own default is 600 seconds (its review screen says so).
-                                (
-                                    "timeout".to_owned(),
-                                    toml::Value::from(i64::from(hook.timeout)),
-                                ),
-                            ]
-                            .into_iter()
-                            .collect();
-                            toml::Value::Table(table)
-                        })
-                        .collect();
-                    let mut group = toml::Table::new();
-                    if let Some(matcher) = matcher {
-                        group.insert("matcher".to_owned(), toml::Value::from(matcher));
-                    }
-                    group.insert("hooks".to_owned(), toml::Value::Array(hooks));
-                    toml::Value::Table(group)
-                })
-                .collect();
-            let value = toml::Value::Array(groups);
-            ["-c".to_owned(), format!("hooks.{event}={value}")]
-        })
-        .collect()
 }
 
 fn words<const N: usize>(argv: [&str; N]) -> Vec<String> {
