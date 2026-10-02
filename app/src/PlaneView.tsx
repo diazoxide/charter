@@ -101,14 +101,7 @@ import {
   type Resuming,
 } from "./sessions";
 import { useExtensionFacts } from "./extensionFacts";
-import {
-  PLANE_SHAPE,
-  ROOT_PANELS,
-  SETTINGS,
-  SIDEBAR,
-  usePlaneChanged,
-  workspaceInterest,
-} from "./planeChanged";
+import { panelsOf, ROOT_PANELS, SETTINGS, SHAPE, SIDEBAR, usePlaneChanged } from "./planeChanged";
 import { PlaneUpdatedMark, usePlaneUpdated, type PlaneUpdates } from "./PlaneUpdated";
 import { inSlots, SIDES, useArrangement } from "./regions";
 import { RegionFrame } from "./RegionFrame";
@@ -386,9 +379,9 @@ export function PlaneView({
   const [rereadWorkspace, setRereadWorkspace] = useState(0);
   /** Bumped when the core says this plane changed on disk (charter-app#264): a todo closed in
    *  a terminal, a workspace another chat made — any change to the plane's shape, never a
-   *  memory or a session record (`PLANE_SHAPE`). The sidebar and the panels count only the
-   *  kinds they are made of, below (FD-10). */
-  const changesOnDisk = usePlaneChanged([plane], PLANE_SHAPE);
+   *  memory or a session record (`SHAPE`). The sidebar and the panels hear only what the
+   *  core says concerns them, below (FD-10). */
+  const changesOnDisk = usePlaneChanged([plane], SHAPE);
   /** The changes what this project has on and its theme are made of (FD-10). */
   const settingsChanges = usePlaneChanged([plane], SETTINGS);
   /** The same, counting only the changes the sidebar is made of (FD-10): a memory an agent
@@ -1022,7 +1015,7 @@ export function PlaneView({
   useRepoSavingKept(plane, ofWorkspace);
   /** The changes the focused workspace's panels are made of (FD-10): its own, and the
    *  personas'. A todo closed in another workspace does not read this one again. */
-  const workspaceChanges = usePlaneChanged([plane], workspaceInterest(ofWorkspace ?? ""));
+  const workspaceChanges = usePlaneChanged([plane], panelsOf(ofWorkspace ?? ""));
   const workspaceState = useWorkspaceState(plane, ofWorkspace, rereadWorkspace, workspaceChanges);
   /** The plane root's own panels — its session records (SI-8d) — while it is focused. */
   const rootChanges = usePlaneChanged([plane], ROOT_PANELS);

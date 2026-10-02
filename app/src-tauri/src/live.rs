@@ -52,10 +52,14 @@ pub async fn workspace_live(
     name: String,
     live: bool,
 ) -> Result<LiveSwitched, String> {
-    let root = planes.held(&plane)?.root().to_path_buf();
-    tauri::async_runtime::spawn_blocking(move || switch(&root, &name, live))
+    let held = planes.held(&plane)?;
+    let root = held.root().to_path_buf();
+    let switched = tauri::async_runtime::spawn_blocking(move || switch(&root, &name, live))
         .await
-        .map_err(|err| format!("switching the workspace did not finish: {err}"))?
+        .map_err(|err| format!("switching the workspace did not finish: {err}"))?;
+    // The sidebar marks it, and is read straight after (FD-10b).
+    held.workspaces_moved();
+    switched
 }
 
 /// [`workspace_live_preview`], without a runtime.

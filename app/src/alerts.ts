@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { commands, type PlaneAlerts, type PlaneId } from "./bindings";
-import { PLANE_SHAPE, usePlaneChanged } from "./planeChanged";
+import { GIT, usePlaneChanged } from "./planeChanged";
 
 /**
  * **charter's alerts, for every project this window holds** — the reading the status bar's
@@ -61,7 +61,7 @@ export function useAlerts(planes: readonly PlaneId[]): {
   const [reading, setReading] = useState<AlertsReading>({ at: "reading" });
   const [asked, setAsked] = useState(0);
   const holding = planes.join("\n");
-  const changesOnDisk = usePlaneChanged(planes, PLANE_SHAPE);
+  const changesOnDisk = usePlaneChanged(planes, GIT);
 
   // Written as `Extensions`'s first read is: the command's own promise, a `gone` flag, and the
   // state set inside the callback — so an answer that lands after a newer ask began, or after

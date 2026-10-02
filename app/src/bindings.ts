@@ -446,11 +446,12 @@ export const commands = {
 	/**  Whether the window is on screen. The scenario tests ask; nothing in the UI does. */
 	windowShowing: () => __TAURI_INVOKE<boolean>("window_showing"),
 	/**
-	 *  The sidebar, read from the plane on disk every time it is asked for.
+	 *  The sidebar, answered from the plane's model (FD-10b, [`charter_core::planemodel`]).
 	 * 
-	 *  Read fresh rather than cached: the plane is a directory the operator also edits by hand
-	 *  and another charter process writes, so a cache here would be a second answer to "what is
-	 *  on disk" that nothing invalidates.
+	 *  The model is read once when the plane is held, and from then on each change the watch
+	 *  names re-reads only what it is part of: a todo closed in `beta` re-reads `beta/todos/`,
+	 *  where this used to list every workspace's todos on every ask. A change nobody could name
+	 *  reads the model again whole, so the plane on disk stays the truth.
 	 * 
 	 *  The chats are the ones `Chats` already holds — one model of a chat, not a second derived
 	 *  from the sessions. What files one under a workspace is the directory it works in, because
@@ -1394,7 +1395,7 @@ export type ByHand = {
  *  What one changed path is part of, as the window's readers divide the plane
  *  ([`charter_core::planechange::Kind`], which this mirrors for the bindings).
  */
-export type ChangeKind = "project" | "harness" | "workspace" | "todos" | "memory" | "sessions" | "persona";
+export type ChangeKind = "project" | "harness" | "workspace" | "todos" | "memory" | "sessions" | "persona" | "git";
 
 /**
  *  Where one change's member list is in a changes view, sent with its blocks
@@ -2545,6 +2546,26 @@ export type PlaneAlerts = {
 	stopped: string | null,
 };
 
+/**
+ *  One answer the window reads from the plane ([`charter_core::planechange::Answer`],
+ *  mirrored for the bindings).
+ */
+export type PlaneAnswer = 
+/**  `plane_sidebar`. */
+{ answer: "sidebar" } | 
+/**  `workspace_panels` for `workspace`, or for every workspace when it is `null`. */
+{ answer: "panels"; workspace: string | null } | 
+/**  `plane_root_panels`. */
+{ answer: "rootPanels" } | 
+/**  The plane's shape beside its panels: the instructions a chat started on, the curations. */
+{ answer: "shape" } | 
+/**  What the project has on, and its theme. */
+{ answer: "settings" } | 
+/**  The git standings: the alerts and the Saving rows. */
+{ answer: "git" } | 
+/**  The view tabs. */
+{ answer: "views" };
+
 /**  One changed path ([`charter_core::planechange::Change`], mirrored for the bindings). */
 export type PlaneChange = {
 	kind: ChangeKind,
@@ -2565,10 +2586,17 @@ export type PlaneChanged = {
 	plane: PlaneId,
 	/**
 	 *  Each changed path and what it is part of, or `null` when what changed is not known —
-	 *  a batch this could not place, or auto-save having committed — and every reader reads
-	 *  again.
+	 *  a batch this could not place — and every reader reads again. Auto-save says what it
+	 *  did as one change of kind `git`, with no path.
 	 */
 	changes: PlaneChange[] | null,
+	/**
+	 *  The answers these changes concern, each once, or `null` — every answer — when what
+	 *  changed is not known. A reader names the answer it holds and reads again only when it
+	 *  is here: which answer a change concerns is the core's question
+	 *  ([`charter_core::planechange::answers`]), never the window's.
+	 */
+	answers: PlaneAnswer[] | null,
 };
 
 /**

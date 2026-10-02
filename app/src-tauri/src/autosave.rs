@@ -10,7 +10,8 @@
 //! - on its first look, pushes what the last run left committed and unpushed (the launch);
 //! - every [`FETCH_EVERY`], and when the window asks ([`Poke::Fetch`]), fetches the target
 //!   branch — and fast-forwards a clean tree onto it only while auto-save is on;
-//! - and after any of these that did something, tells the window the plane changed.
+//! - and after any of these that did something, tells the window its git standing moved
+//!   ([`what_it_did`]).
 //!
 //! Saving at quit is not the worker's: the app is exiting, so [`at_quit`] runs it bounded,
 //! for every held plane at once.
@@ -115,7 +116,7 @@ impl Worker {
                     &poked,
                     &stopping,
                     &mid_turn,
-                    &|| changed(plane.clone(), None),
+                    &|| changed(plane.clone(), what_it_did()),
                     &told,
                 );
             });
@@ -143,6 +144,14 @@ impl Worker {
     pub fn poker(&self) -> Sender<Poke> {
         self.poke.clone()
     }
+}
+
+/// What a look that did something tells the window moved: the git standing, and nothing read
+/// from the tree (#933). A save commits what is already on disk and a fetch moves refs; what
+/// a fast-forward or a save's rebase moves in the tree reaches every reader as the paths it
+/// moved, from the watcher, like any other write.
+fn what_it_did() -> crate::planewatch::What {
+    Some(vec![charter_core::planechange::saved()])
 }
 
 /// The loop: a look every [`LOOK_EVERY`] or at a poke, until the worker is dropped.
@@ -457,6 +466,21 @@ impl Worker {
 mod tests {
     use super::*;
     use std::process::Command;
+
+    #[test]
+    fn what_auto_save_tells_the_window_concerns_the_git_standings_alone() {
+        // #933: a save, a push or a fetch used to be told as "anything may have moved", and
+        // every reader read the plane again. What it moved is the git standing; what a
+        // fast-forward moves in the tree is told by the watcher, path by path.
+        let told = crate::planewatch::PlaneChanged::of(
+            serde_json::from_value(serde_json::json!("/home/dev/plane")).expect("an id"),
+            what_it_did(),
+        );
+        assert_eq!(
+            told.answers,
+            Some(vec![crate::planewatch::PlaneAnswer::Git])
+        );
+    }
 
     fn git(dir: &Path, args: &[&str]) {
         let mut command = Command::new("git");

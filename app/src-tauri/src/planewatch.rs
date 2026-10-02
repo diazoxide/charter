@@ -53,7 +53,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::Duration;
 
-use charter_core::planechange::{self, Change, Kind};
+use charter_core::planechange::{self, Answer, Change, Kind};
 use charter_core::workspaces::Plane;
 use notify::event::{MetadataKind, ModifyKind};
 use notify::{EventKind, RecursiveMode};
@@ -71,9 +71,62 @@ pub(crate) const CHANGED: &str = "plane-changed";
 pub struct PlaneChanged {
     pub plane: PlaneId,
     /// Each changed path and what it is part of, or `null` when what changed is not known —
-    /// a batch this could not place, or auto-save having committed — and every reader reads
-    /// again.
+    /// a batch this could not place — and every reader reads again. Auto-save says what it
+    /// did as one change of kind `git`, with no path.
     pub changes: Option<Vec<PlaneChange>>,
+    /// The answers these changes concern, each once, or `null` — every answer — when what
+    /// changed is not known. A reader names the answer it holds and reads again only when it
+    /// is here: which answer a change concerns is the core's question
+    /// ([`charter_core::planechange::answers`]), never the window's.
+    pub answers: Option<Vec<PlaneAnswer>>,
+}
+
+impl PlaneChanged {
+    /// What the window is told about `plane` when `changes` moved in it.
+    pub fn of(plane: PlaneId, changes: What) -> Self {
+        let answers = planechange::answers(changes.as_deref())
+            .map(|answers| answers.into_iter().map(PlaneAnswer::from).collect());
+        Self {
+            plane,
+            changes: changes.map(|changes| changes.into_iter().map(PlaneChange::from).collect()),
+            answers,
+        }
+    }
+}
+
+/// One answer the window reads from the plane ([`charter_core::planechange::Answer`],
+/// mirrored for the bindings).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+#[serde(tag = "answer", rename_all = "camelCase")]
+pub enum PlaneAnswer {
+    /// `plane_sidebar`.
+    Sidebar,
+    /// `workspace_panels` for `workspace`, or for every workspace when it is `null`.
+    Panels { workspace: Option<String> },
+    /// `plane_root_panels`.
+    RootPanels,
+    /// The plane's shape beside its panels: the instructions a chat started on, the curations.
+    Shape,
+    /// What the project has on, and its theme.
+    Settings,
+    /// The git standings: the alerts and the Saving rows.
+    Git,
+    /// The view tabs.
+    Views,
+}
+
+impl From<Answer> for PlaneAnswer {
+    fn from(answer: Answer) -> Self {
+        match answer {
+            Answer::Sidebar => Self::Sidebar,
+            Answer::Panels { workspace } => Self::Panels { workspace },
+            Answer::RootPanels => Self::RootPanels,
+            Answer::Shape => Self::Shape,
+            Answer::Settings => Self::Settings,
+            Answer::Git => Self::Git,
+            Answer::Views => Self::Views,
+        }
+    }
 }
 
 /// What one changed path is part of, as the window's readers divide the plane
@@ -88,6 +141,7 @@ pub enum ChangeKind {
     Memory,
     Sessions,
     Persona,
+    Git,
 }
 
 /// One changed path ([`charter_core::planechange::Change`], mirrored for the bindings).
@@ -113,6 +167,7 @@ impl From<Change> for PlaneChange {
                 Kind::Memory => ChangeKind::Memory,
                 Kind::Sessions => ChangeKind::Sessions,
                 Kind::Persona => ChangeKind::Persona,
+                Kind::Git => ChangeKind::Git,
             },
             workspace: change.workspace,
             persona: change.persona,
@@ -122,7 +177,7 @@ impl From<Change> for PlaneChange {
 }
 
 /// What a plane change says moved: the changes, or `None` for "not known, read everything".
-pub type What = Option<Vec<PlaneChange>>;
+pub type What = Option<Vec<Change>>;
 
 /// Told whenever a plane changes on disk, whichever plane it is, and what changed in it.
 pub type Changed = Arc<dyn Fn(PlaneId, What) + Send + Sync + 'static>;
@@ -290,9 +345,8 @@ fn what_changed(
             .iter()
             .flat_map(|event| event.paths.iter().map(PathBuf::as_path))
     };
-    let changes = planechange::of_batch(root, paths())
-        .or_else(|| spelled.and_then(|spelled| planechange::of_batch(spelled, paths())))?;
-    Some(changes.into_iter().map(PlaneChange::from).collect())
+    planechange::of_batch(root, paths())
+        .or_else(|| spelled.and_then(|spelled| planechange::of_batch(spelled, paths())))
 }
 
 /// Whether an event is a change to the plane. Everything but an access is: reading a file
@@ -637,7 +691,7 @@ mod tests {
     }
 
     /// Waits for a batch naming `path`, and returns what it said that path is.
-    fn told_about(told: &mpsc::Receiver<(PlaneId, What)>, path: &str) -> PlaneChange {
+    fn told_about(told: &mpsc::Receiver<(PlaneId, What)>, path: &str) -> Change {
         let until = Instant::now() + PATIENCE;
         while let Some(left) = until.checked_duration_since(Instant::now()) {
             let (_, what) = told.recv_timeout(left).expect("told the plane changed");
@@ -668,7 +722,7 @@ mod tests {
         let placed = event(EventKind::Create(CreateKind::File), &[&todo]);
         let named = what_changed(root, None, &[&placed]).expect("placed");
         assert_eq!(named.len(), 1);
-        assert_eq!(named[0].kind, ChangeKind::Todos);
+        assert_eq!(named[0].kind, Kind::Todos);
 
         let pathless = event(EventKind::Any, &[]);
         assert_eq!(what_changed(root, None, &[&placed, &pathless]), None);
@@ -708,7 +762,7 @@ mod tests {
         std::fs::write(root.join("workspaces/alpha/memory/note.md"), "# note\n").expect("a memory");
 
         let change = told_about(&told, "workspaces/alpha/memory/note.md");
-        assert_eq!(change.kind, ChangeKind::Memory);
+        assert_eq!(change.kind, Kind::Memory);
         assert_eq!(change.workspace.as_deref(), Some("alpha"));
     }
 
@@ -723,17 +777,17 @@ mod tests {
 
         std::fs::write(root.join("sessions/r.md"), "# r\n").expect("a root record");
         let change = told_about(&told, "sessions/r.md");
-        assert_eq!(change.kind, ChangeKind::Sessions);
+        assert_eq!(change.kind, Kind::Sessions);
         assert_eq!(change.workspace, None);
 
         std::fs::write(root.join("workspaces/alpha/sessions/r.md"), "# r\n").expect("a record");
         let change = told_about(&told, "workspaces/alpha/sessions/r.md");
-        assert_eq!(change.kind, ChangeKind::Sessions);
+        assert_eq!(change.kind, Kind::Sessions);
         assert_eq!(change.workspace.as_deref(), Some("alpha"));
 
         std::fs::write(root.join("personas/steward/memory/m.md"), "# m\n").expect("a memory");
         let change = told_about(&told, "personas/steward/memory/m.md");
-        assert_eq!(change.kind, ChangeKind::Memory);
+        assert_eq!(change.kind, Kind::Memory);
         assert_eq!(change.persona.as_deref(), Some("steward"));
     }
 
@@ -746,7 +800,7 @@ mod tests {
         std::fs::remove_file(root.join("workspaces/alpha/todos/m8-1.md")).expect("closed");
 
         let change = told_about(&told, "workspaces/alpha/todos/m8-1.md");
-        assert_eq!(change.kind, ChangeKind::Todos);
+        assert_eq!(change.kind, Kind::Todos);
         assert_eq!(change.workspace.as_deref(), Some("alpha"));
     }
 
@@ -791,5 +845,33 @@ mod tests {
                 "workspaces/alpha/todos"
             ]
         );
+    }
+
+    #[test]
+    fn the_window_is_told_which_answers_a_change_concerns_and_every_one_when_it_is_not_known() {
+        let plane = id(Path::new("/home/dev/plane"));
+        let memory = planechange::classify(
+            Path::new("/home/dev/plane"),
+            Path::new("/home/dev/plane/workspaces/alpha/memory/m.md"),
+        )
+        .expect("placed");
+        let told = PlaneChanged::of(plane.clone(), Some(vec![memory]));
+        assert_eq!(
+            told.answers,
+            Some(vec![
+                PlaneAnswer::Panels {
+                    workspace: Some("alpha".to_owned())
+                },
+                PlaneAnswer::Views
+            ])
+        );
+        assert_eq!(
+            serde_json::to_value(&told.answers).expect("serialisable"),
+            serde_json::json!([{"answer": "panels", "workspace": "alpha"}, {"answer": "views"}])
+        );
+
+        let unknown = PlaneChanged::of(plane, None);
+        assert_eq!(unknown.changes, None);
+        assert_eq!(unknown.answers, None);
     }
 }

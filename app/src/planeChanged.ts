@@ -1,94 +1,61 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "./here";
 
-import type { ChangeKind, PlaneChange, PlaneChanged, PlaneId } from "./bindings";
+import type { PlaneAnswer, PlaneChanged, PlaneId } from "./bindings";
 
 /**
- * One kind of change a reader's answer is made of (FD-10). A field left out matches anything;
- * `workspace: null` matches only a change in no workspace — the plane root's session records,
- * a persona's memory.
- */
-export type Wanted = {
-  readonly kind?: ChangeKind;
-  readonly workspace?: string | null;
-};
-
-/** What a reader reads again for: any one of these. */
-export type Interest = readonly Wanted[];
-
-/**
- * The sidebar: every workspace with its todos and colour, and the personas
- * (`plane_sidebar`). Not memory, session records or the harness settings, which it never
- * reads.
- */
-export const SIDEBAR: Interest = [
-  { kind: "todos" },
-  { kind: "workspace" },
-  { kind: "persona" },
-  { kind: "project" },
-];
-
-/**
- * Everything but the memory stores and the session records: the shape of the plane — its
- * settings, workspaces, todos, personas and harness files. What the readers that are not
- * panels follow (the instructions a chat started on, the curations, the git standings).
+ * The answer a reader of the plane holds, by its name (FD-10).
  *
- * **Why the git readers leave memory and records out** (FD-10): an agent saving a memory is
- * the commonest write there is, and asking git for every standing on each one is what the
- * switch-speed work (FR-27) took out. The standings still follow it — they poll on a timer and
- * after every save — and `null` (auto-save committed, or a batch the core could not place)
- * still reaches them at once.
+ * **Which answer a change concerns is the core's question, never the window's**
+ * (`charter_core::planechange::answers`): the core reads the plane format's paths, so it is
+ * the one place that knows a todo is part of the sidebar and a memory is not. `plane-changed`
+ * carries the answers a batch concerns, and a reader here only names the one it holds.
  */
-export const PLANE_SHAPE: Interest = [
-  { kind: "project" },
-  { kind: "harness" },
-  { kind: "workspace" },
-  { kind: "todos" },
-  { kind: "persona" },
-];
+export type Interest = PlaneAnswer;
 
-/** What a project has on, and the theme it draws: `charter.toml`, `charter.local.toml` and
- *  each `workspace.json` (charter-app#253, #273, #281). */
-export const SETTINGS: Interest = [{ kind: "project" }, { kind: "workspace" }];
+/** The sidebar (`plane_sidebar`). */
+export const SIDEBAR: Interest = { answer: "sidebar" };
 
-/** The plane root's panels: its session records, and nothing else (`plane_root_panels`). */
-export const ROOT_PANELS: Interest = [{ kind: "sessions", workspace: null }];
+/** The window's readers beside its panels: the instructions a chat started on, the
+ *  curations. */
+export const SHAPE: Interest = { answer: "shape" };
 
-/**
- * One workspace's panels (`workspace_panels`): everything in that workspace, and the
- * personas with their memory counts and the default persona, which the Personas panel draws.
- * Never another workspace's todos.
- */
-export function workspaceInterest(workspace: string): Interest {
-  return [
-    { workspace },
-    { kind: "persona" },
-    { kind: "memory", workspace: null },
-    { kind: "project" },
-  ];
+/** What a project has on, and the theme it draws. */
+export const SETTINGS: Interest = { answer: "settings" };
+
+/** The git standings: the alerts and the Saving rows. What auto-save did reaches these and
+ *  no other reader (#933). */
+export const GIT: Interest = { answer: "git" };
+
+/** The plane root's panels (`plane_root_panels`). */
+export const ROOT_PANELS: Interest = { answer: "rootPanels" };
+
+/** The view tabs, which read any of the plane's stores. */
+export const VIEWS: Interest = { answer: "views" };
+
+/** One workspace's panels (`workspace_panels`). */
+export function panelsOf(workspace: string): Interest {
+  return { answer: "panels", workspace };
 }
 
 /**
- * Whether `changes` concern a reader whose answer is made of `interest`.
+ * Whether the answers the core said moved include the one a reader holds.
  *
  * **Not knowing concerns everyone.** `null` — or an event from a core too old to say — is the
- * core saying it cannot name what moved (auto-save committed, a batch it could not place), and
- * every reader reads again, as each did before there were kinds. A reader with no interest
- * named reads again on every change.
+ * core saying it cannot name what moved (a batch it could not place), and every reader reads
+ * again, as each did before there were kinds. The core's `panels` with no workspace is every
+ * workspace's: a persona or the project moved.
  */
 export function concerns(
-  changes: readonly PlaneChange[] | null | undefined,
-  interest: Interest | undefined,
+  answers: readonly PlaneAnswer[] | null | undefined,
+  mine: Interest,
 ): boolean {
-  if (changes === null || changes === undefined) return true;
-  if (interest === undefined) return changes.length > 0;
-  return changes.some((change) =>
-    interest.some(
-      (wanted) =>
-        (wanted.kind === undefined || wanted.kind === change.kind) &&
-        (wanted.workspace === undefined || wanted.workspace === change.workspace),
-    ),
-  );
+  if (answers === null || answers === undefined) return true;
+  return answers.some((told) => {
+    if (told.answer !== mine.answer) return false;
+    if (told.answer !== "panels" || mine.answer !== "panels") return true;
+    return told.workspace === null || told.workspace === mine.workspace;
+  });
 }
 
 /**
@@ -108,11 +75,11 @@ export function concerns(
  * a webview being torn down) is simply never bumped, and reads the plane when it is focused,
  * as it did before there was anything to listen to.
  *
- * **Given an `interest`, it moves only for a change that concerns it** ([`concerns`], FD-10),
- * so a panel subscribes to the kinds its answer is made of instead of reading again for every
- * write anywhere in the plane.
+ * **It moves only for a change that concerns the answer it names** ([`concerns`], FD-10), so
+ * a panel reads again for what its answer is made of instead of for every write anywhere in
+ * the plane — and which changes those are is the core's to say.
  */
-export function usePlaneChanged(planes: readonly PlaneId[], interest?: Interest): number {
+export function usePlaneChanged(planes: readonly PlaneId[], interest: Interest): number {
   const [count, setCount] = useState(0);
   // The list by value: a fresh array from the caller each render must not re-register.
   const holding = planes.join("\n");
@@ -132,7 +99,7 @@ export function usePlaneChanged(planes: readonly PlaneId[], interest?: Interest)
       try {
         const unlisten = await listen<PlaneChanged>("plane-changed", (event) => {
           if (gone || !mine.has(event.payload.plane)) return;
-          if (concerns(event.payload.changes, wanted.current)) setCount((was) => was + 1);
+          if (concerns(event.payload.answers, wanted.current)) setCount((was) => was + 1);
         });
         if (gone) unlisten();
         else stop = unlisten;

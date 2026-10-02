@@ -4,7 +4,7 @@ import { cleanup, render as renderBare, screen, waitFor, within } from "@testing
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import { forgetThisLaunch } from "./regions";
-import type { PlaneChange } from "./bindings";
+import type { PlaneAnswer } from "./bindings";
 
 /**
  * **The panels follow the plane on disk** (charter-app#264).
@@ -73,7 +73,7 @@ function todosPanel() {
 /** The core, reading the plane afresh on every ask, and a way to say the plane changed. */
 function core(): {
   asked: string[];
-  changed: (plane: string, changes?: PlaneChange[] | null) => void;
+  changed: (plane: string, answers?: PlaneAnswer[] | null) => void;
 } {
   const asked: string[] = [];
   const listeners = new Map<string, number[]>();
@@ -121,14 +121,14 @@ function core(): {
   });
   return {
     asked,
-    changed: (plane, changes) => {
+    changed: (plane, answers) => {
       const handlers = listeners.get("plane-changed") ?? [];
       if (handlers.length === 0) throw new Error("the window is not listening for plane changes");
       for (const handler of handlers)
         window.__TAURI_INTERNALS__.runCallback(handler, {
           event: "plane-changed",
           id: 1,
-          payload: changes === undefined ? { plane } : { plane, changes },
+          payload: answers === undefined ? { plane } : { plane, changes: [], answers },
         });
     },
   };
@@ -214,14 +214,8 @@ describe("the readers of the plane, told what changed", () => {
     const panels = count(asked, "workspace_panels");
     const sidebar = count(asked, "plane_sidebar");
 
-    changed(PLANE, [
-      {
-        kind: "memory",
-        workspace: "alpha",
-        persona: null,
-        path: "workspaces/alpha/memory/20261002-165000-note.md",
-      },
-    ]);
+    // What the core says a memory of alpha concerns.
+    changed(PLANE, [{ answer: "panels", workspace: "alpha" }, { answer: "views" }]);
 
     await waitFor(() => expect(count(asked, "workspace_panels")).toBeGreaterThan(panels));
     await settle();
@@ -235,8 +229,13 @@ describe("the readers of the plane, told what changed", () => {
     const panels = count(asked, "workspace_panels");
     const sidebar = count(asked, "plane_sidebar");
 
+    // What the core says a todo of beta concerns.
     changed(PLANE, [
-      { kind: "todos", workspace: "beta", persona: null, path: "workspaces/beta/todos/x.md" },
+      { answer: "sidebar" },
+      { answer: "panels", workspace: "beta" },
+      { answer: "shape" },
+      { answer: "git" },
+      { answer: "views" },
     ]);
 
     await waitFor(() => expect(count(asked, "plane_sidebar")).toBeGreaterThan(sidebar));
@@ -260,14 +259,32 @@ describe("the readers of the plane, told what changed", () => {
     const before = asked.length;
     const drawn = commits;
 
-    changed(PLANE, [
-      { kind: "memory", workspace: "beta", persona: null, path: "workspaces/beta/memory/m.md" },
-      { kind: "sessions", workspace: "beta", persona: null, path: "workspaces/beta/sessions/r.md" },
-    ]);
+    // What the core says a memory and a session record of beta concern.
+    changed(PLANE, [{ answer: "panels", workspace: "beta" }, { answer: "views" }]);
 
     await settle();
     expect(asked.slice(before)).toEqual([]);
     expect(commits).toBe(drawn);
+  });
+
+  it("ask git again when auto-save says what it did, and read neither the sidebar nor the panels", async () => {
+    // #933: a save, a push or a fetch used to be told as "anything may have moved", and every
+    // reader read the plane again about 30 s after each memory written.
+    const { asked, changed } = core();
+    render(<App />);
+    await waitFor(() => expect(todoRows()).toHaveLength(2));
+    await waitFor(() => expect(asked).toContain("alerts_everywhere"));
+    await settle();
+    const alerts = count(asked, "alerts_everywhere");
+    const panels = count(asked, "workspace_panels");
+    const sidebar = count(asked, "plane_sidebar");
+
+    changed(PLANE, [{ answer: "git" }]);
+
+    await waitFor(() => expect(count(asked, "alerts_everywhere")).toBeGreaterThan(alerts));
+    await settle();
+    expect(count(asked, "workspace_panels")).toBe(panels);
+    expect(count(asked, "plane_sidebar")).toBe(sidebar);
   });
 
   it("read everything again when the core cannot say what changed", async () => {

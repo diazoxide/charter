@@ -79,6 +79,7 @@ pub mod pieces;
 pub mod plane;
 pub mod planechange;
 pub mod planegit;
+pub mod planemodel;
 pub mod planeroot;
 pub mod planesave;
 pub mod plugin;
