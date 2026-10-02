@@ -1,5 +1,6 @@
 import {
   Fragment,
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -237,7 +238,7 @@ type Where = { tab: true; in?: string; prefer?: string } | { split: Direction };
  * panes on screen anyway (`tabs.ts`), the core has held every session's terminal all along,
  * and a view opened again is sent the screen as it already is.
  */
-export function PlaneView({
+export const PlaneView = memo(function PlaneView({
   plane,
   inFront,
   projects,
@@ -4044,7 +4045,7 @@ export function PlaneView({
       )}
     </>
   );
-}
+});
 
 /** What this project told the window about itself. */
 /** Redraws a component when the theme in force changes: what a workspace's tint is taken from
