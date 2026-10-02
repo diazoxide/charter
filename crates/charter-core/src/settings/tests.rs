@@ -299,11 +299,11 @@ fn plane_and_repos_values_charter_would_not_read_are_refused_in_either_file() {
                 format!("plane.branch in {file} is not a branch name git would accept"),
                 format!(
                     "plane.colour in {file} is not read — [plane] holds mode, branch, \
-                     save_branch, sign, autosave, autosave_after and worktrees"
+                     save_branch, sign, autosave, autosave_after, assisted_by and worktrees"
                 ),
                 format!(
                     "repos.charter-app.save_branch in {file} is not read — [repos.<name>] holds \
-                     mode, branch, sign, autosave and autosave_after"
+                     mode, branch, sign, autosave, autosave_after and assisted_by"
                 ),
             ],
             "{which:?}"

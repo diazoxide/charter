@@ -180,6 +180,7 @@ pub fn at_quit(root: &std::path::Path, bound: Duration) -> AtQuit {
                 sign: false,
                 no_push: true,
                 cwd: root,
+                provenance: None,
             },
             crate::planegit::Trigger::Quit,
             &claim,

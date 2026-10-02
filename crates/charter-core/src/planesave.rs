@@ -49,6 +49,8 @@ pub struct Plane {
     pub autosave: Resolved<bool>,
     /// The quiet period after the last change before an auto-save.
     pub autosave_after: Resolved<Duration>,
+    /// How a save an agent run made spells `Assisted-by` (GL-8, V67).
+    pub assisted_by: Resolved<crate::provenance::Form>,
 }
 
 impl Plane {
@@ -84,6 +86,8 @@ pub struct Repo {
     /// Off when neither file says.
     pub autosave: Resolved<bool>,
     pub autosave_after: Resolved<Duration>,
+    /// How an agent's commit in this repo spells `Assisted-by` (GL-8, V67).
+    pub assisted_by: Resolved<crate::provenance::Form>,
 }
 
 /// What a project's two files say about saving.
@@ -135,6 +139,7 @@ impl Settings {
                 sign: files.or(&["plane"], "sign", toml::Value::as_bool, false),
                 autosave: files.or(&["plane"], "autosave", toml::Value::as_bool, true),
                 autosave_after: files.or(&["plane"], "autosave_after", quiet_period, QUIET),
+                assisted_by: files.assisted_by(&["plane"]),
             },
             plane_left_out: None,
             repos_left_out: None,
@@ -213,6 +218,10 @@ impl Settings {
             sign: files.or(&path, "sign", toml::Value::as_bool, false),
             autosave: files.or(&path, "autosave", toml::Value::as_bool, false),
             autosave_after: files.or(&path, "autosave_after", quiet_period, QUIET),
+            // A repo that does not say follows the project's `[plane] assisted_by`.
+            assisted_by: files
+                .pick(&path, ASSISTED_BY, assisted_by_word)
+                .unwrap_or_else(|| files.assisted_by(&["plane"])),
         }
     }
 }
@@ -228,6 +237,16 @@ struct Files {
 }
 
 impl Files {
+    /// `assisted_by` at `path`: the full form unless a file says otherwise.
+    fn assisted_by(&self, path: &[&str]) -> Resolved<crate::provenance::Form> {
+        self.or(
+            path,
+            ASSISTED_BY,
+            assisted_by_word,
+            crate::provenance::Form::Full,
+        )
+    }
+
     /// [`Files::pick`], or `default` from neither file.
     fn or<T>(
         &self,
@@ -371,17 +390,33 @@ fn share_alias(shared: &toml::Table) -> Option<Mode> {
 }
 
 /// The keys `[plane]` holds that this module reads.
-const PLANE_KEYS: [&str; 6] = [
+const PLANE_KEYS: [&str; 7] = [
     "mode",
     "branch",
     "save_branch",
     "sign",
     "autosave",
     "autosave_after",
+    ASSISTED_BY,
 ];
 
+/// An `assisted_by` value, read in any case.
+fn assisted_by_word(value: &toml::Value) -> Option<crate::provenance::Form> {
+    value.as_str().and_then(crate::provenance::Form::parse)
+}
+
+/// The key naming how `Assisted-by` is spelled, in `[plane]` and in `[repos.<name>]`.
+const ASSISTED_BY: &str = "assisted_by";
+
 /// The keys `[repos.<name>]` holds.
-const REPO_KEYS: [&str; 5] = ["mode", "branch", "sign", "autosave", "autosave_after"];
+const REPO_KEYS: [&str; 6] = [
+    "mode",
+    "branch",
+    "sign",
+    "autosave",
+    "autosave_after",
+    ASSISTED_BY,
+];
 
 /// Everything in `text`'s `[plane]` and `[repos]` that charter would not read, as `file` holds
 /// it, one sentence each and in the file's order. `local` is whether `file` is
@@ -408,7 +443,7 @@ pub fn refusals(text: &str, local: bool, file: &str) -> Vec<String> {
                 } else {
                     out.push(format!(
                         "plane.{} in {file} is not read — [plane] holds mode, branch, \
-                         save_branch, sign, autosave, autosave_after and worktrees",
+                         save_branch, sign, autosave, autosave_after, assisted_by and worktrees",
                         toml_key(key)
                     ));
                 }
@@ -431,7 +466,7 @@ pub fn refusals(text: &str, local: bool, file: &str) -> Vec<String> {
                     } else {
                         out.push(format!(
                             "{at}.{} in {file} is not read — [repos.<name>] holds mode, branch, \
-                             sign, autosave and autosave_after",
+                             sign, autosave, autosave_after and assisted_by",
                             toml_key(key)
                         ));
                     }
@@ -449,6 +484,7 @@ fn value_refusal(at: &str, key: &str, value: &toml::Value, file: &str) -> Option
         "mode" => value.as_str().and_then(Mode::parse).is_some(),
         "branch" | "save_branch" => value.as_str().is_some_and(branch_ok),
         "sign" | "autosave" => value.is_bool(),
+        ASSISTED_BY => assisted_by_word(value).is_some(),
         _ => quiet_period(value).is_some(),
     };
     if ok {
@@ -462,6 +498,7 @@ fn value_refusal(at: &str, key: &str, value: &toml::Value, file: &str) -> Option
             format!("{at}.{key} in {file} is not a branch name git would accept")
         }
         "sign" | "autosave" => format!("{at}.{key} in {file} is not true or false"),
+        ASSISTED_BY => format!("{at}.{key} in {file} is not a form of Assisted-by — full or llm"),
         _ => format!(
             "{at}.{key} in {file} is not a quiet period — a whole number of seconds or minutes, \
              like \"30s\" or \"2m\""

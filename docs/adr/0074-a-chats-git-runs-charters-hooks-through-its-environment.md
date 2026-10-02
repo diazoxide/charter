@@ -181,3 +181,33 @@ The operator accepted both recommendations:
 2. **V26b: `git cherry-pick`, `git rebase` and `git am` are not scanned for now.** This is a
    recorded gap: they mostly replay commits that were already scanned, and a check that could
    only warn after the fact adds noise without a guarantee.
+
+## The message hook (amended 2026-10-03, V67, GL-8)
+
+**A third hook starts `charter`: `commit-msg`, which stamps an agent's own commit with its
+provenance trailers.** Ruling V67 (#702) puts `Assisted-by`, `Charter-Chat`, `Charter-Persona`
+and `Charter-Change` on every commit an agent run makes, in workspace repos and in the project,
+and on none that a human makes by hand. Most of an agent's commits are its own `git commit`
+(above), so the one place charter can reach them is the hook this record already arms. The format
+is in `docs/plane-format.md`, *Provenance trailers*.
+
+- **`commit-msg` runs `charter git-hook commit-msg <file>`, then the repository's own
+  `commit-msg`**, which sees the stamped message. charter reads the chat from
+  `$CHARTER_SESSION_ID` and the app's record (ADR 0066), and the change from the repo's branch
+  (ADR 0060). charter appends the lines itself and changes nothing else in the message. It does
+  not run `git interpret-trailers`, which would reformat the agent's own lines and read trailer
+  configuration that can run a program. A line already there is not added twice.
+- **It never refuses a commit.** It is not a check: a message charter could not stamp, a chat
+  the record does not hold, or a `charter` that has gone commits the message as it was written.
+  This is the opposite of the two checking hooks, which refuse when `charter` has gone.
+- **Only an armed chat's commits get trailers.** The operator's terminal is not armed, and a shell
+  tab is not a chat on a harness (the app's `Opening::git_hooks`). An agent can skip the hook
+  with `--no-verify`, as it can skip the scan, and the Bash guard refuses that spelling.
+- **What it costs:** one more `charter` process per commit, reading the app's record and, in a
+  workspace repo, the workspace's change records. This is accepted on the same grounds as above.
+
+| Where | What |
+|---|---|
+| `charter_core::githooks::COMMIT_MSG` | the shim that runs `charter` and never refuses |
+| `charter_core::provenance` | the trailers, the chat and change they name, and `stamp` |
+| `charter git-hook commit-msg` | the stamping |
