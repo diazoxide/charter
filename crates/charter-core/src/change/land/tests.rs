@@ -132,8 +132,26 @@ impl World {
     /// `charter change land` of `repos`, every forge question answered by `exchanges`, on
     /// GitHub's words unless `source` says otherwise.
     fn land(&self, repos: &[&str], how: How, exchanges: Value) -> (u8, String, Arc<Recorded>) {
+        self.land_breaking(repos, how, exchanges, "")
+    }
+
+    /// [`World::land`], with the pending-landing directory made unwritable (a link out of the
+    /// plane) the moment a request whose path ends in `break_at` is sent.
+    fn land_breaking(
+        &self,
+        repos: &[&str],
+        how: How,
+        exchanges: Value,
+        break_at: &str,
+    ) -> (u8, String, Arc<Recorded>) {
         let text = json!({"source": "the land tests", "exchanges": exchanges});
         let recorded = Arc::new(Recorded::parse(&text.to_string()).unwrap());
+        let breaking = Arc::new(Breaking {
+            recorded: recorded.clone(),
+            at: break_at.to_string(),
+            dir: crate::change::pending::pending_dir(&self.plane, "alpha"),
+            outside: self._dir.path().join("outside"),
+        });
         let mut said = String::new();
         let mut say = |line: Say| {
             said.push_str(&line.to_string());
@@ -141,7 +159,7 @@ impl World {
         };
         let repos: Vec<String> = repos.iter().map(|r| (*r).to_string()).collect();
         let when = chrono::TimeZone::with_ymd_and_hms(&chrono::Utc, 2026, 10, 2, 9, 0, 0).unwrap();
-        let transport = recorded.clone();
+        let transport = breaking.clone();
         let code = land_with(
             &self.plane,
             "alpha",
@@ -154,6 +172,34 @@ impl World {
             &mut say,
         );
         (code, said, recorded)
+    }
+}
+
+/// The recorded transport, which breaks the pending-landing directory when a request to `at`
+/// is sent.
+struct Breaking {
+    recorded: Arc<Recorded>,
+    at: String,
+    dir: PathBuf,
+    outside: PathBuf,
+}
+
+impl crate::forge::transport::Transport for Breaking {
+    fn send(
+        &self,
+        forge: &crate::forge::Forge,
+        call: &crate::forge::transport::Call,
+    ) -> Result<crate::forge::transport::Reply, crate::forge::transport::NoAnswer> {
+        if !self.at.is_empty() && call.path().ends_with(&self.at) {
+            std::fs::remove_dir_all(&self.dir).unwrap();
+            std::fs::create_dir_all(&self.outside).unwrap();
+            std::os::unix::fs::symlink(&self.outside, &self.dir).unwrap();
+        }
+        self.recorded.send(forge, call)
+    }
+
+    fn check_auth(&self, forge: &crate::forge::Forge) -> Result<(), crate::forge::ForgeError> {
+        self.recorded.check_auth(forge)
     }
 }
 
@@ -956,4 +1002,66 @@ fn on_gitlab_a_repo_with_a_merge_train_has_the_request_added_to_it_at_its_head()
         "{said}"
     );
     assert!(world.log().is_empty());
+}
+
+#[test]
+fn a_refusal_charter_cannot_note_in_its_pending_landing_is_said_and_exits_one() {
+    let world = World::new();
+    world.clone("widget");
+    world.change(&[("widget", &[])]);
+    let mut exchanges = ready("widget", 7);
+    exchanges.push(refused(
+        "repos/acme/widget/pulls/7/merge",
+        Some("PUT"),
+        github_merge_fields("widget", 7, "merge"),
+        "Head branch was modified. Review and try the merge again. (HTTP 409)",
+    ));
+    exchanges.push(github_request("widget", 7, "open", MOVED));
+
+    let (code, said, recorded) =
+        world.land_breaking(&["widget"], How::Merge, json!(exchanges), "pulls/7/merge");
+
+    assert_eq!((code, recorded.unspent()), (1, Vec::new()), "{said}");
+    assert!(
+        said.contains(
+            "charter could not note that in its pending landing, which still says it asked"
+        ),
+        "{said}"
+    );
+    assert!(world.log().is_empty());
+}
+
+#[test]
+fn a_merge_left_for_later_that_charter_cannot_note_is_said_and_exits_one() {
+    let world = World::new();
+    world.clone_on("gitlab.com", "acme", "widget");
+    world.change(&[("widget", &[])]);
+    let mut exchanges = gitlab_ready(9, false);
+    exchanges.push(write(
+        "PUT",
+        "projects/acme%2Fwidget/merge_requests/9/merge",
+        gitlab_merge_fields(9),
+        json!({"iid": 9, "state": "opened", "merge_when_pipeline_succeeds": true}),
+    ));
+    exchanges.push(refused(
+        "projects/acme%2Fwidget/merge_requests/9/cancel_merge_when_pipeline_succeeds",
+        Some("POST"),
+        json!([]),
+        "403 Forbidden",
+    ));
+
+    let (code, said, recorded) = world.land_breaking(
+        &["widget"],
+        How::Merge,
+        json!(exchanges),
+        "cancel_merge_when_pipeline_succeeds",
+    );
+
+    assert_eq!((code, recorded.unspent()), (1, Vec::new()), "{said}");
+    assert!(
+        said.contains(
+            "charter could not note that in its pending landing, which still says it asked"
+        ),
+        "{said}"
+    );
 }

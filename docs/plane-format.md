@@ -131,6 +131,7 @@ prose under another heading, which is why every store gets a heading or a row.
   - [`.charter/sessions/<chat>.saved` and `workspaces/<ws>/.charter/sessions/<chat>.saved` — a saved record to pass on](#chartersessionschatsaved-and-workspaceswschartersessionschatsaved--a-saved-record-to-pass-on)
   - [`workspaces/<ws>/changes/<slug>.json` — a cross-repo change](#workspaceswschangesslugjson--a-cross-repo-change)
   - [`workspaces/<ws>/changes/log/<host>.jsonl` — the landing log](#workspaceswschangesloghostjsonl--the-landing-log)
+  - [`workspaces/<ws>/changes/log/pending/<host>.jsonl` — pending landings](#workspaceswschangeslogpendinghostjsonl--pending-landings)
   - [`workspaces/<ws>/pieces/<host>.jsonl` — the piece claim log](#workspaceswspieceshostjsonl--the-piece-claim-log)
   - [`workspaces/<ws>/pieces/seen/<repo>.json` and `pieces/seen/<repo>/<piece>.json`](#workspaceswspiecesseenrepojson-and-piecesseenrepopiecejson)
   - [`workspaces/<ws>/.charter-structure` — the layout stamp](#workspaceswscharter-structure--the-layout-stamp)
@@ -1600,7 +1601,9 @@ and an archived one is where `memstore.archive` would have put it (ADR 0065).
   later and charter could not undo it.
 - **Read by:** `change::pending::pendings`, for `charter change land` (its own member, and
   its blockers) and doctor's `changes` row. The latest line per member, by `ts`, wins; a line
-  that is not exactly the seven fields below is skipped.
+  that is not exactly the seven fields below (`PENDING_FIELDS`) is skipped. A line is
+  evidence only while it stands (every stage but `refused`) and names the landing asked about:
+  `land` matches the request and its head, doctor the head of the member's pushed branch.
 - **Git:** committed **never** — under `/workspaces/<ws>/changes/log/`, which the LIVE block
   re-ignores.
 

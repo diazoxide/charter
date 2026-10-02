@@ -2122,8 +2122,9 @@ fn a_pushed_member_branch_the_default_branch_holds_with_no_landing_is_a_fail() {
     );
     assert!(!r.detail.contains("web:"), "{}", r.detail);
 
-    // Charter started that landing and has not recorded it: the advice is to record it.
-    let pending = |stage| {
+    // A pending landing at a head the merged branch is not at is not this landing: no
+    // "Record it", since `land` would refuse to record it.
+    let pending = |head: &str, stage| {
         crate::change::pending::append(
             &root,
             "alpha",
@@ -2132,7 +2133,7 @@ fn a_pushed_member_branch_the_default_branch_holds_with_no_landing_is_a_fail() {
                 "a",
                 "svc",
                 3,
-                "6dcb09b5b57875f334f61aebed695e2e4193db5e",
+                head,
                 crate::change::pending::Via::Queue,
                 stage,
                 chrono::Utc::now(),
@@ -2140,7 +2141,22 @@ fn a_pushed_member_branch_the_default_branch_holds_with_no_landing_is_a_fail() {
         )
         .unwrap();
     };
-    pending(crate::change::pending::Stage::Asked);
+    pending(
+        "6dcb09b5b57875f334f61aebed695e2e4193db5e",
+        crate::change::pending::Stage::Asked,
+    );
+    let r = one(&root, "changes");
+    assert_eq!(r.status, Status::Fail, "{r:?}");
+    assert!(!r.detail.contains("Record it"), "{}", r.detail);
+    assert!(r.detail.contains("by hand"), "{}", r.detail);
+
+    // Charter started that landing at the head that merged and has not recorded it: the
+    // advice is to record it.
+    let head = crate::testgit::run(&svc, &["rev-parse", "refs/remotes/origin/change/a"])
+        .out
+        .trim()
+        .to_string();
+    pending(&head, crate::change::pending::Stage::Asked);
     let r = one(&root, "changes");
     assert_eq!(r.status, Status::Fail, "{r:?}");
     assert!(
@@ -2153,6 +2169,16 @@ fn a_pushed_member_branch_the_default_branch_holds_with_no_landing_is_a_fail() {
     );
     assert!(!r.detail.contains("by hand"), "{}", r.detail);
 
+    // A merge-later at that same head has merged: record it too.
+    pending(&head, crate::change::pending::Stage::MergeLater);
+    let r = one(&root, "changes");
+    assert!(
+        r.detail
+            .contains("Record it: charter change land a --repo svc"),
+        "{}",
+        r.detail
+    );
+
     // Landed by charter: no divergence.
     landed(&root, "alpha", "a", "svc");
     let r = one(&root, "changes");
@@ -2160,7 +2186,7 @@ fn a_pushed_member_branch_the_default_branch_holds_with_no_landing_is_a_fail() {
 }
 
 #[test]
-fn a_request_left_set_to_merge_later_is_a_fail() {
+fn a_request_left_set_to_merge_later_is_a_fail_that_says_how_it_clears() {
     let (_t, root) = plane("");
     clone_with(&root, "alpha", "svc", &["change/a"]);
     change_record(&root, "alpha", "a", &[("svc", "change/a")]);
@@ -2185,6 +2211,14 @@ fn a_request_left_set_to_merge_later_is_a_fail() {
         r.detail.contains(
             "alpha: svc: request 3 was left set to merge later, at whatever head the branch \
              has when a pipeline passes"
+        ),
+        "{}",
+        r.detail
+    );
+    assert!(
+        r.detail.contains(
+            "Cancel its auto-merge on the forge, then run charter change land a --repo svc \
+             again, or drop the member"
         ),
         "{}",
         r.detail

@@ -43,7 +43,7 @@ use chrono::{DateTime, Utc};
 
 use super::cmd::{REFUSED, load, named, workspace_ok};
 use super::landing::{self, Landing, Landings};
-use super::pending::{self, Pending, Pendings, Stage, Via};
+use super::pending::{self, At, Pending, Pendings, Stage, Via};
 use super::record::{Member, Record};
 use crate::forge::checks::{Checks, Ci};
 use crate::forge::pr::{MergeAs, MergedAt, Pr, Repo, Request, State};
@@ -176,16 +176,29 @@ pub enum Evidence<'a> {
     None,
 }
 
-/// What `log` and `pending` say about `repo`. A landing in the log wins; a pending line that
-/// was refused is no evidence.
-pub fn evidence<'a>(log: &'a Landings, pending: &'a Pendings, repo: &str) -> Evidence<'a> {
+/// What `log` and `pending` say about `repo`'s landing `at`. A landing in the log wins; a
+/// pending line counts only when it still stands and is about that landing
+/// ([`Pending::started`]), so `land` and doctor never disagree about which merge is charter's.
+pub fn evidence<'a>(log: &'a Landings, pending: &'a Pendings, repo: &str, at: At) -> Evidence<'a> {
     if let Some(line) = log.get(repo) {
         return Evidence::Logged(line);
     }
     match pending.get(repo) {
-        Some(p) if p.stage != Stage::Refused => Evidence::Started(p),
+        Some(p) if p.started(at) => Evidence::Started(p),
         _ => Evidence::None,
     }
+}
+
+/// What is said when the pending landing could not be moved on from `asked`: it would stand as
+/// evidence for a merge charter did not make, so the reader is told which line to remove.
+fn unnoted(plane: &Path, ws: &str, repo: &str) -> String {
+    format!(
+        "{}: charter could not note that in its pending landing, which still says it asked. \
+         Remove this member's last line from {} so a later merge of this head is not taken for \
+         charter's.",
+        named(repo),
+        shown::line(&pending::pending_dir(plane, ws).display().to_string())
+    )
 }
 
 /// The records a landing reads and writes, for one change in one workspace.
@@ -428,14 +441,11 @@ pub fn land_with(
     let asked = match asked {
         Ok(asked) => asked,
         Err(why) => {
-            books.pend(started.at(Stage::Refused, now));
+            let noted = books.pend(started.at(Stage::Refused, now));
             // The forge's refusal is the evidence. Whether the head moved is asked again, so
             // the refusal names it in charter's words whichever words the forge used.
-            if let Ok(Some(now_at)) = me.backend.by_head(&caller, path, &member.branch)
-                && now_at.head != req.head
-            {
-                return refuse(
-                    say,
+            let (said, code) = match me.backend.by_head(&caller, path, &member.branch) {
+                Ok(Some(now_at)) if now_at.head != req.head => (
                     format!(
                         "{}: the head moved since the check: checks PASSED at {}, and the \
                          branch is now at {}. Nothing was merged. Land it again once the checks \
@@ -444,24 +454,36 @@ pub fn land_with(
                         short(&req.head),
                         short(&now_at.head)
                     ),
-                );
+                    REFUSED,
+                ),
+                _ => (
+                    format!(
+                        "{}: {}. Nothing was merged.",
+                        named(repo),
+                        forge_said(&why.to_string())
+                    ),
+                    1,
+                ),
+            };
+            say(Say::Fail(said));
+            if !noted {
+                say(Say::Fail(unnoted(plane, ws, repo)));
+                return 1;
             }
-            say(Say::Fail(format!(
-                "{}: {}. Nothing was merged.",
-                named(repo),
-                forge_said(&why.to_string())
-            )));
-            return 1;
+            return code;
         }
     };
     if let MergedAt::Later(why) = asked {
-        books.pend(started.at(Stage::MergeLater, now));
+        let noted = books.pend(started.at(Stage::MergeLater, now));
         say(Say::Fail(format!(
             "{}: {}. It will merge whatever head the branch has when a pipeline passes, not \
              the one charter checked. Cancel its auto-merge on GitLab.",
             named(repo),
             forge_said(&why)
         )));
+        if !noted {
+            say(Say::Fail(unnoted(plane, ws, repo)));
+        }
         return 1;
     }
     if queued {
@@ -546,7 +568,12 @@ fn merged_already(
 ) -> u8 {
     let repo = member.repo.as_str();
     let sigil = me.on.forge.kind.change_sigil();
-    match evidence(&books.log, &books.pending, repo) {
+    match evidence(
+        &books.log,
+        &books.pending,
+        repo,
+        At::Request(req.number, &req.head),
+    ) {
         Evidence::Logged(line) => {
             say(Say::Fail(format!(
                 "{}: {sigil}{} is already landed, and the landing log has it as {}. Nothing to \
@@ -557,7 +584,7 @@ fn merged_already(
             )));
             REFUSED
         }
-        Evidence::Started(p) if p.started(req.number, &req.head) => {
+        Evidence::Started(p) => {
             let Some(commit) = commit else {
                 say(Say::Fail(format!(
                     "{}: {sigil}{} is merged, and the forge names no commit it merged as, so \
@@ -587,7 +614,7 @@ fn merged_already(
             )));
             0
         }
-        _ => {
+        Evidence::None => {
             say(Say::Fail(format!(
                 "{}: {sigil}{} is already merged, and not by charter: charter has no record of \
                  starting that landing, so it records none. Nothing to land.",
@@ -678,9 +705,14 @@ fn member_landed(
         State::Closed => return Ok(Some("its request is REJECTED".into())),
         State::Merged { commit } => commit.clone(),
     };
-    let merge = match evidence(&books.log, &books.pending, &m.repo) {
+    let merge = match evidence(
+        &books.log,
+        &books.pending,
+        &m.repo,
+        At::Request(req.number, &req.head),
+    ) {
         Evidence::Logged(line) => line.merge.clone(),
-        Evidence::Started(p) if p.started(req.number, &req.head) => {
+        Evidence::Started(_) => {
             let Some(commit) = commit else {
                 return Ok(Some(
                     "merged, and the forge names no commit it merged as".into(),
@@ -693,7 +725,7 @@ fn member_landed(
             }
             return Ok(None);
         }
-        _ => {
+        Evidence::None => {
             return Ok(Some(format!(
                 "merged outside charter: charter has no record of landing it, so it cannot \
                  vouch for the order. A person decides whether {} lands without it",

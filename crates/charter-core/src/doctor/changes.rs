@@ -33,7 +33,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::fsx::{self, Unread};
 use super::git::git_in;
 use super::{Doctor, Row};
-use crate::change::pending::{self, Stage};
+use crate::change::pending::{self, At, Stage};
 use crate::change::{Record, land, landing, store};
 use crate::shown;
 
@@ -202,63 +202,84 @@ fn landing_divergences(
             ));
         }
         for m in &record.members {
-            let started = match land::evidence(&log, &pending, &m.repo) {
-                land::Evidence::Logged(_) => continue,
-                land::Evidence::Started(p) => Some(p),
-                land::Evidence::None => None,
+            let any = land::evidence(&log, &pending, &m.repo, At::Any);
+            if matches!(any, land::Evidence::Logged(_)) {
+                continue;
+            }
+            let later = match any {
+                land::Evidence::Started(p) if p.stage == Stage::MergeLater => Some(p),
+                _ => None,
             };
-            if let Some(p) = started.filter(|p| p.stage == Stage::MergeLater) {
+            let (repo, branch) = (shown::short(&m.repo), shown::short(&m.branch));
+            let slug = shown::short(&record.change);
+            // The member's pushed branch, when the clone's default branch holds it: merged.
+            let merged_at = match crate::repos::clone_at(root, ws, &m.repo) {
+                Some(clone) => pushed_and_merged(root, &m.repo, &clone.path, &m.branch)?,
+                None => None,
+            };
+            if let Some((default, head)) = merged_at {
+                let default = shown::short(&default);
+                let ours = matches!(
+                    land::evidence(&log, &pending, &m.repo, At::Head(&head)),
+                    land::Evidence::Started(_)
+                );
+                out.push(if ours {
+                    format!(
+                        "{repo}: branch {branch} is in {default}, and charter started that \
+                         landing and has not recorded it. Record it: charter change land {slug} \
+                         --repo {repo}"
+                    )
+                } else {
+                    format!(
+                        "{repo}: branch {branch} is in {default} and charter did not land it, \
+                         so there is no landing to revert and no {} trailer. A person has to \
+                         revert this member by hand.",
+                        land::TRAILER
+                    )
+                });
+                continue;
+            }
+            if let Some(p) = later {
                 out.push(format!(
-                    "{}: request {} was left set to merge later, at whatever head the branch \
-                     has when a pipeline passes, not the one charter checked. Cancel its \
-                     auto-merge on the forge.",
-                    shown::short(&m.repo),
+                    "{repo}: request {} was left set to merge later, at whatever head the \
+                     branch has when a pipeline passes, not the one charter checked. Cancel its \
+                     auto-merge on the forge, then run charter change land {slug} --repo \
+                     {repo} again, or drop the member.",
                     p.number
                 ));
-                continue;
             }
-            let Some(clone) = crate::repos::clone_at(root, ws, &m.repo) else {
-                continue;
-            };
-            let Some(default) = crate::reposave::default_branch(root, &m.repo, &clone.path) else {
-                continue;
-            };
-            let merged = git_in(
-                &clone.path,
-                &[
-                    "for-each-ref",
-                    &format!("--merged=refs/remotes/origin/{default}"),
-                    "--format=%(refname)",
-                    "refs/remotes/origin/",
-                ],
-            )?;
-            if !merged.ok() {
-                continue;
-            }
-            let pushed = format!("refs/remotes/origin/{}", m.branch);
-            if !merged.out.lines().any(|l| l.trim() == pushed) {
-                continue;
-            }
-            let (repo, branch, default) = (
-                shown::short(&m.repo),
-                shown::short(&m.branch),
-                shown::short(&default),
-            );
-            out.push(if started.is_some() {
-                format!(
-                    "{repo}: branch {branch} is in {default}, and charter started that landing \
-                     and has not recorded it. Record it: charter change land {} --repo {repo}",
-                    shown::short(&record.change)
-                )
-            } else {
-                format!(
-                    "{repo}: branch {branch} is in {default} and charter did not land it, so \
-                     there is no landing to revert and no {} trailer. A person has to revert \
-                     this member by hand.",
-                    land::TRAILER
-                )
-            });
         }
     }
     Ok(out)
+}
+
+/// The default branch and the pushed branch's commit, when `clone`'s pushed `branch`
+/// (`refs/remotes/origin/<branch>`) is already in the default branch. A branch never pushed
+/// is not read as merged: one cut and not yet worked on is in the default branch too.
+fn pushed_and_merged(
+    root: &std::path::Path,
+    repo: &str,
+    clone: &std::path::Path,
+    branch: &str,
+) -> Result<Option<(String, String)>, String> {
+    let Some(default) = crate::reposave::default_branch(root, repo, clone) else {
+        return Ok(None);
+    };
+    let merged = git_in(
+        clone,
+        &[
+            "for-each-ref",
+            &format!("--merged=refs/remotes/origin/{default}"),
+            "--format=%(refname) %(objectname)",
+            "refs/remotes/origin/",
+        ],
+    )?;
+    if !merged.ok() {
+        return Ok(None);
+    }
+    let pushed = format!("refs/remotes/origin/{branch}");
+    Ok(merged.out.lines().find_map(|line| {
+        let (name, head) = line.trim().split_once(' ')?;
+        (name == pushed).then(|| (default.clone(), head.to_string()))
+    }))
 }

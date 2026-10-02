@@ -28,6 +28,20 @@ use crate::contain;
 /// The directory, relative to the landing log's.
 pub const PENDING_DIRNAME: &str = "pending";
 
+/// Every key a line carries, and nothing else, in the sorted order it is written in.
+pub const PENDING_FIELDS: [&str; 7] = ["change", "head", "number", "repo", "stage", "ts", "via"];
+
+/// Which landing a pending line is asked about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum At<'a> {
+    /// This request, at this head: what `land` knows from the forge.
+    Request(u64, &'a str),
+    /// This head: what doctor reads from the clone's pushed branch.
+    Head(&'a str),
+    /// Any landing of the member.
+    Any,
+}
+
 /// How the landing was asked for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Via {
@@ -113,9 +127,20 @@ impl Pending {
         }
     }
 
-    /// Whether this is charter's landing of request `number` at `head`, still standing.
-    pub fn started(&self, number: u64, head: &str) -> bool {
-        self.number == number && self.head == head && self.stage != Stage::Refused
+    /// Whether this line still stands as evidence: every stage but `refused`, which says the
+    /// forge refused and nothing charter asked for will merge.
+    pub fn stands(&self) -> bool {
+        self.stage != Stage::Refused
+    }
+
+    /// Whether this is charter's landing `at`, still standing.
+    pub fn started(&self, at: At) -> bool {
+        self.stands()
+            && match at {
+                At::Request(number, head) => self.number == number && self.head == head,
+                At::Head(head) => self.head == head,
+                At::Any => true,
+            }
     }
 
     fn to_value(&self) -> Value {
@@ -132,7 +157,9 @@ impl Pending {
 
     fn of(value: &Value) -> Option<Pending> {
         let line = value.as_object()?;
-        if line.len() != 7 {
+        let mut keys: Vec<&str> = line.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        if keys != PENDING_FIELDS {
             return None;
         }
         let text = |key: &str| line.get(key)?.as_str().map(str::to_string);
@@ -222,10 +249,12 @@ mod tests {
         std::fs::create_dir_all(root.join("workspaces/alpha")).unwrap();
         let asked = Pending::new("api-2", "web", 7, "h1", Via::Queue, Stage::Asked, at(1));
         append(&root, "alpha", "laptop", &asked).unwrap();
-        assert!(pendings(&root, "alpha", "api-2")["web"].started(7, "h1"));
-        assert!(!pendings(&root, "alpha", "api-2")["web"].started(7, "h2"));
+        let found = |at| pendings(&root, "alpha", "api-2")["web"].started(at);
+        assert!(found(At::Request(7, "h1")) && found(At::Head("h1")) && found(At::Any));
+        assert!(!found(At::Request(7, "h2")) && !found(At::Request(8, "h1")));
+        assert!(!found(At::Head("h2")));
         append(&root, "alpha", "laptop", &asked.at(Stage::Refused, at(2))).unwrap();
-        assert!(!pendings(&root, "alpha", "api-2")["web"].started(7, "h1"));
+        assert!(!found(At::Request(7, "h1")) && !found(At::Any));
         assert!(super::super::landing::landings(&root, "alpha", "api-2").is_empty());
     }
 }

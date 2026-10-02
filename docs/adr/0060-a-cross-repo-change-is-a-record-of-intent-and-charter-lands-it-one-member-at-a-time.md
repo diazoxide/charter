@@ -138,7 +138,9 @@ as needing a person.
   >
   > *Implementation decisions, not rulings* (recorded in #855):
   >
-  > - **D-472a, which supersedes D-0023.** A landing is recorded only on evidence that
+  > - **D-472a, which supersedes D-0023** (D-0023 recorded a queued member's merge on any
+  >   later `land` once the gates passed, which would have taken a browser or admin merge for
+  >   charter's). A landing is recorded only on evidence that
   >   charter started it. Before the forge is asked, `land` appends a pending landing
   >   (`workspaces/<ws>/changes/log/pending/<host>.jsonl`, clone state, never committed). A
   >   queued member, or one whose read-back failed, is logged by a later `land` that finds the
@@ -148,9 +150,9 @@ as needing a person.
   >   definition of this.
   > - **A GitLab repo that does not say whether it has a merge train is not merged**, since a
   >   direct merge there could skip a train.
-  > - **D-0028.** A queue writes its own merge commit message, on GitHub's merge queue and on
-  >   GitLab's merge train alike, so those landings carry no `Charter-Change:` trailer, and a
-  >   missing trailer is not one of doctor's divergences.
+  > - **D-0028: a missing trailer is not a divergence.** A queue writes its own merge commit
+  >   message, on GitHub's merge queue and on GitLab's merge train alike, so those landings
+  >   carry no `Charter-Change:` trailer, and doctor does not flag one that lacks it.
 - **D4: `charter change push` ignores a repo's `mode = "off"`.** ADR 0051's `off` governs
   *saves*, which commit a developer's work nobody asked to commit. `change push` is an explicit
   verb over repos someone named by hand, and it commits nothing. It prints every repo, branch and
