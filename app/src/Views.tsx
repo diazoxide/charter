@@ -182,8 +182,9 @@ export function aboutOf(view: ViewRef, offered: readonly ExtensionView[]): strin
   return offered.find((one) => one.extension === view.from && one.id === view.view)?.about;
 }
 
-/** charter's own views' glyphs, by view. */
-const OWN_MARKS: Record<string, React.ComponentType<{ className?: string }>> = {
+/** charter's own views' glyphs, by view — and so the list of every view charter has, which
+ *  `theme/views.test.tsx` holds its token test to: a view added here is a view it must draw. */
+export const OWN_MARKS: Record<string, React.ComponentType<{ className?: string }>> = {
   persona: UserRound,
   vault: KeyRound,
   settings: Settings2,

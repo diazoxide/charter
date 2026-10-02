@@ -10,6 +10,12 @@ The rule, in one line each:
   comment that becomes code. `app/src/theme/literals.test.ts` fails the build on one.
 - **No arbitrary Tailwind value** — `text-[13px]`, `bg-[#fff]`, `w-[42rem]`. Same test, same
   reason: a theme cannot reach inside a bracket.
+- **Every view is drawn from tokens, in both themes.** `app/src/theme/views.test.tsx` renders
+  every view a tab shows, in every state it draws, in each built-in theme. It fails on what
+  reaches the DOM: a colour in an inline style, an SVG paint attribute or a data URL; a `var(--x)`
+  that is not a token; a token the theme in force does not set; or an arbitrary-value class. It
+  catches a colour built at run time, which no source line shows. A view added to `OWN_MARKS` in
+  `Views.tsx` fails that test until it has a state there.
 - **Semantic names only.** A token is `surface.raised`, never `gray-800`.
 - **Both built-in themes get every new token**, or the window will not start.
 - **No time and no easing outside `app/src/theme/`** — no `150ms`, no `ease-out`, no
