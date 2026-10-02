@@ -1251,8 +1251,9 @@ describe("the project switcher (FR-27)", () => {
   it("asks the window for the switcher, and switches nothing by itself", async () => {
     const done = doing();
     const row = find(catalogue(now({ plane: "/one", projects: two })), "project.switch");
+    if (!row) throw new Error("no switcher row");
 
-    await perform(row!, done);
+    await perform(row, done);
 
     expect(done.calls).toEqual(["switchProject"]);
   });
