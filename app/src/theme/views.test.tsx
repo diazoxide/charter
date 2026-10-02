@@ -742,6 +742,21 @@ const STATES: State[] = [
   },
   { name: "Preferences", view: { from: null, view: "preferences", key: "" }, drawn: /^Text$/ },
   {
+    name: "a worktree's files",
+    view: { from: null, view: "piece-files", key: "alpha/svc/fix-it" },
+    answers: {
+      piece_files: ["README.md", "src/lib.rs"],
+      piece_file: { kind: "text", text: "x\n" },
+    },
+    drawn: /src\/lib\.rs/,
+  },
+  {
+    name: "one of a worktree's files",
+    view: { from: null, view: "piece-file", key: "alpha/svc/fix-it/README.md" },
+    answers: { piece_files: ["README.md"], piece_file: { kind: "text", text: "Read me first\n" } },
+    drawn: /Read me first/,
+  },
+  {
     name: "an extension's view, its action refused",
     view: EXTENSION,
     answers: {
