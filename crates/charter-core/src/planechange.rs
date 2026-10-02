@@ -6,6 +6,9 @@
 //! of one workspace, a memory of one persona, a session record, a manifest — so a reader can
 //! ask again only when the change is one its answer is made of.
 //!
+//! And it answers, for the window, which of the answers it reads a change concerns
+//! ([`Answer`], [`answers`]): the readers name their answer, and the mapping is here.
+//!
 //! **It is a reading of the plane format's paths, nothing more** (`docs/plane-format.md`): no
 //! file is opened, and a path is classified by where it is, never by what is in it.
 //!
@@ -39,6 +42,11 @@ pub enum Kind {
     /// A persona's own files (`persona.md` and the rest), the persona directory itself; or
     /// `personas/` itself, with no persona named.
     Persona,
+    /// The plane's git standing, and no file of its tree: auto-save committed, pushed or
+    /// fetched and left the tree as it was ([`saved`]). Never a path's kind. A look that moved
+    /// the tree — a fast-forward, a save's rebase — is told as not known instead, because the
+    /// watcher does not see every file it moved.
+    Git,
 }
 
 /// One changed path, and what it is part of.
@@ -104,6 +112,105 @@ pub fn of_batch<'a>(root: &Path, paths: impl IntoIterator<Item = &'a Path>) -> O
         changes.insert(classify(root, path)?);
     }
     Some(changes.into_iter().collect())
+}
+
+/// What auto-save did to the plane: a save, a push or a fetch, which moves the git standing
+/// and no answer read from the tree.
+pub fn saved() -> Change {
+    Change {
+        kind: Kind::Git,
+        workspace: None,
+        persona: None,
+        path: String::new(),
+    }
+}
+
+/// One answer the window reads from the plane, named so a reader can say which one it is and
+/// be told again only when a change concerns it.
+///
+/// **The question "which answer does this change concern" is the core's**, here beside what
+/// the answers are read from: the window names the answer it holds and nothing else, so a
+/// command that comes to read another store changes this mapping and not every reader.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
+#[serde(tag = "answer", rename_all = "camelCase")]
+pub enum Answer {
+    /// The sidebar (`plane_sidebar`): the workspaces with their todos, visions, colours and
+    /// LIVE marks, and the personas with the default one.
+    Sidebar,
+    /// A workspace's panels (`workspace_panels`): everything in that workspace, and the
+    /// personas with their memory counts. `None` is every workspace's: a change to the
+    /// personas or the project concerns whichever is focused.
+    Panels { workspace: Option<String> },
+    /// The plane root's panels (`plane_root_panels`): its session records.
+    RootPanels,
+    /// The shape of the plane the window reads beside its panels — the instructions a chat
+    /// started on, the curations: its settings, workspaces, todos, personas and harness
+    /// files, never a memory or a session record.
+    Shape,
+    /// What the project has on and the theme it draws: `charter.toml`, `charter.local.toml`
+    /// and each `workspace.json`.
+    Settings,
+    /// The git standings (the alerts, the Saving rows): the plane's shape, and what auto-save
+    /// did. Not a memory or a session record — the commonest write there is, and the standings
+    /// follow it on their own clock (FD-10).
+    Git,
+    /// The view tabs: any of the plane's stores, and nothing auto-save did.
+    Views,
+}
+
+/// The answers `changes` concern, each once, in a stable order — or `None`, "every answer",
+/// when what changed is not known.
+pub fn answers(changes: Option<&[Change]>) -> Option<Vec<Answer>> {
+    let mut concerned = BTreeSet::new();
+    for change in changes? {
+        concerned.extend(answers_of(change));
+    }
+    Some(concerned.into_iter().collect())
+}
+
+/// The answers one change concerns.
+fn answers_of(change: &Change) -> Vec<Answer> {
+    let panels = || Answer::Panels {
+        workspace: change.workspace.clone(),
+    };
+    let every_panel = || Answer::Panels { workspace: None };
+    match change.kind {
+        Kind::Project => vec![
+            Answer::Sidebar,
+            every_panel(),
+            Answer::Shape,
+            Answer::Settings,
+            Answer::Git,
+            Answer::Views,
+        ],
+        Kind::Harness => vec![Answer::Shape, Answer::Git, Answer::Views],
+        Kind::Workspace => vec![
+            Answer::Sidebar,
+            panels(),
+            Answer::Shape,
+            Answer::Settings,
+            Answer::Git,
+            Answer::Views,
+        ],
+        Kind::Todos => vec![
+            Answer::Sidebar,
+            panels(),
+            Answer::Shape,
+            Answer::Git,
+            Answer::Views,
+        ],
+        Kind::Memory => vec![panels(), Answer::Views],
+        Kind::Sessions if change.workspace.is_none() => vec![Answer::RootPanels, Answer::Views],
+        Kind::Sessions => vec![panels(), Answer::Views],
+        Kind::Persona => vec![
+            Answer::Sidebar,
+            every_panel(),
+            Answer::Shape,
+            Answer::Git,
+            Answer::Views,
+        ],
+        Kind::Git => vec![Answer::Git],
+    }
 }
 
 #[cfg(test)]
@@ -253,5 +360,121 @@ mod tests {
         );
         let outside = Path::new("/elsewhere/c.md");
         assert_eq!(of_batch(root, [todo.as_path(), outside]), None);
+    }
+
+    fn answers_to(change: Change) -> Vec<Answer> {
+        answers(Some(&[change])).expect("placed")
+    }
+
+    fn panels(workspace: Option<&str>) -> Answer {
+        Answer::Panels {
+            workspace: workspace.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn not_knowing_what_changed_concerns_every_answer() {
+        assert_eq!(answers(None), None);
+    }
+
+    #[test]
+    fn a_todo_concerns_the_sidebar_its_own_workspaces_panels_and_the_plane_shape() {
+        assert_eq!(
+            answers_to(at("workspaces/beta/todos/a.md")),
+            vec![
+                Answer::Sidebar,
+                panels(Some("beta")),
+                Answer::Shape,
+                Answer::Git,
+                Answer::Views
+            ]
+        );
+    }
+
+    #[test]
+    fn a_memory_concerns_its_workspaces_panels_and_the_views_and_never_the_sidebar() {
+        assert_eq!(
+            answers_to(at("workspaces/beta/memory/m.md")),
+            vec![panels(Some("beta")), Answer::Views]
+        );
+        // A persona's memory is counted on every workspace's Personas panel.
+        assert_eq!(
+            answers_to(at("personas/steward/memory/m.md")),
+            vec![panels(None), Answer::Views]
+        );
+    }
+
+    #[test]
+    fn a_session_record_concerns_its_workspaces_panels_or_the_plane_roots() {
+        assert_eq!(
+            answers_to(at("workspaces/alpha/sessions/r.md")),
+            vec![panels(Some("alpha")), Answer::Views]
+        );
+        assert_eq!(
+            answers_to(at("sessions/r.md")),
+            vec![Answer::RootPanels, Answer::Views]
+        );
+    }
+
+    #[test]
+    fn the_settings_files_concern_the_settings_and_the_harness_only_the_plane_shape() {
+        assert_eq!(
+            answers_to(at("charter.toml")),
+            vec![
+                Answer::Sidebar,
+                panels(None),
+                Answer::Shape,
+                Answer::Settings,
+                Answer::Git,
+                Answer::Views
+            ]
+        );
+        assert_eq!(
+            answers_to(at("workspaces/alpha/workspace.json")),
+            vec![
+                Answer::Sidebar,
+                panels(Some("alpha")),
+                Answer::Shape,
+                Answer::Settings,
+                Answer::Git,
+                Answer::Views
+            ]
+        );
+        assert_eq!(
+            answers_to(at(".claude/agents/x.md")),
+            vec![Answer::Shape, Answer::Git, Answer::Views]
+        );
+        assert_eq!(
+            answers_to(at("personas/steward/persona.md")),
+            vec![
+                Answer::Sidebar,
+                panels(None),
+                Answer::Shape,
+                Answer::Git,
+                Answer::Views
+            ]
+        );
+    }
+
+    #[test]
+    fn a_save_concerns_the_git_standings_and_nothing_read_from_the_tree() {
+        assert_eq!(answers_to(saved()), vec![Answer::Git]);
+    }
+
+    #[test]
+    fn a_batch_concerns_each_answer_once() {
+        let root = Path::new(ROOT);
+        let changes = of_batch(
+            root,
+            [
+                root.join("workspaces/alpha/memory/a.md").as_path(),
+                root.join("workspaces/alpha/memory/b.md").as_path(),
+            ],
+        )
+        .expect("placed");
+        assert_eq!(
+            answers(Some(&changes)),
+            Some(vec![panels(Some("alpha")), Answer::Views])
+        );
     }
 }

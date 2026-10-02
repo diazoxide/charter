@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { commands, type PlaneId, type PlaneSaving, type RepoSaving } from "./bindings";
-import { PLANE_SHAPE, usePlaneChanged } from "./planeChanged";
+import { GIT, usePlaneChanged } from "./planeChanged";
 
 /** The window event a finished save sends, so every reader of the save standing reads again —
  *  the title bar after the Saving tab's button, and the tab after the title bar's. */
@@ -42,7 +42,7 @@ export function usePlaneSaving(plane: PlaneId | undefined): {
 } {
   const [saving, setSaving] = useState<{ plane: PlaneId; standing: PlaneSaving }>();
   const [asked, setAsked] = useState(0);
-  const changed = usePlaneChanged(plane === undefined ? [] : [plane], PLANE_SHAPE);
+  const changed = usePlaneChanged(plane === undefined ? [] : [plane], GIT);
 
   useEffect(() => {
     if (plane === undefined) return;
@@ -136,7 +136,7 @@ export function useRepoSaving(
    *  changes nothing still draws the hook's owner once before React lets it go. */
   const drawn = useRef(repos);
   const [asked, setAsked] = useState(0);
-  const changed = usePlaneChanged(plane === undefined ? [] : [plane], PLANE_SHAPE);
+  const changed = usePlaneChanged(plane === undefined ? [] : [plane], GIT);
   const key = keyOf(plane, workspace);
 
   useEffect(() => {

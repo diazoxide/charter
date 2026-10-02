@@ -25,6 +25,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use charter_core::engine::Size;
 use charter_core::instructions::Stamp;
 use charter_core::machine;
+use charter_core::planemodel::Model;
 use charter_core::reopen;
 use charter_core::reopen::Choice;
 
@@ -219,6 +220,9 @@ pub struct Held {
     /// What tells the window the plane moved on disk (charter-app#264). None where the
     /// platform would not watch; the panels then read the plane when focused, as they did.
     watch: Mutex<Option<crate::planewatch::Watch>>,
+    /// What the sidebar draws, kept current by what the watch and auto-save say moved
+    /// (FD-10b, [`charter_core::planemodel`]). In memory only.
+    model: Arc<Mutex<Model>>,
     /// The plane's auto-save worker (charter-app#296): saves it after a quiet period and when
     /// a chat ends, and fetches what comes in. Stopped when the plane is let go of.
     autosave: Mutex<Option<crate::autosave::Worker>>,
@@ -231,6 +235,34 @@ pub struct Held {
     closing: Arc<crate::smartclose::Closing>,
     /// The window, for each step of a smart close.
     smart: crate::smartclose::Teller,
+}
+
+/// `tell`, after each change has been applied to `model` — so a reader the window sends on
+/// hearing it reads a model that already has it.
+fn applying(
+    model: Arc<Mutex<Model>>,
+    root: PathBuf,
+    tell: crate::planewatch::Changed,
+) -> crate::planewatch::Changed {
+    Arc::new(move |plane, what: crate::planewatch::What| {
+        model
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .apply(&root, what.as_deref());
+        tell(plane, what);
+    })
+}
+
+/// Starts the watch with `start`, then reads `model` again whole: it was read before the watch
+/// was live, and a write in between — the CLI, another process, auto-save's launch
+/// fast-forward — is one the watch will never tell (#933).
+fn caught_up<W>(model: &Mutex<Model>, root: &Path, start: impl FnOnce() -> W) -> W {
+    let started = start();
+    model
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .apply(root, None);
+    started
 }
 
 /// Each chat's [`Stamp`], by session, taken as it starts.
@@ -254,6 +286,37 @@ pub struct PlaneUpdated {
 impl Held {
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// What the sidebar draws, as the model holds it (FD-10b).
+    ///
+    /// **A plane that is not watched reads it fresh on every ask**, as the sidebar did before
+    /// there was a model: nothing would ever tell the model the plane moved.
+    pub fn sidebar_model(&self) -> Model {
+        let mut model = self.model.lock().unwrap_or_else(PoisonError::into_inner);
+        let watched = self
+            .watch
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_some();
+        if !watched {
+            *model = Model::read(&self.root);
+        }
+        model.clone()
+    }
+
+    /// The window moved the plane's workspaces itself — made, renamed or removed one, or set
+    /// one LIVE — and reads the sidebar straight after: the model is read again
+    /// now rather than when the watch's batch arrives, a quarter of a second or (on a busy
+    /// Mac's FSEvents) seconds later.
+    ///
+    /// **A full re-read under the model's lock**, which the watch also takes to apply a
+    /// change: a synchronous command calling this holds the window for both (#1007).
+    pub fn workspaces_moved(&self) {
+        self.model
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .apply(&self.root, None);
     }
 
     /// The plane's hook channel itself. Only a test asks: the app reads a chat's hook state
@@ -1431,11 +1494,15 @@ impl Planes {
                 lock_started(&started_on).remove(&session);
             }));
         }
+        // Read once here, and from then on only as far as each change the watch and auto-save
+        // name (FD-10b).
+        let model = Arc::new(Mutex::new(Model::read(&root)));
+        let changes = applying(Arc::clone(&model), root.clone(), Arc::clone(&self.changes));
         // Before a chat can end, so its end is one the worker hears.
         let autosave = crate::autosave::Worker::start(
             id.clone(),
             root.clone(),
-            Arc::clone(&self.changes),
+            Arc::clone(&changes),
             Arc::clone(&self.saves),
         );
         // No hook can report a program dying (the process is gone), so the operating system
@@ -1481,15 +1548,17 @@ impl Planes {
 
         // Never fatal, as the socket above is not: a plane that cannot be watched still opens,
         // and its panels read it when a workspace is focused.
-        let watch = crate::planewatch::Watch::start(id.clone(), &root, Arc::clone(&self.changes))
-            .map_err(|why| {
-                tracing::warn!(
-                    "charter: {} is not watched ({why}); its panels will not follow changes \
-                     made outside this window",
-                    root.display()
-                );
-            })
-            .ok();
+        let watch = caught_up(&model, &root, || {
+            crate::planewatch::Watch::start(id.clone(), &root, changes)
+                .map_err(|why| {
+                    tracing::warn!(
+                        "charter: {} is not watched ({why}); its panels will not follow changes \
+                         made outside this window",
+                        root.display()
+                    );
+                })
+                .ok()
+        });
 
         Held {
             id,
@@ -1499,6 +1568,7 @@ impl Planes {
             chats,
             records,
             watch: Mutex::new(watch),
+            model,
             autosave: Mutex::new(Some(autosave)),
             started_on,
             typed,
@@ -2221,6 +2291,67 @@ fn resolving_with(
 #[cfg(test)]
 mod tests {
     use charter_core::state::State;
+
+    #[test]
+    fn a_write_between_the_models_read_and_the_watch_starting_still_reaches_the_sidebar() {
+        // #933 review: the model is read before the watch is live, so a write in that gap —
+        // the CLI, another process, auto-save's launch fast-forward — is told by nobody.
+        let dir = tempfile::tempdir().expect("a plane");
+        let root = dir.path().to_path_buf();
+        let store = root.join("workspaces/beta/todos");
+        std::fs::create_dir_all(&store).expect("a todo store");
+        let model = Mutex::new(Model::read(&root));
+
+        let started = caught_up(&model, &root, || {
+            // Lands after the read and before the watch reports anything.
+            std::fs::write(store.join("b1.md"), "# Beta one\n").expect("a todo");
+            "the watch"
+        });
+
+        assert_eq!(started, "the watch");
+        let model = model.lock().expect("the model");
+        let todos: Vec<String> = model
+            .rows()
+            .expect("listed")
+            .flat_map(|row| row.todos.clone())
+            .collect();
+        assert_eq!(todos, ["Beta one"]);
+    }
+
+    #[test]
+    fn a_change_the_watch_tells_is_in_the_sidebars_model_before_the_window_hears_it() {
+        // FD-10b: the sidebar answers from the model, so the window, told a todo of beta
+        // moved, must read a model that already has it.
+        let dir = tempfile::tempdir().expect("a plane");
+        let root = dir.path().to_path_buf();
+        let store = root.join("workspaces/beta/todos");
+        std::fs::create_dir_all(&store).expect("a todo store");
+        let model = Arc::new(Mutex::new(Model::read(&root)));
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        let changed = applying(Arc::clone(&model), root.clone(), {
+            let model = Arc::clone(&model);
+            let heard = Arc::clone(&heard);
+            Arc::new(move |_, _| {
+                let model = model.lock().expect("the model");
+                let todos: Vec<String> = model
+                    .rows()
+                    .expect("listed")
+                    .flat_map(|row| row.todos.clone())
+                    .collect();
+                heard.lock().expect("heard").push(todos);
+            })
+        });
+        std::fs::write(store.join("b1.md"), "# Beta one\n").expect("a todo");
+
+        let todo =
+            charter_core::planechange::classify(&root, &store.join("b1.md")).expect("placed");
+        changed(
+            serde_json::from_value(serde_json::json!(root.display().to_string())).expect("an id"),
+            Some(vec![todo]),
+        );
+
+        assert_eq!(*heard.lock().expect("heard"), [vec!["Beta one".to_owned()]]);
+    }
 
     use super::*;
     use crate::host::pretend::Pretend;

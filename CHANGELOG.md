@@ -350,6 +350,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   instead, and the app records it the next time it opens the project, saying which lines were
   missing or did not check. A hook call takes about a millisecond longer (FD-30, #667).
 
+- **The sidebar no longer reads every workspace's todos for each change.** The app keeps what
+  the sidebar draws in memory and reads again only what a change is part of: a todo closed in
+  one workspace reads that workspace's todos, and nothing else. A change the app cannot place
+  still reads the whole sidebar again (FD-10b, #933).
+
 - **Fewer redraws when switching projects.** A project's tab strip comes back at the width it
   had instead of drawing every tab and then folding them away, the palette closes in the same
   frame as the switch, and the project's theme and its repos' save standing are drawn from what
@@ -388,8 +393,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the Memory, Personas and Sessions panels only when something else in the project changed.
   Each panel now reads again only for the kind of change it draws, so a todo closed in one
   workspace no longer re-reads another workspace's panels. Saving a memory re-reads only the
-  panels and views that show it. When auto-save is on and commits that memory, the window still
-  reads everything again after the commit (FD-10).
+  panels and views that show it. When auto-save commits, pushes or fetches, only the save state
+  and the alerts read again, where the whole window used to. A fetch or save that brings
+  others' changes into your files still reads everything again (FD-10, #933).
 - **`charter guard ask` never turns a command opencode denies into one it asks about.** opencode
   goes by the last rule that matches a command, so a rule added after `"*": "deny"` used to win
   over it, and a rule for a command that was denied exactly used to replace the deny. Now a

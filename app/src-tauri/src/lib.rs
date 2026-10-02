@@ -599,19 +599,22 @@ struct Sidebar {
     unfiled: Vec<OpenChat>,
 }
 
-/// The sidebar, read from the plane on disk every time it is asked for.
+/// The sidebar, answered from the plane's model (FD-10b, [`charter_core::planemodel`]).
 ///
-/// Read fresh rather than cached: the plane is a directory the operator also edits by hand
-/// and another charter process writes, so a cache here would be a second answer to "what is
-/// on disk" that nothing invalidates.
+/// The model is read once when the plane is held, and from then on each change the watch
+/// names re-reads only what it is part of: a todo closed in `beta` re-reads `beta/todos/`,
+/// where this used to list every workspace's todos on every ask. A change nobody could name
+/// reads the model again whole, so the plane on disk stays the truth.
 ///
 /// The chats are the ones `Chats` already holds — one model of a chat, not a second derived
 /// from the sessions. What files one under a workspace is the directory it works in, because
 /// nothing on the plane records a chat: `.charter/frame/` belongs to the tmux frame and the
 /// app stays out of it.
 ///
-/// On a blocking thread and never the one that draws: it reads every workspace's todos, and a
-/// plane with dozens of workspaces would hold the window while it did (SC-2).
+/// On a blocking thread and never the one that draws (SC-2): the model is behind a lock the
+/// watch holds while it applies a change, and a change nobody could name reads every
+/// workspace's todos again under it, so a plane with dozens of workspaces would hold the window
+/// while it did.
 #[tauri::command]
 #[specta::specta]
 async fn plane_sidebar(
@@ -636,11 +639,12 @@ async fn off_the_window<T: Send + 'static>(
         .map_err(|err| format!("{what} did not finish: {err}"))?
 }
 
-/// The sidebar of the plane `held`, read off disk.
+/// The sidebar of the plane `held`, from its model ([`planes::Held::sidebar_model`]) and the
+/// chats it holds.
 fn sidebar_of(held: &planes::Held) -> Result<Sidebar, String> {
     let root = held.root();
     let on_disk = charter_core::workspaces::Plane::open(root);
-    let live = charter_core::wscmd::live_workspaces(root);
+    let model = held.sidebar_model();
 
     let mut filed: std::collections::HashMap<String, Vec<OpenChat>> =
         std::collections::HashMap::new();
@@ -656,38 +660,24 @@ fn sidebar_of(held: &planes::Held) -> Result<Sidebar, String> {
         }
     }
 
-    let mut workspaces = Vec::new();
-    for name in on_disk.workspaces().map_err(|err| err.to_string())? {
-        // A name off disk is re-checked before it is joined onto a path; one that cannot be
-        // a workspace is left out rather than drawn.
-        let Ok(ws) = on_disk.workspace(&name) else {
-            continue;
-        };
-        workspaces.push(SidebarWorkspace {
-            path: ws.dir().display().to_string(),
-            vision: ws.vision(),
-            // A store charter cannot read costs that workspace its todo list, not the
-            // window its workspaces.
-            todos: ws
-                .todos()
-                .unwrap_or_default()
-                .into_iter()
-                .map(|todo| todo.title)
-                .collect(),
-            chats: filed.remove(&name).unwrap_or_default(),
-            colour: charter_core::extension::project::theme::colour_of(&ws)
-                .as_ref()
-                .map(charter_core::extension::project::theme::Colour::value),
-            live: live.contains(&name),
-            name,
-        });
-    }
+    let workspaces = model
+        .rows()?
+        .map(|row| SidebarWorkspace {
+            path: row.path.display().to_string(),
+            vision: row.vision.clone(),
+            todos: row.todos.clone(),
+            chats: filed.remove(&row.name).unwrap_or_default(),
+            colour: row.colour.clone(),
+            live: model.is_live(&row.name),
+            name: row.name.clone(),
+        })
+        .collect();
 
     Ok(Sidebar {
         root: root.display().to_string(),
         workspaces,
-        personas: on_disk.personas().map_err(|err| err.to_string())?,
-        persona: on_disk.default_persona(),
+        personas: model.personas()?,
+        persona: model.default_persona().map(str::to_owned),
         unfiled,
     })
 }
@@ -1957,10 +1947,7 @@ pub fn run() {
                             &window,
                             &plane,
                             planewatch::CHANGED,
-                            &planewatch::PlaneChanged {
-                                plane: plane.clone(),
-                                changes,
-                            },
+                            &planewatch::PlaneChanged::of(plane.clone(), changes),
                         );
                     })
                 })
