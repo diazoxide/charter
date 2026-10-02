@@ -11,6 +11,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
+import { P, mark } from "./prof";
 import clsx from "clsx";
 import { listen } from "./here";
 import { MAIN, thisWindow } from "./windows";
@@ -983,10 +984,10 @@ export const PlaneView = memo(function PlaneView({
     () => surveyedCommands.filter((command) => on?.has(command.extension) ?? false),
     [on, surveyedCommands],
   );
-  // **This project's theme stays known while the window holds it** (FR-27), in front or not.
-  // The window asks for the theme of the project in front, and an answer nothing is interested
-  // in is forgotten (`projectTheme.ts`): held here, a switch back finds it answered, rather than
-  // asking the core and drawing the whole window again when it replies.
+  // **This project's theme stays known while the window holds it** (FR-27), in front or not:
+  // the window asks for the theme of the project in front, and an answer nothing was
+  // interested in is forgotten (`projectTheme.ts`). Held here, a switch back finds it already
+  // answered instead of asking the core and redrawing the window when it replies.
   useProjectThemeAnswers(plane, ofWorkspace);
   const workspaceState = useWorkspaceState(plane, ofWorkspace, rereadWorkspace, changesOnDisk);
   /** The plane root's own panels — its session records (SI-8d) — while it is focused. */
@@ -3243,6 +3244,9 @@ export const PlaneView = memo(function PlaneView({
 
   // A project the operator is not looking at keeps every piece of state above and draws none
   // of it. See this module's own docstring for why it is `null` and not `hidden`.
+  // eslint-disable-next-line
+  useLayoutEffect(() => { if (inFront) mark("pvLayout"); }, [inFront]);
+  useEffect(() => { if (inFront) mark("pvEffect"); }, [inFront]);
   if (!inFront) return null;
 
   return (
@@ -3261,7 +3265,7 @@ export const PlaneView = memo(function PlaneView({
       {/* Drawn once the plane is read, workspaces or none: its `+` is how the first one is
           made, so a strip that waited for a workspace hid the way to make one. */}
       {sidebar !== undefined && (
-        <div className="workspaces">
+        <P id="Workspaces"><div className="workspaces">
           {/* Draggable along the strip (SI-6, `sortable.tsx`): a drop moves a pinned workspace
               among the pins, and one carried across the boundary pins or unpins it. */}
           <DndContext
@@ -3379,12 +3383,12 @@ export const PlaneView = memo(function PlaneView({
               onPress={press}
             />
           </div>
-        </div>
+        </div></P>
       )}
 
       {/* The chat strip is the focused workspace's, so it is drawn in that workspace's colour
           (charter-app#281): its shade, its selected tab and its accent. */}
-      <header className="bar" style={tintOf(ofWorkspace)}>
+      <P id="ChatBar"><header className="bar" style={tintOf(ofWorkspace)}>
         {/* The chats of the FOCUSED WORKSPACE (ADR 0036), which is what the tmux frame's
             sessions-under-a-workspace was. Named, because the projects and the workspaces
             above are tablists too and a query for `role="tab"` across the whole window
@@ -3620,7 +3624,7 @@ export const PlaneView = memo(function PlaneView({
             one button per region in the arrangement, in the order the window draws them.
 
             The project's path is not here either, for the same reason and since #172. */}
-      </header>
+      </header></P>
 
       {trouble && (
         <p className="trouble" role="alert">
@@ -3721,12 +3725,12 @@ export const PlaneView = memo(function PlaneView({
 
           One workspace answer for all three (`useWorkspaceState`), not one per region: they
           draw the same workspace, and `workspace_repos` runs `git status` per clone. */}
-      <RegionFrame
+      <P id="RegionFrame"><RegionFrame
         arrangement={arrangement}
         onResized={resized}
         content={{
           explorer: (
-            <Explorer
+            <P id="Explorer"><Explorer
               workspace={ofWorkspace}
               live={ofWorkspace !== undefined && liveOf(ofWorkspace)}
               state={workspaceState}
@@ -3738,10 +3742,10 @@ export const PlaneView = memo(function PlaneView({
               wrapping={wrapping}
               offers={found}
               onPress={press}
-            />
+            /></P>
           ),
           aside: (
-            <Panels
+            <P id="Panels"><Panels
               workspace={ofWorkspace}
               state={workspaceState}
               offers={found}
@@ -3754,16 +3758,16 @@ export const PlaneView = memo(function PlaneView({
               onAddTodo={edits.addTodo}
               atRoot={focused === OUTSIDE}
               rootPanels={rootPanels?.contributed}
-            />
+            /></P>
           ),
           bottom: (
-            <BottomBar
+            <P id="BottomBar"><BottomBar
               workspace={ofWorkspace}
               state={workspaceState}
               offers={found}
               onPress={press}
               columns={facts.columns}
-            />
+            /></P>
           ),
         }}
         centre={
@@ -3774,7 +3778,7 @@ export const PlaneView = memo(function PlaneView({
           <Menued on={{ on: "pane" }} offers={found} onPress={press}>
             <div className="panes">
               {frontTab ? (
-                <LayoutPanes
+                <P id="LayoutPanes"><LayoutPanes
                   plane={plane}
                   layout={frontTab.layout}
                   focused={frontTab.focused}
@@ -3797,7 +3801,7 @@ export const PlaneView = memo(function PlaneView({
                     onSaved: memoryEdits.onSaved,
                     onClose: closeView,
                   }}
-                />
+                /></P>
               ) : tabs.order.some((id) => !isBackground(id)) ? (
                 // Chats are running — just not in the workspace being looked at. Saying
                 // "no sessions" here would be charter telling the operator that what it is
@@ -3857,7 +3861,7 @@ export const PlaneView = memo(function PlaneView({
             </div>
           </Menued>
         }
-      />
+      /></P>
 
       {/* **charter's status line**, under everything including the bottom region. It is not
           in the arrangement and `StatusLine.tsx` argues why at length: a slot is sized as a
@@ -3869,7 +3873,7 @@ export const PlaneView = memo(function PlaneView({
           share, and the sidebar has already been read for the strip, so the line costs no
           command of its own — which matters here more than anywhere, because it is the one
           surface that is drawn whatever else the window is doing. */}
-      <StatusLine
+      <P id="StatusLine"><StatusLine
         plane={plane}
         read={sidebar !== undefined}
         where={focused === OUTSIDE ? OUTSIDE_TITLE : focused}
@@ -3889,7 +3893,7 @@ export const PlaneView = memo(function PlaneView({
           placed: SIDES.flatMap((side) => slots[side]),
           onToggle: toggleRegion,
         }}
-      />
+      /></P>
 
       {/* Making a workspace, and deleting one. Mounted only while they are up, and drawn
           here rather than in the window: a workspace belongs to a project. */}

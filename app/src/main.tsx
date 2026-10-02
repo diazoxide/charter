@@ -1,6 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
+import { P } from "./prof";
 import { attach } from "./bench";
 import { settleLayout } from "./regions";
 import { drawWindowText, listenForSizeKeys, onTextSizes, textSizes } from "./textSize";
@@ -32,7 +33,7 @@ attach();
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    <App />
+    <P id="App"><App /></P>
   </React.StrictMode>,
 );
 

@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+import type {} from "./prof";
 import type { Terminal } from "@xterm/xterm";
 import { drawWith, type Drawing, type Renderer } from "./renderer";
 import { onAMac } from "./tabKeys";
@@ -55,6 +56,7 @@ export const measuring = Boolean(import.meta.env.VITE_E2E);
 /** A pane's terminal, now on screen. */
 export function paneOpened(session: number, terminal: Terminal): void {
   if (!measuring) return;
+  window.__prof?.marks && (window.__prof.marks["paneOpened"] ??= performance.now());
   panes.set(session, { session, terminal, tail: "", chunks: 0, characters: 0 });
   terminal.onRender(() => {
     const pane = panes.get(session);
@@ -63,6 +65,7 @@ export function paneOpened(session: number, terminal: Terminal): void {
     // §9.3, step 3).
     const { found } = pane.waiting;
     pane.waiting = undefined;
+    window.__prof && (window.__prof.marks["rendered"] ??= performance.now());
     requestAnimationFrame(() => found(performance.now()));
   });
   awaited?.(session);
@@ -103,6 +106,7 @@ export function paneSent(session: number, text: string): (() => void) | undefine
   pane.chunks += 1;
   pane.characters += text.length;
   pane.firstChunkAt ??= performance.now();
+  window.__prof && (window.__prof.marks["firstChunk"] ??= performance.now());
   const waiting = pane.waiting;
   if (!waiting || waiting.seen) return undefined;
   pane.tail = (pane.tail + text).slice(-TAIL);
@@ -349,6 +353,7 @@ async function work(plan: Plan): Promise<unknown> {
           found({ session, seen: painted(session, plan.sentinel) });
         };
       });
+      window.__prof?.clear();
       const from = performance.now();
       row.click();
       const shown = await until(() =>
@@ -367,6 +372,22 @@ async function work(plan: Plan): Promise<unknown> {
         openMs: listed - pressed,
         shownMs: shown - from,
         ms: at - from,
+        marks: Object.fromEntries(Object.entries(window.__prof?.marks ?? {}).map(([k, v]) => [k, Math.round(v - from)])),
+        prof: (() => {
+          const by: Record<string, number> = {};
+          const commits = new Set<number>();
+          for (const r of window.__prof?.rows ?? []) {
+            const key = `${r.id}:${r.phase}`;
+            by[key] = Math.round(((by[key] ?? 0) + r.actual) * 10) / 10;
+            commits.add(Math.round(r.commit - from));
+          }
+          const timeline: Record<number, string[]> = {};
+          for (const r of window.__prof?.rows ?? []) {
+            const at = Math.round(r.commit - from);
+            (timeline[at] ??= []).push(`${r.id}:${r.phase[0]}:${Math.round(r.actual * 10) / 10}@${Math.round(r.start - from)}`);
+          }
+          return { by, commits: [...commits].sort((a, b) => a - b), timeline };
+        })(),
       };
     }
 
