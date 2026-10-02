@@ -1,4 +1,4 @@
-//! Pending landings: `workspaces/<ws>/changes/log/pending/<host>.jsonl`, the evidence that
+//! Pending landings: `workspaces/<ws>/changes/log/pending/<device>.jsonl`, the evidence that
 //! charter started a landing (#472, D-472a).
 //!
 //! `charter change land` appends a line **before** it asks the forge to merge or to queue a

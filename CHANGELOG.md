@@ -275,6 +275,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Per-machine logs are named by the device id, not the hostname.** The dispatch and skill
+  logs (`personas/_dispatch/`, `personas/_skills/`), the piece claim log, the landing log and
+  pending landings are now filed under this device's id from the machine store. Two machines
+  that share a hostname no longer write into one file, and renaming a machine no longer starts
+  a new one. The hostname stays as a label: a piece claim still says which machine made it.
+  Files an earlier version wrote under a hostname are still read; a later migration renames them
+  (FD-25, #662).
+
 - **Fewer redraws when switching projects.** A project's tab strip comes back at the width it
   had instead of drawing every tab and then folding them away, the palette closes in the same
   frame as the switch, and the project's theme and its repos' save standing are drawn from what

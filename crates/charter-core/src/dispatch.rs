@@ -2,8 +2,8 @@
 //! `charter/dispatch.py` the README's persona roster reads — [`tally`] and
 //! [`generic_share`].
 //!
-//! `personas/_dispatch/<month>.<host>.jsonl` is append-only, one JSON object a line, one
-//! file per month per machine. It is **committed**, which is what makes the roster block a
+//! `personas/_dispatch/<month>.<device>.jsonl` is append-only, one JSON object a line, one
+//! file per month per device ([`log_name`], FD-25). It is **committed**, which is what makes the roster block a
 //! fact every engineer sees the same way rather than a reading of one laptop.
 //!
 //! Three rows are written here. Two are written by a hook: [`record`], when a `Task`/`Agent`
@@ -145,7 +145,26 @@ pub fn host_of(raw: &str) -> String {
     }
 }
 
-/// `personas/_dispatch/<YYYY-MM>.<host>.jsonl` for the month `when` falls in (UTC) —
+/// The name this device's logs are filed under (FD-25, ADR 0066): its device id from the
+/// machine store at `config`, so two machines that share a hostname write two files and a
+/// renamed machine keeps its one. `host` ([`host`]) only where no id has been minted yet, or
+/// can be (ADR 0031): there it is the name the file had before.
+///
+/// Never mints the id: asking for a log's name writes nothing outside the project. The
+/// hostname stays a label wherever a line shows one (the piece claim log's `host`).
+pub fn log_name(config: Option<&Path>, host: &str) -> String {
+    config
+        .and_then(crate::machine::known_device_id)
+        .unwrap_or_else(|| host.to_string())
+}
+
+/// [`log_name`] for this process: the config home's store, if there is one, and this
+/// machine's [`host`].
+pub fn this_log_name() -> String {
+    log_name(crate::machine::config_root_if_there().as_deref(), &host())
+}
+
+/// `personas/_dispatch/<YYYY-MM>.<device>.jsonl` for the month `when` falls in (UTC) —
 /// `dispatch.path_for`.
 pub fn path_for(root: &Path, when: chrono::DateTime<chrono::Utc>, host: &str) -> PathBuf {
     dir(root).join(format!("{}.{host}.jsonl", when.format("%Y-%m")))

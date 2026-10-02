@@ -70,11 +70,21 @@ pub struct Hook<'a> {
     /// The process's directory — the ladders' cwd rung.
     pub cwd: &'a Path,
     pub now: DateTime<Utc>,
-    /// This machine's name as the logs spell it ([`dispatch::host`]).
+    /// This machine's name ([`dispatch::host`]): a label, and the name its logs are filed
+    /// under only until a device id is minted ([`Hook::log_name`]).
     pub host: &'a str,
 }
 
 impl Hook<'_> {
+    /// The name this device's logs are filed under: its device id, read from the machine store
+    /// the environment names and never minted here (FD-25, [`dispatch::log_name`]).
+    fn log_name(&self) -> String {
+        dispatch::log_name(
+            crate::machine::config_root_in(self.env).as_deref(),
+            self.host,
+        )
+    }
+
     /// `data.get(key) or ""` for a string field.
     fn text(&self, key: &str) -> &str {
         self.payload
@@ -721,7 +731,13 @@ pub fn posttooluse_skill(hook: &Hook) -> Answer {
         return Answer::Nothing;
     }
     let persona = hook.persona();
-    let _ = crate::skilluse::record(hook.root, name, persona.as_deref(), hook.now, hook.host);
+    let _ = crate::skilluse::record(
+        hook.root,
+        name,
+        persona.as_deref(),
+        hook.now,
+        &hook.log_name(),
+    );
     Answer::Nothing
 }
 
@@ -782,7 +798,7 @@ pub fn posttooluse_dispatch(hook: &Hook) -> Answer {
     if agent.is_empty() {
         return Answer::Nothing;
     }
-    let logged = dispatch::record(hook.root, agent, hook.now, hook.host);
+    let logged = dispatch::record(hook.root, agent, hook.now, &hook.log_name());
     let response = hook
         .payload
         .get("tool_response")
@@ -820,7 +836,7 @@ pub fn posttooluse_message(hook: &Hook) -> Answer {
         agent_map_lookup(hook, target)
     };
     if let Some(name) = name {
-        let _ = dispatch::record_resume(hook.root, &name, hook.now, hook.host);
+        let _ = dispatch::record_resume(hook.root, &name, hook.now, &hook.log_name());
     }
     Answer::Nothing
 }

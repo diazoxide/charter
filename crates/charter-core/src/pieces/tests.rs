@@ -414,6 +414,7 @@ fn a_recorded_line_is_the_one_pythons_pieces_record_wrote() {
         session: Some("s-1".into()),
         persona: None,
         host: "box".into(),
+        log: "box".into(),
     };
 
     let path = record(
@@ -466,6 +467,7 @@ fn a_log_that_is_a_link_is_not_written_through() {
     std::os::unix::fs::symlink(&target, dir_for(&root, "alpha").join("box.jsonl")).unwrap();
     let who = Who {
         host: "box".into(),
+        log: "box".into(),
         ..Who::default()
     };
 

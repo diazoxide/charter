@@ -77,13 +77,28 @@ impl Event {
 pub struct Who {
     pub session: Option<String>,
     pub persona: Option<String>,
-    /// The filename-safe host ([`crate::dispatch::host`]). The log is one file per machine.
+    /// The filename-safe host ([`crate::dispatch::host`]): the label a line carries as `host`.
     pub host: String,
+    /// The name this device's log is filed under ([`crate::dispatch::log_name`]): its device
+    /// id, never a hostname once it has one (FD-25). The log is one file per device.
+    pub log: String,
 }
 
-/// `workspaces/<ws>/pieces/<host>.jsonl` — this machine's log.
-pub fn log_path(plane: &Path, ws: &str, host: &str) -> PathBuf {
-    dir_for(plane, ws).join(format!("{host}.jsonl"))
+impl Who {
+    /// The name its log file takes: [`Who::log`], or the host for a `Who` built without one,
+    /// as every log was named before FD-25.
+    pub fn file(&self) -> &str {
+        if self.log.is_empty() {
+            &self.host
+        } else {
+            &self.log
+        }
+    }
+}
+
+/// `workspaces/<ws>/pieces/<device>.jsonl` — this device's log.
+pub fn log_path(plane: &Path, ws: &str, device: &str) -> PathBuf {
+    dir_for(plane, ws).join(format!("{device}.jsonl"))
 }
 
 /// Append one event — `pieces.record`. `None` when it could not be written.
@@ -116,7 +131,11 @@ pub fn record(
     if let Some(reason) = reason.filter(|r| !r.is_empty()) {
         line.insert("reason".into(), Value::String(reason.into()));
     }
-    crate::dispatch::append(&log_path(plane, ws, &who.host), plane, &Value::Object(line))
+    crate::dispatch::append(
+        &log_path(plane, ws, who.file()),
+        plane,
+        &Value::Object(line),
+    )
 }
 
 /// What a worker declares about the piece it stands in.

@@ -421,9 +421,10 @@ pub(crate) fn land_in(
     crate::workspaces::ran(code, said)
 }
 
-/// The real forges and remotes, logged as this machine.
-fn real<T>(then: impl FnOnce(&Reach) -> T) -> T {
-    let host = charter_core::dispatch::host();
+/// The real forges and remotes, logged under this device's id from the store at `config`
+/// (FD-25).
+fn real<T>(config: Option<&Path>, then: impl FnOnce(&Reach) -> T) -> T {
+    let host = charter_core::dispatch::log_name(config, &charter_core::dispatch::host());
     then(&Reach {
         backend_of: &|repo: &Repo| repo.backend(),
         route: &|https: &str| https.to_owned(),
@@ -444,8 +445,11 @@ pub(crate) async fn change_push_question(
     change: String,
 ) -> Result<PushQuestion, String> {
     let root = planes.held(&plane)?.root().to_path_buf();
+    let config = planes.config().map(Path::to_path_buf);
     tauri::async_runtime::spawn_blocking(move || {
-        real(|reach| push_question_in(&root, &workspace, &change, reach))
+        real(config.as_deref(), |reach| {
+            push_question_in(&root, &workspace, &change, reach)
+        })
     })
     .await
     .map_err(|err| format!("reading where the push goes did not finish: {err}"))?
@@ -466,10 +470,13 @@ pub(crate) async fn change_push(
     confirmed: Vec<PushDestination>,
 ) -> Result<Vec<String>, String> {
     let root = planes.held(&plane)?.root().to_path_buf();
+    let config = planes.config().map(Path::to_path_buf);
     let running = busy.claim(&root, &workspace, &change)?;
     tauri::async_runtime::spawn_blocking(move || {
         let _running = running;
-        real(|reach| push_in(&root, &workspace, &change, confirmed, reach))
+        real(config.as_deref(), |reach| {
+            push_in(&root, &workspace, &change, confirmed, reach)
+        })
     })
     .await
     .map_err(|err| format!("the push did not finish: {err}"))?
@@ -489,8 +496,11 @@ pub(crate) async fn change_land_question(
     repo: String,
 ) -> Result<LandQuestion, String> {
     let root = planes.held(&plane)?.root().to_path_buf();
+    let config = planes.config().map(Path::to_path_buf);
     tauri::async_runtime::spawn_blocking(move || {
-        real(|reach| land_question_in(&root, &workspace, &change, &repo, reach))
+        real(config.as_deref(), |reach| {
+            land_question_in(&root, &workspace, &change, &repo, reach)
+        })
     })
     .await
     .map_err(|err| format!("checking the landing did not finish: {err}"))?
@@ -512,10 +522,13 @@ pub(crate) async fn change_land(
     squash: bool,
 ) -> Result<Vec<String>, String> {
     let root = planes.held(&plane)?.root().to_path_buf();
+    let config = planes.config().map(Path::to_path_buf);
     let running = busy.claim(&root, &workspace, &change)?;
     tauri::async_runtime::spawn_blocking(move || {
         let _running = running;
-        real(|reach| land_in(&root, &workspace, &change, &confirmed, squash, reach))
+        real(config.as_deref(), |reach| {
+            land_in(&root, &workspace, &change, &confirmed, squash, reach)
+        })
     })
     .await
     .map_err(|err| format!("the landing did not finish: {err}"))?

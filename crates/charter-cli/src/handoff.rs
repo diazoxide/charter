@@ -333,7 +333,7 @@ fn record_opened(opened: &Opened<'_>) {
         placement,
         opened.created,
         opened.now.with_timezone(&chrono::Utc),
-        &charter_core::dispatch::host(),
+        &charter_core::dispatch::this_log_name(),
     );
     if recorded.is_none() {
         voice::warn(&format!(
