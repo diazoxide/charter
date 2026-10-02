@@ -1,3 +1,4 @@
+import process from "node:process";
 import { browser, expect } from "@wdio/globals";
 import { READY, built, declareAProfile, writeShell } from "../harness.js";
 import { endChat, pressAndStart } from "../opening.js";
@@ -116,6 +117,9 @@ describe(`switching among ${OPEN} open projects`, function () {
     // A chat of this spec's own in front, always: whatever an earlier spec left in front there
     // may be a view, which has no pane to paint.
     mine = await aChatIn(first);
+    const HEAVY = Number(process.env.HEAVY ?? "0");
+    for (let k = 0; k < HEAVY; k++) await aChatIn(first);
+    // the chat in front in `first` must be one that printed READY: the last opened is.
     for (let n = 1; n < OPEN; n++) {
       // The profile every scenario chat runs, so each project's chat is the fake harness
       // printing `READY`.
@@ -144,12 +148,21 @@ describe(`switching among ${OPEN} open projects`, function () {
   it("brings each one to the front through the switcher, and its chat's pane paints", async () => {
     // In the order they were opened: the one in front is the last one opened, so no switch is
     // ever to the project already there.
-    const switches = await measureSwitches(planes, ROUNDS, () => PAINTED, jobInTheWindow);
+    const detail: unknown[] = [];
+    const job = async <T,>(plan: Parameters<typeof jobInTheWindow>[0]) => {
+      const r = await jobInTheWindow<T>(plan);
+      detail.push({ plane: (plan as { plane: string }).plane.split("/").at(-1), ...(r as object) });
+      return r;
+    };
+    const order = true ? planes.slice(1).flatMap((one) => [first, one]) : planes;
+    const switches = await measureSwitches(order, ROUNDS, () => PAINTED, job);
+    logLine("prof-switch.jsonl", { detail });
+    for (const d of detail) console.log("PROF " + JSON.stringify(d));
 
     logLine("project-switch.jsonl", { budgetMs: BUDGET_MS, ...switches });
     // In the job's own output too, where a reviewer reads it without downloading anything.
     console.log(`L9 project switch, ${BUDGET_MS} ms budget: ${JSON.stringify(switches)}`);
 
-    expect(switches.samples).toBe(OPEN * ROUNDS);
+    expect(switches.samples).toBe(order.length * ROUNDS);
   });
 });

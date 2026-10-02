@@ -9,6 +9,7 @@ const host = process.env.TAURI_DEV_HOST;
 // https://v2.tauri.app/start/frontend/vite/
 export default defineConfig(() => ({
   plugins: [react(), tailwind()],
+  resolve: true ? { alias: { "react-dom/client": "react-dom/profiling" } } : undefined,
   // Keep Rust errors visible, and give Tauri the fixed port it expects.
   clearScreen: false,
   server: {

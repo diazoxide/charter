@@ -7,6 +7,7 @@ import {
   useState,
   type CSSProperties,
 } from "react";
+import { P, note } from "./prof";
 import { listen } from "./here";
 import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
 import { closestCenter, DndContext } from "@dnd-kit/core";
@@ -728,7 +729,14 @@ function App() {
   }, []);
 
   const onReport = useCallback((plane: PlaneId, mine: PlaneReport) => {
-    setReports((was) => (was[plane] === mine ? was : { ...was, [plane]: mine }));
+    setReports((was) => {
+      if (was[plane] !== mine) {
+        const before = was[plane] as Record<string, unknown> | undefined;
+        const changed = Object.keys(mine).filter((k) => before?.[k] !== (mine as Record<string, unknown>)[k]);
+        note(`report:${plane.split("/").at(-1)}:${changed.join(",")}`);
+      }
+      return was[plane] === mine ? was : { ...was, [plane]: mine };
+    });
   }, []);
 
   const windowDoes = useMemo<WindowDoing>(
@@ -1185,6 +1193,7 @@ function App() {
   const [recent, setRecent] = useState<PlaneId[]>([]);
   useEffect(() => {
     if (inFront === undefined) return;
+    note("setRecent");
     setRecent((was) => (was[0] === inFront ? was : [inFront, ...was.filter((p) => p !== inFront)]));
   }, [inFront]);
 
@@ -1491,6 +1500,13 @@ function App() {
   );
   useRunHere(pressHere);
 
+  const whyPrev = useRef<Record<string, unknown>>({});
+  {
+    const now: Record<string, unknown> = { launch, planes, showing, reports, asking, approving, openTrouble, report, paletteOpen, creating, createTrouble, makingProject, extensions, settingsAsk, switcherAsk, savingAsk, preferencesAsk, firstChat, shellAsk, openingRepo, repoTrouble, repoForgeAsk, createForgeAsk, preferencesAlone, slowStart, notRestored, restoring, relaunchAsking, heldSomething, alertsOpen, pinnedProjects, closing, recent, savingIn, alertsRead, aboutThisMachine, contributedPanels, extensionViews, extensionCommands, onInFront, pickInFront, repos, updates, titleBarRoom, room, others };
+    const changed = Object.keys(now).filter((k) => whyPrev.current[k] !== now[k]);
+    whyPrev.current = now;
+    note(`app:${changed.join(",")}`);
+  }
   return (
     <main className="window">
       {/* The window's own title bar, and the project strip is in it (ADR 0054): on macOS it
@@ -1502,7 +1518,7 @@ function App() {
           any — including one, because `+` is how it gets a second and `×` is the way back to
           the opener. Named, because the chat tabs and the workspaces are tablists too and a
           query for `role="tab"` across the whole window would mix all three. */}
-      <TitleBar
+      <P id="TitleBar"><TitleBar
         projects={
           planes.length > 0 && (
             // One Tab stop for the strip, the project in front, and the arrows along it
@@ -1650,7 +1666,7 @@ function App() {
               }
             : undefined
         }
-      />
+      /></P>
       {/* What the last action answered. Said here only while the palette is down: it is modal
           and draws over this line, and shows the same words itself rather than leaving the
           operator to guess at a sentence behind the overlay. One state, two places it can be
@@ -1699,7 +1715,7 @@ function App() {
       {/* Every project this window holds. Only the one in front draws anything; the rest keep
           their tabs, their splits and their chat states and render nothing at all. */}
       {planes.map((plane) => (
-        <PlaneView
+        <P key={plane} id={plane === inFront ? "PV:front" : "PV:hidden"}><PlaneView
           key={plane}
           plane={plane}
           inFront={plane === inFront}
@@ -1716,7 +1732,7 @@ function App() {
           preferencesAsked={preferencesAsk?.plane === plane ? preferencesAsk.at : undefined}
           firstChatAsked={firstChat?.plane === plane ? firstChat : undefined}
           shellAsked={shellAsk?.plane === plane ? shellAsk : undefined}
-        />
+        /></P>
       ))}
 
       {/* What charter says is wrong in every project this window holds — over the whole
@@ -1822,13 +1838,13 @@ function App() {
           What it lists is the project in front's own catalogue, which travels up with the
           rest of that project's report, and the window's own when there is none — whose
           refusals are #111's. */}
-      <Palette
+      <P id="Palette"><Palette
         offers={saying?.offers ?? openerOffers}
         projects={{ rows: switcherRows, asked: switcherAsk }}
         said={said}
         onRun={saying?.run ?? run}
         onOpened={setPaletteOpen}
-      />
+      /></P>
 
       {/* What has contributed what to this window (ADR 0041 item 5). Mounted only
           while it is asked for: it reads every installed extension's files to re-take its
