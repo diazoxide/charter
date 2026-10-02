@@ -117,7 +117,7 @@ struct Records {
     /// The clone and the device this app writes the record from (V43), stamped onto every
     /// record it writes, so the next launch can tell whether it is still in this clone, on
     /// this device — or in a copy, or a move ([`reopen::arrive`]).
-    seat: reopen::Seat,
+    clone_seat: reopen::CloneSeat,
 }
 
 impl Records {
@@ -136,7 +136,7 @@ impl Records {
             return;
         }
         let record = reopen::Record {
-            seat: Some(self.seat.clone()),
+            clone_seat: Some(self.clone_seat.clone()),
             ..record.clone()
         };
         if let Err(why) = reopen::write(&self.root, &record) {
@@ -387,7 +387,7 @@ impl Held {
         // they are back, so no two clones ever hold one chat's id.
         let record = record.map(|record| {
             let (arrival, record) =
-                reopen::arrive(record, &self.records.seat, &self.records.known());
+                reopen::arrive(record, &self.records.clone_seat, || self.records.known());
             if arrival == reopen::Arrival::Copied {
                 tracing::info!(
                     "charter: plane {} is a copy of another clone; its chats get new ids",
@@ -1371,7 +1371,7 @@ impl Planes {
             root: root.clone(),
             config: self.config.clone(),
             allowed: AtomicBool::new(false),
-            seat: reopen::Seat::of(&root, device.clone()),
+            clone_seat: reopen::CloneSeat::of(&root, device.clone()),
         });
         let writes = Arc::clone(&records);
         let mut chats = Chats::on_host(
@@ -2523,7 +2523,7 @@ mod tests {
             }],
             dealt: 0,
             relaunch_after_update: false,
-            seat: None,
+            clone_seat: None,
         }
     }
 
@@ -2636,7 +2636,7 @@ mod tests {
             root: root.clone(),
             config: Some(config.clone()),
             allowed: AtomicBool::new(true),
-            seat: reopen::Seat::of(&root, None),
+            clone_seat: reopen::CloneSeat::of(&root, None),
         };
 
         // A record that appeared behind charter's back is exactly what the question is for.
@@ -2668,7 +2668,7 @@ mod tests {
             root: root.clone(),
             config: Some(config.clone()),
             allowed: AtomicBool::new(true),
-            seat: reopen::Seat::of(&root, None),
+            clone_seat: reopen::CloneSeat::of(&root, None),
         };
 
         records.write(&one_chat_on("/bin/true"));
@@ -5642,9 +5642,9 @@ mod tests {
             run: Some(OLD_RUN.to_owned()),
             ..Default::default()
         };
-        record.seat = on_disk(root).seat;
+        record.clone_seat = on_disk(root).clone_seat;
         assert!(
-            record.seat.is_some(),
+            record.clone_seat.is_some(),
             "the app records the clone it writes from"
         );
         reopen::write(root, &record).expect("the record is written");
@@ -5667,7 +5667,7 @@ mod tests {
         let id = back.chats[0].identity.id.clone().expect("an id");
         assert_ne!(id, CHAT_ID, "the copy's chat has an id of its own");
         assert_eq!(
-            back.seat.map(|seat| seat.key),
+            back.clone_seat.map(|seat| seat.key),
             Some(charter_core::plane::CloneKey::of(&copy))
         );
         assert_eq!(
@@ -5696,7 +5696,7 @@ mod tests {
         let back = on_disk(&after);
         assert_eq!(back.chats[0].identity.id.as_deref(), Some(CHAT_ID));
         assert_eq!(
-            back.seat.map(|seat| seat.key),
+            back.clone_seat.map(|seat| seat.key),
             Some(charter_core::plane::CloneKey::of(&after))
         );
     }
@@ -5729,7 +5729,7 @@ mod tests {
         relaunched_on(&config, &a);
         let mut record = one_chat_on("/bin/cat");
         record.chats[0].identity.id = Some(CHAT_ID.to_owned());
-        record.seat = on_disk(&a).seat;
+        record.clone_seat = on_disk(&a).clone_seat;
         reopen::write(&a, &record).expect("the record is written");
         let b = a_plane(&dir.path().join("b"));
         std::fs::create_dir_all(b.join(".charter/app")).expect("its state directory");

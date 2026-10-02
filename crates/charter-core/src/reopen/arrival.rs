@@ -4,7 +4,7 @@
 //! copied with `cp -R`, rsync or a backup restore carries `.charter/app/reopen.json` with it,
 //! and with it every open chat's id: two clones would then hold one chat, and anything keyed on
 //! the id (events, session records, ADR 0088's chat links) would merge the two. So the record
-//! says which clone and which device wrote it ([`Seat`]), and the launch that reads it decides,
+//! says which clone and which device wrote it ([`CloneSeat`]), and the launch that reads it decides,
 //! before any chat starts, which of four things it is looking at ([`Arrival`]).
 //!
 //! **Where it looks.** At the old root the record names, and at every project this machine
@@ -30,7 +30,7 @@ use crate::plane::CloneKey;
 
 /// The clone and the device that wrote a record: the record's `clone` key on disk.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Seat {
+pub struct CloneSeat {
     /// The clone-key (ADR 0079 §8) of [`Self::root`].
     pub key: CloneKey,
     /// The clone's canonical root. Kept beside the key because a key cannot be followed back
@@ -41,7 +41,7 @@ pub struct Seat {
     pub device: Option<String>,
 }
 
-impl Seat {
+impl CloneSeat {
     /// The seat of the clone at `root`, written from `device`. `root` is canonicalised once,
     /// here, and the key is taken from that spelling.
     pub fn of(root: &Path, device: Option<String>) -> Self {
@@ -73,8 +73,9 @@ pub enum Arrival {
 }
 
 /// The record `record` as this launch, in the clone and on the device `here` names, puts it
-/// back, and which [`Arrival`] it was. `known` is every project root this machine remembers
-/// opening. Writes nothing: the caller writes what this returns once its chats are back.
+/// back, and which [`Arrival`] it was. `known` answers every project root this machine
+/// remembers opening, and is asked only when the clone-key differs and the old root holds none
+/// of these chats. Writes nothing: the caller writes what this returns once its chats are back.
 ///
 /// **Another device decides first, and nothing is read for it.** A same-path copy to another
 /// machine has the same clone-key, so only the device id catches it. A device that is unknown
@@ -84,8 +85,12 @@ pub enum Arrival {
 /// first, then every root in `known`. A root that is the same directory as this one is never
 /// another clone. **A chat one of them shares is enough**: the original may have opened or
 /// closed others since the copy was made, and one shared id is already one chat in two clones.
-pub fn arrive(record: Record, here: &Seat, known: &[PathBuf]) -> (Arrival, Record) {
-    let Some(was) = record.seat.clone() else {
+pub fn arrive(
+    record: Record,
+    here: &CloneSeat,
+    known: impl FnOnce() -> Vec<PathBuf>,
+) -> (Arrival, Record) {
+    let Some(was) = record.clone_seat.clone() else {
         return (Arrival::Legacy, seated(record, here));
     };
     let another_device = matches!(
@@ -101,10 +106,8 @@ pub fn arrive(record: Record, here: &Seat, known: &[PathBuf]) -> (Arrival, Recor
     if same_directory(&was.root, &here.root) {
         return (Arrival::Same, seated(record, here));
     }
-    let another_holds_them = std::iter::once(&was.root)
-        .chain(known)
-        .filter(|root| !same_directory(root, &here.root))
-        .any(|root| holds_any_of(root, &record));
+    let another = |root: &Path| !same_directory(root, &here.root) && holds_any_of(root, &record);
+    let another_holds_them = another(&was.root) || known().iter().any(|root| another(root));
     if another_holds_them {
         return (Arrival::Copied, reminted(record, here));
     }
@@ -112,9 +115,9 @@ pub fn arrive(record: Record, here: &Seat, known: &[PathBuf]) -> (Arrival, Recor
 }
 
 /// `record`, saying it was written from `here`.
-fn seated(record: Record, here: &Seat) -> Record {
+fn seated(record: Record, here: &CloneSeat) -> Record {
     Record {
-        seat: Some(here.clone()),
+        clone_seat: Some(here.clone()),
         ..record
     }
 }
@@ -163,7 +166,7 @@ fn holds_any_of(root: &Path, record: &Record) -> bool {
 /// original's: the start that puts the chat back begins one of the copy's own. Everything else
 /// a chat is (its number, name, conversation and `resumed_from`) is the copy's as much as the
 /// original's, and is kept.
-fn reminted(record: Record, here: &Seat) -> Record {
+fn reminted(record: Record, here: &CloneSeat) -> Record {
     let chats = record
         .chats
         .into_iter()
@@ -180,9 +183,9 @@ fn reminted(record: Record, here: &Seat) -> Record {
     seated(Record { chats, ..record }, here)
 }
 
-/// [`Seat`] as `reopen.json` keeps it: `{"key", "root", "device"}`.
+/// [`CloneSeat`] as `reopen.json` keeps it: `{"key", "root", "device"}`.
 #[derive(serde::Serialize, serde::Deserialize)]
-pub(super) struct SeatOnDisk {
+pub(super) struct CloneSeatOnDisk {
     #[serde(default)]
     key: String,
     #[serde(default)]
@@ -191,11 +194,11 @@ pub(super) struct SeatOnDisk {
     device: String,
 }
 
-impl SeatOnDisk {
+impl CloneSeatOnDisk {
     /// The seat as it is written, or nothing where its root is not UTF-8. JSON holds a string,
     /// and a lossy spelling of the root would name another directory, so such a clone writes no
     /// seat and every launch of it reads as a record from before V43: its ids are kept.
-    pub(super) fn of(seat: &Seat) -> Option<Self> {
+    pub(super) fn of(seat: &CloneSeat) -> Option<Self> {
         Some(Self {
             key: seat.key.to_string(),
             root: seat.root.to_str()?.to_owned(),
@@ -205,12 +208,12 @@ impl SeatOnDisk {
 
     /// Held to what charter writes: a [`CloneKey`] and an absolute root. Anything else reads as
     /// no seat, which is a record that adopts the clone it is opened in.
-    pub(super) fn held(self) -> Option<Seat> {
+    pub(super) fn held(self) -> Option<CloneSeat> {
         let key = CloneKey::parse(&self.key)?;
         if !Path::new(&self.root).is_absolute() {
             return None;
         }
-        Some(Seat {
+        Some(CloneSeat {
             key,
             root: PathBuf::from(self.root),
             device: super::a_ulid(&self.device),
@@ -241,7 +244,7 @@ mod tests {
                 },
                 ..Default::default()
             }],
-            seat: Some(Seat::of(root, device.map(str::to_owned))),
+            clone_seat: Some(CloneSeat::of(root, device.map(str::to_owned))),
             ..Default::default()
         };
         write(root, &record).expect("the record is written");
@@ -261,9 +264,9 @@ mod tests {
 
     /// [`launched`], on a machine that remembers opening `known`.
     fn launched_knowing(root: &Path, device: Option<&str>, known: &[&Path]) -> (Arrival, Record) {
-        let here = Seat::of(root, device.map(str::to_owned));
+        let here = CloneSeat::of(root, device.map(str::to_owned));
         let known: Vec<PathBuf> = known.iter().map(|root| root.to_path_buf()).collect();
-        let (arrival, record) = arrive(read(root), &here, &known);
+        let (arrival, record) = arrive(read(root), &here, || known);
         write(root, &record).expect("the record is written");
         (arrival, read(root))
     }
@@ -284,7 +287,10 @@ mod tests {
         assert_eq!(a_ulid(id).as_deref(), Some(id));
         assert_eq!(identity.device.as_deref(), Some(DEVICE));
         assert_eq!(identity.run, None, "the original's run is not the copy's");
-        assert_eq!(on_disk.seat, Some(Seat::of(&copy, Some(DEVICE.into()))));
+        assert_eq!(
+            on_disk.clone_seat,
+            Some(CloneSeat::of(&copy, Some(DEVICE.into())))
+        );
         assert_eq!(
             read(&original).chats[0].identity.id.as_deref(),
             Some(CHAT),
@@ -306,7 +312,10 @@ mod tests {
         assert_eq!(identity.id.as_deref(), Some(CHAT));
         assert_eq!(identity.device.as_deref(), Some(DEVICE));
         assert_eq!(identity.run.as_deref(), Some(RUN));
-        assert_eq!(on_disk.seat, Some(Seat::of(&after, Some(DEVICE.into()))));
+        assert_eq!(
+            on_disk.clone_seat,
+            Some(CloneSeat::of(&after, Some(DEVICE.into())))
+        );
         let text = std::fs::read_to_string(path(&after)).unwrap();
         assert!(
             text.contains(crate::plane::CloneKey::of(&after).as_str()),
@@ -329,8 +338,8 @@ mod tests {
         assert!(identity.id.is_some() && identity.id.as_deref() != Some(CHAT));
         assert_eq!(identity.device.as_deref(), Some(OTHER_DEVICE));
         assert_eq!(
-            on_disk.seat,
-            Some(Seat::of(&root, Some(OTHER_DEVICE.into())))
+            on_disk.clone_seat,
+            Some(CloneSeat::of(&root, Some(OTHER_DEVICE.into())))
         );
     }
 
@@ -347,7 +356,7 @@ mod tests {
             .remove("clone")
             .expect("V43 wrote one");
         std::fs::write(path(&root), legacy.to_string()).unwrap();
-        assert_eq!(read(&root).seat, None, "a record with no clone-key");
+        assert_eq!(read(&root).clone_seat, None, "a record with no clone-key");
 
         let (arrival, on_disk) = launched(&root, Some(OTHER_DEVICE));
 
@@ -361,8 +370,8 @@ mod tests {
         assert_eq!(identity.device.as_deref(), Some(DEVICE));
         assert_eq!(identity.run.as_deref(), Some(RUN));
         assert_eq!(
-            on_disk.seat,
-            Some(Seat::of(&root, Some(OTHER_DEVICE.into())))
+            on_disk.clone_seat,
+            Some(CloneSeat::of(&root, Some(OTHER_DEVICE.into())))
         );
     }
 
@@ -381,7 +390,10 @@ mod tests {
 
         assert_eq!(arrival, Arrival::Moved);
         assert_eq!(on_disk.chats[0].identity.id.as_deref(), Some(CHAT));
-        assert_eq!(on_disk.seat, Some(Seat::of(&copy, Some(DEVICE.into()))));
+        assert_eq!(
+            on_disk.clone_seat,
+            Some(CloneSeat::of(&copy, Some(DEVICE.into())))
+        );
     }
 
     #[test]
@@ -435,7 +447,7 @@ mod tests {
 
         for (from, to) in [(key.as_str(), "-rf"), ("\"root\": \"/", "\"root\": \"")] {
             std::fs::write(path(&root), text.replacen(from, to, 1)).unwrap();
-            assert_eq!(read(&root).seat, None, "{from} -> {to}");
+            assert_eq!(read(&root).clone_seat, None, "{from} -> {to}");
         }
     }
 
@@ -507,7 +519,10 @@ mod tests {
             let (arrival, on_disk) = launched_knowing(&root, Some(DEVICE), &[&link, &root]);
             assert_eq!(arrival, Arrival::Same);
             assert_eq!(on_disk.chats[0].identity.id.as_deref(), Some(CHAT));
-            assert_eq!(on_disk.seat, Some(Seat::of(&root, Some(DEVICE.into()))));
+            assert_eq!(
+                on_disk.clone_seat,
+                Some(CloneSeat::of(&root, Some(DEVICE.into())))
+            );
         }
     }
 
@@ -533,7 +548,7 @@ mod tests {
         let record = Record {
             chats: vec![chat.clone()],
             dealt: 9,
-            seat: Some(Seat::of(&original, Some(DEVICE.into()))),
+            clone_seat: Some(CloneSeat::of(&original, Some(DEVICE.into()))),
             ..Default::default()
         };
         write(&original, &record).unwrap();

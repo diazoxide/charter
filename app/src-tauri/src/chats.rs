@@ -1013,7 +1013,7 @@ impl Chats {
             // restarts charter for an update is the only writer that says otherwise (#251).
             relaunch_after_update: false,
             // The writer stamps the clone and device it writes from (V43, `Records::write`).
-            seat: None,
+            clone_seat: None,
         }
     }
 
@@ -2041,7 +2041,7 @@ mod tests {
                     .collect(),
                 dealt: 0,
                 relaunch_after_update: false,
-                seat: None,
+                clone_seat: None,
             },
             SIZE,
         );
@@ -2214,7 +2214,7 @@ mod tests {
                 chats: vec![chat(&claude, "ide.7", None), was_in_front],
                 dealt: 0,
                 relaunch_after_update: false,
-                seat: None,
+                clone_seat: None,
             },
             SIZE,
         );
@@ -2244,7 +2244,7 @@ mod tests {
                 ],
                 dealt: 0,
                 relaunch_after_update: false,
-                seat: None,
+                clone_seat: None,
             },
             SIZE,
         );
@@ -2266,7 +2266,7 @@ mod tests {
                 chats: vec![chat(&a_claude(dir.path()), "ide.7", Some(ID))],
                 dealt: 0,
                 relaunch_after_update: false,
-                seat: None,
+                clone_seat: None,
             },
             SIZE,
         );
@@ -2302,7 +2302,7 @@ mod tests {
                 ],
                 dealt: 0,
                 relaunch_after_update: false,
-                seat: None,
+                clone_seat: None,
             },
             SIZE,
         );
@@ -2326,7 +2326,7 @@ mod tests {
                 chats: vec![chat(&a_claude(dir.path()), "ide.7", None)],
                 dealt: 0,
                 relaunch_after_update: false,
-                seat: None,
+                clone_seat: None,
             },
             SIZE,
         );
@@ -2350,7 +2350,7 @@ mod tests {
             }],
             dealt: 0,
             relaunch_after_update: false,
-            seat: None,
+            clone_seat: None,
         };
         // What `charter workspace rename alpha beta` does to the record.
         assert!(
@@ -2393,7 +2393,7 @@ mod tests {
                 ],
                 dealt: 0,
                 relaunch_after_update: false,
-                seat: None,
+                clone_seat: None,
             },
             SIZE,
         );
@@ -2430,7 +2430,7 @@ mod tests {
                     .collect(),
                 dealt: 0,
                 relaunch_after_update: false,
-                seat: None,
+                clone_seat: None,
             },
             SIZE,
         );
@@ -2453,7 +2453,7 @@ mod tests {
                 chats: vec![chat("/definitely/not/a/program", "ide.7", Some(ID))],
                 dealt: 0,
                 relaunch_after_update: false,
-                seat: None,
+                clone_seat: None,
             },
             SIZE,
         );
@@ -2477,7 +2477,7 @@ mod tests {
                 chats: vec![chat("/definitely/not/a/program", "ide.7", Some(ID))],
                 dealt: 0,
                 relaunch_after_update: false,
-                seat: None,
+                clone_seat: None,
             },
             SIZE,
         );
@@ -2504,7 +2504,7 @@ mod tests {
                 ],
                 dealt: 0,
                 relaunch_after_update: false,
-                seat: None,
+                clone_seat: None,
             },
             SIZE,
         );
@@ -2704,7 +2704,7 @@ mod tests {
                 chats: vec![chat(&claude, "ide.7", None), chat(&claude, "ide.8", None)],
                 dealt: 0,
                 relaunch_after_update: false,
-                seat: None,
+                clone_seat: None,
             },
             SIZE,
         );
@@ -2725,7 +2725,7 @@ mod tests {
                 chats: vec![chat(&a_claude(dir.path()), "ide.7", Some(ID))],
                 dealt: 0,
                 relaunch_after_update: false,
-                seat: None,
+                clone_seat: None,
             },
             SIZE,
         );
@@ -3219,7 +3219,7 @@ mod tests {
                 }],
                 dealt: 0,
                 relaunch_after_update: false,
-                seat: None,
+                clone_seat: None,
             },
             SIZE,
         );

@@ -248,10 +248,10 @@ pub fn state_dir(root: &Path) -> PathBuf {
 /// A project clone's key (ADR 0079 §8): the first 16 hex characters of the SHA-256 of the
 /// clone's canonical root path, over the path's own bytes (`OsStr::as_encoded_bytes`).
 ///
-/// **The one hash of a clone's identity.** The search index keys its directory on it (ADR
-/// 0079), the reopen record says which clone wrote it by it (V43), and a save branch's default
-/// name takes its first six characters ([`crate::planesave::Plane::save_branch_or_default`]),
-/// which is short because it is a branch name a person reads, not because it is another hash.
+/// **The one hash of a clone's identity.** The reopen record says which clone wrote it by it
+/// (V43), the search index will key its directory on it (ADR 0079), and a save branch's default
+/// name is its first six characters for every UTF-8 root
+/// ([`crate::planesave::Plane::save_branch_or_default`]), short because a person reads it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CloneKey(String);
 

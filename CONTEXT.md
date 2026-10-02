@@ -207,9 +207,10 @@ _Avoid_: app data (for the Machine tier as a whole), cache (for clone state), lo
 
 **Clone-key**:
 A project clone's identity on a machine: the first 16 hex characters of the SHA-256 of the
-clone's canonical root path. It keys the search index (ADR 0079) and the reopen record's
-`clone` (V43), and a save branch's default name takes its first six. A clone's own word for
-itself, never committed, and different in every copy.
+clone's canonical root path. It keys the reopen record's `clone` (V43), the search index will
+be keyed on it (ADR 0079), and a save branch's default name takes its first six. A clone's own
+word for itself, never committed, and different in every copy at another path. A copy at the
+same path on another machine has the same key, and the device id is what tells it apart.
 _Avoid_: clone id, plane hash, install id
 
 **Copy** (of a project):
