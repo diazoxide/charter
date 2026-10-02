@@ -538,3 +538,38 @@ describe("a key held down", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 });
+
+describe("a project switch from the palette", () => {
+  const ELSEWHERE = {
+    id: "project.select:/p/beta",
+    title: "Switch to project beta",
+    available: true,
+    reason: "",
+    does: { verb: "selectProject", plane: "/p/beta" },
+  } satisfies Offer;
+
+  it("closes the palette as the switch is pressed, not once it has been carried out", async () => {
+    // The switch is drawn in the commit the press makes (FR-27). A palette that waited for the
+    // answer closed one redraw of the whole window later, over a project already in front.
+    const onOpened = vi.fn();
+    const never = () => new Promise<Ran>(() => {});
+    render(<Palette offers={[...OFFERS, ELSEWHERE]} onRun={never} onOpened={onOpened} />);
+    await open();
+
+    await userEvent.click(screen.getByRole("option", { name: /Switch to project beta/ }));
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(onOpened).toHaveBeenLastCalledWith(false);
+  });
+
+  it("closes it once, however the switch answers", async () => {
+    const onOpened = vi.fn();
+    render(<Palette offers={[...OFFERS, ELSEWHERE]} onRun={ok} onOpened={onOpened} />);
+    await open();
+
+    await userEvent.click(screen.getByRole("option", { name: /Switch to project beta/ }));
+    await act(async () => {});
+
+    expect(onOpened.mock.calls.filter(([open]) => open === false)).toHaveLength(1);
+  });
+});

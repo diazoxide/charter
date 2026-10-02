@@ -179,7 +179,7 @@ import type {
 } from "./bindings";
 import { AskFirst, runExtensionAction } from "./ExtensionAction";
 import { extensionsChanged, useExtensionsOn } from "./extensionsOn";
-import { projectThemeChanged } from "./projectTheme";
+import { projectThemeChanged, useProjectThemeAnswers } from "./projectTheme";
 import { inForce, onDrawn, TINTED_TABS, tintVariables } from "./theme/theme";
 import { hueOf } from "./theme/tint";
 import { handedFromNote, type HandedFrom } from "./handedFrom";
@@ -982,6 +982,11 @@ export function PlaneView({
     () => surveyedCommands.filter((command) => on?.has(command.extension) ?? false),
     [on, surveyedCommands],
   );
+  // **This project's theme stays known while the window holds it** (FR-27), in front or not.
+  // The window asks for the theme of the project in front, and an answer nothing is interested
+  // in is forgotten (`projectTheme.ts`): held here, a switch back finds it answered, rather than
+  // asking the core and drawing the whole window again when it replies.
+  useProjectThemeAnswers(plane, ofWorkspace);
   const workspaceState = useWorkspaceState(plane, ofWorkspace, rereadWorkspace, changesOnDisk);
   /** The plane root's own panels — its session records (SI-8d) — while it is focused. */
   const rootPanels = usePlaneRootPanels(plane, focused === OUTSIDE, changesOnDisk);

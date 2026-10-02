@@ -101,7 +101,11 @@ export function useRepoSaving(
   plane: PlaneId | undefined,
   workspace: string | undefined,
 ): RepoSaving[] | undefined {
-  const [repos, setRepos] = useState<{ key: string; rows: RepoSaving[] }>();
+  // **Every pair's last answer, not only the one in front's** (FR-27): a project switched back
+  // to draws the rows it had at once and asks again behind them, rather than drawing none,
+  // waiting on `git status` per clone, and redrawing the window when it answers. An answer
+  // the same as the rows already drawn redraws nothing.
+  const [repos, setRepos] = useState<Readonly<Record<string, RepoSaving[]>>>({});
   const [asked, setAsked] = useState(0);
   const changed = usePlaneChanged(plane === undefined ? [] : [plane]);
   const key =
@@ -114,7 +118,7 @@ export function useRepoSaving(
       .workspaceSaving(plane, workspace)
       .then((answer) => {
         if (!gone && answer.status === "ok" && Array.isArray(answer.data))
-          setRepos({ key, rows: answer.data });
+          setRepos((was) => (same(was[key], answer.data) ? was : { ...was, [key]: answer.data }));
       })
       .catch(() => undefined);
     return () => {
@@ -123,7 +127,12 @@ export function useRepoSaving(
   }, [plane, workspace, key, asked, changed]);
 
   useRereads(setAsked);
-  return repos?.key === key ? repos?.rows : undefined;
+  return key === undefined ? undefined : repos[key];
+}
+
+/** Whether two answers say the same: the core sends plain data, so its JSON is the answer. */
+function same(drawn: RepoSaving[] | undefined, answer: RepoSaving[]): boolean {
+  return drawn !== undefined && JSON.stringify(drawn) === JSON.stringify(answer);
 }
 
 /** The stages, furthest back first. */

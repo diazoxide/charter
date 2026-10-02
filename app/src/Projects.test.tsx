@@ -732,6 +732,34 @@ describe("the project switcher (FR-27)", () => {
     await waitFor(() => expect(projectTabs()).toEqual(["one", "two", "three*"]));
   }
 
+  it("asks the core for a project's theme once, however often the switcher brings it back", async () => {
+    // A switch back that asked again drew the whole window a second time when the core
+    // replied, after the project was already in front (FR-27's profile).
+    const { asked } = core({
+      launch: null,
+      restore: { planes: [ONE, TWO, THREE], active: 0, dropped: [] },
+    });
+    render(<App />);
+    await waitFor(() => expect(projectTabs()).toEqual(["one*", "two", "three"]));
+    const themesOf = (plane: string) =>
+      asked.filter((one) => one.cmd === "project_theme_drawn" && one.args.plane === plane).length;
+    const visit = async (names: string[]) => {
+      for (const name of names) {
+        await userEvent.click(projectTab(name));
+        await waitFor(() => expect(projectTabs()).toContain(`${name}*`));
+        await waitFor(() => expect(themesOf(paths[name])).toBeGreaterThan(0));
+      }
+    };
+    const paths: Record<string, string> = { one: ONE, two: TWO, three: THREE };
+    // Each in front once, so each has been asked whoever does the asking.
+    await visit(["two", "three", "one"]);
+    const before = [ONE, TWO, THREE].map(themesOf);
+
+    await visit(["two", "three", "one", "two", "one"]);
+
+    expect([ONE, TWO, THREE].map(themesOf)).toEqual(before);
+  });
+
   it("lists the open projects from the title bar, the last one you were in first and aimed at", async () => {
     await beenInTwoThenThree();
 

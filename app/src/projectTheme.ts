@@ -15,11 +15,13 @@ import { commands, type PlaneId } from "./bindings";
  * failed is read as that too — a project whose theme cannot be asked must not hold the window's
  * theme back.
  *
- * **Only what something on screen asks about is kept.** The window asks for the workspace in
- * front and a settings tab for its own, so the pairs change with every workspace switch, and a
- * workspace can be deleted. Each hook says it is interested while it is mounted; a pair nothing
- * is interested in any more is forgotten, so a change on disk re-asks what is on screen and not
- * every workspace ever focused.
+ * **Only what something mounted asks about is kept.** The window asks for the workspace in
+ * front, each project the window holds for the workspace it is on, in front or not (so a
+ * project switch finds its answer already here, FR-27), and a settings tab for its own. The
+ * pairs change with every workspace switch, and a workspace can be deleted. Each hook says it
+ * is interested while it is mounted; a pair nothing is interested in any more is forgotten, so a
+ * change on disk re-asks at most one pair per open project and settings tab, and not every
+ * workspace ever focused.
  */
 
 type Where = { plane: PlaneId; workspace: string | undefined };
