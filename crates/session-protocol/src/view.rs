@@ -289,7 +289,14 @@ impl Gated {
                 }
             };
             match next {
-                Some(chunk) => self.send(&chunk).await?,
+                Some(chunk) => {
+                    // PLANTED REGRESSION, to be reverted: SC-16's gate must catch it.
+                    let until = std::time::Instant::now() + Duration::from_micros(150);
+                    while std::time::Instant::now() < until {
+                        std::hint::spin_loop();
+                    }
+                    self.send(&chunk).await?
+                }
                 None => shared.more.notified().await,
             }
         }
