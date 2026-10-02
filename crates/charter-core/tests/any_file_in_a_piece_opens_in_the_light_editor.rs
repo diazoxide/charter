@@ -151,8 +151,8 @@ fn a_piece_git_does_not_have_is_refused_by_name() {
 #[cfg(unix)]
 #[test]
 fn listing_a_piece_runs_no_program_its_repos_config_names() {
-    use std::os::unix::fs::PermissionsExt;
     charter_core::unsteered!();
+    use std::os::unix::fs::PermissionsExt;
     // ADR 0084 §2: every repo the light editor reads is one an agent can write, and git runs
     // a file-system monitor its config names on the verbs that read the working tree.
     let f = support::plane_with_clone("thing");
