@@ -9,6 +9,9 @@
 //!   eleventh view, while ten views write as fast as the client draws them (FD-4's third line).
 //! - **2 MB burst** and **13 MB burst**: the corpus, ×16 and ×99, pushed into one view in the
 //!   pieces a PTY read hands over, from the client asking to the last byte drawn.
+//! - **keystroke in a flooding pane** (`--rows own`, not gated): a keystroke echoed into a view
+//!   that is itself flooding, so it waits behind what the view holds. It is how the watermarks
+//!   and the queue were measured.
 //!
 //! `tools/bench.mjs --only host` runs it, and in CI runs `main`'s build of it beside the change's,
 //! interleaved, and lets `tools/latency-gate.mjs` decide. The other flags are for measuring the
@@ -17,7 +20,7 @@
 //! ```text
 //! charter-session-bench [--corpus <file>] [--samples <n>] [--rows a,b]
 //!                       [--high <bytes>] [--low <bytes>] [--queue <bytes>]
-//!                       [--draw-mbps <MB/s>] [--rtt-ms <ms>]
+//!                       [--draw-mbps <MB/s>] [--rtt-ms <ms>] [--source-pause <bytes>]
 //! ```
 
 // Unix sockets. Windows is not ported yet (ADR 0068, *Later decisions*).
@@ -53,6 +56,7 @@ mod bench {
     const PTY_READ: usize = 4096;
     /// A source past this much queued waits a millisecond, as a terminal's reader blocks on its
     /// PTY, rather than spinning the runtime (the crate's flooding test does the same).
+    /// `--source-pause` moves it, to measure a view whose queue is nearly full.
     const SOURCE_PAUSE: usize = 256 * 1024;
 
     pub struct Options {
@@ -63,6 +67,7 @@ mod bench {
         /// The client's drawing speed, bytes a second: none is as fast as it reads.
         draw: Option<f64>,
         rtt: Duration,
+        source_pause: usize,
     }
 
     fn options() -> Result<Options, String> {
@@ -75,6 +80,7 @@ mod bench {
             limits: defaults,
             draw: None,
             rtt: Duration::ZERO,
+            source_pause: SOURCE_PAUSE,
         };
         let mut args = std::env::args().skip(1);
         while let Some(flag) = args.next() {
@@ -92,6 +98,7 @@ mod bench {
                 "--low" => o.limits.low_watermark = number()? as usize,
                 "--queue" => o.limits.most_queued_bytes = number()? as usize,
                 "--draw-mbps" => o.draw = Some(number()? * 1e6),
+                "--source-pause" => o.source_pause = number()? as usize,
                 "--rtt-ms" => o.rtt = Duration::from_secs_f64(number()? / 1000.0),
                 _ => return Err(format!("unknown flag {flag}")),
             }
@@ -124,15 +131,23 @@ mod bench {
             let (name, samples) = match row.as_str() {
                 "keystroke" => (
                     "keystroke under ten flooding panes",
-                    runtime.block_on(keystroke(&o)),
+                    within(&runtime, row, keystroke(&o)),
+                ),
+                "own" => (
+                    "keystroke in a flooding pane",
+                    within(&runtime, row, own(&o)),
                 ),
                 "burst2" => (
                     "2 MB burst, asked to drawn",
-                    runtime.block_on(burst(&o, &corpus, 16, o.samples.div_ceil(5))),
+                    within(&runtime, row, burst(&o, &corpus, 16, o.samples.div_ceil(5))),
                 ),
                 "burst13" => (
                     "13 MB burst, asked to drawn",
-                    runtime.block_on(burst(&o, &corpus, 99, o.samples.div_ceil(20))),
+                    within(
+                        &runtime,
+                        row,
+                        burst(&o, &corpus, 99, o.samples.div_ceil(20)),
+                    ),
                 ),
                 other => {
                     eprintln!("charter-session-bench: unknown row {other}");
@@ -150,6 +165,24 @@ mod bench {
         }
         println!("{}", serde_json::Value::Array(rows));
         ExitCode::SUCCESS
+    }
+
+    /// The most one row may take. A row that hangs (a view that never ends, an echo that never
+    /// comes) is a failed run with a reason, not a job that waits out its runner's timeout.
+    const ROW_TIMEOUT: Duration = Duration::from_secs(300);
+
+    fn within<T>(
+        runtime: &tokio::runtime::Runtime,
+        row: &str,
+        measuring: impl std::future::Future<Output = T>,
+    ) -> T {
+        match runtime.block_on(async { tokio::time::timeout(ROW_TIMEOUT, measuring).await }) {
+            Ok(samples) => samples,
+            Err(_) => {
+                eprintln!("charter-session-bench: {row} did not finish within {ROW_TIMEOUT:?}");
+                std::process::exit(1);
+            }
+        }
     }
 
     fn median(ms: &[f64]) -> f64 {
@@ -235,27 +268,38 @@ mod bench {
         }
     }
 
-    /// Draws as a client at `rate` bytes a second would: owes the time, and sleeps it off once it
-    /// is a millisecond or more, so the sleeps stay above the timer's resolution.
+    /// Draws as a client at `rate` bytes a second would. It keeps to a clock rather than
+    /// sleeping per chunk, so a sleep's overshoot (the timer's millisecond) is made up on the
+    /// next chunks instead of adding up. A client idle for longer than [`IDLE`] starts again from
+    /// now rather than drawing what came next at no cost.
+    const IDLE: Duration = Duration::from_millis(5);
+
     struct Drawing {
         rate: Option<f64>,
-        owed: Duration,
+        since: Instant,
+        owed: usize,
     }
 
     impl Drawing {
         fn new(rate: Option<f64>) -> Self {
             Drawing {
                 rate,
-                owed: Duration::ZERO,
+                since: Instant::now(),
+                owed: 0,
             }
         }
 
         async fn draw(&mut self, bytes: usize) {
             let Some(rate) = self.rate else { return };
-            self.owed += Duration::from_secs_f64(bytes as f64 / rate);
-            if self.owed >= Duration::from_millis(1) {
-                tokio::time::sleep(self.owed).await;
-                self.owed = Duration::ZERO;
+            let now = Instant::now();
+            if self.since + Duration::from_secs_f64(self.owed as f64 / rate) + IDLE < now {
+                self.since = now;
+                self.owed = 0;
+            }
+            self.owed += bytes;
+            let done = self.since + Duration::from_secs_f64(self.owed as f64 / rate);
+            if done > now + Duration::from_millis(1) {
+                tokio::time::sleep_until(done.into()).await;
             }
         }
     }
@@ -277,6 +321,7 @@ mod bench {
         let (mut host, mut client) = linked(o).await;
         let stop = Arc::new(AtomicBool::new(false));
         let limits = o.limits;
+        let pause = o.source_pause;
         let host_stop = Arc::clone(&stop);
         let host = tokio::spawn(async move {
             let mut floods = Vec::new();
@@ -290,7 +335,7 @@ mod bench {
                     let line =
                         Bytes::from(format!("pane {pane}: {}\r\n", "x".repeat(200)).repeat(64));
                     while !stop.load(Ordering::Relaxed) {
-                        if feed.queued_bytes() > SOURCE_PAUSE {
+                        if feed.queued_bytes() > pause {
                             tokio::time::sleep(Duration::from_millis(1)).await;
                             continue;
                         }
@@ -352,11 +397,93 @@ mod bench {
         took
     }
 
+    /// A keystroke typed into a pane that is itself flooding, as Ctrl-C into a runaway build is:
+    /// its echo is queued behind what the view already holds, so it waits for the client to
+    /// draw what is queued and in flight. Not a gated row: it is how the watermarks were
+    /// measured (`--rows own`).
+    async fn own(o: &Options) -> Vec<Duration> {
+        let (mut host, mut client) = linked(o).await;
+        let stop = Arc::new(AtomicBool::new(false));
+        let limits = o.limits;
+        let pause = o.source_pause;
+        let host_stop = Arc::clone(&stop);
+        let host = tokio::spawn(async move {
+            let feed = Arc::new(
+                Attacher::new(host.opener(), limits)
+                    .attach(ViewId(0), Bytes::new())
+                    .await
+                    .expect("the flooding view"),
+            );
+            let flood_feed = Arc::clone(&feed);
+            let flood = tokio::spawn(async move {
+                let line = Bytes::from(format!("{}\r\n", "x".repeat(200)).repeat(64));
+                while !host_stop.load(Ordering::Relaxed) {
+                    if flood_feed.queued_bytes() > pause {
+                        tokio::time::sleep(Duration::from_millis(1)).await;
+                        continue;
+                    }
+                    if flood_feed.push(line.clone()).is_err() {
+                        break;
+                    }
+                }
+            });
+            while let Some(Ok(key)) = host.control().next().await {
+                let mut echo = vec![0x07];
+                echo.extend_from_slice(&key);
+                echo.push(0x07);
+                if feed.push(Bytes::from(echo)).is_err() {
+                    break;
+                }
+            }
+            flood.abort();
+        });
+
+        let mut reader = Viewer::default()
+            .accept(client.accept().await.expect("a view"))
+            .await
+            .expect("a view's header");
+        let mut drawing = Drawing::new(o.draw);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let mut took = Vec::with_capacity(o.samples);
+        let mut carry: Vec<u8> = Vec::new();
+        for n in 0..o.samples {
+            let key = format!("K{n}");
+            let marker = format!("\x07{key}\x07").into_bytes();
+            let typed = Instant::now();
+            client
+                .control()
+                .send(Bytes::from(key))
+                .await
+                .expect("a keystroke");
+            loop {
+                let Some(Ok(Chunk::Live(bytes))) = reader.next().await else {
+                    panic!("the flooding view ended")
+                };
+                drawing.draw(bytes.len()).await;
+                reader.ack(bytes.len()).await.expect("an ack");
+                carry.extend_from_slice(&bytes);
+                let found = carry.windows(marker.len()).any(|w| w == marker.as_slice());
+                let keep = carry.len().saturating_sub(marker.len());
+                carry.drain(..keep);
+                if found {
+                    break;
+                }
+            }
+            took.push(typed.elapsed());
+            carry.clear();
+        }
+        stop.store(true, Ordering::Relaxed);
+        drop(client);
+        let _ = host.await;
+        took
+    }
+
     /// `loops` × the corpus into one view, `samples` times: from the client's asking to its
     /// last byte drawn.
     async fn burst(o: &Options, corpus: &Bytes, loops: usize, samples: usize) -> Vec<Duration> {
         let (mut host, mut client) = linked(o).await;
         let limits = o.limits;
+        let pause = o.source_pause;
         let corpus = corpus.clone();
         let total = corpus.len() * loops;
         let host = tokio::spawn(async move {
@@ -368,7 +495,7 @@ mod bench {
                 let mut left = total;
                 let mut at = 0;
                 while left > 0 {
-                    if feed.queued_bytes() > SOURCE_PAUSE {
+                    if feed.queued_bytes() > pause {
                         tokio::time::sleep(Duration::from_millis(1)).await;
                         continue;
                     }

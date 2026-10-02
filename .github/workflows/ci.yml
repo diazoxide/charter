@@ -39,7 +39,9 @@ jobs:
       # tauri::generate_context! reads the built frontend, so it has to exist before clippy.
       - run: mkdir -p app/dist
       - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # `charter-session-protocol/bench` so the latency bench, which only that feature builds, is
+      # linted too (SC-16).
+      - run: cargo clippy --workspace --all-targets --locked --features charter-session-protocol/bench -- -D warnings
       # --no-fail-fast because cargo stops at the first failing test binary and SKIPS every
       # later one. A flake in the binary that happens to run first (charter-app#39) then
       # hides every other result, so a red run says nothing about the rest of the suite.
@@ -74,9 +76,13 @@ jobs:
       - run: node --test "../tools/*.test.mjs"
 
   # SC-16: the session layer's latency against main's, measured in this job (ADR 0086's CI
-  # relative rows L1 and L3, by the method SC-16's amendment of that record proposes). It runs
-  # on every pull request and posts a green check when the change cannot move what it measures,
-  # so it can be required: a `paths:` filter would post no check at all (see `stress.yml`).
+  # relative rows L1 and L3, as amended by V62). It runs on every pull request and posts a green
+  # check when the change cannot move what it measures, so it can be required later: a `paths:`
+  # filter would post no check at all (see `stress.yml`).
+  #
+  # **Evidence only for now (V62):** it reports its verdict and never blocks a merge or turns
+  # main red, until five runs on main show a tight spread. Then `continue-on-error` goes, the
+  # name loses ", evidence only", and the operator adds the check to branch protection.
   #
   # **Why main is built here and not read from the `benchmarks` branch.** The same binary on two
   # ubuntu-24.04 runners differs by more than 20% (they are not one machine), so a change's value
@@ -89,7 +95,8 @@ jobs:
   # versions and the toolchain, and the bench and the gate themselves. The window and the app's
   # own session code are not in it: `stress` and the release scale run (#814) measure those.
   bench:
-    name: latency against main (session layer)
+    name: latency against main (session layer, evidence only)
+    continue-on-error: true
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -124,14 +131,14 @@ jobs:
           node-version-file: .nvmrc
       - name: The change's bench, in release
         if: steps.scope.outputs.measure == 'true'
-        run: cargo build --release --locked -p charter-session-protocol --bin charter-session-bench
+        run: cargo build --release --locked -p charter-session-protocol --bin charter-session-bench --features bench
       # The change's bench source, built against main's crate and lockfile: the same scenarios on
       # both sides, so only the code under them differs. When main's crate cannot build it (the
       # change moved the API the bench calls, or main has no such crate), there is no baseline:
       # every row is reported and nothing is gated, which the job's summary says.
       #
-      # `--features tokio/rt-multi-thread`: the bench's runtime, which main's crate may not ask for
-      # yet. It is a no-op once it does.
+      # The bench's runtime is the crate's `bench` feature; a main from before it had none, and
+      # gets the same runtime by naming tokio's feature directly.
       - name: main's bench, in release
         id: main
         if: github.event_name == 'pull_request' && steps.scope.outputs.measure == 'true'
@@ -140,22 +147,27 @@ jobs:
           if [ -d ../main/crates/session-protocol ]; then
             cp crates/session-protocol/src/bin/charter-session-bench.rs ../main/crates/session-protocol/src/bin/
           fi
+          features=tokio/rt-multi-thread
+          if grep -q '^bench = ' ../main/crates/session-protocol/Cargo.toml 2>/dev/null; then features=bench; fi
           if (cd ../main && CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/main" cargo build --release --locked \
-                -p charter-session-protocol --bin charter-session-bench --features tokio/rt-multi-thread); then
+                -p charter-session-protocol --bin charter-session-bench --features "$features"); then
             echo "bench=$GITHUB_WORKSPACE/target/main/release/charter-session-bench" >> "$GITHUB_OUTPUT"
           else
             echo "::warning::main's crate cannot build this change's bench, so nothing is gated: no baseline"
           fi
       - name: The session layer against main, interleaved, in this job
         if: github.event_name == 'pull_request' && steps.main.outputs.bench != ''
+        timeout-minutes: 15
         run: node tools/bench.mjs --skip-build --only host --baseline "${{ steps.main.outputs.bench }}"
       - name: The session layer, with no baseline to judge it by
         if: github.event_name == 'pull_request' && steps.scope.outputs.measure == 'true' && steps.main.outputs.bench == ''
+        timeout-minutes: 10
         run: node tools/bench.mjs --skip-build --only host
       # main's own record (ADR 0086 §1): each row's median of five runs, which `bench record`
       # appends to the `benchmarks` branch. It gates nothing: on main there is nothing to compare.
       - name: main's record
         if: github.event_name == 'push'
+        timeout-minutes: 10
         run: |
           node tools/bench.mjs --skip-build --only host
           cp target/bench/*/host-bench.json host-bench.json

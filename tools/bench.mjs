@@ -117,7 +117,10 @@ const COLD_START_APP = options.app ? resolve(options.app) : SHIPPED;
 if (!options["skip-build"]) {
   run(
     "cargo",
-    ["build", "--release", "-p", "fake-harness", "-p", "charter-cli", "-p", "charter-session-protocol"],
+    [
+      "build", "--release", "-p", "fake-harness", "-p", "charter-cli",
+      "-p", "charter-session-protocol", "--features", "charter-session-protocol/bench",
+    ],
     { cwd: ROOT },
   );
   run("npx", ["tauri", "build", "--no-bundle"], { cwd: APP });

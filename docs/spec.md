@@ -451,7 +451,11 @@ confirm it (D-0082b). A row is added in the pull request that adds its job.
   when a row is more than 20% worse than the last value `main` recorded on the `benchmarks`
   branch; each value is a median of the job's own samples, and a row gates only once its first
   five green runs on `main` spread by at most about 7% (a starting value), being evidence before
-  that. *Release absolute*: measured with real harnesses on the operator's machine each release
+  that. **The `bench` job's rows are held by V62 instead** (ADR 0086 as amended for SC-16): the
+  pull request against main built in the same job, in alternating rounds, failing only on a
+  sustained, repeated slowdown above 20%. The job is evidence only until five main runs show a
+  tight spread (#932). github-action-benchmark keeps main's history on `benchmarks` for the
+  graphs. *Release absolute*: measured with real harnesses on the operator's machine each release
   by the release scale run (#814); a miss is a bug filed before the release notes, not a block
   (ADR 0082 §3 and §4).
 - **Load.** Every row is stated at the device's hot target ([ADR 0082](adr/0082-charter-serves-one-persons-agents-first-and-its-scale-is-a-hot-chat-count-per-ram-class.md) §3)
@@ -469,7 +473,7 @@ confirm it (D-0082b). A row is added in the pull request that adds its job.
 | M3 | native side (app and `charterd`), no chats | ≤ 384 MB | CI absolute and relative (`stress`) | SC-8 | 183 MB macOS, 311 MB Ubuntu |
 | M4 | native cost of a hot chat, scrollback excluded | ≤ 4 MB | CI absolute (`stress`) | SC-8 | 3.1 MB macOS, 0.12 MB Ubuntu |
 | M5 | native cost of a hibernated chat; no harness process | ≤ 1 MB | CI absolute (`stress`) | SC-4, SC-8 | — |
-| M6 | idle hidden session's scrollback at the cap | ≤ 50 MB | release absolute; CI relative (`bench`) | SC-16 | 20.2 MB |
+| M6 | idle hidden session's scrollback at the cap | ≤ 50 MB | release absolute; CI relative (`bench`) is #931 | SC-16 | 20.2 MB |
 | M7 | no leak: after round 1, each round's close within 32 MB of round 1's, threads within 40 of the base | passes today | CI absolute (`stress`; threads asserted today, memory added by SC-8) | SC-8 | macOS 334.6 MB after round 1, flat in rounds 2 and 3 (base 182.6 MB); Ubuntu 321.7 MB after round 3; threads at 45 |
 | C1 | threads | ≤ 64 at none; ≤ 5 a hot chat; 0 a hibernated | CI absolute (`stress`) | SC-8 | 49 / 24 at none; 3.9 / 4.0 a chat |
 | C2 | descriptors | ≤ 64 at none; ≤ 4 a hot chat; 0 a hibernated | CI absolute (`stress`, macOS with SC-15) | SC-8, SC-15 | 54 at none, 3 a chat (Ubuntu) |
@@ -477,15 +481,15 @@ confirm it (D-0082b). A row is added in the pull request that adds its job.
 | C4 | hook processes spawned per second | recorded | evidence only (`stress`) | SC-8 | — |
 | E1 | idle, window hidden, 3 projects, no chats | ≤ 0.5% of a core, ≤ 1 wakeup/s | CI absolute on Linux (`stress`); release absolute on macOS | SC-18 | — |
 | E2 | idle, window hidden, the hot target's chats at a turn boundary, harnesses excluded | ≤ 1% of a core | CI relative (`stress`); release absolute | SC-18 | — |
-| L1 | keystroke to screen, hot target minus one streaming | ≤ 50 ms | release absolute; CI relative (`bench`) | SC-16 | worst 26 ms |
-| L2 | tab or pane switch | ≤ 100 ms | the same | SC-16 | worst 48 ms |
-| L3 | 2 MB and 13 MB bursts | no freeze; input and other panes responsive | the same | SC-16 | longest frame 42 / 52 ms |
+| L1 | keystroke to screen, hot target minus one streaming | ≤ 50 ms | release absolute; CI relative (`bench`, evidence only until #932): the session layer's half, a keystroke under ten flooding panes over `charterd.sock`, no window; the window's half in CI is #931 | SC-16 | worst 26 ms |
+| L2 | tab or pane switch | ≤ 100 ms | release absolute; CI relative (`bench`) is #931 | SC-16 | worst 48 ms |
+| L3 | 2 MB and 13 MB bursts | no freeze; input and other panes responsive | release absolute; CI relative (`bench`, evidence only until #932): the session layer's half, each burst asked to drawn over `charterd.sock`, no window; the window's half in CI is #931 | SC-16 | longest frame 42 / 52 ms |
 | L4 | synchronized-output animation | ≥ 30 fps | release absolute | SC-16 | 52.4 and 52.0 draws/s against a 60 fps display |
 | L5 | hook call p95, at 50,000 memories and the hot target | ≤ 50 ms | CI absolute (`stress`) | KN-22 | not yet measured |
 | L6 | cold start to the first frame, no chats | ≤ 2 s | CI absolute on Linux (`app builds`, median of five; at most one past a 2.5 s ceiling, reported and not gated, ADR 0086 as amended); release absolute on macOS | FR-8 | 370 ms macOS |
 | L7 | reattach with `charterd` up: first paint of the focused pane | ≤ 1 s | CI relative (`bench`); release absolute | FD-5, FD-7 | — |
 | L8 | relaunch with the hot target's chats to put back: interactive | ≤ 3 s | CI relative (`bench`); release absolute | SC-20 | — |
-| L9 | project switch among 10 open projects, one chat each: the press of the switcher's row to the paint of that project's chat, p95 of 30 | ≤ 200 ms | release absolute; CI relative (`bench`); evidence only (`scenario tests`, macOS and Linux) | FR-27 | — |
+| L9 | project switch among 10 open projects, one chat each: the press of the switcher's row to the paint of that project's chat, p95 of 30 | ≤ 200 ms | release absolute; CI relative (`bench`) is #875 and #931; evidence only (`scenario tests`, macOS and Linux) | FR-27 | — |
 | T1 | event log throughput | ≥ 1,000 events/s sustained, L5 inside its budget | CI absolute (`stress`) | FD-9 | — |
 | T2 | audit throughput and group commit | 1,000 entries/s; ≤ 100 ms between commits (ADR 0075) | CI absolute (`stress`) | AU-3 | — |
 | G1 | git standing at 300,000 files: git processes in one repo at once while the pollers read it; eight reads against one | 1 at a time; eight reads cost no more git processes than one standing | CI absolute (`stress`, *shared standing at 300,000 files*) | FD-11 | — |

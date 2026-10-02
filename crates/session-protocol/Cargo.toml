@@ -13,12 +13,21 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 # The runtime the host and the app already use, and its own codec and compat crates.
-tokio = { version = "1", features = ["io-std", "io-util", "macros", "net", "process", "rt", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1", features = ["io-std", "io-util", "macros", "net", "process", "rt", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["codec", "compat"] }
 futures = "0.3"
 bytes = "1"
 # The multiplexer (ADR 0068 §4): Yamux, per-stream credit over one ordered byte stream.
 yamux = "0.14"
+
+[features]
+# `charter-session-bench`'s runtime, the one the crate's tests use (SC-16). Only the bench asks for
+# it, so the library's own dependencies stay what its users ask for.
+bench = ["tokio/rt-multi-thread"]
+
+[[bin]]
+name = "charter-session-bench"
+required-features = ["bench"]
 
 [dev-dependencies]
 # The heap of the test process, measured, so a memory bound is a measured one.
