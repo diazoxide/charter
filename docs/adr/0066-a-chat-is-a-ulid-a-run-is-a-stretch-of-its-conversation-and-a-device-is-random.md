@@ -32,7 +32,7 @@ it.
 ### A chat is a ULID and its origin device, and the number is what the window calls it
 
 **A chat's id is a [ULID](https://github.com/ulid/spec)**, minted once when the chat is created,
-and never changed. The **origin device** is recorded beside it: the device id (below) of the
+and never changed. (Once per clone and device since V43: see *ADR 0066, amended*, below.) The **origin device** is recorded beside it: the device id (below) of the
 machine that created the chat. The origin device is a fact about the chat, not part of its key.
 80 random bits per millisecond make a collision between two devices negligible, and a key that
 contained a device would carry a stale device once RR-4 moves the chat.
@@ -330,3 +330,50 @@ The three calls that went beyond the words of V1 were each ruled yes:
    is. "Never leaves the machine" means charter never sends it to a service.
 3. **A mid-chat persona adoption or model switch starts a new run**, and `charter persona use`
    tells the host on the hook channel.
+
+## ADR 0066, amended
+
+**Settled by V43** (operator, 2026-10-02): *"a copied project's chats get new ids, and a moved
+project keeps them. This amends ADR 0066 ("a chat's id is minted once" becomes "once per clone
+and device"). `app/reopen.json` records the clone-key (ADR 0079) and the device id. On a
+mismatch, charter looks at the recorded old root: if that root still exists and holds the same
+ids, the project was copied and every chat's id and device is minted again; otherwise it was
+moved, so the ids are kept and `clone` is rewritten. A same-path copy to another machine is
+caught by the device id. Chat-link writers stay off until this lands."*
+
+**Why.** `.charter/` is gitignored, so a `git clone` never carries the record. But `cp -R`, rsync
+and a backup restore do, and with it every open chat's id. Two clones then hold one chat, and
+everything keyed on the id merges them: the event log, session records, and ADR 0088's chat
+links, whose log is `merge=union` (#732, from the #856 review).
+
+**What it means.** "Minted once when the chat is created" now reads **minted once per clone and
+device**. The rule *"the number never leaves the clone, and the id is what leaves"* is unchanged.
+What changes is that a clone no longer trusts an id it did not mint:
+
+- **The record says who wrote it.** `app/reopen.json` gains `clone`: the clone-key (ADR 0079 §8:
+  the first 16 hex characters of the SHA-256 of the clone's canonical root), that root, and the
+  device id. The app stamps it onto every write.
+- **A launch compares it before any chat starts** (`reopen::arrive`):
+
+  | The record says | And | It is | The ids |
+  |---|---|---|---|
+  | no `clone` | | a record from before V43 | kept; `clone` adopts this clone |
+  | another device | | a copy, even at the same path | minted again, on this device |
+  | this clone and device | | the same clone | kept |
+  | another clone-key | the old root's record holds one of these chats' ids | a copy | minted again, on this device |
+  | another clone-key | the old root is gone, or holds none of them | a move | kept; `clone` is rewritten |
+
+  A device unknown on either side (ADR 0031) decides nothing, and the clone-key does. One shared
+  id is enough to call it a copy: the original may have opened or closed other chats since.
+- **A copy's chats keep everything else**: their numbers, conversations, names and
+  `resumed_from`. Only `id`, `device` and `run` are the original's. `run` is cleared, and the
+  start that puts the chat back begins the copy's first run.
+
+**What it cannot tell.** A copy whose original was deleted, or sits on a volume that is not
+mounted, reads as a move and keeps its ids. That is accepted. No live clone holds those ids then,
+so nothing merges from that launch on. Records the original wrote before it went still name
+them, and they name the same chat's history up to the copy, which is true.
+
+**What it does not do.** It turns no chat-link writer on. ADR 0088 §7 keeps them off, and this
+amendment only makes the ids they will write trustworthy. It does not bump the record's
+`version`: an absent `clone` reads as a record from before V43, for `pinned`'s reason.

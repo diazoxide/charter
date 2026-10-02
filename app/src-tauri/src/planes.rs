@@ -114,6 +114,10 @@ struct Records {
     /// names, and writing it would replace the operator's own record — of a plane they never
     /// said yes to — with whatever this process happens to have open, which is nothing.
     allowed: AtomicBool,
+    /// The clone and the device this app writes the record from (V43), stamped onto every
+    /// record it writes, so the next launch can tell whether it is still in this clone, on
+    /// this device — or in a copy, or a move ([`reopen::arrive`]).
+    clone: reopen::CloneMark,
 }
 
 impl Records {
@@ -131,7 +135,11 @@ impl Records {
         if !self.allowed.load(Ordering::SeqCst) {
             return;
         }
-        if let Err(why) = reopen::write(&self.root, record) {
+        let record = reopen::Record {
+            clone: Some(self.clone.clone()),
+            ..record.clone()
+        };
+        if let Err(why) = reopen::write(&self.root, &record) {
             tracing::warn!(
                 "charter: what is open in {} was not recorded ({why})",
                 self.root.display()
@@ -358,6 +366,19 @@ impl Held {
     /// launch about chats the operator already declined.
     fn reopen(&self, size: Size, record: Read, choice: Choice) {
         self.records.allow();
+        // A record another clone or device wrote is a copy's or a move's (V43): a copy's chats
+        // get ids of their own before any of them starts, and are written with them once
+        // they are back, so no two clones ever hold one chat's id.
+        let record = record.map(|record| {
+            let (arrival, record) = reopen::arrive(record, &self.records.clone);
+            if arrival == reopen::Arrival::Copied {
+                tracing::info!(
+                    "charter: plane {} is a copy of another clone; its chats get new ids",
+                    self.root.display()
+                );
+            }
+            record
+        });
         let record = match record {
             Ok(record) if choice == Choice::StartFresh => {
                 let fresh = record.chosen(Choice::StartFresh);
@@ -1323,10 +1344,17 @@ impl Planes {
         }
         let reporting = hooks.reporting();
 
+        // The origin device of every chat this project mints (ADR 0066). None where the machine
+        // store has no id to give: the chats still get ids, and their device reads `unknown`.
+        let device = self
+            .config
+            .as_deref()
+            .and_then(|config| charter_core::machine::device_id(config).ok());
         let records = Arc::new(Records {
             root: root.clone(),
             config: self.config.clone(),
             allowed: AtomicBool::new(false),
+            clone: reopen::CloneMark::of(&root, device.clone()),
         });
         let writes = Arc::clone(&records);
         let mut chats = Chats::on_host(
@@ -1335,13 +1363,7 @@ impl Planes {
         );
         chats.arming_with(self.shipped.clone());
         chats.stopped_by(Arc::clone(&self.kill_switch));
-        // The origin device of every chat this project mints (ADR 0066). None where the machine
-        // store has no id to give: the chats still get ids, and their device reads `unknown`.
-        chats.on_device(
-            self.config
-                .as_deref()
-                .and_then(|config| charter_core::machine::device_id(config).ok()),
-        );
+        chats.on_device(device);
         // Each run a start begins goes into the host's event log, before the chat's program
         // can send its first hook line (ADR 0066, #834): a chat put back after a relaunch
         // carries on under its id, and its first event is `run.started {cause: reopen}`.
@@ -2484,6 +2506,7 @@ mod tests {
             }],
             dealt: 0,
             relaunch_after_update: false,
+            clone: None,
         }
     }
 
@@ -2596,6 +2619,7 @@ mod tests {
             root: root.clone(),
             config: Some(config.clone()),
             allowed: AtomicBool::new(true),
+            clone: reopen::CloneMark::of(&root, None),
         };
 
         // A record that appeared behind charter's back is exactly what the question is for.
@@ -2627,6 +2651,7 @@ mod tests {
             root: root.clone(),
             config: Some(config.clone()),
             allowed: AtomicBool::new(true),
+            clone: reopen::CloneMark::of(&root, None),
         };
 
         records.write(&one_chat_on("/bin/true"));
@@ -5588,6 +5613,75 @@ mod tests {
 
         assert!(first.is_some(), "the chat is still recorded, with an id");
         assert_eq!(on_disk(&root).chats[0].identity.id, first);
+    }
+
+    /// `root`'s record holding one chat with ids, as this clone's app last wrote it (V43).
+    #[cfg(unix)]
+    fn a_project_whose_chat_has_ids(root: &Path) {
+        relaunched(root).let_go_of_all();
+        let mut record = one_chat_on("/bin/cat");
+        record.chats[0].identity = reopen::Identity {
+            id: Some(CHAT_ID.to_owned()),
+            run: Some(OLD_RUN.to_owned()),
+            ..Default::default()
+        };
+        record.clone = on_disk(root).clone;
+        assert!(
+            record.clone.is_some(),
+            "the app records the clone it writes from"
+        );
+        reopen::write(root, &record).expect("the record is written");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_copied_project_s_chats_are_back_under_new_ids_on_disk_and_the_original_s_are_not() {
+        // V43: a copy carries `.charter/app/reopen.json`, and with it the original's ids.
+        let dir = tempfile::tempdir().expect("a directory");
+        let original = a_plane(&dir.path().join("original"));
+        a_project_whose_chat_has_ids(&original);
+        let copy = a_plane(&dir.path().join("copy"));
+        std::fs::create_dir_all(copy.join(".charter/app")).expect("its state directory");
+        std::fs::copy(reopen::path(&original), reopen::path(&copy)).expect("copied");
+
+        relaunched(&copy).let_go_of_all();
+
+        let back = on_disk(&copy);
+        let id = back.chats[0].identity.id.clone().expect("an id");
+        assert_ne!(id, CHAT_ID, "the copy's chat has an id of its own");
+        assert_eq!(
+            back.clone.map(|clone| clone.key),
+            Some(charter_core::plane::clone_key(&copy))
+        );
+        assert_eq!(
+            on_disk(&original).chats[0].identity.id.as_deref(),
+            Some(CHAT_ID)
+        );
+        relaunched(&copy).let_go_of_all();
+        assert_eq!(
+            on_disk(&copy).chats[0].identity.id,
+            Some(id),
+            "minted again once, and kept from then on"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_moved_project_s_chats_are_back_under_their_ids_and_it_records_where_it_is_now() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let before = a_plane(&dir.path().join("before"));
+        a_project_whose_chat_has_ids(&before);
+        let after = dir.path().join("after");
+        std::fs::rename(&before, &after).expect("moved");
+
+        relaunched(&after).let_go_of_all();
+
+        let back = on_disk(&after);
+        assert_eq!(back.chats[0].identity.id.as_deref(), Some(CHAT_ID));
+        assert_eq!(
+            back.clone.map(|clone| clone.key),
+            Some(charter_core::plane::clone_key(&after))
+        );
     }
 
     const CHAT_ID: &str = "01K6E8ZK6V4Q9T0N3M2B1C5D7F";

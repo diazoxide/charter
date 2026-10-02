@@ -245,6 +245,18 @@ pub fn state_dir(root: &Path) -> PathBuf {
     }
 }
 
+/// A project clone's key (ADR 0079 §8): the first 16 hex characters of the SHA-256 of the
+/// clone's canonical root path. Canonicalised here, so a root reached through a link keys as
+/// the directory it is; a root that cannot be resolved keys as spelled.
+pub fn clone_key(root: &Path) -> String {
+    use sha2::Digest;
+    let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let digest = sha2::Sha256::digest(root.as_os_str().as_encoded_bytes());
+    let mut key = crate::extension::hex(&digest);
+    key.truncate(16);
+    key
+}
+
 /// `root.py:_plane_of`: the plane a found marker really belongs to.
 ///
 /// `charter.toml` is a tracked file, so when the repo IS a plane every linked worktree cut

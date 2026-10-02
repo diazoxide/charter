@@ -20,6 +20,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   after its harness could not find the conversation, begins a `fresh` run in the same chat
   (ADR 0066, #834).
 
+- **A copied project's chats get ids of their own.** A project copied with its `.charter/`
+  directory (`cp -R`, rsync, a backup restore) used to carry its original's chat ids, so the two
+  clones' events named one chat. The record now says which clone and device wrote it, and the
+  first launch of a copy, at another path or on another machine, gives every chat a new id. A
+  moved project keeps its ids. A copy whose original has been deleted keeps them too (V43,
+  amending ADR 0066).
+
 - **The supported platforms are written down.** macOS 27 and 26 on Apple silicon, Ubuntu 26.04
   and 24.04 LTS, and Fedora 44, each with the CI job that covers it and what that job proves,
   are in the README and in `docs/platforms.md`. macOS 27, Ubuntu 26.04 and Fedora are covered

@@ -597,7 +597,8 @@ impl Chats {
         operator_shell: bool,
         why: Why,
     ) -> Result<u32, String> {
-        // Who the chat is, and the run this start begins (ADR 0066). **The id is minted once**,
+        // Who the chat is, and the run this start begins (ADR 0066). **The id is minted once**
+        // per clone and device (V43: a copy's was minted again before `put_back` got it),
         // when no record holds one, on this device, and a chat put back or started again keeps
         // the one it had, with its origin device. Every start begins a run of its own.
         let identity = match &chat.identity.id {
@@ -1011,6 +1012,8 @@ impl Chats {
             // An ordinary write, which is what makes the flag last one launch: the quit that
             // restarts charter for an update is the only writer that says otherwise (#251).
             relaunch_after_update: false,
+            // The writer stamps the clone and device it writes from (V43, `Records::write`).
+            clone: None,
         }
     }
 
@@ -2038,6 +2041,7 @@ mod tests {
                     .collect(),
                 dealt: 0,
                 relaunch_after_update: false,
+                clone: None,
             },
             SIZE,
         );
@@ -2210,6 +2214,7 @@ mod tests {
                 chats: vec![chat(&claude, "ide.7", None), was_in_front],
                 dealt: 0,
                 relaunch_after_update: false,
+                clone: None,
             },
             SIZE,
         );
@@ -2239,6 +2244,7 @@ mod tests {
                 ],
                 dealt: 0,
                 relaunch_after_update: false,
+                clone: None,
             },
             SIZE,
         );
@@ -2260,6 +2266,7 @@ mod tests {
                 chats: vec![chat(&a_claude(dir.path()), "ide.7", Some(ID))],
                 dealt: 0,
                 relaunch_after_update: false,
+                clone: None,
             },
             SIZE,
         );
@@ -2295,6 +2302,7 @@ mod tests {
                 ],
                 dealt: 0,
                 relaunch_after_update: false,
+                clone: None,
             },
             SIZE,
         );
@@ -2318,6 +2326,7 @@ mod tests {
                 chats: vec![chat(&a_claude(dir.path()), "ide.7", None)],
                 dealt: 0,
                 relaunch_after_update: false,
+                clone: None,
             },
             SIZE,
         );
@@ -2341,6 +2350,7 @@ mod tests {
             }],
             dealt: 0,
             relaunch_after_update: false,
+            clone: None,
         };
         // What `charter workspace rename alpha beta` does to the record.
         assert!(
@@ -2383,6 +2393,7 @@ mod tests {
                 ],
                 dealt: 0,
                 relaunch_after_update: false,
+                clone: None,
             },
             SIZE,
         );
@@ -2419,6 +2430,7 @@ mod tests {
                     .collect(),
                 dealt: 0,
                 relaunch_after_update: false,
+                clone: None,
             },
             SIZE,
         );
@@ -2441,6 +2453,7 @@ mod tests {
                 chats: vec![chat("/definitely/not/a/program", "ide.7", Some(ID))],
                 dealt: 0,
                 relaunch_after_update: false,
+                clone: None,
             },
             SIZE,
         );
@@ -2464,6 +2477,7 @@ mod tests {
                 chats: vec![chat("/definitely/not/a/program", "ide.7", Some(ID))],
                 dealt: 0,
                 relaunch_after_update: false,
+                clone: None,
             },
             SIZE,
         );
@@ -2490,6 +2504,7 @@ mod tests {
                 ],
                 dealt: 0,
                 relaunch_after_update: false,
+                clone: None,
             },
             SIZE,
         );
@@ -2689,6 +2704,7 @@ mod tests {
                 chats: vec![chat(&claude, "ide.7", None), chat(&claude, "ide.8", None)],
                 dealt: 0,
                 relaunch_after_update: false,
+                clone: None,
             },
             SIZE,
         );
@@ -2709,6 +2725,7 @@ mod tests {
                 chats: vec![chat(&a_claude(dir.path()), "ide.7", Some(ID))],
                 dealt: 0,
                 relaunch_after_update: false,
+                clone: None,
             },
             SIZE,
         );
@@ -3202,6 +3219,7 @@ mod tests {
                 }],
                 dealt: 0,
                 relaunch_after_update: false,
+                clone: None,
             },
             SIZE,
         );
