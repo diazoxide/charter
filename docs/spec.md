@@ -417,6 +417,21 @@ how it is cited and nothing here is renumbered.
     `charter persona edit-memory|archive-memory|unarchive-memory [--shared]`. Moving a memory
     between stores and browsing the archive are later work. **ADR 0065.**
 
+### The light editor — added 2026-10-02
+
+34. **Any file of a worktree opens in the light editor, read only.** A worktree's row in the
+    explorer offers *Browse the files of*, followed by the worktree's name: a view tab listing
+    every file git tracks there and every one it does not ignore, narrowed as the operator
+    types, with the file picked drawn beside the list and *Open in a tab of its own* for a tab
+    of that file alone. The window names the worktree, never a folder. The core opens only a
+    file that list offers (an ignored file, such as a `.env`, does not open by name), and
+    refuses a path with a `.git` component or one that resolves, through a link, outside the
+    worktree or to a file the list does not offer. A binary file, or one past 5 MiB, is said in
+    a sentence rather than drawn. The light editor is CodeMirror 6, with charter's fixed set of
+    grammars and the theme's colours; a diff is drawn in its merge view, which marks only the
+    lines git reported and finds the changed words inside them. Editing (RC-10), the Review tab
+    (RC-4) and *open in your editor at this line* (RC-20) come after. **ADR 0081, ADR 0084.**
+
 ## Limits (acceptance)
 
 Only what a person would notice. Each limit after *Open chats* and *Hot chats*, which are

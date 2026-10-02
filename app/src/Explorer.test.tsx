@@ -383,7 +383,11 @@ describe("a piece row's menu", () => {
       within(menu)
         .getAllByRole("menuitem")
         .map((one) => one.getAttribute("aria-label")),
-    ).toEqual(["Merge worktree one into svc", "Remove worktree one in svc"]);
+    ).toEqual([
+      "Browse the files of one",
+      "Merge worktree one into svc",
+      "Remove worktree one in svc",
+    ]);
   });
 
   it("hands the catalogue's offer back when a row is pressed", async () => {

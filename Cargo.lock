@@ -810,6 +810,7 @@ dependencies = [
  "alacritty_terminal",
  "changelog",
  "charter-core",
+ "charter-same-user",
  "chrono",
  "dirs 7.0.0",
  "flate2",
@@ -851,14 +852,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "charter-same-user"
+version = "0.4.2"
+dependencies = [
+ "nix",
+ "tempfile",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "charter-session-protocol"
 version = "0.4.2"
 dependencies = [
  "bytes",
+ "charter-same-user",
+ "charter-session-protocol",
  "dhat",
  "futures",
+ "getrandom 0.4.3",
+ "hmac 0.13.0",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
+ "subtle",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
@@ -3274,6 +3290,7 @@ dependencies = [
  "cfg-if",
  "cfg_aliases",
  "libc",
+ "memoffset",
 ]
 
 [[package]]

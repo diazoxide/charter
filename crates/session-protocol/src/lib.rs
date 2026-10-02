@@ -5,15 +5,24 @@
 //! pipes, or a connector's stdio (`ssh`, `docker exec`, `kubectl exec`), and inside a
 //! runner's Noise channel (ADR 0078 §3), unchanged. Nothing here assumes a local socket.
 //!
-//! Three layers, each in its own module:
+//! Four layers, each in its own module, and one check before them:
 //!
+//! 0. `local` (unix only): on `charterd.sock`, a connection from another uid is closed before
+//!    a byte of it is read, and only what passed is a `local::SameUser`, the one thing the
+//!    host's `link::serve` takes (FD-6).
 //! 1. [`version`]: before anything else, the two ends agree on one version, and refuse when
 //!    they share no major, or when the other end has not finished its half within
-//!    [`version::HANDSHAKE_TIMEOUT`]. It fails closed.
-//! 2. [`link`]: the stream is multiplexed with Yamux into a **control lane** (length-delimited
+//!    [`version::HANDSHAKE_TIMEOUT`], one deadline over this step and the two after it. It
+//!    fails closed.
+//! 2. [`auth`]: admission is mutual. The client proves, over the host's fresh challenge, that it
+//!    holds one client scope's credential, and the host proves, over the client's fresh nonce,
+//!    that it holds it too; either end refuses the other otherwise. The credential never
+//!    crosses the wire. There is no anonymous scope, and a [`link::Link`] exists only once
+//!    both ends have admitted (FD-6, ADR 0068 §5).
+//! 3. [`link`]: the stream is multiplexed with Yamux into a **control lane** (length-delimited
 //!    frames, the commands and events) and any number of streams, each with **its own credit
 //!    flow control**, so a pane that stops reading stops only itself.
-//! 3. [`view`]: a terminal's bytes to one client: a header, the snapshot, then the live bytes,
+//! 4. [`view`]: a terminal's bytes to one client: a header, the snapshot, then the live bytes,
 //!    raw. The host holds a view to two bounds: it writes no more than a **high watermark**
 //!    ahead of what the client has drawn (xterm.js's flow control, with acknowledgements), and
 //!    it queues no more than a bound in bytes. A view that falls behind that bound is dropped,
@@ -43,6 +52,9 @@
 //! a view's bytes and snapshot come from is the host's (FD-5): `Engine::snapshot` and the
 //! session's output.
 
+pub mod auth;
 pub mod link;
+#[cfg(unix)]
+pub mod local;
 pub mod version;
 pub mod view;

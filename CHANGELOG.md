@@ -21,6 +21,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   diff** opens a shell in that chat's branch with its diff. Nothing is written into your repo, and
   the task asks for nothing to be pushed (FR-28, #621).
 
+- **Read any file of a worktree in charter.** A worktree's menu in the explorer has *Browse the
+  files of …*: a tab listing the worktree's files, narrowed as you type, with the file you pick
+  drawn beside the list in the light editor, charter's read-only CodeMirror 6 viewer with syntax
+  colours from your theme. *Open in a tab of its own* gives a file a tab to itself. A binary file
+  or one past 5 MiB is named rather than drawn. The diff view the Review tab will use is built
+  on the same component (RC-5, #706).
+
 - **Link a chat to a work item.** A chat tab's menu and the palette have **Link to work item…**,
   which asks for the item's tracker key (`github:github.com/owner/repo#12`, or a todo's
   `todo:<workspace>/<todo>`), and **Unlink work item**. A linked chat shows `Work item: <key>`
@@ -399,6 +406,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   built to exhaust them is refused instead of slipping through when the hook dies (#866).
 - **The handoff guard finds a handoff in a shell's script past the shell's options**, including
   options that take a value (#866).
+- **The hook channel reads only your own user's connections.** Besides each chat's token, the
+  app now checks which user is on the other end of its hook socket, and closes a connection
+  from any other user before reading it. The socket's private directory already kept other
+  users out; this still holds if that directory's permissions are ever wrong (FD-6, #645).
 
 ## [0.4.2] - 2026-09-30
 

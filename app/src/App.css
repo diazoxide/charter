@@ -3916,6 +3916,98 @@ h2.sidebar-title .node-icon {
   padding: 0.75rem 1rem 1rem;
 }
 
+/* The light editor (RC-5): a piece's files beside the file picked, or one file filling its
+   tab. CodeMirror draws its own colours from `src/editor/look.ts`; only the layout is here. */
+.view-body:has(> .piece-files, > .piece-file) {
+  display: flex;
+  padding: 0;
+  overflow: hidden;
+}
+
+.piece-files {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+}
+
+.piece-files-list {
+  display: flex;
+  flex: 0 0 18rem;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--border-subtle);
+}
+
+.piece-files-list input {
+  margin: 0.5rem;
+}
+
+.piece-files-list ul {
+  flex: 1 1 auto;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.piece-files-list button {
+  display: block;
+  width: 100%;
+  padding: 0.125rem 0.75rem;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: none;
+  border: none;
+}
+
+.piece-files-list button:hover {
+  background: var(--surface-hover);
+}
+
+.piece-files-list button[aria-current="true"] {
+  background: var(--control-aimed);
+}
+
+.piece-files-list .none {
+  padding: 0 0.75rem;
+}
+
+.piece-files-shown,
+.piece-file {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+.piece-files-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.25rem 0.75rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.light-editor {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.light-editor .cm-editor {
+  height: 100%;
+}
+
+/* The merge view grows to its two documents; its box scrolls them together. */
+.light-editor.merge {
+  overflow-y: auto;
+}
+
 /* A view's sentences: the definition's facts, a count, a producer's note. Read, not scanned —
    so they wrap, which a panel row does not. */
 .view-body .note {

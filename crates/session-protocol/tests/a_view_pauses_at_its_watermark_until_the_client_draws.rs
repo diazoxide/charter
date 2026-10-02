@@ -6,16 +6,23 @@
 use std::time::Duration;
 
 use bytes::Bytes;
+use charter_session_protocol::auth::Scope;
 use charter_session_protocol::link::{self, Link};
 use charter_session_protocol::version::{Speaks, Version};
 use charter_session_protocol::view::{self, Attacher, Chunk, Limits, ViewId, Viewer};
 use tokio::io::duplex;
 use tokio::time::timeout;
 
+mod common;
+use common::HELD;
+
 async fn linked() -> (Link, Link) {
     let speaks = Speaks::new([Version { major: 1, minor: 0 }]);
     let (a, b) = duplex(256 * 1024);
-    let (client, host) = tokio::join!(link::connect(a, speaks.clone()), link::serve(b, speaks));
+    let (client, host) = tokio::join!(
+        link::connect(a, speaks.clone(), Scope::LocalUi, HELD.of(Scope::LocalUi)),
+        link::serve_any(b, speaks, &HELD)
+    );
     (client.unwrap(), host.unwrap())
 }
 

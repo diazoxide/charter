@@ -1,10 +1,14 @@
 //! A peer that opens a stream and then says nothing, or says half a hello, is refused when the
 //! handshake's deadline passes, instead of holding the host's task forever (#817 review).
 
+use charter_session_protocol::auth::{self, Scope};
 use charter_session_protocol::link::{self, LinkError};
 use charter_session_protocol::version::{self, HANDSHAKE_TIMEOUT, Refused, Speaks, Version};
 use tokio::io::{AsyncWriteExt, duplex};
 use tokio::time::Instant;
+
+mod common;
+use common::HELD;
 
 fn v1() -> Speaks {
     Speaks::new([Version { major: 1, minor: 0 }])
@@ -38,9 +42,12 @@ async fn a_host_that_never_answers_is_refused_by_the_client_at_the_deadline() {
 #[tokio::test(start_paused = true)]
 async fn a_client_that_negotiates_and_never_opens_the_control_lane_is_refused() {
     let (mut a, b) = duplex(64 * 1024);
-    let host = tokio::spawn(link::serve(b, v1()));
-    // The client negotiates by hand, then opens nothing.
-    version::offer(&mut a, &v1()).await.unwrap();
+    let host = tokio::spawn(link::serve_any(b, v1(), &HELD));
+    // The client negotiates and is admitted by hand, then opens nothing.
+    let (_, io) = version::offer(&mut a, &v1()).await.unwrap();
+    let _io = auth::present(io, Scope::LocalUi, HELD.of(Scope::LocalUi))
+        .await
+        .unwrap();
     let started = Instant::now();
     let refused = host.await.unwrap().err().unwrap();
     assert!(matches!(refused, LinkError::TimedOut), "{refused:?}");

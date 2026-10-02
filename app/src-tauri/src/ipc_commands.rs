@@ -115,6 +115,8 @@ macro_rules! app_commands {
                 worktrees::worktree_remove,
                 worktrees::worktree_merge,
                 worktrees::worktree_done,
+                piecefiles::piece_files,
+                piecefiles::piece_file,
                 updates::update_channel,
                 updates::set_update_channel,
                 updates::check_for_update,

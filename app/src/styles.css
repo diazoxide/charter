@@ -86,6 +86,10 @@
   --color-danger-surface: var(--danger-surface);
   --color-danger-text: var(--danger-text);
   --color-danger-wash: var(--danger-wash);
+  --color-diff-deleted: var(--diff-deleted);
+  --color-diff-inserted: var(--diff-inserted);
+  --color-diff-deleted-text: var(--diff-deleted-text);
+  --color-diff-inserted-text: var(--diff-inserted-text);
   --color-state-running: var(--state-running);
   --color-state-waiting: var(--state-waiting);
   --color-state-waiting-glow: var(--state-waiting-glow);

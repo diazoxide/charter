@@ -325,7 +325,15 @@ describe("a Tailwind class cannot reach past the tokens", () => {
 describe("the stylesheet and the vocabulary agree", () => {
   const css = nonEmpty("src/App.css");
   const bridge = nonEmpty("src/styles.css");
-  const used = new Set([...css.matchAll(/var\((--[a-z0-9-]+)/g)].map((hit) => hit[1]));
+  /** The light editor's look (RC-5). CodeMirror's own stylesheet is put in the page outside
+   *  every layer, where `App.css` cannot outrank it, so the editor's colours are written
+   *  through `EditorView.theme` there, as tokens, and are read here as `App.css` is. */
+  const editor = nonEmpty("src/editor/look.ts");
+  const used = new Set(
+    [...css.matchAll(/var\((--[a-z0-9-]+)/g), ...editor.matchAll(/var\((--[a-z0-9-]+)/g)].map(
+      (hit) => hit[1],
+    ),
+  );
   const declared = new Set([...TOKENS.map(property), ...MOTION_TOKENS.map(motionProperty)]);
   /** Custom properties the stylesheet declares for itself. A colour may not be one of these —
    *  the tests above fail on a literal — so what is left is a length or a count. */

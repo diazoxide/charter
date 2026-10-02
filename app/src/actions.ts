@@ -47,6 +47,7 @@ import {
   scopeKey,
   type MemoryRef,
 } from "./memories";
+import { pieceFilesTitle, pieceFilesView } from "./pieceViews";
 import { SESSION_VIEW, sessionTitle, sessionTitleOf, sessionView } from "./sessions";
 import { shellKeySaid } from "./shellKey";
 import { switcherKeySaid } from "./switcherKey";
@@ -1571,6 +1572,19 @@ export function catalogue(now: Now): Offer[] {
   const noPlane =
     now.plane === undefined ? "charter found no plane, so it cannot reach a worktree." : undefined;
   for (const cut of pieces) {
+    // Reading first (RC-5): the piece's files, in the light editor. It reads and writes
+    // nothing on disk until a file is picked, and then only reads.
+    const browse = `Browse the files of ${cut.piece}`;
+    offers.push(
+      noPlane === undefined
+        ? can(
+            `worktree.files:${idOf(cut)}`,
+            browse,
+            { verb: "openView", view: pieceFilesView(cut), title: pieceFilesTitle(cut) },
+            cut.piece,
+          )
+        : cannot(`worktree.files:${idOf(cut)}`, browse, noPlane, cut.piece),
+    );
     const title = `Merge worktree ${cut.piece} into ${cut.repo}`;
     offers.push(
       noPlane === undefined
@@ -2398,7 +2412,7 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
     case "worktree": {
       const at = `${what.repo}/${what.piece}`;
       return {
-        above: [`worktree.merge:${at}`],
+        above: [`worktree.files:${at}`, `worktree.merge:${at}`],
         // The discard row is listed and is almost never found: it exists only while a removal
         // of THIS piece has been refused and not answered. That is the whole reason a menu
         // lists ids rather than rows — nothing here has to know when it exists.

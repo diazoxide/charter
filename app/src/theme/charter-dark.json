@@ -40,6 +40,11 @@
     "danger.text": "#f2a0a0",
     "danger.wash": "#c05c5c1f",
 
+    "diff.deleted": "#f851491f",
+    "diff.inserted": "#3fb9501f",
+    "diff.deleted-text": "#f8514955",
+    "diff.inserted-text": "#3fb95055",
+
     "state.running": "#2f81f7",
     "state.waiting": "#d29922",
     "state.waiting-glow": "#d2992259",
