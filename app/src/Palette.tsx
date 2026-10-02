@@ -198,8 +198,13 @@ export function Palette({
     openTheProjects();
   }, [projects?.asked, openTheProjects]);
 
-  /** Whether this window has a switcher for its key to open, for the one keydown listener. */
-  const switches = (projects?.rows.length ?? 0) > 0;
+  /**
+   * Whether this window has a switcher for its key to open, for the one keydown listener: two
+   * projects or more, as the title bar's button and the palette's row. With one there is
+   * nowhere to go, and the key is not taken at all — it goes on to whatever has the keyboard,
+   * as any key the window has no use for does.
+   */
+  const switches = (projects?.rows.length ?? 0) > 1;
   const switchesNow = useRef(switches);
   useEffect(() => {
     switchesNow.current = switches;
@@ -230,9 +235,16 @@ export function Palette({
         e.stopPropagation();
         if (e.repeat) return;
         if (up.current && scopeNow.current === "projects") {
-          // Down one, round to the top: the window switcher's own idiom.
+          // Down one, round to the top: the window switcher's own idiom — past a row that
+          // cannot run, which is the project already in front.
           const { shown, aimed } = latest.current;
-          if (shown.length > 0) setAt((aimed + 1) % shown.length);
+          for (let step = 1; step <= shown.length; step++) {
+            const next = (aimed + step) % shown.length;
+            if (shown[next]?.available) {
+              setAt(next);
+              break;
+            }
+          }
           return;
         }
         openTheProjects();
@@ -259,7 +271,8 @@ export function Palette({
         // not let go, and it is checked on BOTH paths so neither half can flicker.
         if (e.repeat) return;
         if (up.current) {
-          if (e.key === PASS_THROUGH_KEY) handBack();
+          // Only from the palette: the switcher lists no chat to hand it to.
+          if (e.key === PASS_THROUGH_KEY && scopeNow.current === "actions") handBack();
           return;
         }
         setOpen((was) => {
