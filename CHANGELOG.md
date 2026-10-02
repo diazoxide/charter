@@ -282,6 +282,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Switching into a project with many chats is quicker.** Each chat's row in the explorer and its
+  state mark on the tab are dimmed in their colour rather than by transparency, and the mark for a
+  chat that has said nothing yet is a ring broken into two arcs rather than a dashed one, so fifty
+  of them no longer cost the switch a slow paint (FR-27, #891).
+
 - **Per-machine logs are named by the device id, not the hostname.** The dispatch and skill
   logs (`personas/_dispatch/`, `personas/_skills/`), the piece claim log, the landing log and
   pending landings are now filed under this device's id from the machine store. Two machines

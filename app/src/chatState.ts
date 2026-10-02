@@ -85,7 +85,7 @@ export function isShell(chat: Pick<OpenChat, "harness" | "profile">): boolean {
  * The state mark a chat draws, or none.
  *
  * **A shell tab draws none until something reports a state for it.** Its terminal mark
- * already says what it is, and `unknown` beside it — a dashed ring — read as a spinner on a
+ * already says what it is, and `unknown` beside it — a broken ring — read as a spinner on a
  * tab that is not waiting for anything. A harness started by hand in it whose hook report the
  * board adopts has said something, and the mark shows it as on any chat. A harness chat keeps
  * `unknown`: there it is the honest word for a harness that has not reported yet.

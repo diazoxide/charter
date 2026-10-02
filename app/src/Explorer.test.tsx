@@ -229,7 +229,7 @@ describe("the explorer", () => {
   // ---------------------------------------------------------------------------------------
 
   it("draws no state mark on a shell tab's chat, and `unknown` on a harness's", () => {
-    // A shell's terminal icon already says what it is; a dashed `unknown` beside it read as a
+    // A shell's terminal icon already says what it is; a broken-ring `unknown` beside it read as a
     // spinner. A harness that has reported nothing yet still says so.
     draw({
       chats: [
