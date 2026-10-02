@@ -1362,11 +1362,31 @@ and an archived one is where `memstore.archive` would have put it (ADR 0065).
   V40, FW-5 #732). Absent in a workspace nothing has linked or promoted.
 - **Tier:** Plane when LIVE, Clone state when LOCAL — committed with a LIVE workspace, as its todos are, because FI6's links must reach the operator's other devices; unlike the piece claim log and the landing log, which stay in their clone.
 - **Written by:** `charter_core::work::log` (`append`, and `append_alias`, which refuses an
-  alias that would close a cycle). Today its one writer is `charter ws todo promote` (a
-  `promoted` alias, `charter_core::work::promote`). The window's and the host's chat links, the
-  Work list's workspace links, `workspace rename`'s `renamed` aliases and the item cache's
-  `moved` aliases (FW-7) are **decided, not yet written**: the chat half waits on a copied
-  project's chat ids (FW-5 #732), and a project-root chat is refused a link (ADR 0088 §4).
+  alias that would close a cycle). Its writers today:
+  - `charter ws todo promote`: a `promoted` alias (`charter_core::work::promote`);
+  - the app's host, for the window: a chat's link and unlink (`log::link_chat` and
+    `log::unlink_chat`, called by `chat_work_link` and `chat_work_unlink` in
+    `app/src-tauri/src/worklinks.rs`), which the window offers as **Link to work item…** and
+    **Unlink work item** on a chat tab's menu and in the palette (V60). The line goes in this
+    device's log of the workspace the window files the chat under, and names the chat by its
+    ULID, which V43 keeps across a relaunch and a move and mints again in a copy. Linking a chat
+    to the item it already works on, after both are resolved, writes nothing when that
+    workspace's log holds the link, and writes a line when another workspace's does, so this
+    workspace's items hold it. An unlink names the item the chat's link resolves to, and a chat
+    with no link writes nothing. A chat at the project root, or working outside the project, is
+    refused both (ADR 0088 §4).
+
+  **A line is never dated before the last line of the log it goes in**, so a clock that stepped
+  back cannot reorder one device's own lines. **A chat's link or unlink is also dated at least
+  one second after the last line any log holds for that chat.** The fold orders by `(ts, device
+  file, line index, workspace)`, so without that a line in the same second as the chat's link
+  in another workspace's log could sort before it, whatever line each sits on. After the line
+  is written the logs are folded again. A line synced from another device in that moment can
+  still undo it, and that is reported as refused, with what the chat works on now, never as
+  done.
+
+  The Work list's workspace links, `workspace rename`'s `renamed` aliases and the item cache's
+  `moved` aliases (FW-7) are **decided, not yet written**.
 - **Read by:** `charter_core::work::log::fold`, for the Work list (`work::list::of`, which the
   board, FW-9, will draw), `charter ws todo` (which finishes closing a promoted todo whose
   close a crash cut short), and `charter doctor`'s `work links` row, shown only when there is

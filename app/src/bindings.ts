@@ -931,6 +931,18 @@ export const commands = {
 	/**  Forget a todo: it goes, and nothing is journalled. */
 	todoForget: (plane: PlaneId, workspace: string, slug: string) => typedError<string, string>(__TAURI_INVOKE("todo_forget", { plane, workspace, slug })),
 	/**
+	 *  Link the chat in `session` to `item`, and answer the item it now works on, read through its
+	 *  aliases.
+	 */
+	chatWorkLink: (plane: PlaneId, session: number, item: string) => typedError<string, string>(__TAURI_INVOKE("chat_work_link", { plane, session, item })),
+	/**
+	 *  End the work link of the chat in `session`, and answer the item it worked on, or `null` when
+	 *  it had none and nothing was written.
+	 */
+	chatWorkUnlink: (plane: PlaneId, session: number) => typedError<string | null, string>(__TAURI_INVOKE("chat_work_unlink", { plane, session })),
+	/**  The work item the chat in `session` works on, read through its aliases, or `null`. */
+	chatWorkItem: (plane: PlaneId, session: number) => typedError<string | null, string>(__TAURI_INVOKE("chat_work_item", { plane, session })),
+	/**
 	 *  One memory, for its tab. `null` is a memory that is not there any more — a tab put back at a
 	 *  launch can name one archived since — which the tab draws as a view whose source has gone.
 	 */

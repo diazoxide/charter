@@ -13,6 +13,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Link a chat to a work item.** A chat tab's menu and the palette have **Link to work item…**,
+  which asks for the item's tracker key (`github:github.com/owner/repo#12`, or a todo's
+  `todo:<workspace>/<todo>`), and **Unlink work item**. A linked chat shows `Work item: <key>`
+  in its tab's tooltip and in its pane's corner. A chat works on one work item at a time. The
+  link goes in the workspace's work link log, so it reaches your other devices when the
+  workspace is LIVE, and it follows a todo when that todo is promoted to an issue. A chat at
+  the project root is not offered it (V60, ADR 0088, FW-5, #732, #914).
+
 - **Promote a todo to an issue.** `charter ws todo promote <slug> --repo <repo>` opens an issue
   with the todo's title and text in one of the workspace's repos, on GitHub or GitLab, as you.
   It names the repo, whether it is public and the workspace label it adds (private repos only)

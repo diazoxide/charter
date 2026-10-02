@@ -177,6 +177,10 @@ export type Does =
   | { verb: "selectTab"; tab: number }
   /** Opens the name of a chat's tab for editing, in place on the strip (charter-app#254). */
   | { verb: "renameTab"; tab: number }
+  /** Asks which work item a chat works on, and links it (V60, ADR 0088). */
+  | { verb: "linkWorkItem"; tab: number }
+  /** Ends a chat's work link. */
+  | { verb: "unlinkWorkItem"; tab: number }
   /** Pins or unpins a chat, a workspace or a project (ADR 0039).
    *
    *  Three verbs and not one, because they are three stores: a project's pin and a
@@ -523,6 +527,11 @@ export type Now = {
   curations?: Curations;
   /** The chats being smart-closed (ADR 0064): each one's tab offers to cancel it. */
   wrappingUp?: readonly number[];
+  /** The work item each chat works on, by session, as `chat_work_item` answered (ADR 0088). */
+  workItems?: Readonly<Record<number, string>>;
+  /** Whether a chat can have a work link: it is filed in a workspace. A chat at the project
+   *  root, or working outside the project, is offered neither row (ADR 0088 §4). */
+  linkable?: (session: number) => boolean;
   /** Why each chat's Smart close stopped without its record (SI-8f), for its needs-you rows. */
   stopped?: Readonly<Record<number, string>>;
 };
@@ -539,6 +548,10 @@ export type Doing = {
   /** Brings the tab forward with its name open for editing. Nothing is renamed until the
    *  operator says the name, so it answers no `Ran`. */
   renameTab: (tab: number) => void;
+  /** Opens the dialog that asks for the work item. Nothing is linked until it is answered. */
+  linkWorkItem: (tab: number) => void;
+  /** Ends the chat's work link, through `chat_work_unlink`; a refusal is the core's sentence. */
+  unlinkWorkItem: (tab: number) => Promise<Ran>;
   /** Each answers a `Ran`, because a pin can be refused: the stores are bounded, and
    *  "charter pins at most 32 projects — unpin one first" is a sentence the operator can act
    *  on and must therefore reach them. */
@@ -1060,6 +1073,27 @@ export function catalogue(now: Now): Offer[] {
     if (chatOf(now.tabs, tab) === undefined) continue;
     const name = now.tabs.byId[tab].name;
     offers.push(can(`tab.rename:${tab}`, `Rename chat ${name}…`, { verb: "renameTab", tab }, name));
+  }
+
+  // **A chat's work link** (V60, ADR 0088 §3): which work item it works on. Above the line: it
+  // ends nothing, and an unlink only ends the link. The words are the operator's ruling, the
+  // same on every tab, so the note names the chat; a chat that is not in a workspace has no row,
+  // because the window does not offer it there (§4).
+  for (const tab of now.tabs.order) {
+    const chat = chatOf(now.tabs, tab);
+    if (chat === undefined || !(now.linkable?.(chat) ?? false)) continue;
+    const said = `Chat ${now.tabs.byId[tab].name}`;
+    offers.push({
+      ...can(`tab.worklink:${tab}`, "Link to work item…", { verb: "linkWorkItem", tab }),
+      note: said,
+    });
+    const item = now.workItems?.[chat];
+    if (item !== undefined) {
+      offers.push({
+        ...can(`tab.workunlink:${tab}`, "Unlink work item", { verb: "unlinkWorkItem", tab }),
+        note: `${said} · ${workItemSaid(item)}`,
+      });
+    }
   }
 
   // **A preview tab can be kept** (SI-9b, ADR 0065 Q1): the next single click on a memory then
@@ -1792,6 +1826,11 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
     case "renameTab":
       doing.renameTab(does.tab);
       return DID;
+    case "linkWorkItem":
+      doing.linkWorkItem(does.tab);
+      return DID;
+    case "unlinkWorkItem":
+      return doing.unlinkWorkItem(does.tab);
     case "pinTab":
       return doing.pinTab(does.tab, does.pinned);
     case "pinWorkspace":
@@ -2073,6 +2112,11 @@ export function toKeep(offer: Offer): Offer {
     : offer;
 }
 
+/** How a chat's work item is shown: in its tab's tooltip, its pane's corner and its rows (V60). */
+export function workItemSaid(key: string): string {
+  return `Work item: ${key}`;
+}
+
 export function smartCloseCancelId(tab: number): string {
   return `tab.smartclose.cancel:${tab}`;
 }
@@ -2309,6 +2353,8 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
           `tab.select:${what.tab}`,
           `tab.rename:${what.tab}`,
           `tab.pin:${what.tab}`,
+          `tab.worklink:${what.tab}`,
+          `tab.workunlink:${what.tab}`,
         ],
         below: [`tab.close:${what.tab}`],
       };
