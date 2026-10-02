@@ -88,6 +88,9 @@ pub fn in_a_child(filter: &str, bin_name: &str) {
             .env(BIN, &bin)
             .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
             .env("HOME", &home)
+            // A machine store of the child's own, whatever the runner's `XDG_CONFIG_HOME` says:
+            // the forge transports list their calls in it (the network log, OB-15).
+            .env(charter_core::machine::HOME_VAR, home.join(".config"))
             .env("GH_TOKEN", "tok-under-test")
             .env("CHARTER_TEST_NOT_A_CREDENTIAL", "1"),
     )

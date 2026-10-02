@@ -66,6 +66,7 @@ pub mod machine;
 pub mod manifest;
 pub mod mdsection;
 pub mod memstore;
+pub mod netlog;
 pub mod news;
 pub mod noharness;
 pub mod opencode;

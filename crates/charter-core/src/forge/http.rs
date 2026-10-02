@@ -233,19 +233,20 @@ impl Http {
                 self.agent.run(request)
             }
         };
+        // The network log (OB-15): host, method, path template, status and timing; never a body
+        // or a header value.
+        crate::netlog::record(crate::netlog::Call {
+            feature: crate::netlog::Feature::Forge,
+            via: crate::netlog::Via::Https,
+            host: &self.authority,
+            method: method.as_str(),
+            path: call.path(),
+            status: response.as_ref().ok().map(|r| r.status().as_u16()),
+            answered: response.is_ok(),
+            took: started.elapsed(),
+        });
         let response = response.map_err(|e| format!("{method} {} failed: {e}", self.root.rest))?;
         let status = response.status().as_u16();
-        // The network log (OB-15's shape): host, method, path, status and timing; never a body
-        // or a header value.
-        tracing::info!(
-            target: "charter::forge",
-            method = %method,
-            host = %self.authority,
-            path = %call.path().split('?').next().unwrap_or_default(),
-            status,
-            ms = started.elapsed().as_millis() as u64,
-            "forge request"
-        );
         let headers: Vec<(String, String)> = KEPT
             .iter()
             .filter_map(|name| {

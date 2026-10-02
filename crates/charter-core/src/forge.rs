@@ -729,7 +729,15 @@ pub(super) fn cli_env_keeping(
 /// speaks `gh`'s own `search issues` and `issue create`. It moves when the work-item area
 /// (FW-6a/b) exists.
 pub fn gh_as_the_operator(args: &[String], timeout: Duration) -> Result<String, ForgeError> {
-    match cli::Cli::as_the_operator().run(Kind::GitHub, args, timeout) {
+    // Listed as Charter's: it reads and writes Charter's own tracker (OB-15).
+    let path = format!("repos/{}/issues", crate::report::UPSTREAM);
+    let listed = cli::Listed {
+        feature: crate::netlog::Feature::Report,
+        host: "api.github.com",
+        method: "CLI",
+        path: &path,
+    };
+    match cli::Cli::as_the_operator().run_listed(Kind::GitHub, args, timeout, listed) {
         Ok(answer) if answer.ok() => Ok(answer.out),
         Ok(answer) => Err(ForgeError::new(answer.said(Kind::GitHub))),
         Err(
