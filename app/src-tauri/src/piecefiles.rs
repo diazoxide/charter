@@ -137,6 +137,9 @@ mod tests {
 
         let refused = file_of(&root, "alpha", "thing", "piece", "../../README.md").unwrap_err();
 
-        assert_eq!(refused, "'../../README.md' is not a path inside the worktree");
+        assert_eq!(
+            refused,
+            "'../../README.md' is not a path inside the worktree"
+        );
     }
 }
