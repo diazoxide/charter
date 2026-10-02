@@ -1,0 +1,21 @@
+{
+  "source": "GitLab 19.4 REST API docs, projects.md: Get a single project (merge_trains_enabled, Premium and Ultimate)",
+  "exchanges": [
+    {
+      "call": {
+        "endpoint": {
+          "rest": {
+            "method": null,
+            "path": "projects/acme%2Fapi"
+          }
+        },
+        "fields": []
+      },
+      "reply": {
+        "code": 0,
+        "out": "{\"id\": 3, \"merge_trains_enabled\": true}",
+        "err": ""
+      }
+    }
+  ]
+}

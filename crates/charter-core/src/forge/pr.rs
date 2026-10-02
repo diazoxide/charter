@@ -1,13 +1,17 @@
-//! Opening or updating a pull request — a merge request on GitLab — and asking the forge to
-//! merge it once it may. The forge adapters' first write that is not a push (ADR 0051).
+//! Opening or updating a pull request — a merge request on GitLab — asking the forge to merge
+//! it once it may, and, for `charter change land` alone, merging it. The forge adapters' first
+//! write that is not a push (ADR 0051).
 //!
-//! Two calls, the same on both forges:
+//! The calls, the same on both forges:
 //!
 //! - `open_or_update`: the open PR from `head` into `base`, updated with a new title and body,
 //!   or a new one when there is none. Never a second one for the same pair.
 //! - `request_auto_merge`: the forge queues it to merge when its checks allow, by the
 //!   repo's own method, preferring rebase, then a merge commit, then squash — and only at the
 //!   commit this save pushed.
+//! - `merge_at` and `enqueue_at`: `charter change land`'s merge, now or through the target
+//!   branch's merge queue or merge train, each pinned to the head commit whose checks charter
+//!   read (ADR 0060 D3, ruling Q16). `lands_through_queue` says which.
 //!
 //! # The base is always named
 //!
@@ -29,14 +33,19 @@
 //! in [`super::github`] and [`super::gitlab`]. This module holds their neutral types and the
 //! rules both forges share.
 //!
-//! # Only the app asks for auto-merge
+//! # Only the app asks for auto-merge, and only `charter change land` merges
 //!
-//! An agent never merges: `floorguard` refuses `gh pr merge` from a session and keeps doing
-//! so. This module is called by charter's own save, for a project whose mode asks for it.
-//!
-//! And the app only ever *requests* it (ADR 0051). Nothing here merges. When the forge will not
-//! queue a merge because there is nothing to wait for, the answer is
+//! An agent never merges: `floorguard` refuses `gh pr merge` and `charter change land` from a
+//! session nobody is watching, and keeps doing so. `request_auto_merge` is called by charter's
+//! own save, for a project whose mode asks for it, and only ever *requests* it (ADR 0051). When
+//! the forge will not queue a merge because there is nothing to wait for, the answer is
 //! [`AutoMerge::NotQueued`] with the forge's reason, and the PR stays open for a person.
+//!
+//! `merge_at` and `enqueue_at` do merge, and their one caller is `charter change land`, after
+//! its gates (ADR 0060 D3, which made this module's earlier "nothing here merges" false). They
+//! never ask the forge to merge *later*: neither sets auto-merge (GitLab's
+//! `merge_when_pipeline_succeeds` or `auto_merge`), which would merge whatever head the branch
+//! has when a pipeline passes rather than the one charter read.
 
 use std::path::Path;
 
@@ -59,6 +68,16 @@ pub struct Repo {
 pub struct Pr {
     pub number: u64,
     pub url: String,
+}
+
+/// How `charter change land` has its own landing commit made: a merge commit or a squash, with
+/// the subject and body charter writes, which carry the `Charter-Change:` trailer where the
+/// forge lets charter write the message (ADR 0060 §4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MergeAs {
+    pub squash: bool,
+    pub title: String,
+    pub message: String,
 }
 
 /// What `request_auto_merge` got the forge to do.

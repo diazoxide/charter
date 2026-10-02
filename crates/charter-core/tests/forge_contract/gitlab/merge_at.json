@@ -1,0 +1,40 @@
+{
+  "source": "GitLab 19.4 REST API docs, merge_requests.md: Merge a merge request (sha; merge_commit_message; no merge_when_pipeline_succeeds or auto_merge)",
+  "exchanges": [
+    {
+      "call": {
+        "endpoint": {
+          "rest": {
+            "method": "PUT",
+            "path": "projects/acme%2Fapi/merge_requests/12/merge"
+          }
+        },
+        "fields": [
+          {
+            "typed": [
+              "squash",
+              "false"
+            ]
+          },
+          {
+            "text": [
+              "sha",
+              "6dcb09b5b57875f334f61aebed695e2e4193db5e"
+            ]
+          },
+          {
+            "text": [
+              "merge_commit_message",
+              "api-2: api (!12)\n\nbump the api\n\nCharter-Change: api-2"
+            ]
+          }
+        ]
+      },
+      "reply": {
+        "code": 0,
+        "out": "{\"iid\": 12, \"state\": \"merged\", \"merge_commit_sha\": \"e5bd3914e2e596debea16f433f57875b5b90bcd6\"}",
+        "err": ""
+      }
+    }
+  ]
+}

@@ -19,6 +19,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   back to it. Pressing the key again moves down the list, and typing narrows it by name. The
   button shows once a window holds two projects (FR-27, #620).
 
+- **`charter change land` lands one member of a cross-repo change.** `charter change land
+  <change> --repo <name>` merges that member's request at the commit its checks passed on, and
+  only once every member it needs has landed. Each refusal says which gate stopped it: a
+  blocker not landed, checks failed, running, not run or unreadable at that commit, a branch
+  that moved after the checks were read, or more than one member named. Where the target
+  branch has a merge queue (GitHub) or a merge train (GitLab), the request goes into it at that
+  commit, and running `land` again after it merged records the landing. It never turns on
+  auto-merge. The landing commit carries a `Charter-Change:` trailer where the forge lets
+  charter write the message, and a line goes into the change's landing log once the forge
+  confirms the merge. Like `gh pr merge`, it is refused in a session nobody is watching.
+  `charter doctor` now also names a member landed ahead of one it needs, and a member's pushed
+  branch merged outside charter (#472).
+
 - **`charter change push` pushes a cross-repo change.** For each member it prints the repo,
   the branch and where it goes, then pushes the branch, opens its pull request into the repo's
   default branch (or finds the one already there), and writes a block into each request's

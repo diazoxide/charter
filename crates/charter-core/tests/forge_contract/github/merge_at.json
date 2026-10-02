@@ -1,0 +1,46 @@
+{
+  "source": "GitHub REST API version 2022-11-28, pulls: Merge a pull request (sha must match the head, else 409)",
+  "exchanges": [
+    {
+      "call": {
+        "endpoint": {
+          "rest": {
+            "method": "PUT",
+            "path": "repos/acme/api/pulls/12/merge"
+          }
+        },
+        "fields": [
+          {
+            "text": [
+              "merge_method",
+              "merge"
+            ]
+          },
+          {
+            "text": [
+              "commit_title",
+              "api-2: api (#12)"
+            ]
+          },
+          {
+            "text": [
+              "commit_message",
+              "bump the api\n\nCharter-Change: api-2"
+            ]
+          },
+          {
+            "text": [
+              "sha",
+              "6dcb09b5b57875f334f61aebed695e2e4193db5e"
+            ]
+          }
+        ]
+      },
+      "reply": {
+        "code": 0,
+        "out": "{\"sha\": \"e5bd3914e2e596debea16f433f57875b5b90bcd6\", \"merged\": true, \"message\": \"Pull Request successfully merged\"}",
+        "err": ""
+      }
+    }
+  ]
+}

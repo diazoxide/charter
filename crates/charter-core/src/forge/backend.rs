@@ -25,7 +25,7 @@ use serde_json::Value;
 
 use super::checks::Checks;
 use super::cli::Cli;
-use super::pr::{AutoMerge, Opened, Pr, Request, State};
+use super::pr::{AutoMerge, MergeAs, Opened, Pr, Request, State};
 use super::transport::{Call, NoAnswer, Reply, Transport};
 use super::{Forge, ForgeError, Kind, Raised};
 
@@ -275,6 +275,33 @@ pub trait Requests {
         pr: &Pr,
         head_sha: &str,
     ) -> Result<AutoMerge, ForgeError>;
+
+    /// Whether `pr` lands through its target branch's queue: GitHub's merge queue, GitLab's
+    /// merge train (ADR 0060, ruling Q16).
+    fn lands_through_queue(&self, caller: &Caller, path: &str, pr: &Pr)
+    -> Result<bool, ForgeError>;
+
+    /// Merge `pr` now, as `how` says, and only while its head is `head_sha`: the forge's own
+    /// guard refuses a head that moved (ADR 0060 D3). It never asks the forge to merge later.
+    fn merge_at(
+        &self,
+        caller: &Caller,
+        path: &str,
+        pr: &Pr,
+        head_sha: &str,
+        how: &MergeAs,
+    ) -> Result<(), ForgeError>;
+
+    /// Put `pr` in its target branch's queue, only while its head is `head_sha` (ruling Q16).
+    /// `Ok` once the forge's answer names the entry.
+    fn enqueue_at(
+        &self,
+        caller: &Caller,
+        path: &str,
+        pr: &Pr,
+        head_sha: &str,
+        how: &MergeAs,
+    ) -> Result<(), ForgeError>;
 
     /// The checks at exactly `sha` (ADR 0060). `request` is the request's number: GitLab reads
     /// a merge request's own pipelines, and GitHub reads a commit's checks with no request at

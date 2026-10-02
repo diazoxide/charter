@@ -2025,6 +2025,109 @@ fn a_changes_directory_it_cannot_list_is_named_beside_the_verdict() {
     assert!(r.detail.contains("cannot be checked"), "{}", r.detail);
 }
 
+/// A landing line in `ws`'s log, as `charter change land` writes one.
+fn landed(root: &Path, ws: &str, slug: &str, repo: &str) {
+    crate::change::landing::append(
+        root,
+        ws,
+        "laptop",
+        &crate::change::landing::Landing::new(
+            slug,
+            repo,
+            3,
+            "6dcb09b5b57875f334f61aebed695e2e4193db5e",
+            "e5bd3914e2e596debea16f433f57875b5b90bcd6",
+            chrono::Utc::now(),
+        ),
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_member_landed_ahead_of_its_blocker_is_a_fail() {
+    let (_t, root) = plane("");
+    clone_with(&root, "alpha", "svc", &["change/a"]);
+    clone_with(&root, "alpha", "web", &["change/a"]);
+    let mut rec = crate::change::Record::new("a", "why", "t", "2026-09-26T00:00:00+00:00");
+    for (repo, needs) in [("svc", vec![]), ("web", vec!["svc".to_string()])] {
+        rec.members.push(crate::change::Member {
+            repo: repo.into(),
+            branch: "change/a".into(),
+            needs,
+        });
+    }
+    crate::change::store::write(&root, "alpha", &rec).unwrap();
+    landed(&root, "alpha", "a", "web");
+    let r = one(&root, "changes");
+    assert_eq!(r.status, Status::Fail, "{r:?}");
+    assert!(
+        r.detail
+            .contains("alpha: web: landed while 'svc' had not, by charter's landing log"),
+        "{}",
+        r.detail
+    );
+
+    // Once the blocker is declared landed too, the order holds.
+    landed(&root, "alpha", "a", "svc");
+    let r = one(&root, "changes");
+    assert_eq!(r.status, Status::Ok, "{r:?}");
+}
+
+#[test]
+fn a_pushed_member_branch_the_default_branch_holds_with_no_landing_is_a_fail() {
+    let (_t, root) = plane("");
+    clone_with(&root, "alpha", "svc", &["change/a"]);
+    clone_with(&root, "alpha", "web", &["change/a"]);
+    change_record(
+        &root,
+        "alpha",
+        "a",
+        &[("svc", "change/a"), ("web", "change/a")],
+    );
+    for repo in ["svc", "web"] {
+        let dir = root.join("workspaces/alpha").join(repo);
+        git(
+            &dir,
+            &["update-ref", "refs/remotes/origin/main", "refs/heads/main"],
+        );
+        git(
+            &dir,
+            &[
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/main",
+            ],
+        );
+    }
+    // svc's branch was pushed and is in main: merged somewhere charter did not see. web's was
+    // never pushed, so a branch cut and not yet worked on is not read as a landing.
+    let svc = root.join("workspaces/alpha/svc");
+    git(
+        &svc,
+        &[
+            "update-ref",
+            "refs/remotes/origin/change/a",
+            "refs/heads/change/a",
+        ],
+    );
+    let r = one(&root, "changes");
+    assert_eq!(r.status, Status::Fail, "{r:?}");
+    assert!(
+        r.detail.contains(
+            "alpha: svc: branch change/a is in main and charter did not land it, so there is \
+             no landing to revert"
+        ),
+        "{}",
+        r.detail
+    );
+    assert!(!r.detail.contains("web:"), "{}", r.detail);
+
+    // Landed by charter: no divergence.
+    landed(&root, "alpha", "a", "svc");
+    let r = one(&root, "changes");
+    assert_eq!(r.status, Status::Ok, "{r:?}");
+}
+
 #[test]
 fn the_changes_check_never_reaches_a_network() {
     let source = include_str!("changes.rs");

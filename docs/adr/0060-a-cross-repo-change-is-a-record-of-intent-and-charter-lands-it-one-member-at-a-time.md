@@ -126,6 +126,18 @@ as needing a person.
   charter is the one merging. `floorguard::PUBLISH_FORGE` already keeps `charter change land`
   attended-only, and an agent still never merges. This makes `forge::pr`'s "Nothing here
   merges" false once T7 lands, and T7 updates that module's doc.
+
+  > **Amended 2026-10-02, by the operator's ruling Q16 (#472).** Where a member's target
+  > branch has a merge queue (GitHub) or a merge train (GitLab), `land` puts the request in it,
+  > after the same two gates and pinned to the same verified head (`expectedHeadOid`, `sha`),
+  > instead of merging directly. The queue runs its own checks and merges later, so nothing is
+  > logged then; a later `charter change land` of that member finds the request merged and
+  > logs the landing after the same gates. On a repo with no queue a request merged by
+  > somebody else is still never logged as charter's. D3's reasoning stands everywhere else:
+  > with no queue, `land` merges directly, never through auto-merge, which on GitLab
+  > (`merge_when_pipeline_succeeds`) would merge whatever head the branch has when a later
+  > pipeline passes. A queue's merge carries no `Charter-Change:` trailer where the queue
+  > writes its own message (GitHub), so a missing trailer is not one of doctor's divergences.
 - **D4: `charter change push` ignores a repo's `mode = "off"`.** ADR 0051's `off` governs
   *saves*, which commit a developer's work nobody asked to commit. `change push` is an explicit
   verb over repos someone named by hand, and it commits nothing. It prints every repo, branch and

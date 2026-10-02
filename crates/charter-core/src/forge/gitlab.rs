@@ -9,8 +9,8 @@ use super::backend::{
 };
 use super::checks::{self, Checks};
 use super::pr::{
-    AutoMerge, GITLAB_ACTIVE, GITLAB_NOT_MERGEABLE, Opened, Pr, Request, State, commit_named,
-    is_ours, not_queued_when, own_mr, pr_of, unknown_state,
+    AutoMerge, GITLAB_ACTIVE, GITLAB_NOT_MERGEABLE, MergeAs, Opened, Pr, Request, State,
+    commit_named, is_ours, not_queued_when, own_mr, pr_of, unknown_state,
 };
 use super::transport::{Call, Field, Method};
 use super::{
@@ -352,6 +352,126 @@ impl Requests for GitLab {
             &GITLAB_NOT_MERGEABLE,
             &format!("asking {path} to merge !{} when it passes", pr.number),
         )
+    }
+
+    /// The repo's `merge_trains_enabled`. GitLab names it only where merge trains exist
+    /// (Premium and Ultimate), so a repo that does not name it has none.
+    fn lands_through_queue(
+        &self,
+        caller: &Caller,
+        path: &str,
+        _pr: &Pr,
+    ) -> Result<bool, ForgeError> {
+        let project = format!("projects/{}", quote(path));
+        let doing = format!("reading whether {path} lands through a merge train");
+        let settings = self
+            .0
+            .ask(caller, &Call::get(&project, LIST_TIMEOUT), &doing)?;
+        Ok(settings["merge_trains_enabled"] == Value::Bool(true))
+    }
+
+    /// The merge call with `sha`, and **no** `merge_when_pipeline_succeeds` or `auto_merge`:
+    /// either would have GitLab merge later, at whatever head the branch then has, and a
+    /// later push does not undo it. GitLab answers 409 and merges nothing when the head has
+    /// moved past `sha`. Its merge method is the repo's own, so the only choice is squash.
+    ///
+    /// Should GitLab answer that it set the merge request to merge later anyway, charter
+    /// cancels that at once and says so: a merge charter did not see happen is one it cannot
+    /// vouch for.
+    fn merge_at(
+        &self,
+        caller: &Caller,
+        path: &str,
+        pr: &Pr,
+        head_sha: &str,
+        how: &MergeAs,
+    ) -> Result<(), ForgeError> {
+        let mr = format!("projects/{}/merge_requests/{}", quote(path), pr.number);
+        let message = format!("{}\n\n{}", how.title, how.message);
+        let mut fields = vec![
+            Field::typed("squash", if how.squash { "true" } else { "false" }),
+            Field::text("sha", head_sha),
+            Field::text("merge_commit_message", &message),
+        ];
+        if how.squash {
+            fields.push(Field::text("squash_commit_message", &message));
+        }
+        let doing = format!("merging merge request !{} of {path}", pr.number);
+        let answer = self.0.ask(
+            caller,
+            &Call::write(Method::Put, format!("{mr}/merge"), fields),
+            &doing,
+        )?;
+        if answer["state"] == "merged" {
+            return Ok(());
+        }
+        let later = truthy(&answer["merge_when_pipeline_succeeds"])
+            || truthy(&answer["auto_merge_enabled"]);
+        if later {
+            let cancel = Call::write(
+                Method::Post,
+                format!("{mr}/cancel_merge_when_pipeline_succeeds"),
+                Vec::new(),
+            );
+            let not_cancelled =
+                |why: &str| format!("and charter could not cancel it ({why}): cancel it on GitLab");
+            let after = match self.0.said(caller, &cancel) {
+                Ok(Ok(())) => "and charter cancelled that".to_string(),
+                Ok(Err(why)) => not_cancelled(&why),
+                Err(no) => not_cancelled(no.said()),
+            };
+            return Err(ForgeError::new(format!(
+                "{doing}: GitLab set it to merge later instead of merging it, {after}"
+            )));
+        }
+        Err(ForgeError::new(format!(
+            "{doing}: GitLab did not confirm a merge (state {:?})",
+            answer["state"].as_str().unwrap_or("unknown")
+        )))
+    }
+
+    /// Added to the merge train with `sha` and no `auto_merge`, so GitLab adds it now or
+    /// refuses; the train then runs its own pipeline and merges it.
+    fn enqueue_at(
+        &self,
+        caller: &Caller,
+        path: &str,
+        pr: &Pr,
+        head_sha: &str,
+        how: &MergeAs,
+    ) -> Result<(), ForgeError> {
+        let api = format!(
+            "projects/{}/merge_trains/merge_requests/{}",
+            quote(path),
+            pr.number
+        );
+        let doing = format!(
+            "adding merge request !{} of {path} to its merge train at {head_sha}",
+            pr.number
+        );
+        let answer = self.0.ask(
+            caller,
+            &Call::write(
+                Method::Post,
+                api,
+                vec![
+                    Field::typed("squash", if how.squash { "true" } else { "false" }),
+                    Field::text("sha", head_sha),
+                ],
+            ),
+            &doing,
+        )?;
+        let on_it = answer.as_array().is_some_and(|cars| {
+            cars.iter()
+                .any(|car| car["merge_request"]["iid"].as_u64() == Some(pr.number))
+        });
+        if !on_it {
+            return Err(ForgeError::new(format!(
+                "{doing}: GitLab's answer names no car for !{}",
+                pr.number
+            )));
+        }
+        Ok(())
     }
 
     fn checks_at(&self, caller: &Caller, path: &str, sha: &str, request: u64) -> Checks {

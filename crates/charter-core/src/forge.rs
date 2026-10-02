@@ -105,6 +105,15 @@ impl Kind {
         }
     }
 
+    /// What this forge calls the queue a request lands through: GitHub's merge queue,
+    /// GitLab's merge train.
+    pub fn queue_noun(self) -> &'static str {
+        match self {
+            Kind::GitHub => "merge queue",
+            Kind::GitLab => "merge train",
+        }
+    }
+
     /// What an owner is called on this forge.
     pub fn owner_noun(self) -> &'static str {
         match self {

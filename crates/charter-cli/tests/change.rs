@@ -1,7 +1,7 @@
-//! `charter change create|add|drop|list|show|forget|push`: a cross-repo change declared and
-//! read through the binary, with no network (charter#467, ADR 0060). `push`'s forge half is
-//! tested in `charter_core::change::push`, against local bare remotes and a recorded forge;
-//! what is here is the part that never reaches one.
+//! `charter change create|add|drop|list|show|forget|push|land`: a cross-repo change declared
+//! and read through the binary, with no network (charter#467, ADR 0060). `push`'s and `land`'s
+//! forge halves are tested in `charter_core::change::push` and `::land`, against real clones
+//! and a recorded forge; what is here is the part that never reaches one, and the floor.
 //!
 //! Ported from the behaviour of `cli-final`'s `tests/test_commands_change.py`. Exit 2 is a
 //! named refusal and 1 is something wrong, so every refusal test asserts WHICH one fired.
@@ -422,6 +422,115 @@ fn push_has_no_force_and_no_all() {
         !help.contains("--force") && !help.contains("--all"),
         "{help}"
     );
+}
+
+// ---- land -----------------------------------------------------------------------------------
+
+#[test]
+fn land_takes_one_member_has_no_all_and_refuses_two_by_name_before_any_forge() {
+    let plane = Plane::new();
+    plane.ok(&["create", "api-2", "--why", "bump"]);
+    plane.ok(&["add", "api-2", "svc"]);
+    plane.ok(&["add", "api-2", "web"]);
+    let (code, _, err) = plane.change(&["land", "api-2", "--all"]);
+    assert_ne!(code, 0, "--all parsed");
+    assert!(err.contains("--all"), "{err}");
+    let help = plane.charter(&["change", "land", "--help"]);
+    let help = String::from_utf8_lossy(&help.stdout);
+    assert!(help.contains("--repo"), "{help}");
+    assert!(!help.contains("--all"), "{help}");
+
+    let (code, out, err) = plane.change(&["land", "api-2", "--repo", "svc", "--repo", "web"]);
+    assert_eq!(code, 2, "stdout: {out}\nstderr: {err}");
+    assert!(
+        err.contains("one member per landing, and 2 were named: svc, web"),
+        "{err}"
+    );
+    let (code, _, err) = plane.change(&["land", "api-2"]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("--repo <name>"), "{err}");
+}
+
+#[test]
+fn land_by_rebase_is_refused_with_the_reason() {
+    let plane = Plane::new();
+    plane.ok(&["create", "api-2", "--why", "bump"]);
+    plane.ok(&["add", "api-2", "svc"]);
+    let (code, _, err) = plane.change(&["land", "api-2", "--repo", "svc", "--rebase"]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("charter does not land by rebase"), "{err}");
+}
+
+/// The acceptance line: the real floor, in the real hook, against the real command. The same
+/// argv the hook refuses unattended is one this binary parses and runs.
+#[test]
+fn land_from_an_unattended_session_is_refused_by_the_floor_and_attended_is_not() {
+    let plane = Plane::new();
+    plane.ok(&["create", "api-2", "--why", "bump"]);
+    plane.ok(&["add", "api-2", "svc"]);
+    let command = "charter change land api-2 --repo svc -w alpha";
+    let hook = |mode: &str| {
+        let payload = serde_json::json!({
+            "session_id": "11111111-2222-4333-8444-555555555555",
+            "cwd": ".",
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "permission_mode": mode,
+            "tool_input": {"command": command},
+        })
+        .to_string();
+        let mut child = Command::new(env!("CARGO_BIN_EXE_charter"))
+            .args(["hook", "pretooluse"])
+            .current_dir(&plane.root)
+            .env_clear()
+            .env("CHARTER_ROOT", &plane.root)
+            .env("HOME", &plane.home)
+            .env("CHARTER_HARNESS", "claude-code")
+            .env("PATH", "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("the hook runs");
+        use std::io::Write;
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(payload.as_bytes())
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let denied = |out: &str| -> Option<String> {
+        let v: serde_json::Value = serde_json::from_str(out).ok()?;
+        let o = v.get("hookSpecificOutput")?;
+        (o.get("permissionDecision")?.as_str()? == "deny").then(|| {
+            o.get("permissionDecisionReason")?
+                .as_str()
+                .map(str::to_owned)
+        })?
+    };
+
+    let unattended = hook("bypassPermissions");
+    let reason = denied(&unattended).unwrap_or_else(|| panic!("not refused: {unattended:?}"));
+    assert!(
+        reason.contains("`charter change land` publishes or lands code"),
+        "{reason}"
+    );
+    let attended = hook("default");
+    assert!(
+        denied(&attended).is_none(),
+        "attended is untouched: {attended:?}"
+    );
+
+    // The command the floor named is this binary's: it parses and reaches its own gates. With
+    // no forge to reach, svc (no origin) is refused by name, and nothing is merged.
+    let argv: Vec<&str> = command.split(' ').skip(1).collect();
+    let out = plane.charter(&argv);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(2), "{err}");
+    assert!(err.contains("svc: "), "{err}");
 }
 
 // ---- drop and forget ----------------------------------------------------------------------

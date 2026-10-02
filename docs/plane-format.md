@@ -1555,10 +1555,14 @@ and an archived one is where `memstore.archive` would have put it (ADR 0065).
 - **Written by:** `commands_change._append_landing` (`charter/commands_change.py:1092`), from
   `charter change land` (`charter/commands_change.py:1501`), after the merge is read back.
   `change.record_landing` (`charter/change.py:156`) is a second writer with the same shape
-  — see the Appendix.
+  — see the Appendix. In this app: `change::landing::append`, from `charter change land`
+  (`crates/charter-core/src/change/land.rs`) once the read-back confirms the merge at the head
+  the checks passed on, or, for a member landed through a merge queue or merge train, from a
+  later `charter change land` that finds it merged.
 - **Read by:** `change.read_landings` (`charter/change.py:217`), `change.landings`
   (`charter/change.py:189`), `commands_change.landings` (`charter/commands_change.py:1109`),
-  `change.declared_landings` (`charter/change.py:244`).
+  `change.declared_landings` (`charter/change.py:244`). In this app:
+  `change::landing::landings`, for the land gate's blockers and doctor's `changes` row.
 - **Git:** committed **never** — `/workspaces/<ws>/changes/log/` re-ignored inside the LIVE
   block (`charter/workspace.py:1401`), and `_ws_meta_paths` stages `changes/` only when
   `change.has_records` is true (`charter/commands_workspace.py:1119`).

@@ -1,10 +1,10 @@
-//! `charter change` — the command line over [`charter_core::change::cmd`] and
-//! [`charter_core::change::push`] (ADR 0060).
+//! `charter change` — the command line over [`charter_core::change::cmd`],
+//! [`charter_core::change::push`] and [`charter_core::change::land`] (ADR 0060).
 //!
 //! Every member is named by hand. There is no `--all` and no pattern, and
 //! `tests/change.rs` asserts it.
 
-use charter_core::change::cmd;
+use charter_core::change::{cmd, land};
 use clap::Subcommand;
 
 use crate::Here;
@@ -74,6 +74,28 @@ pub enum ChangeCommand {
         #[arg(short = 'w', long = "workspace")]
         workspace: Option<String>,
     },
+    /// Land one member: merge its request at the head commit its checks passed on, once every
+    /// member it needs has landed, through the target branch's merge queue or merge train where
+    /// it has one. Refused, each by name: a blocker not landed, checks not PASSED at that head,
+    /// a head that moved since the check, and more than one member. The landing is recorded in
+    /// the landing log once the forge confirms it. Attended only: a run nobody is watching is
+    /// refused by charter's floor.
+    Land {
+        change: String,
+        /// The one member to land. Name it once: one member per run.
+        #[arg(long, value_name = "NAME", action = clap::ArgAction::Append)]
+        repo: Vec<String>,
+        /// Land as one squashed commit instead of a merge commit.
+        #[arg(long, conflicts_with = "rebase")]
+        squash: bool,
+        /// Refused, with the reason: a rebase landing leaves charter no commit to carry the
+        /// trailer and no single commit to revert.
+        #[arg(long)]
+        rebase: bool,
+        /// The workspace (default: the active one).
+        #[arg(short = 'w', long = "workspace")]
+        workspace: Option<String>,
+    },
     /// Delete the change record. Branches, requests and the landing log are untouched.
     Forget {
         change: String,
@@ -137,6 +159,30 @@ pub fn run(here: &Here, command: ChangeCommand) -> Result<u8, String> {
         }
         ChangeCommand::Push { change, workspace } => {
             charter_core::change::push::push(&root, &ws(workspace.as_deref())?, &change, &mut say)
+        }
+        ChangeCommand::Land {
+            change,
+            repo,
+            squash,
+            rebase,
+            workspace,
+        } => {
+            let how = if rebase {
+                land::How::Rebase
+            } else if squash {
+                land::How::Squash
+            } else {
+                land::How::Merge
+            };
+            land::land(
+                &root,
+                &ws(workspace.as_deref())?,
+                &change,
+                &repo,
+                how,
+                now,
+                &mut say,
+            )
         }
         ChangeCommand::Forget { change, workspace } => {
             cmd::forget(&root, &ws(workspace.as_deref())?, &change, &mut say)

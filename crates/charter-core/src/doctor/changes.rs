@@ -6,20 +6,31 @@
 //! one that needs attention is rarely the one you are standing in.
 //!
 //! **Read from what is on this disk; nothing is asked of a remote.** This runs from the
-//! SessionStart hook. The only git it runs is one local ref listing per clone, whose one
-//! argument is the literal `refs/heads/`, so no value out of a record reaches an argv.
+//! SessionStart hook. The git it runs is local ref listings and reads, every argument a
+//! literal (`refs/heads/`, `refs/remotes/origin/HEAD`), so no value out of a record reaches an
+//! argv: branch names are compared here.
 //!
 //! **An unreadable record is FAIL, and it is kept apart from a divergence**: "charter cannot
 //! read this file" and "git disagrees with this file" send the reader to two different places.
-//! The divergences that need the landing log (a member landed out of order, or merged outside
-//! charter) arrive with `charter change land` (#472).
+//!
+//! **Two divergences need the landing log** (#472), and both are FAIL, since charter can see
+//! them (ADR 0013 rule 2):
+//!
+//! - **landed out of order:** the log declares a member landed while a member it needs has no
+//!   landing. Charter refuses that landing and cannot stop a person merging in the browser;
+//!   this is the half that says so.
+//! - **merged outside charter:** the member's pushed branch (`refs/remotes/origin/<branch>`)
+//!   is already in the clone's default branch, and the log has no landing for it, so there is
+//!   no landing commit for `charter change revert` to run against. A branch never pushed is
+//!   not read as merged: a branch cut and not yet worked on is in the default branch too.
+//!   A squash merge leaves no trace on this disk, so this can under-report, never invent.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::fsx::{self, Unread};
 use super::git::git_in;
 use super::{Doctor, Row};
-use crate::change::{Record, store};
+use crate::change::{Record, landing, store};
 use crate::shown;
 
 const NAME: &str = "changes";
@@ -50,6 +61,10 @@ pub(super) fn changes(d: &Doctor) -> Row {
             unreadable.push(format!("{ws}/{}: {complaint}", shown::short(slug)));
         }
         match stray_branches(root, ws, &listing.records) {
+            Ok(lines) => found.extend(lines.into_iter().map(|line| format!("{ws}: {line}"))),
+            Err(why) => return Row::not_checked(NAME, why),
+        }
+        match landing_divergences(root, ws, &listing.records) {
             Ok(lines) => found.extend(lines.into_iter().map(|line| format!("{ws}: {line}"))),
             Err(why) => return Row::not_checked(NAME, why),
         }
@@ -142,6 +157,95 @@ fn stray_branches(
                     shown::short(&name),
                     shown::short(branch),
                     shown::short(slug)
+                ));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Where the landing log and git disagree about a change's members: a member landed while a
+/// member it needs had not, and a member's pushed branch already in the default branch with
+/// no landing declared.
+fn landing_divergences(
+    root: &std::path::Path,
+    ws: &str,
+    records: &[Record],
+) -> Result<Vec<String>, String> {
+    let mut out = Vec::new();
+    for record in records {
+        let declared = landing::landings(root, ws, &record.change);
+        let landed: BTreeSet<String> = record
+            .members
+            .iter()
+            .filter(|m| declared.contains_key(&m.repo))
+            .map(|m| m.repo.clone())
+            .collect();
+        for (repo, waiting) in record.blocked(&landed) {
+            if !landed.contains(&repo) {
+                continue;
+            }
+            let named: Vec<String> = waiting
+                .iter()
+                .map(|w| format!("'{}'", shown::short(w)))
+                .collect();
+            out.push(format!(
+                "{}: landed while {} had not, by charter's landing log. Charter refuses that \
+                 landing and cannot stop a merge in the browser.",
+                shown::short(&repo),
+                named.join(", ")
+            ));
+        }
+        for m in &record.members {
+            if declared.contains_key(&m.repo) {
+                continue;
+            }
+            let Some(clone) = crate::repos::clone_at(root, ws, &m.repo) else {
+                continue;
+            };
+            let default = git_in(
+                &clone.path,
+                &[
+                    "symbolic-ref",
+                    "--quiet",
+                    "--short",
+                    "refs/remotes/origin/HEAD",
+                ],
+            )?;
+            let Some(default) = default
+                .ok()
+                .then(|| {
+                    default
+                        .out
+                        .trim()
+                        .strip_prefix("origin/")
+                        .map(str::to_owned)
+                })
+                .flatten()
+            else {
+                continue;
+            };
+            let merged = git_in(
+                &clone.path,
+                &[
+                    "for-each-ref",
+                    "--merged=refs/remotes/origin/HEAD",
+                    "--format=%(refname)",
+                    "refs/remotes/origin/",
+                ],
+            )?;
+            if !merged.ok() {
+                continue;
+            }
+            let pushed = format!("refs/remotes/origin/{}", m.branch);
+            if merged.out.lines().any(|l| l.trim() == pushed) {
+                out.push(format!(
+                    "{}: branch {} is in {} and charter did not land it, so there is no \
+                     landing to revert and no Charter-Change trailer. A person has to revert \
+                     this member by hand.",
+                    shown::short(&m.repo),
+                    shown::short(&m.branch),
+                    shown::short(&default)
                 ));
             }
         }

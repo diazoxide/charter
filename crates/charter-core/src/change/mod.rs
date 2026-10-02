@@ -9,12 +9,17 @@
 //! - [`store`]: where records live, gated by containment.
 //! - [`cmd`]: the verbs `charter change` runs, speaking through a `Say` sink.
 //! - [`push`]: `charter change push`, the first verb that writes to a forge.
+//! - [`land`]: `charter change land`, the one that merges: one member, at the head its checks
+//!   passed on.
+//! - [`landing`]: the landing log `land` appends to.
 //!
 //! Words, because "change" already means one pull request in parts of `forge`: a **change** is
 //! the cross-repo object, a **member** one repo's part of it, and a member's pull or merge
 //! request is a **request**.
 
 pub mod cmd;
+pub mod land;
+pub mod landing;
 pub mod observe;
 pub mod push;
 mod record;

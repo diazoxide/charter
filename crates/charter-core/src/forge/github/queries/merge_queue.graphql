@@ -1,0 +1,9 @@
+# Whether a pull request's base branch lands through a merge queue, and the pull request's node id.
+query MergeQueue($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      id
+      isMergeQueueEnabled
+    }
+  }
+}
