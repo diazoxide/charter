@@ -413,7 +413,7 @@ fn a_member_charter_started_landing_and_has_not_recorded_is_named_with_the_way_t
     let (code, said) = world.revert();
     assert_eq!(code, 0, "{said}");
     assert!(
-        said.contains("gadget: charter started landing it")
+        said.contains("gadget: a landing charter started is not recorded yet")
             && said.contains("charter change land api-2 --repo gadget"),
         "{said}"
     );

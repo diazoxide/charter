@@ -276,8 +276,8 @@ pub fn revert(
         let repo = named(&m.repo);
         if started.get(&m.repo).is_some_and(|p| p.started(At::Any)) {
             say(Say::Warn(format!(
-                "{repo}: charter started landing it and has not recorded the merge. Record it \
-                 first: charter change land {} --repo {repo}",
+                "{repo}: a landing charter started is not recorded yet, so there is no commit \
+                 to revert. Record it first: charter change land {} --repo {repo}",
                 named(slug)
             )));
         } else {
