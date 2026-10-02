@@ -4935,3 +4935,8 @@ h2.sidebar-title .node-icon {
   background: var(--danger-surface);
   color: var(--danger-text);
 }
+
+/* PROTOTYPE (FR-27b): a project view is its children, laid out where it always was. */
+.project-view {
+  display: contents;
+}

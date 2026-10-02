@@ -149,7 +149,7 @@ function button(name: string): HTMLElement {
  *  (ADR 0033), the workspaces under them (ADR 0036), and the chat tabs in it. A bench that read
  *  `[role="tab"]` off the document measured whichever came first in the DOM, which since
  *  project tabs landed is a project. */
-const TABS = '[role="tablist"][aria-label="Tabs"]';
+const TABS = '[data-front] [role="tablist"][aria-label="Tabs"]';
 
 /** The project tabs, in the title bar (ADR 0054). */
 const PROJECTS = '[role="tablist"][aria-label="Projects"]';

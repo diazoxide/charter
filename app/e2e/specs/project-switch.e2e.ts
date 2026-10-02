@@ -2,7 +2,8 @@ import process from "node:process";
 import { browser, expect } from "@wdio/globals";
 import { READY, built, declareAProfile, writeShell } from "../harness.js";
 import { endChat, pressAndStart } from "../opening.js";
-import { logLine } from "../processes.js";
+import { logLine, running, webAndHarnessMemory } from "../processes.js";
+import { built as builtApp } from "../harness.js";
 import {
   BUDGET_MS,
   OPEN,
@@ -37,7 +38,7 @@ import {
  * and the project the launch opened is in front again.
  */
 
-const TABS = '[role="tablist"][aria-label="Tabs"]';
+const TABS = '[data-front] [role="tablist"][aria-label="Tabs"]';
 
 /**
  * What a switched-to pane is waited for: the last word of `READY`, which every scenario chat
@@ -158,6 +159,9 @@ describe(`switching among ${OPEN} open projects`, function () {
     const switches = await measureSwitches(order, ROUNDS, () => PAINTED, job);
     logLine("prof-switch.jsonl", { detail });
     for (const d of detail) console.log("PROF " + JSON.stringify(d));
+    const pids = running(builtApp(process.platform === "win32" ? "charter-app.exe" : "charter-app"));
+    if (pids.length === 1) console.log("MEM " + JSON.stringify(webAndHarnessMemory(pids[0])));
+    else console.log("MEM none " + pids.join(","));
 
     logLine("project-switch.jsonl", { budgetMs: BUDGET_MS, ...switches });
     // In the job's own output too, where a reviewer reads it without downloading anything.

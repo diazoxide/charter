@@ -69,6 +69,14 @@ export async function whereTheKeyboardIs(): Promise<string> {
 
 /** Presses a button by the words on it, or by its accessible name. */
 export async function pressOnly(name: string): Promise<void> {
+  const front = await $("[data-front]");
+  if (await front.isExisting()) {
+    const mine = await front.$(`button[aria-label="${name}"]`);
+    if (await mine.isExisting()) {
+      await mine.click();
+      return;
+    }
+  }
   const labelled = await $(`button[aria-label="${name}"]`);
   if (await labelled.isExisting()) {
     await labelled.click();
