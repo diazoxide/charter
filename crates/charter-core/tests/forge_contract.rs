@@ -195,8 +195,14 @@ mod cases {
     pub fn about(kind: &str, how: How) {
         let recorded = over(kind, "about", how);
         let backend = &recorded.backend;
+        // Asked of the repo itself, as the inventory reads it: no forge id, which `about` never
+        // needs, since both forges address the repo by its path.
+        let repo = RepoRecord {
+            id: None,
+            ..acme(kind, "1", "api", &[])
+        };
         assert_eq!(
-            backend.about(&recorded.caller, "acme/api"),
+            backend.about(&recorded.caller, &repo),
             Ok(About {
                 visibility: Visibility::Private,
                 issues: Issues::Open
@@ -770,7 +776,18 @@ mod who_can_open_an_issue {
                            "reply": {"code": 0, "out": out.to_string()}}]});
         let recorded = Arc::new(Recorded::parse(&text.to_string()).unwrap());
         let backend = Forge::default_of(kind).backend_over(recorded.clone());
-        let about = backend.about(&caller(), "acme/api").unwrap();
+        let repo = charter_core::forge::RepoRecord {
+            id: None,
+            name: "api".into(),
+            path_with_namespace: "acme/api".into(),
+            default_branch: None,
+            description: String::new(),
+            web_url: String::new(),
+            ssh_url: String::new(),
+            topics: Vec::new(),
+            forge: kind,
+        };
+        let about = backend.about(&caller(), &repo).unwrap();
         spent(&recorded);
         about
     }

@@ -178,11 +178,12 @@ impl Repos for GitLab {
         Ok(out)
     }
 
-    fn about(&self, caller: &Caller, path: &str) -> Result<About, ForgeError> {
+    fn about(&self, caller: &Caller, repo: &RepoRecord) -> Result<About, ForgeError> {
+        let path = repo.path_with_namespace.as_str();
         let api = format!("projects/{}", quote(path));
         let doing = format!("reading {path}");
-        let repo = self.0.ask(caller, &Call::get(&api, LIST_TIMEOUT), &doing)?;
-        let visibility = repo["visibility"]
+        let answer = self.0.ask(caller, &Call::get(&api, LIST_TIMEOUT), &doing)?;
+        let visibility = answer["visibility"]
             .as_str()
             .and_then(Visibility::parse)
             .ok_or_else(|| ForgeError::new(format!("{doing}: GitLab named no visibility")))?;
@@ -190,13 +191,15 @@ impl Repos for GitLab {
         // `issues_enabled` says only whether they are on. A member of the repo has an access
         // level in `permissions`, given on the repo itself (`project_access`, GitLab's word) or
         // through its group.
-        let member = ["project_access", "group_access"]
-            .iter()
-            .any(|via| repo["permissions"][via]["access_level"].as_u64().is_some());
-        let issues = match repo["issues_access_level"].as_str() {
-            _ if repo["archived"].as_bool() == Some(true) => Issues::Archived,
+        let member = ["project_access", "group_access"].iter().any(|via| {
+            answer["permissions"][via]["access_level"]
+                .as_u64()
+                .is_some()
+        });
+        let issues = match answer["issues_access_level"].as_str() {
+            _ if answer["archived"].as_bool() == Some(true) => Issues::Archived,
             Some("disabled") => Issues::Off,
-            _ if repo["issues_enabled"].as_bool() == Some(false) => Issues::Off,
+            _ if answer["issues_enabled"].as_bool() == Some(false) => Issues::Off,
             Some("private") if !member => Issues::NoRight,
             _ => Issues::Open,
         };

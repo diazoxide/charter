@@ -333,15 +333,16 @@ impl Repos for GitHub {
             .unwrap_or_default())
     }
 
-    fn about(&self, caller: &Caller, path: &str) -> Result<About, ForgeError> {
+    fn about(&self, caller: &Caller, repo: &RepoRecord) -> Result<About, ForgeError> {
+        let path = repo.path_with_namespace.as_str();
         let (owner, name) = owner_name(path);
         let api = format!("repos/{}/{}", quote(owner), quote(name));
         let doing = format!("reading {path}");
-        let repo = self.0.ask(caller, &Call::get(&api, LIST_TIMEOUT), &doing)?;
+        let answer = self.0.ask(caller, &Call::get(&api, LIST_TIMEOUT), &doing)?;
         // `visibility` names `internal` too; a reply without it still says `private`.
-        let visibility = match repo["visibility"].as_str() {
+        let visibility = match answer["visibility"].as_str() {
             Some(word) => Visibility::parse(word),
-            None => repo["private"].as_bool().map(|private| {
+            None => answer["private"].as_bool().map(|private| {
                 if private {
                     Visibility::Private
                 } else {
@@ -352,11 +353,11 @@ impl Repos for GitHub {
         .ok_or_else(|| ForgeError::new(format!("{doing}: GitHub named no visibility")))?;
         // Anyone who can read a repo can open an issue in it, unless its issues are off. A
         // `permissions` block that denies reading is the account's own answer.
-        let issues = if repo["archived"].as_bool() == Some(true) {
+        let issues = if answer["archived"].as_bool() == Some(true) {
             Issues::Archived
-        } else if repo["has_issues"].as_bool() == Some(false) {
+        } else if answer["has_issues"].as_bool() == Some(false) {
             Issues::Off
-        } else if repo["permissions"]["pull"].as_bool() == Some(false) {
+        } else if answer["permissions"]["pull"].as_bool() == Some(false) {
             Issues::NoRight
         } else {
             Issues::Open

@@ -232,10 +232,11 @@ pub trait Repos {
         git_ref: Option<&str>,
     ) -> Result<Vec<String>, ForgeError>;
 
-    /// Whether the repo at `path` is public, and whether this account can open an issue there
-    /// (FI14). Read before anything is sent to it: `charter ws todo promote` names both first
-    /// (ADR 0088 §5). Strict.
-    fn about(&self, caller: &Caller, path: &str) -> Result<About, ForgeError>;
+    /// Whether `repo` is public, and whether this account can open an issue there (FI14). Read
+    /// before anything is sent to it: `charter ws todo promote` names both first (ADR 0088 §5).
+    /// Both forges address it by its `path_with_namespace`, so a record the inventory read,
+    /// which holds no forge id, is enough. Strict.
+    fn about(&self, caller: &Caller, repo: &RepoRecord) -> Result<About, ForgeError>;
 }
 
 /// What [`Repos::about`] answers.

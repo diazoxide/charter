@@ -2883,7 +2883,7 @@ fn promote_todo(
             voice::info(&format!(
                 "Opening an issue in {} ({} at {}, {}) with the todo's title and text{label}.",
                 target.name,
-                target.path,
+                target.path(),
                 target.forge.host,
                 about.visibility.readers()
             ));
