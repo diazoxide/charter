@@ -448,6 +448,59 @@ impl Hooks {
         *self.events.lock().unwrap_or_else(PoisonError::into_inner) = Some(events);
     }
 
+    /// Drains this project's hook spool into the event log (FD-30, ADR 0068 §6): the lines its
+    /// chats' hooks spooled while no host took them, each checked, and every gap and rejected
+    /// line recorded as such.
+    ///
+    /// **Before any chat starts**, as a project is opened: a chat the reopen record names is
+    /// told to the log first, so a line it spooled is recorded under the run it ran in. With
+    /// no event log, or no channel, nothing is drained and the spool waits for a host that has
+    /// both.
+    pub fn drain_spool(&self) {
+        let Some(socket) = &self.socket else { return };
+        let Some(events) = self
+            .events
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+        else {
+            return;
+        };
+        let root = self.plane.root();
+        let mut log = events.lock().unwrap_or_else(PoisonError::into_inner);
+        if charter_core::reopen::path(root).is_file()
+            && let Ok(record) = charter_core::reopen::read_or_refusal(root)
+        {
+            for chat in record.chats {
+                if let (Some(number), Some(id), Some(run)) =
+                    (chat.number, chat.identity.id, chat.identity.run)
+                {
+                    log.knows(
+                        root,
+                        number,
+                        charter_core::eventlog::RunOf {
+                            chat: &id,
+                            run: &run,
+                        },
+                    );
+                }
+            }
+        }
+        let durable = log.durable();
+        let drained = charter_core::hookwire::spool::drain(
+            &charter_core::hookwire::spool::dir_for(socket),
+            &mut |item| {
+                let event = log.spooled(root, item)?;
+                durable.through(event.seq)
+            },
+        );
+        if let Err(why) = drained {
+            tracing::warn!(
+                "charter: the hook spool was not drained ({why}); it is drained at the next start"
+            );
+        }
+    }
+
     /// Stops listening and releases the socket. The plane on disk is untouched.
     ///
     /// Dropping the reader is what unlinks the socket file and joins the thread, and this is
@@ -692,9 +745,12 @@ fn apply(board: &Mutex<Board>, plane: &PlaneId, report: &Report) -> Applied {
     }
 }
 
-/// Writes one event into the host's log, when there is one. A write that fails is said in the
-/// app's log and lets the hook go: the harness was answered already, and a chat is never held
-/// up by a disk (ADR 0075 §7 keeps that for the audit, which is written from this log).
+/// Writes one event into the host's log, when there is one, and returns once it is durable:
+/// the hook is told its line is taken after this, and answers its harness only then (ADR 0075
+/// §7, FD-30). The `fsync` is outside the log's lock, so hooks recorded at once share one.
+///
+/// A write that fails is said in the app's log and lets the hook go: a chat is never held up
+/// by a disk (ADR 0075 §7 keeps that for the audit, which is written from this log).
 ///
 /// Answers the event as written, or nothing.
 fn record(
@@ -707,12 +763,19 @@ fn record(
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .clone()?;
-    let mut log = held.lock().unwrap_or_else(PoisonError::into_inner);
-    write(&mut log)
+    let (event, durable) = {
+        let mut log = held.lock().unwrap_or_else(PoisonError::into_inner);
+        (write(&mut log), log.durable())
+    };
+    let event = event
         .inspect_err(|why| {
             tracing::warn!("charter: a hook call was not written to the event log ({why})");
         })
-        .ok()
+        .ok()?;
+    if let Err(why) = durable.through(event.seq) {
+        tracing::warn!("charter: a hook call's event was not made durable ({why})");
+    }
+    Some(event)
 }
 
 /// The board, whether or not a thread panicked while holding it.
@@ -1171,6 +1234,56 @@ mod tests {
             followed_after(&hooks, named("cleared"), Some(10)).as_deref(),
             Some("cleared")
         );
+    }
+
+    #[test]
+    fn a_line_spooled_while_no_host_listened_is_recorded_when_the_project_is_opened_again() {
+        use charter_core::eventlog::{self, ArgsKey, Log, Recorder};
+        let dir = tempfile::tempdir().expect("a directory");
+        let at = Where {
+            within: dir.path().to_path_buf(),
+            socket: dir.path().join("app").join("hooks.sock"),
+        };
+        let plane: PlaneId =
+            serde_json::from_value(serde_json::json!(dir.path())).expect("a plane id");
+        let call = charter_core::hookwire::ToolCall {
+            chat: 7,
+            tool_hook: "posttooluse".to_owned(),
+            tool: Some("Read".to_owned()),
+            call: Some("toolu_1".to_owned()),
+            args: None,
+            decision: charter_core::hookwire::Decision::None,
+            rule: None,
+            hook_ms: 1,
+            agent: None,
+            at_ms: 0,
+        };
+        // The app issued chat 7 its token and quit; the chat's hook spooled its call.
+        {
+            let gone = Hooks::listening_on(plane.clone(), &at, Arc::new(|_| {}), Arc::new(|_| {}))
+                .expect("listening");
+            let token = gone.token_for(7);
+            gone.stop();
+            let delivered = charter_core::hookwire::deliver_tool(&at.socket, Some(&token), &call)
+                .expect("spooled");
+            assert_eq!(delivered, charter_core::hookwire::Delivered::Spooled(1));
+        }
+
+        let hooks =
+            Hooks::listening_on(plane, &at, Arc::new(|_| {}), Arc::new(|_| {})).expect("listening");
+        let logs = dir.path().join("events");
+        hooks.record_into(Arc::new(Mutex::new(Recorder::new(
+            Log::open(&logs, "DEVICE").expect("a log"),
+            ArgsKey::open(&logs).expect("a key"),
+        ))));
+        hooks.drain_spool();
+
+        let kinds: Vec<String> = eventlog::read(&logs)
+            .expect("the log reads")
+            .into_iter()
+            .map(|event| event.kind)
+            .collect();
+        assert_eq!(kinds, ["hook.posttooluse", "hook.spool.drained"]);
     }
 
     #[test]

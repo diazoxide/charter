@@ -70,6 +70,25 @@ pub fn tell_saved(
     Err(no_channel())
 }
 
+/// [`send`]'s refusal, for every line a hook delivers: nothing is spooled either, since the
+/// spool sits beside a socket there is none of here.
+pub fn deliver_report(
+    _path: &std::path::Path,
+    _token: Option<&ChatToken>,
+    _report: &Report,
+) -> io::Result<super::Delivered> {
+    Err(no_channel())
+}
+
+/// [`deliver_report`]'s refusal, for a refused commit.
+pub fn deliver_refused(
+    _path: &std::path::Path,
+    _token: Option<&ChatToken>,
+    _refused: &CommitRefused,
+) -> io::Result<super::Delivered> {
+    Err(no_channel())
+}
+
 /// The one refusal both halves give, so the two cannot drift into two different stories.
 fn no_channel() -> io::Error {
     io::Error::new(

@@ -283,6 +283,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Files an earlier version wrote under a hostname are still read; a later migration renames them
   (FD-25, #662).
 
+- **No hook call is lost when the app is down.** A hook now waits for the app to say it has
+  recorded the call, on disk, before it answers the harness. When the app is not running, is
+  slow or quits mid-turn, the hook writes the call to its chat's spool in `.charter/app/spool/`
+  instead, and the app records it the next time it opens the project, saying which lines were
+  missing or did not check. A hook call takes about a millisecond longer (FD-30, #667).
+
 - **Fewer redraws when switching projects.** A project's tab strip comes back at the width it
   had instead of drawing every tab and then folding them away, the palette closes in the same
   frame as the switch, and the project's theme and its repos' save standing are drawn from what

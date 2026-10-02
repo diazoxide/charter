@@ -1,8 +1,9 @@
 //! How a hook process reaches the app: one line on a unix socket the app owns.
 //!
 //! A hook runs inside the chat's own process tree, so everything it needs is already in its
-//! environment — the socket to write to and the chat it belongs to. It looks nothing up, reads
-//! no plane and opens no file, which is what keeps it inside the spec's 50 ms.
+//! environment — the socket to write to and the chat it belongs to. It looks nothing up and
+//! reads no plane, which is what keeps it inside the spec's 50 ms. The one file it may open is
+//! its chat's spool beside the socket, when the app does not take its line ([`spool`], FD-30).
 //!
 //! **It can never break a turn.** Every failure here is silent and fast: no app listening, a
 //! socket that has gone, a payload that will not parse. A harness whose turn fails because
@@ -299,15 +300,40 @@ const A_TOKEN_IS: usize = 32;
 #[derive(Debug, Default)]
 pub struct ChatTokens {
     held: std::sync::Mutex<std::collections::HashMap<u32, ChatToken>>,
+    /// The spool directory each token's key is recorded in as it is issued (FD-30), where
+    /// this host has one.
+    spool: Option<std::path::PathBuf>,
 }
 
 impl ChatTokens {
+    /// Tokens whose spool keys are recorded in `dir` as each is issued ([`spool::remember`]),
+    /// so a line a chat spools can be checked by whichever host drains it.
+    pub fn spooling_into(dir: std::path::PathBuf) -> Self {
+        Self {
+            held: std::sync::Mutex::default(),
+            spool: Some(dir),
+        }
+    }
+
     /// A fresh token for `chat`, replacing any it had: 32 bytes from the operating system's
     /// generator, written as hex.
+    ///
+    /// Its spool key is on disk before it returns, where these tokens spool. A key that cannot
+    /// be recorded is said in the log and the token is issued all the same: the chat runs, and
+    /// a line it spools reads as `no-key` at the drain rather than as the chat's.
     pub fn issue(&self, chat: u32) -> std::io::Result<ChatToken> {
         let mut bytes = [0u8; A_TOKEN_IS];
         getrandom::fill(&mut bytes).map_err(std::io::Error::other)?;
         let token = ChatToken(bytes.iter().map(|byte| format!("{byte:02x}")).collect());
+        #[cfg(unix)]
+        if let Some(dir) = &self.spool
+            && let Err(why) = spool::remember(dir, chat, &token)
+        {
+            tracing::warn!(
+                "charter: chat {chat}'s spool key was not recorded ({why}); a line it spools \
+                 cannot be checked"
+            );
+        }
         self.held().insert(chat, token.clone());
         Ok(token)
     }
@@ -858,8 +884,9 @@ pub fn tell_refused(
     one_line_with_a_deadline(path, token, refused)
 }
 
-/// Tells the app at `path` a tool hook ran. [`tell`]'s shape and deadline: the hook has
-/// already answered the harness, and nothing this does can change that answer.
+/// Tells the app at `path` a tool hook ran, [`tell`]'s shape and deadline, and spools nothing:
+/// a hook delivers its line with [`deliver_tool`] instead, which waits for the app to say it
+/// recorded it.
 #[cfg(unix)]
 pub fn tell_tool(
     path: &std::path::Path,
@@ -867,6 +894,107 @@ pub fn tell_tool(
     call: &ToolCall,
 ) -> io::Result<()> {
     one_line_with_a_deadline(path, token, call)
+}
+
+/// Where a hook's line went ([`deliver_report`], [`deliver_tool`], [`deliver_refused`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Delivered {
+    /// The host said it took the line, once its hearer had recorded it.
+    Taken,
+    /// The host did not take it in time, and it is in the chat's spool, durably, under this
+    /// number (FD-30).
+    Spooled(u64),
+}
+
+/// What the host writes back once a hook's line is recorded.
+#[cfg(unix)]
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Taken {
+    taken: bool,
+}
+
+/// Delivers a chat's report: taken by the host at `path`, or spooled beside it.
+#[cfg(unix)]
+pub fn deliver_report(
+    path: &std::path::Path,
+    token: Option<&ChatToken>,
+    report: &Report,
+) -> io::Result<Delivered> {
+    deliver(path, token, report.chat, report)
+}
+
+/// Delivers a tool call's line: taken by the host at `path`, or spooled beside it.
+#[cfg(unix)]
+pub fn deliver_tool(
+    path: &std::path::Path,
+    token: Option<&ChatToken>,
+    call: &ToolCall,
+) -> io::Result<Delivered> {
+    deliver(path, token, call.chat, call)
+}
+
+/// Delivers a refused commit's line: taken by the host at `path`, or spooled beside it.
+#[cfg(unix)]
+pub fn deliver_refused(
+    path: &std::path::Path,
+    token: Option<&ChatToken>,
+    refused: &CommitRefused,
+) -> io::Result<Delivered> {
+    deliver(path, token, refused.chat, refused)
+}
+
+/// The line to the host, and an answer from it that it took the line, within
+/// [`A_NOTICE_TAKES_AT_MOST`]; otherwise the line in chat `chat`'s spool ([`spool::append`]).
+///
+/// **When this returns `Ok` the line is recorded or durable** (ADR 0075 §7, FD-30): a hook
+/// answers its harness after this, so a host that is down, slow or gone costs the line its
+/// moment, never the line. A host that took it after the wait ran out may record it as well
+/// as the drain: the line is then recorded twice, which is the side this errs on.
+///
+/// Without a token nothing can be spooled, since a spool line is checked under the token's key,
+/// and the error says the line is lost.
+#[cfg(unix)]
+fn deliver(
+    path: &std::path::Path,
+    token: Option<&ChatToken>,
+    chat: u32,
+    line: &impl serde::Serialize,
+) -> io::Result<Delivered> {
+    use std::io::{BufRead, Read, Write};
+
+    let bytes = line_with(token, line)?;
+    let to = path.to_path_buf();
+    let taken = within(A_NOTICE_TAKES_AT_MOST, move || {
+        let socket = std::os::unix::net::UnixStream::connect(&to)?;
+        socket.set_write_timeout(Some(A_NOTICE_TAKES_AT_MOST))?;
+        socket.set_read_timeout(Some(A_NOTICE_TAKES_AT_MOST))?;
+        (&socket).write_all(&bytes)?;
+        let mut said = String::new();
+        std::io::BufReader::new(&socket)
+            .take(256)
+            .read_line(&mut said)?;
+        match serde_json::from_str::<Taken>(&said) {
+            Ok(Taken { taken: true }) => Ok(()),
+            _ => Err(io::Error::other("the app did not say it took the line")),
+        }
+    });
+    let Err(why) = taken else {
+        return Ok(Delivered::Taken);
+    };
+    let Some(token) = token else {
+        return Err(io::Error::new(
+            why.kind(),
+            format!("{why}, and with no chat token it cannot be spooled, so it is lost"),
+        ));
+    };
+    spool::append(&spool::dir_for(path), chat, token, line)
+        .map(Delivered::Spooled)
+        .map_err(|spooled| {
+            io::Error::new(
+                spooled.kind(),
+                format!("{why}, and it could not be spooled ({spooled}), so it is lost"),
+            )
+        })
 }
 
 /// `act`, or an error once `deadline` has passed without it finishing.
@@ -983,8 +1111,14 @@ impl Asking {
 /// refusals in `off_unix`, kept in a file of their own because no unix build compiles them.
 #[cfg(not(unix))]
 mod off_unix;
+
+#[cfg(unix)]
+pub mod spool;
 #[cfg(not(unix))]
-pub use off_unix::{Asking, Listener, Reading, send, tell, tell_refused, tell_saved};
+pub use off_unix::{
+    Asking, Listener, Reading, deliver_refused, deliver_report, send, tell, tell_refused,
+    tell_saved,
+};
 
 /// What the app answers an ask with, told which connection it came on.
 ///
@@ -1047,10 +1181,14 @@ impl Listener {
         // on the machine", and it is one call.
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        // Each token's spool key is recorded beside the socket as it is issued (FD-30), so
+        // whichever host drains a chat's spool can check its lines.
+        let spool = spool::dir_for(path);
+        private_directory(&spool)?;
         Ok(Self {
             socket,
             path: path.to_path_buf(),
-            tokens: std::sync::Arc::default(),
+            tokens: std::sync::Arc::new(ChatTokens::spooling_into(spool)),
         })
     }
 
@@ -1316,6 +1454,10 @@ fn serve(
             turns.wait(this);
         }
         let first = !turn.done;
+        // A report, a tool call and a refused commit are answered once their hearer has
+        // returned, which in the app is once the line is recorded (FD-30): the hook answers its
+        // harness only after this, or after it has spooled the line.
+        let recorded = matches!(line, Line::Report(_) | Line::Tool(_) | Line::Refused(_));
         match line {
             Line::Report(report) => (hearing.each)(report),
             Line::Ask(ask) => {
@@ -1334,6 +1476,14 @@ fn serve(
             Line::Saved(record) => (hearing.saved)(record),
             Line::Refused(refused) => (hearing.refused)(refused),
             Line::Tool(call) => (hearing.tool)(call),
+        }
+        if recorded {
+            // An older hook has closed its end already; what it was not waiting for is lost
+            // with nothing to say.
+            if let Ok(mut said) = serde_json::to_vec(&Taken { taken: true }) {
+                said.push(b'\n');
+                let _ = writer.write_all(&said);
+            }
         }
         if first {
             turn.finish();
@@ -3235,3 +3385,7 @@ mod tests {
         assert_eq!(carried, None);
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "hookwire/delivery_tests.rs"]
+mod delivery_tests;

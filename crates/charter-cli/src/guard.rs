@@ -47,6 +47,7 @@ use std::time::Duration;
 
 use charter_core::handoffguard::Caller;
 use charter_core::toolgate::{self, Call, Plane};
+use charter_core::toolhooks::Answer;
 
 /// What a harness reads as "block" — and, here, only as the fallback for an undelivered
 /// denial. `hooks.py:DENY_EXIT`.
@@ -126,26 +127,14 @@ pub fn pretooluse(payload: &str, now: Option<&str>) -> crate::hooks::Answered {
         },
     };
     if let Some(verdict) = judged_on_a_deep_stack(|| toolgate::verdict(&call, plane.as_ref())) {
-        return crate::hooks::Answered {
-            code: deny(&verdict),
-            decision: charter_core::hookwire::Decision::Deny,
-            rule: Some(verdict.reason.clone()),
-        };
+        return crate::hooks::Answered::of(Answer::Deny(verdict));
     }
     // Nothing refused, so the persona tool gate is asked. Its answer is an allow or nothing;
     // one it could not print is simply the ordinary prompt.
-    let mut decision = charter_core::hookwire::Decision::None;
-    if let Some(allow) =
+    crate::hooks::Answered::of(
         crate::hooks::with_hook(payload, now, charter_core::toolhooks::persona_allow)
-    {
-        crate::hooks::say(&allow);
-        decision = crate::hooks::decision_said(&allow);
-    }
-    crate::hooks::Answered {
-        code: ExitCode::SUCCESS,
-        decision,
-        rule: None,
-    }
+            .map_or(Answer::Nothing, Answer::Say),
+    )
 }
 
 /// The stack the guards run on: far more than any of them needs.

@@ -52,10 +52,9 @@ pub fn run(name: &str) -> ExitCode {
     ExitCode::FAILURE
 }
 
-/// The app's needs-you item for this refusal. Dropped whatever it answers: the commit is
-/// refused whether or not an app hears about it, and a chat outside the app has none. ADR 0068
-/// §6 has a refused line spooled instead; no hook spools until FD-30 (charter#667), and this
-/// one spools with the rest when it does.
+/// The app's needs-you item for this refusal. The commit is refused whatever this answers, and
+/// a chat outside the app has none. A line the app does not take is spooled for the next host
+/// to record (ADR 0068 §6, FD-30).
 fn tell_the_app(why: String) {
     let env = |name: &str| std::env::var(name).ok();
     let (Some(socket), Some(chat)) = (
@@ -64,7 +63,7 @@ fn tell_the_app(why: String) {
     ) else {
         return;
     };
-    let _ = hookwire::tell_refused(
+    let _ = hookwire::deliver_refused(
         Path::new(&socket),
         hookwire::ChatToken::from_env().as_ref(),
         &hookwire::CommitRefused {

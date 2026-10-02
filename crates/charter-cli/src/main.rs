@@ -1325,9 +1325,12 @@ pub(crate) const GUARD_CRASHED_RULE: &str = "guard-crashed";
 const GUARD_UNANSWERED_RULE: &str = "guard-unanswered";
 
 /// One [`hookwire::ToolCall`] to the host, when a host is listening: the tool, the hash of its
-/// arguments, the decision and how long the hook took. Never the arguments themselves. A host
-/// that has gone is not the harness's business, and is said only on stderr, as a report that
-/// did not arrive is.
+/// arguments, the decision and how long the hook took. Never the arguments themselves.
+///
+/// **Before the harness is answered** (FD-30): the host says it has recorded the line, or the
+/// line is in the chat's spool, durably, when this returns ([`hookwire::deliver_tool`]). A
+/// line that reached neither is said only on stderr, as a report that did not arrive is, and
+/// the answer is the same either way.
 #[cfg(unix)]
 fn tell_the_host_about_the_tool_call(
     word: &str,
@@ -1373,7 +1376,7 @@ fn tell_the_host_about_the_tool_call(
             .and_then(|since| u64::try_from(since.as_millis()).ok())
             .unwrap_or_default(),
     };
-    if let Err(why) = hookwire::tell_tool(
+    if let Err(why) = hookwire::deliver_tool(
         std::path::Path::new(&socket),
         hookwire::ChatToken::from_env().as_ref(),
         &call,
@@ -1393,11 +1396,8 @@ fn tell_the_host_about_a_crash(word: &str, unanswered: bool) {
     } else {
         GUARD_CRASHED_RULE
     };
-    let answered = hooks::Answered {
-        code: ExitCode::from(BLOCK),
-        decision: hookwire::Decision::Deny,
-        rule: Some(rule.to_owned()),
-    };
+    let answered =
+        hooks::Answered::exit(ExitCode::from(BLOCK), hookwire::Decision::Deny, Some(rule));
     tell_the_host_about_the_tool_call(word, "", &answered, Duration::ZERO);
 }
 
@@ -1423,11 +1423,12 @@ fn hook(name: &str, now: Option<&str>) -> ExitCode {
     // FIRST, in front of `Event::parse`, because none of these is one of the app's reporting
     // events: a tool call carries no chat state worth a `Report`.
     //
-    // **The host still hears every tool call** (FD-9): after the answer is printed, one line on
-    // the hook channel says what was answered, so its event log has one event per hook call.
-    // The verdict is decided and printed before that line is sent, the exit status is the
-    // verdict's whatever the send does, and the send gives up after a bounded wait
-    // (`hookwire::tell_tool`), so a slow or frozen app never holds a guard's answer.
+    // **The host hears every tool call before the harness is answered** (FD-9, FD-30): the
+    // verdict is decided, then one line on the hook channel says what it is, and only once the
+    // host has recorded it, or the line is in the chat's spool, is the verdict printed. The
+    // exit status is the verdict's whatever the send does, and the send gives up on the host
+    // after a bounded wait (`hookwire::deliver_tool`), so a slow or frozen app costs a guard's
+    // answer that wait at most, never the answer.
     let guarded = name == GUARDED_TOOL_HOOK;
     let handler = hooks::handler(name);
     if guarded || handler.is_some() {
@@ -1438,7 +1439,7 @@ fn hook(name: &str, now: Option<&str>) -> ExitCode {
             _ => guard::pretooluse(&text, now),
         };
         tell_the_host_about_the_tool_call(name, &text, &answered, began.elapsed());
-        return answered.code;
+        return answered.print();
     }
     if charter_core::hookreg::NO_OPS.contains(&name) {
         // Answered with nothing, as ever, and still one call the host hears. The payload is
@@ -1446,11 +1447,7 @@ fn hook(name: &str, now: Option<&str>) -> ExitCode {
         let began = std::time::Instant::now();
         if std::env::var_os(SOCKET_ENV).is_some() {
             let text = payload();
-            let answered = hooks::Answered {
-                code: ExitCode::SUCCESS,
-                decision: hookwire::Decision::None,
-                rule: None,
-            };
+            let answered = hooks::Answered::exit(ExitCode::SUCCESS, hookwire::Decision::None, None);
             tell_the_host_about_the_tool_call(name, &text, &answered, began.elapsed());
         }
         return ExitCode::SUCCESS;
@@ -1478,11 +1475,11 @@ fn hook(name: &str, now: Option<&str>) -> ExitCode {
         }
         // A refused tool call is still one the host hears.
         if std::env::var_os(SOCKET_ENV).is_some() {
-            let answered = hooks::Answered {
-                code: ExitCode::from(BLOCK),
-                decision: hookwire::Decision::Deny,
-                rule: Some(UNKNOWN_HOOK_RULE.to_owned()),
-            };
+            let answered = hooks::Answered::exit(
+                ExitCode::from(BLOCK),
+                hookwire::Decision::Deny,
+                Some(UNKNOWN_HOOK_RULE),
+            );
             tell_the_host_about_the_tool_call(name.as_ref(), &payload(), &answered, Duration::ZERO);
         }
         return ExitCode::from(BLOCK);
@@ -1520,7 +1517,7 @@ fn hook(name: &str, now: Option<&str>) -> ExitCode {
         );
     }
     if let Some(report) = &report
-        && let Err(why) = hookwire::send(
+        && let Err(why) = hookwire::deliver_report(
             std::path::Path::new(&socket),
             hookwire::ChatToken::from_env().as_ref(),
             report,
