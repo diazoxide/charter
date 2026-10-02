@@ -183,3 +183,106 @@ pub fn feed(child: &mut std::process::Child, bytes: &[u8]) {
         Err(error) => panic!("the payload is written: {error}"),
     }
 }
+
+/// How long a fixture that ignores signals keeps going before it ends on its own, in seconds.
+///
+/// Five minutes: past any one test's own deadline here (the slowest wait is thirty seconds
+/// for a first-run assessment on a loaded Mac), and short enough that one which slips past
+/// every guard is gone well before the next run starts (#923).
+pub const FIXTURE_LIFETIME_SECS: u32 = 300;
+
+/// A shell script that ignores `signals`, runs `first`, and then waits — for
+/// [`FIXTURE_LIFETIME_SECS`] at most, and never for ever.
+///
+/// What a test means by `trap '' INT HUP; while :; do sleep 600; done`: a program only a kill
+/// can end. Written that way it outlived its test by days whenever the kill never came — a
+/// failed assertion, or a test binary that exited before the reaper thread got to it (#923).
+/// The bound is counted in one-second sleeps, so it needs nothing but `sleep` and the shell's
+/// own arithmetic, and a group kill takes at most one `sleep 1` with it.
+pub fn stubborn(signals: &str, first: &str) -> String {
+    stubborn_for(signals, first, FIXTURE_LIFETIME_SECS)
+}
+
+/// [`stubborn`], with a bound of `secs` seconds instead.
+pub fn stubborn_for(signals: &str, first: &str, secs: u32) -> String {
+    format!(
+        "trap '' {signals}; {first}{sep}i=0; while [ \"$i\" -lt {secs} ]; do sleep 1; \
+         i=$((i+1)); done",
+        sep = if first.is_empty() { "" } else { "; " },
+    )
+}
+
+/// Kills a fixture's whole process group when it drops — when the test ends, and on the
+/// unwind out of a test that failed (#923).
+///
+/// **Synchronous, on purpose.** What leaked was a fixture whose ending was left to someone
+/// else: a session's reaper thread, which hangs up, waits its grace and only then kills, and
+/// which a test binary that exits first never lets finish; or a program a test meant to stop
+/// after its last assertion, when an earlier one failed. This kills before `drop` returns.
+///
+/// **By the pid this test caused to exist, never by name**: either one the test was handed
+/// ([`Ends::group`]), or one the fixture wrote down itself ([`Ends::named_in`]), read when the
+/// guard drops so a test that failed before reading it is still covered. The group is killed
+/// and then the pid itself, since a fixture that is not its group's leader is still named.
+/// A pid of 0 or 1 is never signalled: those are this process's own group and every process
+/// the user owns.
+#[derive(Debug)]
+#[must_use = "a guard that is dropped at once kills its fixture at once"]
+pub struct Ends {
+    target: Target,
+}
+
+#[derive(Debug)]
+enum Target {
+    Pid(u32),
+    NamedIn(PathBuf),
+}
+
+impl Ends {
+    /// Kill the group `pid` leads, and `pid` itself, when this drops.
+    pub fn group(pid: u32) -> Self {
+        Ends {
+            target: Target::Pid(pid),
+        }
+    }
+
+    /// Kill the group led by the pid written in `marker`, and that pid, when this drops —
+    /// nothing, if the marker was never written or does not hold a pid.
+    pub fn named_in(marker: impl Into<PathBuf>) -> Self {
+        Ends {
+            target: Target::NamedIn(marker.into()),
+        }
+    }
+}
+
+impl Drop for Ends {
+    fn drop(&mut self) {
+        let pid = match &self.target {
+            Target::Pid(pid) => Some(*pid),
+            Target::NamedIn(marker) => std::fs::read_to_string(marker)
+                .ok()
+                .and_then(|text| text.trim().parse().ok()),
+        };
+        if let Some(pid) = pid {
+            kill(pid);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn kill(pid: u32) {
+    use rustix::process::{Pid, Signal, kill_process, kill_process_group};
+    let Some(pid) = i32::try_from(pid)
+        .ok()
+        .filter(|&raw| raw > 1)
+        .and_then(Pid::from_raw)
+    else {
+        return;
+    };
+    // ESRCH is the ordinary answer: the fixture already ended, which is the passing case.
+    let _ = kill_process_group(pid, Signal::KILL);
+    let _ = kill_process(pid, Signal::KILL);
+}
+
+#[cfg(not(unix))]
+fn kill(_pid: u32) {}

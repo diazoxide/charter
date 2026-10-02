@@ -1,0 +1,129 @@
+//! A fixture process ends when the test that started it ends, however it ends (#923).
+//!
+//! The leak this answers: a test starts a program that is built to survive a hangup, the
+//! test fails or the binary exits before the reaper thread's kill lands, and the program is
+//! still there days later under pid 1. A [`stand_in::Ends`] guard kills the whole process
+//! group synchronously when it drops — on the way out of a passing test, and on the unwind
+//! out of a failing one.
+#![cfg(unix)]
+
+use std::path::Path;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+
+/// A program leading a group of its own that ignores INT and HUP, with a helper of its own in
+/// that group, and the helper's pid.
+fn a_group_that_will_not_go_quietly(dir: &Path) -> (std::process::Child, u32) {
+    use std::os::unix::process::CommandExt as _;
+    let helper = dir.join("helper");
+    let child = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(format!(
+            "trap '' INT HUP; sleep 30 & echo $! > '{}.part' && mv '{0}.part' '{0}'; wait",
+            helper.display()
+        ))
+        .stdin(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .expect("/bin/sh runs");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let pid = loop {
+        if let Some(pid) = std::fs::read_to_string(&helper)
+            .ok()
+            .and_then(|t| t.trim().parse().ok())
+        {
+            break pid;
+        }
+        assert!(Instant::now() < deadline, "the helper never said its pid");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    (child, pid)
+}
+
+/// Whether `pid` is gone within a few seconds — a killed child whose parent is gone is a
+/// zombie until init reaps it, and a zombie still answers `kill -0`.
+fn gone(pid: u32) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Command::new("/bin/kill")
+        .arg("-0")
+        .arg(pid.to_string())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+    {
+        if Instant::now() > deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    true
+}
+
+#[test]
+fn a_guarded_group_is_killed_when_the_test_panics() {
+    let dir = tempfile::tempdir().expect("a directory");
+    let (mut child, helper) = a_group_that_will_not_go_quietly(dir.path());
+    let leader = child.id();
+
+    let unwound = std::panic::catch_unwind(|| {
+        let _ends = stand_in::Ends::group(leader);
+        panic!("the test failed with its fixture still running");
+    });
+
+    assert!(unwound.is_err());
+    // Asked before the leader is waited for: waiting first would wait the helper out too.
+    assert!(gone(helper), "the helper in the group outlived the panic");
+    let _ = child.wait();
+}
+
+#[test]
+fn a_group_named_in_a_marker_is_killed_by_the_pid_written_there() {
+    // The program writes its own pid; the test only learns it later, or never, if it fails
+    // first. The guard reads the marker when it drops.
+    let dir = tempfile::tempdir().expect("a directory");
+    let (mut child, helper) = a_group_that_will_not_go_quietly(dir.path());
+    let marker = dir.path().join("leader");
+    std::fs::write(&marker, child.id().to_string()).expect("the marker");
+
+    drop(stand_in::Ends::named_in(&marker));
+
+    assert!(gone(helper), "the helper outlived the guard");
+    let _ = child.wait();
+}
+
+#[test]
+fn a_marker_never_written_is_nothing_to_kill() {
+    let dir = tempfile::tempdir().expect("a directory");
+    drop(stand_in::Ends::named_in(dir.path().join("never")));
+}
+
+#[test]
+fn a_stubborn_fixture_ignores_a_hangup_and_still_ends_on_its_own() {
+    use std::os::unix::process::CommandExt as _;
+    let mut child = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(stand_in::stubborn_for("INT HUP", "", 1))
+        .stdin(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .expect("/bin/sh runs");
+    let _ends = stand_in::Ends::group(child.id());
+    std::thread::sleep(Duration::from_millis(200));
+    let _ = Command::new("/bin/kill")
+        .args(["-HUP", &child.id().to_string()])
+        .status();
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(
+        child.try_wait().expect("a status").is_none(),
+        "the fixture did not survive the hangup it is meant to survive"
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while child.try_wait().expect("a status").is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "the fixture outlived its bound"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}

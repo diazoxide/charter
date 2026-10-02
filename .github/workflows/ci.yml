@@ -43,7 +43,12 @@ jobs:
       # --no-fail-fast because cargo stops at the first failing test binary and SKIPS every
       # later one. A flake in the binary that happens to run first (charter-app#39) then
       # hides every other result, so a red run says nothing about the rest of the suite.
-      - run: cargo test --workspace --locked --no-fail-fast
+      #
+      # Under `tools/no-orphans.sh`, which fails the step when the suite leaves a process of its
+      # own running after it ends (#923) — a stand-in or a signal-ignoring fixture that outlived
+      # its test — and kills each one by pid. `--reap` is safe here because the runner is the
+      # job's own machine.
+      - run: tools/no-orphans.sh --reap -- cargo test --workspace --locked --no-fail-fast
 
   deny:
     name: rust (licences, advisories)
