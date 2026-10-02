@@ -23,7 +23,7 @@
 //!                       [--draw-mbps <MB/s>] [--rtt-ms <ms>] [--source-pause <bytes>]
 //! ```
 
-// Unix sockets. Windows is not ported yet (ADR 0068, *Later decisions*).
+// Unix sockets. Windows is not ported yet (ADR 0068, *Later decisions*; M46 Windows, #565).
 #[cfg(not(unix))]
 fn main() {
     eprintln!("charter-session-bench runs on unix sockets only");

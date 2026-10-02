@@ -23,7 +23,8 @@ import { commands, type DoctorReport, type DoctorRow, type PlaneId } from "./bin
  *
  * # The verdict counts only what this build checked
  *
- * About twenty of the doctor's rows are WARNs that say *not checked (…not ported…)*. They are
+ * About twenty of the doctor's rows are WARNs that say *not checked (…)*, for checks this build
+ * does not run (planned in OB-8, #994, and FG-2, #802). They are
  * drawn in the dialog — a doctor that dropped them would read as those problems being fixed —
  * but they are never COUNTED on the line: a count that includes them never goes below twenty,
  * and the one real warning among them is furniture on its first day. The core tells the two

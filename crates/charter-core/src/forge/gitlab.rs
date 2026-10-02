@@ -636,7 +636,7 @@ impl Requests for GitLab {
 }
 
 impl Capabilities for GitLab {
-    /// Not built yet (W7: the GitLab twin, FW-2b, ships one release after GitHub's): every
+    /// Not built yet (W7: the GitLab twin, FW-2b #728, ships one release after GitHub's): every
     /// capability is unavailable for that reason, and takes its fallback.
     fn support(&self, _caller: &Caller, _at: &Reach, what: Capability) -> Support {
         Support::Unavailable(Unavailable::because(what, Reason::NotYetBuilt))

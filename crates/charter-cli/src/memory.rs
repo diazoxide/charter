@@ -64,7 +64,7 @@ pub struct RecallArgs {
 #[derive(Subcommand)]
 pub enum PersonaCommand {
     /// Internal, answered and ignored: the Python plugin's SessionStart prune of ended
-    /// sessions' ephemeral scratch. Not ported, because its rule — a session idle for six hours
+    /// sessions' ephemeral scratch. Left out on purpose, because its rule — a session idle for six hours
     /// has ended — is wrong for a chat the app keeps open for days, and a prune that deletes a
     /// live chat's scratch cannot be undone. Leaving it costs a few small files.
     #[command(name = "_gc", hide = true)]

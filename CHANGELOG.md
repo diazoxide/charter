@@ -324,6 +324,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`charter doctor` names `charter persona optimize` for a persona's memory.** Its memory
+  indexes row said curating a persona's memory from the CLI was "not in this version yet",
+  although `charter persona optimize` has shipped. It now names that command, as it names
+  `charter workspace optimize` for a workspace (HY-12).
 - **A memory or session record written by an agent shows up in its panel straight away.**
   Before, a workspace's or persona's `memory/`, and the session records in `sessions/`, reached
   the Memory, Personas and Sessions panels only when something else in the project changed.

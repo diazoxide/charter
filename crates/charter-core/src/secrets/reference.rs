@@ -11,7 +11,7 @@
 //! every item and field this plane reaches.
 //!
 //! `browser://` is recognised as a scheme and refused at read time: the browser lane is not in
-//! this charter.
+//! this charter. Resolving it, or refusing it when it is written instead, is #996.
 
 use std::time::Duration;
 
@@ -146,6 +146,7 @@ pub fn argv(uri: &str, scheme: &str) -> Result<(Vec<String>, &'static str), Vaul
                 "vault",
             ))
         }
+        // #996.
         _ => Err(VaultError::unavailable(
             "a browser:// reference cannot be read: reading a value out of a browser session is \
              not in this version of charter.",

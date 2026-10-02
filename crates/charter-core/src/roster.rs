@@ -142,6 +142,7 @@ pub fn block(rows: &[Row], generic: u64, total: u64) -> String {
     // computed" are the same fact, and writing them as two conditions is how they drift.
     match (100 * generic).checked_div(total) {
         None => {
+            // Seeding the tally from past sessions is OB-13, #995.
             out.push(
                 "_No dispatches recorded yet._ The tally fills as sub-agents are dispatched; \
                  seeding it from past sessions is not in this version yet."

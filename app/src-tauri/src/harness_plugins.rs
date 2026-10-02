@@ -14,6 +14,7 @@ pub struct HarnessPlugins {
     pub harness: String,
     /// What a person calls it.
     pub title: String,
+    // ADR 0050's sentence; `charter_core::harness_plugin` says what the "yet" waits on.
     /// "plugins for <harness> are not supported yet — <why>", or none where charter applies
     /// a project's choice to the chats it starts.
     pub unsupported: Option<String>,

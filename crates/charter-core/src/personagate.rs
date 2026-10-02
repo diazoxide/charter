@@ -3,7 +3,7 @@
 //!
 //! [`crate::toolgate`] took that module's name for the eight REFUSALS, because in this binary
 //! the refusals were what a tool call met first. This is the other half, the one that module's
-//! header lists as not ported: the last thing `hooks.py:pretooluse` does, after every refusal
+//! header names: the last thing `hooks.py:pretooluse` does, after every refusal
 //! has had its say, is ask this whether the persona's `tools:` covers the command — and if it
 //! does, answer `allow` so the harness does not prompt.
 //!
@@ -47,7 +47,7 @@
 //! ceiling files can only narrow what that allows, so a stale or stray one cannot widen it;
 //! [`sweep_ceilings`] removes the old ones when the app opens a plane.
 //!
-//! # What is not ported
+//! # What it leaves out, and why
 //!
 //! `os.path.expanduser` and `expandvars` on a candidate: unreachable, because
 //! [`shell_literal`] has already refused every command holding a `~` or a `$`.

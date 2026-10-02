@@ -5,8 +5,8 @@
 //! against a copy of a fixture plane and compares the tree it leaves with what the Python
 //! charter left.
 //!
-//! One thing this binary deliberately does NOT do yet, recorded in the harness rather than
-//! left to be discovered:
+//! One thing this binary does NOT do yet, recorded in the harness rather than left to be
+//! discovered, and planned in #999:
 //!
 //! - **Not every command prints its confirmation.** charter says `✓ Vision set for 'alpha' →
 //!   …` on stderr, and `vision` here is still silent (`todo` speaks since M8.5). The memory commands
@@ -3071,7 +3071,7 @@ fn main() -> ExitCode {
     }
     // The three internal words the Python charter's plugin wires beside its hooks. Answered —
     // exit 0, nothing printed, nothing read — so a plugin that still names them can never fail
-    // a session start or a turn end on them; see `hookreg` for why each is not ported.
+    // a session start or a turn end on them; `hookreg` says why each is left out on purpose.
     if matches!(
         &cli.command,
         Command::Workspace(WorkspaceCommand::Reconcile | WorkspaceCommand::Autosave)
@@ -3176,6 +3176,7 @@ fn main() -> ExitCode {
         Command::Statusline { watch, now, .. } => {
             // Before stdin is read or a plane is looked for: nothing is drawn, nothing is
             // recorded, and the answer does not depend on where it is asked (HY-11).
+            // Whether `--watch` repaints or is retired: #997.
             if *watch {
                 return refused(
                     "`statusline --watch` is not in this version yet; statusline does not repaint, \

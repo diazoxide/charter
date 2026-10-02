@@ -61,7 +61,7 @@ impl fmt::Display for Missing {
 /// - **macOS**: Seatbelt, through `sandbox-exec`.
 /// - **Linux**: bubblewrap for the filesystem and `socat` for the network proxy, the two
 ///   programs Claude Code's sandbox runs through.
-/// - **Windows**: no backend yet (ruling V21, 3).
+/// - **Windows**: no backend yet (ruling V21, 3; M46 Windows, #565).
 pub fn missing(os: Os, has: &dyn Fn(&str) -> bool) -> Option<Missing> {
     let needs: &[&'static str] = match os {
         Os::MacOs => &["sandbox-exec"],
