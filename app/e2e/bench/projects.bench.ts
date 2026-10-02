@@ -15,7 +15,7 @@ import { closeEverything, job, openTab, ready, record } from "./window.js";
  * Ten open projects, each with one chat, and each brought to the front through the project
  * switcher three times round (FR-27).
  *
- * Spec limit: row L9 of the budgets of record — switching among ten open projects ≤ 200 ms,
+ * Spec limit: row L9 of the budgets of record — switching among ten open projects ≤ 200 ms at the p95,
  * release absolute. Measured from the press of the project's row in the switcher until the
  * pane of the chat in front over there has painted (`bench.ts`, `project switch`).
  */

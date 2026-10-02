@@ -1,6 +1,7 @@
 /// <reference types="vite/client" />
 import type { Terminal } from "@xterm/xterm";
 import { drawWith, type Drawing, type Renderer } from "./renderer";
+import { onAMac } from "./tabKeys";
 
 /**
  * The seam the benchmark measures the app through.
@@ -238,7 +239,8 @@ export type Plan =
    * Switch to the project at `plane` through the project switcher (FR-27), and measure from
    * the press of its row until that project is in front (`shownMs`) and until the pane of the
    * chat in front over there has painted `sentinel` (`ms`). The switcher is opened first, by
-   * the title bar's button, and that is not timed: it is getting to the row, not the switch.
+   * its key, and that is timed apart (`openMs`, the key to the frame its row is drawn in):
+   * getting to the row is not the switch, and the two are different costs.
    */
   | { kind: "project switch"; plane: string; sentinel: string }
   /** How many times the pane's terminal draws, over `ms`. */
@@ -319,9 +321,21 @@ async function work(plan: Plan): Promise<unknown> {
     }
 
     case "project switch": {
-      button("Switch project…").click();
+      // The key, as the window's capture listener receives it (`switcherKey.ts`).
+      const pressed = performance.now();
+      window.dispatchEvent(
+        new KeyboardEvent(
+          "keydown",
+          onAMac()
+            ? { key: "p", metaKey: true, bubbles: true, cancelable: true }
+            : { key: "P", ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true },
+        ),
+      );
       const row = await until(() =>
         document.getElementById(`palette-row-project.select:${plan.plane}`),
+      );
+      const listed = await new Promise<number>((done) =>
+        requestAnimationFrame(() => done(performance.now())),
       );
       // Every pane on screen is the project in front's, and every one of them goes: so the
       // pane being timed is the first to open after the press, whatever its session. **It is
@@ -348,7 +362,12 @@ async function work(plan: Plan): Promise<unknown> {
       if (came === undefined) throw new Error(`project ${plan.plane} showed no pane`);
       const at = await Promise.race([came.seen, sleep(30_000).then(() => undefined)]);
       if (at === undefined) throw new Error(`the pane never painted ${plan.sentinel}`);
-      return { session: came.session, shownMs: shown - from, ms: at - from };
+      return {
+        session: came.session,
+        openMs: listed - pressed,
+        shownMs: shown - from,
+        ms: at - from,
+      };
     }
 
     case "switch":

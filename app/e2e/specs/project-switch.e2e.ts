@@ -1,5 +1,4 @@
 import { browser, expect } from "@wdio/globals";
-import type { Bench, Plan } from "../../src/bench.ts";
 import { READY, built, declareAProfile, writeShell } from "../harness.js";
 import { endChat, pressAndStart } from "../opening.js";
 import { logLine } from "../processes.js";
@@ -7,6 +6,8 @@ import {
   BUDGET_MS,
   OPEN,
   aProjectOfItsOwn,
+  ask,
+  jobInTheWindow,
   closeTheProjectsOfItsOwn,
   inFront,
   measureSwitches,
@@ -48,67 +49,43 @@ const PAINTED = READY.split(" ").at(-1) ?? READY;
 /** How many times each project is switched to. */
 const ROUNDS = 3;
 
-/** What the app answered a command with, insisting it answered at all. */
-async function ask<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
-  const answer = await browser.executeAsync(
-    (
-      name: string,
-      passed: Record<string, unknown>,
-      done: (out: { ok?: unknown; trouble?: string }) => void,
-    ) => {
-      void window.__TAURI__.core
-        .invoke(name, passed)
-        .then((ok) => done({ ok }))
-        .catch((e: unknown) => done({ trouble: String(e) }));
-    },
-    command,
-    args,
-  );
-  if (answer.trouble !== undefined) throw new Error(`${command} refused: ${answer.trouble}`);
-  return answer.ok as T;
-}
-
-/** Runs a job in the window and answers with its result, once it has finished. */
-async function job<T>(plan: Plan): Promise<T> {
-  await browser.execute((plan) => (window.charterBench as Bench).begin(plan), plan);
-  let state: { running: boolean; result?: unknown; trouble?: string } = { running: true };
-  await browser.waitUntil(
-    async () => {
-      state = await browser.execute(() => (window.charterBench as Bench).poll());
-      return !state.running;
-    },
-    { timeout: 60_000, interval: 50, timeoutMsg: `${plan.kind} never finished` },
-  );
-  if (state.trouble) throw new Error(`${plan.kind}: ${state.trouble}`);
-  return state.result as T;
-}
-
 /**
  * Opens one chat in `plane`, the project in front, and answers with the name its `×` carries.
  *
- * **Waited for by the core's own list, not by the strip.** The strip collapses rather than
- * scrolling, so in a project an earlier spec left full of chats a new tab can push another into
- * the show-more and the strip draws as many tabs as before. `running_sessions` cannot be fooled
- * that way. The new chat is the tab in front once it is up, and its `×` is the one in its cell.
+ * **Known by its session, not by the strip.** The strip collapses rather than scrolling, so in a
+ * project an earlier spec left full of chats a new tab can push another into the show-more and
+ * the strip draws as many tabs as before; and the tab in front is the OLD chat until the new one
+ * is up. So the new chat is the session the core's list did not have before, and its `×` is read
+ * only once that session's own pane is on screen — the pane in front is the tab in front's, so
+ * the `×` beside the selected tab is then this chat's and never another spec's.
  */
 async function aChatIn(plane: string): Promise<string> {
-  const before = (await ask<number[]>("running_sessions", { plane })).length;
+  const before = new Set(await ask<number[]>("running_sessions", { plane }));
   await pressAndStart("New tab");
+  let session: number | undefined;
   await browser.waitUntil(
-    async () => (await ask<number[]>("running_sessions", { plane })).length > before,
+    async () => {
+      session = (await ask<number[]>("running_sessions", { plane })).find(
+        (one) => !before.has(one),
+      );
+      return session !== undefined;
+    },
     { timeout: 30_000, timeoutMsg: "the chat this spec opened never started" },
   );
   let closer = "";
   await browser.waitUntil(
     async () => {
       const found = await browser.execute(
-        (tabs: string) =>
-          document
-            .querySelector(`${tabs} [role="tab"][aria-selected="true"]`)
-            ?.closest(".tab")
-            ?.querySelector('button[aria-label^="End chat "]')
-            ?.getAttribute("aria-label") ?? null,
+        (tabs: string, mine: number) =>
+          document.querySelector(`[data-testid="pane"][data-session="${mine}"]`)
+            ? (document
+                .querySelector(`${tabs} [role="tab"][aria-selected="true"]`)
+                ?.closest(".tab")
+                ?.querySelector('button[aria-label^="End chat "]')
+                ?.getAttribute("aria-label") ?? null)
+            : null,
         TABS,
+        session ?? -1,
       );
       closer = found ?? "";
       return closer !== "";
@@ -167,7 +144,7 @@ describe(`switching among ${OPEN} open projects`, function () {
   it("brings each one to the front through the switcher, and its chat's pane paints", async () => {
     // In the order they were opened: the one in front is the last one opened, so no switch is
     // ever to the project already there.
-    const switches = await measureSwitches(planes, ROUNDS, () => PAINTED, job);
+    const switches = await measureSwitches(planes, ROUNDS, () => PAINTED, jobInTheWindow);
 
     logLine("project-switch.jsonl", { budgetMs: BUDGET_MS, ...switches });
     // In the job's own output too, where a reviewer reads it without downloading anything.

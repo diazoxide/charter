@@ -4396,7 +4396,8 @@ export function Doer({
   /**
    * Drawn as its mark alone, with the row's words carried by `aria-label`.
    *
-   * **For the `+` at the end of a strip, and nothing else.** `docs/design-system.md` says an
+   * **For the controls at the end of a strip, and nothing else**: the `+`, the project strip's
+   * open and create, and its switcher (FR-27). `docs/design-system.md` says an
    * icon goes *beside* words and never instead of them, with one exception — a control whose
    * accessible name is already `aria-label` — and this is that exception said out loud rather
    * than a second rule. It is the operator's own instruction for the project strip's opener
@@ -4444,8 +4445,9 @@ export function Doer({
  * same danger hover (`App.css`, `.ends-a-chat`) — an icon may not make ending a chat look
  * lighter than it is.
  *
- * **The project strip draws two of these side by side, so they may not be the same glyph**
- * (charter-app#178). `FolderPlus` is the folder-with-a-plus every file manager puts on *New
+ * **The project strip draws three of these side by side, so no two may be the same glyph**
+ * (charter-app#178). The third is the switcher's `ArrowLeftRight` (FR-27), first of the three:
+ * two ways along the strip, which is what it does. `FolderPlus` is the folder-with-a-plus every file manager puts on *New
  * folder*, and `project.create` is the row that writes a directory that was not there; opening
  * one that already exists is `FolderOpen`, which is that same universal pair's other half.
  * `project.open` wore `FolderPlus` only because it was the strip's one control when #171 drew
