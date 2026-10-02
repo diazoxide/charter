@@ -1,4 +1,5 @@
-//! The floor's token half: a command that prints the forge token is refused unattended (#866).
+//! The floor's token half: a command that prints the forge token, or reads another stored
+//! secret, is refused unattended (#866).
 //!
 //! A run that holds the token can reach the forge with any client at all, where no guard reads
 //! what it does, so printing it is the first step of every merge the floor would otherwise
@@ -58,4 +59,50 @@ pub(super) fn git_reason(base: &str, args: &[String], sub: Option<&str>) -> Opti
         _ => false,
     };
     prints.then(|| PRINTS_TOKEN.to_owned())
+}
+
+/// The sentence a refusal of a command that reads a stored secret ends with.
+const READS_A_SECRET: &str = "This reads a stored secret, and a run that holds it can act \
+     where no guard sees what it does.";
+
+/// `security` options that take a value, so a cluster ends at one.
+const SECURITY_VALUE_FLAGS: &str = "acCdDGjlpPrst";
+
+/// The subcommands of `pass` and `gopass` that print no stored secret. Anything else, a bare
+/// entry name included, can.
+const PASS_QUIET: &[&str] = &[
+    "ls", "list", "find", "search", "init", "insert", "edit", "generate", "rm", "mv", "cp", "git",
+    "help", "version",
+];
+
+/// The refusal for a command that reads a secret from the operating system's or a password
+/// manager's store: the macOS keychain asked for a password or dumped, the freedesktop secret
+/// service looked up, or a `pass`/`gopass` entry shown (#866).
+pub(super) fn stored_secret_reason(toks: &[String]) -> Option<&'static str> {
+    let (prog, _env, argv) = crate::shellwrap::split_env(toks);
+    let base = crate::shellwrap::base_lower(&prog);
+    let args = argv.get(1..).unwrap_or(&[]);
+    let first = args
+        .iter()
+        .find(|a| !a.starts_with('-'))
+        .map(String::as_str);
+    let reads = match base.as_str() {
+        "security" => match first {
+            Some("find-generic-password" | "find-internet-password") => {
+                args.iter().any(|a| match a.strip_prefix('-') {
+                    Some(cluster) if !cluster.starts_with('-') => cluster
+                        .chars()
+                        .take_while(|c| !SECURITY_VALUE_FLAGS.contains(*c))
+                        .any(|c| c == 'w' || c == 'g'),
+                    _ => false,
+                })
+            }
+            Some("dump-keychain") => true,
+            _ => false,
+        },
+        "secret-tool" => matches!(first, Some("lookup" | "search")),
+        "pass" | "gopass" => first.is_some_and(|w| !PASS_QUIET.contains(&w)),
+        _ => false,
+    };
+    reads.then_some(READS_A_SECRET)
 }

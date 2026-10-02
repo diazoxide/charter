@@ -43,6 +43,7 @@
 
 use std::io::Write;
 use std::process::ExitCode;
+use std::time::Duration;
 
 use charter_core::handoffguard::Caller;
 use charter_core::toolgate::{self, Call, Plane};
@@ -124,7 +125,7 @@ pub fn pretooluse(payload: &str, now: Option<&str>) -> crate::hooks::Answered {
             permission_mode: permission_mode.as_deref(),
         },
     };
-    if let Some(verdict) = toolgate::verdict(&call, plane.as_ref()) {
+    if let Some(verdict) = judged_on_a_deep_stack(|| toolgate::verdict(&call, plane.as_ref())) {
         return crate::hooks::Answered {
             code: deny(&verdict),
             decision: charter_core::hookwire::Decision::Deny,
@@ -145,6 +146,66 @@ pub fn pretooluse(payload: &str, now: Option<&str>) -> crate::hooks::Answered {
         decision,
         rule: None,
     }
+}
+
+/// The stack the guards run on: far more than any of them needs.
+///
+/// A stack overflow is not a panic: it aborts the process before any hook can answer, and a
+/// guard that dies without answering is an allow. Each guard bounds how deep it reads (the
+/// floor's `MAX_DEPTH`), and this is the backstop beneath them all. Only the pages a guard
+/// touches are ever committed, so the reservation costs nothing a person could notice.
+const GUARD_STACK: usize = 256 * 1024 * 1024;
+
+/// How long the guards may take to answer one tool call before it is refused.
+///
+/// A harness gives a hook a deadline of its own and runs the tool when it passes, so a guard
+/// that is still reading is an allow. This is far below any harness's deadline and far above
+/// anything a real command line costs.
+const GUARD_DEADLINE: Duration = Duration::from_secs(20);
+
+/// What sets [`GUARD_DEADLINE`] in milliseconds instead, in a debug build, for the test that
+/// reaches it.
+#[cfg(debug_assertions)]
+const DEADLINE_ON_PURPOSE_ENV: &str = "CHARTER_TEST_GUARD_DEADLINE_MS";
+
+/// The panic payload that says the guard ran out of time, rather than that it crashed.
+const UNANSWERED: &str = "the guard did not answer in time";
+
+fn deadline() -> Duration {
+    #[cfg(debug_assertions)]
+    if let Some(ms) = std::env::var(DEADLINE_ON_PURPOSE_ENV)
+        .ok()
+        .and_then(|ms| ms.parse().ok())
+    {
+        return Duration::from_millis(ms);
+    }
+    GUARD_DEADLINE
+}
+
+/// Runs `judge` on a thread with [`GUARD_STACK`] of stack, and waits at most [`deadline`] for
+/// its answer. A panic on that thread, a thread that cannot start, and an answer that does not
+/// come in time are all the panic hook's refusal ([`refuse_on_a_crash`]), which ends the
+/// process.
+fn judged_on_a_deep_stack<T: Send>(judge: impl FnOnce() -> T + Send) -> T {
+    std::thread::scope(|scope| {
+        let (answer, answered) = std::sync::mpsc::channel();
+        let started = std::thread::Builder::new()
+            .name("guard".into())
+            .stack_size(GUARD_STACK)
+            .spawn_scoped(scope, move || {
+                let _ = answer.send(judge());
+            });
+        if let Err(why) = started {
+            panic!("the guard's thread did not start: {why}");
+        }
+        match answered.recv_timeout(deadline()) {
+            Ok(verdict) => verdict,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => std::panic::panic_any(UNANSWERED),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("the guard's thread ended without answering")
+            }
+        }
+    })
 }
 
 /// From here on, a panic anywhere in this process is a refusal: exit 2, one line on stderr.
@@ -177,11 +238,19 @@ pub(crate) fn refuse_on_a_crash(tell_the_host: fn(&str)) {
             .map(|at| format!(" (at {}:{})", at.file(), at.line()))
             .unwrap_or_default();
         let mut err = std::io::stderr().lock();
-        let _ = writeln!(
-            err,
-            "charter guard: this tool call is refused because the guard crashed{at} before it \
-             could answer, and a guard that could not answer does not allow."
-        );
+        if info.payload().downcast_ref::<&str>() == Some(&UNANSWERED) {
+            let _ = writeln!(
+                err,
+                "charter guard: this tool call is refused because the guard did not answer in \
+                 time, and a guard that could not answer does not allow."
+            );
+        } else {
+            let _ = writeln!(
+                err,
+                "charter guard: this tool call is refused because the guard crashed{at} before \
+                 it could answer, and a guard that could not answer does not allow."
+            );
+        }
         let _ = err.flush();
         drop(err);
         tell_the_host(&word);

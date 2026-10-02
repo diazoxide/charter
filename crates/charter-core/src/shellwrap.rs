@@ -850,7 +850,13 @@ pub fn shell_string(toks: &[String]) -> Option<String> {
     if dash_c { operand.cloned() } else { None }
 }
 
+/// A shell's long options that take the next word as their value.
+const SHELL_LONG_VALUE: [&str; 2] = ["--rcfile", "--init-file"];
+
 /// Past a shell's options: whether `-c` was among them, and the first operand after them.
+///
+/// A long option that takes a value consumes it, and so does a cluster holding `o` or `O`
+/// (`-o pipefail`, `-euo pipefail`, `-co pipefail`), since that letter takes the next word.
 fn shell_options(argv: &[String]) -> (bool, Option<&String>) {
     let mut dash_c = false;
     let mut i = 1;
@@ -859,12 +865,18 @@ fn shell_options(argv: &[String]) -> (bool, Option<&String>) {
             i += 1;
             break;
         }
-        if is_dash_c_cluster(a) {
-            dash_c = true;
-        } else if matches!(a.as_str(), "-o" | "+o" | "-O" | "+O") {
-            i += 1;
-        } else if !(a.len() > 1 && (a.starts_with('-') || a.starts_with('+'))) {
+        if SHELL_LONG_VALUE.contains(&a.as_str()) {
+            i += 2;
+            continue;
+        }
+        let Some(cluster) = a.strip_prefix(['-', '+']).filter(|c| !c.is_empty()) else {
             break;
+        };
+        if a.starts_with('-') && is_dash_c_cluster(a) {
+            dash_c = true;
+        }
+        if !cluster.starts_with('-') && cluster.contains(['o', 'O']) {
+            i += 1;
         }
         i += 1;
     }
@@ -942,6 +954,28 @@ mod tests {
         );
         assert_eq!(shell_string(&w(&["bash", "script.sh"])), None);
         assert_eq!(shell_string(&w(&["bash", "-c"])), None);
+        // A cluster ending in an option that takes a value, a long option that takes one, and
+        // `-c` inside such a cluster.
+        assert_eq!(
+            shell_string(&w(&["bash", "-euo", "pipefail", "-c", "x"])).as_deref(),
+            Some("x")
+        );
+        assert_eq!(
+            shell_string(&w(&["bash", "--rcfile", "rc", "-c", "x"])).as_deref(),
+            Some("x")
+        );
+        assert_eq!(
+            shell_string(&w(&["bash", "--init-file", "rc", "-c", "x"])).as_deref(),
+            Some("x")
+        );
+        assert_eq!(
+            shell_string(&w(&["bash", "-co", "pipefail", "x"])).as_deref(),
+            Some("x")
+        );
+        assert_eq!(
+            shell_string(&w(&["bash", "-O", "extglob", "-c", "x"])).as_deref(),
+            Some("x")
+        );
     }
 
     /// A flag token can be neither recorded as a variable nor found as one — the fact that makes

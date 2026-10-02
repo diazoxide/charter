@@ -77,8 +77,6 @@ pub const MEASURED_SUBAGENT_HARNESSES: [&str; 2] = ["claude-code", "codex"];
 /// `_SPELLING_MARKS`.
 pub const SPELLING_MARKS: &str = "$'\"\\{}?*[]";
 
-pub use crate::shellwrap::STRING_SHELLS;
-
 /// The redirection operators that READ — `hooks.py`'s `_REDIRECT_READS`.
 ///
 /// Spelled here rather than borrowed from [`crate::shellwrap`], whose copy is private and is
@@ -1217,6 +1215,20 @@ mod tests {
         );
         assert_eq!(as_the_shell_reads("a\\\nb"), "ab");
         assert_eq!(as_the_shell_reads("a\nb"), "a\nb");
+    }
+
+    /// A handoff in a shell's `-c` string is found past the shell's options, whatever they are.
+    #[test]
+    fn a_handoff_in_a_shell_string_is_found_past_the_shells_options() {
+        for cmd in [
+            "bash -c 'charter handoff beta <<BRIEF\nx\nBRIEF'",
+            "bash -euo pipefail -c 'charter handoff beta <<BRIEF\nx\nBRIEF'",
+            "bash --rcfile rc -c 'charter handoff beta <<BRIEF\nx\nBRIEF'",
+            "bash -c -- 'charter handoff beta <<BRIEF\nx\nBRIEF'",
+            "bash -co pipefail 'charter handoff beta <<BRIEF\nx\nBRIEF'",
+        ] {
+            assert!(shell_string_handoff(cmd), "{cmd}");
+        }
     }
 
     #[test]

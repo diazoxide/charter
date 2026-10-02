@@ -141,13 +141,31 @@ fn version_tag_re() -> &'static Regex {
 /// `unattended` is the host's answer, passed in rather than read: the Python takes the whole hook
 /// payload and asks [`unattended`] of its `permission_mode`, and the core holds no globals.
 pub fn release_floor_reason(cmd: &str, unattended: bool) -> Option<String> {
+    floor(cmd, unattended, 0)
+}
+
+/// How many commands deep the floor reads a command inside a command — a shell's script, an
+/// alias's expansion, the words fed to a shell's stdin (#866).
+///
+/// Past it the line is refused as one the floor cannot read. No real command nests this deep,
+/// and without a bound a line nested thousands deep would exhaust the stack: a hook that dies
+/// without answering is an allow. The bound also keeps the cost linear in the line, since each
+/// level reads a shorter string than the one around it.
+pub const MAX_DEPTH: usize = 16;
+
+/// [`release_floor_reason`] at `depth` commands in.
+pub(crate) fn floor(cmd: &str, unattended: bool, depth: usize) -> Option<String> {
     if !unattended {
         return None;
     }
     let fix = RELEASE_FLOOR_FIX;
+    if depth > MAX_DEPTH {
+        return Some(format!("{fix}{}", merge::UNREADABLE));
+    }
+    let inner_floor = |inner: &str| floor(inner, unattended, depth + 1);
     let segments = shellseg::segment_argv(cmd);
     // A shell that reads its script from stdin is fed by the rest of the line (#866).
-    let fed = segments
+    let a_shell_reads_stdin = segments
         .iter()
         .any(|toks| shellwrap::reads_script_from_stdin(toks));
     for toks in &segments {
@@ -156,16 +174,22 @@ pub fn release_floor_reason(cmd: &str, unattended: bool) -> Option<String> {
             .into_iter()
             .chain(shellwrap::here_string_script(toks))
         {
-            if let Some(said) = release_floor_reason(&inner, unattended) {
+            if let Some(said) = inner_floor(&inner) {
                 return Some(said);
             }
         }
-        if fed && !shellwrap::reads_script_from_stdin(toks) {
-            for word in toks.iter().filter(|w| w.contains(' ')) {
-                if let Some(said) = release_floor_reason(word, unattended) {
+        if a_shell_reads_stdin && !shellwrap::reads_script_from_stdin(toks) {
+            // What this segment could print into that shell: its words as one line, and each
+            // word that is a line of its own.
+            let joined = toks.iter().skip(1).cloned().collect::<Vec<_>>().join(" ");
+            for script in std::iter::once(&joined).chain(toks.iter().filter(|w| w.contains(' '))) {
+                if let Some(said) = inner_floor(script) {
                     return Some(said);
                 }
             }
+        }
+        if let Some(why) = token::stored_secret_reason(toks) {
+            return Some(format!("{fix}{why}"));
         }
         let (prog, env, argv) = shellwrap::split_env(toks);
         // `GIT tag v1` is a tag — see A2's fold.
@@ -179,15 +203,14 @@ pub fn release_floor_reason(cmd: &str, unattended: bool) -> Option<String> {
         if base == "git" || base.starts_with("git-credential-") {
             let sub = git_subcommand(&args);
             // A git alias defined on the line is read as what it stands for (#866).
-            if let Some(resolved) = merge::git_alias(&args, &env, sub.as_deref()) {
-                match resolved {
-                    Ok(inner) => {
-                        if let Some(said) = release_floor_reason(&inner, unattended) {
-                            return Some(said);
-                        }
+            match merge::git_alias(&args, &env, sub.as_deref()) {
+                merge::GitAlias::Resolved(inner) => {
+                    if let Some(said) = inner_floor(&inner) {
+                        return Some(said);
                     }
-                    Err(why) => return Some(format!("{fix}{why}")),
                 }
+                merge::GitAlias::Unreadable => return Some(format!("{fix}{}", merge::UNREADABLE)),
+                merge::GitAlias::None => {}
             }
             if sub.as_deref() == Some("tag") {
                 // `git tag` alone lists; a bare name is a CREATION — the choke point, since a tag
@@ -219,7 +242,7 @@ pub fn release_floor_reason(cmd: &str, unattended: bool) -> Option<String> {
             // A push option that sets auto-merge, an alias that would publish, or a command that
             // prints the forge token (#866).
             let why = token::git_reason(&base, &args, sub.as_deref())
-                .or_else(|| merge::git_reason(&args, &env, sub.as_deref(), unattended));
+                .or_else(|| merge::git_reason(&args, &env, sub.as_deref(), unattended, depth));
             if let Some(why) = why {
                 return Some(format!("{fix}{why}"));
             }
@@ -258,7 +281,7 @@ pub fn release_floor_reason(cmd: &str, unattended: bool) -> Option<String> {
             }
             if forge {
                 let why = token::forge_reason(&args)
-                    .or_else(|| merge::forge_reason(&name, &args, cmd, unattended));
+                    .or_else(|| merge::forge_reason(&name, &args, cmd, unattended, depth));
                 if let Some(why) = why {
                     return Some(format!("{fix}{why}"));
                 }

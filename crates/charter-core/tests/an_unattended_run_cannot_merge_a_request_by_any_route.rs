@@ -9,7 +9,7 @@
 //! `crates/charter-cli/tests/the_floor_refuses_an_unattended_merge_through_the_hook.rs` puts the
 //! same command lines through the real `charter hook pretooluse`.
 
-use charter_core::floorguard::release_floor_reason;
+use charter_core::floorguard::{MAX_DEPTH, release_floor_reason};
 
 /// Each command is refused unattended and allowed attended.
 fn refused_unattended_only(cmds: &[&str]) {
@@ -431,5 +431,89 @@ fn reading_the_forge_login_without_its_token_stays_allowed() {
         "glab config get editor",
         "gh config get git_protocol",
         "git credential reject",
+    ]);
+}
+
+#[test]
+fn nesting_past_the_floors_depth_is_unreadable() {
+    charter_core::unsteered!();
+    let at_the_cap = format!("{}echo hi", "eval ".repeat(MAX_DEPTH));
+    let past_the_cap = format!("{}echo hi", "eval ".repeat(MAX_DEPTH + 1));
+    let far_past = format!("{}echo hi", "eval ".repeat(40 * MAX_DEPTH));
+    allowed_unattended(&[at_the_cap.as_str(), "bash -c 'bash -c \"echo hi\"'"]);
+    refused_unattended_only(&[past_the_cap.as_str(), far_past.as_str()]);
+    let said = release_floor_reason(&far_past, true).expect("a refusal");
+    assert!(said.contains("cannot read"), "{said}");
+    let merge_inside = format!("{}gh pr merge 12", "eval ".repeat(4));
+    refused_unattended_only(&[merge_inside.as_str()]);
+}
+
+#[test]
+fn a_shell_script_is_read_past_options_that_take_a_value() {
+    charter_core::unsteered!();
+    refused_unattended_only(&[
+        "bash -euo pipefail -c 'gh pr merge 12'",
+        "bash --rcfile rc -c 'gh pr merge 12'",
+        "bash -co pipefail 'gh pr merge 12'",
+        "echo gh pr merge 12 | sh",
+    ]);
+}
+
+#[test]
+fn a_forge_alias_whose_noun_or_verb_the_caller_supplies_is_unreadable() {
+    charter_core::unsteered!();
+    refused_unattended_only(&["gh alias set x '$1 merge'", "gh alias set x 'pr $1'"]);
+    allowed_unattended(&["gh alias set v 'pr view $1'"]);
+}
+
+#[test]
+fn a_git_alias_from_the_environment_or_behind_global_options_is_read() {
+    charter_core::unsteered!();
+    refused_unattended_only(&[
+        "git --config-env alias.p=EXP p",
+        "git --config-env=alias.p=EXP p",
+        "git config alias.p '-c x.y=z push'",
+        "git config alias.p '-C dir tag'",
+    ]);
+}
+
+#[test]
+fn a_push_option_value_and_a_requests_sub_paths_are_not_over_read() {
+    charter_core::unsteered!();
+    allowed_unattended(&[
+        "git push -o 'merge_request.title=Fix [x]? *now* ~soon' origin feat",
+        "glab api -X POST projects/1/merge_requests/5/notes --input note.json",
+        "gh api -X POST repos/o/r/pulls/12/reviews --input review.json",
+        "gh api -X POST repos/o/r/pulls/12/comments -F \"$K=x\"",
+    ]);
+    refused_unattended_only(&[
+        "glab api -X PUT projects/1/merge_requests/5 --input body.json",
+        "git push -o \"$OPT\" origin feat",
+    ]);
+}
+
+#[test]
+fn a_command_that_reads_a_stored_secret_is_refused() {
+    charter_core::unsteered!();
+    refused_unattended_only(&[
+        "security find-generic-password -s github.com -w",
+        "security find-generic-password -a me -s x -g",
+        "security find-internet-password -s github.com -w",
+        "security find-generic-password -gs x",
+        "security dump-keychain -d",
+        "secret-tool lookup service gh",
+        "pass show forge/token",
+        "pass forge/token",
+        "gopass show forge/token",
+        "gopass forge/token",
+        "/usr/bin/security find-generic-password -s x -w",
+    ]);
+    allowed_unattended(&[
+        "security find-generic-password -s x",
+        "security list-keychains",
+        "pass ls",
+        "pass",
+        "gopass list",
+        "secret-tool store --label x service y",
     ]);
 }

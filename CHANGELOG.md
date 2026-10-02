@@ -311,10 +311,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   shell runs are refused, as `gh pr merge` already was. A forge API call whose effect on a merge
   charter cannot read is refused too. Reads, opening a request and ordinary pushes are
   unchanged, and attended use is untouched (#866).
-- **An unattended agent cannot print the forge token.** `gh auth token`, the auth-status and
-  config reads that show the token, and git's credential fill are refused when nobody is
-  watching, since a run holding the token could reach the forge where no guard sees it.
-  Attended use is untouched (#866).
+- **An unattended agent cannot print the forge token or read other stored secrets.** The CLIs'
+  token commands, the auth-status and config reads that show the token, git's credential fill,
+  and commands that read the OS keychain or a password store are refused when nobody is
+  watching, since a run holding a secret could act where no guard sees it. Attended use is
+  untouched (#866).
+- **A guard that cannot answer refuses the call.** The tool-call guards run with a deadline and
+  a deep stack, and the floor bounds how deep it reads a command inside a command, so a line
+  built to exhaust them is refused instead of slipping through when the hook dies (#866).
+- **The handoff guard finds a handoff in a shell's script past the shell's options**, including
+  options that take a value (#866).
 
 ## [0.4.2] - 2026-09-30
 

@@ -49,35 +49,58 @@ fn brace_expansion_re() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"\{[^{}]*(,|\.\.)[^{}]*\}").expect("compiles"))
 }
 
+/// A forge CLI's own aliases of a verb the floor holds: `(cli, noun, alias, verb)`.
+const VERB_ALIASES: &[(&str, &str, &str, &str)] = &[
+    ("glab", "mr", "accept", "merge"),
+    ("gh", "release", "new", "create"),
+];
+
 /// A forge CLI's spellings of a verb the floor already holds, mapped to that verb.
 pub(super) fn canonical_verb<'a>(name: &str, noun: &str, verb: &'a str) -> &'a str {
-    match (name, noun, verb) {
-        ("glab", "mr", "accept") => "merge",
-        ("gh", "release", "new") => "create",
-        _ => verb,
-    }
+    VERB_ALIASES
+        .iter()
+        .find(|(cli, n, alias, _)| *cli == name && *n == noun && *alias == verb)
+        .map_or(verb, |row| row.3)
 }
 
-/// The commands, by their leading words, that an alias may not stand for or begin: the held
-/// verbs, the raw API, alias-making itself, and the commands that print the forge token.
-const HELD_PREFIXES: &[(&str, &[&str])] = &[
-    ("gh", &["pr", "merge"]),
-    ("gh", &["release", "create"]),
-    ("gh", &["release", "new"]),
+/// Commands, by their leading words, that the floor reads past the `PUBLISH_FORGE` table: the
+/// raw API, alias-making, the commands that can print the forge token, and the verb that can
+/// open a request with auto-merge on.
+const HELD_BEYOND_THE_TABLE: &[(&str, &[&str])] = &[
     ("gh", &["api"]),
     ("gh", &["alias"]),
     ("gh", &["auth"]),
     ("gh", &["config", "get"]),
-    ("glab", &["mr", "merge"]),
-    ("glab", &["mr", "accept"]),
-    ("glab", &["mr", "create"]),
-    ("glab", &["mr", "new"]),
-    ("glab", &["release", "create"]),
     ("glab", &["api"]),
     ("glab", &["alias"]),
     ("glab", &["auth"]),
     ("glab", &["config", "get"]),
+    ("glab", &["mr", "create"]),
+    ("glab", &["mr", "new"]),
 ];
+
+/// Every held command of one CLI, by its leading words: the `PUBLISH_FORGE` rows and their
+/// aliases, and [`HELD_BEYOND_THE_TABLE`]. An alias may not stand for one, or for its start.
+fn held_commands(name: &str) -> Vec<Vec<&'static str>> {
+    let table = super::PUBLISH_FORGE
+        .iter()
+        .filter(|(cli, _, _)| *cli == name)
+        .map(|(_, noun, verb)| vec![*noun, *verb]);
+    let aliases = VERB_ALIASES
+        .iter()
+        .filter(|(cli, ..)| *cli == name)
+        .map(|(_, noun, alias, _)| vec![*noun, *alias]);
+    let beyond = HELD_BEYOND_THE_TABLE
+        .iter()
+        .filter(|(cli, _)| *cli == name)
+        .map(|(_, words)| words.to_vec());
+    table.chain(aliases).chain(beyond).collect()
+}
+
+/// The refusal for a call the floor cannot read.
+fn unreadable() -> Option<String> {
+    Some(UNREADABLE.to_owned())
+}
 
 /// The positional words of a forge CLI's argv, with the value of a repository flag dropped, so
 /// the noun and verb are read where the CLI reads them. Answers each word with its index in
@@ -107,14 +130,17 @@ pub(super) fn forge_reason(
     args: &[String],
     cmd: &str,
     unattended: bool,
+    depth: usize,
 ) -> Option<String> {
     let words = forge_words(args);
     let first = words.first().map(|w| w.1);
     let second = words.get(1).map(|w| w.1);
     match (first, second) {
         (Some("api"), _) => api_reason(&args[words[0].0 + 1..], cmd).map(str::to_owned),
-        (Some("alias"), Some("import")) => Some(UNREADABLE.to_owned()),
-        (Some("alias"), Some("set")) => alias_reason(name, &args[words[1].0 + 1..], unattended),
+        (Some("alias"), Some("import")) => unreadable(),
+        (Some("alias"), Some("set")) => {
+            alias_reason(name, &args[words[1].0 + 1..], unattended, depth)
+        }
         (Some("mr"), Some("create" | "new")) if name == "glab" && sets_auto_merge(args) => {
             Some(MERGES.to_owned())
         }
@@ -135,31 +161,34 @@ fn sets_auto_merge(args: &[String]) -> bool {
 
 /// `gh alias set` / `glab alias set`: refused when what the alias stands for would be, or when
 /// it stands for the start of a held command, whose rest the caller would add.
-fn alias_reason(name: &str, args: &[String], unattended: bool) -> Option<String> {
+fn alias_reason(name: &str, args: &[String], unattended: bool, depth: usize) -> Option<String> {
     let positional: Vec<&String> = args.iter().filter(|a| !a.starts_with('-')).collect();
     let expansion = match (positional.first(), positional.get(1)) {
         (Some(_), Some(e)) => e.as_str(),
         // No expansion on the line, or `-` (stdin): it cannot be read.
-        _ => return Some(UNREADABLE.to_owned()),
+        _ => return unreadable(),
     };
     // A shell alias runs a shell command this reader does not follow, and an expansion the shell
     // fills in cannot be read.
     let shell = args.iter().any(|a| a == "--shell" || a == "-s");
     if shell || expansion.starts_with('!') || expansion.starts_with(['$', '`']) {
-        return Some(UNREADABLE.to_owned());
+        return unreadable();
     }
     let expanded: Vec<String> = shellseg::segment_argv(expansion)
         .into_iter()
         .next()
         .unwrap_or_default();
     let words: Vec<&str> = forge_words(&expanded).into_iter().map(|w| w.1).collect();
-    let held = HELD_PREFIXES.iter().any(|(cli, prefix)| {
-        *cli == name
-            && !words.is_empty()
-            && (prefix.starts_with(&words[..]) || words.starts_with(prefix))
-    });
+    // A noun or verb the caller supplies (`$1`) could be any command.
+    if words.iter().take(2).any(|w| w.contains('$')) {
+        return unreadable();
+    }
+    let held = !words.is_empty()
+        && held_commands(name)
+            .iter()
+            .any(|held| held.starts_with(&words[..]) || words.starts_with(held));
     let cmd = format!("{name} {expansion}");
-    if words.is_empty() || held || super::release_floor_reason(&cmd, unattended).is_some() {
+    if words.is_empty() || held || super::floor(&cmd, unattended, depth + 1).is_some() {
         Some(ALIAS.to_owned())
     } else {
         None
@@ -368,11 +397,12 @@ fn is_merge_path(segs: &[String]) -> bool {
     }
 }
 
-/// True when a path is under a pull or merge request, where a body could set auto-merge.
+/// True when a path is a pull or merge request itself, where a body could set auto-merge. Its
+/// reviews, notes and other sub-paths cannot.
 fn is_request_path(segs: &[String]) -> bool {
-    under_repository(segs)
-        .and_then(|rest| rest.first())
-        .is_some_and(|s| s == "pulls" || s == "merge_requests")
+    under_repository(segs).is_some_and(|rest| {
+        rest.len() == 2 && matches!(rest[0].as_str(), "pulls" | "merge_requests")
+    })
 }
 
 /// True when a path is a repository or project itself, whose settings include auto-merge.
@@ -540,9 +570,10 @@ fn is_merge_push_option(opt: &str) -> bool {
     speaks_of_merging(key)
 }
 
-/// The refusal for one push option's value.
+/// The refusal for one push option. Only its key decides: a key the shell fills in cannot be
+/// read, and a value such as a request's title sets nothing.
 fn push_option_reason(opt: &str) -> Option<&'static str> {
-    if opaque(opt) {
+    if opaque(opt.split('=').next().unwrap_or("")) {
         Some(UNREADABLE)
     } else if is_merge_push_option(opt) {
         Some(MERGES)
@@ -556,25 +587,43 @@ fn quoted(word: &str) -> String {
     format!("'{}'", word.replace('\'', r"'\''"))
 }
 
-/// A git alias defined on the line (`-c alias.<name>=…`) and run by this segment, resolved:
-/// `Ok` with the command it stands for, or `Err` with the refusal when it cannot be read (a
-/// shell alias, an expansion the shell fills in, or an alias from the `GIT_CONFIG_*`
-/// environment). `None` when the segment runs no such alias.
-pub(super) fn git_alias(
-    args: &[String],
-    env: &[String],
-    sub: Option<&str>,
-) -> Option<Result<String, &'static str>> {
-    let sub = sub?;
+/// What a git segment's subcommand is, when it may be an alias defined on the line.
+pub(super) enum GitAlias {
+    /// No alias defined on the line is run here.
+    None,
+    /// The alias (`-c alias.<name>=…`) resolved to the command it stands for.
+    Resolved(String),
+    /// An alias this reader cannot follow: a shell alias, an expansion the shell fills in, or
+    /// one taken from the environment (`GIT_CONFIG_*`, `--config-env`).
+    Unreadable,
+}
+
+/// The git alias this segment runs, if one is defined on the line.
+pub(super) fn git_alias(args: &[String], env: &[String], sub: Option<&str>) -> GitAlias {
+    let Some(sub) = sub else {
+        return GitAlias::None;
+    };
     if env.iter().any(|e| {
         e.split_once('=').is_some_and(|(k, v)| {
             k.starts_with("GIT_CONFIG") && v.to_lowercase().starts_with("alias.")
         })
     }) {
-        return Some(Err(UNREADABLE));
+        return GitAlias::Unreadable;
     }
-    let sub_at = args.iter().position(|a| a == sub)?;
+    let Some(sub_at) = args.iter().position(|a| a == sub) else {
+        return GitAlias::None;
+    };
     let globals = &args[..sub_at];
+    for (i, a) in globals.iter().enumerate() {
+        let config_env = match a.strip_prefix("--config-env=") {
+            Some(v) => Some(v),
+            None if a == "--config-env" => globals.get(i + 1).map(String::as_str),
+            None => None,
+        };
+        if config_env.is_some_and(|v| v.to_lowercase().starts_with("alias.")) {
+            return GitAlias::Unreadable;
+        }
+    }
     let mut i = 0;
     while i + 1 < globals.len() {
         if globals[i] == "-c"
@@ -583,18 +632,18 @@ pub(super) fn git_alias(
             && name == sub.to_lowercase()
         {
             if expansion.starts_with('!') || opaque(expansion) {
-                return Some(Err(UNREADABLE));
+                return GitAlias::Unreadable;
             }
             let mut words: Vec<String> = Vec::new();
             words.extend(globals[..i].iter().map(|w| quoted(w)));
             words.extend(globals[i + 2..].iter().map(|w| quoted(w)));
             words.push(expansion.to_owned());
             words.extend(args[sub_at + 1..].iter().map(|w| quoted(w)));
-            return Some(Ok(format!("git {}", words.join(" "))));
+            return GitAlias::Resolved(format!("git {}", words.join(" ")));
         }
         i += 1;
     }
-    None
+    GitAlias::None
 }
 
 /// The merge refusal for a `git` call: a push option that sets auto-merge, given on the command
@@ -605,6 +654,7 @@ pub(super) fn git_reason(
     env: &[String],
     sub: Option<&str>,
     unattended: bool,
+    depth: usize,
 ) -> Option<String> {
     let sub_at = sub.and_then(|s| args.iter().position(|a| a == s));
     let globals = &args[..sub_at.unwrap_or(args.len())];
@@ -633,7 +683,7 @@ pub(super) fn git_reason(
                     None => None,
                 };
                 if config_env.is_some_and(|v| v.to_lowercase().starts_with("push.pushoption")) {
-                    return Some(UNREADABLE.to_owned());
+                    return unreadable();
                 }
                 i += 1;
             }
@@ -645,7 +695,7 @@ pub(super) fn git_reason(
                 .find_map(|o| push_option_reason(o))
                 .map(str::to_owned)
         }
-        Some("config") => config_write_reason(rest, unattended),
+        Some("config") => config_write_reason(rest, unattended, depth),
         _ => None,
     }
 }
@@ -654,22 +704,26 @@ pub(super) fn git_reason(
 const HELD_GIT: &[&str] = &["push", "tag"];
 
 /// `git config` writing a push option that sets auto-merge, or an alias that would publish.
-fn config_write_reason(rest: &[String], unattended: bool) -> Option<String> {
+fn config_write_reason(rest: &[String], unattended: bool, depth: usize) -> Option<String> {
     let key_at = rest.iter().position(|a| {
         let a = a.to_lowercase();
         a == "push.pushoption" || a.starts_with("alias.")
     })?;
-    let value = rest[key_at + 1..].iter().find(|a| !a.starts_with('-'))?;
+    // The value is the word after the key, even one that starts like an option: an alias's
+    // expansion may begin with git's own global options.
+    let value = rest.get(key_at + 1)?;
     if rest[key_at].eq_ignore_ascii_case("push.pushoption") {
         return push_option_reason(value).map(str::to_owned);
     }
     if value.starts_with('!') || opaque(value) {
-        return Some(UNREADABLE.to_owned());
+        return unreadable();
     }
-    let first = value.split_whitespace().next().unwrap_or("");
+    // The subcommand the alias runs, past any global options it carries.
+    let words: Vec<String> = value.split_whitespace().map(str::to_owned).collect();
+    let sub = crate::credguard::git_subcommand(&words).unwrap_or_default();
     let cmd = format!("git {value}");
-    if HELD_GIT.contains(&first.to_lowercase().as_str())
-        || super::release_floor_reason(&cmd, unattended).is_some()
+    if HELD_GIT.contains(&sub.to_lowercase().as_str())
+        || super::floor(&cmd, unattended, depth + 1).is_some()
     {
         Some(ALIAS.to_owned())
     } else {

@@ -35,6 +35,19 @@ impl Plane {
 
     /// The `permissionDecisionReason` the hook printed for `command` in `mode`, or `None`.
     fn denial(&self, command: &str, mode: &str) -> Option<String> {
+        let (code, stdout) = self.answer(command, mode);
+        assert_eq!(code, Some(0), "{command}");
+        let v: serde_json::Value = serde_json::from_str(&stdout).ok()?;
+        let o = v.get("hookSpecificOutput")?;
+        (o.get("permissionDecision")?.as_str()? == "deny").then(|| {
+            o.get("permissionDecisionReason")?
+                .as_str()
+                .map(str::to_owned)
+        })?
+    }
+
+    /// The hook's exit status and stdout for `command` in `mode`.
+    fn answer(&self, command: &str, mode: &str) -> (Option<i32>, String) {
         let payload = serde_json::json!({
             "session_id": "11111111-2222-4333-8444-555555555555",
             "cwd": ".",
@@ -64,15 +77,10 @@ impl Plane {
             .write_all(payload.as_bytes())
             .expect("the payload");
         let out = child.wait_with_output().expect("the hook finishes");
-        assert_eq!(out.status.code(), Some(0), "{command}: {out:?}");
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        let v: serde_json::Value = serde_json::from_str(&stdout).ok()?;
-        let o = v.get("hookSpecificOutput")?;
-        (o.get("permissionDecision")?.as_str()? == "deny").then(|| {
-            o.get("permissionDecisionReason")?
-                .as_str()
-                .map(str::to_owned)
-        })?
+        (
+            out.status.code(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+        )
     }
 
     fn refused_unattended_only(&self, cmds: &[&str]) {
@@ -252,4 +260,94 @@ fn reads_that_are_merely_named_merge_and_the_login_without_its_token_stay_allowe
         "git config alias.co checkout",
         "gh alias set co 'pr checkout'",
     ]);
+}
+
+/// A line nested far past any depth the guard reads is answered, never crashed on: a guard that
+/// dies without answering is an allow.
+#[test]
+fn nesting_far_past_the_floors_depth_is_answered_and_refused_unattended() {
+    let deep = format!("{}echo hi", "eval ".repeat(6000));
+    let plane = Plane::new();
+    plane.refused_unattended_only(&[deep.as_str()]);
+    // Every guard answers a deeply nested line in both modes, with a verdict or a refusal: the
+    // hook never dies without answering.
+    for nested in [
+        format!("{}echo hi{}", "echo $(".repeat(1000), ")".repeat(1000)),
+        format!("{}echo hi{}", "( ".repeat(1000), " )".repeat(1000)),
+        format!("{}echo hi{}", "{ ".repeat(1000), "; }".repeat(1000)),
+        format!("{}echo hi", "bash -c ".repeat(1000)),
+        format!("{}x{}", "\"$(".repeat(1000), ")\"".repeat(1000)),
+    ] {
+        for mode in ["bypassPermissions", "default"] {
+            let code = plane.answer(&nested, mode).0;
+            assert!(matches!(code, Some(0 | 2)), "{mode}: {code:?}");
+        }
+    }
+}
+
+#[test]
+fn a_shell_script_behind_value_options_or_fed_unquoted_is_refused_unattended() {
+    Plane::new().refused_unattended_only(&[
+        "bash -euo pipefail -c 'gh pr merge 12'",
+        "echo gh pr merge 12 | sh",
+        "gh alias set x '$1 merge'",
+        "git --config-env alias.p=EXP p",
+    ]);
+}
+
+#[test]
+fn a_command_that_reads_a_stored_secret_is_refused_unattended() {
+    let plane = Plane::new();
+    plane.refused_unattended_only(&[
+        "security find-generic-password -s github.com -w",
+        "security dump-keychain -d",
+        "secret-tool lookup service gh",
+        "pass show forge/token",
+        "gopass show forge/token",
+    ]);
+    plane.allowed_unattended(&["security find-generic-password -s x", "pass ls"]);
+}
+
+/// A guard still reading when its deadline passes refuses the call, in either mode: a harness
+/// runs the tool once its own hook deadline passes, so a guard that never answers is an allow.
+/// The deadline is shortened for the test; the line is one the guards read slowly.
+#[test]
+fn a_guard_that_does_not_answer_in_time_refuses_the_call() {
+    let plane = Plane::new();
+    let slow = format!("{}1{}", "$((".repeat(3000), "))".repeat(3000));
+    for mode in ["bypassPermissions", "default"] {
+        let payload = serde_json::json!({
+            "session_id": "11111111-2222-4333-8444-555555555555",
+            "cwd": ".",
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "permission_mode": mode,
+            "tool_input": {"command": slow},
+        })
+        .to_string();
+        let mut child = Command::new(env!("CARGO_BIN_EXE_charter"))
+            .args(["hook", "pretooluse"])
+            .current_dir(&plane.root)
+            .env_clear()
+            .env("CHARTER_ROOT", &plane.root)
+            .env("HOME", &plane.home)
+            .env("CHARTER_HARNESS", "claude-code")
+            .env("PATH", "/usr/bin:/bin")
+            .env("CHARTER_TEST_GUARD_DEADLINE_MS", "200")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("the hook runs");
+        child
+            .stdin
+            .take()
+            .expect("stdin")
+            .write_all(payload.as_bytes())
+            .expect("the payload");
+        let out = child.wait_with_output().expect("the hook finishes");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "{mode}: {err}");
+        assert!(err.contains("did not answer in time"), "{mode}: {err}");
+    }
 }
