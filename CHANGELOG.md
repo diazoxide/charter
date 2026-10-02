@@ -22,10 +22,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   force-pushes, sends no tags with the branch, and pushes repos whose save mode is `off` too.
   A repo whose git config sends pushes somewhere other than the URL printed is refused. A
   member that is not a repo in this workspace is refused by name and the others are still
-  pushed. GitLab members are pushed and their merge requests opened the same way, but that is
-  not yet tested end to end. The guard that stops a live substitution in `charter change
-  create` or `drop` now names `charter change push` as what writes the `why` into requests
-  (#471).
+  pushed. GitLab members are pushed and their merge requests opened and updated the same way,
+  on gitlab.com and on a self-managed GitLab declared in `charter.toml`; a draft merge request
+  is adopted and stays a draft, and one from a fork with the same branch name is never touched.
+  When members are on different hosts, a member elsewhere is named by its request's link, so
+  a GitLab description never points at a GitHub number as if it were a GitLab one. The guard
+  that stops a live substitution in `charter change create` or `drop` now names `charter
+  change push` as what writes the `why` into requests (#471).
 
 - **The first run lays your project out for the stack you work in.** Project templates for
   Rust, TypeScript, Python, Go, monorepos and docs-only repos each add an engineer and a
