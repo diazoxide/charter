@@ -1,3 +1,4 @@
+import { mark as profMark } from "./prof";
 import {
   useCallback,
   useEffect,
@@ -121,6 +122,9 @@ async function installCli(): Promise<Ran> {
  * once.
  */
 function App() {
+  profMark("appRender");
+  useLayoutEffect(() => profMark("appCommit"));
+  useEffect(() => profMark("appEffect"));
   // The WebView's own menu, taken away from the whole window (`Menus.tsx`). One listener, on
   // the window, so it covers every surface including the ones with no charter menu of their
   // own — a shipped app that answers a right-click with `Reload` and `Inspect Element` is

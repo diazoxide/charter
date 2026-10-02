@@ -48,6 +48,23 @@ export function arm(): void {
     setTimeout(tick, 0);
   };
   setTimeout(tick, 0);
+  // A higher-priority probe than timers: MessageChannel tasks, which is what React schedules on.
+  const ch = new MessageChannel();
+  let mlast = epoch();
+  ch.port1.onmessage = () => {
+    if (!prof.armed) return;
+    const now = epoch();
+    if (now - mlast > 6) prof.lags.push({ at: mlast, ms: -(now - mlast) });
+    mlast = now;
+    ch.port2.postMessage(0);
+  };
+  ch.port2.postMessage(0);
+  const frame = () => {
+    if (!prof.armed) return;
+    mark("raf");
+    requestAnimationFrame(frame);
+  };
+  requestAnimationFrame(frame);
 }
 export function disarm(): void {
   prof.armed = false;

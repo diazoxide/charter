@@ -1,3 +1,4 @@
+import { mark as profMark } from "./prof";
 import {
   Fragment,
   useCallback,
@@ -3259,6 +3260,7 @@ export function PlaneView({
 
   // A project the operator is not looking at keeps every piece of state above and draws none
   // of it. See this module's own docstring for why it is `null` and not `hidden`.
+  if (inFront) profMark("pvRender");
   if (!inFront) return null;
 
   return (
