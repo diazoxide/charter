@@ -1,5 +1,4 @@
 import {
-  Activity,
   Fragment,
   memo,
   useCallback,
@@ -3248,10 +3247,10 @@ export const PlaneView = memo(function PlaneView({
   // eslint-disable-next-line
   useLayoutEffect(() => { if (inFront) mark("pvLayout"); }, [inFront]);
   useEffect(() => { if (inFront) mark("pvEffect"); }, [inFront]);
-  // PROTOTYPE: hidden, not null (FR-27b)
+  if (!inFront) return null;
 
   return (
-    <Activity mode={inFront ? "visible" : "hidden"}><div className="project-view" data-front={inFront || undefined}>
+    <>
       {/* The workspaces of this project, as the second of the three strips (ADR 0036). It is
           the axis the tmux frame had and the port lost: a top-level tab there was a
           WORKSPACE and the sessions lived under it, and transposing the app onto projects
@@ -3778,7 +3777,7 @@ export const PlaneView = memo(function PlaneView({
              gain a wrapper. */
           <Menued on={{ on: "pane" }} offers={found} onPress={press}>
             <div className="panes">
-              {frontTab && inFront ? (
+              {frontTab ? (
                 <P id="LayoutPanes"><LayoutPanes
                   plane={plane}
                   layout={frontTab.layout}
@@ -4048,7 +4047,7 @@ export const PlaneView = memo(function PlaneView({
           }}
         />
       )}
-    </div></Activity>
+    </>
   );
 });
 

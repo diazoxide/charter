@@ -38,7 +38,7 @@ import {
  * and the project the launch opened is in front again.
  */
 
-const TABS = '[data-front] [role="tablist"][aria-label="Tabs"]';
+const TABS = '[role="tablist"][aria-label="Tabs"]';
 
 /**
  * What a switched-to pane is waited for: the last word of `READY`, which every scenario chat
