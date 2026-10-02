@@ -3,7 +3,6 @@ import type { Bench, Plan } from "../../src/bench.ts";
 import { READY, built, declareAProfile, writeShell } from "../harness.js";
 import { endChat, pressAndStart } from "../opening.js";
 import { logLine } from "../processes.js";
-import { attributesOfEach } from "../reading.js";
 import {
   BUDGET_MS,
   OPEN,
@@ -76,30 +75,39 @@ async function job<T>(plan: Plan): Promise<T> {
   return state.result as T;
 }
 
-/** How many chat tabs the project in front is showing. */
-async function chatTabs(): Promise<number> {
-  return (await attributesOfEach(`${TABS} [role="tab"]`, ["role"])).length;
-}
-
-/** The names of the project in front's tabs, read in one pass (`footer.e2e.ts`'s). */
-async function tabNames(): Promise<string[]> {
-  return browser.execute(() =>
-    [
-      ...(document
-        .querySelector('[role="tablist"][aria-label="Tabs"]')
-        ?.querySelectorAll('[role="tab"]') ?? []),
-    ].map((tab) => tab.textContent ?? ""),
-  );
-}
-
-/** Opens one chat in the project in front, and waits for its tab. */
-async function aChatInFront(): Promise<void> {
-  const before = await chatTabs();
+/**
+ * Opens one chat in `plane`, the project in front, and answers with the name its `×` carries.
+ *
+ * **Waited for by the core's own list, not by the strip.** The strip collapses rather than
+ * scrolling, so in a project an earlier spec left full of chats a new tab can push another into
+ * the show-more and the strip draws as many tabs as before. `running_sessions` cannot be fooled
+ * that way. The new chat is the tab in front once it is up, and its `×` is the one in its cell.
+ */
+async function aChatIn(plane: string): Promise<string> {
+  const before = (await ask<number[]>("running_sessions", { plane })).length;
   await pressAndStart("New tab");
-  await browser.waitUntil(async () => (await chatTabs()) > before, {
-    timeout: 30_000,
-    timeoutMsg: "the chat this spec opened never got a tab",
-  });
+  await browser.waitUntil(
+    async () => (await ask<number[]>("running_sessions", { plane })).length > before,
+    { timeout: 30_000, timeoutMsg: "the chat this spec opened never started" },
+  );
+  let closer = "";
+  await browser.waitUntil(
+    async () => {
+      const found = await browser.execute(
+        (tabs: string) =>
+          document
+            .querySelector(`${tabs} [role="tab"][aria-selected="true"]`)
+            ?.closest(".tab")
+            ?.querySelector('button[aria-label^="End chat "]')
+            ?.getAttribute("aria-label") ?? null,
+        TABS,
+      );
+      closer = found ?? "";
+      return closer !== "";
+    },
+    { timeout: 30_000, timeoutMsg: "the chat this spec opened never came to the front" },
+  );
+  return closer;
 }
 
 describe(`switching among ${OPEN} open projects`, function () {
@@ -109,8 +117,8 @@ describe(`switching among ${OPEN} open projects`, function () {
 
   /** The project the launch opened, which this spec never closes. */
   let first = "";
-  /** Its tabs before this spec opened a chat there, so only that chat is ended again. */
-  let wereAlreadyOpen: string[] = [];
+  /** The `×` of the chat this spec opened there, so only that chat is ended again. */
+  let mine = "";
   /** The window's size before this spec made room for ten project tabs. */
   let size = { width: 0, height: 0 };
   const planes: string[] = [];
@@ -122,8 +130,7 @@ describe(`switching among ${OPEN} open projects`, function () {
     planes.push(first);
     // A chat of this spec's own in front, always: whatever an earlier spec left in front there
     // may be a view, which has no pane to paint.
-    wereAlreadyOpen = await tabNames();
-    await aChatInFront();
+    mine = await aChatIn(first);
     for (let n = 1; n < OPEN; n++) {
       // The profile every scenario chat runs, so each project's chat is the fake harness
       // printing `READY`.
@@ -131,7 +138,7 @@ describe(`switching among ${OPEN} open projects`, function () {
         declareAProfile(at, writeShell(built("fake-harness"))),
       );
       await openFromTheStrip(plane);
-      await aChatInFront();
+      await aChatIn(plane);
       planes.push(plane);
     }
     expect(await ask<string[]>("open_planes")).toHaveLength(OPEN);
@@ -144,9 +151,8 @@ describe(`switching among ${OPEN} open projects`, function () {
       timeout: 30_000,
       timeoutMsg: "the launch's project did not come back to the front",
     });
-    for (const name of (await tabNames()).filter((tab) => !wereAlreadyOpen.includes(tab))) {
-      await endChat(`End chat ${name}`);
-    }
+    // It was the tab in front there when the project was left, so it is the one in front now.
+    if (mine !== "") await endChat(mine);
     await browser.setWindowSize(size.width, size.height);
   });
 
