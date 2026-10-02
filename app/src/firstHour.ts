@@ -32,7 +32,8 @@ export const OUTSIDE_THE_FIRST_HOUR = [
 export function wordsOutsideTheFirstHour(text: string): string[] {
   return OUTSIDE_THE_FIRST_HOUR.filter((word) => {
     const shouted = word === "LIVE" || word === "LOCAL";
-    const escaped = word.replace(/[-]/g, "\\-");
+    // Every character a regular expression gives a meaning, backslash included.
+    const escaped = word.replace(/[\\^$.*+?()[\]{}|-]/g, "\\$&");
     return new RegExp(`(^|[^\\w-])${escaped}s?($|[^\\w-])`, shouted ? "" : "i").test(text);
   });
 }

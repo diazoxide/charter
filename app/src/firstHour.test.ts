@@ -7,6 +7,8 @@ describe("the first hour's words (ADR 0072 §3)", () => {
     expect(wordsOutsideTheFirstHour("two runs")).toEqual(["run"]);
     expect(wordsOutsideTheFirstHour("Start the first chat. It changed nothing.")).toEqual([]);
     expect(wordsOutsideTheFirstHour("a truncated line")).toEqual([]);
+    expect(wordsOutsideTheFirstHour("press show-more")).toEqual(["show-more"]);
+    expect(wordsOutsideTheFirstHour("show more")).toEqual([]);
   });
 
   it("matches LIVE and LOCAL only as the shouted labels", () => {
