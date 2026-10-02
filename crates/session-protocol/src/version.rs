@@ -2,8 +2,9 @@
 //!
 //! **The exchange.** The client sends a hello naming every version it speaks, one per major
 //! with the highest minor it has of that major. The host answers with the highest major both
-//! speak, at the lower of the two minors, or refuses and says which majors it speaks. Then both
-//! sides start the multiplexer at that version. A host speaks its own major and the one before
+//! speak, at the lower of the two minors, or refuses and says which majors it speaks. Then the
+//! client is admitted as one client scope ([`crate::auth`]), and only then do both sides start
+//! the multiplexer at that version. A host speaks its own major and the one before
 //! it, which is how a client and a host one version apart always talk (ADR 0068 §4, N−1).
 //!
 //! **It fails closed.** No shared major is a refusal on both ends, never a guess. A client
@@ -95,6 +96,12 @@ pub enum Refused {
     /// A message that is not the shape this version reads.
     #[error("a negotiation message that cannot be read: {0}")]
     Malformed(String),
+    /// The host refused this client's credential, and said why ([`crate::auth`]).
+    #[error("the host did not admit this client: {0}")]
+    NotAdmitted(String),
+    /// The client presented no credential that admits it as a scope ([`crate::auth`]).
+    #[error("the client presented no credential that admits it")]
+    Unauthenticated,
     /// The other end did not finish its half of the handshake within [`HANDSHAKE_TIMEOUT`].
     #[error("the other end did not finish the handshake within {HANDSHAKE_TIMEOUT:?}")]
     TimedOut,
@@ -138,7 +145,7 @@ pub async fn answer<S: AsyncRead + AsyncWrite>(
     Ok((version, join(Cursor::new(left).chain(reads), writes)))
 }
 
-async fn within_the_deadline<T>(
+pub(crate) async fn within_the_deadline<T>(
     handshake: impl Future<Output = Result<T, Refused>>,
 ) -> Result<T, Refused> {
     tokio::time::timeout(HANDSHAKE_TIMEOUT, handshake)
@@ -216,7 +223,10 @@ fn codec() -> LengthDelimitedCodec {
         .new_codec()
 }
 
-async fn send<W: AsyncWrite + Unpin, T: Serialize>(io: &mut W, message: &T) -> Result<(), Refused> {
+pub(crate) async fn send<W: AsyncWrite + Unpin, T: Serialize>(
+    io: &mut W,
+    message: &T,
+) -> Result<(), Refused> {
     let body = serde_json::to_vec(message).map_err(|e| Refused::Malformed(e.to_string()))?;
     if body.len() > MOST_HELLO_BYTES {
         return Err(Refused::TooLong {
@@ -231,7 +241,7 @@ async fn send<W: AsyncWrite + Unpin, T: Serialize>(io: &mut W, message: &T) -> R
 }
 
 /// Read one message, returning it and whatever was read past it.
-async fn receive<R: AsyncRead + Unpin, T: for<'de> Deserialize<'de>>(
+pub(crate) async fn receive<R: AsyncRead + Unpin, T: for<'de> Deserialize<'de>>(
     io: &mut R,
 ) -> Result<(T, BytesMut), Refused> {
     let mut magic = [0u8; MAGIC.len()];

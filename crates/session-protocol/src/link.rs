@@ -38,6 +38,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 
+use crate::auth::{self, Credential, Credentials, Scope};
 use crate::version::{self, Refused, Speaks, Version};
 
 /// The largest frame the control lane carries. A command or an event is small; a frame this
@@ -86,6 +87,7 @@ type Opening = oneshot::Sender<yamux::Result<yamux::Stream>>;
 /// A negotiated, multiplexed link.
 pub struct Link {
     version: Version,
+    scope: Scope,
     control: Control,
     opener: Opener,
     inbound: Acceptor,
@@ -108,6 +110,11 @@ impl Link {
     /// The version both ends agreed on.
     pub fn version(&self) -> Version {
         self.version
+    }
+
+    /// The client scope this link was admitted as ([`crate::auth`]).
+    pub fn scope(&self) -> Scope {
+        self.scope
     }
 
     pub fn control(&mut self) -> &mut Control {
@@ -205,32 +212,39 @@ impl Control {
     }
 }
 
-/// The client end: negotiate with what `speaks` names, start the multiplexer and open the
-/// control lane.
+/// The client end: negotiate with what `speaks` names, be admitted as `scope` with its
+/// `credential`, start the multiplexer and open the control lane.
 pub async fn connect<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     io: S,
     speaks: Speaks,
+    scope: Scope,
+    credential: &Credential,
 ) -> Result<Link, LinkError> {
     let (version, io) = version::offer(io, &speaks).await?;
+    let io = auth::present(io, scope, credential).await?;
     let (opener, inbound) = drive(io, yamux::Mode::Client);
     let mut lane = opener.open().await?;
     lane.write_all(&[CONTROL_LANE]).await?;
     lane.flush().await?;
     Ok(Link {
         version,
+        scope,
         control: lane_framed(lane),
         opener,
         inbound,
     })
 }
 
-/// The host end: answer with what `speaks` names, start the multiplexer and take the control
-/// lane the client opens.
+/// The host end: answer with what `speaks` names, admit the client as the scope whose
+/// credential in `held` it presents or refuse it, start the multiplexer and take the control
+/// lane the client opens. There is no way to serve a link without admitting it first.
 pub async fn serve<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     io: S,
     speaks: Speaks,
+    held: &Credentials,
 ) -> Result<Link, LinkError> {
     let (version, io) = version::answer(io, &speaks).await?;
+    let (scope, io) = auth::admit(io, held).await?;
     let (opener, mut inbound) = drive(io, yamux::Mode::Server);
     let lane = tokio::time::timeout(version::HANDSHAKE_TIMEOUT, async {
         let mut lane = inbound.accept().await?;
@@ -243,6 +257,7 @@ pub async fn serve<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     .unwrap_or(Err(LinkError::TimedOut))?;
     Ok(Link {
         version,
+        scope,
         control: lane_framed(lane),
         opener,
         inbound,

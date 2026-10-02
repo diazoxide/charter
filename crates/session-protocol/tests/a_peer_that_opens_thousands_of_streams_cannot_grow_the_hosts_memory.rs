@@ -9,9 +9,14 @@
 use std::process::Stdio;
 use std::time::Duration;
 
+use charter_session_protocol::auth::{Credentials, Scope};
 use charter_session_protocol::link;
 use charter_session_protocol::version::{Speaks, Version};
 use tokio::process::Command;
+
+/// One start of the host's credentials, which every link in these tests is admitted with.
+static HELD: std::sync::LazyLock<Credentials> =
+    std::sync::LazyLock::new(|| Credentials::mint().unwrap());
 
 #[global_allocator]
 static ALLOCATOR: dhat::Alloc = dhat::Alloc;
@@ -24,6 +29,10 @@ async fn the_host_holds_a_bounded_number_of_streams_and_bytes_however_many_are_o
     let _profiler = dhat::Profiler::builder().testing().build();
     let mut child = Command::new(env!("CARGO_BIN_EXE_charter-session-peer"))
         .args(["--flood", &STREAMS.to_string(), &BYTES_EACH.to_string()])
+        .env(
+            "CHARTER_SESSION_PEER_CREDENTIAL",
+            HELD.of(Scope::LocalUi).expose(),
+        )
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
@@ -32,7 +41,7 @@ async fn the_host_holds_a_bounded_number_of_streams_and_bytes_however_many_are_o
         .unwrap();
     let stdio = tokio::io::join(child.stdout.take().unwrap(), child.stdin.take().unwrap());
     let speaks = Speaks::new([Version { major: 1, minor: 0 }]);
-    let host = link::serve(stdio, speaks).await.unwrap();
+    let host = link::serve(stdio, speaks, &HELD).await.unwrap();
 
     // Nobody accepts while the flood arrives. Sample what the host holds as it does.
     let mut most_unaccepted = 0;

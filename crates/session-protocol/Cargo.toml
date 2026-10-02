@@ -19,6 +19,16 @@ futures = "0.3"
 bytes = "1"
 # The multiplexer (ADR 0068 §4): Yamux, per-stream credit over one ordered byte stream.
 yamux = "0.14"
+# Each scope's credential (FD-6): minted from the OS generator, compared in constant time,
+# written by a rename from a `0600` temporary file. The same crates charter-core mints and
+# checks a chat's token with.
+getrandom = "0.4"
+subtle = "2"
+tempfile.workspace = true
+
+[target."cfg(unix)".dependencies]
+# The host's own uid, which a local connection's peer must be (FD-6).
+rustix = { version = "1", features = ["process"] }
 
 [features]
 # `charter-session-bench`'s runtime, the one the crate's tests use (SC-16). Only the bench asks for

@@ -999,6 +999,8 @@ pub struct Listener {
     socket: std::os::unix::net::UnixListener,
     path: std::path::PathBuf,
     tokens: std::sync::Arc<ChatTokens>,
+    /// The only uid a connection is read from: this process's own, as it binds (FD-6).
+    owner: u32,
 }
 
 #[cfg(unix)]
@@ -1051,7 +1053,17 @@ impl Listener {
             socket,
             path: path.to_path_buf(),
             tokens: std::sync::Arc::default(),
+            owner: rustix::process::geteuid().as_raw(),
         })
+    }
+
+    /// The same listener, reading only connections from `uid`. For the tests, which have no
+    /// second user to connect as: told it belongs to another uid, the test's own connection
+    /// is the other user's.
+    #[cfg(test)]
+    fn owned_by(mut self, uid: u32) -> Self {
+        self.owner = uid;
+        self
     }
 
     /// The path a hook writes to.
@@ -1144,6 +1156,14 @@ impl Listener {
                 // — have a test; `accept` failing does not, because nothing a test can do
                 // makes it fail. It is written the same way for the same reason.
                 let Ok(connection) = connection else { continue };
+                // **Only this user's connections are read** (FD-6, ADR 0068 §5). The socket is
+                // `0600` in a `0700` directory, which keeps every other user out already; this
+                // still holds if either is ever wrong. A peer of another uid, or one the socket
+                // will not name, is closed unread, before the chat's token is even looked at.
+                if let Err(refused) = peer_is(&connection, self.owner) {
+                    tracing::warn!("charter: the hook channel refused a connection: {refused}");
+                    continue;
+                }
                 // **A thread per connection, and this used to be one thread for all of
                 // them.** An independent review reproduced the consequence: anything that
                 // connects and does not write — `nc -U` on the socket, a hook stopped in a
@@ -1178,6 +1198,25 @@ impl Listener {
             path,
             reading: Some(reading),
         }
+    }
+}
+
+/// `Ok` when the peer on `connection` runs as `owner`, and otherwise why not: another uid,
+/// or a peer the socket would not identify. `charterd.sock` makes the same check
+/// (`charter_session_protocol::local`).
+#[cfg(unix)]
+fn peer_is(connection: &std::os::unix::net::UnixStream, owner: u32) -> io::Result<()> {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    let peer = nix::sys::socket::getsockopt(connection, nix::sys::socket::sockopt::PeerCredentials)
+        .map(|credentials| credentials.uid());
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    let peer = nix::unistd::getpeereid(connection).map(|(uid, _)| uid.as_raw());
+    match peer.map_err(io::Error::from)? {
+        uid if uid == owner => Ok(()),
+        uid => Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("its peer runs as uid {uid}, and this channel serves uid {owner} only"),
+        )),
     }
 }
 
@@ -3162,6 +3201,51 @@ mod tests {
             rx.recv_timeout(std::time::Duration::from_secs(5)),
             Ok("notice")
         );
+    }
+
+    #[test]
+    fn a_connection_from_another_uid_is_refused_before_it_says_anything_even_with_its_token() {
+        // FD-6: the hook channel checks the peer's uid as well as the chat's token. The
+        // listener is told it belongs to a uid this test is not, so this test's own
+        // connection is the other user's: it carries the right token, and is still dropped.
+        let dir = tempfile::tempdir().expect("a directory");
+        let path = dir.path().join("hooks.sock");
+        let ours = rustix::process::geteuid().as_raw();
+        let listener = Listener::bind(dir.path(), &path)
+            .expect("a socket")
+            .owned_by(ours.wrapping_add(1));
+        let seven = listener.tokens().issue(7).expect("a token");
+        let (tx, rx) = mpsc::channel();
+        let _reading = listener.each(Box::new(move |report| {
+            let _ = tx.send(report.chat);
+        }));
+
+        let _ = send(&path, Some(&seven), &a_stop(7));
+
+        assert_eq!(
+            rx.recv_timeout(std::time::Duration::from_secs(2)),
+            Err(mpsc::RecvTimeoutError::Timeout),
+            "a line from another uid was read"
+        );
+    }
+
+    #[test]
+    fn a_connection_from_the_listeners_own_uid_with_its_token_is_read() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let path = dir.path().join("hooks.sock");
+        let ours = rustix::process::geteuid().as_raw();
+        let listener = Listener::bind(dir.path(), &path)
+            .expect("a socket")
+            .owned_by(ours);
+        let seven = listener.tokens().issue(7).expect("a token");
+        let (tx, rx) = mpsc::channel();
+        let _reading = listener.each(Box::new(move |report| {
+            let _ = tx.send(report.chat);
+        }));
+
+        send(&path, Some(&seven), &a_stop(7)).expect("the app took it");
+
+        assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(5)), Ok(7));
     }
 
     #[test]

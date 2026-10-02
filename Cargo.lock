@@ -822,6 +822,7 @@ dependencies = [
  "libc",
  "log",
  "memchr",
+ "nix",
  "portable-pty",
  "proptest",
  "regex",
@@ -857,8 +858,11 @@ dependencies = [
  "bytes",
  "dhat",
  "futures",
+ "getrandom 0.4.3",
+ "rustix",
  "serde",
  "serde_json",
+ "subtle",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
@@ -3274,6 +3278,7 @@ dependencies = [
  "cfg-if",
  "cfg_aliases",
  "libc",
+ "memoffset",
 ]
 
 [[package]]

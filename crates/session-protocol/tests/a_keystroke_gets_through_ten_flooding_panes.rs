@@ -19,10 +19,15 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
+use charter_session_protocol::auth::{Credentials, Scope};
 use charter_session_protocol::link;
 use charter_session_protocol::version::{Speaks, Version};
 use charter_session_protocol::view::{Attacher, Chunk, Limits, ViewId, Viewer};
 use tokio::net::{UnixListener, UnixStream};
+
+/// One start of the host's credentials, which every link in these tests is admitted with.
+static HELD: std::sync::LazyLock<Credentials> =
+    std::sync::LazyLock::new(|| Credentials::mint().unwrap());
 
 const FLOODING: u32 = 10;
 const SAMPLES: usize = 60;
@@ -44,7 +49,7 @@ async fn a_keystroke_gets_through_ten_flooding_panes() {
     let host_stop = Arc::clone(&stop);
     let host = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        let mut link = link::serve(stream, v1()).await.unwrap();
+        let mut link = link::serve(stream, v1(), &HELD).await.unwrap();
         let mut floods = Vec::new();
         for pane in 0..FLOODING {
             let feed = Attacher::new(link.opener(), Limits::default())
@@ -79,9 +84,14 @@ async fn a_keystroke_gets_through_ten_flooding_panes() {
     });
 
     // The client: draws every pane as fast as it reads, and types into the eleventh.
-    let mut client = link::connect(UnixStream::connect(&path).await.unwrap(), v1())
-        .await
-        .unwrap();
+    let mut client = link::connect(
+        UnixStream::connect(&path).await.unwrap(),
+        v1(),
+        Scope::LocalUi,
+        HELD.of(Scope::LocalUi),
+    )
+    .await
+    .unwrap();
     let drawn = Arc::new(AtomicUsize::new(0));
     let mut echo = None;
     for _ in 0..=FLOODING {

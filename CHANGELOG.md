@@ -391,6 +391,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   built to exhaust them is refused instead of slipping through when the hook dies (#866).
 - **The handoff guard finds a handoff in a shell's script past the shell's options**, including
   options that take a value (#866).
+- **The hook channel reads only your own user's connections.** Besides each chat's token, the
+  app now checks which user is on the other end of its hook socket, and closes a connection
+  from any other user before reading it. The socket's private directory already kept other
+  users out; this still holds if that directory's permissions are ever wrong (FD-6, #645).
 
 ## [0.4.2] - 2026-09-30
 

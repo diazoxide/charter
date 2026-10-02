@@ -5,16 +5,24 @@
 use std::time::Duration;
 
 use bytes::Bytes;
+use charter_session_protocol::auth::{Credentials, Scope};
 use charter_session_protocol::link::{self, Link};
 use charter_session_protocol::version::{Speaks, Version};
 use charter_session_protocol::view::{Attacher, Closed, Limits, ViewId, Viewer};
 use tokio::io::duplex;
 use tokio::time::timeout;
 
+/// One start of the host's credentials, which every link in these tests is admitted with.
+static HELD: std::sync::LazyLock<Credentials> =
+    std::sync::LazyLock::new(|| Credentials::mint().unwrap());
+
 async fn linked() -> (Link, Link) {
     let speaks = Speaks::new([Version { major: 1, minor: 0 }]);
     let (a, b) = duplex(256 * 1024);
-    let (client, host) = tokio::join!(link::connect(a, speaks.clone()), link::serve(b, speaks));
+    let (client, host) = tokio::join!(
+        link::connect(a, speaks.clone(), Scope::LocalUi, HELD.of(Scope::LocalUi)),
+        link::serve(b, speaks, &HELD)
+    );
     (client.unwrap(), host.unwrap())
 }
 
