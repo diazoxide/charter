@@ -126,6 +126,11 @@ like any other. Charter never force-pushes, deletes a branch, resets a default b
 a request it did not open. A member merged outside charter has no log line, and revert names it
 as needing a person.
 
+> **Amended 2026-10-02 (implementation note, #473; not a ruling).** For revert, "landed" is the
+> landing log's line and the default branch (its `origin/` tracking ref, else the local branch)
+> still holding that line's commit. No forge is read: the log gets a line only once the forge
+> confirmed the merge (D-472a), and the revert branches from that same ref. Recorded as D-473a.
+
 ## The operator's rulings
 
 - **D1: the change is wanted, declare-and-read first.** T1–T5 (#466–#470) ship first: this

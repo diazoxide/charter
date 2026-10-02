@@ -74,7 +74,7 @@ fn forge_said(words: &str) -> String {
 }
 
 /// The first twelve characters of a commit, contained.
-fn short(sha: &str) -> String {
+pub(super) fn short(sha: &str) -> String {
     shown::line(sha).chars().take(12).collect()
 }
 
@@ -979,6 +979,18 @@ fn blockers_landed(
     Ok(())
 }
 
+/// Whether `at` holds `commit` in `clone`: `commit` is `at` or one of its ancestors. `false`
+/// for anything git could not answer. A revert does not take a commit out of a branch's
+/// history, so this is never how a revert is seen.
+pub(super) fn holds(clone: &Path, commit: &str, at: &str) -> bool {
+    git::run(
+        clone,
+        &["merge-base", "--is-ancestor", commit, at],
+        git::READ,
+    )
+    .is_ok_and(|run| run.ok())
+}
+
 /// What may be handed to git as a commit.
 pub(super) fn sha_ok(sha: &str) -> bool {
     (7..=64).contains(&sha.len())
@@ -1052,19 +1064,12 @@ fn member_landed(
             "merged, but charter cannot tell this clone's default branch".into(),
         ));
     };
-    let holds = |at: &str| {
-        git::run(
-            &reached.clone,
-            &["merge-base", "--is-ancestor", &merge, at],
-            git::READ,
-        )
-        .is_ok_and(|run| run.ok())
-    };
+    let holds = |at: &str| holds(&reached.clone, &merge, at);
     if holds(&format!("refs/remotes/origin/{default}")) || holds(&format!("refs/heads/{default}")) {
         return Ok(None);
     }
     Ok(Some(format!(
-        "merged as {}, which this clone's {} does not contain: reverted, or not fetched since. \
+        "merged as {}, which this clone's {} does not contain: rewritten, or not fetched since. \
          `git fetch` in it, then land again",
         short(&merge),
         shown::line(&default)

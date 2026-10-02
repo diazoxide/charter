@@ -50,7 +50,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   merged outside charter is named for you to revert by hand. A recorded commit that is not a
   commit id, or that the default branch no longer holds, is refused by name, and so is a clone
   with uncommitted work. A revert that conflicts is aborted and its branch left for you to
-  finish. It never force-pushes, deletes a branch or resets one (#473).
+  finish. Run it again once a refusal is put right, and it seeds only the members it has not
+  seeded yet. It never force-pushes, deletes a branch or resets one (#473).
 
 - **`charter change land` lands one member of a cross-repo change.** `charter change land
   <change> --repo <name>` merges that member's request at the commit its checks passed on, and

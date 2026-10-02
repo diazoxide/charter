@@ -436,7 +436,7 @@ fn a_malformed_sha_in_the_log_is_refused_by_name_and_never_reaches_git() {
         world.logged("widget", bad);
         let before = crate::worktree::git::tally::asked(&clone).len();
         let (code, said) = world.revert();
-        assert_eq!(code, 1, "{bad:?}: {said}");
+        assert_eq!(code, REFUSED, "{bad:?}: {said}");
         assert!(said.contains("which is not a commit id"), "{bad:?}: {said}");
         assert!(
             !asked(&clone, before).iter().flatten().any(|w| w == bad),
@@ -456,12 +456,12 @@ fn a_logged_commit_the_default_branch_no_longer_holds_is_refused_by_name() {
         &["update-ref", "refs/remotes/origin/main", "main~1"],
     );
     let (code, said) = world.revert();
-    assert_eq!(code, 1, "{said}");
+    assert_eq!(code, REFUSED, "{said}");
     assert!(
         said.contains(&format!(
             "refs/remotes/origin/main no longer holds {}",
             &merge[..12]
-        )),
+        )) && !said.contains("reverted already"),
         "{said}"
     );
     assert!(!has_branch(&clone, REVERT_BRANCH));
@@ -475,7 +475,7 @@ fn a_logged_commit_git_does_not_know_is_named_rather_than_reverted() {
     world.change(&[("widget", &[])]);
     world.logged("widget", &"0".repeat(40));
     let (code, said) = world.revert();
-    assert_eq!(code, 1, "{said}");
+    assert_eq!(code, REFUSED, "{said}");
     assert!(said.contains("git does not know the commit"), "{said}");
 }
 
@@ -488,7 +488,7 @@ fn a_default_branch_charter_cannot_tell_stops_the_member() {
         &["symbolic-ref", "--delete", "refs/remotes/origin/HEAD"],
     );
     let (code, said) = world.revert();
-    assert_eq!(code, 1, "{said}");
+    assert_eq!(code, REFUSED, "{said}");
     assert!(said.contains("will not guess"), "{said}");
 }
 
@@ -530,18 +530,160 @@ fn the_ordering_is_the_originals_reversed() {
 }
 
 #[test]
-fn a_second_revert_of_the_same_change_is_refused_by_name() {
+fn a_rerun_with_every_member_seeded_changes_nothing() {
     let world = World::new();
-    world.one_landed(false);
+    let (clone, _) = world.one_landed(false);
     assert_eq!(world.revert().0, 0);
-    let before = std::fs::read(store::path_for(&world.plane, "alpha", REVERTED).unwrap()).unwrap();
+    let path = store::path_for(&world.plane, "alpha", REVERTED).unwrap();
+    let before = std::fs::read(&path).unwrap();
+    let branch = sha(&clone, REVERT_BRANCH);
+    let (code, said) = world.revert();
+    assert_eq!(code, 0, "{said}");
+    assert!(said.contains("widget: already seeded"), "{said}");
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    assert_eq!(sha(&clone, REVERT_BRANCH), branch);
+}
+
+/// A member refused before its branch was made is put right and the revert run again: only
+/// that member is seeded, and joins the record with its order; the seeded one is untouched.
+#[test]
+fn a_rerun_seeds_only_the_member_that_was_refused() {
+    let world = World::new();
+    let widget = world.clone("widget");
+    let gadget = world.clone("gadget");
+    world.change(&[("widget", &[]), ("gadget", &["widget"])]);
+    for repo in ["widget", "gadget"] {
+        let merge = world.land(repo, false);
+        world.logged(repo, &merge);
+    }
+    // `gadget`'s tracking ref is behind its landing: refused before anything is made.
+    git(
+        &gadget,
+        &["update-ref", "refs/remotes/origin/main", "main~1"],
+    );
     let (code, said) = world.revert();
     assert_eq!(code, REFUSED, "{said}");
-    assert!(said.contains("'revert-api-2' already exists"), "{said}");
+    let members: Vec<String> = world
+        .reverted()
+        .members
+        .into_iter()
+        .map(|m| m.repo)
+        .collect();
+    assert_eq!(members, vec!["widget"]);
+    let seeded = sha(&widget, REVERT_BRANCH);
+
+    git(&gadget, &["update-ref", "refs/remotes/origin/main", "main"]);
+    let before = crate::worktree::git::tally::asked(&widget).len();
+    let (code, said) = world.revert();
+    assert_eq!(code, 0, "{said}");
+    assert!(said.contains("widget: already seeded"), "{said}");
+    assert_eq!(sha(&widget, REVERT_BRANCH), seeded);
+    assert!(reverts(&asked(&widget, before)).is_empty());
+    assert!(!in_tree(&gadget, REVERT_BRANCH, "gadget.rs"));
+    let needs: Vec<(String, Vec<String>)> = world
+        .reverted()
+        .members
+        .into_iter()
+        .map(|m| (m.repo, m.needs))
+        .collect();
     assert_eq!(
-        std::fs::read(store::path_for(&world.plane, "alpha", REVERTED).unwrap()).unwrap(),
-        before
+        needs,
+        vec![
+            ("widget".to_string(), vec!["gadget".to_string()]),
+            ("gadget".to_string(), vec![]),
+        ]
     );
+}
+
+/// A seed refused after the member joined the record (uncommitted work) is seeded by the
+/// rerun once the work is put away.
+#[test]
+fn a_rerun_seeds_a_member_whose_branch_was_not_made() {
+    let world = World::new();
+    let (clone, _) = world.one_landed(false);
+    std::fs::write(clone.join("README.md"), "work in progress\n").unwrap();
+    assert_eq!(world.revert().0, REFUSED);
+    git(&clone, &["checkout", "--", "README.md"]);
+    let (code, said) = world.revert();
+    assert_eq!(code, 0, "{said}");
+    assert!(!in_tree(&clone, REVERT_BRANCH, "widget.rs"));
+}
+
+/// The revert landed and its record forgotten, then revert asked again: the default branch
+/// already carries the revert, so it is refused by name rather than reverted twice. Both
+/// landing shapes: a merge keeps git's "This reverts commit" line, a squash keeps only the
+/// trailer charter's landing wrote.
+#[test]
+fn a_revert_already_on_the_default_branch_is_refused_by_name() {
+    for squash in [false, true] {
+        let world = World::new();
+        let (clone, _) = world.one_landed(false);
+        assert_eq!(world.revert().0, 0);
+        let message = "revert-api-2: widget (#8)\n\nreverts it\n\nCharter-Change: revert-api-2";
+        if squash {
+            git(&clone, &["merge", "-q", "--squash", REVERT_BRANCH]);
+            git(&clone, &["commit", "-q", "-m", message]);
+        } else {
+            git(
+                &clone,
+                &["merge", "-q", "--no-ff", "-m", message, REVERT_BRANCH],
+            );
+        }
+        world.publish("widget");
+        git(&clone, &["branch", "-D", REVERT_BRANCH]);
+        store::forget(&world.plane, "alpha", REVERTED).unwrap();
+        let (code, said) = world.revert();
+        assert_eq!(code, REFUSED, "squash {squash}: {said}");
+        assert!(
+            said.contains("already carries a revert of"),
+            "squash {squash}: {said}"
+        );
+        assert!(!has_branch(&clone, REVERT_BRANCH));
+    }
+}
+
+/// A member charter landed and that was later dropped from the change is named, not
+/// reverted and not passed over in silence.
+#[test]
+fn a_landed_member_later_dropped_is_named_and_not_reverted() {
+    let world = World::new();
+    world.one_landed(false);
+    world.logged("gizmo", &"e".repeat(40));
+    let (code, said) = world.revert();
+    assert_eq!(code, 0, "{said}");
+    assert!(
+        said.contains("gizmo: landed by charter, and later dropped from api-2; not reverted"),
+        "{said}"
+    );
+}
+
+/// The logged commit is resolved once, to its full id, and that id is what every later git
+/// call is handed: a branch whose name is the logged short id cannot stand in for it.
+#[test]
+fn a_branch_named_like_the_logged_commit_cannot_stand_in_for_it() {
+    let world = World::new();
+    let clone = world.clone("widget");
+    world.change(&[("widget", &[])]);
+    let merge = world.land("widget", false);
+    let shorter = &merge[..12];
+    world.logged("widget", shorter);
+    git(&clone, &["branch", shorter, "main~1"]);
+    let before = crate::worktree::git::tally::asked(&clone).len();
+    let (_, said) = world.revert();
+    let ran = asked(&clone, before);
+    let later: Vec<&Vec<String>> = ran
+        .iter()
+        .filter(|a| matches!(verb(a), "rev-list" | "merge-base" | "revert"))
+        .collect();
+    for argv in later {
+        assert!(!argv.iter().any(|w| w == shorter), "{argv:?}");
+    }
+    // git resolves the name to the branch, and charter sees the id does not match the log.
+    assert!(
+        said.contains("names something else in this clone"),
+        "{said}"
+    );
+    assert!(!has_branch(&clone, REVERT_BRANCH));
 }
 
 // ---- every way a seed can fail is named ---------------------------------------------------
@@ -552,7 +694,7 @@ fn uncommitted_work_is_refused_before_any_branch_and_the_record_still_names_the_
     let (clone, _) = world.one_landed(false);
     std::fs::write(clone.join("README.md"), "work in progress\n").unwrap();
     let (code, said) = world.revert();
-    assert_eq!(code, 1, "{said}");
+    assert_eq!(code, REFUSED, "{said}");
     assert!(said.contains("uncommitted changes"), "{said}");
     assert!(!has_branch(&clone, REVERT_BRANCH));
     assert_eq!(
@@ -575,7 +717,7 @@ fn a_branch_that_already_exists_is_neither_reused_nor_replaced() {
     git(&clone, &["branch", REVERT_BRANCH, "main~1"]);
     let was = sha(&clone, REVERT_BRANCH);
     let (code, said) = world.revert();
-    assert_eq!(code, 1, "{said}");
+    assert_eq!(code, REFUSED, "{said}");
     assert!(said.contains("already exists here"), "{said}");
     assert_eq!(sha(&clone, REVERT_BRANCH), was);
 }

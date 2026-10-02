@@ -101,7 +101,8 @@ pub enum ChangeCommand {
     /// member's clone, a branch off the default branch carrying `git revert` of the commit the
     /// landing log names. Pushes nothing and merges nothing: push and land it like any other
     /// change. A member with no landing record is named as a person's to revert, and a logged
-    /// commit the default branch no longer holds is refused by name.
+    /// commit the default branch no longer holds is refused by name. Run it again after a
+    /// refusal is put right: it seeds only the members it has not seeded yet.
     Revert {
         change: String,
         /// The workspace (default: the active one).
