@@ -2640,6 +2640,30 @@ h2.sidebar-title .node-icon {
   border-top: 1px solid var(--border-subtle);
 }
 
+/* The harness setup tab (FR-29): one row per harness, its installer's command on a line of
+   its own so it reads whole before Install runs it. */
+.harness-setup {
+  padding: 1rem;
+  max-width: 48rem;
+}
+
+.harness-setup-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.harness-setup-rows li {
+  padding: 0.5rem 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.harness-installer {
+  display: block;
+  margin: 0.35rem 0;
+  overflow-wrap: anywhere;
+}
+
 /* New project's two-directory form, under Advanced (FR-4). Closed by default, and a summary
    that looks pressable, as the refused profiles' is. */
 .advanced {

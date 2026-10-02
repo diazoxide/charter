@@ -215,6 +215,12 @@ export function FirstRun({
       {found && (
         <>
           <h2 id="first-run-found">On this machine</h2>
+          {found.harnesses.every((row) => !row.installed) && (
+            <p className="came-back">
+              No harness is installed on this machine. Once your repo is open, charter lists each
+              one with its own installer, which runs in a shell tab when you press Install.
+            </p>
+          )}
           <ul className="first-run-found" aria-labelledby="first-run-found">
             {found.harnesses.map((row) => (
               <li key={row.name}>

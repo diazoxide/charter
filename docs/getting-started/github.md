@@ -7,7 +7,9 @@ same steps for GitLab are in [Getting started with GitLab](gitlab.md).
 
 - A Mac with Apple Silicon, or a Linux machine on x86_64. There is no Windows build yet.
 - At least one harness, the coding agent a chat runs: Claude Code (`claude`), Codex or
-  opencode. Each one signs in with its own login, the first time a chat starts it.
+  opencode. Each one signs in with its own login, the first time a chat starts it. With none
+  installed, charter lists each one's official installer once your repo is open, and
+  **Install** runs it in a shell tab.
 - GitHub's own command-line tool, [`gh`](https://cli.github.com/), signed in with
   `gh auth login`. charter lists your repos, clones them and opens pull requests through `gh`,
   as you: it keeps no GitHub token of its own.

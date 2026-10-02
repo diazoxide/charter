@@ -608,13 +608,14 @@ function App() {
 
   /** What an opened repo puts in the window: its first chat, through the trust gate. */
   const openedRepo = useCallback((repo: OpenedRepo) => {
-    const { opened, workspace, cwd, harness, instructions } = repo;
+    const { opened, workspace, cwd, harness, none_installed, instructions } = repo;
     const plane = opened.plane;
     const ask = opened.ask;
     setFirstChat((was) => ({
       workspace,
       cwd,
       harness,
+      noneInstalled: none_installed,
       instructions,
       plane,
       asking: plane === null ? (ask?.path ?? null) : null,

@@ -689,3 +689,168 @@ describe("the repo's agent instructions", () => {
     expect(calls("import_instructions")).toHaveLength(1);
   });
 });
+
+/**
+ * FR-29 (W10): a machine with no harness. The first chat is a tab with each harness's official
+ * installer, run in a shell tab on a press; the harness's own login is its own first screen;
+ * and a local model server already on the machine is named as the way in with no account.
+ * Which installer, where it installs, and what counts as a local server are
+ * `charter_core::noharness`'s, tested there.
+ */
+describe("no harness found (FR-29)", () => {
+  const NOTHING = {
+    ...FOUND,
+    harnesses: [
+      {
+        name: "claude",
+        title: "Claude Code",
+        installed: false,
+        signed_in: false,
+        installer: "curl -fsSL https://claude.ai/install.sh | bash",
+        installer_page: "https://code.claude.com/docs/en/setup",
+      },
+      {
+        name: "codex",
+        title: "Codex",
+        installed: false,
+        signed_in: false,
+        installer: "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
+        installer_page: "https://github.com/openai/codex",
+      },
+      {
+        name: "opencode",
+        title: "opencode",
+        installed: false,
+        signed_in: false,
+        installer: "curl -fsSL https://opencode.ai/install | bash",
+        installer_page: "https://opencode.ai/docs/",
+      },
+    ],
+    local_models: [],
+  };
+
+  /** A machine with no harness: `found` is what the next look at it finds. */
+  function noHarness(found: () => unknown = () => NOTHING) {
+    return core((cmd) => {
+      if (cmd === "first_run_found") return found();
+      // The setup tab looks at harnesses and local models only, never the forge CLIs.
+      if (cmd === "harness_setup_found") {
+        const all = found() as typeof NOTHING;
+        return { harnesses: all.harnesses, local_models: all.local_models };
+      }
+      if (cmd === "start_options")
+        return {
+          ...START_OPTIONS,
+          profiles: [
+            ...START_OPTIONS.profiles,
+            { ...START_OPTIONS.profiles[0], name: "codex", kind: "codex", is_default: false },
+          ],
+        };
+      if (cmd === "open_repo")
+        return {
+          opened: {
+            opened: { plane: LOCAL, ask: null },
+            workspace: "widget",
+            cwd: CLONE,
+            harness: null,
+            none_installed: true,
+            instructions: 0,
+          },
+          asks_forge: null,
+        };
+      if (cmd === "open_session") return 7;
+      return undefined;
+    });
+  }
+
+  it("says on the first run that a harness is installed after the repo is open", async () => {
+    noHarness();
+    render(<App />);
+
+    expect(await screen.findByText(/No harness is installed on this machine/)).toBeInTheDocument();
+  });
+
+  it("reaches a working chat: the official installer in a shell tab, then the picker", async () => {
+    let installed = false;
+    const { calls } = noHarness(() =>
+      installed
+        ? {
+            ...NOTHING,
+            harnesses: [
+              NOTHING.harnesses[0],
+              { ...NOTHING.harnesses[1], installed: true },
+              NOTHING.harnesses[2],
+            ],
+          }
+        : NOTHING,
+    );
+    render(<App />);
+
+    const person = await openRepoByPath(REPO);
+
+    // Not the picker: there is nothing on this machine it could start.
+    const strip = await screen.findByRole("tablist", { name: "Tabs" });
+    const setup = await within(strip).findByRole("tab", { name: /Set up a harness · widget/ });
+    expect(setup).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByRole("dialog", { name: "Start a chat" })).not.toBeInTheDocument();
+    const pane = await screen.findByRole("region", { name: "Set up a harness · widget" });
+    expect(within(pane).getByRole("heading", { name: "No harness found" })).toBeInTheDocument();
+    // Each vendor's own command, shown before it is run.
+    expect(
+      within(pane).getByText("curl -fsSL https://claude.ai/install.sh | bash"),
+    ).toBeInTheDocument();
+    expect(calls("open_session")).toHaveLength(0);
+
+    await person.click(within(pane).getByRole("button", { name: "Install Codex" }));
+
+    // The core types its own compiled-in command (V65): the window names the harness, never
+    // the words, and nothing it sends is a runnable string.
+    await vi.waitFor(() => expect(calls("type_installer")).toHaveLength(1));
+    expect(calls("type_installer")[0].args).toEqual({ plane: LOCAL, session: 7, harness: "codex" });
+    expect(calls("send_input")).toHaveLength(0);
+    // At the project's root, not in the fresh clone, whose own shell hooks never run for it.
+    expect(calls("open_session")[0].args).toMatchObject({
+      plane: LOCAL,
+      program: null,
+      cwd: LOCAL,
+    });
+    const forgeLooks = calls("first_run_found").length;
+
+    // The installer finished in its shell; the operator comes back and looks again.
+    installed = true;
+    await person.click(within(strip).getByRole("tab", { name: /Set up a harness · widget/ }));
+    const back = await screen.findByRole("region", { name: "Set up a harness · widget" });
+    await person.click(within(back).getByRole("button", { name: "Check again" }));
+    await person.click(await within(back).findByRole("button", { name: "Start a chat" }));
+    expect(calls("first_run_found")).toHaveLength(forgeLooks);
+
+    // The picker, as every chat's start (ADR 0022), on the harness just installed: its own
+    // login is its first screen.
+    const picker = await screen.findByRole("dialog", { name: "Start a chat" });
+    await person.click(within(picker).getByRole("button", { name: "Start" }));
+    await vi.waitFor(() => expect(calls("start_chat")).toHaveLength(1));
+    expect(calls("start_chat")[0].args).toMatchObject({
+      plane: LOCAL,
+      cwd: CLONE,
+      profile: "codex",
+    });
+  });
+
+  it("names a local model server already on the machine as the way in with no account", async () => {
+    noHarness(() => ({
+      ...NOTHING,
+      local_models: [
+        { title: "Ollama", base_url: "http://127.0.0.1:11434/v1", harness: "opencode" },
+      ],
+    }));
+    render(<App />);
+
+    await openRepoByPath(REPO);
+
+    const pane = await screen.findByRole("region", { name: "Set up a harness · widget" });
+    const local = await within(pane).findByRole("heading", { name: "A model on this machine" });
+    expect(local.parentElement).toHaveTextContent(/Ollama is running on this machine/);
+    expect(local.parentElement).toHaveTextContent("http://127.0.0.1:11434/v1");
+    expect(local.parentElement).toHaveTextContent(/opencode/);
+  });
+});

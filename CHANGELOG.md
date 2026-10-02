@@ -27,6 +27,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   chat starts with the first one's lesson in its briefing, whichever harness it runs on. **Show its
   diff** opens a shell in that chat's branch with its diff. Nothing is written into your repo, and
   the task asks for nothing to be pushed (FR-28, #621).
+- **No harness found.** On a machine with no Claude Code, Codex or opencode, opening your repo
+  on the first run opens a **Set up a harness** tab instead of the chat picker. It lists each
+  harness with its vendor's own install command, and **Install** runs exactly that command in
+  a shell tab at the project's root. Each installer puts its harness where charter looks, so **Check
+  again** finds it without a restart, and **Start a chat** opens the picker on it; the harness asks
+  for its own login when its chat starts. If Ollama or LM Studio is already answering on this
+  machine, the tab says so and names opencode as the harness that can use it with no account.
 
 - **Read any file of a worktree in charter.** A worktree's menu in the explorer has *Browse the
   files of …*: a tab listing the worktree's files, narrowed as you type, with the file you pick
