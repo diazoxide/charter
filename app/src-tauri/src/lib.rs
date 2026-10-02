@@ -40,6 +40,7 @@ mod killswitch;
 mod lifecycle;
 mod live;
 mod memories;
+mod off_the_main_thread;
 mod opener;
 mod panels;
 mod panics;
@@ -608,10 +609,35 @@ struct Sidebar {
 /// from the sessions. What files one under a workspace is the directory it works in, because
 /// nothing on the plane records a chat: `.charter/frame/` belongs to the tmux frame and the
 /// app stays out of it.
+///
+/// On a blocking thread and never the one that draws: it reads every workspace's todos, and a
+/// plane with dozens of workspaces would hold the window while it did (SC-2).
 #[tauri::command]
 #[specta::specta]
-fn plane_sidebar(planes: tauri::State<'_, Planes>, plane: PlaneId) -> Result<Sidebar, String> {
+async fn plane_sidebar(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+) -> Result<Sidebar, String> {
+    // Resolved here, so a plane that is not open refuses here; the blocking half carries the
+    // plane's own handle, which outlives the registry's lock.
     let held = planes.held(&plane)?;
+    off_the_window("reading the sidebar", move || sidebar_of(&held)).await
+}
+
+/// Runs `read` on a blocking thread, so a command that walks the plane's files never holds the
+/// thread that draws the window (SC-2). `what` names it in the one failure this adds: the
+/// thread ending without an answer.
+async fn off_the_window<T: Send + 'static>(
+    what: &str,
+    read: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(read)
+        .await
+        .map_err(|err| format!("{what} did not finish: {err}"))?
+}
+
+/// The sidebar of the plane `held`, read off disk.
+fn sidebar_of(held: &planes::Held) -> Result<Sidebar, String> {
     let root = held.root();
     let on_disk = charter_core::workspaces::Plane::open(root);
     let live = charter_core::wscmd::live_workspaces(root);
@@ -677,26 +703,36 @@ fn plane_sidebar(planes: tauri::State<'_, Planes>, plane: PlaneId) -> Result<Sid
 /// process's working directory — `plane::resolve`, the singleton ADR 0034 removed — so a
 /// window showing a project the launch had not opened drew the workspaces of the one it had.
 /// A workspace name means nothing without its project; two projects can both have an `alpha`.
+///
+/// On a blocking thread: it reads every todo, memory and session record of the workspace.
 #[tauri::command]
 #[specta::specta]
-fn workspace_panels(
+async fn workspace_panels(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
     workspace: String,
 ) -> Result<panels::Panels, String> {
-    panels::of(planes.held(&plane)?.root(), &workspace)
+    let root = planes.held(&plane)?.root().to_path_buf();
+    off_the_window("reading the workspace's panels", move || {
+        panels::of(&root, &workspace)
+    })
+    .await
 }
 
 /// The plane root's panels (SI-1, SI-8d): its session records, as the Sessions panel draws them.
 /// A command of its own because the plane root is not a workspace, and `workspace_panels` asks
-/// for one by name.
+/// for one by name. On a blocking thread, as it reads every record.
 #[tauri::command]
 #[specta::specta]
-fn plane_root_panels(
+async fn plane_root_panels(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
 ) -> Result<panels::PlaneRootPanels, String> {
-    Ok(panels::plane_root(planes.held(&plane)?.root()))
+    let root = planes.held(&plane)?.root().to_path_buf();
+    off_the_window("reading the project's sessions", move || {
+        Ok(panels::plane_root(&root))
+    })
+    .await
 }
 
 /// One session record, for its view tab (SI-8d): its facts and its text, read by its

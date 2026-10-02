@@ -239,18 +239,24 @@ fn now() -> chrono::NaiveDateTime {
     chrono::Local::now().naive_local()
 }
 
+/// What a memory command says when its blocking thread ended without an answer. Every one of
+/// them runs on such a thread: finding a memory by its slug lists its store, and a store holds
+/// thousands (SC-2).
+const READING: &str = "reading the memory";
+const WRITING: &str = "writing the memory";
+
 /// One memory, for its tab. `null` is a memory that is not there any more — a tab put back at a
 /// launch can name one archived since — which the tab draws as a view whose source has gone.
 #[tauri::command]
 #[specta::specta]
-pub fn memory_read(
+pub async fn memory_read(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
     scope: MemoryScope,
     slug: String,
 ) -> Result<Option<MemoryView>, String> {
     let root = planes.held(&plane)?.root().to_path_buf();
-    read(&root, &scope, &slug)
+    crate::off_the_window(READING, move || read(&root, &scope, &slug)).await
 }
 
 fn read(root: &Path, scope: &MemoryScope, slug: &str) -> Result<Option<MemoryView>, String> {
@@ -266,7 +272,7 @@ fn read(root: &Path, scope: &MemoryScope, slug: &str) -> Result<Option<MemoryVie
 #[tauri::command]
 #[specta::specta]
 #[allow(clippy::too_many_arguments)]
-pub fn memory_edit(
+pub async fn memory_edit(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
     scope: MemoryScope,
@@ -277,7 +283,10 @@ pub fn memory_edit(
     overwrite: bool,
 ) -> Result<MemoryEdited, String> {
     let root = planes.held(&plane)?.root().to_path_buf();
-    edit(&root, &scope, &slug, &title, &text, &read, overwrite)
+    crate::off_the_window(WRITING, move || {
+        edit(&root, &scope, &slug, &title, &text, &read, overwrite)
+    })
+    .await
 }
 
 fn edit(
@@ -310,14 +319,14 @@ fn edit(
 /// What it answers is what Undo hands back to `memory_unarchive`.
 #[tauri::command]
 #[specta::specta]
-pub fn memory_archive(
+pub async fn memory_archive(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
     scope: MemoryScope,
     slug: String,
 ) -> Result<MemoryArchived, String> {
     let root = planes.held(&plane)?.root().to_path_buf();
-    archive(&root, &scope, &slug)
+    crate::off_the_window(WRITING, move || archive(&root, &scope, &slug)).await
 }
 
 fn archive(root: &Path, scope: &MemoryScope, slug: &str) -> Result<MemoryArchived, String> {
@@ -334,7 +343,7 @@ fn archive(root: &Path, scope: &MemoryScope, slug: &str) -> Result<MemoryArchive
 /// its index line is appended. The memory as it is back.
 #[tauri::command]
 #[specta::specta]
-pub fn memory_unarchive(
+pub async fn memory_unarchive(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
     scope: MemoryScope,
@@ -342,7 +351,10 @@ pub fn memory_unarchive(
     restore_as: Option<String>,
 ) -> Result<MemoryView, String> {
     let root = planes.held(&plane)?.root().to_path_buf();
-    unarchive(&root, &scope, &archived, restore_as.as_deref())
+    crate::off_the_window(WRITING, move || {
+        unarchive(&root, &scope, &archived, restore_as.as_deref())
+    })
+    .await
 }
 
 fn unarchive(
@@ -363,7 +375,7 @@ fn unarchive(
 /// writes. An empty `title` is the text's first line.
 #[tauri::command]
 #[specta::specta]
-pub fn memory_create(
+pub async fn memory_create(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
     scope: MemoryScope,
@@ -371,7 +383,7 @@ pub fn memory_create(
     text: String,
 ) -> Result<MemoryView, String> {
     let root = planes.held(&plane)?.root().to_path_buf();
-    create(&root, &scope, &title, &text, now())
+    crate::off_the_window(WRITING, move || create(&root, &scope, &title, &text, now())).await
 }
 
 fn create(

@@ -332,6 +332,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Files an earlier version wrote under a hostname are still read; a later migration renames them
   (FD-25, #662).
 
+- **The window no longer waits on the project's files.** The sidebar, a workspace's panels,
+  the project root's session records, the Curate menu and every memory read or edit are read
+  off the thread that draws the window. On a project with sixty workspaces and a thousand
+  memories, a workspace's panels used to hold the window for about 45 ms per read and the
+  sidebar for about 27 ms; now each holds it for about 10 µs. A terminal's resize and watch stay
+  where they were, so they keep their order (SC-2, #680).
+
 - **Fewer redraws when switching projects.** A project's tab strip comes back at the width it
   had instead of drawing every tab and then folding them away, the palette closes in the same
   frame as the switch, and the project's theme and its repos' save standing are drawn from what
