@@ -10,7 +10,8 @@
 //! - on its first look, pushes what the last run left committed and unpushed (the launch);
 //! - every [`FETCH_EVERY`], and when the window asks ([`Poke::Fetch`]), fetches the target
 //!   branch — and fast-forwards a clean tree onto it only while auto-save is on;
-//! - and after any of these that did something, tells the window the plane changed.
+//! - and after any of these that did something, tells the window what moved: the git standing,
+//!   or everything when it moved the tree ([`what_it_did`]).
 //!
 //! Saving at quit is not the worker's: the app is exiting, so [`at_quit`] runs it bounded,
 //! for every held plane at once.
@@ -115,7 +116,7 @@ impl Worker {
                     &poked,
                     &stopping,
                     &mid_turn,
-                    &|| changed(plane.clone(), None),
+                    &|moved| changed(plane.clone(), what_it_did(moved)),
                     &told,
                 );
             });
@@ -145,13 +146,58 @@ impl Worker {
     }
 }
 
+/// What a look that did something tells the window moved (#933).
+///
+/// **The git standing alone, when the tree did not move:** a commit takes what is already on
+/// disk, a push and a fetch that brought nothing in move only refs, and only the git readers
+/// read again.
+///
+/// **Everything, when it moved the tree** (`moved`): a fetch that fast-forwarded, a save that
+/// rebased onto the remote. The watch would tell the files it moved only where it watches —
+/// it is not recursive, and a project it could not watch has none — so not knowing is said.
+fn what_it_did(moved: bool) -> crate::planewatch::What {
+    (!moved).then(|| vec![charter_core::planechange::saved()])
+}
+
+/// `HEAD` of the repository at `dir`, or `None` where it cannot be read.
+fn head_of(dir: &Path) -> Option<String> {
+    let read = charter_core::worktree::git::run(
+        dir,
+        &["rev-parse", "--verify", "-q", "HEAD"],
+        charter_core::worktree::git::READ,
+    )
+    .ok()?;
+    read.ok().then(|| read.line().trim().to_owned())
+}
+
+/// Whether a save moved the tree at `dir` beyond the commit it made of it: `HEAD` is neither
+/// where it was (`before`) nor one commit on top of it, which is what a rebase onto commits
+/// from the remote leaves. A head that cannot be read is not known, and so is told as moved.
+fn tree_moved(dir: &Path, before: Option<&str>) -> bool {
+    let (Some(before), Some(after)) = (before, head_of(dir)) else {
+        return true;
+    };
+    if after == before {
+        return false;
+    }
+    let parent = charter_core::worktree::git::run(
+        dir,
+        &["rev-parse", "--verify", "-q", "HEAD^"],
+        charter_core::worktree::git::READ,
+    )
+    .ok()
+    .filter(|read| read.ok())
+    .map(|read| read.line().trim().to_owned());
+    parent.as_deref() != Some(before)
+}
+
 /// The loop: a look every [`LOOK_EVERY`] or at a poke, until the worker is dropped.
 fn run(
     root: &Path,
     poked: &Receiver<Poke>,
     stop: &AtomicBool,
     mid_turn: &dyn Fn(&str) -> Vec<String>,
-    tell: &dyn Fn(),
+    tell: &dyn Fn(bool),
     saved: &dyn Fn(),
 ) {
     let mut state = State::default();
@@ -164,7 +210,7 @@ fn run(
         let plane = state.look(root, now, poke);
         let repos = state.look_at_repos(root, now, poke, mid_turn);
         if plane || repos {
-            tell();
+            tell(std::mem::take(&mut state.moved_tree));
         }
         if std::mem::take(&mut state.saved) {
             saved();
@@ -185,6 +231,9 @@ struct State {
     fetched: Option<Instant>,
     /// The last look saved the plane, and nobody has been told yet.
     saved: bool,
+    /// A look since the window was last told moved the tree under the plane or a repo — a
+    /// fast-forward, a save's rebase — and the window is told everything ([`what_it_did`]).
+    moved_tree: bool,
     /// Each auto-saved repo's quiet period, by its clone's path.
     repos: HashMap<PathBuf, Quiet>,
     repos_launched: bool,
@@ -211,6 +260,7 @@ impl State {
             self.fetched = Some(now);
             if let Ok(incoming) = planegit::fetch(root, autosave::on(&plane)) {
                 did |= incoming.behind > 0;
+                self.moved_tree |= incoming.moved;
             }
         }
         // Off: what came in is still fetched and shown, and nothing else costs a git process.
@@ -242,7 +292,9 @@ impl State {
         });
         if let Some(trigger) = trigger {
             // A refusal is in the journal, in its own words; the stage says blocked.
+            let before = head_of(root);
             self.saved = crate::saving::save_as(root, None, trigger).is_ok();
+            self.moved_tree |= tree_moved(root, before.as_deref());
             did = true;
         }
         did
@@ -333,6 +385,7 @@ impl State {
                 });
                 if let Some(trigger) = trigger {
                     // A refusal is in the journal, in its own words; the row says blocked.
+                    let before = head_of(&repo.path);
                     let _ = reposave::save_as(
                         &reposave::Request {
                             plane: root,
@@ -347,6 +400,7 @@ impl State {
                         trigger,
                         &mut |_| {},
                     );
+                    self.moved_tree |= tree_moved(&repo.path, before.as_deref());
                     did = true;
                 }
             }
@@ -457,6 +511,80 @@ impl Worker {
 mod tests {
     use super::*;
     use std::process::Command;
+
+    fn answers_of(what: crate::planewatch::What) -> Option<Vec<crate::planewatch::PlaneAnswer>> {
+        crate::planewatch::PlaneChanged::of(
+            serde_json::from_value(serde_json::json!("/home/dev/plane")).expect("an id"),
+            what,
+        )
+        .answers
+    }
+
+    #[test]
+    fn a_look_that_left_the_tree_alone_tells_the_git_standings_alone() {
+        // #933: a commit, a push or a fetch that brought nothing in moved the git standing
+        // and no file, and used to be told as "anything may have moved".
+        assert_eq!(
+            answers_of(what_it_did(false)),
+            Some(vec![crate::planewatch::PlaneAnswer::Git])
+        );
+    }
+
+    #[test]
+    fn a_look_that_moved_the_tree_tells_every_reader() {
+        // A fetch that fast-forwarded, a save that rebased: files moved that the watch does
+        // not see (it is not recursive) or that nobody watches at all.
+        assert_eq!(answers_of(what_it_did(true)), None);
+    }
+
+    #[test]
+    fn a_save_that_commits_the_tree_as_it_was_has_not_moved_it() {
+        let dir = plane("[plane]\nmode = \"commit\"\n");
+        let mut state = State::default();
+        let at = Instant::now();
+        state.look(dir.path(), at, None);
+        std::fs::write(dir.path().join("note.md"), "n").unwrap();
+
+        assert!(state.look(
+            dir.path(),
+            at + Duration::from_secs(1),
+            Some(Poke::SessionEnded)
+        ));
+
+        assert_eq!(commits(dir.path()), 1);
+        assert!(
+            !state.moved_tree,
+            "a commit of the tree as it was moved nothing"
+        );
+    }
+
+    #[test]
+    fn a_head_that_moved_past_the_saves_own_commit_moved_the_tree() {
+        let dir = plane("[plane]\nmode = \"commit\"\n");
+        let root = dir.path();
+        let before = head_of(root);
+        assert!(!tree_moved(root, before.as_deref()), "nothing happened");
+
+        git(
+            root,
+            &["commit", "-q", "--allow-empty", "-m", "the save's own"],
+        );
+        assert!(
+            !tree_moved(root, before.as_deref()),
+            "one commit on top is the save's"
+        );
+
+        // What a rebase onto the remote leaves: other commits under the save's own.
+        git(
+            root,
+            &["commit", "-q", "--allow-empty", "-m", "replayed on top"],
+        );
+        assert!(tree_moved(root, before.as_deref()));
+        assert!(
+            tree_moved(root, None),
+            "a head that could not be read is not known"
+        );
+    }
 
     fn git(dir: &Path, args: &[&str]) {
         let mut command = Command::new("git");

@@ -149,8 +149,12 @@ pub fn workspace_create(
     vision: Option<String>,
     live: bool,
 ) -> Result<Vec<String>, String> {
-    let root = planes.held(&plane)?.root().to_path_buf();
-    let mut said = create_in(&root, &name, vision.as_deref(), live)?;
+    let held = planes.held(&plane)?;
+    let root = held.root().to_path_buf();
+    let made = create_in(&root, &name, vision.as_deref(), live);
+    // The window reads the sidebar straight after, made or not (FD-10b).
+    held.workspaces_moved();
+    let mut said = made?;
     if live && let Some(not_saved) = crate::live::save_after(&root, &mut said) {
         said.push(not_saved);
     }
@@ -265,15 +269,14 @@ pub fn workspace_remove(
     workspace: String,
     force: bool,
 ) -> Result<Vec<String>, Refused> {
-    let root = planes
-        .held(&plane)
-        .map_err(|why| Refused {
-            said: why,
-            at_risk: Vec::new(),
-        })?
-        .root()
-        .to_path_buf();
+    let held = planes.held(&plane).map_err(|why| Refused {
+        said: why,
+        at_risk: Vec::new(),
+    })?;
+    let root = held.root().to_path_buf();
     let removed = remove_in(&root, &workspace, force);
+    // The window reads the sidebar straight after (FD-10b).
+    held.workspaces_moved();
     if removed.is_ok() {
         heard.tell(&app, plane, root, Event::WorkspaceRemoved { workspace });
     }
@@ -317,7 +320,10 @@ pub async fn workspace_rename(
     let held = planes.held(&plane)?;
     let config = planes.config().map(Path::to_path_buf);
     tauri::async_runtime::spawn_blocking(move || {
-        rename_in(&held, config.as_deref(), &workspace, &name)
+        let renamed = rename_in(&held, config.as_deref(), &workspace, &name);
+        // The window reads the sidebar straight after (FD-10b).
+        held.workspaces_moved();
+        renamed
     })
     .await
     .map_err(|err| format!("the rename did not finish: {err}"))?
