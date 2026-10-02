@@ -13,7 +13,7 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 # The runtime the host and the app already use, and its own codec and compat crates.
-tokio = { version = "1", features = ["io-std", "io-util", "macros", "net", "process", "rt", "sync", "time"] }
+tokio = { version = "1", features = ["io-std", "io-util", "macros", "net", "process", "rt", "rt-multi-thread", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["codec", "compat"] }
 futures = "0.3"
 bytes = "1"
