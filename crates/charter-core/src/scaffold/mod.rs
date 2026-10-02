@@ -472,6 +472,7 @@ pub fn init(place: &Place, args: &InitArgs) -> Outcome {
 
     ask_gate(&mut run, root, settings_ok, &HANDOFF_ASK, "init");
     ask_gate(&mut run, root, settings_ok, &REPORT_ASK, "init");
+    ask_gate(&mut run, root, settings_ok, &PROMOTE_ASK, "init");
 
     profile_approvals(&mut run, root);
 
@@ -604,6 +605,7 @@ pub fn reinit(place: &Place) -> Outcome {
     }
 
     ask_gate(&mut run, root, settings_ok, &REPORT_ASK, "reinit");
+    ask_gate(&mut run, root, settings_ok, &PROMOTE_ASK, "reinit");
 
     profile_approvals(&mut run, root);
 
@@ -858,11 +860,12 @@ pub const MERGE_RULES_END: &str = "# <<< charter merge rules <<<";
 
 /// The files a plane only ever grows by whole lines, merged by git's `union` driver so two
 /// machines appending to them never conflict (`docs/plane-format.md`, `.gitattributes`).
-const MERGE_RULES: [&str; 6] = [
+const MERGE_RULES: [&str; 7] = [
     "personas/_dispatch/*.jsonl merge=union",
     "personas/_skills/*.jsonl merge=union",
     "workspaces/*/pieces/*.jsonl merge=union",
     "workspaces/*/changes/log/*.jsonl merge=union",
+    "workspaces/*/work/*.jsonl merge=union",
     "personas/*/memory/MEMORY.md merge=union",
     "workspaces/*/memory/MEMORY.md merge=union",
 ];
@@ -1037,6 +1040,14 @@ const REPORT_ASK: AskRule = AskRule {
     label: "charter report --yes",
     rule: settings::REPORT_RULE,
     pattern: settings::REPORT_PATTERN,
+};
+
+/// The consent rule for promoting a todo to an issue (V42, ADR 0088 §5): the harness asks the
+/// operator before `charter ws todo promote` sends a todo's title and text to a forge.
+const PROMOTE_ASK: AskRule = AskRule {
+    label: "charter ws todo promote",
+    rule: settings::PROMOTE_RULE,
+    pattern: settings::PROMOTE_PATTERN,
 };
 
 /// `commands.ensure_handoff_gate`, for any of charter's default ask rules: the rule in every
@@ -1918,9 +1929,10 @@ mod tests {
 
         let settings_item = if guard_created {
             ".claude/settings.json (env, ask: charter handoff, ask: charter report --yes, \
-             plane-root guard)"
+             ask: charter ws todo promote, plane-root guard)"
         } else {
-            ".claude/settings.json (env, ask: charter handoff, ask: charter report --yes)"
+            ".claude/settings.json (env, ask: charter handoff, ask: charter report --yes, ask: charter \
+             ws todo promote)"
         };
         let mut said = vec![
             Say::Ok("Initialized control plane (schema 1) — 9 item(s) written.".to_owned()),
@@ -1932,7 +1944,9 @@ mod tests {
             Say::Info("  + .gitattributes (merge rules)".to_owned()),
             Say::Info(format!("  + {settings_item}")),
             Say::Info(
-                "  + opencode.json (ask: charter handoff, ask: charter report --yes)".to_owned(),
+                "  + opencode.json (ask: charter handoff, ask: charter report --yes, ask: charter ws \
+                 todo promote)"
+                    .to_owned(),
             ),
             Say::Info("  + personas/steward/ (front door, declared in charter.toml)".to_owned()),
         ];
@@ -1975,8 +1989,9 @@ mod tests {
                      .claude/settings.json (ask: \
                      charter handoff), opencode.json (ask: charter handoff), \
                      .claude/settings.json (ask: charter report --yes), opencode.json (ask: \
-                     charter report --yes), .claude/settings.json (plane-root guard already \
-                     wired)"
+                     charter report --yes), .claude/settings.json (ask: charter ws todo \
+                     promote), opencode.json (ask: charter ws todo promote), \
+                     .claude/settings.json (plane-root guard already wired)"
                         .to_owned()
                 ),
                 Say::Info(NEXT.to_owned()),
@@ -2248,8 +2263,9 @@ mod tests {
                            .gitattributes (merge rules), .claude/settings.json (env), \
                            .claude/settings.json (ask: charter handoff), opencode.json (ask: \
                            charter handoff), .claude/settings.json (ask: charter report --yes), \
-                           opencode.json (ask: charter report --yes), personas/steward/ (front \
-                           door, declared in charter.toml)"
+                           opencode.json (ask: charter report --yes), .claude/settings.json \
+                           (ask: charter ws todo promote), opencode.json (ask: charter ws todo \
+                           promote), personas/steward/ (front door, declared in charter.toml)"
             .to_owned();
         let mut present = "workspaces/".to_owned();
         if guard_created {
@@ -2740,7 +2756,8 @@ mod tests {
         let mut added = "personas/, inventory/, workspaces/, .gitignore (/charter.local.toml), \
                          .gitignore (/sessions/), .gitattributes (merge rules), .claude/settings.json (env), \
                          .claude/settings.json (ask: charter report --yes), opencode.json (ask: \
-                         charter report --yes)"
+                         charter report --yes), .claude/settings.json (ask: charter ws todo \
+                         promote), opencode.json (ask: charter ws todo promote)"
             .to_owned();
         let mut said = Vec::new();
         if guard_created {
@@ -2772,7 +2789,8 @@ mod tests {
             "workspaces/, .gitignore (/charter.local.toml), .gitignore (/sessions/), \
              .gitattributes (merge rules), \
              .claude/settings.json (env), .claude/settings.json (ask: charter report --yes), \
-             opencode.json (ask: charter report --yes)"
+             opencode.json (ask: charter report --yes), .claude/settings.json (ask: charter ws \
+             todo promote), opencode.json (ask: charter ws todo promote)"
                 .to_owned();
         let mut present = "personas/".to_owned();
         if guard_created {
@@ -3509,12 +3527,69 @@ mod report_ask_tests {
         assert_eq!(outcome.code, 0, "{:?}", outcome.said);
         assert_eq!(
             read(&root.join(settings::SETTINGS))["permissions"]["ask"],
-            json!(["Bash(charter handoff *)", "Bash(charter report *--yes*)"])
+            json!([
+                "Bash(charter handoff *)",
+                "Bash(charter report *--yes*)",
+                "Bash(charter *todo*promote*)"
+            ])
         );
         assert_eq!(
             read(&root.join(settings::OPENCODE))["permission"]["bash"],
-            json!({"charter handoff *": "ask", "charter report *--yes*": "ask"})
+            json!({"charter handoff *": "ask", "charter report *--yes*": "ask",
+                   "charter *todo*promote*": "ask"})
         );
+    }
+
+    /// V42: `charter ws todo promote` sends a todo's text to a forge, so both harnesses ask
+    /// first, whatever the call's spelling or the order of its flags.
+    #[test]
+    fn every_spelling_of_a_todo_promote_asks_in_both_harnesses_and_no_other_todo_does() {
+        let (_d, root) = plane();
+        let outcome = init(&place(&root, false), &args());
+        assert_eq!(outcome.code, 0, "{:?}", outcome.said);
+        let claude = read(&root.join(settings::SETTINGS))["permissions"]["ask"].clone();
+        let opencode = read(&root.join(settings::OPENCODE))["permission"]["bash"].clone();
+        let claude_asks = |command: &str| {
+            claude.as_array().unwrap().iter().any(|rule| {
+                rule.as_str()
+                    .and_then(|r| r.strip_prefix("Bash(")?.strip_suffix(')'))
+                    .and_then(|p| glob::Pattern::new(p).ok())
+                    .is_some_and(|p| p.matches(command))
+            })
+        };
+        // opencode: the last rule that matches decides.
+        let opencode_asks = |command: &str| {
+            opencode
+                .as_object()
+                .unwrap()
+                .iter()
+                .rfind(|(p, _)| glob::Pattern::new(p).is_ok_and(|p| p.matches(command)))
+                .is_some_and(|(_, decision)| decision == "ask")
+        };
+        for promote in [
+            "charter ws todo promote port-the-picker",
+            "charter ws todo promote port-the-picker --repo api",
+            "charter ws todo -w alpha promote port-the-picker",
+            "charter ws -w alpha todo promote port-the-picker --repo api",
+            "charter workspace todo promote port-the-picker",
+            "charter workspace todo --workspace alpha promote port-the-picker --repo api",
+        ] {
+            assert!(
+                claude_asks(promote),
+                "Claude Code does not ask for {promote:?}: {claude}"
+            );
+            assert!(
+                opencode_asks(promote),
+                "opencode does not ask for {promote:?}: {opencode}"
+            );
+        }
+        for other in [
+            "charter ws todo done port-the-picker",
+            "charter ws todo -w alpha",
+        ] {
+            assert!(!claude_asks(other), "{other:?}");
+            assert!(!opencode_asks(other), "{other:?}");
+        }
     }
 
     #[test]
@@ -3550,14 +3625,16 @@ mod report_ask_tests {
             json!([
                 "Bash(charter handoff *)",
                 "Bash(terraform *)",
-                "Bash(charter report *--yes*)"
+                "Bash(charter report *--yes*)",
+                "Bash(charter *todo*promote*)"
             ])
         );
         assert_eq!(claude["permissions"]["allow"], json!(["Bash(ls *)"]));
         assert_eq!(claude["permissions"]["deny"], json!(["Bash(rm -rf *)"]));
         assert_eq!(
             read(&root.join(settings::OPENCODE))["permission"]["bash"],
-            json!({"charter handoff *": "ask", "ls *": "allow", "charter report *--yes*": "ask"})
+            json!({"charter handoff *": "ask", "ls *": "allow", "charter report *--yes*": "ask",
+                   "charter *todo*promote*": "ask"})
         );
 
         // Once it is there, `reinit` has nothing to add and does not mention it.

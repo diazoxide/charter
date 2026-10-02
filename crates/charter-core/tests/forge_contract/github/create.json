@@ -1,0 +1,40 @@
+{
+  "source": "GitHub REST API version 2022-11-28, docs.github.com/en/rest, issues: Create an issue",
+  "exchanges": [
+    {
+      "call": {
+        "endpoint": {
+          "rest": {
+            "method": "POST",
+            "path": "repos/acme/api/issues"
+          }
+        },
+        "fields": [
+          {
+            "text": [
+              "title",
+              "Port the picker"
+            ]
+          },
+          {
+            "text": [
+              "body",
+              "What the todo said.\n\nSecond paragraph."
+            ]
+          },
+          {
+            "text": [
+              "labels[]",
+              "ws:alpha"
+            ]
+          }
+        ]
+      },
+      "reply": {
+        "code": 0,
+        "out": "{\"id\": 1012, \"node_id\": \"I_kwDOAcme12\", \"number\": 12, \"title\": \"Port the picker\", \"body\": \"What the todo said.\\n\\nSecond paragraph.\", \"state\": \"open\", \"html_url\": \"https://github.com/acme/api/issues/12\", \"labels\": [{\"name\": \"ws:alpha\"}]}",
+        "err": ""
+      }
+    }
+  ]
+}

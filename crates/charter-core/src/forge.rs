@@ -48,7 +48,7 @@ pub mod transport;
 
 pub use backend::{
     Account, Caller, Capabilities, Capability, ForgeBackend, ForgeRef, Owner, Principal, Priority,
-    Reach, RepoRecord, Repos, Requests, Support, Surface,
+    Reach, RepoRecord, Repos, Requests, Support, Surface, WorkItems,
 };
 
 /// The best-effort budget: an auth check. Python's `base.STATUS_TIMEOUT`.

@@ -5,8 +5,8 @@
 use serde_json::Value;
 
 use super::backend::{
-    Asker, Caller, Capabilities, Capability, Owner, Reach, Reason, RepoRecord, Repos, Requests,
-    Support, Unavailable, UnknownWhy,
+    About, Asker, Caller, Capabilities, Capability, ForgeRef, Issues, NewWorkItem, Owner, Reach,
+    Reason, RepoRecord, Repos, Requests, Support, Unavailable, UnknownWhy, Visibility, WorkItems,
 };
 use super::checks::{self, Checks};
 use super::pr::{
@@ -331,6 +331,79 @@ impl Repos for GitHub {
                     .collect()
             })
             .unwrap_or_default())
+    }
+
+    fn about(&self, caller: &Caller, path: &str) -> Result<About, ForgeError> {
+        let (owner, name) = owner_name(path);
+        let api = format!("repos/{}/{}", quote(owner), quote(name));
+        let doing = format!("reading {path}");
+        let repo = self.0.ask(caller, &Call::get(&api, LIST_TIMEOUT), &doing)?;
+        // `visibility` names `internal` too; a reply without it still says `private`.
+        let visibility = match repo["visibility"].as_str() {
+            Some(word) => Visibility::parse(word),
+            None => repo["private"].as_bool().map(|private| {
+                if private {
+                    Visibility::Private
+                } else {
+                    Visibility::Public
+                }
+            }),
+        }
+        .ok_or_else(|| ForgeError::new(format!("{doing}: GitHub named no visibility")))?;
+        // Anyone who can read a repo can open an issue in it, unless its issues are off. A
+        // `permissions` block that denies reading is the account's own answer.
+        let issues = if repo["archived"].as_bool() == Some(true) {
+            Issues::Archived
+        } else if repo["has_issues"].as_bool() == Some(false) {
+            Issues::Off
+        } else if repo["permissions"]["pull"].as_bool() == Some(false) {
+            Issues::NoRight
+        } else {
+            Issues::Open
+        };
+        Ok(About { visibility, issues })
+    }
+}
+
+impl WorkItems for GitHub {
+    fn create(
+        &self,
+        caller: &Caller,
+        path: &str,
+        new: &NewWorkItem,
+    ) -> Result<crate::work::WorkItem, ForgeError> {
+        let issue = self.create_issue(
+            caller,
+            path,
+            &work::NewIssue {
+                title: new.title.clone(),
+                body: Some(new.body.clone()),
+                labels: new
+                    .workspace_label
+                    .iter()
+                    .map(|ws| super::backend::workspace_label(Kind::GitHub, ws))
+                    .collect(),
+                ..work::NewIssue::default()
+            },
+        )?;
+        let doing = format!("opening an issue in {path}");
+        let unnamed = || {
+            ForgeError::new(format!(
+                "{doing}: GitHub's answer names no page charter can key the issue by: {}",
+                issue.html_url
+            ))
+        };
+        let (host, parts) = crate::work::key::page_of(&issue.html_url).ok_or_else(unnamed)?;
+        let [owner, repo, ..] = parts.as_slice() else {
+            return Err(unnamed());
+        };
+        let key = crate::work::TrackerKey::github(&host, &format!("{owner}/{repo}"), issue.number)
+            .map_err(|why| ForgeError::new(format!("{doing}: {why}")))?;
+        Ok(crate::work::WorkItem {
+            key,
+            forge_ref: Some(ForgeRef(issue.node_id.clone())),
+            url: issue.html_url,
+        })
     }
 }
 

@@ -782,6 +782,7 @@ key refuses.
   personas/_skills/*.jsonl merge=union
   workspaces/*/pieces/*.jsonl merge=union
   workspaces/*/changes/log/*.jsonl merge=union
+  workspaces/*/work/*.jsonl merge=union
   personas/*/memory/MEMORY.md merge=union
   workspaces/*/memory/MEMORY.md merge=union
   ```
@@ -1354,25 +1355,40 @@ and an archived one is where `memstore.archive` would have put it (ADR 0065).
 ### `workspaces/<ws>/work/<device>.jsonl` — the work link log
 
 - **Format:** JSON Lines, one object per line, append-only, one file per device: `<device>` is
-  this device's id from the machine store (ADR 0066), never a hostname.
-- **Status:** **accepted, not yet written** ([ADR
+  this device's id from the machine store (ADR 0066), never a hostname. Each line is written
+  whole, in one write, so git's `union` driver always keeps whole lines.
+- **Status:** **written** ([ADR
   0088](adr/0088-a-work-items-identity-is-its-tracker-key-and-the-project-records-its-links.md),
-  V40). FW-5 (#732) writes it; nothing writes or reads it yet.
+  V40, FW-5 #732). Absent in a workspace nothing has linked or promoted.
 - **Tier:** Plane when LIVE, Clone state when LOCAL — committed with a LIVE workspace, as its todos are, because FI6's links must reach the operator's other devices; unlike the piece claim log and the landing log, which stay in their clone.
-- **Written by:** FW-5: a chat's link and unlink from the window and the host, a workspace's link
-  from the Work list, `charter ws todo promote` (a `promoted` alias), `workspace rename` (`renamed`
-  aliases) and the item cache, FW-7 (`moved` aliases).
-- **Read by:** the Work list and the board (FW-9), a chat's header, and anything that resolves a
-  tracker key through its aliases.
-- **Git:** committed when LIVE. With FW-5 the LIVE block gains `!/workspaces/<n>/work` and
-  `!/workspaces/<n>/work/**`, a LIVE workspace's staged paths gain `work`, and the
-  `.gitattributes` block gains `workspaces/*/work/*.jsonl merge=union`. `workspace fork` does not
-  copy it.
+- **Written by:** `charter_core::work::log` (`append`, and `append_alias`, which refuses an
+  alias that would close a cycle). Today its one writer is `charter ws todo promote` (a
+  `promoted` alias, `charter_core::work::promote`). The window's and the host's chat links, the
+  Work list's workspace links, `workspace rename`'s `renamed` aliases and the item cache's
+  `moved` aliases (FW-7) are **decided, not yet written**: the chat half waits on a copied
+  project's chat ids (FW-5 #732), and a project-root chat is refused a link (ADR 0088 §4).
+- **Read by:** `charter_core::work::log::fold`, for the Work list (`work::list::of`, which the
+  board, FW-9, will draw), `charter ws todo` (which finishes closing a promoted todo whose
+  close a crash cut short), and `charter doctor`'s `work links` row, shown only when there is
+  something to report: a todo a promote aliased but did not close, skipped lines (named by
+  file), or an alias cycle.
+- **Git:** committed when LIVE: the LIVE block holds `!/workspaces/<n>/work` and
+  `!/workspaces/<n>/work/**`, a LIVE workspace's staged paths hold `work`, and the
+  `.gitattributes` block holds `workspaces/*/work/*.jsonl merge=union`. Gitignored when LOCAL, by
+  `/workspaces/*/*`. `workspace fork` does not copy it.
 - **Encoding details:** each line is one of four closed key sets, `v` being `1` and `ts` UTC
-  ISO-8601 seconds; `item`, `from` and `to` are tracker keys (ADR 0088 §1) and `chat` a chat's
-  ULID. A line with any other key set, `op` or `cause` is skipped and counted in `doctor`.
-  Readers fold every file in `work/`, sorted by `ts`, then file name, then line. A line never
-  holds an item's title, body, labels, state or forge id, nor the local principal.
+  ISO-8601 seconds (`2026-10-02T08:12:00Z`); `item`, `from` and `to` are tracker keys (ADR 0088
+  §1) and `chat` a chat's ULID in its canonical spelling. A line with any other key set, `v`,
+  `op`, `cause` or `ts`, or a key or chat id that does not parse, is skipped and counted.
+  Readers fold every file in every workspace's `work/`, sorted by `ts`, then file name, then
+  line, a tie that leaves going to the workspace's name (ADR 0088's implementation erratum). A line never holds an item's title, body, labels, state or forge id, nor
+  the local principal.
+- **The fold:** every key is read through its aliases first; a cycle a merge made stops before
+  the first key it would repeat. A chat's link is its last chat link across every workspace's
+  log, ended by a later chat unlink naming the same item once both are resolved. A workspace's
+  items are its own links, less those a later unlink names, plus the item of each chat whose
+  current link its log wrote. Every directory and file is read through containment, and one
+  that resolves out of the project is not read.
 
 | Line | Keys | Meaning |
 |---|---|---|
@@ -3265,10 +3281,14 @@ same bound.
 (`charter/commands.py:1354`) is written verbatim; an `mcp__…` pattern with a wildcard or
 arguments raises `UnexpressibleRule` and nothing is written.
 
-**Default ask rules** (charter-app): `init` writes two, `Bash(charter handoff *)` and
-`Bash(charter report *--yes*)`. The second is new in charter-app (ADR 0059, amended
-2026-09-26), and `reinit` adds it to a plane that predates it. `opencode.json` gets the same
-two globs. A **project template** (FR-17) adds its stack's guard defaults the same way,
+**Default ask rules** (charter-app): `init` writes three, `Bash(charter handoff *)`,
+`Bash(charter report *--yes*)` and `Bash(charter *todo*promote*)`. The second is new in
+charter-app (ADR 0059, amended 2026-09-26), the third with `charter ws todo promote` (V42,
+ADR 0088 §5): `charter`, then `todo`, then `promote`, with anything between, so it holds for
+`ws` and `workspace` and for a `-w` or `--repo` on either side of the verb. `reinit` adds the
+second and third to a plane that predates them. `opencode.json` gets the same globs, each
+placed so that no allow or ask that matches the same command comes after it (opencode's last
+match wins). A **project template** (FR-17) adds its stack's guard defaults the same way,
 through `charter guard ask`'s writer (every harness with command permissions or none, then
 every workspace layer). Codex's command rules live in `CODEX_HOME` or a trusted project's `.codex/rules`, which charter does not write, so charter's own guard applies there:
 the commands that publish or deploy, such as `Bash(cargo publish *)` for Rust or

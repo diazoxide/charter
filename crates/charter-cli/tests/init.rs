@@ -223,12 +223,13 @@ fn init_in_an_empty_directory_leaves_exactly_the_plane_the_python_charter_leaves
         (
             ".claude/settings.json",
             r#""Bash(charter handoff *)"]"#,
-            r#""Bash(charter handoff *)","Bash(charter report *--yes*)"]"#,
+            r#""Bash(charter handoff *)","Bash(charter report *--yes*)","Bash(charter *todo*promote*)"]"#,
         ),
         (
             "opencode.json",
             "\"charter handoff *\": \"ask\"\n",
-            "\"charter handoff *\": \"ask\",\n      \"charter report *--yes*\": \"ask\"\n",
+            "\"charter handoff *\": \"ask\",\n      \"charter report *--yes*\": \"ask\",\n      \
+             \"charter *todo*promote*\": \"ask\"\n",
         ),
     ] {
         let Some(Node::File(python)) = want.get(Path::new(rel)) else {
@@ -250,6 +251,7 @@ personas/_dispatch/*.jsonl merge=union
 personas/_skills/*.jsonl merge=union
 workspaces/*/pieces/*.jsonl merge=union
 workspaces/*/changes/log/*.jsonl merge=union
+workspaces/*/work/*.jsonl merge=union
 personas/*/memory/MEMORY.md merge=union
 workspaces/*/memory/MEMORY.md merge=union
 # <<< charter merge rules <<<
@@ -289,13 +291,14 @@ fn a_file_already_at_every_path_init_writes_is_left_byte_for_byte() {
     scene.write(
         ".claude/settings.json",
         "{\n    \"env\": {\"CHARTER_HARNESS\": \"claude-code\"},\n    \"permissions\": {\"ask\": \
-         [\"Bash(charter handoff *)\", \"Bash(charter report *--yes*)\"]},\n    \"hooks\": {\"PreToolUse\": [{\"matcher\": \"Bash\", \
+         [\"Bash(charter handoff *)\", \"Bash(charter report *--yes*)\", \
+         \"Bash(charter *todo*promote*)\"]},\n    \"hooks\": {\"PreToolUse\": [{\"matcher\": \"Bash\", \
          \"hooks\": [{\"type\": \"command\", \"command\": \"charter hook pretooluse\"}]}]}\n}",
     );
     scene.write(
         "opencode.json",
         "{\"permission\": {\"bash\": {\"charter handoff *\": \"ask\", \"charter report *--yes*\": \
-         \"ask\"}}}",
+         \"ask\", \"charter *todo*promote*\": \"ask\"}}}",
     );
     scene.write("personas/ops/persona.md", "---\nname: ops\n---\n");
     scene.write("inventory/repos.json", "{}");

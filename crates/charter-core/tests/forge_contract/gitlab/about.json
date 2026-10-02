@@ -1,0 +1,21 @@
+{
+  "source": "GitLab 19.4 REST API docs (gitlab-org/gitlab 19-4-stable-ee, doc/api), projects.md: Get a single project (visibility, issues_enabled, issues_access_level, permissions)",
+  "exchanges": [
+    {
+      "call": {
+        "endpoint": {
+          "rest": {
+            "method": null,
+            "path": "projects/acme%2Fapi"
+          }
+        },
+        "fields": []
+      },
+      "reply": {
+        "code": 0,
+        "out": "{\"id\": 3, \"path_with_namespace\": \"acme/api\", \"visibility\": \"private\", \"issues_enabled\": true, \"issues_access_level\": \"enabled\", \"permissions\": {\"project_access\": {\"access_level\": 30}, \"group_access\": null}}",
+        "err": ""
+      }
+    }
+  ]
+}

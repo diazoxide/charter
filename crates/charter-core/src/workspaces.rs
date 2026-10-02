@@ -262,6 +262,11 @@ impl Workspace {
         &self.name
     }
 
+    /// The project this workspace belongs to.
+    pub fn plane_root(&self) -> &Path {
+        &self.plane_root
+    }
+
     pub fn dir(&self) -> &Path {
         &self.dir
     }

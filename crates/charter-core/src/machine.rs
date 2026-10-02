@@ -931,6 +931,15 @@ pub fn device_id(config_root: &Path) -> io::Result<String> {
         .ok_or_else(|| io::Error::other("the machine store kept no device id"))
 }
 
+/// This device's id, from the config home's machine store, minting it the first time: the one
+/// lookup a `charter` command makes for it. Refused, in words, where there is no config home or
+/// the store keeps none.
+pub fn this_device_id() -> Result<String, String> {
+    let config = config_root()
+        .ok_or_else(|| "there is no config home to keep this device's id in".to_string())?;
+    device_id(&config).map_err(|e| e.to_string())
+}
+
 /// The device off the file: an id that is not a ULID is no id, and the next ask mints one.
 fn device_of(raw: Option<&serde_json::Value>) -> Option<Device> {
     let raw = raw?;

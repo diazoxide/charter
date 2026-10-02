@@ -37,6 +37,7 @@ mod plugin;
 mod profiles;
 mod rules;
 pub(crate) mod session;
+mod work;
 
 /// Python's truthiness of a TOML value, for `crate::alerts`, which reads the same manifest
 /// sections through the same `(cfg.get(name) or {})` idiom.
@@ -369,6 +370,7 @@ impl Doctor {
         rows.extend(clones::hidden_agents_md(self));
         rows.push(deferred::row("workspace layer", deferred::WORKSPACE_LAYER));
         rows.push(changes::changes(self));
+        rows.extend(work::work_links(self));
         rows.push(inventory::inventory(self));
         rows.push(deferred::row("vaults", deferred::VAULTS));
         rows.push(deferred::row("vault registry", deferred::VAULTS));

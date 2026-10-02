@@ -1,0 +1,40 @@
+{
+  "source": "GitLab 19.4 REST API docs (gitlab-org/gitlab 19-4-stable-ee, doc/api), issues.md: New issue",
+  "exchanges": [
+    {
+      "call": {
+        "endpoint": {
+          "rest": {
+            "method": "POST",
+            "path": "projects/acme%2Fapi/issues"
+          }
+        },
+        "fields": [
+          {
+            "text": [
+              "title",
+              "Port the picker"
+            ]
+          },
+          {
+            "text": [
+              "description",
+              "What the todo said.\n\nSecond paragraph."
+            ]
+          },
+          {
+            "text": [
+              "labels",
+              "charter::ws::alpha"
+            ]
+          }
+        ]
+      },
+      "reply": {
+        "code": 0,
+        "out": "{\"id\": 84012, \"iid\": 12, \"project_id\": 3, \"title\": \"Port the picker\", \"description\": \"What the todo said.\\n\\nSecond paragraph.\", \"state\": \"opened\", \"labels\": [\"charter::ws::alpha\"], \"web_url\": \"https://gitlab.com/acme/api/-/issues/12\", \"references\": {\"short\": \"#12\", \"relative\": \"#12\", \"full\": \"acme/api#12\"}}",
+        "err": ""
+      }
+    }
+  ]
+}

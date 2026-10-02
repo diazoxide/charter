@@ -21,6 +21,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use charter_core::forge::backend::{About, Issues, NewWorkItem, Visibility};
 use charter_core::forge::checks::{Checks, Ci};
 use charter_core::forge::pr::{AutoMerge, MergeAs, MergedAt, Opened, Pr, Request, State};
 use charter_core::forge::recorded::Recorded;
@@ -38,8 +39,9 @@ const SHA: &str = "6dcb09b5b57875f334f61aebed695e2e4193db5e";
 const MERGE: &str = "e5bd3914e2e596debea16f433f57875b5b90bcd6";
 
 /// Every case, by the seam method it covers. The parity test compares this with the traits.
-const CASES: [&str; 16] = [
+const CASES: [&str; 18] = [
     "owned",
+    "about",
     "reachable",
     "top_level",
     "open_or_update",
@@ -55,6 +57,7 @@ const CASES: [&str; 16] = [
     "open_on_branch",
     "ci_word",
     "support",
+    "create",
 ];
 
 fn recordings() -> PathBuf {
@@ -185,6 +188,19 @@ mod cases {
             repos,
             [acme(kind, "1", "api", &[])],
             "only the declared owner's repos"
+        );
+        spent(&recorded);
+    }
+
+    pub fn about(kind: &str, how: How) {
+        let recorded = over(kind, "about", how);
+        let backend = &recorded.backend;
+        assert_eq!(
+            backend.about(&recorded.caller, "acme/api"),
+            Ok(About {
+                visibility: Visibility::Private,
+                issues: Issues::Open
+            })
         );
         spent(&recorded);
     }
@@ -414,6 +430,38 @@ mod cases {
         ));
         spent(&recorded);
     }
+
+    pub fn create(kind: &str, how: How) {
+        let recorded = over(kind, "create", how);
+        let backend = &recorded.backend;
+        let made = backend
+            .create(
+                &recorded.caller,
+                "acme/api",
+                &NewWorkItem {
+                    title: "Port the picker".into(),
+                    body: "What the todo said.\n\nSecond paragraph.".into(),
+                    workspace_label: Some("alpha".into()),
+                },
+            )
+            .unwrap();
+        let (key, forge_ref, url) = match kind {
+            "github" => (
+                "github:github.com/acme/api#12",
+                "I_kwDOAcme12",
+                "https://github.com/acme/api/issues/12",
+            ),
+            _ => (
+                "gitlab:gitlab.com/acme/api#12",
+                "84012",
+                "https://gitlab.com/acme/api/-/issues/12",
+            ),
+        };
+        assert_eq!(made.key.as_str(), key);
+        assert_eq!(made.forge_ref, Some(ForgeRef(forge_ref.into())));
+        assert_eq!(made.url, url);
+        spent(&recorded);
+    }
 }
 
 /// One module per forge, holding every case of [`CASES`].
@@ -500,6 +548,16 @@ macro_rules! contract {
                 charter_core::unsteered!();
                 super::cases::support(stringify!($forge), super::How::$how);
             }
+            #[test]
+            fn about_says_whether_the_repo_is_public_and_takes_issues() {
+                charter_core::unsteered!();
+                super::cases::about(stringify!($forge), super::How::$how);
+            }
+            #[test]
+            fn create_opens_an_issue_and_names_it_by_its_tracker_key_with_its_forge_ref_beside() {
+                charter_core::unsteered!();
+                super::cases::create(stringify!($forge), super::How::$how);
+            }
         }
     };
 }
@@ -530,7 +588,7 @@ fn every_method_of_the_seam_has_a_case_on_both_forges() {
     let source =
         std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/forge/backend.rs"))
             .unwrap();
-    let mut methods: Vec<String> = ["Repos", "Requests", "Capabilities"]
+    let mut methods: Vec<String> = ["Repos", "Requests", "Capabilities", "WorkItems"]
         .iter()
         .flat_map(|t| methods_of(&source, t))
         .collect();
@@ -697,6 +755,68 @@ mod gitlab_forks {
             Ok(None)
         );
         spent(&recorded);
+    }
+}
+
+/// Whether an account can open an issue, in each forge's own fields (`Repos::about`): GitHub's
+/// `has_issues` and `permissions.pull`, GitLab's `issues_access_level` and membership.
+mod who_can_open_an_issue {
+    use super::*;
+
+    fn about_of(kind: charter_core::forge::Kind, path: &str, out: Value) -> About {
+        let text = json!({"source": "GitHub REST 2022-11-28 repos.md; GitLab 19.4 projects.md",
+            "exchanges": [{"call": {"endpoint": {"rest": {"method": null, "path": path}},
+                                    "fields": []},
+                           "reply": {"code": 0, "out": out.to_string()}}]});
+        let recorded = Arc::new(Recorded::parse(&text.to_string()).unwrap());
+        let backend = Forge::default_of(kind).backend_over(recorded.clone());
+        let about = backend.about(&caller(), "acme/api").unwrap();
+        spent(&recorded);
+        about
+    }
+
+    #[test]
+    fn github_says_off_when_issues_are_off_and_no_right_when_it_may_not_read() {
+        charter_core::unsteered!();
+        let github = |out| about_of(charter_core::forge::Kind::GitHub, "repos/acme/api", out);
+        assert_eq!(
+            github(json!({"private": false, "has_issues": false})),
+            About {
+                visibility: Visibility::Public,
+                issues: Issues::Off
+            }
+        );
+        assert_eq!(
+            github(json!({"visibility": "internal", "permissions": {"pull": false}})).issues,
+            Issues::NoRight
+        );
+    }
+
+    #[test]
+    fn gitlab_says_no_right_for_members_only_issues_to_a_stranger() {
+        charter_core::unsteered!();
+        let gitlab = |out| {
+            about_of(
+                charter_core::forge::Kind::GitLab,
+                "projects/acme%2Fapi",
+                out,
+            )
+        };
+        let stranger = json!({"visibility": "public", "issues_access_level": "private",
+                              "permissions": {"project_access": null, "group_access": null}});
+        assert_eq!(gitlab(stranger).issues, Issues::NoRight);
+        let member = json!({"visibility": "internal", "issues_access_level": "private",
+                            "permissions": {"project_access": null,
+                                            "group_access": {"access_level": 10}}});
+        assert_eq!(
+            gitlab(member),
+            About {
+                visibility: Visibility::Internal,
+                issues: Issues::Open
+            }
+        );
+        let off = json!({"visibility": "private", "issues_access_level": "disabled"});
+        assert_eq!(gitlab(off).issues, Issues::Off);
     }
 }
 

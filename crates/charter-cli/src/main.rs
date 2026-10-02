@@ -1041,14 +1041,19 @@ enum WorkspaceCommand {
         #[arg(long, hide = true)]
         now: Option<String>,
     },
-    /// Record a todo, list them, or close one with `done <slug>`.
+    /// Record a todo, list them, close one with `done <slug>`, or promote one to an issue with
+    /// `promote <slug> --repo <repo>`.
     ///
-    /// `done`/`forget` are read as verbs rather than as todo text, and told apart by the
-    /// shape of the call rather than the word: one positional records, two close. charter's
-    /// own parser does exactly this, and a real subcommand cannot.
+    /// `done`/`forget`/`promote` are read as verbs rather than as todo text, and told apart by
+    /// the shape of the call rather than the word: one positional records, two act on a todo.
+    /// charter's own parser does exactly this, and a real subcommand cannot.
     Todo {
         #[arg(num_args = 0..=2)]
         words: Vec<String>,
+        /// With `promote`: the workspace's repo to open the issue in, by its inventory name.
+        /// May be left out when the workspace has one repo on a forge.
+        #[arg(long)]
+        repo: Option<String>,
         #[command(flatten)]
         common: Common,
     },
@@ -2612,10 +2617,14 @@ fn run(command: Command) -> Result<u8, String> {
                 now.as_deref(),
             );
         }
-        Command::Workspace(WorkspaceCommand::Todo { words, common }) => {
+        Command::Workspace(WorkspaceCommand::Todo {
+            words,
+            repo,
+            common,
+        }) => {
             let ws = here.workspace(common.workspace.as_deref())?;
             let stamp = common.stamp()?;
-            return Ok(todo(&here.plane, &ws, &words, stamp));
+            return Ok(todo(&here.plane, &ws, &words, repo.as_deref(), stamp));
         }
     }
     Ok(0)
@@ -2629,13 +2638,21 @@ fn todo(
     plane: &Plane,
     ws: &charter_core::workspaces::Workspace,
     words: &[String],
+    repo: Option<&str>,
     stamp: chrono::NaiveDateTime,
 ) -> u8 {
     let root = plane.root();
     let name = ws.name();
     let dir = ws.dir().join("todos");
     let see = format!("charter ws todo --workspace {name}");
+    let promoting = words.first().is_some_and(|verb| verb == "promote") && words.len() == 2;
+    if repo.is_some() && !promoting {
+        voice::err("--repo is taken only with `charter ws todo promote <slug>`.");
+        return 1;
+    }
+    finish_promotes(plane, ws, stamp);
     match words {
+        [verb, slug] if verb == "promote" => promote_todo(plane, ws, slug, repo, stamp),
         [] => {
             let (open, unread) = charter_core::memstore::read_entries(root, &dir);
             voice::unread(root, &unread);
@@ -2727,6 +2744,15 @@ fn todo(
         // A lone verb is NOT todo text. charter refuses it, and the reason is that
         // `todo done` with a forgotten slug would otherwise record a todo called "done" and
         // leave the one it meant to close open.
+        [verb] if verb == "promote" => {
+            voice::err("`todo promote` needs the slug of the todo to promote.");
+            voice::info(&format!("  The slug is the first column: {see}"));
+            voice::info(
+                "  To record a todo actually called \"promote\", capitalise it or add a word: \
+                 charter ws todo \"Promote …\"",
+            );
+            1
+        }
         [verb] if verb == "done" || verb == "forget" => {
             voice::err(&format!(
                 "`todo {verb}` needs the slug of the todo to close."
@@ -2772,7 +2798,114 @@ fn todo(
             }
         }
         _ => {
-            voice::err("usage: charter ws todo [-w WS] [\"<text>\" | done <slug>]");
+            voice::err(
+                "usage: charter ws todo [-w WS] [\"<text>\" | done <slug> | forget <slug> | \
+                 promote <slug> [--repo <repo>]]",
+            );
+            1
+        }
+    }
+}
+
+/// Finish closing every todo of `ws` a promote already aliased to an issue, when a crash cut the
+/// promote short after its alias (ADR 0088 §5). Best effort: a log or a store charter cannot
+/// read closes nothing here, and `ws todo` goes on as it would have.
+fn finish_promotes(
+    plane: &Plane,
+    ws: &charter_core::workspaces::Workspace,
+    stamp: chrono::NaiveDateTime,
+) {
+    use charter_core::work::{log, promote};
+    if !log::dir_for(plane.root(), ws.name()).exists() {
+        return;
+    }
+    if let Ok(closed) = promote::finish_closes(ws, &log::fold(plane.root()), stamp) {
+        for (title, to) in closed {
+            voice::ok(&format!(
+                "Closed '{title}' in '{}' — it was promoted to {to}.",
+                ws.name()
+            ));
+        }
+    }
+}
+
+/// `charter ws todo promote <slug> [--repo <repo>]` (ADR 0088 §5): name the repo and whether it
+/// is public, open the issue as the operator, alias the todo to it, and close the todo.
+fn promote_todo(
+    plane: &Plane,
+    ws: &charter_core::workspaces::Workspace,
+    slug: &str,
+    repo: Option<&str>,
+    stamp: chrono::NaiveDateTime,
+) -> u8 {
+    use charter_core::work::promote::{self, Step};
+    let root = plane.root();
+    let slug = charter_core::memstore::py_strip(slug);
+    if !charter_core::contain::segment_ok(slug) {
+        voice::err(&charter_core::repocmd::clone::not_a_segment(slug));
+        return 1;
+    }
+    let target = match promote::target(root, ws.name(), repo) {
+        Ok(target) => target,
+        Err(why) => {
+            voice::err(&why);
+            return 1;
+        }
+    };
+    let device = match charter_core::machine::this_device_id() {
+        Ok(device) => device,
+        Err(why) => {
+            voice::err(&format!(
+                "this device has no id, so the work link log has no file to write: {why}"
+            ));
+            return 1;
+        }
+    };
+    let backend = target.forge.backend();
+    let mut tell = |step: Step<'_>| match step {
+        Step::Sending {
+            target,
+            about,
+            label,
+        } => {
+            let label = match label {
+                Some(label) => format!(", labelled {label}"),
+                None => ", with no workspace label".to_string(),
+            };
+            voice::info(&format!(
+                "Opening an issue in {} ({} at {}, {}) with the todo's title and text{label}.",
+                target.name,
+                target.path,
+                target.forge.host,
+                about.visibility.readers()
+            ));
+        }
+        Step::Created(item) => voice::info(&format!("  Opened {} — {}", item.key, item.url)),
+    };
+    match promote::promote(
+        ws,
+        slug,
+        &target,
+        backend.as_ref(),
+        &charter_core::forge::Caller::command(),
+        &device,
+        stamp,
+        &mut tell,
+    ) {
+        Ok(done) => {
+            // The close is `ws todo done`'s, so it says what `done` says about the journal.
+            memory::said_remembered(plane, ws.name(), &done.journal, false);
+            voice::ok(&format!(
+                "Promoted '{}' in '{}' to {} — the todo is closed, and its work links now reach \
+                 the issue.",
+                done.title,
+                ws.name(),
+                done.item.key
+            ));
+            0
+        }
+        Err(why) => {
+            voice::err(&why);
             1
         }
     }

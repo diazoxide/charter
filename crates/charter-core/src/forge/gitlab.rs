@@ -5,8 +5,8 @@
 use serde_json::Value;
 
 use super::backend::{
-    Asker, Caller, Capabilities, Capability, ForgeRef, Owner, Reach, Reason, RepoRecord, Repos,
-    Requests, Support, Unavailable,
+    About, Asker, Caller, Capabilities, Capability, ForgeRef, Issues, NewWorkItem, Owner, Reach,
+    Reason, RepoRecord, Repos, Requests, Support, Unavailable, Visibility, WorkItems,
 };
 use super::checks::{self, Checks};
 use super::pr::{
@@ -176,6 +176,77 @@ impl Repos for GitLab {
             page += 1;
         }
         Ok(out)
+    }
+
+    fn about(&self, caller: &Caller, path: &str) -> Result<About, ForgeError> {
+        let api = format!("projects/{}", quote(path));
+        let doing = format!("reading {path}");
+        let repo = self.0.ask(caller, &Call::get(&api, LIST_TIMEOUT), &doing)?;
+        let visibility = repo["visibility"]
+            .as_str()
+            .and_then(Visibility::parse)
+            .ok_or_else(|| ForgeError::new(format!("{doing}: GitLab named no visibility")))?;
+        // `issues_access_level` is `disabled`, `private` (members only) or `enabled`; the older
+        // `issues_enabled` says only whether they are on. A member of the repo has an access
+        // level in `permissions`, given on the repo itself (`project_access`, GitLab's word) or
+        // through its group.
+        let member = ["project_access", "group_access"]
+            .iter()
+            .any(|via| repo["permissions"][via]["access_level"].as_u64().is_some());
+        let issues = match repo["issues_access_level"].as_str() {
+            _ if repo["archived"].as_bool() == Some(true) => Issues::Archived,
+            Some("disabled") => Issues::Off,
+            _ if repo["issues_enabled"].as_bool() == Some(false) => Issues::Off,
+            Some("private") if !member => Issues::NoRight,
+            _ => Issues::Open,
+        };
+        Ok(About { visibility, issues })
+    }
+}
+
+impl WorkItems for GitLab {
+    fn create(
+        &self,
+        caller: &Caller,
+        path: &str,
+        new: &NewWorkItem,
+    ) -> Result<crate::work::WorkItem, ForgeError> {
+        let mut fields = vec![
+            Field::text("title", &new.title),
+            Field::text("description", &new.body),
+        ];
+        if let Some(ws) = &new.workspace_label {
+            fields.push(Field::text(
+                "labels",
+                &super::backend::workspace_label(Kind::GitLab, ws),
+            ));
+        }
+        let doing = format!("opening an issue in {path}");
+        let call = Call::write(
+            Method::Post,
+            format!("projects/{}/issues", quote(path)),
+            fields,
+        );
+        let issue = self.0.ask(caller, &call, &doing)?;
+        let url = issue["web_url"].as_str().unwrap_or_default().to_string();
+        let iid = issue["iid"].as_u64();
+        // The path as GitLab spells it, from its own full reference: `group/sub/repo#12`.
+        let full = issue["references"]["full"].as_str().unwrap_or_default();
+        let place = full.rsplit_once('#').map(|(place, _)| place);
+        let host = crate::work::key::page_of(&url).map(|(host, _)| host);
+        let (Some(iid), Some(place), Some(host)) = (iid, place, host) else {
+            return Err(ForgeError::new(format!(
+                "{doing}: GitLab's answer names no page and reference charter can key the issue by"
+            )));
+        };
+        let key = crate::work::TrackerKey::gitlab_issue(&host, place, iid)
+            .map_err(|why| ForgeError::new(format!("{doing}: {why}")))?;
+        let forge_ref = issue["id"].as_u64().map(|id| ForgeRef(id.to_string()));
+        Ok(crate::work::WorkItem {
+            key,
+            forge_ref,
+            url,
+        })
     }
 }
 
