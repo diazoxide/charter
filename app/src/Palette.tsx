@@ -10,6 +10,8 @@ import {
   type Offer,
   type Ran,
 } from "./actions";
+import { opensTheSwitcher } from "./switcherKey";
+import { onAMac } from "./tabKeys";
 
 /**
  * The command palette: every action the window can do, reachable by typing.
@@ -57,14 +59,32 @@ import {
  * not replace it with a generic failure, and shows it beside the rows rather than behind
  * them — the profile picker's rule, for the same reason: a refusal an operator cannot see
  * next to what they were doing is one they cannot act on.
+ *
+ * **It is the project switcher too** (FR-27), and that is one surface rather than two for the
+ * reason the bar's buttons are rows of it: the box, the arrows, Enter, Escape and the keyboard
+ * going back where it was are this component's, and a second dialog would be a second copy of
+ * each. The switcher is the palette listing only `projects.rows` — the window's own
+ * `Switch to project …` rows, the last project the operator was in first — under its own
+ * name. It opens on its key (`switcherKey.ts`), on the title bar's button, and on the
+ * palette's own `Switch project…` row, which turns the palette it is run from into the
+ * switcher rather than closing it. **A further press of its key moves down one**, the way a
+ * system's window switcher does, so the key and Enter go back to the last project and the key
+ * twice and Enter to the one before that.
  */
 export function Palette({
   offers,
+  projects,
   said,
   onRun,
   onOpened,
 }: {
   offers: readonly Offer[];
+  /**
+   * The project switcher's rows, in the order it lists them, and how many times it has been
+   * asked for from outside this component — the title bar's button. Absent, there is no
+   * switcher and its key is nobody's.
+   */
+  projects?: { rows: readonly Offer[]; asked: number };
   /** What the last row answered, when it refused or had something to say. */
   said?: { from: string; refused: boolean; words: string };
   /** The window carrying out a row. It answers what happened; this decides what to draw. */
@@ -73,6 +93,10 @@ export function Palette({
   onOpened?: (open: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
+  /** What it is listing: every action, or only the projects (FR-27). */
+  const [scope, setScope] = useState<"actions" | "projects">("actions");
+  /** The same, for the one keydown listener. */
+  const scopeNow = useRef(scope);
   const [query, setQuery] = useState("");
   /** The row the arrows moved to, or nothing while Enter is aimed by `aim`. */
   const [at, setAt] = useState<number>();
@@ -88,13 +112,11 @@ export function Palette({
   /** The rows and the dispatcher as they are right now, for the ONE keydown listener: it is
    *  registered once and must not be rebuilt on every render, so it cannot close over
    *  either. */
-  const latest = useRef({ offers, onRun });
-  useEffect(() => {
-    latest.current = { offers, onRun };
-  });
+  const latest = useRef({ offers, onRun, shown: [] as readonly Offer[], aimed: -1 });
 
   const close = useCallback(() => {
     setOpen(false);
+    setScope("actions");
     setQuery("");
     setAt(undefined);
     setHeld(undefined);
@@ -118,6 +140,24 @@ export function Palette({
     if (back instanceof HTMLElement && back.isConnected) back.focus();
   }, []);
 
+  /** Lists only the projects, from a fresh box: what was typed was typed at the other list. */
+  const toTheProjects = useCallback(() => {
+    setScope("projects");
+    setQuery("");
+    setAt(undefined);
+    setHeld(undefined);
+  }, []);
+
+  /** Opens it as the switcher, from wherever the keyboard is; or turns it into one. */
+  const openTheProjects = useCallback(() => {
+    if (!up.current) {
+      came.current = document.activeElement;
+      onOpened?.(true);
+      setOpen(true);
+    }
+    toTheProjects();
+  }, [onOpened, toTheProjects]);
+
   /**
    * Runs a row and leaves if it ran. What Enter does, what a click does, and what the second
    * `F2` does — one function, so the chord can never become a second implementation of a row
@@ -130,6 +170,13 @@ export function Palette({
         setHeld(offer.reason);
         return;
       }
+      // **The one row that is about this palette itself**: it turns the palette into the
+      // switcher, which closing and opening again would do with a flash and the keyboard sent
+      // somewhere in between.
+      if (offer.does.verb === "switchProject") {
+        toTheProjects();
+        return;
+      }
       setHeld(undefined);
       void (async () => {
         const ran = await latest.current.onRun(offer);
@@ -138,8 +185,30 @@ export function Palette({
         if (ran.ok) close();
       })();
     },
-    [close],
+    [close, toTheProjects],
   );
+
+  // The title bar's button, as a new count: each one opens the switcher. The first value is
+  // the count the window started with, which asked for nothing.
+  const askedFor = useRef(projects?.asked ?? 0);
+  useEffect(() => {
+    const asked = projects?.asked ?? 0;
+    if (asked === askedFor.current) return;
+    askedFor.current = asked;
+    openTheProjects();
+  }, [projects?.asked, openTheProjects]);
+
+  /**
+   * Whether this window has a switcher for its key to open, for the one keydown listener: two
+   * projects or more, as the title bar's button and the palette's row. With one there is
+   * nowhere to go, and the key is not taken at all — it goes on to whatever has the keyboard,
+   * as any key the window has no use for does.
+   */
+  const switches = (projects?.rows.length ?? 0) > 1;
+  const switchesNow = useRef(switches);
+  useEffect(() => {
+    switchesNow.current = switches;
+  }, [switches]);
 
   /** The second press of the key that opened it, as the row that sends it. */
   const handBack = useCallback(() => {
@@ -159,6 +228,28 @@ export function Palette({
   // modal surface can be, and it is not a state to be one stray focus away from.
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
+      // The switcher's key (FR-27). A terminal sends nothing for it (`switcherKey.ts`), so it
+      // is claimed wherever the keyboard is, and there is nothing to hand back.
+      if (switchesNow.current && opensTheSwitcher(e, onAMac())) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.repeat) return;
+        if (up.current && scopeNow.current === "projects") {
+          // Down one, round to the top: the window switcher's own idiom — past a row that
+          // cannot run, which is the project already in front.
+          const { shown, aimed } = latest.current;
+          for (let step = 1; step <= shown.length; step++) {
+            const next = (aimed + step) % shown.length;
+            if (shown[next]?.available) {
+              setAt(next);
+              break;
+            }
+          }
+          return;
+        }
+        openTheProjects();
+        return;
+      }
       // The chord is the palette's, but not everywhere: one a terminal encodes belongs to the
       // chat while the chat has the keyboard. Falling through here is the whole of the fix —
       // nothing is prevented and nothing is stopped, so the keystroke carries on down to
@@ -180,7 +271,8 @@ export function Palette({
         // not let go, and it is checked on BOTH paths so neither half can flicker.
         if (e.repeat) return;
         if (up.current) {
-          if (e.key === PASS_THROUGH_KEY) handBack();
+          // Only from the palette: the switcher lists no chat to hand it to.
+          if (e.key === PASS_THROUGH_KEY && scopeNow.current === "actions") handBack();
           return;
         }
         setOpen((was) => {
@@ -201,7 +293,7 @@ export function Palette({
     };
     window.addEventListener("keydown", key, true);
     return () => window.removeEventListener("keydown", key, true);
-  }, [close, handBack, onOpened]);
+  }, [close, handBack, onOpened, openTheProjects]);
 
   // The box takes the keyboard as soon as it exists, so the first thing typed narrows.
   useEffect(() => {
@@ -209,9 +301,14 @@ export function Palette({
     if (open) box.current?.focus();
   }, [open]);
 
-  const rows = open ? narrow(query, offers) : [];
+  const listing = scope === "projects" ? (projects?.rows ?? []) : offers;
+  const rows = open ? narrow(query, listing) : [];
   const aimed = at ?? aim(rows);
   const aimedId = aimed >= 0 ? rows[aimed]?.id : undefined;
+  useEffect(() => {
+    latest.current = { offers, onRun, shown: rows, aimed };
+    scopeNow.current = scope;
+  });
 
   // The aimed row, brought on screen. The list scrolls at 55vh and the catalogue is 117 rows
   // with fifty chats open (charter-app#48), so past the first screenful the arrows were
@@ -237,7 +334,11 @@ export function Palette({
   // standing: they pressed `F2` meaning to send `F2`, and this is on screen the instant it
   // opened. Only while there is somewhere to send it — otherwise the row below says why, and
   // a hint promising something that would refuse is worse than no hint.
-  const handsBack = offers.some((row) => row.id === PASS_THROUGH_ID && row.available);
+  const handsBack =
+    scope === "actions" && offers.some((row) => row.id === PASS_THROUGH_ID && row.available);
+  // The switcher's words, where the palette's would be: what it is, what to type, and what
+  // its rows are called.
+  const switcher = scope === "projects";
 
   return (
     // A Radix dialog (`docs/ui-primitives.md`). What it adds over the markup that was here is
@@ -260,7 +361,7 @@ export function Palette({
         <Dialog.Overlay className="asking" />
         <Dialog.Content
           className="warning palette"
-          aria-label="Command palette"
+          aria-label={switcher ? "Project switcher" : "Command palette"}
           // A click outside answers nothing, which is how every surface in this app has always
           // behaved: the way out is Escape or a row. Turned off explicitly rather than left to
           // the default, so a reviewer sees it was decided.
@@ -278,7 +379,7 @@ export function Palette({
           }}
         >
           <label className="palette-ask" htmlFor="palette-query">
-            Run an action
+            {switcher ? "Switch to a project" : "Run an action"}
           </label>
           <input
             id="palette-query"
@@ -292,7 +393,7 @@ export function Palette({
             aria-activedescendant={
               aimed >= 0 && rows[aimed] ? `palette-row-${rows[aimed].id}` : undefined
             }
-            placeholder="Type to narrow"
+            placeholder={switcher ? "Type a project's name" : "Type to narrow"}
             value={query}
             onChange={(e) => {
               setQuery(e.target.value);
@@ -341,10 +442,17 @@ export function Palette({
 
           {rows.length === 0 ? (
             <p className="none" role="status">
-              No action matches what you typed.
+              {switcher
+                ? "No open project matches what you typed."
+                : "No action matches what you typed."}
             </p>
           ) : (
-            <ul id="palette-rows" className="palette-rows" role="listbox" aria-label="Actions">
+            <ul
+              id="palette-rows"
+              className="palette-rows"
+              role="listbox"
+              aria-label={switcher ? "Projects" : "Actions"}
+            >
               {rows.map((row, index) => (
                 <li
                   key={row.id}
@@ -358,7 +466,11 @@ export function Palette({
                   }
                   onClick={() => runOffer(row)}
                 >
-                  <span className="palette-title">{row.title}</span>
+                  {/* A project's name alone in the switcher: every row there is a switch, and
+                    `Switch to project` ten times over is ten times the same three words. */}
+                  <span className="palette-title">
+                    {switcher ? (row.name ?? row.title) : row.title}
+                  </span>
                   {/* The reason, as words. Dimming is decoration; this is the meaning, and it
                     is what a screen reader and a monochrome display both get. */}
                   {!row.available && <span className="palette-why">{row.reason}</span>}

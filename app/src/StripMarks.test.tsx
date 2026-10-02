@@ -70,6 +70,8 @@ describe("the bar's buttons carry a mark beside their words", () => {
         "pane.split.right",
         "project.create",
         "project.open",
+        // The project switcher's button, at the start of the strip's controls (FR-27).
+        "project.switch",
         "workspace.create",
       ].sort(),
     );
@@ -95,7 +97,7 @@ describe("the bar's buttons carry a mark beside their words", () => {
    */
   const SIDE_BY_SIDE: Record<string, string[]> = {
     // `App.tsx`'s `.strip-doing`, the only place two icon-only rows are drawn together.
-    "the project strip": ["project.open", "project.create"],
+    "the project strip": ["project.switch", "project.open", "project.create"],
     // One each, so these cannot collide with anything — listed so that a second control
     // arriving on either strip has somewhere to be added and something to fail against.
     "the workspace strip": ["workspace.create"],

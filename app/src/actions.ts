@@ -49,6 +49,7 @@ import {
 } from "./memories";
 import { SESSION_VIEW, sessionTitle, sessionTitleOf, sessionView } from "./sessions";
 import { shellKeySaid } from "./shellKey";
+import { switcherKeySaid } from "./switcherKey";
 import { onAMac } from "./tabKeys";
 import {
   changesTitle,
@@ -150,6 +151,10 @@ export const ROOT_TIP = "Plane — chats here start at the plane root";
 /** The key that opens a shell tab, as this platform spells it — said on the row, so the palette
  *  is where an operator learns it (`shellKey.ts`). */
 export const SHELL_KEY_SAID = shellKeySaid(onAMac());
+
+/** The key that opens the project switcher, as this platform spells it — said on its row, for
+ *  the same reason (`switcherKey.ts`, FR-27). */
+export const SWITCHER_KEY_SAID = switcherKeySaid(onAMac());
 
 /** What a row does, as a value the window can carry out. */
 export type Does =
@@ -304,6 +309,10 @@ export type Does =
   /** Brings a project this window already holds to the front. Nothing is opened, nothing is
    *  closed, and the project that was in front keeps every chat it had running. */
   | { verb: "selectProject"; plane: string }
+  /** Opens the project switcher (FR-27): the palette, listing only the projects this window
+   *  holds, the last one the operator was in first. It switches nothing by itself; a row in it
+   *  is a `selectProject`. */
+  | { verb: "switchProject" }
   /** Lets go of one project, which ends its chats and takes its tab out. Nothing of the
    *  project on disk goes. */
   | { verb: "closeProject"; plane: string }
@@ -604,6 +613,8 @@ export type Doing = {
   showExtensions: () => void;
   installCli: () => Promise<Ran>;
   selectProject: (plane: string) => void;
+  /** Opens the project switcher. Nothing is switched until a row in it is run. */
+  switchProject: () => void;
   closeProject: (plane: string) => Promise<Ran>;
   /** Moves that project into another window, or a new one. The core can refuse. */
   moveProject: (plane: string, to: string | null) => Promise<Ran>;
@@ -673,6 +684,8 @@ export function projectRows(
 ): {
   open: Offer;
   create: Offer;
+  /** The one row that opens the switcher over every project here (FR-27). */
+  switcher: Offer;
   switchTo: Offer[];
   pin: Offer[];
   settings: Offer[];
@@ -694,6 +707,24 @@ export function projectRows(
       ...can("project.create", "New project…", { verb: "createProject" }),
       note: "Makes a plane in a directory of its own. It never writes into a repo you point at.",
     },
+    // **One row for all of them, beside the one row per project** (FR-27). The rows below find
+    // a project by its name from the whole palette; this one is the palette listing nothing but
+    // the projects, the last one the operator was in aimed at, so a switch back is the key and
+    // Enter. A window holding one project has nowhere to switch to, and says so in the words
+    // `project.window` uses for the same fact.
+    switcher:
+      projects.length < 2
+        ? cannot(
+            "project.switch",
+            "Switch project…",
+            projects.length === 0
+              ? "This window holds no project."
+              : "It is the only project in this window.",
+          )
+        : {
+            ...can("project.switch", "Switch project…", { verb: "switchProject" }),
+            note: `The projects open in this window, the last one you were in first. ${SWITCHER_KEY_SAID}.`,
+          },
     switchTo: projects.map((project) => {
       const title = `Switch to project ${project.name}`;
       // The project in front has a row that says so and cannot run — the same rule the tab
@@ -1193,6 +1224,7 @@ export function catalogue(now: Now): Offer[] {
   offers.push(
     projects.open,
     projects.create,
+    projects.switcher,
     ...projects.switchTo,
     ...projects.pin,
     ...projects.settings,
@@ -1858,6 +1890,9 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
       return doing.installCli();
     case "selectProject":
       doing.selectProject(does.plane);
+      return DID;
+    case "switchProject":
+      doing.switchProject();
       return DID;
     case "closeProject":
       return doing.closeProject(does.plane);

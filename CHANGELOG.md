@@ -13,6 +13,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A project switcher.** ⌘P (Ctrl+Shift+P off a Mac), the new button at the start of the
+  project strip's controls, or *Switch project…* in the palette lists the projects open in the
+  window, the last one you were in first and already selected, so the key and Enter take you
+  back to it. Pressing the key again moves down the list, and typing narrows it by name. The
+  button shows once a window holds two projects (FR-27, #620).
+
 - **`charter change push` pushes a cross-repo change.** For each member it prints the repo,
   the branch and where it goes, then pushes the branch, opens its pull request into the repo's
   default branch (or finds the one already there), and writes a block into each request's

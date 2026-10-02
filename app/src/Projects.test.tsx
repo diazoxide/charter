@@ -1,12 +1,20 @@
 import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render as renderBare, screen, waitFor, within } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render as renderBare,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import type { Moved, OpenChat } from "./bindings";
 import { dragWithTheKeyboard, laidOutInARow } from "./test-strips";
 import { BUILT_IN, DEFAULT_THEME, drawIn, inForce, onDrawn, type Theme } from "./theme/theme";
+import { onAMac } from "./tabKeys";
 
 /**
  * A window holding more than one project (ADR 0033, spec decision 23).
@@ -232,12 +240,12 @@ describe("a window holding more than one project", () => {
       chats: { [ONE]: [chat({ session: 1, name: "one.1" })] },
     });
     render(<App />);
-    await vi.waitFor(() => expect(chatTabs()).toEqual(["one.1"]));
+    await waitFor(() => expect(chatTabs()).toEqual(["one.1"]));
 
     await userEvent.click(screen.getByRole("button", { name: "Open a project…" }));
     await openByPath(TWO);
 
-    await vi.waitFor(() => expect(projectTabs()).toEqual(["one", "two*"]));
+    await waitFor(() => expect(projectTabs()).toEqual(["one", "two*"]));
     // **Nothing was closed.** A window that merged two projects by letting go of one would be
     // this feature with its reason removed.
     expect(asked.some((one) => one.cmd === "close_plane")).toBe(false);
@@ -256,18 +264,18 @@ describe("a window holding more than one project", () => {
       },
     });
     render(<App />);
-    await vi.waitFor(() => expect(chatTabs()).toEqual(["one.1", "one.2"]));
+    await waitFor(() => expect(chatTabs()).toEqual(["one.1", "one.2"]));
 
     await userEvent.click(screen.getByRole("button", { name: "Open a project…" }));
     await openByPath(TWO);
-    await vi.waitFor(() => expect(chatTabs()).toEqual(["two.1"]));
+    await waitFor(() => expect(chatTabs()).toEqual(["two.1"]));
 
     expect(asked.some((one) => one.cmd === "close_session")).toBe(false);
     // And going back shows the first project's tabs again, without asking the core for them
     // a second time: they were never thrown away.
     const asksSoFar = asked.filter((one) => one.cmd === "opened_chats").length;
     await userEvent.click(projectTab("one"));
-    await vi.waitFor(() => expect(chatTabs()).toEqual(["one.1", "one.2"]));
+    await waitFor(() => expect(chatTabs()).toEqual(["one.1", "one.2"]));
     expect(asked.filter((one) => one.cmd === "opened_chats").length).toBe(asksSoFar);
   });
 
@@ -292,7 +300,7 @@ describe("a window holding more than one project", () => {
     );
 
     // The core holds the ignore, and answers it the way it answers every move.
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(asked.filter((one) => one.cmd === "ignore_needs_you").map((one) => one.args)).toEqual([
         { plane: ONE, session: 1 },
       ]),
@@ -386,15 +394,15 @@ describe("a window holding more than one project", () => {
     const stop = onDrawn((theme) => terminal.push(theme));
     try {
       render(<App />);
-      await vi.waitFor(() => expect(inForce()).toBe(BUILT_IN["charter-light"]));
+      await waitFor(() => expect(inForce()).toBe(BUILT_IN["charter-light"]));
 
       await userEvent.click(screen.getByRole("button", { name: "Open a project…" }));
       await openByPath(TWO);
-      await vi.waitFor(() => expect(projectTabs()).toEqual(["one", "two*"]));
-      await vi.waitFor(() => expect(inForce()).toBe(DEFAULT_THEME));
+      await waitFor(() => expect(projectTabs()).toEqual(["one", "two*"]));
+      await waitFor(() => expect(inForce()).toBe(DEFAULT_THEME));
 
       await userEvent.click(projectTab("one"));
-      await vi.waitFor(() => expect(inForce()).toBe(BUILT_IN["charter-light"]));
+      await waitFor(() => expect(inForce()).toBe(BUILT_IN["charter-light"]));
       expect(terminal.map((theme) => theme.name)).toEqual([
         "charter-light",
         "charter-dark",
@@ -417,10 +425,10 @@ describe("a window holding more than one project", () => {
       },
     });
     render(<App />);
-    await vi.waitFor(() => expect(chatTabs()).toEqual(["one.1"]));
+    await waitFor(() => expect(chatTabs()).toEqual(["one.1"]));
     await userEvent.click(screen.getByRole("button", { name: "Open a project…" }));
     await openByPath(TWO);
-    await vi.waitFor(() => expect(chatTabs()).toEqual(["two.1"]));
+    await waitFor(() => expect(chatTabs()).toEqual(["two.1"]));
 
     // Project ONE's chat 1, while project TWO is on screen. Both projects have a chat 1, so
     // a window that ignored the plane on the event would mark the wrong tab.
@@ -436,7 +444,7 @@ describe("a window holding more than one project", () => {
       refusals: [],
     });
 
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(projectTab("one").querySelector(".project-needs")?.textContent).toBe("1"),
     );
     expect(projectTab("two").querySelector(".project-needs")).toBeNull();
@@ -449,14 +457,14 @@ describe("a window holding more than one project", () => {
     // wrong now that a window holds both at once.
     const { asked } = core({ launch: ONE });
     render(<App />);
-    await vi.waitFor(() => expect(asked.some((one) => one.cmd === "workspace_panels")).toBe(true));
+    await waitFor(() => expect(asked.some((one) => one.cmd === "workspace_panels")).toBe(true));
 
     await userEvent.click(screen.getByRole("button", { name: "Open a project…" }));
     await openByPath(TWO);
-    await vi.waitFor(() => expect(projectTabs()).toEqual(["one", "two*"]));
+    await waitFor(() => expect(projectTabs()).toEqual(["one", "two*"]));
 
     for (const cmd of ["workspace_panels", "workspace_repos"]) {
-      await vi.waitFor(() =>
+      await waitFor(() =>
         expect(asked.filter((one) => one.cmd === cmd).pop()?.args).toEqual({
           plane: TWO,
           workspace: "alpha",
@@ -474,10 +482,10 @@ describe("a window holding more than one project", () => {
       },
     });
     render(<App />);
-    await vi.waitFor(() => expect(chatTabs()).toEqual(["one.1"]));
+    await waitFor(() => expect(chatTabs()).toEqual(["one.1"]));
     await userEvent.click(screen.getByRole("button", { name: "Open a project…" }));
     await openByPath(TWO);
-    await vi.waitFor(() => expect(projectTabs()).toEqual(["one", "two*"]));
+    await waitFor(() => expect(projectTabs()).toEqual(["one", "two*"]));
 
     await userEvent.click(screen.getByRole("button", { name: "Close project two" }));
 
@@ -489,7 +497,7 @@ describe("a window holding more than one project", () => {
       }),
     );
 
-    await vi.waitFor(() => expect(projectTabs()).toEqual(["one*"]));
+    await waitFor(() => expect(projectTabs()).toEqual(["one*"]));
     // The core was told to let go of THAT project and no other, and the tab beside it came
     // to the front — `closeTab`'s rule, one scope up.
     expect(asked.filter((one) => one.cmd === "close_plane").map((one) => one.args)).toEqual([
@@ -511,10 +519,10 @@ describe("a window holding more than one project", () => {
       },
     });
     render(<App />);
-    await vi.waitFor(() => expect(chatTabs()).toEqual(["one.1"]));
+    await waitFor(() => expect(chatTabs()).toEqual(["one.1"]));
     await userEvent.click(screen.getByRole("button", { name: "Open a project…" }));
     await openByPath(TWO);
-    await vi.waitFor(() => expect(projectTabs()).toEqual(["one", "two*"]));
+    await waitFor(() => expect(projectTabs()).toEqual(["one", "two*"]));
 
     askToQuit();
 
@@ -529,12 +537,12 @@ describe("a window holding more than one project", () => {
     // cold-launch restore reads the strip, and two calls could disagree about the same window.
     const { asked } = core({ launch: ONE });
     render(<App />);
-    await vi.waitFor(() => expect(projectTabs()).toEqual(["one*"]));
+    await waitFor(() => expect(projectTabs()).toEqual(["one*"]));
 
     await userEvent.click(screen.getByRole("button", { name: "Open a project…" }));
     await openByPath(TWO);
 
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(asked.filter((one) => one.cmd === "window_holds_planes").pop()?.args).toEqual({
         held: { planes: [ONE, TWO], active: 1 },
       }),
@@ -555,7 +563,7 @@ describe("a window holding more than one project", () => {
     await dragWithTheKeyboard("{ArrowLeft}");
 
     await waitFor(() => expect(projectTabs()).toEqual(["two", "one*"]));
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(asked.filter((one) => one.cmd === "window_holds_planes").pop()?.args).toEqual({
         held: { planes: [TWO, ONE], active: 1 },
       }),
@@ -568,11 +576,11 @@ describe("a window holding more than one project", () => {
     // suppressed.
     const { asked } = core({ launch: ONE });
     render(<App />);
-    await vi.waitFor(() => expect(projectTabs()).toEqual(["one*"]));
+    await waitFor(() => expect(projectTabs()).toEqual(["one*"]));
 
     await userEvent.click(screen.getByRole("button", { name: "Open a project…" }));
 
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(asked.filter((one) => one.cmd === "window_holds_planes").pop()?.args).toEqual({
         held: { planes: [ONE], active: null },
       }),
@@ -589,11 +597,11 @@ describe("a window holding more than one project", () => {
     // running. It used to be told on screen that the window was busy with another project.
     const { secondLaunch } = core({ launch: ONE });
     render(<App />);
-    await vi.waitFor(() => expect(projectTabs()).toEqual(["one*"]));
+    await waitFor(() => expect(projectTabs()).toEqual(["one*"]));
 
     secondLaunch(TWO);
 
-    await vi.waitFor(() => expect(projectTabs()).toEqual(["one", "two*"]));
+    await waitFor(() => expect(projectTabs()).toEqual(["one", "two*"]));
   });
 
   it("raises the project a second launch names when it is already a tab", async () => {
@@ -602,14 +610,14 @@ describe("a window holding more than one project", () => {
     // to the front rather than opening a second one.
     const { secondLaunch } = core({ launch: ONE });
     render(<App />);
-    await vi.waitFor(() => expect(projectTabs()).toEqual(["one*"]));
+    await waitFor(() => expect(projectTabs()).toEqual(["one*"]));
     await userEvent.click(screen.getByRole("button", { name: "Open a project…" }));
     await openByPath(TWO);
-    await vi.waitFor(() => expect(projectTabs()).toEqual(["one", "two*"]));
+    await waitFor(() => expect(projectTabs()).toEqual(["one", "two*"]));
 
     secondLaunch(ONE);
 
-    await vi.waitFor(() => expect(projectTabs()).toEqual(["one*", "two"]));
+    await waitFor(() => expect(projectTabs()).toEqual(["one*", "two"]));
   });
 });
 
@@ -622,7 +630,7 @@ describe("the cold launch putting the last quit's projects back", () => {
 
     render(<App />);
 
-    await vi.waitFor(() => expect(projectTabs()).toEqual(["one", "two*"]));
+    await waitFor(() => expect(projectTabs()).toEqual(["one", "two*"]));
     // Through `open_plane`, which is the trust gate — never a path of its own. A restore that
     // opened these itself would be ADR 0035 turned off for every project the operator had
     // ever had open at once.
@@ -649,7 +657,7 @@ describe("the cold launch putting the last quit's projects back", () => {
 
     expect(await screen.findByText(/~\/dev\/gone is no longer there/)).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    await vi.waitFor(() => expect(projectTabs()).toEqual(["two*"]));
+    await waitFor(() => expect(projectTabs()).toEqual(["two*"]));
   });
 
   it("leaves the launch's own project in front of everything it put back", async () => {
@@ -659,7 +667,7 @@ describe("the cold launch putting the last quit's projects back", () => {
 
     render(<App />);
 
-    await vi.waitFor(() => expect(projectTabs()).toEqual(["one*", "two"]));
+    await waitFor(() => expect(projectTabs()).toEqual(["one*", "two"]));
   });
 
   it("does not write the arrangement back before it has finished reading it", async () => {
@@ -673,9 +681,7 @@ describe("the cold launch putting the last quit's projects back", () => {
 
     render(<App />);
 
-    await vi.waitFor(() =>
-      expect(asked.some((one) => one.cmd === "window_holds_planes")).toBe(true),
-    );
+    await waitFor(() => expect(asked.some((one) => one.cmd === "window_holds_planes")).toBe(true));
     const first = asked.filter((one) => one.cmd === "window_holds_planes")[0];
     expect(first.args).toEqual({ held: { planes: [ONE, TWO], active: 0 } });
   });
@@ -691,5 +697,143 @@ describe("the cold launch putting the last quit's projects back", () => {
       "Open a repo to start",
     );
     expect(screen.queryByRole("tablist", { name: "Projects" })).not.toBeInTheDocument();
+  });
+});
+
+const THREE = "/home/dev/three";
+
+/** The switcher's rows, as it lists them: each project's name, `*` on the one Enter would run. */
+const switcherRows = () =>
+  within(screen.getByRole("listbox", { name: "Projects" }))
+    .getAllByRole("option")
+    .map(
+      (row) =>
+        `${row.querySelector(".palette-title")?.textContent}${
+          row.getAttribute("aria-selected") === "true" ? "*" : ""
+        }`,
+    );
+
+/** The switcher's own key, as this platform spells it (`switcherKey.ts`). */
+const switcherKey = () =>
+  fireEvent.keyDown(
+    window,
+    onAMac() ? { key: "p", metaKey: true } : { key: "P", ctrlKey: true, shiftKey: true },
+  );
+
+describe("the project switcher (FR-27)", () => {
+  /** Three projects back from the last quit, `one` in front, and the operator having been in
+   *  `two` and then `three` — so the last project before this one is `two`. */
+  async function beenInTwoThenThree() {
+    core({ launch: null, restore: { planes: [ONE, TWO, THREE], active: 0, dropped: [] } });
+    render(<App />);
+    await waitFor(() => expect(projectTabs()).toEqual(["one*", "two", "three"]));
+    await userEvent.click(projectTab("two"));
+    await userEvent.click(projectTab("three"));
+    await waitFor(() => expect(projectTabs()).toEqual(["one", "two", "three*"]));
+  }
+
+  it("lists the open projects from the title bar, the last one you were in first and aimed at", async () => {
+    await beenInTwoThenThree();
+
+    await userEvent.click(screen.getByRole("button", { name: "Switch project…" }));
+
+    // The one in front is listed, and cannot run — the strip's rule — so Enter is on the one
+    // before it, and the rest follow in the order the operator was last in them.
+    await waitFor(() => expect(switcherRows()).toEqual(["three", "two*", "one"]));
+    expect(screen.getByText("It is already in front.")).toBeInTheDocument();
+  });
+
+  it("goes back to the last project with the key and Enter, and nothing else", async () => {
+    await beenInTwoThenThree();
+
+    switcherKey();
+    await waitFor(() => expect(switcherRows()).toEqual(["three", "two*", "one"]));
+    await userEvent.keyboard("{Enter}");
+
+    await waitFor(() => expect(projectTabs()).toEqual(["one", "two*", "three"]));
+    expect(screen.queryByRole("listbox", { name: "Projects" })).not.toBeInTheDocument();
+    // And the next switch back is to `three`, which is now the last one before this.
+    switcherKey();
+    await waitFor(() => expect(switcherRows()).toEqual(["two", "three*", "one"]));
+  });
+
+  it("moves down the list on each further press of its key, the way a window switcher does", async () => {
+    await beenInTwoThenThree();
+
+    switcherKey();
+    await waitFor(() => expect(switcherRows()).toEqual(["three", "two*", "one"]));
+    switcherKey();
+
+    await waitFor(() => expect(switcherRows()).toEqual(["three", "two", "one*"]));
+  });
+
+  it("goes round past the project in front, which a press of its key can never aim at", async () => {
+    await beenInTwoThenThree();
+    switcherKey();
+    await waitFor(() => expect(switcherRows()).toEqual(["three", "two*", "one"]));
+    switcherKey();
+    await waitFor(() => expect(switcherRows()).toEqual(["three", "two", "one*"]));
+
+    switcherKey();
+
+    await waitFor(() => expect(switcherRows()).toEqual(["three", "two*", "one"]));
+  });
+
+  it("keeps F2 for the palette: in the switcher it hands nothing to the chat", async () => {
+    const { asked } = core({
+      launch: null,
+      restore: { planes: [ONE, TWO], active: 0, dropped: [] },
+      chats: { [ONE]: [chat({ session: 1, name: "one.1" })] },
+    });
+    render(<App />);
+    await waitFor(() => expect(projectTabs()).toEqual(["one*", "two"]));
+    switcherKey();
+    await waitFor(() => expect(switcherRows()).toEqual(["one", "two*"]));
+
+    fireEvent.keyDown(window, { key: "F2" });
+
+    expect(switcherRows()).toEqual(["one", "two*"]);
+    expect(asked.some((one) => one.cmd === "send_input")).toBe(false);
+  });
+
+  it("narrows to what is typed, by the project's name", async () => {
+    await beenInTwoThenThree();
+    switcherKey();
+    await waitFor(() => expect(switcherRows()).toHaveLength(3));
+
+    await userEvent.keyboard("on");
+
+    await waitFor(() => expect(switcherRows()).toEqual(["one*"]));
+  });
+
+  it("is a row of the palette, which turns into the switcher when it is run", async () => {
+    await beenInTwoThenThree();
+    await userEvent.keyboard("{Meta>}k{/Meta}");
+    await userEvent.keyboard("Switch project…");
+    await userEvent.keyboard("{Enter}");
+
+    await waitFor(() => expect(switcherRows()).toEqual(["three", "two*", "one"]));
+    // Nothing was switched by opening it, and Escape leaves it as the palette is left.
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(projectTabs()).toEqual(["one", "two", "three*"]));
+  });
+
+  it("leaves its key alone while the window holds one project, as the button and the row do", async () => {
+    core({ launch: ONE });
+    render(<App />);
+    await waitFor(() => expect(projectTabs()).toEqual(["one*"]));
+
+    // Not taken: nothing to switch to, so the key goes on to whatever has the keyboard.
+    expect(switcherKey()).toBe(true);
+    expect(screen.queryByRole("listbox", { name: "Projects" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("draws no switcher in the title bar while the window holds one project", async () => {
+    core({ launch: ONE });
+    render(<App />);
+    await waitFor(() => expect(projectTabs()).toEqual(["one*"]));
+
+    expect(screen.queryByRole("button", { name: "Switch project…" })).not.toBeInTheDocument();
   });
 });

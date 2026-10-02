@@ -18,6 +18,7 @@ import {
   OUTSIDE,
   perform,
   SHELL_KEY_SAID,
+  SWITCHER_KEY_SAID,
   type Cut,
   type Doing,
   type Now,
@@ -140,6 +141,7 @@ function doing(): Doing & { calls: string[] } {
       return { ok: true as const, said: "On PATH" };
     }),
     selectProject: note("selectProject"),
+    switchProject: note("switchProject"),
     closeProject: vi.fn(async (plane: string) => {
       calls.push(`closeProject:${plane}`);
       return { ok: true as const };
@@ -1167,6 +1169,7 @@ describe("carrying out a row", () => {
         "openWorkspaceSettings:beta",
         "switchLive:alpha",
         "switchLive:beta",
+        "switchProject",
         "renameWorkspace:alpha",
         "renameWorkspace:beta",
         "quit",
@@ -1219,6 +1222,40 @@ describe("a plain shell tab (SI-5)", () => {
     const row = by(catalogue(now()), "shell.new");
 
     expect(row?.note).toContain(SHELL_KEY_SAID);
+  });
+});
+
+describe("the project switcher (FR-27)", () => {
+  const two = [
+    { plane: "/one", name: "one" },
+    { plane: "/two", name: "two" },
+  ];
+  const find = (offers: Offer[], id: string) => offers.find((offer) => offer.id === id);
+
+  it("offers one row that opens the switcher, and says its key so the palette teaches it", () => {
+    const row = find(catalogue(now({ plane: "/one", projects: two })), "project.switch");
+
+    expect(row?.title).toBe("Switch project…");
+    expect(row?.available).toBe(true);
+    expect(row?.does).toEqual({ verb: "switchProject" });
+    expect(row?.note).toContain(SWITCHER_KEY_SAID);
+  });
+
+  it("says why there is nothing to switch to in a window holding one project", () => {
+    const row = find(catalogue(now({ plane: "/one", projects: [two[0]] })), "project.switch");
+
+    expect(row?.available).toBe(false);
+    expect(row?.reason).toBe("It is the only project in this window.");
+  });
+
+  it("asks the window for the switcher, and switches nothing by itself", async () => {
+    const done = doing();
+    const row = find(catalogue(now({ plane: "/one", projects: two })), "project.switch");
+    if (!row) throw new Error("no switcher row");
+
+    await perform(row, done);
+
+    expect(done.calls).toEqual(["switchProject"]);
   });
 });
 
@@ -1486,8 +1523,9 @@ describe("the palette at fifty chats", () => {
       // Three further down than #174 left it under `re` and `r`: `New vault…` (charter-app#235),
       // `Preferences…` (charter-app#283) and `New persona…` (SI-3) are rows that make/land
       // near the creates. One more since SI-9c: `Open shared memory` (`shared` has `re`).
+      // And one more under `r` since FR-27: `Switch project…` (`project` has an `r`).
       expect(at("re", loaded())).toBe(8);
-      expect(at("r", loaded())).toBe(11);
+      expect(at("r", loaded())).toBe(12);
       expect(at("rem", loaded())).toBe(1);
     });
 
@@ -1512,8 +1550,12 @@ describe("the palette at fifty chats", () => {
     // partition and not a score: rows that all match the same way keep the catalogue's order.
     const offers = loaded();
     const selects = offers.filter((row) => row.id.startsWith("tab.select:"));
+    // The switcher's own row (FR-27) is the one `switch` row about what is in front — it has no
+    // name after a colon — so it leads, and the fifty after it keep their order.
+    const switcher = offers.filter((row) => row.id === "project.switch");
 
-    expect(narrow("switch", offers)).toEqual(selects);
+    expect(switcher).toHaveLength(1);
+    expect(narrow("switch", offers)).toEqual([...switcher, ...selects]);
   });
 
   it("still offers one row per chat and per workspace, browsable with nothing typed", () => {
@@ -1585,8 +1627,9 @@ describe("the palette at fifty chats", () => {
     // 471 since SI-9c: a new memory in the focused workspace, in each of the 8 personas and in
     // the shared store, and the shared list's own row.
     // 481 since GL-1: New branch… in each of the ten clones.
+    // 482 since FR-27: Switch project…, one row however many projects the window holds.
     // This window has no todos loaded, so no `todo.` rows.
-    expect(offers).toHaveLength(481);
+    expect(offers).toHaveLength(482);
   });
 
   /**

@@ -19,6 +19,7 @@ import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
 import { closestCenter, DndContext } from "@dnd-kit/core";
 import { horizontalListSortingStrategy, SortableContext } from "@dnd-kit/sortable";
 import {
+  ArrowLeftRight,
   ChevronDown,
   FolderOpen,
   FolderPlus,
@@ -2686,6 +2687,7 @@ export function PlaneView({
       showExtensions: windowDoes.showExtensions,
       installCli: windowDoes.installCli,
       selectProject: windowDoes.selectProject,
+      switchProject: windowDoes.switchProject,
       closeProject: windowDoes.closeProject,
       moveProject: windowDoes.moveProject,
       openSettings: windowDoes.openSettings,
@@ -4118,6 +4120,8 @@ export type WindowDoing = {
   /** Puts the app's `charter` on a terminal's PATH. The window's: it is about the machine. */
   installCli: () => Promise<Ran>;
   selectProject: (plane: string) => void;
+  /** Opens the project switcher (FR-27). The window's: the palette and the projects are. */
+  switchProject: () => void;
   closeProject: (plane: string) => Promise<Ran>;
   /** Moves a project into another window, or a new one (charter#126). The window's, because
    *  the window is what holds projects. */
@@ -4392,7 +4396,8 @@ export function Doer({
   /**
    * Drawn as its mark alone, with the row's words carried by `aria-label`.
    *
-   * **For the `+` at the end of a strip, and nothing else.** `docs/design-system.md` says an
+   * **For the controls at the end of a strip, and nothing else**: the `+`, the project strip's
+   * open and create, and its switcher (FR-27). `docs/design-system.md` says an
    * icon goes *beside* words and never instead of them, with one exception — a control whose
    * accessible name is already `aria-label` — and this is that exception said out loud rather
    * than a second rule. It is the operator's own instruction for the project strip's opener
@@ -4440,8 +4445,9 @@ export function Doer({
  * same danger hover (`App.css`, `.ends-a-chat`) — an icon may not make ending a chat look
  * lighter than it is.
  *
- * **The project strip draws two of these side by side, so they may not be the same glyph**
- * (charter-app#178). `FolderPlus` is the folder-with-a-plus every file manager puts on *New
+ * **The project strip draws three of these side by side, so no two may be the same glyph**
+ * (charter-app#178). The third is the switcher's `ArrowLeftRight` (FR-27), first of the three:
+ * two ways along the strip, which is what it does. `FolderPlus` is the folder-with-a-plus every file manager puts on *New
  * folder*, and `project.create` is the row that writes a directory that was not there; opening
  * one that already exists is `FolderOpen`, which is that same universal pair's other half.
  * `project.open` wore `FolderPlus` only because it was the strip's one control when #171 drew
@@ -4462,6 +4468,8 @@ export const MARKS: Record<string, typeof Plus> = {
   "pane.close": X,
   "project.create": FolderPlus,
   "project.open": FolderOpen,
+  // The title bar's switcher (FR-27): two ways along the strip, which is what it does.
+  "project.switch": ArrowLeftRight,
 };
 
 /**
