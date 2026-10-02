@@ -641,12 +641,59 @@ mod tests {
         let until = Instant::now() + PATIENCE;
         while let Some(left) = until.checked_duration_since(Instant::now()) {
             let (_, what) = told.recv_timeout(left).expect("told the plane changed");
-            let changes = what.expect("told what changed, not only that something did");
+            // A batch the watcher could not place is told as `None`, and is not this test's
+            // business: the change it waits for comes in a batch of its own or the next one.
+            let Some(changes) = what else {
+                continue;
+            };
             if let Some(found) = changes.into_iter().find(|change| change.path == path) {
                 return found;
             }
         }
         panic!("never told about {path}");
+    }
+
+    fn event(kind: EventKind, paths: &[&Path]) -> notify_debouncer_full::DebouncedEvent {
+        let event = paths.iter().fold(notify::Event::new(kind), |event, path| {
+            event.add_path(path.to_path_buf())
+        });
+        notify_debouncer_full::DebouncedEvent::new(event, Instant::now())
+    }
+
+    #[test]
+    fn a_batch_is_told_as_unknown_when_an_event_names_no_path_or_asks_for_a_rescan() {
+        use notify::event::{CreateKind, Flag};
+        let root = Path::new("/home/dev/plane");
+        let todo = root.join("workspaces/alpha/todos/a.md");
+        let placed = event(EventKind::Create(CreateKind::File), &[&todo]);
+        let named = what_changed(root, None, &[&placed]).expect("placed");
+        assert_eq!(named.len(), 1);
+        assert_eq!(named[0].kind, ChangeKind::Todos);
+
+        let pathless = event(EventKind::Any, &[]);
+        assert_eq!(what_changed(root, None, &[&placed, &pathless]), None);
+
+        let mut rescan = event(EventKind::Other, &[&todo]);
+        rescan.event = rescan.event.set_flag(Flag::Rescan);
+        assert_eq!(what_changed(root, None, &[&placed, &rescan]), None);
+    }
+
+    #[test]
+    fn a_root_opened_through_a_link_places_paths_the_disk_spells_its_own_way() {
+        // macOS hands FSEvents paths as `/private/var/...` for a root opened as `/var/...`.
+        use notify::event::CreateKind;
+        let plane = plane_with_todos(&[]);
+        let real = plane.path().canonicalize().expect("canonical");
+        let links = tempfile::tempdir().expect("a place for the link");
+        let link = links.path().join("plane");
+        std::os::unix::fs::symlink(&real, &link).expect("a link to the plane");
+        let todo = real.join("workspaces/alpha/todos/a.md");
+        let written = event(EventKind::Create(CreateKind::File), &[&todo]);
+
+        assert_eq!(what_changed(&link, None, &[&written]), None);
+        let placed = what_changed(&link, Some(&real), &[&written]).expect("placed");
+        assert_eq!(placed[0].path, "workspaces/alpha/todos/a.md");
+        assert_eq!(placed[0].workspace.as_deref(), Some("alpha"));
     }
 
     #[test]

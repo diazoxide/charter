@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { PlaneChange } from "./bindings";
-import { concerns, ROOT_PANELS, SIDEBAR, workspaceInterest } from "./planeChanged";
+import {
+  concerns,
+  PLANE_SHAPE,
+  ROOT_PANELS,
+  SETTINGS,
+  SIDEBAR,
+  workspaceInterest,
+} from "./planeChanged";
 
 const change = (over: Partial<PlaneChange> & Pick<PlaneChange, "kind">): PlaneChange => ({
   workspace: null,
@@ -51,6 +58,24 @@ describe("whether a change concerns a reader of the plane (FD-10)", () => {
     expect(concerns([change({ kind: "sessions" })], ROOT_PANELS)).toBe(true);
     expect(concerns([change({ kind: "sessions", workspace: "alpha" })], ROOT_PANELS)).toBe(false);
     expect(concerns([change({ kind: "todos", workspace: "alpha" })], ROOT_PANELS)).toBe(false);
+  });
+
+  it("keeps the git readers and the window's own readers off memory and session records", () => {
+    for (const kind of ["memory", "sessions"] as const) {
+      expect(concerns([change({ kind, workspace: "alpha" })], PLANE_SHAPE)).toBe(false);
+      expect(concerns([change({ kind, workspace: "alpha" })], SETTINGS)).toBe(false);
+    }
+    for (const kind of ["project", "harness", "workspace", "todos", "persona"] as const) {
+      expect(concerns([change({ kind })], PLANE_SHAPE)).toBe(true);
+    }
+    expect(concerns(null, PLANE_SHAPE)).toBe(true);
+  });
+
+  it("keeps what a project has on to its settings files and workspace manifests", () => {
+    expect(concerns([change({ kind: "project" })], SETTINGS)).toBe(true);
+    expect(concerns([change({ kind: "workspace", workspace: "alpha" })], SETTINGS)).toBe(true);
+    expect(concerns([change({ kind: "todos", workspace: "alpha" })], SETTINGS)).toBe(false);
+    expect(concerns([change({ kind: "harness" })], SETTINGS)).toBe(false);
   });
 
   it("is told by any one change of a batch", () => {

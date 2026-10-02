@@ -99,7 +99,14 @@ import {
   type Resuming,
 } from "./sessions";
 import { useExtensionFacts } from "./extensionFacts";
-import { ROOT_PANELS, SIDEBAR, usePlaneChanged, workspaceInterest } from "./planeChanged";
+import {
+  PLANE_SHAPE,
+  ROOT_PANELS,
+  SETTINGS,
+  SIDEBAR,
+  usePlaneChanged,
+  workspaceInterest,
+} from "./planeChanged";
 import { PlaneUpdatedMark, usePlaneUpdated, type PlaneUpdates } from "./PlaneUpdated";
 import { inSlots, SIDES, useArrangement } from "./regions";
 import { RegionFrame } from "./RegionFrame";
@@ -368,9 +375,12 @@ export function PlaneView({
    */
   const [rereadWorkspace, setRereadWorkspace] = useState(0);
   /** Bumped when the core says this plane changed on disk (charter-app#264): a todo closed in
-   *  a terminal, a workspace another chat made — whatever changed. The sidebar and the panels
-   *  count only the kinds they are made of, below (FD-10). */
-  const changesOnDisk = usePlaneChanged([plane]);
+   *  a terminal, a workspace another chat made — any change to the plane's shape, never a
+   *  memory or a session record (`PLANE_SHAPE`). The sidebar and the panels count only the
+   *  kinds they are made of, below (FD-10). */
+  const changesOnDisk = usePlaneChanged([plane], PLANE_SHAPE);
+  /** The changes what this project has on and its theme are made of (FD-10). */
+  const settingsChanges = usePlaneChanged([plane], SETTINGS);
   /** The same, counting only the changes the sidebar is made of (FD-10): a memory an agent
    *  saves does not make it list every workspace's todos again. */
   const sidebarChanges = usePlaneChanged([plane], SIDEBAR);
@@ -381,12 +391,12 @@ export function PlaneView({
   // editor, from a `git pull` — is one of these, and what this project has on may have moved
   // with it (charter-app#253). Not at the mount: `useExtensionsOn` asks then.
   useEffect(() => {
-    if (changesOnDisk === 0) return;
+    if (settingsChanges === 0) return;
     extensionsChanged(plane);
     // And the theme it draws, which the same two files and each `workspace.json` pick
     // (charter-app#273, #281).
     projectThemeChanged(plane);
-  }, [changesOnDisk, plane]);
+  }, [settingsChanges, plane]);
   /** Whether the new-workspace dialog is up, why the last attempt made nothing, and whether
    *  charter is making one right now. */
   const [makingWorkspace, setMakingWorkspace] = useState(false);
@@ -3817,7 +3827,9 @@ export function PlaneView({
                   onAsk={(pane) => change((tabs) => stopWaiting(tabs, pane))}
                   onVaultChanged={reloadVaults}
                   memory={{
-                    changed: memoryEdits.changed + changesOnDisk,
+                    // The views follow the disk themselves (`ViewPane`), so a memory saved
+                    // redraws the views and not this whole window (FD-10).
+                    changed: memoryEdits.changed,
                     onSaved: memoryEdits.onSaved,
                     onClose: closeView,
                   }}

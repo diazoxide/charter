@@ -28,6 +28,29 @@ export const SIDEBAR: Interest = [
   { kind: "project" },
 ];
 
+/**
+ * Everything but the memory stores and the session records: the shape of the plane — its
+ * settings, workspaces, todos, personas and harness files. What the readers that are not
+ * panels follow (the instructions a chat started on, the curations, the git standings).
+ *
+ * **Why the git readers leave memory and records out** (FD-10): an agent saving a memory is
+ * the commonest write there is, and asking git for every standing on each one is what the
+ * switch-speed work (FR-27) took out. The standings still follow it — they poll on a timer and
+ * after every save — and `null` (auto-save committed, or a batch the core could not place)
+ * still reaches them at once.
+ */
+export const PLANE_SHAPE: Interest = [
+  { kind: "project" },
+  { kind: "harness" },
+  { kind: "workspace" },
+  { kind: "todos" },
+  { kind: "persona" },
+];
+
+/** What a project has on, and the theme it draws: `charter.toml`, `charter.local.toml` and
+ *  each `workspace.json` (charter-app#253, #273, #281). */
+export const SETTINGS: Interest = [{ kind: "project" }, { kind: "workspace" }];
+
 /** The plane root's panels: its session records, and nothing else (`plane_root_panels`). */
 export const ROOT_PANELS: Interest = [{ kind: "sessions", workspace: null }];
 
