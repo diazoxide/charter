@@ -454,6 +454,21 @@ fn the_save_branch_is_the_one_named_or_this_clones_own() {
 }
 
 #[test]
+fn the_save_branch_names_its_clone_by_the_clone_key_and_is_the_name_it_always_was() {
+    // One hash names a clone (ADR 0079's clone-key); the branch takes its first six digits.
+    // The literal is the name the branch had before the two were one, so no clone's save
+    // branch moved when they were unified.
+    let at = std::path::Path::new("/nowhere/a-project");
+    let plane = settings("", "").plane;
+    let key = crate::plane::CloneKey::of(at);
+    assert_eq!(key.as_str(), "6fec8e6c929644b3");
+    assert_eq!(
+        plane.save_branch_or_default(at),
+        format!("charter/save/{}-6fec8e", crate::dispatch::host())
+    );
+}
+
+#[test]
 fn the_repos_auto_save_can_reach_are_every_table_in_either_file_sorted_and_once() {
     let got = settings(
         "[plane]\nmode = \"push\"\n[repos.widget]\nmode = \"pr\"\n[repos.api]\n",

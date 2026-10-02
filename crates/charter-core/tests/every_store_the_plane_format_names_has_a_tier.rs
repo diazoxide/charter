@@ -381,3 +381,43 @@ fn a_tier_is_one_the_adr_defines() {
     assert!(check("Clone state, cached").is_some());
     assert!(check("Clone state, transient.").is_some());
 }
+
+/// The section of `text` under the `###` heading `heading`, up to the next `###` or `---`.
+fn section<'a>(text: &'a str, heading: &str) -> &'a str {
+    let start = text
+        .find(&format!("\n### {heading}\n"))
+        .unwrap_or_else(|| panic!("no `### {heading}` heading"));
+    let body = &text[start + 1..];
+    let end = body[4..]
+        .find("\n### ")
+        .map(|at| at + 4)
+        .unwrap_or(body.len());
+    &body[..end]
+}
+
+/// V43 put the clone-key and the device id in `app/reopen.json`. It is still the reopen record
+/// V2 names, which ADR 0069 makes Clone state: the key says which clone it belongs to, and a
+/// copy that carries it is told apart rather than trusted.
+#[test]
+fn the_reopen_record_with_its_clone_key_is_still_clone_state() {
+    charter_core::unsteered!();
+    let doc = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/plane-format.md");
+    let text = std::fs::read_to_string(&doc).expect("docs/plane-format.md is readable");
+    let reopen = section(&text, "`app/reopen.json`");
+
+    let tier = reopen
+        .lines()
+        .find_map(tier_on)
+        .expect("app/reopen.json has a **Tier:** line");
+    assert_eq!(check(tier), None, "{tier}");
+    assert!(tier.starts_with("Clone state"), "{tier}");
+    assert!(tier.contains("ADR 0069"), "{tier}");
+    for row in [
+        "| `clone` |",
+        "| `clone.key` |",
+        "| `clone.root` |",
+        "| `clone.device` |",
+    ] {
+        assert!(reopen.contains(row), "app/reopen.json has no {row} row");
+    }
+}

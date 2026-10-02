@@ -30,6 +30,9 @@ use std::path::{Path, PathBuf};
 
 use crate::harness::{Harness, SessionId};
 
+mod arrival;
+pub use arrival::{Arrival, CloneSeat, arrive};
+
 /// The one version of this file this app writes and reads. A record of any other version is
 /// ignored whole, the way the frame's own manifest is: a format that changed means the
 /// chats in it cannot be trusted to mean what they say.
@@ -165,7 +168,8 @@ pub struct Chat {
 /// that is not a ULID reads as `None`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Identity {
-    /// The chat's id, minted once when the host first started it and never changed.
+    /// The chat's id, minted once per clone and device when the host first started it there,
+    /// and never changed in that clone (V43: a copy's launch mints it again, see [`arrive`]).
     pub id: Option<String>,
     /// The device id of the machine that minted [`Self::id`], where it had one: a fact about
     /// the chat, never part of its key. `None` reads as `unknown`.
@@ -328,6 +332,11 @@ pub struct Record {
     /// the launch after it does not open (`--no-restore`, a declined trust ask) keeps the flag
     /// on disk, so it counts only at the launch that took [`RESTARTED_TO_UPDATE`] — see there.
     pub relaunch_after_update: bool,
+    /// The clone and the device that wrote this record (V43), which is how a launch tells a
+    /// copied project from a moved one — see [`arrive`]. `None` in every record written before
+    /// V43, and in one built in memory: the app's writer stamps the clone it holds onto every
+    /// record it writes.
+    pub clone_seat: Option<CloneSeat>,
 }
 
 /// What the operator answered when a launch found something to put back (charter-app#250).
@@ -700,6 +709,7 @@ pub fn read_or_refusal(plane_root: &Path) -> Result<Record, std::io::Error> {
             .collect(),
         dealt: on_disk.dealt,
         relaunch_after_update: on_disk.relaunch_after_update,
+        clone_seat: on_disk.clone.and_then(arrival::CloneSeatOnDisk::held),
     };
     // Held to the same invariant on the way in as on the way out: a file whose counter sits
     // below a number it still names — hand-edited, or written by a charter that did not know
@@ -809,6 +819,11 @@ struct OnDisk {
     /// record before it was. Not a version bump, for [`Chat::pinned`]'s reason.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     relaunch_after_update: bool,
+    /// See [`Record::clone`]. Absent in every record written before V43, which reads as a
+    /// clone that adopts the one it is opened in. Not a version bump, for [`Chat::pinned`]'s
+    /// reason.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    clone: Option<arrival::CloneSeatOnDisk>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -1064,6 +1079,10 @@ impl From<&Record> for OnDisk {
             dealt: highest_dealt(record),
             views: record.views.iter().map(ViewOnDisk::from).collect(),
             relaunch_after_update: record.relaunch_after_update,
+            clone: record
+                .clone_seat
+                .as_ref()
+                .and_then(arrival::CloneSeatOnDisk::of),
         }
     }
 }
@@ -1669,6 +1688,7 @@ pub(crate) mod tests {
             views: Vec::new(),
             dealt: 0,
             relaunch_after_update: false,
+            clone_seat: None,
             chats: vec![Chat {
                 program: "/bin/sh".into(),
                 args: vec!["-c".into(), "touch /tmp/pwned".into()],
@@ -1891,6 +1911,7 @@ pub(crate) mod tests {
             views: Vec::new(),
             dealt: 0,
             relaunch_after_update: false,
+            clone_seat: None,
             chats: vec![
                 Chat {
                     pinned: true,
@@ -1964,6 +1985,7 @@ pub(crate) mod tests {
             ],
             dealt: 5,
             relaunch_after_update: false,
+            clone_seat: None,
         };
 
         write(plane.path(), &record).expect("the record is written");
@@ -2023,6 +2045,7 @@ pub(crate) mod tests {
                 }],
                 dealt: 1,
                 relaunch_after_update: false,
+                clone_seat: None,
             },
         )
         .expect("the record is written");
@@ -2077,6 +2100,7 @@ pub(crate) mod tests {
             views: vec![vault("ops"), vault("e2e-vault"), vault("team.prod_2")],
             dealt: 0,
             relaunch_after_update: false,
+            clone_seat: None,
         };
 
         write(plane.path(), &record).expect("the record is written");
@@ -2104,6 +2128,7 @@ pub(crate) mod tests {
             ],
             dealt: 0,
             relaunch_after_update: false,
+            clone_seat: None,
         };
 
         write(plane.path(), &record).expect("the record is written");
