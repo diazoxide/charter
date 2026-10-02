@@ -4,7 +4,7 @@
 //! credential never gets a link. The credential itself never crosses the wire, so whatever
 //! answers at the socket's path learns nothing it can replay.
 
-use charter_session_protocol::auth::{Credential, Credentials, Scope};
+use charter_session_protocol::auth::{self, Credential, Credentials, Scope};
 use charter_session_protocol::link::{self, LinkError};
 use charter_session_protocol::version::{self, HANDSHAKE_TIMEOUT, Refused, Speaks, Version};
 use tokio::io::duplex;
@@ -101,11 +101,14 @@ async fn an_answer_with_no_proof_no_scope_or_a_scope_that_carries_no_credential_
     }
 }
 
-#[tokio::test]
-async fn a_fake_host_learns_nothing_it_can_replay_to_the_real_one() {
-    // Something of the same user bound the socket's path while the host was down. It answers
-    // the version, sends a challenge of its own and keeps whatever the client sends back.
-    let (client_end, mut fake_end) = duplex(1 << 16);
+/// A fake host: something of the same user that bound the socket's path while the host was
+/// down. It answers the version, sends a challenge of its own, keeps the client's answer, and
+/// sends back whatever verdict `admit` makes from that answer. Returns what the client made of
+/// it, and the answer the fake kept.
+async fn fooled_by(
+    admit: impl FnOnce(&serde_json::Value) -> String + Send + 'static,
+) -> (Result<(), Refused>, serde_json::Value) {
+    let (mut client_end, mut fake_end) = duplex(1 << 16);
     let fake = tokio::spawn(async move {
         let (_, mut io) = version::answer(&mut fake_end, &v1()).await.unwrap();
         write_frame(
@@ -113,21 +116,64 @@ async fn a_fake_host_learns_nothing_it_can_replay_to_the_real_one() {
             &format!(r#"{{"challenge":"{}"}}"#, "ab".repeat(32)),
         )
         .await;
-        read_frame(&mut io).await
+        let kept = read_frame(&mut io).await;
+        write_frame(&mut io, &admit(&kept)).await;
+        // Held open, so the client's verdict is its own and not the end of the stream.
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        kept
     });
-    let fooled = link::connect(client_end, v1(), Scope::Approval, HELD.of(Scope::Approval)).await;
-    assert!(
-        fooled.is_err(),
-        "the client believed the fake host admitted it"
-    );
-    let kept = fake.await.unwrap();
+    let (_, io) = version::offer(&mut client_end, &v1()).await.unwrap();
+    let believed = auth::present(io, Scope::Approval, HELD.of(Scope::Approval))
+        .await
+        .map(|_| ());
+    (believed, fake.await.unwrap())
+}
 
-    // It holds no credential: only a proof bound to the challenge it chose.
+#[tokio::test]
+async fn a_fake_host_that_admits_the_client_without_proving_it_holds_the_credential_is_refused() {
+    let verdicts: [fn(&serde_json::Value) -> String; 4] = [
+        // An admission with no proof at all.
+        |_| r#"{"admit":"approval"}"#.to_owned(),
+        |_| r#"{"admit":{"scope":"approval"}}"#.to_owned(),
+        // A proof that is not the credential's.
+        |_| {
+            format!(
+                r#"{{"admit":{{"scope":"approval","proof":"{}"}}}}"#,
+                "00".repeat(32)
+            )
+        },
+        // The client's own proof, reflected back as the host's.
+        |kept| {
+            format!(
+                r#"{{"admit":{{"scope":"approval","proof":{}}}}}"#,
+                kept["proof"]
+            )
+        },
+    ];
+    for (at, verdict) in verdicts.into_iter().enumerate() {
+        let (believed, kept) = fooled_by(verdict).await;
+        assert!(
+            believed.is_err(),
+            "the client believed a host that never proved it holds the credential ({kept})"
+        );
+        // The two that carry a proof are refused for the proof, not for their shape.
+        if at >= 2 {
+            assert!(
+                matches!(believed, Err(Refused::HostUnproven)),
+                "{believed:?}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_proof_a_fake_host_kept_holds_no_credential_and_is_refused_by_the_real_one() {
+    let (_, kept) = fooled_by(|_| r#"{"refuse":{"why":"gone"}}"#.to_owned()).await;
+
     assert!(
         !kept.to_string().contains(HELD.of(Scope::Approval).expose()),
         "{kept}"
     );
-
     // Replayed to the real host, which challenges with a fresh value, the proof is refused.
     let (verdict, said) = verdict_on(|_| kept.to_string()).await;
     assert!(

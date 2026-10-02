@@ -37,8 +37,6 @@ charter-same-user.workspace = true
 # `link::serve_any`: serve a link over any stream, skipping the uid check. For this crate's own
 # tests only, which turn it on from `[dev-dependencies]`, so no build of the host has it.
 any-stream = []
-
-[features]
 # `charter-session-bench`'s runtime, the one the crate's tests use (SC-16). Only the bench asks for
 # it, so the library's own dependencies stay what its users ask for.
 bench = ["tokio/rt-multi-thread"]

@@ -101,6 +101,12 @@ pub enum Refused {
     /// The host refused this client's credential, and said why ([`crate::auth`]).
     #[error("the host did not admit this client: {0}")]
     NotAdmitted(String),
+    /// The host admitted this client without proving it holds the scope's credential, so it
+    /// is not the host that minted it ([`crate::auth`]).
+    #[error(
+        "the other end admitted this client without proving it is the host that minted its credential"
+    )]
+    HostUnproven,
     /// The client presented no credential that admits it as a scope ([`crate::auth`]).
     #[error("the client presented no credential that admits it")]
     Unauthenticated,

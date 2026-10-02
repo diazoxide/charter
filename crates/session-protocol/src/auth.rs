@@ -1,23 +1,32 @@
 //! Admission: every connection to `charterd` is one client scope, proved by that scope's
 //! credential, before anything else it says is read (FD-6, ADR 0068 §5).
 //!
-//! **The exchange** comes right after the version is agreed and before the multiplexer
-//! starts. The host sends a fresh random challenge. The client answers with the scope it asks
-//! to be and a proof: an HMAC-SHA256, keyed by that scope's credential, over a label that names
-//! this exchange, the scope and the challenge. The host computes the same proof, compares the
-//! two in constant time, and admits the client as that scope or refuses it, and either way says
-//! so. Only an admitted connection becomes a [`crate::link::Link`], and the link knows which
-//! scope it is, so what a scope may do (FD-27) is decided against a fact the host checked,
-//! never against a claim.
+//! **The exchange is mutual**, and comes right after the version is agreed and before the
+//! multiplexer starts (ADR 0068 §5, as amended by FD-6):
 //!
-//! **The credential never crosses the wire.** Whatever answers at the socket's path, the real
-//! host or a process of the same user that bound the path while the host was down, is told
-//! only a proof bound to the challenge it sent itself. The real host never sends the same
-//! challenge twice, so a proof is worth nothing to anyone else: a fake host learns nothing it
-//! can replay, and a proof replayed against another challenge is refused. A same-user process
-//! that can already put itself between a client and a running host could relay one live
-//! admission; such a process can already open the credential files, which is why the chat
-//! sandbox denies a chat both the files and the socket (ADR 0068 §5).
+//! 1. The host sends a fresh random challenge.
+//! 2. The client answers with the scope it asks to be, a fresh random nonce of its own, and its
+//!    proof: an HMAC-SHA256, keyed by that scope's credential, over [`CLIENT_LABEL`], the scope
+//!    and the host's challenge.
+//! 3. The host computes the same proof and compares the two in constant time. It admits the
+//!    client with a proof of its own, an HMAC-SHA256 under the same credential over
+//!    [`HOST_LABEL`], the scope, its challenge and the client's nonce, or it refuses.
+//! 4. The client checks the host's proof in constant time, and refuses a host that cannot make
+//!    it.
+//!
+//! Only a connection both ends admitted becomes a [`crate::link::Link`], and the link knows
+//! which scope it is, so what a scope may do (FD-27) is decided against a fact the host
+//! checked, never against a claim. The two labels differ, so neither side's proof can ever be
+//! reflected back as the other's.
+//!
+//! **The credential never crosses the wire, and whatever answers at the socket's path must
+//! hold it.** A process of the same user that bound the path while the host was down is told
+//! only a proof bound to the challenge it sent itself, which the real host, never sending the
+//! same challenge twice, refuses; and it cannot make the host's proof for the client's fresh
+//! nonce, so the client refuses it before it says anything else. A same-user process that can
+//! already put itself between a client and a running host could relay one live admission;
+//! such a process can already open the credential files, which is why the chat sandbox denies
+//! a chat both the files and the socket (ADR 0068 §5).
 //!
 //! **It fails closed.** There is no anonymous scope, not even for listing. An answer that
 //! names no scope, a scope this end does not know, no proof, a wrong one, or one made with
@@ -37,8 +46,8 @@
 //!
 //! **On the wire,** the three messages are framed as the version's are
 //! ([`crate::version::MAGIC`], then one length-delimited frame of JSON):
-//! `{"challenge":"<hex>"}`, then `{"scope":"terminal","proof":"<hex>"}`, then
-//! `{"admit":"terminal"}` or `{"refuse":{"why":"…"}}`.
+//! `{"challenge":"<hex>"}`, then `{"scope":"terminal","nonce":"<hex>","proof":"<hex>"}`,
+//! then `{"admit":{"scope":"terminal","proof":"<hex>"}}` or `{"refuse":{"why":"…"}}`.
 
 use std::io::Cursor;
 use std::path::Path;
@@ -49,9 +58,14 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, join, split};
 
 use crate::version::{self, Negotiated, Refused};
 
-/// What a proof is made over first, so it can only ever be a proof of this exchange, in this
-/// version of it, and never a MAC a credential made for anything else.
-const LABEL: &[u8] = b"charter session protocol 1: admission";
+/// What the client's proof is made over first, so it can only ever be a client's proof of this
+/// exchange, in this version of it, and never a MAC the credential made for anything else.
+pub const CLIENT_LABEL: &[u8] = b"charter session protocol 1: the client proves its scope";
+
+/// What the host's proof is made over first. Distinct from [`CLIENT_LABEL`], so a client's
+/// proof can never be reflected back to it as the host's.
+pub const HOST_LABEL: &[u8] =
+    b"charter session protocol 1: the host proves it minted the credential";
 
 /// How many random bytes a credential is: 256 bits from the operating system's generator,
 /// the size of a chat's token.
@@ -120,9 +134,19 @@ impl<'de> Deserialize<'de> for Scope {
     }
 }
 
-/// One scope's credential: 32 random bytes, as hex. Never written out by `Debug`.
-#[derive(Clone, PartialEq, Eq)]
+/// One scope's credential: 32 random bytes, as hex. Never written out by `Debug`, and compared
+/// in constant time.
+#[derive(Clone)]
 pub struct Credential(String);
+
+impl PartialEq for Credential {
+    fn eq(&self, other: &Self) -> bool {
+        use subtle::ConstantTimeEq;
+        bool::from(self.0.as_bytes().ct_eq(other.0.as_bytes()))
+    }
+}
+
+impl Eq for Credential {}
 
 impl Credential {
     /// A fresh one, from the operating system's generator.
@@ -229,24 +253,49 @@ impl Credentials {
         &self.0[at]
     }
 
-    /// Whether `proof` is the proof `scope`'s credential makes for `challenge`, compared in
-    /// constant time, so how long a wrong one takes to refuse says nothing about how much of
-    /// it was right.
+    /// Whether `proof` is the client's proof for `scope` and `challenge`.
     fn admits(&self, scope: Scope, challenge: &str, proof: &str) -> bool {
-        use subtle::ConstantTimeEq;
-        let expected = prove(self.of(scope), scope, challenge);
-        bool::from(expected.as_bytes().ct_eq(proof.as_bytes()))
+        same(&client_proof(self.of(scope), scope, challenge), proof)
     }
 }
 
-/// The proof `credential` makes that its holder is `scope`, for `challenge`: HMAC-SHA256 keyed
-/// by the credential, over [`LABEL`], the scope's word and the challenge, each ended by a zero
-/// byte so no two of them can run together. As hex.
-fn prove(credential: &Credential, scope: Scope, challenge: &str) -> String {
+/// Whether two proofs are the same, compared in constant time, so how long a wrong one takes
+/// to refuse says nothing about how much of it was right.
+fn same(expected: &str, given: &str) -> bool {
+    use subtle::ConstantTimeEq;
+    bool::from(expected.as_bytes().ct_eq(given.as_bytes()))
+}
+
+/// The client's proof that it holds `scope`'s credential, for the host's `challenge`.
+fn client_proof(credential: &Credential, scope: Scope, challenge: &str) -> String {
+    prove(
+        credential,
+        CLIENT_LABEL,
+        &[scope.word().as_bytes(), challenge.as_bytes()],
+    )
+}
+
+/// The host's proof that it holds `scope`'s credential, for its own `challenge` and the
+/// client's `nonce`.
+fn host_proof(credential: &Credential, scope: Scope, challenge: &str, nonce: &str) -> String {
+    prove(
+        credential,
+        HOST_LABEL,
+        &[
+            scope.word().as_bytes(),
+            challenge.as_bytes(),
+            nonce.as_bytes(),
+        ],
+    )
+}
+
+/// HMAC-SHA256 keyed by `credential`, over `label` and then each of `parts`, each ended by a
+/// zero byte so no two of them can run together. As hex.
+fn prove(credential: &Credential, label: &[u8], parts: &[&[u8]]) -> String {
     use hmac::{KeyInit, Mac};
     let mut mac = hmac::Hmac::<sha2::Sha256>::new_from_slice(credential.0.as_bytes())
         .unwrap_or_else(|_| unreachable!("HMAC takes a key of any length"));
-    for part in [LABEL, scope.word().as_bytes(), challenge.as_bytes()] {
+    for part in std::iter::once(label).chain(parts.iter().copied()) {
         mac.update(part);
         mac.update(&[0]);
     }
@@ -257,10 +306,15 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// How many random bytes a challenge is.
+/// How many random bytes a challenge, and a client's nonce, is.
 const A_CHALLENGE_IS: usize = 32;
 
-/// A fresh challenge, as hex.
+/// Whether `text` is a challenge or a nonce: 32 bytes, as hex.
+fn is_a_challenge(text: &str) -> bool {
+    text.len() == 2 * A_CHALLENGE_IS && text.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// A fresh challenge, or nonce, as hex.
 fn challenge() -> std::io::Result<String> {
     let mut bytes = [0u8; A_CHALLENGE_IS];
     getrandom::fill(&mut bytes).map_err(std::io::Error::other)?;
@@ -280,19 +334,28 @@ struct Answer {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     scope: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    nonce: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     proof: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum Verdict {
-    Admit(Scope),
-    Refuse { why: String },
+    /// Admitted as `scope`, with the host's own proof that it holds the scope's credential.
+    Admit {
+        scope: Scope,
+        proof: String,
+    },
+    Refuse {
+        why: String,
+    },
 }
 
 /// What the host says to every refused answer, whatever was wrong with it, so a refusal says
 /// nothing about which part was right.
-const NOT_ADMITTED: &str = "a connection to charterd names one client scope and proves it holds the credential the running host minted for it";
+const NOT_ADMITTED: &str = "a connection to charterd names one client scope and proves it holds \
+     the credential the running host minted for it";
 
 /// The client's side: prove to be `scope` with its `credential`, and return the stream to go
 /// on with once the host has admitted it. Refused if the host has not finished within
@@ -325,9 +388,7 @@ pub(crate) async fn present_unbounded<S: AsyncRead + AsyncWrite>(
 ) -> Result<Negotiated<S>, Refused> {
     let (mut reads, mut writes) = split(io);
     let (challenge, left): (Challenge, BytesMut) = version::receive(&mut reads).await?;
-    if challenge.challenge.len() != 2 * A_CHALLENGE_IS
-        || !challenge.challenge.bytes().all(|b| b.is_ascii_hexdigit())
-    {
+    if !is_a_challenge(&challenge.challenge) {
         return Err(Refused::Malformed(
             "the host's challenge is not one".to_owned(),
         ));
@@ -337,20 +398,34 @@ pub(crate) async fn present_unbounded<S: AsyncRead + AsyncWrite>(
             "the host sent more before this client answered".to_owned(),
         ));
     }
+    let nonce = self::challenge()?;
     version::send(
         &mut writes,
         &Answer {
             scope: Some(scope.word().to_owned()),
-            proof: Some(prove(credential, scope, &challenge.challenge)),
+            nonce: Some(nonce.clone()),
+            proof: Some(client_proof(credential, scope, &challenge.challenge)),
         },
     )
     .await?;
     let (verdict, left): (Verdict, BytesMut) = version::receive(&mut reads).await?;
     match verdict {
-        Verdict::Admit(admitted) if admitted == scope => {
-            Ok(join(Cursor::new(left).chain(reads), writes))
+        Verdict::Admit {
+            scope: admitted,
+            proof,
+        } if admitted == scope => {
+            if same(
+                &host_proof(credential, scope, &challenge.challenge, &nonce),
+                &proof,
+            ) {
+                Ok(join(Cursor::new(left).chain(reads), writes))
+            } else {
+                Err(Refused::HostUnproven)
+            }
         }
-        Verdict::Admit(admitted) => Err(Refused::Malformed(format!(
+        Verdict::Admit {
+            scope: admitted, ..
+        } => Err(Refused::Malformed(format!(
             "the host admitted this client as {admitted}, which it never asked to be"
         ))),
         Verdict::Refuse { why } => Err(Refused::NotAdmitted(why)),
@@ -374,9 +449,14 @@ pub(crate) async fn admit_unbounded<S: AsyncRead + AsyncWrite>(
     .await?;
     let (answer, left): (Answer, BytesMut) = version::receive(&mut reads).await?;
     let scope = answer.scope.as_deref().and_then(Scope::from_word);
-    match (scope, answer.proof.as_deref()) {
-        (Some(scope), Some(proof)) if held.admits(scope, &challenge, proof) => {
-            version::send(&mut writes, &Verdict::Admit(scope)).await?;
+    let nonce = answer
+        .nonce
+        .as_deref()
+        .filter(|nonce| is_a_challenge(nonce));
+    match (scope, nonce, answer.proof.as_deref()) {
+        (Some(scope), Some(nonce), Some(proof)) if held.admits(scope, &challenge, proof) => {
+            let proof = host_proof(held.of(scope), scope, &challenge, nonce);
+            version::send(&mut writes, &Verdict::Admit { scope, proof }).await?;
             Ok((scope, join(Cursor::new(left).chain(reads), writes)))
         }
         _ => {

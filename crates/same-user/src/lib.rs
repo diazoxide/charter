@@ -136,8 +136,12 @@ fn private_directory_of(dir: &Path, owner: Uid) -> io::Result<()> {
     opened.set_permissions(std::fs::Permissions::from_mode(0o700))
 }
 
+/// The most [`read_private_file`] reads. What it is for is a credential, a few dozen bytes; a
+/// file past this is not one, and is refused rather than read into memory.
+pub const A_PRIVATE_FILE_IS_AT_MOST: u64 = 64 * 1024;
+
 /// The whole of `path`, read only when it is a regular file, not a link, owned by this user,
-/// that nobody else may read or write.
+/// that nobody else may read or write, and no longer than [`A_PRIVATE_FILE_IS_AT_MOST`].
 pub fn read_private_file(path: &Path) -> io::Result<String> {
     read_private_file_of(path, Uid::effective())
 }
@@ -163,7 +167,15 @@ fn read_private_file_of(path: &Path, owner: Uid) -> io::Result<String> {
         ));
     }
     let mut text = String::new();
-    opened.read_to_string(&mut text)?;
+    (&mut opened)
+        .take(A_PRIVATE_FILE_IS_AT_MOST + 1)
+        .read_to_string(&mut text)?;
+    if text.len() as u64 > A_PRIVATE_FILE_IS_AT_MOST {
+        return Err(not_private(
+            path,
+            &format!("is longer than {A_PRIVATE_FILE_IS_AT_MOST} bytes"),
+        ));
+    }
     Ok(text)
 }
 
@@ -321,6 +333,18 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let path = private_file(home.path(), "abc");
         assert_eq!(read_private_file(&path).unwrap(), "abc");
+    }
+
+    #[test]
+    fn a_private_file_longer_than_the_cap_is_refused_and_one_at_the_cap_is_read() {
+        let home = tempfile::tempdir().unwrap();
+        let cap = usize::try_from(A_PRIVATE_FILE_IS_AT_MOST).unwrap();
+        let path = private_file(home.path(), &"a".repeat(cap));
+        assert_eq!(read_private_file(&path).unwrap().len(), cap);
+
+        let path = private_file(home.path(), &"a".repeat(cap + 1));
+        let refused = read_private_file(&path).unwrap_err();
+        assert!(refused.to_string().contains("longer than"), "{refused}");
     }
 
     #[test]

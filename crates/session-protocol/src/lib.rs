@@ -14,9 +14,11 @@
 //!    they share no major, or when the other end has not finished its half within
 //!    [`version::HANDSHAKE_TIMEOUT`], one deadline over this step and the two after it. It
 //!    fails closed.
-//! 2. [`auth`]: the client is admitted as one client scope, by a proof over a fresh challenge
-//!    that it holds that scope's credential, or refused. The credential never crosses the wire. There is no anonymous scope, and a [`link::Link`] exists only once admitted
-//!    (FD-6, ADR 0068 §5).
+//! 2. [`auth`]: admission is mutual. The client proves, over the host's fresh challenge, that it
+//!    holds one client scope's credential, and the host proves, over the client's fresh nonce,
+//!    that it holds it too; either end refuses the other otherwise. The credential never
+//!    crosses the wire. There is no anonymous scope, and a [`link::Link`] exists only once
+//!    both ends have admitted (FD-6, ADR 0068 §5).
 //! 3. [`link`]: the stream is multiplexed with Yamux into a **control lane** (length-delimited
 //!    frames, the commands and events) and any number of streams, each with **its own credit
 //!    flow control**, so a pane that stops reading stops only itself.

@@ -1164,7 +1164,7 @@ impl Listener {
                     charter_same_user::peer_of(&connection),
                     self.owner,
                 ) {
-                    if let Some(also) = REFUSALS.say() {
+                    if let Some(also) = PEER_REFUSALS.say() {
                         tracing::warn!(
                             "charter: the hook channel refused a connection: {refused}{also}"
                         );
@@ -1230,13 +1230,21 @@ fn private_directory(directory: &std::path::Path) -> io::Result<()> {
     charter_same_user::private_directory(directory)
 }
 
-/// The hook channel's refusals, said in the log at most once per [`A_REFUSAL_IS_SAID_EVERY`].
+/// The hook channel's refusals of a peer that is not this user, said in the log at most once
+/// per [`A_REFUSAL_IS_SAID_EVERY`].
 ///
 /// A refusal is something to know about, and a client that connects in a loop must not be
 /// able to fill the log with them, so the ones in between are counted and the next line that is
-/// said gives the count.
+/// said gives the count. **One limiter per kind of refusal**, so one kind cannot spend the
+/// interval and hide the other: a throwaway line without a token does not keep a peer of
+/// another uid out of the log, nor the reverse.
 #[cfg(unix)]
-static REFUSALS: RateLimited = RateLimited::new();
+static PEER_REFUSALS: RateLimited = RateLimited::new();
+
+/// The hook channel's refusals of a line that did not carry its chat's token, limited apart
+/// from [`PEER_REFUSALS`].
+#[cfg(unix)]
+static TOKEN_REFUSALS: RateLimited = RateLimited::new();
 
 /// How often a refusal on the hook channel is said in the log at most.
 #[cfg(unix)]
@@ -1362,7 +1370,7 @@ fn serve(
         // app's log (#647); the token is not.
         let chat = line.chat();
         if !tokens.admits(chat, token.as_deref()) {
-            if let Some(also) = REFUSALS.say() {
+            if let Some(also) = TOKEN_REFUSALS.say() {
                 tracing::warn!(
                     "charter: a line on the hook channel for chat {chat} did not carry that \
                      chat's token, so it was dropped{also}"
