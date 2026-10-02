@@ -33,7 +33,7 @@ mod support;
 
 use std::path::{Path, PathBuf};
 
-use support::forge_cli::{BIN, Scene, in_a_child, in_child, was_asked};
+use support::forge_cli::{BIN, Scene, bare_repo, in_a_child, in_child, was_asked};
 
 #[test]
 fn every_question_is_asked_of_a_stand_in_cli_first_on_path() {
@@ -55,7 +55,7 @@ fn a_cli_whose_path_cannot_be_quoted_is_named_bare_in_the_helper() {
 
 mod child {
     use super::*;
-    use charter_core::forge::{Caller, ForgeError, Raised};
+    use charter_core::forge::{Caller, ForgeError, ForgeRef, Kind, Owner, Raised, RepoRecord};
     use serde_json::{Value, json};
 
     /// `n` bare records named `r<i>`, as a page of a listing.
@@ -64,11 +64,18 @@ mod child {
         Value::Array(items).to_string()
     }
 
-    fn names(records: &[Value]) -> Vec<String> {
-        records
-            .iter()
-            .map(|r| r["name"].as_str().unwrap_or_default().to_string())
-            .collect()
+    fn names(records: &[RepoRecord]) -> Vec<String> {
+        records.iter().map(|r| r.name.clone()).collect()
+    }
+
+    /// A record of `path`, at `default_branch`, with an `id` when one is given.
+    fn at(path: &str, default_branch: &str, id: Option<&str>) -> RepoRecord {
+        RepoRecord {
+            id: id.map(|id| ForgeRef(id.into())),
+            path_with_namespace: path.into(),
+            default_branch: Some(default_branch.to_string()).filter(|b| !b.is_empty()),
+            ..bare_repo(path.rsplit('/').next().unwrap_or(path), Kind::GitHub)
+        }
     }
 
     #[test]
@@ -234,18 +241,12 @@ mod child {
         let repos = scene
             .forge("github")
             .backend()
-            .owned(&Caller::command(), "ac me")
+            .owned(&Caller::command(), &Owner::new("ac me"))
             .unwrap();
 
         assert_eq!(repos.len(), 101);
         assert_eq!(names(&repos)[100], "r0");
-        assert_eq!(
-            repos[0],
-            json!({
-                "id": null, "name": "r0", "path_with_namespace": null, "default_branch": null,
-                "description": "", "web_url": "", "ssh_url": "", "topics": [], "forge": "github",
-            })
-        );
+        assert_eq!(repos[0], bare_repo("r0", Kind::GitHub));
     }
 
     #[test]
@@ -266,7 +267,7 @@ mod child {
             scene
                 .forge("github")
                 .backend()
-                .owned(&Caller::command(), "o")
+                .owned(&Caller::command(), &Owner::new("o"))
                 .unwrap()
                 .len(),
             100
@@ -279,9 +280,9 @@ mod child {
         assert_eq!(
             none.forge("github")
                 .backend()
-                .owned(&Caller::command(), "o")
+                .owned(&Caller::command(), &Owner::new("o"))
                 .unwrap(),
-            Vec::<Value>::new()
+            Vec::<RepoRecord>::new()
         );
     }
 
@@ -298,7 +299,7 @@ mod child {
                 &scene
                     .forge("github")
                     .backend()
-                    .owned(&Caller::command(), "o")
+                    .owned(&Caller::command(), &Owner::new("o"))
                     .unwrap()
             ),
             ["r0", "r1", "r2"]
@@ -329,7 +330,7 @@ mod child {
         let repos = scene
             .forge("github")
             .backend()
-            .reachable(&Caller::command(), "acme")
+            .reachable(&Caller::command(), &Owner::new("acme"))
             .unwrap();
 
         assert_eq!(names(&repos), ["widget", "gadget"]);
@@ -356,7 +357,7 @@ mod child {
         let repos = scene
             .forge("gitlab")
             .backend()
-            .reachable(&Caller::command(), "grp")
+            .reachable(&Caller::command(), &Owner::new("grp"))
             .unwrap();
 
         assert_eq!(names(&repos), ["api"]);
@@ -388,23 +389,26 @@ mod child {
         let repos = scene
             .forge("github")
             .backend()
-            .owned(&Caller::command(), "acme")
+            .owned(&Caller::command(), &Owner::new("acme"))
             .unwrap();
 
         assert_eq!(
             repos,
             vec![
-                json!({"id": 1, "name": "widget", "path_with_namespace": "acme/widget",
-                       "default_branch": "main", "description": "",
-                       "web_url": "https://github.com/acme/widget",
-                       "ssh_url": "git@github.com:acme/widget.git", "topics": ["rust"],
-                       "forge": "github"}),
-                json!({"id": 2, "name": "gadget", "path_with_namespace": "acme/gadget",
-                       "default_branch": "dev", "description": "d", "web_url": "",
-                       "ssh_url": "", "topics": [], "forge": "github"}),
-                json!({"id": 3, "name": "bare", "path_with_namespace": null,
-                       "default_branch": null, "description": "", "web_url": "",
-                       "ssh_url": "", "topics": [], "forge": "github"}),
+                RepoRecord {
+                    web_url: "https://github.com/acme/widget".into(),
+                    ssh_url: "git@github.com:acme/widget.git".into(),
+                    topics: vec!["rust".into()],
+                    ..at("acme/widget", "main", Some("1"))
+                },
+                RepoRecord {
+                    description: "d".into(),
+                    ..at("acme/gadget", "dev", Some("2"))
+                },
+                RepoRecord {
+                    id: Some(ForgeRef("3".into())),
+                    ..bare_repo("bare", Kind::GitHub)
+                },
             ]
         );
     }
@@ -434,7 +438,7 @@ mod child {
                 &words
                     .forge("github")
                     .backend()
-                    .owned(&Caller::command(), "solo")
+                    .owned(&Caller::command(), &Owner::new("solo"))
                     .unwrap()
             ),
             ["r0", "r1"]
@@ -457,7 +461,7 @@ mod child {
         assert_eq!(
             body.forge("github")
                 .backend()
-                .owned(&Caller::command(), "solo")
+                .owned(&Caller::command(), &Owner::new("solo"))
                 .unwrap()
                 .len(),
             1
@@ -487,7 +491,7 @@ mod child {
             scene
                 .forge("github")
                 .backend()
-                .owned(&Caller::command(), "o"),
+                .owned(&Caller::command(), &Owner::new("o")),
             Err(ForgeError::new(
                 "listing repos for GitHub owner 'o' failed (orgs/o/repos?per_page=100&page=2): \
                  gh: Not Found (HTTP 404)"
@@ -502,7 +506,7 @@ mod child {
         assert_eq!(
             user.forge("github")
                 .backend()
-                .owned(&Caller::command(), "o"),
+                .owned(&Caller::command(), &Owner::new("o")),
             Err(ForgeError::new(
                 "listing repos for GitHub owner 'o' failed (users/o/repos?per_page=100&page=1): \
                  HTTP 404"
@@ -525,7 +529,9 @@ mod child {
             "  gh: Server Error (HTTP 502)\n",
         );
         assert_eq!(
-            err.forge("github").backend().owned(&Caller::command(), "o"),
+            err.forge("github")
+                .backend()
+                .owned(&Caller::command(), &Owner::new("o")),
             Err(ForgeError::new(
                 "listing repos for GitHub owner 'o' failed (orgs/o/repos?per_page=100&page=1): \
                  gh: Server Error (HTTP 502)"
@@ -541,7 +547,9 @@ mod child {
             " \n",
         );
         assert_eq!(
-            out.forge("github").backend().owned(&Caller::command(), "o"),
+            out.forge("github")
+                .backend()
+                .owned(&Caller::command(), &Owner::new("o")),
             Err(ForgeError::new(
                 "listing repos for GitHub owner 'o' failed (orgs/o/repos?per_page=100&page=1): \
                  said on stdout"
@@ -554,7 +562,7 @@ mod child {
         assert_eq!(
             mute.forge("github")
                 .backend()
-                .owned(&Caller::command(), "o"),
+                .owned(&Caller::command(), &Owner::new("o")),
             Err(ForgeError::new(
                 "listing repos for GitHub owner 'o' failed (orgs/o/repos?per_page=100&page=1): \
                  gh exited 4"
@@ -567,7 +575,7 @@ mod child {
         let why = garbled
             .forge("github")
             .backend()
-            .owned(&Caller::command(), "o")
+            .owned(&Caller::command(), &Owner::new("o"))
             .unwrap_err()
             .to_string();
         assert!(
@@ -609,18 +617,28 @@ mod child {
         let repos = scene
             .forge("gitlab")
             .backend()
-            .owned(&Caller::command(), "grp/sub")
+            .owned(&Caller::command(), &Owner::new("grp/sub"))
             .unwrap();
 
         assert_eq!(repos.len(), 101);
-        assert_eq!(repos[0]["name"], "p0", "`path` before `name`");
-        assert_eq!(repos[0]["ssh_url"], "");
+        assert_eq!(
+            repos[0],
+            bare_repo("p0", Kind::GitLab),
+            "`path` before `name`"
+        );
         assert_eq!(
             repos[100],
-            json!({"id": 9, "name": "Named", "path_with_namespace": "grp/sub/named",
-                   "default_branch": "main", "description": "about",
-                   "web_url": "https://gl/named", "ssh_url": "git@gl:grp/sub/named.git",
-                   "topics": ["x"], "forge": "gitlab"}),
+            RepoRecord {
+                id: Some(ForgeRef("9".into())),
+                name: "Named".into(),
+                path_with_namespace: "grp/sub/named".into(),
+                default_branch: Some("main".into()),
+                description: "about".into(),
+                web_url: "https://gl/named".into(),
+                ssh_url: "git@gl:grp/sub/named.git".into(),
+                topics: vec!["x".into()],
+                forge: Kind::GitLab,
+            },
             "an empty `path` falls back to `name`"
         );
     }
@@ -642,7 +660,7 @@ mod child {
             scene
                 .forge("gitlab")
                 .backend()
-                .owned(&Caller::command(), "g"),
+                .owned(&Caller::command(), &Owner::new("g")),
             Err(ForgeError::new(
                 "listing repos for GitLab group 'g' failed: GitLab API call failed \
                  (groups/g/projects?per_page=100&page=1&include_subgroups=true&archived=false): \
@@ -667,7 +685,7 @@ mod child {
         assert_eq!(
             full.forge("gitlab")
                 .backend()
-                .owned(&Caller::command(), "g")
+                .owned(&Caller::command(), &Owner::new("g"))
                 .unwrap()
                 .len(),
             100
@@ -689,7 +707,7 @@ mod child {
         scene.gh_api("repos/acme/wid%20get/git/trees/dev", 0, &tree, "");
         scene.gh_api("repos/acme/wid%20get/git/trees/HEAD", 0, "", "");
         let forge = scene.forge("github");
-        let repo = json!({"path_with_namespace": "acme/wid get", "default_branch": "dev"});
+        let repo = at("acme/wid get", "dev", None);
 
         assert_eq!(
             forge
@@ -706,7 +724,7 @@ mod child {
             ["Cargo.toml", "README.md", ""],
             "an empty ref is no ref"
         );
-        let bare = json!({"path_with_namespace": "acme/wid get", "default_branch": ""});
+        let bare = at("acme/wid get", "", None);
         assert_eq!(
             forge
                 .backend()
@@ -732,7 +750,7 @@ mod child {
         );
         scene.gh_api("repos/acme/w/git/trees/next", 0, "{", "");
         let forge = scene.forge("github");
-        let repo = json!({"path_with_namespace": "acme/w", "default_branch": "main"});
+        let repo = at("acme/w", "main", None);
 
         assert_eq!(
             forge.backend().top_level(&Caller::command(), &repo, None),
@@ -780,7 +798,11 @@ mod child {
 
         let names = forge
             .backend()
-            .top_level(&Caller::command(), &json!({"id": 42}), Some("feature/x"))
+            .top_level(
+                &Caller::command(),
+                &at("", "", Some("42")),
+                Some("feature/x"),
+            )
             .unwrap();
         assert_eq!(names.len(), 102);
         assert_eq!(names[100..], ["last", ""]);
@@ -788,7 +810,7 @@ mod child {
         assert_eq!(
             forge
                 .backend()
-                .top_level(&Caller::command(), &json!({"id": "a/b"}), Some("")),
+                .top_level(&Caller::command(), &at("", "", Some("a/b")), Some("")),
             Err(ForgeError::new(
                 "GitLab API call failed (projects/a%2Fb/repository/tree?per_page=100&page=1): boom"
                     .into()

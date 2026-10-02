@@ -174,3 +174,18 @@ pub fn was_asked(base: &Path) -> bool {
 pub fn in_child() -> bool {
     std::env::var_os(CHILD).is_some()
 }
+
+/// A repo record with only a name and a forge: every other field empty.
+pub fn bare_repo(name: &str, forge: charter_core::forge::Kind) -> charter_core::forge::RepoRecord {
+    charter_core::forge::RepoRecord {
+        id: None,
+        name: name.into(),
+        path_with_namespace: String::new(),
+        default_branch: None,
+        description: String::new(),
+        web_url: String::new(),
+        ssh_url: String::new(),
+        topics: Vec::new(),
+        forge,
+    }
+}

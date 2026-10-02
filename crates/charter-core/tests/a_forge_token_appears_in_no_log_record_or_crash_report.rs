@@ -20,10 +20,15 @@
 use std::path::Path;
 use std::sync::Arc;
 
+mod support;
+use support::forge_cli::bare_repo;
+
 use charter_core::forge::http::{ApiRoot, TokenSource};
 use charter_core::forge::pr::Pr;
 use charter_core::forge::route::{HostScope, Resolver, SignIn};
-use charter_core::forge::{Account, Caller, Capability, Forge, ForgeError, Kind, Reach};
+use charter_core::forge::{
+    Account, Caller, Capability, Forge, ForgeError, Kind, Owner, Reach, RepoRecord,
+};
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::json;
 use wiremock::matchers::any;
@@ -91,11 +96,15 @@ fn every_operation(rt: &tokio::runtime::Runtime, run: &Path, status: u16) {
         number: 1,
         url: "x".into(),
     };
-    let repo = json!({"path_with_namespace": "o/r", "default_branch": "main"});
+    let repo = RepoRecord {
+        path_with_namespace: "o/r".into(),
+        default_branch: Some("main".into()),
+        ..bare_repo("r", Kind::GitHub)
+    };
     let sha = "6dcb09b5b57875f334f61aebed695e2e4193db5e";
     let said = [
-        format!("{:?}", backend.owned(&me, "o")),
-        format!("{:?}", backend.reachable(&me, "o")),
+        format!("{:?}", backend.owned(&me, &Owner::new("o"))),
+        format!("{:?}", backend.reachable(&me, &Owner::new("o"))),
         format!("{:?}", backend.top_level(&me, &repo, None)),
         format!(
             "{:?}",

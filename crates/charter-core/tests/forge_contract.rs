@@ -24,7 +24,9 @@ use std::sync::Arc;
 use charter_core::forge::checks::{Checks, Ci};
 use charter_core::forge::pr::{AutoMerge, MergeAs, MergedAt, Opened, Pr, Request, State};
 use charter_core::forge::recorded::Recorded;
-use charter_core::forge::{Caller, Capability, Forge, ForgeBackend, Reach, Support};
+use charter_core::forge::{
+    Caller, Capability, Forge, ForgeBackend, ForgeRef, Kind, Owner, Reach, RepoRecord, Support,
+};
 use serde_json::{Value, json};
 
 #[path = "forge_contract/native.rs"]
@@ -136,45 +138,61 @@ fn caller() -> Caller {
 mod cases {
     use super::*;
 
+    /// The record a recording's repo `name` under `acme` becomes, in neutral fields. GitLab
+    /// names a repo by its `path` (`api`), not its display name (`Api`).
+    fn acme(kind: &str, id: &str, name: &str, topics: &[&str]) -> RepoRecord {
+        let host = match kind {
+            "github" => "github.com",
+            _ => "gitlab.com",
+        };
+        RepoRecord {
+            id: Some(ForgeRef(id.into())),
+            name: name.into(),
+            path_with_namespace: format!("acme/{name}"),
+            default_branch: Some("main".into()),
+            description: String::new(),
+            web_url: format!("https://{host}/acme/{name}"),
+            ssh_url: format!("git@{host}:acme/{name}.git"),
+            topics: topics.iter().map(|t| t.to_string()).collect(),
+            forge: Kind::parse(kind).unwrap(),
+        }
+    }
+
     pub fn owned(kind: &str, how: How) {
         let recorded = over(kind, "owned", how);
         let backend = &recorded.backend;
-        let repos = backend.owned(&recorded.caller, "acme").unwrap();
-        let shown: Vec<(&str, &str, &str)> = repos
-            .iter()
-            .map(|r| {
-                (
-                    r["name"].as_str().unwrap(),
-                    r["path_with_namespace"].as_str().unwrap(),
-                    r["forge"].as_str().unwrap(),
-                )
-            })
-            .collect();
+        let repos = backend
+            .owned(&recorded.caller, &Owner::new("acme"))
+            .unwrap();
         assert_eq!(
-            shown,
-            [("api", "acme/api", kind), ("web", "acme/web", kind)]
+            repos,
+            [
+                acme(kind, "1", "api", &[]),
+                acme(kind, "2", "web", &["frontend"])
+            ],
+            "every field typed; a null description is empty"
         );
-        assert_eq!(repos[0]["default_branch"], "main");
-        assert_eq!(repos[0]["description"], "", "a null description is empty");
         spent(&recorded);
     }
 
     pub fn reachable(kind: &str, how: How) {
         let recorded = over(kind, "reachable", how);
         let backend = &recorded.backend;
-        let repos = backend.reachable(&recorded.caller, "acme").unwrap();
-        let paths: Vec<&str> = repos
-            .iter()
-            .map(|r| r["path_with_namespace"].as_str().unwrap())
-            .collect();
-        assert_eq!(paths, ["acme/api"], "only the declared owner's repos");
+        let repos = backend
+            .reachable(&recorded.caller, &Owner::new("acme"))
+            .unwrap();
+        assert_eq!(
+            repos,
+            [acme(kind, "1", "api", &[])],
+            "only the declared owner's repos"
+        );
         spent(&recorded);
     }
 
     pub fn top_level(kind: &str, how: How) {
         let recorded = over(kind, "top_level", how);
         let backend = &recorded.backend;
-        let repo = json!({"id": 7, "path_with_namespace": "acme/api", "default_branch": "main"});
+        let repo = acme(kind, "7", "api", &[]);
         assert_eq!(
             backend.top_level(&recorded.caller, &repo, None).unwrap(),
             ["Cargo.toml", "src"]

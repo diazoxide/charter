@@ -13,7 +13,7 @@
       },
       "reply": {
         "code": 0,
-        "out": "[{\"id\": 1, \"name\": \"Api\", \"path\": \"api\", \"path_with_namespace\": \"acme/api\", \"default_branch\": \"main\", \"description\": null, \"web_url\": \"https://gitlab.com/acme/api\", \"ssh_url_to_repo\": \"git@gitlab.com:acme/api.git\", \"topics\": []}, {\"id\": 2, \"name\": \"Web\", \"path\": \"web\", \"path_with_namespace\": \"acme/web\", \"default_branch\": \"main\", \"description\": null, \"web_url\": \"https://gitlab.com/acme/web\", \"ssh_url_to_repo\": \"git@gitlab.com:acme/web.git\", \"topics\": []}]",
+        "out": "[{\"id\": 1, \"name\": \"Api\", \"path\": \"api\", \"path_with_namespace\": \"acme/api\", \"default_branch\": \"main\", \"description\": null, \"web_url\": \"https://gitlab.com/acme/api\", \"ssh_url_to_repo\": \"git@gitlab.com:acme/api.git\", \"topics\": []}, {\"id\": 2, \"name\": \"Web\", \"path\": \"web\", \"path_with_namespace\": \"acme/web\", \"default_branch\": \"main\", \"description\": null, \"web_url\": \"https://gitlab.com/acme/web\", \"ssh_url_to_repo\": \"git@gitlab.com:acme/web.git\", \"topics\": [\"frontend\"]}]",
         "err": ""
       }
     }

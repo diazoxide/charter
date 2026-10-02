@@ -64,6 +64,11 @@ empty" is how a rate-limited lookup wipes an inventory, or a save opens a second
 answers nothing. Being wrong costs a blank column, retried at the next refresh, and this path
 must never break a surface that draws all the time.
 
+The seam speaks neutral types. A listing of repos answers `RepoRecord`s, one per repo, whose
+fields are the keys the inventory writes (`name`, `path_with_namespace`, `default_branch`,
+`description`, `web_url`, `ssh_url`, `topics`, `forge`) plus the forge's own `id`, and it is
+asked for an `Owner`: a GitHub organisation or user, or a GitLab group by its full path.
+
 ### The parity table
 
 Measured against GitHub's REST API (version `2022-11-28`) and GraphQL schema, and against the

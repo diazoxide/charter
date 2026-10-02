@@ -5,8 +5,8 @@
 use serde_json::Value;
 
 use super::backend::{
-    Asker, Caller, Capabilities, Capability, Reach, Reason, Repos, Requests, Support, Unavailable,
-    UnknownWhy,
+    Asker, Caller, Capabilities, Capability, Owner, Reach, Reason, RepoRecord, Repos, Requests,
+    Support, Unavailable, UnknownWhy,
 };
 use super::checks::{self, Checks};
 use super::pr::{
@@ -15,8 +15,8 @@ use super::pr::{
 };
 use super::transport::{Call, Field, Method, NoAnswer};
 use super::{
-    ForgeError, Kind, LIST_TIMEOUT, Raised, STATUS_TIMEOUT, falsy, first_field, mapped, parse,
-    quote, truthy, word_of,
+    ForgeError, Kind, LIST_TIMEOUT, Raised, STATUS_TIMEOUT, falsy, first_field, listed_branch,
+    listed_description, listed_id, listed_str, listed_topics, mapped, parse, quote, word_of,
 };
 
 // FW-6a is the first caller of the work items; until it lands only their tests reach them, and
@@ -208,28 +208,19 @@ impl GitHub {
     }
 }
 
-/// One GitHub repo in the shape every backend produces (Python's `_normalize`).
-fn normalize(raw: &Value) -> Value {
-    let get = |key: &str| raw.get(key).cloned().unwrap_or(Value::Null);
-    let text_or_empty = |key: &str| match raw.get(key) {
-        Some(v) if truthy(v) => v.clone(),
-        _ => Value::String(String::new()),
-    };
-    let topics = match raw.get("topics") {
-        Some(v) if truthy(v) => v.clone(),
-        _ => Value::Array(Vec::new()),
-    };
-    serde_json::json!({
-        "id": get("id"),
-        "name": get("name"),
-        "path_with_namespace": get("full_name"),
-        "default_branch": get("default_branch"),
-        "description": text_or_empty("description"),
-        "web_url": text_or_empty("html_url"),
-        "ssh_url": text_or_empty("ssh_url"),
-        "topics": topics,
-        "forge": Kind::GitHub.word(),
-    })
+/// One GitHub repo as a neutral record (Python's `_normalize`).
+fn normalize(raw: &Value) -> RepoRecord {
+    RepoRecord {
+        id: listed_id(raw),
+        name: listed_str(raw, "name"),
+        path_with_namespace: listed_str(raw, "full_name"),
+        default_branch: listed_branch(raw),
+        description: listed_description(raw),
+        web_url: listed_str(raw, "html_url"),
+        ssh_url: listed_str(raw, "ssh_url"),
+        topics: listed_topics(raw),
+        forge: Kind::GitHub,
+    }
 }
 
 /// The [`State`] a GitHub pull request record says. GitHub says `closed` for a merged PR too;
@@ -248,7 +239,8 @@ fn state_of(record: &Value, doing: &str) -> Result<State, ForgeError> {
 }
 
 impl Repos for GitHub {
-    fn owned(&self, caller: &Caller, owner: &str) -> Result<Vec<Value>, ForgeError> {
+    fn owned(&self, caller: &Caller, owner: &Owner) -> Result<Vec<RepoRecord>, ForgeError> {
+        let owner = owner.as_str();
         let enc = quote(owner);
         let raw = match self.paged(caller, &format!("orgs/{enc}/repos"), owner, true) {
             Err(Paged::NotAnOrg) => {
@@ -266,38 +258,35 @@ impl Repos for GitHub {
         Ok(raw.iter().map(normalize).collect())
     }
 
-    fn reachable(&self, caller: &Caller, owner: &str) -> Result<Vec<Value>, ForgeError> {
+    fn reachable(&self, caller: &Caller, owner: &Owner) -> Result<Vec<RepoRecord>, ForgeError> {
         let raw = match self.paged(
             caller,
             "user/repos?affiliation=owner,collaborator,organization_member",
-            owner,
+            owner.as_str(),
             false,
         ) {
             Ok(items) => items,
             Err(Paged::Failed(e)) => return Err(e),
             Err(Paged::NotAnOrg) => unreachable!("only the org probe says this"),
         };
-        Ok(super::under_owner(raw.iter().map(normalize), owner))
+        Ok(raw
+            .iter()
+            .map(normalize)
+            .filter(|r| owner.holds(r))
+            .collect())
     }
 
     fn top_level(
         &self,
         caller: &Caller,
-        repo: &Value,
+        repo: &RepoRecord,
         git_ref: Option<&str>,
     ) -> Result<Vec<String>, ForgeError> {
-        let path = repo
-            .get("path_with_namespace")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
+        let path = repo.path_with_namespace.as_str();
         let (owner, name) = owner_name(path);
         let git_ref = git_ref
             .filter(|r| !r.is_empty())
-            .or_else(|| {
-                repo.get("default_branch")
-                    .and_then(Value::as_str)
-                    .filter(|r| !r.is_empty())
-            })
+            .or(repo.default_branch.as_deref())
             .unwrap_or("HEAD");
         let api = format!(
             "repos/{}/{}/git/trees/{}",

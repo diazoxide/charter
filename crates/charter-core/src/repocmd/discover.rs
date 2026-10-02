@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use serde_json::Value;
 
 use super::{Say, Sink};
-use crate::forge::{self, Caller, Forge, py_str};
+use crate::forge::{self, Caller, Forge, Owner, RepoRecord, py_str};
 use crate::inventory;
 
 /// How many stack probes run at once. Python's `_build_batch` worker count.
@@ -58,13 +58,13 @@ pub fn discover(root: &Path, options: Options, say: Sink) -> u8 {
             say(Say::Plain(why.to_string()));
             return 1;
         }
-        let projects: Vec<Value> = match forge.backend().owned(&Caller::command(), owner) {
+        let owned = forge
+            .backend()
+            .owned(&Caller::command(), &Owner::new(owner.clone()));
+        let repos: Vec<RepoRecord> = match owned {
             Ok(all) => all
                 .into_iter()
-                .filter(|p| {
-                    let name = p.get("name").and_then(Value::as_str).unwrap_or_default();
-                    !exclude.iter().any(|e| e == name)
-                })
+                .filter(|p| !exclude.contains(&p.name))
                 .collect(),
             Err(why) => {
                 say(Say::Plain(why.to_string()));
@@ -73,7 +73,7 @@ pub fn discover(root: &Path, options: Options, say: Sink) -> u8 {
         };
         say(Say::Info(format!(
             "Found {} project(s) on {}. {}",
-            projects.len(),
+            repos.len(),
             forge.kind.word(),
             if options.no_probe {
                 "Skipping stack probe."
@@ -81,7 +81,7 @@ pub fn discover(root: &Path, options: Options, say: Sink) -> u8 {
                 "Probing repo stacks …"
             }
         )));
-        let (records, failed) = build_batch(forge, &projects, options.no_probe);
+        let (records, failed) = build_batch(forge, &repos, options.no_probe);
         probe_failures += failed;
         batches.push(records);
     }
@@ -169,33 +169,32 @@ fn join(names: &[&String]) -> String {
         .join(", ")
 }
 
-/// Every project as its inventory record, probing stacks eight at a time. Returns the
+/// Every repo as its inventory record, probing stacks eight at a time. Returns the
 /// records in the order the forge listed them, and how many probes FAILED — as opposed to
 /// found nothing.
-fn build_batch(forge: &Forge, projects: &[Value], no_probe: bool) -> (Vec<Value>, usize) {
+fn build_batch(forge: &Forge, repos: &[RepoRecord], no_probe: bool) -> (Vec<Value>, usize) {
     if no_probe {
-        let records = projects
+        let records = repos
             .iter()
-            .map(|p| inventory::record(forge, p, "unknown"))
+            .map(|p| inventory::record(p, "unknown"))
             .collect();
         return (records, 0);
     }
-    let stacks: Mutex<Vec<Option<Result<&'static str, ()>>>> =
-        Mutex::new(vec![None; projects.len()]);
+    let stacks: Mutex<Vec<Option<Result<&'static str, ()>>>> = Mutex::new(vec![None; repos.len()]);
     let next = AtomicUsize::new(0);
     let backend = forge.backend();
     let backend = backend.as_ref();
     std::thread::scope(|scope| {
-        for _ in 0..PROBES.min(projects.len()) {
+        for _ in 0..PROBES.min(repos.len()) {
             scope.spawn(|| {
                 loop {
                     let i = next.fetch_add(1, Ordering::SeqCst);
-                    let Some(project) = projects.get(i) else {
+                    let Some(repo) = repos.get(i) else {
                         break;
                     };
-                    let git_ref = project.get("default_branch").and_then(Value::as_str);
+                    let git_ref = repo.default_branch.as_deref();
                     let found = backend
-                        .top_level(&Caller::command(), project, git_ref)
+                        .top_level(&Caller::command(), repo, git_ref)
                         .map(|files| inventory::classify_stack(&files))
                         .map_err(|_| ());
                     if let Ok(mut slots) = stacks.lock() {
@@ -207,10 +206,10 @@ fn build_batch(forge: &Forge, projects: &[Value], no_probe: bool) -> (Vec<Value>
     });
     let stacks = stacks.into_inner().unwrap_or_default();
     let mut failed = 0;
-    let records = projects
+    let records = repos
         .iter()
         .zip(stacks)
-        .map(|(project, stack)| {
+        .map(|(repo, stack)| {
             let stack = match stack {
                 Some(Ok(stack)) => stack,
                 _ => {
@@ -218,7 +217,7 @@ fn build_batch(forge: &Forge, projects: &[Value], no_probe: bool) -> (Vec<Value>
                     "unknown"
                 }
             };
-            inventory::record(forge, project, stack)
+            inventory::record(repo, stack)
         })
         .collect();
     (records, failed)

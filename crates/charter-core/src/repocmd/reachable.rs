@@ -37,15 +37,15 @@ pub fn reachable(root: &Path) -> Result<Reachable, String> {
             out.trouble.push(why.to_string());
             continue;
         }
-        match forge.backend().reachable(&forge::Caller::window(), &owner) {
-            Ok(projects) => batches.push(
-                projects
+        let reached = forge
+            .backend()
+            .reachable(&forge::Caller::window(), &forge::Owner::new(owner));
+        match reached {
+            Ok(repos) => batches.push(
+                repos
                     .iter()
-                    .filter(|p| {
-                        let name = p.get("name").and_then(Value::as_str).unwrap_or_default();
-                        !exclude.iter().any(|e| e == name)
-                    })
-                    .map(|p| inventory::record(&forge, p, "unknown"))
+                    .filter(|p| !exclude.contains(&p.name))
+                    .map(|p| inventory::record(p, "unknown"))
                     .collect::<Vec<_>>(),
             ),
             Err(why) => out.trouble.push(why.to_string()),
