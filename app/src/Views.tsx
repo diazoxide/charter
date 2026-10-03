@@ -15,6 +15,7 @@ import {
   Puzzle,
   RefreshCw,
   Save,
+  Search,
   Settings2,
   SlidersHorizontal,
   UserRound,
@@ -49,6 +50,8 @@ import { HeadingOffer } from "./PanelSection";
 import { SavingView } from "./SavingView";
 import { SessionRecordTab } from "./SessionRecordTab";
 import { pieceOf } from "./pieceViews";
+import { SEARCH, isSearch } from "./contentSearch";
+import { SearchTab } from "./SearchTab";
 import { SESSION_VIEW } from "./sessions";
 import { PREFERENCES_VIEW, SAVING_VIEW, SETTINGS_VIEW, viewKey, type ViewRef } from "./tabs";
 import { VaultTab } from "./VaultTab";
@@ -215,6 +218,7 @@ export const OWN_MARKS: Record<string, React.ComponentType<{ className?: string 
   preferences: SlidersHorizontal,
   "piece-files": FolderGit2,
   "piece-file": FileCode,
+  [SEARCH]: Search,
 };
 
 /** The glyph a view's tab carries: a person for a persona, a piece of a puzzle for a view an
@@ -252,6 +256,7 @@ export function ViewPane({
   firstTask,
   split,
   onSplit,
+  onShowInstead,
 }: {
   plane: PlaneId;
   view: ViewRef;
@@ -290,6 +295,9 @@ export function ViewPane({
   split?: number;
   /** The operator moved this view's divider. */
   onSplit?: (split: number) => void;
+  /** The pane now shows `to` rather than `from`, under `title`: a Search tab that asks
+   *  something new (FM-8). */
+  onShowInstead?: (from: ViewRef, to: ViewRef, title: string) => void;
 }) {
   // **The view follows the disk itself** (FD-10), on every change: the lists and memories
   // charter's own views read are any of the plane's stores. Here and not in the window, so a
@@ -423,6 +431,10 @@ export function ViewPane({
           /* The plane's save standing and its save button (charter-app#294). Keyed by the
              plane, so a pane that comes to show another project's starts from its own read. */
           <SavingView key={plane} plane={plane} workspace={workspace} />
+        ) : isSearch(view) ? (
+          /* ⌘⇧F's Search tab (FM-8). Keyed by the plane alone: its view follows what it asks,
+             and a new query is the same tab asking again, not another tab. */
+          <SearchTab key={plane} plane={plane} view={view} onAsk={onShowInstead} />
         ) : piece !== undefined ? (
           /* A piece's files, or one of them, in the light editor (RC-5). Keyed by the view, so
              a pane that comes to show another file starts from its own read. */

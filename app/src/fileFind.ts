@@ -42,6 +42,8 @@ export function scopeSaid(scope: FileScope, nameOf: (plane: PlaneId) => string):
   switch (scope.kind) {
     case "branch":
       return `branch ${placeName(scope)}`;
+    case "workspace":
+      return `workspace ${scope.workspace}`;
     case "project":
       return `project ${nameOf(scope.plane)}`;
     case "open-projects":

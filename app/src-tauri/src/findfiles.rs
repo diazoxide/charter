@@ -11,7 +11,7 @@
 //! window hands in.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use charter_core::files::{Finder, Named, Place};
@@ -22,8 +22,9 @@ use crate::planes::{PlaneId, Planes};
 /// enough to cross the IPC at every keystroke.
 const MOST: usize = 50;
 
-/// Where ⌘P looks: the scope follows the window's focus, and Tab widens it.
-#[derive(Debug, Clone, serde::Deserialize, specta::Type)]
+/// Where ⌘P and ⌘⇧F look: for ⌘P the scope follows the window's focus, and Tab widens it; the
+/// Search tab (FM-8) offers the four as a choice.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, specta::Type)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum FileScope {
     /// One branch: a piece, or no piece for the repo's own folder.
@@ -32,6 +33,12 @@ pub enum FileScope {
         workspace: String,
         repo: String,
         piece: Option<String>,
+    },
+    /// Every branch of one workspace of a project, `near` first (FM-8).
+    Workspace {
+        plane: PlaneId,
+        workspace: String,
+        near: Option<NearBranch>,
     },
     /// Every branch of one project, `near` first: the branch the window's focus is on, so the
     /// nearest of equal hits leads.
@@ -49,7 +56,7 @@ pub enum FileScope {
 
 /// The branch the window's focus is on, by name, in the project a scope puts first. It only
 /// orders the scope: a name no branch of the project has moves nothing.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, specta::Type)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, specta::Type)]
 pub struct NearBranch {
     pub workspace: String,
     pub repo: String,
@@ -165,13 +172,7 @@ pub async fn find_files(
     scope: FileScope,
     query: String,
 ) -> Result<FilesFound, String> {
-    let projects: Vec<PlaneId> = match &scope {
-        FileScope::Branch { plane, .. } | FileScope::Project { plane, .. } => {
-            planes.held(plane)?;
-            vec![plane.clone()]
-        }
-        FileScope::OpenProjects { .. } => planes.open_now(),
-    };
+    let projects = projects_of(&scope, &planes)?;
     let session = finder.session(window.label(), session);
     tauri::async_runtime::spawn_blocking(move || {
         let mut session = session.lock().unwrap_or_else(PoisonError::into_inner);
@@ -195,25 +196,7 @@ fn found_in(
     projects: &[PlaneId],
     query: &str,
 ) -> FilesFound {
-    let named: Vec<(PlaneId, Named)> = match scope {
-        FileScope::Branch {
-            plane,
-            workspace,
-            repo,
-            piece,
-        } => vec![(
-            plane.clone(),
-            Named {
-                ws: workspace.clone(),
-                repo: repo.clone(),
-                piece: piece.clone(),
-            },
-        )],
-        FileScope::Project { plane, near } => nearest_first(finder, projects, Some(plane), near),
-        FileScope::OpenProjects { front, near } => {
-            nearest_first(finder, projects, front.as_ref(), near)
-        }
-    };
+    let named = branches_in(scope, projects, &mut |root| finder.branches(root).to_vec());
     let roots: Vec<PathBuf> = named.iter().map(|(plane, _)| plane.root().into()).collect();
     let places: Vec<Place<'_>> = named
         .iter()
@@ -245,11 +228,64 @@ fn found_in(
     }
 }
 
+/// The projects `scope` looks in, vouched for by the registry: the one it names, which must be
+/// open, or every project open now. ⌘P's and ⌘⇧F's one check (ADR 0052).
+pub(crate) fn projects_of(scope: &FileScope, planes: &Planes) -> Result<Vec<PlaneId>, String> {
+    Ok(match scope {
+        FileScope::OpenProjects { .. } => planes.open_now(),
+        FileScope::Branch { plane, .. }
+        | FileScope::Workspace { plane, .. }
+        | FileScope::Project { plane, .. } => {
+            planes.held(plane)?;
+            vec![plane.clone()]
+        }
+    })
+}
+
+/// Every branch `scope` covers, with its project, nearest first: what ⌘P ranks and what ⌘⇧F
+/// walks, in this order. `projects` are the projects the registry vouched for, and
+/// `branches_of` answers a project's branches in the explorer's order.
+pub(crate) fn branches_in(
+    scope: &FileScope,
+    projects: &[PlaneId],
+    branches_of: &mut dyn FnMut(&Path) -> Vec<Named>,
+) -> Vec<(PlaneId, Named)> {
+    match scope {
+        FileScope::Branch {
+            plane,
+            workspace,
+            repo,
+            piece,
+        } => vec![(
+            plane.clone(),
+            Named {
+                ws: workspace.clone(),
+                repo: repo.clone(),
+                piece: piece.clone(),
+            },
+        )],
+        FileScope::Workspace {
+            plane,
+            workspace,
+            near,
+        } => nearest_first(branches_of, projects, Some(plane), near)
+            .into_iter()
+            .filter(|(_, one)| &one.ws == workspace)
+            .collect(),
+        FileScope::Project { plane, near } => {
+            nearest_first(branches_of, projects, Some(plane), near)
+        }
+        FileScope::OpenProjects { front, near } => {
+            nearest_first(branches_of, projects, front.as_ref(), near)
+        }
+    }
+}
+
 /// Every branch of `projects`, nearest first: the `front` project before the others, and in it
 /// the `near` branch before its others. Ties in the ranking go to the place nearer the front of
 /// the scope, so this is what makes the focused branch's copy of a file beat the clone's.
 fn nearest_first(
-    finder: &mut Finder,
+    branches_of: &mut dyn FnMut(&Path) -> Vec<Named>,
     projects: &[PlaneId],
     front: Option<&PlaneId>,
     near: &Option<NearBranch>,
@@ -259,10 +295,9 @@ fn nearest_first(
     ordered.sort_by_key(|plane| Some(*plane) != front);
     let mut named = Vec::new();
     for plane in ordered {
-        let mut of: Vec<(PlaneId, Named)> = finder
-            .branches(plane.root())
-            .iter()
-            .map(|one| (plane.clone(), one.clone()))
+        let mut of: Vec<(PlaneId, Named)> = branches_of(plane.root())
+            .into_iter()
+            .map(|one| (plane.clone(), one))
             .collect();
         if Some(plane) == front
             && let Some(near) = near
@@ -279,7 +314,6 @@ fn nearest_first(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
     fn git(dir: &Path, args: &[&str]) {
         let ran = charter_core::forklock::output(

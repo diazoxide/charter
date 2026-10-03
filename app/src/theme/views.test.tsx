@@ -904,6 +904,17 @@ const STATES: State[] = [
     drawn: /Read me first/,
   },
   {
+    name: "a Search tab before anything is typed",
+    view: { from: null, view: "search", key: "branch|alpha|alpha/svc/fix-it||" },
+    drawn: /^Search the content of the files$/,
+  },
+  {
+    name: "a Search tab whose query the core refused",
+    view: { from: null, view: "search", key: "project|||r|open(" },
+    answers: { search_files: new Error("regex parse error: unclosed group") },
+    drawn: /unclosed group/,
+  },
+  {
     name: "an extension's view, its action refused",
     view: EXTENSION,
     answers: {

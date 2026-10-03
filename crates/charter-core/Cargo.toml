@@ -42,6 +42,14 @@ portable-pty.workspace = true
 # file-level copyleft used unmodified; its dependencies, memchr and unicode-segmentation, are
 # already in this workspace's lockfile.
 nucleo-matcher = "0.3"
+# ⌘⇧F's content search (FM-8, #1111; V86 F9): ripgrep's own crates. `ignore` walks a branch's
+# folder with its .gitignore rules read in-process and never follows a link; `grep-searcher`
+# and `grep-regex` match line by line, with the regex's compiled size bounded. MIT OR
+# Unlicense, dual, so MIT holds; their regex, memchr and bstr are already in this lockfile.
+ignore = "0.4"
+grep-matcher = "0.1"
+grep-regex = "0.1"
+grep-searcher = "0.1"
 # The secret-shape rules are `charter/hooks.py`'s regexes, ported character for character.
 regex = "1"
 serde = { workspace = true, features = ["derive"] }

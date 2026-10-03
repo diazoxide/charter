@@ -275,6 +275,89 @@ describe("the explorer", () => {
     }
   });
 
+  /**
+   * **⌘⇧F searches the content of the files and opens a hit at its line** (FM-8, #1111), against
+   * the real core: `search_files` walks the picked branch in-process and streams its hits, and
+   * Enter on the one stepped to opens the branch's file tab with the preview on that line. The
+   * key is sent as the window's own event, with the platform's modifiers, for ⌘P's reason
+   * (#176).
+   */
+  it("finds a fixture string on ⌘⇧F and opens the hit at its line in the file tab", async () => {
+    // One app serves the whole run: a palette a spec before this one left open is closed first.
+    if (await $('[role="dialog"]').isExisting()) await browser.keys(["Escape"]);
+    await onAlpha();
+    const plane = (await ask<string[]>("open_planes"))[0];
+    const branch = join(plane, "workspaces", "alpha", ".worktrees", "svc", "fix-login");
+    // In a folder of this test's own, which it removes again: the fixture's own files stay.
+    mkdirSync(join(branch, "found-by-content"), { recursive: true });
+    writeFileSync(
+      join(branch, "found-by-content", "notes.md"),
+      "# Notes\n\nnothing here\n\nthe quokka-sentinel lives on line five\n",
+    );
+    // **It leaves the window as it found it**, for ⌘P's reason above: nothing picked in the
+    // explorer, and no dialog up.
+    try {
+      const spot = await $('[data-testid="piece-svc-fix-login"] .spot');
+      await spot.waitForExist({ timeout: 20_000 });
+      await spot.click();
+
+      await browser.execute(() => {
+        const mac = navigator.platform.startsWith("Mac");
+        window.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "F",
+            metaKey: mac,
+            ctrlKey: !mac,
+            shiftKey: true,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      });
+      await browser.waitUntil(async () => (await tabInFront()) === "Search", {
+        timeout: 20_000,
+        timeoutMsg: `no Search tab came forward; in front is ${await tabInFront()}`,
+      });
+      const box = await $('[role="searchbox"][aria-label="Search the files"]');
+      await box.waitForDisplayed({ timeout: 20_000 });
+      await expect($('[role="combobox"][aria-label="Where to search"]')).toHaveValue("branch");
+      await box.click();
+      await browser.keys("quokka-sentinel");
+
+      const hit = await $('[role="listbox"][aria-label="Search results"] [role="option"]');
+      await hit.waitForExist({ timeout: 20_000 });
+      await expect(hit).toHaveText(expect.stringContaining("the quokka-sentinel lives"));
+      await expect(
+        $('[role="listbox"][aria-label="Search results"] [role="group"]'),
+      ).toHaveAttribute("aria-label", expect.stringContaining("notes.md, found-by-content"));
+      await browser.waitUntil(async () => (await tabInFront()) === "Search · quokka-sentinel", {
+        timeout: 20_000,
+        timeoutMsg: `the tab is called ${await tabInFront()}`,
+      });
+
+      // Into the hits from the box, and the one stepped to opens.
+      await browser.keys(["ArrowDown"]);
+      await browser.keys(["Enter"]);
+
+      await browser.waitUntil(async () => (await tabInFront()) === "Files · fix-login", {
+        timeout: 20_000,
+        timeoutMsg: `the file tab never came forward; in front is ${await tabInFront()}`,
+      });
+      const editor = await $('[data-testid="light-editor"]');
+      await editor.waitForDisplayed({ timeout: 20_000 });
+      await expect(editor).toHaveText(expect.stringContaining("quokka-sentinel"));
+      // The cursor is on the hit's line, which the gutter marks.
+      const marked = await $('[data-testid="light-editor"] .cm-activeLineGutter');
+      await expect(marked).toHaveText("5");
+    } finally {
+      if (await $('[role="dialog"]').isDisplayed()) await browser.keys(["Escape"]);
+      const root = await $('[data-testid="explorer"] button.spot-root');
+      await root.click();
+      await expect(root).toHaveAttribute("aria-current", "true");
+      rmSync(join(branch, "found-by-content"), { recursive: true, force: true });
+    }
+  });
+
   it("shows a file an agent creates in an expanded folder without a refresh", async () => {
     await onAlpha();
     const files = await $('[data-testid="files-svc-fix-login"] .file-node');

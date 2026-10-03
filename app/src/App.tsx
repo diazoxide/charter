@@ -65,6 +65,7 @@ import { closeOnDelete } from "./tabKeys";
 import { useExtensionCommands, useExtensionViews } from "./Views";
 import { Palette } from "./Palette";
 import { placeOf, scopeLadder } from "./fileFind";
+import { useJumpAsks, type Pending } from "./fileJump";
 import type { Place } from "./pieceViews";
 import { ClosingProject } from "./ClosingProject";
 import { QuitWarning, type Ending } from "./QuitWarning";
@@ -193,8 +194,25 @@ function App() {
     plane: PlaneId;
     place: Place;
     path: string;
+    /** A jump to a line (a search hit, FM-8): the branch's file tab lands on it. */
+    line?: number;
     at: number;
   }>();
+  /**
+   * A jump to a file at a line (FM-8, `fileJump.ts`): a search hit, possibly another project's.
+   * That project comes to the front and opens the branch's file tab, which lands on the line.
+   */
+  const jumped = useCallback((jump: Pending) => {
+    setShowing({ at: "plane", plane: jump.plane });
+    setFileAsk((was) => ({
+      plane: jump.plane,
+      place: jump.place,
+      path: jump.path,
+      line: jump.line,
+      at: (was?.at ?? 0) + 1,
+    }));
+  }, []);
+  useJumpAsks(jumped);
   /** The last ask for a project's Saving tab (charter-app#294), the same shape as `settingsAsk`. */
   const [savingAsk, setSavingAsk] = useState<{ plane: PlaneId; at: number }>();
   /**
