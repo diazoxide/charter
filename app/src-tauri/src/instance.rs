@@ -116,9 +116,15 @@ impl Instance {
         Self(std::sync::Mutex::new(Some(file)))
     }
 
+    /// Unlocked before it is closed. A program forked on another thread holds a copy of the
+    /// descriptor until it execs, and a copy shares the lock: closing this one alone would
+    /// leave the lock held until then, and a restart in that moment would find it taken.
+    /// Unlocking lets go of it for every copy at once.
     pub fn let_go(&self) {
-        if let Ok(mut held) = self.0.lock() {
-            held.take();
+        if let Ok(mut held) = self.0.lock()
+            && let Some(file) = held.take()
+        {
+            let _ = file.unlock();
         }
     }
 }
@@ -154,6 +160,25 @@ mod tests {
         instance.let_go();
 
         hold(&path).expect("the next launch holds it");
+    }
+
+    #[test]
+    fn the_lock_is_free_again_even_while_a_program_forked_before_the_let_go_has_not_started() {
+        // A program started in a terminal is forked, and until its exec the child holds a copy
+        // of every descriptor this process has, the lock's included, close-on-exec or not. A
+        // copy shares the lock, so closing this process's descriptor alone would leave it held
+        // for as long as that child takes to exec — under load, long enough for a restart to
+        // find it taken. A duplicate is that child's copy, deterministically.
+        let dir = tempfile::tempdir().expect("a directory");
+        let path = dir.path().join("charter.lock");
+        let held = hold(&path).expect("held");
+        let forked_child_s_copy = held.try_clone().expect("a copy of the descriptor");
+        let instance = Instance::holding(held);
+
+        instance.let_go();
+
+        hold(&path).expect("the next launch holds it");
+        drop(forked_child_s_copy);
     }
 
     #[test]
