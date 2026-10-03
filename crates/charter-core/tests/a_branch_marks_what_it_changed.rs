@@ -733,9 +733,12 @@ fn many_reads_of_a_branch_with_many_untracked_files_leave_charters_memory_steady
 #[test]
 fn gitoxide_has_no_network_client_transport_or_credential_helpers_anywhere_in_the_workspace() {
     charter_core::unsteered!();
+    // Only this host's platform: cargo has downloaded no package that only another platform
+    // builds, and `--offline` would fail on one (main CI, 2026-10-04).
     let out = charter_core::forklock::output(
         std::process::Command::new(env!("CARGO"))
             .args(["metadata", "--format-version", "1", "--locked", "--offline"])
+            .args(["--filter-platform", host_triple()])
             .current_dir(env!("CARGO_MANIFEST_DIR")),
     )
     .expect("cargo metadata runs");
@@ -812,4 +815,17 @@ fn a_hung_read_stops_itself_at_its_deadline_without_waiting_to_be_killed() {
     // Stopped by itself — the app's kill says "did not finish" and comes a grace period later.
     assert!(said.contains("stopped without an answer"), "{said}");
     assert!(took < deadline + files::GRACE, "took {took:?}");
+}
+
+/// The target this test was built for, as cargo spells it, for `--filter-platform`.
+fn host_triple() -> &'static str {
+    match (std::env::consts::ARCH, std::env::consts::OS) {
+        ("aarch64", "macos") => "aarch64-apple-darwin",
+        ("x86_64", "macos") => "x86_64-apple-darwin",
+        ("x86_64", "linux") => "x86_64-unknown-linux-gnu",
+        ("aarch64", "linux") => "aarch64-unknown-linux-gnu",
+        ("x86_64", "windows") => "x86_64-pc-windows-msvc",
+        ("aarch64", "windows") => "aarch64-pc-windows-msvc",
+        (arch, os) => panic!("no target triple known for {arch} on {os}"),
+    }
 }
