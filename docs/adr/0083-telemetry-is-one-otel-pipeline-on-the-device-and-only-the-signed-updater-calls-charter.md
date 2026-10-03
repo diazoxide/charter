@@ -271,6 +271,10 @@ For this pipeline that means:
   the static signed files beside it**: the first-party catalogue and the revocation feed, as V18
   applied C-21, and the weekly manifest asset (V13, OB-17). They are reads of files. They carry
   no identifier, and each appears in the network log.
+  *Amended by V64 (operator, 2026-10-02, OB-15 #687): **and a report the operator explicitly
+  sends** (`charter report`, ADR 0059). It is the operator's own act. The network log lists it as
+  a Charter line, and a run that sends no report still lists no Charter address but the
+  updater's.*
 - **The OTel pipeline never sends to a Charter host by default**, and has no built-in destination.
   A Charter destination can exist only as an org's, after an account (§8).
 - **Product telemetry (OB-12) is a separate, closed registry**, not a filter over this pipeline.
@@ -280,7 +284,7 @@ For this pipeline that means:
   O5:** *"Charter product telemetry is opt-in only."*
 - **Crash reports (OB-11) stay as O9 settles them**, with their own consent and the same viewer.
 - **The test is OB-15's:** *"a no-account run shows no Charter host except the updater and the
-  static signed files beside it"*. It runs with collection on, so the pipeline is held to it.
+  static signed files beside it"*. *(A run that sends a report also lists that report, under V64.)* It runs with collection on, so the pipeline is held to it.
 
 ### 10. What telemetry is trusted for
 
