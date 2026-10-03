@@ -549,6 +549,16 @@ impl Held {
         (self.tell)(self.board().ignored(session));
     }
 
+    /// The permission asks this plane's chats hold open, as the window lists them (HP-6).
+    pub fn asks(&self) -> crate::asking::Asking {
+        crate::asking::asking(&self.id, self.hooks.asks())
+    }
+
+    /// Answers chat `session`'s ask `ask` with `option`, as the operator in the window (HP-6).
+    pub fn answer_ask(&self, session: u32, ask: &str, option: &str) -> Result<(), String> {
+        self.hooks.answer(session, ask, option)
+    }
+
     /// Writes the record, ends every session, and stops listening — everything a plane holds
     /// in this process, and nothing it has on disk.
     ///
@@ -680,6 +690,8 @@ pub struct Planes {
     by_hand: hooks::ByHandTeller,
     /// Told each step of a smart close in any plane (ADR 0064).
     smart: crate::smartclose::Teller,
+    /// Told a plane's permission asks each time they change (HP-6).
+    asks: crate::asking::Teller,
     /// The launch's question and its answer — see [`Relaunching`].
     relaunching: Mutex<Relaunching>,
     /// The kill switch (OV-1): one for every plane this process holds, so a plane opened after
@@ -755,6 +767,7 @@ impl Planes {
             saves: Arc::new(|_, _| {}),
             by_hand: Arc::new(|_| {}),
             smart: Arc::new(|_| {}),
+            asks: Arc::new(|_| {}),
             relaunching: Mutex::new(Relaunching::default()),
             hosting: Arc::new(|reporting| Box::new(Sessions::reporting_to(reporting))),
             events: None,
@@ -798,6 +811,13 @@ impl Planes {
     /// registry holds, so the window can put a banner on that tab (ADR 0062).
     pub fn telling_by_hand(mut self, by_hand: hooks::ByHandTeller) -> Self {
         self.by_hand = by_hand;
+        self
+    }
+
+    /// Tells `asks` a plane's permission asks each time they change, so the window can list them
+    /// in needs-you and answer them there (HP-6).
+    pub fn telling_asks(mut self, asks: crate::asking::Teller) -> Self {
+        self.asks = asks;
         self
     }
 
@@ -1434,6 +1454,7 @@ impl Planes {
             // is started and issued a token (FD-30).
             hooks.drain_spool();
         }
+        hooks.tell_asks_to(Arc::clone(&self.asks));
         let reporting = hooks.reporting();
 
         // The origin device of every chat this project mints (ADR 0066). None where the machine

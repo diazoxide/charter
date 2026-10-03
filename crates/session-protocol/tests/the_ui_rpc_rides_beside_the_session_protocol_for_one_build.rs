@@ -98,6 +98,39 @@ async fn a_method_the_host_does_not_serve_is_refused_before_it_is_asked() {
 }
 
 #[tokio::test]
+async fn answering_an_ask_is_never_served_on_the_link_even_to_the_window() {
+    // HP-6: `answer_ask` is the window's over Tauri's IPC alone, even when a host is built with
+    // the app's whole command list.
+    let commands = Commands::default();
+    let (a, b) = duplex(64 * 1024);
+    let (client, served) = tokio::join!(
+        link::connect(
+            a,
+            session::speaks(),
+            Scope::LocalUi,
+            HELD.of(Scope::LocalUi)
+        ),
+        link::serve_any(b, session::speaks(), &HELD)
+    );
+    let ui = ui::Server::new(BUILD, ["rename_chat", "answer_ask"], commands.clone());
+    tokio::spawn(session::serve(served.unwrap(), Sessions, Some(ui)));
+    let client = Client::new(client.unwrap()).0;
+    let ui = client.ui(BUILD).await.unwrap();
+
+    let refused = ui
+        .call(
+            "answer_ask",
+            json!({"plane": 1, "session": 3, "ask": "a", "option": "allow"}),
+        )
+        .await
+        .unwrap();
+
+    assert!(refused.is_err(), "{refused:?}");
+    assert!(commands.asked.lock().unwrap().is_empty());
+    assert!(ui::WINDOW_ONLY.contains(&"answer_ask"));
+}
+
+#[tokio::test]
 async fn a_window_of_another_build_is_refused_the_ui_rpc_and_keeps_the_session_protocol() {
     let commands = Commands::default();
     let client = linked(Scope::LocalUi, Some(commands.clone())).await;

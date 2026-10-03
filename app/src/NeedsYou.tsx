@@ -156,6 +156,26 @@ export type Needing = Asking & {
   project: string;
 };
 
+/**
+ * **A chat's permission prompt, held open for the operator** (HP-6): Claude Code asking to run
+ * a tool, as the chat's own `PermissionRequest` hook handed it to the core. Answered here, it
+ * goes back on that hook and the harness carries it out — the chat's pane never needs focus.
+ */
+export type PermissionAsk = {
+  plane: string;
+  /** The project, named as its tab names it. */
+  project: string;
+  session: number;
+  /** What the chat is called there, as its needs-you row would say it. */
+  name: string;
+  /** The ask's id, which the answer names. */
+  ask: string;
+  /** What it asks, in one line, every credential shape masked. */
+  says: string;
+  /** The answers the harness offers, in its order and words. */
+  options: readonly { id: string; label: string; allows: boolean }[];
+};
+
 /** A chat that can be waiting on the operator without being able to say so (charter-app#52):
  *  a shell, or a harness without charter's hooks. */
 export type Quiet = {
@@ -203,12 +223,21 @@ export function NeedsYouMenu({
   items,
   quiet,
   onPress,
+  asks = [],
+  onAnswer,
+  onOpen,
 }: {
   items: readonly Needing[];
   /** The chats that can be waiting without saying so, across every project. */
   quiet: readonly Quiet[];
   /** Carries a row out in the project it belongs to. */
   onPress: (plane: string, offer: Offer) => void;
+  /** The permission prompts held open for the operator (HP-6), across every project. */
+  asks?: readonly PermissionAsk[];
+  /** Answers one of `asks` with the option chosen. */
+  onAnswer?: (ask: PermissionAsk, option: string) => void;
+  /** Puts the chat that asked in front, where its own prompt shows the ask whole. */
+  onOpen?: (ask: PermissionAsk) => void;
 }) {
   /**
    * Whether the list is up — held here rather than left to Radix, for the show-more menu's
@@ -231,7 +260,8 @@ export function NeedsYouMenu({
   const anchor = useRef<HTMLSpanElement>(null);
   const held = useRef(false);
   const trigger = useRef<HTMLButtonElement>(null);
-  const asked = items.length > 0;
+  const count = items.length + asks.length;
+  const asked = count > 0;
   const none = !asked && quiet.length === 0;
   // The button appearing because a chat has just asked, as opposed to having been there when
   // the bar was drawn: only the first is a change worth drawing (`useArrived`).
@@ -249,7 +279,7 @@ export function NeedsYouMenu({
     else if (anchor.current) moveAlong(anchor.current, false);
   }, [asked]);
   const said = asked
-    ? `${items.length} ${items.length === 1 ? "chat needs" : "chats need"} you`
+    ? `${count} ${count === 1 ? "chat needs" : "chats need"} you`
     : quietSaid(quiet);
   return (
     // `display: contents`: a place to be next to, not a box in the bar's row.
@@ -281,7 +311,7 @@ export function NeedsYouMenu({
               onClick={() => setOpen((up) => !up)}
             >
               <Hand aria-hidden="true" />
-              {asked && <span className="needs-you-number">{items.length}</span>}
+              {asked && <span className="needs-you-number">{count}</span>}
             </button>
           </Menu.Trigger>
           <Menu.Portal>
@@ -341,6 +371,43 @@ export function NeedsYouMenu({
                   </Menu.Group>
                 );
               })}
+              {asks.map((ask) => (
+                // **Answered here, not in the pane** (HP-6): each option the harness offered
+                // is an item, and choosing it sends that answer back on the chat's own hook.
+                // A press never moves the keyboard to the chat, which is the point.
+                <Menu.Group
+                  key={`${ask.plane}#${ask.ask}`}
+                  className="needs-you-row needs-you-permission"
+                  aria-label={`${ask.name}: ${ask.says} · ${ask.project}`}
+                >
+                  <p className="needs-you-says">
+                    <span className="needs-you-name">{`${ask.name}: ${ask.says}`}</span>
+                    <span className="needs-you-where">{ask.project}</span>
+                  </p>
+                  {ask.options.map((option) => (
+                    <Menu.Item
+                      key={option.id}
+                      className={`more-tab needs-you-answer${option.allows ? " allows" : ""}`}
+                      aria-label={`${option.label}: ${ask.name}, ${ask.says}`}
+                      onSelect={() => onAnswer?.(ask, option.id)}
+                    >
+                      {option.label}
+                    </Menu.Item>
+                  ))}
+                  {/* The core offers Allow only where the line above IS the whole action
+                      (`hooked::shown_in_full`); otherwise the pane shows it whole. */}
+                  <Menu.Item
+                    className="more-tab needs-you-open"
+                    aria-label={`Open ${ask.name} in its pane`}
+                    onSelect={() => {
+                      went.current = true;
+                      onOpen?.(ask);
+                    }}
+                  >
+                    Open in its pane
+                  </Menu.Item>
+                </Menu.Group>
+              ))}
               {quiet.length > 0 && (
                 <Menu.Group className="needs-you-quiet" aria-label="Can't say they're waiting">
                   {quiet.map((one) => (

@@ -18,6 +18,7 @@ macro_rules! tauri_context {
 
 mod about;
 mod alerts;
+mod asking;
 mod autosave;
 mod branchwatch;
 mod changes;
@@ -1903,7 +1904,10 @@ fn without_channel_commands(bindings: &str) -> String {
     out.push_str(&lines[open + 1..begins[0]].concat());
     for pair in begins.windows(2) {
         let command = lines[pair[0]..pair[1]].concat();
-        if !command.contains("Channel<") {
+        let window_only = charter_session_protocol::ui::WINDOW_ONLY
+            .iter()
+            .any(|name| command.contains(&format!("(\"{name}\"")));
+        if !command.contains("Channel<") && !window_only {
             out.push_str(&command);
         }
     }
@@ -2214,6 +2218,14 @@ pub fn run() {
                         );
                     })
                 })
+                // A chat's permission prompt, held on its hook: the window lists it in needs-you
+                // and answers it there (HP-6).
+                .telling_asks({
+                    let window = app.handle().clone();
+                    std::sync::Arc::new(move |told: asking::Asking| {
+                        windows::emit_for_plane(&window, &told.plane.clone(), asking::EVENT, &told);
+                    })
+                })
                 // A harness started by hand in a shell tab: the window draws a banner on that
                 // tab, offering to open it as a chat (ADR 0062).
                 .telling_by_hand({
@@ -2518,6 +2530,8 @@ mod tests {
                     !called,
                     "`{command}` takes a channel, which a view carries instead"
                 );
+            } else if charter_session_protocol::ui::WINDOW_ONLY.contains(command) {
+                assert!(!called, "`{command}` is the window's alone (HP-6)");
             } else {
                 assert!(
                     called,
@@ -2543,6 +2557,15 @@ mod tests {
                 "`{command}` is no longer a command of the window's, so nothing need leave it out"
             );
         }
+    }
+
+    #[test]
+    fn answering_an_ask_is_the_window_s_alone_and_never_in_the_link_s_client() {
+        // HP-6, V16, V75: the window's Tauri IPC answers an ask; the link to `charterd` never
+        // carries one until FD-27 tells a human scope from any other (#664).
+        let bindings = std::fs::read_to_string(BINDINGS).unwrap();
+        assert!(bindings.contains("(\"answer_ask\""), "the window answers");
+        assert!(!ui_rpc_client().contains("(\"answer_ask\""));
     }
 
     /// The window's commands that take a channel: `watch_session`, the one that streams a

@@ -12,6 +12,7 @@ pub mod asked;
 pub mod asks;
 pub mod claude;
 pub mod codex;
+pub mod hooked;
 pub mod model;
 pub mod opencode;
 #[cfg(test)]
@@ -1167,14 +1168,23 @@ mod tests {
     }
 
     #[test]
-    fn the_settings_arm_no_hook_so_no_hook_is_armed_twice() {
-        // Every hook is the plugin's. A hook in `--settings` as well would fire beside it and
-        // report every event twice.
+    fn the_settings_arm_only_the_permission_hook_so_no_hook_is_armed_twice() {
+        // Every hook that reports or guards is the plugin's: one in `--settings` as well would
+        // fire beside it and report every event twice. The one the settings own is the
+        // permission hook (HP-6), which can ALLOW and so is never in a file a chat can write
+        // (`plugin::tests`): it rides on the argument, quoted as the status line is.
         let empty = tempfile::tempdir().expect("a directory");
-        let (args, _) = claude("/bin/charter", empty.path());
+        let (args, _) = claude("/home/o'brien/charter", empty.path());
         let settings: serde_json::Value = serde_json::from_str(settings_of(&args)).expect("JSON");
 
-        assert!(settings.get("hooks").is_none(), "{settings}");
+        assert_eq!(
+            settings["hooks"],
+            serde_json::json!({"PermissionRequest": [{"hooks": [{
+                "type": "command",
+                "command": r"'/home/o'\''brien/charter' hook permissionrequest",
+                "timeout": 60,
+            }]}]})
+        );
     }
 
     #[test]
@@ -1262,7 +1272,15 @@ mod tests {
 
         let mut from_settings = Vec::new();
         entries(&settings, &mut from_settings);
-        assert!(from_settings.is_empty(), "{from_settings:?}");
+        // The permission hook alone (HP-6), which the plugin never carries.
+        assert_eq!(
+            from_settings,
+            [(
+                "PermissionRequest".to_owned(),
+                String::new(),
+                crate::harness::hooked::WORD.to_owned()
+            )]
+        );
 
         let mut all = from_settings;
         entries(&plugin, &mut all);
@@ -1270,7 +1288,7 @@ mod tests {
         all.sort();
         all.dedup();
         assert_eq!(all.len(), before, "a hook is wired twice");
-        assert_eq!(all.len(), crate::hookreg::HANDLERS.len());
+        assert_eq!(all.len(), crate::hookreg::HANDLERS.len() + 1);
     }
 
     /// Codex's `-c` pairs as (dotted key, parsed TOML value), failing on anything else.

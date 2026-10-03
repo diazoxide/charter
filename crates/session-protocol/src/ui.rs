@@ -79,9 +79,17 @@ pub struct Server {
     handler: Arc<dyn Handler>,
 }
 
+/// The app's commands no link ever serves, whatever list a host is built with: they are the
+/// window's alone, over Tauri's IPC.
+///
+/// `answer_ask` answers a chat's ask as the operator (HP-6). Only a human scope answers one (V16,
+/// V75), and a link's `local-ui` credential is a file that nothing yet keeps a chat from
+/// reading (FD-27, #664), so an answer over the link could be an agent's own.
+pub const WINDOW_ONLY: &[&str] = &["answer_ask"];
+
 impl Server {
     /// `methods` is the app's command list (`ipc_commands.rs`), or the part of it this host
-    /// answers; a method not in it is refused before `handler` is asked.
+    /// answers; a method not in it, or in [`WINDOW_ONLY`], is refused before `handler` is asked.
     pub fn new(
         build: impl Into<String>,
         methods: impl IntoIterator<Item = impl Into<String>>,
@@ -89,7 +97,11 @@ impl Server {
     ) -> Server {
         Server {
             build: build.into(),
-            methods: methods.into_iter().map(Into::into).collect(),
+            methods: methods
+                .into_iter()
+                .map(Into::into)
+                .filter(|method: &String| !WINDOW_ONLY.contains(&method.as_str()))
+                .collect(),
             handler: Arc::new(handler),
         }
     }

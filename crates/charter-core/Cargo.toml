@@ -58,6 +58,10 @@ serde = { workspace = true, features = ["derive"] }
 # `arbitrary_precision` keeps an integer beyond `u64` exact, which the default turns into an
 # `f64` at PARSE time — the digest would then be taken over a number the file never held.
 serde_json = { workspace = true, features = ["preserve_order", "arbitrary_precision"] }
+# A Unicode character's general category (HP-6): the window offers Allow only on text with no
+# format character in it, read from the Unicode tables rather than a hand list. MIT/Apache-2.0,
+# from unicode-rs, the authors of the unicode-* crates the tree already has.
+unicode-properties = { version = "0.1", default-features = false, features = ["general-category"] }
 sha2 = "0.11"
 # A branch's changes, read in-process (FM-4, D-88f): the explorer reads them by itself after
 # every write an agent makes, so no git process may start in a repository whose config the agent
@@ -138,12 +142,15 @@ ulid = "3"
 # `cargo build --release` does — and the app's own `e2e` feature turns it on for the binary
 # the scenario tests drive (charter-app#129).
 fenced = []
+# What a test playing a chat's hook inside the host's own process needs and nothing else may
+# call (`hookwire::permission::ask_permission_of_an_admitted_host`, HP-6). Only tests turn it on.
+test-support = []
 
 [dev-dependencies]
 # This crate, fenced, so charter-core's OWN tests run under the guard as well. A
 # dev-dependency on itself is how a crate turns a feature on for its tests and only its
 # tests; without it the fence would be a rule every crate but this one had to keep.
-charter-core = { path = ".", features = ["fenced"] }
+charter-core = { path = ".", features = ["fenced", "test-support"] }
 # The frozen fuzz subsets under `fixtures/corpora/*-generated.jsonl.gz` are read through it.
 # Test-only, and already in this workspace's lockfile (Tauri's `png` pulls it in), with the
 # same default features — so it adds no crate to the tree and no licence to review.

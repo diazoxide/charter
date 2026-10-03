@@ -10,6 +10,9 @@
 //!   link, for a socket or for credentials to sit in.
 //! - [`read_private_file`]: a file read only when it is a regular file of this user's that
 //!   nobody else may read or write, never a link.
+//! - [`admit_host`]: the other way round, for a client whose reply carries authority (HP-6's
+//!   permission hook): the process listening must be this user's, this process's ancestor,
+//!   and hold the socket at the path now.
 //!
 //! **An unmapped uid is nobody's.** Inside a user namespace, a uid the namespace does not map
 //! reads as the overflow uid, 65534 by default, whoever it really is; `(uid_t)-1` is no uid at
@@ -25,6 +28,12 @@ use std::io::{self, Read};
 use std::os::fd::AsFd;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::Path;
+
+mod ancestry;
+pub use ancestry::{
+    MOST_GENERATIONS, NotOurHost, Parents, admit_host, holds_a_socket_at, judge, listening_at,
+    lsof_command, lsof_names, ps_command, ps_lines, stat_parent, walk,
+};
 
 /// A user id.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -70,6 +79,34 @@ pub fn peer_of(socket: &impl AsFd) -> io::Result<Uid> {
     #[cfg(not(any(target_os = "linux", target_os = "android")))]
     let uid = nix::unistd::getpeereid(socket).map(|(uid, _)| uid.as_raw());
     uid.map(Uid).map_err(io::Error::from)
+}
+
+/// The process at the other end of the unix socket `socket`: its uid, and its pid as the kernel
+/// recorded it for the socket (`SO_PEERCRED` on Linux; `LOCAL_PEERCRED` and `LOCAL_PEERPID` on
+/// macOS). For a connection a client made, that is the process that is listening.
+pub fn peer_process_of(socket: &impl AsFd) -> io::Result<(Uid, u32)> {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    let peer = nix::sys::socket::getsockopt(socket, nix::sys::socket::sockopt::PeerCredentials)
+        .map(|credentials| (credentials.uid(), credentials.pid()));
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    let peer = nix::sys::socket::getsockopt(socket, nix::sys::socket::sockopt::LocalPeerCred)
+        .and_then(|credentials| {
+            nix::sys::socket::getsockopt(socket, nix::sys::socket::sockopt::LocalPeerPid)
+                .map(|pid| (credentials.uid(), pid))
+        });
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios"
+    )))]
+    let peer: nix::Result<(u32, i32)> = Err(nix::errno::Errno::ENOTSUP);
+    let (uid, pid) = peer.map_err(io::Error::from)?;
+    let pid = u32::try_from(pid)
+        .ok()
+        .filter(|pid| *pid > 0)
+        .ok_or_else(|| io::Error::other("the socket named no peer process"))?;
+    Ok((Uid(uid), pid))
 }
 
 /// Why a connection was closed unread.
@@ -220,6 +257,86 @@ mod tests {
 
     fn other() -> Uid {
         Uid(ours().0.wrapping_add(1))
+    }
+
+    fn run(command: &mut std::process::Command) -> io::Result<std::process::Output> {
+        command.output()
+    }
+
+    #[test]
+    fn this_process_s_ancestors_start_with_its_parent() {
+        let chain = Parents::now(run)
+            .expect("readable")
+            .chain(std::process::id());
+        assert_eq!(chain.first(), Some(&std::os::unix::process::parent_id()));
+        assert!(!chain.contains(&std::process::id()));
+    }
+
+    #[test]
+    fn a_socket_this_process_listens_on_is_never_its_own_host() {
+        // A hook only connects; the self shortcut a pid could be recycled into is gone.
+        let dir = tempfile::tempdir().expect("a directory");
+        let path = dir.path().join("s.sock");
+        let _listener = std::os::unix::net::UnixListener::bind(&path).expect("bound");
+        let client = std::os::unix::net::UnixStream::connect(&path).expect("connects");
+        let (uid, pid) = peer_process_of(&client).expect("identified");
+        assert_eq!((uid, pid), (Uid::effective(), std::process::id()));
+        assert!(matches!(
+            admit_host(&client, &path, run),
+            Err(NotOurHost::NotAnAncestor { .. })
+        ));
+    }
+
+    /// Where [`a_child_that_listens`] binds, when this test binary is run as that child.
+    const LISTEN_AT: &str = "CHARTER_SAME_USER_TEST_LISTEN_AT";
+
+    /// Not a test: this binary, run again as a child of the test that wants a listener which
+    /// is no ancestor of its own, binds at [`LISTEN_AT`], says so, and waits to be killed.
+    #[test]
+    #[ignore = "a helper the tests below start as a child"]
+    fn a_child_that_listens() {
+        let Some(path) = std::env::var_os(LISTEN_AT) else {
+            return;
+        };
+        let _listener = std::os::unix::net::UnixListener::bind(path).expect("bound");
+        println!("up");
+        std::thread::sleep(std::time::Duration::from_secs(30));
+    }
+
+    #[test]
+    fn a_socket_a_child_listens_on_is_no_host() {
+        // A process started below this one, the shape of anything a chat runs, binds the path.
+        let dir = tempfile::tempdir().expect("a directory");
+        let path = dir.path().join("s.sock");
+        let mut child = std::process::Command::new(std::env::current_exe().expect("this test"))
+            .args([
+                "--exact",
+                "tests::a_child_that_listens",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env(LISTEN_AT, &path)
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("the child starts");
+        let mut said = std::io::BufReader::new(child.stdout.take().expect("piped"));
+        let mut line = String::new();
+        while !line.contains("up") {
+            line.clear();
+            if std::io::BufRead::read_line(&mut said, &mut line).expect("it speaks") == 0 {
+                break;
+            }
+        }
+        let client = std::os::unix::net::UnixStream::connect(&path).expect("connects");
+
+        let refused = admit_host(&client, &path, run);
+
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(
+            matches!(refused, Err(NotOurHost::NotAnAncestor { .. })),
+            "{refused:?}"
+        );
     }
 
     #[test]

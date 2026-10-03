@@ -44,6 +44,7 @@ mod handoff;
 mod hooks;
 mod mcp;
 mod memory;
+mod permission;
 mod piece;
 mod report;
 mod scan;
@@ -1445,6 +1446,11 @@ fn hook(name: &str, now: Option<&str>) -> ExitCode {
     // exit status is the verdict's whatever the send does, and the send gives up on the host
     // after a bounded wait (`hookwire::deliver_tool`), so a slow or frozen app costs a guard's
     // answer that wait at most, never the answer.
+    // The harness's permission prompt (HP-6): held open until the operator answers it in the
+    // window, or the harness's own prompt decides. Not a tool hook: it decides nothing itself.
+    if name == charter_core::harness::hooked::WORD {
+        return permission::permissionrequest(&payload());
+    }
     let guarded = name == GUARDED_TOOL_HOOK;
     let handler = hooks::handler(name);
     if guarded || handler.is_some() {
