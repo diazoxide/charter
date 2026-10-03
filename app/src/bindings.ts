@@ -1953,6 +1953,28 @@ export type HandedFromNote = {
 	workspace: string,
 };
 
+/**
+ *  A harness's capability card at a glance (HP-19, W10, ADR 0072 §3): what the picker says under
+ *  the harness that is picked, what a chat's header draws, and what a control that is off for a
+ *  missing capability says. Every word is `charter_core::harness_card`'s, read off the harness's
+ *  declaration and the adapter charter ships for it; the whole card is the `harness` view.
+ */
+export type HarnessGlance = {
+	/**  The word a profile's `kind` names: the key its card's view tab opens on. */
+	name: string,
+	/**  The product's own name, `Codex`: what a chat's header says. */
+	title: string,
+	/**  What the card is labelled: `What Codex can do here`. */
+	label: string,
+	/**  One line for each thing it lacks, in the card's order: none where it lacks nothing. */
+	lines: string[],
+	/**
+	 *  What a control that types a prompt into its chat says while it is off: the card's line
+	 *  and label — or none where a prompt can be typed in.
+	 */
+	cannot_type: string | null,
+};
+
 /**  One plugin, in one project. */
 export type HarnessPlugin = {
 	/**  The harness's own id for it. */
@@ -2413,6 +2435,8 @@ export type OpenChat = {
 	persona: string | null,
 	/**  What its harness cannot tell charter, said on the chat — none where it tells all. */
 	unreported: string | null,
+	/**  Its harness's card at a glance, which its header draws (HP-19) — none for a shell. */
+	card: HarnessGlance | null,
 	/**
 	 *  Whether the operator pinned it (ADR 0039). It rides the plane's own app
 	 *  record, so a pinned chat comes back pinned at the next launch.
@@ -2998,6 +3022,11 @@ export type ProfileRow = {
 	 *  (FR-28), offers it by.
 	 */
 	ready_to_type: boolean,
+	/**
+	 *  The card of the harness its `kind` names, at a glance (HP-19), or none for a kind this
+	 *  project has no declaration of.
+	 */
+	harness: HarnessGlance | null,
 };
 
 /**

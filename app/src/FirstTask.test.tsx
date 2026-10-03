@@ -43,6 +43,10 @@ const SIDEBAR = {
   unfiled: [],
 };
 
+/** What the core says of opencode's missing capability: its card's line and label (HP-19). */
+const OPENCODE_CANNOT_TYPE =
+  "opencode cannot have a prompt typed in for you, because charter cannot tell when it has finished starting. See What opencode can do here.";
+
 const profile = (name: string, kind: string, approval: string | null, isDefault = false) => ({
   name,
   kind,
@@ -51,6 +55,16 @@ const profile = (name: string, kind: string, approval: string | null, isDefault 
   is_default: isDefault,
   approval,
   ready_to_type: kind !== "opencode",
+  // Its harness's card at a glance (HP-19), as the core answers it for opencode.
+  ...(kind === "opencode" && {
+    harness: {
+      name: "opencode",
+      title: "opencode",
+      label: "What opencode can do here",
+      lines: [],
+      cannot_type: OPENCODE_CANNOT_TYPE,
+    },
+  }),
 });
 
 const START_OPTIONS = {
@@ -279,8 +293,12 @@ describe("the first task", () => {
     const { pane } = await openTheFirstTask();
 
     const run1 = within(pane).getByRole("radiogroup", { name: "First chat" });
-    expect(within(run1).getByRole("radio", { name: "opencode" })).toBeDisabled();
-    expect(within(run1).getByText("charter cannot type the task into it")).toBeInTheDocument();
+    const opencode = within(run1).getByRole("radio", { name: "opencode" });
+    expect(opencode).toBeDisabled();
+    // The off control says what its harness lacks, in its card's line and label (HP-19, ADR
+    // 0072 §3): beside it, and as its tooltip.
+    expect(within(run1).getByText(OPENCODE_CANNOT_TYPE)).toBeInTheDocument();
+    expect(opencode).toHaveAttribute("title", OPENCODE_CANNOT_TYPE);
   });
 
   it("shows a run's diff in a shell in its branch's folder", async () => {

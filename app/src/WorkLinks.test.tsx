@@ -50,6 +50,7 @@ function putBack(session: number, cwd: string): OpenChat {
     profile: "claude",
     persona: "steward",
     unreported: null,
+    card: null,
     guessed: null,
     pinned: false,
     label: null,

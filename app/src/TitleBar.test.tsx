@@ -466,6 +466,7 @@ describe("the title bar in the window, which holds the project strip (ADR 0054)"
       profile: null,
       persona: null,
       unreported: null,
+      card: null,
       guessed: null,
       pinned: false,
       label: null,

@@ -217,6 +217,7 @@ function open(session: number, unreported: string | null): OpenChat {
     profile: null,
     persona: null,
     unreported,
+    card: null,
     guessed: null,
     pinned: false,
     label: null,

@@ -722,3 +722,77 @@ fn a_flags_value_takes_no_percent_sign_and_no_drive_letter() {
     let dir = project(&[("aider.toml", &with_new("\"--remote=example.com:8080\""))]);
     assert!(read(dir.path()).get("aider").is_some());
 }
+
+/// A declaration whose `field = value` line is the TOML `line`, under `[table]` when it is one.
+fn declaring(line: &str) -> String {
+    format!("name = \"gemini\"\nprogram = \"gemini\"\n{line}\n")
+}
+
+#[test]
+fn a_title_a_window_draws_is_one_short_line_with_nothing_invisible_in_it() {
+    // HP-19: the title is the card's label, on the picker and the tab strip.
+    for (line, what) in [
+        ("title = \"Gem\\u202Eini\"", "a bidi override"),
+        ("title = \"Gem\\u200Bini\"", "a zero-width space"),
+        ("title = \"Gem\\u001b[31mini\"", "an escape"),
+        ("title = \"\"\"Gem\nini\"\"\"", "a newline"),
+        (&format!("title = \"{}\"", "G".repeat(61)), "61 characters"),
+    ] {
+        let why = refused("gemini", &declaring(line));
+        assert!(
+            why.starts_with("harnesses/gemini.toml's title")
+                && why.contains("one line of at most 60 characters"),
+            "{what}: {why}"
+        );
+    }
+    let fine = project(&[(
+        "gemini.toml",
+        &declaring(&format!("title = \"{}\"", "G".repeat(60))),
+    )]);
+    assert!(read(fine.path()).refused.is_empty());
+}
+
+#[test]
+fn a_project_title_may_not_be_a_harness_charter_ships() {
+    let why = refused("gemini", &declaring("title = \"claude code\""));
+    assert!(
+        why.starts_with("harnesses/gemini.toml's title") && why.contains("charter ships"),
+        "{why}"
+    );
+}
+
+#[test]
+fn the_versions_a_declaration_was_measured_on_are_one_short_line() {
+    for line in [
+        "tested = \"1.0\\u2066\"".to_owned(),
+        format!("tested = \"{}\"", "1".repeat(81)),
+    ] {
+        let why = refused("gemini", &declaring(&line));
+        assert!(
+            why.starts_with("harnesses/gemini.toml's tested")
+                && why.contains("one line of at most 80 characters"),
+            "{line}: {why}"
+        );
+    }
+}
+
+#[test]
+fn a_no_s_reason_is_one_line_of_at_most_200_characters() {
+    for (reason, what) in [
+        ("it\\nhas none".to_owned(), "a newline"),
+        ("it has \\u202Enone".to_owned(), "a bidi override"),
+        ("x".repeat(10_000), "10 KB"),
+    ] {
+        let why = refused(
+            "gemini",
+            &declaring(&format!(
+                "[capabilities]\nreports_waiting = \"no: {reason}\""
+            )),
+        );
+        assert!(
+            why.starts_with("harnesses/gemini.toml's [capabilities] reports_waiting")
+                && why.contains("one line of at most 200 characters"),
+            "{what}: {why}"
+        );
+    }
+}

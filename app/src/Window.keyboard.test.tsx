@@ -66,6 +66,14 @@ function chat(session: number, name: string, inFront = false) {
     profile: "claude",
     persona: "steward",
     unreported: null,
+    // Its harness's card at a glance (HP-19), which the pane's top-left corner draws as a button.
+    card: {
+      name: "claude",
+      title: "Claude Code",
+      label: "What Claude Code can do here",
+      lines: [],
+      cannot_type: null,
+    },
     guessed: null,
     pinned: false,
   };
@@ -306,8 +314,10 @@ describe("the window's tab order", () => {
       "treeitem alphathe workspace itself",
       // The handle between it and the centre — `react-resizable-panels`' keyboard resize.
       "separator",
-      // The focused pane's own controls, drawn in its top corner, then its terminal. From
-      // here Tab is the shell's, and Ctrl+Tab is the way on.
+      // The focused pane's own controls, drawn in its top corners left to right — the harness
+      // it runs (HP-19), then split and end — then its terminal. From here Tab is the shell's,
+      // and Ctrl+Tab is the way on.
+      "button What Claude Code can do here",
       "button Split right",
       "button Split down",
       "button End this pane's chat",
