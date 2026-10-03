@@ -1,5 +1,6 @@
 //! charter's core, shared by the desktop app and the `charter` binary.
 
+pub mod acp;
 pub mod active;
 pub mod adopt;
 pub mod alerts;
@@ -73,6 +74,7 @@ pub mod memstore;
 pub mod netlog;
 pub mod news;
 pub mod noharness;
+pub mod noterminal;
 pub mod opencode;
 pub mod openfiles;
 pub mod panel;

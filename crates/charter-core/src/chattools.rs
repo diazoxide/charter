@@ -117,6 +117,25 @@ pub fn codex_flag(binary: &Path) -> String {
     format!("mcp_servers.{SERVER}={}", toml::Value::Table(table))
 }
 
+/// The server as ACP's `session/new` takes it in `mcpServers` (ADR 0080 §1): a stdio server, run
+/// by the agent, handed the [`SCOPE_ENV`] variables `chat_env` sets and nothing else of charter's.
+pub fn acp_server(
+    binary: &Path,
+    chat_env: &[(String, String)],
+) -> agent_client_protocol::schema::v1::McpServer {
+    use agent_client_protocol::schema::v1::{EnvVariable, McpServer, McpServerStdio};
+    let env = chat_env
+        .iter()
+        .filter(|(name, _)| SCOPE_ENV.contains(&name.as_str()))
+        .map(|(name, value)| EnvVariable::new(name, value))
+        .collect();
+    McpServer::Stdio(
+        McpServerStdio::new(SERVER, binary)
+            .args(vec![SUBCOMMAND.to_owned()])
+            .env(env),
+    )
+}
+
 /// The server as opencode's config names a local one. opencode hands it its own environment
 /// and directory (measured on 1.18.33).
 pub fn opencode_entry(binary: &Path) -> Value {

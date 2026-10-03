@@ -10,9 +10,14 @@ publish = false
 
 [dependencies]
 clap.workspace = true
+# `--acp` speaks ACP's JSON-RPC lines (`acp.rs`).
+serde_json.workspace = true
+# `--leave-terminal` probes charter's own `noterminal::leave`, and opens a terminal after it as
+# the host does, through the same crate.
+charter-core.workspace = true
+portable-pty.workspace = true
 
 [dev-dependencies]
-charter-core.workspace = true
 tempfile.workspace = true
 
 [lints]

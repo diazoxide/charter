@@ -11,6 +11,7 @@
 //! output that arrived before the pane was watching reaches it as a snapshot of the screen,
 //! and a throughput number would be measuring the wrong thing.
 
+mod acp;
 mod synthetic;
 
 use std::io::{self, BufRead, Write};
@@ -67,6 +68,44 @@ struct Args {
     /// The exit code once everything else has run.
     #[arg(long, default_value_t = 0)]
     exit_code: u8,
+
+    /// Be a scripted ACP agent on stdio instead (`acp.rs`), and do nothing else.
+    #[arg(long)]
+    acp: bool,
+
+    /// With `--acp`: append each message the client sends to this file.
+    #[arg(long, requires = "acp")]
+    acp_record: Option<PathBuf>,
+
+    /// With `--acp`: the protocol version to answer `initialize` with.
+    #[arg(long, requires = "acp", default_value_t = 1)]
+    acp_version: u64,
+
+    /// With `--acp`: answer `session/new` that a login is needed.
+    #[arg(long, requires = "acp")]
+    acp_login: bool,
+
+    /// Say whether this process has a controlling terminal, leave it as the host does
+    /// (`charter_core::noterminal::leave`), open a terminal pair, and say again; nothing else.
+    #[arg(long)]
+    leave_terminal: bool,
+
+    /// With `--acp`: read every message and answer none.
+    #[arg(long, requires = "acp")]
+    acp_silent: bool,
+
+    /// With `--acp`: first start a process outside this one's group that holds its stdout.
+    #[arg(long, requires = "acp")]
+    acp_escape: bool,
+
+    /// Start this program and wait for it, and nothing else: a parent that, like tauri-cli's
+    /// `dev`, ends on Ctrl-C without ending its child. Says the child's pid.
+    #[arg(long, num_args = 1.., allow_hyphen_values = true, value_name = "PROGRAM")]
+    parent_of: Vec<String>,
+
+    /// With `--leave-terminal`: say this process's pid, and stay a while once left.
+    #[arg(long, requires = "leave_terminal")]
+    linger: bool,
 }
 
 fn main() -> ExitCode {
@@ -81,6 +120,29 @@ fn main() -> ExitCode {
 }
 
 fn run(args: &Args) -> Result<(), String> {
+    if let Some((program, rest)) = args.parent_of.split_first() {
+        let mut child = Command::new(program)
+            .args(rest)
+            .spawn()
+            .map_err(|err| format!("cannot start {program}: {err}"))?;
+        println!("child pid {}", child.id());
+        child
+            .wait()
+            .map_err(|err| format!("cannot wait for {program}: {err}"))?;
+        return Ok(());
+    }
+    if args.leave_terminal {
+        return leave_terminal(args.linger);
+    }
+    if args.acp {
+        return acp::serve(&acp::Script {
+            record: args.acp_record.clone(),
+            version: args.acp_version,
+            login: args.acp_login,
+            silent: args.acp_silent,
+            escape: args.acp_escape,
+        });
+    }
     let output = match (&args.corpus, args.synthetic) {
         (Some(path), _) => {
             std::fs::read(path).map_err(|err| format!("cannot read {}: {err}", path.display()))?
@@ -133,6 +195,56 @@ fn run(args: &Args) -> Result<(), String> {
                 .and_then(|()| stdout.flush())
                 .map_err(write_err)?;
         }
+    }
+    Ok(())
+}
+
+/// `--leave-terminal`: what `/dev/tty` answers before and after leaving, and after opening a
+/// terminal pair the way the host does.
+fn leave_terminal(linger: bool) -> Result<(), String> {
+    use charter_core::noterminal::{self, Left};
+    let said = |when: &str| {
+        let has = if noterminal::has_one() { "yes" } else { "no" };
+        println!("terminal {when}: {has}");
+    };
+    said("before");
+    if linger {
+        println!("started as pid {}", std::process::id());
+    }
+    // A level-3 chat refuses to start while the host still has its terminal.
+    let refused = charter_core::acp::Chat::start(
+        charter_core::acp::Launch {
+            chat: "probe".to_owned(),
+            argv: vec!["true".to_owned()],
+            cwd: std::env::temp_dir(),
+            env: Vec::new(),
+            env_strip: Vec::new(),
+            charter_mcp: None,
+            patience: std::time::Duration::from_secs(5),
+        },
+        std::sync::Arc::new(charter_core::harness::asks::Asks::new()),
+    )
+    .err();
+    if noterminal::has_one() {
+        let refused = refused == Some(charter_core::acp::NotStarted::Terminal);
+        println!(
+            "acp with a terminal refused: {}",
+            if refused { "yes" } else { "no" }
+        );
+    }
+    match noterminal::leave().map_err(|err| format!("cannot leave the terminal: {err}"))? {
+        Left::Relaunched(code) => std::process::exit(code),
+        Left::NoneToLeave | Left::NewSession => {}
+    }
+    said("after");
+    let pair = portable_pty::native_pty_system()
+        .openpty(portable_pty::PtySize::default())
+        .map_err(|err| format!("cannot open a terminal: {err}"))?;
+    said("after a pair");
+    drop(pair);
+    if linger {
+        println!("left as pid {}", std::process::id());
+        std::thread::sleep(Duration::from_secs(60));
     }
     Ok(())
 }

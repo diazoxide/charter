@@ -434,3 +434,16 @@ fn an_ask_id_reads_back_from_its_text() {
         id
     );
 }
+
+#[test]
+fn an_open_ask_names_its_chat_even_past_its_deadline_and_a_closed_one_names_none() {
+    // What a chat checks before answering, so that it never closes another chat's ask: past
+    // its deadline an ask is no longer pending, but until it is expired it is still that chat's.
+    let asks = Asks::new();
+    let t0 = Instant::now();
+    let late = raise(&asks, "chat-2", an_ask(Deadline::Within(1_000)), t0);
+    assert!(asks.pending(t0 + Duration::from_secs(5)).is_empty());
+    assert_eq!(asks.chat_of(&late.id).as_deref(), Some("chat-2"));
+    asks.withdraw(&late.id);
+    assert_eq!(asks.chat_of(&late.id), None);
+}

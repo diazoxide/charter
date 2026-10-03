@@ -25,6 +25,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 tempfile = "3"
+# The terminal a chat runs in; fake-harness opens one the way the host does (`--leave-terminal`).
+portable-pty = "0.9"
 
 [workspace.lints.rust]
 # `deny`, not `forbid`, for exactly one audited block: `executor::inherit_nothing_else`, the

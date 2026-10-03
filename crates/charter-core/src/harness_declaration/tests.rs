@@ -383,6 +383,13 @@ fn every_built_in_declaration_says_what_harness_measured() {
             None => ReadyToType::Never,
         };
         assert_eq!(d.terminal.ready_to_type, ready, "{who}");
+        // HP-2: the ACP agent `Harness::acp_args` starts, after the harness's own program.
+        let acp = harness.acp_args().map(|args| {
+            std::iter::once(harness.name().to_owned())
+                .chain(args.iter().map(|arg| (*arg).to_owned()))
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(d.levels.acp, acp, "{who}");
         assert_eq!(
             d.capability("reports_its_process").holds(),
             harness.reports_its_process(),
