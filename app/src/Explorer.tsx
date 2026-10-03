@@ -623,15 +623,16 @@ function ChatList({
 
 /** What the tree knows about branches' folders: which are open, what each holds, and whether
  *  what git ignores is drawn. */
-type FilesOf = {
+export type FilesOf = {
   expanded: ReadonlySet<string>;
   reads: ReadonlyMap<string, FolderRead>;
   showIgnored: boolean;
 };
 
 /** Everything a branch's file rows share: the branch they are of, what the tree knows about
- *  its folders, and what a row does to the tree and to a screen reader. */
-type FileRows = {
+ *  its folders, and what a row does to the tree and to a screen reader. The file tab (FM-2) draws
+ *  its tree out of the same rows. */
+export type FileRows = {
   place: Place;
   files: FilesOf;
   fold: (key: string, open: boolean) => void;
@@ -689,7 +690,7 @@ function FilesRow({
 
 /** What one opened folder holds, a row each: folders that open in turn, and files; and how many
  *  more it holds than the core lists. */
-function FolderEntries({
+export function FolderEntries({
   branch,
   entries,
   more,
@@ -757,7 +758,7 @@ function expands(entry: FolderEntry): boolean {
 }
 
 /** The entries drawn: every one when ignored files are shown, else those git does not ignore. */
-function shown(entries: readonly FolderEntry[], showIgnored: boolean): FolderEntry[] {
+export function shown(entries: readonly FolderEntry[], showIgnored: boolean): FolderEntry[] {
   return showIgnored ? [...entries] : entries.filter((entry) => !entry.ignored);
 }
 
@@ -794,7 +795,7 @@ function openFolders(
 }
 
 /** The folder a fold key names when it is a folder directly inside `parent`. */
-function childOf(
+export function childOf(
   key: string,
   workspace: string,
   parent: BranchFolderRef,
@@ -825,15 +826,15 @@ const pieceRow = (repo: string, piece: string) => `piece:${repo}/${piece}`;
 /** A folded clone, by workspace as well as name: two workspaces can each clone `svc`. */
 const foldKey = (workspace: string, repo: string) => `${workspace}/${repo}`;
 /** A branch's folder, or one of its files, as a row. */
-const fileRow = (ref: BranchFolderRef) => `file:${folderKey(ref)}`;
+export const fileRow = (ref: BranchFolderRef) => `file:${folderKey(ref)}`;
 /** What starts every opened folder's fold key, so `fold` knows it from a clone's. */
 const FILE_FOLD = "files:";
 /** An opened folder of a branch, by workspace as well: two workspaces can each clone `svc`. */
-const fileFold = (workspace: string, ref: BranchFolderRef) =>
+export const fileFold = (workspace: string, ref: BranchFolderRef) =>
   `${FILE_FOLD}${workspace}\u0000${folderKey(ref)}`;
 
 /** One row of the tree, as the keyboard and a screen reader know it (#238). */
-type Row = {
+export type Row = {
   id: string;
   /** What type-ahead matches: the row's own name, which is its first word on screen. */
   name: string;
@@ -853,8 +854,10 @@ type Row = {
 };
 
 /** The attributes a row carries as a `treeitem`, and the `data-row` the keys find it by. */
-type TreeItem = {
+export type TreeItem = {
   role: "treeitem";
+  /** The file the file tab previews (FM-2); the explorer selects no file. */
+  "aria-selected"?: boolean;
   "aria-level"?: number;
   "aria-posinset"?: number;
   "aria-setsize"?: number;
@@ -882,45 +885,32 @@ function treeOf(
   files: FilesOf,
 ): Row[] {
   if (workspace === undefined) return [];
-  /** `shows` is whether its children are drawn when it is: not in a folded clone or a closed
-   *  folder. A clone whose branches could not be listed has none to draw, and says why. */
-  type Node = { id: string; name: string; fold?: Row["fold"]; kids: Node[]; shows: boolean };
   const { panels, pieces } = state;
   const inAPiece = new Set<number>();
-  const chatNode = (chat: OpenChat): Node => ({
+  const chatNode = (chat: OpenChat): TreeNode => ({
     id: chatRow(chat.session),
     name: chat.name,
     kids: [],
     shows: true,
   });
-  /** A branch's folder and, once opened, what it holds: the same walk `FilesRow` draws. */
-  const folderNode = (ref: BranchFolderRef, name: string): Node => {
-    const key = fileFold(workspace, ref);
-    const open = files.expanded.has(key);
-    const read = open ? files.reads.get(folderKey(ref)) : undefined;
-    const kids = shown(read?.entries ?? [], files.showIgnored).map((entry): Node => {
-      const here = { ...ref, folder: joined(ref.folder, entry.name) };
-      return expands(entry)
-        ? folderNode(here, entry.name)
-        : { id: fileRow(here), name: entry.name, kids: [], shows: true };
-    });
-    return { id: fileRow(ref), name, fold: { key, open }, kids, shows: open };
-  };
-  const clones = (panels?.repos ?? []).map((repo): Node => {
-    const branches = (pieces[repo] ?? []).map((piece): Node => {
+  const clones = (panels?.repos ?? []).map((repo): TreeNode => {
+    const branches = (pieces[repo] ?? []).map((piece): TreeNode => {
       const working = chats.filter((chat) => under(chat.cwd, piece.path));
       for (const chat of working) inAPiece.add(chat.session);
       return {
         id: pieceRow(repo, piece.piece),
         name: piece.piece,
         kids: [
-          folderNode({ repo, piece: piece.piece, folder: "" }, "Files"),
+          folderNode(workspace, { repo, piece: piece.piece, folder: "" }, "Files", files),
           ...working.map(chatNode),
         ],
         shows: true,
       };
     });
-    const kids = [folderNode({ repo, piece: null, folder: "" }, "Files"), ...branches];
+    const kids = [
+      folderNode(workspace, { repo, piece: null, folder: "" }, "Files", files),
+      ...branches,
+    ];
     const key = foldKey(workspace, repo);
     const open = !folded.has(key);
     return {
@@ -931,7 +921,7 @@ function treeOf(
       shows: open,
     };
   });
-  const root: Node = {
+  const root: TreeNode = {
     id: ROOT,
     name: workspace,
     kids: [...chats.filter((chat) => !inAPiece.has(chat.session)).map(chatNode), ...clones],
@@ -939,22 +929,65 @@ function treeOf(
   };
 
   const rows: Row[] = [];
-  const walk = (node: Node, parent: Row | undefined, drawn: boolean, at: number, of: number) => {
-    const row: Row = {
-      id: node.id,
-      name: node.name,
-      level: (parent?.level ?? 0) + 1,
-      parent: parent?.id,
-      posinset: at + 1,
-      setsize: of,
-      fold: node.fold,
-      drawn,
-      parents: node.kids.length > 0,
-    };
-    rows.push(row);
-    node.kids.forEach((kid, i) => walk(kid, row, drawn && node.shows, i, node.kids.length));
+  walkRows(root, undefined, true, 0, 1, rows);
+  return rows;
+}
+
+/** `shows` is whether its children are drawn when it is: not in a folded clone or a closed
+ *  folder. A clone whose branches could not be listed has none to draw, and says why. */
+type TreeNode = { id: string; name: string; fold?: Row["fold"]; kids: TreeNode[]; shows: boolean };
+
+/** A branch's folder and, once opened, what it holds: the same walk `FilesRow` draws. */
+function folderNode(
+  workspace: string,
+  ref: BranchFolderRef,
+  name: string,
+  files: FilesOf,
+): TreeNode {
+  const key = fileFold(workspace, ref);
+  const open = files.expanded.has(key);
+  const read = open ? files.reads.get(folderKey(ref)) : undefined;
+  const kids = shown(read?.entries ?? [], files.showIgnored).map((entry): TreeNode => {
+    const here = { ...ref, folder: joined(ref.folder, entry.name) };
+    return expands(entry)
+      ? folderNode(workspace, here, entry.name, files)
+      : { id: fileRow(here), name: entry.name, kids: [], shows: true };
+  });
+  return { id: fileRow(ref), name, fold: { key, open }, kids, shows: open };
+}
+
+/** A node and everything under it, as rows, appended to `rows` in the order they are drawn. */
+function walkRows(
+  node: TreeNode,
+  parent: Row | undefined,
+  drawn: boolean,
+  at: number,
+  of: number,
+  rows: Row[],
+) {
+  const row: Row = {
+    id: node.id,
+    name: node.name,
+    level: (parent?.level ?? 0) + 1,
+    parent: parent?.id,
+    posinset: at + 1,
+    setsize: of,
+    fold: node.fold,
+    drawn,
+    parents: node.kids.length > 0,
   };
-  walk(root, undefined, true, 0, 1);
+  rows.push(row);
+  node.kids.forEach((kid, i) => walkRows(kid, row, drawn && node.shows, i, node.kids.length, rows));
+}
+
+/**
+ * The rows of one branch's tree with its own folder as the root, which is not a row itself: what
+ * the file tab draws (FM-2). Its folder's entries are the first level.
+ */
+export function fileTreeRows(workspace: string, top: BranchFolderRef, files: FilesOf): Row[] {
+  const rows: Row[] = [];
+  const root = folderNode(workspace, top, "", files);
+  root.kids.forEach((kid, i) => walkRows(kid, undefined, root.shows, i, root.kids.length, rows));
   return rows;
 }
 
@@ -970,7 +1003,7 @@ type TreeMove = { focus: string } | { fold: string; open: boolean } | "stay" | "
  * @param drawn The rows drawn, in order.
  * @param from The row the key was pressed on.
  */
-function treeKey(drawn: readonly Row[], from: string | undefined, key: string): TreeMove {
+export function treeKey(drawn: readonly Row[], from: string | undefined, key: string): TreeMove {
   const at = drawn.findIndex((row) => row.id === from);
   if (at < 0) return "not-mine";
   const row = drawn[at];

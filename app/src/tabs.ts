@@ -243,7 +243,25 @@ export type Tabs = {
   inFront?: number;
   /** Ids already handed out, so a new tab or pane never reuses one. */
   named: { tabs: number; panes: number };
+  /**
+   * Where each view's divider was, by {@link viewKey}: its first side's share of the pane in
+   * percent — a file tab's tree beside its preview (FM-2). **Kept for a view whose tab closed**,
+   * so opening it again brings the divider back where it was; the record keeps it for the tabs
+   * open at a quit (`reopen::View::split`).
+   */
+  splits?: Readonly<Record<string, number>>;
 };
+
+/** Where `view`'s divider was, or `undefined` when it never moved. */
+export function splitOf(tabs: Tabs, view: ViewRef): number | undefined {
+  return tabs.splits?.[viewKey(view)];
+}
+
+/** `view`'s divider was moved to `split`. Answers `tabs` itself when it was already there. */
+export function setSplit(tabs: Tabs, view: ViewRef, split: number): Tabs {
+  if (splitOf(tabs, view) === split) return tabs;
+  return { ...tabs, splits: { ...tabs.splits, [viewKey(view)]: split } };
+}
 
 export function noTabs(): Tabs {
   return { byId: {}, order: [], named: { tabs: 0, panes: 0 } };
@@ -307,6 +325,7 @@ function withTab(
   const order = [...tabs.order];
   order.splice(Math.max(0, Math.min(at, order.length)), 0, id);
   return {
+    ...tabs,
     byId: {
       ...tabs.byId,
       [id]: {
@@ -481,10 +500,12 @@ export function putViewBack(
   name: string,
   workspace: string,
   at: number,
+  split?: number,
 ): Tabs {
   if (findView(tabs, view)) return tabs;
   const opened = withTab(tabs, name, { kind: "view", view, workspace, waits: true }, at);
-  return { ...opened, inFront: tabs.inFront };
+  const back = { ...opened, inFront: tabs.inFront };
+  return split === undefined ? back : setSplit(back, view, split);
 }
 
 /**

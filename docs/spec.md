@@ -423,14 +423,16 @@ how it is cited and nothing here is renumbered.
 
 34. **Any file of a worktree opens in the light editor, read only.** On screen a worktree is
     its **branch**, and its directory the branch's **folder** (#989). A branch's row in the
-    explorer offers *Browse the files of*, followed by its folder's name: a view tab listing
-    every file git tracks there and every one it does not ignore, narrowed as the operator
-    types, with the file picked drawn beside the list and *Open in a tab of its own* for a tab
-    of that file alone. The window names the branch's folder, never a path. The core opens only a
+    explorer offers *Browse the files of*, followed by its folder's name: a view tab with the
+    branch as the explorer's tree, read a folder at a time, beside a preview of the file picked,
+    with *Open in a tab of its own* for a tab of that file alone. The divider between them is
+    dragged or moved with the arrow keys and kept with the tab, across a close and a relaunch
+    (FM-2). The window names the branch's folder, never a path. The core opens only a
     file that list offers (an ignored file, such as a `.env`, does not open by name), and
     refuses a path with a `.git` component or one that resolves, through a link, outside the
-    worktree or to a file the list does not offer. A binary file, or one past 5 MiB, is said in
-    a sentence rather than drawn. The light editor is CodeMirror 6, with charter's fixed set of
+    worktree or to a file the list does not offer. An image is drawn as an image and markdown
+    rendered, with its source a press away; a binary file, or one past 2 MiB, is said in a
+    sentence rather than drawn. The light editor is CodeMirror 6, with charter's fixed set of
     grammars and the theme's colours; a diff is drawn in its merge view, which marks only the
     lines git reported and finds the changed words inside them. Editing (RC-10) and the Review
     tab (RC-4) come after. **ADR 0081, ADR 0084.**

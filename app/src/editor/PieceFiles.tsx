@@ -1,32 +1,36 @@
 /**
- * **A piece's files, and one file of a piece** (RC-5): the light editor's two view tabs.
+ * **A branch's files, and one file of a branch** (RC-5, FM-2): the light editor's two view tabs.
  *
- * - **Files · \<piece\>** lists every file of the piece (what git tracks and what it does not
- *   ignore, `charter_core::piecefiles::list`), narrows the list as the operator types, and
- *   draws the file picked beside it. One tab for a whole piece, so reading through a branch
- *   does not leave a tab per file behind.
- * - **\<file\> · \<piece\>** is one file in a tab of its own: what the list's *Open in a tab
- *   of its own* opens, and what a jump from a diff, a record or the knowledge graph will open.
+ * - **Files · \<branch\>** is the branch as a tree (`BranchTree`, the explorer's own file rows)
+ *   beside a read-only preview of the file picked, with a divider between them that can be
+ *   dragged or moved from the keyboard. Where it was left is the tab's (`tabs.splits`), and the
+ *   record keeps it for a tab open at a quit (`reopen::View::split`). One tab for a whole
+ *   branch, so reading through it does not leave a tab per file behind.
+ * - **\<file\> · \<branch\>** is one file in a tab of its own: what the preview's *Open in a
+ *   tab of its own* opens, and what a jump from a diff, a record or the knowledge graph opens.
  *
- * Both only read. The core names the folder from the piece, and refuses a path that leaves it.
+ * **The preview** (#1103 F4) draws code in the light editor, an image as an image, markdown
+ * rendered (with its source a press away), and for a binary file or one past 2 MiB a sentence
+ * with its size instead of its contents. Both tabs only read. The core names the folder from the
+ * branch, refuses a path that leaves it, and decides what a file is by its bytes.
  *
  * **Open in your editor** (RC-20, ADR 0081 §3) is beside the file in both: the file and the
  * line the cursor is on go to the editor chosen on the Preferences tab. The window sends the
- * piece, the path, the line and which editor; the core checks the path as it checks a read,
+ * branch, the path, the line and which editor; the core checks the path as it checks a read,
  * and builds the URL or the program's arguments itself.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import Markdown, { type Components } from "react-markdown";
+import { Group, Panel, Separator, type Layout } from "react-resizable-panels";
 import { FileText, LoaderCircle } from "lucide-react";
 import { EmptyState } from "../EmptyState";
+import { ExternalLink } from "../ReleaseNotes";
 import { commands, type PieceFile, type PlaneId } from "../bindings";
-import { pieceFileTitle, pieceFileView, placeName, type Place } from "../pieceViews";
+import { pieceFileTitle, pieceFileView, type Place } from "../pieceViews";
 import type { ViewRef } from "../tabs";
+import { BranchTree } from "./BranchTree";
 import { LightEditor } from "./LightEditor";
 import { useYourEditor } from "../yourEditor";
-
-/** How many matching paths the list draws at once. A repo of tens of thousands of files is
- *  narrowed by typing, not scrolled; the rest are counted under the list. */
-const SHOWN = 500;
 
 /** A size, as a person reads one. */
 function sized(bytes: number): string {
@@ -35,32 +39,38 @@ function sized(bytes: number): string {
   return `${Math.round(bytes / (1024 * 1024))} MiB`;
 }
 
-/** What the core answered for one file, or the sentence it refused with. */
-type Read = { file?: PieceFile; trouble?: string };
+/**
+ * One file, as the tabs draw it: still being read, refused with the core's sentence, or what
+ * the core found it to be. One union, so every state is drawn in one place (#988).
+ */
+type FileRead = { kind: "reading" } | { kind: "refused"; why: string } | PieceFile;
 
-/** One file of the piece, read from the core each time its path changes. */
-function useFile(plane: PlaneId, cut: Place, path: string | undefined): Read | undefined {
-  const [read, setRead] = useState<{ path: string; read: Read }>();
+const READING: FileRead = { kind: "reading" };
+
+/**
+ * One file of the branch, read from the core each time its path changes: the one path both tabs
+ * read a file through (#988). `undefined` while no file is picked.
+ */
+function useFile(plane: PlaneId, cut: Place, path: string | undefined): FileRead | undefined {
+  const [read, setRead] = useState<{ path: string; read: FileRead }>();
   useEffect(() => {
     if (path === undefined) return;
     let gone = false;
+    const told = (read: FileRead) => {
+      if (!gone) setRead({ path, read });
+    };
     void commands
       .pieceFile(plane, cut.workspace, cut.repo, cut.piece, path)
-      .then((answer) => {
-        if (gone) return;
-        setRead({
-          path,
-          read: answer.status === "error" ? { trouble: answer.error } : { file: answer.data },
-        });
-      })
-      .catch((err: unknown) => {
-        if (!gone) setRead({ path, read: { trouble: String(err) } });
-      });
+      .then((answer) =>
+        told(answer.status === "error" ? { kind: "refused", why: answer.error } : answer.data),
+      )
+      .catch((err: unknown) => told({ kind: "refused", why: String(err) }));
     return () => {
       gone = true;
     };
   }, [plane, cut.workspace, cut.repo, cut.piece, path]);
-  return path !== undefined && read?.path === path ? read.read : undefined;
+  if (path === undefined) return undefined;
+  return read?.path === path ? read.read : READING;
 }
 
 /**
@@ -124,36 +134,123 @@ function ToYourEditor({
   );
 }
 
-/** A file as the light editor draws it, or the sentence that says why it does not. */
+/** Whether a file is markdown, by its name: what the preview renders rather than lists. */
+function isMarkdown(path: string): boolean {
+  return /\.(md|markdown)$/i.test(path);
+}
+
+/**
+ * Markdown's headings one level under the preview's own, its links opened in the browser only
+ * when they are http or https (`ReleaseNotes`), and an image said by its words: the window
+ * loads nothing a file names (the CSP has no source for it), so a picture is never fetched.
+ */
+const MARKDOWN: Components = {
+  h1: "h3",
+  h2: "h4",
+  h3: "h5",
+  a: ({ href, children }) => <ExternalLink href={href}>{children}</ExternalLink>,
+  img: ({ alt }) => (
+    <span className="piece-markdown-image">{`[image${alt ? `: ${alt}` : ""}]`}</span>
+  ),
+};
+
+/**
+ * An image, drawn on a canvas from its bytes.
+ *
+ * **Decoded here, never loaded from a URL**: the window's CSP gives images no source but the
+ * app's own (`tauri.conf.json`), and a `data:` or `blob:` source would be one more way for
+ * whatever the window shows to fetch. `createImageBitmap` decodes bytes it is handed and loads
+ * nothing. An animated image shows its first frame.
+ */
+function ImagePreview({ name, mime, base64 }: { name: string; mime: string; base64: string }) {
+  const canvas = useRef<HTMLCanvasElement>(null);
+  const [drawn, setDrawn] = useState<{ of: string; size?: string; trouble?: string }>();
+  useEffect(() => {
+    let gone = false;
+    const say = (got: { size?: string; trouble?: string }) => {
+      if (!gone) setDrawn({ of: base64, ...got });
+    };
+    void (async () => {
+      try {
+        const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+        const bitmap = await createImageBitmap(new Blob([bytes], { type: mime }));
+        const to = canvas.current;
+        if (gone || to === null) {
+          bitmap.close();
+          return;
+        }
+        to.width = bitmap.width;
+        to.height = bitmap.height;
+        to.getContext("2d")?.drawImage(bitmap, 0, 0);
+        say({ size: `${bitmap.width} × ${bitmap.height}` });
+        bitmap.close();
+      } catch (err) {
+        say({ trouble: `charter could not draw ${name}: ${String(err)}` });
+      }
+    })();
+    return () => {
+      gone = true;
+    };
+  }, [base64, mime, name]);
+  const now = drawn?.of === base64 ? drawn : undefined;
+  return (
+    <figure className="piece-image">
+      <canvas ref={canvas} role="img" aria-label={name} />
+      <figcaption>
+        {now?.trouble ?? (now?.size === undefined ? mime : `${now.size} · ${mime}`)}
+      </figcaption>
+    </figure>
+  );
+}
+
+/** A file as the preview draws it, or the sentence that says why it does not. */
 function Shown({
   path,
   read,
   line,
   onLine,
+  source = false,
 }: {
   path: string;
-  read: Read | undefined;
+  read: FileRead;
   line?: number;
   onLine?: (line: number) => void;
+  /** Markdown's source rather than the rendering. */
+  source?: boolean;
 }) {
-  if (read === undefined) {
-    return <EmptyState mark={LoaderCircle} headline={`Reading ${path}…`} size="panel" />;
-  }
-  if (read.trouble !== undefined) {
-    return <EmptyState headline={read.trouble} size="panel" testid="piece-file-trouble" />;
-  }
-  const file = read.file;
-  if (file === undefined) return null;
   const name = path.slice(path.lastIndexOf("/") + 1);
-  switch (file.kind) {
+  switch (read.kind) {
+    case "reading":
+      return <EmptyState mark={LoaderCircle} headline={`Reading ${path}…`} size="panel" />;
+    case "refused":
+      return <EmptyState headline={read.why} size="panel" testid="piece-file-trouble" />;
     case "text":
-      return <LightEditor path={path} text={file.text} line={line} onLine={onLine} />;
+      return isMarkdown(path) && !source ? (
+        <article className="piece-markdown release-notes" data-testid="piece-markdown">
+          <Markdown skipHtml components={MARKDOWN}>
+            {read.text}
+          </Markdown>
+        </article>
+      ) : (
+        <LightEditor path={path} text={read.text} line={line} onLine={onLine} />
+      );
+    case "image":
+      return <ImagePreview name={name} mime={read.mime} base64={read.base64} />;
+    case "huge-image":
+      return (
+        <EmptyState
+          mark={FileText}
+          headline={`${name} is ${read.width} × ${read.height} pixels, past what the preview draws (40 megapixels)`}
+          body="Open it in your editor."
+          size="panel"
+        />
+      );
     case "binary":
       return (
         <EmptyState
           mark={FileText}
-          headline={`${name} is a binary file (${sized(file.bytes)})`}
-          body="The light editor draws text only."
+          headline={`${name} is a binary file (${sized(read.bytes)})`}
+          body="The preview draws text and images only."
           size="panel"
         />
       );
@@ -161,7 +258,7 @@ function Shown({
       return (
         <EmptyState
           mark={FileText}
-          headline={`${name} is ${sized(file.bytes)}, past what the light editor draws (5 MiB)`}
+          headline={`${name} is ${sized(read.bytes)}, past what the preview draws (2 MiB)`}
           body="Open it in your editor."
           size="panel"
         />
@@ -169,7 +266,7 @@ function Shown({
   }
 }
 
-/** One file of a piece, in a tab of its own, brought to `line` when one is given. */
+/** One file of a branch, in a tab of its own, brought to `line` when one is given. */
 export function PieceFileTab({
   plane,
   cut,
@@ -181,125 +278,139 @@ export function PieceFileTab({
   path: string;
   line?: number;
 }) {
-  const read = useFile(plane, cut, path);
+  const read = useFile(plane, cut, path) ?? READING;
   const at = useCursorLine(path, line);
+  // A jump to a line (a diff, a record) lands in the text at that line; a file opened to be read
+  // is rendered.
+  const [source, setSource] = useState(line !== undefined);
   return (
     <div className="piece-file">
       <header className="piece-files-head">
         <code>{path}</code>
         <span className="piece-files-actions">
+          <SourceToggle path={path} read={read} source={source} onSource={setSource} />
           <ToYourEditor plane={plane} cut={cut} path={path} line={at.line} />
         </span>
       </header>
-      <Shown path={path} read={read} line={line} onLine={at.moved} />
+      <Shown path={path} read={read} line={line} onLine={at.moved} source={source} />
     </div>
   );
 }
 
-/** A piece's files: the list, narrowed by what is typed, and the file picked beside it. */
+/** *Source*, beside a markdown file: its text in the light editor rather than rendered. */
+function SourceToggle({
+  path,
+  read,
+  source,
+  onSource,
+}: {
+  path: string;
+  read: FileRead;
+  source: boolean;
+  onSource: (source: boolean) => void;
+}) {
+  if (read.kind !== "text" || !isMarkdown(path)) return null;
+  return (
+    <button type="button" tabIndex={0} aria-pressed={source} onClick={() => onSource(!source)}>
+      Source
+    </button>
+  );
+}
+
+/** The tree's panel, as the divider's layout names it. */
+const TREE = "piece-files-tree";
+/** The tree's share of the tab when it was never moved, and the shares it is held between. */
+const SPLIT = { start: 30, least: 10, most: 70 };
+/** Where the operator last left a file tab's divider in this window: where a branch's tab that
+ *  has never been moved starts, so a second branch opens at the width the first was given. */
+let lastSplit: number | undefined;
+
+/**
+ * A branch's files: the tree, and the file picked beside it in the preview, with a divider
+ * between them that is dragged or moved with the arrow keys (`react-resizable-panels`, as the
+ * window's own regions are). Where it is left is told to the tab (`onSplit`).
+ */
 export function PieceFilesTab({
   plane,
   cut,
   onOpenView,
+  split,
+  onSplit,
 }: {
   plane: PlaneId;
   cut: Place;
   onOpenView: (view: ViewRef, title: string) => void;
+  /** Where the tab's divider was left: the tree's share in percent. */
+  split?: number;
+  /** The operator moved the divider. */
+  onSplit?: (split: number) => void;
 }) {
-  const [listed, setListed] = useState<{ files?: string[]; trouble?: string }>();
-  const [wanted, setWanted] = useState("");
   const [picked, setPicked] = useState<string>();
+  const [source, setSource] = useState<{ path: string; on: boolean }>();
   const at = useCursorLine(picked);
-  useEffect(() => {
-    let gone = false;
-    void commands
-      .pieceFiles(plane, cut.workspace, cut.repo, cut.piece)
-      .then((answer) => {
-        if (gone) return;
-        setListed(answer.status === "error" ? { trouble: answer.error } : { files: answer.data });
-      })
-      .catch((err: unknown) => {
-        if (!gone) setListed({ trouble: String(err) });
-      });
-    return () => {
-      gone = true;
-    };
-  }, [plane, cut.workspace, cut.repo, cut.piece]);
   const read = useFile(plane, cut, picked);
+  // **Read once**: a panel's size is a constraint, and a constraint that changes re-registers
+  // the panel (`RegionFrame.tsx`). The divider is where the operator's hand put it already.
+  const [started] = useState(() =>
+    Math.min(SPLIT.most, Math.max(SPLIT.least, Math.round(split ?? lastSplit ?? SPLIT.start))),
+  );
+  const settled = (layout: Layout, meta: { isUserInteraction: boolean }) => {
+    // The layout is reported on mount too; only a drag or a key is the operator's.
+    const tree = layout[TREE];
+    if (!meta.isUserInteraction || typeof tree !== "number") return;
+    lastSplit = Math.round(tree);
+    onSplit?.(lastSplit);
+  };
+  const showsSource = source !== undefined && source.path === picked && source.on;
 
-  const matching = useMemo(() => {
-    const needle = wanted.trim().toLowerCase();
-    const files = listed?.files ?? [];
-    return needle === "" ? files : files.filter((path) => path.toLowerCase().includes(needle));
-  }, [listed, wanted]);
-
-  if (listed === undefined) {
-    return <EmptyState mark={LoaderCircle} headline={`Listing the files of ${placeName(cut)}…`} />;
-  }
-  if (listed.trouble !== undefined) {
-    return <EmptyState headline={listed.trouble} testid="piece-files-trouble" />;
-  }
   return (
-    <div className="piece-files">
-      <nav className="piece-files-list" aria-label={`Files of ${placeName(cut)}`}>
-        <input
-          type="search"
-          aria-label="Find a file"
-          placeholder="Find a file"
-          value={wanted}
-          onChange={(event) => setWanted(event.target.value)}
-        />
-        <ul>
-          {matching.slice(0, SHOWN).map((path) => (
-            <li key={path}>
-              <button
-                type="button"
-                tabIndex={0}
-                aria-current={path === picked ? "true" : undefined}
-                onClick={() => setPicked(path)}
-                onDoubleClick={() =>
-                  onOpenView(pieceFileView(cut, path), pieceFileTitle(cut, path))
-                }
-              >
-                {path}
-              </button>
-            </li>
-          ))}
-        </ul>
-        {matching.length > SHOWN && (
-          <p className="none">{`${matching.length - SHOWN} more: type to narrow the list`}</p>
-        )}
-        {matching.length === 0 && <p className="none">No file matches</p>}
-      </nav>
-      <section className="piece-files-shown" aria-label={picked ?? "No file picked"}>
-        {picked === undefined ? (
-          <EmptyState
-            mark={FileText}
-            headline={`${listed.files?.length ?? 0} files in ${placeName(cut)}`}
-            body="Pick one to read it."
-            size="panel"
-          />
-        ) : (
-          <>
-            <header className="piece-files-head">
-              <code>{picked}</code>
-              <span className="piece-files-actions">
-                <ToYourEditor plane={plane} cut={cut} path={picked} line={at.line} />
-                <button
-                  type="button"
-                  tabIndex={0}
-                  onClick={() =>
-                    onOpenView(pieceFileView(cut, picked), pieceFileTitle(cut, picked))
-                  }
-                >
-                  Open in a tab of its own
-                </button>
-              </span>
-            </header>
-            <Shown path={picked} read={read} onLine={at.moved} />
-          </>
-        )}
-      </section>
-    </div>
+    <Group className="piece-files" orientation="horizontal" onLayoutChanged={settled}>
+      <Panel
+        id={TREE}
+        defaultSize={`${started}%`}
+        minSize={`${SPLIT.least}%`}
+        maxSize={`${SPLIT.most}%`}
+      >
+        <BranchTree plane={plane} place={cut} picked={picked} onPick={setPicked} />
+      </Panel>
+      <Separator className="piece-files-split" aria-label="Resize the file tree" />
+      <Panel id="piece-files-preview" minSize={`${100 - SPLIT.most}%`}>
+        <section className="piece-files-shown" aria-label={picked ?? "No file picked"}>
+          {picked === undefined || read === undefined ? (
+            <EmptyState
+              mark={FileText}
+              headline="Pick a file to read it"
+              body="Arrows move through the tree, Right opens a folder, and Enter shows a file here."
+              size="panel"
+            />
+          ) : (
+            <>
+              <header className="piece-files-head">
+                <code>{picked}</code>
+                <span className="piece-files-actions">
+                  <SourceToggle
+                    path={picked}
+                    read={read}
+                    source={showsSource}
+                    onSource={(on) => setSource({ path: picked, on })}
+                  />
+                  <ToYourEditor plane={plane} cut={cut} path={picked} line={at.line} />
+                  <button
+                    type="button"
+                    tabIndex={0}
+                    onClick={() =>
+                      onOpenView(pieceFileView(cut, picked), pieceFileTitle(cut, picked))
+                    }
+                  >
+                    Open in a tab of its own
+                  </button>
+                </span>
+              </header>
+              <Shown path={picked} read={read} onLine={at.moved} source={showsSource} />
+            </>
+          )}
+        </section>
+      </Panel>
+    </Group>
   );
 }

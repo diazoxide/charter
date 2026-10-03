@@ -1672,6 +1672,7 @@ mod tests {
             at: 0,
             active: false,
             pinned: false,
+            split: None,
         }
     }
 

@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { browser, expect, $, $$ } from "@wdio/globals";
 import { pressAndStart } from "../opening.js";
@@ -192,9 +192,10 @@ describe("the explorer", () => {
       timeout: 20_000,
       timeoutMsg: `the file tab never came forward; in front is ${await tabInFront()}`,
     });
-    const editor = await $('[data-testid="light-editor"]');
-    await editor.waitForDisplayed({ timeout: 20_000 });
-    await expect(editor).toHaveText(expect.stringContaining("# svc"));
+    // Markdown, so it is drawn rendered (FM-2); `# svc` is its heading.
+    const rendered = await $('[data-testid="piece-markdown"]');
+    await rendered.waitForDisplayed({ timeout: 20_000 });
+    await expect(rendered).toHaveText(expect.stringContaining("svc"));
   });
 
   it("shows a file an agent creates in an expanded folder without a refresh", async () => {
@@ -250,6 +251,88 @@ describe("the explorer", () => {
 
     // `scratch.txt` is in the clone and not committed: the repo's own folder, as it is.
     await expect(await fileRow(null, "scratch.txt", 20_000, "tool")).toBeExisting();
+  });
+
+  /**
+   * **The file tab is the branch's tree beside a resizable preview** (FM-2, #1105), against the
+   * real core: the tree is `branch_tree`'s, the preview `piece_file`'s, and the divider's place
+   * is written to the plane's record the next launch reads. Nothing is stubbed.
+   */
+  it("opens the fixture branch's file tab as a tree, drags its divider and keeps it", async () => {
+    await onAlpha();
+    await browseTheFiles();
+    const tree = await $('[data-testid="piece-files-tree"]');
+    await tree.waitForExist({ timeout: 20_000 });
+
+    // A file opens in the preview beside the tree.
+    const readme = await tree.$('[data-row="file:svc/fix-login:README.md"]');
+    await readme.waitForExist({ timeout: 20_000 });
+    await readme.click();
+    const preview = await $('[aria-label="README.md"]');
+    await browser.waitUntil(async () => (await preview.getText()).includes("svc"), {
+      timeout: 20_000,
+      timeoutMsg: "the preview never drew README.md",
+    });
+    await expect(readme).toHaveAttribute("aria-selected", "true");
+
+    // The divider is dragged with the pointer…
+    const divider = await $('[role="separator"][aria-label="Resize the file tree"]').getElement();
+    await divider.waitForDisplayed({ timeout: 20_000 });
+    const before = await valueOf(divider);
+    expect(await dragTheDivider(120)).toBe(true);
+    await browser.waitUntil(async () => (await valueOf(divider)) > before, {
+      timeout: 20_000,
+      timeoutMsg: `dragging the divider never moved it from ${before}%`,
+    });
+    // …and moved from the keyboard, saying where it is.
+    const dragged = await valueOf(divider);
+    await divider.click();
+    await browser.keys(["ArrowLeft"]);
+    await browser.waitUntil(async () => (await valueOf(divider)) < dragged, {
+      timeout: 20_000,
+      timeoutMsg: "the arrow key never moved the divider",
+    });
+    const left = await valueOf(divider);
+
+    // The record the next launch reads holds the tab and where its divider was.
+    const record = join((await ask<string[]>("open_planes"))[0], ".charter", "app", "reopen.json");
+    await browser.waitUntil(
+      async () =>
+        filesTabsIn(record).some(
+          (one) => one.key === "alpha/svc/fix-login" && Math.abs((one.split ?? 0) - left) <= 1,
+        ),
+      { timeout: 20_000, timeoutMsg: "the record never kept the file tab's divider" },
+    );
+
+    // Opening the same branch's files again keeps one tab…
+    await browseTheFiles();
+    expect(filesTabsIn(record).filter((one) => one.key === "alpha/svc/fix-login")).toHaveLength(1);
+    expect((await tabNames()).filter((name) => name === "Files · fix-login")).toHaveLength(1);
+
+    // …and closing it and opening it again brings the divider back where it was.
+    await $(
+      '[role="tablist"][aria-label="Tabs"] button[aria-label="Close Files · fix-login"]',
+    ).click();
+    await browser.waitUntil(async () => !(await tabNames()).includes("Files · fix-login"), {
+      timeout: 20_000,
+      timeoutMsg: "the file tab did not close",
+    });
+    await browseTheFiles();
+    const again = await $('[role="separator"][aria-label="Resize the file tree"]').getElement();
+    await again.waitForDisplayed({ timeout: 20_000 });
+    await browser.waitUntil(async () => Math.abs((await valueOf(again)) - left) <= 1, {
+      timeout: 20_000,
+      timeoutMsg: `the divider came back at ${await valueOf(again)}%, not the ${left}% it was left at`,
+    });
+
+    // Put away, so the specs after this one find the explorer's rows and no tab's.
+    await $(
+      '[role="tablist"][aria-label="Tabs"] button[aria-label="Close Files · fix-login"]',
+    ).click();
+    await browser.waitUntil(async () => !(await tabNames()).includes("Files · fix-login"), {
+      timeout: 20_000,
+      timeoutMsg: "the file tab did not close",
+    });
   });
 
   it("does not list every workspace, because the strip above already answers that", async () => {
@@ -524,6 +607,94 @@ async function fileRow(
 /** The chats on the strip, which is the focused workspace's and no other's. */
 async function chatTabs(): Promise<string[]> {
   // In one pass: a chat is being added to the strip while it is polled (charter#506).
+  return textOfEach('[role="tablist"][aria-label="Tabs"] [role="tab"] .tab-name');
+}
+
+/**
+ * Opens the fixture branch's file tab from its row's menu — *Browse the files of fix-login* —
+ * and waits for it to come forward.
+ */
+async function browseTheFiles(): Promise<void> {
+  await $('[data-testid="piece-svc-fix-login"]').waitForExist({ timeout: 20_000 });
+  expect(await sendContextMenu('[data-testid="piece-svc-fix-login"] .spot')).toBe(true);
+  const menu = await $('[role="menu"]');
+  await menu.waitForDisplayed({ timeout: 20_000 });
+  let item: WebdriverIO.Element | undefined;
+  for (const one of await $$('[role="menu"] [role="menuitem"]').getElements()) {
+    if ((await one.getText()).includes("Browse the files of fix-login")) item = one;
+  }
+  if (item === undefined)
+    throw new Error(`the branch's menu offers no file tab: ${await menu.getText()}`);
+  await item.click();
+  await browser.waitUntil(async () => (await tabInFront()) === "Files · fix-login", {
+    timeout: 20_000,
+    timeoutMsg: `the file tab never came forward; in front is ${await tabInFront()}`,
+  });
+}
+
+/**
+ * Drags the file tab's divider `by` pixels to the right, as the pointer events a drag sends.
+ *
+ * **Dispatched rather than performed**, for the reason `sendContextMenu` gives: a WebDriver
+ * pointer action on the embedded driver raises no pointer events the page sees, measured on
+ * macOS. What is sent is the sequence the platform would send — down on the divider's centre,
+ * a move, and up — to the document `react-resizable-panels` listens on.
+ */
+async function dragTheDivider(by: number): Promise<boolean> {
+  return browser.execute(async (dx: number) => {
+    const handle = document.querySelector('[role="separator"][aria-label="Resize the file tree"]');
+    if (!(handle instanceof HTMLElement)) return false;
+    const box = handle.getBoundingClientRect();
+    const x = box.left + box.width / 2;
+    const y = box.top + box.height / 2;
+    const at = (type: string, clientX: number, target: EventTarget) =>
+      target.dispatchEvent(
+        new PointerEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          pointerId: 1,
+          pointerType: "mouse",
+          isPrimary: true,
+          button: 0,
+          buttons: type === "pointerup" ? 0 : 1,
+          clientX,
+          clientY: y,
+        }),
+      );
+    const frame = () => new Promise((done) => requestAnimationFrame(done));
+    at("pointerdown", x, handle);
+    await frame();
+    for (let step = 1; step <= 6; step++) {
+      at("pointermove", x + (dx * step) / 6, document);
+      await frame();
+    }
+    at("pointerup", x + dx, document);
+    return true;
+  }, by);
+}
+
+/** Where a divider says it is, in percent. */
+async function valueOf(divider: WebdriverIO.Element): Promise<number> {
+  return Number(await divider.getAttribute("aria-valuenow"));
+}
+
+/** The file tabs a plane's record names, read off the disk. */
+function filesTabsIn(record: string): { key: string; split?: number | null }[] {
+  try {
+    const views =
+      (
+        JSON.parse(readFileSync(record, "utf8")) as {
+          views?: { view: string; key: string; split?: number | null }[];
+        }
+      ).views ?? [];
+    return views.filter((one) => one.view === "piece-files");
+  } catch {
+    return [];
+  }
+}
+
+/** Every tab on the strip, by name. */
+async function tabNames(): Promise<string[]> {
   return textOfEach('[role="tablist"][aria-label="Tabs"] [role="tab"] .tab-name');
 }
 

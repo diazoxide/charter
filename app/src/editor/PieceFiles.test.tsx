@@ -1,82 +1,147 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import type { PieceFile, PlaneId } from "../bindings";
+import type { FolderEntry, PieceFile, PlaneId } from "../bindings";
 import { PieceFileTab, PieceFilesTab } from "./PieceFiles";
 import { forgetYourEditor, setYourEditor } from "../yourEditor";
 
 const PLANE = "/plane" as unknown as PlaneId;
 const CUT = { workspace: "alpha", repo: "svc", piece: "fix-it" };
 
-/** The core, as these tabs ask it: a piece with three files. */
-function core(files: Record<string, PieceFile | string>, editorSays?: string) {
+const file = (name: string): FolderEntry => ({
+  name,
+  kind: "file",
+  ignored: false,
+  refused: null,
+});
+const folder = (name: string): FolderEntry => ({ ...file(name), kind: "folder" });
+
+/**
+ * The core, as these tabs ask it: each file by its path, and each folder of the branch by its
+ * path — by default, the folders the files' paths name.
+ */
+function core(
+  files: Record<string, PieceFile | string>,
+  editorSays?: string,
+  folders?: Record<string, FolderEntry[]>,
+) {
   const asked: string[] = [];
-  mockIPC((cmd, args) => {
-    if (cmd === "open_in_your_editor") {
-      const a = args as Record<string, unknown>;
-      asked.push(`${cmd}:${a.workspace}/${a.repo}/${a.piece}:${a.path}:${a.line}:${a.editor}`);
-      if (editorSays !== undefined) throw editorSays;
-      return null;
-    }
-    const a = args as Record<string, string>;
-    if (cmd === "piece_files") {
-      asked.push(`${cmd}:${a.workspace}/${a.repo}/${a.piece}`);
-      return Object.keys(files);
-    }
-    if (cmd === "piece_file") {
-      asked.push(`${cmd}:${a.path}`);
-      const found = files[a.path];
-      if (typeof found === "string") throw found;
-      return found;
-    }
-    throw new Error(`unexpected ${cmd}`);
-  });
+  const tree = folders ?? foldersOf(Object.keys(files));
+  mockIPC(
+    (cmd, args) => {
+      if (cmd === "open_in_your_editor") {
+        const a = args as Record<string, unknown>;
+        asked.push(`${cmd}:${a.workspace}/${a.repo}/${a.piece}:${a.path}:${a.line}:${a.editor}`);
+        if (editorSays !== undefined) throw editorSays;
+        return null;
+      }
+      const a = args as Record<string, string>;
+      if (cmd === "branch_tree") {
+        asked.push(`${cmd}:${a.workspace}/${a.repo}/${a.piece}:${a.folder}`);
+        return { entries: tree[a.folder] ?? [], more: 0 };
+      }
+      if (cmd === "files_watch") return null;
+      if (cmd === "piece_file") {
+        asked.push(`${cmd}:${a.path}`);
+        const found = files[a.path];
+        if (typeof found === "string") throw found;
+        return found;
+      }
+      throw new Error(`unexpected ${cmd}`);
+    },
+    { shouldMockEvents: true },
+  );
   return asked;
+}
+
+/** The folders a set of paths makes, each folder's folders first. */
+function foldersOf(paths: string[]): Record<string, FolderEntry[]> {
+  const out: Record<string, FolderEntry[]> = {};
+  const add = (at: string, entry: FolderEntry) => {
+    const list = (out[at] ??= []);
+    if (!list.some((one) => one.name === entry.name)) list.push(entry);
+  };
+  for (const path of paths) {
+    const parts = path.split("/");
+    parts.forEach((name, i) => {
+      const at = parts.slice(0, i).join("/");
+      add(at, i === parts.length - 1 ? file(name) : folder(name));
+    });
+  }
+  for (const list of Object.values(out))
+    list.sort((a, b) => (a.kind === b.kind ? 0 : a.kind === "folder" ? -1 : 1));
+  return out;
 }
 
 afterEach(() => {
   cleanup();
   clearMocks();
   forgetYourEditor();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
-describe("a piece's files", () => {
-  it("lists the piece's files, and opens any of them in the light editor", async () => {
+/** The tab's tree, and a row of it by name. */
+const tree = () => screen.findByRole("tree", { name: "Files of fix-it" });
+const row = async (name: string, timeout?: number) =>
+  within(await tree()).findByRole("treeitem", { name }, { timeout });
+
+describe("a branch's files", () => {
+  it("draws the branch as a tree, folder by folder, and opens a file in the preview", async () => {
     const asked = core({
       "README.md": { kind: "text", text: "# svc\n" },
       "src/lib.rs": { kind: "text", text: "pub fn one() {}\n" },
     });
     render(<PieceFilesTab plane={PLANE} cut={CUT} onOpenView={() => undefined} />);
 
-    await userEvent.click(await screen.findByRole("button", { name: "src/lib.rs" }));
+    expect(await row("src")).toHaveAttribute("aria-expanded", "false");
+    expect(within(await tree()).queryByRole("treeitem", { name: "lib.rs" })).toBeNull();
+    await userEvent.click(await row("src"));
+    await userEvent.click(await row("lib.rs"));
 
     await waitFor(() =>
       expect(screen.getByTestId("light-editor")).toHaveTextContent("pub fn one() {}"),
     );
-    expect(asked).toEqual(["piece_files:alpha/svc/fix-it", "piece_file:src/lib.rs"]);
+    expect(await row("lib.rs")).toHaveAttribute("aria-selected", "true");
+    expect(asked).toEqual([
+      "branch_tree:alpha/svc/fix-it:",
+      "branch_tree:alpha/svc/fix-it:src",
+      "piece_file:src/lib.rs",
+    ]);
   });
 
-  it("narrows the list to the files whose path holds what is typed", async () => {
-    core({
-      "README.md": { kind: "text", text: "" },
-      "src/lib.rs": { kind: "text", text: "" },
-      "src/main.rs": { kind: "text", text: "" },
-    });
+  it("draws every entry of a folder, with no cap of its own", async () => {
+    const many = Object.fromEntries(
+      Array.from({ length: 600 }, (_, i) => [`f${i}.txt`, { kind: "text", text: "" } as PieceFile]),
+    );
+    core(many);
     render(<PieceFilesTab plane={PLANE} cut={CUT} onOpenView={() => undefined} />);
-    await screen.findByRole("button", { name: "README.md" });
 
-    await userEvent.type(screen.getByRole("searchbox", { name: "Find a file" }), "main");
+    await row("f599.txt", 20_000);
 
-    expect(screen.queryByRole("button", { name: "README.md" })).toBeNull();
-    expect(screen.getByRole("button", { name: "src/main.rs" })).toBeInTheDocument();
+    expect(within(await tree()).getAllByRole("treeitem")).toHaveLength(600);
+    // Six hundred rows through jsdom take seconds on a busy runner; the default 5 is for one.
+  }, 30_000);
+
+  it("moves through the tree with the arrows, and opens a folder with Right", async () => {
+    core({ "a.txt": { kind: "text", text: "" }, "src/lib.rs": { kind: "text", text: "" } });
+    render(<PieceFilesTab plane={PLANE} cut={CUT} onOpenView={() => undefined} />);
+    (await row("src")).focus();
+
+    await userEvent.keyboard("{ArrowRight}");
+    expect(await row("src")).toHaveAttribute("aria-expanded", "true");
+    await userEvent.keyboard("{ArrowRight}");
+
+    expect(await row("lib.rs")).toHaveFocus();
   });
 
   it("opens the file it shows in a tab of its own", async () => {
     core({ "src/lib.rs": { kind: "text", text: "x\n" } });
     const opened = vi.fn();
     render(<PieceFilesTab plane={PLANE} cut={CUT} onOpenView={opened} />);
-    await userEvent.click(await screen.findByRole("button", { name: "src/lib.rs" }));
+    await userEvent.click(await row("src"));
+    await userEvent.click(await row("lib.rs"));
 
     await userEvent.click(await screen.findByRole("button", { name: "Open in a tab of its own" }));
 
@@ -84,6 +149,76 @@ describe("a piece's files", () => {
       { from: null, view: "piece-file", key: "alpha/svc/fix-it/src/lib.rs" },
       "lib.rs · fix-it",
     );
+  });
+});
+
+describe("the preview (FM-2)", () => {
+  /** Opens `path` from the tab's tree, which lists exactly it. */
+  async function preview(path: string, answer: PieceFile) {
+    core({ [path]: answer });
+    render(<PieceFilesTab plane={PLANE} cut={CUT} onOpenView={() => undefined} />);
+    await userEvent.click(await row(path));
+  }
+
+  it("renders a markdown file, and shows its source on request", async () => {
+    await preview("NOTES.md", { kind: "text", text: "# Plan\n\nShip *it*.\n" });
+
+    expect(await screen.findByRole("heading", { name: "Plan" })).toBeInTheDocument();
+    expect(screen.queryByTestId("light-editor")).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: "Source" }));
+
+    await waitFor(() => expect(screen.getByTestId("light-editor")).toHaveTextContent("# Plan"));
+    expect(screen.getByRole("button", { name: "Source" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("draws an image as an image, decoded in the window", async () => {
+    const drawn = vi.fn();
+    vi.stubGlobal(
+      "createImageBitmap",
+      vi.fn(async () => ({ width: 3, height: 2, close: () => undefined })),
+    );
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+      drawImage: drawn,
+    } as unknown as CanvasRenderingContext2D);
+
+    await preview("logo.png", { kind: "image", mime: "image/png", base64: "iVBORw0KGgo=" });
+
+    expect(await screen.findByRole("img", { name: "logo.png" })).toBeInTheDocument();
+    expect(await screen.findByText("3 × 2 · image/png")).toBeInTheDocument();
+    expect(drawn).toHaveBeenCalled();
+  });
+
+  it("says an image declaring a huge canvas by its size, and draws none of it", async () => {
+    await preview("bomb.png", {
+      kind: "huge-image",
+      mime: "image/png",
+      width: 16000,
+      height: 16000,
+    });
+
+    expect(
+      await screen.findByText(
+        "bomb.png is 16000 × 16000 pixels, past what the preview draws (40 megapixels)",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("img")).toBeNull();
+  });
+
+  it("says a binary file is binary, and draws none of it", async () => {
+    await preview("tool.bin", { kind: "binary", bytes: 2048 });
+
+    expect(await screen.findByText(/tool\.bin is a binary file \(2 KiB\)/)).toBeInTheDocument();
+    expect(screen.queryByTestId("light-editor")).toBeNull();
+  });
+
+  it("says a file past 2 MiB is too large to preview, and offers your editor", async () => {
+    await preview("big.log", { kind: "too-large", bytes: 3 * 1024 * 1024 });
+
+    expect(
+      await screen.findByText("big.log is 3 MiB, past what the preview draws (2 MiB)"),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Open in your editor/ })).toBeInTheDocument();
   });
 });
 
@@ -111,7 +246,7 @@ describe("one file of a piece", () => {
     render(<PieceFileTab plane={PLANE} cut={CUT} path="big.log" />);
 
     expect(
-      await screen.findByText(/big\.log is 6 MiB, past what the light editor draws/),
+      await screen.findByText(/big\.log is 6 MiB, past what the preview draws/),
     ).toBeInTheDocument();
   });
 
@@ -191,11 +326,12 @@ describe("open in your editor (RC-20)", () => {
     expect(await screen.findByText(/neither \$VISUAL nor \$EDITOR is set/)).toBeInTheDocument();
   });
 
-  it("is offered beside the file the list shows, too", async () => {
+  it("is offered beside the file the tree shows, too", async () => {
     setYourEditor("zed");
     const asked = core({ "src/lib.rs": { kind: "text", text: "x\n" } });
     render(<PieceFilesTab plane={PLANE} cut={CUT} onOpenView={() => undefined} />);
-    await userEvent.click(await screen.findByRole("button", { name: "src/lib.rs" }));
+    await userEvent.click(await row("src"));
+    await userEvent.click(await row("lib.rs"));
 
     await userEvent.click(await button());
 

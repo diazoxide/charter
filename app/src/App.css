@@ -4057,52 +4057,54 @@ h2.sidebar-title .node-icon {
   min-width: 0;
 }
 
-.piece-files-list {
-  display: flex;
-  flex: 0 0 18rem;
-  flex-direction: column;
-  min-height: 0;
+/* The file tab (FM-2): the branch's tree beside the preview, the panes' own divider between
+   (`[data-separator]`). The tree is the explorer's own rows (`.explorer`), so it draws as the
+   sidebar's does; its panel scrolls. */
+.piece-files-tree {
+  height: 100%;
   border-right: 1px solid var(--border-subtle);
 }
 
-.piece-files-list input {
-  margin: 0.5rem;
+/* The tree's file shown in the preview: what `aria-selected` says, drawn the way the explorer
+   draws the place the next chat starts in, with more than colour. */
+.explorer .file-node[aria-selected="true"] {
+  border-inline-start-color: var(--accent-base);
+  background: var(--accent-surface);
 }
 
-.piece-files-list ul {
+.piece-image {
+  display: flex;
   flex: 1 1 auto;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 0;
   margin: 0;
-  padding: 0;
-  overflow-y: auto;
-  list-style: none;
+  padding: 1rem;
+  overflow: auto;
 }
 
-.piece-files-list button {
-  display: block;
-  width: 100%;
-  padding: 0.125rem 0.75rem;
-  overflow: hidden;
-  text-align: left;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  background: none;
-  border: none;
+.piece-image canvas {
+  max-width: 100%;
+  height: auto;
 }
 
-.piece-files-list button:hover {
-  background: var(--surface-hover);
+.piece-image figcaption,
+.piece-markdown-image {
+  color: var(--text-muted);
+  font-size: 0.8rem;
 }
 
-.piece-files-list button[aria-current="true"] {
-  background: var(--control-aimed);
-}
-
-.piece-files-list .none {
-  padding: 0 0.75rem;
+.piece-markdown {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 0.75rem 1rem;
+  overflow: auto;
 }
 
 .piece-files-shown,
 .piece-file {
+  height: 100%;
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;

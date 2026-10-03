@@ -308,7 +308,16 @@ pub struct View {
     pub active: bool,
     /// Whether the operator pinned it (ADR 0039), for [`Chat::pinned`]'s reasons.
     pub pinned: bool,
+    /// Where the view's divider was, as its first side's share of the tab in percent: the file
+    /// tab's tree beside its preview (FM-2). `None` for a view with no divider, or one never
+    /// moved.
+    pub split: Option<u8>,
 }
+
+/// The one view whose key is a path of names rather than one name: a branch's file tab
+/// (`app/src/pieceViews.ts`), keyed `workspace/repo/piece`, or `workspace/repo/` for the repo's
+/// own folder.
+const FILES_VIEW: &str = "piece-files";
 
 /// Every chat that was open, and the numbers this plane has already spent.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -898,6 +907,10 @@ struct ViewOnDisk {
     active: bool,
     #[serde(default)]
     pinned: bool,
+    /// See [`View::split`]. Absent for a view never split, and any number reads: one outside a
+    /// share of the tab is forgotten, never a reason to drop the tab.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    split: Option<f64>,
 }
 
 impl ViewOnDisk {
@@ -922,8 +935,19 @@ impl ViewOnDisk {
             return None;
         };
         // A key is empty — the whole plane — or one word of the alphabet charter mints names
-        // in. A persona's name passes; a path does not.
-        if !self.key.is_empty() && !id_ok(&self.key) {
+        // in. A persona's name passes; a path does not. charter's own file tab is the one
+        // exception, and its key is still names only: a workspace, a repo and a piece (or no
+        // piece, for the repo's own folder), each one charter would mint, so nothing in it walks
+        // anywhere — and the core finds the folder from those names, as it does for the window.
+        let branch_key = |key: &str| {
+            let parts: Vec<&str> = key.split('/').collect();
+            matches!(parts.as_slice(), [ws, repo, piece]
+                if id_ok(ws) && id_ok(repo) && (piece.is_empty() || id_ok(piece)))
+        };
+        let keyed = self.key.is_empty()
+            || id_ok(&self.key)
+            || (from.is_none() && self.view == FILES_VIEW && branch_key(&self.key));
+        if !keyed {
             return None;
         }
         // The title is only ever drawn, as a text node — but it is drawn on a tab, so it is
@@ -947,6 +971,10 @@ impl ViewOnDisk {
             at: self.at,
             active: self.active,
             pinned: self.pinned,
+            split: self
+                .split
+                .filter(|share| share.is_finite() && (1.0..=99.0).contains(share))
+                .map(|share| share.round() as u8),
         })
     }
 }
@@ -962,6 +990,7 @@ impl From<&View> for ViewOnDisk {
             at: view.at,
             active: view.active,
             pinned: view.pinned,
+            split: view.split.map(f64::from),
         }
     }
 }
@@ -2168,6 +2197,7 @@ pub(crate) mod tests {
             at: 1,
             active: true,
             pinned: false,
+            split: None,
         }
     }
 
@@ -2211,6 +2241,7 @@ pub(crate) mod tests {
                     at: 2,
                     active: false,
                     pinned: true,
+                    split: None,
                 },
             ],
             dealt: 0,
@@ -2282,6 +2313,66 @@ pub(crate) mod tests {
         assert_eq!(
             back.views[0].workspace, None,
             "a name that is not a workspace files the tab outside every workspace"
+        );
+    }
+
+    #[test]
+    fn a_branch_s_file_tab_comes_back_with_its_split() {
+        // FM-2 (#1105): the file tab is keyed by its branch, `workspace/repo/piece`, or
+        // `workspace/repo/` for the repo's own folder, and remembers where its divider was.
+        let plane = tempfile::tempdir().unwrap();
+        let files = |key: &str, split: Option<u8>| View {
+            view: "piece-files".into(),
+            title: "Files · fix-login".into(),
+            active: false,
+            split,
+            ..persona_view(key)
+        };
+        let record = Record {
+            views: vec![
+                files("alpha/svc/fix-login", Some(30)),
+                files("alpha/svc/", None),
+            ],
+            ..Default::default()
+        };
+
+        write(plane.path(), &record).expect("the record is written");
+
+        assert_eq!(read(plane.path()), record);
+    }
+
+    #[test]
+    fn a_file_tab_line_that_names_no_branch_is_dropped_and_a_wild_split_is_forgotten() {
+        let plane = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(plane.path().join(".charter/app")).unwrap();
+        std::fs::write(
+            path(plane.path()),
+            br#"{"version":1,"at":0,"chats":[],"views":[
+                {"view":"piece-files","key":"alpha/../etc"},
+                {"view":"piece-files","key":"alpha/svc/fix/extra"},
+                {"view":"piece-files","key":"/svc/fix"},
+                {"view":"persona","key":"alpha/svc/fix"},
+                {"view":"piece-files","key":"alpha/svc/fix","split":250},
+                {"view":"piece-files","key":"alpha/svc/","split":0},
+                {"view":"piece-files","key":"alpha/svc/","split":-3.5}
+            ]}"#,
+        )
+        .unwrap();
+
+        let back = read(plane.path());
+
+        let kept: Vec<_> = back
+            .views
+            .iter()
+            .map(|v| (v.key.as_str(), v.split))
+            .collect();
+        assert_eq!(
+            kept,
+            [
+                ("alpha/svc/fix", None),
+                ("alpha/svc/", None),
+                ("alpha/svc/", None)
+            ]
         );
     }
 

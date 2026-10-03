@@ -412,6 +412,8 @@ describe("a persona's own tab", () => {
             at: 1,
             active: true,
             pinned: false,
+            // A persona's tab has no divider to remember (FM-2).
+            split: null,
           },
         ],
       }),
@@ -480,6 +482,25 @@ describe("view tabs at a relaunch", () => {
           workspace: "alpha",
         },
       ]),
+    );
+  });
+
+  it("keep where a file tab's divider was, so the next launch has it too (FM-2)", async () => {
+    const FILES_BACK: ViewTab = {
+      ...STEWARD_BACK,
+      view: "piece-files",
+      key: "alpha/svc/fix-login",
+      title: "Files · fix-login",
+      active: false,
+      split: 42,
+    };
+    const { asked } = core({ reopened: [FILES_BACK], chats: [{ ...OPEN_CHAT, in_front: false }] });
+    render(<App />);
+
+    await waitFor(() =>
+      expect(
+        (asked.filter((one) => one.cmd === "window_views").at(-1)?.args.views as ViewTab[]) ?? [],
+      ).toEqual([expect.objectContaining({ key: "alpha/svc/fix-login", split: 42 })]),
     );
   });
 

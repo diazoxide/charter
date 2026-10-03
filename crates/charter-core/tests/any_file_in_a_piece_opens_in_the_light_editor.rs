@@ -89,6 +89,136 @@ fn a_file_past_the_light_editors_size_is_offered_to_your_editor_instead() {
     assert_eq!(opened, Opened::TooLarge { bytes: big });
 }
 
+/// FM-2 (#1105): the file tab's preview draws an image as an image. It is known by what its
+/// first bytes say, never by its name, so a `.png` that is really text opens as text.
+#[test]
+fn an_image_opens_as_an_image_known_by_its_bytes() {
+    charter_core::unsteered!();
+    let f = support::plane_with_clone("thing");
+    let piece = cut(&f, "piece");
+    let png = png_header(2, 1);
+    // Start of image, then a baseline frame header: 8-bit, 1 high, 2 wide, three components.
+    let jpeg = [
+        &[0xFF, 0xD8, 0xFF, 0xC0, 0, 17, 8, 0, 1, 0, 2, 3][..],
+        &[1, 0x11, 0, 2, 0x11, 0, 3, 0x11, 0],
+    ]
+    .concat();
+    // Its logical screen descriptor: 1 by 1, no colour table.
+    let gif = b"GIF89a\x01\x00\x01\x00\x00\x00\x00".to_vec();
+    // A lossless WebP's header: its signature byte, then width and height less one, 14 bits each.
+    let webp = [
+        &b"RIFF"[..],
+        &[26, 0, 0, 0],
+        &b"WEBPVP8L"[..],
+        &[5, 0, 0, 0, 0x2F, 0, 0, 0, 0],
+        &[0; 8],
+    ]
+    .concat();
+    let cases = [
+        ("shot.png", png, "image/png"),
+        ("photo.jpg", jpeg, "image/jpeg"),
+        ("spinner.gif", gif, "image/gif"),
+        ("art.webp", webp, "image/webp"),
+        // Named for another kind: what is inside decides.
+        ("misnamed.txt", png_header(3, 3), "image/png"),
+    ];
+    for (name, bytes, mime) in cases {
+        std::fs::write(piece.join(name), &bytes).unwrap();
+
+        let opened = files::open(&f.plane, Branch::piece(&f.ws, &f.repo, "piece"), name).unwrap();
+
+        assert_eq!(opened, Opened::Image { mime, data: bytes }, "{name}");
+    }
+    // A name that says image does not make text one.
+    std::fs::write(piece.join("fake.png"), "just text\n").unwrap();
+    let opened = files::open(&f.plane, Branch::piece(&f.ws, &f.repo, "piece"), "fake.png").unwrap();
+    assert_eq!(
+        opened,
+        Opened::Text {
+            text: "just text\n".to_string()
+        }
+    );
+}
+
+/// A PNG's signature and header chunk, declaring `width` by `height`, and nothing else: a few
+/// dozen bytes that ask a decoder for a canvas of any size.
+fn png_header(width: u32, height: u32) -> Vec<u8> {
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    png.extend_from_slice(&13u32.to_be_bytes());
+    png.extend_from_slice(b"IHDR");
+    png.extend_from_slice(&width.to_be_bytes());
+    png.extend_from_slice(&height.to_be_bytes());
+    // 8-bit greyscale, deflate, adaptive filtering, no interlace; then a CRC nobody checks here.
+    png.extend_from_slice(&[8, 0, 0, 0, 0, 0, 0, 0, 0]);
+    png
+}
+
+/// FM-2 review: the 2 MiB cap bounds the bytes, not what they decode to. An image whose header
+/// declares more than 40 megapixels is said by its size and never handed to the window, however
+/// few bytes it is; a header that says no size is not an image the preview draws.
+#[test]
+fn an_image_declaring_a_huge_canvas_is_said_by_its_size_and_not_drawn() {
+    charter_core::unsteered!();
+    let f = support::plane_with_clone("thing");
+    let piece = cut(&f, "piece");
+    std::fs::write(piece.join("bomb.png"), png_header(16_000, 16_000)).unwrap();
+    std::fs::write(piece.join("fits.png"), png_header(8_000, 5_000)).unwrap();
+    std::fs::write(piece.join("cut.png"), &png_header(1, 1)[..12]).unwrap();
+    let open =
+        |name: &str| files::open(&f.plane, Branch::piece(&f.ws, &f.repo, "piece"), name).unwrap();
+
+    assert_eq!(
+        open("bomb.png"),
+        Opened::HugeImage {
+            mime: "image/png",
+            width: 16_000,
+            height: 16_000
+        }
+    );
+    assert!(
+        matches!(
+            open("fits.png"),
+            Opened::Image {
+                mime: "image/png",
+                ..
+            }
+        ),
+        "40 megapixels exactly is drawn"
+    );
+    assert_eq!(open("cut.png"), Opened::Binary { bytes: 12 });
+}
+
+/// FM-2 (#1105, V86 F4): the preview reads at most 2 MiB of a file. Up to it a file is drawn,
+/// past it only its size is said, whether it is text or an image.
+#[test]
+fn the_preview_reads_up_to_two_mebibytes_and_no_further() {
+    charter_core::unsteered!();
+    let f = support::plane_with_clone("thing");
+    let piece = cut(&f, "piece");
+    let two = 2 * 1024 * 1024;
+    std::fs::write(piece.join("fits.log"), vec![b'a'; two]).unwrap();
+    std::fs::write(piece.join("over.log"), vec![b'a'; two + 1]).unwrap();
+    let mut big_png = b"\x89PNG\r\n\x1a\n".to_vec();
+    big_png.resize(two + 1, 0);
+    std::fs::write(piece.join("huge.png"), &big_png).unwrap();
+    let open =
+        |name: &str| files::open(&f.plane, Branch::piece(&f.ws, &f.repo, "piece"), name).unwrap();
+
+    assert!(matches!(open("fits.log"), Opened::Text { text } if text.len() == two));
+    assert_eq!(
+        open("over.log"),
+        Opened::TooLarge {
+            bytes: two as u64 + 1
+        }
+    );
+    assert_eq!(
+        open("huge.png"),
+        Opened::TooLarge {
+            bytes: two as u64 + 1
+        }
+    );
+}
+
 #[test]
 fn a_path_that_leaves_the_piece_is_refused() {
     charter_core::unsteered!();

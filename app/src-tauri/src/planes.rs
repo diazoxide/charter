@@ -3716,6 +3716,7 @@ mod tests {
             at: 1,
             active: false,
             pinned: false,
+            split: None,
         }
     }
 
@@ -5666,6 +5667,7 @@ mod tests {
             at: 0,
             active: true,
             pinned: false,
+            split: None,
         }]);
         let said = crate::workspaces::rename_in(&held, None, "alpha", "beta").expect("renamed");
 

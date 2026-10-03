@@ -57,6 +57,7 @@ fn view(workspace: &str, view: &str, key: &str, title: &str) -> View {
         at: 0,
         active: false,
         pinned: false,
+        split: None,
     }
 }
 

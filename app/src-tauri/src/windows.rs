@@ -157,6 +157,7 @@ fn make_split<R: Runtime>(app: &AppHandle<R>, label: &str) -> Result<(), String>
         .initialization_script(crate::windowprefs::creation_script(
             charter_core::machine::config_root().as_deref(),
         ))
+        .on_new_window(crate::navguard::no_new_window)
         .build()
         .map(|_| ())
         .map_err(|err| format!("charter could not make a window: {err}"))

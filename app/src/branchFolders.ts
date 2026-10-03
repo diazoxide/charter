@@ -94,15 +94,9 @@ export function useBranchFolders(
     };
   });
 
-  /** Whether the core is watching anything for this window, so a window that never opened a
-   *  folder never asks it to watch nothing. */
-  const watching = useRef(false);
-  /** What the core is told to watch: the whole open set, which replaces what it had. */
-  const watch = useRef((folders: BranchFolder[]) => {
-    if (folders.length === 0 && !watching.current) return;
-    watching.current = folders.length > 0;
-    void commands.filesWatch(folders).catch(() => undefined);
-  });
+  /** What this tree has the core watch: its share of the window's set (`watchFor`). */
+  const owner = useRef(Symbol("branch folders"));
+  const watch = useRef((folders: BranchFolder[]) => watchFor(owner.current, folders));
 
   // Each folder newly open is read, and the whole open set is what the core watches.
   useEffect(() => {
@@ -160,6 +154,37 @@ export function useBranchFolders(
 }
 
 const EMPTY: ReadonlyMap<string, FolderRead> = new Map();
+
+/** The most folders one `files_watch` takes (`charter_core::files::WATCHED`). */
+const WATCHED = 256;
+
+/** Every tree's open folders in this window, by tree: the explorer's and each file tab's
+ *  (FM-2). */
+const watchedBy = new Map<symbol, BranchFolder[]>();
+
+/** Whether the core is watching anything for this window, so a window that never opened a
+ *  folder never asks it to watch nothing. */
+let watchingAny = false;
+
+/**
+ * Tells the core what this window watches now that `owner`'s open folders are `folders`.
+ *
+ * **The core keeps one set per window, and each call replaces it** (FM-1's D-6). Two trees in
+ * one window — the explorer and a file tab — would each replace the other's, so the core is told
+ * their union, once per folder, up to what one call takes.
+ */
+function watchFor(owner: symbol, folders: BranchFolder[]) {
+  if (folders.length === 0) watchedBy.delete(owner);
+  else watchedBy.set(owner, folders);
+  const union = new Map<string, BranchFolder>();
+  for (const one of [...watchedBy.values()].flat()) {
+    union.set(`${one.plane}\0${one.workspace}\0${folderKey(one)}`, one);
+  }
+  const all = [...union.values()].slice(0, WATCHED);
+  if (all.length === 0 && !watchingAny) return;
+  watchingAny = all.length > 0;
+  void commands.filesWatch(all).catch(() => undefined);
+}
 
 /** A key back into the folder it names. */
 function unkey(key: string): BranchFolderRef {

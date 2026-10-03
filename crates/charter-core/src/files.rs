@@ -25,13 +25,24 @@ use std::path::{Component, Path, PathBuf};
 use crate::worktree::{self, git};
 use crate::youreditor::{self, Editor, Launch, NotLaunched};
 
-/// The largest file the light editor draws, in bytes: 5 MiB.
+/// The largest file the preview draws, in bytes: 2 MiB (V86 F4, FM-2).
 ///
 /// A file past it is answered with its size, and the window offers your editor instead (ADR
-/// 0081 §3). The light editor is for reading and small edits; a log or a generated bundle that
-/// size is neither, and holding it would cost the web content process (ADR 0086 row M2) for a
-/// file nobody reads line by line.
-pub const LARGEST: u64 = 5 * 1024 * 1024;
+/// 0081 §3). The preview is for reading; a log or a generated bundle that size is not read line
+/// by line, and holding it would cost the web content process (ADR 0086 row M2) for nothing
+/// anyone reads.
+///
+/// **It bounds an image's bytes, not what they decode to**: a quarter-megabyte PNG can declare a
+/// canvas of gigabytes. That is [`MOST_PIXELS`]'s to bound.
+pub const LARGEST: u64 = 2 * 1024 * 1024;
+
+/// The most pixels an image the preview draws may declare: 40 megapixels (FM-2 review).
+///
+/// The window decodes an image to four bytes a pixel, and draws it on a canvas of the same size,
+/// so this keeps one preview to some 320 MB of the web content process at worst — a phone
+/// camera's photo still fits. Past it the image is said by its size ([`Opened::HugeImage`]).
+/// The size is read from the image's header, never by decoding it.
+pub const MOST_PIXELS: u64 = 40_000_000;
 
 /// How much of a file is looked at to call it binary: git's own heuristic, a NUL byte in the
 /// first 8,000 bytes (`buffer_is_binary` in git's `xdiff-interface.c`).
@@ -86,6 +97,17 @@ pub enum Opened {
     /// Text, to draw. Bytes that are not UTF-8 are drawn as U+FFFD: the light editor only reads
     /// here, so nothing is written back through the replacement.
     Text { text: String },
+    /// An image, known by its first bytes and never by its name: its media type and its bytes
+    /// (FM-2). PNG, JPEG, GIF and WebP — the raster kinds a web view decodes. An SVG is text,
+    /// and opens as text.
+    Image { mime: &'static str, data: Vec<u8> },
+    /// An image whose header declares more than [`MOST_PIXELS`]: its type and declared size,
+    /// and none of its bytes.
+    HugeImage {
+        mime: &'static str,
+        width: u32,
+        height: u32,
+    },
     /// A file git would call binary, by its size. Drawn as a sentence, never as text.
     Binary { bytes: u64 },
     /// A file past [`LARGEST`], by its size.
@@ -824,6 +846,29 @@ pub fn open(plane: &Path, branch: Branch<'_>, path: &str) -> Result<Opened, Refu
             bytes: read.len() as u64,
         });
     }
+    if let Some(mime) = image_kind(&read) {
+        // Its size as its header declares it, without decoding: a header that says none is not
+        // an image the window is handed to decode.
+        match imagesize::blob_size(&read) {
+            Ok(size) if size.width > 0 && size.height > 0 => {
+                let pixels = (size.width as u64).saturating_mul(size.height as u64);
+                if pixels <= MOST_PIXELS {
+                    return Ok(Opened::Image { mime, data: read });
+                }
+                let side = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+                return Ok(Opened::HugeImage {
+                    mime,
+                    width: side(size.width),
+                    height: side(size.height),
+                });
+            }
+            _ => {
+                return Ok(Opened::Binary {
+                    bytes: read.len() as u64,
+                });
+            }
+        }
+    }
     if read[..read.len().min(SNIFF)].contains(&0) {
         return Ok(Opened::Binary {
             bytes: read.len() as u64,
@@ -832,6 +877,22 @@ pub fn open(plane: &Path, branch: Branch<'_>, path: &str) -> Result<Opened, Refu
     Ok(Opened::Text {
         text: String::from_utf8_lossy(&read).into_owned(),
     })
+}
+
+/// The image kind `bytes` start as, by the signature each format opens with; `None` for anything
+/// else. Only the signature is trusted, never a name: the window decodes what this answers.
+fn image_kind(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("image/png")
+    } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("image/jpeg")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("image/gif")
+    } else if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else {
+        None
+    }
 }
 
 /// One file of the branch, handed to your editor at `line` (RC-20, ADR 0081 §3): what the app

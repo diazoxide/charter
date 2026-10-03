@@ -783,11 +783,6 @@ export const commands = {
 	 */
 	worktreeDone: (plane: PlaneId, workspace: string, repo: string, piece: string) => typedError<null, string>(__TAURI_INVOKE("worktree_done", { plane, workspace, repo, piece })),
 	/**
-	 *  The files of a branch, relative to its folder: what git tracks and what it does not ignore.
-	 *  No `piece` is the repo's own folder.
-	 */
-	pieceFiles: (plane: PlaneId, workspace: string, repo: string, piece: string | null) => typedError<string[], string>(__TAURI_INVOKE("piece_files", { plane, workspace, repo, piece })),
-	/**
 	 *  One file of a branch, by its path relative to the branch's folder. Refused for a path that
 	 *  leaves it.
 	 */
@@ -2672,9 +2667,19 @@ export type Piece = {
 export type PieceFile = 
 /**  Text, to draw. */
 { kind: "text"; text: string } | 
+/**
+ *  An image, known by its first bytes (FM-2): its media type and its bytes as base64. The
+ *  window decodes it into a canvas, so nothing is loaded from a URL.
+ */
+{ kind: "image"; mime: string; base64: string } | 
 /**  A file git would call binary, by its size in bytes. */
 { kind: "binary"; bytes: number } | 
-/**  Past the largest file the light editor draws (5 MiB), by its size in bytes. */
+/**
+ *  An image whose header declares more pixels than the preview draws (40 megapixels): its
+ *  type and declared size, and none of its bytes.
+ */
+{ kind: "huge-image"; mime: string; width: number; height: number } | 
+/**  Past the largest file the preview draws (2 MiB), by its size in bytes. */
 { kind: "too-large"; bytes: number };
 
 /**  What the plane's pin says against this charter. */
@@ -3804,6 +3809,12 @@ export type ViewTab = {
 	at: number,
 	active: boolean,
 	pinned: boolean,
+	/**
+	 *  Where the view's divider was, as its first side's share of the tab in percent: a file
+	 *  tab's tree beside its preview (FM-2). `null` for a view with no divider, or one never
+	 *  moved.
+	 */
+	split?: number | null,
 };
 
 /**  One project's share of the question: which, and how much of it would come back. */
