@@ -132,6 +132,23 @@ export const TOKENS = [
   "diff.deleted-text",
   "diff.inserted-text",
 
+  // A file's or a folder's icon in a tree (FM-3, #1106): the colours an icon theme
+  // (`icons.ts`) may name, and the only ones. Categorical hues, as VS Code's `charts.*` are,
+  // because what tells a Rust file from a TypeScript one at a glance is a hue; `folder` is its
+  // own so folders can stand apart from plain files, and `motive` is the emblem drawn over a
+  // named folder. Every one but `motive` is held to 3:1 on the window (`contrast.test.ts`).
+  "icon.folder",
+  "icon.motive",
+  "icon.grey",
+  "icon.red",
+  "icon.orange",
+  "icon.yellow",
+  "icon.green",
+  "icon.teal",
+  "icon.blue",
+  "icon.purple",
+  "icon.pink",
+
   // What a chat, or a check on a branch, is doing. `waiting-glow` is the ring around a chat
   // that wants the operator — a colour and not a shadow recipe, so a theme can turn it off by
   // making it transparent.

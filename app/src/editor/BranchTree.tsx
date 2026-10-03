@@ -15,6 +15,7 @@ import {
   type TreeItem,
 } from "../Explorer";
 import type { PlaneId } from "../bindings";
+import { useFileIcons } from "../projectTheme";
 import { placeName, type Place } from "../pieceViews";
 import { useTabStop } from "../roving";
 
@@ -52,6 +53,7 @@ export function BranchTree({
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set([topKey]));
   const [showIgnored, setShowIgnored] = useState(false);
   const reads = useBranchFolders(plane, workspace, openUnder(workspace, top, expanded));
+  const icons = useFileIcons(plane, workspace);
   // The explorer's file rows, with no change marks and nothing narrowed: the file tab shows the
   // branch as it is (FM-4's marks and filter are the explorer's).
   const files: FilesOf = {
@@ -140,6 +142,7 @@ export function BranchTree({
                 treeitem,
                 isDrawn: (id) => byId.get(id)?.drawn ?? false,
                 onOpenFile: (_place, path) => onPick(path),
+                icons,
               }}
             />
           )}

@@ -3092,3 +3092,57 @@ fn the_survey_hands_each_extension_on_this_machine_with_its_name_and_standing() 
     assert_eq!(approvals(&installed), [("solarized", true)]);
     assert_eq!(installed[0].name, "Solarized");
 }
+
+// -------------------------------------------------------------------------------------
+// An icon theme (FM-3, #1106): data, contributed the way a colour theme is
+// -------------------------------------------------------------------------------------
+
+#[test]
+fn an_icon_theme_is_contributed_as_data_and_in_force_only_once_approved() {
+    let made = Made::new();
+    made.manifest(
+        r#"{"version":1,"id":"seti","name":"Seti",
+            "contributes":{"icon_themes":[{"name":"Seti","file":"seti.json"}]}}"#,
+    );
+    made.file("seti.json", r#"{"name":"Seti","symbols":{}}"#);
+    let found = read_at(&made.at()).expect("an icon-theme-only extension is an extension");
+    let icons = &found.manifest.icon_themes;
+    assert_eq!(
+        icons,
+        &[Theme {
+            name: "Seti".to_owned(),
+            file: "seti.json".to_owned(),
+        }]
+    );
+    // The text handed to the window is the text the fingerprint was taken over.
+    assert_eq!(
+        found.theme_text(&icons[0]),
+        Some(r#"{"name":"Seti","symbols":{}}"#)
+    );
+    assert!(
+        prompt(&found, Standing::New)
+            .declares
+            .iter()
+            .any(|it| it == "an icon theme, “Seti”"),
+        "the approval names what it contributes"
+    );
+
+    install(&made.config(), &BuiltIn::none(), &made.at()).expect("installed");
+    let seen = survey(&made.config(), &BuiltIn::none());
+    assert!(seen.installed[0].icon_themes_in_force().is_empty());
+    assert_eq!(seen.built_in_icon_themes, BUILT_IN_ICON_THEMES.to_vec());
+    approve(&made.config(), found.id(), &found.path, &found.fingerprint).expect("approved");
+    let seen = survey(&made.config(), &BuiltIn::none());
+    assert_eq!(seen.installed[0].icon_themes_in_force().len(), 1);
+}
+
+#[test]
+fn an_icon_theme_file_that_is_not_there_refuses_the_extension() {
+    let made = Made::new();
+    made.manifest(
+        r#"{"version":1,"id":"seti","name":"Seti",
+            "contributes":{"icon_themes":[{"name":"Seti","file":"seti.json"}]}}"#,
+    );
+    let refused = read_at(&made.at()).expect_err("a declared file that is missing");
+    assert!(refused.contains("is not there"), "{refused}");
+}

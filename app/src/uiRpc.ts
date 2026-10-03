@@ -940,6 +940,12 @@ export const commands = {
 	 */
 	extensionThemes: () => typedError<ExtensionTheme[], string>(__TAURI_INVOKE("extension_themes")),
 	/**
+	 *  Every icon theme in force (FM-3, #1106): the ones approved extensions contribute, on
+	 *  [`extension_themes`]'s terms and in its shape. The text is parsed by `theme/icons.ts`
+	 *  against its closed vocabulary — path data and `icon.*` tokens — and never by this crate.
+	 */
+	extensionIconThemes: () => typedError<ExtensionTheme[], string>(__TAURI_INVOKE("extension_icon_themes")),
+	/**
 	 *  Every panel an approved extension contributes to this window's side region.
 	 * 
 	 *  **Its own command, asked once per window and never per workspace focus.** A survey reads
@@ -1168,6 +1174,12 @@ export const commands = {
 	 *  ever holds the themes a survey found, and draws the built-in when the pick is not among them.
 	 */
 	projectThemeDrawn: (plane: PlaneId, workspace: string | null) => typedError<string | null, string>(__TAURI_INVOKE("project_theme_drawn", { plane, workspace })),
+	/**
+	 *  The icon theme the file trees draw while this project — and `workspace` in it — is in front
+	 *  (FM-3, #1106), as a file holds it: `null` draws charter's own. Read as cheaply as
+	 *  [`project_theme_drawn`], from the record and the project's files alone.
+	 */
+	projectIconsDrawn: (plane: PlaneId, workspace: string | null) => typedError<string | null, string>(__TAURI_INVOKE("project_icons_drawn", { plane, workspace })),
 	/**
 	 *  Every view an approved extension offers this window.
 	 * 

@@ -190,6 +190,20 @@ pub async fn extension_themes() -> Result<Vec<ExtensionTheme>, String> {
         .map_err(|err| format!("reading this machine's themes did not finish: {err}"))
 }
 
+/// Every icon theme in force (FM-3, #1106): the ones approved extensions contribute, on
+/// [`extension_themes`]'s terms and in its shape. The text is parsed by `theme/icons.ts`
+/// against its closed vocabulary — path data and `icon.*` tokens — and never by this crate.
+#[tauri::command]
+#[specta::specta]
+pub async fn extension_icon_themes() -> Result<Vec<ExtensionTheme>, String> {
+    let root = config_root()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        icons_in_force(&extension::survey(&root, &built_in()))
+    })
+    .await
+    .map_err(|err| format!("reading this machine's icon themes did not finish: {err}"))
+}
+
 /// Every panel an approved extension contributes to this window's side region.
 ///
 /// **Its own command, asked once per window and never per workspace focus.** A survey reads
@@ -227,10 +241,23 @@ fn panels_in_force(seen: &extension::Survey) -> Vec<crate::panels::PanelView> {
 
 /// [`extension_themes`] with the survey already taken.
 fn in_force(seen: &extension::Survey) -> Vec<ExtensionTheme> {
+    texts_in_force(seen, extension::Surveyed::themes_in_force)
+}
+
+/// [`extension_icon_themes`] with the survey already taken.
+fn icons_in_force(seen: &extension::Survey) -> Vec<ExtensionTheme> {
+    texts_in_force(seen, extension::Surveyed::icon_themes_in_force)
+}
+
+/// Each theme `which` says a row has in force, with the text its fingerprint was taken over.
+fn texts_in_force(
+    seen: &extension::Survey,
+    which: fn(&extension::Surveyed) -> &[extension::Theme],
+) -> Vec<ExtensionTheme> {
     let mut themes = Vec::new();
     for row in &seen.installed {
         let Some(found) = &row.found else { continue };
-        for theme in row.themes_in_force() {
+        for theme in which(row) {
             // A theme whose text is somehow not there is dropped rather than sent empty: an
             // empty theme would load as the built-in with a complaint for every token, which
             // looks like a theme that did nothing wrong.
@@ -940,6 +967,45 @@ fn project_theme_drawn_of(
         .map(theme::Pick::value)
 }
 
+/// The icon theme the file trees draw while this project — and `workspace` in it — is in front
+/// (FM-3, #1106), as a file holds it: `null` draws charter's own. Read as cheaply as
+/// [`project_theme_drawn`], from the record and the project's files alone.
+#[tauri::command]
+#[specta::specta]
+pub async fn project_icons_drawn(
+    planes: tauri::State<'_, crate::planes::Planes>,
+    plane: crate::planes::PlaneId,
+    workspace: Option<String>,
+) -> Result<Option<String>, String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    let config = config_root()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let workspace = workspace.as_deref();
+        project_icons_drawn_of(
+            &extension::read(&config, &built_in()),
+            &extension::project::Choices::read_in(&root, workspace),
+            &extension::project::theme::Said::read_in(&root, workspace),
+        )
+    })
+    .await
+    .map_err(|err| format!("reading this project's icon theme did not finish: {err}"))
+}
+
+/// [`project_icons_drawn`] without a runtime.
+fn project_icons_drawn_of(
+    loaded: &extension::Loaded,
+    choices: &extension::project::Choices,
+    said: &extension::project::theme::Said,
+) -> Option<String> {
+    use extension::project::theme;
+    let on =
+        extension::project::resolve(&extension::project::Installed::from_record(loaded), choices);
+    theme::resolve_icons(&on, None, said)
+        .draws
+        .as_ref()
+        .map(theme::Pick::value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1171,6 +1237,59 @@ mod tests {
         assert!(
             in_force(&extension::survey(&config, &extension::BuiltIn::none())).is_empty(),
             "a theme that changed after approval was still drawn"
+        );
+    }
+
+    #[test]
+    fn an_approved_extensions_icon_theme_reaches_the_window_and_a_project_picks_it() {
+        // FM-3 (#1106): an icon theme travels on a colour theme's terms, and `[theme] icons`
+        // picks it; turned off in the project, charter's own icons are drawn.
+        let dir = tempfile::tempdir().expect("a directory");
+        let at = dir.path().join("ext");
+        std::fs::create_dir_all(&at).expect("the extension's directory");
+        std::fs::write(
+            at.join(extension::MANIFEST),
+            r#"{"version":1,"id":"seti","name":"Seti",
+                "contributes":{"icon_themes":[{"name":"Seti","file":"seti.json"}]}}"#,
+        )
+        .expect("a manifest");
+        std::fs::write(at.join("seti.json"), r#"{"symbols":{}}"#).expect("an icon theme");
+        let config = dir.path().join("config");
+        let found =
+            extension::install(&config, &extension::BuiltIn::none(), &at).expect("installed");
+        let seen = || extension::survey(&config, &extension::BuiltIn::none());
+        assert!(
+            icons_in_force(&seen()).is_empty(),
+            "unapproved, and in force"
+        );
+        extension::approve(&config, found.id(), &found.path, &found.fingerprint).expect("approved");
+        let icons = icons_in_force(&seen());
+        assert_eq!(
+            icons,
+            [ExtensionTheme {
+                extension: "seti".to_owned(),
+                name: "Seti".to_owned(),
+                text: r#"{"symbols":{}}"#.to_owned(),
+            }]
+        );
+        assert!(
+            in_force(&seen()).is_empty(),
+            "an icon theme is not a colour theme"
+        );
+
+        let loaded = extension::read(&config, &extension::BuiltIn::none());
+        let shared = "[theme]\nicons = \"seti/Seti\"\n";
+        let drawn = |local: &str| {
+            project_icons_drawn_of(
+                &loaded,
+                &extension::project::Choices::from_text(Some(shared), Some(local)),
+                &extension::project::theme::Said::from_text(Some(shared), Some(local)),
+            )
+        };
+        assert_eq!(drawn("").as_deref(), Some("seti/Seti"));
+        assert_eq!(
+            drawn("[extensions.seti]\nenabled = false\n").as_deref(),
+            Some("charter-icons")
         );
     }
 

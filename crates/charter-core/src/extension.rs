@@ -213,6 +213,11 @@ pub const VERSION: u32 = 1;
 /// because the alternative is a registry that quietly stops being the whole answer.
 pub const BUILT_IN_THEMES: [&str; 2] = ["charter-dark", "charter-light"];
 
+/// The icon theme charter itself contributes (FM-3, #1106): compiled into the window's bundle
+/// (`app/src/theme/charter-icons.json`), held to this list by `app/src/theme/registry.test.ts`
+/// as [`BUILT_IN_THEMES`] is.
+pub const BUILT_IN_ICON_THEMES: [&str; 1] = ["charter-icons"];
+
 /// The most a manifest may be. It is one small object, it is read whole, and it is read on the
 /// path that draws the window — so a planted giant is a launch that never finishes.
 const MOST_MANIFEST_BYTES: u64 = 64 << 10;
@@ -340,6 +345,10 @@ pub struct Manifest {
     pub name: String,
     /// The themes it contributes.
     pub themes: Vec<Theme>,
+    /// The icon themes it contributes (FM-3, #1106), as `contributes.icon_themes`: data on a
+    /// theme's terms — a file declared, hashed, kept as the text that was hashed, and parsed by
+    /// the window against a closed vocabulary (`app/src/theme/icons.ts`), never run.
+    pub icon_themes: Vec<Theme>,
     /// The panels it contributes to the window's side region (`crate::panel`).
     ///
     /// **Data, like a theme, and never a file.** A panel's whole body is in this manifest — so
@@ -1103,34 +1112,8 @@ fn parse(text: &str) -> Result<Manifest, String> {
             .ok_or("has a 'contributes' that is not an object")?,
     };
 
-    let mut themes = Vec::new();
-    for (at, raw) in contributes
-        .get("themes")
-        .map(array)
-        .unwrap_or_default()
-        .iter()
-        .enumerate()
-    {
-        let raw = raw
-            .as_object()
-            .ok_or_else(|| format!("declares a theme at {at} that is not an object"))?;
-        let file = raw
-            .get("file")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| format!("declares a theme at {at} with no file"))?;
-        declarable(file).map_err(|why| format!("declares the theme file {file:?}, which {why}"))?;
-        let name = raw
-            .get("name")
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|name| !name.is_empty())
-            .unwrap_or(file)
-            .to_owned();
-        themes.push(Theme {
-            name,
-            file: file.to_owned(),
-        });
-    }
+    let themes = themes_of(contributes, "themes", "theme")?;
+    let icon_themes = themes_of(contributes, "icon_themes", "icon theme")?;
 
     let program = match contributes.get("runs") {
         None => None,
@@ -1219,6 +1202,7 @@ fn parse(text: &str) -> Result<Manifest, String> {
     }
 
     if themes.is_empty()
+        && icon_themes.is_empty()
         && panels.is_empty()
         && views.is_empty()
         && program.is_none()
@@ -1227,7 +1211,7 @@ fn parse(text: &str) -> Result<Manifest, String> {
     {
         return Err("declares no contributions, so there is nothing to consent to".into());
     }
-    if themes.len() + usize::from(program.is_some()) > MOST_DECLARED_FILES {
+    if themes.len() + icon_themes.len() + usize::from(program.is_some()) > MOST_DECLARED_FILES {
         return Err(format!(
             "declares more than {MOST_DECLARED_FILES} files, and charter puts every one of them \
              in front of the operator"
@@ -1261,6 +1245,7 @@ fn parse(text: &str) -> Result<Manifest, String> {
             // by declaration, which is #152 with the hole moved rather than closed.
             for file in themes
                 .iter()
+                .chain(&icon_themes)
                 .map(|theme| theme.file.as_str())
                 .chain(program.as_deref())
             {
@@ -1318,6 +1303,7 @@ fn parse(text: &str) -> Result<Manifest, String> {
         id: id.to_owned(),
         name,
         themes,
+        icon_themes,
         panels,
         views,
         program,
@@ -1448,6 +1434,45 @@ fn ok_in_an_id(c: char) -> bool {
 
 fn array(value: &serde_json::Value) -> Vec<serde_json::Value> {
     value.as_array().cloned().unwrap_or_default()
+}
+
+/// The themes `contributes.<key>` declares — colour themes or icon themes, one shape: each an
+/// object with a `file` inside the extension and a `name` (the file's, when it has none).
+fn themes_of(
+    contributes: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    noun: &str,
+) -> Result<Vec<Theme>, String> {
+    let mut themes = Vec::new();
+    for (at, raw) in contributes
+        .get(key)
+        .map(array)
+        .unwrap_or_default()
+        .iter()
+        .enumerate()
+    {
+        let raw = raw
+            .as_object()
+            .ok_or_else(|| format!("declares a {noun} at {at} that is not an object"))?;
+        let file = raw
+            .get("file")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| format!("declares a {noun} at {at} with no file"))?;
+        declarable(file)
+            .map_err(|why| format!("declares the {noun} file {file:?}, which {why}"))?;
+        let name = raw
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .unwrap_or(file)
+            .to_owned();
+        themes.push(Theme {
+            name,
+            file: file.to_owned(),
+        });
+    }
+    Ok(themes)
 }
 
 /// Whether a manifest may name this file: a relative path of ordinary segments, below the
@@ -1623,6 +1648,7 @@ fn tree(
     let wanted: BTreeMap<&str, ()> = manifest
         .themes
         .iter()
+        .chain(&manifest.icon_themes)
         .map(|theme| (theme.file.as_str(), ()))
         .collect();
     let declared: Vec<&str> = wanted
@@ -2469,6 +2495,12 @@ impl Surveyed {
         self.in_force().map_or(&[], |manifest| &manifest.themes)
     }
 
+    /// The icon themes it is contributing right now (FM-3), on a theme's terms.
+    pub fn icon_themes_in_force(&self) -> &[Theme] {
+        self.in_force()
+            .map_or(&[], |manifest| &manifest.icon_themes)
+    }
+
     /// The panels it is contributing right now, on the same terms and for the same reason: an
     /// extension that is new, changed or unreadable contributes nothing, and the registry doing
     /// that one job is what a panel contribution rests on entirely.
@@ -2511,6 +2543,8 @@ impl Surveyed {
 pub struct Survey {
     /// charter's own themes, which are compiled into the window and are never asked about.
     pub built_in_themes: Vec<String>,
+    /// charter's own icon themes ([`BUILT_IN_ICON_THEMES`]), compiled into the window too.
+    pub built_in_icon_themes: Vec<String>,
     /// Every extension the record names and every built-in the app ships, in id order.
     pub installed: Vec<Surveyed>,
     /// Why the record could not be read, when it could not — in which case `installed` holds
@@ -2566,6 +2600,10 @@ pub fn survey(config_root: &Path, built_in: &BuiltIn) -> Survey {
     }
     Survey {
         built_in_themes: BUILT_IN_THEMES
+            .iter()
+            .map(|&name| name.to_owned())
+            .collect(),
+        built_in_icon_themes: BUILT_IN_ICON_THEMES
             .iter()
             .map(|&name| name.to_owned())
             .collect(),
@@ -2638,6 +2676,13 @@ pub fn prompt(found: &Extension, standing: Standing) -> Prompt {
             .themes
             .iter()
             .map(|theme| format!("a theme, “{}”", theme.name)),
+    );
+    declares.extend(
+        found
+            .manifest
+            .icon_themes
+            .iter()
+            .map(|theme| format!("an icon theme, “{}”", theme.name)),
     );
     declares.extend(found.manifest.panels.iter().map(crate::panel::declares));
     declares.extend(found.manifest.views.iter().map(|view| {

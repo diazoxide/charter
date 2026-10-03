@@ -3,6 +3,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { Info } from "lucide-react";
 import { commands, type About } from "./bindings";
 import { ExternalLink, ReleaseNotes } from "./ReleaseNotes";
+import vendored from "../icons/vendored.json";
 
 /** Where every version's notes are, the same text this dialog shows for one of them. */
 const RELEASES = "https://github.com/diazoxide/charter/releases";
@@ -113,6 +114,7 @@ export function AboutCharter() {
               <ExternalLink href={HELP.newIssue}>report a bug</ExternalLink>. See{" "}
               <ExternalLink href={HELP.support}>how to get help</ExternalLink>.
             </p>
+            <Notices />
           </div>
           {/* `tabIndex={0}` on Close, per `docs/ui-primitives.md`, as `ExternalLink` gives each link. */}
           <div className="answer">
@@ -168,5 +170,38 @@ function Said({ about }: { about: About }) {
         <ExternalLink href={RELEASES}>releases page</ExternalLink>.
       </p>
     </div>
+  );
+}
+
+/** Each vendored directory's licence text, by the directory `vendored.json` names it by. */
+const LICENCES: Record<string, string> = Object.fromEntries(
+  Object.entries(
+    import.meta.glob<string>("../icons/*/LICENSE", {
+      query: "?raw",
+      import: "default",
+      eager: true,
+    }),
+  ).map(([path, text]) => [path.split("/").at(-2) ?? "", text]),
+);
+
+/**
+ * **What charter ships that others wrote, with their licences** (FM-3, #1106): each vendored
+ * asset (`app/icons/vendored.json`) and its licence text, compiled into the bundle so the
+ * attribution travels with every copy of the app.
+ */
+function Notices() {
+  return (
+    <details className="honest notices" data-testid="about-notices">
+      <summary>Notices</summary>
+      {vendored.map((asset) => (
+        <div key={asset.name}>
+          <p>
+            File and folder icons: {asset.name} {asset.version}, under the {asset.licence} licence,
+            from {asset.source}.
+          </p>
+          <pre>{LICENCES[asset.files]}</pre>
+        </div>
+      ))}
+    </details>
   );
 }

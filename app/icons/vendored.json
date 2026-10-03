@@ -1,0 +1,9 @@
+[
+  {
+    "name": "material-icon-theme",
+    "version": "5.39.0",
+    "licence": "MIT",
+    "source": "https://github.com/material-extensions/vscode-material-icon-theme",
+    "files": "material-icon-theme"
+  }
+]

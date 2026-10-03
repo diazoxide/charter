@@ -3,13 +3,10 @@ import { useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
 import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
 import {
   ChevronRight,
-  File,
   Files,
   FileSymlink,
   FileX,
-  Folder,
   FolderGit2,
-  FolderOpen,
   Folders,
   FolderX,
   ListFilter,
@@ -19,6 +16,9 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import type { FolderEntry, OpenChat, PlaneId } from "./bindings";
+import { FileIcon } from "./FileIcon";
+import { useFileIcons } from "./projectTheme";
+import { iconFor, type IconTheme } from "./theme/icons";
 import {
   folderKey,
   useBranchFolders,
@@ -205,6 +205,7 @@ export function Explorer({
     [statuses],
   );
   const reads = useBranchFolders(plane, workspace, open);
+  const icons = useFileIcons(plane, workspace);
   const files: FilesOf = {
     workspace: workspace ?? "",
     expanded,
@@ -302,7 +303,7 @@ export function Explorer({
   const filesOf = (repo: string, piece: string | null) => (
     <FilesRow
       branch={{ repo, piece, folder: "" }}
-      at={{ place: { workspace, repo, piece }, files, fold, treeitem, isDrawn, onOpenFile }}
+      at={{ place: { workspace, repo, piece }, files, fold, treeitem, isDrawn, onOpenFile, icons }}
     />
   );
   // The chats that are in no piece of this workspace: they work in the workspace itself or
@@ -853,6 +854,8 @@ export type FileRows = {
   treeitem: (id: string) => TreeItem;
   isDrawn: (id: string) => boolean;
   onOpenFile?: (place: Place, path: string) => void;
+  /** The project's icon theme (FM-3), which every file and folder row is drawn from. */
+  icons: IconTheme;
 };
 
 /** A branch folder's *Files* row, or a folder's row, with what it holds under it once opened. */
@@ -873,7 +876,6 @@ function FilesRow({
   const key = fileFold(at.place.workspace, branch);
   const open = isOpen(at.files, branch, always);
   const level = open ? levelOf(at.files, branch) : undefined;
-  const Mark = branch.folder === "" ? Files : open ? FolderOpen : Folder;
   const marked = at.files.indexes.get(branchKey(branch))?.marks.get(branch.folder);
   return (
     <>
@@ -887,7 +889,12 @@ function FilesRow({
           }}
         >
           <ChevronRight className="twisty" data-open={open || undefined} />
-          <Mark className="node-icon" />
+          {/* The branch's own folder is the *Files* row; a folder under it is drawn by name. */}
+          {branch.folder === "" ? (
+            <Files className="node-icon" />
+          ) : (
+            <FileIcon symbol={iconFor(at.icons, { name, folder: true, open })} />
+          )}
           <span className="spot-name">{name}</span>
           {/* A space, so a screen reader says the mark as its own word; flex drops it. */}{" "}
           <ChangeBadge marked={marked} folder />
@@ -946,7 +953,9 @@ export function FolderEntries({
           }
           const id = fileRow(here);
           const refused = entry.refused;
-          const Mark = refused !== undefined ? FileX : entry.kind === "link" ? FileSymlink : File;
+          // Refused and linked files keep their own marks: what they say is that this row is
+          // not an ordinary file, which matters more than what kind of file it would be.
+          const Mark = refused !== undefined ? FileX : entry.kind === "link" ? FileSymlink : null;
           return (
             <li
               key={`f${entry.name}`}
@@ -966,7 +975,11 @@ export function FolderEntries({
                     if (refused === undefined) at.onOpenFile?.(at.place, path);
                   }}
                 >
-                  <Mark className="node-icon" />
+                  {Mark === null ? (
+                    <FileIcon symbol={iconFor(at.icons, { name: entry.name, folder: false })} />
+                  ) : (
+                    <Mark className="node-icon" />
+                  )}
                   <span className="spot-name">{entry.name}</span>{" "}
                   <ChangeBadge marked={entry.marked} folder={false} />
                   {/* Why it does not open, said beside it — an ignored file's too, which is

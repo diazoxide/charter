@@ -1442,6 +1442,53 @@ button.show-more:focus-visible {
   color: var(--accent-base);
 }
 
+/* A file's or a folder's icon (FM-3, #1106): drawn by `FileIcon.tsx` from the icon theme, each
+   outline coloured by the `icon.*` token its theme names, as `data-tone`. Sized as every icon
+   is, at 1em; never tinted by the row, because the hue is what the icon says. */
+.file-icon {
+  width: 1em;
+  height: 1em;
+  flex: none;
+  vertical-align: -0.14em;
+  /* A contributed symbol is drawn inside its 1em box and nowhere else, said here rather than
+     left to the browser's own sheet. */
+  overflow: hidden;
+  contain: paint;
+}
+.file-icon [data-tone="icon-folder"] {
+  fill: var(--icon-folder);
+}
+.file-icon [data-tone="icon-motive"] {
+  fill: var(--icon-motive);
+}
+.file-icon [data-tone="icon-grey"] {
+  fill: var(--icon-grey);
+}
+.file-icon [data-tone="icon-red"] {
+  fill: var(--icon-red);
+}
+.file-icon [data-tone="icon-orange"] {
+  fill: var(--icon-orange);
+}
+.file-icon [data-tone="icon-yellow"] {
+  fill: var(--icon-yellow);
+}
+.file-icon [data-tone="icon-green"] {
+  fill: var(--icon-green);
+}
+.file-icon [data-tone="icon-teal"] {
+  fill: var(--icon-teal);
+}
+.file-icon [data-tone="icon-blue"] {
+  fill: var(--icon-blue);
+}
+.file-icon [data-tone="icon-purple"] {
+  fill: var(--icon-purple);
+}
+.file-icon [data-tone="icon-pink"] {
+  fill: var(--icon-pink);
+}
+
 /* A spot is what the next chat starts in. The current one is marked with more than colour —
    a bar down its inline start and its own weight — because "where will this chat open" is
    the one thing in this region that must never be read wrong. */
