@@ -1,8 +1,9 @@
 //! How a hook process reaches the app: one line on a unix socket the app owns.
 //!
 //! A hook runs inside the chat's own process tree, so everything it needs is already in its
-//! environment — the socket to write to and the chat it belongs to. It looks nothing up, reads
-//! no plane and opens no file, which is what keeps it inside the spec's 50 ms.
+//! environment — the socket to write to and the chat it belongs to. It looks nothing up and
+//! reads no plane, which is what keeps it inside the spec's 50 ms. The one file it may open is
+//! its chat's spool beside the socket, when the app does not take its line ([`spool`], FD-30).
 //!
 //! **It can never break a turn.** Every failure here is silent and fast: no app listening, a
 //! socket that has gone, a payload that will not parse. A harness whose turn fails because
@@ -299,15 +300,40 @@ const A_TOKEN_IS: usize = 32;
 #[derive(Debug, Default)]
 pub struct ChatTokens {
     held: std::sync::Mutex<std::collections::HashMap<u32, ChatToken>>,
+    /// The spool directory each token's key is recorded in as it is issued (FD-30), where
+    /// this host has one.
+    spool: Option<std::path::PathBuf>,
 }
 
 impl ChatTokens {
+    /// Tokens whose spool keys are recorded in `dir` as each is issued ([`spool::remember`]),
+    /// so a line a chat spools can be checked by whichever host drains it.
+    pub fn spooling_into(dir: std::path::PathBuf) -> Self {
+        Self {
+            held: std::sync::Mutex::default(),
+            spool: Some(dir),
+        }
+    }
+
     /// A fresh token for `chat`, replacing any it had: 32 bytes from the operating system's
     /// generator, written as hex.
+    ///
+    /// Its spool key is on disk before it returns, where these tokens spool. A key that cannot
+    /// be recorded is said in the log and the token is issued all the same: the chat runs, and
+    /// a line it spools reads as `no-key` at the drain rather than as the chat's.
     pub fn issue(&self, chat: u32) -> std::io::Result<ChatToken> {
         let mut bytes = [0u8; A_TOKEN_IS];
         getrandom::fill(&mut bytes).map_err(std::io::Error::other)?;
         let token = ChatToken(bytes.iter().map(|byte| format!("{byte:02x}")).collect());
+        #[cfg(unix)]
+        if let Some(dir) = &self.spool
+            && let Err(why) = spool::remember(dir, chat, &token)
+        {
+            tracing::warn!(
+                "charter: chat {chat}'s spool key was not recorded ({why}); a line it spools \
+                 cannot be checked"
+            );
+        }
         self.held().insert(chat, token.clone());
         Ok(token)
     }
@@ -715,7 +741,11 @@ pub struct CommitRefused {
 }
 
 /// What hears a [`CommitRefused`].
-pub type Refused = Box<dyn Fn(CommitRefused) + Send + Sync + 'static>;
+///
+/// It answers once the line is recorded durably, or with the error that kept it from being:
+/// only an `Ok` is told to the hook as taken, so a line the host could not record is spooled
+/// (FD-30).
+pub type Refused = Box<dyn Fn(CommitRefused) -> std::io::Result<()> + Send + Sync + 'static>;
 
 /// A tool hook ran: what the host's event log records of it (FD-9, #649).
 ///
@@ -785,13 +815,18 @@ impl Decision {
 }
 
 /// What hears a [`ToolCall`].
-pub type Tooled = Box<dyn Fn(ToolCall) + Send + Sync + 'static>;
+///
+/// It answers as a [`Refused`] does: `Ok` once the call is recorded durably.
+pub type Tooled = Box<dyn Fn(ToolCall) -> std::io::Result<()> + Send + Sync + 'static>;
+
+/// What hears a [`Report`]. It answers as a [`Refused`] does.
+pub type Reported = Box<dyn Fn(Report) -> std::io::Result<()> + Send + Sync + 'static>;
 
 /// Who hears each kind of line on the hook channel ([`Listener::hear`]): one field per kind, so
 /// a kind added later is a field every caller is made to answer.
 pub struct Hearing {
     /// Every [`Report`].
-    pub each: Box<dyn Fn(Report) + Send + Sync + 'static>,
+    pub each: Reported,
     /// Every [`Ask`], whose [`Answer`] is written back on the connection it came on.
     pub answer: Answerer,
     /// Every [`StartedByHand`].
@@ -847,26 +882,105 @@ pub fn tell_saved(
     one_line_with_a_deadline(path, token, saved)
 }
 
-/// Tells the app at `path` a chat's commit was refused. [`tell`]'s shape and deadline: the
-/// commit is refused whether or not the app hears this.
-#[cfg(unix)]
-pub fn tell_refused(
-    path: &std::path::Path,
-    token: Option<&ChatToken>,
-    refused: &CommitRefused,
-) -> io::Result<()> {
-    one_line_with_a_deadline(path, token, refused)
+/// Where a hook's line went ([`deliver_report`], [`deliver_tool`], [`deliver_refused`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Delivered {
+    /// The host said it took the line, once its hearer had recorded it.
+    Taken,
+    /// The host did not take it in time, and it is in the chat's spool, durably, under this
+    /// number (FD-30).
+    Spooled(u64),
 }
 
-/// Tells the app at `path` a tool hook ran. [`tell`]'s shape and deadline: the hook has
-/// already answered the harness, and nothing this does can change that answer.
+/// What the host writes back once a hook's line is recorded.
 #[cfg(unix)]
-pub fn tell_tool(
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Taken {
+    taken: bool,
+}
+
+/// Delivers a chat's report: taken by the host at `path`, or spooled beside it.
+#[cfg(unix)]
+pub fn deliver_report(
+    path: &std::path::Path,
+    token: Option<&ChatToken>,
+    report: &Report,
+) -> io::Result<Delivered> {
+    deliver(path, token, report.chat, report)
+}
+
+/// Delivers a tool call's line: taken by the host at `path`, or spooled beside it.
+#[cfg(unix)]
+pub fn deliver_tool(
     path: &std::path::Path,
     token: Option<&ChatToken>,
     call: &ToolCall,
-) -> io::Result<()> {
-    one_line_with_a_deadline(path, token, call)
+) -> io::Result<Delivered> {
+    deliver(path, token, call.chat, call)
+}
+
+/// Delivers a refused commit's line: taken by the host at `path`, or spooled beside it.
+#[cfg(unix)]
+pub fn deliver_refused(
+    path: &std::path::Path,
+    token: Option<&ChatToken>,
+    refused: &CommitRefused,
+) -> io::Result<Delivered> {
+    deliver(path, token, refused.chat, refused)
+}
+
+/// The line to the host, and an answer from it that it took the line, within
+/// [`A_NOTICE_TAKES_AT_MOST`]; otherwise the line in chat `chat`'s spool ([`spool::append`]).
+///
+/// **When this returns `Ok` the line is recorded or durable** (ADR 0075 §7, FD-30): a hook
+/// answers its harness after this, so a host that is down, slow or gone costs the line its
+/// moment, never the line. A host that took it after the wait ran out may record it as well
+/// as the drain: the line is then recorded twice, which is the side this errs on.
+///
+/// Without a token nothing can be spooled, since a spool line is checked under the token's key,
+/// and the error says the line is lost.
+#[cfg(unix)]
+fn deliver(
+    path: &std::path::Path,
+    token: Option<&ChatToken>,
+    chat: u32,
+    line: &impl serde::Serialize,
+) -> io::Result<Delivered> {
+    use std::io::{BufRead, Read, Write};
+
+    let bytes = line_with(token, line)?;
+    let to = path.to_path_buf();
+    let taken = within(A_NOTICE_TAKES_AT_MOST, move || {
+        let socket = std::os::unix::net::UnixStream::connect(&to)?;
+        socket.set_write_timeout(Some(A_NOTICE_TAKES_AT_MOST))?;
+        socket.set_read_timeout(Some(A_NOTICE_TAKES_AT_MOST))?;
+        (&socket).write_all(&bytes)?;
+        let mut said = String::new();
+        std::io::BufReader::new(&socket)
+            .take(256)
+            .read_line(&mut said)?;
+        match serde_json::from_str::<Taken>(&said) {
+            Ok(Taken { taken: true }) => Ok(()),
+            _ => Err(io::Error::other("the app did not say it took the line")),
+        }
+    });
+    let Err(why) = taken else {
+        return Ok(Delivered::Taken);
+    };
+    let Some(token) = token else {
+        return Err(io::Error::new(
+            why.kind(),
+            format!("{why}, and with no chat token it cannot be spooled, so it is lost"),
+        ));
+    };
+    spool::append(&spool::dir_for(path), chat, token, line)
+        .map(Delivered::Spooled)
+        .map_err(|spooled| {
+            io::Error::new(
+                spooled.kind(),
+                format!("{why}, and it could not be spooled ({spooled}), so it is lost"),
+            )
+        })
 }
 
 /// `act`, or an error once `deadline` has passed without it finishing.
@@ -983,8 +1097,13 @@ impl Asking {
 /// refusals in `off_unix`, kept in a file of their own because no unix build compiles them.
 #[cfg(not(unix))]
 mod off_unix;
+
+#[cfg(unix)]
+pub mod spool;
 #[cfg(not(unix))]
-pub use off_unix::{Asking, Listener, Reading, send, tell, tell_refused, tell_saved};
+pub use off_unix::{
+    Asking, Listener, Reading, deliver_refused, deliver_report, send, tell, tell_saved,
+};
 
 /// What the app answers an ask with, told which connection it came on.
 ///
@@ -1049,10 +1168,25 @@ impl Listener {
         // on the machine", and it is one call.
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        // Each token's spool key is recorded beside the socket as it is issued (FD-30), so
+        // whichever host drains a chat's spool can check its lines: only where the sandbox's
+        // integrity denial covers the directory (V63). Anywhere else nothing spools.
+        let spool = spool::dir_for(path);
+        let tokens = if spool::covered(&spool) {
+            private_directory(&spool)?;
+            ChatTokens::spooling_into(spool)
+        } else {
+            tracing::warn!(
+                "charter: the hook channel at {} is outside the directory a sandboxed chat is \
+                 denied, so its hooks spool nothing and a line it does not take is lost",
+                path.display()
+            );
+            ChatTokens::default()
+        };
         Ok(Self {
             socket,
             path: path.to_path_buf(),
-            tokens: std::sync::Arc::default(),
+            tokens: std::sync::Arc::new(tokens),
             owner: charter_same_user::Uid::effective(),
         })
     }
@@ -1124,12 +1258,15 @@ impl Listener {
         saved: Saved,
     ) -> Reading {
         self.hear(Hearing {
-            each,
+            each: Box::new(move |report| {
+                each(report);
+                Ok(())
+            }),
             answer,
             noticed,
             saved,
-            refused: Box::new(|_| {}),
-            tool: Box::new(|_| {}),
+            refused: Box::new(|_| Ok(())),
+            tool: Box::new(|_| Ok(())),
         })
     }
 
@@ -1383,8 +1520,12 @@ fn serve(
             turns.wait(this);
         }
         let first = !turn.done;
+        // A report, a tool call and a refused commit are answered once their hearer has
+        // returned, which in the app is once the line is recorded (FD-30): the hook answers its
+        // harness only after this, or after it has spooled the line.
+        let mut recorded = None;
         match line {
-            Line::Report(report) => (hearing.each)(report),
+            Line::Report(report) => recorded = Some((hearing.each)(report)),
             Line::Ask(ask) => {
                 // An ask is answered for as long as opening a chat takes, and nothing about
                 // the order of hook calls hangs on it: the turn is let go before it is.
@@ -1399,8 +1540,22 @@ fn serve(
             }
             Line::ByHand(notice) => (hearing.noticed)(notice),
             Line::Saved(record) => (hearing.saved)(record),
-            Line::Refused(refused) => (hearing.refused)(refused),
-            Line::Tool(call) => (hearing.tool)(call),
+            Line::Refused(refused) => recorded = Some((hearing.refused)(refused)),
+            Line::Tool(call) => recorded = Some((hearing.tool)(call)),
+        }
+        // Told as taken only once it is recorded durably: a line the hearer could not record
+        // gets no answer, so its hook spools it (FD-30). An older hook has closed its end
+        // already, and what it was not waiting for is lost with nothing to say.
+        if let Some(recorded) = recorded {
+            if let Err(why) = recorded {
+                tracing::warn!(
+                    "charter: a line on the hook channel for chat {chat} was not recorded \
+                     ({why}), so its hook was not told it was taken"
+                );
+            } else if let Ok(mut said) = serde_json::to_vec(&Taken { taken: true }) {
+                said.push(b'\n');
+                let _ = writer.write_all(&said);
+            }
         }
         if first {
             turn.finish();
@@ -2993,10 +3148,13 @@ mod tests {
             noticed: Box::new(|_| panic!("no harness was started by hand")),
             saved: Box::new(|_| panic!("no record was saved")),
             refused: Box::new(|_| panic!("no commit was refused")),
-            tool: Box::new(move |call| tx.lock().unwrap().send(call).unwrap()),
+            tool: Box::new(move |call| {
+                tx.lock().unwrap().send(call).unwrap();
+                Ok(())
+            }),
         });
-        tell_tool(&path, None, &call).expect("the line is written");
-        tell_tool(&path, Some(&token), &call).expect("the line is written");
+        one_line_with_a_deadline(&path, None, &call).expect("the line is written");
+        one_line_with_a_deadline(&path, Some(&token), &call).expect("the line is written");
         assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(5)), Ok(call));
         assert!(
             rx.recv_timeout(std::time::Duration::from_millis(200))
@@ -3033,12 +3191,15 @@ mod tests {
             answer: Box::new(|_, _| panic!("no ask was sent")),
             noticed: Box::new(|_| panic!("no harness was started by hand")),
             saved: Box::new(|_| panic!("no record was saved")),
-            refused: Box::new(move |refused| tx.lock().unwrap().send(refused).unwrap()),
+            refused: Box::new(move |refused| {
+                tx.lock().unwrap().send(refused).unwrap();
+                Ok(())
+            }),
             tool: Box::new(|_| panic!("no tool hook ran")),
         });
         // Without the token it is dropped, as every line is.
-        tell_refused(&path, None, &refused).expect("the line is written");
-        tell_refused(&path, Some(&token), &refused).expect("the line is written");
+        one_line_with_a_deadline(&path, None, &refused).expect("the line is written");
+        one_line_with_a_deadline(&path, Some(&token), &refused).expect("the line is written");
         assert_eq!(
             rx.recv_timeout(std::time::Duration::from_secs(5)),
             Ok(refused)
@@ -3364,3 +3525,7 @@ mod tests {
         assert_eq!(carried, None);
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "hookwire/delivery_tests.rs"]
+mod delivery_tests;

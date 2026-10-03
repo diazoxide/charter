@@ -425,6 +425,14 @@ impl Denied {
 
         // 2. Integrity: charter's own records, which only charter writes.
         deny(Class::Integrity, root.join(".charter/app"), Access::Write);
+        // Every chat's hook spool and the keys that check it, neither read nor written: the
+        // hooks that write a spool run outside the sandbox their tools run in (ADR 0068 §6 as
+        // amended by V63), so nothing inside it needs them.
+        deny(
+            Class::Integrity,
+            crate::hookwire::spool::dir_for(&root.join(".charter/app/hooks.sock")),
+            Access::ReadWrite,
+        );
 
         // 3. Human powers: the approvals a person gave on this machine.
         let config_root = crate::machine::rooted(

@@ -1272,3 +1272,149 @@ fn a_seal_hands_its_hook_the_segment_the_next_events_go_to() {
         "the handle the hook got is the file the third event is in"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn a_drained_line_is_recorded_under_the_chat_and_run_it_ran_in_and_says_it_was_spooled() {
+    use crate::hookwire::spool::{Drained, Spooled};
+    let dir = tempfile::tempdir().unwrap();
+    let plane = Path::new("/plane");
+    let mut recorder = recorder(dir.path());
+    // The run chat 3 was in when the host went away, as the reopen record still says it.
+    recorder.knows(
+        plane,
+        3,
+        RunOf {
+            chat: "01J9ZZCHAT00000000000000AA",
+            run: "01J9ZZRUN000000000000000AA",
+        },
+    );
+
+    let call = tool_call(3, "pretooluse", crate::hookwire::Decision::Allow);
+    for item in [
+        Drained::Line {
+            chat: 3,
+            seq: 1,
+            line: Spooled::Tool(call),
+        },
+        Drained::Gap {
+            chat: 3,
+            from: 2,
+            to: 4,
+        },
+        Drained::Rejected {
+            chat: 3,
+            seq: Some(7),
+            why: crate::hookwire::spool::why::MAC,
+        },
+        Drained::Spool {
+            chat: 3,
+            from: 1,
+            to: 6,
+        },
+    ] {
+        recorder.spooled(plane, item).unwrap();
+    }
+
+    let events = read(dir.path()).unwrap();
+    let kinds: Vec<&str> = events.iter().map(|event| event.kind.as_str()).collect();
+    assert_eq!(
+        kinds,
+        [
+            "hook.pretooluse",
+            "hook.spool.gap",
+            "hook.spool.rejected",
+            "hook.spool.drained"
+        ],
+        "no run.started: a drained line is the run it ran in"
+    );
+    for event in &events {
+        assert_eq!(event.chat.as_deref(), Some("01J9ZZCHAT00000000000000AA"));
+        assert_eq!(event.run.as_deref(), Some("01J9ZZRUN000000000000000AA"));
+    }
+    assert_eq!(events[0].body["spooled"], 1);
+    assert_eq!(events[0].body["decision"], "allow");
+    assert_eq!(
+        (
+            events[1].body["from"].as_u64(),
+            events[1].body["to"].as_u64()
+        ),
+        (Some(2), Some(4))
+    );
+    assert_eq!(events[2].body["seq"], 7);
+    assert_eq!(events[2].body["why"], "mac");
+    assert_eq!(events[3].body["to"], 6);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_drained_line_of_a_chat_the_host_cannot_name_is_recorded_under_its_number() {
+    use crate::hookwire::spool::{Drained, Spooled};
+    let dir = tempfile::tempdir().unwrap();
+    let mut recorder = recorder(dir.path());
+
+    recorder
+        .spooled(
+            Path::new("/plane"),
+            Drained::Line {
+                chat: 9,
+                seq: 1,
+                line: Spooled::Report(report(9, crate::state::Event::Stop)),
+            },
+        )
+        .unwrap();
+
+    let events = read(dir.path()).unwrap();
+    assert_eq!(events.len(), 1, "no run is made up for it: {events:?}");
+    assert_eq!(events[0].kind, "hook.stop");
+    assert_eq!(events[0].chat, None);
+    assert_eq!(events[0].body["chat_number"], 9);
+}
+
+#[test]
+fn an_event_is_made_durable_through_its_number() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut log = Log::open(dir.path(), DEVICE).unwrap();
+    let durable = log.durable();
+    let event = log
+        .append(None, None, None, "hook.stop", serde_json::json!({}))
+        .unwrap();
+
+    durable.through(event.seq).unwrap();
+
+    assert_eq!(durable.synced(), event.seq);
+    durable.through(event.seq).unwrap();
+    assert_eq!(
+        durable.synced(),
+        event.seq,
+        "a number already durable is not synced again"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn what_makes_events_durable_follows_each_seal_onto_the_segment_being_written() {
+    use std::os::unix::fs::MetadataExt;
+    let dir = tempfile::tempdir().unwrap();
+    let mut log = Log::open_with(dir.path(), DEVICE, SMALL).unwrap();
+    let durable = log.durable();
+    let before = append_n(&mut log, 1)[0];
+    durable.through(before).unwrap();
+
+    // Enough to seal at least once, and one more event in the new segment.
+    let seqs = append_n(&mut log, 8);
+    assert!(
+        !segments(dir.path()).unwrap().is_empty(),
+        "the log sealed a segment"
+    );
+    let last = *seqs.last().unwrap();
+    durable.through(last).unwrap();
+
+    let live = std::fs::metadata(dir.path().join(FILE)).unwrap().ino();
+    assert_eq!(
+        durable.inode(),
+        Some(live),
+        "the handle synced is the segment being written, not a sealed one"
+    );
+    assert_eq!(durable.synced(), last);
+}

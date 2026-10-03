@@ -223,6 +223,7 @@ rest of O3's sources.
 | `secret.requested`, `secret.approved`, `secret.denied`, `secret.revealed` | V15, AU-5 | vault, secret name, channel, the approval's scope, how many times this chat has asked |
 | `killswitch.stop`, `killswitch.rearm`, `killswitch.tamper` | ADR 0071 | `by` |
 | `hook.spool.drained`, `hook.spool.gap`, `hook.spool.rejected` | ADR 0068 §6 | chat, the sequence range, the check's result |
+| `hook.commit_refused` | ADR 0074, ADR 0068 §6 | chat; `spooled`, its spool number, when it was drained from a spool. Never what was found. *Added 2026-10-02 by FD-30 (PR #953).* |
 | `host.started` | this record | the reconcile's result |
 | `audit.chain.gap`, `audit.chain.genesis`, `audit.segment.pruned`, `audit.retention.changed`, `audit.exported` | this record, AU-3, AU-4, AU-22 | ranges, hashes, the settings, the export's target kind |
 | `account.link` | ADR 0066 | nothing beyond the two pseudonyms |

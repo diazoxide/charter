@@ -1358,6 +1358,9 @@ impl Planes {
         });
         if let Some(events) = &self.events {
             hooks.record_into(Arc::clone(events));
+            // What this project's hooks spooled while no host took their lines, before a chat
+            // is started and issued a token (FD-30).
+            hooks.drain_spool();
         }
         let reporting = hooks.reporting();
 

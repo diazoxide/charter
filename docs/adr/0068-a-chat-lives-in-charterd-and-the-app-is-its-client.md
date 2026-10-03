@@ -274,6 +274,22 @@ spools like one when the socket refuses it. Until FD-30 lands (charter#667), no 
 `charter git-hook` drops the line on a refused socket, as every hook does today, and the
 commit is refused all the same. FD-30 covers this line with the rest.
 
+*Amended 2026-10-02 by ruling V63, for FD-30 (charter#667, PR #953).* Four things above read
+differently as built:
+
+- **Codex's hooks run outside charter's wrap**, as Claude Code's do. Today no harness charter
+  sandboxes runs its hooks inside the sandbox, so a chat's sandbox denies reading and writing
+  **every** chat's spool, its own included.
+- **The verifier is at rest.** Each line's MAC is keyed by a key derived from the chat's token
+  (HMAC-SHA256 of the token under a fixed label). The host writes that key, never the token, to
+  `keys.json` in the spool directory before the token reaches the chat, so a later host can
+  check the line. The file is owner-only, and the sandbox denies a chat reading and writing it.
+- **A spool exists only where the sandbox's integrity denial reaches**, which is a project's
+  `.charter/app/spool/`. Beside a hook socket anywhere else, the hook spools nothing, writes no
+  key, and reports the line as lost.
+- **A gap is found from the file's own highest number.** Lines removed from the end are not
+  detected, and neither are lines removed and then followed by new ones.
+
 ### 7. An upgrade hands the terminals over, and drains only when it must (V7; FD-28: upgrade without losing agents)
 
 **The normal path hands every live PTY master to the new host over `SCM_RIGHTS`.** A PTY master is

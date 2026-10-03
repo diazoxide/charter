@@ -95,6 +95,88 @@ impl Retention {
 /// What [`Log::on_seal`] is given.
 type SealHook = Box<dyn FnMut(&File) + Send>;
 
+/// What makes a log's events durable: one `fsync` for every event appended before it, so
+/// hooks recorded at once share one (group commit).
+///
+/// The operating system's ordinary `fsync`. On macOS that hands the data to the drive, not
+/// through the drive's own cache (`F_FULLFSYNC`, measured at about 10 ms against 0.1 ms on
+/// the operator's machine), which is what SQLite does by default there.
+///
+/// **It follows the segment being written** (FD-24): each seal swaps in a handle on the new
+/// `events.jsonl` before any event is written to it. Every event of the sealed segment was
+/// `fsync`ed by the seal itself, so a number at or below the last one appended before the swap
+/// is durable whichever handle is synced. A seal that could not open the next segment leaves
+/// no handle, and `through` answers an error until one is open, so nothing is told durable that
+/// is not.
+pub struct Durable {
+    appended: std::sync::atomic::AtomicU64,
+    /// The last number known durable, and the segment being written.
+    state: std::sync::Mutex<(u64, Option<File>)>,
+}
+
+impl Durable {
+    /// Returns once every event up to `seq` is durable.
+    pub fn through(&self, seq: u64) -> io::Result<()> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.0 >= seq {
+            return Ok(());
+        }
+        let appended = self.appended.load(std::sync::atomic::Ordering::SeqCst);
+        let Some(file) = state.1.as_ref() else {
+            return Err(io::Error::other(
+                "the event log has no segment open to make durable",
+            ));
+        };
+        #[cfg(unix)]
+        rustix::fs::fsync(file)?;
+        #[cfg(not(unix))]
+        file.sync_data()?;
+        state.0 = appended.max(seq);
+        Ok(())
+    }
+
+    /// The last number known to be durable.
+    pub fn synced(&self) -> u64 {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .0
+    }
+
+    /// The inode of the segment it syncs, for the test that it follows a seal.
+    #[cfg(all(test, unix))]
+    fn inode(&self) -> Option<u64> {
+        use std::os::unix::fs::MetadataExt;
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .1
+            .as_ref()
+            .and_then(|file| file.metadata().ok())
+            .map(|meta| meta.ino())
+    }
+
+    /// Notes that every event up to `seq` is durable: a seal `fsync`ed them.
+    fn durable_through(&self, seq: u64) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.0 = state.0.max(seq);
+    }
+
+    /// Moves onto `file`, the segment a seal just opened.
+    fn follow(&self, file: Option<File>) {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .1 = file;
+    }
+}
+
 /// The log of one device, open for appending. Holding it is being the device's one writer.
 pub struct Log {
     /// Held locked for as long as the `Log` lives.
@@ -104,6 +186,8 @@ pub struct Log {
     /// one could not be opened yet: nothing is written until it is, so no line ever goes into
     /// a segment already sealed.
     file: Option<File>,
+    /// What makes its events durable, which follows each seal.
+    durable: std::sync::Arc<Durable>,
     device: String,
     retention: Retention,
     next: u64,
@@ -168,10 +252,15 @@ impl Log {
             Some(last) => after(last)?,
             None => 1,
         };
+        let durable = std::sync::Arc::new(Durable {
+            appended: std::sync::atomic::AtomicU64::new(next - 1),
+            state: std::sync::Mutex::new((next - 1, Some(file.try_clone()?))),
+        });
         let mut log = Log {
             _lock: lock,
             dir: dir.to_owned(),
             file: Some(file),
+            durable,
             device: device.to_owned(),
             retention,
             next,
@@ -195,10 +284,9 @@ impl Log {
     }
 
     /// Appends one event and answers it as written. When this returns `Ok` the whole line has
-    /// been handed to the operating system, which a reader sees at once; it is not `fsync`ed,
-    /// so a machine that loses power can lose the last events. ADR 0075 §7's "answered once the
-    /// event is in the log" is not met yet: the hook has already answered when its line
-    /// reaches the host, until FD-30's spool.
+    /// been handed to the operating system, which a reader sees at once; it is durable once
+    /// [`Durable::through`] its number has returned, which the host waits for before it tells
+    /// a hook its line is taken (ADR 0075 §7, FD-30).
     pub fn append(
         &mut self,
         chat: Option<&str>,
@@ -243,6 +331,9 @@ impl Log {
         }
         self.good += line.len() as u64;
         self.next = after(seq)?;
+        self.durable
+            .appended
+            .store(seq, std::sync::atomic::Ordering::SeqCst);
         if self.good >= self.seal_at {
             // The event is written whatever sealing makes of it.
             self.seal_or_warn();
@@ -281,6 +372,8 @@ impl Log {
         sync_dir(&self.dir)?;
         self.good = 0;
         self.torn = false;
+        // Before any event is written to it, so `Durable::through` never syncs a sealed one.
+        self.durable.follow(file.try_clone().ok());
         if let Some(hook) = self.on_seal.as_mut() {
             hook(&file);
         }
@@ -322,6 +415,8 @@ impl Log {
             return Ok(());
         };
         file.sync_data()?;
+        // Every event so far is in this segment and durable now.
+        self.durable.durable_through(self.next.saturating_sub(1));
         std::fs::rename(self.dir.join(FILE), self.dir.join(sealed_name(first)))?;
         self.file = None;
         sync_dir(&self.dir)?;
@@ -331,6 +426,14 @@ impl Log {
             tracing::warn!(error = %why, "the event log could not delete an old segment");
         }
         Ok(())
+    }
+}
+
+impl Log {
+    /// What makes this log's events durable, shared so the `fsync` can happen outside whatever
+    /// lock holds the log.
+    pub fn durable(&self) -> std::sync::Arc<Durable> {
+        std::sync::Arc::clone(&self.durable)
     }
 }
 
@@ -859,6 +962,21 @@ pub fn phase(word: &str) -> Option<Phase> {
     }
 }
 
+/// A spool drain's kinds (ADR 0075 §4's registry): a gap in a chat's sequence, a line that did
+/// not check, a sequence drained, and a refused commit's line drained from a spool.
+pub const SPOOL_GAP: &str = "hook.spool.gap";
+pub const SPOOL_REJECTED: &str = "hook.spool.rejected";
+pub const SPOOL_DRAINED: &str = "hook.spool.drained";
+pub const COMMIT_REFUSED: &str = "hook.commit_refused";
+
+/// The kind a tool call's event is recorded under: `hook.<word>` for a word charter answers.
+fn tool_kind(call: &crate::hookwire::ToolCall) -> String {
+    match phase(&call.tool_hook) {
+        Some(_) => format!("hook.{}", call.tool_hook),
+        None => UNKNOWN_HOOK.to_owned(),
+    }
+}
+
 /// The kind a tool hook word charter does not answer is recorded under, so a line cannot mint
 /// a kind of its own: the word goes in the body, shortened.
 pub const UNKNOWN_HOOK: &str = "hook.unknown";
@@ -995,6 +1113,18 @@ impl Recorder {
         followed: Followed,
         cleared: Option<&str>,
     ) -> io::Result<Event> {
+        self.report_spooled(plane, report, followed, cleared, None)
+    }
+
+    /// [`Recorder::report_with`], saying the spool number a drained report had.
+    fn report_spooled(
+        &mut self,
+        plane: &Path,
+        report: &crate::hookwire::Report,
+        followed: Followed,
+        cleared: Option<&str>,
+        spooled: Option<u64>,
+    ) -> io::Result<Event> {
         let known = self.chats.contains_key(&(plane.to_path_buf(), report.chat));
         let top = match followed {
             Followed::Moved if known => self.new_run(plane, report.chat, Began::Clear, cleared)?,
@@ -1006,6 +1136,9 @@ impl Recorder {
         let mut body = serde_json::json!({});
         if report.event == crate::state::Event::SessionStart {
             body["started"] = started(report.detail.started).into();
+        }
+        if let Some(seq) = spooled {
+            body["spooled"] = seq.into();
         }
         let event = self.append(&under, &format!("hook.{}", report.event.word()), body)?;
         match (report.event, &report.agent) {
@@ -1035,14 +1168,42 @@ impl Recorder {
         call: &crate::hookwire::ToolCall,
         now: Instant,
     ) -> io::Result<Event> {
+        self.tool_spooled(plane, call, now, None)
+    }
+
+    /// [`Recorder::tool`], saying the spool number a drained call had.
+    fn tool_spooled(
+        &mut self,
+        plane: &Path,
+        call: &crate::hookwire::ToolCall,
+        now: Instant,
+        spooled: Option<u64>,
+    ) -> io::Result<Event> {
         let top = self.identity(plane, call.chat)?;
         let under = self.under(top, call.agent.as_deref())?;
         let phase = phase(&call.tool_hook);
+        let mut body = self.tool_body(call);
+        if let Some(seq) = spooled {
+            body["spooled"] = seq.into();
+        }
+        if let Some(id) = &call.call {
+            let key = (under.run.clone(), id.clone());
+            if let Some(phase) = phase
+                && let Some(ms) = self.pair(key, phase, now, call.at_ms)
+            {
+                body["tool_ms"] = ms.into();
+            }
+        }
+        self.append(&under, &tool_kind(call), body)
+    }
+
+    /// What a tool event's body says of its call, before any duration.
+    fn tool_body(&self, call: &crate::hookwire::ToolCall) -> serde_json::Value {
         let mut body = serde_json::json!({
             "decision": call.decision.word(),
             "hook_ms": call.hook_ms,
         });
-        if phase.is_none() {
+        if phase(&call.tool_hook).is_none() {
             body["word"] =
                 crate::shown::readable(&call.tool_hook, crate::shown::DISPLAY_LIMIT).into();
         }
@@ -1057,18 +1218,111 @@ impl Recorder {
         }
         if let Some(id) = &call.call {
             body["call"] = id.as_str().into();
-            let key = (under.run.clone(), id.clone());
-            if let Some(phase) = phase
-                && let Some(ms) = self.pair(key, phase, now, call.at_ms)
-            {
-                body["tool_ms"] = ms.into();
-            }
         }
-        let kind = match phase {
-            Some(_) => format!("hook.{}", call.tool_hook),
-            None => UNKNOWN_HOOK.to_owned(),
+        body
+    }
+
+    /// Tells the recorder who chat `number` in `plane` is and which run it is in, without an
+    /// event: a chat the reopen record names, before the host starts anything, so a line it
+    /// spooled before the host went away is recorded under the run it ran in (FD-30).
+    pub fn knows(&mut self, plane: &Path, number: u32, RunOf { chat, run }: RunOf<'_>) {
+        self.chats.insert(
+            (plane.to_path_buf(), number),
+            Identity {
+                chat: chat.to_owned(),
+                run: run.to_owned(),
+            },
+        );
+    }
+
+    /// The event for one thing a drain of the hook spool found (FD-30, ADR 0075 §4): a line
+    /// recorded as it would have been live, with `spooled` its number, or `hook.spool.gap`,
+    /// `hook.spool.rejected` or `hook.spool.drained`.
+    ///
+    /// **A chat the recorder does not know is not given a run.** A drain runs before the host
+    /// starts a chat, so a chat it cannot name ([`Recorder::knows`]) is one that had closed; its
+    /// events are recorded with no chat or run, under its number (`chat_number`).
+    #[cfg(unix)]
+    pub fn spooled(
+        &mut self,
+        plane: &Path,
+        item: crate::hookwire::spool::Drained,
+    ) -> io::Result<Event> {
+        use crate::hookwire::spool::{Drained, Spooled};
+        let number = item.chat();
+        let known = self.chats.get(&(plane.to_path_buf(), number)).cloned();
+        let (kind, mut body) = match item {
+            Drained::Line { seq, line, .. } => match (line, &known) {
+                (Spooled::Report(report), Some(_)) => {
+                    return self.report_spooled(plane, &report, Followed::No, None, Some(seq));
+                }
+                (Spooled::Tool(call), Some(_)) => {
+                    return self.tool_spooled(plane, &call, Instant::now(), Some(seq));
+                }
+                (Spooled::Refused(refused), Some(_)) => {
+                    return self.refused_spooled(plane, refused.chat, Some(seq));
+                }
+                (Spooled::Report(report), None) => (
+                    format!("hook.{}", report.event.word()),
+                    serde_json::json!({ "spooled": seq }),
+                ),
+                (Spooled::Tool(call), None) => {
+                    let mut body = self.tool_body(&call);
+                    body["spooled"] = seq.into();
+                    (tool_kind(&call), body)
+                }
+                (Spooled::Refused(_), None) => (
+                    COMMIT_REFUSED.to_owned(),
+                    serde_json::json!({ "spooled": seq }),
+                ),
+            },
+            Drained::Gap { from, to, .. } => (
+                SPOOL_GAP.to_owned(),
+                serde_json::json!({ "from": from, "to": to }),
+            ),
+            Drained::Rejected { seq, why, .. } => (
+                SPOOL_REJECTED.to_owned(),
+                serde_json::json!({ "seq": seq, "why": why }),
+            ),
+            Drained::Spool { from, to, .. } => (
+                SPOOL_DRAINED.to_owned(),
+                serde_json::json!({ "from": from, "to": to }),
+            ),
         };
-        self.append(&under, &kind, body)
+        body["chat_number"] = number.into();
+        match known {
+            Some(who) => self
+                .log
+                .append(Some(&who.chat), Some(&who.run), None, &kind, body),
+            None => self.log.append(None, None, None, &kind, body),
+        }
+    }
+
+    /// The event for a commit charter's git hook refused in chat `number` (SQ-16):
+    /// `hook.commit_refused`, under the chat's run. Metadata only: what was found is the
+    /// needs-you item's, never the log's.
+    pub fn refused(&mut self, plane: &Path, number: u32) -> io::Result<Event> {
+        self.refused_spooled(plane, number, None)
+    }
+
+    fn refused_spooled(
+        &mut self,
+        plane: &Path,
+        number: u32,
+        spooled: Option<u64>,
+    ) -> io::Result<Event> {
+        let who = self.identity(plane, number)?;
+        let mut body = serde_json::json!({});
+        if let Some(seq) = spooled {
+            body["spooled"] = seq.into();
+        }
+        self.log
+            .append(Some(&who.chat), Some(&who.run), None, COMMIT_REFUSED, body)
+    }
+
+    /// What makes this recorder's events durable: [`Durable::through`] after each write.
+    pub fn durable(&self) -> std::sync::Arc<Durable> {
+        self.log.durable()
     }
 
     /// How long a tool call ran, once both of its ends have been heard, in either order.
