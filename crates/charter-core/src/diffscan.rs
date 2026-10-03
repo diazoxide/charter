@@ -18,6 +18,13 @@
 //! [`checked`] is [`staged`] filtered through the allowlist ([`crate::scanallow`]): charter's
 //! own entries, and the repository's file as it is at `HEAD`. It also says whether the commit
 //! changes that file, which a chat's commit may not.
+//!
+//! # Before a push (SQ-7)
+//!
+//! [`pushed`] is the same scan over what a push would send: every commit git's `pre-push`
+//! names that the remote does not already have, each commit's added lines, filtered through the
+//! same allowlist. It catches a commit that never passed a chat's `pre-commit`: one the operator
+//! made in an unarmed terminal, or one `cherry-pick`, `rebase` or `am` made (ADR 0074, V26b).
 
 use std::path::Path;
 
@@ -62,11 +69,6 @@ pub struct Scan {
 pub fn checked(repo: &Path) -> Result<Scan, String> {
     let found = staged(repo)?;
     let at_head = |args: &[&str]| git::run_in_hook(repo, args, git::READ).ok();
-    let file = at_head(&["show", &format!("HEAD:{}", scanallow::FILE)])
-        .filter(|run| run.code == Some(0))
-        .map(|run| Allowlist::parse(&String::from_utf8_lossy(&run.out)))
-        .unwrap_or_default();
-    let allowlist = Allowlist::of(file);
     let changed = at_head(&[
         "-c",
         "core.quotePath=false",
@@ -78,11 +80,37 @@ pub fn checked(repo: &Path) -> Result<Scan, String> {
     ])
     .filter(|run| run.code == Some(0))
     .ok_or("git could not name the files the commit changes")?;
+    let mut scan = through_the_allowlist(repo, found);
+    scan.changes_the_allowlist = String::from_utf8_lossy(&changed.out)
+        .split('\0')
+        .any(scanallow::is_the_file);
+    Ok(scan)
+}
+
+/// `found`, split into what is refused and what an entry lets through: charter's own entries
+/// and the repository's allowlist as it is at `HEAD`.
+fn through_the_allowlist(repo: &Path, found: Vec<Finding>) -> Scan {
+    through(allowlist_at(repo, "HEAD").unwrap_or_default(), found)
+}
+
+/// The text of the repository's allowlist at `rev`, or `None` when `rev` has none or git could
+/// not show it.
+fn allowlist_at(repo: &Path, rev: &str) -> Option<String> {
+    git::run_in_hook(
+        repo,
+        &["show", &format!("{rev}:{}", scanallow::FILE)],
+        git::READ,
+    )
+    .ok()
+    .filter(|run| run.code == Some(0))
+    .map(|run| String::from_utf8_lossy(&run.out).into_owned())
+}
+
+/// `found` split through charter's own entries and the allowlist file `text`.
+fn through(text: String, found: Vec<Finding>) -> Scan {
+    let allowlist = Allowlist::of(Allowlist::parse(&text));
     let mut scan = Scan {
         problems: allowlist.problems.clone(),
-        changes_the_allowlist: String::from_utf8_lossy(&changed.out)
-            .split('\0')
-            .any(scanallow::is_the_file),
         ..Scan::default()
     };
     for finding in found {
@@ -99,6 +127,144 @@ pub fn checked(repo: &Path) -> Result<Scan, String> {
             None => scan.refused.push(finding),
         }
     }
+    scan
+}
+
+/// How long git may take to show what a push sends. A push is a network operation already, and
+/// a branch's first push to a new remote shows its whole history.
+const SHOWING_A_PUSH: std::time::Duration = git::NETWORK;
+
+/// git's object name for "nothing": a deleted ref on the local side, a new one on the remote's.
+fn is_nothing(oid: &str) -> bool {
+    oid.bytes().all(|b| b == b'0')
+}
+
+/// What a push from `repo` to `remote` (at `url`) would publish, from the lines git writes on
+/// `pre-push`'s standard input (`updates`: `<local ref> <local oid> <remote ref> <remote oid>`),
+/// filtered through the allowlist the remote already has.
+///
+/// The commits read are those reachable from what is pushed and from neither what the remote
+/// has for those refs nor, when the push names a configured remote, any of its remote-tracking
+/// refs: what the push sends. Each is read as its own diff, root commits included whatever
+/// `log.showRoot` says, so a secret one commit adds and a later one removes is found: the history
+/// still publishes it. Merge commits are not read; each side's commits are.
+///
+/// **What is pushed must be a commit.** A ref is peeled to the commit it names (an annotated tag
+/// to its commit); a ref that names a blob or a tree, directly or through a tag, has no history
+/// to read, so it is refused rather than sent unread.
+///
+/// **The allowlist is the remote's.** A pushed range that changes `.charter-scan-allow.toml`
+/// sets [`Scan::changes_the_allowlist`], which the push hook refuses: only the operator pushes an
+/// allowlist change. Otherwise findings go through the file as the remote has it for each ref
+/// (the remote's commit, or, for a new ref, the pushed tip, which the range leaves unchanged);
+/// refs whose files differ get charter's own entries alone.
+///
+/// `Err` is input git did not write, a ref that is not a commit, or git failing to answer, all
+/// of which the caller refuses on.
+pub fn pushed(repo: &Path, remote: &str, url: &str, updates: &str) -> Result<Scan, String> {
+    let commit_of = |oid: &str| {
+        git::run_in_hook(
+            repo,
+            &[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("{oid}^{{commit}}"),
+            ],
+            git::READ,
+        )
+        .ok()
+        .filter(|run| run.code == Some(0))
+        .map(|run| String::from_utf8_lossy(&run.out).trim().to_owned())
+        .filter(|oid| !oid.is_empty())
+    };
+    let mut sends = Vec::new();
+    let mut has = Vec::new();
+    // The revision whose allowlist each update is filtered through.
+    let mut allowlists = Vec::new();
+    for line in updates.lines().filter(|l| !l.trim().is_empty()) {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        let [name, local, _, theirs] = fields[..] else {
+            return Err(format!("a line git wrote could not be read: {line:?}"));
+        };
+        let is_oid = |oid: &str| !oid.is_empty() && oid.bytes().all(|b| b.is_ascii_hexdigit());
+        if !is_oid(local) || !is_oid(theirs) {
+            return Err(format!("a line git wrote could not be read: {line:?}"));
+        }
+        if is_nothing(local) {
+            continue;
+        }
+        let Some(tip) = commit_of(local) else {
+            return Err(format!(
+                "{name} does not name a commit, so what it would publish has no history to \
+                 scan; push without it"
+            ));
+        };
+        let known = (!is_nothing(theirs)).then(|| commit_of(theirs)).flatten();
+        if !is_nothing(theirs) {
+            has.push(format!("^{theirs}"));
+        }
+        allowlists.push(known.unwrap_or_else(|| tip.clone()));
+        sends.push(tip);
+    }
+    if sends.is_empty() {
+        return Ok(Scan::default());
+    }
+    let mut range = sends;
+    range.extend(has);
+    // git hands a push to a URL with no remote configured the URL twice, and a URL is no
+    // remote-tracking namespace.
+    if remote != url {
+        range.push("--not".to_owned());
+        range.push(format!("--remotes={remote}"));
+    }
+    let ask = |head: &[&str]| {
+        let mut args: Vec<&str> = head.to_vec();
+        // The remote's side of a ref names a commit this clone may never have fetched.
+        args.push("--ignore-missing");
+        args.extend(range.iter().map(String::as_str));
+        args.push("--");
+        let tail: &[&str] = if head.first() == Some(&"rev-list") {
+            &[scanallow::FILE]
+        } else {
+            &[]
+        };
+        args.extend(tail);
+        let run = git::run_in_hook(repo, &args, SHOWING_A_PUSH).map_err(|gone| gone.to_string())?;
+        match run.code {
+            Some(0) => Ok(String::from_utf8_lossy(&run.out).into_owned()),
+            None => Err("git took too long to show what the push sends".to_owned()),
+            Some(_) => Err(String::from_utf8_lossy(&run.err).trim().to_owned()),
+        }
+    };
+    let changes_the_allowlist = !ask(&["rev-list", "--full-history"])?.trim().is_empty();
+    let diff = ask(&[
+        "-c",
+        "core.quotePath=false",
+        "log",
+        "-p",
+        // `log.showRoot=false` would otherwise show a root commit with no diff at all.
+        "--root",
+        "--no-merges",
+        "--format=",
+        "--no-color",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--src-prefix=a/",
+        "--dst-prefix=b/",
+        "-U0",
+    ])?;
+    let texts: Vec<Option<String>> = allowlists
+        .iter()
+        .map(|rev| allowlist_at(repo, rev))
+        .collect();
+    let text = if texts.windows(2).all(|pair| pair[0] == pair[1]) {
+        texts.into_iter().next().flatten().unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let mut scan = through(text, in_diff(&diff)?);
+    scan.changes_the_allowlist = changes_the_allowlist;
     Ok(scan)
 }
 
@@ -238,13 +404,36 @@ pub const ALLOWLIST_REFUSAL: &str = "charter: commit refused — it changes .cha
      the commit (`git restore --staged .charter-scan-allow.toml`); the operator reviews and \
      commits an entry. Do not use --no-verify; the operator has been told.\n";
 
+/// What a chat's push of a range that changes the allowlist is refused with.
+pub const PUSH_ALLOWLIST_REFUSAL: &str = "charter: push refused — it would publish a change to \
+     .charter-scan-allow.toml, the scan's allowlist. The operator pushes an allowlist change \
+     themselves. Do not use --no-verify; the operator has been told.\n";
+
 /// The most findings a refusal lists; the rest are counted.
 const LISTED: usize = 20;
 
-/// What the commit is refused with, on standard error: every finding, masked.
-pub fn refusal(found: &[Finding]) -> String {
-    let mut out = String::from(
-        "charter: commit refused — it would publish what looks like a secret or personal data:\n",
+/// What a refusal stops: a chat's commit, at `pre-commit` or `pre-merge-commit`, or its push,
+/// at `pre-push`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stopped {
+    Commit,
+    Push,
+}
+
+impl Stopped {
+    fn word(self) -> &'static str {
+        match self {
+            Self::Commit => "commit",
+            Self::Push => "push",
+        }
+    }
+}
+
+/// What the commit or push is refused with, on standard error: every finding, masked.
+pub fn refusal(stopped: Stopped, found: &[Finding]) -> String {
+    let mut out = format!(
+        "charter: {} refused — it would publish what looks like a secret or personal data:\n",
+        stopped.word()
     );
     for finding in found.iter().take(LISTED) {
         out.push_str(&format!("  {}\n", one_line(finding)));
@@ -252,27 +441,37 @@ pub fn refusal(found: &[Finding]) -> String {
     if found.len() > LISTED {
         out.push_str(&format!("  … and {} more\n", found.len() - LISTED));
     }
+    out.push_str(match stopped {
+        Stopped::Commit => "Take it out of the change and commit again. ",
+        Stopped::Push => {
+            "It is in a commit the push would send, which the commit scan never saw. Take it out \
+             of that commit's history before pushing (amend it, or rebase and edit the commit \
+             that added it), and if it is a live credential, revoke it: removing it from the \
+             files alone leaves it in history. "
+        }
+    });
     out.push_str(
-        "Take it out of the change and commit again. A credential belongs in a vault \
-         (`charter secret`), and personal data does not belong in a repository. If a finding is \
-         not what it looks like, `charter scan --explain` names its rule and the entry that \
-         would let it through; tell the operator, who adds it to .charter-scan-allow.toml in a \
-         commit of their own. Do not use --no-verify; the operator has been told.\n",
+        "A credential belongs in a vault (`charter secret`), and personal data does not belong \
+         in a repository. If a finding is not what it looks like, `charter scan --explain` names \
+         its rule and the entry that would let it through; tell the operator, who adds it to \
+         .charter-scan-allow.toml in a commit of their own. Do not use --no-verify; the \
+         operator has been told.\n",
     );
     out
 }
 
-/// What the app's needs-you item says about a refusal in `repo`: the repository's name and the
-/// first finding, masked, with how many more there are.
-pub fn summary(repo: &Path, found: &[Finding]) -> String {
+/// What the app's needs-you item says about a refusal in `repo`: what was stopped, the
+/// repository's name and the first finding, masked, with how many more there are.
+pub fn summary(stopped: Stopped, repo: &Path, found: &[Finding]) -> String {
     let name = repo.file_name().map_or_else(
         || repo.display().to_string(),
         |n| n.to_string_lossy().into_owned(),
     );
     let first = found.first().map(one_line).unwrap_or_default();
+    let what = stopped.word();
     match found.len() {
-        0 | 1 => format!("commit refused in {name}: {first}"),
-        n => format!("commit refused in {name}: {first} (and {} more)", n - 1),
+        0 | 1 => format!("{what} refused in {name}: {first}"),
+        n => format!("{what} refused in {name}: {first} (and {} more)", n - 1),
     }
 }
 
@@ -340,7 +539,7 @@ mod tests {
                 },
             ]
         );
-        let said = refusal(&found);
+        let said = refusal(Stopped::Commit, &found);
         assert!(
             !said.contains(&key()) && !said.contains("ada@lovelace.dev"),
             "{said}"
@@ -519,5 +718,208 @@ mod tests {
         testgit::run(&repo, &["mv", scanallow::FILE, "elsewhere.toml"]);
 
         assert!(checked(&repo).unwrap().changes_the_allowlist);
+    }
+
+    // `pushed` (SQ-7).
+
+    const NOTHING: &str = "0000000000000000000000000000000000000000";
+
+    fn commit_all(repo: &Path, message: &str) -> String {
+        testgit::run(repo, &["add", "-A"]);
+        testgit::run(repo, &["commit", "-q", "-m", message]);
+        testgit::run(repo, &["rev-parse", "HEAD"])
+            .out
+            .trim()
+            .to_owned()
+    }
+
+    fn update(local: &str, theirs: &str) -> String {
+        format!("refs/heads/main {local} refs/heads/main {theirs}\n")
+    }
+
+    #[test]
+    fn a_push_to_a_url_scans_what_the_remote_lacks_and_not_what_it_has() {
+        let (_dir, repo) = repo();
+        std::fs::write(repo.join("old.sh"), format!("T={}\n", key())).unwrap();
+        let published = commit_all(&repo, "published long ago");
+        std::fs::write(repo.join("owners"), "ada@lovelace.dev\n").unwrap();
+        let tip = commit_all(&repo, "new");
+
+        let url = "https://forge.invalid/o/r.git";
+        let scan = pushed(&repo, url, url, &update(&tip, &published)).unwrap();
+
+        assert_eq!(
+            scan.refused
+                .iter()
+                .map(|f| (f.path.as_str(), f.rule))
+                .collect::<Vec<_>>(),
+            [("owners", "email")]
+        );
+    }
+
+    #[test]
+    fn a_new_branch_is_scanned_back_to_its_root_and_a_deletion_sends_nothing() {
+        let (_dir, repo) = repo();
+        std::fs::write(repo.join("old.sh"), format!("T={}\n", key())).unwrap();
+        let tip = commit_all(&repo, "root");
+
+        let url = "/elsewhere.git";
+        assert_eq!(
+            pushed(&repo, url, url, &update(&tip, NOTHING))
+                .unwrap()
+                .refused
+                .len(),
+            1
+        );
+        assert!(
+            pushed(&repo, url, url, &update(NOTHING, &tip))
+                .unwrap()
+                .refused
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn the_remotes_commit_this_clone_never_fetched_does_not_stop_the_scan() {
+        let (_dir, repo) = repo();
+        std::fs::write(repo.join("owners"), "ada@lovelace.dev\n").unwrap();
+        let tip = commit_all(&repo, "new");
+        let unknown = "1234567890abcdef1234567890abcdef12345678";
+
+        let scan = pushed(&repo, "/r.git", "/r.git", &update(&tip, unknown)).unwrap();
+
+        assert_eq!(scan.refused.len(), 1);
+    }
+
+    #[test]
+    fn input_git_did_not_write_is_refused_not_waved_through() {
+        let (_dir, repo) = repo();
+        for updates in ["refs/heads/main abc", "a b c d e", "r not-an-oid r 0000"] {
+            assert!(pushed(&repo, "o", "/o", updates).is_err(), "{updates}");
+        }
+        assert!(pushed(&repo, "o", "/o", "").unwrap().refused.is_empty());
+    }
+
+    #[test]
+    fn a_push_refusal_says_the_value_is_in_history_and_never_shows_it() {
+        let finding = Finding {
+            path: "deploy.sh".into(),
+            line: 1,
+            rule: "forge-token",
+            kind: "a token by its forge's prefix",
+            masked: "ghp_****".into(),
+            fingerprint: String::new(),
+        };
+        let said = refusal(Stopped::Push, std::slice::from_ref(&finding));
+        assert!(said.starts_with("charter: push refused"), "{said}");
+        assert!(said.contains("history"), "{said}");
+        assert_eq!(
+            summary(Stopped::Push, Path::new("/x/app"), &[finding]),
+            "push refused in app: deploy.sh:1  a token by its forge's prefix  ghp_****"
+        );
+    }
+
+    #[test]
+    fn a_new_branchs_root_commit_is_read_even_where_log_hides_root_diffs() {
+        let (_dir, repo) = repo();
+        testgit::run(&repo, &["config", "log.showRoot", "false"]);
+        std::fs::write(repo.join("deploy.sh"), format!("T={}\n", key())).unwrap();
+        let root = commit_all(&repo, "root");
+
+        let scan = pushed(&repo, "/r.git", "/r.git", &update(&root, NOTHING)).unwrap();
+
+        assert_eq!(scan.refused.len(), 1, "{scan:?}");
+    }
+
+    #[test]
+    fn a_tag_that_names_a_blob_is_refused_and_an_annotated_tag_is_read_as_its_commit() {
+        let (_dir, repo) = repo();
+        std::fs::write(repo.join("loose"), format!("T={}\n", key())).unwrap();
+        let blob = testgit::run(&repo, &["hash-object", "-w", "loose"])
+            .out
+            .trim()
+            .to_owned();
+        let tag = format!("refs/tags/x {blob} refs/tags/x {NOTHING}\n");
+        let why = pushed(&repo, "/r.git", "/r.git", &tag).unwrap_err();
+        assert!(
+            why.contains("refs/tags/x") && why.contains("not name a commit"),
+            "{why}"
+        );
+
+        std::fs::remove_file(repo.join("loose")).unwrap();
+        std::fs::write(repo.join("owners"), "ada@lovelace.dev\n").unwrap();
+        commit_all(&repo, "owners");
+        testgit::run(&repo, &["tag", "-a", "-m", "v1", "v1"]);
+        let annotated = testgit::run(&repo, &["rev-parse", "v1"])
+            .out
+            .trim()
+            .to_owned();
+        let tag = format!("refs/tags/v1 {annotated} refs/tags/v1 {NOTHING}\n");
+        assert_eq!(
+            pushed(&repo, "/r.git", "/r.git", &tag)
+                .unwrap()
+                .refused
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_pushed_range_that_changes_the_allowlist_says_so() {
+        let (_dir, repo) = repo();
+        std::fs::write(repo.join("README"), "x\n").unwrap();
+        let published = commit_all(&repo, "published");
+        allowlist_at_head(&repo, DOCS_EMAIL);
+        let tip = testgit::run(&repo, &["rev-parse", "HEAD"])
+            .out
+            .trim()
+            .to_owned();
+
+        let scan = pushed(&repo, "/r.git", "/r.git", &update(&tip, &published)).unwrap();
+
+        assert!(scan.changes_the_allowlist);
+        assert!(
+            !pushed(&repo, "/r.git", "/r.git", &update(&published, NOTHING))
+                .unwrap()
+                .changes_the_allowlist,
+            "a range that does not touch the file"
+        );
+    }
+
+    #[test]
+    fn findings_go_through_the_allowlist_the_remote_has_not_the_checkouts() {
+        let (_dir, repo) = repo();
+        std::fs::write(repo.join("README"), "x\n").unwrap();
+        let published = commit_all(&repo, "published");
+        // The remote's commit has no allowlist; the branch pushed carries a docs email.
+        std::fs::create_dir(repo.join("docs")).unwrap();
+        std::fs::write(repo.join("docs/intro.md"), "By ada@lovelace.dev\n").unwrap();
+        let tip = commit_all(&repo, "docs");
+        // The checkout is elsewhere, with an allowlist that would let it through.
+        testgit::run(&repo, &["checkout", "-q", "-b", "elsewhere", &published]);
+        allowlist_at_head(&repo, DOCS_EMAIL);
+
+        let scan = pushed(&repo, "/r.git", "/r.git", &update(&tip, &published)).unwrap();
+
+        assert_eq!(scan.refused.len(), 1, "{scan:?}");
+        assert!(scan.allowed.is_empty());
+    }
+
+    #[test]
+    fn an_allowlist_the_remote_already_has_lets_a_finding_through() {
+        let (_dir, repo) = repo();
+        allowlist_at_head(&repo, DOCS_EMAIL);
+        let published = testgit::run(&repo, &["rev-parse", "HEAD"])
+            .out
+            .trim()
+            .to_owned();
+        std::fs::create_dir(repo.join("docs")).unwrap();
+        std::fs::write(repo.join("docs/intro.md"), "By ada@lovelace.dev\n").unwrap();
+        let tip = commit_all(&repo, "docs");
+
+        let scan = pushed(&repo, "/r.git", "/r.git", &update(&tip, &published)).unwrap();
+
+        assert!(scan.refused.is_empty(), "{scan:?}");
+        assert_eq!(scan.allowed.len(), 1);
     }
 }

@@ -6,6 +6,10 @@
 //!
 //! - `git commit --no-verify`, and `-n` on `git commit`, alone or in a bundle (`-an`);
 //! - `git merge --no-verify`, which skips `pre-merge-commit` (`-n` on merge is `--no-stat`);
+//! - `git push --no-verify`, which skips `pre-push`, the same scan of what a push sends (SQ-7;
+//!   `-n` on push is `--dry-run`), and on `merge` and `push` each prefix of `--no-verify` git
+//!   takes as it (`--no-veri` and longer);
+//! - `git send-pack`, the plumbing under `git push`, which runs no `pre-push`;
 //! - `git -c core.hooksPath=…` and `git --config-env=core.hooksPath=…`, on any subcommand;
 //! - `GIT_CONFIG_COUNT`, `GIT_CONFIG_PARAMETERS` or a `GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>`
 //!   set in front of a command or exported on the line, which replace the chat's pair.
@@ -27,8 +31,8 @@ use crate::shellseg;
 use crate::shellwrap::{self, base_lower};
 
 /// What every refusal of this arm ends with.
-const FIX: &str = "That would skip charter's scan of the commit for secrets and personal data. \
-     Fix what the scan found and commit again. If a finding is not what it looks like, \
+const FIX: &str = "That would skip charter's scan of what it publishes for secrets and personal \
+     data. Fix what the scan found and try again. If a finding is not what it looks like, \
      `charter scan --explain` names the entry that would let it through; tell the operator, \
      who commits it to .charter-scan-allow.toml. Do not use --no-verify.";
 
@@ -80,6 +84,15 @@ fn commit_skips_hooks(args: &[String]) -> Option<&'static str> {
         i += 1;
     }
     None
+}
+
+/// Whether a `merge` or `push` argument is `--no-verify` as git's option parser takes it: the
+/// whole word, or any prefix of it long enough to name it alone (`--no-veri`; `--no-ver` is
+/// also the start of `--no-verbose`, which git refuses as ambiguous). `commit` is read by
+/// [`commit_skips_hooks`].
+fn skips_verify(arg: &str) -> bool {
+    const WORD: &str = "--no-verify";
+    arg.len() >= "--no-veri".len() && WORD.starts_with(arg)
 }
 
 /// The spelling that would skip a chat's commit hooks, and the refusal, or `None`.
@@ -144,16 +157,29 @@ pub fn hook_skip_hit(cmd: &str, cwd: &str) -> Option<(&'static str, String)> {
         };
         let skip = match sub.as_str() {
             "commit" => commit_skips_hooks(args),
-            "merge" => args
+            // `-n` on merge is `--no-stat`, and on push `--dry-run`.
+            "merge" | "push" => args
                 .iter()
-                .any(|a| a == "--no-verify")
+                .any(|a| skips_verify(a))
                 .then_some("--no-verify"),
+            // The plumbing under `git push`, which runs no `pre-push` at all.
+            "send-pack" => Some("send-pack"),
             _ => None,
         };
+        if sub == "send-pack" {
+            return Some((
+                "send-pack",
+                format!(
+                    "`git send-pack` pushes without the `pre-push` hook a chat's pushes run. \
+                     Use `git push`. {FIX}"
+                ),
+            ));
+        }
         if let Some(spelling) = skip {
+            let what = if sub == "push" { "pushes" } else { "commits" };
             return Some((
                 spelling,
-                format!("`git {sub} {spelling}` skips the hooks a chat's commits run. {FIX}"),
+                format!("`git {sub} {spelling}` skips the hooks a chat's {what} run. {FIX}"),
             ));
         }
         if !cwd.is_empty() && moves_the_allowlist(&dir, sub, args) {
@@ -233,6 +259,14 @@ mod tests {
             ("git commit -anm x", "-n"),
             ("cd repo && git -C . commit -qn", "-n"),
             ("git merge --no-verify side", "--no-verify"),
+            ("git push --no-verify origin main", "--no-verify"),
+            ("git push --no-verif origin main", "--no-verify"),
+            ("git push --no-veri", "--no-verify"),
+            ("git merge --no-verif side", "--no-verify"),
+            (
+                "git send-pack https://forge.invalid/o/r.git main",
+                "send-pack",
+            ),
             (
                 "git -c core.hooksPath=/dev/null commit -m x",
                 "core.hooksPath",
@@ -256,7 +290,9 @@ mod tests {
             "git merge -n side",
             "git -c user.name=x commit -m y",
             "git log -n 3",
-            "git push --no-verify",
+            "git push -n origin main",
+            "git push --no-ver origin main",
+            "git push --no-verbose origin main",
             "echo git commit --no-verify",
         ] {
             assert_eq!(refused(cmd), None, "{cmd}");
