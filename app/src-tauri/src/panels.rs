@@ -1781,6 +1781,7 @@ mod tests {
                         profile: None,
                         conversation: conversation.map(str::to_owned),
                         cwd: None,
+                        unsandboxed: false,
                     }),
                     persona: Some("steward".to_owned()),
                     pieces: Vec::new(),

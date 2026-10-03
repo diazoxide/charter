@@ -16,6 +16,7 @@ const ONE: StartOptions = {
       is_default: true,
       ready_to_type: true,
       harness: null,
+      sandbox: null,
       approval: null,
     },
   ],
@@ -51,7 +52,7 @@ describe("a chat that starts in a repo (GL-1)", () => {
     expect(screen.getByRole("checkbox", { name: /new branch in api/ })).toBeChecked();
     await user.click(screen.getByRole("button", { name: "Start" }));
 
-    expect(onStart).toHaveBeenCalledWith("claude", "steward", false, null, true);
+    expect(onStart).toHaveBeenCalledWith("claude", "steward", false, null, true, null);
   });
 
   it("works on the branch the repo has checked out when the box is cleared", async () => {
@@ -60,7 +61,7 @@ describe("a chat that starts in a repo (GL-1)", () => {
     await user.click(screen.getByRole("checkbox", { name: /new branch in api/ }));
     await user.click(screen.getByRole("button", { name: "Start" }));
 
-    expect(onStart).toHaveBeenCalledWith("claude", "steward", false, null, false);
+    expect(onStart).toHaveBeenCalledWith("claude", "steward", false, null, false, null);
   });
 
   it("asks nothing about a branch for a chat that does not start in a repo", () => {
@@ -124,7 +125,7 @@ describe("the picker a chat starts from", () => {
     await user.click(screen.getByRole("radio", { name: /release/ }));
     await user.click(screen.getByRole("button", { name: "Start" }));
 
-    expect(onStart).toHaveBeenCalledWith("claude", "release", false, null, false);
+    expect(onStart).toHaveBeenCalledWith("claude", "release", false, null, false, null);
   });
 
   it("starts on the plane's own default persona when nobody picks another", async () => {
@@ -132,7 +133,7 @@ describe("the picker a chat starts from", () => {
 
     await user.click(screen.getByRole("button", { name: "Start" }));
 
-    expect(onStart).toHaveBeenCalledWith("claude", "steward", false, null, false);
+    expect(onStart).toHaveBeenCalledWith("claude", "steward", false, null, false, null);
   });
 
   it("can start a chat that adopts no persona at all", async () => {
@@ -141,7 +142,7 @@ describe("the picker a chat starts from", () => {
     await user.click(screen.getByRole("radio", { name: "none" }));
     await user.click(screen.getByRole("button", { name: "Start" }));
 
-    expect(onStart).toHaveBeenCalledWith("claude", null, false, null, false);
+    expect(onStart).toHaveBeenCalledWith("claude", null, false, null, false, null);
   });
 
   it("leaves the pane's footer blank unless this chat asks for charter's", async () => {
@@ -152,7 +153,7 @@ describe("the picker a chat starts from", () => {
     expect(screen.getByRole("checkbox", { name: /charter's footer/ })).not.toBeChecked();
     await user.click(screen.getByRole("button", { name: "Start" }));
 
-    expect(onStart).toHaveBeenCalledWith("claude", "steward", false, null, false);
+    expect(onStart).toHaveBeenCalledWith("claude", "steward", false, null, false, null);
   });
 
   it("starts a chat that draws charter's footer when the box is ticked", async () => {
@@ -161,7 +162,7 @@ describe("the picker a chat starts from", () => {
     await user.click(screen.getByRole("checkbox", { name: /charter's footer/ }));
     await user.click(screen.getByRole("button", { name: "Start" }));
 
-    expect(onStart).toHaveBeenCalledWith("claude", "steward", true, null, false);
+    expect(onStart).toHaveBeenCalledWith("claude", "steward", true, null, false, null);
   });
 
   it("starts under the name typed in the Name field (charter-app#254)", async () => {
@@ -170,7 +171,7 @@ describe("the picker a chat starts from", () => {
     await user.type(screen.getByRole("textbox", { name: /^Name/ }), "billing bug");
     await user.click(screen.getByRole("button", { name: "Start" }));
 
-    expect(onStart).toHaveBeenCalledWith("claude", "steward", false, "billing bug", false);
+    expect(onStart).toHaveBeenCalledWith("claude", "steward", false, "billing bug", false, null);
   });
 
   it("starts under the default name when the Name field is only spaces", async () => {
@@ -179,7 +180,7 @@ describe("the picker a chat starts from", () => {
     await user.type(screen.getByRole("textbox", { name: /^Name/ }), "   ");
     await user.click(screen.getByRole("button", { name: "Start" }));
 
-    expect(onStart).toHaveBeenCalledWith("claude", "steward", false, null, false);
+    expect(onStart).toHaveBeenCalledWith("claude", "steward", false, null, false, null);
   });
 
   it("says the Name field is optional and what an empty one means", () => {
@@ -212,6 +213,7 @@ describe("the picker a chat starts from", () => {
           is_default: true,
           ready_to_type: true,
           harness: null,
+          sandbox: null,
           approval: "new",
         },
       ],
@@ -227,6 +229,7 @@ describe("the picker a chat starts from", () => {
       "claude --model opus",
       null,
       false,
+      null,
     );
   });
 
@@ -243,6 +246,7 @@ describe("the picker a chat starts from", () => {
           is_default: true,
           ready_to_type: true,
           harness: null,
+          sandbox: null,
           approval: "new",
         },
       ],
@@ -261,6 +265,7 @@ describe("the picker a chat starts from", () => {
       "CLAUDE_CONFIG_DIR=~/.claude-work claude --model opus",
       null,
       false,
+      null,
     );
     expect(onStart).not.toHaveBeenCalled();
   });
@@ -276,6 +281,7 @@ describe("the picker a chat starts from", () => {
           is_default: true,
           ready_to_type: true,
           harness: null,
+          sandbox: null,
           approval: "changed",
         },
       ],
@@ -321,7 +327,7 @@ describe("the picker a chat starts from", () => {
     expect(screen.getByRole("radio", { name: "none" })).toBeChecked();
 
     return user.click(screen.getByRole("button", { name: "Start" })).then(() => {
-      expect(onStart).toHaveBeenCalledWith("claude", null, false, null, false);
+      expect(onStart).toHaveBeenCalledWith("claude", null, false, null, false, null);
     });
   });
 
@@ -341,6 +347,7 @@ describe("the picker a chat starts from", () => {
           is_default: true,
           ready_to_type: true,
           harness: null,
+          sandbox: null,
           approval: null,
         },
         {
@@ -351,6 +358,7 @@ describe("the picker a chat starts from", () => {
           is_default: false,
           ready_to_type: true,
           harness: null,
+          sandbox: null,
           approval: null,
         },
       ],
@@ -387,7 +395,7 @@ describe("the picker a chat starts from", () => {
         .click(screen.getByText("plain"))
         .then(() => user.click(screen.getByRole("button", { name: "Start" })))
         .then(() => {
-          expect(onStart).toHaveBeenCalledWith("plain", "steward", false, null, false);
+          expect(onStart).toHaveBeenCalledWith("plain", "steward", false, null, false, null);
         });
     });
 
@@ -398,7 +406,7 @@ describe("the picker a chat starts from", () => {
       await user.keyboard("{ArrowDown}");
       await user.click(screen.getByRole("button", { name: "Start" }));
 
-      expect(onStart).toHaveBeenCalledWith("plain", "steward", false, null, false);
+      expect(onStart).toHaveBeenCalledWith("plain", "steward", false, null, false, null);
     });
 
     it("hides the window behind it from the keyboard and from the accessibility tree", () => {
@@ -428,5 +436,239 @@ describe("the picker a chat starts from", () => {
 
     const [, persona] = onStart.mock.calls[0] as [string, string | null];
     expect(["release", null]).toContain(persona);
+  });
+});
+
+describe("a chat in a project that runs every chat sandboxed (ADR 0067 §7, V78 a)", () => {
+  const sandboxed = (sandbox: StartOptions["profiles"][number]["sandbox"]) =>
+    options({ profiles: [{ ...ONE.profiles[0], sandbox }] });
+
+  function showWith(sandbox: StartOptions["profiles"][number]["sandbox"], onInstall?: () => void) {
+    const onStart = vi.fn();
+    const onApprove = vi.fn();
+    render(
+      <StartChat
+        options={sandboxed(sandbox)}
+        onStart={onStart}
+        onApprove={onApprove}
+        onInstall={onInstall}
+        onCancel={vi.fn()}
+      />,
+    );
+    return { onStart, onApprove, user: userEvent.setup() };
+  }
+
+  it("says nothing of a sandbox the project has not turned on", () => {
+    show();
+    expect(screen.queryByRole("checkbox", { name: /without the sandbox/ })).not.toBeInTheDocument();
+    expect(screen.queryByText(/sandbox/i)).not.toBeInTheDocument();
+  });
+
+  it("starts sandboxed unless the person ticks the box", async () => {
+    const { onStart, user } = showWith({ state: "sandboxed", said: "", install: null });
+
+    expect(screen.getByRole("checkbox", { name: "start without the sandbox" })).not.toBeChecked();
+    await user.click(screen.getByRole("button", { name: "Start" }));
+
+    expect(onStart).toHaveBeenCalledWith("claude", "steward", false, null, false, null);
+  });
+
+  it("starts this one chat without the sandbox, with the reason typed, and says so on the button", async () => {
+    const { onStart, user } = showWith({ state: "sandboxed", said: "", install: null });
+
+    await user.click(screen.getByRole("checkbox", { name: "start without the sandbox" }));
+    await user.type(
+      screen.getByRole("textbox", { name: "Why, if you want it recorded" }),
+      "the build needs the network",
+    );
+    await user.click(screen.getByRole("button", { name: "Start without the sandbox" }));
+
+    expect(onStart).toHaveBeenCalledWith("claude", "steward", false, null, false, {
+      reason: "the build needs the network",
+    });
+  });
+
+  it("sends no reason when none was typed", async () => {
+    const { onStart, user } = showWith({ state: "sandboxed", said: "", install: null });
+
+    await user.click(screen.getByRole("checkbox", { name: "start without the sandbox" }));
+    await user.click(screen.getByRole("button", { name: "Start without the sandbox" }));
+
+    expect(onStart).toHaveBeenCalledWith("claude", "steward", false, null, false, {
+      reason: null,
+    });
+  });
+
+  it("shows why the sandbox cannot be applied, and the one way on is said on the button", async () => {
+    const why =
+      "this plane runs every chat sandboxed, and this machine cannot apply the sandbox: socat is not installed";
+    const { onStart, user } = showWith({ state: "refused", said: why, install: null });
+
+    expect(screen.getByRole("alert")).toHaveTextContent(why);
+    expect(screen.queryByRole("button", { name: "Start" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Start without the sandbox" }));
+
+    expect(onStart).toHaveBeenCalledWith("claude", "steward", false, null, false, {
+      reason: null,
+    });
+  });
+
+  it("shows the distribution's install command and types it in a shell tab only when asked", async () => {
+    const onInstall = vi.fn();
+    const { onStart, user } = showWith(
+      { state: "refused", said: "socat is not installed", install: "sudo apt install socat" },
+      onInstall,
+    );
+
+    expect(screen.getByText("sudo apt install socat").tagName).toBe("CODE");
+    await user.click(screen.getByRole("button", { name: "Type it in a shell tab" }));
+
+    expect(onInstall).toHaveBeenCalledTimes(1);
+    expect(onStart).not.toHaveBeenCalled();
+  });
+
+  it("says why a chat on a system with no backend starts without the sandbox", () => {
+    const said =
+      "This chat runs without the sandbox: charter has no sandbox backend on Windows yet, so every chat here starts without it until one exists.";
+    showWith({ state: "unsandboxed", said, install: null });
+
+    expect(screen.getByText(said)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start" })).toBeInTheDocument();
+  });
+
+  it("carries the opt-out through the approval, and says so on its button", async () => {
+    const onApprove = vi.fn();
+    render(
+      <StartChat
+        options={options({
+          profiles: [
+            {
+              ...ONE.profiles[0],
+              approval: "new",
+              sandbox: { state: "refused", said: "socat is not installed", install: null },
+            },
+          ],
+        })}
+        onStart={vi.fn()}
+        onApprove={onApprove}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Approve and start without the sandbox" }));
+
+    expect(onApprove).toHaveBeenCalledWith("claude", "steward", false, "claude", null, false, {
+      reason: null,
+    });
+  });
+});
+
+describe("a harness charter holds back in a sandboxed project (V87f)", () => {
+  it("shows Codex's refusal and starts it only without the sandbox", async () => {
+    const said =
+      "charter cannot keep a Codex chat inside its sandbox yet (#1123), so in this project a new one starts only without the sandbox, from the new-chat picker.";
+    const onStart = vi.fn();
+    render(
+      <StartChat
+        options={options({
+          profiles: [
+            {
+              ...ONE.profiles[0],
+              name: "codex",
+              kind: "codex",
+              shown: "codex",
+              sandbox: { state: "refused", said, install: null },
+            },
+          ],
+        })}
+        onStart={onStart}
+        onApprove={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent(said);
+    expect(screen.queryByRole("button", { name: "Start" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Type it in a shell tab" }),
+    ).not.toBeInTheDocument();
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Start without the sandbox" }));
+
+    expect(onStart).toHaveBeenCalledWith("codex", "steward", false, null, false, { reason: null });
+  });
+});
+
+describe("a program the sandbox will not bind (V87g)", () => {
+  it.each([
+    [
+      "a program where the chat can write",
+      "this plane runs every chat sandboxed, and the program lives where this chat can write: /work/acme/bin/claude, so it was not started sandboxed. Keep the program outside the plane and outside what a chat may write.",
+    ],
+    [
+      "a command naming a file where the chat can write",
+      "this plane runs every chat sandboxed, and this profile's command names /tmp/run.sh, which lies where this chat can write, so it was not started sandboxed. Keep every file the command names outside the plane and outside what a chat may write.",
+    ],
+    [
+      "a command word too long to check",
+      "this plane runs every chat sandboxed, and a word of this profile's command is longer than 4 KiB, which charter does not check, so it was not started sandboxed. Keep what it says in a file outside the plane and name that file instead.",
+    ],
+    [
+      "a program named by a relative path",
+      "this plane runs every chat sandboxed, and this profile's program is a relative path, which would be found in a folder the chat can write, so it was not started sandboxed. Name the program by its full path.",
+    ],
+    [
+      "a program that does not answer as Claude Code",
+      "this plane runs every chat sandboxed, and this profile's program does not answer as Claude Code, whose sandbox it was given, so it was not started sandboxed.",
+    ],
+  ])("shows %s, and starts it only without the sandbox", async (_, said) => {
+    const onStart = vi.fn();
+    render(
+      <StartChat
+        options={options({
+          profiles: [{ ...ONE.profiles[0], sandbox: { state: "refused", said, install: null } }],
+        })}
+        onStart={onStart}
+        onApprove={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent(said);
+    expect(screen.queryByRole("button", { name: "Start" })).not.toBeInTheDocument();
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Start without the sandbox" }));
+
+    expect(onStart).toHaveBeenCalledWith("claude", "steward", false, null, false, { reason: null });
+  });
+});
+
+describe("a profile nobody has approved, in a sandboxed project", () => {
+  it("says its program is checked once it is approved, and still asks for the approval", () => {
+    const said =
+      "charter checks this profile's program before it starts sandboxed, once the profile may start: approved, and declared in a file git does not carry.";
+    render(
+      <StartChat
+        options={options({
+          profiles: [
+            {
+              ...ONE.profiles[0],
+              approval: "new",
+              sandbox: { state: "sandboxed", said, install: null },
+            },
+          ],
+        })}
+        onStart={vi.fn()}
+        onApprove={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText(said)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve and start" })).toBeInTheDocument();
   });
 });

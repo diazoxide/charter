@@ -150,6 +150,15 @@ pub struct Chat {
     /// again without it. `None` is every other chat, and every record written before this
     /// field — not a format change, for [`Self::pinned`]'s reason.
     pub renamed_from: Option<String>,
+    /// Whether the chat's last run started without the sandbox in a project that has it on: a
+    /// person's opt-out, or a system with no backend (ADR 0067 §7).
+    ///
+    /// **A fact about the run that was, never a choice about the next one.** No start reads it
+    /// as an opt-out — an opt-out is never inherited by a relaunch or a resume — so a chat
+    /// that ran unsandboxed starts sandboxed next, or not at all where the sandbox cannot be
+    /// applied. This is how a sandboxed start knows to say the sandbox came back on
+    /// (`trust.sandbox.on`), and how the chat's session record says what it ran under. `false` is every other chat, and every record written before this field.
+    pub unsandboxed: bool,
     /// Who this chat is beyond this clone: its id, its origin device, its current run and the
     /// chat it was resumed from (ADR 0066). See [`Identity`].
     pub identity: Identity,
@@ -1051,6 +1060,10 @@ struct ChatOnDisk {
     /// [`Chat::renamed_from`]. A value that is not a workspace name reads as absent.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     renamed_from: String,
+    /// `"off"` where the chat's last run was unsandboxed — see [`Chat::unsandboxed`] — and
+    /// absent otherwise. Any other word reads as absent.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    sandbox: String,
     /// The chat's ids — see [`Identity`]. Each is a ULID, absent when not known: every record
     /// written before ids existed, and a chat no host has started yet. A value that is not a
     /// ULID reads as absent.
@@ -1077,6 +1090,9 @@ fn is_zero(n: &u32) -> bool {
 pub fn a_ulid(word: &str) -> Option<String> {
     ulid::Ulid::from_string(word).ok().map(|id| id.to_string())
 }
+
+/// The one word a record's `sandbox` holds.
+const SANDBOX_OFF: &str = "off";
 
 /// A new ULID: how the host mints a chat's id and each of its runs' (ADR 0066).
 pub fn mint() -> String {
@@ -1159,6 +1175,11 @@ impl From<&Record> for OnDisk {
                     label: chat.label.clone().unwrap_or_default(),
                     from: chat.from.as_ref().map(FromOnDisk::from),
                     renamed_from: chat.renamed_from.clone().unwrap_or_default(),
+                    sandbox: if chat.unsandboxed {
+                        SANDBOX_OFF.to_owned()
+                    } else {
+                        String::new()
+                    },
                     id: chat.identity.id.clone().unwrap_or_default(),
                     device: chat.identity.device.clone().unwrap_or_default(),
                     run: chat.identity.run.clone().unwrap_or_default(),
@@ -1217,6 +1238,7 @@ impl From<ChatOnDisk> for Chat {
             from: chat.from.and_then(FromOnDisk::sound),
             renamed_from: Some(chat.renamed_from)
                 .filter(|name| crate::contain::workspace_name_ok(name)),
+            unsandboxed: chat.sandbox == SANDBOX_OFF,
             identity: Identity {
                 id: a_ulid(&chat.id),
                 device: a_ulid(&chat.device),
@@ -1460,6 +1482,43 @@ pub(crate) mod tests {
 
         fs::write(path(plane.path()), text.replace("\"alpha\"", "\"../x\"")).unwrap();
         assert_eq!(read(plane.path()).chats[0].renamed_from, None);
+    }
+
+    /// ADR 0067 §7: the record says a chat's last run was unsandboxed, so the next run can say
+    /// the sandbox came back on — and it is never read as an opt-out: the launch it builds is
+    /// the same either way.
+    #[test]
+    fn a_chat_that_ran_unsandboxed_is_recorded_so_and_its_relaunch_is_built_the_same() {
+        let plane = tempfile::tempdir().unwrap();
+        let unsandboxed = Chat {
+            unsandboxed: true,
+            ..claude("ide.7", Some(ID))
+        };
+        write(
+            plane.path(),
+            &Record {
+                chats: vec![unsandboxed.clone(), claude("ide.8", Some(ID))],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let text = fs::read_to_string(path(plane.path())).unwrap();
+        assert_eq!(text.matches("\"sandbox\": \"off\"").count(), 1, "{text}");
+
+        let back = read(plane.path());
+        assert_eq!(back.chats[0], unsandboxed);
+        assert!(!back.chats[1].unsandboxed);
+        assert_eq!(
+            back.chats[0].launch(),
+            claude("ide.7", Some(ID)).launch(),
+            "nothing about the next start reads it"
+        );
+
+        fs::write(path(plane.path()), text.replace("\"off\"", "\"none\"")).unwrap();
+        assert!(
+            !read(plane.path()).chats[0].unsandboxed,
+            "only the one word"
+        );
     }
 
     #[test]

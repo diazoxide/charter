@@ -293,12 +293,21 @@ fn repo_with(dir: &std::path::Path, name: &str, marker: &str) -> std::path::Path
 }
 
 /// A profile `work` declared and approved in the project at `root`, running a stand-in.
-fn a_profile(root: &std::path::Path) {
-    let bin = stand_in::program(root, "claude-stand-in", "#!/bin/sh\nexit 0\n");
+/// A `work` profile on a Claude Code stand-in, approved. The script is in `outside`, a folder
+/// no chat writes, run by `/bin/sh`, and answers `--version` as Claude Code does: a project charter makes runs its chats
+/// sandboxed (ADR 0067 §1), and a sandbox binds only that, never a file inside the project
+/// (ruling V87g).
+fn a_profile(root: &std::path::Path, outside: &std::path::Path) {
+    let bin = stand_in::program(
+        outside,
+        "claude-stand-in",
+        "#!/bin/sh\nif [ \"$1\" = --version ]; then echo \"2.1.288 (Claude Code)\"; fi\nexit 0\n",
+    );
+    // Run as `/bin/sh <script>`, the script in a folder no chat writes.
     std::fs::write(
         root.join(charter_core::profiles::LOCAL_FILE),
         format!(
-            "[harness.work]\nkind = \"claude\"\ncommand = [{:?}]\n",
+            "[harness.work]\nkind = \"claude\"\ncommand = [\"/bin/sh\", {:?}]\n",
             bin.display().to_string()
         ),
     )
@@ -337,7 +346,10 @@ fn a_project_made_from_each_template_starts_a_chat_in_its_repo_under_each_of_its
         )
         .expect("a project");
         let repo = repo_with(dir.path(), "widget", marker);
-        a_profile(&root);
+        // Where no chat writes: a sandboxed start refuses a program, or any file its command
+        // names, in the project or a temp folder (ruling V87g, D-88g).
+        let bin = stand_in::NoChatWrites::new();
+        a_profile(&root, bin.path());
 
         let taken = firstrun::take_in_from(&root, &repo, &Choice::Fits).expect("opened");
 
@@ -363,6 +375,7 @@ fn a_project_made_from_each_template_starts_a_chat_in_its_repo_under_each_of_its
                     resume: None,
                     show_footer: false,
                     resuming: None,
+                    without_sandbox: None,
                 },
                 &root,
             );

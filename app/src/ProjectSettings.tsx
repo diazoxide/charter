@@ -16,6 +16,7 @@ import {
   type ProjectExtension,
   type ProjectExtensions,
   type ProjectTheme,
+  type SandboxState,
   type ProjectSettings as Both,
   type SavingInForce,
   type SettingsChange,
@@ -74,6 +75,7 @@ export function ProjectSettings({ plane }: { plane: PlaneId }) {
   const [harnesses, setHarnesses] = useState<HarnessPlugins[]>([]);
   const [theme, setTheme] = useState<ProjectTheme>();
   const [saving, setSaving] = useState<Saving>();
+  const [sandbox, setSandbox] = useState<SandboxState>();
   /** The newest read out: an answer to an older one — before a save, or for another plane — is
    *  dropped rather than drawn over what came after it. */
   const reading = useRef(0);
@@ -136,6 +138,15 @@ export function ProjectSettings({ plane }: { plane: PlaneId }) {
       .catch((err: unknown) => {
         if (newest()) setSaving({ trouble: String(err) });
       });
+    // The sandbox, and this machine's opt-out count (ADR 0067 §7, V78 d): local, never sent.
+    void commands
+      .sandboxState(plane)
+      .then((said) => {
+        if (newest()) setSandbox(said.status === "ok" ? (said.data ?? undefined) : undefined);
+      })
+      .catch(() => {
+        if (newest()) setSandbox(undefined);
+      });
     readTheme();
   }, [plane, readTheme]);
 
@@ -178,6 +189,18 @@ export function ProjectSettings({ plane }: { plane: PlaneId }) {
         <code>vault:&lt;vault&gt;/&lt;key&gt;</code>; charter refuses a value that looks like a
         credential.
       </p>
+      {sandbox && (
+        <p className="note" data-testid="settings-sandbox">
+          {sandbox.on ? (
+            <>Sandbox: on. {sandbox.said}. Counted on this machine only, and never sent.</>
+          ) : (
+            <>
+              Sandbox: off. <code>[sandbox] mode = &quot;on&quot;</code> in the Shared file runs
+              every chat sandboxed.
+            </>
+          )}
+        </p>
+      )}
       <Section
         file={both.shared}
         testid="settings-shared"

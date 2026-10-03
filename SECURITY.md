@@ -96,6 +96,8 @@ scanning, where maintainers read them. They are not yet published to the public 
 
 A plane can put every chat charter starts in a sandbox ([ADR 0067](docs/adr/0067-a-chat-runs-in-a-sandbox-charter-compiles-for-its-harness.md)):
 `[sandbox]` with `mode = "on"` in its `charter.toml` ([the plane format](docs/plane-format.md)).
+A project charter makes has it on. A project made before the sandbox existed keeps running as
+it did, and charter offers once to turn it on.
 
 **What it covers.** Chats that charter starts, on a harness charter compiles the policy for.
 Today those are Claude Code, through its own sandbox, and opencode on macOS. A sandboxed
@@ -123,6 +125,17 @@ not a boundary. The boundary for every sandboxed harness, Claude Code included, 
 charter's own wrap around the whole harness, which is not built yet for Claude Code (#1123). A plane can turn the sandbox
 on, but never off.
 
+**The opt-out is one chat's, and it is recorded.** A person can start one chat without the
+sandbox from the window's new-chat picker, and nothing else can: there is no CLI word, file or
+setting for it, and it is for a new chat only. A relaunched or resumed chat does not inherit
+it: it starts sandboxed, or not at all where the sandbox cannot be applied (a Codex chat, a
+refused program). Continuing an opted-out chat's conversation without the sandbox is not
+offered yet (#1098). That chat's tab says
+it runs without the sandbox. Charter records the start in its event log on this machine
+(`trust.sandbox.off`), with the reason the person typed, and records the sandbox coming back
+on (`trust.sandbox.on`). Charter also counts on this machine how many new chats started without
+it, and never sends that count anywhere.
+
 **What it does not cover.**
 
 - **Agents charter did not start.** For those, charter can export each harness's managed
@@ -132,6 +145,9 @@ on, but never off.
   ([ADR 0028](docs/adr/0028-containment-checks-a-path-and-does-not-hold-it.md)), a sandboxed
   chat that races charter's own file access may get charter to do what the chat cannot. So the
   sandbox is a boundary between a chat and the machine, not between a chat and charter.
+- **Windows.** Charter has no sandbox backend on Windows yet (#565), so every chat there
+  starts without the sandbox. Its tab says so, and the start is recorded with charter, not the
+  person, as the one who started it unsandboxed.
 - **opencode on Linux.** Charter cannot wrap opencode on Linux yet (#1040), so a plane with
   the sandbox on does not start opencode chats there.
 - **What opencode keeps for itself.** A wrapped opencode chat can also write what an opencode

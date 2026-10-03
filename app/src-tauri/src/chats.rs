@@ -115,6 +115,23 @@ pub type Starting = Box<dyn Fn(u32, Option<Harness>, Option<String>) + Send + Sy
 /// number, its id, the run's id and why it began (ADR 0066). What the event log is told.
 pub type Beginning = Box<dyn Fn(u32, RunOf<'_>, Began) + Send + Sync>;
 
+/// What a start decided about a chat's sandbox (ADR 0067 §7): the trust event to write, under
+/// the chat and the run the start is about to begin, BEFORE its program runs; or, once a new
+/// chat has started, how it counts towards this machine's opt-out rate (ruling V78 d). Each
+/// call carries one of the two.
+pub struct Sandboxing<'a> {
+    pub change: Option<&'a charter_core::sandbox::Change>,
+    /// The chat's id and the run it begins, for `change`.
+    pub run: Option<RunOf<'a>>,
+    pub counted: Option<charter_core::sandbox::local::Started>,
+    pub harness: Option<Harness>,
+    pub persona: Option<&'a str>,
+}
+
+/// Told of [`Sandboxing`]. An `Err` is that the trust event was not written: a person's opt-out
+/// is then not started, so no opt-out ever runs unaudited (ADR 0067 §7).
+pub type Trusting = Box<dyn Fn(Sandboxing<'_>) -> Result<(), String> + Send + Sync>;
+
 /// Why a chat is being started, which is what decides why its run begins (ADR 0066).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Why {
@@ -166,6 +183,11 @@ pub struct Chats {
     starting: Mutex<Option<Starting>>,
     /// Told of the run each start begins, before its program runs (ADR 0066).
     beginning: Mutex<Option<Beginning>>,
+    /// Told what each start decided about the chat's sandbox (ADR 0067 §7).
+    trusting: Mutex<Option<Trusting>>,
+    /// What a start found to say on a chat's tab after the core's start had spoken: that its
+    /// trust event could not be written. Taken by the window's start ([`Self::start_notes`]).
+    late_notes: Mutex<HashMap<u32, Vec<String>>>,
     /// This device's id, the origin device of every chat minted here; `None` where the machine
     /// store has none to give (ADR 0031), which a chat records as `unknown`.
     device: Option<String>,
@@ -215,6 +237,14 @@ pub struct Chats {
 /// The arguments and the environment that arm a chat's harness for that chat alone.
 type Armed = (Vec<String>, Vec<(String, String)>);
 
+/// A chat's sandbox, as a start decided it: compiled for its harness with the real program it
+/// then runs (ruling V87g), or lifted and why — never both, and neither where its project has
+/// not turned the sandbox on.
+type Decided = (
+    Option<(charter_core::sandbox::Applied, String)>,
+    Option<charter_core::sandbox::Lifted>,
+);
+
 impl Chats {
     /// Chats whose record is written by `record_it` every time what is open changes.
     ///
@@ -236,6 +266,8 @@ impl Chats {
             sessions: host,
             starting: Mutex::new(None),
             beginning: Mutex::new(None),
+            trusting: Mutex::new(None),
+            late_notes: Mutex::new(HashMap::new()),
             device: None,
             let_go: Mutex::new(HashMap::new()),
             never_started: Mutex::new(None),
@@ -267,6 +299,32 @@ impl Chats {
     /// begins: the chat's id, which a relaunch keeps, a new run's id, and why (ADR 0066).
     pub fn when_a_run_begins(&self, tell: Beginning) {
         *lock(&self.beginning) = Some(tell);
+    }
+
+    /// Calls `tell` with what each start decided about the chat's sandbox: its trust event as
+    /// its run begins, before its program runs, and how a new chat counts once it has started
+    /// (ADR 0067 §7, ruling V78).
+    pub fn when_the_sandbox_is_decided(&self, tell: Trusting) {
+        *lock(&self.trusting) = Some(tell);
+    }
+
+    /// Whether `session` is a shell tab at `root`: a chat on no profile running no harness,
+    /// in that directory. Where SD-30's install command may be typed (ruling V78 c), never an
+    /// agent's pane.
+    pub fn is_shell_at(&self, session: u32, root: &std::path::Path) -> bool {
+        let same = |a: &std::path::Path, b: &std::path::Path| {
+            a == b || matches!((a.canonicalize(), b.canonicalize()), (Ok(a), Ok(b)) if a == b)
+        };
+        lock(&self.open).get(&session).is_some_and(|one| {
+            one.chat.profile.is_none()
+                && one.harness.is_none()
+                && one.chat.cwd.as_deref().is_some_and(|cwd| same(cwd, root))
+        })
+    }
+
+    /// What chat `session`'s start found to say on its tab beyond the core's notices, once.
+    pub fn start_notes(&self, session: u32) -> Vec<String> {
+        lock(&self.late_notes).remove(&session).unwrap_or_default()
     }
 
     /// Says which device this is: the origin device of every chat minted from now on.
@@ -378,12 +436,12 @@ impl Chats {
     /// chat outside any plane, is the operator's own and is left as it was.
     /// With the sandbox, the program the chat then runs: the real file the check asked about
     /// (ruling V87g), never the name it was recorded by.
-    #[allow(clippy::type_complexity)]
-    fn sandbox_off_profile(
-        chat: &Chat,
-    ) -> Result<Option<(charter_core::sandbox::Applied, String)>, String> {
+    ///
+    /// No person picked it in the window, so there is no opt-out here; a system with no backend
+    /// (Windows) starts it unsandboxed, and says why, as it does a chat on a profile.
+    fn sandbox_off_profile(chat: &Chat) -> Result<Decided, String> {
         let Some(harness) = chat.harness() else {
-            return Ok(None);
+            return Ok((None, None));
         };
         // A `charter.toml` above the chat that is not a regular file is no plane to the walk
         // below, which would start the chat unsandboxed: it is refused instead.
@@ -399,18 +457,25 @@ impl Chats {
             .as_deref()
             .and_then(|cwd| charter_core::plane::find_root(cwd).ok())
         else {
-            return Ok(None);
+            return Ok((None, None));
         };
-        let applied = charter_core::sandbox::for_start(
+        let decided = charter_core::sandbox::decide(
             harness,
             &root,
             &charter_core::sandbox::Machine::this(),
             &charter_core::sandbox::backend::installed,
+            None,
         )
         .map_err(|refused| refused.to_string())?;
+        let (applied, lifted) = match decided {
+            Some(charter_core::sandbox::Decided::Sandboxed(applied)) => (Some(applied), None),
+            Some(charter_core::sandbox::Decided::Unsandboxed(lifted)) => (None, Some(lifted)),
+            None => (None, None),
+        };
         // Ruling V87g: the program is the harness the sandbox was compiled for, and not a file
         // a sandboxed chat could have changed. The real file it names is what the check asks;
-        // a chat whose program then runs by another name would not be the one checked.
+        // a chat whose program then runs by another name would not be the one checked. A chat
+        // that starts without the sandbox is bound to none.
         if let Some(applied) = &applied {
             let launch = chat.launch();
             let words = charter_core::programs::resolve_argv(std::slice::from_ref(&launch.program))
@@ -430,9 +495,9 @@ impl Chats {
                 None,
             )
             .map_err(|refused| refused.to_string())?;
-            return Ok(Some((applied.clone(), checked[0].clone())));
+            return Ok((Some((applied.clone(), checked[0].clone())), None));
         }
-        Ok(None)
+        Ok((None, lifted))
     }
 
     /// Starts a chat the core has already worked out the launch for — a chat on a profile.
@@ -498,6 +563,7 @@ impl Chats {
             ready.how.clone(),
             &ready.plugins,
             ready.sandbox.as_ref(),
+            ready.unsandboxed.as_ref(),
             size,
             // A chat on a profile is an agent, never the operator's shell.
             false,
@@ -541,6 +607,7 @@ impl Chats {
                 // carry it would silently blank a footer the operator had turned on.
                 show_footer: chat.show_footer,
                 resuming: None,
+                without_sandbox: None,
             },
             root,
         )?;
@@ -575,7 +642,7 @@ impl Chats {
         why: Why,
     ) -> Result<u32, String> {
         // Before anything is resolved or run, as for a chat on a profile.
-        let sandboxed = Self::sandbox_off_profile(chat)?;
+        let (sandboxed, unsandboxed) = Self::sandbox_off_profile(chat)?;
         let mut launch = chat.launch();
         let sandbox = sandboxed.map(|(applied, program)| {
             launch.program = program;
@@ -600,6 +667,7 @@ impl Chats {
             // with the pins alone.
             &std::collections::BTreeMap::new(),
             sandbox.as_ref(),
+            unsandboxed.as_ref(),
             size,
             operator_shell,
             why,
@@ -669,6 +737,7 @@ impl Chats {
         how: charter_core::reopen::Reopened,
         plugins: &charter_core::harness_plugin::Chosen,
         sandbox: Option<&charter_core::sandbox::Applied>,
+        unsandboxed: Option<&charter_core::sandbox::Lifted>,
         size: Size,
         operator_shell: bool,
         why: Why,
@@ -695,6 +764,57 @@ impl Chats {
             Why::Upgrade => Began::Reopen,
             Why::Again => Began::Fresh,
         };
+        // What this start means for the sandbox's audit and its count (ADR 0067 §7): off where
+        // it starts without the sandbox, back on where its last run did and this one does not,
+        // and one more new chat towards the opt-out rate.
+        let (trust, counted) = charter_core::sandbox::at_start(
+            unsandboxed,
+            sandbox.is_some(),
+            chat.unsandboxed,
+            why == Why::New,
+        );
+        // The trust event, written before anything runs. **An opt-out is never unaudited**
+        // (ADR 0067 §7): a person's is not started when it cannot be written. A system with no
+        // backend still starts — every chat there would otherwise be refused — and its tab
+        // says the record is missing.
+        let mut late = Vec::new();
+        if let Some(change) = &trust {
+            let written = match (
+                lock(&self.trusting).as_ref(),
+                identity.id.as_deref(),
+                identity.run.as_deref(),
+            ) {
+                (Some(trusting), Some(id), Some(run)) => trusting(Sandboxing {
+                    change: Some(change),
+                    run: Some(RunOf { chat: id, run }),
+                    counted: None,
+                    harness,
+                    persona: chat.persona.as_deref(),
+                }),
+                _ => Err("charter's event log is not open".to_owned()),
+            };
+            if let Err(why) = written {
+                use charter_core::sandbox::{By, Change, Lifted};
+                match change {
+                    Change::Off(Lifted { by: By::Person, .. }) => {
+                        return Err(format!(
+                            "charter could not record that this chat would run without the \
+                             sandbox ({why}), so it was not started. An opt-out is always \
+                             recorded; start it sandboxed, or try again once the event log is \
+                             back."
+                        ));
+                    }
+                    Change::Off(_) => late.push(format!(
+                        "charter could not record that this chat runs without the sandbox \
+                         ({why}), so the event log has no record of it."
+                    )),
+                    // Back on: the chat is sandboxed, and the record that it is can be missing.
+                    Change::On => tracing::warn!(
+                        "charter: a chat's sandbox came back on and was not recorded ({why})"
+                    ),
+                }
+            }
+        }
         // The profile's own command first — a wrapper reads its own words before it hands the
         // rest on (M8.3) — then the state hooks, then charter's own words: a chat's recorded
         // arguments may end in a positional prompt that nothing may come after.
@@ -807,9 +927,28 @@ impl Chats {
                 .as_deref()
                 .and_then(|id| charter_core::harness::SessionId::new(id).ok()),
             renamed_from: None,
+            // What this run started under, for the next run's audit and the session record —
+            // never read as an opt-out by any start.
+            unsandboxed: unsandboxed.is_some(),
             identity,
             ..chat.clone()
         };
+        // Counted once it has started, so a start that failed is not a chat. A count that
+        // could not be kept costs the rate one chat, never the chat.
+        if let (Some(counted), Some(trusting)) = (counted, lock(&self.trusting).as_ref())
+            && let Err(why) = trusting(Sandboxing {
+                change: None,
+                run: None,
+                counted: Some(counted),
+                harness,
+                persona: chat.persona.as_deref(),
+            })
+        {
+            tracing::warn!("charter: a chat was not counted for the sandbox ({why})");
+        }
+        if !late.is_empty() {
+            lock(&self.late_notes).insert(session, late);
+        }
         lock(&self.open).insert(
             session,
             Running {
@@ -2151,6 +2290,7 @@ mod tests {
             how: charter_core::reopen::Reopened::Fresh(Fresh::NoConversationRecorded),
             plugins: std::collections::BTreeMap::new(),
             sandbox: Some(sandbox),
+            unsandboxed: None,
             notices: Vec::new(),
         }
     }
@@ -2209,7 +2349,7 @@ mod tests {
         assert_eq!(
             refused,
             "charter cannot keep a Codex chat inside its sandbox yet (#1123), so in this \
-             project it starts only without the sandbox."
+             project a new one starts only without the sandbox, from the new-chat picker."
         );
         assert!(chats.in_order().is_empty(), "a chat was opened");
     }
@@ -3188,6 +3328,7 @@ mod tests {
             how: Reopened::Fresh(Fresh::NoConversationRecorded),
             plugins: std::collections::BTreeMap::new(),
             sandbox: None,
+            unsandboxed: None,
             notices: Vec::new(),
         }
     }
@@ -3688,6 +3829,7 @@ mod tests {
             ),
             plugins: std::collections::BTreeMap::new(),
             sandbox: None,
+            unsandboxed: None,
             notices: Vec::new(),
         };
 
@@ -3761,6 +3903,7 @@ mod tests {
             ),
             plugins: std::collections::BTreeMap::new(),
             sandbox: None,
+            unsandboxed: None,
             notices: Vec::new(),
         };
 
@@ -3840,6 +3983,7 @@ mod tests {
                 resume: None,
                 show_footer: false,
                 resuming: None,
+                without_sandbox: None,
             },
             &root,
         )
@@ -4083,5 +4227,265 @@ mod tests {
 
         assert_eq!(host.running(), Vec::<u32>::new());
         assert!(chats.open_now().is_empty());
+    }
+
+    // ----- the sandbox's audit and count (ADR 0067 §7, ruling V78) -----
+
+    /// What each start told `when_the_sandbox_is_decided`, and when each run began, in one
+    /// list in the order they were said.
+    type Said = std::sync::Arc<Mutex<Vec<String>>>;
+
+    fn saying(chats: &mut Chats) -> Said {
+        saying_or(chats, None)
+    }
+
+    /// [`saying`], with every trust event refused for `refused` when one is given: what the
+    /// app's callback answers when the event log cannot take it.
+    fn saying_or(chats: &mut Chats, refused: Option<&'static str>) -> Said {
+        let said: Said = std::sync::Arc::default();
+        let runs = std::sync::Arc::clone(&said);
+        chats.when_a_run_begins(Box::new(move |session, _, cause| {
+            lock(&runs).push(format!("{session} run {}", cause.word()));
+        }));
+        let decided = std::sync::Arc::clone(&said);
+        chats.when_the_sandbox_is_decided(Box::new(move |it| {
+            let what = match (it.change, it.counted) {
+                (Some(change), _) => {
+                    if let Some(why) = refused {
+                        return Err(why.to_owned());
+                    }
+                    assert!(it.run.is_some(), "a trust event names the run it is under");
+                    change.kind().to_owned()
+                }
+                (None, Some(counted)) => format!("counted {counted:?}"),
+                (None, None) => "nothing".to_owned(),
+            };
+            lock(&decided).push(format!(
+                "{what} {} {}",
+                it.harness.map_or("-", Harness::name),
+                it.persona.unwrap_or("-")
+            ));
+            Ok(())
+        }));
+        said
+    }
+
+    fn a_person_lifted_it() -> charter_core::sandbox::Lifted {
+        charter_core::sandbox::Lifted {
+            by: charter_core::sandbox::By::Person,
+            reason: Some("needs the network".to_owned()),
+        }
+    }
+
+    #[test]
+    fn a_chat_started_without_the_sandbox_is_audited_off_as_its_run_begins_and_counted_once_up() {
+        let mut chats = Chats::new();
+        let said = saying(&mut chats);
+        let ready = charter_core::start::Ready {
+            harness: Some(Harness::ClaudeCode),
+            unsandboxed: Some(a_person_lifted_it()),
+            ..a_shell_ready()
+        };
+        let chat = Chat {
+            persona: Some("steward".to_owned()),
+            ..chat("/bin/sh", "c", None)
+        };
+
+        let session = chats.start_ready(&chat, &ready, SIZE).expect("starts");
+
+        assert_eq!(
+            *lock(&said),
+            [
+                "trust.sandbox.off claude steward".to_owned(),
+                format!("{session} run start"),
+                "counted OptedOut claude steward".to_owned(),
+            ],
+            "the record is written before the chat's program runs"
+        );
+        assert!(
+            chats.record().chats[0].unsandboxed,
+            "the record says what the run ran under"
+        );
+        let _ = chats.close(session);
+    }
+
+    #[test]
+    fn a_chat_whose_last_run_was_unsandboxed_is_audited_back_on_when_it_starts_sandboxed() {
+        let plane = a_sandboxed_plane();
+        let mut chats = Chats::on_host(Box::new(|_| {}), Box::new(Pretend::default()));
+        chats.arming_with(crate::Shipped {
+            binary: Some(plane.path().join("charter")),
+            plugin: Some(plane.path().join("plugin")),
+            shims: None,
+            git_hooks: None,
+        });
+        let said = saying(&mut chats);
+        let ready = ready_under(Harness::ClaudeCode, a_claude_sandbox(plane.path()));
+        let chat = Chat {
+            unsandboxed: true,
+            cwd: Some(plane.path().to_path_buf()),
+            ..chat("/bin/sh", "c", None)
+        };
+
+        let session = chats
+            .start_ready_as(&chat, &ready, SIZE, Why::Relaunch)
+            .expect("starts");
+
+        assert_eq!(
+            *lock(&said),
+            [
+                "trust.sandbox.on claude -".to_owned(),
+                format!("{session} run fresh"),
+            ],
+            "a relaunch is never counted as a new chat"
+        );
+        assert!(!chats.record().chats[0].unsandboxed);
+    }
+
+    #[test]
+    fn a_new_sandboxed_chat_is_counted_and_has_nothing_to_audit() {
+        let plane = a_sandboxed_plane();
+        let mut chats = Chats::on_host(Box::new(|_| {}), Box::new(Pretend::default()));
+        chats.arming_with(crate::Shipped {
+            binary: Some(plane.path().join("charter")),
+            plugin: Some(plane.path().join("plugin")),
+            shims: None,
+            git_hooks: None,
+        });
+        let said = saying(&mut chats);
+        let ready = ready_under(Harness::ClaudeCode, a_claude_sandbox(plane.path()));
+
+        let chat = Chat {
+            cwd: Some(plane.path().to_path_buf()),
+            ..chat("/bin/sh", "c", None)
+        };
+
+        let session = chats.start_ready(&chat, &ready, SIZE).expect("starts");
+
+        assert_eq!(
+            *lock(&said),
+            [
+                format!("{session} run start"),
+                "counted Sandboxed claude -".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_shell_says_nothing_about_a_sandbox() {
+        let mut chats = Chats::new();
+        let said = saying(&mut chats);
+
+        let session = chats.start(&chat("/bin/sh", "shell", None), SIZE).unwrap();
+
+        assert_eq!(*lock(&said), [format!("{session} run start")]);
+        let _ = chats.close(session);
+    }
+
+    /// ADR 0067 §7: an opt-out is never unaudited. A person's is refused, and nothing runs,
+    /// when its trust event cannot be written.
+    #[test]
+    fn a_persons_opt_out_that_cannot_be_recorded_is_not_started() {
+        let host = Pretend::default();
+        let mut chats = Chats::on_host(Box::new(|_| {}), Box::new(host.clone()));
+        let said = saying_or(&mut chats, Some("the disk is full"));
+        let ready = charter_core::start::Ready {
+            harness: Some(Harness::ClaudeCode),
+            unsandboxed: Some(a_person_lifted_it()),
+            ..a_shell_ready()
+        };
+
+        let refused = chats
+            .start_ready(&chat("/bin/sh", "c", None), &ready, SIZE)
+            .expect_err("not started");
+
+        assert!(refused.contains("could not record"), "{refused}");
+        assert!(refused.contains("the disk is full"), "{refused}");
+        assert!(host.asked().is_empty(), "something ran");
+        assert!(lock(&said).is_empty(), "{:?}", lock(&said));
+        assert!(chats.record().chats.is_empty());
+    }
+
+    #[test]
+    fn a_persons_opt_out_with_no_event_log_at_all_is_not_started() {
+        let host = Pretend::default();
+        let chats = Chats::on_host(Box::new(|_| {}), Box::new(host.clone()));
+        let ready = charter_core::start::Ready {
+            harness: Some(Harness::ClaudeCode),
+            unsandboxed: Some(a_person_lifted_it()),
+            ..a_shell_ready()
+        };
+
+        let refused = chats
+            .start_ready(&chat("/bin/sh", "c", None), &ready, SIZE)
+            .expect_err("not started");
+
+        assert!(refused.contains("event log is not open"), "{refused}");
+        assert!(host.asked().is_empty(), "something ran");
+    }
+
+    /// A system with no backend starts every chat without the sandbox, so a missing record
+    /// cannot refuse them all: the chat starts, and its tab says the record is missing.
+    #[test]
+    fn a_windows_start_that_cannot_be_recorded_still_starts_and_its_tab_says_so() {
+        let host = Pretend::default();
+        let mut chats = Chats::on_host(Box::new(|_| {}), Box::new(host.clone()));
+        let _said = saying_or(&mut chats, Some("the disk is full"));
+        let ready = charter_core::start::Ready {
+            harness: Some(Harness::ClaudeCode),
+            unsandboxed: Some(charter_core::sandbox::Lifted {
+                by: charter_core::sandbox::By::NoBackend(charter_core::sandbox::Os::Windows),
+                reason: None,
+            }),
+            ..a_shell_ready()
+        };
+
+        let session = chats
+            .start_ready(&chat("/bin/sh", "c", None), &ready, SIZE)
+            .expect("starts");
+
+        let notes = chats.start_notes(session);
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(notes[0].contains("could not record"), "{notes:?}");
+        assert!(notes[0].contains("the disk is full"), "{notes:?}");
+        assert!(chats.start_notes(session).is_empty(), "said once");
+    }
+
+    #[test]
+    fn only_a_shell_tab_at_the_project_root_is_a_place_to_type_an_install_command() {
+        let root = tempfile::tempdir().expect("a project");
+        let elsewhere = tempfile::tempdir().expect("elsewhere");
+        let chats = Chats::on_host(Box::new(|_| {}), Box::new(Pretend::default()));
+        let shell_at = |cwd: &std::path::Path| {
+            chats
+                .start(
+                    &Chat {
+                        cwd: Some(cwd.to_path_buf()),
+                        ..chat("/bin/sh", "shell", None)
+                    },
+                    SIZE,
+                )
+                .expect("starts")
+        };
+        let here = shell_at(root.path());
+        let there = shell_at(elsewhere.path());
+        let agent = chats
+            .start_ready(
+                &Chat {
+                    cwd: Some(root.path().to_path_buf()),
+                    ..chat("/bin/sh", "c", None)
+                },
+                &charter_core::start::Ready {
+                    harness: Some(Harness::ClaudeCode),
+                    ..a_shell_ready()
+                },
+                SIZE,
+            )
+            .expect("starts");
+
+        assert!(chats.is_shell_at(here, root.path()));
+        assert!(!chats.is_shell_at(there, root.path()), "another directory");
+        assert!(!chats.is_shell_at(agent, root.path()), "an agent's pane");
+        assert!(!chats.is_shell_at(9999, root.path()), "no such session");
     }
 }

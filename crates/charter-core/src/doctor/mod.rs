@@ -38,6 +38,7 @@ mod plugin;
 mod profiles;
 mod remote;
 mod rules;
+mod sandbox;
 pub(crate) mod session;
 mod work;
 
@@ -400,6 +401,7 @@ impl Doctor {
         rows.push(deferred::row("vaults", deferred::VAULTS));
         rows.push(deferred::row("vault registry", deferred::VAULTS));
         rows.push(config::version_lock(self));
+        rows.extend(sandbox::sandbox(self));
         rows.push(memory::memory_indexes(self));
         rows.push(personas::personas(self));
         rows.push(personas::persona_grant(self));

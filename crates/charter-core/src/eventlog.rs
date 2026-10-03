@@ -1344,6 +1344,28 @@ impl Recorder {
             .append(Some(&who.chat), Some(&who.run), None, COMMIT_REFUSED, body)
     }
 
+    /// The trust event for a change to a chat's sandbox: `trust.sandbox.off` or
+    /// `trust.sandbox.on` (ADR 0067 §7), under the chat and the run the host is about to begin
+    /// for it ([`RunOf`]), with the chat's `harness` and `persona`. Written **before** the
+    /// chat's program runs, so an unsandboxed chat is never running unrecorded; an error is
+    /// the host's to act on (a person's opt-out is then not started). Written here until the
+    /// audit exists, which is written from this log (ADR 0075, amending ADR 0067 §7).
+    pub fn trust(
+        &mut self,
+        RunOf { chat, run }: RunOf<'_>,
+        change: &crate::sandbox::Change,
+        harness: Option<crate::harness::Harness>,
+        persona: Option<&str>,
+    ) -> io::Result<Event> {
+        self.log.append(
+            Some(chat),
+            Some(run),
+            None,
+            change.kind(),
+            change.body(harness, persona),
+        )
+    }
+
     /// What makes this recorder's events durable: [`Durable::through`] after each write.
     pub fn durable(&self) -> std::sync::Arc<Durable> {
         self.log.durable()

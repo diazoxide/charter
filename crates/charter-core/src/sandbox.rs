@@ -62,6 +62,20 @@ pub struct Policy {
     pub egress: Vec<Preset>,
 }
 
+/// The `[sandbox]` block that turns the sandbox on with the default egress, as charter writes it
+/// into a new project's `charter.toml` and into an existing one whose operator took the offer
+/// (ADR 0067 §1, ruling V21 1 and 5). It ends with a newline.
+pub fn on_block() -> String {
+    let egress: Vec<String> = Preset::DEFAULT
+        .iter()
+        .map(|preset| format!("\"{}\"", preset.word()))
+        .collect();
+    format!(
+        "[{TABLE}]\nmode = \"on\"\negress = [{}]\n",
+        egress.join(", ")
+    )
+}
+
 /// A plane's `charter.toml`, read and parsed once for everything the sandbox asks of it: the
 /// policy, the refusals and the forge hosts.
 #[derive(Debug, Clone, Default)]
@@ -1163,7 +1177,7 @@ impl fmt::Display for NotStarted {
             Self::HeldBack(harness, issue) => write!(
                 f,
                 "charter cannot keep {} {} chat inside its sandbox yet (#{issue}), so in this \
-                 project it starts only without the sandbox.",
+                 project a new one starts only without the sandbox, from the new-chat picker.",
                 article(harness.title()),
                 harness.title()
             ),
@@ -1275,10 +1289,287 @@ pub(crate) fn compiled_anyway(
     })
 }
 
+/// A person's choice, in the window, to start one chat without the sandbox (ADR 0067 §7,
+/// ruling V78 a): the new-chat picker's "Start without the sandbox".
+///
+/// **Only the window makes one** — the app's start command, on the human `local-ui` scope.
+/// No CLI word, no file, no profile and no chat can: [`crate::start::Start::without_sandbox`]
+/// is `None` everywhere else, and nothing is recorded that a later start reads as one, so it is
+/// never inherited by a new chat, a resumed chat, a relaunch, a workspace or the project.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OptOut {
+    /// What the person typed as the reason, if anything: an operator note for the audit.
+    pub reason: Option<String>,
+}
+
+impl OptOut {
+    /// The longest reason kept, in characters.
+    pub const MOST_REASON_CHARS: usize = 200;
+
+    /// The reason as the audit keeps it: one line, its whitespace runs made one space, clipped
+    /// to [`Self::MOST_REASON_CHARS`] with its ellipsis, and none when it is blank.
+    fn kept_reason(&self) -> Option<String> {
+        let words: Vec<&str> = self.reason.as_deref()?.split_whitespace().collect();
+        (!words.is_empty())
+            .then(|| crate::shown::one_line(&words.join(" "), Self::MOST_REASON_CHARS - 1))
+    }
+}
+
+/// Who started a chat in a sandboxed project without the sandbox.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum By {
+    /// A person, in the window, for this chat ([`OptOut`]).
+    Person,
+    /// Charter itself, because this operating system has no sandbox backend yet (Windows,
+    /// M46, #565; ruling V21 3). The audit names charter as the actor, never the operator (ruling V78 b).
+    NoBackend(Os),
+}
+
+/// A chat in a sandboxed project that starts without the sandbox: who chose it and why — what
+/// its `trust.sandbox.off` event records ([`crate::eventlog::Recorder::trust`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Lifted {
+    pub by: By,
+    /// The person's reason, one line, where one was typed.
+    pub reason: Option<String>,
+}
+
+impl Lifted {
+    /// What is lifted: every class (ADR 0067 §5). An unsandboxed chat holds none of them.
+    pub const CLASSES: [Class; 5] = Class::ALL;
+
+    /// What the chat's tab says as it starts, so the opt-out is visible for its whole life.
+    pub fn notice(&self) -> String {
+        match self.by {
+            By::Person => "This chat runs without the sandbox: you turned it off for this chat \
+                           only. A new or resumed chat does not inherit it."
+                .to_owned(),
+            // The Windows backend is M46, #565.
+            By::NoBackend(os) => format!(
+                "This chat runs without the sandbox: charter has no sandbox backend on {} yet, \
+                 so every chat here starts without it until one exists.",
+                match os {
+                    Os::Windows => "Windows",
+                    Os::MacOs | Os::Linux | Os::Other => "this system",
+                }
+            ),
+        }
+    }
+}
+
+/// A change to one chat's sandbox, as its trust event records it (ADR 0067 §7; ADR 0075 §4's
+/// `trust.sandbox.off` and `trust.sandbox.on`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Change {
+    /// The chat starts without the sandbox.
+    Off(Lifted),
+    /// A chat whose last run was unsandboxed starts this run sandboxed: an opt-out lasts one
+    /// run and is never inherited, so it is charter that puts it back on.
+    On,
+}
+
+impl Change {
+    /// The event's kind.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Off(_) => "trust.sandbox.off",
+            Self::On => "trust.sandbox.on",
+        }
+    }
+
+    /// The event's body: who, the chat's harness and persona, and the classes lifted or put
+    /// back. Which chat, which run, when and on which machine are the envelope's (ADR 0066).
+    ///
+    /// **The person is named by their scope, never by a login** (ADR 0075 §3): the actor is
+    /// `operator` on `local-ui`, and the audit's pseudonym replaces it when AU-18 lands.
+    pub fn body(&self, harness: Option<Harness>, persona: Option<&str>) -> serde_json::Value {
+        let classes: Vec<&str> = Lifted::CLASSES.iter().map(|class| class.word()).collect();
+        let harness = harness.map(Harness::name);
+        match self {
+            Self::Off(Lifted {
+                by: By::Person,
+                reason,
+            }) => serde_json::json!({
+                "actor_kind": "human",
+                "actor": "operator",
+                "scope": "local-ui",
+                "harness": harness,
+                "persona": persona,
+                "reason": reason,
+                "lifted": classes,
+            }),
+            Self::Off(Lifted {
+                by: By::NoBackend(os),
+                reason,
+            }) => serde_json::json!({
+                "actor_kind": "host",
+                "actor": "charter (no backend on this OS)",
+                "os": match os {
+                    Os::Windows => "windows",
+                    Os::MacOs => "macos",
+                    Os::Linux => "linux",
+                    Os::Other => "other",
+                },
+                "harness": harness,
+                "persona": persona,
+                "reason": reason,
+                "lifted": classes,
+            }),
+            Self::On => serde_json::json!({
+                "actor_kind": "host",
+                "actor": "charter",
+                "harness": harness,
+                "persona": persona,
+                "restored": classes,
+            }),
+        }
+    }
+}
+
+/// What a chat in a sandboxed project starts under.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Decided {
+    /// The sandbox, compiled for its harness.
+    Sandboxed(Applied),
+    /// No sandbox, and why ([`Lifted`]): audited as `trust.sandbox.off`.
+    Unsandboxed(Lifted),
+}
+
+/// What a chat of `harness` in the project at `root` starts under on `machine`, where `opt_out`
+/// is a person's choice to start it without the sandbox: `None` where the project has not
+/// turned the sandbox on (there is nothing to lift, so nothing to audit), else sandboxed or
+/// unsandboxed — or why the chat does not start.
+///
+/// **Fail closed, with two exits that are each audited** (ADR 0067 §1 and §7):
+/// - a person's opt-out, which starts the chat without the sandbox even where it could not be
+///   applied — the opt-out inside the refusal;
+/// - Windows, where no backend exists yet and every chat starts at the opt-out with charter as
+///   the actor (ruling V21 3). Any other system with no backend still refuses.
+pub fn decide(
+    harness: Harness,
+    root: &Path,
+    machine: &Machine,
+    has: &dyn Fn(&str) -> bool,
+    opt_out: Option<&OptOut>,
+) -> Result<Option<Decided>, NotStarted> {
+    // A file that cannot be read may say `[sandbox]`, so it never reads as "not set": it falls
+    // through to the refusal below, which the opt-out sits inside.
+    let plane = Plane::read(root);
+    if !plane.unreadable() && plane.said().policy.is_none() {
+        return Ok(None);
+    }
+    if let Some(opt_out) = opt_out {
+        return Ok(Some(Decided::Unsandboxed(Lifted {
+            by: By::Person,
+            reason: opt_out.kept_reason(),
+        })));
+    }
+    if machine.os == Os::Windows {
+        return Ok(Some(Decided::Unsandboxed(Lifted {
+            by: By::NoBackend(Os::Windows),
+            reason: None,
+        })));
+    }
+    for_start(harness, root, machine, has).map(|applied| applied.map(Decided::Sandboxed))
+}
+
+/// What the new-chat picker says about the sandbox for a chat of one harness, before anything
+/// starts (ruling V78 a): the reason is on screen beside "Start without the sandbox".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Ahead {
+    /// The project has not turned the sandbox on: the picker says nothing.
+    Off,
+    /// The chat starts sandboxed, unless the person opts out.
+    Sandboxed,
+    /// The chat starts without the sandbox whatever is picked (Windows), and why.
+    Unsandboxed(Lifted),
+    /// The sandbox cannot be applied, so the chat starts only without it: the refusal, and
+    /// SD-30's install command where installing something would fix it (ruling V78 c).
+    Refused {
+        why: String,
+        install: Option<String>,
+    },
+}
+
+/// [`Ahead`] for a chat of `harness` in the project at `root` on `machine`, with `has` saying
+/// what is installed and `os_release` the text of `/etc/os-release` (empty off Linux).
+///
+/// Every refusal the start would give is shown here first, beside "Start without the sandbox":
+/// a harness charter holds back (Codex, ruling V87f), and — where the chat would be sandboxed —
+/// what `check` says of the program under the sandbox compiled for it (ruling V87g): the start's
+/// own [`program::checked`], asked by [`crate::start::sandbox_ahead`] with the start's words,
+/// folder and environment. A profile nobody approved is never run, so its caller passes a
+/// `check` that asks nothing.
+pub fn ahead(
+    harness: Harness,
+    root: &Path,
+    machine: &Machine,
+    has: &dyn Fn(&str) -> bool,
+    os_release: &str,
+    check: &dyn Fn(&Applied) -> Result<(), NotStarted>,
+) -> Ahead {
+    let refused = |refused: NotStarted| Ahead::Refused {
+        why: refused.to_string(),
+        install: match &refused {
+            NotStarted::NoBackend(missing) => backend::install_command(missing, os_release),
+            NotStarted::NoCompiler(_)
+            | NotStarted::HeldBack(..)
+            | NotStarted::ProgramWritable(_)
+            | NotStarted::ProgramRelative
+            | NotStarted::WordWritable(_)
+            | NotStarted::WordTooLong
+            | NotStarted::NotTheHarness(_)
+            | NotStarted::Uncompilable(_)
+            | NotStarted::PlaneUnreadable => None,
+        },
+    };
+    match decide(harness, root, machine, has, None) {
+        Ok(None) => Ahead::Off,
+        Ok(Some(Decided::Sandboxed(applied))) => match check(&applied) {
+            Ok(()) => Ahead::Sandboxed,
+            Err(not) => refused(not),
+        },
+        Ok(Some(Decided::Unsandboxed(lifted))) => Ahead::Unsandboxed(lifted),
+        Err(not) => refused(not),
+    }
+}
+
+/// What one start of a chat means for the sandbox's audit and its count: the trust event to
+/// write, if any, and how to count the chat, if it is new.
+///
+/// - `lifted`: it starts without the sandbox in a project that has it on — `trust.sandbox.off`.
+/// - `sandboxed`: it starts under the sandbox; where its last run was unsandboxed
+///   (`was_unsandboxed`), the sandbox is back on — `trust.sandbox.on`.
+/// - `new_chat`: a chat that was not open before, counted once towards the opt-out rate. A
+///   relaunch or a start in a chat's place is another run of the same chat, never counted.
+pub fn at_start(
+    lifted: Option<&Lifted>,
+    sandboxed: bool,
+    was_unsandboxed: bool,
+    new_chat: bool,
+) -> (Option<Change>, Option<local::Started>) {
+    let counted = |started| new_chat.then_some(started);
+    match lifted {
+        Some(lifted) => (
+            Some(Change::Off(lifted.clone())),
+            counted(match lifted.by {
+                By::Person => local::Started::OptedOut,
+                By::NoBackend(_) => local::Started::NoBackend,
+            }),
+        ),
+        None if sandboxed => (
+            was_unsandboxed.then_some(Change::On),
+            counted(local::Started::Sandboxed),
+        ),
+        None => (None, None),
+    }
+}
+
 pub mod backend;
 pub mod claude;
 pub mod codex;
 pub mod egress;
+pub mod local;
 pub mod opencode;
 pub mod planted;
 pub mod program;

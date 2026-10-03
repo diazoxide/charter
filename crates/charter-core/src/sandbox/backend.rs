@@ -73,6 +73,62 @@ pub fn missing(os: Os, has: &dyn Fn(&str) -> bool) -> Option<Missing> {
     (!absent.is_empty()).then_some(Missing::Programs { os, absent })
 }
 
+/// SD-30's install action: the command that installs what `missing` names with the package
+/// manager of the distribution `os_release` (the text of `/etc/os-release`) says this is, or
+/// `None` where there is nothing to install or charter does not know the distribution.
+///
+/// **Typed, never run** (ruling V78 c). Installing needs `sudo`, so the app types this into a
+/// shell tab at the project root and the person presses Return, unlike FR-29's installers
+/// (V65). It is built here from charter's own table and the programs found missing, so no text
+/// from a project, a plane or the window reaches the shell.
+pub fn install_command(missing: &Missing, os_release: &str) -> Option<String> {
+    let Missing::Programs {
+        os: Os::Linux,
+        absent,
+    } = missing
+    else {
+        return None;
+    };
+    let field = |key: &str| -> Vec<String> {
+        os_release
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix(key)?.strip_prefix('='))
+            .flat_map(|value| {
+                value
+                    .trim()
+                    .trim_matches(['"', '\''])
+                    .split_whitespace()
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    };
+    let mut names = field("ID");
+    names.extend(field("ID_LIKE"));
+    // The distribution itself first, then what it is like.
+    const MANAGERS: [(&[&str], &str); 5] = [
+        (&["debian", "ubuntu"], "sudo apt install"),
+        (&["fedora", "rhel", "centos"], "sudo dnf install"),
+        (&["arch"], "sudo pacman -S"),
+        (&["opensuse", "suse"], "sudo zypper install"),
+        (&["alpine"], "sudo apk add"),
+    ];
+    let manager = names.iter().find_map(|name| {
+        MANAGERS
+            .iter()
+            .find(|(ids, _)| {
+                ids.iter()
+                    .any(|id| name == id || name.starts_with(&format!("{id}-")))
+            })
+            .map(|(_, manager)| *manager)
+    })?;
+    let packages: Vec<&str> = absent
+        .iter()
+        .map(|it| if *it == "bwrap" { "bubblewrap" } else { it })
+        .collect();
+    Some(format!("{manager} {}", packages.join(" ")))
+}
+
 /// Whether `program` is installed on this machine, as [`missing`] asks it.
 pub fn installed(program: &str) -> bool {
     if program == "sandbox-exec" {
