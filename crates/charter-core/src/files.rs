@@ -25,6 +25,13 @@ use std::path::{Component, Path, PathBuf};
 use crate::worktree::{self, git};
 use crate::youreditor::{self, Editor, Launch, NotLaunched};
 
+// What a branch changed (FM-4): its own file, so the calls other tickets add here stay apart.
+mod status;
+pub use status::{Change, MARKED, Mark, Rolled, Status, status};
+// Where to listen for those changes (FM-4).
+mod watch;
+pub use watch::{KNOWN, Root, root};
+
 /// The largest file the light editor draws, in bytes: 5 MiB.
 ///
 /// A file past it is answered with its size, and the window offers your editor instead (ADR

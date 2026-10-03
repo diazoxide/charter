@@ -19,6 +19,7 @@ macro_rules! tauri_context {
 mod about;
 mod alerts;
 mod autosave;
+mod branchwatch;
 mod changes;
 mod chats;
 mod clipath;
@@ -1645,6 +1646,8 @@ fn commands() -> Builder<tauri::Wry> {
         .typ::<planewatch::PlaneChanged>()
         // What `files-changed` carries (FM-1).
         .typ::<filewatch::FilesChanged>()
+        // What `branch-changed` carries (FM-4).
+        .typ::<branchwatch::BranchChanged>()
         // What `extension-heard` carries (charter-app#343).
         .typ::<heard::ExtensionHeard>()
         // What `harness-by-hand` carries (ADR 0062).
@@ -1880,6 +1883,10 @@ pub fn run() {
                     if let Some(watch) = window.try_state::<filewatch::FileWatch>() {
                         watch.forget(window.label());
                     }
+                    // Nor the branches whose changes it shows (FM-4).
+                    if let Some(watch) = window.try_state::<branchwatch::BranchWatch>() {
+                        watch.forget(window.label());
+                    }
                     windows::destroyed(window);
                 }
                 _ => {}
@@ -1950,6 +1957,18 @@ pub fn run() {
                         window,
                         filewatch::CHANGED,
                         filewatch::FilesChanged { folders },
+                    );
+                })
+            }));
+            // The branches each window shows the changes of, listened to whole so an agent's
+            // first write anywhere in one moves its markers (FM-4).
+            app.manage(branchwatch::BranchWatch::new({
+                let app = app.handle().clone();
+                std::sync::Arc::new(move |window: &str, branches| {
+                    let _ = app.emit_to(
+                        window,
+                        branchwatch::CHANGED,
+                        branchwatch::BranchChanged { branches },
                     );
                 })
             }));

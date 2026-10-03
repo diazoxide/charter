@@ -1,5 +1,5 @@
 import { LiveMark } from "./LiveDialog";
-import { useState, type KeyboardEvent, type ReactNode } from "react";
+import { useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
 import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
 import {
   ChevronRight,
@@ -12,6 +12,7 @@ import {
   FolderOpen,
   Folders,
   FolderX,
+  ListFilter,
   GitBranch,
   LoaderCircle,
   SquareTerminal,
@@ -24,6 +25,15 @@ import {
   type BranchFolderRef,
   type FolderRead,
 } from "./branchFolders";
+import {
+  branchKey,
+  indexed,
+  useBranchStatus,
+  type BranchRef,
+  type Indexed,
+  type Marked,
+  type StatusRead,
+} from "./branchStatus";
 import type { Place } from "./pieceViews";
 import { WRAPPING_UP, WrappingUp } from "./NeedsYou";
 import { Menued } from "./Menus";
@@ -123,6 +133,14 @@ const NONE_WRAPPING: ReadonlySet<number> = new Set();
  * link out of the branch, git's own folder, a FIFO — is drawn with the reason. The *Files* row
  * is a child of the branch rather than the branch row folding itself, because a click on a
  * branch picks where the next chat starts and the chats working in it stay drawn under it.
+ *
+ * **What a branch changed is marked on it** (FM-4, #1107): each file it changed, added,
+ * deleted or renamed against the branch it was cut from, committed or not, and each folder
+ * holding such a file with how many, read again as agents write (`branchStatus.ts`). A file
+ * the branch deleted is drawn where it was, and does not open. *Changed only* collapses every
+ * open branch's files to what it changed, every folder of it open. The *Filter files* box
+ * narrows the file rows drawn to names holding what is typed, keeping the folders on the way to
+ * one; Esc clears it.
  */
 export function Explorer({
   plane,
@@ -166,9 +184,38 @@ export function Explorer({
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   /** Whether what git ignores is drawn, dimmed. */
   const [showIgnored, setShowIgnored] = useState(false);
+  /** Whether a branch's files are collapsed to what it changed (FM-4). */
+  const [changedOnly, setChangedOnly] = useState(false);
+  /** What the file rows are narrowed to: names holding it, any case. */
+  const [filter, setFilter] = useState("");
   const open = openFolders(workspace, state, expanded);
+  const branches: BranchRef[] = open
+    .filter((ref) => ref.folder === "")
+    .map(({ repo, piece }) => ({ repo, piece }));
+  const statuses = useBranchStatus(plane, workspace, branches);
+  // Indexed once per answer, not per folder per keystroke: a branch of 10,000 changes is walked
+  // when its status arrives, and each folder after that is one lookup.
+  const indexes = useMemo(
+    () =>
+      new Map(
+        [...statuses].flatMap(([key, read]) =>
+          read.status === undefined ? [] : [[key, indexed(read.status)] as const],
+        ),
+      ),
+    [statuses],
+  );
   const reads = useBranchFolders(plane, workspace, open);
-  const files: FilesOf = { expanded, reads, showIgnored };
+  const files: FilesOf = {
+    workspace: workspace ?? "",
+    expanded,
+    reads,
+    showIgnored,
+    statuses,
+    indexes,
+    changedOnly,
+    filter: filter.trim().toLocaleLowerCase(),
+    levels: new Map(),
+  };
   const tree = treeOf(workspace, state, chats, folded, files);
   const drawn = tree.filter((row) => row.drawn);
   const picked =
@@ -267,6 +314,28 @@ export function Explorer({
     <RovingFocusGroup.Root asChild orientation="vertical" {...stop}>
       <nav className="explorer" aria-label="Explorer" data-testid="explorer">
         {state.trouble && <Trouble>{state.trouble}</Trouble>}
+
+        {open.length > 0 && (
+          // Only while some branch's files are open: it narrows the file rows and nothing else.
+          <div className="files-filter">
+            <ListFilter className="node-icon" />
+            <input
+              type="search"
+              value={filter}
+              aria-label="Filter files"
+              placeholder="Filter files"
+              onChange={(event) => setFilter(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key !== "Escape" || filter === "") return;
+                // Taken here: an Esc that cleared the box has done its job, and nothing behind
+                // the explorer should act on it too.
+                event.preventDefault();
+                event.stopPropagation();
+                setFilter("");
+              }}
+            />
+          </div>
+        )}
 
         {/* The tree is the rows and what holds them. The sentences about the whole region — the
           trouble above, the pending and empty notes and what charter would not read below —
@@ -481,15 +550,25 @@ export function Explorer({
         ))}
 
         {open.length > 0 && (
-          // Only while some branch's files are open: with none, there is nothing it changes.
-          <button
-            type="button"
-            className="ignored-toggle"
-            aria-pressed={showIgnored}
-            onClick={() => setShowIgnored((was) => !was)}
-          >
-            Show ignored files
-          </button>
+          // Only while some branch's files are open: with none, there is nothing they change.
+          <div className="files-toggles">
+            <button
+              type="button"
+              className="changed-toggle"
+              aria-pressed={changedOnly}
+              onClick={() => setChangedOnly((was) => !was)}
+            >
+              Changed only
+            </button>
+            <button
+              type="button"
+              className="ignored-toggle"
+              aria-pressed={showIgnored}
+              onClick={() => setShowIgnored((was) => !was)}
+            >
+              Show ignored files
+            </button>
+          </div>
         )}
       </nav>
     </RovingFocusGroup.Root>
@@ -624,10 +703,145 @@ function ChatList({
 /** What the tree knows about branches' folders: which are open, what each holds, and whether
  *  what git ignores is drawn. */
 type FilesOf = {
+  workspace: string;
   expanded: ReadonlySet<string>;
   reads: ReadonlyMap<string, FolderRead>;
   showIgnored: boolean;
+  /** What each open branch changed, by {@link branchKey}. */
+  statuses: ReadonlyMap<string, StatusRead>;
+  /** The same, indexed by path and by folder, by {@link branchKey}. */
+  indexes: ReadonlyMap<string, Indexed>;
+  /** Whether each branch's files are collapsed to what it changed. */
+  changedOnly: boolean;
+  /** What the file rows are narrowed to, lower-cased; `""` narrows nothing. */
+  filter: string;
+  /** Each folder's {@link levelOf}, worked out once per render. */
+  levels: Map<string, Level>;
 };
+
+/** One row under a folder of a branch, as both the render and {@link treeOf} walk it. */
+type Child = {
+  name: string;
+  kind: FolderEntry["kind"];
+  ignored: boolean;
+  refused: string | undefined;
+  /** A folder that opens onto what it holds. */
+  expands: boolean;
+  /** A folder that is always open: one of *Changed only*'s. */
+  always: boolean;
+  marked: Marked | undefined;
+};
+
+/** What a folder of a branch draws under it: still being read, refused, or its rows. */
+type Level =
+  { pending: true } | { trouble: string } | { children: Child[]; more: number; narrowed: boolean };
+
+/** What a file the branch deleted says, drawn where it was. */
+const DELETED = "deleted on this branch";
+
+/** Whether a folder of a branch is open: one of *Changed only*'s always is. */
+function isOpen(files: FilesOf, ref: BranchFolderRef, always: boolean): boolean {
+  return always || files.expanded.has(fileFold(files.workspace, ref));
+}
+
+/**
+ * What an OPEN folder of a branch draws under it: its entries — or, under *Changed only*, the
+ * paths below it the branch changed — each with its mark, narrowed to the filter.
+ *
+ * **The one answer the render and {@link treeOf} both read**, so a row drawn is a row the
+ * keyboard and a screen reader know, and the other way round.
+ */
+function levelOf(files: FilesOf, ref: BranchFolderRef): Level {
+  const cached = files.levels.get(folderKey(ref));
+  if (cached !== undefined) return cached;
+  const level = levelOfUncached(files, ref);
+  files.levels.set(folderKey(ref), level);
+  return level;
+}
+
+function levelOfUncached(files: FilesOf, ref: BranchFolderRef): Level {
+  const key = branchKey(ref);
+  const index = files.indexes.get(key);
+  let children: Child[];
+  let more = 0;
+  if (files.changedOnly) {
+    const read = files.statuses.get(key);
+    if (read === undefined) return { pending: true };
+    if (read.trouble !== undefined) return { trouble: read.trouble };
+    children = changedUnder(index, ref.folder);
+    // Past the most the core marks, the rest are counted at the branch's top.
+    if (ref.folder === "") more = index?.status.more ?? 0;
+  } else {
+    const read = files.reads.get(folderKey(ref));
+    if (read === undefined) return { pending: true };
+    if (read.trouble !== undefined) return { trouble: read.trouble };
+    more = read.more ?? 0;
+    const entries = shown(read.entries ?? [], files.showIgnored);
+    children = entries.map((entry): Child => ({
+      name: entry.name,
+      kind: entry.kind,
+      ignored: entry.ignored,
+      refused: entry.refused ?? undefined,
+      expands: expands(entry),
+      always: false,
+      marked: index?.marks.get(joined(ref.folder, entry.name)),
+    }));
+    // What the branch deleted here is not on disk to list: it is drawn where it was.
+    const listed = new Set(entries.map((entry) => entry.name));
+    const gone = changedUnder(index, ref.folder).filter(
+      (child) => child.marked?.mark === "deleted" && !child.expands && !listed.has(child.name),
+    );
+    children = [...children, ...gone];
+  }
+  if (files.filter === "") return { children, more, narrowed: false };
+  const kept = children.filter((child) => {
+    if (child.name.toLocaleLowerCase().includes(files.filter)) return true;
+    if (!child.expands) return false;
+    const here = { ...ref, folder: joined(ref.folder, child.name) };
+    if (!isOpen(files, here, child.always)) return false;
+    const below = levelOf(files, here);
+    return "children" in below && below.children.length > 0;
+  });
+  return { children: kept, more, narrowed: true };
+}
+
+/** The rows directly under `folder` that lead to a change: each changed file there, and each
+ *  folder holding one, folders first, in the order a person reads names. */
+function changedUnder(index: Indexed | undefined, folder: string): Child[] {
+  return (index?.under.get(folder) ?? []).map((seed) => ({
+    name: seed.name,
+    kind: seed.folder ? "folder" : "file",
+    ignored: false,
+    refused: !seed.folder && seed.mark === "deleted" ? DELETED : undefined,
+    expands: seed.folder,
+    always: seed.folder,
+    marked: index?.marks.get(joined(folder, seed.name)),
+  }));
+}
+
+/** The words a mark is said in. */
+const MARK_SAID: Record<Marked["mark"], string> = {
+  changed: "changed",
+  added: "added",
+  deleted: "deleted",
+  renamed: "renamed",
+};
+
+/** A file's or a folder's mark: a letter for a file, how many for a folder, and the words for a
+ *  screen reader and a hover. */
+function ChangeBadge({ marked, folder }: { marked: Marked | undefined; folder: boolean }) {
+  if (marked === undefined) return null;
+  const said = folder
+    ? `${marked.count ?? 0} ${marked.count === 1 ? "change" : "changes"}`
+    : marked.from
+      ? `renamed from ${marked.from}`
+      : MARK_SAID[marked.mark];
+  return (
+    <span className="change-mark" data-mark={marked.mark} title={said} aria-label={said}>
+      {folder ? marked.count : marked.mark[0].toUpperCase()}
+    </span>
+  );
+}
 
 /** Everything a branch's file rows share: the branch they are of, what the tree knows about
  *  its folders, and what a row does to the tree and to a screen reader. */
@@ -644,18 +858,22 @@ type FileRows = {
 function FilesRow({
   branch,
   name = "Files",
+  always = false,
   at,
 }: {
   branch: BranchFolderRef;
   /** Its name: *Files* for the branch's own folder, the folder's name below it. */
   name?: string;
+  /** Always open: a folder of *Changed only*'s, which does not fold. */
+  always?: boolean;
   at: FileRows;
 }) {
   const id = fileRow(branch);
   const key = fileFold(at.place.workspace, branch);
-  const open = at.files.expanded.has(key);
-  const read = at.files.reads.get(folderKey(branch));
+  const open = isOpen(at.files, branch, always);
+  const level = open ? levelOf(at.files, branch) : undefined;
   const Mark = branch.folder === "" ? Files : open ? FolderOpen : Folder;
+  const marked = at.files.indexes.get(branchKey(branch))?.marks.get(branch.folder);
   return (
     <>
       <RovingFocusGroup.Item asChild tabStopId={id} focusable={at.isDrawn(id)}>
@@ -663,25 +881,24 @@ function FilesRow({
           type="button"
           className="file-node"
           {...at.treeitem(id)}
-          onClick={() => at.fold(key, !open)}
+          onClick={() => {
+            if (!always) at.fold(key, !open);
+          }}
         >
           <ChevronRight className="twisty" data-open={open || undefined} />
           <Mark className="node-icon" />
           <span className="spot-name">{name}</span>
+          {/* A space, so a screen reader says the mark as its own word; flex drops it. */}{" "}
+          <ChangeBadge marked={marked} folder />
         </button>
       </RovingFocusGroup.Item>
-      {open &&
-        (read === undefined ? (
+      {level !== undefined &&
+        ("pending" in level ? (
           <Pending>Reading…</Pending>
-        ) : read.trouble !== undefined ? (
-          <Trouble>{read.trouble}</Trouble>
+        ) : "trouble" in level ? (
+          <Trouble>{level.trouble}</Trouble>
         ) : (
-          <FolderEntries
-            branch={branch}
-            entries={shown(read.entries ?? [], at.files.showIgnored)}
-            more={read.more ?? 0}
-            at={at}
-          />
+          <FolderEntries branch={branch} level={level} at={at} />
         ))}
     </>
   );
@@ -691,34 +908,51 @@ function FilesRow({
  *  more it holds than the core lists. */
 function FolderEntries({
   branch,
-  entries,
-  more,
+  level,
   at,
 }: {
   branch: BranchFolderRef;
-  entries: readonly FolderEntry[];
-  more: number;
+  level: { children: Child[]; more: number; narrowed: boolean };
   at: FileRows;
 }) {
-  if (entries.length === 0 && more === 0) return <p className="none">Nothing here</p>;
+  const { children: entries, more, narrowed } = level;
+  if (entries.length === 0 && more === 0) {
+    // A folder the filter emptied says nothing: the rows that match say where to look.
+    if (narrowed) return null;
+    return (
+      <p className="none">
+        {at.files.changedOnly && branch.folder === "" ? "Nothing changed" : "Nothing here"}
+      </p>
+    );
+  }
   return (
     <>
       <ul className="files" role="group">
         {entries.map((entry) => {
           const path = joined(branch.folder, entry.name);
           const here = { ...branch, folder: path };
-          if (expands(entry)) {
+          if (entry.expands) {
             return (
-              <li key={entry.name} role="none" data-ignored={entry.ignored || undefined}>
-                <FilesRow branch={here} name={entry.name} at={at} />
+              <li
+                key={`d${entry.name}`}
+                role="none"
+                data-ignored={entry.ignored || undefined}
+                data-mark={entry.marked?.mark}
+              >
+                <FilesRow branch={here} name={entry.name} always={entry.always} at={at} />
               </li>
             );
           }
           const id = fileRow(here);
-          const refused = entry.refused ?? undefined;
+          const refused = entry.refused;
           const Mark = refused !== undefined ? FileX : entry.kind === "link" ? FileSymlink : File;
           return (
-            <li key={entry.name} role="none" data-ignored={entry.ignored || undefined}>
+            <li
+              key={`f${entry.name}`}
+              role="none"
+              data-ignored={entry.ignored || undefined}
+              data-mark={entry.marked?.mark}
+            >
               <RovingFocusGroup.Item asChild tabStopId={id} focusable={at.isDrawn(id)}>
                 <button
                   type="button"
@@ -732,7 +966,8 @@ function FolderEntries({
                   }}
                 >
                   <Mark className="node-icon" />
-                  <span className="spot-name">{entry.name}</span>
+                  <span className="spot-name">{entry.name}</span>{" "}
+                  <ChangeBadge marked={entry.marked} folder={false} />
                   {/* Why it does not open, said beside it — an ignored file's too, which is
                       drawn only once the operator asked to see what git ignores. */}
                   {refused !== undefined && <span className="spot-what">{refused}</span>}
@@ -745,7 +980,9 @@ function FolderEntries({
       {more > 0 && (
         // A folder of tens of thousands of generated files is drawn as its first entries; the
         // rest are counted, never drawn.
-        <p className="none">{`${more.toLocaleString("en")} more not shown`}</p>
+        <p className="none">
+          {`${more.toLocaleString("en")} ${at.files.changedOnly ? "more changes" : "more"} not shown`}
+        </p>
       )}
     </>
   );
@@ -894,17 +1131,24 @@ function treeOf(
     shows: true,
   });
   /** A branch's folder and, once opened, what it holds: the same walk `FilesRow` draws. */
-  const folderNode = (ref: BranchFolderRef, name: string): Node => {
+  const folderNode = (ref: BranchFolderRef, name: string, always = false): Node => {
     const key = fileFold(workspace, ref);
-    const open = files.expanded.has(key);
-    const read = open ? files.reads.get(folderKey(ref)) : undefined;
-    const kids = shown(read?.entries ?? [], files.showIgnored).map((entry): Node => {
-      const here = { ...ref, folder: joined(ref.folder, entry.name) };
-      return expands(entry)
-        ? folderNode(here, entry.name)
-        : { id: fileRow(here), name: entry.name, kids: [], shows: true };
+    const open = isOpen(files, ref, always);
+    const level = open ? levelOf(files, ref) : undefined;
+    const children = level !== undefined && "children" in level ? level.children : [];
+    const kids = children.map((child): Node => {
+      const here = { ...ref, folder: joined(ref.folder, child.name) };
+      return child.expands
+        ? folderNode(here, child.name, child.always)
+        : { id: fileRow(here), name: child.name, kids: [], shows: true };
     });
-    return { id: fileRow(ref), name, fold: { key, open }, kids, shows: open };
+    return {
+      id: fileRow(ref),
+      name,
+      fold: always ? undefined : { key, open },
+      kids,
+      shows: open,
+    };
   };
   const clones = (panels?.repos ?? []).map((repo): Node => {
     const branches = (pieces[repo] ?? []).map((piece): Node => {
