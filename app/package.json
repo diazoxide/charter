@@ -60,7 +60,8 @@
     "react-dom": "^19.1.0",
     "react-markdown": "^10.1.0",
     "react-resizable-panels": "^4.14.1",
-    "tailwind-merge": "^3.7.0"
+    "tailwind-merge": "^3.7.0",
+    "use-sync-external-store": "^1.7.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -72,6 +73,7 @@
     "@types/node": "^22.20.4",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
+    "@types/use-sync-external-store": "^1.7.0",
     "@vitejs/plugin-react": "^6.0.2",
     "@wdio/cli": "^9.32.0",
     "@wdio/local-runner": "^9.32.0",

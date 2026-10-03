@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { Explorer, type Spot } from "./Explorer";
-import { moved, nothingKnown, type ChatStates } from "./chatState";
+import { ChatsHere, fixedChats, moved, nothingKnown, type ChatStates } from "./chatState";
 import { catalogue, catalogued, type Catalogued, type Offer } from "./actions";
 import { noTabs } from "./tabs";
 import type { OpenChat, Panels as PanelsModel, Piece } from "./bindings";
@@ -88,17 +88,20 @@ function draw(on: {
   states?: ChatStates;
 }) {
   render(
-    <Explorer
-      workspace={"workspace" in on ? on.workspace : "alpha"}
-      state={on.state ?? state()}
-      chats={on.chats ?? []}
-      states={on.states ?? nothingKnown}
-      spot={on.spot}
-      onPick={on.onPick ?? (() => {})}
-      onShowChat={on.onShowChat ?? (() => {})}
-      offers={on.offers ?? new Map()}
-      onPress={on.onPress ?? (() => {})}
-    />,
+    // What the chats are doing is read by each row off the project's store (SC-3), which is
+    // the one `PlaneView` provides; here it is one that holds `states` and never moves.
+    <ChatsHere.Provider value={fixedChats(on.states ?? nothingKnown)}>
+      <Explorer
+        workspace={"workspace" in on ? on.workspace : "alpha"}
+        state={on.state ?? state()}
+        chats={on.chats ?? []}
+        spot={on.spot}
+        onPick={on.onPick ?? (() => {})}
+        onShowChat={on.onShowChat ?? (() => {})}
+        offers={on.offers ?? new Map()}
+        onPress={on.onPress ?? (() => {})}
+      />
+    </ChatsHere.Provider>,
   );
 }
 
