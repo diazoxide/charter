@@ -6,6 +6,7 @@
 //!
 //! [`run`] is where a RUN's state lives (ADR 0076): nine states, each move naming one cause.
 
+pub mod children;
 pub mod run;
 
 use crate::harness::model::{Ask, Began, Item, Said, Session, Turn};
@@ -220,6 +221,8 @@ pub struct Chat {
     asking: bool,
     /// How many prompts have started a turn of this chat since the app started it.
     turns: u32,
+    /// The child agents of its current run, shown under it (FD-18, W8).
+    children: children::Children,
 }
 
 impl Chat {
@@ -233,6 +236,38 @@ impl Chat {
             refusals: Vec::new(),
             asking: false,
             turns: 0,
+            children: children::Children::default(),
+        }
+    }
+
+    /// The child agents of the chat's current run, oldest first.
+    pub fn children(&self) -> &[children::Child] {
+        self.children.list()
+    }
+
+    /// A hook of child agent `agent` was heard that says nothing more than that it is there:
+    /// a tool call. Answers whether anything a reader can see changed.
+    pub fn child_heard(&mut self, agent: &str) -> bool {
+        !self.ended && self.children.seen(agent)
+    }
+
+    /// Child agent `agent` said `said`, on its parent's hooks. Answers whether anything a
+    /// reader can see changed.
+    ///
+    /// **Only its ask is the chat's** (ADR 0076 §6): a child is never `input-required`, so
+    /// what it asks the operator, the chat asks. Its own turn, its session and its end move
+    /// the child alone, so a fan-out of sub-agents never blinks the chat out of `running`.
+    pub fn child_said(&mut self, agent: &str, said: &Said) -> bool {
+        if self.ended {
+            return false;
+        }
+        match said {
+            Said::Item(Item::ChildEnded) => self.children.ended(agent),
+            Said::Ask(_) => {
+                let seen = self.children.seen(agent);
+                self.heard(said) || seen
+            }
+            _ => self.children.seen(agent),
         }
     }
 
@@ -431,7 +466,10 @@ impl Chat {
         // Nothing will prompt it again, so nothing it was waiting to read is an item any more.
         self.reports.clear();
         self.refusals.clear();
-        was != self.seen()
+        // A child still working ends with its parent, in the parent's end (ADR 0076 §6). It
+        // shares the parent's process group, so the stop that ended the parent ended it.
+        let children = self.children.end_with(self.state);
+        was != self.seen() || children
     }
 }
 
@@ -687,11 +725,50 @@ impl Board {
             // or a stale environment in a process that outlived it.
             return false;
         };
+        let was = tracked.conversation.clone();
         if !tracked.take(report) {
             return false;
         }
-        let changed = tracked.chat.reported_from(report.event, report.detail);
+        // A sub-agent naming another conversation is not the chat's `/clear`: the chat stays in
+        // the one it was in, and keeps its children.
+        if report.agent.is_some() && was.is_some() {
+            tracked.conversation.clone_from(&was);
+        }
+        // The chat followed its own harness onto another conversation (C6): a new run began
+        // in the same process, and the old run's children were the old run's.
+        let mut changed =
+            was.is_some() && tracked.conversation != was && tracked.chat.children.superseded();
+        let said = report.event.said(report.detail);
+        changed |= match &report.agent {
+            Some(agent) => tracked.chat.child_said(agent, &said),
+            None => tracked.chat.heard(&said),
+        };
         self.stamp(report.chat, changed)
+    }
+
+    /// A tool hook of child agent `agent` of chat `number` was heard: a Codex child's first
+    /// hook is one, since charter arms Codex with no `SubagentStop`. Answers whether anything a
+    /// reader can see changed: nothing does for a chat the board does not have.
+    ///
+    /// **Not checked against the chat's conversation** as a report is, because a tool call
+    /// carries none. It is admitted by the chat's own token, as the event log admits it, so
+    /// a sub-agent of a harness nested in the chat's shell can show as a child of the chat:
+    /// a row that is wrong, never a state of the chat that is.
+    pub fn child_heard(&mut self, number: u32, agent: &str) -> bool {
+        let changed = self
+            .chats
+            .get_mut(&number)
+            .is_some_and(|tracked| tracked.chat.child_heard(agent));
+        self.stamp(number, changed)
+    }
+
+    /// The child agents of chat `number`'s current run, oldest first; none for a chat the
+    /// board does not have.
+    pub fn children(&self, number: u32) -> Vec<children::Child> {
+        self.chats
+            .get(&number)
+            .map(|tracked| tracked.chat.children().to_vec())
+            .unwrap_or_default()
     }
 
     /// The operator ignored this chat's request (charter-app#248). Answers whether anything a
@@ -2193,5 +2270,189 @@ mod tests {
 
         assert!(board.moved_at(7) > before);
         assert!(board.moved_at(7) > board.moved_at(8));
+    }
+
+    // ----- child agents (FD-18, W8) ---------------------------------------------------------
+
+    /// A report from sub-agent `agent` of a Claude Code chat: its own process and conversation,
+    /// as Claude Code sends a sub-agent's hooks.
+    fn from_agent(chat: u32, event: Event, agent: &str) -> crate::hookwire::Report {
+        crate::hookwire::Report {
+            agent: Some(agent.to_owned()),
+            ..report(chat, event, Some(A))
+        }
+    }
+
+    fn children_of(board: &Board, chat: u32) -> Vec<(String, State)> {
+        board
+            .children(chat)
+            .into_iter()
+            .map(|child| (child.agent, child.state))
+            .collect()
+    }
+
+    #[test]
+    fn a_claude_code_sub_agent_shows_under_its_chat_and_completes_at_its_subagent_stop() {
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+
+        assert!(board.reported(&from_agent(7, Event::Notification, "a1")));
+        assert_eq!(children_of(&board, 7), [("a1".to_owned(), State::Running)]);
+
+        assert!(board.reported(&from_agent(7, Event::SubagentStop, "a1")));
+        assert_eq!(children_of(&board, 7), [("a1".to_owned(), State::Done)]);
+        assert_eq!(board.state(7), State::Waiting, "its ask was the chat's");
+    }
+
+    #[test]
+    fn a_child_s_turn_is_not_its_chat_s() {
+        // ADR 0076 §6: no child move changes the chat's own state. A child that ends its own
+        // turn has not ended the turn that dispatched it.
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+
+        board.reported(&from_agent(7, Event::Stop, "a1"));
+        board.reported(&from_agent(7, Event::SessionStart, "a1"));
+
+        assert_eq!(board.state(7), State::Running);
+        assert!(board.needs_you().is_empty());
+        assert_eq!(children_of(&board, 7), [("a1".to_owned(), State::Running)]);
+    }
+
+    #[test]
+    fn a_child_reporting_another_conversation_does_not_move_its_chat_onto_it() {
+        // A sub-agent's report names a conversation, and a different one is not the chat's
+        // `/clear`: the chat stays where it is, and keeps its children.
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+        board.child_heard(7, "a1");
+
+        board.reported(&crate::hookwire::Report {
+            agent: Some("a2".to_owned()),
+            ..report(7, Event::Notification, Some(B))
+        });
+
+        assert_eq!(board.conversation(7), Some(A));
+        assert_eq!(
+            children_of(&board, 7),
+            [
+                ("a1".to_owned(), State::Running),
+                ("a2".to_owned(), State::Running)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_report_naming_an_agent_id_no_harness_would_send_is_no_child_and_still_the_chat_s_ask() {
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+        let huge = "x".repeat(70 * 1024);
+
+        assert!(!board.child_heard(7, &huge));
+        board.reported(&from_agent(7, Event::Stop, &huge));
+        assert_eq!(board.state(7), State::Running, "still a child's turn");
+        assert!(board.reported(&from_agent(7, Event::Notification, &huge)));
+
+        assert_eq!(board.state(7), State::Waiting);
+        assert!(board.children(7).is_empty());
+    }
+
+    #[test]
+    fn a_codex_child_shows_under_its_chat_from_its_first_tool_call() {
+        // Codex is armed with no `SubagentStop`, and its child's first hook charter hears is a
+        // tool call carrying `agent_id`.
+        let mut board = Board::new();
+        board.opened(3, Some(Harness::Codex), None);
+        board.reported(&unsigned(3, Event::UserPromptSubmit, Some(A)));
+
+        assert!(board.child_heard(3, "thread-2"));
+        assert!(!board.child_heard(3, "thread-2"));
+
+        assert_eq!(
+            children_of(&board, 3),
+            [("thread-2".to_owned(), State::Running)]
+        );
+        assert_eq!(board.state(3), State::Running);
+    }
+
+    #[test]
+    fn stopping_the_parent_ends_every_child_still_working_with_it() {
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+        board.reported(&from_agent(7, Event::Notification, "a1"));
+        board.child_heard(7, "a2");
+        board.reported(&from_agent(7, Event::SubagentStop, "a2"));
+
+        // A stop signals the group, and a signal leaves no code.
+        assert!(board.exited(7, None));
+
+        assert_eq!(
+            children_of(&board, 7),
+            [
+                ("a1".to_owned(), State::Failed),
+                ("a2".to_owned(), State::Done)
+            ]
+        );
+        assert!(
+            !board.child_heard(7, "a3"),
+            "a chat that ended spawns nothing"
+        );
+        assert!(!board.reported(&from_agent(7, Event::SubagentStop, "a1")));
+    }
+
+    #[test]
+    fn a_sub_agent_of_a_harness_nested_in_the_chat_is_not_the_chat_s_child() {
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+        let nested = crate::hookwire::Report {
+            agent: Some("n1".to_owned()),
+            ..from_pid(7, Event::Notification, Some(NESTED), 9999)
+        };
+
+        assert!(!board.reported(&nested));
+
+        assert!(board.children(7).is_empty());
+    }
+
+    #[test]
+    fn a_clear_shows_none_of_the_old_conversation_s_children() {
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+        board.child_heard(7, "a1");
+
+        board.reported(&crate::hookwire::Report {
+            detail: from(Started::Cleared),
+            ..report(7, Event::SessionStart, Some(B))
+        });
+
+        assert!(board.children(7).is_empty());
+    }
+
+    #[test]
+    fn a_child_moving_is_a_move_of_its_chat() {
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        claude_chat(&mut board, 8, Some(A));
+        let before = board.moved_at(7);
+
+        board.child_heard(7, "a1");
+
+        assert!(board.moved_at(7) > before);
+        assert!(board.moved_at(7) > board.moved_at(8));
+    }
+
+    #[test]
+    fn a_chat_the_board_does_not_have_has_no_children() {
+        let mut board = Board::new();
+
+        assert!(!board.child_heard(4, "a1"));
+        assert!(board.children(4).is_empty());
     }
 }

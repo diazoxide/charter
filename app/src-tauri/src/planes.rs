@@ -3235,6 +3235,131 @@ mod tests {
         );
     }
 
+    // ----- child agents under their chat (FD-18, W8) -----
+
+    /// The newest snapshot the window was sent about chat `session`: its child agents, by the
+    /// harness's id and the word the window draws.
+    fn the_window_s_children(told: &Mutex<Vec<Moved>>, session: u32) -> Vec<(String, String)> {
+        told.lock()
+            .expect("the log")
+            .iter()
+            .filter(|moved| moved.session == session)
+            .max_by_key(|moved| moved.sequence)
+            .map(|moved| {
+                moved
+                    .children
+                    .iter()
+                    .map(|child| (child.agent.clone(), child.state.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_claude_code_sub_agent_and_a_codex_child_show_under_their_chat_and_stopping_it_stops_them()
+    {
+        let dir = tempfile::tempdir().expect("a directory");
+        let config = dir.path().join("config-home");
+        std::fs::create_dir_all(&config).expect("a config home");
+        let told = Arc::new(Mutex::new(Vec::new()));
+        let tell = Arc::clone(&told);
+        let planes = Planes::telling(
+            Arc::new(move |moved: Moved| tell.lock().expect("the log").push(moved)),
+            crate::Shipped::default(),
+            Some(config),
+        );
+        let plane = planes.open(&a_plane(&dir.path().join("plane")));
+        let held = planes.held(&plane).expect("held");
+        // The chat's program, and a process it started in the chat's own process group, as a
+        // child agent's work runs: a sub-agent's tool, or a Codex child thread's command. Both
+        // ignore an interrupt and a hangup, so only the stop's kill ends them.
+        let child_pid = dir.path().join("child.pid");
+        let child_agent = stand_in::program(
+            dir.path(),
+            "child-agent",
+            &format!("#!/bin/sh\n{}\n", stand_in::stubborn("INT HUP", "")),
+        );
+        let mut chat = one_chat_on("/bin/sh").chats.remove(0);
+        chat.args = vec![
+            "-c".to_owned(),
+            format!(
+                "trap '' INT HUP; '{}' & echo $! > '{}'; wait",
+                child_agent.display(),
+                child_pid.display()
+            ),
+        ];
+        let session = held.chats().start(&chat, A_PANE).expect("the chat starts");
+        let parent = held.chats().sessions().process_id(session).expect("a pid");
+        let _ends = stand_in::Ends::group(parent);
+        assert!(becomes(|| std::fs::read_to_string(&child_pid)
+            .is_ok_and(|pid| pid.trim().parse::<u32>().is_ok())));
+        let child: u32 = std::fs::read_to_string(&child_pid)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+
+        // A Claude Code sub-agent's ask comes on its parent's hooks, carrying its `agent_id`.
+        a_prompt_to(&held, session);
+        charter_core::hookwire::send(
+            held.hooks().socket().expect("the plane is listening"),
+            Some(&held.hooks().token_for(session)),
+            &charter_core::hookwire::Report {
+                chat: session,
+                event: charter_core::state::Event::Notification,
+                conversation: charter_core::hookwire::Conversation::Unknown,
+                pid: None,
+                agent: Some("sub-1".to_owned()),
+                detail: charter_core::state::Detail::default(),
+            },
+        )
+        .expect("the hook reaches the plane");
+        // A Codex child is first heard on a tool call.
+        charter_core::hookwire::deliver_tool(
+            held.hooks().socket().expect("the plane is listening"),
+            Some(&held.hooks().token_for(session)),
+            &charter_core::hookwire::ToolCall {
+                chat: session,
+                tool_hook: "pretooluse".to_owned(),
+                tool: Some("Bash".to_owned()),
+                call: None,
+                args: None,
+                decision: charter_core::hookwire::Decision::None,
+                rule: None,
+                hook_ms: 1,
+                agent: Some("thread-2".to_owned()),
+                at_ms: 0,
+            },
+        )
+        .expect("told");
+        let both_working = vec![
+            ("sub-1".to_owned(), "running".to_owned()),
+            ("thread-2".to_owned(), "running".to_owned()),
+        ];
+        assert!(
+            becomes(|| the_window_s_children(&told, session) == both_working),
+            "the window was told {:?}",
+            the_window_s_children(&told, session)
+        );
+
+        planes.stop_every_agent(Actor::Window).expect("kept");
+
+        assert!(
+            becomes(|| !alive(child)),
+            "process {child} outlived its parent"
+        );
+        let both_ended = vec![
+            ("sub-1".to_owned(), "failed".to_owned()),
+            ("thread-2".to_owned(), "failed".to_owned()),
+        ];
+        assert!(
+            becomes(|| the_window_s_children(&told, session) == both_ended),
+            "the window was told {:?}",
+            the_window_s_children(&told, session)
+        );
+    }
+
     // ----- the question a relaunch asks (charter-app#250) -----
 
     /// How many chats a plane has tried to start: running, or tried and refused. Counted

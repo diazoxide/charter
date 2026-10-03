@@ -391,6 +391,7 @@ describe("what the window is told about the chats", () => {
       sequence: 1,
       reports: [],
       refusals: [],
+      children: [],
     };
   }
 
@@ -457,6 +458,7 @@ describe("being asked to quit", () => {
       sequence: 1,
       reports: [],
       refusals: [],
+      children: [],
     };
   }
 

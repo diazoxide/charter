@@ -503,12 +503,13 @@ impl Harness {
             Self::Codex => Some(
                 "Codex says nothing until your first prompt, and nothing at all until you \
                  trust charter's hooks when Codex asks; it never says when it stops mid-turn \
-                 for your approval.",
+                 for your approval, and a sub-agent reads working until the chat ends.",
             ),
             Self::Opencode => Some(
                 "opencode says nothing until your first prompt, and nothing when it quits; once \
                  you answer its permission prompt, the chat reads waiting until the turn ends, \
-                 and a session you open inside it with /new is not followed.",
+                 a session you open inside it with /new is not followed, and its sub-agents \
+                 are not shown under it.",
             ),
         }
     }
@@ -562,6 +563,38 @@ mod tests {
         assert_eq!(
             pairs, 4,
             "Claude Code's and Codex's sandboxes, each to the two others"
+        );
+    }
+
+    #[test]
+    fn a_codex_chat_says_its_sub_agents_read_working_until_it_ends() {
+        // FD-18: Codex is armed with no `SubagentStop` (`plugin::CODEX`, #1086), so a child is
+        // never heard to finish, and the chat says so rather than showing it working for good.
+        assert!(!crate::plugin::CODEX.contains(&"subagentstop"));
+        assert!(
+            Harness::Codex
+                .unreported()
+                .is_some_and(|said| said.contains("sub-agent reads working until")),
+            "{:?}",
+            Harness::Codex.unreported()
+        );
+    }
+
+    #[test]
+    fn an_opencode_chat_says_its_sub_agents_are_not_shown_under_it() {
+        // FD-18: a child agent is told by the payload's `agent_id`, read only where it was
+        // measured (`handoffguard::MEASURED_SUBAGENT_HARNESSES`: Claude Code and Codex).
+        // opencode's payload has none, so its chat says so rather than looking childless.
+        assert!(
+            !crate::handoffguard::MEASURED_SUBAGENT_HARNESSES.contains(&"opencode"),
+            "opencode was measured: drop this sentence"
+        );
+        assert!(
+            Harness::Opencode
+                .unreported()
+                .is_some_and(|said| said.contains("sub-agents are not shown under it")),
+            "{:?}",
+            Harness::Opencode.unreported()
         );
     }
 

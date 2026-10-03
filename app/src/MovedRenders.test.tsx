@@ -107,6 +107,7 @@ function moving(session: number, state: State, at: number, queue: number[] = [])
     sequence: at,
     reports: [],
     refusals: [],
+    children: [],
   };
 }
 

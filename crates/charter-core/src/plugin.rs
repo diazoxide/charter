@@ -100,8 +100,10 @@ pub const HOOKS_FILE: &str = "hooks/hooks.json";
 /// than filtered by event, because each one is a hook the operator is asked to trust.
 ///
 /// The four state events Codex was measured firing (codex-cli 0.147.0, `harness.rs`) and the
-/// Bash guard. Codex has no `Notification`; `SubagentStop` would change nothing the board
-/// draws; and the other tool hooks match Claude Code's tool names (`Read|Grep`, `Write|Edit`,
+/// Bash guard. Codex has no `Notification`; `SubagentStop` is not measured on Codex, so a
+/// Codex child agent is shown from its first tool call and never heard to finish: it reads
+/// working until its chat ends, and the chat says so (`Harness::unreported`, #1086); and the
+/// other tool hooks match Claude Code's tool names (`Read|Grep`, `Write|Edit`,
 /// `Task|Agent`), which Codex's tools are not called, so arming them would ask for trust in
 /// hooks that never fire.
 pub const CODEX: [&str; 5] = [

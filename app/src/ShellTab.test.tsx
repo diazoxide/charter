@@ -313,6 +313,7 @@ describe("a shell tab's state mark", () => {
       moved_at: 1,
       reports: [],
       refusals: [],
+      children: [],
       sequence: 1,
     };
     core([opened(4, "shell 4", ALPHA, { in_front: true })], [running]);

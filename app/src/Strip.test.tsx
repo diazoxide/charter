@@ -180,6 +180,7 @@ function moving(session: number, at: number): Moved {
     sequence: at,
     reports: [],
     refusals: [],
+    children: [],
   };
 }
 

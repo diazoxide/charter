@@ -1,7 +1,14 @@
 import { memo, type ReactNode } from "react";
 import { SquareTerminal } from "lucide-react";
 import { ChatMark, WrappingUp } from "./NeedsYou";
-import { markOf, useChatsHere, useChatsSelect } from "./chatState";
+import {
+  childrenOf,
+  markOf,
+  sameChildren,
+  useChatsHere,
+  useChatsSelect,
+  type State,
+} from "./chatState";
 import { PlaneUpdatedMark, type PlaneUpdates } from "./PlaneUpdated";
 import { chatOf, contentsOf, panesOf, type Tabs } from "./tabs";
 import { ViewMark } from "./Views";
@@ -31,6 +38,66 @@ export const ChatStateMark = memo(function ChatStateMark({
 }) {
   const state = useChatsSelect(useChatsHere(), (states) => markOf(states, session ?? -1, shell));
   return <ChatMark state={state} />;
+});
+
+/** How many characters of a harness's id for a child agent its row shows: enough to tell
+ *  apart two ids that differ late (`thread-1`, `thread-10`). The whole id is its tooltip. */
+const AGENT_ID_SHOWN = 16;
+
+/** A child agent's id as its row shows it: whole when it fits, cut with an ellipsis when not. */
+function shownId(agent: string): string {
+  return agent.length > AGENT_ID_SHOWN ? `${agent.slice(0, AGENT_ID_SHOWN)}…` : agent;
+}
+
+/** The id of chat `session`'s list of sub-agents, which the chat's row is described by. */
+export function childAgentsId(session: number): string {
+  return `sub-agents-of-${session}`;
+}
+
+/** The words a child agent's state can be, as `ChatMark` draws them. */
+const CHILD_STATES: readonly string[] = ["running", "waiting", "done", "failed"];
+
+/**
+ * **A chat's child agents, under its row** (FD-18, W8): each sub-agent or child its harness
+ * spawned, by the harness's id for it, with what it is doing. Reads its own chat's children off
+ * the project's store, as the state mark does (SC-3), and draws nothing for a chat with none.
+ *
+ * Not rows of the tree: a child is not something to bring forward or start in, so the arrows
+ * stop on its chat and not on it. Its asks are its chat's, and a stop of the chat stops it.
+ */
+export const ChildAgents = memo(function ChildAgents({
+  session,
+  name,
+}: {
+  session: number;
+  /** The chat's name, which the list is labelled by. */
+  name: string;
+}) {
+  const children = useChatsSelect(
+    useChatsHere(),
+    (states) => childrenOf(states, session),
+    sameChildren,
+  );
+  if (children.length === 0) return null;
+  return (
+    <ul
+      id={childAgentsId(session)}
+      className="child-agents"
+      role="list"
+      aria-label={`Sub-agents of ${name}`}
+    >
+      {children.map((child) => (
+        <li key={child.agent} className="child-agent">
+          <span className="agent" title={child.agent}>
+            sub-agent {shownId(child.agent)}
+          </span>
+          <ChatMark
+            state={CHILD_STATES.includes(child.state) ? (child.state as State) : "unknown"}
+          />
+        </li>
+      ))}
+    </ul>
+  );
 });
 
 /**

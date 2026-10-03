@@ -68,6 +68,19 @@ pub struct Moved {
     /// than the one it holds (`chatState.ts`), which it can do only because this is numbered
     /// in the order the board was read. [`sequence`] is the whole definition.
     pub sequence: u32,
+    /// The child agents of this chat's current run, oldest first (FD-18, W8): each sub-agent
+    /// or child its harness spawned, drawn under the chat. Empty for nearly every chat.
+    pub children: Vec<ChildAgent>,
+}
+
+/// One child agent of a chat, as the window draws it under the chat (ADR 0066, ADR 0076 §6).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct ChildAgent {
+    /// The harness's id for it, unique within the chat.
+    pub agent: String,
+    /// `running` while it works, `done` once its own stop is heard, or the word its chat
+    /// ended as when the chat ended first: a stop of the chat stops its children.
+    pub state: String,
 }
 
 /// The event the window is sent when a harness was started by hand in a shell tab (ADR 0062).
@@ -409,6 +422,7 @@ impl Hooks {
                 let board = Arc::clone(&board);
                 let plane = plane.clone();
                 let events = Arc::clone(&events);
+                let moved = Arc::clone(&moved);
                 Box::new(move |refused| {
                     let recorded = record(&events, |log| log.refused(plane.root(), refused.chat));
                     let what = {
@@ -425,11 +439,26 @@ impl Hooks {
             },
             tool: {
                 let events = Arc::clone(&events);
+                let board = Arc::clone(&board);
                 let plane = plane.clone();
                 Box::new(move |call| {
-                    record(&events, |log| {
+                    let recorded = record(&events, |log| {
                         log.tool(plane.root(), &call, std::time::Instant::now())
-                    })
+                    });
+                    // A child agent's tool call shows it under its chat: a Codex child's
+                    // first hook is one (FD-18). Built under the same hold as the change.
+                    if let Some(agent) = &call.agent {
+                        let what = {
+                            let mut guard = held_board(&board);
+                            guard
+                                .child_heard(call.chat, agent)
+                                .then(|| seen_by(&guard, &plane, call.chat))
+                        };
+                        if let Some(what) = what {
+                            moved(what);
+                        }
+                    }
+                    recorded
                 })
             },
         });
@@ -670,6 +699,14 @@ fn seen_by(board: &Board, plane: &PlaneId, session: u32) -> Moved {
         moved_at: board.moved_at(session),
         reports: board.reports(session),
         refusals: board.refusals(session),
+        children: board
+            .children(session)
+            .into_iter()
+            .map(|child| ChildAgent {
+                agent: child.agent,
+                state: word(child.state),
+            })
+            .collect(),
     }
 }
 

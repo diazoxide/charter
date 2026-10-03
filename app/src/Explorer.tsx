@@ -16,7 +16,7 @@ import { WRAPPING_UP, WrappingUp } from "./NeedsYou";
 import { Menued } from "./Menus";
 import { WorktreeMark } from "./Worktree";
 import { isShell } from "./chatState";
-import { ChatStateMark } from "./ChatRows";
+import { ChatStateMark, ChildAgents, childAgentsId } from "./ChatRows";
 import type { Catalogued, Offer } from "./actions";
 import type { WorkspaceState } from "./workspaceState";
 import { useTabStop } from "./roving";
@@ -502,6 +502,9 @@ function ChatList({
               className="chat"
               data-wrapping-up={wrapping.has(chat.session) || undefined}
               title={wrapping.has(chat.session) ? WRAPPING_UP : undefined}
+              // What it spawned, read as its description: an id that names no element, for a
+              // chat with no sub-agents, describes it with nothing.
+              aria-describedby={childAgentsId(chat.session)}
               {...treeitem(chatRow(chat.session))}
               onClick={() => onShow(chat.session)}
             >
@@ -532,6 +535,8 @@ function ChatList({
               reads `unknown` until its first prompt and never says it is waiting on an
               approval; without this it looks like charter is broken. */}
           {chat.unreported && <p className="unreported">{chat.unreported}</p>}
+          {/* What it spawned, under it (FD-18): its sub-agents, each with its state. */}
+          <ChildAgents session={chat.session} name={chat.name} />
         </li>
       ))}
     </ul>

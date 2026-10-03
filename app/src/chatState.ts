@@ -10,7 +10,7 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState } from 
 import { useSyncExternalStoreWithSelector } from "use-sync-external-store/with-selector";
 import { listen } from "./here";
 
-import { commands, type Moved, type OpenChat, type PlaneId } from "./bindings";
+import { commands, type ChildAgent, type Moved, type OpenChat, type PlaneId } from "./bindings";
 
 /** The five states the spec names. `unknown` is a harness that carries no state hook. */
 export type State = "unknown" | "running" | "waiting" | "done" | "failed";
@@ -57,6 +57,12 @@ export type ChatStates = {
    * next prompt empties it.
    */
   readonly refusals: Readonly<Record<number, readonly string[]>>;
+  /**
+   * Each chat's child agents: the sub-agents and children its harness spawned, drawn under the
+   * chat (FD-18, W8). Under `heardAt`'s rule, like `reports`: only the chat's own snapshots
+   * change it.
+   */
+  readonly children: Readonly<Record<number, readonly ChildAgent[]>>;
 };
 
 export const nothingKnown: ChatStates = {
@@ -67,6 +73,7 @@ export const nothingKnown: ChatStates = {
   heardAt: {},
   reports: {},
   refusals: {},
+  children: {},
 };
 
 /** The state of one chat, which is `unknown` until something says otherwise. */
@@ -108,6 +115,11 @@ export function movedAt(states: ChatStates, session: number): number {
 /** The chats that reported back to `session` and have not been read yet, oldest first. */
 export function reportsTo(states: ChatStates, session: number): readonly string[] {
   return states.reports[session] ?? [];
+}
+
+/** `session`'s child agents, oldest first: none for a chat that has spawned none. */
+export function childrenOf(states: ChatStates, session: number): readonly ChildAgent[] {
+  return states.children[session] ?? [];
 }
 
 /** What `session`'s refused commits were refused for, oldest first. */
@@ -168,7 +180,34 @@ export function moved(states: ChatStates, move: Moved): ChatStates {
     heardAt: newerChat ? { ...states.heardAt, [move.session]: move.sequence } : states.heardAt,
     reports: newerChat ? withLines(states.reports, move.session, move.reports) : states.reports,
     refusals: newerChat ? withLines(states.refusals, move.session, move.refusals) : states.refusals,
+    children: newerChat
+      ? withChildren(states.children, move.session, move.children)
+      : states.children,
   };
+}
+
+/**
+ * `children` as `session`'s entry, and the same map when it says what the map already held, so
+ * a chat whose children did not change keeps the list its rows were drawn from. A move with no
+ * list — a core older than the field — says the chat has none.
+ */
+function withChildren(
+  by: Readonly<Record<number, readonly ChildAgent[]>>,
+  session: number,
+  children: readonly ChildAgent[] | undefined,
+): Readonly<Record<number, readonly ChildAgent[]>> {
+  const now = Array.isArray(children) ? children : [];
+  return sameChildren(by[session] ?? [], now) ? by : { ...by, [session]: now };
+}
+
+/** Whether two lists of child agents say the same thing: the same agents, in the same order and
+ *  the same states. */
+export function sameChildren(one: readonly ChildAgent[], other: readonly ChildAgent[]): boolean {
+  return (
+    one === other ||
+    (one.length === other.length &&
+      one.every((child, at) => child.agent === other[at].agent && child.state === other[at].state))
+  );
 }
 
 /** Whether two lists hold the same things in the same order. */

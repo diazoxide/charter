@@ -286,7 +286,14 @@ describe("a window holding more than one project", () => {
     });
     render(<App />);
     await waitFor(() => expect(chatTabs()).toEqual(["one.1", "one.2"]));
-    const asking = { plane: ONE, state: "waiting", moved_at: 1, reports: [], refusals: [] };
+    const asking = {
+      plane: ONE,
+      state: "waiting",
+      moved_at: 1,
+      reports: [],
+      refusals: [],
+      children: [],
+    };
     move({ ...asking, session: 1, needs_you: true, queue: [1, 2], sequence: 1 });
     move({ ...asking, session: 2, needs_you: true, queue: [1, 2], sequence: 2 });
     const count = () => projectTab("one").querySelector(".project-needs")?.textContent;
@@ -347,6 +354,7 @@ describe("a window holding more than one project", () => {
       sequence: 1,
       reports: [],
       refusals: [],
+      children: [],
     });
     const hand = await screen.findByRole("button", { name: "1 chat needs you" });
     expect(
@@ -380,6 +388,7 @@ describe("a window holding more than one project", () => {
       sequence: 1,
       reports: [],
       refusals: [],
+      children: [],
     });
     await screen.findByRole("button", { name: "1 chat needs you" });
 
@@ -442,6 +451,7 @@ describe("a window holding more than one project", () => {
       sequence: 1,
       reports: [],
       refusals: [],
+      children: [],
     });
 
     await waitFor(() =>
