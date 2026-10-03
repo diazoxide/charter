@@ -220,18 +220,13 @@ impl Log {
     ///
     /// **One writer per device** (ADR 0066, ADR 0068): [`LOCK`] is locked for as long as the
     /// `Log` lives, and a second `open` while it is held is refused rather than interleaved.
+    /// A lock held for only a moment is waited for, up to [`LOCK_WAIT`] (#972).
     /// The numbering carries on from the last event already in the log, so a `seq` is never
     /// used twice.
     pub fn open_with(dir: &Path, device: &str, retention: Retention) -> io::Result<Log> {
         crate::secrets::make_private_dir(dir)?;
         let lock = private_file(&dir.join(LOCK))?;
-        lock.try_lock().map_err(|why| match why {
-            std::fs::TryLockError::WouldBlock => io::Error::new(
-                io::ErrorKind::WouldBlock,
-                "another host is already writing this device's event log",
-            ),
-            std::fs::TryLockError::Error(why) => why,
-        })?;
+        lock_as_the_writer(&lock)?;
         let mut file = private_file(&dir.join(FILE))?;
         let good = cut_a_torn_line(&mut file)?;
         let last = match last_seq(&mut file)? {
@@ -458,6 +453,35 @@ fn sync_dir(dir: &Path) -> io::Result<()> {
     #[cfg(not(unix))]
     let _ = dir;
     Ok(())
+}
+
+/// How long [`Log::open_with`] waits for a lock someone else holds before refusing (#972).
+///
+/// A lock is held by an open file, and every process forked while the log is open shares the
+/// log's open files until it execs a program. So the lock outlives a `Log` dropped while another
+/// thread of the same process is spawning a program, and a host that just exited, when one of
+/// its children has not exec'd yet. Neither is a second writer, and both are over in far less
+/// than this.
+pub const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Locks `lock`, the device's [`LOCK`], waiting up to [`LOCK_WAIT`] for whoever holds it.
+fn lock_as_the_writer(lock: &File) -> io::Result<()> {
+    let deadline = Instant::now() + LOCK_WAIT;
+    loop {
+        match lock.try_lock() {
+            Ok(()) => return Ok(()),
+            Err(std::fs::TryLockError::WouldBlock) if Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(std::fs::TryLockError::WouldBlock) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "another host is already writing this device's event log",
+                ));
+            }
+            Err(std::fs::TryLockError::Error(why)) => return Err(why),
+        }
+    }
 }
 
 fn unreadable(what: &str) -> io::Error {

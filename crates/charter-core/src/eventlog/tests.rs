@@ -75,6 +75,29 @@ fn a_second_writer_on_the_same_log_is_refused() {
     assert!(second.is_err(), "one writer per device (ADR 0068)");
 }
 
+/// #972: a process forked while the log is open shares its lock until it execs, so a log
+/// closed and opened again in that moment, as when another thread is spawning a program or the
+/// app is relaunched, waits the child out instead of being refused as a second writer. The
+/// child here inherits the lock across its exec, so it holds it for as long as it sleeps.
+#[cfg(unix)]
+#[test]
+fn a_log_opened_again_while_a_child_still_holds_its_lock_waits_the_child_out() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = Log::open(dir.path(), DEVICE).unwrap();
+    rustix::io::fcntl_setfd(&log._lock, rustix::io::FdFlags::empty()).unwrap();
+    let mut child = crate::forklock::spawn(std::process::Command::new("sleep").arg("0.2")).unwrap();
+
+    drop(log);
+    let again = Log::open(dir.path(), DEVICE);
+    child.wait().unwrap();
+
+    assert!(
+        again.is_ok(),
+        "a child holding the lock a moment is not a second writer: {:?}",
+        again.err()
+    );
+}
+
 #[test]
 fn an_args_digest_is_keyed_by_the_device_and_stays_the_same_across_launches() {
     let one = tempfile::tempdir().unwrap();
