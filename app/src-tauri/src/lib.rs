@@ -56,6 +56,7 @@ mod planewatch;
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod portal;
 mod saving;
+mod searchfiles;
 mod sessions;
 mod settings;
 mod slowstart;
@@ -1695,6 +1696,8 @@ fn commands() -> Builder<tauri::Wry> {
         .typ::<filewatch::FilesChanged>()
         // What `branch-changed` carries (FM-4).
         .typ::<branchwatch::BranchChanged>()
+        // What `files-searched` carries (FM-8).
+        .typ::<searchfiles::FilesSearched>()
         // What `extension-heard` carries (charter-app#343).
         .typ::<heard::ExtensionHeard>()
         // What `harness-by-hand` carries (ADR 0062).
@@ -1940,6 +1943,12 @@ pub fn run() {
                     if let Some(watch) = window.try_state::<branchwatch::BranchWatch>() {
                         watch.forget(window.label());
                     }
+                    // And its ⌘⇧F searches stop (FM-8).
+                    if let Some(searches) =
+                        window.try_state::<std::sync::Arc<searchfiles::FileSearches>>()
+                    {
+                        searches.forget(window.label());
+                    }
                     windows::destroyed(window);
                 }
                 _ => {}
@@ -2031,6 +2040,15 @@ pub fn run() {
                 },
                 reader(),
             ));
+            // Each window's ⌘⇧F searches, one per Search tab, and how their hits reach the
+            // window that asked (FM-8).
+            app.manage(std::sync::Arc::new(searchfiles::FileSearches::default()));
+            app.manage(searchfiles::SearchTeller({
+                let app = app.handle().clone();
+                std::sync::Arc::new(move |window: &str, batch| {
+                    let _ = app.emit_to(window, searchfiles::HEARD, batch);
+                })
+            }));
             // What each window is holding, and which of its projects it has in front. Empty
             // until a window says, and an empty answer means "not looking", so a notification
             // is sent rather than suppressed.

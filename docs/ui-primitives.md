@@ -784,6 +784,13 @@ pane's own terminal (`attachCustomKeyEventHandler`) rather than on the window, b
 over the pane that has the keyboard and nowhere else. Neither the palette (`⌘K`, `F2`) nor the
 native menu claims `F`: the macOS menu is charter's, Edit's predefined items and nothing else.
 
+**Search in the files is `⌘⇧F` on a Mac and `Ctrl+Shift+F` elsewhere, and takes nothing either**
+(FM-8, `searchKey.opensSearch`). xterm.js 6.0.0 sends nothing for a `⌘` chord, and `Ctrl+Shift+F`
+is no byte for the new-shell key's reason. Off a Mac the chord is the pane's find first: while a
+chat has the keyboard, `Ctrl+Shift+F` stays its find bar, and everywhere else in the window it
+opens a Search tab. It is a capture listener on the window, held by the project in front, as the
+new-shell key is.
+
 **Shift+Enter in a harness's pane is the harness's newline** (SI-4, `Harness::newline`). A
 terminal has no Shift+Enter: xterm.js 6.0.0 sends a bare CR for it, the byte Enter sends, so every
 harness submitted on it. The pane sends the harness's own newline instead — ESC CR for all three,

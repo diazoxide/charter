@@ -65,6 +65,7 @@ import {
   PASS_THROUGH_BYTES,
   PASS_THROUGH_KEY,
   RENAMES_ON_F2,
+  CHAT_KEYBOARD,
   type Clone,
   type Cut,
   type Doing,
@@ -94,7 +95,15 @@ import { cloneRepos } from "./repoClones";
 import { StartChat } from "./StartChat";
 import { SessionPane } from "./SessionPane";
 import { Explorer, type Spot } from "./Explorer";
-import { pieceFileTitle, pieceFileView, type Place } from "./pieceViews";
+import {
+  pieceFileTitle,
+  pieceFileView,
+  pieceFilesTitle,
+  pieceFilesView,
+  type Place,
+} from "./pieceViews";
+import { isSearch, searchFromFocus, searchTitle, searchView } from "./contentSearch";
+import { opensSearch } from "./searchKey";
 import { BottomBar } from "./BottomBar";
 import { useWorkspaceState } from "./workspaceState";
 import {
@@ -139,6 +148,7 @@ import {
   panesOf,
   putViewBack,
   setSplit,
+  showInstead,
   splitOf,
   refileViews,
   followRename,
@@ -328,8 +338,9 @@ export const PlaneView = memo(function PlaneView({
   /** The same, for the Preferences tab (`WindowDoing.openPreferences`, charter-app#283): a
    *  count that goes up each time the window asks for it on THIS project's strip. */
   preferencesAsked?: number;
-  /** A file ⌘P found in THIS project (FM-7), opened in its file tab once per `at`. */
-  fileAsked?: { place: Place; path: string; at: number };
+  /** A file ⌘P found in THIS project (FM-7), opened in its file tab once per `at`; with a
+   *  `line`, a jump to it (a search hit, FM-8), opened in the branch's file tab at that line. */
+  fileAsked?: { place: Place; path: string; line?: number; at: number };
   /** The first chat a repository opened into this project asks for (FR-4): started in that
    *  repository's clone, on the workspace named after it. `at` counts the asks, so each is
    *  answered once. */
@@ -1884,9 +1895,13 @@ export const PlaneView = memo(function PlaneView({
   useEffect(() => {
     if (fileAsked === undefined || fileHandled.current === fileAsked.at) return;
     fileHandled.current = fileAsked.at;
+    // A jump to a line (a search hit) opens the branch's file tab, which picks the file and
+    // lands on the line (`fileJump.ts`); a file ⌘P found opens in a tab of its own.
+    const { place, path } = fileAsked;
+    const jump = fileAsked.line !== undefined;
     showView(
-      pieceFileView(fileAsked.place, fileAsked.path),
-      pieceFileTitle(fileAsked.place, fileAsked.path),
+      jump ? pieceFilesView(place) : pieceFileView(place, path),
+      jump ? pieceFilesTitle(place) : pieceFileTitle(place, path),
     );
   }, [fileAsked, showView]);
 
@@ -3386,6 +3401,35 @@ export const PlaneView = memo(function PlaneView({
   }, [by, inFront, press]);
 
   /**
+   * **The key that opens a Search tab** (`searchKey.ts`, FM-8): as narrow as the focus — the
+   * branch the explorer picked, else the workspace in front, else the project — or the Search
+   * tab already open for that, brought forward. Claimed on the window, capture-phase, by the
+   * project in front, as the shell's key is; off a Mac, inside a chat, the chord is the chat's
+   * find bar and is left to it.
+   */
+  useEffect(() => {
+    if (!inFront) return;
+    const key = (e: KeyboardEvent) => {
+      const mac = onAMac();
+      if (!opensSearch(e, mac)) return;
+      const on = e.target;
+      if (!mac && on instanceof Element && on.closest(`[${CHAT_KEYBOARD}]`) !== null) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.repeat) return;
+      const ask = searchFromFocus(
+        ofWorkspace !== undefined && spot !== undefined
+          ? { workspace: ofWorkspace, repo: spot.repo, piece: spot.piece ?? null }
+          : undefined,
+        ofWorkspace,
+      );
+      showView(searchView(ask), searchTitle(ask));
+    };
+    window.addEventListener("keydown", key, true);
+    return () => window.removeEventListener("keydown", key, true);
+  }, [inFront, ofWorkspace, showView, spot]);
+
+  /**
    * A pane's own button: that pane becomes the focused one, and then the row runs.
    *
    * **The row is the bar's row unchanged**, which is what keeps one list of actions. A split
@@ -4123,6 +4167,8 @@ export const PlaneView = memo(function PlaneView({
                     changed: memoryEdits.changed,
                     onSaved: memoryEdits.onSaved,
                     onClose: closeView,
+                    showInstead: (from, to, title) =>
+                      change((tabs) => showInstead(tabs, from, to, title)),
                   }}
                   firstTask={firstTaskDoes}
                   split={{
@@ -4668,6 +4714,8 @@ function viewTabsOf(tabs: Tabs, pinnedViews: readonly string[]): ViewTab[] {
     if (lead?.kind !== "view") return [];
     // A new memory's tab holds nothing on disk yet, so there is nothing to bring back.
     if (isMemory(lead.view) && memoryRefOf(lead.view.key)?.slug === DRAFT) return [];
+    // A Search tab is what the operator typed, never written to the record (FM-8).
+    if (isSearch(lead.view)) return [];
     return [
       {
         from: lead.view.from,
@@ -5136,6 +5184,8 @@ function LayoutPanes({
     changed: number;
     onSaved: (from: ViewRef, memory: MemoryView) => void;
     onClose: (view: ViewRef) => void;
+    /** A view that now shows something else: a Search tab asking a new query (FM-8). */
+    showInstead: (from: ViewRef, to: ViewRef, title: string) => void;
   };
   /** What the first task's tab asks the plane to do (FR-28). */
   firstTask: FirstTaskDoes;
@@ -5176,6 +5226,7 @@ function LayoutPanes({
               changed={memory.changed}
               onMemorySaved={memory.onSaved}
               onCloseView={memory.onClose}
+              onShowInstead={memory.showInstead}
               firstTask={firstTask}
               split={split.of(content.view)}
               onSplit={(to) => split.moved(content.view, to)}

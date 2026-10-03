@@ -818,6 +818,19 @@ export const commands = {
 	 *  replaces the window's last one.
 	 */
 	branchWatch: (branches: WatchedBranch[]) => typedError<null, string>(__TAURI_INVOKE("branch_watch", { branches })),
+	/**
+	 *  Starts the Search tab `id`'s run `run`: `query` over `scope`, matched as `options` say. The
+	 *  tab's earlier run stops first. Answers how many branches the scope covers; the hits arrive as
+	 *  `files-searched` events, and a query that cannot be searched is refused here, in a sentence.
+	 */
+	searchFiles: (id: number, run: number, scope: FileScope, query: string, options: SearchOptions) => typedError<number, string>(__TAURI_INVOKE("search_files", { id, run, scope, query, options })),
+	/**
+	 *  "Show more": the Search tab `id`'s run `run` continues where its last page stopped. Nothing
+	 *  happens for a run that is no longer the tab's, or one whose page is still running.
+	 */
+	searchFilesMore: (id: number, run: number) => typedError<null, string>(__TAURI_INVOKE("search_files_more", { id, run })),
+	/**  The Search tab `id` closed: its search stops and is let go of. */
+	searchFilesEnd: (id: number) => __TAURI_INVOKE<void>("search_files_end", { id }),
 	/**  Which channel this machine takes charter from: `stable` or `dev`. */
 	updateChannel: () => __TAURI_INVOKE<string>("update_channel"),
 	/**  Put this machine on a channel. A word charter does not know is refused, not guessed at. */
@@ -1862,10 +1875,15 @@ export type FileChange = {
 	uncommitted: boolean,
 };
 
-/**  Where ⌘P looks: the scope follows the window's focus, and Tab widens it. */
+/**
+ *  Where ⌘P and ⌘⇧F look: for ⌘P the scope follows the window's focus, and Tab widens it; the
+ *  Search tab (FM-8) offers the four as a choice.
+ */
 export type FileScope = 
 /**  One branch: a piece, or no piece for the repo's own folder. */
 { kind: "branch"; plane: PlaneId; workspace: string; repo: string; piece: string | null } | 
+/**  Every branch of one workspace of a project, `near` first (FM-8). */
+{ kind: "workspace"; plane: PlaneId; workspace: string; near: NearBranch | null } | 
 /**
  *  Every branch of one project, `near` first: the branch the window's focus is on, so the
  *  nearest of equal hits leads.
@@ -1892,6 +1910,23 @@ export type FilesFound = {
 	refused: string[],
 	/**  Each branch with more files than ⌘P lists, in the core's sentence. */
 	partial: string[],
+};
+
+/**
+ *  What `files-searched` carries: files a run found since the last batch, the branches it could
+ *  not search, and — on the page's last batch — why the page ended.
+ */
+export type FilesSearched = {
+	id: number,
+	run: number,
+	files: SearchedFile[],
+	refused: string[],
+	/**
+	 *  Each file not searched, and why — a line too long to match, or matching it took past a
+	 *  page's time — as `<path> in <branch>: <why>`.
+	 */
+	unsearched: string[],
+	ended: SearchEnd | null,
 };
 
 /**  What the first-run screen shows about this machine. */
@@ -3524,6 +3559,57 @@ export type SavingInForce = {
 	plane_left_out: string | null,
 	/**  The same for `[repos]`: what the Repos group says. */
 	repos_left_out: string | null,
+};
+
+/**  Why a page of a search ended. */
+export type SearchEnd = 
+/**  The whole scope is searched. */
+"done" | 
+/**  A page's lines were found; there may be more. */
+"capped" | 
+/**  A page's time ran out; there may be more. */
+"out-of-time" | 
+/**  A newer run, or the tab closing, stopped it. */
+"stopped";
+
+/**  How a query is matched, as the Search tab's toggles say. */
+export type SearchOptions = {
+	/**  A regular expression, rather than the text as typed. */
+	regex: boolean,
+	/**  Letters match only in the case typed. */
+	matchCase: boolean,
+	/**  Only a whole word matches. */
+	wholeWord: boolean,
+};
+
+/**
+ *  One file with matches: its project, its branch, its path, how many of its lines match, and
+ *  the first of them.
+ */
+export type SearchedFile = {
+	plane: PlaneId,
+	workspace: string,
+	repo: string,
+	/**  No piece is the repo's own folder. */
+	piece: string | null,
+	path: string,
+	count: number,
+	lines: SearchedLine[],
+};
+
+/**  One matching line: its number, from 1, and its stretches. */
+export type SearchedLine = {
+	number: number,
+	parts: SearchedPart[],
+	/**  Whether the line was longer than what is shown of it. */
+	clipped: boolean,
+};
+
+/**  One stretch of a matching line. */
+export type SearchedPart = {
+	text: string,
+	/**  Whether this stretch is what matched. */
+	hit: boolean,
 };
 
 /**

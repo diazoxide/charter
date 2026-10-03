@@ -711,7 +711,7 @@ fn save_branch(request: &Request, on: &str, head_sha: &str) -> Result<String, St
 }
 
 /// The names a file of credentials goes by, whatever is in it.
-fn secret_name(name: &str) -> Option<&'static str> {
+pub(crate) fn secret_name(name: &str) -> Option<&'static str> {
     let lower = name.to_ascii_lowercase();
     let example = [".example", ".sample", ".template", ".dist"]
         .iter()

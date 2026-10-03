@@ -36,6 +36,11 @@ pub use watch::{ASKED, KNOWN, Root, root};
 // Both read in a bounded child of charter's own binary (FM-4, D-88h).
 mod reader;
 pub use reader::{Answer, Ask, GRACE, MEMORY, OUTPUT, READ_ARG, Reader, serve_if_asked, status};
+mod search;
+pub use search::{
+    BadQuery, Ended, FILE_LINES, FILL, FileHits, HitLine, LINE_CHARS, LONGEST_LINE, LONGEST_QUERY,
+    PAGE_TIME, Part, Search, SearchOptions, Searched, search,
+};
 
 /// The largest file the preview draws, in bytes: 2 MiB (V86 F4, FM-2).
 ///
@@ -423,6 +428,92 @@ fn listing(base: &Path, relative: &Path) -> std::io::Result<Vec<Listed>> {
         });
     }
     Ok(out)
+}
+
+/// A branch's folder, held open: what [`open_inside`] opens a file relative to, so no folder
+/// above the file — the branch's own, or one of its ancestors up to the project — is looked up
+/// by path again once it was opened.
+#[cfg(unix)]
+pub(crate) struct Held(rustix::fd::OwnedFd);
+
+/// Where there is no descriptor to hold: the folder's resolved path, every open checked again.
+#[cfg(not(unix))]
+pub(crate) struct Held(PathBuf);
+
+/// The folder `folder` names under `root`, opened from `root` one component at a time, following
+/// no link (`O_NOFOLLOW | O_DIRECTORY`): an ancestor of the branch's folder swapped for a link —
+/// a workspace's `.worktrees/<repo>`, which its chats can write — fails the open with `ELOOP` or
+/// `ENOTDIR` rather than leading elsewhere. `root` is the project's resolved root, which the
+/// operator chose; `folder` must lie under it.
+#[cfg(unix)]
+fn hold_folder(root: &Path, folder: &Path) -> std::io::Result<Held> {
+    use rustix::fs::{CWD, Mode, OFlags};
+    let relative = folder
+        .strip_prefix(root)
+        .map_err(|_| std::io::Error::other("the branch's folder is not inside the project"))?;
+    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let mut fd = rustix::fs::openat(CWD, root, flags, Mode::empty())?;
+    for step in relative.components() {
+        match step {
+            Component::Normal(name) => fd = rustix::fs::openat(&fd, name, flags, Mode::empty())?,
+            Component::CurDir => {}
+            _ => return Err(std::io::Error::other("not a plain path inside the project")),
+        }
+    }
+    Ok(Held(fd))
+}
+
+#[cfg(not(unix))]
+fn hold_folder(root: &Path, folder: &Path) -> std::io::Result<Held> {
+    let resolved = std::fs::canonicalize(folder)?;
+    if !resolved.starts_with(root) || resolved != folder {
+        return Err(std::io::Error::other(
+            "the branch's folder is not the one checked",
+        ));
+    }
+    Ok(Held(resolved))
+}
+
+/// The file `relative` names in the held folder, opened from it one component at a time,
+/// following no link (`O_NOFOLLOW`): a folder on the way swapped for a link since the walk saw
+/// it fails the open with `ELOOP` or `ENOTDIR` rather than being followed, and so does the file
+/// itself. Opened non-blocking, so a FIFO answers at once rather than waiting for a writer; the
+/// caller checks it is a regular file.
+#[cfg(unix)]
+fn open_inside(held: &Held, relative: &Path) -> std::io::Result<std::fs::File> {
+    use rustix::fs::{Mode, OFlags};
+    let folder = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let mut steps: Vec<&std::ffi::OsStr> = relative
+        .components()
+        .filter_map(|step| match step {
+            Component::Normal(name) => Some(name),
+            _ => None,
+        })
+        .collect();
+    let Some(leaf) = steps.pop() else {
+        return Err(std::io::Error::other("no file named"));
+    };
+    let mut fd: Option<rustix::fd::OwnedFd> = None;
+    for name in steps {
+        let next = match &fd {
+            Some(at) => rustix::fs::openat(at, name, folder, Mode::empty())?,
+            None => rustix::fs::openat(&held.0, name, folder, Mode::empty())?,
+        };
+        fd = Some(next);
+    }
+    let file = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+    let opened = match &fd {
+        Some(at) => rustix::fs::openat(at, leaf, file, Mode::empty())?,
+        None => rustix::fs::openat(&held.0, leaf, file, Mode::empty())?,
+    };
+    Ok(std::fs::File::from(opened))
+}
+
+/// [`open_inside`] where there is no open that refuses a link: every component is refused when
+/// it is a link, and the open's own last component by `O_NOFOLLOW` where there is one.
+#[cfg(not(unix))]
+fn open_inside(held: &Held, relative: &Path) -> std::io::Result<std::fs::File> {
+    crate::contain::open_no_link(&held.0, &held.0.join(relative))
 }
 
 /// [`listing`] where there is no open that refuses a link: listed by path, then refused when

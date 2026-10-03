@@ -1,0 +1,619 @@
+//! ⌘⇧F: **the content of a branch's files, searched** (FM-8, #1111; #1103, V86 F9), across a
+//! scope of branches: one branch, a workspace's, a project's, or every open project's.
+//!
+//! **A live scan, in-process, on ripgrep's own crates.** `ignore` walks the branch's folder,
+//! never following a link; `grep-regex` and `grep-searcher` match line by line. No index is kept
+//! and no program is started per file. The one git call a branch costs is its offered list, the
+//! same listing [`super::list`] and ⌘P read: operator-initiated git, which stays on the git
+//! binary (V88a), through the hardened runner.
+//!
+//! **What is read is what the light editor opens, never more.** git's offered list — what it
+//! tracks, and what it does not track and does not ignore — is the only rule: the walk reads no
+//! ignore file of its own and descends only into folders that hold an offered path. On top of
+//! that it never reads:
+//! - a link, wherever it leads, or anything in `.git` or a repository nested in the branch;
+//! - a path in a vault or charter's own state, by the leak guard's one pattern for it;
+//! - a file named like a credential (`.env`, a private key, `*.pem`, `credentials.json`, a
+//!   registry's `.npmrc`/`.pypirc`), by the repo save's rule for it, even where git offers it;
+//! - a binary file or an image, by the preview's own test of its first bytes;
+//! - a file past the preview's [`super::LARGEST`], which the preview would not draw either.
+//!
+//! A file is opened from the branch's folder one component at a time, following no link, so a
+//! folder or the file swapped for a link after the walk saw it is refused, not followed.
+//!
+//! **Paged, stoppable, resumable.** A [`Search`] walks its scope in order — place by place,
+//! each branch's folders by name — and [`Search::more`] runs it until a page of lines has been
+//! heard, its time budget is spent, the caller's stop is raised, or nothing is left. Stop and
+//! time are heard inside a file too, a [`FILL`] at a time, and a line longer than
+//! [`LONGEST_LINE`] is not matched at all. The walk's place is kept between pages, so "Show
+//! more" continues where the page stopped rather than starting again.
+
+use std::io::Read as _;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
+
+use grep_matcher::Matcher as _;
+use grep_regex::{RegexMatcher, RegexMatcherBuilder};
+use grep_searcher::sinks::Lossy;
+use grep_searcher::{BinaryDetection, SearcherBuilder};
+
+use super::{Named, Place, Refused};
+
+/// The longest query searched, in characters: past a sentence, a search is a paste by mistake.
+pub const LONGEST_QUERY: usize = 1000;
+
+/// The most a query's compiled regex may take: 1 MiB, a tenth of the regex crate's own default,
+/// so a pattern like `\w{1000}{1000}` is refused as too big rather than built.
+const REGEX_SIZE: usize = 1 << 20;
+
+/// The most the lazy DFA may hold while matching: 8 MiB, past which it falls back to a slower
+/// engine rather than grow.
+const DFA_SIZE: usize = 8 << 20;
+
+/// The most matching lines one file shows. The count still says how many there are.
+pub const FILE_LINES: usize = 100;
+
+/// The most characters of one matching line kept, around its first match: a minified bundle's
+/// single line is shown as the stretch that matched.
+pub const LINE_CHARS: usize = 240;
+
+/// How long one page may run before it stops and offers to continue: a scope of a million
+/// files is walked a page at a time, never all at once behind one keystroke.
+pub const PAGE_TIME: Duration = Duration::from_secs(10);
+
+/// How a query is matched.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SearchOptions {
+    /// The query is a regular expression (Rust's `regex` syntax); otherwise its every character
+    /// is itself.
+    pub regex: bool,
+    /// Letters match only in the case typed; otherwise any case.
+    pub match_case: bool,
+    /// A match must be a whole word: no letter, digit or `_` either side.
+    pub whole_word: bool,
+}
+
+/// One stretch of a matching line: what it says, and whether it is what matched.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Part {
+    pub text: String,
+    pub hit: bool,
+}
+
+/// One matching line of a file: its number, from 1, and its text in [`Part`]s.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HitLine {
+    pub number: u64,
+    pub parts: Vec<Part>,
+    /// Whether text before or after the parts was left out, for a line past [`LINE_CHARS`].
+    pub clipped: bool,
+}
+
+impl HitLine {
+    /// The line's text as kept, its parts joined.
+    pub fn text(&self) -> String {
+        self.parts.iter().map(|part| part.text.as_str()).collect()
+    }
+}
+
+/// One file with matches: which place of the scope, by its index; its path in that branch;
+/// how many of its lines match; and the first [`FILE_LINES`] of them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileHits {
+    pub at: usize,
+    pub path: String,
+    pub count: u64,
+    pub lines: Vec<HitLine>,
+}
+
+/// What a search hears, in the order the scope is walked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Searched {
+    /// A file with matches.
+    File(FileHits),
+    /// A place of the scope that could not be searched, by its index, in the core's sentence.
+    Refused { at: usize, why: String },
+    /// A file of a place that was not searched, and why: a line past [`LONGEST_LINE`], or
+    /// matching it took past the page's time.
+    NotSearched {
+        at: usize,
+        path: String,
+        why: String,
+    },
+}
+
+/// Why a page of a search ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ended {
+    /// Every place of the scope is searched.
+    Done,
+    /// The page's lines were heard; [`Search::more`] continues.
+    Capped,
+    /// The page's time ran out; [`Search::more`] continues.
+    OutOfTime,
+    /// The caller's stop was raised.
+    Stopped,
+}
+
+/// Why a query is not searched.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum BadQuery {
+    #[error("Type something to search for")]
+    Empty,
+    #[error("A search is at most {LONGEST_QUERY} characters")]
+    TooLong,
+    #[error("A search is one line")]
+    Lines,
+    #[error("{0}")]
+    Pattern(String),
+}
+
+/// A content search of a scope, walked a page at a time.
+pub struct Search {
+    places: Vec<(PathBuf, Named)>,
+    matcher: RegexMatcher,
+    /// The place being walked, by index, and how far.
+    at: usize,
+    walking: Option<Walking>,
+    budget: Duration,
+}
+
+/// One branch, being walked.
+struct Walking {
+    base: PathBuf,
+    /// The branch's folder, held open from the project's root: every file is opened relative to
+    /// it, so no folder above the file is looked up by path again.
+    held: super::Held,
+    offered: std::sync::Arc<Vec<String>>,
+    walk: ignore::Walk,
+}
+
+/// A search of `scope` for `query`, matched as `options` say. Nothing is read until
+/// [`Search::more`] is asked; a query that cannot be searched is refused here.
+pub fn search(
+    scope: &[Place<'_>],
+    query: &str,
+    options: SearchOptions,
+) -> Result<Search, BadQuery> {
+    if query.is_empty() {
+        return Err(BadQuery::Empty);
+    }
+    if query.chars().count() > LONGEST_QUERY {
+        return Err(BadQuery::TooLong);
+    }
+    if query.contains(['\n', '\r']) {
+        return Err(BadQuery::Lines);
+    }
+    let matcher = RegexMatcherBuilder::new()
+        .fixed_strings(!options.regex)
+        .case_insensitive(!options.match_case)
+        .word(options.whole_word)
+        .line_terminator(Some(b'\n'))
+        .size_limit(REGEX_SIZE)
+        .dfa_size_limit(DFA_SIZE)
+        .build(query)
+        .map_err(|e| BadQuery::Pattern(e.to_string()))?;
+    let places = scope
+        .iter()
+        .map(|place| {
+            (
+                place.plane.to_path_buf(),
+                Named {
+                    ws: place.branch.ws.to_string(),
+                    repo: place.branch.repo.to_string(),
+                    piece: place.branch.piece.map(str::to_owned),
+                },
+            )
+        })
+        .collect();
+    Ok(Search {
+        places,
+        matcher,
+        at: 0,
+        walking: None,
+        budget: PAGE_TIME,
+    })
+}
+
+impl Search {
+    /// The same search with another page time: for a test, or a caller with its own clock.
+    pub fn with_page_time(mut self, budget: Duration) -> Self {
+        self.budget = budget;
+        self
+    }
+
+    /// Searches on from where the last page stopped, telling `heard` each file with matches,
+    /// each file that could not be searched and each place that could not be searched, until
+    /// `lines` matching lines have been heard (counting whole files, so a page may run a file
+    /// past it), the page's time is spent, `stop` is raised, or the scope is done.
+    ///
+    /// **Stop and the page's time are heard inside a file too**: its bytes reach the matcher a
+    /// [`FILL`] at a time, and each fill asks both first. So a costly pattern over a large file
+    /// ends within one fill's matching, never at the end of the file.
+    pub fn more(
+        &mut self,
+        lines: usize,
+        stop: &AtomicBool,
+        heard: &mut dyn FnMut(Searched),
+    ) -> Ended {
+        let until = Instant::now() + self.budget;
+        let mut shown = 0usize;
+        loop {
+            if stop.load(Ordering::Relaxed) {
+                return Ended::Stopped;
+            }
+            if shown > 0 && shown >= lines {
+                return Ended::Capped;
+            }
+            if Instant::now() >= until {
+                return Ended::OutOfTime;
+            }
+            if self.at >= self.places.len() {
+                return Ended::Done;
+            }
+            if self.walking.is_none() {
+                let (plane, named) = &self.places[self.at];
+                match walking(plane, named) {
+                    Ok(walk) => self.walking = Some(walk),
+                    Err(why) => {
+                        heard(Searched::Refused { at: self.at, why });
+                        self.at += 1;
+                        continue;
+                    }
+                }
+            }
+            let walking = self.walking.as_mut().expect("set above");
+            let Some(entry) = walking.walk.next() else {
+                self.walking = None;
+                self.at += 1;
+                continue;
+            };
+            let Ok(entry) = entry else { continue };
+            let Some(path) = searchable(walking, &entry) else {
+                continue;
+            };
+            let watch = Watch { stop, until };
+            match file_hits(&self.matcher, self.at, &walking.held, path, &watch) {
+                Read::Hits(found) => {
+                    shown += found.lines.len();
+                    heard(Searched::File(found));
+                }
+                Read::Nothing => {}
+                Read::NotSearched(path, why) => heard(Searched::NotSearched {
+                    at: self.at,
+                    path,
+                    why,
+                }),
+                Read::Cut(Cut::Stop) => return Ended::Stopped,
+                Read::Cut(Cut::Time(path)) => {
+                    heard(Searched::NotSearched {
+                        at: self.at,
+                        path,
+                        why: "matching it took longer than a page may".to_string(),
+                    });
+                    return Ended::OutOfTime;
+                }
+            }
+        }
+    }
+}
+
+/// How much of a file reaches the matcher at once: what one fill matches before stop and the
+/// page's time are asked again.
+pub const FILL: usize = 16 * 1024;
+
+/// The longest line searched, in bytes. A file with a longer line — a minified bundle, or a
+/// file written to be slow — is not searched, and the answer says so: the matcher works a line
+/// at a time, and one line is what it cannot be stopped inside.
+pub const LONGEST_LINE: usize = 256 * 1024;
+
+/// What a file's matching is asked to hear.
+struct Watch<'a> {
+    stop: &'a AtomicBool,
+    until: Instant,
+}
+
+/// Why a file's matching was cut short.
+enum Cut {
+    Stop,
+    /// The page's time ran out inside the file named.
+    Time(String),
+}
+
+/// What reading one file found.
+enum Read {
+    Hits(FileHits),
+    Nothing,
+    NotSearched(String, String),
+    Cut(Cut),
+}
+
+/// A file's bytes handed to the matcher a [`FILL`] at a time, each fill refused once the stop
+/// is raised or the page's time is spent.
+struct Watched<'a> {
+    bytes: &'a [u8],
+    at: usize,
+    watch: &'a Watch<'a>,
+    cut: Option<bool>,
+}
+
+impl std::io::Read for Watched<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.watch.stop.load(Ordering::Relaxed) {
+            self.cut = Some(true);
+            return Err(std::io::Error::other("stopped"));
+        }
+        if Instant::now() >= self.watch.until {
+            self.cut = Some(false);
+            return Err(std::io::Error::other("out of time"));
+        }
+        let rest = &self.bytes[self.at..];
+        let n = rest.len().min(buf.len()).min(FILL);
+        buf[..n].copy_from_slice(&rest[..n]);
+        self.at += n;
+        Ok(n)
+    }
+}
+
+/// The matches of one file, opened from the branch's held folder one component at a time,
+/// following no link ([`super::open_inside`]): nothing for a file with none, or one that is binary, an
+/// image, past the preview's size, not a regular file, or gone.
+fn file_hits(
+    matcher: &RegexMatcher,
+    at: usize,
+    held: &super::Held,
+    path: String,
+    watch: &Watch<'_>,
+) -> Read {
+    let Ok(mut file) = super::open_inside(held, Path::new(&path)) else {
+        return Read::Nothing;
+    };
+    let Ok(meta) = file.metadata() else {
+        return Read::Nothing;
+    };
+    if !meta.is_file() || meta.len() > super::LARGEST {
+        return Read::Nothing;
+    }
+    let mut bytes = Vec::with_capacity(meta.len() as usize);
+    if file
+        .by_ref()
+        .take(super::LARGEST + 1)
+        .read_to_end(&mut bytes)
+        .is_err()
+        || bytes.len() as u64 > super::LARGEST
+        || super::image_kind(&bytes).is_some()
+        || bytes[..bytes.len().min(super::SNIFF)].contains(&0)
+    {
+        return Read::Nothing;
+    }
+    let mut count = 0u64;
+    let mut lines = Vec::new();
+    let mut searcher = SearcherBuilder::new()
+        .line_number(true)
+        .binary_detection(BinaryDetection::none())
+        .heap_limit(Some(LONGEST_LINE))
+        .build();
+    let mut reader = Watched {
+        bytes: &bytes,
+        at: 0,
+        watch,
+        cut: None,
+    };
+    let searched = searcher.search_reader(
+        matcher,
+        &mut reader,
+        Lossy(|number, line: &str| {
+            count += 1;
+            if lines.len() < FILE_LINES {
+                lines.push(hit_line(matcher, number, line));
+            }
+            Ok(true)
+        }),
+    );
+    match (searched, reader.cut) {
+        (_, Some(true)) => Read::Cut(Cut::Stop),
+        (_, Some(false)) => Read::Cut(Cut::Time(path)),
+        (Err(_), None) => Read::NotSearched(
+            path,
+            format!("it has a line longer than {} KiB", LONGEST_LINE / 1024),
+        ),
+        (Ok(()), None) if count == 0 => Read::Nothing,
+        (Ok(()), None) => Read::Hits(FileHits {
+            at,
+            path,
+            count,
+            lines,
+        }),
+    }
+}
+
+/// A branch's folder, its offered list, and a walk of it, ready to search.
+///
+/// **git's offered list is the only rule.** The walk reads no ignore file of its own — no
+/// `.gitignore`, no `info/exclude`, no global excludes, no `.ignore` — because each is a file
+/// an agent can plant as a link to a device or a FIFO, and reading one would follow it. The
+/// walk descends only into a folder that holds an offered path, so `target/` and
+/// `node_modules/` are never walked, and it opens nothing but folders.
+fn walking(plane: &Path, named: &Named) -> Result<Walking, String> {
+    let branch = named.branch();
+    let ready = || -> Result<Walking, Refused> {
+        let folder = super::folder_of(plane, branch)?;
+        let offered = std::sync::Arc::new(super::files_in(&folder, branch)?);
+        let unreadable = |e: std::io::Error| Refused::Unreadable {
+            what: branch.called().to_string(),
+            why: e.to_string(),
+        };
+        // **Held from the project's root, one folder at a time, following no link**: an
+        // ancestor of the branch's folder swapped for a link — `.worktrees/<repo>` sits in a
+        // workspace its chats write — is refused here, or, swapped later, never reached, since
+        // every file is opened relative to the folder held now.
+        let root = std::fs::canonicalize(plane).map_err(unreadable)?;
+        let base = std::fs::canonicalize(&folder).map_err(unreadable)?;
+        let held = super::hold_folder(&root, &base).map_err(unreadable)?;
+        let top = base.clone();
+        let listed = std::sync::Arc::clone(&offered);
+        let walk = ignore::WalkBuilder::new(&base)
+            .hidden(false)
+            .ignore(false)
+            .git_ignore(false)
+            .git_exclude(false)
+            .git_global(false)
+            .parents(false)
+            .follow_links(false)
+            .same_file_system(true)
+            .max_filesize(Some(super::LARGEST))
+            .sort_by_file_name(|a, b| a.cmp(b))
+            .filter_entry(move |entry| {
+                if entry.depth() == 0 {
+                    return true;
+                }
+                if entry.file_name() == ".git" {
+                    return false;
+                }
+                if !entry.file_type().is_some_and(|kind| kind.is_dir()) {
+                    return true;
+                }
+                // A repository nested in the branch is its own, not the branch's.
+                if std::fs::symlink_metadata(entry.path().join(".git")).is_ok() {
+                    return false;
+                }
+                entry
+                    .path()
+                    .strip_prefix(&top)
+                    .is_ok_and(|inside| holds_offered(&listed, &super::slashed(inside)))
+            })
+            .build();
+        Ok(Walking {
+            base,
+            held,
+            offered,
+            walk,
+        })
+    };
+    ready().map_err(|refused| refused.to_string())
+}
+
+/// Whether any path of the sorted `offered` list lies under the folder `folder` — as spelled,
+/// or composed as git spells a name where the system composes (macOS).
+fn holds_offered(offered: &[String], folder: &str) -> bool {
+    use unicode_normalization::UnicodeNormalization as _;
+    let under = |folder: &str| {
+        let prefix = format!("{folder}/");
+        let from = offered.partition_point(|one| one.as_str() < prefix.as_str());
+        offered
+            .get(from)
+            .is_some_and(|one| one.starts_with(&prefix))
+    };
+    under(folder) || under(&folder.nfc().collect::<String>())
+}
+
+/// The path, relative to the branch and as git's list spells it, of an entry the search reads;
+/// `None` for anything it does not.
+fn searchable(walking: &Walking, entry: &ignore::DirEntry) -> Option<String> {
+    use unicode_normalization::UnicodeNormalization as _;
+    // Never a link, whatever it leads to, and never a folder, a FIFO or a socket.
+    if entry.path_is_symlink() || !entry.file_type().is_some_and(|kind| kind.is_file()) {
+        return None;
+    }
+    let relative = entry.path().strip_prefix(&walking.base).ok()?;
+    if super::names_git(entry.path(), &walking.base) {
+        return None;
+    }
+    let path = super::slashed(relative);
+    // git lists a name composed where the system composes (macOS), whatever the disk holds.
+    let composed: String = path.nfc().collect();
+    let offers = |one: &str| {
+        walking
+            .offered
+            .binary_search_by(|o| o.as_str().cmp(one))
+            .is_ok()
+    };
+    if !offers(&path) && !offers(&composed) {
+        return None;
+    }
+    if guarded(&path) {
+        return None;
+    }
+    Some(path)
+}
+
+/// Whether a path is one search never reads, whatever git says of it: in a vault or charter's
+/// own state, or named like a credential.
+fn guarded(path: &str) -> bool {
+    if crate::leakguard::vault_path_matches(path)
+        || path
+            .split('/')
+            .any(|step| crate::leakguard::vault_path_matches(&format!("{step}/")))
+    {
+        return true;
+    }
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let lower = name.to_ascii_lowercase();
+    crate::reposave::secret_name(name).is_some() || lower == ".npmrc" || lower == ".pypirc"
+}
+
+/// A matching line as [`Part`]s, its line ending dropped and, past [`LINE_CHARS`], clipped to
+/// a stretch around its first match.
+fn hit_line(matcher: &RegexMatcher, number: u64, line: &str) -> HitLine {
+    let line = line.trim_end_matches(['\n', '\r']);
+    let mut found: Vec<(usize, usize)> = Vec::new();
+    let _ = matcher.find_iter(line.as_bytes(), |m| {
+        // An empty match (`^`, `\b`) marks nothing.
+        if m.start() < m.end() && line.is_char_boundary(m.start()) && line.is_char_boundary(m.end())
+        {
+            found.push((m.start(), m.end()));
+        }
+        true
+    });
+    let (from, to, clipped) = window(line, found.first().map_or(0, |first| first.0));
+    let mut parts = Vec::new();
+    let mut said = from;
+    for (start, end) in found {
+        let (start, end) = (start.max(from), end.min(to));
+        if start >= end {
+            continue;
+        }
+        if said < start {
+            parts.push(Part {
+                text: line[said..start].to_string(),
+                hit: false,
+            });
+        }
+        parts.push(Part {
+            text: line[start..end].to_string(),
+            hit: true,
+        });
+        said = end;
+    }
+    if said < to {
+        parts.push(Part {
+            text: line[said..to].to_string(),
+            hit: false,
+        });
+    }
+    HitLine {
+        number,
+        parts,
+        clipped,
+    }
+}
+
+/// The stretch of `line` kept, as byte offsets on character boundaries: all of it when it is
+/// within [`LINE_CHARS`], otherwise that many characters from a little before `first`.
+fn window(line: &str, first: usize) -> (usize, usize, bool) {
+    if line.chars().count() <= LINE_CHARS {
+        return (0, line.len(), false);
+    }
+    let lead = LINE_CHARS / 4;
+    let before: Vec<usize> = line[..first].char_indices().map(|(at, _)| at).collect();
+    let from = before
+        .len()
+        .checked_sub(lead)
+        .map_or(0, |skip| before[skip]);
+    let to = line[from..]
+        .char_indices()
+        .nth(LINE_CHARS)
+        .map_or(line.len(), |(at, _)| from + at);
+    (from, to, from > 0 || to < line.len())
+}

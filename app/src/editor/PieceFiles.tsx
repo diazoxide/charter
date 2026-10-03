@@ -6,6 +6,8 @@
  *   dragged or moved from the keyboard. Where it was left is the tab's (`tabs.splits`), and the
  *   record keeps it for a tab open at a quit (`reopen::View::split`). One tab for a whole
  *   branch, so reading through it does not leave a tab per file behind.
+ *   A jump to a file at a line (a search hit, FM-8; `fileJump.ts`) lands here: the preview picks
+ *   the file and brings the line into view.
  * - **\<file\> · \<branch\>** is one file in a tab of its own: what the preview's *Open in a
  *   tab of its own* opens, and what a jump from a diff, a record or the knowledge graph opens.
  *
@@ -31,6 +33,7 @@ import type { ViewRef } from "../tabs";
 import { BranchTree } from "./BranchTree";
 import { LightEditor } from "./LightEditor";
 import { useYourEditor } from "../yourEditor";
+import { settleJump, usePendingJump } from "../fileJump";
 
 /** A size, as a person reads one. */
 function sized(bytes: number): string {
@@ -347,7 +350,20 @@ export function PieceFilesTab({
 }) {
   const [picked, setPicked] = useState<string>();
   const [source, setSource] = useState<{ path: string; on: boolean }>();
-  const at = useCursorLine(picked);
+  // **A jump lands here** (FM-8): the file it names is picked and its line brought into view.
+  // Taken while drawing, the way React keeps what an earlier render saw, so the preview never
+  // draws the old file first; settled after, so a tab opened later does not land on it again.
+  const jump = usePendingJump(plane, cut);
+  const [landed, setLanded] = useState<{ at: number; path: string; line: number }>();
+  if (jump !== undefined && jump.at !== landed?.at) {
+    setLanded({ at: jump.at, path: jump.path, line: jump.line });
+    setPicked(jump.path);
+  }
+  useEffect(() => {
+    if (landed !== undefined) settleJump(landed.at);
+  }, [landed]);
+  const line = landed !== undefined && landed.path === picked ? landed.line : undefined;
+  const at = useCursorLine(picked, line);
   const read = useFile(plane, cut, picked);
   // **Read once**: a panel's size is a constraint, and a constraint that changes re-registers
   // the panel (`RegionFrame.tsx`). The divider is where the operator's hand put it already.
@@ -361,7 +377,9 @@ export function PieceFilesTab({
     lastSplit = Math.round(tree);
     onSplit?.(lastSplit);
   };
-  const showsSource = source !== undefined && source.path === picked && source.on;
+  // A line jumped to is in the text, so a markdown file shows its source, as its own tab does.
+  const showsSource =
+    source !== undefined && source.path === picked ? source.on : line !== undefined;
 
   return (
     <Group className="piece-files" orientation="horizontal" onLayoutChanged={settled}>
@@ -406,7 +424,7 @@ export function PieceFilesTab({
                   </button>
                 </span>
               </header>
-              <Shown path={picked} read={read} onLine={at.moved} source={showsSource} />
+              <Shown path={picked} read={read} line={line} onLine={at.moved} source={showsSource} />
             </>
           )}
         </section>
