@@ -97,8 +97,14 @@ waits in needs you until a human scope answers it through ACP.**
 - **The agent process is started like a terminal chat's program**, with three differences only:
   its argv is the declaration's `[levels] acp` argv, its stdio is two pipes `charterd` holds
   instead of a PTY, and it has no pane. The rest is the same:
-  - it leads its own session, as a PTY program does, so ADR 0068 §5's process-tree check,
-    ADR 0071's stop and V27c's pause of the whole process group hold for it;
+  - it leads its own process group, so ADR 0068 §5's process-tree check, ADR 0071's stop and
+    V27c's pause of the whole process group hold for it. **Amended by V77:** it does not lead
+    its own session, as a PTY program does, because `setsid` in the child needs a `pre_exec`,
+    which is `unsafe`, and the one audited block is the executor's. It stays in the host's
+    session, so **the host never has a controlling terminal**: the app (and `charterd`, once it
+    runs on its own) leaves any terminal it was started from before it starts a chat
+    (`charter_core::noterminal`), and a level-3 chat refuses to start while the host still has
+    one;
   - it gets the chat's environment, including the chat's number, token and hook socket, so a
     `charter` command it runs and ADR 0074's git hooks work as in any chat;
   - `session/new` gets the chat's worktree as `cwd`, and **charter's MCP server** in
@@ -325,10 +331,12 @@ it"*, is recorded by §3 above.
 
 ## What changes where
 
-The code does not change with this record.
+When this record was accepted, no code changed with it. V77 later changed one thing in the
+host: the app leaves its controlling terminal as it starts (`charter_core::noterminal`, §1).
 
 | Where | What changes |
 |---|---|
+| The app, `charterd` | V77: the host leaves its controlling terminal at start, and a level-3 chat refuses to start while it has one |
 | `charter-core` / `charterd` | HP-2: the ACP client in `charterd`, stdio, with §2's client capabilities, §4's negotiation, §5's order and §6's handover state |
 | Declarations | FD-14: the built-ins' `[levels] acp` argv names the ACP adapter program; `tested` covers it |
 | The capability card and `charter doctor` | HP-19: *no, the ACP adapter program is not installed*, and the negotiated differences |
@@ -377,3 +385,10 @@ The code does not change with this record.
    can hide it everywhere (C9) (V28c).
 4. **An ACP ask has no deadline.** It stays in needs you until answered, cancelled or stopped
    (V28d).
+
+## Ruled (V77, 2026-10-03, the HP-2 review)
+
+5. **A level-3 agent leads its own process group, not its own session, and the host never has
+   a controlling terminal.** `process_group(0)` stays; no new `unsafe`. The app and `charterd`
+   leave their terminal as they start, with a test that a host started in a terminal has none
+   afterwards, and none after it opens a terminal pair. §1 is amended to say so.

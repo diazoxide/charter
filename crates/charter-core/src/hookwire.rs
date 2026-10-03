@@ -80,6 +80,9 @@ pub const CLAUDE_PID_ENV: &str = "CLAUDE_PID";
 ///
 /// **Nor the launcher's chat token** ([`TOKEN_ENV`]): each chat gets its own at the `exec`,
 /// and one the app inherited is never another chat's, whoever lists it.
+///
+/// **Nor the host's relaunch marker** ([`crate::noterminal::RELAUNCHED_ENV`]): it names the
+/// app's own parent, and an app started from a chat's shell leaves that shell's terminal.
 pub const NOT_INHERITED: &[&str] = &[
     CLAUDE_CONVERSATION_ENV,
     CLAUDE_PID_ENV,
@@ -87,6 +90,7 @@ pub const NOT_INHERITED: &[&str] = &[
     crate::active::WORKSPACE_ENV,
     crate::active::PLANE_ROOT_ENV,
     TOKEN_ENV,
+    crate::noterminal::RELAUNCHED_ENV,
 ];
 
 /// Which conversation a report is of, and how well that is known.
@@ -1902,6 +1906,7 @@ mod tests {
         assert!(NOT_INHERITED.contains(&crate::active::PLANE_ROOT_ENV));
         // Nor the launcher's own chat token: a chat is given its own at the `exec`.
         assert!(NOT_INHERITED.contains(&TOKEN_ENV));
+        assert!(NOT_INHERITED.contains(&crate::noterminal::RELAUNCHED_ENV));
         // charter's own two are set per session, after these are removed, so they are not
         // here — removing them would remove what the app just put in.
         assert!(!NOT_INHERITED.contains(&SOCKET_ENV));

@@ -347,6 +347,15 @@ impl Asks {
             .collect()
     }
 
+    /// The chat that raised ask `id`, while it is open, its deadline passed or not.
+    pub fn chat_of(&self, id: &AskId) -> Option<String> {
+        self.held()
+            .open
+            .iter()
+            .find(|open| open.raised.id == *id)
+            .map(|open| open.raised.chat.clone())
+    }
+
     /// Every ask still waiting at `now`, oldest first.
     pub fn pending(&self, now: Instant) -> Vec<Raised> {
         self.held()

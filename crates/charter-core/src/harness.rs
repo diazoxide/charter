@@ -335,6 +335,21 @@ impl Harness {
         self.adapter().armed_with()
     }
 
+    /// The arguments that start this harness's program as an ACP agent, for a chat at level 3
+    /// over [`crate::acp`], or `None` where charter does not run it over ACP yet. A fact, as
+    /// the `[levels] acp` argv of its declaration will be once FD-14 moves it there.
+    ///
+    /// opencode's ACP agent is opencode itself, `opencode acp` (ADR 0080 §3, measured on
+    /// 1.18.33: protocol version 1, `loadSession`, and a session run with `fs` and `terminal`
+    /// both off). Codex and Claude Code reach ACP through ACP adapter programs, which HP-3 and
+    /// HP-4 decide.
+    pub fn acp_args(self) -> Option<&'static [&'static str]> {
+        match self {
+            Self::Opencode => Some(&["acp"]),
+            Self::ClaudeCode | Self::Codex => None,
+        }
+    }
+
     /// The adapter that arms this harness at level 2 (ADR 0073 §3): the enum is their
     /// registry, and every harness has one.
     pub fn adapter(self) -> &'static dyn HarnessAdapter {
@@ -523,6 +538,15 @@ fn words<const N: usize>(argv: [&str; N]) -> Vec<String> {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn opencode_offers_level_3_through_its_own_acp_mode_and_the_others_wait_for_their_tickets() {
+        // ADR 0080 §3: opencode's ACP agent is the same program (HP-2, first); Codex's and
+        // Claude Code's are ACP adapter programs HP-3 and HP-4 decide.
+        assert_eq!(Harness::Opencode.acp_args(), Some(&["acp"][..]));
+        assert_eq!(Harness::Codex.acp_args(), None);
+        assert_eq!(Harness::ClaudeCode.acp_args(), None);
+    }
 
     #[test]
     fn a_sandbox_compiled_for_one_harness_arms_no_chat_of_any_other() {

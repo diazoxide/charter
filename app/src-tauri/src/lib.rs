@@ -1766,6 +1766,14 @@ fn without_channel_commands(bindings: &str) -> String {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Before anything else, chats included: the host has no controlling terminal, because a
+    // level-3 agent shares its session and could open it (V77, ADR 0080 §1). Started straight
+    // from a shell, the app runs again as its own child, which leaves; this process only
+    // waits for it and exits as it does.
+    let left = charter_core::noterminal::leave();
+    if let Ok(charter_core::noterminal::Left::Relaunched(code)) = left {
+        std::process::exit(code);
+    }
     // Read first, so that what it holds is when the process started and not when the window
     // first asked.
     LazyLock::force(&STARTED);
@@ -1780,6 +1788,12 @@ pub fn run() {
     charter_core::applog::install();
     reached("run() entered");
     reached(&raised.to_string());
+    match &left {
+        Ok(left) => reached(&format!("the controlling terminal: {left:?}")),
+        // Not fatal here: a level-3 chat checks again before it starts, and refuses to start
+        // while the host still has a terminal (`charter_core::acp::NotStarted::Terminal`).
+        Err(err) => tracing::warn!("charter: the app could not leave its terminal: {err}"),
+    }
     if matches!(raised, charter_core::openfiles::Raised::Refused { .. }) {
         tracing::warn!("charter: {raised}");
     }

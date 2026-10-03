@@ -806,7 +806,7 @@ key refuses.
 | `[terminal].ready_to_type` | `"on-start"`, `"raw-and-quiet"` or `"never"` | default `"never"` | When a curation prompt may be typed into a new chat (ADR 0061). `"on-start"` waits for a hook, so only a harness with hooks may say it. | stable | same |
 | `[levels].terminal` | bool | default `true` | Level 1. Every declaration offers it; `false` is refused. | stable | same |
 | `[levels].hooks` | bool | default `false` | Level 2. `true` only in a built-in: a project declaration that says it is refused (V24c). | stable | same |
-| `[levels].acp` | list[str] | optional | Level 3 over ACP: the argv that starts the harness's ACP agent. Its first word follows `program`'s rules and the rest `new`'s shapes. Read by HP-2's client when it lands. | stable | same |
+| `[levels].acp` | list[str] | optional | Level 3 over ACP: the argv that starts the harness's ACP agent. Its first word follows `program`'s rules and the rest `new`'s shapes. The built-in opencode declaration names `["opencode", "acp"]`, which HP-2's client (`charter_core::acp`) runs; a chat starts at level 3 from a declaration once #1076 wires it in. | stable | same |
 | `[capabilities].<name>` | str | optional | A harness capability (ADR 0073 §6): `"yes"`, `"no: <the reason>"` or `"unknown"`. One left out is unknown, which charter treats as no. The names: `reports_its_process`, `reports_its_start_before_the_first_prompt`, `keeps_conversations_by_directory`, `reports_waiting`, `resumes_by_id` (`"yes"` needs `[session].resume`), `per_chat_plugins`. A ticket that reads a new one adds it here. | stable | same, `CAPABILITIES` |
 
 ---

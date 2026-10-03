@@ -182,3 +182,125 @@ fn a_corpus_that_does_not_exist_is_an_error_not_silence() {
     screen_until(&session, "fake-harness:");
     assert_ne!(session.wait(PATIENCE).unwrap(), Some(Exit::Code(0)));
 }
+
+#[test]
+fn the_host_leaves_its_controlling_terminal_and_a_terminal_it_opens_after_is_not_one() {
+    // V77: a level-3 agent shares the host's session, so the host has no terminal to share.
+    // A program in a pane leads its session and its group, so `setsid` is refused and the
+    // host starts again as its own child, which leaves (`charter_core::noterminal`).
+    let session = harness(&["--leave-terminal"]);
+    let screen = screen_until(&session, "terminal after a pair:");
+    let said: Vec<&str> = screen
+        .lines
+        .iter()
+        .map(|line| line.trim())
+        .filter(|line| line.starts_with("terminal "))
+        .collect();
+    assert!(said.contains(&"terminal before: yes"), "{said:#?}");
+    assert!(
+        screen
+            .lines
+            .iter()
+            .any(|line| line.trim() == "acp with a terminal refused: yes"),
+        "{:#?}",
+        screen.lines
+    );
+    assert!(said.contains(&"terminal after: no"), "{said:#?}");
+    assert!(said.contains(&"terminal after a pair: no"), "{said:#?}");
+    assert!(
+        !said
+            .iter()
+            .any(|line| line.starts_with("terminal after") && line.ends_with("yes"))
+    );
+    assert_eq!(session.wait(PATIENCE).unwrap(), Some(Exit::Code(0)));
+}
+
+/// The pid a `--leave-terminal --linger` line names, `<what> pid <n>`, the first time.
+fn pid_said(screen: &Screen, what: &str) -> String {
+    let prefix = format!("{what} pid ");
+    screen
+        .lines
+        .iter()
+        .find_map(|line| line.trim().strip_prefix(&prefix).map(str::to_owned))
+        .unwrap_or_else(|| panic!("no {prefix:?} in {:#?}", screen.lines))
+}
+
+fn alive(pid: &str) -> bool {
+    std::process::Command::new("kill")
+        .args(["-0", pid])
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+#[test]
+fn a_relaunched_host_ends_when_the_process_that_relaunched_it_is_killed() {
+    // A SIGKILLed first process can pass nothing on, so the relaunched host watches a pipe from
+    // it and ends at its end, rather than living on as an orphaned window.
+    let session = harness(&["--leave-terminal", "--linger"]);
+    let screen = screen_until(&session, "left as pid");
+    let first = pid_said(&screen, "started as");
+    let left = pid_said(&screen, "left as");
+    assert_ne!(first, left, "the host relaunched itself");
+    assert!(alive(&left));
+    let killed = std::process::Command::new("kill")
+        .args(["-KILL", &first])
+        .status()
+        .expect("kill runs");
+    assert!(killed.success());
+    // Well inside the minute `--linger` stays for.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while alive(&left) {
+        assert!(
+            Instant::now() < deadline,
+            "the relaunched host {left} outlived its parent"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[test]
+fn a_relaunched_host_killed_by_a_signal_ends_its_first_process_by_the_same_signal() {
+    let session = harness(&["--leave-terminal", "--linger"]);
+    let screen = screen_until(&session, "left as pid");
+    let left = pid_said(&screen, "left as");
+    let killed = std::process::Command::new("kill")
+        .args(["-TERM", &left])
+        .status()
+        .expect("kill runs");
+    assert!(killed.success());
+    // The operating system's name for it: "Terminated" on Linux, "Terminated: 15" on macOS.
+    match session.wait(PATIENCE).unwrap() {
+        Some(Exit::Signal(name)) => assert!(name.starts_with("Terminated"), "{name}"),
+        other => panic!("ended by {other:?}, not by SIGTERM"),
+    }
+}
+
+#[test]
+fn a_host_that_left_its_terminal_ends_with_a_parent_that_ends_on_ctrl_c() {
+    // `cargo tauri dev`: tauri-cli ends on Ctrl-C without ending the app it started. Before
+    // the host left its terminal the app got the same Ctrl-C; now it is in a session of its own,
+    // so it ends when its parent does.
+    let session = harness(&[
+        "--parent-of",
+        env!("CARGO_BIN_EXE_fake-harness"),
+        "--leave-terminal",
+        "--linger",
+    ]);
+    let screen = screen_until(&session, "left as pid");
+    let left = pid_said(&screen, "left as");
+    assert_eq!(
+        pid_said(&screen, "child"),
+        left,
+        "it left without a relaunch"
+    );
+    session.write(b"\x03").expect("Ctrl-C");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while alive(&left) {
+        assert!(
+            Instant::now() < deadline,
+            "the host {left} outlived its parent"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
