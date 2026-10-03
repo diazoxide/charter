@@ -6,8 +6,8 @@
 use serde_json::Value;
 
 use super::backend::{
-    About, Asker, Caller, Capabilities, Capability, ForgeRef, Issues, NewWorkItem, Owner, Reach,
-    RepoRecord, Repos, Requests, Support, UnknownWhy, Visibility, WorkItems,
+    About, Asker, Caller, Capabilities, Capability, ForgeRef, Issues, NewWorkItem, Owner,
+    PushProtection, Reach, RepoRecord, Repos, Requests, Support, UnknownWhy, Visibility, WorkItems,
 };
 use super::checks::{self, Checks};
 use super::pr::{
@@ -209,7 +209,18 @@ impl Repos for GitLab {
             Some("private") if !member => Issues::NoRight,
             _ => Issues::Open,
         };
-        Ok(About { visibility, issues })
+        // Named `pre_receive_secret_detection_enabled` before GitLab 18.0, and in the answer
+        // only for an account that may change it.
+        let push_protection = PushProtection::of(
+            answer["secret_push_protection_enabled"]
+                .as_bool()
+                .or_else(|| answer["pre_receive_secret_detection_enabled"].as_bool()),
+        );
+        Ok(About {
+            visibility,
+            issues,
+            push_protection,
+        })
     }
 }
 

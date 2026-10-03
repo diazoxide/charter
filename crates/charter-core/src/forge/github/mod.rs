@@ -5,8 +5,9 @@
 use serde_json::Value;
 
 use super::backend::{
-    About, Asker, Caller, Capabilities, Capability, ForgeRef, Issues, NewWorkItem, Owner, Reach,
-    Reason, RepoRecord, Repos, Requests, Support, Unavailable, UnknownWhy, Visibility, WorkItems,
+    About, Asker, Caller, Capabilities, Capability, ForgeRef, Issues, NewWorkItem, Owner,
+    PushProtection, Reach, Reason, RepoRecord, Repos, Requests, Support, Unavailable, UnknownWhy,
+    Visibility, WorkItems,
 };
 use super::checks::{self, Checks};
 use super::pr::{
@@ -362,7 +363,21 @@ impl Repos for GitHub {
         } else {
             Issues::Open
         };
-        Ok(About { visibility, issues })
+        // `security_and_analysis` is in the answer only for an account with admin rights.
+        let push_protection = PushProtection::of(
+            match answer["security_and_analysis"]["secret_scanning_push_protection"]["status"]
+                .as_str()
+            {
+                Some("enabled") => Some(true),
+                Some("disabled") => Some(false),
+                _ => None,
+            },
+        );
+        Ok(About {
+            visibility,
+            issues,
+            push_protection,
+        })
     }
 }
 

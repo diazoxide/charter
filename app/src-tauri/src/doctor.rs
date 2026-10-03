@@ -11,8 +11,8 @@
 //! So this runs [`charter_core::doctor::Doctor`] **in the app's own process**, on the plane the
 //! window names, and hands the rows over unchanged. Thin by design, as `worktrees.rs` is: every
 //! row, every sentence and every verdict is the core's, the same ones `charter doctor --json`
-//! prints (and the recorded `doctor-*` scenarios hold byte for byte to Python's, ADR 0046). Nothing here
-//! rewords a row.
+//! prints (and the recorded `doctor-*` scenarios hold byte for byte to Python's, ADR 0046).
+//! Nothing here rewords a row.
 //!
 //! # Two depths, and who asks for which
 //!
@@ -28,9 +28,10 @@
 //! hold "what the window draws is what `charter doctor --json` prints" as an equality.
 //!
 //! - **The full doctor** (`full: true`) also answers for each harness profile — whether its
-//!   program can be found, the search a launch makes. The core keeps that to a doctor *a
-//!   person asked for* (`doctor/profiles.rs`, ruling 11), so the window asks it only when the
-//!   operator opens the doctor. Opening it is the asking.
+//!   program can be found, the search a launch makes — and asks the forge who can read the
+//!   project's remote and whether it refuses a pushed secret (`project remote`, SQ-8). The core
+//!   keeps that to a doctor *a person asked for* (`doctor/profiles.rs`, ruling 11), so the
+//!   window asks it only when the operator opens the doctor. Opening it is the asking.
 
 use charter_core::doctor::{Doctor, Row, Status};
 
@@ -135,12 +136,19 @@ pub async fn plane_doctor(
 /// environment variable, and `pinned` is what makes the `nested plane` row talk about
 /// `$CHARTER_ROOT`.
 pub(crate) fn report(root: &std::path::Path, full: bool) -> DoctorReport {
+    let doctor = Doctor::at(root, root, false, !full);
+    // The full doctor is one the operator opened, so it asks the forge about the project's
+    // remote, as a typed `charter doctor` does (SQ-8). The preflight asks no forge.
+    let doctor = if full {
+        doctor.asking_forges(
+            charter_core::forge::Caller::window(),
+            std::sync::Arc::new(charter_core::forge::cli::Cli::default()),
+        )
+    } else {
+        doctor
+    };
     DoctorReport {
-        rows: Doctor::at(root, root, false, !full)
-            .run()
-            .into_iter()
-            .map(DoctorRow::from)
-            .collect(),
+        rows: doctor.run().into_iter().map(DoctorRow::from).collect(),
         app_rows: vec![chat_footer(root), event_log(crate::EVENT_LOG.get())],
         full,
         path: std::env::var_os("PATH").map(|p| p.to_string_lossy().into_owned()),

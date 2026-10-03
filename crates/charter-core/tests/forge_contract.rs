@@ -21,7 +21,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use charter_core::forge::backend::{About, Issues, NewWorkItem, Visibility};
+use charter_core::forge::backend::{About, Issues, NewWorkItem, PushProtection, Visibility};
 use charter_core::forge::checks::{Checks, Ci};
 use charter_core::forge::pr::{AutoMerge, MergeAs, MergedAt, Opened, Pr, Request, State};
 use charter_core::forge::recorded::Recorded;
@@ -223,7 +223,9 @@ mod cases {
             backend.about(&recorded.caller, &repo),
             Ok(About {
                 visibility: Visibility::Private,
-                issues: Issues::Open
+                issues: Issues::Open,
+                // The recorded account is no admin, so neither forge names the setting.
+                push_protection: PushProtection::Unknown,
             })
         );
         spent(&recorded);
@@ -845,7 +847,8 @@ mod who_can_open_an_issue {
             github(json!({"private": false, "has_issues": false})),
             About {
                 visibility: Visibility::Public,
-                issues: Issues::Off
+                issues: Issues::Off,
+                push_protection: PushProtection::Unknown,
             }
         );
         assert_eq!(
@@ -874,11 +877,61 @@ mod who_can_open_an_issue {
             gitlab(member),
             About {
                 visibility: Visibility::Internal,
-                issues: Issues::Open
+                issues: Issues::Open,
+                push_protection: PushProtection::Unknown,
             }
         );
         let off = json!({"visibility": "private", "issues_access_level": "disabled"});
         assert_eq!(gitlab(off).issues, Issues::Off);
+    }
+
+    /// Whether the forge refuses a push that carries a secret (SQ-8), in each forge's own field:
+    /// GitHub's `security_and_analysis.secret_scanning_push_protection.status`, GitLab's
+    /// `secret_push_protection_enabled` (`pre_receive_secret_detection_enabled` before 18.0).
+    /// Both forges show it only to an account that may change it; silence is `Unknown`.
+    #[test]
+    fn push_protection_is_read_from_each_forges_own_field_and_silence_is_unknown() {
+        charter_core::unsteered!();
+        let github = |out| {
+            about_of(charter_core::forge::Kind::GitHub, "repos/acme/api", out).push_protection
+        };
+        let status = |s: &str| {
+            json!({"visibility": "public", "security_and_analysis":
+                   {"secret_scanning_push_protection": {"status": s}}})
+        };
+        assert_eq!(github(status("enabled")), PushProtection::On);
+        assert_eq!(github(status("disabled")), PushProtection::Off);
+        assert_eq!(github(status("something new")), PushProtection::Unknown);
+        assert_eq!(
+            github(json!({"visibility": "public"})),
+            PushProtection::Unknown
+        );
+
+        let gitlab = |out| {
+            about_of(
+                charter_core::forge::Kind::GitLab,
+                "projects/acme%2Fapi",
+                out,
+            )
+            .push_protection
+        };
+        let public = |key: &str, on: bool| json!({"visibility": "public", key: on});
+        assert_eq!(
+            gitlab(public("secret_push_protection_enabled", true)),
+            PushProtection::On
+        );
+        assert_eq!(
+            gitlab(public("secret_push_protection_enabled", false)),
+            PushProtection::Off
+        );
+        assert_eq!(
+            gitlab(public("pre_receive_secret_detection_enabled", true)),
+            PushProtection::On
+        );
+        assert_eq!(
+            gitlab(json!({"visibility": "public"})),
+            PushProtection::Unknown
+        );
     }
 }
 
