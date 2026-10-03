@@ -283,3 +283,182 @@ fn charter_scan_explain_names_the_rule_and_the_entry_that_would_let_it_through()
     );
     assert!(!said.contains("ada@lovelace.dev"), "{said}");
 }
+
+// The same scan before a push (SQ-7). A commit can reach a chat's push without passing its
+// `pre-commit`: the operator made it in their own terminal, which is not armed, or git made it
+// without one (`cherry-pick`, `rebase`, `am`; V26b). `pre-push` scans every commit the push
+// would send that the remote does not already have.
+
+impl Chat {
+    /// A bare repository the chat's clone pushes to as `origin`.
+    fn with_origin(&self) -> PathBuf {
+        let origin = self.dir.path().join("origin.git");
+        let made = std::process::Command::new("git")
+            .args(["init", "-q", "--bare"])
+            .arg(&origin)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(made.status.success(), "{made:?}");
+        self.git(&["remote", "add", "origin", &origin.display().to_string()]);
+        assert!(
+            self.git(&["push", "-q", "origin", "main"]).status.success(),
+            "the first, clean push"
+        );
+        origin
+    }
+
+    /// `main` as the remote has it.
+    fn remote_main(&self, origin: &Path) -> String {
+        let mut cmd = std::process::Command::new("git");
+        cmd.arg("--git-dir").arg(origin).args(["rev-parse", "main"]);
+        String::from_utf8_lossy(&charter_core::forklock::output(&mut cmd).unwrap().stdout)
+            .into_owned()
+    }
+}
+
+#[test]
+fn a_planted_secret_the_commit_scan_never_saw_is_refused_before_push() {
+    let chat = Chat::new();
+    let origin = chat.with_origin();
+    let published = chat.remote_main(&origin);
+    std::fs::write(chat.repo.join("deploy.sh"), format!("TOKEN={}\n", key())).unwrap();
+    chat.operator_git(&["add", "deploy.sh"]);
+    assert!(
+        chat.operator_git(&["commit", "-q", "-m", "by hand"])
+            .status
+            .success()
+    );
+    std::fs::write(chat.repo.join("notes.md"), "fine\n").unwrap();
+    chat.git(&["add", "notes.md"]);
+    assert!(chat.git(&["commit", "-q", "-m", "on top"]).status.success());
+
+    let ran = chat.git(&["push", "origin", "main"]);
+
+    assert!(!ran.status.success(), "{ran:?}");
+    assert_eq!(chat.remote_main(&origin), published, "nothing was pushed");
+    let said = String::from_utf8_lossy(&ran.stderr);
+    assert!(said.contains("push refused"), "{said}");
+    assert!(said.contains("deploy.sh:1"), "{said}");
+    assert!(said.contains("ghp_****"), "{said}");
+    assert!(!said.contains(&key()), "{said}");
+
+    let heard = chat.heard.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(heard.chat, 7);
+    assert!(
+        heard.commit_refused.starts_with("push refused in"),
+        "{heard:?}"
+    );
+    assert!(heard.commit_refused.contains("deploy.sh:1"), "{heard:?}");
+}
+
+#[test]
+fn a_secret_added_and_removed_again_before_the_push_is_still_refused() {
+    let chat = Chat::new();
+    let origin = chat.with_origin();
+    let published = chat.remote_main(&origin);
+    std::fs::write(chat.repo.join("deploy.sh"), format!("TOKEN={}\n", key())).unwrap();
+    chat.operator_git(&["add", "deploy.sh"]);
+    chat.operator_git(&["commit", "-q", "-m", "oops"]);
+    chat.operator_git(&["rm", "-q", "deploy.sh"]);
+    chat.operator_git(&["commit", "-q", "-m", "gone again"]);
+
+    let ran = chat.git(&["push", "origin", "main"]);
+
+    assert!(!ran.status.success(), "the history still holds it: {ran:?}");
+    assert_eq!(chat.remote_main(&origin), published);
+}
+
+#[test]
+fn a_clean_push_goes_through_and_the_repositorys_own_pre_push_reads_what_git_sent() {
+    let chat = Chat::new();
+    let origin = chat.with_origin();
+    let seen = chat.dir.path().join("pre-push saw");
+    let hook = chat.repo.join(".git").join("hooks").join("pre-push");
+    std::fs::write(
+        &hook,
+        format!(
+            "#!/bin/sh\necho \"$1\" > '{0}'\ncat >> '{0}'\n",
+            seen.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::write(chat.repo.join("notes.md"), "fine\n").unwrap();
+    chat.git(&["add", "notes.md"]);
+    chat.git(&["commit", "-q", "-m", "notes"]);
+    let head = chat.head();
+
+    let ran = chat.git(&["push", "-q", "origin", "main"]);
+
+    assert!(ran.status.success(), "{ran:?}");
+    assert_eq!(chat.remote_main(&origin), head);
+    let saw = std::fs::read_to_string(&seen).unwrap();
+    assert!(saw.starts_with("origin\n"), "{saw}");
+    assert!(
+        saw.contains(&format!("refs/heads/main {}", head.trim())),
+        "the ref lines git wrote on standard input: {saw}"
+    );
+}
+
+#[test]
+fn a_secret_already_on_the_remote_does_not_refuse_the_next_push() {
+    let chat = Chat::new();
+    std::fs::write(chat.repo.join("old.sh"), format!("TOKEN={}\n", key())).unwrap();
+    chat.operator_git(&["add", "old.sh"]);
+    chat.operator_git(&["commit", "-q", "-m", "long ago"]);
+    let origin = chat.dir.path().join("origin.git");
+    chat.operator_git(&["init", "-q", "--bare", &origin.display().to_string()]);
+    chat.operator_git(&["remote", "add", "origin", &origin.display().to_string()]);
+    assert!(
+        chat.operator_git(&["push", "-q", "origin", "main"])
+            .status
+            .success()
+    );
+    std::fs::write(chat.repo.join("notes.md"), "fine\n").unwrap();
+    chat.git(&["add", "notes.md"]);
+    chat.git(&["commit", "-q", "-m", "notes"]);
+
+    let ran = chat.git(&["push", "-q", "origin", "main"]);
+
+    assert!(
+        ran.status.success(),
+        "only what the push sends is its to answer for: {ran:?}"
+    );
+}
+
+#[test]
+fn a_chat_cannot_push_an_allowlist_change_even_one_the_operator_committed() {
+    let chat = Chat::new();
+    let origin = chat.with_origin();
+    let published = chat.remote_main(&origin);
+    std::fs::write(chat.repo.join(".charter-scan-allow.toml"), DOCS_EMAIL).unwrap();
+    chat.operator_git(&["add", ".charter-scan-allow.toml"]);
+    assert!(
+        chat.operator_git(&["commit", "-q", "-m", "allow the docs' authors"])
+            .status
+            .success()
+    );
+
+    let ran = chat.git(&["push", "origin", "main"]);
+
+    assert!(!ran.status.success(), "{ran:?}");
+    assert_eq!(chat.remote_main(&origin), published);
+    let said = String::from_utf8_lossy(&ran.stderr);
+    assert!(
+        said.contains("The operator pushes an allowlist change themselves"),
+        "{said}"
+    );
+    let heard = chat.heard.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(
+        heard.commit_refused.starts_with("push refused in")
+            && heard.commit_refused.contains("allowlist"),
+        "{heard:?}"
+    );
+    assert!(
+        chat.operator_git(&["push", "-q", "origin", "main"])
+            .status
+            .success(),
+        "the operator's own terminal is not armed"
+    );
+}

@@ -1,6 +1,6 @@
-//! The git hooks charter arms every chat with (SQ-16, ADR 0074): git's own `pre-commit` and
-//! `pre-merge-commit`, in whatever repository the chat commits to — a workspace's repo, a piece,
-//! a clone the agent made itself outside any plane.
+//! The git hooks charter arms every chat with (SQ-16, ADR 0074): git's own `pre-commit`,
+//! `pre-merge-commit` and `pre-push` (SQ-7), in whatever repository the chat commits to — a
+//! workspace's repo, a piece, a clone the agent made itself outside any plane.
 //!
 //! # How a chat is armed
 //!
@@ -23,9 +23,9 @@
 //!
 //! `core.hooksPath` replaces a repository's hooks directory, so a shim stands in for each hook
 //! in [`NAMES`], and each one runs the repository's own hook of the same name — after charter's
-//! check, for the two in [`CHECKED`], and after charter stamps the message with the chat's
-//! provenance trailers, for [`COMMIT_MSG`] (GL-8, [`crate::provenance`]). Husky, the pre-commit framework and git-lfs keep working
-//! in a chat exactly as they do in a terminal.
+//! check, for the two in [`CHECKED`] and for [`PRE_PUSH`], and after charter stamps the message
+//! with the chat's provenance trailers, for [`COMMIT_MSG`] (GL-8, [`crate::provenance`]). Husky,
+//! the pre-commit framework and git-lfs keep working in a chat exactly as they do in a terminal.
 //!
 //! **Which directory is the repository's own is git's answer, not charter's**: the shim asks
 //! `git rev-parse --git-path hooks` with charter's own pair renamed out of the way for that one
@@ -57,6 +57,12 @@ pub const CHECKED: [&str; 2] = [PRE_COMMIT, PRE_MERGE_COMMIT];
 
 /// The hook git runs before it makes a merge commit, which never runs `pre-commit`.
 pub const PRE_MERGE_COMMIT: &str = "pre-merge-commit";
+
+/// The hook git runs before a push, with the remote's name and URL as arguments and one line
+/// per ref on standard input. charter scans every commit the push would send that the remote
+/// does not have (SQ-7), and refuses as the commit hooks do. Its shim keeps standard input, so
+/// the repository's own `pre-push` reads the same lines.
+pub const PRE_PUSH: &str = "pre-push";
 
 /// The hook that hands charter the message git is about to commit, so an agent's own commit
 /// carries its provenance trailers (GL-8, V67, ADR 0074 amended). It never refuses a commit: a
@@ -207,10 +213,26 @@ fn quoted(text: &str) -> String {
 /// When the `charter` that wrote it has gone, a checked hook refuses — a commit nothing scanned
 /// is not one charter lets through. [`COMMIT_MSG`] runs `charter` with git's arguments and never
 /// refuses: a message it could not stamp is committed as it was written.
+///
+/// [`PRE_PUSH`] reads git's standard input once, hands it to `charter` with git's arguments, and
+/// then to the repository's own `pre-push`, which is run rather than `exec`ed so it can be fed.
 fn shim(charter: &Path, hooks: &Path, name: &str) -> String {
     let charter = quoted(&charter.display().to_string());
     let hooks = quoted(&hooks.display().to_string());
-    let check = if CHECKED.contains(&name) {
+    let check = if name == PRE_PUSH {
+        format!(
+            r#"# The ref lines git wrote, kept whole (the dot keeps a trailing newline), for charter
+# and then for the repository's own hook.
+updates=$(cat; echo .)
+updates=${{updates%.}}
+if [ ! -x "$charter" ]; then
+  echo "charter: this push could not be scanned for secrets — charter's binary is gone; restart the chat from the app" >&2
+  exit 1
+fi
+printf '%s' "$updates" | "$charter" {COMMAND} {name} "$@" || exit 1
+"#
+        )
+    } else if CHECKED.contains(&name) {
         format!(
             r#"if [ ! -x "$charter" ]; then
   echo "charter: this commit could not be scanned for secrets — charter's binary is gone; restart the chat from the app" >&2
@@ -226,6 +248,14 @@ fi
         )
     } else {
         String::new()
+    };
+    let run_own = if name == PRE_PUSH {
+        format!(
+            r#"printf '%s' "$updates" | "$own/{name}" "$@"
+exit $?"#
+        )
+    } else {
+        format!(r#"exec "$own/{name}" "$@""#)
     };
     format!(
         r#"#!/bin/sh
@@ -259,7 +289,7 @@ esac
 [ -f "$own/{name}" ] && [ -x "$own/{name}" ] || exit 0
 # A repository whose own config names this directory has no hooks but these.
 [ "$(cd "$own" && pwd -P)" = "$(cd "$hooks" && pwd -P)" ] && exit 0
-exec "$own/{name}" "$@"
+{run_own}
 "#
     )
 }
@@ -608,5 +638,83 @@ mod tests {
 
         assert!(ran.status.success(), "{ran:?}");
         assert!(armed.mark("commit-msg").exists());
+    }
+
+    /// Runs the `pre-push` shim by hand in the armed repository, as git does: the remote's name
+    /// and URL as arguments, the ref lines on standard input.
+    fn pre_push(armed: &Armed, updates: &str) -> std::process::Output {
+        use std::io::Write;
+        let mut cmd = std::process::Command::new(armed.hooks.dir().join(PRE_PUSH));
+        cmd.current_dir(&armed.repo)
+            .args(["origin", "/r.git"])
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        let mut child = crate::forklock::spawn(&mut cmd).unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(updates.as_bytes())
+            .unwrap();
+        child.wait_with_output().unwrap()
+    }
+
+    #[test]
+    fn a_push_hands_charter_and_then_the_repositorys_own_pre_push_the_same_input() {
+        let armed = Armed::new("");
+        let said = armed.root.join("said");
+        script(
+            &armed.root.join("charter"),
+            &format!("echo \"$@\" > '{0}'; cat >> '{0}'", said.display()),
+        );
+        let seen = armed.root.join("seen");
+        script(
+            &armed.repo.join(".git/hooks/pre-push"),
+            &format!("echo \"$@\" > '{0}'; cat >> '{0}'", seen.display()),
+        );
+        let updates = "refs/heads/a 1 refs/heads/a 0\nrefs/heads/b 2 refs/heads/b 0\n";
+
+        let ran = pre_push(&armed, updates);
+
+        assert!(ran.status.success(), "{ran:?}");
+        assert_eq!(
+            std::fs::read_to_string(&said).unwrap(),
+            format!("git-hook pre-push origin /r.git\n{updates}")
+        );
+        assert_eq!(
+            std::fs::read_to_string(&seen).unwrap(),
+            format!("origin /r.git\n{updates}")
+        );
+    }
+
+    #[test]
+    fn a_refused_push_does_not_run_the_repositorys_own_pre_push_and_its_refusal_is_the_hooks() {
+        let armed = Armed::new("exit 1");
+        script(
+            &armed.repo.join(".git/hooks/pre-push"),
+            &format!("touch '{}'", armed.mark("pre-push").display()),
+        );
+        assert!(!pre_push(&armed, "").status.success());
+        assert!(!armed.mark("pre-push").exists());
+
+        let armed = Armed::new("exit 0");
+        script(&armed.repo.join(".git/hooks/pre-push"), "exit 4");
+        assert_eq!(pre_push(&armed, "").status.code(), Some(4));
+    }
+
+    #[test]
+    fn a_pre_push_whose_charter_has_gone_refuses_the_push() {
+        let armed = Armed::new("exit 0");
+        std::fs::remove_file(armed.root.join("charter")).unwrap();
+
+        let ran = pre_push(&armed, "");
+
+        assert!(!ran.status.success());
+        assert!(
+            String::from_utf8_lossy(&ran.stderr).contains("push could not be scanned"),
+            "{ran:?}"
+        );
     }
 }

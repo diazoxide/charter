@@ -231,3 +231,54 @@ is in `docs/plane-format.md`, *Provenance trailers*.
 | `charter_core::provenance` | the trailers, the chat and change they name, and `stamp` |
 | `charter_core::process::descends_from` | whether the commit runs below the chat's harness |
 | `charter git-hook commit-msg` | the stamping |
+
+## The push hook (amended 2026-10-03, SQ-7)
+
+**`pre-push` runs the same scan over what a push would send.** Program-map ticket SQ-7 (#586,
+gap G4a: the scan is the project's pre-commit *and* pre-push hook) adds a third checking hook to the
+two above. A commit can reach a chat's push without passing its `pre-commit`: one the operator
+made in their own terminal, which is not armed, or one `cherry-pick`, `rebase` or `am` made
+(V26b). The push is the last point before it is published.
+
+- **What is read.** git hands `pre-push` the remote's name and URL, and one line per ref it
+  updates. Each ref is peeled to the commit it names; a ref that names a blob or a tree,
+  directly or through a tag, has no history to read and refuses the push. charter reads every
+  commit reachable from what is pushed and from neither what the remote has for those refs nor,
+  for a configured remote, its remote-tracking refs. Each commit's added lines are scanned as its
+  own diff, root commits included whatever `log.showRoot` says, so a value one commit adds and a
+  later one removes is still found: the history publishes it. Merge commits are not read; each
+  side's commits are. A deleted ref sends nothing.
+- **The same rules, and the remote's allowlist** (`secretshape::leaks`, `.charter-scan-allow.toml`).
+  A pushed range that changes the allowlist refuses the push: the operator pushes an allowlist
+  change themselves, as only the operator commits one. Otherwise findings go through the file as
+  the remote already has it for each ref, never the checkout's: the remote's commit, or for a new
+  ref the pushed tip, which the range then leaves unchanged. Refs whose files differ get
+  charter's own entries alone.
+- **A finding refuses the push**, names each hit by path, line and kind with the value masked,
+  says that the value is in history and a live credential needs revoking, and puts the chat in
+  the needs-you queue with the same `CommitRefused` line, worded "push refused".
+- **It refuses like the commit hooks.** A `charter` that has gone, input charter cannot read, or
+  a git that does not answer within the network deadline refuses the push.
+- **The repository's own `pre-push` still runs**, after charter's check, with the same arguments
+  and the same lines on its standard input: the shim reads them once and feeds both.
+- **The Bash guard refuses `git push --no-verify`** and each prefix of it git accepts
+  (`--no-veri` and longer; the same now holds for `git merge`), and `git send-pack`, the plumbing
+  under `git push`, which runs no `pre-push`.
+- **What it does not cover.** This is a mistake guard, as above, not a boundary:
+  - a push the app or the operator's terminal makes is not armed, as for the commit hooks;
+    `charter save` scans what it stages itself (ADR 0051);
+  - "what the remote already has" is read from this clone's remote-tracking refs, which anything
+    in the clone can write: a ref written there excludes its commits from the scan;
+  - a merge commit's own resolution is not read, and a chat can make a merge without
+    `pre-merge-commit` (`git commit-tree` with two parents);
+  - commit and tag messages are not scanned, and content git shows as "Binary files differ" (a
+    `binary` or `-diff` attribute, `core.bigFileThreshold`) is not read, here or at commit;
+  - pushing by any route the Bash guard cannot read: `sh -c`, a script, an alias, a forge CLI's
+    API calls that write content, or a git client that is not git.
+
+| Where | What |
+|---|---|
+| `charter_core::githooks::PRE_PUSH` | the shim that keeps standard input for both hooks |
+| `charter_core::diffscan::pushed` | the commits a push sends, scanned |
+| `charter git-hook pre-push` | the refusal |
+| `charter_core::commitguard` | `git push --no-verify` and its prefixes, `git send-pack` |
