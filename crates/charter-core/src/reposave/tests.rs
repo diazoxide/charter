@@ -26,6 +26,11 @@ impl Fixture {
     /// A plane saying `toml`, and a clone `alpha/widget` on `main` whose one commit is on its
     /// remote.
     fn new(toml: &str) -> Fixture {
+        Fixture::on("github.com", toml)
+    }
+
+    /// [`Fixture::new`], with its origin on `host`.
+    fn on(host: &str, toml: &str) -> Fixture {
         let dir = tempfile::tempdir().unwrap();
         let top = dir.path().canonicalize().unwrap();
         let plane = top.join("plane");
@@ -44,7 +49,12 @@ impl Fixture {
         run(&bare, &["init", "-q", "--bare", "-b", "main", "."]);
         run(
             &clone,
-            &["remote", "add", "origin", "git@github.com:acme/widget.git"],
+            &[
+                "remote",
+                "add",
+                "origin",
+                &format!("git@{host}:acme/widget.git"),
+            ],
         );
         let base = format!("file://{}/", bare.parent().unwrap().display());
         run(
@@ -52,7 +62,7 @@ impl Fixture {
             &[
                 "config",
                 &format!("url.{base}.insteadOf"),
-                "https://github.com/acme/",
+                &format!("https://{host}/acme/"),
             ],
         );
         // By the bare repository's path, never by `origin`: the SSH form would leave this
@@ -663,6 +673,39 @@ fn a_protected_feature_branch_in_pr_mode_names_the_fix_that_applies() {
         "{said}"
     );
     assert!(!said.contains("mode = \"pr\""), "{said}");
+}
+
+/// A protected branch in a mode with no request, on `host`: what the save says to do instead.
+fn protected_in_push_mode(host: &str) -> String {
+    let f = Fixture::on(host, "[repos.widget]\nmode = \"push\"\n");
+    std::fs::create_dir_all(f.bare.join("hooks")).unwrap();
+    stand_in::program(
+        &f.bare,
+        "hooks/pre-receive",
+        "#!/bin/sh\necho 'GH006: Protected branch update failed for refs/heads/main.' >&2\nexit 1\n",
+    );
+    f.write("a.md", "a");
+    let (code, said) = f.save();
+    assert_eq!(code, 1, "{said}");
+    said
+}
+
+#[test]
+fn a_protected_branch_on_github_is_saved_through_a_pull_request() {
+    let said = protected_in_push_mode("github.com");
+    assert!(
+        said.contains("Set [repos.widget] mode = \"pr\" to save it through a pull request"),
+        "{said}"
+    );
+}
+
+#[test]
+fn a_protected_branch_on_gitlab_is_saved_through_a_merge_request() {
+    let said = protected_in_push_mode("gitlab.com");
+    assert!(
+        said.contains("Set [repos.widget] mode = \"pr\" to save it through a merge request"),
+        "{said}"
+    );
 }
 
 // A tree git stopped part-way through something is never saved (#433).

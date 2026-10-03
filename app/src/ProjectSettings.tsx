@@ -862,7 +862,7 @@ const PLANE_KEYS: readonly SaveKey[] = [
     key: "mode",
     label: "Mode",
     kind: "mode",
-    hint: "How far a save of the plane goes: off, commit, push, pr (push to the save branch and keep one PR open), or pr-merge (and set that PR to auto-merge).",
+    hint: "How far a save of the plane goes: off, commit, push, pr (push to the save branch and keep one request open), or pr-merge (and set that request to auto-merge).",
     none: "not set — the Saving view asks once, before anything is pushed",
   },
   {
@@ -901,7 +901,7 @@ const REPO_KEYS: readonly SaveKey[] = [
     key: "branch",
     label: "branch",
     kind: "text",
-    hint: "The branch a PR goes into.",
+    hint: "The branch a request goes into.",
     none: "the repo's default branch",
   },
   { key: "sign", label: "sign", kind: "bool", hint: "Sign the commits a save makes." },

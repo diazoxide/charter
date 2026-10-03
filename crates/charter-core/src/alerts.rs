@@ -74,8 +74,9 @@ pub enum Severity {
 /// What the plane root is doing with a memory commit that did not land.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Memory {
-    /// On the remote under `charter/<sha>`, waiting on a pull request. Nothing is at risk.
-    AwaitingPullRequest,
+    /// On the remote under `charter/<sha>`, waiting on a request, named in the words of the
+    /// forge the plane's origin is on. Nothing is at risk.
+    AwaitingRequest(crate::forge::Kind),
     /// Reached nowhere: the next `git reset --hard origin/<branch>` deletes it.
     NotPushed,
 }
@@ -173,8 +174,11 @@ impl Alert {
                     bits.push(format!("{DIM}on{R} {branch}{DIM}, not{R} {default}"));
                 }
                 match memory {
-                    Some(Memory::AwaitingPullRequest) => {
-                        bits.push(format!("{warn}memory awaiting a pull request{R}"));
+                    Some(Memory::AwaitingRequest(kind)) => {
+                        bits.push(format!(
+                            "{warn}memory awaiting a {}{R}",
+                            kind.request_noun()
+                        ));
                     }
                     Some(Memory::NotPushed) => {
                         bits.push(format!("{bad}memory commit not pushed{R}"))
@@ -248,8 +252,8 @@ impl Alert {
                     bits.push(format!("on {branch}, not {default}"));
                 }
                 match memory {
-                    Some(Memory::AwaitingPullRequest) => {
-                        bits.push("memory awaiting a pull request".to_owned());
+                    Some(Memory::AwaitingRequest(kind)) => {
+                        bits.push(format!("memory awaiting a {}", kind.request_noun()));
                     }
                     Some(Memory::NotPushed) => bits.push("memory commit not pushed".to_owned()),
                     None => {}
@@ -656,15 +660,16 @@ fn unlanded_memory(root: &Path) -> Option<Memory> {
         return None;
     }
     let outcome = rec.get("outcome").and_then(serde_json::Value::as_str);
+    let awaiting = || Memory::AwaitingRequest(crate::forge::request_words_of(root, root));
     if outcome == Some(crate::planegit::Outcome::PrOpen.word()) {
         // A PR mode's pull request (charter-app#298), asked of the target branch as the save
         // asks it.
-        return crate::planegit::unlanded(root).map(|_| Memory::AwaitingPullRequest);
+        return crate::planegit::unlanded(root).map(|_| awaiting());
     }
     let branched = outcome == Some(crate::planegit::Outcome::Branched.word());
     let landed = rec.get("landed").is_some_and(json_truthy);
     Some(if branched && landed {
-        Memory::AwaitingPullRequest
+        awaiting()
     } else {
         Memory::NotPushed
     })

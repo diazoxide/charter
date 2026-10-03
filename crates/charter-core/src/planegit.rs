@@ -1035,6 +1035,8 @@ fn land_via_branch(
         .map(|r| r.line().trim().to_string())
         .unwrap_or_default();
     let fresh = format!("charter/{}", if sha.is_empty() { "change" } else { &sha });
+    let kind = forge::request_words_of(root, root);
+    let noun = kind.request_noun();
     let reuse = open_pull_request_branch(root).filter(|r| *r != fresh);
     // A reuse that did not fast-forward is not a failure to report: the fresh name has not
     // been tried yet, and naming a branch charter chose on the operator's behalf as the thing
@@ -1060,8 +1062,7 @@ fn land_via_branch(
             .map(|(_, run)| tail(run))
             .unwrap_or_default();
         say(Say::Fail(format!(
-            "'{default_branch}' requires a pull request, and pushing the branch '{fresh}' also \
-             failed:"
+            "'{default_branch}' requires a {noun}, and pushing the branch '{fresh}' also failed:"
         )));
         for line in said.lines() {
             say(Say::Fail(format!("  {line}")));
@@ -1074,14 +1075,15 @@ fn land_via_branch(
     let branch = attempt.map(|(name, _)| name).unwrap_or(fresh);
     let url = compare_url(https, &branch, root);
     say(Say::Done(format!(
-        "'{default_branch}' requires a pull request — pushed {branch} instead."
+        "'{default_branch}' requires a {noun} — pushed {branch} instead."
     )));
     if let Some(url) = &url {
         say(Say::Info(format!("  open it: {url}")));
     }
     say(Say::Info(format!(
         "  the commit is also on your local {default_branch}, one ahead of the remote. After \
-         the PR merges: git -C {} pull --rebase",
+         the {} merges: git -C {} pull --rebase",
+        kind.request_short(),
         root.display()
     )));
     PushResult {
@@ -2175,7 +2177,10 @@ fn commit_push(
                         "Nothing new to commit — carrying on {n} commit(s) this machine has not \
                          saved yet."
                     ),
-                    None => "Nothing new to commit — asking after the open pull request.".into(),
+                    None => format!(
+                        "Nothing new to commit — asking after the open {}.",
+                        forge::request_words_of(root, root).request_noun()
+                    ),
                 }));
                 attempt.outcome = "committed";
                 attempt.commit = git::run(root, &["rev-parse", "HEAD"], git::READ)

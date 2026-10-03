@@ -18,6 +18,7 @@ function standing(over: Partial<PlaneSaving> = {}): PlaneSaving {
     changed: [],
     ahead: 0,
     pr: null,
+    request: "pull request",
     blocked: null,
     branch: "main",
     pushes: true,
@@ -192,6 +193,27 @@ describe("SavingView", () => {
     ).toBeTruthy();
   });
 
+  it("names the request a merge request when the project's origin is on GitLab", async () => {
+    core([
+      standing({
+        mode: "pr-merge",
+        stage: "pr-open",
+        branch: "release",
+        pr: "https://gitlab.com/acme/plane/-/merge_requests/12",
+        request: "merge request",
+      }),
+    ]);
+    const { container } = render(<SavingView plane={PLANE} />);
+    expect(await screen.findByText("Pushed — waiting on its merge request")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Mode: pr-merge (charter.toml) — a save pushes to this machine's save branch and keeps a merge request open into release, set to merge when its checks pass",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByText("Merge request:", { exact: false })).toBeTruthy();
+    expect(container.textContent?.toLowerCase()).not.toContain("pull request");
+  });
+
   it("offers a save for commits only when a save would push them", async () => {
     core([standing({ stage: "committed", ahead: 2 })]);
     render(<SavingView plane={PLANE} />);
@@ -302,6 +324,7 @@ function repo(over: Partial<RepoSaving> = {}): RepoSaving {
     changed: 0,
     ahead: 0,
     pr: null,
+    request: "pull request",
     blocked: null,
     pushes: true,
     target: "main",
@@ -363,6 +386,42 @@ describe("SavingView, with the workspace's repos (charter-app#299)", () => {
     expect(
       (within(rows[2]).getByRole("button", { name: "Save docs" }) as HTMLButtonElement).disabled,
     ).toBe(true);
+  });
+
+  it("names a GitLab repo's request a merge request, and the column a request when forges differ", async () => {
+    coreWithRepos(standing(), [
+      [
+        repo({
+          name: "api",
+          stage: "pr-open",
+          branch: "feature/x",
+          pr: "https://gitlab.com/acme/api/-/merge_requests/3",
+          request: "merge request",
+        }),
+      ],
+    ]);
+    render(<SavingView plane={PLANE} workspace="alpha" />);
+    let table = await screen.findByRole("table", { name: "Repos in alpha" });
+    expect(within(table).getByRole("columnheader", { name: "Merge request" })).toBeTruthy();
+    let row = within(table).getAllByRole("row")[1];
+    expect(row.textContent).toContain("Pushed — waiting on its merge request");
+    expect(row.textContent).toContain(
+      "Commits on feature/x, pushes feature/x, and opens a merge request into main",
+    );
+    expect(table.textContent?.toLowerCase()).not.toContain("pull request");
+    cleanup();
+
+    coreWithRepos(standing(), [
+      [
+        repo({ name: "api", request: "merge request" }),
+        repo({ name: "web", request: "pull request" }),
+      ],
+    ]);
+    render(<SavingView plane={PLANE} workspace="alpha" />);
+    table = await screen.findByRole("table", { name: "Repos in alpha" });
+    expect(within(table).getByRole("columnheader", { name: "Request" })).toBeTruthy();
+    row = within(table).getAllByRole("row")[2];
+    expect(row.textContent).toContain("opens a pull request into main");
   });
 
   it("saves one repo from its row, and says in the core's words whom a held-back save waits for", async () => {

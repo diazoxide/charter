@@ -11,9 +11,11 @@ import {
 import {
   askWayOut,
   behindness,
+  capitalised,
   repoSavable,
   repoSaveGoesTo,
   repoStageText,
+  requestOf,
   saveAll,
   tellSaved,
   usePlaneSaving,
@@ -179,7 +181,7 @@ export function SavingView({
           {saving.mode === null && <ModeQuestion plane={plane} branch={saving.branch} />}
           {saving.pr !== null && (
             <p className="settings-hint">
-              {"Pull request: "}
+              {`${capitalised(saving.request)}: `}
               <a href={saving.pr} target="_blank" rel="noreferrer">
                 {saving.pr}
               </a>
@@ -281,7 +283,7 @@ export function SavingView({
 
 /**
  * **One row per repo in the workspace** (charter-app#299): its stage, the branch it is on, the
- * pull request it waits on, and its own Save. A table for the reason the bottom bar's is one:
+ * request it waits on, and its own Save. A table for the reason the bottom bar's is one:
  * "which of these is unsaved" is a column question.
  */
 function RepoRows({
@@ -302,7 +304,7 @@ function RepoRows({
           <th scope="col">Repo</th>
           <th scope="col">Branch</th>
           <th scope="col">Stage</th>
-          <th scope="col">Pull request</th>
+          <th scope="col">{capitalised(requestOf(repos))}</th>
           <th scope="col">Mode</th>
           <th scope="col">Save goes to</th>
           <th scope="col">
@@ -593,12 +595,13 @@ export function furthestBack(
     const words = stageWords(saving);
     return { stage, said: withIncoming(words, incoming), words, incoming };
   }
-  const n = counted.filter((repo) => repo.stage === stage).length;
+  const waiting = counted.filter((repo) => repo.stage === stage);
+  const n = waiting.length;
   const phrases: Record<string, [string, string]> = {
     blocked: ["blocked", "blocked"],
     changed: ["changed", "changed"],
     committed: ["committed, not pushed", "committed, not pushed"],
-    "pr-open": ["waiting on its pull request", "waiting on their pull requests"],
+    "pr-open": [`waiting on its ${requestOf(waiting)}`, `waiting on their ${requestOf(waiting)}s`],
   };
   const [one, many] = phrases[stage] ?? [stage, stage];
   const words = n === 1 ? `1 repo ${one}` : `${n} repos ${many}`;
@@ -637,7 +640,7 @@ function stageWords(saving: PlaneSaving): string {
         ? "Committed, not pushed"
         : `${saving.ahead} committed, not pushed`;
     case "pr-open":
-      return "Pushed — waiting on its pull request";
+      return `Pushed — waiting on its ${saving.request}`;
     default:
       return "Saved";
   }
@@ -648,7 +651,7 @@ function modeText(saving: PlaneSaving): string {
   const reach = !saving.pushes
     ? "a save commits and goes no further"
     : saving.mode === "pr" || saving.mode === "pr-merge"
-      ? `a save pushes to this machine's save branch and keeps a pull request open into ${saving.branch}${
+      ? `a save pushes to this machine's save branch and keeps a ${saving.request} open into ${saving.branch}${
           saving.mode === "pr-merge" ? ", set to merge when its checks pass" : ""
         }`
       : `a save pushes to ${saving.branch}`;

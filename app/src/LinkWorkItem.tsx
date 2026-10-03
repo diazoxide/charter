@@ -5,8 +5,8 @@ import { useFocusBack } from "./EndingChat";
 /**
  * **Link to work item…**, from a chat tab's menu or the palette (V60, ADR 0088 §3).
  *
- * Asks for the work item's tracker key, such as `github:github.com/owner/repo#12` or
- * `todo:<workspace>/<todo>`, and links the chat to it. A chat works on one work item at most, so
+ * Asks for the work item's tracker key, such as `github:github.com/owner/repo#12`,
+ * `gitlab:gitlab.com/group/repo#12` or `todo:<workspace>/<todo>`, and links the chat to it. A chat works on one work item at most, so
  * a new link replaces the one it has.
  *
  * **It validates nothing**, for `NewBranch`'s reason: what a tracker key is, and which chats
@@ -81,9 +81,13 @@ export function LinkWorkItem({
               autoComplete="off"
               spellCheck={false}
               placeholder="github:github.com/owner/repo#12"
-              aria-describedby={`${keyId}-why`}
+              aria-describedby={`${keyId}-like ${keyId}-why`}
               onChange={(event) => setKey(event.target.value)}
             />
+            <p className="came-back" id={`${keyId}-like`}>
+              On GitHub, a key looks like <code>github:github.com/owner/repo#12</code>; on GitLab,
+              like <code>gitlab:gitlab.com/group/repo#12</code>.
+            </p>
             <p className="came-back" id={`${keyId}-why`}>
               {linked ? (
                 <>

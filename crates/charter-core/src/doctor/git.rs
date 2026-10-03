@@ -518,16 +518,14 @@ fn stranded_push(d: &Doctor) -> Result<Option<(String, String)>, String> {
     if rec.get("outcome").and_then(serde_json::Value::as_str) == Some("branched")
         && let Some(landed) = landed
     {
+        let noun = crate::forge::request_words_of(&d.root, &d.root).request_noun();
         let open_it = match url {
             Some(url) => format!("Open it: {url}"),
-            None => "Open a pull request for it.".to_owned(),
+            None => format!("Open a {noun} for it."),
         };
         return Ok(Some((
             format!("a memory commit went to '{landed}', not {branch}"),
-            format!(
-                "'{branch}' requires a pull request, so charter pushed {landed} instead. \
-                 {open_it}"
-            ),
+            format!("'{branch}' requires a {noun}, so charter pushed {landed} instead. {open_it}"),
         )));
     }
     Ok(Some((

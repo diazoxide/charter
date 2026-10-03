@@ -38,4 +38,16 @@ describe("Link to work item", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(tab).toHaveFocus();
   });
+
+  it("gives a GitHub key and a GitLab key as its examples", async () => {
+    render(<Opener />);
+    await userEvent.click(screen.getByRole("button", { name: "the tab" }));
+    const key = await screen.findByLabelText("Tracker key");
+    expect(key).toHaveAccessibleDescription(
+      expect.stringContaining("github:github.com/owner/repo#12"),
+    );
+    expect(key).toHaveAccessibleDescription(
+      expect.stringContaining("gitlab:gitlab.com/group/repo#12"),
+    );
+  });
 });

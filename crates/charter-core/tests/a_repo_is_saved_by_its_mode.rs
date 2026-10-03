@@ -37,11 +37,16 @@ mod repo_saves {
     /// names `main` as widget's default branch; and a clone `alpha/widget` on `main`, with its
     /// one commit on the stand-in remote.
     fn repo(host: &str, toml: &str) -> Repo {
+        repo_on("github", host, toml)
+    }
+
+    /// [`repo`], with `host` declared as a forge of `kind`.
+    fn repo_on(kind: &str, host: &str, toml: &str) -> Repo {
         let f = support::plane_with_clone("widget");
         assert_eq!((f.ws.as_str(), f.repo.as_str()), ("alpha", "widget"));
         std::fs::write(
             f.plane.join("charter.toml"),
-            format!("[[forge]]\nkind = \"github\"\nhost = \"{host}\"\n\n{toml}"),
+            format!("[[forge]]\nkind = \"{kind}\"\nhost = \"{host}\"\n\n{toml}"),
         )
         .unwrap();
         std::fs::create_dir_all(f.plane.join("inventory")).unwrap();
@@ -218,6 +223,12 @@ mod repo_saves {
 
         assert_eq!(code, 0, "{said}");
         assert!(was_asked(&looked) && was_asked(&opened), "{said}");
+        assert!(
+            said.contains(&format!(
+                "Pull request #3 from feature/x into main: https://{host}/acme/widget/pull/3"
+            )),
+            "{said}"
+        );
         assert_eq!(r.remote("feature/x"), r.head());
         assert_eq!(r.remote("main"), main_before, "main was pushed");
         let line = r.last();
@@ -413,4 +424,119 @@ mod repo_saves {
 
     const SETTINGS: &str = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){autoMergeAllowed rebaseMergeAllowed mergeCommitAllowed squashMergeAllowed pullRequest(number:$number){id}}}";
     const ENABLE: &str = "mutation($id:ID!,$method:PullRequestMergeMethod!,$head:GitObjectID!){enablePullRequestAutoMerge(input:{pullRequestId:$id,mergeMethod:$method,expectedHeadOid:$head}){clientMutationId}}";
+
+    /// A repo whose origin is on a GitLab: its save names the merge request as GitLab does,
+    /// `!3` (#1067).
+    mod on_gitlab {
+        use super::*;
+
+        const MRS: &str = "projects/acme%2Fwidget/merge_requests";
+
+        fn mr_url(host: &str, number: u32) -> String {
+            format!("https://{host}/acme/widget/-/merge_requests/{number}")
+        }
+
+        fn lookup(scene: &Scene, head: &str, out: &str) -> PathBuf {
+            scene.glab_api(
+                &format!(
+                    "{MRS}?state=opened&source_branch={}&target_branch=main&per_page=100",
+                    head.replace('/', "%2F")
+                ),
+                0,
+                out,
+                "",
+            )
+        }
+
+        #[test]
+        fn a_pr_merge_save_opens_a_merge_request_and_names_it_bang_3() {
+            charter_core::unsteered!();
+            if !in_child() {
+                return;
+            }
+            let host = "repo-mr-open.test";
+            let scene = Scene::new(host);
+            let r = repo_on("gitlab", host, "[repos.widget]\nmode = \"pr-merge\"\n");
+            support::git(&r.clone, &["checkout", "-q", "-b", "feature/x"]);
+            r.commit("c.md", "a change");
+            lookup(&scene, "feature/x", "[]");
+            let opened = scene.answers(
+                "glab",
+                &[
+                    "--hostname",
+                    host,
+                    "api",
+                    "-X",
+                    "POST",
+                    MRS,
+                    "-f",
+                    "source_branch=feature/x",
+                    "-f",
+                    "target_branch=main",
+                    "-f",
+                    "title=a change",
+                    "-f",
+                    "description=Saved by charter from the alpha workspace ([repos.widget] mode = pr-merge).\n\n<!-- charter-save -->",
+                ],
+                0,
+                &format!(r#"{{"iid": 3, "id": 9003, "web_url": "{}"}}"#, mr_url(host, 3)),
+                "",
+            );
+            scene.glab_api(
+                "projects/acme%2Fwidget",
+                0,
+                r#"{"squash_option": "default_off"}"#,
+                "",
+            );
+            scene.glab_api(
+                &format!("{MRS}/3"),
+                0,
+                r#"{"iid": 3, "state": "opened", "head_pipeline": null}"#,
+                "",
+            );
+
+            let (code, said) = r.save();
+
+            assert_eq!(code, 0, "{said}");
+            assert!(was_asked(&opened), "{said}");
+            assert!(
+                said.contains(&format!(
+                    "Merge request !3 from feature/x into main: {}",
+                    mr_url(host, 3)
+                )),
+                "{said}"
+            );
+            assert!(said.contains("!3 is not set to auto-merge"), "{said}");
+            assert!(!said.to_lowercase().contains("pull request"), "{said}");
+        }
+
+        #[test]
+        fn a_merge_request_a_person_opened_is_named_bang_8_and_left_alone() {
+            charter_core::unsteered!();
+            if !in_child() {
+                return;
+            }
+            let host = "repo-mr-theirs.test";
+            let scene = Scene::new(host);
+            let r = repo_on("gitlab", host, "[repos.widget]\nmode = \"pr-merge\"\n");
+            support::git(&r.clone, &["checkout", "-q", "-b", "feature/z"]);
+            r.commit("d.md", "their change");
+            lookup(
+                &scene,
+                "feature/z",
+                &format!(
+                    r#"[{{"iid": 8, "source_project_id": 5, "target_project_id": 5, "web_url": "{}", "description": "My own words."}}]"#,
+                    mr_url(host, 8)
+                ),
+            );
+
+            let (code, said) = r.save();
+
+            assert_eq!(code, 0, "{said}");
+            assert!(
+                said.contains("already has a merge request charter did not open, !8"),
+                "{said}"
+            );
+        }
+    }
 }
