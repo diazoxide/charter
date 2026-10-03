@@ -8,11 +8,12 @@
 //
 //   node tools/changelog-fold.mjs          fold every fragment and delete it (release prep)
 //   node tools/changelog-fold.mjs --check  exit 1 when a fragment is waiting to be folded
+//   node tools/changelog-fold.mjs --help   say this; any other argument is refused (exit 2)
 //
 // Each fragment's entries go FIRST under their heading, newest on top as the file already
 // reads, and fragments are taken in name order. A heading `## [Unreleased]` does not have yet is
 // made, in Keep a Changelog's order. Nothing already in the file moves.
-import { readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -107,7 +108,29 @@ export function pending(root) {
     if (e.code === "ENOENT") return [];
     throw e;
   }
-  return names.filter((name) => name.endsWith(".md") && name !== NOT_A_FRAGMENT).sort();
+  // A file here that is not a fragment would be skipped and its entry lost, so it is refused.
+  const strays = names.filter((name) => name !== NOT_A_FRAGMENT && !/^[^.].*[^.]\.md$/.test(name));
+  if (strays.length > 0)
+    throw new Error(
+      `changes/ holds ${strays.join(", ")}, which is not a fragment: name each one <slug>.md`,
+    );
+  return names.filter((name) => name !== NOT_A_FRAGMENT).sort();
+}
+
+const USAGE = `usage: node tools/changelog-fold.mjs [--check | --help]
+  (no argument)  fold every fragment in changes/ into CHANGELOG.md and delete it
+  --check        exit 1 when a fragment is waiting to be folded; writes nothing`;
+
+/**
+ * What the command line asks for. Anything but nothing, `--check` or `--help` is a usage error,
+ * never a fold: a guessed flag must not rewrite CHANGELOG.md and delete the fragments (#1023).
+ */
+export function mode(args) {
+  if (args.length === 0) return { run: "fold" };
+  if (args.length === 1 && (args[0] === "--help" || args[0] === "-h")) return { run: "help" };
+  if (args.length === 1 && args[0] === "--check") return { run: "check" };
+  const bad = args.find((arg) => arg !== "--check") ?? args[1];
+  return { run: "usage", bad };
 }
 
 /**
@@ -126,10 +149,28 @@ export function foldInto(root) {
   return names;
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const root = fileURLToPath(new URL("..", import.meta.url));
+/** Whether this file is the script node was asked to run, however the path to it was spelled. */
+function runAsScript() {
   try {
-    if (process.argv.includes("--check")) {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (runAsScript()) {
+  const root = fileURLToPath(new URL("..", import.meta.url));
+  const asked = mode(process.argv.slice(2));
+  if (asked.run === "help") {
+    console.log(USAGE);
+    process.exit(0);
+  }
+  if (asked.run === "usage") {
+    console.error(`unknown argument ${asked.bad}\n${USAGE}`);
+    process.exit(2);
+  }
+  try {
+    if (asked.run === "check") {
       const names = pending(root);
       if (names.length > 0) {
         console.error(
