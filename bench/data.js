@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791029981199,
+  "lastUpdate": 1791031884600,
   "repoUrl": "https://github.com/diazoxide/charter",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -462,6 +462,48 @@ window.BENCHMARK_DATA = {
             "value": 105.096882,
             "unit": "ms",
             "extra": "median of 5 runs: 102.718, 105.044, 105.097, 105.338, 105.396 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "b6069cea22c6a3efc5621bc933b26e900a0f97c8",
+          "message": "Burn-down 1: read-only charter tools pre-allowed, request mode, branch on screen\n\nV79 (#1050): a Claude Code chat the app starts carries an allow for each of\ncharter's five read-only MCP tools (todo_list, memory_search,\nsession_record_list, session_record_read, change_status) beside Smart close's\nallow, in the same per-chat --settings. The list is written out\n(chattools::PRE_ALLOWED), never derived from the read-only mark, so\nask_operator and every write still ask. ADR 0064's SI-8e section and the spec\nare amended, and record what was measured on Claude Code 2.1.288: the\nsession's --mcp-config server wins over a same-named project, local or user\nserver, which is not started at all.\n\nV81 (#1087): prose calls the pr and pr-merge modes \"request mode\" on every\nforge, including prsave's save_branch refusal, the docs and CONTEXT.md, which\ngains a Request mode entry. The config words are unchanged. No recorded\nscenario pinned the old words.\n\n#989: the window calls a piece its branch and its directory the branch's\nfolder. Menu rows name the branch by its own name (Cut carries it) and a\nfolder on no branch as a folder; the bottom bar counts branches. The window's\nmerge, remove, mark-done and list commands send the core's window sentence\n(worktree::Refusal::in_window, the new NotDeclared::in_window), and the\nrefusals charter words itself (seven merge and remove cases) gain one through\nRefusal::Stuck, so no \"worktree\", \"git -C\" or \"--force\" of charter's reaches\nthe window; charter worktree keeps its sentences byte for byte. A merge of a\nmissing piece is refused as missing, and workspace drop says \"branch\nfolders\". CONTEXT.md says so.\n\nCloses #1050\nCloses #1087\nCloses #989\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-03T16:46:13+04:00",
+          "tree_id": "59dd233ae04b01cabfeebddb11ea45874bb8dbab",
+          "url": "https://github.com/diazoxide/charter/commit/b6069cea22c6a3efc5621bc933b26e900a0f97c8"
+        },
+        "date": 1791031883314,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.4830015,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.477, 0.482, 0.483, 0.489, 0.494 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.5059435,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.172, 16.214, 16.506, 16.898, 16.994 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.1567185,
+            "unit": "ms",
+            "extra": "median of 5 runs: 100.704, 101.080, 101.157, 101.210, 102.185 ms"
           }
         ]
       }
