@@ -371,6 +371,7 @@ fn open_it(held: &Held, plane: &PlaneId, open: &OpenChat, size: Size) -> Result<
             // for this one.
             show_footer: false,
             resuming: None,
+            without_sandbox: None,
         },
         root,
     )
@@ -557,6 +558,7 @@ mod tests {
                 resume: None,
                 show_footer: false,
                 resuming: None,
+                without_sandbox: None,
             },
             root,
         )

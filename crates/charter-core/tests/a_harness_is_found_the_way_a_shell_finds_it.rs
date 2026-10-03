@@ -70,6 +70,7 @@ impl Plane {
             resume: None,
             show_footer: false,
             resuming: None,
+            without_sandbox: None,
         }
     }
 }

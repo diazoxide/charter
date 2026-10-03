@@ -426,7 +426,7 @@ describe("the first run", () => {
     await vi.waitFor(() => expect(calls("start_chat")).toHaveLength(1));
     expect(calls("start_chat")[0].args).toMatchObject({
       cwd: CLONE,
-      boxes: { show_footer: false, new_branch: true },
+      boxes: { show_footer: false, new_branch: true, without_sandbox: null },
     });
     expect(
       await screen.findByRole("status", { name: "What this chat's start found" }),

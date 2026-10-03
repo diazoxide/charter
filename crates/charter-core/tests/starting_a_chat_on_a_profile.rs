@@ -100,6 +100,7 @@ impl Plane {
             // it ships (ADR 0029).
             show_footer: false,
             resuming: None,
+            without_sandbox: None,
         }
     }
 }
@@ -1128,4 +1129,196 @@ fn an_opencode_chat_in_a_sandboxed_plane_is_not_started_rather_than_started_unco
         "{refused}"
     );
     assert!(!plane.root().join("ran").exists(), "the harness was run");
+}
+
+/// The per-chat opt-out (ADR 0067 §7, ruling V78 a): the picker's "Start without the
+/// sandbox" starts this one chat unsandboxed, says so on its tab, and hands the app what the
+/// audit records — on every system, the ones the sandbox cannot be applied on included.
+#[test]
+fn a_person_starts_one_chat_without_the_sandbox_and_its_tab_says_so() {
+    charter_core::unsteered!();
+    let (plane, _outside, _) = an_opencode_chat_in_a_sandboxed_plane();
+    let start = Start {
+        without_sandbox: Some(charter_core::sandbox::OptOut {
+            reason: Some("needs the network".to_owned()),
+        }),
+        ..plane.start("work")
+    };
+
+    let ready = start::ready(&start, plane.root()).expect("it starts");
+
+    assert_eq!(ready.sandbox, None);
+    let lifted = ready.unsandboxed.expect("audited as lifted");
+    assert_eq!(lifted.by, charter_core::sandbox::By::Person);
+    assert_eq!(lifted.reason.as_deref(), Some("needs the network"));
+    assert!(
+        ready.notices.contains(&lifted.notice()),
+        "{:?}",
+        ready.notices
+    );
+}
+
+#[test]
+fn a_chat_with_no_opt_out_is_never_started_as_if_it_had_one() {
+    charter_core::unsteered!();
+    let plane = Plane::new();
+    let bin = plane.harness();
+    plane.profile("claude", &bin, "");
+
+    let ready = start::ready(&plane.start("work"), plane.root()).expect("it starts");
+
+    assert_eq!(ready.unsandboxed, None, "nothing lifted, nothing to audit");
+}
+
+// -------------------------------------------------------------------------------------
+// The picker's view of the sandbox, asked as the start asks it (ruling V87g)
+// -------------------------------------------------------------------------------------
+
+/// A machine where every harness has a sandbox charter compiles.
+fn a_mac() -> charter_core::sandbox::Machine {
+    charter_core::sandbox::Machine {
+        env: charter_core::secrets::Env::of(&[]),
+        home: None,
+        os: charter_core::sandbox::Os::MacOs,
+    }
+}
+
+/// What the picker says for the `work` profile, approved or not, with every program run
+/// recorded in `ran`.
+fn picker_says(
+    plane: &Plane,
+    approved: bool,
+    ran: &std::sync::Mutex<Vec<String>>,
+) -> charter_core::sandbox::Ahead {
+    let set = profiles::current(plane.root());
+    let profile = set.get("work").expect("declared");
+    let probe = |words: &[String]| {
+        ran.lock().unwrap().push(words[0].clone());
+        Some("2.1.288 (Claude Code)".to_owned())
+    };
+    start::sandbox_ahead(
+        profile,
+        plane.root(),
+        approved,
+        &a_mac(),
+        &|_| true,
+        "",
+        Some(&probe),
+    )
+    .expect("a harness")
+}
+
+#[test]
+fn the_picker_checks_an_approved_program_with_the_starts_own_check() {
+    charter_core::unsteered!();
+    let outside = tempfile::tempdir().unwrap();
+    let plane = Plane::new();
+    let script = harness_outside(&plane, &outside, "claude");
+    fs::write(
+        plane.root().join("charter.toml"),
+        "[sandbox]\nmode = \"on\"\n",
+    )
+    .unwrap();
+    shell_profile(&plane, "claude", &script);
+    let ran = std::sync::Mutex::new(Vec::new());
+
+    let said = picker_says(&plane, true, &ran);
+
+    assert_eq!(said, charter_core::sandbox::Ahead::Sandboxed);
+    let real = Path::new("/bin/sh")
+        .canonicalize()
+        .unwrap()
+        .display()
+        .to_string();
+    assert_eq!(
+        *ran.lock().unwrap(),
+        [real],
+        "the resolved real file, as the start runs it"
+    );
+}
+
+#[test]
+fn the_picker_runs_no_program_nobody_approved() {
+    charter_core::unsteered!();
+    let outside = tempfile::tempdir().unwrap();
+    let plane = Plane::new();
+    let script = harness_outside(&plane, &outside, "claude");
+    fs::write(
+        plane.root().join("charter.toml"),
+        "[sandbox]\nmode = \"on\"\n",
+    )
+    .unwrap();
+    shell_profile(&plane, "claude", &script);
+    let ran = std::sync::Mutex::new(Vec::new());
+
+    let said = picker_says(&plane, false, &ran);
+
+    assert_eq!(said, charter_core::sandbox::Ahead::Sandboxed);
+    assert!(
+        ran.lock().unwrap().is_empty(),
+        "an unapproved program was run"
+    );
+}
+
+#[test]
+fn the_picker_shows_a_program_where_the_chat_can_write_as_the_starts_refusal() {
+    charter_core::unsteered!();
+    let plane = Plane::new();
+    let inside = plane.root().join("bin/claude");
+    fs::create_dir_all(inside.parent().unwrap()).unwrap();
+    fs::write(&inside, "#!/bin/sh\n").unwrap();
+    let plane = {
+        fs::write(
+            plane.root().join("charter.toml"),
+            "[sandbox]\nmode = \"on\"\n",
+        )
+        .unwrap();
+        plane.profile("claude", &inside, "");
+        plane
+    };
+    let ran = std::sync::Mutex::new(Vec::new());
+
+    let charter_core::sandbox::Ahead::Refused { why, install } = picker_says(&plane, true, &ran)
+    else {
+        panic!("refused");
+    };
+
+    assert!(
+        matches!(
+            start::ready(&plane.start("work"), plane.root()),
+            Err(ref refused) if *refused == why
+        ),
+        "the picker says what the start says: {why}"
+    );
+    assert_eq!(install, None);
+    assert!(
+        ran.lock().unwrap().is_empty(),
+        "a refused program is not run"
+    );
+}
+
+#[test]
+fn the_picker_shows_a_relative_program_as_the_starts_refusal() {
+    charter_core::unsteered!();
+    let plane = Plane::new();
+    fs::write(
+        plane.root().join("charter.toml"),
+        "[sandbox]\nmode = \"on\"\n",
+    )
+    .unwrap();
+    plane.profile("claude", Path::new("./bin/claude"), "");
+    fs::create_dir_all(plane.root().join("bin")).unwrap();
+    fs::write(plane.root().join("bin/claude"), "#!/bin/sh\n").unwrap();
+    let ran = std::sync::Mutex::new(Vec::new());
+
+    let said = picker_says(&plane, true, &ran);
+
+    assert!(
+        matches!(&said, charter_core::sandbox::Ahead::Refused { .. }),
+        "{said:?}"
+    );
+    assert!(
+        ran.lock().unwrap().is_empty(),
+        "a refused program is not run"
+    );
 }

@@ -68,6 +68,10 @@ pub struct ChatFacts {
     /// The directory it runs in, plane-relative — `.` for the plane root — from the app's
     /// record of it; `None` for a chat outside the plane.
     pub cwd: Option<String>,
+    /// Whether its current run started without the sandbox in a project that has it on — the
+    /// app's record of it ([`crate::reopen::Chat::unsandboxed`]). A record says `sandbox: off`
+    /// for it, which is where ADR 0067 §7 puts a chat's opt-out until the audit exists.
+    pub unsandboxed: bool,
 }
 
 /// One piece a chat worked in, as git reports it.
@@ -555,6 +559,9 @@ fn render(new: &New) -> String {
             value(chat.and_then(|c| c.cwd.as_deref()), UNKNOWN)
         ),
     ];
+    if chat.is_some_and(|c| c.unsandboxed) {
+        lines.push("sandbox: off".to_owned());
+    }
     for piece in &facts.pieces {
         lines.push(format!(
             "piece: {}/{} @ {}",
@@ -944,6 +951,7 @@ pub fn chat_facts(root: &Path, number: u32) -> ChatFacts {
             profile: None,
             conversation: None,
             cwd: None,
+            unsandboxed: false,
         };
     };
     let harness = chat.harness().map(|h| h.name().to_owned());
@@ -962,6 +970,7 @@ pub fn chat_facts(root: &Path, number: u32) -> ChatFacts {
             .cwd
             .as_deref()
             .and_then(|dir| plane_relative(root, dir)),
+        unsandboxed: chat.unsandboxed,
     }
 }
 

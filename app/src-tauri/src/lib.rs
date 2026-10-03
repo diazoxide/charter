@@ -52,6 +52,7 @@ mod planes;
 mod planewatch;
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod portal;
+mod sandboxing;
 mod saving;
 mod sessions;
 mod settings;
@@ -882,6 +883,10 @@ struct ProfileRow {
     /// (`Harness::ready_to_type`): what a surface that types one, such as the first task
     /// (FR-28), offers it by.
     ready_to_type: bool,
+    /// What the sandbox does for a chat on it, where the project turned the sandbox on: the
+    /// picker shows it beside "Start without the sandbox" (ADR 0067 §7, ruling V78 a). Null
+    /// where the project has not, or the kind is no harness.
+    sandbox: Option<sandboxing::SandboxAhead>,
 }
 
 /// Everything the picker draws, read from the plane when it is opened.
@@ -908,11 +913,24 @@ struct StartOptions {
 /// Read fresh every time it is opened, like the sidebar: `charter.local.toml` is a file the
 /// operator edits by hand and a chat can write, so a cache here would be a second answer to
 /// "what is on disk" that nothing invalidates.
+///
+/// **Off the main thread**: a sandboxed project's picker asks each approved Claude Code
+/// profile's program its `--version` (ruling V87g), which can take seconds, and the window
+/// must not freeze for it.
 #[tauri::command]
 #[specta::specta]
-fn start_options(planes: tauri::State<'_, Planes>, plane: PlaneId) -> Result<StartOptions, String> {
-    let held = planes.held(&plane)?;
-    let root = held.root();
+async fn start_options(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+) -> Result<StartOptions, String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || start_options_in(&root))
+        .await
+        .map_err(|err| format!("charter could not read the profiles: {err}"))?
+}
+
+/// What [`start_options`] answers for the project at `root`.
+fn start_options_in(root: &std::path::Path) -> Result<StartOptions, String> {
     let (set, check) = charter_core::profiles::for_launch(root);
     let on_disk = charter_core::workspaces::Plane::open(root);
     Ok(StartOptions {
@@ -930,6 +948,7 @@ fn start_options(planes: tauri::State<'_, Planes>, plane: PlaneId) -> Result<Sta
                 ready_to_type: charter_core::harness::Harness::of_kind(&p.kind)
                     .and_then(charter_core::harness::Harness::ready_to_type)
                     .is_some(),
+                sandbox: sandboxing::ahead_here(p, root),
             })
             .collect(),
         refused: set
@@ -1048,6 +1067,11 @@ async fn start_chat(
     tauri::async_runtime::spawn_blocking(move || {
         let named = label.clone();
         let show_footer = boxes.show_footer;
+        let without_sandbox = boxes
+            .without_sandbox
+            .map(|asked| charter_core::sandbox::OptOut {
+                reason: asked.reason,
+            });
         let (mut started, said) = worktrees::on_a_branch(
             held.root(),
             config.as_deref(),
@@ -1062,7 +1086,10 @@ async fn start_chat(
                     cwd,
                     name,
                     label,
-                    show_footer,
+                    Picked {
+                        show_footer,
+                        without_sandbox,
+                    },
                     columns,
                     rows,
                 )
@@ -1080,12 +1107,30 @@ async fn start_chat(
 /// A struct because tauri-specta types a command of at most ten arguments, and `start_chat` grew
 /// an eleventh with `new_branch`. The two boxes are the pair that belong together: both are the
 /// operator's answer in the picker about this one chat, decided before it starts.
-#[derive(Debug, Clone, Copy, serde::Deserialize, specta::Type)]
+#[derive(Debug, Clone, serde::Deserialize, specta::Type)]
 struct Boxes {
     /// Draw charter's footer in the pane (ADR 0029).
     show_footer: bool,
     /// Start on a branch of its own when the chat starts in a repo's clone (GL-1).
     new_branch: bool,
+    /// "Start without the sandbox", for this chat only, and the reason typed, if any (ADR 0067
+    /// §7, ruling V78 a). Null for a sandboxed start. The window's picker is the one place an
+    /// opt-out is made: it reaches the core here, on the window's own human scope, and nothing
+    /// a chat, a file or the CLI sends can carry one.
+    without_sandbox: Option<WithoutSandbox>,
+}
+
+/// A person's opt-out, as the picker sends it.
+#[derive(Debug, Clone, serde::Deserialize, specta::Type)]
+struct WithoutSandbox {
+    /// What the person typed as the reason, or null.
+    reason: Option<String>,
+}
+
+/// What the picker's boxes decided about one chat, as its start reads them.
+struct Picked {
+    show_footer: bool,
+    without_sandbox: Option<charter_core::sandbox::OptOut>,
 }
 
 /// The start itself, in the directory `on_a_branch` settled on.
@@ -1097,7 +1142,10 @@ fn start_chat_in(
     cwd: Option<PathBuf>,
     name: String,
     label: Option<String>,
-    show_footer: bool,
+    Picked {
+        show_footer,
+        without_sandbox,
+    }: Picked,
     columns: u16,
     rows: u16,
 ) -> Result<Started, String> {
@@ -1110,6 +1158,7 @@ fn start_chat_in(
         resume: None,
         show_footer,
         resuming: None,
+        without_sandbox,
     };
     let ready = charter_core::start::ready(&start, root)?;
     let chat = Chat {
@@ -1138,10 +1187,12 @@ fn start_chat_in(
     let session = held
         .chats()
         .start_ready(&chat, &ready, Size { columns, rows })?;
+    let mut notices = ready.notices;
+    notices.extend(held.chats().start_notes(session));
     Ok(Started {
         session,
         label,
-        notices: ready.notices,
+        notices,
     })
 }
 

@@ -1470,6 +1470,34 @@ impl Planes {
                 }
             }));
         }
+        // What each start decided about a chat's sandbox (ADR 0067 §7): its trust event, in the
+        // event log under the run the start is about to begin and made durable before the chat's
+        // program runs — an `Err` refuses a person's opt-out — and this machine's local count of
+        // new chats with and without it (ruling V78 d), which `charter doctor` and Project
+        // settings show.
+        {
+            let events = self.events.clone();
+            let project = root.clone();
+            chats.when_the_sandbox_is_decided(Box::new(move |decided| {
+                if let Some(change) = decided.change {
+                    let (Some(events), Some(run)) = (&events, decided.run) else {
+                        return Err("charter's event log is not open on this machine".to_owned());
+                    };
+                    let mut log = events.lock().unwrap_or_else(PoisonError::into_inner);
+                    let event = log
+                        .trust(run, change, decided.harness, decided.persona)
+                        .map_err(|why| format!("the event log refused it: {why}"))?;
+                    log.durable()
+                        .through(event.seq)
+                        .map_err(|why| format!("the event log could not keep it: {why}"))?;
+                }
+                if let Some(counted) = decided.counted {
+                    charter_core::sandbox::local::count(&project, counted)
+                        .map_err(|why| why.to_string())?;
+                }
+                Ok(())
+            }));
+        }
 
         // **Before a single session is started, because putting the record back starts them.**
         // A harness fires `SessionStart` at its own exec, and a board that learned the chat's

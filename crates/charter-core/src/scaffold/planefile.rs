@@ -108,7 +108,9 @@ fn toml_str(s: &str) -> String {
     crate::pyjson::dumps(&serde_json::Value::String(s.to_owned()), None, ",", ":")
 }
 
-/// `commands._render_charter_toml`: what `init` writes into a fresh plane.
+/// `commands._render_charter_toml`: what `init` writes into a fresh plane, and then the
+/// `[sandbox]` block the Python charter never wrote: every project charter makes runs its chats
+/// sandboxed (ADR 0067 §1, ruling V21).
 pub fn render(forge: &str, owner: &str, host: Option<&str>) -> String {
     let mut lines = vec![
         format!("schema = {WRITTEN}"),
@@ -128,6 +130,7 @@ pub fn render(forge: &str, owner: &str, host: Option<&str>) -> String {
         "share = \"local\"".to_owned(),
         String::new(),
     ]);
+    lines.push(crate::sandbox::on_block());
     lines.join("\n")
 }
 
@@ -313,7 +316,9 @@ fn said_as_set(next: &str, section: &str, key: &str, value: &str) -> Result<(), 
     }
 }
 
-fn edited(body: &str, section: &str, key: &str, value: &str) -> String {
+/// `body` with `key = "value"` set inside `[section]`, as [`set_key`] edits it: a text edit,
+/// so a caller that must know the edit landed in the table re-reads the result.
+pub(crate) fn edited(body: &str, section: &str, key: &str, value: &str) -> String {
     let mut lines: Vec<String> = text::lines_with_ends(body)
         .into_iter()
         .map(str::to_owned)
@@ -368,21 +373,45 @@ fn edited(body: &str, section: &str, key: &str, value: &str) -> String {
 mod tests {
     use super::*;
 
-    /// Verified against CPython 3.14: `commands._render_charter_toml(...)`.
+    /// The block every new project ends with (ADR 0067 §1, ruling V21 5).
+    const SANDBOX_ON: &str =
+        "\n[sandbox]\nmode = \"on\"\negress = [\"model-providers\", \"forge\", \"toolchains\"]\n";
+
+    /// Verified against CPython 3.14: `commands._render_charter_toml(...)`, and then the
+    /// `[sandbox]` block the Python charter never wrote (ADR 0067 §1).
     #[test]
     fn a_fresh_charter_toml_is_the_one_python_writes() {
         assert_eq!(
             render("github", "acme", None),
-            "schema = 1\n\n[[forge]]\nkind = \"github\"\nowner = \"acme\"\n\n[memory]\nshare = \"local\"\n"
+            format!(
+                "schema = 1\n\n[[forge]]\nkind = \"github\"\nowner = \"acme\"\n\n[memory]\nshare = \"local\"\n{SANDBOX_ON}"
+            )
         );
         assert_eq!(
             render("gitlab", "", Some("git.example.com")),
-            "schema = 1\n\n[[forge]]\nkind = \"gitlab\"\nhost = \"git.example.com\"\n\n[memory]\nshare = \"local\"\n"
+            format!(
+                "schema = 1\n\n[[forge]]\nkind = \"gitlab\"\nhost = \"git.example.com\"\n\n[memory]\nshare = \"local\"\n{SANDBOX_ON}"
+            )
         );
         assert_eq!(
             render("github", "a\"c\u{e9}", None).lines().nth(4),
             Some("owner = \"a\\\"c\\u00e9\"")
         );
+    }
+
+    /// A project charter makes runs every chat sandboxed, with the default egress (ADR 0067
+    /// §1, ruling V21 5), and the file says nothing charter would refuse.
+    #[test]
+    fn a_new_project_turns_the_sandbox_on_with_the_default_egress() {
+        let said = crate::sandbox::Plane::of(Some(&render("github", "acme", None))).said();
+
+        assert_eq!(
+            said.policy,
+            Some(crate::sandbox::Policy {
+                egress: crate::sandbox::Preset::DEFAULT.to_vec()
+            })
+        );
+        assert!(said.refused.is_empty(), "{:?}", said.refused);
     }
 
     fn set(body: &str) -> String {

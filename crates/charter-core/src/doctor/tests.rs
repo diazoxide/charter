@@ -2318,3 +2318,48 @@ fn the_changes_check_never_reaches_a_network() {
         );
     }
 }
+
+// ---- sandbox (ADR 0067 §7, V12, ruling V78 d) ------------------------------------------------
+
+#[test]
+fn a_project_that_has_not_turned_the_sandbox_on_prints_no_sandbox_row() {
+    let (_d, root) = plane("schema = 1\n");
+    assert!(
+        !doctor(&root).run().iter().any(|r| r.name == "sandbox"),
+        "the rows Python printed, and nothing more"
+    );
+}
+
+#[test]
+fn a_sandboxed_project_prints_this_machines_opt_out_rate_and_the_bar() {
+    let (_d, root) = plane("schema = 1\n[sandbox]\nmode = \"on\"\n");
+    assert_eq!(
+        one(&root, "sandbox"),
+        Row::ok(
+            "sandbox",
+            "on — no chat has started under this project's sandbox on this machine yet"
+        )
+    );
+
+    for started in [
+        crate::sandbox::local::Started::Sandboxed,
+        crate::sandbox::local::Started::Sandboxed,
+        crate::sandbox::local::Started::Sandboxed,
+        crate::sandbox::local::Started::OptedOut,
+    ] {
+        crate::sandbox::local::count(&root, started).unwrap();
+    }
+    assert_eq!(
+        one(&root, "sandbox").detail,
+        "on — 1 of 4 chats started without the sandbox on this machine (25%); the bar is under \
+         10%"
+    );
+}
+
+#[test]
+fn the_sandbox_row_sits_after_the_version_lock() {
+    let (_d, root) = plane("schema = 1\n[sandbox]\nmode = \"on\"\n");
+    let names: Vec<String> = doctor(&root).run().into_iter().map(|r| r.name).collect();
+    let at = names.iter().position(|n| n == "version lock").unwrap();
+    assert_eq!(names[at + 1], "sandbox");
+}

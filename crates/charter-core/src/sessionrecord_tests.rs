@@ -40,6 +40,7 @@ fn facts(place: Place, when: chrono::NaiveDateTime) -> Facts {
             profile: Some("work".to_owned()),
             conversation: Some("0f6c2a1e-aaaa-bbbb-cccc-123456789abc".to_owned()),
             cwd: Some("workspaces/alpha/charter/si-8b".to_owned()),
+            unsandboxed: false,
         }),
         persona: Some("steward".to_owned()),
         pieces: vec![Touched {
@@ -482,6 +483,7 @@ fn a_chat_the_app_has_no_record_of_is_known_only_by_its_number() {
             profile: None,
             conversation: None,
             cwd: None,
+            unsandboxed: false,
         }
     );
 }
@@ -701,4 +703,51 @@ fn a_saved_line_spelling_the_plane_another_way_still_names_its_record() {
     let named = saved(&link, &recorded.path).expect("the record, through the other spelling");
 
     assert_eq!(named.title, "Ship it");
+}
+
+// ---- what the chat ran under (ADR 0067 §7, as ADR 0075 amends it) ----------------------------
+
+#[test]
+fn a_record_of_a_chat_that_ran_without_the_sandbox_says_so() {
+    let dir = plane(&["alpha"]);
+    let mut facts = facts(alpha(), at(14, 3, 12));
+    if let Some(chat) = facts.chat.as_mut() {
+        chat.unsandboxed = true;
+    }
+    let done = write(dir.path(), "Ship the record", BODY, &facts).unwrap();
+    let text = std::fs::read_to_string(&done.path).unwrap();
+    assert!(
+        text.contains("\ncwd: workspaces/alpha/charter/si-8b\nsandbox: off\npiece: "),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_record_of_any_other_chat_has_no_sandbox_line() {
+    let dir = plane(&["alpha"]);
+    let done = write(
+        dir.path(),
+        "Ship the record",
+        BODY,
+        &facts(alpha(), at(14, 3, 12)),
+    )
+    .unwrap();
+    let text = std::fs::read_to_string(&done.path).unwrap();
+    assert!(!text.contains("sandbox:"), "{text}");
+}
+
+#[test]
+fn whether_a_chat_ran_unsandboxed_comes_from_the_apps_record_of_it() {
+    let dir = plane(&[]);
+    std::fs::create_dir_all(dir.path().join(".charter/app")).unwrap();
+    std::fs::write(
+        dir.path().join(crate::reopen::IN_PLANE),
+        r#"{"version": 1, "at": 1, "dealt": 8, "chats": [
+            {"program": "claude", "name": "7", "number": 7, "sandbox": "off"},
+            {"program": "claude", "name": "8", "number": 8}
+        ]}"#,
+    )
+    .unwrap();
+    assert!(chat_facts(dir.path(), 7).unsandboxed);
+    assert!(!chat_facts(dir.path(), 8).unsandboxed);
 }

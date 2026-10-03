@@ -1160,3 +1160,35 @@ describe("the Repos group (charter-app#300, ADR 0051)", () => {
     );
   });
 });
+
+describe("the sandbox line (ADR 0067 §7, ruling V78 d)", () => {
+  function withSandbox(state: { on: boolean; offer: boolean; said: string | null }) {
+    mockIPC((cmd) => {
+      if (cmd === "project_settings") return { shared: SHARED, local: LOCAL };
+      if (cmd === "sandbox_state") return state;
+      return undefined;
+    });
+    render(<ProjectSettings plane={PLANE} />);
+  }
+
+  it("shows this machine's opt-out count where the sandbox is on, and that it is never sent", async () => {
+    withSandbox({
+      on: true,
+      offer: false,
+      said: "1 of 4 chats started without the sandbox on this machine (25%); the bar is under 10%",
+    });
+
+    expect(await screen.findByTestId("settings-sandbox")).toHaveTextContent(
+      "Sandbox: on. 1 of 4 chats started without the sandbox on this machine (25%); the bar is " +
+        "under 10%. Counted on this machine only, and never sent.",
+    );
+  });
+
+  it("says how a project that has it off turns it on", async () => {
+    withSandbox({ on: false, offer: false, said: null });
+
+    expect(await screen.findByTestId("settings-sandbox")).toHaveTextContent(
+      'Sandbox: off. [sandbox] mode = "on" in the Shared file runs every chat sandboxed.',
+    );
+  });
+});

@@ -291,6 +291,20 @@ export const commands = {
 	 *  through here. A word that is not a harness charter starts is refused, and nothing is typed.
 	 */
 	typeInstaller: (plane: PlaneId, session: number, harness: string) => typedError<null, string>(__TAURI_INVOKE("type_installer", { plane, session, harness })),
+	/**  The project's sandbox, for the offer notice and Project settings. */
+	sandboxState: (plane: PlaneId) => typedError<SandboxState, string>(__TAURI_INVOKE("sandbox_state", { plane })),
+	/**
+	 *  The person's answer to the one-time offer: `turn_on` writes `[sandbox] mode = "on"` into
+	 *  the project's `charter.toml`; either answer is the last time it is asked on this machine.
+	 */
+	answerSandboxOffer: (plane: PlaneId, turnOn: boolean) => typedError<SandboxState, string>(__TAURI_INVOKE("answer_sandbox_offer", { plane, turnOn })),
+	/**
+	 *  Types SD-30's install command into shell session `session` at the project root, and does
+	 *  not run it (ruling V78 c): installing needs `sudo`, so the person reads it and presses
+	 *  Return. The window sends no text; the line is built here, and it is typed only into a shell
+	 *  tab at the project root.
+	 */
+	typeSandboxInstall: (plane: PlaneId, session: number) => typedError<null, string>(__TAURI_INVOKE("type_sandbox_install", { plane, session })),
 	/**
 	 *  Opens `path`, a repo, into this machine's local plane: the plane is made when there is
 	 *  none, laid out from the project template `template` names (FR-17), the repo is cloned into
@@ -693,6 +707,10 @@ export const commands = {
 	 *  Read fresh every time it is opened, like the sidebar: `charter.local.toml` is a file the
 	 *  operator edits by hand and a chat can write, so a cache here would be a second answer to
 	 *  "what is on disk" that nothing invalidates.
+	 * 
+	 *  **Off the main thread**: a sandboxed project's picker asks each approved Claude Code
+	 *  profile's program its `--version` (ruling V87g), which can take seconds, and the window
+	 *  must not freeze for it.
 	 */
 	startOptions: (plane: PlaneId) => typedError<StartOptions, string>(__TAURI_INVOKE("start_options", { plane })),
 	/**
@@ -1406,6 +1424,13 @@ export type Boxes = {
 	show_footer: boolean,
 	/**  Start on a branch of its own when the chat starts in a repo's clone (GL-1). */
 	new_branch: boolean,
+	/**
+	 *  "Start without the sandbox", for this chat only, and the reason typed, if any (ADR 0067
+	 *  §7, ruling V78 a). Null for a sandboxed start. The window's picker is the one place an
+	 *  opt-out is made: it reaches the core here, on the window's own human scope, and nothing
+	 *  a chat, a file or the CLI sends can carry one.
+	 */
+	without_sandbox: WithoutSandbox | null,
 };
 
 /**
@@ -2937,6 +2962,12 @@ export type ProfileRow = {
 	 *  (FR-28), offers it by.
 	 */
 	ready_to_type: boolean,
+	/**
+	 *  What the sandbox does for a chat on it, where the project turned the sandbox on: the
+	 *  picker shows it beside "Start without the sandbox" (ADR 0067 §7, ruling V78 a). Null
+	 *  where the project has not, or the kind is no harness.
+	 */
+	sandbox: SandboxAhead | null,
 };
 
 /**
@@ -3338,6 +3369,38 @@ export type RowAction = {
 	asks_first: boolean,
 	/**  Whether it says it deletes, so the question the window asks can say so. */
 	deletes: boolean,
+};
+
+/**  What the picker says about the sandbox for one profile, before anything starts. */
+export type SandboxAhead = {
+	/**  `sandboxed`, `unsandboxed` (this system has no backend) or `refused`. */
+	state: string,
+	/**
+	 *  The sentence the picker shows: why it is refused, or why it starts without the sandbox.
+	 *  Empty for `sandboxed`.
+	 */
+	said: string,
+	/**
+	 *  SD-30's install command, shown before the person asks for it to be typed: where the
+	 *  refusal is a program this machine is missing and charter knows its distribution.
+	 */
+	install: string | null,
+};
+
+/**  What the project view says about the sandbox. */
+export type SandboxState = {
+	/**  Whether the project turned the sandbox on. */
+	on: boolean,
+	/**
+	 *  Whether the one-time offer is due: an existing project that has not turned it on, and
+	 *  nobody on this machine has answered (ruling V21 1).
+	 */
+	offer: boolean,
+	/**
+	 *  This machine's opt-out count in one sentence (V12), where the project has it on. Local
+	 *  only, never sent (ruling V78 d).
+	 */
+	said: string | null,
 };
 
 /**  One save attempt, as the journal holds it. */
@@ -3846,6 +3909,12 @@ export type WindowTabs = {
 	 *  operator is not looking at, or holding none at all.
 	 */
 	active: number | null,
+};
+
+/**  A person's opt-out, as the picker sends it. */
+export type WithoutSandbox = {
+	/**  What the person typed as the reason, or null. */
+	reason: string | null,
 };
 
 /**

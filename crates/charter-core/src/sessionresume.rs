@@ -128,6 +128,9 @@ pub fn ready(root: &Path, path: &str, name: &str, after_failure: bool) -> Result
         resume: None,
         show_footer: false,
         resuming: Some(record.shown.clone()),
+        // A resumed chat starts sandboxed, or is refused, whatever the chat it resumes ran under
+        // (ADR 0067 §7): an opt-out is never inherited.
+        without_sandbox: None,
     };
 
     let (set, _) = crate::profiles::for_launch(root);

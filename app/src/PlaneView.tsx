@@ -180,6 +180,7 @@ import { closeOnDelete, onAMac, renameOnF2 } from "./tabKeys";
 import { opensAShell } from "./shellKey";
 import { TabRename } from "./TabRename";
 import { EmptyState } from "./EmptyState";
+import { SandboxOffer } from "./SandboxOffer";
 import type {
   ExtensionCommand,
   ExtensionView,
@@ -187,6 +188,7 @@ import type {
   RowAction,
   SavedRecord,
   SmartClosing,
+  WithoutSandbox,
 } from "./bindings";
 import { AskFirst, runExtensionAction } from "./ExtensionAction";
 import { extensionsChanged, useExtensionsOn } from "./extensionsOn";
@@ -223,9 +225,13 @@ const NONE: readonly never[] = [];
  *  tab, opened as a chat instead (ADR 0062). */
 type Where = { tab: true; in?: string; prefer?: string } | { split: Direction };
 
-/** What a new shell tab has typed into it: a line spelled out (FR-4's `gh auth login`), or a
- *  harness whose compiled-in installer the core types itself (FR-29, V65). */
-type Typed = { line: string; installer?: undefined } | { installer: string; line?: undefined };
+/** What a new shell tab has typed into it: a line spelled out (FR-4's `gh auth login`), a
+ *  harness whose compiled-in installer the core types itself (FR-29, V65), or the sandbox's
+ *  install command, which the core types and leaves for the person to run (SD-30, V78 c). */
+type Typed =
+  | { line: string; installer?: undefined; sandboxInstall?: undefined }
+  | { installer: string; line?: undefined; sandboxInstall?: undefined }
+  | { sandboxInstall: true; line?: undefined; installer?: undefined };
 
 /**
  * One project, with everything that belongs to it.
@@ -1457,6 +1463,14 @@ export const PlaneView = memo(function PlaneView({
                 if (said.status === "error") setTrouble(said.error);
               })
               .catch((err: unknown) => setTrouble(String(err)));
+          // Typed and not run: installing needs sudo, so the person presses Return (V78 c).
+          else if (typed?.sandboxInstall)
+            void commands
+              .typeSandboxInstall(plane, session)
+              .then((said) => {
+                if (said.status === "error") setTrouble(said.error);
+              })
+              .catch((err: unknown) => setTrouble(String(err)));
         })
         .catch((err: unknown) => setTrouble(String(err)));
     },
@@ -1605,6 +1619,7 @@ export const PlaneView = memo(function PlaneView({
       label: string | null,
       newBranch: boolean,
       filedIn?: string,
+      withoutSandbox: WithoutSandbox | null = null,
     ): Promise<string | undefined> => {
       // A tab asked for in one directory starts there; everything else starts where the
       // explorer's pick says (charter-app#174).
@@ -1629,7 +1644,8 @@ export const PlaneView = memo(function PlaneView({
           name,
           label,
           // The core cuts the branch only when `cwd` is a repo's clone (GL-1).
-          { show_footer: showFooter, new_branch: newBranch },
+          // The opt-out is the picker's alone (ADR 0067 §7): every other start sends none.
+          { show_footer: showFooter, new_branch: newBranch, without_sandbox: withoutSandbox },
           STARTING_SIZE.columns,
           STARTING_SIZE.rows,
         )
@@ -1673,6 +1689,7 @@ export const PlaneView = memo(function PlaneView({
       showFooter: boolean,
       label: string | null,
       newBranch: boolean,
+      withoutSandbox: WithoutSandbox | null,
     ) => {
       if (picking === undefined || startingNow.current) return;
       const kind = picking.options.profiles.find((one) => one.name === profile)?.kind;
@@ -1689,6 +1706,8 @@ export const PlaneView = memo(function PlaneView({
         showFooter,
         label,
         newBranch,
+        undefined,
+        withoutSandbox,
       ).finally(() => {
         startingNow.current = false;
         setStarting(false);
@@ -1715,6 +1734,7 @@ export const PlaneView = memo(function PlaneView({
       shown: string,
       label: string | null,
       newBranch: boolean,
+      withoutSandbox: WithoutSandbox | null,
     ) => {
       // A start already running from this picker is the one start it gets (GL-1).
       if (startingNow.current) return;
@@ -1730,7 +1750,7 @@ export const PlaneView = memo(function PlaneView({
       // away the choice on the one path where a profile is being used for the first time.
       // The footer choice rides the same path, and for the same reason: a first run of a
       // profile is exactly where a dropped choice would go unnoticed.
-      await startPicked(profile, persona, showFooter, label, newBranch);
+      await startPicked(profile, persona, showFooter, label, newBranch, withoutSandbox);
     },
     [plane, startPicked],
   );
@@ -3940,6 +3960,9 @@ export const PlaneView = memo(function PlaneView({
       {/* **A smart close that ended on its record** (SI-8f): its tab has gone, so this is where
           the window says so — quietly, as news and not as a question, with the record one
           press away in its own view tab (SI-8d). */}
+      {/* **The sandbox's one-time offer** to a project made before it (ADR 0067 §1, V21 1):
+          a notice like the one below, answered once, never a dialog. */}
+      <SandboxOffer plane={plane} />
       {savedNotice && (
         <p className="came-back" role="status">
           Session saved{savedNotice.record ? ` — ${savedNotice.record.title}` : "."}{" "}
@@ -4327,11 +4350,22 @@ export const PlaneView = memo(function PlaneView({
           starting={starting}
           prefer={"prefer" in picking.where ? picking.where.prefer : undefined}
           trouble={pickerTrouble}
-          onStart={(profile, persona, footer, label, newBranch) =>
-            void startPicked(profile, persona, footer, label, newBranch)
+          onStart={(profile, persona, footer, label, newBranch, withoutSandbox) =>
+            void startPicked(profile, persona, footer, label, newBranch, withoutSandbox)
           }
-          onApprove={(profile, persona, footer, shown, label, newBranch) =>
-            void approveAndStart(profile, persona, footer, shown, label, newBranch)
+          onApprove={(profile, persona, footer, shown, label, newBranch, withoutSandbox) =>
+            void approveAndStart(profile, persona, footer, shown, label, newBranch, withoutSandbox)
+          }
+          // SD-30's install action: a shell tab at the project root with the command typed and
+          // not run. The picker closes, since the chat it was for starts after the install.
+          onInstall={
+            root === undefined
+              ? undefined
+              : () => {
+                  setPicking(undefined);
+                  setPickerTrouble(undefined);
+                  openShell(root, OUTSIDE, { sandboxInstall: true });
+                }
           }
           onCancel={() => {
             setPicking(undefined);

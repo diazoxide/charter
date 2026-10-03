@@ -876,8 +876,8 @@ fn a_codex_chat_in_a_sandboxed_plane_is_refused_until_charter_wraps_it() {
     assert_eq!(refused, NotStarted::HeldBack(Harness::Codex, 1123));
     assert_eq!(
         refused.to_string(),
-        "charter cannot keep a Codex chat inside its sandbox yet (#1123), so in this project it \
-         starts only without the sandbox."
+        "charter cannot keep a Codex chat inside its sandbox yet (#1123), so in this project a \
+         new one starts only without the sandbox, from the new-chat picker."
     );
     // A plane that says nothing still starts Codex as it always has.
     let plain = plane_saying("schema = 1\n");
@@ -1506,4 +1506,520 @@ fn every_harness_is_compiled_against_the_plane_as_the_kernel_names_it() {
         "{write}"
     );
     assert!(!write.contains(&linked.display().to_string()), "{write}");
+}
+
+// -------------------------------------------------------------------------------------
+// The per-chat opt-out (ADR 0067 §7) and Windows (ruling V21 3, V78 b)
+// -------------------------------------------------------------------------------------
+
+fn off(reason: Option<&str>) -> OptOut {
+    OptOut {
+        reason: reason.map(str::to_owned),
+    }
+}
+
+#[test]
+fn a_person_can_start_one_chat_without_the_sandbox_and_every_class_is_lifted_for_it() {
+    let plane = plane_saying(ON);
+    let decided = decide(
+        Harness::ClaudeCode,
+        plane.path(),
+        &machine(Os::MacOs),
+        &|_| true,
+        Some(&off(Some("the build needs the network"))),
+    );
+    assert_eq!(
+        decided,
+        Ok(Some(Decided::Unsandboxed(Lifted {
+            by: By::Person,
+            reason: Some("the build needs the network".to_owned()),
+        })))
+    );
+    assert_eq!(Lifted::CLASSES, Class::ALL);
+}
+
+#[test]
+fn the_opt_out_is_what_lets_a_chat_start_where_the_sandbox_cannot_be_applied() {
+    let plane = plane_saying(ON);
+    let refused = decide(
+        Harness::ClaudeCode,
+        plane.path(),
+        &machine(Os::Linux),
+        &|_| false,
+        None,
+    );
+    assert!(
+        matches!(refused, Err(NotStarted::NoBackend(_))),
+        "{refused:?}"
+    );
+    let started = decide(
+        Harness::ClaudeCode,
+        plane.path(),
+        &machine(Os::Linux),
+        &|_| false,
+        Some(&off(None)),
+    );
+    assert_eq!(
+        started,
+        Ok(Some(Decided::Unsandboxed(Lifted {
+            by: By::Person,
+            reason: None,
+        })))
+    );
+}
+
+#[test]
+fn a_project_that_has_not_turned_the_sandbox_on_has_nothing_to_opt_out_of() {
+    let plane = plane_saying("schema = 1\n");
+    let decided = decide(
+        Harness::ClaudeCode,
+        plane.path(),
+        &machine(Os::MacOs),
+        &|_| true,
+        Some(&off(Some("why not"))),
+    );
+    assert_eq!(decided, Ok(None), "no lift, so nothing to audit");
+}
+
+#[test]
+fn without_an_opt_out_a_sandboxed_project_still_sandboxes_or_refuses() {
+    let plane = plane_saying(ON);
+    let decided = decide(
+        Harness::ClaudeCode,
+        plane.path(),
+        &machine(Os::MacOs),
+        &|_| true,
+        None,
+    );
+    assert!(
+        matches!(decided, Ok(Some(Decided::Sandboxed(ref applied))) if applied.harness() == Harness::ClaudeCode),
+        "{decided:?}"
+    );
+}
+
+#[test]
+fn on_windows_a_chat_in_a_sandboxed_project_starts_at_the_opt_out_and_charter_is_the_actor() {
+    let plane = plane_saying(ON);
+    let decided = decide(
+        Harness::ClaudeCode,
+        plane.path(),
+        &machine(Os::Windows),
+        &|_| true,
+        None,
+    );
+    assert_eq!(
+        decided,
+        Ok(Some(Decided::Unsandboxed(Lifted {
+            by: By::NoBackend(Os::Windows),
+            reason: None,
+        })))
+    );
+}
+
+#[test]
+fn a_system_with_no_backend_that_is_not_windows_still_fails_closed() {
+    let plane = plane_saying(ON);
+    let decided = decide(
+        Harness::ClaudeCode,
+        plane.path(),
+        &machine(Os::Other),
+        &|_| true,
+        None,
+    );
+    assert_eq!(
+        decided,
+        Err(NotStarted::NoBackend(backend::Missing::NoBackend(
+            Os::Other
+        )))
+    );
+}
+
+#[test]
+fn a_typed_reason_is_kept_to_one_short_line() {
+    let long = format!("first line\nsecond {}", "x".repeat(600));
+    let plane = plane_saying(ON);
+    let Ok(Some(Decided::Unsandboxed(lifted))) = decide(
+        Harness::ClaudeCode,
+        plane.path(),
+        &machine(Os::MacOs),
+        &|_| true,
+        Some(&off(Some(&long))),
+    ) else {
+        panic!("unsandboxed");
+    };
+    let reason = lifted.reason.expect("a reason");
+    assert!(!reason.contains('\n'), "{reason}");
+    assert!(
+        reason.chars().count() <= OptOut::MOST_REASON_CHARS,
+        "{reason}"
+    );
+    let blank = decide(
+        Harness::ClaudeCode,
+        plane.path(),
+        &machine(Os::MacOs),
+        &|_| true,
+        Some(&off(Some("   "))),
+    );
+    assert_eq!(
+        blank,
+        Ok(Some(Decided::Unsandboxed(Lifted {
+            by: By::Person,
+            reason: None,
+        })))
+    );
+}
+
+#[test]
+fn an_unsandboxed_chat_says_so_on_its_tab_and_why() {
+    assert_eq!(
+        Lifted {
+            by: By::Person,
+            reason: None,
+        }
+        .notice(),
+        "This chat runs without the sandbox: you turned it off for this chat only. A new or \
+         resumed chat does not inherit it."
+    );
+    assert_eq!(
+        Lifted {
+            by: By::NoBackend(Os::Windows),
+            reason: None,
+        }
+        .notice(),
+        "This chat runs without the sandbox: charter has no sandbox backend on Windows yet, so \
+         every chat here starts without it until one exists."
+    );
+}
+
+// -------------------------------------------------------------------------------------
+// SD-30's install action (ruling V78 c): the distribution's own command, typed and never run
+// -------------------------------------------------------------------------------------
+
+#[test]
+fn the_install_action_is_the_distributions_own_package_manager_command() {
+    let missing = backend::missing(Os::Linux, &|_| false).expect("missing");
+    let cases = [
+        (
+            "ID=ubuntu\nID_LIKE=debian\n",
+            "sudo apt install bubblewrap socat",
+        ),
+        ("ID=debian\n", "sudo apt install bubblewrap socat"),
+        ("ID=\"fedora\"\n", "sudo dnf install bubblewrap socat"),
+        (
+            "ID=\"rocky\"\nID_LIKE=\"rhel centos fedora\"\n",
+            "sudo dnf install bubblewrap socat",
+        ),
+        ("ID=arch\n", "sudo pacman -S bubblewrap socat"),
+        (
+            "ID=\"opensuse-tumbleweed\"\nID_LIKE=\"opensuse suse\"\n",
+            "sudo zypper install bubblewrap socat",
+        ),
+        ("ID=alpine\n", "sudo apk add bubblewrap socat"),
+    ];
+    for (os_release, command) in cases {
+        assert_eq!(
+            backend::install_command(&missing, os_release).as_deref(),
+            Some(command),
+            "{os_release}"
+        );
+    }
+}
+
+#[test]
+fn only_what_is_missing_is_installed() {
+    let missing = backend::missing(Os::Linux, &|program| program == "bwrap").expect("missing");
+    assert_eq!(
+        backend::install_command(&missing, "ID=debian\n").as_deref(),
+        Some("sudo apt install socat")
+    );
+}
+
+#[test]
+fn a_distribution_charter_does_not_know_gets_no_action_rather_than_a_guess() {
+    let missing = backend::missing(Os::Linux, &|_| false).expect("missing");
+    assert_eq!(backend::install_command(&missing, "ID=nixos\n"), None);
+    assert_eq!(backend::install_command(&missing, ""), None);
+}
+
+#[test]
+fn a_system_with_no_backend_has_nothing_to_install() {
+    let missing = backend::missing(Os::Windows, &|_| false).expect("missing");
+    assert_eq!(backend::install_command(&missing, "ID=debian\n"), None);
+    let missing = backend::missing(Os::MacOs, &|_| false).expect("missing");
+    assert_eq!(backend::install_command(&missing, "ID=debian\n"), None);
+}
+
+// -------------------------------------------------------------------------------------
+// What the new-chat picker says before anything starts, and what each start records
+// -------------------------------------------------------------------------------------
+
+#[test]
+fn the_picker_says_nothing_of_a_sandbox_a_project_has_not_turned_on() {
+    let plane = plane_saying("schema = 1\n");
+    assert_eq!(
+        ahead(
+            Harness::ClaudeCode,
+            plane.path(),
+            &machine(Os::Linux),
+            &|_| false,
+            "",
+            &|_| Ok(()),
+        ),
+        Ahead::Off
+    );
+}
+
+#[test]
+fn the_picker_says_a_chat_will_be_sandboxed_where_it_can_be() {
+    let plane = plane_saying(ON);
+    assert_eq!(
+        ahead(
+            Harness::ClaudeCode,
+            plane.path(),
+            &machine(Os::MacOs),
+            &|_| true,
+            "",
+            &|_| Ok(()),
+        ),
+        Ahead::Sandboxed
+    );
+}
+
+#[test]
+fn the_picker_shows_the_refusal_and_the_distributions_install_command_before_the_start() {
+    let plane = plane_saying(ON);
+    let Ahead::Refused { why, install } = ahead(
+        Harness::ClaudeCode,
+        plane.path(),
+        &machine(Os::Linux),
+        &|program| program == "bwrap",
+        "ID=debian\n",
+        &|_| Ok(()),
+    ) else {
+        panic!("refused");
+    };
+    assert!(why.contains("socat is not installed"), "{why}");
+    assert_eq!(install.as_deref(), Some("sudo apt install socat"));
+}
+
+#[test]
+fn a_refusal_nothing_can_be_installed_for_offers_no_install() {
+    let plane = plane_saying(ON);
+    std::fs::write(
+        plane.path().join("vaults.json"),
+        r#"{"vaults": {"dev": {"provider": "keyring"}}}"#,
+    )
+    .expect("the registry");
+    let Ahead::Refused { install, .. } = ahead(
+        Harness::ClaudeCode,
+        plane.path(),
+        &machine(Os::MacOs),
+        &|_| true,
+        "ID=debian\n",
+        &|_| Ok(()),
+    ) else {
+        panic!("refused");
+    };
+    assert_eq!(install, None);
+}
+
+#[test]
+fn on_windows_the_picker_says_the_chat_starts_without_the_sandbox_and_why() {
+    let plane = plane_saying(ON);
+    assert_eq!(
+        ahead(
+            Harness::Codex,
+            plane.path(),
+            &machine(Os::Windows),
+            &|_| true,
+            "",
+            &|_| Ok(()),
+        ),
+        Ahead::Unsandboxed(Lifted {
+            by: By::NoBackend(Os::Windows),
+            reason: None,
+        })
+    );
+}
+
+fn person() -> Lifted {
+    Lifted {
+        by: By::Person,
+        reason: None,
+    }
+}
+
+#[test]
+fn a_new_chat_a_person_starts_unsandboxed_is_audited_off_and_counted_as_an_opt_out() {
+    assert_eq!(
+        at_start(Some(&person()), false, false, true),
+        (Some(Change::Off(person())), Some(local::Started::OptedOut))
+    );
+}
+
+#[test]
+fn a_windows_start_is_audited_and_counted_apart_from_a_choice() {
+    let windows = Lifted {
+        by: By::NoBackend(Os::Windows),
+        reason: None,
+    };
+    assert_eq!(
+        at_start(Some(&windows), false, false, true),
+        (
+            Some(Change::Off(windows.clone())),
+            Some(local::Started::NoBackend)
+        )
+    );
+}
+
+#[test]
+fn a_chat_that_ran_unsandboxed_and_starts_sandboxed_again_is_audited_back_on_and_not_counted() {
+    assert_eq!(at_start(None, true, true, false), (Some(Change::On), None));
+}
+
+#[test]
+fn a_sandboxed_new_chat_is_counted_and_has_nothing_to_audit() {
+    assert_eq!(
+        at_start(None, true, false, true),
+        (None, Some(local::Started::Sandboxed))
+    );
+}
+
+#[test]
+fn a_relaunch_is_audited_but_never_counted_again() {
+    assert_eq!(
+        at_start(Some(&person()), false, false, false),
+        (Some(Change::Off(person())), None)
+    );
+}
+
+#[test]
+fn a_chat_in_a_project_without_the_sandbox_is_neither_audited_nor_counted() {
+    assert_eq!(at_start(None, false, false, true), (None, None));
+    assert_eq!(at_start(None, false, true, true), (None, None));
+}
+
+#[test]
+fn an_unreadable_charter_toml_still_refuses_rather_than_reading_as_off() {
+    let plane = plane_saying("[sandbox\nmode = \"on\"\n");
+    assert_eq!(
+        decide(
+            Harness::ClaudeCode,
+            plane.path(),
+            &machine(Os::MacOs),
+            &|_| true,
+            None,
+        ),
+        Err(NotStarted::PlaneUnreadable)
+    );
+    assert!(
+        matches!(
+            ahead(
+                Harness::ClaudeCode,
+                plane.path(),
+                &machine(Os::MacOs),
+                &|_| true,
+                "",
+                &|_| Ok(()),
+            ),
+            Ahead::Refused { .. }
+        ),
+        "the picker shows the refusal"
+    );
+    // The opt-out sits inside that refusal, and is audited as every other one is.
+    assert_eq!(
+        decide(
+            Harness::ClaudeCode,
+            plane.path(),
+            &machine(Os::MacOs),
+            &|_| true,
+            Some(&off(None)),
+        ),
+        Ok(Some(Decided::Unsandboxed(Lifted {
+            by: By::Person,
+            reason: None,
+        })))
+    );
+}
+
+/// Ruling V87f: a sandboxed project holds Codex back until #1123. The picker shows that
+/// refusal before anything starts, and the opt-out inside it still starts the chat, audited.
+#[test]
+fn the_picker_shows_codex_held_back_and_the_opt_out_still_starts_it() {
+    let plane = plane_saying(ON);
+    let Ahead::Refused { why, install } = ahead(
+        Harness::Codex,
+        plane.path(),
+        &machine(Os::MacOs),
+        &|_| true,
+        "ID=debian\n",
+        &|_| Ok(()),
+    ) else {
+        panic!("held back");
+    };
+    assert_eq!(why, NotStarted::HeldBack(Harness::Codex, 1123).to_string());
+    assert_eq!(install, None, "nothing to install fixes it");
+    assert_eq!(
+        decide(
+            Harness::Codex,
+            plane.path(),
+            &machine(Os::MacOs),
+            &|_| true,
+            Some(&off(None)),
+        ),
+        Ok(Some(Decided::Unsandboxed(Lifted {
+            by: By::Person,
+            reason: None,
+        })))
+    );
+}
+
+/// Ruling V87g, before the start: whatever the start's program check refuses — a relative
+/// program, one wherever the chat can write, one not answering as the harness — is shown as a
+/// refusal with "Start without the sandbox", and asked only where the chat would be sandboxed.
+#[test]
+fn the_picker_shows_every_refusal_of_the_program_check() {
+    let plane = plane_saying(ON);
+    for refusal in [
+        NotStarted::ProgramRelative,
+        NotStarted::ProgramWritable(plane.path().join("bin/claude")),
+        NotStarted::NotTheHarness(Harness::ClaudeCode),
+    ] {
+        let said = refusal.to_string();
+        let check = |_: &Applied| Err(refusal.clone());
+        assert_eq!(
+            ahead(
+                Harness::ClaudeCode,
+                plane.path(),
+                &machine(Os::MacOs),
+                &|_| true,
+                "",
+                &check,
+            ),
+            Ahead::Refused {
+                why: said,
+                install: None,
+            }
+        );
+    }
+    let asked = std::sync::atomic::AtomicBool::new(false);
+    let check = |_: &Applied| {
+        asked.store(true, std::sync::atomic::Ordering::SeqCst);
+        Err(NotStarted::ProgramRelative)
+    };
+    assert!(matches!(
+        ahead(
+            Harness::ClaudeCode,
+            plane.path(),
+            &machine(Os::Windows),
+            &|_| true,
+            "",
+            &check
+        ),
+        Ahead::Unsandboxed(_)
+    ));
+    assert!(
+        !asked.load(std::sync::atomic::Ordering::SeqCst),
+        "not asked where the chat is not sandboxed"
+    );
 }

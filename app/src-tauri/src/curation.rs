@@ -392,6 +392,7 @@ pub fn start_typed(
             // for this one — a handoff's rule.
             show_footer: false,
             resuming: None,
+            without_sandbox: None,
         },
         &root,
     )?;
