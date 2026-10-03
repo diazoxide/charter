@@ -668,6 +668,11 @@ describe("the one list of actions", () => {
         title: "Changes · alpha",
       },
     });
+    // FG-3: a member may be on GitLab, whose request is a merge request, so the note names
+    // neither forge's word.
+    expect(by(offers, "workspace.changes:alpha")?.note).toBe(
+      "alpha: each cross-repo change, each member's request and its checks.",
+    );
     const outside = catalogue(now({ plane: "/plane", workspaces: [OUTSIDE], focused: OUTSIDE }));
     expect(outside.some((offer) => offer.id.startsWith("workspace.changes:"))).toBe(false);
   });

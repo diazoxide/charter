@@ -988,9 +988,14 @@ fn open_pull_request_branch(root: &Path) -> Option<String> {
 /// interpolated, and each one observed rather than imagined (ADR 0009: charter may name a
 /// cause it RECOGNISED, never one it inferred). An unmatched rejection falls through to the
 /// generic "push failed" warning, which costs precision and can never mislead.
-const PROTECTED_SIGNATURES: [&str; 6] = [
+const PROTECTED_SIGNATURES: [&str; 8] = [
     "protected branch",
     "gh006",
+    // A GitHub ruleset that protects the branch (GH013). Only its branch-protection rule lines,
+    // never GH013 itself: GH013 also refuses a secret (push protection) or a file a ruleset
+    // forbids, and neither is a protected branch.
+    "changes must be made through a pull request",
+    "cannot update this protected ref",
     "pre-receive hook declined",
     "required status check",
     "merge_request",

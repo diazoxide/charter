@@ -1590,6 +1590,13 @@ fn a_protected_branch_is_recognised_only_from_words_a_forge_actually_says() {
         "remote: You are not allowed to push code to protected branches",
         "remote: create a merge_request for this branch",
         "remote: Required status check \"ci\" is expected.",
+        // A GitHub ruleset that protects the branch (GH013, GitHub docs "About rulesets"),
+        // GitHub's counterpart of GitLab's protected branch: only its branch-protection rule
+        // lines say so.
+        "remote: error: GH013: Repository rule violations found for refs/heads/main.\n\
+         remote: - Changes must be made through a pull request.",
+        "remote: error: GH013: Repository rule violations found for refs/heads/main.\n\
+         remote: - Cannot update this protected ref.",
     ] {
         assert!(is_protected_rejection(rejection), "{rejection}");
     }
@@ -1597,6 +1604,16 @@ fn a_protected_branch_is_recognised_only_from_words_a_forge_actually_says() {
         "! [rejected] main -> main (non-fast-forward)",
         "fatal: could not read from remote repository",
         "error: failed to push some refs",
+        // GH013 is also how GitHub refuses a push for what it carries rather than where it
+        // goes: secret push protection, and file-size, path and commit-message rulesets. None
+        // of them is a protected branch, and a save holding a token must not be told one is.
+        "remote: error: GH013: Repository rule violations found for refs/heads/main.\n\
+         remote: - GITHUB PUSH PROTECTION\n\
+         remote:   Push cannot contain secrets\n\
+         ! [remote rejected] main -> main (push declined due to repository rule violations)",
+        "remote: error: GH013: Repository rule violations found for refs/heads/main.\n\
+         remote: - File size is above the limit",
+        "! [remote rejected] main -> main (push declined due to repository rule violations)",
         "",
     ] {
         assert!(!is_protected_rejection(ordinary), "{ordinary}");
