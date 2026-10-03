@@ -146,13 +146,171 @@ pub fn set_key(root: &Path, section: &str, key: &str, value: &str) -> std::io::R
     let path = super::linked_to(&root.join(crate::plane::MANIFEST));
     let dir = path.parent().unwrap_or(root);
     crate::rewrite::update(dir, &path, |body| match body {
-        Some(body) => Ok(Some(edited(body, section, key, value))),
+        Some(body) => {
+            let next = edited(body, section, key, value);
+            said_as_set(&next, section, key, value).map_err(|why| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("{}: {why}, so it was left as it is", path.display()),
+                )
+            })?;
+            Ok(Some(next))
+        }
         None => Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             format!("{} is not there", path.display()),
         )),
     })
     .map(|_| ())
+}
+
+/// The table and key a project's stable id is kept under: `[project] id = "<ULID>"` (V76).
+pub const PROJECT_ID: (&str, &str) = ("project", "id");
+
+/// The project's stable id: the ULID in its `charter.toml`'s `[project] id`, in its canonical
+/// spelling. `None` when there is none yet, or when what is there is not a ULID.
+///
+/// It is what the session protocol names a project by (ADR 0068, amended by FD-26). A path
+/// differs from clone to clone and machine to machine; the id travels with the project, since
+/// `charter.toml` is committed.
+pub fn project_id(root: &Path) -> Option<String> {
+    let Read::Config(table) = load(root) else {
+        return None;
+    };
+    id_in(&table).ok().flatten()
+}
+
+/// [`project_id`], minting it first when the project has none: a fresh ULID, written into
+/// `charter.toml` as `[project] id` by the same text edit as [`set_key`], so every byte the
+/// operator wrote is kept. Read, decided and written under one lock, so two processes asking
+/// at once get one id.
+///
+/// An id that is there and is not a ULID is an error, and the file is left as it is: an id is
+/// never written over. So is a directory with no `charter.toml`, which is not a project.
+pub fn ensure_project_id(root: &Path) -> std::io::Result<String> {
+    let path = super::linked_to(&root.join(crate::plane::MANIFEST));
+    let dir = path.parent().unwrap_or(root);
+    let mut id = None;
+    crate::rewrite::update(dir, &path, |body| {
+        let Some(body) = body else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("{} is not there, so this is not a project", path.display()),
+            ));
+        };
+        let table: toml::Table = body.parse().map_err(|e: toml::de::Error| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "{} is not valid TOML: {}",
+                    path.display(),
+                    e.message().trim()
+                ),
+            )
+        })?;
+        match id_in(&table) {
+            Ok(Some(held)) => {
+                id = Some(held);
+                Ok(None)
+            }
+            Ok(None) => {
+                let minted = crate::reopen::mint();
+                let next = with_project_id(body, &minted).map_err(|why| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("{}: {why}", path.display()),
+                    )
+                })?;
+                id = Some(minted);
+                Ok(Some(next))
+            }
+            Err(why) => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("{}: {why}", path.display()),
+            )),
+        }
+    })?;
+    id.ok_or_else(|| std::io::Error::other("no project id was read or minted"))
+}
+
+/// `body` with `[project] id = "<minted>"` added, through `toml_edit` as the Project settings
+/// tab's save edits (`settings::save`), so every comment, key order and spacing is kept and a
+/// `project` table written any way TOML allows (a header with a comment, spaces or quotes, an
+/// inline table, a dotted key, a subtable) is the one the id goes into.
+///
+/// The text is parsed again before it is handed back, and must read as holding exactly this
+/// id; anything else is an error and nothing is written. A `project` that is not a table has no
+/// room for an id, and is an error too.
+fn with_project_id(body: &str, minted: &str) -> Result<String, String> {
+    let (section, key) = PROJECT_ID;
+    let mut doc: toml_edit::DocumentMut = body
+        .parse()
+        .map_err(|e: toml_edit::TomlError| format!("not valid TOML: {}", e.message().trim()))?;
+    match doc.get_mut(section) {
+        None => {
+            let mut table = toml_edit::Table::new();
+            table.insert(key, toml_edit::value(minted));
+            doc.insert(section, toml_edit::Item::Table(table));
+        }
+        Some(item) => match item.as_table_like_mut() {
+            Some(table) => {
+                table.insert(key, toml_edit::value(minted));
+            }
+            None => {
+                return Err(format!(
+                    "`{section}` is not a table, so it has no room for an id"
+                ));
+            }
+        },
+    }
+    let next = doc.to_string();
+    let reread: toml::Table = next.parse().map_err(|e: toml::de::Error| {
+        format!("the id would leave a file that does not parse: {e}")
+    })?;
+    match id_in(&reread) {
+        Ok(Some(held)) if held == minted => Ok(next),
+        other => Err(format!(
+            "the id would not read back as written ({other:?}), so nothing was written"
+        )),
+    }
+}
+
+/// The id `table` holds: `Ok(None)` for none, an error for one that is not a ULID.
+fn id_in(table: &toml::Table) -> Result<Option<String>, String> {
+    let (section, key) = PROJECT_ID;
+    match table.get(section).and_then(|s| s.get(key)) {
+        None => Ok(None),
+        Some(toml::Value::String(word)) => crate::reopen::a_ulid(word)
+            .map(Some)
+            .ok_or_else(|| format!("[{section}] {key} = \"{word}\" is not a ULID")),
+        Some(other) => Err(format!(
+            "[{section}] {key} is a {}, not a ULID",
+            other.type_str()
+        )),
+    }
+}
+
+/// Whether `next`, what [`set_key`]'s text edit made, parses and says `[section] key = value`.
+/// The edit finds a section only by a plain `[section]` header, so a table written any other
+/// way (a header with a comment, an inline table, a dotted key) would get a second one, and the
+/// file would not parse; a `section` that is not a table would be shadowed. Either is refused.
+fn said_as_set(next: &str, section: &str, key: &str, value: &str) -> Result<(), String> {
+    let table: toml::Table = next.parse().map_err(|e: toml::de::Error| {
+        format!(
+            "setting [{section}] {key} here would leave a file that does not parse ({})",
+            e.message().trim()
+        )
+    })?;
+    match table
+        .get(section)
+        .and_then(|s| s.get(key))
+        .and_then(|v| v.as_str())
+    {
+        Some(said) if said == value => Ok(()),
+        _ => Err(format!(
+            "setting [{section}] {key} here would not read back as \"{value}\""
+        )),
+    }
 }
 
 fn edited(body: &str, section: &str, key: &str, value: &str) -> String {

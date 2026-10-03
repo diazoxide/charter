@@ -493,6 +493,8 @@ Paths derived from the root (all in `derive`, `charter/config.py:661`) that land
   refuses to write over a file that changed on disk since the tab read it. (The file marks the
   plane, so the tab is only ever open where it exists; were it deleted under the tab, a save
   would create it at 0600.)
+  **And `[project].id`**, minted once into a project that has none, with `toml_edit`
+  (`planefile::ensure_project_id`, V76; see its row below).
 - **Read by:** `charter/instance.py:105` `load` — and *only* there:
   `charter/config.py:719` (every command/hook, at import), plus direct re-reads in
   `charter/commands.py:211`, `charter/commands.py:3614`, `charter/hooks.py:7260`,
@@ -536,7 +538,12 @@ Paths derived from the root (all in `derive`, `charter/config.py:661`) that land
     - Removal (`value=None`) deletes the key line and **leaves the emptied section header**
       (`charter/instance.py:436`); a missing section or missing key rewrites nothing.
     - Values are always emitted double-quoted, so only string-valued keys are writable this
-      way. Measured: `set_locked_version` on the `init` output appends
+      way.
+    - **In charter-app** the edited text is parsed before it is written, and must say what was
+      asked (`[section] key` set to the value, or gone for a removal). The edit finds a section
+      only by a plain `[section]` header, so a table written any other way (a header with a
+      comment, an inline table, a dotted key), or a `section` that is not a table, would be
+      doubled or shadowed: that is refused, and the file is left as it was (FD-26). Measured: `set_locked_version` on the `init` output appends
       `\n[charter]\nversion = "0.62.1"\n`.
 - **Schema/refusal:** `plane_version` (`charter/instance.py:79`) — absent `schema` means
   `UNSTAMPED = 1` (`charter/instance.py:63`), a non-`int` (or `bool`) value means "cannot
@@ -557,6 +564,7 @@ Paths derived from the root (all in `derive`, `charter/config.py:661`) that land
 |---|---|---|---|---|---|
 | `schema` | int (top level) | optional; absent = 1 | Project format version. charter-app understands 2, and a higher one makes the project read-only to it (V37a). `init` writes 1. A bump follows [Compatibility across charter versions](#compatibility-across-charter-versions-fr-24). | stable | `charter/instance.py:98` |
 | `requires` | array of tables (top level) | optional; absent = none. Declared with `schema = 2` (V37a) | Features a charter must have to write this project, each `{ feature, since }` (V37b). A charter that lacks one opens the project read-only and names `since` ([Compatibility across charter versions](#compatibility-across-charter-versions-fr-24)). | **stable**, a public format commitment (V37b): read by charter-app from FR-24; written by no charter yet, since no feature exists | `crates/charter-core/src/compat.rs` |
+| `[project].id` | str, a ULID | optional; absent = none yet, minted at the first ask | **charter-app only** (V76, ADR 0068 as amended by FD-26). The project's stable id: what the session protocol names a project by, in `start` and in each listed chat's `project`, never its path, which differs on every clone and device. Minted once, as a ULID like a chat's and a device's (ADR 0066), by `planefile::ensure_project_id` the first time something asks for it, and written into this file with `toml_edit`, as the Project settings tab's save writes, under the plane root's lock, so two processes asking at once get one id. A `project` table written any way TOML allows (a header with a comment, spaces or quotes, an inline table, a dotted key, a subtable) gets the id inside it; a `project` that is not a table is refused. The result is parsed again before it is written and must read as holding exactly the new id, or nothing is written. **Tier:** Plane, as the whole file: committed, so every clone and device of the project names it the same. Never written over: a value that is not a ULID is reported and left as it is, and the reader treats it as none. Read in its canonical (upper-case) spelling. | stable, a public format commitment (V76) | `crates/charter-core/src/scaffold/planefile.rs` `project_id`, `ensure_project_id` |
 | `[[forge]]` | array of tables | optional; none = one default GitLab forge | One block per forge tracked. Index 0 is `config.GROUP`/`EXCLUDE`. | stable | `charter/instance.py:143` |
 | `[[forge]].kind` | str | default `"gitlab"`; one of `gitlab`, `github` | Backend class. Unknown kind = that block skipped + reported. | stable | `charter/forge/registry.py:69`, `charter/forge/registry.py:15` |
 | `[[forge]].group` / `.owner` | str | optional; `group` wins, else `owner`, else `""` | Org/group whose repos are discovered. | stable | `charter/instance.py:162` |

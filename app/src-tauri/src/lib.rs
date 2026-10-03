@@ -1684,6 +1684,104 @@ fn typescript() -> specta_typescript::Typescript {
     specta_typescript::Typescript::default()
 }
 
+/// Where the UI RPC's typed client lives (FD-26): the same commands, over the link to `charterd`.
+#[cfg(test)]
+const UI_RPC: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../src/uiRpc.ts");
+
+/// The import every generated command calls through: Tauri's IPC.
+#[cfg(test)]
+const TAURI_INVOKE: &str =
+    "import { invoke as __TAURI_INVOKE, Channel } from \"@tauri-apps/api/core\";";
+
+/// The UI RPC's typed TypeScript client (ADR 0068 §4, FD-26): what `tauri-specta` generates
+/// from `ipc_commands.rs`, with each command sent by `uiRpcLink.ts` on the link's control lane
+/// instead of over Tauri's IPC. One generator, so the two clients cannot disagree about a
+/// command, its arguments or its types; only the transport differs.
+#[cfg(test)]
+fn ui_rpc_client() -> String {
+    let out = tempfile::tempdir().expect("a directory to generate into");
+    let generated = out.path().join("bindings.ts");
+    commands()
+        .export(typescript(), &generated)
+        .expect("the bindings are generated");
+    let bindings =
+        std::fs::read_to_string(&generated).expect("the generated bindings are readable");
+    assert!(
+        bindings.contains(TAURI_INVOKE),
+        "tauri-specta no longer imports Tauri's invoke as the UI RPC's client expects"
+    );
+    let client = without_channel_commands(&bindings);
+    // `Channel` stays imported only while something the client keeps still names it.
+    let names = if client.contains("Channel<") {
+        "invoke as __TAURI_INVOKE, Channel"
+    } else {
+        "invoke as __TAURI_INVOKE"
+    };
+    client.replacen(
+        TAURI_INVOKE,
+        &format!(
+            "// The UI RPC's client (FD-26): bindings.ts's commands, sent over the link to \
+             charterd.\nimport {{ {names} }} from \"./uiRpcLink\";"
+        ),
+        1,
+    )
+}
+
+/// The generated `commands` object without each command that takes a `Channel`: a channel is
+/// Tauri's stream to the window, and on the link a terminal's bytes are a view of the session
+/// protocol instead (ADR 0068 §4).
+///
+/// A command starts at a line `\t<name>: (<args>) => …` directly inside the object, with the
+/// doc comment right above it, and runs to the next one's doc comment. A return type's own
+/// fields sit at the same indent but are never `(…) => …`, so only a command starts one.
+#[cfg(test)]
+fn without_channel_commands(bindings: &str) -> String {
+    let lines: Vec<&str> = bindings.split_inclusive('\n').collect();
+    let Some(open) = lines
+        .iter()
+        .position(|l| l.starts_with("export const commands = {"))
+    else {
+        return bindings.to_owned();
+    };
+    // `};` alone on a line: a return type's own `}` at the margin is always followed by more.
+    let close = (open + 1..lines.len())
+        .find(|&i| lines[i].trim_end() == "};")
+        .unwrap_or(lines.len());
+    let starts_a_command = |line: &str| {
+        line.strip_prefix('\t').is_some_and(|rest| {
+            let name_end = rest
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .unwrap_or(0);
+            name_end > 0 && rest[name_end..].starts_with(": (") && rest.contains(") => ")
+        })
+    };
+    let is_doc = |line: &str| {
+        let line = line.trim_start();
+        line.starts_with("/**") || line.starts_with('*')
+    };
+    // Where each command's text begins: its doc comment, or the command itself.
+    let mut begins: Vec<usize> = (open + 1..close)
+        .filter(|&i| starts_a_command(lines[i]))
+        .map(|mut i| {
+            while i > open + 1 && is_doc(lines[i - 1]) {
+                i -= 1;
+            }
+            i
+        })
+        .collect();
+    begins.push(close);
+    let mut out: String = lines[..=open].concat();
+    out.push_str(&lines[open + 1..begins[0]].concat());
+    for pair in begins.windows(2) {
+        let command = lines[pair[0]..pair[1]].concat();
+        if !command.contains("Channel<") {
+            out.push_str(&command);
+        }
+    }
+    out.push_str(&lines[close..].concat());
+    out
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Read first, so that what it holds is when the process started and not when the window
@@ -2051,6 +2149,7 @@ mod tests {
         commands()
             .export(typescript(), BINDINGS)
             .expect("the bindings are written");
+        std::fs::write(UI_RPC, ui_rpc_client()).expect("the UI RPC's client is written");
     }
 
     /// The bundled plugin's `hooks/hooks.json`, in the repository.
@@ -2189,4 +2288,60 @@ mod tests {
             "{BINDINGS} is out of date: run `cargo test -p charter-app -- --ignored`"
         );
     }
+
+    #[test]
+    fn the_ui_rpcs_typescript_client_is_the_one_these_commands_generate() {
+        assert_eq!(
+            std::fs::read_to_string(UI_RPC).unwrap_or_default(),
+            ui_rpc_client(),
+            "{UI_RPC} is out of date: run `cargo test -p charter-app -- --ignored`"
+        );
+    }
+
+    #[test]
+    fn the_ui_rpcs_client_calls_every_command_over_the_link_and_none_over_tauri() {
+        let client = ui_rpc_client();
+        assert!(client.contains(r#"from "./uiRpcLink";"#));
+        assert!(
+            !client.contains("@tauri-apps/"),
+            "the UI RPC's client imports nothing of Tauri's"
+        );
+        let (value_free, vault_values) = app_commands!(command_names);
+        for command in value_free.iter().chain(vault_values) {
+            let called = client.contains(&format!("(\"{command}\""));
+            if TAKES_A_CHANNEL.contains(command) {
+                assert!(
+                    !called,
+                    "`{command}` takes a channel, which a view carries instead"
+                );
+            } else {
+                assert!(
+                    called,
+                    "`{command}` is in ipc_commands.rs and not in the UI RPC's client"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_ui_rpcs_client_has_no_command_that_takes_a_channel() {
+        // A channel is Tauri's stream to the window; on the link, a terminal's bytes are a
+        // view of the session protocol (ADR 0068 §4), so such a command has no UI RPC form.
+        let client = ui_rpc_client();
+        assert!(
+            !client.contains("Channel<"),
+            "a command that takes a channel is in the client"
+        );
+        let bindings = std::fs::read_to_string(BINDINGS).unwrap();
+        for command in TAKES_A_CHANNEL {
+            assert!(
+                bindings.contains(&format!("(\"{command}\"")),
+                "`{command}` is no longer a command of the window's, so nothing need leave it out"
+            );
+        }
+    }
+
+    /// The window's commands that take a channel: `watch_session`, the one that streams a
+    /// terminal to a pane.
+    const TAKES_A_CHANNEL: &[&str] = &["watch_session"];
 }

@@ -401,3 +401,13 @@ amendment only makes the ids they will write trustworthy. It does not bump the r
 **Why it is amended in place.** V43 changes one sentence of this record's own decision and adds
 no decision of another area, so it is recorded here, where that sentence is read. This record
 already carries its ruling in place (*Ruled (V21)*, above).
+
+## ADR 0066, amended by FD-26 (2026-10-03, V76)
+
+*"A cursor older than what the host still keeps gets a fresh snapshot and a marker saying events
+were missed"* is built as the marker alone. The session protocol's `missed` frame names the
+device, the last `seq` the client held and the `seq` the stream resumes at, and it carries no
+snapshot. A client that held state built from the missed events rebuilds it from what follows.
+A client that shows a chat's terminal attaches it again, and the view's stream opens with the
+terminal's snapshot (ADR 0068 §4, as amended by FD-26). That is the client's duty, and it is the
+same path a view that fell behind takes.

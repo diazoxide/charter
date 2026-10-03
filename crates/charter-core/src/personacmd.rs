@@ -194,9 +194,40 @@ pub fn set_key(path: &Path, section: &str, key: &str, value: Option<&str>) -> io
                 format!("{} is not there", path.display()),
             ));
         };
-        Ok(edited(text, section, key, value))
+        let next = edited(text, section, key, value);
+        if let Some(next) = &next {
+            reads_as_set(next, section, key, value).map_err(|why| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("{}: {why}, so it was left as it is", path.display()),
+                )
+            })?;
+        }
+        Ok(next)
     })
     .map(|_| ())
+}
+
+/// Whether `next`, what the text edit made, parses and says what was asked: `[section] key` is
+/// `value`, or with `None` is gone. The edit finds a section only by a plain `[section]` header,
+/// so a table written any other way (a header with a comment, an inline table, a dotted key)
+/// would get a second one and the file would not parse, and a `section` that is not a table
+/// would be shadowed. Either is refused, and the file is not written.
+fn reads_as_set(next: &str, section: &str, key: &str, value: Option<&str>) -> Result<(), String> {
+    let doc: toml::Table = next.parse().map_err(|e: toml::de::Error| {
+        format!(
+            "changing [{section}] {key} here would leave a file that does not parse ({})",
+            e.message().trim()
+        )
+    })?;
+    let now = doc.get(section).and_then(|s| s.get(key));
+    match (value, now.and_then(|v| v.as_str())) {
+        (Some(wanted), Some(said)) if said == wanted => Ok(()),
+        (None, None) if now.is_none() => Ok(()),
+        _ => Err(format!(
+            "changing [{section}] {key} here would not read back as asked"
+        )),
+    }
 }
 
 /// `text` with `key` set or removed inside `[section]`, or `None` when nothing changes.
