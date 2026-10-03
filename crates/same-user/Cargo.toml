@@ -15,7 +15,7 @@ thiserror.workspace = true
 # The peer's uid on a unix socket: `SO_PEERCRED` on Linux, `getpeereid` on macOS. The
 # standard library's `peer_cred` is unstable, rustix has the Linux half only, and the
 # workspace denies `unsafe`. The version portable-pty already links, so the tree gains no crate.
-nix = { version = "0.28", default-features = false, features = ["socket", "user"] }
+nix = { version = "0.31", default-features = false, features = ["socket", "user"] }
 
 [dev-dependencies]
 tempfile.workspace = true
