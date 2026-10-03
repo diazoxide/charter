@@ -1,0 +1,171 @@
+# Keep the Milestone options in step with the repository's open milestones, and the label
+# options with its labels (`gh label list`): a form cannot read either, and GitHub applies no
+# label or milestone from a dropdown. A maintainer applies what the fields name (HY-18, #1097).
+name: Ticket
+description: Planned work, specified the way the program map files one. For maintainers.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A ticket is work that is already decided. A bug goes to the bug report, an idea still
+        being shaped to Discussions → Ideas, and a decision still to make to an ADR proposal.
+        Everything here is public: security work stays at the level of its class.
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Outcome / what
+      description: What is true when this is done, in the words of CONTEXT.md.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance
+      description: Each line something a reviewer can check. A pull request says `Closes` only when every line is met.
+      value: |
+        - [ ]
+    validations:
+      required: true
+  - type: textarea
+    id: blocked-by
+    attributes:
+      label: Blocked by
+      description: The tickets that must land first, as `<map ID> (#<n>)`, or `none`.
+      placeholder: FD-2 (#641)
+  - type: textarea
+    id: blocks
+    attributes:
+      label: Blocks
+      description: The tickets waiting on this one.
+  - type: textarea
+    id: source
+    attributes:
+      label: Source
+      description: Where it came from — a research note, a review, an issue.
+  - type: input
+    id: decisions
+    attributes:
+      label: Decisions
+      description: The rulings and ADRs it rests on.
+      placeholder: V67, ADR 0074
+  - type: input
+    id: map-id
+    attributes:
+      label: Map ID
+      description: Its ID on the program map, if it has one.
+      placeholder: GL-8
+  - type: dropdown
+    id: type
+    attributes:
+      label: Type
+      options:
+        - "type:feature"
+        - "type:chore"
+        - "type:test"
+        - "type:epic"
+    validations:
+      required: true
+  - type: dropdown
+    id: size
+    attributes:
+      label: Size
+      options:
+        - S
+        - M
+        - L
+  - type: dropdown
+    id: milestone
+    attributes:
+      label: Milestone
+      description: The milestone it belongs to. A maintainer sets it from this field.
+      options:
+        - "M9 · Hygiene & drift"
+        - "M11 · Security quick wins"
+        - "M12 · Quality"
+        - "M13 · First run & simplicity"
+        - "M14 · Design system & polish"
+        - "M15 · Dogfood & releases"
+        - "M17 · Oversight"
+        - "M18 · Foundations"
+        - "M19 · Harness protocol (ACP + MCP server)"
+        - "M27 · Product"
+        - "M28 · Scale & felt speed"
+        - "M29 · Observability & cost"
+        - "M30 · Audit & tamper evidence"
+        - "M31 · Secure by default"
+        - "M32 · Model sources & gateway"
+        - "M33 · Multi-harness advantage"
+        - "M34 · Git & change loop"
+        - "M35 · Review & code"
+        - "M36 · Settings & entity pages"
+        - "M37 · Forge parity & automation"
+        - "M38 · Agent coordination"
+        - "M39 · Workflows as data"
+        - "M40 · Plane knowledge & memory governance"
+        - "M41 · Editor integration & in-app views"
+        - "M44 · Remote runners"
+        - "M46 · Windows"
+        - "M47 · Extensions, packs & ecosystem"
+        - "M48 · Notifications & bridges"
+        - "M51 · Forge work"
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - "area:core"
+        - "area:app"
+        - "area:harness"
+        - "area:plane"
+        - "area:git"
+        - "area:forge"
+        - "area:obs"
+        - "area:audit"
+        - "area:security"
+        - "area:models"
+        - "area:windows"
+        - "area:ci"
+        - "area:ecosystem"
+    validations:
+      required: true
+  - type: dropdown
+    id: horizon
+    attributes:
+      label: Horizon
+      description: "`now` is in the current slot, `next` is the slot after it."
+      options:
+        - "horizon:now"
+        - "horizon:next"
+        - "none"
+  - type: dropdown
+    id: tier
+    attributes:
+      label: Tier
+      options:
+        - "tier:free-local"
+        - "none"
+  - type: dropdown
+    id: forge
+    attributes:
+      label: Forge
+      description: The forge the work depends on, if any.
+      options:
+        - "forge:github"
+        - "forge:gitlab"
+        - "forge:both"
+        - "none"
+  - type: dropdown
+    id: concept
+    attributes:
+      label: Concept
+      description: The concepts of CONTEXT.md it touches.
+      multiple: true
+      options:
+        - "concept:project"
+        - "concept:workspace"
+        - "concept:chat"
+        - "concept:persona"
+        - "concept:memory"
