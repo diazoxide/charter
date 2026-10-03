@@ -773,6 +773,8 @@ on a Mac and `Ctrl+Shift+P` elsewhere. xterm.js 6.0.0 sends nothing for `⌘P`, 
 is no byte for the new-shell key's reason, so plain `Ctrl+P` still reaches the shell as
 previous-history. It is the palette's own capture listener on the window, because the switcher
 is the palette listing only the projects; a further press while it is up moves down one row.
+It finds files too (FM-7): a *Files* group after the projects, where Tab widens the scope rather
+than moving the focus, which the dialog's trap would only send round to the box again.
 
 **Find in a pane is `⌘F` on a Mac and `Ctrl+Shift+F` elsewhere, and takes nothing either** (SI-4,
 `SessionPane.opensFind`). xterm.js 6.0.0 sends nothing for `⌘F`. It would send `\x06` for

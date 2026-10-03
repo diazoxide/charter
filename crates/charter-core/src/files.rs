@@ -25,6 +25,9 @@ use std::path::{Component, Path, PathBuf};
 use crate::worktree::{self, git};
 use crate::youreditor::{self, Editor, Launch, NotLaunched};
 
+mod find;
+pub use find::{Finder, Found, Hit, Named, Place, branches, find};
+
 /// The largest file the preview draws, in bytes: 2 MiB (V86 F4, FM-2).
 ///
 /// A file past it is answered with its size, and the window offers your editor instead (ADR

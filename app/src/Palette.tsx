@@ -10,6 +10,8 @@ import {
   type Offer,
   type Ran,
 } from "./actions";
+import type { FileScope, FoundFile, PlaneId } from "./bindings";
+import { hitSaid, scopeSaid, useFileFind } from "./fileFind";
 import { opensTheSwitcher } from "./switcherKey";
 import { onAMac } from "./tabKeys";
 
@@ -70,10 +72,20 @@ import { onAMac } from "./tabKeys";
  * switcher rather than closing it. **A further press of its key moves down one**, the way a
  * system's window switcher does, so the key and Enter go back to the last project and the key
  * twice and Enter to the one before that.
+ *
+ * **And it finds files** (FM-7, #1110; V86 F10): once something is typed, a "Files" group
+ * follows the projects — a group of its own, never ranked into the projects' list (ADR 0079's
+ * rule for a box that asks two kinds of thing). Its scope follows the window's focus, the
+ * branch picked in the explorer, else the project in front, and Tab widens it a rung at a time
+ * up to every open project (Shift+Tab narrows); the scope is said above the group. With files
+ * to find, the key is the window's whenever a project is open, not only when there are two to
+ * switch between, and a lone project's own row, which could only say it is already in front,
+ * is not listed.
  */
 export function Palette({
   offers,
   projects,
+  files,
   said,
   onRun,
   onOpened,
@@ -85,6 +97,15 @@ export function Palette({
    * switcher and its key is nobody's.
    */
   projects?: { rows: readonly Offer[]; asked: number };
+  /**
+   * ⌘P's files (FM-7): the scopes it steps through, narrowest first, what a project is called,
+   * and how a found file is opened. Absent, the switcher finds no files.
+   */
+  files?: {
+    ladder: readonly FileScope[];
+    nameOf: (plane: PlaneId) => string;
+    onOpen: (file: FoundFile) => void;
+  };
   /** What the last row answered, when it refused or had something to say. */
   said?: { from: string; refused: boolean; words: string };
   /** The window carrying out a row. It answers what happened; this decides what to draw. */
@@ -108,6 +129,8 @@ export function Palette({
   /** Whether it is up, for the one listener that is registered once and must not be torn
    *  down and rebuilt on every open. */
   const up = useRef(false);
+  /** Which rung of `files.ladder` the files are found in: Tab widens it (FM-7). */
+  const [rung, setRung] = useState(0);
 
   /** The rows and the dispatcher as they are right now, for the ONE keydown listener: it is
    *  registered once and must not be rebuilt on every render, so it cannot close over
@@ -117,6 +140,7 @@ export function Palette({
   const close = useCallback(() => {
     setOpen(false);
     setScope("actions");
+    setRung(0);
     setQuery("");
     setAt(undefined);
     setHeld(undefined);
@@ -143,6 +167,7 @@ export function Palette({
   /** Lists only the projects, from a fresh box: what was typed was typed at the other list. */
   const toTheProjects = useCallback(() => {
     setScope("projects");
+    setRung(0);
     setQuery("");
     setAt(undefined);
     setHeld(undefined);
@@ -205,11 +230,11 @@ export function Palette({
 
   /**
    * Whether this window has a switcher for its key to open, for the one keydown listener: two
-   * projects or more, as the title bar's button and the palette's row. With one there is
-   * nowhere to go, and the key is not taken at all — it goes on to whatever has the keyboard,
-   * as any key the window has no use for does.
+   * projects or more, as the title bar's button and the palette's row — or any project at all
+   * once there are files to find in it (FM-7). With neither the key is not taken at all — it
+   * goes on to whatever has the keyboard, as any key the window has no use for does.
    */
-  const switches = (projects?.rows.length ?? 0) > 1;
+  const switches = (projects?.rows.length ?? 0) > 1 || (files?.ladder.length ?? 0) > 0;
   const switchesNow = useRef(switches);
   useEffect(() => {
     switchesNow.current = switches;
@@ -306,10 +331,32 @@ export function Palette({
     if (open) box.current?.focus();
   }, [open]);
 
-  const listing = scope === "projects" ? (projects?.rows ?? []) : offers;
+  // A lone project is not listed beside the files: its one row could only say it is in front.
+  const projectRows =
+    files === undefined || (projects?.rows.length ?? 0) > 1 ? (projects?.rows ?? []) : [];
+  const listing = scope === "projects" ? projectRows : offers;
   const rows = open ? narrow(query, listing) : [];
-  const aimed = at ?? aim(rows);
-  const aimedId = aimed >= 0 ? rows[aimed]?.id : undefined;
+  const ladder = files?.ladder ?? [];
+  const finding = open && scope === "projects" && ladder.length > 0;
+  /** The rung in use: the ladder can be shorter than when Tab last moved, at the next opening. */
+  const rungNow = Math.min(rung, ladder.length - 1);
+  const fileScope = finding ? ladder[rungNow] : undefined;
+  const found = useFileFind(finding, fileScope, query);
+  const fileRows = finding ? found.files : [];
+  /** The rows the arrows move over: the projects', then the files'. */
+  const total = rows.length + fileRows.length;
+  const firstRunnable = aim(rows);
+  const aimed =
+    at !== undefined && at < total
+      ? at
+      : firstRunnable >= 0
+        ? firstRunnable
+        : fileRows.length > 0
+          ? rows.length
+          : -1;
+  const rowId = (index: number) =>
+    index < rows.length ? `palette-row-${rows[index]?.id}` : `palette-file-${index - rows.length}`;
+  const aimedId = aimed >= 0 && aimed < total ? rowId(aimed) : undefined;
   useEffect(() => {
     latest.current = { offers, onRun, shown: rows, aimed };
     scopeNow.current = scope;
@@ -323,15 +370,31 @@ export function Palette({
   // therefore no `scrollIntoView`: a unit test must not fail for want of a scrollbar.
   useEffect(() => {
     if (aimedId === undefined) return;
-    document.getElementById(`palette-row-${aimedId}`)?.scrollIntoView?.({ block: "nearest" });
+    document.getElementById(aimedId)?.scrollIntoView?.({ block: "nearest" });
   }, [aimedId]);
 
   if (!open) return null;
 
   const move = (by: number) => {
-    if (rows.length === 0) return;
+    if (total === 0) return;
     const from = aimed < 0 ? (by > 0 ? -1 : 0) : aimed;
-    setAt((from + by + rows.length) % rows.length);
+    setAt((from + by + total) % total);
+  };
+
+  /** Opens a found file in its file tab, and leaves. */
+  const openFile = (file: FoundFile) => {
+    close();
+    files?.onOpen(file);
+  };
+
+  /** Enter, or a click, on the row at `index` of either group. */
+  const runRow = (index: number) => {
+    if (index < 0) return;
+    if (index < rows.length) runOffer(rows[index]);
+    else {
+      const file = fileRows[index - rows.length];
+      if (file) openFile(file);
+    }
   };
 
   const showing = said && said.words !== "" ? said : undefined;
@@ -344,6 +407,8 @@ export function Palette({
   // The switcher's words, where the palette's would be: what it is, what to type, and what
   // its rows are called.
   const switcher = scope === "projects";
+  // What the switcher is, said: with files to find, it is where a project or a file is gone to.
+  const switcherAsk = finding ? "Go to a project or a file" : "Switch to a project";
 
   return (
     // A Radix dialog (`docs/ui-primitives.md`). What it adds over the markup that was here is
@@ -366,7 +431,7 @@ export function Palette({
         <Dialog.Overlay className="asking" />
         <Dialog.Content
           className="warning palette"
-          aria-label={switcher ? "Project switcher" : "Command palette"}
+          aria-label={switcher ? (finding ? switcherAsk : "Project switcher") : "Command palette"}
           // A click outside answers nothing, which is how every surface in this app has always
           // behaved: the way out is Escape or a row. Turned off explicitly rather than left to
           // the default, so a reviewer sees it was decided.
@@ -384,7 +449,7 @@ export function Palette({
           }}
         >
           <label className="palette-ask" htmlFor="palette-query">
-            {switcher ? "Switch to a project" : "Run an action"}
+            {switcher ? switcherAsk : "Run an action"}
           </label>
           <input
             id="palette-query"
@@ -394,11 +459,19 @@ export function Palette({
             role="combobox"
             autoComplete="off"
             aria-expanded="true"
-            aria-controls="palette-rows"
-            aria-activedescendant={
-              aimed >= 0 && rows[aimed] ? `palette-row-${rows[aimed].id}` : undefined
+            aria-controls={
+              [rows.length > 0 && "palette-rows", fileRows.length > 0 && "palette-files"]
+                .filter(Boolean)
+                .join(" ") || undefined
             }
-            placeholder={switcher ? "Type a project's name" : "Type to narrow"}
+            aria-activedescendant={aimedId}
+            placeholder={
+              switcher
+                ? finding
+                  ? "Type a project's or a file's name"
+                  : "Type a project's name"
+                : "Type to narrow"
+            }
             value={query}
             onChange={(e) => {
               setQuery(e.target.value);
@@ -417,8 +490,13 @@ export function Palette({
                 move(-1);
               } else if (e.key === "Enter") {
                 e.preventDefault();
-                const row = aimed >= 0 ? rows[aimed] : undefined;
-                if (row) runOffer(row);
+                runRow(aimed);
+              } else if (e.key === "Tab" && finding) {
+                // Tab widens where files are found, Shift+Tab narrows it, round the ladder.
+                e.preventDefault();
+                const by = e.shiftKey ? -1 : 1;
+                setRung((rungNow + by + ladder.length) % ladder.length);
+                setAt(undefined);
               }
             }}
           />
@@ -445,7 +523,7 @@ export function Palette({
             </p>
           )}
 
-          {rows.length === 0 ? (
+          {rows.length === 0 && finding ? null : rows.length === 0 ? (
             <p className="none" role="status">
               {switcher
                 ? "No open project matches what you typed."
@@ -486,6 +564,57 @@ export function Palette({
                 </li>
               ))}
             </ul>
+          )}
+
+          {/* ⌘P's files (FM-7): a group of their own after the projects, never ranked into
+            them, under the scope they were found in. */}
+          {finding && fileScope && files && (
+            <section className="palette-files" aria-label="Files">
+              <p className="palette-scope" role="status" aria-label="Where files are found">
+                Files in {scopeSaid(fileScope, files.nameOf)}
+                {ladder.length > 1 && (
+                  <span className="palette-why">
+                    {rungNow === ladder.length - 1 ? "Tab to narrow again" : "Tab to widen"}
+                  </span>
+                )}
+              </p>
+              {found.partial.map((said) => (
+                <p key={said} className="said" role="status">
+                  {said}
+                </p>
+              ))}
+              {found.refused.map((why) => (
+                <p key={why} className="refusal said" role="alert">
+                  {why}
+                </p>
+              ))}
+              {query.trim() !== "" && fileRows.length === 0 && !found.looking && (
+                <p className="none" role="status">
+                  No file matches what you typed.
+                </p>
+              )}
+              {fileRows.length > 0 && (
+                <ul id="palette-files" className="palette-rows" role="listbox" aria-label="Files">
+                  {fileRows.map((file, at) => {
+                    const index = rows.length + at;
+                    const { name, where } = hitSaid(file, files.nameOf);
+                    return (
+                      <li
+                        key={`${file.plane}\n${file.workspace}\n${file.repo}\n${file.piece ?? ""}\n${file.path}`}
+                        id={`palette-file-${at}`}
+                        role="option"
+                        aria-selected={index === aimed}
+                        className={index === aimed ? "palette-row aimed" : "palette-row"}
+                        onClick={() => openFile(file)}
+                      >
+                        <span className="palette-title">{name}</span>
+                        <span className="palette-why">{where}</span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </section>
           )}
         </Dialog.Content>
       </Dialog.Portal>

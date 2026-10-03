@@ -25,6 +25,7 @@ import {
   type Ask,
   type ForgeRow,
   type ForgeWord,
+  type FoundFile,
   type OpenedRepo,
   type PlaneId,
   type RelaunchChoice,
@@ -63,6 +64,8 @@ import { useTabStop } from "./roving";
 import { closeOnDelete } from "./tabKeys";
 import { useExtensionCommands, useExtensionViews } from "./Views";
 import { Palette } from "./Palette";
+import { placeOf, scopeLadder } from "./fileFind";
+import type { Place } from "./pieceViews";
 import { ClosingProject } from "./ClosingProject";
 import { QuitWarning, type Ending } from "./QuitWarning";
 import { RelaunchAsk } from "./RelaunchAsk";
@@ -181,6 +184,17 @@ function App() {
    * asking twice opens it twice; the palette opens on each new value.
    */
   const [switcherAsk, setSwitcherAsk] = useState(0);
+  /**
+   * The last file ⌘P was asked to open (FM-7): its project, its branch, its path and a count,
+   * the shape `settingsAsk` has. The project's own `PlaneView` opens its file tab, because its
+   * tabs are its own; the window brings the project to the front first.
+   */
+  const [fileAsk, setFileAsk] = useState<{
+    plane: PlaneId;
+    place: Place;
+    path: string;
+    at: number;
+  }>();
   /** The last ask for a project's Saving tab (charter-app#294), the same shape as `settingsAsk`. */
   const [savingAsk, setSavingAsk] = useState<{ plane: PlaneId; at: number }>();
   /**
@@ -1204,6 +1218,32 @@ function App() {
    * the operator was last in each, with the path as the note, because two projects can share a
    * directory name and the name is all the row shows.
    */
+  /**
+   * ⌘P's files (FM-7): the scope ladder from the window's focus — the branch the project in
+   * front has picked, that project, every open project — and a found file opened in its own
+   * project, brought to the front. None while no project is open.
+   */
+  const branchInFront = saying?.branch;
+  const files = useMemo(
+    () =>
+      planes.length === 0
+        ? undefined
+        : {
+            ladder: scopeLadder(inFront, branchInFront, planes.length),
+            nameOf: calledOn,
+            onOpen: (file: FoundFile) => {
+              setShowing({ at: "plane", plane: file.plane });
+              setFileAsk((was) => ({
+                plane: file.plane,
+                place: placeOf(file),
+                path: file.path,
+                at: (was?.at ?? 0) + 1,
+              }));
+            },
+          },
+    [branchInFront, inFront, planes.length],
+  );
+
   const switcherRows = useMemo(() => {
     const held = drawn.map((project) => project.plane);
     const order = [
@@ -1719,6 +1759,7 @@ function App() {
           preferencesAsked={preferencesAsk?.plane === plane ? preferencesAsk.at : undefined}
           firstChatAsked={firstChat?.plane === plane ? firstChat : undefined}
           shellAsked={shellAsk?.plane === plane ? shellAsk : undefined}
+          fileAsked={fileAsk?.plane === plane ? fileAsk : undefined}
         />
       ))}
 
@@ -1828,6 +1869,7 @@ function App() {
       <Palette
         offers={saying?.offers ?? openerOffers}
         projects={{ rows: switcherRows, asked: switcherAsk }}
+        files={files}
         said={said}
         onRun={saying?.run ?? run}
         onOpened={setPaletteOpen}

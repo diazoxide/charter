@@ -37,6 +37,11 @@ memchr = "2"
 # lockfile, so it adds no crate to the tree.
 glob = "0.3"
 portable-pty.workspace = true
+# ⌘P's fuzzy file names (FM-7, #1110): helix's matcher, the fzf algorithm with a bonus for
+# path boundaries, and no allocation per match. MPL-2.0, on deny.toml's allow-list as a
+# file-level copyleft used unmodified; its dependencies, memchr and unicode-segmentation, are
+# already in this workspace's lockfile.
+nucleo-matcher = "0.3"
 # The secret-shape rules are `charter/hooks.py`'s regexes, ported character for character.
 regex = "1"
 serde = { workspace = true, features = ["derive"] }
