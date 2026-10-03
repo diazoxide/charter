@@ -36,6 +36,7 @@ mod personas;
 mod plane;
 mod plugin;
 mod profiles;
+mod remote;
 mod rules;
 pub(crate) mod session;
 mod work;
@@ -294,6 +295,12 @@ pub struct Doctor {
     /// The home whose `.claude` the persona lint looks for installed skills in. `None` for a
     /// doctor a test names, which must never read the operator's own.
     pub(crate) home: Option<PathBuf>,
+    /// Who asks a forge about the project's remote, and over what (SQ-8). `None` asks no
+    /// forge, which the `project remote` row says; the preflight never asks one.
+    pub(crate) forges: Option<(
+        crate::forge::Caller,
+        std::sync::Arc<dyn crate::forge::transport::Transport>,
+    )>,
 }
 
 impl Doctor {
@@ -313,6 +320,10 @@ impl Doctor {
         d.ids = crate::active::Ids::from_env();
         d.persona_env = std::env::var(crate::active::PERSONA_ENV).ok();
         d.home = crate::profiles::home();
+        d.forges = Some((
+            crate::forge::Caller::command(),
+            std::sync::Arc::new(crate::forge::cli::Cli::default()),
+        ));
         d.machine = std::env::current_exe()
             .and_then(|p| p.canonicalize())
             .ok()
@@ -321,6 +332,17 @@ impl Doctor {
                 crate::plugin_install::Machine::from_env_to_read(binary, bundle).ok()
             });
         d
+    }
+
+    /// This doctor, asking a forge about the project's remote as `caller`, over `transport`.
+    /// Only a doctor someone asked for does: the preflight asks no forge whatever this says.
+    pub fn asking_forges(
+        mut self,
+        caller: crate::forge::Caller,
+        transport: std::sync::Arc<dyn crate::forge::transport::Transport>,
+    ) -> Self {
+        self.forges = Some((caller, transport));
+        self
     }
 
     /// This doctor, reading `machine`'s harness configuration.
@@ -342,6 +364,7 @@ impl Doctor {
             ids: crate::active::Ids::default(),
             persona_env: None,
             home: None,
+            forges: None,
         }
     }
 
@@ -359,6 +382,7 @@ impl Doctor {
         rows.push(config::schema(self));
         rows.push(git::plane_root(self));
         rows.push(git::index_lock(self));
+        rows.extend(remote::project_remote(self));
         rows.push(session::session_root(self));
         rows.push(session::session_layer(self));
         rows.push(deferred::row("harness", deferred::HARNESS));

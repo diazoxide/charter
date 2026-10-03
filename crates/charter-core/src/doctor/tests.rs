@@ -2318,3 +2318,209 @@ fn the_changes_check_never_reaches_a_network() {
         );
     }
 }
+
+// ---- project remote (SQ-8) -------------------------------------------------------------------
+
+/// A repository plane whose `origin` is `url`.
+fn plane_pushing_to(url: &str) -> (tempfile::TempDir, PathBuf) {
+    let (d, root) = repo_plane();
+    git(&root, &["remote", "add", "origin", url]);
+    (d, root)
+}
+
+/// The `project remote` row of a typed doctor whose forge answers `path` with `out` — or, with
+/// `None`, a forge that has nothing recorded and so answers nothing.
+fn remote_row(root: &Path, answer: Option<(&str, serde_json::Value)>) -> Row {
+    let exchanges = match answer {
+        Some((path, out)) => serde_json::json!([{
+            "call": {"endpoint": {"rest": {"method": null, "path": path}}, "fields": []},
+            "reply": {"code": 0, "out": out.to_string()}
+        }]),
+        None => serde_json::json!([]),
+    };
+    let text = serde_json::json!({"source": "test", "exchanges": exchanges}).to_string();
+    let recorded = std::sync::Arc::new(crate::forge::recorded::Recorded::parse(&text).unwrap());
+    let rows = Doctor::at(root, root, false, false)
+        .asking_forges(crate::forge::Caller::command(), recorded)
+        .run();
+    row(&rows, "project remote")
+}
+
+fn github_repo(visibility: &str, push_protection: Option<&str>) -> serde_json::Value {
+    let mut out = serde_json::json!({"visibility": visibility});
+    if let Some(status) = push_protection {
+        out["security_and_analysis"] =
+            serde_json::json!({"secret_scanning_push_protection": {"status": status}});
+    }
+    out
+}
+
+#[test]
+fn a_public_github_remote_with_push_protection_on_is_fine_and_says_both() {
+    let (_d, root) = plane_pushing_to("https://github.com/acme/plane.git");
+    let r = remote_row(
+        &root,
+        Some(("repos/acme/plane", github_repo("public", Some("enabled")))),
+    );
+    assert_eq!(r.status, Status::Ok, "{r:?}");
+    assert_eq!(
+        r.detail,
+        "acme/plane on GitHub is public — everyone can read what is pushed; push protection \
+         is on"
+    );
+}
+
+#[test]
+fn a_public_github_remote_without_push_protection_is_a_warning_with_the_setting_to_change() {
+    let (_d, root) = plane_pushing_to("git@github.com:acme/plane.git");
+    let r = remote_row(
+        &root,
+        Some(("repos/acme/plane", github_repo("public", Some("disabled")))),
+    );
+    assert_eq!(r.status, Status::Warn, "{r:?}");
+    assert!(r.detail.ends_with("push protection is off"), "{r:?}");
+    assert!(
+        r.hint.contains("Turn on push protection") && r.hint.contains("GitHub"),
+        "{r:?}"
+    );
+}
+
+#[test]
+fn a_public_gitlab_remote_whose_setting_this_account_cannot_see_is_a_warning_not_a_pass() {
+    let (_d, root) = plane_pushing_to("https://gitlab.com/acme/ops/plane.git");
+    let r = remote_row(
+        &root,
+        Some((
+            "projects/acme%2Fops%2Fplane",
+            serde_json::json!({"visibility": "public"}),
+        )),
+    );
+    assert_eq!(r.status, Status::Warn, "{r:?}");
+    assert_eq!(
+        r.detail,
+        "acme/ops/plane on GitLab is public — everyone can read what is pushed; whether secret \
+         push protection is on is not shown to this account"
+    );
+}
+
+#[test]
+fn a_gitlab_remote_with_secret_push_protection_off_names_gitlabs_setting() {
+    let (_d, root) = plane_pushing_to("https://gitlab.com/acme/plane.git");
+    let r = remote_row(
+        &root,
+        Some((
+            "projects/acme%2Fplane",
+            serde_json::json!({"visibility": "internal", "secret_push_protection_enabled": false}),
+        )),
+    );
+    assert_eq!(r.status, Status::Warn, "{r:?}");
+    assert!(
+        r.detail
+            .contains("internal — everyone signed in to gitlab.com can read"),
+        "{r:?}"
+    );
+    assert!(r.hint.contains("secret push protection"), "{r:?}");
+    assert!(r.hint.contains("does not offer it"), "{r:?}");
+}
+
+#[test]
+fn a_private_remote_is_fine_whatever_its_push_protection() {
+    let (_d, root) = plane_pushing_to("https://github.com/acme/plane.git");
+    let r = remote_row(
+        &root,
+        Some(("repos/acme/plane", github_repo("private", None))),
+    );
+    assert_eq!(r.status, Status::Ok, "{r:?}");
+    assert_eq!(
+        r.detail,
+        "acme/plane on GitHub is private; whether push protection is on is not shown to this \
+         account"
+    );
+}
+
+#[test]
+fn a_forge_that_does_not_answer_is_not_checked_rather_than_fine() {
+    let (_d, root) = plane_pushing_to("https://github.com/acme/plane.git");
+    let r = remote_row(&root, None);
+    assert_eq!(r.status, Status::Warn, "{r:?}");
+    assert!(r.detail.starts_with("not checked ("), "{r:?}");
+    assert_eq!(r.hint, NOT_CHECKED_HINT);
+}
+
+#[test]
+fn a_remote_on_a_host_no_forge_names_is_not_checked() {
+    let (_d, root) = plane_pushing_to("https://git.example.invalid/acme/plane.git");
+    let r = remote_row(&root, None);
+    assert_eq!(r.status, Status::Warn, "{r:?}");
+    assert!(
+        r.detail.contains("git.example.invalid") && r.detail.starts_with("not checked ("),
+        "{r:?}"
+    );
+}
+
+#[test]
+fn a_remote_on_this_machine_publishes_nothing() {
+    let (_d, root) = plane_pushing_to("/srv/git/plane.git");
+    let r = remote_row(&root, None);
+    assert_eq!(r.status, Status::Ok, "{r:?}");
+    assert_eq!(
+        r.detail,
+        "origin is on this machine (/srv/git/plane.git), so a push publishes nothing"
+    );
+}
+
+#[test]
+fn a_project_with_no_origin_or_no_repository_pushes_nowhere() {
+    let (_d, root) = repo_plane();
+    assert_eq!(
+        remote_row(&root, None).detail,
+        "no origin remote, so nothing is pushed"
+    );
+    let (_d, root) = plane("schema = 1\n");
+    assert_eq!(remote_row(&root, None).detail, "not a git repository");
+}
+
+#[test]
+fn a_doctor_that_asks_no_forge_says_so_and_the_preflight_has_no_row() {
+    let (_d, root) = plane_pushing_to("https://github.com/acme/plane.git");
+    let r = row(
+        &Doctor::at(&root, &root, false, false).run(),
+        "project remote",
+    );
+    assert!(r.detail.starts_with("not checked ("), "{r:?}");
+    assert!(
+        !doctor(&root)
+            .run()
+            .iter()
+            .any(|r| r.name == "project remote"),
+        "the session start asks no forge"
+    );
+}
+
+#[test]
+fn a_project_inside_another_repository_is_not_answered_with_that_repositorys_remote() {
+    let (_d, outer) = plane_pushing_to("https://github.com/acme/outer.git");
+    let inner = outer.join("workspaces").join("nested");
+    std::fs::create_dir_all(&inner).unwrap();
+    std::fs::write(inner.join("charter.toml"), "schema = 1\n").unwrap();
+    let r = remote_row(&inner, None);
+    assert_eq!(r.status, Status::Ok, "{r:?}");
+    assert!(r.detail.starts_with("not its own repository"), "{r:?}");
+}
+
+#[test]
+fn a_forge_refusal_over_several_lines_stays_on_the_rows_one_line() {
+    let (_d, root) = plane_pushing_to("https://github.com/acme/plane.git");
+    let text = serde_json::json!({"source": "test", "exchanges": [{
+        "call": {"endpoint": {"rest": {"method": null, "path": "repos/acme/plane"}}, "fields": []},
+        "reply": {"code": 1, "out": "", "err": "log in first\nor set GH_TOKEN"}
+    }]})
+    .to_string();
+    let recorded = std::sync::Arc::new(crate::forge::recorded::Recorded::parse(&text).unwrap());
+    let rows = Doctor::at(&root, &root, false, false)
+        .asking_forges(crate::forge::Caller::command(), recorded)
+        .run();
+    let r = row(&rows, "project remote");
+    assert!(r.detail.starts_with("not checked ("), "{r:?}");
+    assert!(!r.detail.contains('\n'), "{r:?}");
+}

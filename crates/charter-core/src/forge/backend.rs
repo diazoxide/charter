@@ -232,8 +232,10 @@ pub trait Repos {
         git_ref: Option<&str>,
     ) -> Result<Vec<String>, ForgeError>;
 
-    /// Whether `repo` is public, and whether this account can open an issue there (FI14). Read
-    /// before anything is sent to it: `charter ws todo promote` names both first (ADR 0088 §5).
+    /// Whether `repo` is public, whether this account can open an issue there (FI14), and
+    /// whether the forge refuses a push that carries a secret (SQ-8). Read before anything is
+    /// sent to it: `charter ws todo promote` names the first two first (ADR 0088 §5), and
+    /// `charter doctor` names the first and the last for the project's own remote.
     /// Both forges address it by its `path_with_namespace`, so a record the inventory read,
     /// which holds no forge id, is enough. Strict.
     fn about(&self, caller: &Caller, repo: &RepoRecord) -> Result<About, ForgeError>;
@@ -244,6 +246,28 @@ pub trait Repos {
 pub struct About {
     pub visibility: Visibility,
     pub issues: Issues,
+    pub push_protection: PushProtection,
+}
+
+/// Whether the forge itself refuses a push that carries a secret: GitHub's push protection,
+/// GitLab's secret push protection. Each forge shows the setting only to an account that may
+/// change it, so an answer without it is `Unknown`, never `Off`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PushProtection {
+    On,
+    Off,
+    Unknown,
+}
+
+impl PushProtection {
+    /// Read off a forge's on/off answer, `None` being silence.
+    pub fn of(on: Option<bool>) -> PushProtection {
+        match on {
+            Some(true) => PushProtection::On,
+            Some(false) => PushProtection::Off,
+            None => PushProtection::Unknown,
+        }
+    }
 }
 
 /// Who can read a repo.

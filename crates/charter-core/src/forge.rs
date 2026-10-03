@@ -161,6 +161,15 @@ impl Kind {
         }
     }
 
+    /// What this forge calls refusing a push that carries a secret, in its own pages' words:
+    /// GitHub's push protection, GitLab's secret push protection.
+    pub fn push_protection_noun(self) -> &'static str {
+        match self {
+            Kind::GitHub => "push protection",
+            Kind::GitLab => "secret push protection",
+        }
+    }
+
     /// The forge's own name, as a heading reads it.
     pub fn display(self) -> &'static str {
         match self {
