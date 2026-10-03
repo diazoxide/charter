@@ -159,6 +159,18 @@ impl Ready {
 /// Refuses rather than starting something else. Every refusal names the profile and what to
 /// do; none of them offers a different profile.
 pub fn ready(start: &Start, root: &Path) -> Result<Ready, String> {
+    ready_in(start, root, &crate::harness_declaration::read(root))
+}
+
+/// [`ready`] with the project's harness declarations read once, by the caller: the profile,
+/// the approval gate and the arguments are all taken from `declared`, so the declaration the
+/// operator approved is the one whose words run, whatever the file says by the time the
+/// program starts (ruling V66).
+pub fn ready_in(
+    start: &Start,
+    root: &Path,
+    declared: &crate::harness_declaration::Declarations,
+) -> Result<Ready, String> {
     let Some(name) = start.profile.as_deref() else {
         return Err(
             "this chat is not on a harness profile, so there is nothing to start it from — \
@@ -168,7 +180,7 @@ pub fn ready(start: &Start, root: &Path) -> Result<Ready, String> {
     };
     // The launch read, which has already asked git whether this plane's `charter.local.toml`
     // would reach every clone of it.
-    let (set, check) = profiles::for_launch(root);
+    let (set, check) = profiles::for_launch_in(root, declared);
     let Some(profile) = set.get(name) else {
         let refused = set
             .refused
@@ -204,14 +216,22 @@ pub fn ready(start: &Start, root: &Path) -> Result<Ready, String> {
     notices.extend(hidden_agents_md_notice(&here));
     // The gate. Startable kind, ignored file, approved command — one call, so no caller can
     // start a chat past a check another caller makes.
-    if let Some(why) = crate::wiring::refusal(profile, root) {
+    if let Some(why) = crate::wiring::refusal_in(profile, root, declared) {
         return Err(why);
     }
 
     let harness = Harness::of_kind(&profile.kind);
+    // A kind with no `Harness` is one the project declares (ADR 0073): the gate above refused
+    // every other. It runs at level 1, and its session words are its declaration's.
+    let declared = match harness {
+        Some(_) => None,
+        None => declared
+            .projects()
+            .find(|d| d.name == profile.kind)
+            .cloned(),
+    };
     // The sandbox, or no chat (ADR 0067 §1): asked before anything is resolved or run, so a
-    // chat that cannot be confined never reaches the program. A kind with no harness is
-    // refused by the gate above, so there is always one to ask about here.
+    // chat that cannot be confined never reaches the program.
     let sandbox = match harness {
         Some(harness) => crate::sandbox::for_start(
             harness,
@@ -220,9 +240,24 @@ pub fn ready(start: &Start, root: &Path) -> Result<Ready, String> {
             &crate::sandbox::backend::installed,
         )
         .map_err(|refused| refused.to_string())?,
-        None => None,
+        None => {
+            // A declared harness has no adapter, so nothing compiles a sandbox for it yet
+            // (SD-2): in a project that turned the sandbox on, it is not started at all.
+            if crate::sandbox::Plane::read(root).said().policy.is_some() {
+                return Err(format!(
+                    "this project turns the sandbox on, and charter cannot sandbox a {} chat \
+                     yet — it is a declared harness with no adapter, and a chat that cannot be \
+                     confined is not started. Nothing was started.",
+                    crate::shown::short(&profile.kind)
+                ));
+            }
+            None
+        }
     };
-    let (added, session, how) = arguments(harness, profile, start);
+    let (added, session, how) = match (harness, &declared) {
+        (None, Some(declared)) => declared_arguments(declared, profile, start),
+        _ => arguments(harness, profile, start),
+    };
     let home = profiles::home().unwrap_or_else(|| PathBuf::from("~"));
     // Resolved HERE, in charter's own process, and the absolute path is what the terminal is
     // given (charter-app#134). A bare word handed to a pty is resolved against whatever
@@ -455,6 +490,42 @@ fn arguments(
             let argv = chosen
                 .as_ref()
                 .map(|id| harness.new_session_argv(id, &start.name))
+                .unwrap_or_default();
+            (argv, chosen, Reopened::Fresh(Fresh::NoConversationRecorded))
+        }
+    }
+}
+
+/// [`arguments`] for a harness a project declares: its declaration's templates, by the same
+/// rules (ADR 0073 §3).
+fn declared_arguments(
+    declared: &crate::harness_declaration::Declaration,
+    profile: &Profile,
+    start: &Start,
+) -> (Vec<String>, Option<SessionId>, Reopened) {
+    if declared.session_named_in(&profile.command[1..]) {
+        return (
+            Vec::new(),
+            None,
+            Reopened::Fresh(Fresh::SessionNamedByTheOperator),
+        );
+    }
+    match start.resume.as_ref() {
+        Some(id) => match declared.resume_argv(id, &start.name) {
+            Some(argv) => (argv, Some(id.clone()), Reopened::Resumed(id.clone())),
+            None => (
+                Vec::new(),
+                None,
+                Reopened::Fresh(Fresh::NoResumeForThisProgram),
+            ),
+        },
+        None => {
+            let chosen = (declared.session.chosen_by
+                == crate::harness_declaration::ChosenBy::Charter)
+                .then(SessionId::fresh);
+            let argv = chosen
+                .as_ref()
+                .map(|id| declared.new_session_argv(id, &start.name))
                 .unwrap_or_default();
             (argv, chosen, Reopened::Fresh(Fresh::NoConversationRecorded))
         }

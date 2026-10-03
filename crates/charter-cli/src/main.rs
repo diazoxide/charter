@@ -28,7 +28,7 @@ use std::time::Duration;
 
 use charter_core::extension::events::Event as ExtensionEvent;
 use charter_core::hookwire::{self, Report, SOCKET_ENV};
-use charter_core::profiles::{self, ProfileSet, Source};
+use charter_core::profiles::{self, ProfileSet};
 use charter_core::shown;
 use charter_core::state::Event;
 use charter_core::workspaces::Plane;
@@ -668,7 +668,7 @@ fn read_only_standing(command: &Command) -> ReadOnly {
         | Command::Persona(memory::PersonaCommand::List)
         | Command::Change(change::ChangeCommand::List { .. })
         | Command::Session(session::SessionCommand::List { .. })
-        | Command::Harness(HarnessCommand::List)
+        | Command::Harness(HarnessCommand::List | HarnessCommand::Show { .. })
         | Command::Guard {
             verb: None | Some(GuardCommand::List),
         } => ReadOnly::RunsAndSays,
@@ -769,6 +769,12 @@ enum PluginCommand {
 enum HarnessCommand {
     /// Every profile charter read, the file it came from, and why any was refused.
     List,
+    /// A harness's declaration as charter read it: a built-in, or the project's
+    /// `harnesses/<name>.toml` (ADR 0073).
+    Show {
+        /// The harness's declared name, as a profile's `kind` names it.
+        name: String,
+    },
 }
 
 /// The two `version` verbs that move a PUBLISHED `charter-cp` release.
@@ -2508,6 +2514,9 @@ fn run(command: Command) -> Result<u8, String> {
             let set = profiles::with_ignore_check(profiles::current(&root), &check);
             eprint!("{}", harness_listing(&set, &check));
         }
+        Command::Harness(HarnessCommand::Show { name }) => {
+            return Ok(harness_show(here.plane.root(), &name));
+        }
         Command::Workspace(WorkspaceCommand::List) => {
             let mut names = here.plane.workspaces().map_err(|e| e.to_string())?;
             // The workspace `resolve` TERMINATES on is always listable, whether or not its
@@ -3422,6 +3431,61 @@ fn doctor(json: bool, preflight: bool, fix: bool) -> ExitCode {
     ExitCode::from(charter_core::doctor::exit_code(&rows).max(u8::from(fix_failed)))
 }
 
+/// `charter harness show <name>`: the declaration on stdout under one comment line naming
+/// where it came from and its digest, or the one sentence on stderr saying why there is none.
+///
+/// Each line through [`shown::readable`]: the file is one a chat can write, and a control
+/// byte in it would otherwise drive the reader's terminal. **So what it prints is not always
+/// the digested bytes**: anything outside printable ASCII (a tab, an accented letter in a
+/// comment) is printed escaped, and the digest in the first line is of the file as it is on
+/// disk.
+fn harness_show(root: &std::path::Path, name: &str) -> u8 {
+    use charter_core::harness_declaration as decl;
+    let declared = decl::read(root);
+    let Some(found) = declared.get(name) else {
+        let file = format!("{}/{}.toml", decl::DIR, shown::short(name));
+        if let Some(refused) = declared.refused.iter().find(|r| r.file == file) {
+            eprintln!("charter: {}", refused.reason);
+            return 1;
+        }
+        let names: Vec<&str> = declared.declared.iter().map(|d| d.name.as_str()).collect();
+        eprintln!(
+            "charter: no harness '{}' is declared — the harnesses are {}. A project declares \
+             one in {}/<name>.toml.",
+            shown::short(name),
+            names.join(", "),
+            decl::DIR
+        );
+        return 1;
+    };
+    let lines: Vec<String> = found
+        .text
+        .lines()
+        .map(|line| {
+            if line.is_empty() {
+                String::new()
+            } else {
+                shown::readable(line, usize::MAX)
+            }
+        })
+        .collect();
+    println!("# {}: {}, {}", found.name, found.file, found.digest);
+    if lines
+        .iter()
+        .zip(found.text.lines())
+        .any(|(shown, line)| shown != line)
+    {
+        println!(
+            "# shown escaped: what is not printable ASCII is written as an escape, so the text \
+             below is not the bytes the digest is of"
+        );
+    }
+    for line in lines {
+        println!("{line}");
+    }
+    0
+}
+
 /// The profile listing, as `charter harness list` prints it on stderr.
 ///
 /// Built-ins first in registry order — a declared replacement keeps its kind's place — then
@@ -3483,10 +3547,7 @@ fn harness_listing(set: &ProfileSet, check: &profiles::IgnoreCheck) -> String {
         } else {
             "  "
         };
-        let source = match p.source {
-            Source::BuiltIn => Source::BuiltIn.as_str(),
-            Source::Local => Source::Local.as_str(),
-        };
+        let source = p.source.as_str();
         out.push_str(&line(mark, [&cells[0], &cells[1], &cells[2]], source));
     }
     if !set.refused.is_empty() {
