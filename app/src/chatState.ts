@@ -6,7 +6,8 @@
  * questions a second to learn nothing, and the spec's whole point is that the answer arrives
  * from a hook.
  */
-import { useEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { useSyncExternalStoreWithSelector } from "use-sync-external-store/with-selector";
 import { listen } from "./here";
 
 import { commands, type Moved, type OpenChat, type PlaneId } from "./bindings";
@@ -154,20 +155,140 @@ export function moved(states: ChatStates, move: Moved): ChatStates {
     // The whole queue travels on every move rather than being assembled here from a series
     // of edges: a window that missed one event would otherwise keep a chat in the queue, or
     // out of it, for as long as the app ran.
-    needsYou: newerQueue ? move.queue : states.needsYou,
+    //
+    // **Kept as the same array when it says the same thing** (SC-3): every reader of the queue
+    // compares by identity, and a fresh copy of an unchanged queue on every move would redraw
+    // all of them for a chat that only went from waiting to running.
+    needsYou: newerQueue ? sameOr(states.needsYou, move.queue) : states.needsYou,
     // **Only the chat this event is about.** The count is per-chat and the event carries
     // one chat's, so folding it over the whole map would be writing this chat's number onto
     // every other chat — every tab would then read as having moved at once.
     movedAt: newerChat ? { ...states.movedAt, [move.session]: move.moved_at } : states.movedAt,
     queueFrom: newerQueue ? move.sequence : states.queueFrom,
     heardAt: newerChat ? { ...states.heardAt, [move.session]: move.sequence } : states.heardAt,
-    reports: newerChat ? { ...states.reports, [move.session]: move.reports } : states.reports,
-    refusals: newerChat ? { ...states.refusals, [move.session]: move.refusals } : states.refusals,
+    reports: newerChat ? withLines(states.reports, move.session, move.reports) : states.reports,
+    refusals: newerChat ? withLines(states.refusals, move.session, move.refusals) : states.refusals,
+  };
+}
+
+/** Whether two lists hold the same things in the same order. */
+export function sameList<T>(one: readonly T[], other: readonly T[]): boolean {
+  return one === other || (one.length === other.length && one.every((it, at) => it === other[at]));
+}
+
+/** `was` when `now` says the same thing, so what did not change keeps its identity. A move
+ *  that carries no list says it is empty, as `withLines` reads one. */
+function sameOr<T>(was: readonly T[], now: readonly T[] | undefined): readonly T[] {
+  const list = Array.isArray(now) ? now : [];
+  return sameList(was, list) ? was : list;
+}
+
+/**
+ * `lines` as `session`'s entry, and the same map when that is what it already held. A chat
+ * nothing was said about has none, and an empty list says nothing new about it.
+ *
+ * A move that carries no list at all — a core older than the field — says the chat has none,
+ * as it always has here: the move is still taken rather than dropped over it.
+ */
+function withLines(
+  by: Readonly<Record<number, readonly string[]>>,
+  session: number,
+  lines: readonly string[] | undefined,
+): Readonly<Record<number, readonly string[]>> {
+  const now = Array.isArray(lines) ? lines : [];
+  return sameList(by[session] ?? [], now) ? by : { ...by, [session]: now };
+}
+
+/**
+ * What is known, and WHICH project it is known about.
+ *
+ * **The pair, because a state without its project is a guess.** Every project numbers its
+ * chats from one, so a `waiting` left behind by the last project's chat 1 must not be drawn on
+ * this one's — and `underneath` deliberately never writes over what it finds, which is right
+ * for a snapshot racing an event inside one project and exactly wrong across two. Carried
+ * rather than cleared on the way in: a window that answered "what is chat 1 doing" by
+ * forgetting, in an effect, would be answering it one render late.
+ *
+ * The opener is what made this reachable. Until a window could be given a second project,
+ * there was no switch to be wrong about.
+ */
+type Known = { readonly plane?: PlaneId; readonly states: ChatStates };
+
+/**
+ * **What every chat in a project is doing, held outside React** (SC-3, research 02 §5.6).
+ *
+ * It used to be a hook's state at the top of `PlaneView`, so every `chat-moved` re-rendered the
+ * whole project view — every tab, every pane, and the catalogue — to change one dot. Held here,
+ * each reader subscribes to its own share with `useSyncExternalStore` and is redrawn only when
+ * that share changes: a tab to its own chat's state, the strips to the queue.
+ */
+export type ChatStore = {
+  subscribe: (listener: () => void) => () => void;
+  /** What is known about `plane`, and nothing at all about any other. */
+  statesFor: (plane: PlaneId | undefined) => ChatStates;
+};
+
+/** A store and the project its readers are asking about: what `useChatsSelect` reads. */
+export type Chats = { readonly store: ChatStore; readonly plane: PlaneId | undefined };
+
+/** A store that is told things, which is the one `useChats` keeps. */
+type HeldStore = ChatStore & { change: (how: (was: Known) => Known) => void };
+
+function chatStore(): HeldStore {
+  let known: Known = { states: nothingKnown };
+  const listeners = new Set<() => void>();
+  return {
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => void listeners.delete(listener);
+    },
+    statesFor: (plane) => (known.plane === plane ? known.states : nothingKnown),
+    change: (how) => {
+      const now = how(known);
+      if (now === known) return;
+      known = now;
+      for (const listener of [...listeners]) listener();
+    },
   };
 }
 
 /**
- * Subscribes to what the chats are doing in ONE plane, starting from what the core knows.
+ * Chats whose states are `states` and never move: what a component drawn on its own, in a test
+ * or a preview, reads when nothing above it holds a project.
+ */
+export function fixedChats(states: ChatStates = nothingKnown): Chats {
+  return { store: { subscribe: () => () => {}, statesFor: () => states }, plane: undefined };
+}
+
+/** The project's chats a row reads its own chat from. `PlaneView` provides it. */
+export const ChatsHere = createContext<Chats>(fixedChats());
+
+/** The chats of the project this component is drawn in. */
+export function useChatsHere(): Chats {
+  return useContext(ChatsHere);
+}
+
+/**
+ * **One reader's share of what the chats are doing**, and a re-render only when it changes.
+ *
+ * `select` picks the share and `same` says whether two of them are the same answer, so a share
+ * the reducer rebuilt with the same contents — a list of names, an order — does not redraw.
+ * React's own selector hook (`use-sync-external-store/with-selector`) does the remembering, so
+ * the rule `useSyncExternalStore` has — the same snapshot answers the same value — is kept by
+ * the standard implementation rather than by one written here.
+ */
+export function useChatsSelect<T>(
+  chats: Chats,
+  select: (states: ChatStates) => T,
+  same: (one: T, other: T) => boolean = Object.is,
+): T {
+  const { store, plane } = chats;
+  const states = () => store.statesFor(plane);
+  return useSyncExternalStoreWithSelector(store.subscribe, states, states, select, same);
+}
+
+/**
+ * Keeps what the chats are doing in ONE plane, starting from what the core knows.
  *
  * The first answer matters: chats are put back before this plane's view subscribes (M1.7,
  * and charter-app#250's answer comes first), so some of them may have fired hooks already.
@@ -176,24 +297,12 @@ export function moved(states: ChatStates, move: Moved): ChatStates {
  * app, not on a window, and every plane numbers its chats from one — so a process holding two
  * projects would otherwise have one project's "session 3 is waiting" land on the other's chat
  * 3. The event carries its plane precisely so this can be a comparison rather than a hope.
+ *
+ * **It answers the store, not the states**, so the component holding it is not redrawn by a
+ * move: only what reads a share through `useChatsSelect` is.
  */
-export function useChatStates(plane: PlaneId | undefined): ChatStates {
-  /**
-   * What is known, and WHICH project it is known about.
-   *
-   * **The pair, because a state without its project is a guess.** Every project numbers its
-   * chats from one, so a `waiting` left behind by the last project's chat 1 must not be drawn
-   * on this one's — and `underneath` below deliberately never writes over what it finds, which
-   * is right for a snapshot racing an event inside one project and exactly wrong across two.
-   * Carried rather than cleared on the way in: a window that answered "what is chat 1 doing"
-   * by forgetting, in an effect, would be answering it one render late.
-   *
-   * The opener is what made this reachable. Until a window could be given a second project,
-   * there was no switch to be wrong about.
-   */
-  const [known, setKnown] = useState<{ plane?: PlaneId; states: ChatStates }>({
-    states: nothingKnown,
-  });
+export function useChats(plane: PlaneId | undefined): Chats {
+  const [store] = useState(chatStore);
   /** Which plane's moves count, read at the moment one arrives. */
   const showing = useRef(plane);
   // Kept current in an effect rather than during the render, which is where a ref may be
@@ -216,13 +325,15 @@ export function useChatStates(plane: PlaneId | undefined): ChatStates {
       try {
         const unlisten = await listen<Moved>("chat-moved", (event) => {
           if (gone || event.payload.plane !== showing.current) return;
-          setKnown((was) => ({
-            plane: event.payload.plane,
-            states: moved(
+          store.change((was) => {
+            const states = moved(
               was.plane === event.payload.plane ? was.states : nothingKnown,
               event.payload,
-            ),
-          }));
+            );
+            return states === was.states && was.plane === event.payload.plane
+              ? was
+              : { plane: event.payload.plane, states };
+          });
         });
         if (gone) unlisten();
         else stop = unlisten;
@@ -236,7 +347,7 @@ export function useChatStates(plane: PlaneId | undefined): ChatStates {
       gone = true;
       stop?.();
     };
-  }, []);
+  }, [store]);
 
   // And the first answer, once there is a plane to ask about. Asked AFTER the listener is
   // registered above, which is what makes the fold below safe.
@@ -259,7 +370,7 @@ export function useChatStates(plane: PlaneId | undefined): ChatStates {
       // to `running` and out of the needs-you queue, and a chat waiting for you has no next
       // event to correct it. A review reproduced it.
       if (!gone && Array.isArray(known))
-        setKnown((was) => ({
+        store.change((was) => ({
           plane,
           states: underneath(was.plane === plane ? was.states : nothingKnown, known),
         }));
@@ -268,11 +379,11 @@ export function useChatStates(plane: PlaneId | undefined): ChatStates {
     return () => {
       gone = true;
     };
-  }, [plane]);
+  }, [plane, store]);
 
-  // What is known about THIS project, and nothing at all about any other. Derived rather than
-  // cleared: the answer is right in the render the project changes in, not one after it.
-  return known.plane === plane ? known.states : nothingKnown;
+  // What is known about THIS project, and nothing at all about any other: `statesFor` derives
+  // it rather than clearing it, so the answer is right in the render the project changes in.
+  return useMemo(() => ({ store, plane }), [store, plane]);
 }
 
 /**

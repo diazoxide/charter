@@ -12,10 +12,11 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import type { OpenChat } from "./bindings";
-import { ChatMark, WRAPPING_UP, WrappingUp } from "./NeedsYou";
+import { WRAPPING_UP, WrappingUp } from "./NeedsYou";
 import { Menued } from "./Menus";
 import { WorktreeMark } from "./Worktree";
-import { isShell, markOf, type ChatStates } from "./chatState";
+import { isShell } from "./chatState";
+import { ChatStateMark } from "./ChatRows";
 import type { Catalogued, Offer } from "./actions";
 import type { WorkspaceState } from "./workspaceState";
 import { useTabStop } from "./roving";
@@ -104,7 +105,6 @@ export function Explorer({
   live = false,
   state,
   chats,
-  states,
   spot,
   onPick,
   onShowChat,
@@ -119,7 +119,6 @@ export function Explorer({
   state: WorkspaceState;
   /** The chats working in this workspace, so a piece can say what is already running in it. */
   chats: readonly OpenChat[];
-  states: ChatStates;
   /** The piece picked, or nothing for the workspace's own directory. */
   spot: Spot | undefined;
   onPick: (spot: Spot | undefined) => void;
@@ -242,7 +241,6 @@ export function Explorer({
           </RovingFocusGroup.Item>
           <ChatList
             chats={atTheRoot}
-            states={states}
             wrapping={wrapping}
             onShow={onShowChat}
             treeitem={treeitem}
@@ -372,7 +370,6 @@ export function Explorer({
                             )}
                             <ChatList
                               chats={working}
-                              states={states}
                               wrapping={wrapping}
                               onShow={onShowChat}
                               treeitem={treeitem}
@@ -477,14 +474,12 @@ function PieceCount({ pieces, refused }: { pieces?: readonly unknown[]; refused?
  *  the operator starts a second one in it. */
 function ChatList({
   chats,
-  states,
   wrapping,
   onShow,
   treeitem,
   isDrawn,
 }: {
   chats: readonly OpenChat[];
-  states: ChatStates;
   wrapping: ReadonlySet<number>;
   onShow: (session: number) => void;
   /** What a row says about its place in the tree. */
@@ -515,7 +510,8 @@ function ChatList({
                 stopped being enough to tell them apart. */}
               <SquareTerminal className="node-icon" />
               <span className="session">{chat.name}</span>
-              <ChatMark state={markOf(states, chat.session, isShell(chat))} />
+              {/* Its own chat's state, read by the mark itself (SC-3). */}
+              <ChatStateMark session={chat.session} shell={isShell(chat)} />
               <WrappingUp held={wrapping.has(chat.session)} />
               {/* The PROFILE where there is one, and the harness otherwise. A profile is what
                 the operator picked and what a relaunch looks up again; the kind is what the

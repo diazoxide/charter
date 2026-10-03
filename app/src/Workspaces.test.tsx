@@ -197,6 +197,26 @@ describe("the workspace strip", () => {
     expect(focused()).toEqual(["alpha"]);
   });
 
+  /**
+   * **A workspace tab at rest carries no inline transition** (SC-3's ejection from train 3).
+   * `dnd-kit` puts `transition: transform 0ms linear` on a sortable for the one render after its
+   * strip's items change, and takes it off on the next render. The project view stopped
+   * redrawing on every chat move, so for a strip read once there is no next render, and the
+   * inline rule hid the stylesheet's own transition (`motion.e2e.ts`).
+   */
+  it("leaves a resting workspace tab's transition to the stylesheet", async () => {
+    core();
+    render(<App />);
+
+    await vi.waitFor(() => expect(strip()).toEqual(["Plane root", "alpha", "beta"]));
+    await waitFor(() => {
+      for (const tab of within(screen.getByRole("tablist", { name: "Workspaces" })).getAllByRole(
+        "tab",
+      ))
+        expect(tab.style.transition).toBe("");
+    });
+  });
+
   it("starts a chat in the focused workspace, and shows it there at once", async () => {
     // The plane is read fresh a tick later; until it answers, charter still knows where it
     // put the chat, because it chose the directory. A tab missing from the strip the

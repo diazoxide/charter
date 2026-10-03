@@ -148,7 +148,33 @@ export function SortableTab({
   const sortable = useSortable({ id, disabled: fixed });
   const style: CSSProperties = {
     transform: CSS.Translate.toString(sortable.transform),
-    transition: sortable.transition,
+    transition: resting(sortable) ? undefined : sortable.transition,
   };
   return children({ sortable, style });
+}
+
+/**
+ * `dnd-kit`'s "no transition for this frame", which it puts on a tab whose strip's items have
+ * just changed and takes off at the tab's next render (`@dnd-kit/sortable`'s `getTransition`).
+ */
+const FOR_ONE_FRAME = CSS.Transition.toString({
+  property: "transform",
+  duration: 0,
+  easing: "linear",
+});
+
+/**
+ * Whether a tab is at rest: nothing is being dragged, it is not displaced, and the only
+ * transition `dnd-kit` has for it is the one-frame zero it leaves after its strip's items
+ * change.
+ *
+ * **That one is left to the stylesheet instead** (SC-3). It animates nothing — the tab has no
+ * transform to animate — but an inline `transition` replaces the stylesheet's whole rule, so a
+ * tab drawn with it loses its own transition (`motion.e2e.ts`). `dnd-kit` relies on a next
+ * render to take it off, and a strip that was read once and is not redrawn has none.
+ */
+function resting(sortable: ReturnType<typeof useSortable>): boolean {
+  return (
+    !sortable.isSorting && sortable.transform === null && sortable.transition === FOR_ONE_FRAME
+  );
 }

@@ -1,5 +1,6 @@
 import {
   Fragment,
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -7,6 +8,7 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type ComponentProps,
   type CSSProperties,
   type ReactNode,
 } from "react";
@@ -103,7 +105,7 @@ import {
 } from "./sessions";
 import { useExtensionFacts } from "./extensionFacts";
 import { panelsOf, ROOT_PANELS, SETTINGS, SHAPE, SIDEBAR, usePlaneChanged } from "./planeChanged";
-import { PlaneUpdatedMark, usePlaneUpdated, type PlaneUpdates } from "./PlaneUpdated";
+import { usePlaneUpdated } from "./PlaneUpdated";
 import { inSlots, SIDES, useArrangement } from "./regions";
 import { RegionFrame } from "./RegionFrame";
 import { useDoctor } from "./Doctor";
@@ -161,7 +163,7 @@ import {
   type Tabs,
   type ViewRef,
 } from "./tabs";
-import { ChatMark, chipSays, WRAPPING_UP, WrappingUp, type Asking } from "./NeedsYou";
+import { chipSays, WRAPPING_UP, WrappingUp, type Asking } from "./NeedsYou";
 import { EndingChat, type SmartAsk } from "./EndingChat";
 import { DID_NOT_START, saidWhenItEnds, stoppedWhy, useSmartClosing } from "./smartClose";
 import { Panels } from "./Panels";
@@ -170,7 +172,7 @@ import { OpenVault, useVaults } from "./Vaults";
 import { usePlaneEdits } from "./PlaneEdits";
 import { useMemoryEdits } from "./MemoryEdits";
 import { DRAFT, isMemory, memoryRefOf } from "./memories";
-import { ViewMark, ViewPane } from "./Views";
+import { ViewPane } from "./Views";
 import type { FirstTaskDoes } from "./FirstTaskTab";
 import { useTabStop } from "./roving";
 import { closeOnDelete, onAMac, renameOnF2 } from "./tabKeys";
@@ -192,14 +194,19 @@ import { inForce, onDrawn, TINTED_TABS, tintVariables } from "./theme/theme";
 import { hueOf } from "./theme/tint";
 import { handedFromNote, type HandedFrom } from "./handedFrom";
 import {
+  ChatsHere,
   isShell,
-  markOf,
   movedAt,
   quietOnes,
+  sameList,
   stateOf,
-  useChatStates,
+  useChats,
+  useChatsHere,
+  useChatsSelect,
   type ChatStates,
+  type State,
 } from "./chatState";
+import { TabMarks } from "./ChatRows";
 import { fitting, LEAST, LEAST_CHIP, LEAST_ROOT, leastAt, useRoom } from "./fits";
 import { useArrived } from "./lib/arrived";
 import type { Ending } from "./QuitWarning";
@@ -229,7 +236,7 @@ type Typed = { line: string; installer?: undefined } | { installer: string; line
  *
  * **A project that is not in front keeps everything and draws nothing.** It stays mounted and
  * returns `null`: its tabs, its splits, its focused workspace and its picker are React state
- * that simply is not rendered, and its `useChatStates` goes on listening, so the project tab
+ * that simply is not rendered, and its `useChats` goes on listening, so the project tab
  * can say a chat over there needs you. That is the operator's own reason for wanting one
  * window per project in the first place — fifty chats in project A must not be torn down
  * because he glanced at project B.
@@ -255,8 +262,13 @@ type Typed = { line: string; installer?: undefined } | { installer: string; line
  * Its panes come and go with it, and that costs a project nothing: only the tab in front has
  * panes on screen anyway (`tabs.ts`), the core has held every session's terminal all along,
  * and a view opened again is sent the screen as it already is.
+ *
+ * **Held (`memo`), so the window redrawing is not this view redrawing** (SC-3). Every chat move
+ * reaches the window as this project's report — the quit warning's states, the project strip's
+ * order — and the window redraws for it; a project view drawn again for that, with the same
+ * props, would be every tab and pane redrawn for one chat's move.
  */
-export function PlaneView({
+export const PlaneView = memo(function PlaneView({
   plane,
   inFront,
   projects,
@@ -321,7 +333,13 @@ export function PlaneView({
   /** What every chat is doing, in THIS project. Pushed from the core; nothing here polls.
    *  It keeps listening while the project is behind another one, which is what lets its tab
    *  say that something over there needs you. */
-  const states = useChatStates(plane);
+  const chats = useChats(plane);
+  // **Only the shares this view draws from, each redrawing it only when it changes** (SC-3).
+  // A chat's own state is not one of them: its tab, its explorer row and its pane read that
+  // themselves, so a chat that only went from running to waiting redraws those and not this.
+  const needsYou = useChatsSelect(chats, (states) => states.needsYou);
+  const reports = useChatsSelect(chats, (states) => states.reports);
+  const refusals = useChatsSelect(chats, (states) => states.refusals);
   const [trouble, setTrouble] = useState<string>();
   const [sidebar, setSidebar] = useState<SidebarModel>();
   /** This project's save standing (charter-app#302): every project reads its own, so the project
@@ -1226,7 +1244,7 @@ export function PlaneView({
    *  the show-more button when the strip is not drawing it (ADR 0054). One reading of the
    *  queue for both, so the button goes down exactly when the tab would. */
   const waitingIn = (workspace: string) =>
-    states.needsYou.filter((session) => filedIn(session) === workspace).length;
+    needsYou.filter((session) => filedIn(session) === workspace).length;
 
   const workspaceMarks = (workspace: string) => {
     const waiting = waitingIn(workspace);
@@ -1319,7 +1337,10 @@ export function PlaneView({
    * down on `chat-moved` and in the first snapshot, so two windows on one plane agree and a
    * relaunch does not invent an order out of whatever it happened to draw first.
    */
-  const lastMoved = useCallback<LastMoved>((session) => movedAt(states, session), [states]);
+  const lastMoved =
+    (states: ChatStates): LastMoved =>
+    (session) =>
+      movedAt(states, session);
 
   /**
    * What the show-more menu lists: the tabs the strip has no room for, **most recently moved
@@ -1339,11 +1360,14 @@ export function PlaneView({
   /** How many of a tab's chats need you: every one of its panes' that is in the queue, split
    *  or not. Its share of the chat strip's show-more count when the strip is not drawing it. */
   const waitingOn = (id: number) =>
-    panesOf(tabs, id).filter((pane) => states.needsYou.includes(pane.session)).length;
+    panesOf(tabs, id).filter((pane) => needsYou.includes(pane.session)).length;
 
-  const notShowing = useMemo(
-    () => byLastActivity(hidden, tabs, lastMoved),
-    [hidden, lastMoved, tabs],
+  // Read as an order and redrawn only when the order changes: a move by a chat the strip is
+  // drawing changes nothing in a menu of the ones it is not.
+  const notShowing = useChatsSelect(
+    chats,
+    (states) => byLastActivity(hidden, tabs, lastMoved(states)),
+    sameList,
   );
 
   /**
@@ -1354,16 +1378,20 @@ export function PlaneView({
    * A workspace moved when the last of its chats did. One nothing has been heard about reads
    * `0` and keeps the strip's order, for `byLastActivity`'s reason.
    */
-  const workspacesNotShowing = useMemo(() => {
-    const movedIn = (workspace: string) =>
-      Math.max(
-        0,
-        ...tabsIn(tabs, workspace, filedIn)
-          .flatMap((id) => panesOf(tabs, id))
-          .map((pane) => lastMoved(pane.session)),
-      );
-    return [...workspacesShown.hidden].sort((one, other) => movedIn(other) - movedIn(one));
-  }, [filedIn, lastMoved, tabs, workspacesShown.hidden]);
+  const workspacesNotShowing = useChatsSelect(
+    chats,
+    (states) => {
+      const movedIn = (workspace: string) =>
+        Math.max(
+          0,
+          ...tabsIn(tabs, workspace, filedIn)
+            .flatMap((id) => panesOf(tabs, id))
+            .map((pane) => movedAt(states, pane.session)),
+        );
+      return [...workspacesShown.hidden].sort((one, other) => movedIn(other) - movedIn(one));
+    },
+    sameList,
+  );
 
   // The tab that was in front on this strip, remembered so that coming back to a workspace
   // comes back to the chat that was on screen there.
@@ -2773,25 +2801,32 @@ export function PlaneView({
   // A resumed chat whose harness ended without a word — it could not find the conversation — is
   // replaced by a fresh chat with the same record, once (SI-8d). Everything else a resumed chat
   // does only marks it heard, and a heard chat is the operator's from then on.
+  //
+  // Watched off the store rather than read in a render, so it is not a reason to draw this view.
   useEffect(() => {
-    for (const [session, watched] of [...resuming.current]) {
-      const state = stateOf(states, session);
-      if (lostOnResume(watched, state)) {
-        resuming.current.delete(session);
-        const tab = now.current.order.find((id) =>
-          panesOf(now.current, id).some((pane) => pane.session === session),
-        );
-        if (tab !== undefined) change((tabs) => closeTab(tabs, tab, filedIn, isPinned));
-        void commands.closeSession(plane, session);
-        setReopened((was) => was.filter((one) => one.session !== session));
-        void resumeSession(watched.path, session);
-      } else if (state === "done" || state === "failed") {
-        resuming.current.delete(session);
-      } else {
-        resuming.current.set(session, heardFrom(watched, state));
+    const watch = () => {
+      const states = chats.store.statesFor(chats.plane);
+      for (const [session, watched] of [...resuming.current]) {
+        const state = stateOf(states, session);
+        if (lostOnResume(watched, state)) {
+          resuming.current.delete(session);
+          const tab = now.current.order.find((id) =>
+            panesOf(now.current, id).some((pane) => pane.session === session),
+          );
+          if (tab !== undefined) change((tabs) => closeTab(tabs, tab, filedIn, isPinned));
+          void commands.closeSession(plane, session);
+          setReopened((was) => was.filter((one) => one.session !== session));
+          void resumeSession(watched.path, session);
+        } else if (state === "done" || state === "failed") {
+          resuming.current.delete(session);
+        } else {
+          resuming.current.set(session, heardFrom(watched, state));
+        }
       }
-    }
-  }, [change, filedIn, isPinned, plane, resumeSession, states]);
+    };
+    watch();
+    return chats.store.subscribe(watch);
+  }, [change, chats, filedIn, isPinned, plane, resumeSession]);
 
   /**
    * A chat's work link (V60, ADR 0088 §3). **What each chat works on is asked once per chat**,
@@ -2961,8 +2996,9 @@ export function PlaneView({
   //
   // Held, because it is one of the catalogue's inputs: a fresh array on every render would
   // rebuild all 117 rows of a fifty-chat catalogue for every keystroke in the palette.
-  const quiet = useMemo(
-    () =>
+  const quiet = useChatsSelect(
+    chats,
+    (states) =>
       sidebar
         ? quietOnes(
             [...sidebar.workspaces.flatMap((ws) => ws.chats), ...sidebar.unfiled],
@@ -2972,7 +3008,7 @@ export function PlaneView({
             (chat) => (alreadyShows(tabs, chat.session) ? nameOf(chat.session) : chat.name),
           )
         : [],
-    [nameOf, sidebar, states, tabs],
+    sameList,
   );
 
   /** The chats working in the focused workspace, which is what the explorer files under the
@@ -3091,11 +3127,11 @@ export function PlaneView({
             // beside no other — with one removal per piece that is the difference between one
             // offer to throw work away and fifty.
             refused: report?.refused ? report.from : undefined,
-            needsYou: states.needsYou,
+            needsYou,
             quiet,
             nameOf,
-            reportsTo: (session) => states.reports[session] ?? [],
-            refusedIn: (session) => states.refusals[session] ?? [],
+            reportsTo: (session) => reports[session] ?? [],
+            refusedIn: (session) => refusals[session] ?? [],
             // The projects' pins are the WINDOW's, and travel down with the projects: a
             // project that is not in front draws nothing, so its pin cannot be held here.
             pinned: {
@@ -3131,9 +3167,9 @@ export function PlaneView({
       quiet,
       report,
       spot?.path,
-      states.needsYou,
-      states.refusals,
-      states.reports,
+      needsYou,
+      refusals,
+      reports,
       strips,
       tabs,
       vaultNames,
@@ -3336,29 +3372,31 @@ export function PlaneView({
   // more, so there is nowhere to scroll it to; `fits.ts` draws the selected tab instead, and
   // that is the same promise kept by construction rather than by a side effect.
 
-  // The chats still open, in the order the tab bar shows them: what a quit would end, with
-  // what each one is doing already resolved. The state has to be looked up HERE, because a
-  // session number names a chat only inside its own project.
-  const ending = useMemo<Ending[]>(
+  // The chats still open, in the order the tab bar shows them: what a quit would end. What
+  // each one is doing is resolved when the report is made, below, and has to be looked up in
+  // this project, because a session number names a chat only inside its own project.
+  const quitting = useMemo<Leaving[]>(
     () =>
       tabs.order.flatMap((id) => {
         const filed = workspaceOf(tabs, id, filedIn);
         return panesOf(tabs, id).map(({ session }) => {
           const known = reopened.find((chat) => chat.session === session);
           return {
-            key: `${plane}#${session}`,
-            project: plane,
-            // The tab's name — the one the operator gave it, or its default — and not the
-            // harness's: this is a list the operator reads (charter-app#254).
-            name: tabs.byId[id].name,
-            harness: known?.harness ?? null,
-            cwd: known?.cwd ?? null,
-            workspace: filed === OUTSIDE ? OUTSIDE_TITLE : filed,
-            state: stateOf(states, session),
+            session,
+            chat: {
+              key: `${plane}#${session}`,
+              project: plane,
+              // The tab's name — the one the operator gave it, or its default — and not the
+              // harness's: this is a list the operator reads (charter-app#254).
+              name: tabs.byId[id].name,
+              harness: known?.harness ?? null,
+              cwd: known?.cwd ?? null,
+              workspace: filed === OUTSIDE ? OUTSIDE_TITLE : filed,
+            },
           };
         });
       }),
-    [filedIn, plane, reopened, states, tabs],
+    [filedIn, plane, reopened, tabs],
   );
 
   // **This project's chats asking, for the title bar's list** (charter-app#249), which is the
@@ -3369,11 +3407,11 @@ export function PlaneView({
   // its name. One already in the queue is one item that says it; one that is not is an item of
   // its own, whose ✕ dismisses it.
   const asking = useMemo<Asking[]>(() => {
-    const reportsTo = (session: number) => states.reports[session] ?? [];
-    const refusedIn = (session: number) => states.refusals[session] ?? [];
+    const reportsTo = (session: number) => reports[session] ?? [];
+    const refusedIn = (session: number) => refusals[session] ?? [];
     const rows = catalogued([
-      ...needsYouRows(states.needsYou, nameOf, tabs, reportsTo, refusedIn),
-      ...stoppedRows(stopped, states.needsYou, nameOf, tabs),
+      ...needsYouRows(needsYou, nameOf, tabs, reportsTo, refusedIn),
+      ...stoppedRows(stopped, needsYou, nameOf, tabs),
     ]);
     const item = (session: number, ignore: string): Asking => {
       const filed = filedIn(session);
@@ -3392,10 +3430,10 @@ export function PlaneView({
       .map(Number)
       .filter((session) => rows.has(dismissId(session)));
     return [
-      ...states.needsYou.map((session) => item(session, ignoreId(session))),
+      ...needsYou.map((session) => item(session, ignoreId(session))),
       ...alsoStopped.map((session) => item(session, dismissId(session))),
     ];
-  }, [filedIn, nameOf, states.needsYou, states.refusals, states.reports, stopped, tabs]);
+  }, [filedIn, nameOf, needsYou, refusals, reports, stopped, tabs]);
 
   // What this project has open, told to the window: the quit warning lists every project's
   // chats, and this project's own tab says when one of them needs you.
@@ -3405,9 +3443,11 @@ export function PlaneView({
   // which project this launch opened, and once, so a project that is not in front is not a
   // second capturing listener for the same key. What it lists has to be the project in
   // front's, and this is how it gets there.
-  const mine = useMemo<PlaneReport>(
+  //
+  // **Without what its chats are doing**, which is added as it is reported, below: that changes
+  // with every move, and a report rebuilt here for each one was the whole view redrawn for each.
+  const mine = useMemo<Omit<PlaneReport, "ending" | "moved">>(
     () => ({
-      ending,
       asking,
       quiet,
       settled,
@@ -3422,21 +3462,8 @@ export function PlaneView({
       workspace: ofWorkspace,
       colour: colourWithHue(sidebar?.workspaces.find((ws) => ws.name === ofWorkspace)?.colour),
       saving,
-      moved: Math.max(0, ...Object.values(states.movedAt)),
     }),
-    [
-      asking,
-      ending,
-      ofWorkspace,
-      offers,
-      quiet,
-      report,
-      run,
-      saving,
-      settled,
-      sidebar,
-      states.movedAt,
-    ],
+    [asking, ofWorkspace, offers, quiet, report, run, saving, settled, sidebar],
   );
   // **Before the paint, not after it.** A quit — Cmd-Q, the tray, the menu — arrives whenever
   // it arrives, and the window decides on what every project has told it: a report that
@@ -3444,9 +3471,39 @@ export function PlaneView({
   // heard about yet. `useLayoutEffect` puts this in the same flush as the render that
   // produced it, which is the nearest thing to the synchronous ref the single-project window
   // used before there was anything to report to.
+  //
+  // **And again whenever a chat moves, straight off the store** (SC-3): what each chat is doing
+  // and when the newest of them moved are the report's, so the quit warning and the project
+  // strip's order stay current, and this view is not redrawn to say so. A move that changes
+  // neither is not reported at all.
+  /** Its sessions, for the status line's count of the ones running. */
+  const quitSessions = useMemo(() => quitting.map((chat) => chat.session), [quitting]);
+  const reported = useRef<
+    { mine: typeof mine; quitting: Leaving[]; doing: State[]; moved: number } | undefined
+  >(undefined);
   useLayoutEffect(() => {
-    onReport(plane, mine);
-  }, [mine, onReport, plane]);
+    const report = () => {
+      const states = chats.store.statesFor(chats.plane);
+      const doing = quitting.map((chat) => stateOf(states, chat.session));
+      const moved = Math.max(0, ...Object.values(states.movedAt));
+      const was = reported.current;
+      if (
+        was?.mine === mine &&
+        was.quitting === quitting &&
+        was.moved === moved &&
+        sameList(was.doing, doing)
+      )
+        return;
+      reported.current = { mine, quitting, doing, moved };
+      onReport(plane, {
+        ...mine,
+        ending: quitting.map(({ chat }, at) => ({ ...chat, state: doing[at] })),
+        moved,
+      });
+    };
+    report();
+    return chats.store.subscribe(report);
+  }, [chats, quitting, mine, onReport, plane]);
 
   const frontChat = frontTab && reopened.find((chat) => chat.session === chatOf(tabs, frontTab.id));
 
@@ -3463,7 +3520,7 @@ export function PlaneView({
   if (!inFront) return null;
 
   return (
-    <>
+    <ChatsHere.Provider value={chats}>
       {/* The workspaces of this project, as the second of the three strips (ADR 0036). It is
           the axis the tmux frame had and the port lost: a top-level tab there was a
           WORKSPACE and the sessions lived under it, and transposing the app onto projects
@@ -3746,7 +3803,6 @@ export function PlaneView({
                                   <TabMarks
                                     tabs={tabs}
                                     id={id}
-                                    states={states}
                                     updates={planeUpdates}
                                     shells={shells}
                                     wrapping={wrapping}
@@ -3791,7 +3847,6 @@ export function PlaneView({
                 <TabMarks
                   tabs={tabs}
                   id={id}
-                  states={states}
                   updates={planeUpdates}
                   shells={shells}
                   wrapping={wrapping}
@@ -3951,7 +4006,6 @@ export function PlaneView({
               live={ofWorkspace !== undefined && liveOf(ofWorkspace)}
               state={workspaceState}
               chats={workspaceChats}
-              states={states}
               spot={spot}
               onPick={pickSpot}
               onShowChat={showChat}
@@ -4001,7 +4055,6 @@ export function PlaneView({
                   onFocus={(pane) => change((tabs) => focusPane(tabs, pane))}
                   offerFor={by}
                   onPaneDoes={onPaneDoes}
-                  states={states}
                   name={frontTab.name}
                   handedFrom={handedFrom}
                   workItems={workItems}
@@ -4093,12 +4146,13 @@ export function PlaneView({
           share, and the sidebar has already been read for the strip, so the line costs no
           command of its own — which matters here more than anywhere, because it is the one
           surface that is drawn whatever else the window is doing. */}
-      <StatusLine
+      <StatusLineHere
+        sessions={quitSessions}
+        settled={settled}
         plane={plane}
         read={sidebar !== undefined}
         where={focused === OUTSIDE ? OUTSIDE_TITLE : focused}
         workspaces={sidebar?.workspaces.length}
-        running={runningIn({ ending, settled })}
         state={workspaceState}
         doctor={doctor}
         pin={pin}
@@ -4278,9 +4332,9 @@ export function PlaneView({
           }}
         />
       )}
-    </>
+    </ChatsHere.Provider>
   );
-}
+});
 
 /** What this project told the window about itself. */
 /** Redraws a component when the theme in force changes: what a workspace's tint is taken from
@@ -4312,6 +4366,31 @@ export type FirstChat = {
   /** Which ask this is, so each is answered once. */
   at: number;
 };
+
+/**
+ * The status line, with how many of the project's chats are running read off the store here
+ * (SC-3): the count changes with most moves, and the project view is not redrawn for it.
+ */
+function StatusLineHere({
+  sessions,
+  settled,
+  ...line
+}: Omit<ComponentProps<typeof StatusLine>, "running"> & {
+  /** The project's open chats, in the quit warning's order. */
+  sessions: readonly number[];
+  settled: boolean;
+}) {
+  const running = useChatsSelect(useChatsHere(), (states) =>
+    runningIn({
+      ending: sessions.map((session) => ({ state: stateOf(states, session) })),
+      settled,
+    }),
+  );
+  return <StatusLine {...line} running={running} />;
+}
+
+/** A chat a quit would end, before what it is doing is looked up (`PlaneReport.ending`). */
+type Leaving = { session: number; chat: Omit<Ending, "state"> };
 
 export type PlaneReport = {
   /** Every chat it has open, with what each one is doing — what a quit would end. */
@@ -4573,8 +4652,6 @@ function tabTip(from: string | undefined, workItem: string | undefined): string 
 function PaneFrame({
   plane,
   session,
-  moved,
-  running,
   from,
   workItem,
   byHand,
@@ -4586,8 +4663,6 @@ function PaneFrame({
 }: {
   plane: PlaneId;
   session: number;
-  moved: number;
-  running: boolean;
   /** Where a handed-off chat came from, `↳ from steward 3 · ops`, in the chat's own corner. */
   from?: string;
   /** The work item this chat works on, `Work item: <key>`, in the same corner (V60). */
@@ -4601,6 +4676,12 @@ function PaneFrame({
   doing: ReactNode;
   children: ReactNode;
 }) {
+  // **Read off the store, by the pane itself** (SC-3): the gauge reads its record again when its
+  // chat moves and keeps reading while the chat is mid-turn, and a move by another chat is no
+  // reason to redraw this pane.
+  const chats = useChatsHere();
+  const moved = useChatsSelect(chats, (states) => movedAt(states, session));
+  const running = useChatsSelect(chats, (states) => stateOf(states, session) === "running");
   const usage = useChatUsage(plane, session, moved, running);
   return (
     <div className="pane-frame">
@@ -4928,69 +5009,6 @@ export function Closer({ offer, onPress }: { offer?: Offer; onPress: (offer: Off
   );
 }
 
-/**
- * What a tab says about itself, on the strip and in the menu of what the strip has no room for.
- *
- * **A chat's tab is its name and what it is doing; a view's tab is a mark and its name**, with
- * no state — a view is not doing anything, and a dot beside it would be a claim about a chat
- * the tab does not have. The mark says what kind of thing the tab holds before the name is
- * read: a person for a persona, a puzzle piece for a view an extension offers.
- */
-function TabMarks({
-  tabs,
-  id,
-  states,
-  updates,
-  shells,
-  pin,
-  wrapping,
-}: {
-  tabs: Tabs;
-  id: number;
-  states: ChatStates;
-  /** The chats wrapping up — being smart-closed (ADR 0064). */
-  wrapping: ReadonlySet<number>;
-  /** The chats the plane's instructions changed under, by session (charter#369). */
-  updates: PlaneUpdates;
-  /** The chats that are shell tabs, whose tab wears a terminal's mark (SI-5). */
-  shells: ReadonlySet<number>;
-  /** The pin mark, on the strip; the menu of hidden tabs draws none. */
-  pin?: ReactNode;
-}) {
-  const lead = contentsOf(tabs, id)[0]?.content;
-  const chat = chatOf(tabs, id);
-  if (lead?.kind === "view") {
-    return (
-      <>
-        <ViewMark view={lead.view} />
-        {/* The preview tab is in italics, as VS Code draws its own: the tab the next single
-            click on a memory reuses (SI-9b). */}
-        <span className={lead.preview ? "tab-name is-preview" : "tab-name"}>
-          {tabs.byId[id].name}
-        </span>
-        {pin}
-      </>
-    );
-  }
-  return (
-    <>
-      {/* A shell tab's mark, before its name as a view's is: what kind of thing the tab holds,
-          read before the name is. A harness chat wears none — it is the ordinary case. */}
-      {chat !== undefined && shells.has(chat) && (
-        <SquareTerminal className="tab-mark" data-mark="shell" aria-hidden="true" />
-      )}
-      <span className="tab-name">{tabs.byId[id].name}</span>
-      {pin}
-      <PlaneUpdatedMark files={chat === undefined ? undefined : updates[chat]} />
-      {/* The first pane's session is the tab's own chat. Its own element, so what a tab IS
-          stays separate from what it is DOING — a tab whose text changed every time a turn
-          began would be unreadable, and untestable. */}
-      <ChatMark state={markOf(states, chat ?? -1, chat !== undefined && shells.has(chat))} />
-      <WrappingUp held={panesOf(tabs, id).some((one) => wrapping.has(one.session))} />
-    </>
-  );
-}
-
 /** A tab's layout, as panes with a handle between each split. */
 function LayoutPanes({
   plane,
@@ -4999,7 +5017,6 @@ function LayoutPanes({
   onFocus,
   offerFor,
   onPaneDoes,
-  states,
   name,
   handedFrom,
   workItems,
@@ -5023,9 +5040,6 @@ function LayoutPanes({
   /** The catalogue, by row id. There is one list of actions and the panes read it too. */
   offerFor: (id: string) => Offer | undefined;
   onPaneDoes: (pane: number, offer: Offer | undefined) => void;
-  /** What every chat is doing, for the gauge in each pane's corner: it reads its record
-   *  again when its chat moves, and keeps reading while the chat is mid-turn. */
-  states: ChatStates;
   /** The tab's name, which is the title of the view it opened on. */
   name: string;
   /** Where each handed-off chat came from, by session (charter-app#258). */
@@ -5097,8 +5111,6 @@ function LayoutPanes({
       <PaneFrame
         plane={plane}
         session={content.session}
-        moved={movedAt(states, content.session)}
-        running={stateOf(states, content.session) === "running"}
         from={handedFrom[content.session]}
         workItem={workItems[content.session]}
         byHand={byHand[content.session]}
@@ -5145,7 +5157,6 @@ function LayoutPanes({
               onFocus={onFocus}
               offerFor={offerFor}
               onPaneDoes={onPaneDoes}
-              states={states}
               name={name}
               handedFrom={handedFrom}
               workItems={workItems}

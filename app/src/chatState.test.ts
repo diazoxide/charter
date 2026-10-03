@@ -251,3 +251,58 @@ describe("a refused commit (SQ-16)", () => {
     expect(refusalsOf(prompted, 3)).toEqual([]);
   });
 });
+
+/**
+ * **What a move did not change is the same object afterwards** (SC-3). The queue and every
+ * chat's reports travel whole on every move, so a reader that compares what it drew from by
+ * identity — a row, the needs-you list, the catalogue — would otherwise be told that all of it
+ * changed every time any chat did anything.
+ */
+describe("a move keeps what it did not change", () => {
+  it("keeps the queue when the move carries the same one", () => {
+    const before = moved(nothingKnown, doing(3, "waiting", [3]));
+
+    const after = moved(before, doing(4, "running", [3]));
+
+    expect(after.needsYou).toBe(before.needsYou);
+  });
+
+  it("takes a queue that did change", () => {
+    const before = moved(nothingKnown, doing(3, "waiting", [3]));
+
+    const after = moved(before, doing(4, "waiting", [3, 4]));
+
+    expect(after.needsYou).toEqual([3, 4]);
+  });
+
+  it("keeps every chat's reports and refusals when the move says nothing new about them", () => {
+    const before = moved(nothingKnown, doing(3, "waiting", [3], 1, ["drop commons"], ["no key"]));
+
+    const after = moved(before, doing(3, "running", [], 2, ["drop commons"], ["no key"]));
+
+    expect(after.reports).toBe(before.reports);
+    expect(after.refusals).toBe(before.refusals);
+    expect(stateOf(after, 3)).toBe("running");
+  });
+
+  it("still takes a move that carries no queue, as an empty one", () => {
+    // A core older than the field, or a test's hand-written event: the chat's own state is
+    // still news, and an absent queue must not throw it away.
+    const before = moved(nothingKnown, doing(3, "waiting", [3]));
+    const bare = { ...doing(3, "running") } as Partial<Moved>;
+    delete bare.queue;
+
+    const after = moved(before, bare as Moved);
+
+    expect(stateOf(after, 3)).toBe("running");
+    expect(after.needsYou).toEqual([]);
+  });
+
+  it("takes reports that did change", () => {
+    const before = moved(nothingKnown, doing(3, "waiting", [3], 1, ["drop commons"]));
+
+    const after = moved(before, doing(3, "running", [], 2, []));
+
+    expect(reportsTo(after, 3)).toEqual([]);
+  });
+});
