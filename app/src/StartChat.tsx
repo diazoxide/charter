@@ -2,6 +2,7 @@ import { useId, useRef, useState } from "react";
 import * as Checkbox from "@radix-ui/react-checkbox";
 import * as Dialog from "@radix-ui/react-dialog";
 import * as RadioGroup from "@radix-ui/react-radio-group";
+import { HarnessSummary } from "./HarnessCard";
 import { ApprovalSentence, ProfileMeta } from "./ProfileApproval";
 import type { ProfileRow, StartOptions } from "./bindings";
 
@@ -221,6 +222,9 @@ export function StartChat({
               <Row key={row.name} row={row} onPick={setProfile} />
             ))}
           </RadioGroup.Root>
+          {/* The picked harness's card, at a glance (HP-19): what it runs at and lacks, before
+              anything starts. Its whole card is a tab, opened from the chat's header. */}
+          {picked?.harness && <HarnessSummary glance={picked.harness} />}
 
           <h3 className="choices-name" id="pick-persona">
             Persona

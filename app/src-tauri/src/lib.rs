@@ -538,6 +538,11 @@ struct OpenChat {
     persona: Option<String>,
     /// What its harness cannot tell charter, said on the chat — none where it tells all.
     unreported: Option<String>,
+    /// Its harness's card at a glance, which its header draws (HP-19) — none for a shell, and
+    /// left out of the answer then, rather than `null`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[specta(optional)]
+    card: Option<HarnessGlance>,
     /// Whether the operator pinned it (ADR 0039). It rides the plane's own app
     /// record, so a pinned chat comes back pinned at the next launch.
     pinned: bool,
@@ -862,6 +867,37 @@ async fn alerts_everywhere(
     .map_err(|err| format!("reading the alerts did not finish: {err}"))
 }
 
+/// A harness's capability card at a glance (HP-19, W10, ADR 0072 §3): what the picker says under
+/// the harness that is picked, what a chat's header draws, and what a control that is off for a
+/// missing capability says. Every word is `charter_core::harness_card`'s, read off the harness's
+/// declaration and the adapter charter ships for it; the whole card is the `harness` view.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+struct HarnessGlance {
+    /// The word a profile's `kind` names: the key its card's view tab opens on.
+    name: String,
+    /// The product's own name, `Codex`: what a chat's header says.
+    title: String,
+    /// What the card is labelled: `What Codex can do here`.
+    label: String,
+    /// One line for each thing it lacks, in the card's order: none where it lacks nothing.
+    lines: Vec<String>,
+    /// What a control that types a prompt into its chat says while it is off: the card's line
+    /// and label — or none where a prompt can be typed in.
+    cannot_type: Option<String>,
+}
+
+impl From<&charter_core::harness_card::Card> for HarnessGlance {
+    fn from(card: &charter_core::harness_card::Card) -> Self {
+        Self {
+            name: card.name.clone(),
+            title: card.title.clone(),
+            label: card.label(),
+            lines: card.lines(),
+            cannot_type: card.lacks(charter_core::harness_card::READY_TO_TYPE),
+        }
+    }
+}
+
 /// One row of the profile picker: what it runs, where charter read it, and what pressing
 /// Enter on it would do.
 #[derive(Debug, Clone, serde::Serialize, specta::Type)]
@@ -882,6 +918,11 @@ struct ProfileRow {
     /// (`Harness::ready_to_type`): what a surface that types one, such as the first task
     /// (FR-28), offers it by.
     ready_to_type: bool,
+    /// The card of the harness its `kind` names, at a glance (HP-19), or none for a kind this
+    /// project has no declaration of. Left out of the answer then, rather than `null`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[specta(optional)]
+    harness: Option<HarnessGlance>,
 }
 
 /// Everything the picker draws, read from the plane when it is opened.
@@ -915,6 +956,8 @@ fn start_options(planes: tauri::State<'_, Planes>, plane: PlaneId) -> Result<Sta
     let root = held.root();
     let (set, check) = charter_core::profiles::for_launch(root);
     let on_disk = charter_core::workspaces::Plane::open(root);
+    // Every harness the project has, read once for every row (HP-19).
+    let cards = charter_core::harness_card::read(root);
     Ok(StartOptions {
         profiles: set
             .profiles()
@@ -930,6 +973,10 @@ fn start_options(planes: tauri::State<'_, Planes>, plane: PlaneId) -> Result<Sta
                 ready_to_type: charter_core::harness::Harness::of_kind(&p.kind)
                     .and_then(charter_core::harness::Harness::ready_to_type)
                     .is_some(),
+                harness: cards
+                    .iter()
+                    .find(|card| card.name == p.kind)
+                    .map(HarnessGlance::from),
             })
             .collect(),
         refused: set
@@ -1472,6 +1519,9 @@ impl From<chats::Open> for OpenChat {
                 .harness
                 .and_then(Harness::unreported)
                 .map(str::to_owned),
+            card: open.harness.map(|harness| {
+                HarnessGlance::from(&charter_core::harness_card::built_in_card(harness))
+            }),
             profile: open.profile,
             persona: open.persona,
             in_front: open.in_front,

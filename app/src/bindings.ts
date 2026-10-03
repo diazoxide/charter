@@ -384,7 +384,7 @@ export const commands = {
 	 *  window has sent the operator's answer to the launch's question (`opener::relaunch`,
 	 *  charter-app#250), and a window that reloads asks again rather than starting a second copy.
 	 */
-	openedChats: (plane: PlaneId) => typedError<OpenChat[], string>(__TAURI_INVOKE("opened_chats", { plane })),
+	openedChats: (plane: PlaneId) => typedError<OpenChat_Serialize[], string>(__TAURI_INVOKE("opened_chats", { plane })),
 	/**
 	 *  The chats this launch could not start, by name and reason. They are still recorded, and
 	 *  will be tried again at the next launch.
@@ -484,7 +484,7 @@ export const commands = {
 	 *  workspace's todos again under it, so a plane with dozens of workspaces would hold the window
 	 *  while it did.
 	 */
-	planeSidebar: (plane: PlaneId) => typedError<Sidebar, string>(__TAURI_INVOKE("plane_sidebar", { plane })),
+	planeSidebar: (plane: PlaneId) => typedError<Sidebar_Serialize, string>(__TAURI_INVOKE("plane_sidebar", { plane })),
 	/**
 	 *  The focused workspace's panels: its repos, its todos and the plane's personas.
 	 * 
@@ -530,7 +530,7 @@ export const commands = {
 	 *  so the same record starts fresh this time, and says so. It is **the same chat**, under its
 	 *  id, in a run that begins `fresh` (ADR 0066), and not a second one. It may already be closed.
 	 */
-	resumeSession: (plane: PlaneId, path: string, name: string, insteadOf: number | null, columns: number, rows: number) => typedError<OpenChat, string>(__TAURI_INVOKE("resume_session", { plane, path, name, insteadOf, columns, rows })),
+	resumeSession: (plane: PlaneId, path: string, name: string, insteadOf: number | null, columns: number, rows: number) => typedError<OpenChat_Serialize, string>(__TAURI_INVOKE("resume_session", { plane, path, name, insteadOf, columns, rows })),
 	/**
 	 *  The window came back into focus: fetch the plane's target branch, unless it was fetched a
 	 *  moment ago. Answers at once; what the fetch finds reaches the window as a plane change.
@@ -694,7 +694,7 @@ export const commands = {
 	 *  operator edits by hand and a chat can write, so a cache here would be a second answer to
 	 *  "what is on disk" that nothing invalidates.
 	 */
-	startOptions: (plane: PlaneId) => typedError<StartOptions, string>(__TAURI_INVOKE("start_options", { plane })),
+	startOptions: (plane: PlaneId) => typedError<StartOptions_Serialize, string>(__TAURI_INVOKE("start_options", { plane })),
 	/**
 	 *  Records that the operator approved running this profile's command — **the one they were
 	 *  shown**.
@@ -1913,6 +1913,28 @@ export type HandedFromNote = {
 	workspace: string,
 };
 
+/**
+ *  A harness's capability card at a glance (HP-19, W10, ADR 0072 §3): what the picker says under
+ *  the harness that is picked, what a chat's header draws, and what a control that is off for a
+ *  missing capability says. Every word is `charter_core::harness_card`'s, read off the harness's
+ *  declaration and the adapter charter ships for it; the whole card is the `harness` view.
+ */
+export type HarnessGlance = {
+	/**  The word a profile's `kind` names: the key its card's view tab opens on. */
+	name: string,
+	/**  The product's own name, `Codex`: what a chat's header says. */
+	title: string,
+	/**  What the card is labelled: `What Codex can do here`. */
+	label: string,
+	/**  One line for each thing it lacks, in the card's order: none where it lacks nothing. */
+	lines: string[],
+	/**
+	 *  What a control that types a prompt into its chat says while it is off: the card's line
+	 *  and label — or none where a prompt can be typed in.
+	 */
+	cannot_type: string | null,
+};
+
 /**  One plugin, in one project. */
 export type HarnessPlugin = {
 	/**  The harness's own id for it. */
@@ -2339,7 +2361,10 @@ export type Offer = {
 };
 
 /**  One chat the app has open, as the UI draws it and as the quit warning lists it. */
-export type OpenChat = {
+export type OpenChat = OpenChat_Serialize | OpenChat_Deserialize;
+
+/**  One chat the app has open, as the UI draws it and as the quit warning lists it. */
+export type OpenChat_Deserialize = {
 	session: number,
 	name: string,
 	cwd: string | null,
@@ -2362,6 +2387,58 @@ export type OpenChat = {
 	persona: string | null,
 	/**  What its harness cannot tell charter, said on the chat — none where it tells all. */
 	unreported: string | null,
+	/**
+	 *  Its harness's card at a glance, which its header draws (HP-19) — none for a shell, and
+	 *  left out of the answer then, rather than `null`.
+	 */
+	card?: HarnessGlance | null,
+	/**
+	 *  Whether the operator pinned it (ADR 0039). It rides the plane's own app
+	 *  record, so a pinned chat comes back pinned at the next launch.
+	 */
+	pinned: boolean,
+	/**
+	 *  The name the operator gave it, or none — then its tab says the default, `<persona>
+	 *  <N>` (charter-app#254). Charter's label only: `name` is still what its harness was
+	 *  started with.
+	 */
+	label: string | null,
+	/**
+	 *  Where a handoff opened it from, where one did: the note its tab's tooltip and its header
+	 *  draw, `↳ from steward 3 · ops` (charter-app#258). Never the parent's number.
+	 */
+	from: HandedFromNote | null,
+};
+
+/**  One chat the app has open, as the UI draws it and as the quit warning lists it. */
+export type OpenChat_Serialize = {
+	session: number,
+	name: string,
+	cwd: string | null,
+	/**  The harness it runs, by the word the plane calls it — or none for a shell. */
+	harness: string | null,
+	/**  Whether it is the chat to show: at a launch, the one that was in front at the quit. */
+	in_front: boolean,
+	/**  The conversation it was resumed by, where it was. The UI says which happened. */
+	resumed: string | null,
+	/**  Why it is a new chat rather than the one it was, where it is. */
+	fresh: string | null,
+	/**
+	 *  What a Resume from a session record had to guess because the record could not say it —
+	 *  its profile, its directory — or none (SI-8e).
+	 */
+	guessed: string | null,
+	/**  The harness profile it started on, where it started on one. */
+	profile: string | null,
+	/**  The persona it adopted. */
+	persona: string | null,
+	/**  What its harness cannot tell charter, said on the chat — none where it tells all. */
+	unreported: string | null,
+	/**
+	 *  Its harness's card at a glance, which its header draws (HP-19) — none for a shell, and
+	 *  left out of the answer then, rather than `null`.
+	 */
+	card?: HarnessGlance | null,
 	/**
 	 *  Whether the operator pinned it (ADR 0039). It rides the plane's own app
 	 *  record, so a pinned chat comes back pinned at the next launch.
@@ -2914,7 +2991,13 @@ export type PlaneUpdated = {
  *  One row of the profile picker: what it runs, where charter read it, and what pressing
  *  Enter on it would do.
  */
-export type ProfileRow = {
+export type ProfileRow = ProfileRow_Serialize | ProfileRow_Deserialize;
+
+/**
+ *  One row of the profile picker: what it runs, where charter read it, and what pressing
+ *  Enter on it would do.
+ */
+export type ProfileRow_Deserialize = {
 	name: string,
 	kind: string,
 	/**
@@ -2937,6 +3020,45 @@ export type ProfileRow = {
 	 *  (FR-28), offers it by.
 	 */
 	ready_to_type: boolean,
+	/**
+	 *  The card of the harness its `kind` names, at a glance (HP-19), or none for a kind this
+	 *  project has no declaration of. Left out of the answer then, rather than `null`.
+	 */
+	harness?: HarnessGlance | null,
+};
+
+/**
+ *  One row of the profile picker: what it runs, where charter read it, and what pressing
+ *  Enter on it would do.
+ */
+export type ProfileRow_Serialize = {
+	name: string,
+	kind: string,
+	/**
+	 *  The environment and the command as one line a person reads, already contained: a
+	 *  profile is a file a chat can write, and a control byte in it must never redraw a row.
+	 */
+	shown: string,
+	/**  `built-in` or `charter.local.toml`. */
+	source: string,
+	/**  The row the picker starts on. It launches nothing by itself. */
+	is_default: boolean,
+	/**
+	 *  `new` or `changed` when this profile's command must be shown and approved before it
+	 *  runs; absent when charter has already recorded running exactly this.
+	 */
+	approval: string | null,
+	/**
+	 *  Whether charter can type a prompt into a chat on it once its harness has started
+	 *  (`Harness::ready_to_type`): what a surface that types one, such as the first task
+	 *  (FR-28), offers it by.
+	 */
+	ready_to_type: boolean,
+	/**
+	 *  The card of the harness its `kind` names, at a glance (HP-19), or none for a kind this
+	 *  project has no declaration of. Left out of the answer then, rather than `null`.
+	 */
+	harness?: HarnessGlance | null,
 };
 
 /**
@@ -3476,27 +3598,25 @@ export type SettingsWhich =
  *  The whole left-hand side: every workspace with its chats, and the focused workspace's
  *  persona and todos.
  */
-export type Sidebar = {
-	root: string,
-	workspaces: SidebarWorkspace[],
-	/**  The plane's personas, and the one a new chat here would adopt. */
-	personas: string[],
-	persona: string | null,
-	/**  Chats whose directory is in no workspace, so the sidebar can still show them. */
-	unfiled: OpenChat[],
-};
+export type Sidebar = Sidebar_Serialize | Sidebar_Deserialize;
 
 /**
  *  One workspace as the sidebar draws it: what it is for, what it still means to do, and the
  *  chats working in it.
  */
-export type SidebarWorkspace = {
+export type SidebarWorkspace = SidebarWorkspace_Serialize | SidebarWorkspace_Deserialize;
+
+/**
+ *  One workspace as the sidebar draws it: what it is for, what it still means to do, and the
+ *  chats working in it.
+ */
+export type SidebarWorkspace_Deserialize = {
 	name: string,
 	/**  Where the workspace is, so a chat can be started in it. */
 	path: string,
 	vision: string,
 	todos: string[],
-	chats: OpenChat[],
+	chats: OpenChat_Deserialize[],
 	/**
 	 *  Its colour as its `workspace.json` holds it — a palette name or `#rrggbb` — or `null`
 	 *  (charter-app#281). Here because every workspace tab draws its own, whether or not it is
@@ -3508,6 +3628,58 @@ export type SidebarWorkspace = {
 	 *  (charter-app#301). Every place a workspace is drawn marks it.
 	 */
 	live: boolean,
+};
+
+/**
+ *  One workspace as the sidebar draws it: what it is for, what it still means to do, and the
+ *  chats working in it.
+ */
+export type SidebarWorkspace_Serialize = {
+	name: string,
+	/**  Where the workspace is, so a chat can be started in it. */
+	path: string,
+	vision: string,
+	todos: string[],
+	chats: OpenChat_Serialize[],
+	/**
+	 *  Its colour as its `workspace.json` holds it — a palette name or `#rrggbb` — or `null`
+	 *  (charter-app#281). Here because every workspace tab draws its own, whether or not it is
+	 *  in front, and the sidebar is already the one read of every workspace.
+	 */
+	colour: string | null,
+	/**
+	 *  Whether it is LIVE: its charter, memory and todos published with the plane
+	 *  (charter-app#301). Every place a workspace is drawn marks it.
+	 */
+	live: boolean,
+};
+
+/**
+ *  The whole left-hand side: every workspace with its chats, and the focused workspace's
+ *  persona and todos.
+ */
+export type Sidebar_Deserialize = {
+	root: string,
+	workspaces: SidebarWorkspace_Deserialize[],
+	/**  The plane's personas, and the one a new chat here would adopt. */
+	personas: string[],
+	persona: string | null,
+	/**  Chats whose directory is in no workspace, so the sidebar can still show them. */
+	unfiled: OpenChat_Deserialize[],
+};
+
+/**
+ *  The whole left-hand side: every workspace with its chats, and the focused workspace's
+ *  persona and todos.
+ */
+export type Sidebar_Serialize = {
+	root: string,
+	workspaces: SidebarWorkspace_Serialize[],
+	/**  The plane's personas, and the one a new chat here would adopt. */
+	personas: string[],
+	persona: string | null,
+	/**  Chats whose directory is in no workspace, so the sidebar can still show them. */
+	unfiled: OpenChat_Serialize[],
 };
 
 /**  Whether Smart close is offered on a chat, and the answer the close dialog starts on. */
@@ -3536,8 +3708,34 @@ export type SmartClosing = {
 };
 
 /**  Everything the picker draws, read from the plane when it is opened. */
-export type StartOptions = {
-	profiles: ProfileRow[],
+export type StartOptions = StartOptions_Serialize | StartOptions_Deserialize;
+
+/**  Everything the picker draws, read from the plane when it is opened. */
+export type StartOptions_Deserialize = {
+	profiles: ProfileRow_Deserialize[],
+	/**
+	 *  Profiles charter read and will not use, by name and reason, so a row that is missing
+	 *  is never merely missing.
+	 */
+	refused: ([string, string])[],
+	personas: string[],
+	/**  The plane's `[persona] default`, which is the persona row the picker starts on. */
+	persona: string | null,
+	/**
+	 *  Set when git would carry `charter.local.toml`: every declared profile is refused
+	 *  until it is fixed, and this is the one fix for that state.
+	 */
+	ignore_fix: string | null,
+	/**
+	 *  Whether this plane declares no profiles of its own. The built-ins still start, and
+	 *  the picker says so rather than looking empty or broken.
+	 */
+	declares_none: boolean,
+};
+
+/**  Everything the picker draws, read from the plane when it is opened. */
+export type StartOptions_Serialize = {
+	profiles: ProfileRow_Serialize[],
 	/**
 	 *  Profiles charter read and will not use, by name and reason, so a row that is missing
 	 *  is never merely missing.

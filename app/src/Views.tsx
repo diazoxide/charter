@@ -2,6 +2,7 @@ import { Fragment, Suspense, lazy, useEffect, useMemo, useState, type ReactNode 
 import {
   Brain,
   ChartColumn,
+  Cpu,
   Download,
   FileCode,
   FileText,
@@ -209,6 +210,8 @@ export const OWN_MARKS: Record<string, React.ComponentType<{ className?: string 
   [REPO_INSTRUCTIONS]: FileText,
   [FIRST_TASK]: ListChecks,
   [HARNESS_SETUP_VIEW]: Download,
+  /** A harness's capability card (HP-19, `tabs.harnessCardView`). */
+  harness: Cpu,
   preferences: SlidersHorizontal,
   "piece-files": FolderGit2,
   "piece-file": FileCode,

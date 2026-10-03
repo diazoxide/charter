@@ -151,13 +151,12 @@ pub fn start(
 /// When a run's harness can have the task typed into it, or why not.
 fn cannot_type(profile: &str, harness: Option<Harness>) -> Result<ReadyToType, String> {
     match harness {
+        // What its harness lacks, as its capability card says it (HP-19, ADR 0072 §3).
         Some(harness) => harness.ready_to_type().ok_or_else(|| {
-            format!(
-                "'{profile}' starts {}, which goes quiet while it is still starting, so \
-                 charter has no moment to type the first task into it. Start this chat with \
-                 Claude Code or Codex.",
-                harness.title()
-            )
+            let lacks = charter_core::harness_card::built_in_card(harness)
+                .lacks(charter_core::harness_card::READY_TO_TYPE)
+                .unwrap_or_default();
+            format!("'{profile}' cannot start the first task: {lacks}")
         }),
         None => Err(format!(
             "'{profile}' starts a program charter has not measured, so it cannot tell when \
@@ -312,7 +311,14 @@ mod tests {
 
         let refused = start(&held, None, &project.clone, "work".into(), None, 2, SIZE).unwrap_err();
 
-        assert!(refused.contains("with Claude Code or Codex"), "{refused}");
+        // What it lacks, in its capability card's line and label (HP-19).
+        assert!(
+            refused.contains(
+                "opencode cannot have a prompt typed in for you, because charter cannot tell when \
+                 it has finished starting. See What opencode can do here."
+            ),
+            "{refused}"
+        );
         assert!(held.chats().open_now().is_empty());
         assert!(
             !project

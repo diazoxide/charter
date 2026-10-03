@@ -40,6 +40,7 @@ import {
   type ByHand,
   type PlaneSaving,
   type ChatWorktree,
+  type HarnessGlance,
   type OpenChat,
   type PlaneId,
   type Refused,
@@ -129,6 +130,7 @@ import {
   openView,
   offerView,
   harnessSetupTitle,
+  harnessCardView,
   harnessSetupView,
   repoInstructionsTitle,
   repoInstructionsView,
@@ -194,6 +196,7 @@ import { projectThemeChanged, useProjectThemeKept } from "./projectTheme";
 import { inForce, onDrawn, TINTED_TABS, tintVariables } from "./theme/theme";
 import { hueOf } from "./theme/tint";
 import { handedFromNote, type HandedFrom } from "./handedFrom";
+import { HarnessChip } from "./HarnessCard";
 import {
   ChatsHere,
   isShell,
@@ -3013,6 +3016,18 @@ export const PlaneView = memo(function PlaneView({
     sameList,
   );
 
+  /** Each open chat's harness card, at a glance, by session (HP-19): what its header draws. The
+   *  core's list of open chats carries it, so a chat put back at a launch has it from its
+   *  first frame. */
+  const glances = useMemo(() => {
+    const out: Record<number, HarnessGlance> = {};
+    const open = sidebar
+      ? [...reopened, ...sidebar.workspaces.flatMap((ws) => ws.chats), ...sidebar.unfiled]
+      : reopened;
+    for (const chat of open) if (chat.card) out[chat.session] = chat.card;
+    return out;
+  }, [sidebar, reopened]);
+
   /** The chats working in the focused workspace, which is what the explorer files under the
    *  spots they are working at. The plane's own answer, like everything else about where a
    *  chat is: nothing on the plane records a chat, so the directory it works in is it. */
@@ -4064,6 +4079,7 @@ export const PlaneView = memo(function PlaneView({
                   onPaneDoes={onPaneDoes}
                   name={frontTab.name}
                   handedFrom={handedFrom}
+                  glances={glances}
                   workItems={workItems}
                   byHand={byHand}
                   onByHand={answerByHand}
@@ -4660,6 +4676,8 @@ function PaneFrame({
   plane,
   session,
   from,
+  harness,
+  onOpenCard,
   workItem,
   byHand,
   onByHand,
@@ -4672,6 +4690,10 @@ function PaneFrame({
   session: number;
   /** Where a handed-off chat came from, `↳ from steward 3 · ops`, in the chat's own corner. */
   from?: string;
+  /** The harness the chat runs, at a glance, in the same corner (HP-19): none for a shell. */
+  harness?: HarnessGlance;
+  /** Opens that harness's card tab. */
+  onOpenCard: (glance: HarnessGlance) => void;
   /** The work item this chat works on, `Work item: <key>`, in the same corner (V60). */
   workItem?: string;
   /** A harness started by hand in this shell tab, while its banner is up (ADR 0062). */
@@ -4698,6 +4720,7 @@ function PaneFrame({
           controls are in its top corner, which is where reading order puts them anyway. */}
       <div className="pane-corner at-start">
         <ChatGauge usage={usage} />
+        {harness && <HarnessChip glance={harness} onOpen={() => onOpenCard(harness)} />}
         {from && <span className="pane-from">{from}</span>}
         {workItem && <span className="pane-work-item">{workItemSaid(workItem)}</span>}
         {byHand && <ByHandBanner note={byHand} onAnswer={onByHand} />}
@@ -5026,6 +5049,7 @@ function LayoutPanes({
   onPaneDoes,
   name,
   handedFrom,
+  glances,
   workItems,
   byHand,
   onByHand,
@@ -5051,6 +5075,8 @@ function LayoutPanes({
   name: string;
   /** Where each handed-off chat came from, by session (charter-app#258). */
   handedFrom: Readonly<Record<number, string>>;
+  /** Each chat's harness card, at a glance, by session (HP-19). */
+  glances: Readonly<Record<number, HarnessGlance>>;
   /** The work item each chat works on, by session (V60). */
   workItems: Readonly<Record<number, string>>;
   /** A harness started by hand in a shell tab, by session, for its banner (ADR 0062). */
@@ -5119,6 +5145,8 @@ function LayoutPanes({
         plane={plane}
         session={content.session}
         from={handedFrom[content.session]}
+        harness={glances[content.session]}
+        onOpenCard={(glance) => onOpenView(harnessCardView(glance.name), glance.label)}
         workItem={workItems[content.session]}
         byHand={byHand[content.session]}
         onByHand={(open) => onByHand(content.session, open)}
@@ -5166,6 +5194,7 @@ function LayoutPanes({
               onPaneDoes={onPaneDoes}
               name={name}
               handedFrom={handedFrom}
+              glances={glances}
               workItems={workItems}
               byHand={byHand}
               onByHand={onByHand}

@@ -179,6 +179,8 @@ export function FirstTaskTab({
                         id={`${labelId}-${one.name}`}
                         disabled={!one.ready_to_type}
                         aria-describedby={`${labelId}-${one.name}-says`}
+                        // The capability it lacks, in its harness card's words (HP-19).
+                        title={one.harness?.cannot_type ?? undefined}
                       >
                         <RadioGroup.Indicator className="dot-mark" />
                       </RadioGroup.Item>
@@ -187,7 +189,9 @@ export function FirstTaskTab({
                       </label>
                       <ProfileMeta row={one} id={`${labelId}-${one.name}-says`}>
                         {!one.ready_to_type && (
-                          <span className="what">charter cannot type the task into it</span>
+                          <span className="what">
+                            {one.harness?.cannot_type ?? "charter cannot type the task into it"}
+                          </span>
                         )}
                       </ProfileMeta>
                     </div>

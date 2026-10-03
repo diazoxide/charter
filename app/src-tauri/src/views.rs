@@ -504,6 +504,22 @@ fn built_in(
                 ),
             })
         }
+        // A harness's capability card (HP-19), keyed by the harness's name: read off its
+        // declaration in this project and the adapter charter ships for it.
+        "harness" => Ok(match charter_core::harness_card::named(root, key) {
+            Some(card) => ViewAnswer::Answered {
+                blocks: card.blocks().iter().map(PanelBlock::from).collect(),
+                took_ms: millis(began.elapsed()),
+                overreach: None,
+                changes: None,
+            },
+            None => ViewAnswer::Gone {
+                why: format!(
+                    "This project has no harness called {} any more.",
+                    charter_core::shown::short(key)
+                ),
+            },
+        }),
         other => Ok(ViewAnswer::Gone {
             why: format!("This version of charter has no view called '{other}'."),
         }),
@@ -676,6 +692,54 @@ mod tests {
             .map(|fact| fact.label.as_str())
             .collect();
         assert!(facts.contains(&"read from the forge"), "{facts:?}");
+    }
+
+    #[test]
+    fn a_harness_card_tab_is_answered_off_the_harness_s_declaration() {
+        // HP-19: the card is charter's own view, keyed by the harness's name, and drawn in the
+        // panel vocabulary like the persona view.
+        let plane = tempfile::tempdir().expect("a plane");
+        let ViewAnswer::Answered { blocks, .. } = built_in(
+            plane.path(),
+            &plane.path().join(".charter"),
+            "harness",
+            "opencode",
+        )
+        .expect("an answer") else {
+            panic!("the harness card was not answered");
+        };
+        // Labelled in the first hour's words (ADR 0072 §3).
+        assert!(
+            blocks.iter().any(|block| matches!(block,
+                PanelBlock::Note { text, .. } if text == "What opencode can do here")),
+            "{blocks:?}"
+        );
+        let rows: Vec<&str> = blocks
+            .iter()
+            .filter_map(|block| match block {
+                PanelBlock::List { rows, .. } => Some(rows),
+                _ => None,
+            })
+            .flatten()
+            .map(|row| row.text.as_str())
+            .collect();
+        assert!(
+            rows.contains(&"Can have a prompt typed in for you when it starts"),
+            "{rows:?}"
+        );
+    }
+
+    #[test]
+    fn a_harness_card_for_a_harness_the_project_does_not_have_says_so() {
+        let plane = tempfile::tempdir().expect("a plane");
+        let answer = built_in(
+            plane.path(),
+            &plane.path().join(".charter"),
+            "harness",
+            "gemini",
+        )
+        .expect("an answer");
+        assert!(matches!(answer, ViewAnswer::Gone { .. }), "{answer:?}");
     }
 
     #[test]

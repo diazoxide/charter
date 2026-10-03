@@ -142,6 +142,16 @@ export function harnessSetupTitle(workspace: string): string {
   return `Set up a harness · ${workspace}`;
 }
 
+/**
+ * **A harness's capability card** (HP-19, W10): what one harness can do here, each thing it lacks
+ * said in a line, drawn by the core off the harness's declaration and adapter
+ * (`charter_core::harness_card`). Keyed by the harness's name, so there is one tab per harness,
+ * opened from a chat's header and called what the card is labelled, *What Codex can do here*.
+ */
+export function harnessCardView(harness: string): ViewRef {
+  return { from: null, view: "harness", key: harness };
+}
+
 /** What a workspace's settings tab is called. */
 export function workspaceSettingsTitle(workspace: string): string {
   return `Workspace settings · ${workspace}`;

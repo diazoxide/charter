@@ -1020,6 +1020,29 @@ button.show-more:focus-visible {
   opacity: 0.92;
 }
 
+/* The harness a chat runs, at a glance (HP-19): a button, because it opens the harness's card
+   tab. Drawn like its neighbours in the corner, and never wider than one. */
+.pane-harness {
+  max-width: 16rem;
+  overflow: hidden;
+  padding: 0 0.35rem;
+  font-size: 0.72rem;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-muted);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  opacity: 0.92;
+  cursor: pointer;
+}
+
+.pane-harness:hover,
+.pane-harness:focus-visible {
+  color: var(--text-primary);
+  opacity: 1;
+}
+
 /* **The work item a chat works on** (V60, ADR 0088): `Work item: <key>`, in the same corner and
    in the same quiet box as where a handed-off chat came from, for the same reason. Its own class,
    so the two can part ways without one rule serving both. */

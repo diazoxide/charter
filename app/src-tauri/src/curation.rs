@@ -264,13 +264,14 @@ fn launch_profile(root: &Path) -> Result<String, String> {
 /// One answer for the menu's rows and for the start itself.
 fn when_typed(profile: &str, harness: Option<Harness>) -> Result<ReadyToType, String> {
     match harness {
+        // What its harness lacks, as its capability card says it (HP-19, ADR 0072 §3).
         Some(harness) => harness.ready_to_type().ok_or_else(|| {
+            let lacks = charter_core::harness_card::built_in_card(harness)
+                .lacks(charter_core::harness_card::READY_TO_TYPE)
+                .unwrap_or_default();
             format!(
-                "The default profile '{profile}' runs {}, which says nothing until your first \
-                 prompt and goes quiet while it is still starting, so charter has no moment to \
-                 type a curation prompt into it. Make a Claude Code or Codex profile the \
-                 default to curate from here.",
-                harness.name()
+                "No curation chat can open on the default profile '{profile}': {lacks} Make \
+                 another profile the default to curate from here."
             )
         }),
         None => Err(format!(
@@ -1703,7 +1704,8 @@ mod tests {
 
         let refused = open(&held, "workspace:alpha", "charter/compact", SIZE).unwrap_err();
 
-        assert!(refused.contains("still starting"), "{refused}");
+        // What opencode lacks, in its capability card's line (HP-19).
+        assert!(refused.contains("finished starting"), "{refused}");
         assert!(held.chats().open_now().is_empty());
     }
 
@@ -1788,8 +1790,13 @@ mod tests {
             Ok(ReadyToType::WhenRawAndQuiet)
         );
         let opencode = when_typed("work", Some(Harness::Opencode)).unwrap_err();
+        // What it lacks, in its capability card's line and label (HP-19).
         assert!(
-            opencode.contains("'work'") && opencode.contains("first prompt"),
+            opencode.contains("'work'")
+                && opencode.contains(
+                    "opencode cannot have a prompt typed in for you, because charter cannot tell \
+                     when it has finished starting. See What opencode can do here."
+                ),
             "{opencode}"
         );
         let custom = when_typed("custom", None).unwrap_err();
