@@ -759,17 +759,6 @@ checksum = "6d43a04d8753f35258c91f8ec639f792891f748a1edbd759cf1dcea3382ad83c"
 
 [[package]]
 name = "cfb"
-version = "0.7.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d38f2da7a0a2c4ccf0065be06397cc26a81f4e528be095826eee9d4adbb8c60f"
-dependencies = [
- "byteorder",
- "fnv",
- "uuid",
-]
-
-[[package]]
-name = "cfb"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a347dcabdae9c31b0825fd6a8bed285ec9c2acb89c47827126d52fa4f59cece3"
@@ -894,7 +883,7 @@ dependencies = [
  "charter-core",
  "charter-same-user",
  "chrono",
- "dirs 7.0.0",
+ "dirs",
  "flate2",
  "futures",
  "getrandom 0.4.3",
@@ -1548,15 +1537,6 @@ dependencies = [
  "const-oid",
  "crypto-common 0.2.2",
  "ctutils",
-]
-
-[[package]]
-name = "dirs"
-version = "6.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c3e8aa94d75141228480295a7d0e7feb620b1a5ad9f12bc40be62411e38cce4e"
-dependencies = [
- "dirs-sys",
 ]
 
 [[package]]
@@ -3827,20 +3807,11 @@ dependencies = [
 
 [[package]]
 name = "infer"
-version = "0.19.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a588916bfdfd92e71cacef98a63d9b1f0d74d6599980d11894290e7ddefffcf7"
-dependencies = [
- "cfb 0.7.3",
-]
-
-[[package]]
-name = "infer"
 version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f4200d433cbd5178df7797c9c2e75b348b728e39631cf14520d1e2fc424201f4"
 dependencies = [
- "cfb 0.14.0",
+ "cfb",
 ]
 
 [[package]]
@@ -6701,7 +6672,7 @@ dependencies = [
  "anyhow",
  "bytes",
  "cookie",
- "dirs 7.0.0",
+ "dirs",
  "dunce",
  "embed_plist",
  "getrandom 0.3.4",
@@ -6752,7 +6723,7 @@ checksum = "5b5ae674f48836f5dd2eeaf9e221c095bd3e78a8d0439c77ca93b48740a1b644"
 dependencies = [
  "anyhow",
  "cargo_toml",
- "dirs 7.0.0",
+ "dirs",
  "glob",
  "heck 0.5.0",
  "json-patch",
@@ -6885,9 +6856,9 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-opener"
-version = "2.6.0"
+version = "2.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d4cf2c5723e6fe265a907591d5fae6b8b94edde39ad3876fdf425acf8d71f9b6"
+checksum = "d39404b2572927e0d3ed30a7ca226037f7508d22e79c96ee6ef0d42b6a4b3345"
 dependencies = [
  "dunce",
  "glob",
@@ -6901,15 +6872,15 @@ dependencies = [
  "tauri-plugin",
  "thiserror 2.0.21",
  "url",
- "windows 0.61.3",
+ "windows 0.62.2",
  "zbus",
 ]
 
 [[package]]
 name = "tauri-plugin-single-instance"
-version = "2.5.0"
+version = "2.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8bed24ed0f31939002fad4568e04ba87ba717cd22f85318b867fc427ab88e11b"
+checksum = "91baf4f5db4b008fc2bcada0f7d3a49b45d911f94575ac236f225ed67554f5c0"
 dependencies = [
  "serde",
  "serde_json",
@@ -6917,22 +6888,22 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tracing",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
  "zbus",
 ]
 
 [[package]]
 name = "tauri-plugin-updater"
-version = "2.13.0"
+version = "2.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fae4783480c5d97373b98ae9f2e70158ca992cdf29e04b236a42b1f82b1b3804"
+checksum = "3cb0b2ea3e85ca287990d3859a29cc5cb18024240fd78f62e027fb7963670f18"
 dependencies = [
  "base64 0.22.1",
- "dirs 6.0.0",
+ "dirs",
  "flate2",
  "futures-util",
  "http",
- "infer 0.19.0",
+ "infer",
  "log",
  "minisign-verify",
  "osakit",
@@ -6950,7 +6921,7 @@ dependencies = [
  "time",
  "tokio",
  "url",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
  "zip",
 ]
 
@@ -7100,7 +7071,7 @@ dependencies = [
  "dunce",
  "glob",
  "http",
- "infer 0.22.0",
+ "infer",
  "json-patch",
  "log",
  "memchr",
@@ -7527,7 +7498,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b2b9c52859a94554803ccd4a24b98f74148ebc73b90676d783f3490b1bff9d72"
 dependencies = [
  "crossbeam-channel",
- "dirs 7.0.0",
+ "dirs",
  "libappindicator",
  "muda",
  "objc2",
@@ -8624,7 +8595,7 @@ dependencies = [
  "block2",
  "cookie",
  "crossbeam-channel",
- "dirs 7.0.0",
+ "dirs",
  "dom_query",
  "dpi",
  "dunce",
