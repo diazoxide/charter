@@ -978,6 +978,26 @@ fn a_dangling_link_and_an_unindexed_file_are_named_with_their_repair() {
 }
 
 #[test]
+fn a_personas_unindexed_file_is_named_with_persona_optimize() {
+    // `charter persona optimize` shipped in #455; the hint said "not in this version yet"
+    // until HY-12 (#575).
+    let (_d, root) = plane("schema = 1\n");
+    memory(&root, "personas/steward/memory", "", &["kept.md"]);
+    std::fs::write(
+        root.join("personas/steward/persona.md"),
+        "---\nrole: x\n---\n",
+    )
+    .unwrap();
+    let r = one(&root, "memory indexes");
+    assert_eq!(r.status, Status::Warn);
+    assert_eq!(
+        r.hint,
+        "steward (0 dangling, 1 unindexed)  → charter persona optimize --all --apply  (links \
+         unindexed files)"
+    );
+}
+
+#[test]
 fn a_workspace_name_with_a_newline_in_it_cannot_forge_a_row() {
     // A chat can make a directory under `workspaces/` with any name (#353).
     let (_d, root) = plane("schema = 1\n");

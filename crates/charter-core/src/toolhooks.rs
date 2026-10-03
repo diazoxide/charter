@@ -21,10 +21,11 @@
 //! Bash leak guard, which is ungated, and `$CHARTER_HOME` can put a real vault within reach of
 //! a directory that holds no `charter.toml`.
 //!
-//! # What is not ported, and why
+//! # What the Python charter did here that this leaves out, and why
 //!
 //! - **The trace** (`_trace`): one JSONL row per verdict, nudge and dispatch under
-//!   `.charter/persona-state/trace/`. It changes no verdict and nothing in charter-app reads it.
+//!   `.charter/persona-state/trace/`. It changes no verdict and nothing in charter-app reads it;
+//!   the event log (FD-9, #649) records one structured event per hook call instead.
 //! - **The ask marks** (`_ask_mark_set`, `_ask_approved`): they exist only to write the
 //!   `…-approved` trace row when an asked tool call goes through.
 //! - **The routing ask on `pretooluse-edit`** (`_route_mark_take`): it answered a mark the

@@ -11,9 +11,9 @@
 //! a committed `leak.md -> /outside/secret.md` read, echoed, and used as an oracle for the
 //! rest of the file. This module never opens a memory any other way.
 //!
-//! What it does NOT decide: which workspace and which persona are "active". charter
-//! resolves both through a ladder of pointers and settings this binary has not ported, so
-//! a caller names them, and a scope with no owner named is the caller's refusal to make.
+//! What it does NOT decide: which workspace and which persona are "active". Both are
+//! resolved through the ladders in [`crate::active`], which the caller runs, so a caller names
+//! them here, and a scope with no owner named is the caller's refusal to make.
 
 use std::path::{Path, PathBuf};
 

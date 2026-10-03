@@ -90,7 +90,8 @@ pub const RULE_LINE: &str = "\u{0}charter-rule\u{0}";
 /// **Named in the output, on purpose.** A status line that silently omitted a section would be
 /// the same lie as a `doctor` printing green for a check that did not run: the reader cannot
 /// tell "charter looked and there is nothing" from "charter did not look". So the line says
-/// which surfaces are missing, in the order they will arrive.
+/// which surfaces are missing, in the order they will arrive. Drawing them, or retiring
+/// them, is #997.
 pub const NOT_DRAWN_YET: &str = "not drawn by this build: repos · personas · session";
 
 /// The eight ANSI colour names, in ECMA-48's own order — `instance.FRAME_PANE_COLOURS`.

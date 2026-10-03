@@ -59,15 +59,15 @@ fn index_refusal(root: &Path, mem_dir: &Path) -> Option<String> {
         .or_else(|| fsx::write_refusal(root, &mem_dir.join(INDEX)))
 }
 
-/// Which kind of base a label is, for the command that repairs it — `charter persona
-/// optimize` never touches a workspace, so a hint naming it for one fixes nothing.
-/// The curation command for one kind of base, where this version has one: `workspace
-/// optimize` does, and a persona's is not in this version yet.
+/// The curation command for one kind of base — `charter persona optimize` never touches a
+/// workspace, and `charter workspace optimize` never touches a persona, so a hint naming the
+/// other one fixes nothing. A persona label covers `_shared` too, which `persona optimize
+/// --all` curates beside every persona.
 fn optimize_hint(kind: &str, args: &str) -> String {
     if kind == "workspace" {
         format!("  → charter workspace optimize {args}")
     } else {
-        "  → curating a persona's memory from the CLI is not in this version yet".to_owned()
+        format!("  → charter persona optimize {args}")
     }
 }
 

@@ -673,6 +673,7 @@ impl fmt::Display for NotStarted {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let lead = "this plane runs every chat sandboxed";
         match self {
+            // A compiler for opencode is SD-2, #695.
             Self::NoCompiler(harness) => write!(
                 f,
                 "{lead}, and charter cannot sandbox {} {} chat yet, so it was not started. \

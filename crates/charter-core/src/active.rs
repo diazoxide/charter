@@ -17,7 +17,7 @@
 //! | 2 | [`WorkspaceRung::Environment`] | `$CHARTER_WORKSPACE` |
 //! | 3 | [`WorkspaceRung::Cwd`] | the tree the caller is standing in |
 //! | 4 | [`WorkspaceRung::SessionPointer`] | `.charter/sessions/<sid>.workspace` |
-//! | — | *the frame's launch record* | **not ported — see below** |
+//! | — | *the frame's launch record* | **left out on purpose — see below** |
 //! | 5 | [`WorkspaceRung::TerminalPointer`] | `.charter/terminals/<tid>.workspace` |
 //! | 6 | [`WorkspaceRung::DeclaredDefault`] | `workspaces/.default` |
 //! | 7 | [`WorkspaceRung::PlaneDefault`] | `[workspace] default` in `charter.toml` |

@@ -12,13 +12,14 @@
 //! run says so, WARN and never OK, because a green glyph over "charter did not look" is read
 //! as "charter looked and it is fine" by anyone scanning the column.
 //!
-//! **That rule is also what decided how the unported checks appear.** About half of Python's
-//! rows are about parts this binary does not own yet — the guard and the vaults (M3), the
-//! forges, the tmux frame, the Claude Code plugin. Dropping those rows would be the loudest
-//! possible violation: a doctor that stops reporting a problem reads as the problem being
-//! fixed. So every one of them is still here, under its own name and in its own place, as a
-//! WARN that says it was not checked and why ([`deferred`]). The differential test holds the
-//! list of them, so a row that becomes ported has to say so there.
+//! **That rule is also what decided how the checks this build does not run appear.** About half of
+//! Python's rows were about parts this binary did not own when it was rebuilt — the guard and the
+//! vaults (M3), the forges, the tmux frame, the Claude Code plugin. The ones still not checked are
+//! planned in OB-8 (#994) and, for the forges, FG-2 (#802). Dropping those rows would be the
+//! loudest possible violation: a doctor that stops reporting a problem reads as the problem being
+//! fixed. So every one of them is still here, under its own name and in its own place, as a WARN
+//! that says it was not checked and why ([`deferred`]). The differential test holds the list of
+//! them, so a row that becomes ported has to say so there.
 
 mod changes;
 mod clones;
@@ -102,9 +103,9 @@ pub struct Row {
 }
 
 impl Row {
-    /// Whether this row is one this binary does not run at all — a check that belongs to a
-    /// part not ported yet ([`deferred`]), printed as a WARN so its silence is never read as
-    /// a pass.
+    /// Whether this row is one this binary does not run at all — a check this build does not
+    /// have yet ([`deferred`], planned in #994 and #802), printed as a WARN so its silence is
+    /// never read as a pass.
     ///
     /// **A different claim from a check that ran and could not finish** ([`Row::not_checked`]).
     /// That one is a real warning about this machine: charter tried, and a git timed out or a

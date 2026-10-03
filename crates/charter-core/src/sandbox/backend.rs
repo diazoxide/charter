@@ -15,7 +15,7 @@ pub const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 pub enum Missing {
     /// Programs the backend runs through, by name, on `os`.
     Programs { os: Os, absent: Vec<&'static str> },
-    /// No backend exists for this operating system yet.
+    /// No backend exists for this operating system yet (Windows: M46, #565).
     NoBackend(Os),
 }
 
@@ -45,6 +45,7 @@ impl fmt::Display for Missing {
                 }
                 Ok(())
             }
+            // M46 Windows, #565.
             Self::NoBackend(Os::Windows) => {
                 f.write_str("charter has no sandbox backend on Windows yet")
             }
@@ -61,7 +62,7 @@ impl fmt::Display for Missing {
 /// - **macOS**: Seatbelt, through `sandbox-exec`.
 /// - **Linux**: bubblewrap for the filesystem and `socat` for the network proxy, the two
 ///   programs Claude Code's sandbox runs through.
-/// - **Windows**: no backend yet (ruling V21, 3).
+/// - **Windows**: no backend yet (ruling V21, 3; M46 Windows, #565).
 pub fn missing(os: Os, has: &dyn Fn(&str) -> bool) -> Option<Missing> {
     let needs: &[&'static str] = match os {
         Os::MacOs => &["sandbox-exec"],
