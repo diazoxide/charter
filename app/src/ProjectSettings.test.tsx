@@ -812,6 +812,9 @@ describe("the Plane group (charter-app#300, ADR 0051)", () => {
     expect(within(localPlane).getByLabelText("Mode")).toHaveValue("push");
     expect(within(sharedPlane).getByLabelText("Target branch")).toHaveValue("");
     expect(within(localPlane).getByLabelText("Target branch")).toHaveValue("trunk");
+    expect(within(sharedPlane).getByLabelText("Mode")).toHaveAccessibleDescription(
+      /pr \(push to the save branch and keep one request open\), or pr-merge \(and set that request to auto-merge\)/,
+    );
     expect(within(sharedPlane).getByLabelText("Save branch")).toHaveValue("");
     expect(within(sharedPlane).getByLabelText("Sign commits")).toHaveValue("on");
     expect(within(localPlane).getByLabelText("Sign commits")).toHaveValue("");
@@ -1050,6 +1053,10 @@ describe("the Repos group (charter-app#300, ADR 0051)", () => {
     );
     expect(within(sharedRepos).getByLabelText("web: branch")).toHaveAccessibleDescription(
       /In this project: the repo's default branch, its default\./,
+    );
+    // The glossary's word, which names a pull request and a merge request both — never "PR".
+    expect(within(sharedRepos).getByLabelText("web: branch")).toHaveAccessibleDescription(
+      /The branch a request goes into\./,
     );
     expect(within(localRepos).getByLabelText("api: auto-save")).toHaveAccessibleDescription(
       /In this project: on, from charter\.local\.toml\./,

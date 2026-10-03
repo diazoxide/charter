@@ -276,6 +276,7 @@ describe("the save indicator (charter-app#294)", () => {
       changed: ["a.md", "b.md", "c.md"],
       ahead: 0,
       pr: null,
+      request: "pull request",
       blocked: null,
       branch: "main",
       pushes: true,
@@ -292,7 +293,7 @@ describe("the save indicator (charter-app#294)", () => {
   }
 
   /** A workspace repo at `stage`, with everything not under test left plain. */
-  function repo(name: string, stage: string): RepoSaving {
+  function repo(name: string, stage: string, request = "pull request"): RepoSaving {
     return {
       name,
       mode: "pr",
@@ -303,6 +304,7 @@ describe("the save indicator (charter-app#294)", () => {
       changed: 0,
       ahead: 0,
       pr: null,
+      request,
       blocked: null,
       pushes: true,
       target: "main",
@@ -399,6 +401,36 @@ describe("the save indicator (charter-app#294)", () => {
     expect(within(where).getByText("↓3").closest(".save-indicator-words")).toBeNull();
     expect(where.querySelector(".save-indicator-words")?.textContent).toBe(
       "2 repos waiting on their pull requests",
+    );
+  });
+
+  it("names a merge request on GitLab, and a request when the repos' forges differ", () => {
+    const said = (plane: PlaneSaving, repos: RepoSaving[]) => {
+      render(
+        <TitleBar
+          save={{ saving: plane, repos, busy: false, onOpen: () => {}, onSave: () => {} }}
+        />,
+      );
+      const words = document.querySelector(".save-indicator-words")?.textContent;
+      cleanup();
+      return words;
+    };
+    const quiet = saving({ stage: "saved", changed: [] });
+
+    expect(said(saving({ stage: "pr-open", changed: [], request: "merge request" }), [])).toBe(
+      "Pushed — waiting on its merge request",
+    );
+    expect(said(quiet, [repo("svc", "pr-open", "merge request")])).toBe(
+      "1 repo waiting on its merge request",
+    );
+    expect(
+      said(quiet, [
+        repo("svc", "pr-open", "merge request"),
+        repo("web", "pr-open", "merge request"),
+      ]),
+    ).toBe("2 repos waiting on their merge requests");
+    expect(said(quiet, [repo("svc", "pr-open", "merge request"), repo("web", "pr-open")])).toBe(
+      "2 repos waiting on their requests",
     );
   });
 

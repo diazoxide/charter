@@ -2786,6 +2786,11 @@ export type PlaneSaving = {
 	/**  Commits the remote does not have; `null` when there is nothing to count against. */
 	ahead: number | null,
 	pr: string | null,
+	/**
+	 *  What the forge the plane's origin is on calls a request: `pull request` or `merge
+	 *  request` — `pull request` when charter does not know the forge.
+	 */
+	request: string,
 	blocked: string | null,
 	/**  The target branch: `[plane] branch`, or the one the plane has checked out. */
 	branch: string,
@@ -3152,6 +3157,11 @@ export type RepoSaving = {
 	/**  Commits the remote's copy of the branch lacks; `null` for a branch never pushed. */
 	ahead: number | null,
 	pr: string | null,
+	/**
+	 *  What the forge its origin is on calls a request: `pull request` or `merge request` —
+	 *  `pull request` when charter does not know the forge.
+	 */
+	request: string,
 	blocked: string | null,
 	/**  Whether a save would push. */
 	pushes: boolean,

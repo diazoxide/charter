@@ -114,8 +114,9 @@ pub(super) fn config(root: &Path, plane: &Plane) -> Result<(Repo, String, String
     if save == target {
         return Err(format!(
             "[plane] save_branch is {save}, the target branch itself, and a PR mode never \
-             pushes to the branch its pull request goes into. Name another save_branch, or \
-             remove it for charter/save/<host>-<clone>"
+             pushes to the branch its {} goes into. Name another save_branch, or \
+             remove it for charter/save/<host>-<clone>",
+            repo.forge.kind.request_noun()
         ));
     }
     Ok((repo, save, target))
@@ -252,7 +253,9 @@ pub(super) fn push(root: &Path, plane: &Plane, sign: bool, say: Sink) -> PushRes
         );
     }
     let helper = forge::helper_for(&repo.forge);
-    let cli = repo.forge.kind.cli();
+    let kind = repo.forge.kind;
+    let cli = kind.cli();
+    let noun = kind.request_noun();
 
     let head = resolve(root, "HEAD").unwrap_or_default();
     let settled = settle(root, plane, &target, sign, Some((&https, &helper)), say);
@@ -261,7 +264,7 @@ pub(super) fn push(root: &Path, plane: &Plane, sign: bool, say: Sink) -> PushRes
         Settled::Unknown(why) => {
             say(Say::Warn(format!(
                 "Committed, but not pushed: {why}. Nothing is pushed until charter knows \
-                 whether the last pull request merged; the next save asks again."
+                 whether the last {noun} merged; the next save asks again."
             )));
             return record_push(
                 root,
@@ -304,8 +307,10 @@ pub(super) fn push(root: &Path, plane: &Plane, sign: bool, say: Sink) -> PushRes
         && kept.pushed.as_deref() == Some(head.as_str())
     {
         say(Say::Done(format!(
-            "Pull request #{} already carries all of it: {}",
-            open.number, open.url
+            "{} {} already carries all of it: {}",
+            kind.request_noun_capitalised(),
+            kind.request_ref(open.number),
+            open.url
         )));
         return record_push(
             root,
@@ -327,7 +332,7 @@ pub(super) fn push(root: &Path, plane: &Plane, sign: bool, say: Sink) -> PushRes
         "Pushed {save} via {cli} (HTTPS token — no SSH, no 1Password)."
     )));
 
-    let (title, body) = describe(root, &target, &save);
+    let (title, body) = describe(root, &target, &save, kind);
     let pr::Opened { pr: opened, ours } = match repo.backend().open_or_update(
         &Caller::command(),
         &repo.path,
@@ -339,7 +344,7 @@ pub(super) fn push(root: &Path, plane: &Plane, sign: bool, say: Sink) -> PushRes
         Ok(opened) => opened,
         Err(why) => {
             say(Say::Warn(format!(
-                "Pushed {save}, but the pull request into {target} could not be opened: {why}"
+                "Pushed {save}, but the {noun} into {target} could not be opened: {why}"
             )));
             return record_push(
                 root,
@@ -360,16 +365,17 @@ pub(super) fn push(root: &Path, plane: &Plane, sign: bool, say: Sink) -> PushRes
     });
     kept.write(root);
     say(Say::Done(format!(
-        "Pull request into {target}: {}",
+        "{} into {target}: {}",
+        kind.request_noun_capitalised(),
         opened.url
     )));
     let mut detail = String::new();
     if !ours {
         // A save branch somebody set by hand can carry a PR a person opened: it was left exactly
         // as it was, and nothing more is asked of the forge about it (#299's rule).
-        detail = "the open pull request from the save branch is not charter's, so it was left \
-                  as it was"
-            .into();
+        detail = format!(
+            "the open {noun} from the save branch is not charter's, so it was left as it was"
+        );
         say(Say::Info(format!("  {detail}.")));
     } else if mode == Mode::PrMerge {
         match repo
@@ -381,14 +387,14 @@ pub(super) fn push(root: &Path, plane: &Plane, sign: bool, say: Sink) -> PushRes
             )),
             Ok(AutoMerge::NotQueued(why)) => {
                 say(Say::Info(format!(
-                    "  Auto-merge was not queued — {why}. The pull request stays open for a \
-                     person to merge."
+                    "  Auto-merge was not queued — {why}. The {noun} stays open for a person \
+                     to merge."
                 )));
                 detail = why;
             }
             Err(why) => {
                 say(Say::Warn(format!(
-                    "  Auto-merge could not be requested: {why}. The pull request stays open."
+                    "  Auto-merge could not be requested: {why}. The {noun} stays open."
                 )));
                 detail = why.to_string();
             }
@@ -515,9 +521,9 @@ fn tip_is_in_head(root: &Path, https: &str, helper: &str, save: &str, tip: &str)
     is_ancestor(root, tip, "HEAD")
 }
 
-/// The pull request's title and body: what the save branch carries that the target lacks, in
-/// the commits' own words.
-fn describe(root: &Path, target: &str, save: &str) -> (String, String) {
+/// The request's title and body: what the save branch carries that the target lacks, in the
+/// commits' own words, and the request named as `kind`'s forge names it.
+fn describe(root: &Path, target: &str, save: &str, kind: forge::Kind) -> (String, String) {
     const LISTED: usize = 50;
     let range = format!("refs/remotes/origin/{target}..HEAD");
     let subjects: Vec<String> = git::run(
@@ -542,7 +548,8 @@ fn describe(root: &Path, target: &str, save: &str) -> (String, String) {
     };
     let mut body = format!(
         "Saved by charter on {host}. Every save from this machine pushes to {save} and updates \
-         this pull request.\n"
+         this {}.\n",
+        kind.request_noun()
     );
     if total > subjects.len() {
         body.push_str(&format!("\n- … and {} earlier", total - subjects.len()));
@@ -603,6 +610,9 @@ pub(super) fn settle(
         return Settled::Nothing;
     };
     let number = known.number;
+    let kind = repo.forge.kind;
+    // `pull request #12`, `merge request !12`.
+    let request = format!("{} {}", kind.request_noun(), kind.request_ref(number));
     let head = known.head.clone();
     let opened = Pr {
         number,
@@ -635,8 +645,9 @@ pub(super) fn settle(
         Ok(State::Closed) => {
             return blocked(
                 format!(
-                    "pull request #{number} was closed without merging. This machine's commits \
-                     are still here: save again to open a new pull request"
+                    "{request} was closed without merging. This machine's commits are still \
+                     here: save again to open a new {}",
+                    kind.request_noun()
                 ),
                 true,
                 say,
@@ -645,7 +656,7 @@ pub(super) fn settle(
         Ok(State::Merged { commit }) => commit,
         Err(why) => {
             return Settled::Unknown(format!(
-                "charter could not ask where pull request #{number} stands: {why}"
+                "charter could not ask where {request} stands: {why}"
             ));
         }
     };
@@ -663,7 +674,7 @@ pub(super) fn settle(
         );
         if !fetched.is_ok_and(|run| run.ok()) {
             return Settled::Unknown(format!(
-                "pull request #{number} merged, but {target} could not be fetched to move onto it"
+                "{request} merged, but {target} could not be fetched to move onto it"
             ));
         }
     }
@@ -678,7 +689,7 @@ pub(super) fn settle(
                 {
                     return blocked(
                         format!(
-                            "pull request #{number} merged as {commit}, which is not on \
+                            "{request} merged as {commit}, which is not on \
                              {target} on the remote. Nothing was moved"
                         ),
                         false,
@@ -695,7 +706,7 @@ pub(super) fn settle(
             let more = differ.len().saturating_sub(shown.len());
             return blocked(
                 format!(
-                    "pull request #{number} merged, but what it merged does not match what this \
+                    "{request} merged, but what it merged does not match what this \
                      machine pushed in {}{}. Nothing was moved",
                     shown.join(", "),
                     if more > 0 {
@@ -717,14 +728,14 @@ pub(super) fn settle(
             Ok(run) if run.ok() => {}
             Ok(run) => {
                 return Settled::Waiting(format!(
-                    "pull request #{number} merged, and {target} moves onto the remote's once \
+                    "{request} merged, and {target} moves onto the remote's once \
                      nothing here is in the way: {}",
                     tail(&run)
                 ));
             }
             Err(unavailable) => {
                 return Settled::Waiting(format!(
-                    "pull request #{number} merged, and moving {target} did not finish: \
+                    "{request} merged, and moving {target} did not finish: \
                      {unavailable}"
                 ));
             }
@@ -734,7 +745,7 @@ pub(super) fn settle(
             // Newer commits are replayed onto the remote's branch, which needs a clean tree:
             // the next save commits first, and settles then.
             return Settled::Waiting(format!(
-                "pull request #{number} merged, and {target} moves onto the remote's with the \
+                "{request} merged, and {target} moves onto the remote's with the \
                  next save"
             ));
         }
@@ -759,7 +770,7 @@ pub(super) fn settle(
             };
             return blocked(
                 format!(
-                    "pull request #{number} merged, but the {newer} commit(s) made since would \
+                    "{request} merged, but the {newer} commit(s) made since would \
                      not replay onto {target}: {said}"
                 ),
                 false,
@@ -771,7 +782,9 @@ pub(super) fn settle(
     kept.write(root);
     let _ = std::fs::remove_file(push_record_path(root));
     say(Say::Done(format!(
-        "Pull request #{number} merged — {target} is now the remote's{}.",
+        "{} {} merged — {target} is now the remote's{}.",
+        kind.request_noun_capitalised(),
+        kind.request_ref(number),
         if newer > 0 {
             format!(", with {newer} newer commit(s) on top")
         } else {

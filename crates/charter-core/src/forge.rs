@@ -114,6 +114,27 @@ impl Kind {
         }
     }
 
+    /// [`Kind::request_noun`] as a sentence starts with it: `Pull request`, `Merge request`.
+    pub fn request_noun_capitalised(self) -> &'static str {
+        match self {
+            Kind::GitHub => "Pull request",
+            Kind::GitLab => "Merge request",
+        }
+    }
+
+    /// The request's short name: `PR` on GitHub, `MR` on GitLab.
+    pub fn request_short(self) -> &'static str {
+        match self {
+            Kind::GitHub => "PR",
+            Kind::GitLab => "MR",
+        }
+    }
+
+    /// A request as this forge's own pages name it: `#12` on GitHub, `!12` on GitLab.
+    pub fn request_ref(self, number: u64) -> String {
+        format!("{}{number}", self.change_sigil())
+    }
+
     /// What this forge calls the queue a request lands through: GitHub's merge queue,
     /// GitLab's merge train.
     pub fn queue_noun(self) -> &'static str {
@@ -161,6 +182,17 @@ impl Kind {
 pub struct Forge {
     pub kind: Kind,
     pub host: String,
+}
+
+/// Whose words name a request for `clone`: the forge its origin is on, when that is a host
+/// `plane` declares or a kind's default host. Any other origin, or none, gets GitHub's words —
+/// "pull request", `#12` — which are the words charter used for every forge before #1067, and
+/// which the recorded behaviour keeps.
+pub fn request_words_of(plane: &Path, clone: &Path) -> Kind {
+    let url = git::run(clone, &["remote", "get-url", "origin"], git::READ)
+        .map(|run| run.out.trim().to_string())
+        .unwrap_or_default();
+    resolve_host(&url, plane).map_or(Kind::GitHub, |forge| forge.kind)
 }
 
 /// The sentence a host that is not a hostname is refused with. Python's `NOT_A_HOST`.
@@ -1094,6 +1126,52 @@ mod tests {
         assert_eq!(load_config(none.path()), Ok(toml::Table::new()));
     }
 
+    /// Whose words name a request in a clone whose origin is `origin` (none when `None`), in a
+    /// plane that says `toml`.
+    fn request_words_with(toml: &str, origin: Option<&str>) -> Kind {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("charter.toml"), toml).unwrap();
+        assert!(crate::testgit::run(dir.path(), &["init", "-q", "."]).ok());
+        if let Some(url) = origin {
+            assert!(crate::testgit::run(dir.path(), &["remote", "add", "origin", url]).ok());
+        }
+        request_words_of(dir.path(), dir.path())
+    }
+
+    #[test]
+    fn a_request_is_named_by_the_forge_an_https_origin_is_on() {
+        assert_eq!(
+            request_words_with("", Some("https://gitlab.com/group/sub/repo.git")),
+            Kind::GitLab
+        );
+        assert_eq!(
+            request_words_with("", Some("https://github.com/acme/widget.git")),
+            Kind::GitHub
+        );
+    }
+
+    #[test]
+    fn a_request_on_a_self_managed_gitlab_the_plane_declares_is_a_merge_request() {
+        let declared = "[[forge]]\nkind = \"gitlab\"\nhost = \"git.acme.test\"\n";
+        assert_eq!(
+            request_words_with(declared, Some("git@git.acme.test:group/repo.git")),
+            Kind::GitLab
+        );
+        assert_eq!(
+            request_words_with(declared, Some("https://git.acme.test/group/repo.git")),
+            Kind::GitLab
+        );
+    }
+
+    #[test]
+    fn a_request_on_an_unknown_host_or_with_no_origin_keeps_githubs_words() {
+        assert_eq!(
+            request_words_with("", Some("https://git.acme.test/group/repo.git")),
+            Kind::GitHub
+        );
+        assert_eq!(request_words_with("", None), Kind::GitHub);
+    }
+
     #[test]
     fn a_forge_entry_that_is_not_a_table_costs_only_itself() {
         let dir = tempfile::tempdir().unwrap();
@@ -1120,6 +1198,24 @@ mod tests {
     fn a_change_is_numbered_with_its_forges_own_sigil() {
         assert_eq!(Kind::GitHub.change_sigil(), "#");
         assert_eq!(Kind::GitLab.change_sigil(), "!");
+    }
+
+    #[test]
+    fn a_request_is_named_in_its_forges_own_words() {
+        assert_eq!(
+            (
+                Kind::GitHub.request_noun_capitalised(),
+                Kind::GitHub.request_ref(12)
+            ),
+            ("Pull request", "#12".to_string())
+        );
+        assert_eq!(
+            (
+                Kind::GitLab.request_noun_capitalised(),
+                Kind::GitLab.request_ref(12)
+            ),
+            ("Merge request", "!12".to_string())
+        );
     }
 
     #[test]

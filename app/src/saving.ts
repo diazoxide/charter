@@ -186,6 +186,20 @@ export function repoSavable(repo: RepoSaving): boolean {
   );
 }
 
+/** A request's noun as a heading or a sentence starts with it: `Pull request`, `Merge request`. */
+export function capitalised(noun: string): string {
+  return noun.charAt(0).toUpperCase() + noun.slice(1);
+}
+
+/**
+ * What a set of repos call their requests: their forge's noun when they share one, else the
+ * glossary's own word, `request`, which names a pull request and a merge request both.
+ */
+export function requestOf(repos: readonly RepoSaving[]): string {
+  const nouns = new Set(repos.map((repo) => repo.request));
+  return nouns.size === 1 ? [...nouns][0] : "request";
+}
+
 /** A repo's stage, as its row and the title bar say it. */
 export function repoStageText(repo: RepoSaving): string {
   switch (repo.stage) {
@@ -198,7 +212,7 @@ export function repoStageText(repo: RepoSaving): string {
     case "committed":
       return repo.ahead === null ? "Committed, not pushed" : `${repo.ahead} committed, not pushed`;
     case "pr-open":
-      return "Pushed — waiting on its pull request";
+      return `Pushed — waiting on its ${repo.request}`;
     default:
       return "Saved";
   }
@@ -207,8 +221,8 @@ export function repoStageText(repo: RepoSaving): string {
 /**
  * **Where a repo's Save goes**, said before anyone presses it (ADR 0051, amended 2026-09-25):
  * the steps `reposave::save_as` takes, by mode, including where it stops short. A save always
- * commits every changed file on the branch the clone is on; in a PR mode on the pull
- * request's base or the default branch, that commit is then pushed as a branch of charter's
+ * commits every changed file on the branch the clone is on; in a PR mode on the request's base
+ * or the default branch, that commit is then pushed as a branch of charter's
  * own, never to the branch itself.
  */
 export function repoSaveGoesTo(repo: RepoSaving, workspace: string): string {
@@ -227,13 +241,13 @@ export function repoSaveGoesTo(repo: RepoSaving, workspace: string): string {
     case "pr-merge": {
       if (!repo.pushes) return `Commits on ${on}, then stops: ${noForge}`;
       if (repo.target === null)
-        return `Commits on ${on}, then stops: charter does not know where a pull request goes — set [repos.${repo.name}] branch`;
+        return `Commits on ${on}, then stops: charter does not know where a ${repo.request} goes — set [repos.${repo.name}] branch`;
       const pushed = repo.ownBranch
         ? `pushes that commit as charter/${workspace}/… (never to ${on})`
         : `pushes ${on}`;
       const merge =
         repo.mode === "pr-merge" ? ", and asks it to merge itself once its checks pass" : "";
-      return `Commits on ${on}, ${pushed}, and opens a pull request into ${repo.target}${merge}`;
+      return `Commits on ${on}, ${pushed}, and opens a ${repo.request} into ${repo.target}${merge}`;
     }
     default:
       return `Saved by mode ${repo.mode}`;

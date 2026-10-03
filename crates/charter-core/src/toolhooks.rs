@@ -549,35 +549,40 @@ fn ws_edit_first(hook: &Hook, ws: &str) -> bool {
 
 /// `memory_share_note`: what recording a memory will actually do on this plane — which is
 /// whatever the plane's next save does with it, by `[plane] mode` (ADR 0051). Nothing commits a
-/// memory on its own.
-pub fn memory_share_note(root: &Path) -> &'static str {
+/// memory on its own. A PR mode's request is named as the forge the plane's origin is on names it.
+pub fn memory_share_note(root: &Path) -> String {
     use crate::planesave::Mode;
+    let request = || crate::forge::request_words_of(root, root).request_noun();
     match crate::planesave::Settings::read(root).plane.mode.value {
-        None => {
-            "It stays on THIS MACHINE until the plane is saved — `charter save` commits and \
-             pushes it."
-        }
-        Some(Mode::Off) => {
-            "It stays on THIS MACHINE — this plane's `[plane] mode` is `off`, so charter commits \
-             nothing; commit and push it yourself if the team needs it."
-        }
-        Some(Mode::Commit) => {
-            "It is committed with the plane's next save, but NOT pushed — this plane's `[plane] \
-             mode` is `commit`."
-        }
+        None => "It stays on THIS MACHINE until the plane is saved — `charter save` commits and \
+                 pushes it."
+            .to_owned(),
+        Some(Mode::Off) => "It stays on THIS MACHINE — this plane's `[plane] mode` is `off`, so \
+                            charter commits nothing; commit and push it yourself if the team \
+                            needs it."
+            .to_owned(),
+        Some(Mode::Commit) => "It is committed with the plane's next save, but NOT pushed — this \
+                               plane's `[plane] mode` is `commit`."
+            .to_owned(),
         Some(Mode::Push) => {
-            "It reaches the team with the plane's next save — `charter save` pushes it."
+            "It reaches the team with the plane's next save — `charter save` pushes it.".to_owned()
         }
         Some(Mode::Pr) => {
-            "It reaches the team once a person merges the plane's pull request — this plane's \
-             `[plane] mode` is `pr`, so the next save pushes it to this machine's save branch \
-             and opens or updates that pull request."
+            let request = request();
+            format!(
+                "It reaches the team once a person merges the plane's {request} — this plane's \
+                 `[plane] mode` is `pr`, so the next save pushes it to this machine's save \
+                 branch and opens or updates that {request}."
+            )
         }
         Some(Mode::PrMerge) => {
-            "It reaches the team once the plane's pull request merges by itself — this plane's \
-             `[plane] mode` is `pr-merge`, so the next save pushes it to this machine's save \
-             branch, opens or updates that pull request, and sets it to merge when its checks \
-             pass."
+            let request = request();
+            format!(
+                "It reaches the team once the plane's {request} merges by itself — this plane's \
+                 `[plane] mode` is `pr-merge`, so the next save pushes it to this machine's save \
+                 branch, opens or updates that {request}, and sets it to merge when its checks \
+                 pass."
+            )
         }
     }
 }

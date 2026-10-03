@@ -758,6 +758,29 @@ fn a_memory_commit_pushed_under_another_name_is_named_by_that_name() {
 }
 
 #[test]
+fn a_memory_commit_pushed_past_a_gitlab_main_asks_for_a_merge_request() {
+    let (_d, root) = repo_plane();
+    git(
+        &root,
+        &["remote", "add", "origin", "git@gitlab.com:acme/plane.git"],
+    );
+    std::fs::create_dir_all(root.join(".charter")).unwrap();
+    std::fs::write(
+        root.join(".charter/plane-push.json"),
+        r#"{"outcome": "branched", "branch": "main", "landed": "charter/abc"}"#,
+    )
+    .unwrap();
+    let r = one(&root, "plane root");
+    assert!(
+        r.hint.starts_with(
+            "'main' requires a merge request, so charter pushed charter/abc instead. Open a \
+             merge request for it."
+        ),
+        "{r:?}"
+    );
+}
+
+#[test]
 fn a_push_record_cannot_forge_a_row_of_the_table() {
     let (_d, root) = repo_plane();
     std::fs::create_dir_all(root.join(".charter")).unwrap();

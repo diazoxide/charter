@@ -48,6 +48,11 @@ mod pr_saves {
     /// A plane on `release`, saved in `mode`, whose origin is a bare repository standing in
     /// for a GitHub at `host`.
     fn plane(host: &str, mode: &str) -> Plane {
+        plane_on("github", host, mode)
+    }
+
+    /// [`plane`], on a forge of `kind`.
+    fn plane_on(kind: &str, host: &str, mode: &str) -> Plane {
         let dir = tempfile::tempdir().unwrap();
         let top = std::fs::canonicalize(dir.path()).unwrap();
         let root = top.join("plane");
@@ -55,7 +60,7 @@ mod pr_saves {
         std::fs::write(
             root.join("charter.toml"),
             format!(
-                "[[forge]]\nkind = \"github\"\nhost = \"{host}\"\nowner = \"acme\"\n\n\
+                "[[forge]]\nkind = \"{kind}\"\nhost = \"{host}\"\nowner = \"acme\"\n\n\
                  [plane]\nmode = \"{mode}\"\nbranch = \"release\"\nsave_branch = \"{SAVE}\"\n"
             ),
         )
@@ -969,5 +974,271 @@ mod pr_saves {
         )
         .unwrap();
         assert_ne!(planegit::standing(&other).stage, Stage::Blocked);
+    }
+
+    /// A plane whose origin is on a GitLab: its saves name a merge request as GitLab does,
+    /// `!12`, and a GitHub's saves keep their words (#1067).
+    mod on_gitlab {
+        use super::*;
+
+        const MRS: &str = "projects/acme%2Fplane/merge_requests";
+
+        fn url(plane: &Plane, number: u64) -> String {
+            format!(
+                "https://{}/acme/plane/-/merge_requests/{number}",
+                plane.scene.host
+            )
+        }
+
+        fn body(subjects: &[&str]) -> String {
+            let mut out = format!(
+                "Saved by charter on {}. Every save from this machine pushes to {SAVE} and \
+                 updates this merge request.\n",
+                charter_core::dispatch::host()
+            );
+            for subject in subjects {
+                out.push_str(&format!("\n- {subject}"));
+            }
+            out
+        }
+
+        /// A save of `file` that opens MR `number` from the save branch.
+        fn opened(plane: &Plane, file: &str, number: u64) -> String {
+            plane.scene.glab_api(
+                &format!(
+                    "{MRS}?state=opened&source_branch=charter%2Fsave%2Ftest&target_branch=release&per_page=100"
+                ),
+                0,
+                "[]",
+                "",
+            );
+            let host = plane.scene.host.clone();
+            let created = plane.scene.answers(
+                "glab",
+                &[
+                    "--hostname",
+                    &host,
+                    "api",
+                    "-X",
+                    "POST",
+                    MRS,
+                    "-f",
+                    &format!("source_branch={SAVE}"),
+                    "-f",
+                    "target_branch=release",
+                    "-f",
+                    &format!("title={}", title(&[file])),
+                    "-f",
+                    &format!("description={}", body(&[file])),
+                ],
+                0,
+                &format!(
+                    r#"{{"iid": {number}, "id": 9000, "web_url": "{}"}}"#,
+                    url(plane, number)
+                ),
+                "",
+            );
+            let (code, said) = plane.save(file, file);
+            assert_eq!(code, 0, "{said}");
+            assert!(was_asked(&created), "{said}");
+            said
+        }
+
+        /// MR `number` stands in `state`, as GitLab's record says it.
+        fn stands(plane: &Plane, number: u64, record: &str) -> PathBuf {
+            plane
+                .scene
+                .glab_api(&format!("{MRS}/{number}"), 0, record, "")
+        }
+
+        #[test]
+        fn a_save_opens_a_merge_request_and_says_so_in_gitlabs_words() {
+            charter_core::unsteered!();
+            if !in_child() {
+                return;
+            }
+            let plane = plane_on("gitlab", "mr-words-open.test", "pr");
+
+            let said = opened(&plane, "work.md", 12);
+
+            assert!(
+                said.contains(&format!("Merge request into release: {}", url(&plane, 12))),
+                "{said}"
+            );
+            assert!(!said.to_lowercase().contains("pull request"), "{said}");
+            assert_eq!(plane.standing().stage, Stage::PrOpen);
+        }
+
+        #[test]
+        fn a_merge_request_closed_without_merging_blocks_the_plane_naming_it_bang_12() {
+            charter_core::unsteered!();
+            if !in_child() {
+                return;
+            }
+            let plane = plane_on("gitlab", "mr-words-closed.test", "pr");
+            opened(&plane, "work.md", 12);
+            stands(&plane, 12, r#"{"iid": 12, "state": "closed"}"#);
+
+            planegit::fetch(&plane.root, true).expect("the fetch");
+
+            let blocked = plane.standing().blocked.unwrap_or_default();
+            assert!(
+                blocked.starts_with("merge request !12 was closed without merging"),
+                "{blocked}"
+            );
+            assert!(
+                blocked.ends_with("save again to open a new merge request"),
+                "{blocked}"
+            );
+        }
+
+        #[test]
+        fn a_merged_merge_request_is_named_bang_12_when_the_plane_moves_onto_it() {
+            charter_core::unsteered!();
+            if !in_child() {
+                return;
+            }
+            let plane = plane_on("gitlab", "mr-words-merged.test", "pr");
+            opened(&plane, "work.md", 12);
+            let at = merge(&plane, "squash");
+            stands(
+                &plane,
+                12,
+                &format!(r#"{{"iid": 12, "state": "merged", "squash_commit_sha": "{at}"}}"#),
+            );
+
+            let (code, said) = plane.save_as(None, Trigger::Cli);
+
+            assert_eq!(code, 0, "{said}");
+            assert!(
+                said.contains("Nothing new to commit — asking after the open merge request."),
+                "{said}"
+            );
+            assert!(
+                said.contains("Merge request !12 merged — release is now the remote's."),
+                "{said}"
+            );
+            assert_eq!(plane.standing().stage, Stage::Saved, "{said}");
+        }
+
+        #[test]
+        fn a_merge_request_gitlab_cannot_report_on_is_named_bang_12() {
+            charter_core::unsteered!();
+            if !in_child() {
+                return;
+            }
+            let plane = plane_on("gitlab", "mr-words-unknown.test", "pr");
+            opened(&plane, "one.md", 12);
+            plane
+                .scene
+                .glab_api(&format!("{MRS}/12"), 1, "", "HTTP 502: Bad Gateway");
+
+            let (code, said) = plane.save("two.md", "two.md");
+
+            assert_eq!(code, 0, "{said}");
+            assert!(
+                said.contains("charter could not ask where merge request !12 stands"),
+                "{said}"
+            );
+            assert!(
+                said.contains("whether the last merge request merged"),
+                "{said}"
+            );
+        }
+
+        #[test]
+        fn a_pr_merge_save_gitlab_will_not_queue_leaves_the_merge_request_open() {
+            charter_core::unsteered!();
+            if !in_child() {
+                return;
+            }
+            let plane = plane_on("gitlab", "mr-words-automerge.test", "pr-merge");
+            plane.scene.glab_api(
+                "projects/acme%2Fplane",
+                0,
+                r#"{"squash_option": "default_off"}"#,
+                "",
+            );
+            stands(
+                &plane,
+                12,
+                r#"{"iid": 12, "state": "opened", "head_pipeline": null}"#,
+            );
+
+            let said = opened(&plane, "work.md", 12);
+
+            assert!(
+                said.contains("The merge request stays open for a person to merge."),
+                "{said}"
+            );
+            assert!(!said.to_lowercase().contains("pull request"), "{said}");
+        }
+    }
+
+    /// The same messages on a GitHub keep the words they had before #1067.
+    mod on_github {
+        use super::*;
+
+        #[test]
+        fn a_save_opens_a_pull_request_and_says_so_in_githubs_words() {
+            charter_core::unsteered!();
+            if !in_child() {
+                return;
+            }
+            let plane = plane("pr-words-open.test", "pr");
+
+            let said = plane.opened("work.md", 12);
+
+            assert!(
+                said.contains(&format!("Pull request into release: {}", plane.url(12))),
+                "{said}"
+            );
+        }
+
+        #[test]
+        fn a_pull_request_closed_without_merging_blocks_the_plane_naming_it_hash_12() {
+            charter_core::unsteered!();
+            if !in_child() {
+                return;
+            }
+            let plane = plane("pr-words-closed.test", "pr");
+            plane.opened("work.md", 12);
+            plane.state(12, false);
+
+            planegit::fetch(&plane.root, true).expect("the fetch");
+
+            let blocked = plane.standing().blocked.unwrap_or_default();
+            assert!(
+                blocked.starts_with("pull request #12 was closed without merging"),
+                "{blocked}"
+            );
+            assert!(
+                blocked.ends_with("save again to open a new pull request"),
+                "{blocked}"
+            );
+        }
+
+        #[test]
+        fn a_merged_pull_request_is_named_hash_12_when_the_plane_moves_onto_it() {
+            charter_core::unsteered!();
+            if !in_child() {
+                return;
+            }
+            let plane = plane("pr-words-merged.test", "pr");
+            plane.opened("work.md", 12);
+            let at = merge(&plane, "squash");
+            plane.merged(12, &at);
+
+            let (_, said) = plane.save_as(None, Trigger::Cli);
+
+            assert!(
+                said.contains("Nothing new to commit — asking after the open pull request."),
+                "{said}"
+            );
+            assert!(
+                said.contains("Pull request #12 merged — release is now the remote's."),
+                "{said}"
+            );
+        }
     }
 }

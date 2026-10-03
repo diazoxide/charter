@@ -56,12 +56,22 @@ impl Fixture {
     /// `get-url` returns the SSH URL untouched, charter rewrites it to HTTPS itself (golden
     /// rule 0's own rule), and git maps THAT onto the bare repository. Measured both ways.
     fn with_a_remote(&self) -> PathBuf {
+        self.with_a_remote_on("github.com")
+    }
+
+    /// [`Fixture::with_a_remote`], with `origin` on `host`.
+    fn with_a_remote_on(&self, host: &str) -> PathBuf {
         let bare = self.root.parent().unwrap().join("forge/acme/plane.git");
         std::fs::create_dir_all(&bare).unwrap();
         run(&bare, &["init", "-q", "--bare", "-b", "main", "."]);
         run(
             &self.root,
-            &["remote", "add", "origin", "git@github.com:acme/plane.git"],
+            &[
+                "remote",
+                "add",
+                "origin",
+                &format!("git@{host}:acme/plane.git"),
+            ],
         );
         let base = format!("file://{}/", bare.parent().unwrap().display());
         run(
@@ -69,7 +79,7 @@ impl Fixture {
             &[
                 "config",
                 &format!("url.{base}.insteadOf"),
-                "https://github.com/acme/",
+                &format!("https://{host}/acme/"),
             ],
         );
         bare
@@ -1319,6 +1329,44 @@ fn a_branch_that_requires_a_pull_request_gets_one_rather_than_a_stranded_commit(
     let record = push_record(&fixture.root).expect("a record");
     assert_eq!(record["outcome"], "branched");
     assert_eq!(record["landed"], branch);
+}
+
+/// A save of new work to a `main` the remote on `host` refuses as protected: what it said.
+fn saved_past_a_protected_main(host: &str) -> String {
+    let fixture = Fixture::plane();
+    let bare = fixture.with_a_remote_on(host);
+    std::fs::create_dir_all(bare.join("hooks")).unwrap();
+    stand_in::program(
+        &bare,
+        "hooks/pre-receive",
+        "#!/bin/sh\nwhile read _ _ ref; do\n  case \"$ref\" in refs/heads/main)\n    echo \
+         'remote: error: protected branch hook declined' >&2\n    exit 1;; esac\ndone\nexit 0\n",
+    );
+    std::fs::write(fixture.root.join("work.md"), "work").unwrap();
+    let (code, said) = fixture.just_save();
+    assert_eq!(code, 0, "{said}");
+    said
+}
+
+#[test]
+fn a_protected_main_on_github_asks_for_a_pull_request() {
+    let said = saved_past_a_protected_main("github.com");
+    assert!(
+        said.contains("'main' requires a pull request — pushed charter/"),
+        "{said}"
+    );
+    assert!(said.contains("After the PR merges"), "{said}");
+}
+
+#[test]
+fn a_protected_main_on_gitlab_asks_for_a_merge_request() {
+    let said = saved_past_a_protected_main("gitlab.com");
+    assert!(
+        said.contains("'main' requires a merge request — pushed charter/"),
+        "{said}"
+    );
+    assert!(said.contains("After the MR merges"), "{said}");
+    assert!(!said.contains("pull request"), "{said}");
 }
 
 #[test]

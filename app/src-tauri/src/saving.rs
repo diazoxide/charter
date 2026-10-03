@@ -47,6 +47,9 @@ pub struct PlaneSaving {
     /// Commits the remote does not have; `null` when there is nothing to count against.
     pub ahead: Option<u32>,
     pub pr: Option<String>,
+    /// What the forge the plane's origin is on calls a request: `pull request` or `merge
+    /// request` — `pull request` when charter does not know the forge.
+    pub request: String,
     pub blocked: Option<String>,
     /// The target branch: `[plane] branch`, or the one the plane has checked out.
     pub branch: String,
@@ -183,6 +186,9 @@ pub fn saving_of(root: &Path) -> PlaneSaving {
         changed: standing.changed,
         ahead: standing.ahead,
         pr: standing.pr,
+        request: charter_core::forge::request_words_of(root, root)
+            .request_noun()
+            .to_owned(),
         blocked: standing.blocked,
         branch: standing.branch,
         pushes: standing.pushes,
@@ -250,6 +256,9 @@ pub struct RepoSaving {
     /// Commits the remote's copy of the branch lacks; `null` for a branch never pushed.
     pub ahead: Option<u32>,
     pub pr: Option<String>,
+    /// What the forge its origin is on calls a request: `pull request` or `merge request` —
+    /// `pull request` when charter does not know the forge.
+    pub request: String,
     pub blocked: Option<String>,
     /// Whether a save would push.
     pub pushes: bool,
@@ -346,6 +355,9 @@ pub fn repos_saving(root: &Path, workspace: &str) -> Result<Vec<RepoSaving>, Str
                 changed: standing.changed,
                 ahead: standing.ahead,
                 pr: standing.pr,
+                request: charter_core::forge::request_words_of(root, &repo.path)
+                    .request_noun()
+                    .to_owned(),
                 blocked: standing.blocked,
                 pushes: standing.pushes,
             }
@@ -619,6 +631,29 @@ mod tests {
         assert_eq!(
             (row.target.as_deref(), row.own_branch),
             (Some("main"), false)
+        );
+    }
+
+    #[test]
+    fn a_project_and_a_repo_whose_origin_is_on_gitlab_name_their_request_a_merge_request() {
+        let (dir, clone) =
+            plane_with_a_repo("[plane]\nmode = \"pr\"\n\n[repos.widget]\nmode = \"pr\"\n");
+        assert_eq!(saving_of(dir.path()).request, "pull request");
+        assert_eq!(
+            repos_saving(dir.path(), "alpha").unwrap()[0].request,
+            "pull request"
+        );
+
+        for at in [dir.path(), clone.as_path()] {
+            git(
+                at,
+                &["remote", "add", "origin", "git@gitlab.com:acme/widget.git"],
+            );
+        }
+        assert_eq!(saving_of(dir.path()).request, "merge request");
+        assert_eq!(
+            repos_saving(dir.path(), "alpha").unwrap()[0].request,
+            "merge request"
         );
     }
 

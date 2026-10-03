@@ -494,6 +494,32 @@ fn a_memory_commit_never_pushed_is_red_and_one_awaiting_a_pull_request_is_not() 
 }
 
 #[test]
+fn a_memory_commit_on_a_gitlab_plane_is_awaiting_a_merge_request() {
+    let (_held, root) = plane(HEALTHY);
+    repo(&root);
+    git(
+        &root,
+        &["remote", "add", "origin", "git@gitlab.com:acme/plane.git"],
+    );
+    push_record(
+        &root,
+        serde_json::json!({"outcome": "branched", "landed": "charter/1a2b3c4d", "branch": "main"}),
+    );
+    let got = reading(&root);
+    assert_eq!(
+        got.alerts[0].line(&Look::default()),
+        format!(
+            "{W}⚠\x1b[0m \x1b[2mplane root\x1b[0m plane\x1b[2m · \x1b[0m{W}memory awaiting a merge \
+             request\x1b[0m{ROOT_REMEDY}"
+        )
+    );
+    assert_eq!(
+        got.alerts[0].shown().detail,
+        "plane · memory awaiting a merge request"
+    );
+}
+
+#[test]
 fn every_finding_shares_one_row_in_charters_order() {
     let (_held, root) = plane(HEALTHY);
     repo(&root);

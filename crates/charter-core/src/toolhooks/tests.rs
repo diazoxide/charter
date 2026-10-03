@@ -836,3 +836,25 @@ fn what_a_memory_will_do_follows_the_planes_mode_and_never_promises_a_push_nobod
          opens or updates that pull request, and sets it to merge when its checks pass."
     );
 }
+
+#[test]
+fn on_a_gitlab_plane_a_memory_waits_on_the_planes_merge_request() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("charter.toml"),
+        "[plane]\nmode = \"pr-merge\"\n",
+    )
+    .unwrap();
+    for args in [
+        &["init", "-q", "."][..],
+        &["remote", "add", "origin", "git@gitlab.com:acme/plane.git"],
+    ] {
+        assert!(crate::testgit::run(dir.path(), args).ok(), "git {args:?}");
+    }
+    assert_eq!(
+        memory_share_note(dir.path()),
+        "It reaches the team once the plane's merge request merges by itself — this plane's \
+         `[plane] mode` is `pr-merge`, so the next save pushes it to this machine's save branch, \
+         opens or updates that merge request, and sets it to merge when its checks pass."
+    );
+}

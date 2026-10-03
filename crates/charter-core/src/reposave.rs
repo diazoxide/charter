@@ -422,6 +422,7 @@ fn commit_push(
     let forge = crate::gitpolicy::forge_for(clone, request.plane)
         .unwrap_or_else(|| Forge::default_of(forge::DEFAULT_KIND));
     let helper = forge::helper_for(&forge);
+    let noun = forge.kind.request_noun();
 
     // Where the commit goes: the branch it is on — or, in a PR mode on the branch a PR would
     // go into, a branch of charter's own.
@@ -429,8 +430,8 @@ fn commit_push(
         let default = default_branch(request.plane, request.name, clone);
         let Some(base) = repo.branch.value.clone().or_else(|| default.clone()) else {
             let why = format!(
-                "charter does not know {}'s default branch, so it cannot say where a pull \
-                 request goes. Set [repos.{}] branch",
+                "charter does not know {}'s default branch, so it cannot say where a {noun} \
+                 goes. Set [repos.{}] branch",
                 request.name, request.name
             );
             say(Say::Fail(format!("Not pushed: {why}.")));
@@ -491,13 +492,13 @@ fn commit_push(
                 // Already a PR mode, on a branch that is neither the default nor the base: the
                 // branch itself is protected, so saves go through a PR into it instead.
                 format!(
-                    "Set [repos.{}] branch = \"{remote_branch}\" to save it through a pull \
-                     request into it, or work on another branch",
+                    "Set [repos.{}] branch = \"{remote_branch}\" to save it through a {noun} \
+                     into it, or work on another branch",
                     request.name
                 )
             } else {
                 format!(
-                    "Set [repos.{}] mode = \"pr\" to save it through a pull request",
+                    "Set [repos.{}] mode = \"pr\" to save it through a {noun}",
                     request.name
                 )
             };
@@ -548,7 +549,7 @@ fn commit_push(
     let repo_on_forge = match pr::Repo::of_clone(request.plane, clone) {
         Ok(found) => found,
         Err(why) => {
-            say(Say::Fail(format!("Pushed, but no pull request: {why}.")));
+            say(Say::Fail(format!("Pushed, but no {noun}: {why}.")));
             attempt.outcome = "blocked";
             attempt.detail = why;
             return 1;
@@ -575,7 +576,7 @@ fn commit_push(
         Ok(opened) => opened,
         Err(why) => {
             say(Say::Fail(format!(
-                "Pushed {remote_branch}, but the pull request into {base} was not opened: {why}"
+                "Pushed {remote_branch}, but the {noun} into {base} was not opened: {why}"
             )));
             attempt.detail = why.to_string();
             return 1;
@@ -587,9 +588,10 @@ fn commit_push(
         // Somebody's own PR from this branch: its title, its body and whether it merges are
         // theirs. The push has already reached it, which is what a save of their branch is.
         let said = format!(
-            "{remote_branch} already has a pull request charter did not open, #{}: {} — \
+            "{remote_branch} already has a {noun} charter did not open, {}: {} — \
              charter left its title, description and merging alone",
-            opened.pr.number, opened.pr.url
+            forge.kind.request_ref(opened.pr.number),
+            opened.pr.url
         );
         say(Say::Info(said.clone()));
         attempt.detail = said;
@@ -597,8 +599,10 @@ fn commit_push(
     }
     let opened = opened.pr;
     say(Say::Done(format!(
-        "Pull request #{} from {remote_branch} into {base}: {}",
-        opened.number, opened.url
+        "{} {} from {remote_branch} into {base}: {}",
+        forge.kind.request_noun_capitalised(),
+        forge.kind.request_ref(opened.number),
+        opened.url
     )));
     if mode == Mode::PrMerge {
         match repo_on_forge.backend().request_auto_merge(
@@ -608,19 +612,22 @@ fn commit_push(
             &head_sha,
         ) {
             Ok(pr::AutoMerge::Queued) => say(Say::Done(format!(
-                "#{} is set to merge once its checks pass.",
-                opened.number
+                "{} is set to merge once its checks pass.",
+                forge.kind.request_ref(opened.number)
             ))),
             Ok(pr::AutoMerge::NotQueued(why)) => {
                 let said = format!(
-                    "#{} is not set to auto-merge — {why}. It stays open for a person to merge.",
-                    opened.number
+                    "{} is not set to auto-merge — {why}. It stays open for a person to merge.",
+                    forge.kind.request_ref(opened.number)
                 );
                 say(Say::Warn(said.clone()));
                 attempt.detail = said;
             }
             Err(why) => {
-                let said = format!("#{} is not set to auto-merge: {why}", opened.number);
+                let said = format!(
+                    "{} is not set to auto-merge: {why}",
+                    forge.kind.request_ref(opened.number)
+                );
                 say(Say::Warn(said.clone()));
                 attempt.detail = said;
             }
