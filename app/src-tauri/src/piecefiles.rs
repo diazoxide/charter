@@ -10,7 +10,7 @@
 use std::path::Path;
 
 use base64::Engine as _;
-use charter_core::files::{self, Branch, Entry, Kind, Opened};
+use charter_core::files::{self, Branch, Entry, Kind, Mark, Opened};
 use charter_core::youreditor::{self, Editor, Launch};
 
 use crate::planes::{PlaneId, Planes};
@@ -126,6 +126,117 @@ pub async fn branch_tree(
     })
     .await
     .map_err(|err| format!("reading the folder did not finish: {err}"))?
+}
+
+/// What a branch did to one path (FM-4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, specta::Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum ChangeMark {
+    /// Its content or its kind changed.
+    Changed,
+    /// It is new against the branch it was cut from.
+    Added,
+    /// It is gone.
+    Deleted,
+    /// It moved here from another path.
+    Renamed,
+}
+
+impl From<Mark> for ChangeMark {
+    fn from(mark: Mark) -> Self {
+        match mark {
+            Mark::Changed => Self::Changed,
+            Mark::Added => Self::Added,
+            Mark::Deleted => Self::Deleted,
+            Mark::Renamed => Self::Renamed,
+        }
+    }
+}
+
+/// One path a branch changed.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct FileChange {
+    /// Its path relative to the branch's folder.
+    pub path: String,
+    pub mark: ChangeMark,
+    /// Where a renamed file came from: a name to show, never a path to open.
+    pub from: Option<String>,
+    /// Whether it is not committed yet.
+    pub uncommitted: bool,
+}
+
+/// One folder holding changes: the mark they share (`changed` when they differ) and how many.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct FolderChanges {
+    /// Its path relative to the branch's folder; `""` is the branch's own.
+    pub folder: String,
+    pub mark: ChangeMark,
+    pub count: u32,
+}
+
+/// What a branch changed against the branch it was cut from, committed or not.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct BranchStatus {
+    /// Sorted by path, at most 10,000.
+    pub changes: Vec<FileChange>,
+    /// Every folder holding a change, sorted by path.
+    pub folders: Vec<FolderChanges>,
+    /// How many changes past those are not listed.
+    pub more: u32,
+    /// The branch the changes are counted against; `null` when against the last commit.
+    pub base: Option<String>,
+}
+
+/// What a branch changed against the branch it was cut from, committed or not, file by file and
+/// rolled up onto its folders: the explorer's markers and its "Changed only" (FM-4).
+// Read by gitoxide in the core's bounded reader, a short-lived child of this binary killed past
+// its deadline and memory cap; no git process reads the branch's config for this (D-88f,
+// D-88h). On a blocking thread and never the one that draws (SC-2). Not a doc comment, because
+// the generated bindings carry those.
+#[tauri::command]
+#[specta::specta]
+pub async fn branch_status(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    workspace: String,
+    repo: String,
+    piece: Option<String>,
+) -> Result<BranchStatus, String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || {
+        status_of(&root, branch(&workspace, &repo, &piece))
+    })
+    .await
+    .map_err(|err| format!("reading what the branch changed did not finish: {err}"))?
+}
+
+fn status_of(plane: &Path, branch: Branch<'_>) -> Result<BranchStatus, String> {
+    let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+    files::status(&crate::reader(), plane, branch)
+        .map(|status| BranchStatus {
+            changes: status
+                .changes
+                .into_iter()
+                .map(|one| FileChange {
+                    path: one.path,
+                    mark: one.mark.into(),
+                    from: one.from,
+                    uncommitted: one.uncommitted,
+                })
+                .collect(),
+            folders: status
+                .folders
+                .into_iter()
+                .map(|one| FolderChanges {
+                    folder: one.folder,
+                    mark: one.mark.into(),
+                    count: count(one.count),
+                })
+                .collect(),
+            more: count(status.more),
+            base: status.base,
+        })
+        .map_err(|refused| refused.to_string())
 }
 
 /// The branch the window named: a piece of a repo, or the repo's own folder. Shared with
@@ -382,6 +493,33 @@ mod tests {
             tree_of(&root, PIECE, ".."),
             Err("'..' is not a path inside the branch's folder".to_string())
         );
+    }
+
+    #[test]
+    fn what_a_branch_changed_crosses_with_each_files_mark_and_its_folders() {
+        let (_dir, root, piece) = plane();
+        std::fs::create_dir_all(piece.join("src")).unwrap();
+        std::fs::write(piece.join("src/lib.rs"), "\n").unwrap();
+
+        let status = status_of(&root, PIECE).unwrap();
+
+        assert_eq!(
+            status.changes,
+            [FileChange {
+                path: "src/lib.rs".to_string(),
+                mark: ChangeMark::Added,
+                from: None,
+                uncommitted: true,
+            }]
+        );
+        assert!(
+            status
+                .folders
+                .iter()
+                .any(|one| one.folder == "src" && one.mark == ChangeMark::Added && one.count == 1),
+            "{status:?}"
+        );
+        assert_eq!(status.base.as_deref(), Some("main"));
     }
 
     #[test]

@@ -27,6 +27,15 @@ use crate::youreditor::{self, Editor, Launch, NotLaunched};
 
 mod find;
 pub use find::{Finder, Found, Hit, Named, Place, branches, find};
+// What a branch changed (FM-4): its own file, so the calls other tickets add here stay apart.
+mod status;
+pub use status::{Change, MARKED, Mark, Rolled, Status};
+// Where to listen for those changes (FM-4).
+mod watch;
+pub use watch::{ASKED, KNOWN, Root, root};
+// Both read in a bounded child of charter's own binary (FM-4, D-88h).
+mod reader;
+pub use reader::{Answer, Ask, GRACE, MEMORY, OUTPUT, READ_ARG, Reader, serve_if_asked, status};
 
 /// The largest file the preview draws, in bytes: 2 MiB (V86 F4, FM-2).
 ///
@@ -172,6 +181,9 @@ pub enum Refused {
     Editor(#[from] NotLaunched),
     #[error("charter could not read '{what}': {why}")]
     Unreadable { what: String, why: String },
+    /// A read of the branch, in the bounded reader, that failed: its sentence.
+    #[error("{0}")]
+    Read(String),
 }
 
 /// The branch's files: every file git tracks, and every one it does not track and does not

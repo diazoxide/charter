@@ -51,6 +51,17 @@ serde = { workspace = true, features = ["derive"] }
 # `f64` at PARSE time — the digest would then be taken over a number the file never held.
 serde_json = { workspace = true, features = ["preserve_order", "arbitrary_precision"] }
 sha2 = "0.11"
+# A branch's changes, read in-process (FM-4, D-88f): the explorer reads them by itself after
+# every write an agent makes, so no git process may start in a repository whose config the agent
+# can write. gitoxide reads the index, the working tree and the trees with no program run:
+# `files::status` drops every `filter` and `diff` section from the config it read, and gitoxide
+# has no fsmonitor, hooks or lazy fetch. MIT OR Apache-2.0. No default features: no network, no
+# credential helpers, no worktree mutation.
+gix = { version = "0.88", default-features = false, features = ["sha1", "status", "revision", "blob-diff", "excludes", "dirwalk", "index"] }
+# The bounded reader's memory cap (FM-4, D-88h): the child reads its own resident memory and
+# stops past the cap. Portable where `setrlimit` is not (macOS refuses an address-space limit
+# below what a process has already mapped). MIT OR Apache-2.0.
+memory-stats = "1"
 # How many cells a character takes, measured as `alacritty_terminal` measures it: the engine
 # needs it to repair what inserting a character does (`engine/pane_rules.rs`). Already in this
 # workspace's lockfile through `alacritty_terminal`, so it adds no crate to the tree.

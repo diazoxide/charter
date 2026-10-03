@@ -319,6 +319,110 @@ describe("the explorer", () => {
     await fileRow("fix-login", "notes/second.md", 60_000);
   });
 
+  /**
+   * **What a branch changed, marked as an agent writes** (FM-4, #1107), against the real core:
+   * `branch_status` runs git in the fixture branch, and the folder watch hears the write.
+   */
+  it("marks a file an agent adds or changes without a refresh", async () => {
+    await onAlpha();
+    const plane = (await ask<string[]>("open_planes"))[0];
+    const branch = join(plane, "workspaces", "alpha", ".worktrees", "svc", "fix-login");
+    const files = await $('[data-testid="files-svc-fix-login"] .file-node');
+    await files.waitForExist({ timeout: 20_000 });
+    if ((await files.getAttribute("aria-expanded")) !== "true") await files.click();
+    await explorerRow("fix-login", "README.md");
+    const readme = readFileSync(join(branch, "README.md"), "utf8");
+
+    try {
+      writeFileSync(join(branch, "agent-marked.md"), "written by an agent\n");
+      writeFileSync(join(branch, "README.md"), `${readme}changed by an agent\n`);
+
+      await marked("fix-login", "agent-marked.md", "added");
+      await marked("fix-login", "README.md", "changed");
+    } finally {
+      // One app process serves the whole run: the branch is left as it was found.
+      writeFileSync(join(branch, "README.md"), readme);
+      rmSync(join(branch, "agent-marked.md"), { force: true });
+    }
+    await $(inExplorer('li[data-mark] > [data-row="file:svc/fix-login:README.md"]')).waitForExist({
+      timeout: 60_000,
+      reverse: true,
+      timeoutMsg: "README.md is still marked after the agent put it back",
+    });
+  });
+
+  it("marks an agent's first write into a folder nobody opened", async () => {
+    await onAlpha();
+    const plane = (await ask<string[]>("open_planes"))[0];
+    const branch = join(plane, "workspaces", "alpha", ".worktrees", "svc", "fix-login");
+    const files = await $('[data-testid="files-svc-fix-login"] .file-node');
+    await files.waitForExist({ timeout: 20_000 });
+    if ((await files.getAttribute("aria-expanded")) !== "true") await files.click();
+    // `.claude` holds a file git tracks, is closed, and the branch has changed nothing in it.
+    const folder = await explorerRow("fix-login", ".claude");
+    await expect(folder).toHaveAttribute("aria-expanded", "false");
+    await $(inExplorer('li[data-mark] > [data-row="file:svc/fix-login:.claude"]')).waitForExist({
+      timeout: 20_000,
+      reverse: true,
+      timeoutMsg: ".claude is marked before anything was written in it",
+    });
+
+    try {
+      writeFileSync(join(branch, ".claude", "agent-first.md"), "the agent's first write here\n");
+
+      await marked("fix-login", ".claude", "added");
+    } finally {
+      rmSync(join(branch, ".claude", "agent-first.md"), { force: true });
+    }
+  });
+
+  it("collapses to what the branch changed, and filters the tree by name until Esc", async () => {
+    await onAlpha();
+    const plane = (await ask<string[]>("open_planes"))[0];
+    const branch = join(plane, "workspaces", "alpha", ".worktrees", "svc", "fix-login");
+    mkdirSync(join(branch, "changed-dir"), { recursive: true });
+    writeFileSync(join(branch, "changed-dir", "deep.md"), "changed\n");
+    const files = await $('[data-testid="files-svc-fix-login"] .file-node');
+    await files.waitForExist({ timeout: 20_000 });
+    if ((await files.getAttribute("aria-expanded")) !== "true") await files.click();
+    await explorerRow("fix-login", "README.md");
+    // By role and name: a toggle button, and the search box beside the tree.
+    const changedOnly = await $("aria/Changed only");
+    await expect(changedOnly).toHaveAttribute("aria-pressed", "false");
+
+    try {
+      await changedOnly.click();
+
+      // Every folder of it open, with nothing clicked; and what the branch did not change gone.
+      await explorerRow("fix-login", "changed-dir/deep.md", 60_000);
+      await $(inExplorer('[data-row="file:svc/fix-login:README.md"]')).waitForExist({
+        timeout: 20_000,
+        reverse: true,
+        timeoutMsg: "Changed only still draws README.md, which the branch did not change",
+      });
+      await changedOnly.click();
+      await explorerRow("fix-login", "README.md");
+
+      const filter = await $("aria/Filter files");
+      await expect(filter).toHaveAttribute("type", "search");
+      await filter.setValue("readme");
+      await $(inExplorer('[data-row="file:svc/fix-login:changed-dir"]')).waitForExist({
+        timeout: 20_000,
+        reverse: true,
+        timeoutMsg: "the filter still draws a folder whose name and rows do not match",
+      });
+      await expect(await explorerRow("fix-login", "README.md")).toBeExisting();
+
+      await browser.keys(["Escape"]);
+
+      await expect(filter).toHaveValue("");
+      await explorerRow("fix-login", "changed-dir");
+    } finally {
+      if ((await changedOnly.getAttribute("aria-pressed")) === "true") await changedOnly.click();
+      rmSync(join(branch, "changed-dir"), { recursive: true, force: true });
+    }
+  });
+
   it("expands a repo into the repo's own files", async () => {
     await onAlpha();
     const files = await $('[data-testid="files-tool"] .file-node');
@@ -679,6 +783,40 @@ async function fileRow(
     timeoutMsg: `the explorer never drew ${path} under ${piece ?? repo}`,
   });
   return row;
+}
+
+/**
+ * `selector` inside the explorer. The file tab (FM-2) draws a branch's tree with the same row ids,
+ * and a tab opened by an earlier spec is still there: a row the explorer stopped drawing can still
+ * be in the file tab.
+ */
+function inExplorer(selector: string): string {
+  return `[data-testid="explorer"] ${selector}`;
+}
+
+/** A file's row in a branch's folder in the explorer, once it is drawn there. */
+async function explorerRow(
+  piece: string,
+  path: string,
+  timeout = 20_000,
+): Promise<WebdriverIO.Element> {
+  const row = await $(inExplorer(`[data-row="file:svc/${piece}:${path}"]`)).getElement();
+  await row.waitForExist({
+    timeout,
+    timeoutMsg: `the explorer never drew ${path} under ${piece}`,
+  });
+  return row;
+}
+
+/** Waits until a file's row in a branch's folder in the explorer carries `mark`. */
+async function marked(piece: string, path: string, mark: string): Promise<void> {
+  await $(
+    inExplorer(`li[data-mark="${mark}"] > [data-row="file:svc/${piece}:${path}"]`),
+  ).waitForExist({
+    // FSEvents gives no bound on when it delivers on a busy Mac (#577), so the wait is long.
+    timeout: 60_000,
+    timeoutMsg: `the explorer never marked ${path} as ${mark}`,
+  });
 }
 
 /** The chats on the strip, which is the focused workspace's and no other's. */
