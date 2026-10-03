@@ -566,19 +566,59 @@ fn no_plane_is_said_out_loud_rather_than_reported_green() {
 // ---- version lock ---------------------------------------------------------------------------
 
 #[test]
-fn a_plane_that_pins_nothing_is_fine_and_one_that_pins_is_not_called_in_sync() {
+fn a_plane_that_pins_nothing_is_fine_and_a_malformed_section_is_not_checked() {
     let (_d, root) = plane("schema = 1\n");
     assert_eq!(one(&root, "version lock").detail, "not pinned");
-    let (_d, root) = plane("[charter]\nversion = \"0.62.1\"\n");
-    let r = one(&root, "version lock");
-    assert_eq!(r.status, Status::Warn);
-    assert!(r.detail.starts_with("not checked (pinned 0.62.1;"), "{r:?}");
     let (_d, root) = plane("charter = \"0.62.1\"\n");
     let r = one(&root, "version lock");
     assert_eq!(
         r.detail,
         "not checked ('str' object has no attribute 'get')"
     );
+}
+
+// The row asks `adopt::pin_verdict` (ADR 0030's follow-up, ADR 0045): the same four answers
+// `charter version` gives, in a row.
+
+fn pinned(version: &str) -> Row {
+    let (_d, root) = plane(&format!("[charter]\nversion = \"{version}\"\n"));
+    one(&root, "version lock")
+}
+
+#[test]
+fn a_pin_this_charter_meets_is_fine() {
+    let app = crate::adopt::app_version();
+    let r = pinned(app);
+    assert_eq!(r.status, Status::Ok, "{r:?}");
+    assert_eq!(r.detail, format!("pinned {app}, which this charter is"));
+}
+
+#[test]
+fn a_pin_on_the_python_line_is_not_drift() {
+    let r = pinned("0.50.0");
+    assert_eq!(r.status, Status::Ok, "{r:?}");
+    assert_eq!(
+        r.detail,
+        "pinned 0.50.0, a release of the Python charter (charter-cp): not drift, nothing to \
+         compare"
+    );
+}
+
+#[test]
+fn a_pin_this_charter_does_not_meet_is_drift() {
+    let app = crate::adopt::app_version();
+    for pin in ["9.0.0", "not-a-version"] {
+        let r = pinned(pin);
+        assert_eq!(r.status, Status::Warn, "{r:?}");
+        assert_eq!(
+            r.detail,
+            format!("drift: pinned {pin}, and this charter is {app}")
+        );
+        assert_eq!(
+            r.hint,
+            "Run: charter version  (says how to conform the plane or the app)"
+        );
+    }
 }
 
 // ---- plane root and index lock ----------------------------------------------------------------

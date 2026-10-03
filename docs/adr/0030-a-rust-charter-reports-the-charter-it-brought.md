@@ -108,3 +108,8 @@ matches the pin is not ported to this charter yet"*. It can now be ported, again
 Python's `doctor` in `tests/differential/doctor_scenarios.py`, and moving it is a change to
 `doctor`'s output rather than to this decision. It is deliberately not in the same commit as
 the decision it depends on.
+
+**Done, #573.** The row now asks `adopt::pin_verdict` (ADR 0045 replaced `shipped_version()`
+with the app's own version, and the Python differential is gone): a pin this charter meets and
+a pin on the Python charter's line are OK, and drift is a warning that sends the reader to
+`charter version`.
