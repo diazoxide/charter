@@ -138,7 +138,9 @@ fn whether_a_harness_opens_sandboxed_comes_from_the_adapter_charter_ships() {
     for card in &cards {
         let compiled = Harness::of_kind(&card.name)
             .filter(|_| card.origin == Origin::BuiltIn)
-            .is_some_and(|harness| crate::sandbox::compiler(harness).is_some());
+            .is_some_and(|harness| {
+                crate::sandbox::never_on(harness, crate::sandbox::Os::this()).is_none()
+            });
         assert_eq!(
             has(card, SANDBOX),
             compiled,
@@ -147,6 +149,12 @@ fn whether_a_harness_opens_sandboxed_comes_from_the_adapter_charter_ships() {
         );
     }
     assert!(has(card_of(&cards, "claude"), SANDBOX));
+    // A compiler is not enough: Codex's is held back (#1123), and opencode's wrap is macOS's.
+    assert!(!has(card_of(&cards, "codex"), SANDBOX));
+    assert_eq!(
+        has(card_of(&cards, "opencode"), SANDBOX),
+        cfg!(target_os = "macos")
+    );
     assert_eq!(
         ability(card_of(&cards, "gemini"), SANDBOX).answer,
         Answer::No(NO_ADAPTER.to_owned())
@@ -219,7 +227,7 @@ fn the_lines_are_what_the_harness_lacks_in_the_cards_order() {
              has finished starting.",
             "opencode cannot be sandboxed by charter yet, so a project that sandboxes its chats \
              opens none on it.",
-        ]
+        ][..if cfg!(target_os = "macos") { 5 } else { 6 }]
     );
 }
 

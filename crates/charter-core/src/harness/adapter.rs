@@ -63,20 +63,29 @@ pub trait HarnessAdapter: Sync {
     /// ([`crate::sandbox::NotStarted::NoCompiler`]).
     fn sandbox_compiler(&self) -> Option<crate::sandbox::Compiler>;
 
-    /// The chat's whole line under `form`, the sandbox [`Self::sandbox_compiler`] compiled: the
-    /// profile's `command`, then `armed` (what [`Self::arm`] gave), then `charters`, charter's
-    /// own words — or the one sentence saying why it may not start. Only
-    /// [`crate::sandbox::Applied::line`] asks, with the form compiled for this harness.
+    /// The issue this harness's sandbox is held back for, where charter has a compiler for it
+    /// and still refuses a sandboxed start ([`crate::sandbox::NotStarted::HeldBack`]): its own
+    /// sandbox cannot be kept to what the compiler says while it runs. `None` for every
+    /// harness that starts sandboxed.
+    fn sandbox_held_back(&self) -> Option<u32> {
+        None
+    }
+
+    /// The chat's whole line under `form`, the sandbox [`Self::sandbox_compiler`] compiled,
+    /// from `words`: the program, the profile's `command`, then `armed` (what [`Self::arm`]
+    /// gave), then `charters`, charter's own words — where the chat opens, `at`; or the one
+    /// sentence saying why it may not start. Only [`crate::sandbox::Applied::line`] asks, with
+    /// the form compiled for this harness.
     ///
-    /// **Fail closed.** A form this adapter did not compile, and a flag in the chat's own words
-    /// that would outrank the sandbox, each refuse the chat.
+    /// **Fail closed.** A form this adapter did not compile, a flag in the chat's own words
+    /// that would outrank the sandbox, and a wrap without what it needs at `at` each refuse
+    /// the chat.
     fn sandboxed_line(
         &self,
         form: &crate::sandbox::Form,
-        command: Vec<String>,
-        armed: Vec<String>,
-        charters: Vec<String>,
-    ) -> Result<Vec<String>, String>;
+        words: crate::sandbox::Words,
+        at: &crate::sandbox::At<'_>,
+    ) -> Result<crate::sandbox::Line, String>;
 
     /// What the app arms a chat of this harness with, as `charter doctor` says it.
     fn armed_with(&self) -> String;

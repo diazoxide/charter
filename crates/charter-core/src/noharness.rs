@@ -321,10 +321,10 @@ mod tests {
 
     #[test]
     fn a_port_nobody_listens_on_is_not_a_server() {
-        // Bound, then let go: nothing listens there by the time it is asked.
-        let addr = TcpListener::bind("127.0.0.1:0")
-            .and_then(|l| l.local_addr())
-            .expect("a free port");
+        // A reserved port nothing listens on, rather than one bound and let go: a port let go
+        // can be dealt to another test's listener in this same binary at once, and asking it
+        // would land a stray connection there.
+        let addr: std::net::SocketAddr = "127.0.0.1:1".parse().expect("an address");
 
         assert!(!answers_200(addr, "/api/tags", Duration::from_secs(2)));
     }

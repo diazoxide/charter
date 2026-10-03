@@ -18,8 +18,8 @@
 //! thing left out on purpose is not deferred and is not worded so: it says "left out" or "by
 //! design", with the reason. A plain "not yet" is not matched, and neither is "cannot … yet":
 //! almost every one in this tree is about time ("written and not yet acknowledged", "the plane
-//! cannot be moved yet", "a render cannot see yet"), not scope. The one "cannot … yet" that is
-//! a deferral, the sandbox refusal of a harness with no compiler, cites SD-2 (#695) anyway.
+//! cannot be moved yet", "a render cannot see yet"), not scope. The one deferral of that kind,
+//! the sandbox refusal of opencode on Linux, cites #1040 anyway.
 //!
 //! **A phrase may wrap.** Each line is read joined with the next, with the comment markers,
 //! string continuations and quotes taken out ([`prose`]), so a deferral split across two lines

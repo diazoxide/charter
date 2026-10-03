@@ -29,6 +29,10 @@ use crate::state::{Detail, Ending, Event, Started};
 /// The socket a hook writes to, in the environment of every session the app starts.
 pub const SOCKET_ENV: &str = "CHARTER_HOOK_SOCKET";
 
+/// How a hook's stderr begins when the app did not take its line: the hook says so there, and
+/// the opencode shim shows that sentence in the chat's window (ruling V73c).
+pub const NOT_TAKEN: &str = "charter: the app did not take this";
+
 /// Which chat the hook is running inside, in the same environment.
 ///
 /// The app's own number for the chat, set at the `exec`, exactly as the Python charter sets

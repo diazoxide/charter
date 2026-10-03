@@ -18,6 +18,16 @@
 //! command could neither read nor write a denied directory, could write its own directory,
 //! reached a listed host, and was refused an unlisted one; and with the web tools denied they
 //! were not offered to the model at all, even when named in `--allowedTools`.
+//!
+//! **The later-code class** (ruling V73b). Measured on 2.1.288 on macOS, a headless turn against
+//! a stand-in model server: Claude Code's own sandbox already kept a command from writing git's
+//! config and hooks (in a nested clone too), `.mcp.json`, `.vscode`, `.idea`, `.claude`'s
+//! settings, commands and agents, and shell startup files, and let it write `opencode.json`,
+//! `.opencode`, `.codex`, `.envrc` and `charter.toml`. With each name added to `denyWrite` as
+//! `**/<name>`, every one was refused at any depth, and an ordinary file was still written.
+//! What it does not hold: a command moved a directory holding a `config` into a nested
+//! clone's `.git` (measured), and no glob can deny the `.git` itself without denying what git
+//! writes below it (#1065).
 
 use serde_json::{Value, json};
 
@@ -59,6 +69,19 @@ pub fn settings(compiled: &Compiled) -> Result<Settings, Uncompilable> {
         deny_write.push(path);
         edit_rules.push(format!("Edit({rooted})"));
         edit_rules.push(format!("Edit({rooted}/**)"));
+    }
+    // The later-code class (ruling V73b), by name at any depth: added to the names Claude
+    // Code's own sandbox already keeps commands from writing, never in their place. A name
+    // that holds only itself (`.git`) is left out: a glob here denies what is below it too,
+    // and git writes there.
+    for planted in super::PLANTED
+        .iter()
+        .filter(|planted| planted.reach == super::Reach::AndBelow)
+    {
+        let glob = format!("**/{}", planted.path);
+        deny_write.push(glob.clone());
+        edit_rules.push(format!("Edit({glob})"));
+        edit_rules.push(format!("Edit({glob}/**)"));
     }
     let deny = WEB_TOOLS
         .iter()
