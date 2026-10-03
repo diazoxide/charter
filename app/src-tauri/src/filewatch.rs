@@ -14,23 +14,38 @@
 //! its folders are open, and at most `charter_core::files::WATCHED` folders are watched for a
 //! window.
 //!
-//! **One event per batch, debounced** as the plane's is, and an access is not a change: the
-//! window reads the folder again when told, and on inotify that read is an `IN_OPEN`.
+//! **One event per burst, folded by hand**, and an access is not a change: the window reads the
+//! folder again when told, and on inotify that read is an `IN_OPEN`.
+//!
+//! **Every change is told, a short-lived file's included** (#1138). The plane's watch uses
+//! `notify-debouncer-full`, which takes a file removed while its creation is still being folded
+//! as never having been there, and reports neither. That is right for a consumer that only ever
+//! learns of files through it, and wrong for this one: the window lists a folder whenever it is
+//! told about it, so it can draw a file whose creation the debouncer has not passed on yet, and
+//! when that file's removal cancelled its creation nothing ever told the window to draw it
+//! gone. inotify reports the two separately, so an e2e spec on Linux that removed a file it had
+//! just seen drawn found it drawn for ever. So this folds the platform's own events: the folder
+//! of every one that is a change is told, whatever came after it.
 
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
-use std::time::Duration;
-
-use notify_debouncer_full::{DebounceEventResult, Debouncer, RecommendedCache, new_debouncer_opt};
+use std::time::{Duration, Instant};
 
 use crate::planes::{PlaneId, Planes};
+use crate::watchset::Plain;
 
 /// The event a window is sent.
 pub(crate) const CHANGED: &str = "files-changed";
 
 /// How long a burst is folded for: an agent writing ten files is one read of their folder.
 const QUIET_FOR: Duration = Duration::from_millis(250);
+
+/// The most changed paths one burst holds. Past it the burst is taken as having moved every
+/// open folder: a flood costs a fixed amount of memory, and a window reads a few folders too
+/// many rather than missing one.
+const MOST_PATHS: usize = 256;
 
 /// One folder of a branch, as the window names it: the plane, the workspace, the repo, the piece
 /// (none for the repo's own folder) and the folder's path inside the branch (`""` for its top).
@@ -53,7 +68,7 @@ pub struct FilesChanged {
 pub type Told = Arc<dyn Fn(&str, Vec<BranchFolder>) + Send + Sync + 'static>;
 
 struct Inner<W: notify::Watcher> {
-    debouncer: Option<Debouncer<W, RecommendedCache>>,
+    watcher: Option<Plain<W>>,
     /// Each window's folders, with the directory each resolved to.
     by_window: HashMap<String, Vec<(BranchFolder, PathBuf)>>,
     /// The newest set each window asked for, by its [`FileWatch::ticket`]: a set resolved late
@@ -82,7 +97,7 @@ impl<W: notify::Watcher + Send + 'static> FileWatch<W> {
     fn with_config(told: Told, config: notify::Config) -> Self {
         Self {
             inner: Arc::new(Mutex::new(Inner {
-                debouncer: None,
+                watcher: None,
                 by_window: HashMap::new(),
                 newest: HashMap::new(),
                 watched: HashSet::new(),
@@ -129,8 +144,8 @@ impl<W: notify::Watcher + Send + 'static> FileWatch<W> {
         } else {
             inner.by_window.insert(window.to_string(), folders);
         }
-        if inner.debouncer.is_none() && !inner.by_window.is_empty() {
-            inner.debouncer = Some(self.start()?);
+        if inner.watcher.is_none() && !inner.by_window.is_empty() {
+            inner.watcher = Some(self.start()?);
         }
         inner.follow();
         Ok(())
@@ -145,53 +160,122 @@ impl<W: notify::Watcher + Send + 'static> FileWatch<W> {
         }
     }
 
-    fn start(&self) -> Result<Debouncer<W, RecommendedCache>, String> {
+    /// The platform's watcher, and a thread that folds what it reports into one tell per burst.
+    /// The thread ends when the watcher is dropped, which drops the sending half it reads.
+    fn start(&self) -> Result<Plain<W>, String> {
+        let (changed, changes) = mpsc::channel::<Change>();
         let handle: Weak<Mutex<Inner<W>>> = Arc::downgrade(&self.inner);
         let told = Arc::clone(&self.told);
-        let tell = move |batch: DebounceEventResult| {
-            let Ok(events) = batch else { return };
-            // A path that changed, and the folder it changed in: a file added is an event on
-            // the file, and a watched folder removed is an event on the folder itself.
-            let mut moved: HashSet<&Path> = HashSet::new();
-            for event in events
-                .iter()
-                .filter(|event| crate::watchset::matters(&event.kind))
-            {
-                for path in &event.paths {
-                    moved.insert(path);
-                    if let Some(parent) = path.parent() {
-                        moved.insert(parent);
+        std::thread::Builder::new()
+            .name("charter-files-watch".into())
+            .spawn(move || {
+                while let Ok(first) = changes.recv() {
+                    let mut moved = Moved::default();
+                    moved.add(first);
+                    let until = Instant::now() + QUIET_FOR;
+                    loop {
+                        // Checked before each receive: under a flood `recv_timeout` with no
+                        // time left still answers with what is queued, and never times out.
+                        let left = until.saturating_duration_since(Instant::now());
+                        if left.is_zero() {
+                            break;
+                        }
+                        match changes.recv_timeout(left) {
+                            Ok(more) => moved.add(more),
+                            Err(RecvTimeoutError::Timeout) => break,
+                            Err(RecvTimeoutError::Disconnected) => return,
+                        }
+                    }
+                    let Some(inner) = handle.upgrade() else {
+                        return;
+                    };
+                    let concerned = moved.concerning(&inner);
+                    drop(inner);
+                    // Outside the lock, so a window that answers by watching again never waits
+                    // on it.
+                    for (window, folders) in concerned {
+                        told(&window, folders);
                     }
                 }
+            })
+            .map_err(|e| format!("charter could not watch the branch's folders: {e}"))?;
+        W::new(
+            move |event: notify::Result<notify::Event>| {
+                let Ok(event) = event else { return };
+                let change = if event.need_rescan() {
+                    Change::Everything
+                } else if crate::watchset::matters(&event.kind) {
+                    Change::Paths(event.paths)
+                } else {
+                    return;
+                };
+                let _ = changed.send(change);
+            },
+            // Never into a link: a folder linked from inside the branch to outside it is not
+            // the branch's, as the tree's own read refuses it.
+            self.config.with_follow_symlinks(false),
+        )
+        .map(Plain)
+        .map_err(|e| format!("charter could not watch the branch's folders: {e}"))
+    }
+}
+
+/// What the platform reported: paths that changed, or that it lost track and anything may have.
+enum Change {
+    Paths(Vec<PathBuf>),
+    Everything,
+}
+
+/// A burst's changes, folded.
+#[derive(Default)]
+struct Moved {
+    /// A path that changed, and the folder it changed in: a file added is an event on the file,
+    /// and a watched folder removed is an event on the folder itself.
+    paths: HashSet<PathBuf>,
+    everything: bool,
+}
+
+impl Moved {
+    fn add(&mut self, change: Change) {
+        match change {
+            Change::Everything => self.everything = true,
+            Change::Paths(paths) => {
+                for path in paths {
+                    if self.everything {
+                        return;
+                    }
+                    if self.paths.len() >= MOST_PATHS {
+                        self.everything = true;
+                        self.paths.clear();
+                        return;
+                    }
+                    if let Some(parent) = path.parent() {
+                        self.paths.insert(parent.to_path_buf());
+                    }
+                    self.paths.insert(path);
+                }
             }
-            if moved.is_empty() {
-                return;
-            }
-            let Some(inner) = handle.upgrade() else {
-                return;
-            };
-            let concerned: Vec<(String, Vec<BranchFolder>)> = {
-                let inner = inner.lock().unwrap_or_else(PoisonError::into_inner);
-                inner
-                    .by_window
+        }
+    }
+
+    /// Each window that has one of these folders open, and which of its folders moved.
+    fn concerning<W: notify::Watcher>(
+        &self,
+        inner: &Mutex<Inner<W>>,
+    ) -> Vec<(String, Vec<BranchFolder>)> {
+        let inner = inner.lock().unwrap_or_else(PoisonError::into_inner);
+        inner
+            .by_window
+            .iter()
+            .filter_map(|(window, folders)| {
+                let hit: Vec<BranchFolder> = folders
                     .iter()
-                    .filter_map(|(window, folders)| {
-                        let hit: Vec<BranchFolder> = folders
-                            .iter()
-                            .filter(|(_, dir)| moved.contains(dir.as_path()))
-                            .map(|(folder, _)| folder.clone())
-                            .collect();
-                        (!hit.is_empty()).then(|| (window.clone(), hit))
-                    })
-                    .collect()
-            };
-            // Outside the lock, so a window that answers by watching again never waits on it.
-            for (window, folders) in concerned {
-                told(&window, folders);
-            }
-        };
-        new_debouncer_opt(QUIET_FOR, None, tell, RecommendedCache::new(), self.config)
-            .map_err(|e| format!("charter could not watch the branch's folders: {e}"))
+                    .filter(|(_, dir)| self.everything || self.paths.contains(dir))
+                    .map(|(folder, _)| folder.clone())
+                    .collect();
+                (!hit.is_empty()).then(|| (window.clone(), hit))
+            })
+            .collect()
     }
 }
 
@@ -204,8 +288,8 @@ impl<W: notify::Watcher> Inner<W> {
             .flatten()
             .map(|(_, dir)| dir.clone())
             .collect();
-        if let Some(debouncer) = self.debouncer.as_mut() {
-            crate::watchset::follow(debouncer, &mut self.watched, wanted);
+        if let Some(watcher) = self.watcher.as_mut() {
+            crate::watchset::follow(watcher, &mut self.watched, wanted);
         }
     }
 }
@@ -270,7 +354,7 @@ fn same_branch(a: &BranchFolder, b: &BranchFolder) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::mpsc;
+    use std::path::Path;
 
     const PATIENCE: Duration = Duration::from_secs(10);
 
@@ -361,5 +445,165 @@ mod tests {
         std::fs::write(src.join("new.rs"), "\n").unwrap();
 
         assert!(told.recv_timeout(Duration::from_secs(2)).is_err());
+    }
+
+    thread_local! {
+        /// What [`Raw`] was handed on this test's thread: how the test plays the platform.
+        static RAW: std::cell::RefCell<Option<Box<dyn notify::EventHandler>>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    /// A watcher that reports exactly the raw events the test sends ([`raw`]), one at a time
+    /// as inotify does: no poller's snapshot and no FSEvents latency between the test and what
+    /// the watch makes of them.
+    struct Raw;
+
+    impl notify::Watcher for Raw {
+        fn new<F: notify::EventHandler>(handler: F, _: notify::Config) -> notify::Result<Self> {
+            RAW.with(|raw| *raw.borrow_mut() = Some(Box::new(handler)));
+            Ok(Raw)
+        }
+        fn watch(&mut self, _: &Path, _: notify::RecursiveMode) -> notify::Result<()> {
+            Ok(())
+        }
+        fn unwatch(&mut self, _: &Path) -> notify::Result<()> {
+            Ok(())
+        }
+        fn kind() -> notify::WatcherKind {
+            notify::WatcherKind::NullWatcher
+        }
+    }
+
+    /// The platform reports `kind` on `path`.
+    fn raw(kind: notify::EventKind, path: &Path) {
+        RAW.with(|raw| {
+            raw.borrow_mut()
+                .as_mut()
+                .expect("the watch has started")
+                .handle_event(Ok(notify::Event::new(kind).add_path(path.to_path_buf())));
+        });
+    }
+
+    /// A watch on [`Raw`], with `src` open in window `main`.
+    fn watching_raw(src: &Path) -> (FileWatch<Raw>, mpsc::Receiver<(String, Vec<BranchFolder>)>) {
+        let (tx, told) = mpsc::channel();
+        let tx = Mutex::new(tx);
+        let watch = FileWatch::<Raw>::with_config(
+            Arc::new(move |window: &str, folders| {
+                let _ = tx.lock().unwrap().send((window.to_string(), folders));
+            }),
+            notify::Config::default(),
+        );
+        watch
+            .set("main", vec![(folder("src"), src.to_path_buf())])
+            .unwrap();
+        (watch, told)
+    }
+
+    #[test]
+    fn a_file_removed_soon_after_it_was_made_is_still_told() {
+        // The window lists a folder whenever it is told about it, and any other change can
+        // tell it: so it may have drawn a file whose creation the watch has not passed on
+        // yet. If the watch then took the file's removal as cancelling its creation, as a
+        // debouncer that folds a create and a remove into nothing does, the window would
+        // never hear of either and would draw the file for ever. inotify reports the two
+        // separately, so this happened on Linux, where an e2e spec removes a file it has just
+        // seen drawn (#1138).
+        use notify::event::{CreateKind, EventKind, RemoveKind};
+        let src = PathBuf::from("/branch/src");
+        let (_watch, told) = watching_raw(&src);
+
+        raw(EventKind::Create(CreateKind::File), &src.join("brief.md"));
+        raw(EventKind::Remove(RemoveKind::File), &src.join("brief.md"));
+
+        let (window, folders) = told
+            .recv_timeout(PATIENCE)
+            .expect("the window was told the folder moved");
+        assert_eq!(window, "main");
+        assert_eq!(folders, [folder("src")]);
+    }
+
+    #[test]
+    fn a_read_of_the_folder_tells_nobody() {
+        // The window reads a folder when told, and inotify reports that read: told about it,
+        // the window would read again because it read, for ever.
+        use notify::event::{AccessKind, AccessMode, EventKind};
+        let src = PathBuf::from("/branch/src");
+        let (_watch, told) = watching_raw(&src);
+
+        raw(EventKind::Access(AccessKind::Open(AccessMode::Any)), &src);
+
+        assert!(told.recv_timeout(QUIET_FOR * 4).is_err());
+    }
+
+    #[test]
+    fn a_platform_that_lost_track_tells_every_open_folder() {
+        // inotify's queue overflowed: anything may have changed, so every open folder is read
+        // again rather than none.
+        let src = PathBuf::from("/branch/src");
+        let (_watch, told) = watching_raw(&src);
+
+        RAW.with(|raw| {
+            raw.borrow_mut()
+                .as_mut()
+                .expect("the watch has started")
+                .handle_event(Ok(notify::Event::new(notify::EventKind::Other)
+                    .set_flag(notify::event::Flag::Rescan)));
+        });
+
+        let (window, folders) = told.recv_timeout(PATIENCE).expect("the window was told");
+        assert_eq!(window, "main");
+        assert_eq!(folders, [folder("src")]);
+    }
+
+    #[test]
+    fn a_sustained_flood_is_still_told_once_its_burst_is_over() {
+        // A burst ends QUIET_FOR after its first event, however many more are queued: an agent
+        // writing without pause must not keep the window from ever hearing of it (the burst
+        // only ended on a quiet moment, and a flood of 12.3M events never had one).
+        use notify::event::{CreateKind, EventKind};
+        let src = PathBuf::from("/branch/src");
+        let (_watch, told) = watching_raw(&src);
+        let started = Instant::now();
+        let mut first_tell = None;
+        let mut n: u64 = 0;
+        while started.elapsed() < Duration::from_secs(3) {
+            raw(
+                EventKind::Create(CreateKind::File),
+                &src.join(format!("f{n}")),
+            );
+            n += 1;
+            if first_tell.is_none() && told.try_recv().is_ok() {
+                first_tell = Some(started.elapsed());
+            }
+        }
+        assert!(
+            first_tell.is_some_and(|t| t < Duration::from_secs(1)),
+            "no tell within 1 s of a flood's start: {first_tell:?} after {n} events"
+        );
+    }
+
+    #[test]
+    fn a_burst_past_the_cap_tells_every_open_folder_and_holds_no_more_paths() {
+        // Paths are held only up to MOST_PATHS; past it the burst is taken as everything, so a
+        // flood costs a fixed amount of memory and every open folder is read again.
+        let mut moved = Moved::default();
+        let elsewhere = PathBuf::from("/elsewhere");
+        moved.add(Change::Paths(
+            (0..MOST_PATHS * 2)
+                .map(|n| elsewhere.join(format!("f{n}")))
+                .collect(),
+        ));
+        assert!(moved.everything);
+        assert!(moved.paths.len() <= MOST_PATHS + 1, "{}", moved.paths.len());
+
+        let src = PathBuf::from("/branch/src");
+        let watch =
+            FileWatch::<Raw>::with_config(Arc::new(|_: &str, _| {}), notify::Config::default());
+        watch.set("main", vec![(folder("src"), src)]).unwrap();
+        assert_eq!(
+            moved.concerning(&watch.inner),
+            [("main".to_string(), vec![folder("src")])]
+        );
     }
 }

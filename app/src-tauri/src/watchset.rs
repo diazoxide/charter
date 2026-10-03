@@ -1,9 +1,9 @@
 //! What the app's two file watchers share (`planewatch.rs`, `filewatch.rs`): which events are
-//! changes, and keeping a debouncer's watches equal to a wanted set of folders, each watched
+//! changes, and keeping a watcher's watches equal to a wanted set of folders, each watched
 //! non-recursively.
 
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use notify::RecursiveMode;
 use notify::event::{EventKind, MetadataKind, ModifyKind};
@@ -20,17 +20,45 @@ pub(crate) fn matters(kind: &EventKind) -> bool {
     )
 }
 
+/// What watches folders one at a time: a debouncer, or a platform watcher whose events are
+/// folded by hand ([`Plain`]).
+pub(crate) trait Folders {
+    fn watch(&mut self, path: &Path) -> notify::Result<()>;
+    fn unwatch(&mut self, path: &Path) -> notify::Result<()>;
+}
+
+impl<W: notify::Watcher> Folders for Debouncer<W, RecommendedCache> {
+    fn watch(&mut self, path: &Path) -> notify::Result<()> {
+        Debouncer::watch(self, path, RecursiveMode::NonRecursive)
+    }
+    fn unwatch(&mut self, path: &Path) -> notify::Result<()> {
+        Debouncer::unwatch(self, path)
+    }
+}
+
+/// A platform watcher on its own, with no debouncer between it and the caller.
+pub(crate) struct Plain<W>(pub W);
+
+impl<W: notify::Watcher> Folders for Plain<W> {
+    fn watch(&mut self, path: &Path) -> notify::Result<()> {
+        self.0.watch(path, RecursiveMode::NonRecursive)
+    }
+    fn unwatch(&mut self, path: &Path) -> notify::Result<()> {
+        self.0.unwatch(path)
+    }
+}
+
 /// Watches every folder of `wanted`, non-recursively, and stops watching the ones in `watched`
 /// it no longer names; `watched` is kept as what is watched now.
-pub(crate) fn follow<W: notify::Watcher>(
-    debouncer: &mut Debouncer<W, RecommendedCache>,
+pub(crate) fn follow(
+    folders: &mut impl Folders,
     watched: &mut HashSet<PathBuf>,
     wanted: HashSet<PathBuf>,
 ) {
     let stale: Vec<PathBuf> = watched.difference(&wanted).cloned().collect();
     for path in stale {
         // An error is a watch the platform has already dropped with its directory.
-        let _ = debouncer.unwatch(&path);
+        let _ = folders.unwatch(&path);
         watched.remove(&path);
     }
     for path in wanted {
@@ -39,7 +67,7 @@ pub(crate) fn follow<W: notify::Watcher>(
         }
         // A directory that went between the listing and here is simply not watched; the next
         // batch lists again.
-        if debouncer.watch(&path, RecursiveMode::NonRecursive).is_ok() {
+        if folders.watch(&path).is_ok() {
             watched.insert(path);
         }
     }
