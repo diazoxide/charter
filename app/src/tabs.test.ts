@@ -24,6 +24,8 @@ import {
   focusedContent,
   openView,
   putViewBack,
+  setSplit,
+  splitOf,
   offerView,
   refileViews,
   followRename,
@@ -685,6 +687,32 @@ describe("a tab that shows a view (ADR 0043, as amended 2026-09-23)", () => {
       const open = openView(noTabs(), STEWARD, "steward", "alpha");
 
       expect(offerView(open, STEWARD, "steward", "alpha")).toBe(open);
+    });
+  });
+
+  describe("where its divider was (FM-2)", () => {
+    const FILES = { from: null, view: "piece-files", key: "alpha/svc/fix-login" };
+
+    it("is remembered for the view, and kept when the tab closes and the view opens again", () => {
+      const open = setSplit(openView(noTabs(), FILES, "Files · fix-login", "alpha"), FILES, 31);
+      const closed = closeTab(open, 1, oneWorkspace);
+      const again = openView(closed, FILES, "Files · fix-login", "alpha");
+
+      expect(splitOf(open, FILES)).toBe(31);
+      expect(splitOf(again, FILES)).toBe(31);
+      expect(splitOf(again, STEWARD)).toBeUndefined();
+    });
+
+    it("comes back with a view a launch puts back", () => {
+      const tabs = putViewBack(noTabs(), FILES, "Files · fix-login", "alpha", 0, 42);
+
+      expect(splitOf(tabs, FILES)).toBe(42);
+    });
+
+    it("answers the same tabs when it did not move", () => {
+      const open = setSplit(openView(noTabs(), FILES, "Files", "alpha"), FILES, 31);
+
+      expect(setSplit(open, FILES, 31)).toBe(open);
     });
   });
 

@@ -117,7 +117,6 @@ macro_rules! app_commands {
                 worktrees::worktree_remove,
                 worktrees::worktree_merge,
                 worktrees::worktree_done,
-                piecefiles::piece_files,
                 piecefiles::piece_file,
                 piecefiles::open_in_your_editor,
                 piecefiles::branch_tree,

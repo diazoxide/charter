@@ -808,6 +808,7 @@ name = "charter-app"
 version = "0.4.2"
 dependencies = [
  "arboard",
+ "base64 0.23.1",
  "changelog",
  "charter-core",
  "chrono",
@@ -874,6 +875,7 @@ dependencies = [
  "graphql_client",
  "hmac 0.13.0",
  "http",
+ "imagesize",
  "keyring",
  "libc",
  "log",
@@ -2752,6 +2754,12 @@ dependencies = [
  "icu_normalizer",
  "icu_properties",
 ]
+
+[[package]]
+name = "imagesize"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09e54e57b4c48b40f7aec75635392b12b3421fa26fe8b4332e63138ed278459c"
 
 [[package]]
 name = "indexmap"

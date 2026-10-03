@@ -136,6 +136,8 @@ import {
   firstTaskView,
   panesOf,
   putViewBack,
+  setSplit,
+  splitOf,
   refileViews,
   followRename,
   PREFERENCES_TITLE,
@@ -688,7 +690,14 @@ export const PlaneView = memo(function PlaneView({
           .sort((one, other) => one.at - other.at)
           .reduce(
             (tabs, view) =>
-              putViewBack(tabs, refOf(view), view.title, view.workspace ?? OUTSIDE, view.at),
+              putViewBack(
+                tabs,
+                refOf(view),
+                view.title,
+                view.workspace ?? OUTSIDE,
+                view.at,
+                view.split ?? undefined,
+              ),
             chats,
           );
         const front = open.find((chat) => chat.in_front);
@@ -4081,6 +4090,10 @@ export const PlaneView = memo(function PlaneView({
                     onClose: closeView,
                   }}
                   firstTask={firstTaskDoes}
+                  split={{
+                    of: (view) => splitOf(tabs, view),
+                    moved: (view, split) => change((tabs) => setSplit(tabs, view, split)),
+                  }}
                 />
               ) : tabs.order.some((id) => !isBackground(id)) ? (
                 // Chats are running — just not in the workspace being looked at. Saying
@@ -4627,6 +4640,7 @@ function viewTabsOf(tabs: Tabs, pinnedViews: readonly string[]): ViewTab[] {
         at,
         active: tabs.inFront === id,
         pinned: pinnedViews.includes(viewKey(lead.view)),
+        split: splitOf(tabs, lead.view) ?? null,
       },
     ];
   });
@@ -5037,6 +5051,7 @@ function LayoutPanes({
   onVaultChanged,
   memory,
   firstTask,
+  split,
 }: {
   /** Which plane's sessions these panes are showing. A session number belongs to a plane,
    *  and every command a pane makes carries it. */
@@ -5076,6 +5091,11 @@ function LayoutPanes({
   };
   /** What the first task's tab asks the plane to do (FR-28). */
   firstTask: FirstTaskDoes;
+  /** Where a view's divider was, and where the operator moved it to (FM-2). */
+  split: {
+    of: (view: ViewRef) => number | undefined;
+    moved: (view: ViewRef, split: number) => void;
+  };
 }) {
   if (layout.kind === "pane") {
     const content = layout.content;
@@ -5109,6 +5129,8 @@ function LayoutPanes({
               onMemorySaved={memory.onSaved}
               onCloseView={memory.onClose}
               firstTask={firstTask}
+              split={split.of(content.view)}
+              onSplit={(to) => split.moved(content.view, to)}
             />
           </div>
         </div>
@@ -5177,6 +5199,7 @@ function LayoutPanes({
               onVaultChanged={onVaultChanged}
               memory={memory}
               firstTask={firstTask}
+              split={split}
             />
           </Panel>
         </Fragment>

@@ -41,6 +41,7 @@ mod killswitch;
 mod lifecycle;
 mod live;
 mod memories;
+mod navguard;
 mod off_the_main_thread;
 mod opener;
 mod panels;
@@ -1848,6 +1849,8 @@ pub fn run() {
             second_launch(app, &cwd);
         }))
         .plugin(tauri_plugin_opener::init())
+        // No webview navigates off the app, whatever a page it draws links to (FM-2 review).
+        .plugin(navguard::plugin())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         // Registered in every build so a broken updater config fails CI's app build, and
@@ -1921,6 +1924,7 @@ pub fn run() {
                 .initialization_script(windowprefs::creation_script(
                     charter_core::machine::config_root().as_deref(),
                 ))
+                .on_new_window(navguard::no_new_window)
                 .build()?;
             reached("the window is built");
             // Where a panic is kept, now that the app can be told where its logs belong. An app

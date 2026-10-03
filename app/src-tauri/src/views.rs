@@ -530,6 +530,11 @@ pub(crate) struct ViewTab {
     pub at: u32,
     pub active: bool,
     pub pinned: bool,
+    /// Where the view's divider was, as its first side's share of the tab in percent: a file
+    /// tab's tree beside its preview (FM-2). `null` for a view with no divider, or one never
+    /// moved.
+    #[serde(default)]
+    pub split: Option<u8>,
 }
 
 impl From<charter_core::reopen::View> for ViewTab {
@@ -543,6 +548,7 @@ impl From<charter_core::reopen::View> for ViewTab {
             at: view.at,
             active: view.active,
             pinned: view.pinned,
+            split: view.split,
         }
     }
 }
@@ -558,6 +564,7 @@ impl From<ViewTab> for charter_core::reopen::View {
             at: tab.at,
             active: tab.active,
             pinned: tab.pinned,
+            split: tab.split,
         }
     }
 }

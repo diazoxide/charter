@@ -9,6 +9,7 @@
 
 use std::path::Path;
 
+use base64::Engine as _;
 use charter_core::files::{self, Branch, Entry, Kind, Opened};
 use charter_core::youreditor::{self, Editor, Launch};
 
@@ -20,30 +21,20 @@ use crate::planes::{PlaneId, Planes};
 pub enum PieceFile {
     /// Text, to draw.
     Text { text: String },
+    /// An image, known by its first bytes (FM-2): its media type and its bytes as base64. The
+    /// window decodes it into a canvas, so nothing is loaded from a URL.
+    Image { mime: String, base64: String },
     /// A file git would call binary, by its size in bytes.
     Binary { bytes: u32 },
-    /// Past the largest file the light editor draws (5 MiB), by its size in bytes.
+    /// An image whose header declares more pixels than the preview draws (40 megapixels): its
+    /// type and declared size, and none of its bytes.
+    HugeImage {
+        mime: String,
+        width: u32,
+        height: u32,
+    },
+    /// Past the largest file the preview draws (2 MiB), by its size in bytes.
     TooLarge { bytes: u32 },
-}
-
-/// The files of a branch, relative to its folder: what git tracks and what it does not ignore.
-/// No `piece` is the repo's own folder.
-// Its plane is a `PlaneId` the registry vouches for, and the piece is named, never given as a
-// directory (charter-app#127, `worktrees.rs`). Not a doc comment, because the generated
-// bindings carry those and this is about the Rust.
-#[tauri::command]
-#[specta::specta]
-pub fn piece_files(
-    planes: tauri::State<'_, Planes>,
-    plane: PlaneId,
-    workspace: String,
-    repo: String,
-    piece: Option<String>,
-) -> Result<Vec<String>, String> {
-    files_of(
-        planes.held(&plane)?.root(),
-        branch(&workspace, &repo, &piece),
-    )
 }
 
 /// One file of a branch, by its path relative to the branch's folder. Refused for a path that
@@ -235,10 +226,6 @@ fn launch_of(
         .map_err(|refused| refused.to_string())
 }
 
-fn files_of(plane: &Path, branch: Branch<'_>) -> Result<Vec<String>, String> {
-    files::list(plane, branch).map_err(|refused| refused.to_string())
-}
-
 fn file_of(plane: &Path, branch: Branch<'_>, path: &str) -> Result<PieceFile, String> {
     // A size crosses as a `u32`: specta refuses a `u64` for TypeScript, which has no integer
     // that wide. A binary or oversized file past 4 GiB is said as 4 GiB.
@@ -246,6 +233,19 @@ fn file_of(plane: &Path, branch: Branch<'_>, path: &str) -> Result<PieceFile, St
     files::open(plane, branch, path)
         .map(|opened| match opened {
             Opened::Text { text } => PieceFile::Text { text },
+            Opened::Image { mime, data } => PieceFile::Image {
+                mime: mime.to_string(),
+                base64: base64::engine::general_purpose::STANDARD.encode(data),
+            },
+            Opened::HugeImage {
+                mime,
+                width,
+                height,
+            } => PieceFile::HugeImage {
+                mime: mime.to_string(),
+                width,
+                height,
+            },
             Opened::Binary { bytes: n } => PieceFile::Binary { bytes: bytes(n) },
             Opened::TooLarge { bytes: n } => PieceFile::TooLarge { bytes: bytes(n) },
         })
@@ -294,17 +294,31 @@ mod tests {
     }
 
     #[test]
-    fn a_pieces_file_list_and_a_file_cross_to_the_window() {
+    fn a_pieces_file_crosses_to_the_window() {
         let (_dir, root, _piece) = plane();
 
-        let files = files_of(&root, PIECE).unwrap();
         let file = file_of(&root, PIECE, "README.md").unwrap();
 
-        assert!(files.contains(&"README.md".to_string()), "{files:?}");
         assert_eq!(
             file,
             PieceFile::Text {
                 text: "one\n".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn an_image_crosses_to_the_window_as_its_type_and_base64() {
+        let (_dir, root, piece) = plane();
+        std::fs::write(piece.join("dot.gif"), b"GIF89a\x01\x00\x01\x00\x00\x00\x00").unwrap();
+
+        let file = file_of(&root, PIECE, "dot.gif").unwrap();
+
+        assert_eq!(
+            file,
+            PieceFile::Image {
+                mime: "image/gif".to_string(),
+                base64: "R0lGODlhAQABAAAAAA==".to_string(),
             }
         );
     }

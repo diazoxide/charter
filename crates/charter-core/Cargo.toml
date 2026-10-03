@@ -25,6 +25,11 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 # `charter/report.py:consent_path`. Already in this workspace's lockfile — Tauri depends on
 # it — so this adds no crate to the tree and no licence to review.
 dirs = "7"
+# The file tab's image preview (FM-2) reads an image's declared size from its header, without
+# decoding it, so a small file declaring a huge canvas is summarised rather than handed to the
+# window to decode. MIT, header-only, no dependencies of its own; only the four kinds the preview
+# draws.
+imagesize = { version = "0.14", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 # The same searcher vte uses to find these sequences in the same bytes.
 memchr = "2"
 # An extension's declared plane-write paths (charter-app#341): one segment matched as a shell

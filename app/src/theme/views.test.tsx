@@ -658,7 +658,13 @@ const ORDINARY: Answers = {
     ignore_fix: null,
     declares_none: true,
   },
-  piece_files: ["README.md", "src/main.rs"],
+  branch_tree: {
+    entries: [
+      { name: "src", kind: "folder", ignored: false, refused: null },
+      { name: "main.rs", kind: "file", ignored: false, refused: null },
+    ],
+    more: 0,
+  },
   piece_file: { kind: "text", text: "fn main() {}\n" },
   harness_setup_found: NO_HARNESS,
   extensions_on: [],
@@ -803,7 +809,7 @@ const STATES: State[] = [
   {
     name: "a piece's files",
     view: { from: null, view: "piece-files", key: `${WORKSPACE}/${WORKSPACE}/chat-1` },
-    drawn: /src\/main\.rs/,
+    drawn: /^main\.rs$/,
   },
   {
     name: "a file of a piece",
@@ -831,15 +837,18 @@ const STATES: State[] = [
     name: "a branch's files",
     view: { from: null, view: "piece-files", key: "alpha/svc/fix-it" },
     answers: {
-      piece_files: ["README.md", "src/lib.rs"],
+      branch_tree: {
+        entries: [{ name: "lib.rs", kind: "file", ignored: false, refused: null }],
+        more: 0,
+      },
       piece_file: { kind: "text", text: "x\n" },
     },
-    drawn: /src\/lib\.rs/,
+    drawn: /^lib\.rs$/,
   },
   {
     name: "one of a branch's files",
     view: { from: null, view: "piece-file", key: "alpha/svc/fix-it/README.md" },
-    answers: { piece_files: ["README.md"], piece_file: { kind: "text", text: "Read me first\n" } },
+    answers: { piece_file: { kind: "text", text: "Read me first\n" } },
     drawn: /Read me first/,
   },
   {

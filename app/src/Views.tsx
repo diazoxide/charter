@@ -247,6 +247,8 @@ export function ViewPane({
   onMemorySaved,
   onCloseView,
   firstTask,
+  split,
+  onSplit,
 }: {
   plane: PlaneId;
   view: ViewRef;
@@ -281,6 +283,10 @@ export function ViewPane({
   onCloseView?: (view: ViewRef) => void;
   /** What the first task's tab asks the plane to do: start a run, show a run's diff (FR-28). */
   firstTask?: FirstTaskDoes;
+  /** Where this view's divider was, as its first side's share in percent (FM-2). */
+  split?: number;
+  /** The operator moved this view's divider. */
+  onSplit?: (split: number) => void;
 }) {
   // **The view follows the disk itself** (FD-10), on every change: the lists and memories
   // charter's own views read are any of the plane's stores. Here and not in the window, so a
@@ -424,6 +430,8 @@ export function ViewPane({
                 plane={plane}
                 cut={piece.place}
                 onOpenView={onOpenView}
+                split={split}
+                onSplit={onSplit}
               />
             ) : (
               <PieceFileTab
