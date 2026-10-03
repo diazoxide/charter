@@ -6,6 +6,7 @@
 use std::path::Path;
 
 use charter_core::piecefiles::{self, Opened};
+use charter_core::youreditor::{self, Editor, Launch};
 
 use crate::planes::{PlaneId, Planes};
 
@@ -55,6 +56,96 @@ pub fn piece_file(
         &piece,
         &path,
     )
+}
+
+/// Which editor the operator chose on the Preferences tab (RC-20, ADR 0081 §3). The window
+/// names one of these four and nothing else: never a program, never a URL.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, specta::Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum YourEditor {
+    /// Visual Studio Code, through `vscode://`.
+    Vscode,
+    /// Zed, through `zed://`.
+    Zed,
+    /// A JetBrains IDE, through `idea://`.
+    Idea,
+    /// `$VISUAL`, else `$EDITOR`, from charter's own environment, with `+line`.
+    Variable,
+}
+
+impl From<YourEditor> for Editor {
+    fn from(editor: YourEditor) -> Self {
+        match editor {
+            YourEditor::Vscode => Self::VsCode,
+            YourEditor::Zed => Self::Zed,
+            YourEditor::Idea => Self::Idea,
+            YourEditor::Variable => Self::Variable,
+        }
+    }
+}
+
+/// One file of a piece, opened in your editor at a line (RC-20). Refused, in the core's
+/// sentence, for any path the light editor would refuse.
+// The path is checked by `charter_core::piecefiles::in_your_editor` exactly as `piece_file`
+// checks it, and the editor is handed the resolved absolute path: as a URL to the operating
+// system's opener, or as one argument of the program `$VISUAL`/`$EDITOR` names, never through
+// a shell. Not a doc comment, because the generated bindings carry those.
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+#[specta::specta]
+pub fn open_in_your_editor(
+    app: tauri::AppHandle,
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    workspace: String,
+    repo: String,
+    piece: String,
+    path: String,
+    line: u32,
+    editor: YourEditor,
+) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt as _;
+    let var = |name: &str| std::env::var(name).ok();
+    match launch_of(
+        planes.held(&plane)?.root(),
+        &workspace,
+        &repo,
+        &piece,
+        &path,
+        line,
+        editor,
+        &var,
+    )? {
+        Launch::Url(url) => app
+            .opener()
+            .open_url(&url, None::<&str>)
+            .map_err(|e| format!("the system did not open {url}: {e}")),
+        Launch::Program { program, args } => youreditor::start(&program, &args),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn launch_of(
+    plane: &Path,
+    workspace: &str,
+    repo: &str,
+    piece: &str,
+    path: &str,
+    line: u32,
+    editor: YourEditor,
+    var: &dyn Fn(&str) -> Option<String>,
+) -> Result<Launch, String> {
+    piecefiles::in_your_editor(
+        plane,
+        workspace,
+        repo,
+        piece,
+        path,
+        line,
+        editor.into(),
+        var,
+    )
+    .map_err(|refused| refused.to_string())
 }
 
 fn files_of(plane: &Path, workspace: &str, repo: &str, piece: &str) -> Result<Vec<String>, String> {
@@ -128,6 +219,59 @@ mod tests {
             PieceFile::Text {
                 text: "one\n".to_string()
             }
+        );
+    }
+
+    #[test]
+    fn the_editor_the_window_names_reaches_the_core_as_a_url_for_that_editor() {
+        let (_dir, root, piece) = plane();
+        let none = |_: &str| None;
+        let file = std::fs::canonicalize(piece).unwrap().join("README.md");
+
+        let vscode = launch_of(
+            &root,
+            "alpha",
+            "thing",
+            "piece",
+            "README.md",
+            4,
+            YourEditor::Vscode,
+            &none,
+        );
+        let refused = launch_of(
+            &root,
+            "alpha",
+            "thing",
+            "piece",
+            "../x",
+            4,
+            YourEditor::Zed,
+            &none,
+        );
+
+        assert_eq!(
+            vscode,
+            Ok(Launch::Url(format!("vscode://file{}:4:1", file.display())))
+        );
+        assert_eq!(
+            refused,
+            Err("'../x' is not a path inside the worktree".to_string())
+        );
+    }
+
+    #[test]
+    fn the_editors_cross_from_the_window_by_their_wire_names() {
+        let named: Vec<YourEditor> =
+            serde_json::from_str(r#"["vscode", "zed", "idea", "variable"]"#).unwrap();
+
+        assert_eq!(
+            named,
+            [
+                YourEditor::Vscode,
+                YourEditor::Zed,
+                YourEditor::Idea,
+                YourEditor::Variable
+            ]
         );
     }
 

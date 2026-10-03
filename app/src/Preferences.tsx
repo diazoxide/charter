@@ -1,4 +1,6 @@
 import { useId } from "react";
+import * as RadioGroup from "@radix-ui/react-radio-group";
+import type { YourEditor as Editor } from "./bindings";
 import { onAMac } from "./tabKeys";
 import {
   DEFAULT_TEXT,
@@ -11,6 +13,7 @@ import {
   type Which,
 } from "./textSize";
 import { atCreation } from "./windowprefs";
+import { EDITORS, setYourEditor, useYourEditor } from "./yourEditor";
 
 /**
  * **Preferences** (charter-app#283): how this machine's window is drawn, in a view tab of its own
@@ -18,8 +21,8 @@ import { atCreation } from "./windowprefs";
  *
  * **Nothing here is a project's.** Project settings (#252) is a plane's two files; this is the
  * machine's layout file (`charter/layout.json`, beside `machine.json`), so a size set here is the
- * same in every project and reaches no clone. Today it is the two text sizes; it is where the
- * next per-machine preference goes.
+ * same in every project and reaches no clone. Today it is the two text sizes and your editor
+ * (RC-20); it is where the next per-machine preference goes.
  *
  * **Every change applies as it is made** — the window's text the moment the slider moves, the
  * terminals refitted to theirs — and is written to the file then. There is no Save, because
@@ -36,6 +39,7 @@ export function Preferences() {
         <TextSize which="window" size={sizes.window} />
         <TextSize which="terminal" size={sizes.terminal} />
       </fieldset>
+      <YourEditorChoice />
     </div>
   );
 }
@@ -79,5 +83,45 @@ function TextSize({ which, size }: { which: Which; size: number }) {
       </div>
       <p className="settings-hint">{keysFor(which)}</p>
     </div>
+  );
+}
+
+/** Which editor *Open in your editor* hands a file and a line to (RC-20, ADR 0081 §3). */
+function YourEditorChoice() {
+  const id = useId();
+  const editor = useYourEditor();
+  return (
+    <fieldset className="settings-group">
+      <legend id={id}>Your editor</legend>
+      <p className="settings-hint">
+        Where Open in your editor sends a file, at the line you are reading.
+      </p>
+      <RadioGroup.Root
+        className="choices"
+        name="your-editor"
+        value={editor ?? ""}
+        onValueChange={(value) => setYourEditor(value as Editor)}
+        aria-labelledby={id}
+      >
+        {EDITORS.map((one) => (
+          <div className="choice" key={one.id}>
+            <RadioGroup.Item
+              className="dot"
+              value={one.id}
+              id={`${id}-${one.id}`}
+              aria-describedby={`${id}-${one.id}-says`}
+            >
+              <RadioGroup.Indicator className="dot-mark" />
+            </RadioGroup.Item>
+            <label className="who" htmlFor={`${id}-${one.id}`}>
+              {one.name}
+            </label>
+            <span className="meta" id={`${id}-${one.id}-says`}>
+              <span className="what">{one.says}</span>
+            </span>
+          </div>
+        ))}
+      </RadioGroup.Root>
+    </fieldset>
   );
 }

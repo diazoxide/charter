@@ -1,6 +1,8 @@
 import { useCallback, useState } from "react";
 import { commands } from "./bindings";
 import { forgetTextSizes, onTextSizes, textSizes, type TextSizes } from "./textSize";
+import { forgetYourEditor, onYourEditor, yourEditor } from "./yourEditor";
+import type { YourEditor } from "./bindings";
 import { atCreation, sayAboutThisMachine, type Reading } from "./windowprefs";
 
 /**
@@ -147,7 +149,13 @@ export const VERSION = 1;
 /** The document, as it is written to the file. `text` is the two text sizes (`textSize.ts`,
  *  charter-app#283), kept here because they are the same kind of preference — how one operator
  *  likes their window — and this is the one writer of the file. */
-type Document = { version: typeof VERSION; regions: Arrangement; text: TextSizes };
+type Document = {
+  version: typeof VERSION;
+  regions: Arrangement;
+  text: TextSizes;
+  /** Your editor (`yourEditor.ts`, RC-20), when one is chosen. */
+  editor?: YourEditor;
+};
 
 /** A document read field by field, and what had to be put right to read it. */
 export type Loaded = { regions: Arrangement; said: string[] };
@@ -261,6 +269,7 @@ export function forgetThisLaunch(): void {
   changed = undefined;
   writing = Promise.resolve();
   forgetTextSizes();
+  forgetYourEditor();
   clearTimeout(textWrite);
 }
 
@@ -316,11 +325,15 @@ function sayWhatTheLayoutCost(path: string, started: ReturnType<typeof startingL
 
 const where = (path: string) => path || "the layout file";
 
-const asDocument = (regions: Arrangement): Document => ({
-  version: VERSION,
-  regions,
-  text: textSizes(),
-});
+const asDocument = (regions: Arrangement): Document => {
+  const editor = yourEditor();
+  return {
+    version: VERSION,
+    regions,
+    text: textSizes(),
+    ...(editor !== undefined ? { editor } : {}),
+  };
+};
 
 /**
  * A text size changed: the file is rewritten with it, and with the arrangement as it stands —
@@ -333,6 +346,9 @@ onTextSizes(() => {
   clearTimeout(textWrite);
   textWrite = setTimeout(() => remember(remembered()), TEXT_WRITE_SETTLES_MS);
 });
+
+/** Your editor was chosen (RC-20): one change, written at once. */
+onYourEditor(() => remember(remembered()));
 
 /** Every write, in the order the window made it. Tauri runs commands on a thread pool, and two
  *  writes that raced there could land the older one last. */

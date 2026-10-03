@@ -16,6 +16,7 @@ use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
 use crate::worktree::{self, git};
+use crate::youreditor::{self, Editor, Launch, NotLaunched};
 
 /// The largest file the light editor draws, in bytes: 5 MiB.
 ///
@@ -63,6 +64,8 @@ pub enum Refused {
     NotOffered(String),
     #[error("'{0}' is not a file")]
     NotAFile(String),
+    #[error(transparent)]
+    Editor(#[from] NotLaunched),
     #[error("charter could not read '{what}': {why}")]
     Unreadable { what: String, why: String },
 }
@@ -122,40 +125,7 @@ pub fn open(
     piece: &str,
     path: &str,
 ) -> Result<Opened, Refused> {
-    let folder = folder_of(plane, ws, repo, piece)?;
-    let relative = inside(path)?;
-    // **Only what the list offers opens** (ADR 0084 §2, ADR 0052): a file git tracks, or one
-    // it does not track and does not ignore. An ignored `.env`, or a secret materialised into
-    // the worktree, is not something a review shows, and `piece_file` hands the window no
-    // value the vault keeps out of it. One more git call per open.
-    let offered = files_in(&folder, piece)?;
-    let offers = |relative: &Path| offered.binary_search(&slashed(relative)).is_ok();
-    if !offers(relative) {
-        return Err(Refused::NotOffered(path.to_string()));
-    }
-    let base = std::fs::canonicalize(&folder).map_err(|e| Refused::Unreadable {
-        what: piece.to_string(),
-        why: e.to_string(),
-    })?;
-    let resolved = match std::fs::canonicalize(base.join(relative)) {
-        Ok(resolved) => resolved,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Err(Refused::NotThere(path.to_string()));
-        }
-        Err(e) => {
-            return Err(Refused::Unreadable {
-                what: path.to_string(),
-                why: e.to_string(),
-            });
-        }
-    };
-    if resolved == base || !resolved.starts_with(&base) || names_git(&resolved, &base) {
-        return Err(Refused::NotInPiece(path.to_string()));
-    }
-    // A link opens only a file the list offers too: one to an ignored file is refused.
-    if !resolved.strip_prefix(&base).is_ok_and(offers) {
-        return Err(Refused::NotOffered(path.to_string()));
-    }
+    let (base, resolved) = locate(plane, ws, repo, piece, path)?;
     // The resolved path has no link on it, so the open refuses one planted since.
     let mut file = crate::contain::open_no_link(&base, &resolved).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
@@ -198,6 +168,80 @@ pub fn open(
     Ok(Opened::Text {
         text: String::from_utf8_lossy(&read).into_owned(),
     })
+}
+
+/// One file of the piece, handed to your editor at `line` (RC-20, ADR 0081 §3): what the app
+/// launches, a URL in the editor's own scheme or `$VISUAL`/`$EDITOR` as a program with its
+/// arguments ([`youreditor::launch`]).
+///
+/// **The path is checked exactly as [`open`] checks it**, so what the light editor would refuse
+/// is never handed on either: only a file the list offers, inside the piece, through no link
+/// that leaves it. The editor is given the file's resolved, absolute path. A file past the
+/// light editor's size is handed on like any other: it is what your editor is for.
+#[allow(clippy::too_many_arguments)]
+pub fn in_your_editor(
+    plane: &Path,
+    ws: &str,
+    repo: &str,
+    piece: &str,
+    path: &str,
+    line: u32,
+    editor: Editor,
+    var: &dyn Fn(&str) -> Option<String>,
+) -> Result<Launch, Refused> {
+    let (_, resolved) = locate(plane, ws, repo, piece, path)?;
+    // A submodule is offered by its path and is a folder; a FIFO is no file to edit.
+    if !resolved.is_file() {
+        return Err(Refused::NotAFile(path.to_string()));
+    }
+    Ok(youreditor::launch(editor, &resolved, line, var)?)
+}
+
+/// The piece's resolved folder and the resolved file `path` names in it, once every check has
+/// passed: a plain relative path, offered by the list, inside the piece, not git's, and through
+/// a link only to another offered file.
+fn locate(
+    plane: &Path,
+    ws: &str,
+    repo: &str,
+    piece: &str,
+    path: &str,
+) -> Result<(PathBuf, PathBuf), Refused> {
+    let folder = folder_of(plane, ws, repo, piece)?;
+    let relative = inside(path)?;
+    // **Only what the list offers opens** (ADR 0084 §2, ADR 0052): a file git tracks, or one
+    // it does not track and does not ignore. An ignored `.env`, or a secret materialised into
+    // the worktree, is not something a review shows, and `piece_file` hands the window no
+    // value the vault keeps out of it. One more git call per open.
+    let offered = files_in(&folder, piece)?;
+    let offers = |relative: &Path| offered.binary_search(&slashed(relative)).is_ok();
+    if !offers(relative) {
+        return Err(Refused::NotOffered(path.to_string()));
+    }
+    let base = std::fs::canonicalize(&folder).map_err(|e| Refused::Unreadable {
+        what: piece.to_string(),
+        why: e.to_string(),
+    })?;
+    let resolved = match std::fs::canonicalize(base.join(relative)) {
+        Ok(resolved) => resolved,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(Refused::NotThere(path.to_string()));
+        }
+        Err(e) => {
+            return Err(Refused::Unreadable {
+                what: path.to_string(),
+                why: e.to_string(),
+            });
+        }
+    };
+    if resolved == base || !resolved.starts_with(&base) || names_git(&resolved, &base) {
+        return Err(Refused::NotInPiece(path.to_string()));
+    }
+    // A link opens only a file the list offers too: one to an ignored file is refused.
+    if !resolved.strip_prefix(&base).is_ok_and(offers) {
+        return Err(Refused::NotOffered(path.to_string()));
+    }
+    Ok((base, resolved))
 }
 
 /// The piece's folder, found the way the Explorer finds it: among the pieces git has.

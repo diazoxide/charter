@@ -9,6 +9,11 @@
  *   of its own* opens, and what a jump from a diff, a record or the knowledge graph will open.
  *
  * Both only read. The core names the folder from the piece, and refuses a path that leaves it.
+ *
+ * **Open in your editor** (RC-20, ADR 0081 §3) is beside the file in both: the file and the
+ * line the cursor is on go to the editor chosen on the Preferences tab. The window sends the
+ * piece, the path, the line and which editor; the core checks the path as it checks a read,
+ * and builds the URL or the program's arguments itself.
  */
 import { useEffect, useMemo, useState } from "react";
 import { FileText, LoaderCircle } from "lucide-react";
@@ -18,6 +23,7 @@ import type { Cut } from "../actions";
 import { pieceFileTitle, pieceFileView } from "../pieceViews";
 import type { ViewRef } from "../tabs";
 import { LightEditor } from "./LightEditor";
+import { useYourEditor } from "../yourEditor";
 
 /** How many matching paths the list draws at once. A repo of tens of thousands of files is
  *  narrowed by typing, not scrolled; the rest are counted under the list. */
@@ -58,8 +64,79 @@ function useFile(plane: PlaneId, cut: Cut, path: string | undefined): Read | und
   return path !== undefined && read?.path === path ? read.read : undefined;
 }
 
+/**
+ * The line the cursor is on in the file at `path`: `start` (else 1) until it moves, and back to
+ * that when another file is drawn.
+ */
+function useCursorLine(path: string | undefined, start?: number) {
+  const [moved, setMoved] = useState<{ path: string | undefined; start?: number; line: number }>();
+  const line =
+    moved !== undefined && moved.path === path && moved.start === start ? moved.line : (start ?? 1);
+  return { line, moved: (line: number) => setMoved({ path, start, line }) };
+}
+
+/**
+ * *Open in your editor*: the button, and the sentence when nothing opened. With no editor
+ * chosen it asks for one rather than guess.
+ */
+function ToYourEditor({
+  plane,
+  cut,
+  path,
+  line,
+}: {
+  plane: PlaneId;
+  cut: Cut;
+  path: string;
+  line: number;
+}) {
+  const editor = useYourEditor();
+  // What went wrong, for the file and editor it went wrong for: another file, or another
+  // editor chosen, says nothing until it is tried.
+  const [said, setSaid] = useState<{ about: string; trouble: string }>();
+  const about = `${path}\n${editor ?? ""}`;
+  const trouble = said?.about === about ? said.trouble : undefined;
+  const say = (trouble: string | undefined) =>
+    setSaid(trouble === undefined ? undefined : { about, trouble });
+  const open = () => {
+    if (editor === undefined) {
+      say("Choose your editor on the Preferences tab first.");
+      return;
+    }
+    say(undefined);
+    void commands
+      .openInYourEditor(plane, cut.workspace, cut.repo, cut.piece, path, line, editor)
+      .then((answer) => {
+        if (answer.status === "error") say(answer.error);
+      })
+      .catch((err: unknown) => say(String(err)));
+  };
+  return (
+    <>
+      <button type="button" tabIndex={0} onClick={open}>
+        {`Open in your editor at line ${line}`}
+      </button>
+      {trouble !== undefined && (
+        <p className="piece-files-trouble" role="status">
+          {trouble}
+        </p>
+      )}
+    </>
+  );
+}
+
 /** A file as the light editor draws it, or the sentence that says why it does not. */
-function Shown({ path, read }: { path: string; read: Read | undefined }) {
+function Shown({
+  path,
+  read,
+  line,
+  onLine,
+}: {
+  path: string;
+  read: Read | undefined;
+  line?: number;
+  onLine?: (line: number) => void;
+}) {
   if (read === undefined) {
     return <EmptyState mark={LoaderCircle} headline={`Reading ${path}…`} size="panel" />;
   }
@@ -71,7 +148,7 @@ function Shown({ path, read }: { path: string; read: Read | undefined }) {
   const name = path.slice(path.lastIndexOf("/") + 1);
   switch (file.kind) {
     case "text":
-      return <LightEditor path={path} text={file.text} />;
+      return <LightEditor path={path} text={file.text} line={line} onLine={onLine} />;
     case "binary":
       return (
         <EmptyState
@@ -93,12 +170,29 @@ function Shown({ path, read }: { path: string; read: Read | undefined }) {
   }
 }
 
-/** One file of a piece, in a tab of its own. */
-export function PieceFileTab({ plane, cut, path }: { plane: PlaneId; cut: Cut; path: string }) {
+/** One file of a piece, in a tab of its own, brought to `line` when one is given. */
+export function PieceFileTab({
+  plane,
+  cut,
+  path,
+  line,
+}: {
+  plane: PlaneId;
+  cut: Cut;
+  path: string;
+  line?: number;
+}) {
   const read = useFile(plane, cut, path);
+  const at = useCursorLine(path, line);
   return (
     <div className="piece-file">
-      <Shown path={path} read={read} />
+      <header className="piece-files-head">
+        <code>{path}</code>
+        <span className="piece-files-actions">
+          <ToYourEditor plane={plane} cut={cut} path={path} line={at.line} />
+        </span>
+      </header>
+      <Shown path={path} read={read} line={line} onLine={at.moved} />
     </div>
   );
 }
@@ -116,6 +210,7 @@ export function PieceFilesTab({
   const [listed, setListed] = useState<{ files?: string[]; trouble?: string }>();
   const [wanted, setWanted] = useState("");
   const [picked, setPicked] = useState<string>();
+  const at = useCursorLine(picked);
   useEffect(() => {
     let gone = false;
     void commands
@@ -189,15 +284,20 @@ export function PieceFilesTab({
           <>
             <header className="piece-files-head">
               <code>{picked}</code>
-              <button
-                type="button"
-                tabIndex={0}
-                onClick={() => onOpenView(pieceFileView(cut, picked), pieceFileTitle(cut, picked))}
-              >
-                Open in a tab of its own
-              </button>
+              <span className="piece-files-actions">
+                <ToYourEditor plane={plane} cut={cut} path={picked} line={at.line} />
+                <button
+                  type="button"
+                  tabIndex={0}
+                  onClick={() =>
+                    onOpenView(pieceFileView(cut, picked), pieceFileTitle(cut, picked))
+                  }
+                >
+                  Open in a tab of its own
+                </button>
+              </span>
             </header>
-            <Shown path={picked} read={read} />
+            <Shown path={picked} read={read} onLine={at.moved} />
           </>
         )}
       </section>

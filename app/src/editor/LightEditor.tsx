@@ -52,15 +52,36 @@ function colour(path: string, language: Compartment, views: EditorView[]): () =>
 }
 
 /** One file, read only. `line`, when given, is brought into view (a jump from a diff, a
- *  record or the knowledge graph). */
-export function LightEditor({ path, text, line }: { path: string; text: string; line?: number }) {
+ *  record or the knowledge graph). `onLine` hears the line the cursor moves to, which is the
+ *  line *Open in your editor* hands on (RC-20). */
+export function LightEditor({
+  path,
+  text,
+  line,
+  onLine,
+}: {
+  path: string;
+  text: string;
+  line?: number;
+  onLine?: (line: number) => void;
+}) {
   const host = useRef<HTMLDivElement>(null);
+  // Held in a ref, so a new callback does not draw the file again.
+  const hears = useRef(onLine);
+  useEffect(() => {
+    hears.current = onLine;
+  }, [onLine]);
   useEffect(() => {
     if (!host.current) return;
     const language = new Compartment();
+    const cursor = EditorView.updateListener.of((update) => {
+      if (!update.selectionSet) return;
+      const state = update.state;
+      hears.current?.(state.doc.lineAt(state.selection.main.head).number);
+    });
     const view = new EditorView({
       parent: host.current,
-      state: EditorState.create({ doc: text, extensions: reading(language) }),
+      state: EditorState.create({ doc: text, extensions: [reading(language), cursor] }),
     });
     if (line !== undefined && line >= 1 && line <= view.state.doc.lines) {
       const at = view.state.doc.line(line).from;

@@ -18,3 +18,11 @@ globalThis.ResizeObserver ??= class {
   unobserve() {}
   disconnect() {}
 };
+
+// jsdom has no layout, so a Range has no client rects. CodeMirror measures one when it scrolls
+// to a line (RC-20 opens a file at a line), and the measure runs after the test that caused it.
+// An empty rect list is what an unlaid-out document would report.
+if (typeof Range !== "undefined") {
+  Range.prototype.getClientRects ??= () => [] as unknown as DOMRectList;
+  Range.prototype.getBoundingClientRect ??= () => new DOMRect(0, 0, 0, 0);
+}
