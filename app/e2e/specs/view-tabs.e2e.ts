@@ -271,6 +271,9 @@ describe("view tabs", function () {
 
       await (await undo.$("button=Undo")).click();
 
+      // Undo moves the file back first and then appends its index line, under the store's
+      // lock but not atomically to a reader outside it, so wait for both.
+      const index = join(plane, "personas", "devops", "memory", "MEMORY.md");
       await browser.waitUntil(
         async () => {
           try {
@@ -281,9 +284,10 @@ describe("view tabs", function () {
         },
         { timeout: 20_000, timeoutMsg: "Undo did not put the memory back under its own slug" },
       );
-      expect(
-        readFileSync(join(plane, "personas", "devops", "memory", "MEMORY.md"), "utf8"),
-      ).toContain("(cluster-prod-1-lives-in-eu-west-1.md)");
+      await browser.waitUntil(
+        async () => readFileSync(index, "utf8").includes("(cluster-prod-1-lives-in-eu-west-1.md)"),
+        { timeout: 20_000, timeoutMsg: "Undo did not put the memory back in its index" },
+      );
     });
   });
 
