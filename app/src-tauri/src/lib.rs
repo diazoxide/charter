@@ -1270,10 +1270,61 @@ fn open_session(
     rows: u16,
 ) -> Result<u32, String> {
     let program_named = program.is_some();
-    let chat = Chat {
+    let chat = unprofiled(program, args, cwd.map(PathBuf::from), name);
+    // The board already knows about it: `Chats` announces a chat BEFORE its program starts,
+    // so its very first hook lands somewhere. Registering it here would be too late.
+    let chats = planes.held(&plane)?;
+    let size = Size { columns, rows };
+    // **The operator's own shell — no program named — is the one start the kill switch lets
+    // through** (OV-1, ADR 0071). A program named here is anything at all, a harness included,
+    // so it is refused while agents are stopped like every other chat.
+    if program_named {
+        chats.chats().start(&chat, size)
+    } else {
+        chats.chats().start_operator_shell(&chat, size)
+    }
+}
+
+/// A shell tab in one folder of a branch (FM-10): the operator's own shell, as `open_session`
+/// with no program starts it, in a folder the core resolved. `""` is the branch's own folder.
+/// Refused, in the core's sentence, for a folder outside the branch, a link or git's own.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::too_many_arguments)]
+fn open_shell_in_branch(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    workspace: String,
+    repo: String,
+    piece: Option<String>,
+    folder: String,
+    name: String,
+    columns: u16,
+    rows: u16,
+) -> Result<u32, String> {
+    let held = planes.held(&plane)?;
+    let cwd = piecefiles::shell_folder(
+        held.root(),
+        piecefiles::branch(&workspace, &repo, &piece),
+        &folder,
+    )?;
+    let chat = unprofiled(None, Vec::new(), Some(cwd), name);
+    held.chats()
+        .start_operator_shell(&chat, Size { columns, rows })
+}
+
+/// A chat on no profile: a program the window named, or the operator's shell when it named
+/// none.
+fn unprofiled(
+    program: Option<String>,
+    args: Vec<String>,
+    cwd: Option<PathBuf>,
+    name: String,
+) -> Chat {
+    Chat {
         program: program.unwrap_or_else(sessions::shell),
         args,
-        cwd: cwd.map(PathBuf::from),
+        cwd,
         name,
         resume: None,
         active: false,
@@ -1294,18 +1345,6 @@ fn open_session(
         from: None,
         renamed_from: None,
         ..Default::default()
-    };
-    // The board already knows about it: `Chats` announces a chat BEFORE its program starts,
-    // so its very first hook lands somewhere. Registering it here would be too late.
-    let chats = planes.held(&plane)?;
-    let size = Size { columns, rows };
-    // **The operator's own shell — no program named — is the one start the kill switch lets
-    // through** (OV-1, ADR 0071). A program named here is anything at all, a harness included,
-    // so it is refused while agents are stopped like every other chat.
-    if program_named {
-        chats.chats().start(&chat, size)
-    } else {
-        chats.chats().start_operator_shell(&chat, size)
     }
 }
 

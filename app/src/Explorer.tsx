@@ -40,7 +40,7 @@ import { Menued } from "./Menus";
 import { WorktreeMark } from "./Worktree";
 import { isShell } from "./chatState";
 import { ChatStateMark, ChildAgents, childAgentsId } from "./ChatRows";
-import type { Catalogued, Offer } from "./actions";
+import type { BranchPath, Catalogued, FileOn, Offer } from "./actions";
 import type { WorkspaceState } from "./workspaceState";
 import { useTabStop } from "./roving";
 
@@ -141,6 +141,12 @@ const NONE_WRAPPING: ReadonlySet<number> = new Set();
  * open branch's files to what it changed, every folder of it open. The *Filter files* box
  * narrows the file rows drawn to names holding what is typed, keeping the folders on the way to
  * one; Esc clears it.
+ *
+ * **A file or folder row has a menu that changes nothing** (FM-10, #1113): copy its path,
+ * relative or absolute, reveal it in the file manager, your editor for a file and a shell tab
+ * for a folder (`actions.fileRows`). Never create, rename, move or delete (ADR 0081, V86 F8):
+ * charter does not race an agent writing the same tree. Each row names the branch and the path
+ * inside it; the core places it (`files::place`), so no path the window joined leaves it.
  */
 export function Explorer({
   plane,
@@ -303,7 +309,16 @@ export function Explorer({
   const filesOf = (repo: string, piece: string | null) => (
     <FilesRow
       branch={{ repo, piece, folder: "" }}
-      at={{ place: { workspace, repo, piece }, files, fold, treeitem, isDrawn, onOpenFile, icons }}
+      at={{
+        place: { workspace, repo, piece },
+        files,
+        fold,
+        treeitem,
+        isDrawn,
+        onOpenFile,
+        onPress,
+        icons,
+      }}
     />
   );
   // The chats that are in no piece of this workspace: they work in the workspace itself or
@@ -856,7 +871,33 @@ export type FileRows = {
   onOpenFile?: (place: Place, path: string) => void;
   /** The project's icon theme (FM-3), which every file and folder row is drawn from. */
   icons: IconTheme;
+  /** A file or folder row's menu was used (FM-10): copy its path, reveal it, your editor or a
+   *  shell tab there. No menu without it. */
+  onPress?: (offer: Offer) => void;
 };
+
+/** What a file row's menu is looked up in: nothing, because its rows are its own
+ *  (`actions.fileRows`). */
+const NO_CATALOGUE: Catalogued = new Map();
+
+/**
+ * A file or folder row with its menu (FM-10): the rows `actions.fileRows` builds for it — never
+ * listed in the catalogue — and nothing that creates, renames, moves or deletes (ADR 0081). The row is drawn as it was when the tree
+ * has no way to carry a row out.
+ */
+function FileMenu({ on, at, children }: { on: FileOn; at: FileRows; children: ReactNode }) {
+  if (at.onPress === undefined) return <>{children}</>;
+  return (
+    <Menued on={on} offers={NO_CATALOGUE} onPress={at.onPress}>
+      {children}
+    </Menued>
+  );
+}
+
+/** A file row's path in the branch, as its menu names it. */
+function pathOn(at: FileRows, path: string): BranchPath {
+  return { ...at.place, path };
+}
 
 /** A branch folder's *Files* row, or a folder's row, with what it holds under it once opened. */
 function FilesRow({
@@ -877,29 +918,40 @@ function FilesRow({
   const open = isOpen(at.files, branch, always);
   const level = open ? levelOf(at.files, branch) : undefined;
   const marked = at.files.indexes.get(branchKey(branch))?.marks.get(branch.folder);
+  const row = (
+    <RovingFocusGroup.Item asChild tabStopId={id} focusable={at.isDrawn(id)}>
+      <button
+        type="button"
+        className="file-node"
+        {...at.treeitem(id)}
+        onClick={() => {
+          if (!always) at.fold(key, !open);
+        }}
+      >
+        <ChevronRight className="twisty" data-open={open || undefined} />
+        {/* The branch's own folder is the *Files* row; a folder under it is drawn by name. */}
+        {branch.folder === "" ? (
+          <Files className="node-icon" />
+        ) : (
+          <FileIcon symbol={iconFor(at.icons, { name, folder: true, open })} />
+        )}
+        <span className="spot-name">{name}</span>
+        {/* A space, so a screen reader says the mark as its own word; flex drops it. */}{" "}
+        <ChangeBadge marked={marked} folder />
+      </button>
+    </RovingFocusGroup.Item>
+  );
   return (
     <>
-      <RovingFocusGroup.Item asChild tabStopId={id} focusable={at.isDrawn(id)}>
-        <button
-          type="button"
-          className="file-node"
-          {...at.treeitem(id)}
-          onClick={() => {
-            if (!always) at.fold(key, !open);
-          }}
-        >
-          <ChevronRight className="twisty" data-open={open || undefined} />
-          {/* The branch's own folder is the *Files* row; a folder under it is drawn by name. */}
-          {branch.folder === "" ? (
-            <Files className="node-icon" />
-          ) : (
-            <FileIcon symbol={iconFor(at.icons, { name, folder: true, open })} />
-          )}
-          <span className="spot-name">{name}</span>
-          {/* A space, so a screen reader says the mark as its own word; flex drops it. */}{" "}
-          <ChangeBadge marked={marked} folder />
-        </button>
-      </RovingFocusGroup.Item>
+      {/* A folder's menu (FM-10); the branch's own *Files* row has none, its branch's row
+          being where that folder is acted on. */}
+      {branch.folder === "" ? (
+        row
+      ) : (
+        <FileMenu on={{ on: "file", at: pathOn(at, branch.folder), kind: "folder" }} at={at}>
+          {row}
+        </FileMenu>
+      )}
       {level !== undefined &&
         ("pending" in level ? (
           <Pending>Reading…</Pending>
@@ -963,30 +1015,40 @@ export function FolderEntries({
               data-ignored={entry.ignored || undefined}
               data-mark={entry.marked?.mark}
             >
-              <RovingFocusGroup.Item asChild tabStopId={id} focusable={at.isDrawn(id)}>
-                <button
-                  type="button"
-                  className="file-node"
-                  data-refused={refused !== undefined || undefined}
-                  aria-disabled={refused !== undefined || undefined}
-                  title={refused ?? path}
-                  {...at.treeitem(id)}
-                  onClick={() => {
-                    if (refused === undefined) at.onOpenFile?.(at.place, path);
-                  }}
-                >
-                  {Mark === null ? (
-                    <FileIcon symbol={iconFor(at.icons, { name: entry.name, folder: false })} />
-                  ) : (
-                    <Mark className="node-icon" />
-                  )}
-                  <span className="spot-name">{entry.name}</span>{" "}
-                  <ChangeBadge marked={entry.marked} folder={false} />
-                  {/* Why it does not open, said beside it — an ignored file's too, which is
+              <FileMenu
+                on={{
+                  on: "file",
+                  at: pathOn(at, path),
+                  kind: entry.kind,
+                  refused,
+                }}
+                at={at}
+              >
+                <RovingFocusGroup.Item asChild tabStopId={id} focusable={at.isDrawn(id)}>
+                  <button
+                    type="button"
+                    className="file-node"
+                    data-refused={refused !== undefined || undefined}
+                    aria-disabled={refused !== undefined || undefined}
+                    title={refused ?? path}
+                    {...at.treeitem(id)}
+                    onClick={() => {
+                      if (refused === undefined) at.onOpenFile?.(at.place, path);
+                    }}
+                  >
+                    {Mark === null ? (
+                      <FileIcon symbol={iconFor(at.icons, { name: entry.name, folder: false })} />
+                    ) : (
+                      <Mark className="node-icon" />
+                    )}
+                    <span className="spot-name">{entry.name}</span>{" "}
+                    <ChangeBadge marked={entry.marked} folder={false} />
+                    {/* Why it does not open, said beside it — an ignored file's too, which is
                       drawn only once the operator asked to see what git ignores. */}
-                  {refused !== undefined && <span className="spot-what">{refused}</span>}
-                </button>
-              </RovingFocusGroup.Item>
+                    {refused !== undefined && <span className="spot-what">{refused}</span>}
+                  </button>
+                </RovingFocusGroup.Item>
+              </FileMenu>
             </li>
           );
         })}

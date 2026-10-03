@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import type { FolderEntry, PieceFile, PlaneId } from "../bindings";
 import { PieceFileTab, PieceFilesTab } from "./PieceFiles";
 import { forgetYourEditor, setYourEditor } from "../yourEditor";
+import type { Offer } from "../actions";
 
 const PLANE = "/plane" as unknown as PlaneId;
 const CUT = { workspace: "alpha", repo: "svc", piece: "fix-it" };
@@ -353,5 +354,29 @@ describe("open in your editor (RC-20)", () => {
     await waitFor(() =>
       expect(asked).toContain("open_in_your_editor:alpha/svc/fix-it:src/lib.rs:1:zed"),
     );
+  });
+});
+
+describe("a row of the file tab's tree (FM-10)", () => {
+  it("has the explorer's menu: its paths, a reveal, and your editor or a shell there", async () => {
+    core({ "README.md": { kind: "text", text: "x" }, "src/lib.rs": { kind: "text", text: "" } });
+    const pressed: Offer[] = [];
+    render(
+      <PieceFilesTab
+        plane={PLANE}
+        cut={CUT}
+        onOpenView={() => undefined}
+        onPress={(offer) => pressed.push(offer)}
+      />,
+    );
+
+    fireEvent.contextMenu(await row("src"));
+    const menu = await screen.findByRole("menu");
+    expect(within(menu).getByRole("menuitem", { name: "Open a shell tab here" })).toBeVisible();
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Copy absolute path" }));
+
+    expect(pressed.map((offer) => offer.does)).toEqual([
+      { verb: "copyPath", at: { ...CUT, path: "src" }, absolute: true },
+    ]);
   });
 });

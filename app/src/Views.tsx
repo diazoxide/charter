@@ -447,6 +447,7 @@ export function ViewPane({
                 onOpenView={onOpenView}
                 split={split}
                 onSplit={onSplit}
+                onPress={onPress}
               />
             ) : (
               <PieceFileTab

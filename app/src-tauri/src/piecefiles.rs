@@ -337,6 +337,91 @@ fn launch_of(
         .map_err(|refused| refused.to_string())
 }
 
+/// One file or folder of a branch, its path put on the clipboard: relative to the branch's
+/// folder, or absolute (FM-10). Refused, in the core's sentence, for a path that leaves the
+/// branch, a link or git's own folder.
+// The path is placed by `charter_core::files::place` and the absolute one is the core's, never
+// one the window joined; it goes to the clipboard here and never back to the window. Not a doc
+// comment, because the generated bindings carry those.
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+#[specta::specta]
+pub fn copy_branch_path(
+    planes: tauri::State<'_, Planes>,
+    clipboard: tauri::State<'_, crate::vaults::SystemClipboard>,
+    plane: PlaneId,
+    workspace: String,
+    repo: String,
+    piece: Option<String>,
+    path: String,
+    absolute: bool,
+) -> Result<(), String> {
+    let text = path_text(
+        planes.held(&plane)?.root(),
+        branch(&workspace, &repo, &piece),
+        &path,
+        absolute,
+    )?;
+    clipboard.put_text(&text)
+}
+
+/// One file or folder of a branch, shown in the operating system's file manager: Finder,
+/// Files or File Explorer (FM-10). Refused as Copy path is refused.
+// The opener plugin's reveal, called here with the path the core placed: the window names a
+// branch and a path inside it, never a directory. Not a doc comment, because the generated
+// bindings carry those.
+#[tauri::command]
+#[specta::specta]
+pub fn reveal_branch_path(
+    app: tauri::AppHandle,
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    workspace: String,
+    repo: String,
+    piece: Option<String>,
+    path: String,
+) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt as _;
+    let placed = placed_of(
+        planes.held(&plane)?.root(),
+        branch(&workspace, &repo, &piece),
+        &path,
+    )?;
+    app.opener()
+        .reveal_item_in_dir(&placed.absolute)
+        .map_err(|e| format!("the system did not show '{path}': {e}"))
+}
+
+fn placed_of(plane: &Path, branch: Branch<'_>, path: &str) -> Result<files::Placed, String> {
+    files::place(plane, branch, path).map_err(|refused| refused.to_string())
+}
+
+/// What Copy path puts on the clipboard: the path in the branch, or the absolute path the core
+/// placed. An absolute path is said as a person writes it, without Windows' `\\?\` prefix.
+fn path_text(
+    plane: &Path,
+    branch: Branch<'_>,
+    path: &str,
+    absolute: bool,
+) -> Result<String, String> {
+    if !absolute {
+        // A link's own path, followed nowhere: what its row copies (`files::named`).
+        return files::named(plane, branch, path).map_err(|refused| refused.to_string());
+    }
+    let placed = placed_of(plane, branch, path)?;
+    Ok(dunce::simplified(&placed.absolute).display().to_string())
+}
+
+/// The folder of a branch a shell tab starts in (FM-10), resolved as the tree resolves it: inside
+/// the branch, reached through no link, not git's. `""` is the branch's own folder.
+pub(crate) fn shell_folder(
+    plane: &Path,
+    branch: Branch<'_>,
+    folder: &str,
+) -> Result<std::path::PathBuf, String> {
+    files::folder(plane, branch, folder).map_err(|refused| refused.to_string())
+}
+
 fn file_of(plane: &Path, branch: Branch<'_>, path: &str) -> Result<PieceFile, String> {
     // A size crosses as a `u32`: specta refuses a `u64` for TypeScript, which has no integer
     // that wide. A binary or oversized file past 4 GiB is said as 4 GiB.
@@ -535,6 +620,80 @@ mod tests {
                 YourEditor::Idea,
                 YourEditor::Variable
             ]
+        );
+    }
+
+    #[test]
+    fn copy_path_is_the_path_in_the_branch_or_the_one_the_core_resolved() {
+        let (_dir, root, piece) = plane();
+        std::fs::create_dir_all(piece.join("src")).unwrap();
+        std::fs::write(piece.join("src/lib.rs"), "\n").unwrap();
+        let resolved = std::fs::canonicalize(&piece).unwrap();
+
+        let relative = path_text(&root, PIECE, "./src/lib.rs", false);
+        let absolute = path_text(&root, PIECE, "src", true);
+
+        assert_eq!(relative, Ok("src/lib.rs".to_string()));
+        assert_eq!(absolute, Ok(resolved.join("src").display().to_string()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_links_relative_path_is_copied_and_its_absolute_path_and_reveal_are_refused() {
+        let (_dir, root, piece) = plane();
+        std::os::unix::fs::symlink(piece.join("README.md"), piece.join("CLAUDE.md")).unwrap();
+        let refused = "'CLAUDE.md' is not a path inside the branch's folder".to_string();
+
+        assert_eq!(
+            path_text(&root, PIECE, "CLAUDE.md", false),
+            Ok("CLAUDE.md".to_string())
+        );
+        assert_eq!(
+            path_text(&root, PIECE, "CLAUDE.md", true),
+            Err(refused.clone())
+        );
+        assert_eq!(
+            placed_of(&root, PIECE, "CLAUDE.md").map(|placed| placed.absolute),
+            Err(refused)
+        );
+    }
+
+    #[test]
+    fn a_path_outside_the_branch_is_refused_before_it_is_copied_or_revealed() {
+        let (_dir, root, _piece) = plane();
+
+        assert_eq!(
+            path_text(&root, PIECE, "../../charter.toml", true),
+            Err("'../../charter.toml' is not a path inside the branch's folder".to_string())
+        );
+        assert_eq!(
+            placed_of(&root, PIECE, ".git").map(|placed| placed.absolute),
+            Err("'.git' is not a path inside the branch's folder".to_string())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_shell_starts_only_in_a_folder_of_the_branch_reached_through_no_link() {
+        let (_dir, root, piece) = plane();
+        std::fs::create_dir_all(piece.join("src")).unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), piece.join("out")).unwrap();
+        let resolved = std::fs::canonicalize(&piece).unwrap();
+
+        assert_eq!(shell_folder(&root, PIECE, "src"), Ok(resolved.join("src")));
+        assert_eq!(shell_folder(&root, PIECE, ""), Ok(resolved));
+        assert_eq!(
+            shell_folder(&root, PIECE, "out"),
+            Err("'out' is not a path inside the branch's folder".to_string())
+        );
+        assert_eq!(
+            shell_folder(&root, PIECE, "README.md"),
+            Err("'README.md' is not a folder".to_string())
+        );
+        assert_eq!(
+            shell_folder(&root, PIECE, "../.."),
+            Err("'../..' is not a path inside the branch's folder".to_string())
         );
     }
 

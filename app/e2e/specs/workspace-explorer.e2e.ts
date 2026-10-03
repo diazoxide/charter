@@ -674,6 +674,42 @@ describe("the explorer", () => {
       timeoutMsg: `the chat ${started} did not come back when its workspace was focused again`,
     });
   });
+
+  /**
+   * **A shell tab in a folder of a branch, from the folder's menu** (FM-10, #1113), against the
+   * real core, and last, so the shell it leaves running is counted by no scenario here:
+   * `open_shell_in_branch` resolves the folder inside the branch and starts the operator's shell
+   * there. The window names the branch and the folder, never a directory, and the chat the core
+   * opened works in that folder. The event is dispatched, for the piece menu's reason above.
+   */
+  it("opens a shell tab in a folder of the branch from the folder's menu", async () => {
+    await onAlpha();
+    const plane = (await ask<string[]>("open_planes"))[0];
+    const branch = join(plane, "workspaces", "alpha", ".worktrees", "svc", "fix-login");
+    mkdirSync(join(branch, "shell-here"), { recursive: true });
+    writeFileSync(join(branch, "shell-here", "keep.md"), "kept\n");
+    const files = await $('[data-testid="files-svc-fix-login"] .file-node');
+    await files.waitForExist({ timeout: 20_000 });
+    if ((await files.getAttribute("aria-expanded")) !== "true") await files.click();
+    await fileRow("fix-login", "shell-here", 60_000);
+
+    const sent = await sendContextMenu('[data-row="file:svc/fix-login:shell-here"]');
+    expect(sent).toBe(true);
+    const menu = await $('[role="menu"]');
+    await menu.waitForDisplayed({ timeout: 20_000 });
+    await expect(menu).toHaveText("Copy absolute path", { containing: true });
+    await menu.$('[role="menuitem"][aria-label="Open a shell tab here"]').click();
+    await menu.waitForDisplayed({ timeout: 20_000, reverse: true });
+
+    await browser.waitUntil(async () => (await tabInFront()).startsWith("shell"), {
+      timeout: 20_000,
+      timeoutMsg: `no shell tab came forward; in front is ${await tabInFront()}`,
+    });
+    const chats = await ask<{ cwd: string | null }[]>("opened_chats", { plane });
+    expect(
+      chats.some((one) => one.cwd?.split("\\").join("/").endsWith("/fix-login/shell-here")),
+    ).toBe(true);
+  });
 });
 
 /**

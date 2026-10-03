@@ -350,6 +350,18 @@ export type Does =
    *  core resolves the subject again (`curate`), so what is typed is the core's prompt now. */
   | { verb: "curate"; subject: string; action: string }
   | { verb: "quit" }
+  /** Puts a branch file's or folder's path on the clipboard (FM-10): relative to the branch's
+   *  folder, or `absolute`. The core places the path and copies it, so the absolute path is
+   *  never one the window joined. It changes nothing on disk. */
+  | { verb: "copyPath"; at: BranchPath; absolute: boolean }
+  /** Shows a branch file or folder in the operating system's file manager (FM-10). The core
+   *  places it, inside the branch and through no link, and reveals it. */
+  | { verb: "revealPath"; at: BranchPath }
+  /** Opens a branch file in the operator's editor at `line` (RC-20). */
+  | { verb: "openInEditor"; at: BranchPath; line: number }
+  /** Opens a shell tab whose working directory is a folder of a branch (FM-10). The core
+   *  resolves the folder; the shell starts no harness, so nothing asks first. */
+  | { verb: "shellInFolder"; at: BranchPath }
   /** A row that cannot run. It still carries a `Does`, so "what it would do" and "whether it
    *  can" stay separate questions — and `perform` refuses it rather than guessing. */
   | { verb: "nothing" };
@@ -648,7 +660,22 @@ export type Doing = {
    *  typed into — so it answers a `Ran`. */
   curate: (subject: string, action: string) => Promise<Ran>;
   quit: () => void;
+  /** Each answers a `Ran`: the core places the path and can refuse it — a path that left the
+   *  branch, a link, a file gone meanwhile — and says so in its own sentence. */
+  copyPath: (at: BranchPath, absolute: boolean) => Promise<Ran>;
+  revealPath: (at: BranchPath) => Promise<Ran>;
+  /** Refused, rather than guessed, while no editor is chosen on the Preferences tab. */
+  openInEditor: (at: BranchPath, line: number) => Promise<Ran>;
+  /** A shell tab in that folder; a refusal is said the way a shell tab's is. */
+  shellInFolder: (at: BranchPath) => void;
 };
+
+/**
+ * One file or folder of a branch, as a file row names it (FM-10): the branch by workspace,
+ * repo and piece — no piece for the repo's own folder (#948) — and the path inside it. Never a
+ * directory: what it is on disk is the core's answer (`files::place`).
+ */
+export type BranchPath = { workspace: string; repo: string; piece: string | null; path: string };
 
 /**
  * One worktree charter cut, named the way every worktree command names one.
@@ -1983,6 +2010,15 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
     case "quit":
       doing.quit();
       return DID;
+    case "copyPath":
+      return doing.copyPath(does.at, does.absolute);
+    case "revealPath":
+      return doing.revealPath(does.at);
+    case "openInEditor":
+      return doing.openInEditor(does.at, does.line);
+    case "shellInFolder":
+      doing.shellInFolder(does.at);
+      return DID;
     case "nothing":
       return DID;
   }
@@ -2346,6 +2382,9 @@ export type MenuOn =
   /** One clone of the focused workspace, by name — the explorer's clone heading and the bottom
    *  bar's repo row. The path is the catalogue's, so the menu does not carry it. */
   | { on: "clone"; repo: string }
+  /** One file or folder row of a branch's tree — the explorer's and the file tab's (FM-10):
+   *  what it is as the tree drew it, and why it does not open when the tree said. */
+  | FileOn
   /** The panes — the centre of the window, where a chat is. Not about any one pane: a split
    *  acts on the pane that has the keyboard, which is what the bar's buttons act on too. */
   | { on: "pane" };
@@ -2369,6 +2408,8 @@ export type MenuOn =
  */
 export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
   switch (what.on) {
+    case "file":
+      return { above: fileRows(what).map((row) => row.id), below: [] };
     case "chat":
       return {
         above: [
@@ -2571,8 +2612,84 @@ export function catalogued(offers: readonly Offer[]): Catalogued {
  * greyed row is an answer where a missing row is a mystery.
  */
 export function menuRows(what: MenuOn, offers: Catalogued): { above: Offer[]; below: Offer[] } {
+  // A file row's menu is its own short list, built for the row it was opened on: a branch
+  // holds more files than any catalogue could list in advance (FM-10).
+  if (what.on === "file") return { above: fileRows(what), below: [] };
   const found = (ids: readonly string[]) =>
     ids.map((id) => offers.get(id)).filter((row) => row !== undefined);
   const { above, below } = menuOn(what);
   return { above: found(above), below: found(below) };
+}
+
+// ----------------------------------------------------------------------------------------
+// a branch's file rows (FM-10)
+// ----------------------------------------------------------------------------------------
+
+/** A file or folder row a menu was opened on. */
+export type FileOn = {
+  on: "file";
+  at: BranchPath;
+  /** What the tree drew it as: a folder, a file, or a link it never follows. */
+  kind: "folder" | "file" | "link";
+  /** Why the file does not open, in the core's sentence, when the tree said: an ignored file,
+   *  a link out of the branch, a file the branch deleted. */
+  refused?: string;
+};
+
+/**
+ * Every verb a file or folder row offers, and nothing else (FM-10, V86 F8).
+ *
+ * **Each changes nothing in the branch**: charter never creates, renames, moves or deletes a
+ * file (ADR 0081), so it never races an agent writing the same tree. A copy, a reveal, your
+ * editor and a shell are where a person changes files, and each is theirs. A test holds this
+ * list to exactly these verbs, so a row that writes cannot be added to it quietly.
+ */
+export const FILE_VERBS = ["copyPath", "revealPath", "openInEditor", "shellInFolder"] as const;
+
+/** What Reveal is called where the window runs: the file manager's own name. */
+export function revealSaid(platform: string): string {
+  if (platform.startsWith("Mac")) return "Reveal in Finder";
+  if (platform.startsWith("Win")) return "Reveal in File Explorer";
+  return "Reveal in Files";
+}
+
+/** Reveal's words on this platform, said on its row. */
+export const REVEAL_SAID = revealSaid(typeof navigator === "undefined" ? "" : navigator.platform);
+
+/** Why a link's row copies only its relative path. */
+export const NO_LINK_FOLLOWED =
+  "charter follows no link: it reveals and places only the branch's own files and folders.";
+
+/**
+ * The rows a file or folder's menu draws, in order (FM-10): copy its path, relative or
+ * absolute; reveal it; and your editor for a file or a shell tab for a folder.
+ *
+ * **Built for the one row the menu was opened on**, never listed in the catalogue: a branch has
+ * more files than any list could hold, and the menu is drawn only while it is open. Data like
+ * every other offer — a `Does` that `perform` carries out — so the surfaces stay views of it.
+ */
+export function fileRows(what: FileOn): Offer[] {
+  const { at, kind } = what;
+  const key = `${at.workspace}/${at.repo}/${at.piece ?? ""}:${at.path}`;
+  const placed = (id: string, title: string, does: Does): Offer =>
+    kind === "link" ? cannot(id, title, NO_LINK_FOLLOWED) : can(id, title, does);
+  const rows: Offer[] = [
+    can(`file.copy:${key}`, "Copy relative path", { verb: "copyPath", at, absolute: false }),
+    placed(`file.copyabsolute:${key}`, "Copy absolute path", {
+      verb: "copyPath",
+      at,
+      absolute: true,
+    }),
+    placed(`file.reveal:${key}`, REVEAL_SAID, { verb: "revealPath", at }),
+  ];
+  if (kind === "folder") {
+    rows.push(can(`file.shell:${key}`, "Open a shell tab here", { verb: "shellInFolder", at }));
+  } else {
+    rows.push(
+      what.refused === undefined
+        ? can(`file.editor:${key}`, "Open in your editor", { verb: "openInEditor", at, line: 1 })
+        : cannot(`file.editor:${key}`, "Open in your editor", what.refused),
+    );
+  }
+  return rows;
 }

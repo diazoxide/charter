@@ -50,6 +50,9 @@ tokio = { version = "1", features = ["time", "rt"] }
 # What the app notices goes to the diagnostic log `charter_core::applog` installs (#647): a
 # file that rotates daily, and standard error. The version charter-core uses.
 tracing = "0.1"
+# A file row's Copy absolute path (FM-10) says a Windows path without the `\\?\` prefix
+# `canonicalize` gives it. The version tauri-plugin-opener already brings in.
+dunce = "1.0.5"
 # A vault's Copy (charter-app#236): the core puts the value on the system clipboard itself, so
 # it never reaches the window, and marks it for clipboard histories to leave out. Text only.
 arboard = { version = "3.6.1", default-features = false }

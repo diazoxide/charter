@@ -616,6 +616,11 @@ fn folder_in(base: &Path, folder: &str) -> Result<PathBuf, Refused> {
     } else {
         inside(folder)?.to_path_buf()
     };
+    // Git's own folder is refused by its name before the disk is asked, so whether something
+    // exists inside it is never said.
+    if gits(&relative) {
+        return Err(Refused::NotInPiece(folder.to_string()));
+    }
     let dir = base.join(&relative);
     // The folder as the disk spells it must be the folder as it was named: a link anywhere on
     // the way resolves elsewhere, and is refused rather than followed.
@@ -1001,6 +1006,94 @@ fn image_kind(bytes: &[u8]) -> Option<&'static str> {
     }
 }
 
+/// A file or folder of a branch, placed on disk for an act outside the window (FM-10): its
+/// path copied, revealed in the operating system's file manager, or a shell tab started in it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Placed {
+    /// Its resolved absolute path: the branch's folder as the disk spells it, joined with the
+    /// path, which no link is on.
+    pub absolute: PathBuf,
+    /// Its path relative to the branch's folder, as git's file list spells one.
+    pub relative: String,
+    /// Whether it is a folder.
+    pub folder: bool,
+}
+
+/// One file or folder of the branch, by its path relative to the branch's folder, placed on
+/// disk (FM-10): what Copy path, Reveal and a shell tab act on, so a path that leaves the
+/// window is always one the core resolved.
+///
+/// **No link is followed**, whether it leads out of the branch or to another of its files: the
+/// path as the disk resolves it must be the path as it was named. Refused, too, when the path
+/// is empty, absolute, walks up, or is or is inside a `.git`. An ignored file or folder is
+/// placed like any other: the tree draws it when asked, and nothing here reads its bytes.
+pub fn place(plane: &Path, branch: Branch<'_>, path: &str) -> Result<Placed, Refused> {
+    let base = base_of(plane, branch)?;
+    let relative = slashed(inside(path)?);
+    // Git's own folder is refused by its name before the disk is asked (see `folder_in`).
+    if relative.is_empty() || gits(Path::new(&relative)) {
+        return Err(Refused::NotInPiece(path.to_string()));
+    }
+    let absolute = base.join(&relative);
+    match std::fs::canonicalize(&absolute) {
+        Ok(resolved) if resolved == absolute => {}
+        Ok(_) => return Err(Refused::NotInPiece(path.to_string())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(Refused::NotThere(path.to_string()));
+        }
+        Err(e) => {
+            return Err(Refused::Unreadable {
+                what: path.to_string(),
+                why: e.to_string(),
+            });
+        }
+    }
+    if names_git(&absolute, &base) {
+        return Err(Refused::NotInPiece(path.to_string()));
+    }
+    let folder = absolute.is_dir();
+    Ok(Placed {
+        absolute,
+        relative,
+        folder,
+    })
+}
+
+/// One file, folder or link of the branch by its path relative to the branch's folder, said as
+/// git's file list spells one (FM-10): what Copy relative path copies.
+///
+/// **Nothing is followed, the leaf included**: its folder is resolved as [`folder`] resolves one
+/// — inside the branch, through no link, not git's — and the leaf itself is only looked at
+/// (`symlink_metadata`), so a link's row copies the link's own path. Refused, as [`place`]
+/// refuses, for an empty, absolute or walking-up path, and for git's own folder.
+pub fn named(plane: &Path, branch: Branch<'_>, path: &str) -> Result<String, Refused> {
+    let relative = inside(path)?;
+    let spelled = slashed(relative);
+    if spelled.is_empty() || gits(relative) {
+        return Err(Refused::NotInPiece(path.to_string()));
+    }
+    let (parent, leaf) = match spelled.rsplit_once('/') {
+        Some((parent, leaf)) => (parent, leaf),
+        None => ("", spelled.as_str()),
+    };
+    let base = base_of(plane, branch)?;
+    let folder = folder_in(&base, parent).map_err(|refused| match refused {
+        Refused::NotInPiece(_) => Refused::NotInPiece(path.to_string()),
+        Refused::NotThere(_) | Refused::NotAFolder(_) => Refused::NotThere(path.to_string()),
+        other => other,
+    })?;
+    match std::fs::symlink_metadata(base.join(folder).join(leaf)) {
+        Ok(_) => Ok(spelled),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            Err(Refused::NotThere(path.to_string()))
+        }
+        Err(e) => Err(Refused::Unreadable {
+            what: path.to_string(),
+            why: e.to_string(),
+        }),
+    }
+}
+
 /// One file of the branch, handed to your editor at `line` (RC-20, ADR 0081 §3): what the app
 /// launches, a URL in the editor's own scheme or `$VISUAL`/`$EDITOR` as a program with its
 /// arguments ([`youreditor::launch`]).
@@ -1117,9 +1210,17 @@ fn inside(path: &str) -> Result<&Path, Refused> {
 /// (in a worktree `.git` is a file naming the clone's git directory) or a nested repo's. Either
 /// is git's, not the branch's.
 fn names_git(resolved: &Path, base: &Path) -> bool {
-    resolved
-        .strip_prefix(base)
-        .is_ok_and(|below| below.components().any(|step| step.as_os_str() == ".git"))
+    resolved.strip_prefix(base).is_ok_and(gits)
+}
+
+/// Whether a path relative to the branch has a `.git` component, in any ASCII case: on a
+/// case-insensitive folder (macOS, Windows, a Linux casefold or FAT mount) `.GIT` is git's too.
+fn gits(relative: &Path) -> bool {
+    relative.components().any(|step| {
+        step.as_os_str()
+            .as_encoded_bytes()
+            .eq_ignore_ascii_case(b".git")
+    })
 }
 
 /// A relative path as git's file list spells it: its plain components joined by `/`.
