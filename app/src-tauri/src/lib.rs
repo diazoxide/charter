@@ -920,7 +920,7 @@ fn start_options(planes: tauri::State<'_, Planes>, plane: PlaneId) -> Result<Sta
             .map(|p| ProfileRow {
                 name: p.name.clone(),
                 kind: p.kind.clone(),
-                shown: charter_core::profiles::display(p),
+                shown: charter_core::profiletrust::shown(root, p),
                 source: p.source.as_str().to_owned(),
                 is_default: set.default.as_deref() == Some(p.name.as_str()),
                 approval: charter_core::profiletrust::approval_needed(root, p)
@@ -991,25 +991,7 @@ fn approve_profile(
             charter_core::shown::short(&name)
         )
     })?;
-    let now = charter_core::profiles::display(profile);
-    if now != shown {
-        return Err(format!(
-            "profile '{}' changed while you were reading it, so nothing was approved and \
-             nothing was started. It now runs: {now}",
-            charter_core::shown::short(&name)
-        ));
-    }
-    charter_core::profiletrust::record_launched(
-        root,
-        &profile.name,
-        &charter_core::profiletrust::fingerprint(profile),
-    )
-    .map_err(|err| {
-        format!(
-            "charter could not record that approval ({err}), so it will not \
-                            start the profile — it would only ask again."
-        )
-    })
+    charter_core::profiletrust::approve(root, profile, &shown)
 }
 
 /// Starts a chat on a harness profile, with a persona.

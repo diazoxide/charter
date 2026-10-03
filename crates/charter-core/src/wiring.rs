@@ -21,6 +21,7 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::harness_declaration::Declarations;
 use crate::profiles::{self, Profile, Source};
 use crate::shown;
 
@@ -61,8 +62,14 @@ fn whole(value: &str) -> String {
 /// opencode profile that passes `--pure`, or sets the variables charter arms opencode through,
 /// would run a chat that looks guarded and loads no charter plugin at all (measured, opencode
 /// 1.18.23 — [`crate::opencode::disarmed_by`]).
-fn not_startable(p: &Profile) -> Option<String> {
+///
+/// **A harness a project declares starts too, at level 1** (ADR 0073, FD-14): its terminal
+/// alone, with nothing to arm and so nothing that could start it disarmed.
+fn not_startable(p: &Profile, declared: &Declarations) -> Option<String> {
     let Some(harness) = crate::harness::Harness::of_kind(&p.kind) else {
+        if project_declaration(p, declared).is_some() {
+            return None;
+        }
         return Some(format!(
             "profile '{}' runs {}, which this app does not start.",
             shown::short(&p.name),
@@ -85,12 +92,16 @@ fn not_startable(p: &Profile) -> Option<String> {
 /// declaration charter has refused, and a record saying the operator once approved it says
 /// nothing about the file it now sits in. Built-ins skip both — their command is charter's
 /// own, out of the registry.
-fn not_asked(p: &Profile, root: &Path) -> Option<(String, String)> {
+fn not_asked(p: &Profile, root: &Path, declared: &Declarations) -> Option<(String, String)> {
     if p.source == Source::BuiltIn {
         return None;
     }
     let name = shown::short(&p.name);
-    let check = profiles::ignore_check(root);
+    let check = if p.source == Source::Local {
+        profiles::ignore_check(root)
+    } else {
+        profiles::IgnoreCheck::default()
+    };
     if !check.passes() {
         return Some((
             format!(
@@ -101,20 +112,41 @@ fn not_asked(p: &Profile, root: &Path) -> Option<(String, String)> {
             check.fix,
         ));
     }
-    crate::profiletrust::approval_needed(root, p).map(|state| {
-        (
+    let fix = format!(
+        "start a chat on '{}' from the app's new-chat picker, which shows its command and \
+         asks once",
+        whole(&p.name)
+    );
+    if let Some(state) = crate::profiletrust::profile_approval_needed(root, p) {
+        return Some((
             format!(
                 "profile '{name}' is {}, and nobody has approved it — nothing was started. \
                  Approve it once so charter can run it.",
                 state.as_str()
             ),
+            fix,
+        ));
+    }
+    crate::profiletrust::declaration_approval_needed_in(root, p, declared).map(|(state, d)| {
+        (
             format!(
-                "start a chat on '{}' from the app's new-chat picker, which shows its command \
-                 and asks once",
-                whole(&p.name)
+                "harness '{}', declared in {}, is {} on this machine, and nobody has approved \
+                 it — nothing was started. Approve it once so charter can run it.",
+                shown::short(&d.name),
+                d.file,
+                state.as_str()
             ),
+            fix,
         )
     })
+}
+
+/// The project's harness declaration `p` runs on, where its kind is one.
+fn project_declaration<'a>(
+    p: &Profile,
+    declared: &'a Declarations,
+) -> Option<&'a crate::harness_declaration::Declaration> {
+    declared.projects().find(|d| d.name == p.kind)
 }
 
 /// Whether charter's guard runs in a chat the app would start on `p`.
@@ -127,14 +159,15 @@ fn not_asked(p: &Profile, root: &Path) -> Option<(String, String)> {
 /// Nothing is run: a profile charter may not run a command for is told why before anything
 /// else, and a harness that is found is not asked anything.
 pub fn detect(p: &Profile, root: &Path) -> Wiring {
-    if let Some((why, fix)) = not_asked(p, root) {
+    let declared = crate::harness_declaration::read(root);
+    if let Some((why, fix)) = not_asked(p, root, &declared) {
         return Wiring {
             state: State::Unknown,
             detail: why,
             fix,
         };
     }
-    if let Some(why) = not_startable(p) {
+    if let Some(why) = not_startable(p, &declared) {
         return Wiring {
             state: State::Unknown,
             detail: why,
@@ -169,7 +202,14 @@ pub fn detect(p: &Profile, root: &Path) -> Wiring {
                 "{} — {}",
                 crate::harness::Harness::of_kind(&p.kind)
                     .map(crate::harness::Harness::armed_with)
-                    .unwrap_or_default(),
+                    .unwrap_or_else(|| {
+                        format!(
+                            "a {} chat runs in its terminal alone, with none of charter's hooks \
+                             armed (it is declared in {}/)",
+                            shown::short(&p.kind),
+                            crate::harness_declaration::DIR
+                        )
+                    }),
                 whole(found.first().map(String::as_str).unwrap_or_default()),
             ),
             fix: String::new(),
@@ -205,10 +245,16 @@ fn names_a_place(program: &str) -> bool {
 /// operator wants is the one about v1 rather than one about consent; then the gate that says
 /// whether charter may run the profile's command at all.
 pub fn refusal(p: &Profile, root: &Path) -> Option<String> {
-    if let Some(why) = not_startable(p) {
+    refusal_in(p, root, &crate::harness_declaration::read(root))
+}
+
+/// [`refusal`] against the project's harness declarations as already read: the ones the
+/// launch then runs ([`crate::start::ready_in`]), so the bytes approved are the bytes run.
+pub fn refusal_in(p: &Profile, root: &Path, declared: &Declarations) -> Option<String> {
+    if let Some(why) = not_startable(p, declared) {
         return Some(why);
     }
-    not_asked(p, root).map(|(why, _fix)| why)
+    not_asked(p, root, declared).map(|(why, _fix)| why)
 }
 
 #[cfg(test)]

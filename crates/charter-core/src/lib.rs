@@ -51,6 +51,7 @@ pub mod handed;
 pub mod handoff;
 pub mod handoffguard;
 pub mod harness;
+pub mod harness_declaration;
 pub mod harness_plugin;
 #[cfg(unix)]
 pub(crate) mod held;
