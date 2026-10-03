@@ -117,6 +117,22 @@ pub(crate) fn bursts(
     })
 }
 
+/// [`bursts`], and `None` each time `idle` passes with no event at all: for a watch that also
+/// looks for itself now and then, so a watch the platform has quietly lost makes it slow rather
+/// than blind. It ends as [`bursts`] does.
+pub(crate) fn bursts_or_idle(
+    events: Receiver<notify::Event>,
+    quiet_for: Duration,
+    most: usize,
+    idle: Duration,
+) -> impl Iterator<Item = Option<Burst>> {
+    std::iter::from_fn(move || match events.recv_timeout(idle) {
+        Ok(first) => rest_of_burst(&events, first, quiet_for, most).map(Some),
+        Err(RecvTimeoutError::Timeout) => Some(None),
+        Err(RecvTimeoutError::Disconnected) => None,
+    })
+}
+
 /// The burst `first` begins: everything received until `quiet_for` after it, or `None` when the
 /// watcher is dropped before then.
 fn rest_of_burst(
@@ -195,12 +211,30 @@ pub(crate) mod raw {
     /// and what the watch makes of them. Made on the test's own thread.
     pub(crate) struct Raw;
 
+    /// Every path a [`Raw`] was asked to watch, from any thread: each test's are its own,
+    /// under a directory of its own.
+    static WATCHES: std::sync::Mutex<Vec<std::path::PathBuf>> = std::sync::Mutex::new(Vec::new());
+
+    /// How many times a [`Raw`] has been asked to watch `path`.
+    pub(crate) fn watched(path: &Path) -> usize {
+        WATCHES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .filter(|watched| *watched == path)
+            .count()
+    }
+
     impl notify::Watcher for Raw {
         fn new<F: notify::EventHandler>(handler: F, _: notify::Config) -> notify::Result<Self> {
             RAW.with(|raw| *raw.borrow_mut() = Some(Box::new(handler)));
             Ok(Raw)
         }
-        fn watch(&mut self, _: &Path, _: notify::RecursiveMode) -> notify::Result<()> {
+        fn watch(&mut self, path: &Path, _: notify::RecursiveMode) -> notify::Result<()> {
+            WATCHES
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(path.to_path_buf());
             Ok(())
         }
         fn unwatch(&mut self, _: &Path) -> notify::Result<()> {
@@ -376,5 +410,19 @@ mod tests {
             .next()
             .expect("the error was sent on");
         assert!(burst.everything);
+    }
+
+    #[test]
+    fn an_idle_watch_is_said_to_be_idle_and_a_burst_still_comes_through() {
+        let (tx, rx) = mpsc::channel();
+        let mut bursts =
+            bursts_or_idle(rx, Duration::from_millis(50), 8, Duration::from_millis(50));
+        assert_eq!(bursts.next(), Some(None), "no event, so idle");
+        tx.send(on(EventKind::Create(CreateKind::File), "/p/a"))
+            .unwrap();
+        let burst = bursts.next().expect("not ended").expect("a burst");
+        assert_eq!(burst.paths, HashSet::from([PathBuf::from("/p/a")]));
+        drop(tx);
+        assert_eq!(bursts.next(), None, "a dropped watcher ends them");
     }
 }

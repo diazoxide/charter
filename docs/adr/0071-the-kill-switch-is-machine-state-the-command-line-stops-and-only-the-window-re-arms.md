@@ -34,7 +34,9 @@ re-arm writes its journal line or does not happen.
 directory (`notify`, non-recursive, filtered to the switch's two files). A stop that appears on
 disk stops the app and ends every session. A marker that disappears while stopped is written
 back and journaled as a `tamper`; it never re-arms. The re-arm and the watch take one lock, so
-the re-arm's own removal of the marker is never read as a tamper. A stop the app cannot write
+the re-arm's own removal of the marker is never read as a tamper. The watch also looks at the
+files every 3 seconds when it has heard nothing, and watches the directory again when it is
+made anew, so a watch the platform lost makes a stop slower to arrive, never lost (D-88l). A stop the app cannot write
 to disk still stops the app, and the window says so on the title bar.
 
 **What it stops, and what it lets through.** Every session's program gets an interrupt, then a

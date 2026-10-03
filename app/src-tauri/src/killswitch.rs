@@ -38,6 +38,10 @@ const FOLDED_FOR: Duration = Duration::from_millis(100);
 /// it named.
 const MOST_PATHS: usize = 256;
 
+/// How often the watch looks at the switch's files when nothing has told it to (D-88l): a watch
+/// the platform has quietly lost then makes a stop slower to arrive, never lost.
+const LOOK_EVERY: Duration = Duration::from_secs(3);
+
 /// What a look at the files did to the switch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Moved {
@@ -150,7 +154,9 @@ impl KillSwitch {
 
 /// A watch on the switch's files. Dropping it stops it.
 pub struct Watch<W: notify::Watcher = notify::RecommendedWatcher> {
-    _watcher: W,
+    /// Shared with the watch's thread only weakly, so it can watch the directory again; dropped
+    /// here, it ends that thread.
+    _watcher: Arc<Mutex<W>>,
 }
 
 /// Watches charter's directory, non-recursively, and calls `moved` after every batch of writes
@@ -175,22 +181,77 @@ fn watch_in<W: notify::Watcher + Send + 'static>(
     switch: Arc<KillSwitch>,
     moved: impl Fn(Moved) + Send + 'static,
 ) -> notify::Result<Watch<W>> {
+    watch_in_every(dir, switch, moved, LOOK_EVERY)
+}
+
+/// [`watch_in`], looking at the files every `every` that passes with no event (D-88l, ADR 0071).
+///
+/// **A dead watch is a slower stop, not none.** A watcher can stop hearing without saying so:
+/// charter's directory removed and made again takes its inotify watch with it. So when nothing
+/// arrives for `every`, the switch is looked at anyway, and the directory is watched again
+/// whenever the platform said it was removed or renamed, a burst was everything, or it is no
+/// longer the directory that was watched.
+fn watch_in_every<W: notify::Watcher + Send + 'static>(
+    dir: &Path,
+    switch: Arc<KillSwitch>,
+    moved: impl Fn(Moved) + Send + 'static,
+    every: Duration,
+) -> notify::Result<Watch<W>> {
     let (sent, events) = mpsc::channel();
     let mut watcher = W::new(crate::watchset::sender(sent), notify::Config::default())?;
+    let mut watched_as = identity(dir);
     watcher.watch(dir, RecursiveMode::NonRecursive)?;
+    let watcher = Arc::new(Mutex::new(watcher));
+    let rewatching = Arc::downgrade(&watcher);
     let looking = Arc::clone(&switch);
+    let dir = dir.to_path_buf();
     std::thread::Builder::new()
         .name("charter-kill-switch-watch".into())
         .spawn(move || {
-            for burst in crate::watchset::bursts(events, FOLDED_FOR, MOST_PATHS) {
-                let ours = burst.everything
-                    || burst
-                        .paths
-                        .iter()
-                        .filter_map(|path| path.file_name())
-                        .any(halt::concerns);
-                if ours {
-                    moved(looking.look());
+            // Set when the watch can no longer be trusted, and watched again at the end of the
+            // step: cleared only by a watch that took.
+            let mut lost = false;
+            for step in crate::watchset::bursts_or_idle(events, FOLDED_FOR, MOST_PATHS, every) {
+                match step {
+                    Some(burst) => {
+                        // An event on the directory itself is its removal or its rename (the
+                        // platform says so as it drops the watch: inotify's IN_DELETE_SELF and
+                        // IN_MOVE_SELF), and a burst that is everything may hide one. A directory
+                        // made again at once can have the same device and inode on Linux, so
+                        // its identity alone does not show the watch went with the old one.
+                        lost |= burst.everything || burst.paths.contains(&dir);
+                        let ours = burst.everything
+                            || burst
+                                .paths
+                                .iter()
+                                .filter_map(|path| path.file_name())
+                                .any(halt::concerns);
+                        if ours {
+                            moved(looking.look());
+                        }
+                    }
+                    // Told only when the look moved the switch: a window is not sent the same
+                    // standing every few seconds.
+                    None => match looking.look() {
+                        Moved::Nothing => {}
+                        moved_to => moved(moved_to),
+                    },
+                }
+                let now = identity(&dir);
+                if !lost && now == watched_as {
+                    continue;
+                }
+                let Some(watcher) = rewatching.upgrade() else {
+                    return;
+                };
+                let mut watcher = watcher.lock().unwrap_or_else(PoisonError::into_inner);
+                // The old watch is gone with its directory, or about to be: an error is that.
+                let _ = watcher.unwatch(&dir);
+                // Not watched yet when this fails, or when there is no directory: the next step
+                // tries again.
+                if now.is_none() || watcher.watch(&dir, RecursiveMode::NonRecursive).is_ok() {
+                    watched_as = now;
+                    lost = false;
                 }
             }
         })
@@ -198,6 +259,22 @@ fn watch_in<W: notify::Watcher + Send + 'static>(
     // Anything written before the watch began is looked at once, here.
     let _ = switch.look();
     Ok(Watch { _watcher: watcher })
+}
+
+/// Which directory `dir` is now, by its device and inode, or `None` when there is none: a
+/// directory made again at the same path is another one, and its watch went with the first.
+fn identity(dir: &Path) -> Option<(u64, u64)> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::metadata(dir)
+            .ok()
+            .map(|found| (found.dev(), found.ino()))
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::metadata(dir).ok().map(|_| (0, 0))
+    }
 }
 
 /// Whether every agent is stopped, for a window drawing its title bar.
@@ -452,6 +529,104 @@ mod tests {
             heard.recv_timeout(Duration::from_secs(10)),
             Ok(Moved::Stopped),
             "the watch never looked"
+        );
+    }
+
+    #[test]
+    fn a_watch_that_hears_nothing_still_sees_a_stop_within_its_period() {
+        // D-88l: the watcher's events are cut off entirely (Raw is told nothing), as a watch
+        // the platform has lost would be; the stop is still seen, a period late at most.
+        use crate::watchset::raw::Raw;
+        let config = a_config_home();
+        let switch = switch_in(config.path());
+        let dir = switch.directory().expect("charter's directory");
+        let (tell, heard) = mpsc::channel();
+        let every = Duration::from_millis(200);
+        let _watch = watch_in_every::<Raw>(
+            &dir,
+            Arc::clone(&switch),
+            move |moved| {
+                let _ = tell.send(moved);
+            },
+            every,
+        )
+        .expect("watching");
+
+        halt::stop(config.path(), Actor::Cli, 1).expect("stopped from a terminal");
+
+        assert_eq!(
+            heard.recv_timeout(Duration::from_secs(10)),
+            Ok(Moved::Stopped),
+            "a watch that heard nothing never looked"
+        );
+        assert!(switch.is_stopped());
+    }
+
+    /// [`watch_in_every`] on [`Raw`](crate::watchset::raw::Raw), looking every 50 ms, and how
+    /// many times `dir` has been watched so far.
+    fn watching_counted(
+        config: &Path,
+    ) -> (
+        Watch<crate::watchset::raw::Raw>,
+        PathBuf,
+        impl Fn() -> usize,
+    ) {
+        let switch = switch_in(config);
+        let dir = switch.directory().expect("charter's directory");
+        let watch = watch_in_every::<crate::watchset::raw::Raw>(
+            &dir,
+            switch,
+            |_| {},
+            Duration::from_millis(50),
+        )
+        .expect("watching");
+        let counted = dir.clone();
+        (watch, dir, move || crate::watchset::raw::watched(&counted))
+    }
+
+    /// Waits until `count` says `want`, or ten seconds have passed, and says what it said.
+    fn reaches(count: impl Fn() -> usize, want: usize) -> usize {
+        let until = std::time::Instant::now() + Duration::from_secs(10);
+        while count() < want && std::time::Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        count()
+    }
+
+    #[test]
+    fn a_directory_the_platform_says_was_removed_is_watched_again_even_as_the_same_inode() {
+        // Linux: removed and made again at once, the directory can have the same device and
+        // inode, and its watch is gone all the same. What says so is the platform's removal
+        // of the directory itself; here nothing on disk changes at all.
+        use notify::event::{EventKind, RemoveKind};
+        let config = a_config_home();
+        let (_watch, dir, watches) = watching_counted(config.path());
+        assert_eq!(watches(), 1);
+
+        crate::watchset::raw::raw(EventKind::Remove(RemoveKind::Folder), &dir);
+
+        assert_eq!(
+            reaches(&watches, 2),
+            2,
+            "the directory the platform removed was not watched again"
+        );
+    }
+
+    #[test]
+    fn a_directory_made_again_as_another_is_watched_again_with_nothing_said() {
+        // A watch that dies without a word: the directory is another one, and the idle look
+        // sees it. The old one is kept aside, so the new one cannot have its inode.
+        let config = a_config_home();
+        let (_watch, dir, watches) = watching_counted(config.path());
+        assert_eq!(watches(), 1);
+
+        std::fs::rename(&dir, dir.with_extension("old")).expect("moved aside");
+        std::fs::create_dir_all(&dir).expect("made again");
+
+        assert_eq!(
+            reaches(&watches, 2),
+            2,
+            "the directory made again was not watched again"
         );
     }
 
