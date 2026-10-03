@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790980235912,
+  "lastUpdate": 1790999210681,
   "repoUrl": "https://github.com/diazoxide/charter",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -210,6 +210,48 @@ window.BENCHMARK_DATA = {
             "value": 102.13193050000001,
             "unit": "ms",
             "extra": "median of 5 runs: 100.632, 101.826, 102.132, 102.266, 102.397 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "d09addcb16ee0384fc057340f943ea5b459a4f48",
+          "message": "Hook spool with sequence numbers: no hook call is lost when the host is down (FD-30)\n\nA hook now delivers its line before it answers its harness. The host says it\ntook the line only once its hearer has recorded the event and fsynced the\nevent log. Otherwise the line goes to the chat's own spool in a project's\n.charter/app/spool/, fsynced, with the next number in that key's sequence and\na MAC under a key derived from the chat's token. The app drains every spool\nwhen it opens a project, before any chat starts, and records each line that\nchecks under the run it ran in, plus each gap and each line that did not\ncheck (hook.spool.gap, hook.spool.rejected, hook.spool.drained).\n\n- The chat sandbox is denied reading and writing every spool and its keys.\n  Nothing spools, and no key is written, where that denial does not reach.\n- A line that is not text, or a keys file that does not read, is rejected and\n  never stops the drain or the next hook.\n- The fsync follows each seal of the event log (FD-24) onto the segment being\n  written.\n- A refused commit is recorded as hook.commit_refused.\n- ADR 0068 §6 is amended by ruling V63, and ADR 0075's registry gains\n  hook.commit_refused.\n\nThis closes the two departures from ADR 0075 §7 that FD-9 recorded: the hook\nanswered before its event was recorded, and the event log was not fsynced.\n\nCloses #667\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-03T07:45:44+04:00",
+          "tree_id": "354e0ec590a5befff7bb6f1a0c8688e90b38e3fa",
+          "url": "https://github.com/diazoxide/charter/commit/d09addcb16ee0384fc057340f943ea5b459a4f48"
+        },
+        "date": 1790999209612,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.621307,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.603, 0.608, 0.621, 0.630, 0.631 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.0742715,
+            "unit": "ms",
+            "extra": "median of 5 runs: 15.891, 16.064, 16.074, 16.124, 16.510 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.4633965,
+            "unit": "ms",
+            "extra": "median of 5 runs: 101.131, 101.259, 101.463, 101.639, 101.723 ms"
           }
         ]
       }
