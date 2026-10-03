@@ -85,6 +85,13 @@ cargo audit bin /usr/bin/charter* \
 
 Builds published before this change carry neither.
 
+## The repository's supply-chain score
+
+The [OpenSSF Scorecard](https://scorecard.dev/) grades this repository once a week
+(`.github/workflows/scorecard.yml`): pinned actions, token permissions, branch protection and
+the rest. It reports and never gates a change. Its findings go to the repository's code
+scanning, where maintainers read them. They are not yet published to the public Scorecard API.
+
 ## What charter's chat sandbox is, and what it is not
 
 A plane can put every chat charter starts in a sandbox ([ADR 0067](docs/adr/0067-a-chat-runs-in-a-sandbox-charter-compiles-for-its-harness.md)):

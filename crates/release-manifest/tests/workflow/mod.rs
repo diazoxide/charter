@@ -227,9 +227,14 @@ pub fn workflow_permissions(text: &str) -> Vec<(String, String)> {
 
 /// The job called `name`, or a panic naming the one that is missing.
 pub fn job<'a>(jobs: &'a [Job], name: &str) -> &'a Job {
+    job_named(jobs, name, "release.yml")
+}
+
+/// The job called `name` in `file`'s jobs, or a panic naming the one that is missing.
+pub fn job_named<'a>(jobs: &'a [Job], name: &str, file: &str) -> &'a Job {
     jobs.iter()
         .find(|j| j.name == name)
-        .unwrap_or_else(|| panic!("release.yml has no `{name}` job"))
+        .unwrap_or_else(|| panic!("{file} has no `{name}` job"))
 }
 
 /// The `name:` of each `download-artifact` step in the job, sorted, after checking that none
