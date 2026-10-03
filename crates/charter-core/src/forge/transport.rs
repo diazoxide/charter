@@ -190,14 +190,16 @@ impl Reply {
     /// What kind of failure a refusal is: from its HTTP status when the transport saw one,
     /// and [`Failure::Unrecognised`] when it did not (the CLI's sentence is not parsed for it).
     pub fn failure(&self) -> Failure {
-        let spent = self.header("x-ratelimit-remaining") == Some("0")
-            || self.header("retry-after").is_some();
+        // GitHub spells its rate limit `x-ratelimit-*`, GitLab `ratelimit-*`.
+        let limit = |name: &str| {
+            self.header(&format!("x-ratelimit-{name}"))
+                .or_else(|| self.header(&format!("ratelimit-{name}")))
+        };
+        let spent = limit("remaining") == Some("0") || self.header("retry-after").is_some();
         match self.status {
             Some(401) => Failure::Auth,
             Some(403 | 429) if spent => Failure::RateLimited {
-                reset: self
-                    .header("x-ratelimit-reset")
-                    .and_then(|r| r.parse().ok()),
+                reset: limit("reset").and_then(|r| r.parse().ok()),
             },
             Some(403) => Failure::Forbidden,
             Some(404) => Failure::NotFound,

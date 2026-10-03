@@ -3,7 +3,7 @@
 //! A child of this binary signs a canary token in, installs the diagnostic log (FD-8's
 //! `applog`, into a directory of its own) and a `log` recorder at trace level for what `ureq`
 //! and rustls write (with `RUST_LOG=trace` set too), and makes every forge seam operation
-//! natively three times: against a recorded forge that answers, against one that refuses with
+//! natively three times on each forge, GitHub and GitLab: against a recorded forge that answers, against one that refuses with
 //! a `401`, and against a port nothing listens on. It writes every
 //! answer and every error to the log, keeps its ETag store in the same run directory, and then
 //! crashes: a panic on a thread holding the token, then one on the main thread.
@@ -46,16 +46,17 @@ impl TokenSource for Canary {
     }
 }
 
-fn account() -> Account {
+fn account(kind: Kind) -> Account {
     Account {
-        kind: Kind::GitHub,
-        host: "github.com".into(),
+        kind,
+        host: kind.default_host().into(),
         login: "octocat".into(),
     }
 }
 
-/// Every seam operation, as a human in the window, against a forge answering `status`.
-fn every_operation(rt: &tokio::runtime::Runtime, run: &Path, status: u16) {
+/// Every seam operation on forge `kind`, as a human in the window, against a forge answering
+/// `status`.
+fn every_operation(rt: &tokio::runtime::Runtime, run: &Path, kind: Kind, status: u16) {
     let server = rt.block_on(MockServer::start());
     // Status 0: nothing listens where the forge should be.
     let root = if status == 0 {
@@ -80,19 +81,19 @@ fn every_operation(rt: &tokio::runtime::Runtime, run: &Path, status: u16) {
             )
             .mount(&server),
     );
-    let resolver = Resolver::new(Kind::GitHub, "github.com")
+    let resolver = Resolver::new(kind, kind.default_host())
         .at_root(root)
         .etags_in(&run.join("config"))
         .signed_in(
             &HostScope::for_a_test(),
-            account(),
+            account(kind),
             SignIn {
                 tokens: Arc::new(Canary),
                 imported_from_cli: false,
             },
         );
-    let backend = Forge::default_of(Kind::GitHub).backend_for(Arc::new(resolver));
-    let me = Caller::window().as_account(account());
+    let backend = Forge::default_of(kind).backend_for(Arc::new(resolver));
+    let me = Caller::window().as_account(account(kind));
     let pr = Pr {
         number: 1,
         url: "x".into(),
@@ -100,7 +101,8 @@ fn every_operation(rt: &tokio::runtime::Runtime, run: &Path, status: u16) {
     let repo = RepoRecord {
         path_with_namespace: "o/r".into(),
         default_branch: Some("main".into()),
-        ..bare_repo("r", Kind::GitHub)
+        id: Some(charter_core::forge::ForgeRef("7".into())),
+        ..bare_repo("r", kind)
     };
     let sha = "6dcb09b5b57875f334f61aebed695e2e4193db5e";
     let said = [
@@ -133,7 +135,7 @@ fn every_operation(rt: &tokio::runtime::Runtime, run: &Path, status: u16) {
             == Some(&format!("Bearer {CANARY}"))
     });
     if with_token {
-        println!("CHILD-SENT-THE-TOKEN {status}");
+        println!("CHILD-SENT-THE-TOKEN {} {status}", kind.word());
     }
 }
 
@@ -189,9 +191,11 @@ fn a_forge_token_appears_in_no_log_record_or_crash_report() {
             .enable_all()
             .build()
             .unwrap();
-        every_operation(&rt, run, 200);
-        every_operation(&rt, run, 401);
-        every_operation(&rt, run, 0);
+        for kind in [Kind::GitHub, Kind::GitLab] {
+            every_operation(&rt, run, kind, 200);
+            every_operation(&rt, run, kind, 401);
+            every_operation(&rt, run, kind, 0);
+        }
         // The crash: a thread holding the token panics, then the main thread does.
         let held = Canary.token().unwrap();
         let _ = std::thread::spawn(move || {
@@ -230,10 +234,13 @@ fn a_forge_token_appears_in_no_log_record_or_crash_report() {
         stderr.contains("a forced crash after every forge operation"),
         "the child did not get as far as its crash:\n{stdout}\n{stderr}"
     );
-    assert!(
-        stdout.contains("CHILD-SENT-THE-TOKEN 200") && stdout.contains("CHILD-SENT-THE-TOKEN 401"),
-        "the recorded forge was never sent the token, so the run proves nothing:\n{stdout}"
-    );
+    for kind in ["github", "gitlab"] {
+        assert!(
+            stdout.contains(&format!("CHILD-SENT-THE-TOKEN {kind} 200"))
+                && stdout.contains(&format!("CHILD-SENT-THE-TOKEN {kind} 401")),
+            "the recorded {kind} was never sent the token, so the run proves nothing:\n{stdout}"
+        );
+    }
     let written = files_under(run.path());
     let log_text: String = written
         .iter()

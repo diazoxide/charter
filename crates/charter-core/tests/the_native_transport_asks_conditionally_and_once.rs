@@ -191,3 +191,125 @@ fn a_redirect_is_not_followed_with_the_token() {
     assert!(reached.is_empty(), "the redirect was followed");
     rt.block_on(server.verify());
 }
+
+/// The same transport on GitLab (FW-2b): its paths, its weak ETags and its rate-limit headers.
+mod gitlab {
+    use super::*;
+
+    const MR: &str = "/projects/acme%2Fapi/merge_requests/7";
+
+    fn account() -> Account {
+        Account {
+            kind: Kind::GitLab,
+            host: "gitlab.com".into(),
+            login: "octocat".into(),
+        }
+    }
+
+    fn human() -> Caller {
+        Caller::window().as_account(account())
+    }
+
+    fn backend(server: &MockServer, cli: Arc<Counting>) -> Box<dyn ForgeBackend> {
+        let resolver = Resolver::new(Kind::GitLab, "gitlab.com")
+            .at_root(ApiRoot::at(&server.uri()))
+            .cli_over(cli)
+            .signed_in(
+                &HostScope::for_a_test(),
+                account(),
+                SignIn {
+                    tokens: Arc::new(Fixed),
+                    imported_from_cli: false,
+                },
+            );
+        Forge::default_of(Kind::GitLab).backend_for(Arc::new(resolver))
+    }
+
+    #[test]
+    fn a_second_read_sends_gitlabs_weak_etag_back_and_a_304_is_answered_from_the_store() {
+        charter_core::unsteered!();
+        let rt = runtime();
+        let server = rt.block_on(MockServer::start());
+        rt.block_on(
+            Mock::given(method("GET"))
+                .and(path(MR))
+                .and(header("if-none-match", "W/\"a1b2\""))
+                .respond_with(ResponseTemplate::new(304))
+                .expect(1)
+                .mount(&server),
+        );
+        rt.block_on(
+            Mock::given(method("GET"))
+                .and(path(MR))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_string(r#"{"iid":7,"state":"opened"}"#)
+                        .insert_header("etag", "W/\"a1b2\""),
+                )
+                .up_to_n_times(1)
+                .expect(1)
+                .mount(&server),
+        );
+        let gitlab = backend(&server, Arc::default());
+        assert_eq!(gitlab.state(&human(), "acme/api", &pr()), Ok(State::Open));
+        assert_eq!(gitlab.state(&human(), "acme/api", &pr()), Ok(State::Open));
+        rt.block_on(server.verify());
+    }
+
+    #[test]
+    fn a_refused_token_is_auth_in_gitlabs_words_and_is_never_retried_through_the_cli() {
+        charter_core::unsteered!();
+        let rt = runtime();
+        let server = rt.block_on(MockServer::start());
+        rt.block_on(
+            Mock::given(method("GET"))
+                .and(path(MR))
+                .respond_with(
+                    ResponseTemplate::new(401).set_body_string(r#"{"message":"401 Unauthorized"}"#),
+                )
+                .expect(1)
+                .mount(&server),
+        );
+        let cli = Arc::new(Counting::default());
+        let error = backend(&server, cli.clone())
+            .state(&human(), "acme/api", &pr())
+            .unwrap_err();
+        assert_eq!(error.failure(), &Failure::Auth);
+        assert!(
+            error.to_string().contains("401 Unauthorized (HTTP 401)"),
+            "{error}"
+        );
+        assert!(!error.to_string().contains(TOKEN));
+        assert_eq!(cli.0.load(Ordering::SeqCst), 0, "retried through the CLI");
+        rt.block_on(server.verify());
+    }
+
+    #[test]
+    fn a_throttled_read_is_rate_limited_with_gitlabs_reset() {
+        charter_core::unsteered!();
+        let rt = runtime();
+        let server = rt.block_on(MockServer::start());
+        rt.block_on(
+            Mock::given(method("GET"))
+                .and(path(MR))
+                .respond_with(
+                    ResponseTemplate::new(429)
+                        .set_body_string("Retry later\n")
+                        .insert_header("ratelimit-remaining", "0")
+                        .insert_header("ratelimit-reset", "1790000000"),
+                )
+                .expect(1)
+                .mount(&server),
+        );
+        let error = backend(&server, Arc::default())
+            .state(&human(), "acme/api", &pr())
+            .unwrap_err();
+        assert_eq!(
+            error.failure(),
+            &Failure::RateLimited {
+                reset: Some(1790000000)
+            }
+        );
+        rt.block_on(server.verify());
+    }
+}

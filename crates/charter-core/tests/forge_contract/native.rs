@@ -50,6 +50,7 @@ impl Transport for NoCli {
 
 /// One exchange's request, as the native transport sends it.
 struct Exactly {
+    kind: Kind,
     method: http::Method,
     path_and_query: String,
     body: Option<Value>,
@@ -71,7 +72,21 @@ impl wiremock::Match for Exactly {
             .headers
             .get("authorization")
             .and_then(|v| v.to_str().ok());
-        request.method == self.method
+        let header = |name: &str| request.headers.get(name).and_then(|v| v.to_str().ok());
+        // Each forge is asked in its own dialect: GitHub's media type and API version, and
+        // plain JSON with no GitHub header for GitLab.
+        let dialect = match self.kind {
+            Kind::GitHub => {
+                header("accept") == Some("application/vnd.github+json")
+                    && header("x-github-api-version") == Some("2022-11-28")
+            }
+            Kind::GitLab => {
+                header("accept") == Some("application/json")
+                    && header("x-github-api-version").is_none()
+            }
+        };
+        dialect
+            && request.method == self.method
             && asked == self.path_and_query
             && body == self.body
             && token == Some(&format!("Bearer {TOKEN}"))
@@ -120,7 +135,7 @@ fn body_of(fields: &[Field]) -> serde_json::Map<String, Value> {
 }
 
 /// The HTTP request a recorded call is, read from the recording.
-fn expected(call: &Call) -> Exactly {
+fn expected(kind: Kind, call: &Call) -> Exactly {
     assert!(
         call.fields.iter().all(|f| {
             let name = json_of(f).0;
@@ -133,6 +148,7 @@ fn expected(call: &Call) -> Exactly {
             let (query, rest) = call.fields.split_first().expect("a GraphQL query");
             let variables: serde_json::Map<String, Value> = rest.iter().map(json_of).collect();
             Exactly {
+                kind,
                 method: http::Method::POST,
                 path_and_query: "/graphql".into(),
                 body: Some(serde_json::json!({"query": json_of(query).1, "variables": variables})),
@@ -144,6 +160,7 @@ fn expected(call: &Call) -> Exactly {
                 "a recorded GET carries its query in its path"
             );
             Exactly {
+                kind,
                 method: http::Method::GET,
                 path_and_query: format!("/{path}"),
                 body: None,
@@ -153,6 +170,7 @@ fn expected(call: &Call) -> Exactly {
             method: Some(method),
             path,
         } => Exactly {
+            kind,
             method: method.word().parse().unwrap(),
             path_and_query: format!("/{path}"),
             body: Some(Value::Object(body_of(&call.fields))),
@@ -160,20 +178,20 @@ fn expected(call: &Call) -> Exactly {
     }
 }
 
-pub fn account() -> Account {
+/// The account a native case signs in as, on `host`.
+pub fn account(kind: Kind, host: &str) -> Account {
     Account {
-        kind: Kind::GitHub,
-        host: "github.com".into(),
+        kind,
+        host: host.into(),
         login: "octocat".into(),
     }
 }
 
-/// `kind`'s backend over the native transport, against a server answering `recording`.
-pub fn over(kind: &str, recording: &str) -> Over {
-    assert_eq!(
-        kind, "github",
-        "only GitHub has a native transport yet (FW-2b)"
-    );
+/// `kind`'s backend on `host` over the native transport, against a server answering
+/// `recording`. `host` is the instance the account is on: github.com, gitlab.com, or a
+/// self-managed GitLab, whose API root differs and whose capabilities charter has not asked.
+pub fn over(kind: &str, host: &str, recording: &str) -> Over {
+    let kind = Kind::parse(kind).expect("a forge kind");
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -187,27 +205,30 @@ pub fn over(kind: &str, recording: &str) -> Over {
             exchange.reply.code, 0,
             "a native recording replays answers only"
         );
-        let mock = Mock::given(expected(&exchange.call))
+        let mock = Mock::given(expected(kind, &exchange.call))
             .respond_with(ResponseTemplate::new(200).set_body_string(exchange.reply.out))
             .up_to_n_times(1)
             .expect(1);
         rt.block_on(mock.mount(&server));
     }
-    let resolver = Resolver::new(Kind::GitHub, "github.com")
+    let resolver = Resolver::new(kind, host)
         .at_root(root)
         .cli_over(Arc::new(NoCli))
         .signed_in(
             &HostScope::for_a_test(),
-            account(),
+            account(kind, host),
             SignIn {
                 tokens: Arc::new(Fixed),
                 imported_from_cli: false,
             },
         );
-    let backend = Forge::default_of(Kind::GitHub).backend_for(Arc::new(resolver));
+    let mut forge = Forge::default_of(kind);
+    forge.host = host.to_string();
+    let backend = forge.backend_for(Arc::new(resolver));
     Over {
         backend,
-        caller: Caller::window().as_account(account()),
+        caller: Caller::window().as_account(account(kind, host)),
+        host: host.to_string(),
         check: Box::new(move || rt.block_on(server.verify())),
     }
 }

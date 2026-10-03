@@ -530,3 +530,25 @@ accepted.
 
 A chat's sandbox denies the ETag store to read and to write (ADR 0067's human-powers class),
 because its answers were fetched with the human's token.
+
+## Amended by FW-2b (#728), 2026-10-03
+
+FW-2b built the native GitLab client on FW-2a's transport. Three things depart from the text
+above. Each holds until the ticket named, and the text above is left as accepted.
+
+1. **GitLab REST does not use the `gitlab` crate (ruling 4, amended by the operator's V72).**
+   The crate's endpoint builders are behind its `client_api` feature, which brings in
+   `reqwest`, the client "Rejected" names for the core. And FG-3's GitLab bodies are already `Call`s, built once, whose recordings and
+   `glab api` argv are pinned (ADR 0046). So GitLab's REST bodies are charter's own, as
+   GitHub's are, sent over the same `Transport`, and pagination is the short-page loop both
+   backends use. If the crate ever offers its endpoints without `reqwest`, the move is a
+   rewrite of how a `Call` is built, and the recordings say whether it changed what is asked.
+2. **GitLab's GraphQL documents are not checked at compile time yet** ([#1031](https://github.com/diazoxide/charter/issues/1031)).
+   GitLab publishes no schema file to vendor, as GitHub does; the schema is read by
+   introspection, and part of it describes GitLab's Enterprise Edition, whose licence is not
+   GitLab's MIT one. Until #1031 settles that, the three GitLab documents (a work item's
+   children, setting its parent, setting an issue's iteration) are constants that the recorded
+   tests pin, and FW-15's live nightly is what catches a renamed field.
+3. **Epics use v4's REST epics endpoints.** GitLab deprecated them in 17.0 in favour of work
+   items and still serves them in v4. FW-6b, which maps epics onto the neutral model, moves them
+   to work items ([#1032](https://github.com/diazoxide/charter/issues/1032)).

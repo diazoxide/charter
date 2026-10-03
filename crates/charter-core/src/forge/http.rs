@@ -34,7 +34,7 @@ use zeroize::Zeroizing;
 
 use super::etag::{EtagStore, Stored};
 use super::transport::{Call, Endpoint, Field, NoAnswer, Reply, Transport};
-use super::{Forge, ForgeError};
+use super::{Forge, ForgeError, Kind};
 
 /// Hands out an account's token when a request is sent. FW-1 and FW-3a decide the sign-in
 /// flows and write the keyring-backed source; the seam takes a source so that no caller ever
@@ -45,18 +45,36 @@ pub trait TokenSource: Send + Sync {
 
 /// Where a forge's API lives: its REST root and its GraphQL endpoint.
 ///
-/// Its fields are private, and the one constructor a shipped build has, [`ApiRoot::github`],
-/// always names an HTTPS root. [`ApiRoot::at`], which can name a loopback `http://` root for a
+/// Its fields are private, and the constructors a shipped build has, [`ApiRoot::github`],
+/// [`ApiRoot::gitlab`] and [`ApiRoot::of`], always name an HTTPS root. [`ApiRoot::at`], which can name a loopback `http://` root for a
 /// recorded forge, exists only in a test build.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApiRoot {
-    /// `https://api.github.com`, or `https://<host>/api/v3` on a GHES.
+    /// `https://api.github.com`, `https://<host>/api/v3` on a GHES, or `https://<host>/api/v4`
+    /// on a GitLab.
     rest: String,
-    /// `https://api.github.com/graphql`, or `https://<host>/api/graphql` on a GHES.
+    /// `https://api.github.com/graphql`, or `https://<host>/api/graphql` on a GHES or a GitLab.
     graphql: String,
 }
 
 impl ApiRoot {
+    /// The API of forge `kind` on `host`.
+    pub fn of(kind: Kind, host: &str) -> ApiRoot {
+        match kind {
+            Kind::GitHub => ApiRoot::github(host),
+            Kind::GitLab => ApiRoot::gitlab(host),
+        }
+    }
+
+    /// GitLab's API for `host`: gitlab.com's, or a self-managed instance's, which serves it at
+    /// the same paths (REST v4 and GraphQL).
+    pub fn gitlab(host: &str) -> ApiRoot {
+        ApiRoot {
+            rest: format!("https://{host}/api/v4"),
+            graphql: format!("https://{host}/api/graphql"),
+        }
+    }
+
     /// GitHub's API for `host`: github.com's own, or a GitHub Enterprise Server's.
     pub fn github(host: &str) -> ApiRoot {
         if host.eq_ignore_ascii_case("github.com") {
@@ -115,6 +133,7 @@ fn checked(url: &str) -> Result<(String, String), String> {
 
 /// HTTPS with a token charter holds.
 pub struct Http {
+    kind: Kind,
     agent: ureq::Agent,
     root: ApiRoot,
     authority: String,
@@ -134,7 +153,8 @@ impl std::fmt::Debug for Http {
 const MOST_BODY: u64 = 64 * 1024 * 1024;
 
 /// The headers a [`Reply`] keeps: what the backends, the ETag store and FW-4's budget read.
-const KEPT: [&str; 7] = [
+/// GitHub spells its rate limit `x-ratelimit-*` and GitLab `ratelimit-*`.
+const KEPT: [&str; 10] = [
     "etag",
     "link",
     "retry-after",
@@ -142,12 +162,31 @@ const KEPT: [&str; 7] = [
     "x-ratelimit-remaining",
     "x-ratelimit-reset",
     "x-ratelimit-used",
+    "ratelimit-limit",
+    "ratelimit-remaining",
+    "ratelimit-reset",
 ];
 
+/// The headers that say which API a request speaks: GitHub's media type and the REST version
+/// charter was written against, or plain JSON for GitLab, whose v4 is in the path.
+fn dialect(kind: Kind) -> &'static [(&'static str, &'static str)] {
+    match kind {
+        Kind::GitHub => &[
+            ("accept", "application/vnd.github+json"),
+            ("x-github-api-version", "2022-11-28"),
+        ],
+        Kind::GitLab => &[("accept", "application/json")],
+    }
+}
+
 impl Http {
-    /// The native transport to `root`, authenticated by `tokens`. Refused for a root a token
-    /// may not be sent to.
-    pub fn new(root: ApiRoot, tokens: Arc<dyn TokenSource>) -> Result<Http, ForgeError> {
+    /// The native transport to forge `kind`'s API at `root`, authenticated by `tokens`. Refused
+    /// for a root a token may not be sent to.
+    pub fn new(
+        kind: Kind,
+        root: ApiRoot,
+        tokens: Arc<dyn TokenSource>,
+    ) -> Result<Http, ForgeError> {
         let (_, authority) = checked(&root.rest).map_err(ForgeError::transport)?;
         let (_, graphql) = checked(&root.graphql).map_err(ForgeError::transport)?;
         if graphql != authority {
@@ -171,6 +210,7 @@ impl Http {
             .build()
             .new_agent();
         Ok(Http {
+            kind,
             agent,
             root,
             authority,
@@ -209,12 +249,14 @@ impl Http {
             http::HeaderValue::from_str(&bearer).map_err(|_| "the token is not a header value")?;
         drop(bearer);
         authorization.set_sensitive(true);
+        // GitLab takes a personal, group or OAuth token as a bearer token too.
         let mut request = http::Request::builder()
             .method(method.clone())
             .uri(&url)
-            .header(http::header::ACCEPT, "application/vnd.github+json")
-            .header("x-github-api-version", "2022-11-28")
             .header(http::header::AUTHORIZATION, authorization);
+        for (name, value) in dialect(self.kind) {
+            request = request.header(*name, *value);
+        }
         if let Some(stored) = &stored {
             request = request.header(http::header::IF_NONE_MATCH, &stored.etag);
         }
@@ -410,6 +452,20 @@ fn set(into: &mut Map<String, Value>, name: &str, value: Value) -> Result<(), St
     set(inner, &format!("{key}{tail}"), value)
 }
 
+/// What a refusal's JSON says: GitHub's and GitLab's `message`, which GitLab makes an object of
+/// field errors when it refuses a write, or an OAuth refusal's `error_description`, else its
+/// `error`.
+fn refusal_words(answer: &Value) -> Option<String> {
+    match &answer["message"] {
+        Value::String(said) => return Some(said.clone()),
+        Value::Null => {}
+        other => return Some(other.to_string()),
+    }
+    ["error_description", "error"]
+        .iter()
+        .find_map(|key| answer[*key].as_str().map(str::to_string))
+}
+
 /// The [`Reply`] a forge's HTTP answer is, spelled as the CLI would have.
 fn reply_of(call: &Call, status: u16, out: String, headers: Vec<(String, String)>) -> Reply {
     let refusal = |err: String| Reply {
@@ -422,7 +478,7 @@ fn reply_of(call: &Call, status: u16, out: String, headers: Vec<(String, String)
     if !(200..300).contains(&status) {
         let message = serde_json::from_str::<Value>(&out)
             .ok()
-            .and_then(|v| v["message"].as_str().map(str::to_string))
+            .and_then(|v| refusal_words(&v))
             .unwrap_or_else(|| out.trim().to_string());
         return refusal(format!("{message} (HTTP {status})"));
     }
@@ -472,6 +528,7 @@ impl Transport for Http {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::forge::Kind;
     use crate::forge::transport::Method;
 
     struct Fixed(&'static str);
@@ -502,7 +559,7 @@ mod tests {
         ] {
             assert!(checked(url).is_err(), "{url}");
             assert!(
-                Http::new(ApiRoot::at(url), Arc::new(Fixed("canary"))).is_err(),
+                Http::new(Kind::GitHub, ApiRoot::at(url), Arc::new(Fixed("canary"))).is_err(),
                 "{url}"
             );
         }
@@ -510,7 +567,12 @@ mod tests {
 
     #[test]
     fn a_path_cannot_move_a_request_off_the_api_roots_host() {
-        let t = Http::new(ApiRoot::github("github.com"), Arc::new(Fixed("canary"))).unwrap();
+        let t = Http::new(
+            Kind::GitHub,
+            ApiRoot::github("github.com"),
+            Arc::new(Fixed("canary")),
+        )
+        .unwrap();
         for path in ["//evil.example/x", "@evil.example/x", "/../../x"] {
             let (_, url, _) = t
                 .request_of(&Call::get(path, super::super::LIST_TIMEOUT))
@@ -522,6 +584,7 @@ mod tests {
     #[test]
     fn the_transports_debug_never_shows_the_token() {
         let t = Http::new(
+            Kind::GitHub,
             ApiRoot::github("github.com"),
             Arc::new(Fixed("canary-4b1d")),
         )
@@ -541,6 +604,99 @@ mod tests {
         assert_eq!(url(&ghes, &get), "https://ghe.example.com/api/v3/user");
         let gql = Call::graphql("query{viewer{login}}", vec![], super::super::LIST_TIMEOUT);
         assert_eq!(url(&ghes, &gql), "https://ghe.example.com/api/graphql");
+    }
+
+    #[test]
+    fn gitlab_com_and_a_self_managed_gitlab_have_their_own_api_roots() {
+        let get = Call::get("projects/acme%2Fapi", super::super::LIST_TIMEOUT);
+        let gql = Call::graphql("query{currentUser{id}}", vec![], super::super::LIST_TIMEOUT);
+        let url = |root: &ApiRoot, call: &Call| request_for(root, call).unwrap().1;
+        let dotcom = ApiRoot::gitlab("gitlab.com");
+        assert_eq!(
+            url(&dotcom, &get),
+            "https://gitlab.com/api/v4/projects/acme%2Fapi"
+        );
+        assert_eq!(url(&dotcom, &gql), "https://gitlab.com/api/graphql");
+        let own = ApiRoot::of(Kind::GitLab, "git.example.com:8443");
+        assert_eq!(
+            url(&own, &get),
+            "https://git.example.com:8443/api/v4/projects/acme%2Fapi"
+        );
+        assert_eq!(url(&own, &gql), "https://git.example.com:8443/api/graphql");
+        assert_eq!(
+            ApiRoot::of(Kind::GitHub, "github.com"),
+            ApiRoot::github("github.com")
+        );
+    }
+
+    #[test]
+    fn gitlab_is_asked_in_its_own_dialect_and_github_in_its_own() {
+        let names = |kind| {
+            dialect(kind)
+                .iter()
+                .map(|(n, v)| format!("{n}: {v}"))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names(Kind::GitLab), ["accept: application/json"]);
+        assert_eq!(
+            names(Kind::GitHub),
+            [
+                "accept: application/vnd.github+json",
+                "x-github-api-version: 2022-11-28"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_gitlab_refusal_reads_as_glabs_would() {
+        let get = Call::get("x", super::super::LIST_TIMEOUT);
+        let said = |status, body: &str| reply_of(&get, status, body.into(), vec![]).err;
+        assert_eq!(
+            said(404, r#"{"message":"404 Project Not Found"}"#),
+            "404 Project Not Found (HTTP 404)"
+        );
+        // A validation refusal names its fields in an object.
+        let invalid = said(400, r#"{"message":{"title":["can't be blank"]}}"#);
+        assert!(
+            invalid.contains("title") && invalid.contains("can't be blank"),
+            "{invalid}"
+        );
+        assert!(invalid.ends_with("(HTTP 400)"), "{invalid}");
+        // An OAuth refusal says why in `error_description`, else `error`.
+        assert_eq!(
+            said(
+                403,
+                r#"{"error":"insufficient_scope","error_description":"The request requires higher privileges."}"#
+            ),
+            "The request requires higher privileges. (HTTP 403)"
+        );
+        assert_eq!(
+            said(401, r#"{"error":"invalid_token"}"#),
+            "invalid_token (HTTP 401)"
+        );
+    }
+
+    #[test]
+    fn gitlabs_rate_limit_headers_are_kept_and_read() {
+        let get = Call::get("x", super::super::LIST_TIMEOUT);
+        let spent = reply_of(
+            &get,
+            429,
+            "Retry later".into(),
+            vec![
+                ("ratelimit-remaining".into(), "0".into()),
+                ("ratelimit-reset".into(), "1790000000".into()),
+            ],
+        );
+        assert_eq!(
+            spent.failure(),
+            crate::forge::Failure::RateLimited {
+                reset: Some(1790000000)
+            }
+        );
+        for name in ["ratelimit-limit", "ratelimit-remaining", "ratelimit-reset"] {
+            assert!(KEPT.contains(&name), "{name}");
+        }
     }
 
     #[test]
