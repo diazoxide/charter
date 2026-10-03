@@ -1,12 +1,20 @@
 // Folding `changes/*.md` into CHANGELOG.md's `## [Unreleased]`. Run with `node --test tools/`.
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import {
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { fold, foldInto, pending } from "./changelog-fold.mjs";
+import { fold, foldInto, mode, pending } from "./changelog-fold.mjs";
 
 const LOG = `# Changelog
 
@@ -135,4 +143,30 @@ test("the repository's own CHANGELOG.md and changes/ fold cleanly", () => {
       assert.ok(folded.includes(line), `folded changelog lacks: ${line}`);
     }
   }
+});
+
+test("an unknown flag such as --help folds nothing and is a usage error", () => {
+  assert.deepEqual(mode(["--help"]), { run: "help" });
+  assert.deepEqual(mode(["-h"]), { run: "help" });
+  assert.deepEqual(mode(["--dry-run"]), { run: "usage", bad: "--dry-run" });
+  assert.deepEqual(mode(["--check", "extra"]), { run: "usage", bad: "extra" });
+  assert.deepEqual(mode([]), { run: "fold" });
+  assert.deepEqual(mode(["--check"]), { run: "check" });
+});
+
+test("a file in changes/ that is not README.md or a .md fragment is refused, naming it", () => {
+  const root = mkdtempSync(join(tmpdir(), "fold-"));
+  mkdirSync(join(root, "changes"));
+  writeFileSync(join(root, "CHANGELOG.md"), LOG);
+  writeFileSync(join(root, "changes", "README.md"), "how\n");
+  writeFileSync(join(root, "changes", "lost.markdown"), "### Fixed\n\n- x\n");
+  assert.throws(() => pending(root), /lost\.markdown/);
+  assert.equal(readFileSync(join(root, "CHANGELOG.md"), "utf8"), LOG);
+});
+
+test("run through a symlinked path, the script still acts and does not silently pass", () => {
+  const link = join(mkdtempSync(join(tmpdir(), "fold-link-")), "tools");
+  symlinkSync(fileURLToPath(new URL(".", import.meta.url)), link);
+  const ran = spawnSync(process.execPath, [join(link, "changelog-fold.mjs"), "--bogus"]);
+  assert.equal(ran.status, 2, String(ran.stderr));
 });
