@@ -21,7 +21,7 @@ matters to an autonomous agent specifically.
   `charter doctor` lists a row for the CLI and one for its auth, and in this version says
   of both that they are not checked yet; `charter discover` asks `auth status` itself
   before it lists anything.
-- **What "group" means:** the GitLab group (or subgroup) whose projects this forge block
+- **What "group" means:** the GitLab group (or subgroup) whose repos this forge block
   tracks. `include_subgroups` is always on, so a group tracks everything beneath it too.
 - **Default host:** `gitlab.com`. Declare `host = "gitlab.example.com"` in the
   `[[forge]]` block for a self-hosted instance (GitLab Enterprise/CE) — every `glab`
@@ -74,8 +74,12 @@ asked for an `Owner`: a GitHub organisation or user, or a GitLab group by its fu
 Measured against GitHub's REST API (version `2022-11-28`) and GraphQL schema, and against the
 GitLab 19.4 REST documentation (`gitlab-org/gitlab`, branch `19-4-stable-ee`, `doc/api/`).
 Each row has a contract case on both forges in `tests/forge_contract.rs`, run against the
-recordings in `tests/forge_contract/<forge>/`, and the CLI transport's argv for each is pinned
-by `tests/a_forge_cli_is_asked_exactly_what_python_asked.rs` and
+recordings in `tests/forge_contract/<forge>/` six times: through the CLI transport on each
+forge, and through the native transport on github.com, gitlab.com, a GitHub Enterprise Server
+and a self-managed GitLab, the native runs with no `gh` or `glab` on `PATH`. The same suite
+checks that the network log lists every REST call in the recordings by a template that keeps no
+owner, repo, branch, number or commit. The CLI transport's argv for each is pinned by
+`tests/a_forge_cli_is_asked_exactly_what_python_asked.rs` and
 `tests/a_pr_is_opened_or_updated_and_set_to_auto_merge.rs`.
 
 | Area · method | Who calls it | GitHub | GitLab | Discipline | Parity |
@@ -85,9 +89,9 @@ by `tests/a_forge_cli_is_asked_exactly_what_python_asked.rs` and
 | `Repos::top_level` | `discover`'s stack probe | `GET repos/{o}/{r}/git/trees/{ref}` (ref, else default branch, else `HEAD`) | `GET projects/{id}/repository/tree` (ref, else the default branch) | strict | same |
 | `Repos::about` | `charter ws todo promote` (ADR 0088 §5), before it sends | `GET repos/{o}/{r}`: `visibility` (else `private`), `archived`, `has_issues`, `permissions.pull` | `GET projects/{path}`: `visibility`, `archived`, `issues_access_level` (else `issues_enabled`), membership from `permissions` | strict | same |
 | `WorkItems::create` | `charter ws todo promote` | `POST repos/{o}/{r}/issues` with `title`, `body` and `labels[]` (`ws:<name>`, private repos only); keyed by `html_url` and `number`, `node_id` beside; every todo value a literal `-f` | `POST projects/{path}/issues` with `title`, `description` and `labels` (`charter::ws::<name>`, private repos only); keyed by `web_url`'s host, `references.full` and `iid`, `id` beside; every todo value a literal `-f` | strict | same |
-| `Requests::open_or_update` | a PR-mode save (ADR 0051), `charter change push` | `GET pulls?state=open&head={o}:{b}&base=…`, then `PATCH` or `POST pulls` | `GET merge_requests?state=opened&source_branch=…&target_branch=…`, own project only, then `PUT` or `POST` | strict | same |
+| `Requests::open_or_update` | a PR-mode save (ADR 0051), `charter change push` | `GET pulls?state=open&head={o}:{b}&base=…`, then `PATCH` or `POST pulls` | `GET merge_requests?state=opened&source_branch=…&target_branch=…`, the repo's own only (never a fork's), then `PUT` or `POST` | strict | same |
 | `Requests::state` | a PR-mode save | `GET pulls/{n}`: `closed` + `merged` is merged, at `merge_commit_sha` | `GET merge_requests/{iid}`: `merged`, at `squash_commit_sha` else `merge_commit_sha` | strict | same |
-| `Requests::by_head` | `charter change show` and `push` (ADR 0060) | `GET pulls?state=all&head={o}:{b}`, checked against `head.repo.full_name` | `GET merge_requests?source_branch=…&state=all`, own project only | strict | same |
+| `Requests::by_head` | `charter change show` and `push` (ADR 0060) | `GET pulls?state=all&head={o}:{b}`, checked against `head.repo.full_name` | `GET merge_requests?source_branch=…&state=all`, the repo's own only | strict | same |
 | `Requests::body` | `charter change push` (ADR 0060) | `GET pulls/{n}`, its `body` (`null` is empty) | `GET merge_requests/{iid}`, its `description` (`null` is empty) | strict | same |
 | `Requests::set_body` | `charter change push` | `PATCH pulls/{n}` with `body` alone | `PUT merge_requests/{iid}` with `description` alone | strict | same |
 | `Requests::request_auto_merge` | a PR-merge save | GraphQL `enablePullRequestAutoMerge` with `expectedHeadOid` | `PUT merge_requests/{iid}/merge` with `merge_when_pipeline_succeeds` and `sha`, only while a pipeline runs | strict | **gap 3** (#805) |
@@ -95,8 +99,9 @@ by `tests/a_forge_cli_is_asked_exactly_what_python_asked.rs` and
 | `Requests::merge_at` | `charter change land` (ADR 0060 D3) | `PUT pulls/{n}/merge` with `merge_method`, `commit_title`, `commit_message` and `sha` | `PUT merge_requests/{iid}/merge` with `squash`, `sha` and `merge_commit_message`, **never** `merge_when_pipeline_succeeds` or `auto_merge` | strict | same |
 | `Requests::enqueue_at` | `charter change land` (ruling Q16) | GraphQL `enqueuePullRequest` with `expectedHeadOid` | `POST merge_trains/merge_requests/{iid}` with `squash` and `sha`, no `auto_merge` | strict | same, except the method (below) |
 | `Requests::checks_at` | `charter change show` and `land` | check runs **and** commit statuses at the sha, each read whole | the request's pipelines at the sha; the newest decides | strict, `UNKNOWN` on failure | same, by design |
-| `Requests::open_on_branch` | `gl-refresh` | `GET pulls?state=open&head={o}:{b}&per_page=1` | `GET merge_requests?state=opened&source_branch=…&per_page=100`, own project only | permissive | same (fixed here) |
+| `Requests::open_on_branch` | `gl-refresh` | `GET pulls?state=open&head={o}:{b}&per_page=1` | `GET merge_requests?state=opened&source_branch=…&per_page=100`, the repo's own only | permissive | same (fixed here) |
 | `Requests::ci_word` | `gl-refresh` | GraphQL `statusCheckRollup.state` (5 values) | `GET pipelines?ref=…&per_page=1`, its `status` (13 values) | permissive | same |
+| `Capabilities::support` | the fallbacks of ADR 0070 §2 | no request: epics are never there; sub-issues, dependencies, boards and iterations are there on github.com's instance; everything else is not asked yet | no request: epics, iterations, boards, child items and blocking links are there on gitlab.com's instance; a self-managed GitLab's are not asked yet | never yes unasked | same; the probes come with FG-2 (#802) |
 
 ### `charter change push`
 
@@ -217,11 +222,30 @@ again, it seeds only the members it has not seeded yet.
 | `gh auth status` / `glab auth status` | `Forge::check_auth`, the CLI transport's own check | It asks whether the transport can speak as someone, not the forge anything. The native transport answers it from its own sign-in |
 | `gh search issues`, `gh issue create` | `report.rs`, through `forge::gh_as_the_operator` | It files on charter's own tracker, which is on GitHub whatever forge a project uses, under the reporter's own login. It moves to the work-item area (FW-6a) with #806 |
 | `gh auth git-credential`, `glab`'s helper | a clone's git credential helper | Git's own credential path is not part of the seam (ADR 0070 §4, #752) |
+| `gh auth status` / `glab auth status`, from the first run | the app's first run, through `Forge::check_auth` | The same check as the first row, asked of each forge whose CLI is installed |
+| `gh …` and `glab …` in a chat's own commands | the guard tables (`personagate`, `proseguard`, `floorguard`, `heredoc`, `leakguard`) | They decide whether a chat's command asks first or is refused. charter sends nothing through them. Their parity between the two CLIs is #1068 |
+
+**Work items beyond `create`.** Each forge's native client has its work items as that forge has
+them, crate-private, with recorded-request tests (`src/forge/github/work.rs`,
+`src/forge/gitlab/work_tests.rs`). Nothing outside the core calls them yet. They join the seam's
+`WorkItems` area when FW-6a (#733) and FW-6b (#734) map them onto the work model:
+
+| Concept | GitHub | GitLab |
+|---|---|---|
+| An issue: read, list, create, update | `repos/{o}/{r}/issues` | `projects/{id}/issues` |
+| A child item | sub-issues | a GraphQL work item's parent |
+| Blocked by | issue dependencies | issue links, `blocks` |
+| Milestones | `repos/{o}/{r}/milestones` | `projects/{id}/milestones` |
+| Types | issue types | — (a work item's type; FW-6b decides) |
+| Epics | — | `groups/{id}/epics` (Premium) |
+| Iterations | a Projects v2 iteration field | `groups/{id}/iterations` (Premium) |
+| Boards | a Projects v2 board, its items and fields | a repo's boards and their label lists |
+| Pipelines | — (checks are `Requests::checks_at`) | `projects/{id}/pipelines` |
 
 ### Gaps the audit found
 
-Fixed in this audit, each with a case in `tests/forge_contract.rs`. Both move charter away from
-what the Python charter answered, on purpose (ADR 0046):
+Fixed in this audit, each with a case in `tests/forge_contract.rs`. The first two move charter
+away from what the Python charter answered, on purpose (ADR 0046):
 
 - **Two GitLab pipeline statuses were unread.** GitLab 19.4 lists thirteen (`doc/api/pipelines.md`,
   the `status` filter), and charter, like Python's `gitlab._CI_MAP`, mapped eleven.
@@ -232,24 +256,38 @@ what the Python charter answered, on purpose (ADR 0046):
   project's own (`source_project_id == target_project_id`). It now reads a page of a hundred and
   keeps only the project's own, as GitHub's `head={owner}:{branch}` already does. Python asked
   for one MR (`per_page=1`); the pinned argv test moved with it.
+- **A GitHub Enterprise Server never ran the native contract.** A self-managed GitLab did. Every
+  case now runs on a GitHub Enterprise Server too (`github_self_managed`).
+- **A GitHub ruleset that protects a branch was not read as a protected branch.** GitHub refuses
+  that push with `GH013` and a branch-protection rule line, "Changes must be made through a pull
+  request" or "Cannot update this protected ref". Neither matched a protected-branch signature,
+  so the save said only "push failed". GitLab's protected branch already matched. Those two
+  lines are now recognised like GitHub's `GH006`. `GH013` alone is not, because GitHub also
+  uses it to refuse a secret or a file a ruleset forbids, and that is not a protected branch.
+- **Nothing showed that the network log masks every call.** It is now checked for every recorded
+  call on both forges.
 
 Open, each filed:
 
 1. **A GitLab user namespace cannot be discovered** (#803). `owned` asks `groups/{owner}/projects`,
    which does not answer for a user. GitHub falls back from the org endpoint to the user one;
    GitLab's equivalent is `GET users/{owner}/projects` (`doc/api/projects.md`).
-2. **GitLab lists projects shared into the group** (#804). `groups/:id/projects` defaults
-   `with_shared` to `true` (`doc/api/groups.md`), so a project another namespace shares with the
+2. **GitLab lists repos shared into the group** (#804). `groups/:id/projects` defaults
+   `with_shared` to `true` (`doc/api/groups.md`), so a repo another namespace shares with the
    group is discovered as if it were the group's. `with_shared=false` would match GitHub.
 3. **GitLab's auto-merge parameter is deprecated** (#805, after FG-2, #802).
    `merge_when_pipeline_succeeds` was deprecated in GitLab 17.11 in favour of `auto_merge`, and
    19.4 still accepts it. charter keeps it on purpose: a GitLab older than `auto_merge` ignores an
    unknown parameter and would merge at once. Since 19.1, `auto_merge` on a project with merge
    trains joins the train.
-4. **No recording captured from a live GitLab** (#742). The native contract runs on gitlab.com
-   and on a self-managed host (`gitlab_self_managed`), but both replay GitLab's documented
-   answers; FW-15's nightly records real ones.
+4. **No recording captured from a live forge** (#742). The native contract runs on each forge's
+   own instance and on a self-managed one, but every run replays the forge's documented answers;
+   FW-15's nightly records real ones.
 5. **`charter report` is outside the seam** (#806), until the work-item area (FW-6a) exists.
+6. **A request-mode save on GitLab says "pull request"** (#1067). The project's and a repo's
+   `pr` and `pr-merge` saves, their doctor rows and alerts, and the app's saving view name a
+   merge request `pull request #12`. The changes view already says what each forge says.
+7. **The guard tables treat the two forge CLIs unevenly** (#1068).
 
 ## The native GitLab client (FW-2b)
 

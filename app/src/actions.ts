@@ -1206,7 +1206,7 @@ export function catalogue(now: Now): Offer[] {
           view: changesView(workspace),
           title: changesTitle(workspace),
         }),
-        note: `${workspace}: each cross-repo change, each member's pull request and its checks.`,
+        note: `${workspace}: each cross-repo change, each member's request and its checks.`,
       });
     }
     // LIVE or LOCAL (charter-app#301): the row says which way it goes, and asks before it does.

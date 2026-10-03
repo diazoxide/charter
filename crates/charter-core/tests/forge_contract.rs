@@ -452,8 +452,18 @@ mod cases {
         // Premium namespace, which a narrower reach would have to probe); a self-managed GitLab
         // has what its edition and licence have, which charter has not asked.
         let epics = backend.support(&recorded.caller, &Reach::Instance, Capability::Epics);
+        // Sub-issues, said of the instance: github.com has them; a GitHub Enterprise Server has
+        // what its version has, which charter has not asked.
+        let sub_issues = backend.support(&recorded.caller, &Reach::Instance, Capability::SubIssues);
         match (kind, recorded.host.as_str()) {
-            ("github", _) => assert!(matches!(epics, Support::Unavailable(_)), "{epics:?}"),
+            ("github", "github.com") => {
+                assert!(matches!(epics, Support::Unavailable(_)), "{epics:?}");
+                assert_eq!(sub_issues, Support::Available);
+            }
+            ("github", _) => {
+                assert!(matches!(epics, Support::Unavailable(_)), "{epics:?}");
+                assert!(matches!(sub_issues, Support::Unknown(_)), "{sub_issues:?}");
+            }
             ("gitlab", "gitlab.com") => assert_eq!(epics, Support::Available),
             ("gitlab", _) => assert!(matches!(epics, Support::Unknown(_)), "{epics:?}"),
             _ => unreachable!("two forges"),
@@ -595,9 +605,11 @@ macro_rules! contract {
 contract!(github, github, Recorded);
 contract!(gitlab, gitlab, Recorded);
 // The native transport, against a server answering the same recordings over HTTP: on each
-// forge's own instance, and on a self-managed GitLab (ADR 0070 §7: it gates every change).
+// forge's own instance, and on a self-managed instance of each: a GitHub Enterprise Server and a
+// self-managed GitLab (ADR 0070 §7: it gates every change).
 contract!(github_native, github, Native);
 contract!(gitlab_native, gitlab, Native);
+contract!(github_self_managed, github, SelfManaged);
 contract!(gitlab_self_managed, gitlab, SelfManaged);
 
 /// The method names of one `pub trait <name> { … }` block in `backend.rs`.
@@ -654,6 +666,7 @@ fn every_method_of_the_seam_has_a_case_on_both_forges() {
     for (module, kind, how) in [
         ("github_native", "github", "Native"),
         ("gitlab_native", "gitlab", "Native"),
+        ("github_self_managed", "github", "SelfManaged"),
         ("gitlab_self_managed", "gitlab", "SelfManaged"),
     ] {
         assert_eq!(
@@ -869,8 +882,107 @@ mod who_can_open_an_issue {
     }
 }
 
+/// The network log, for the recorded REST calls of the parity table on both forges (FG-3): each
+/// is listed by its template, and no name of the scene (the owner, the repo, a branch, a
+/// request's number, a commit) survives into it. A GraphQL call is listed as `graphql`, which
+/// holds no name, so it is not read here.
+mod network_log {
+    use super::*;
+
+    /// Every name the recordings' paths carry, however each forge spells it.
+    const SCENE: [&str; 10] = [
+        "acme", "api", "web", "main", "charter", "save", "12", "7", SHA, MERGE,
+    ];
+
+    fn paths(kind: &str) -> Vec<String> {
+        CASES
+            .iter()
+            .flat_map(|case| {
+                let file: Value = serde_json::from_str(&recording(kind, case)).unwrap();
+                file["exchanges"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter_map(|e| {
+                        e["call"]["endpoint"]["rest"]["path"]
+                            .as_str()
+                            .map(String::from)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn every_recorded_call_on_both_forges_is_listed_with_no_name_of_the_scene() {
+        charter_core::unsteered!();
+        for kind in ["github", "gitlab"] {
+            let paths = paths(kind);
+            // Exactly the REST calls the recordings hold, so a recording that lost one, or a
+            // reader that skipped some, fails here rather than checking less.
+            let expected = match kind {
+                "github" => 15,
+                _ => 20,
+            };
+            assert_eq!(paths.len(), expected, "{kind}: the recorded REST calls");
+            for path in paths {
+                let listed = charter_core::netlog::template(&path);
+                assert!(
+                    !listed.contains('?'),
+                    "{kind}: {path} keeps its query: {listed}"
+                );
+                for segment in listed.split('/') {
+                    assert!(
+                        !SCENE.iter().any(|name| segment.contains(name)),
+                        "{kind}: {path} is listed as {listed}, which names {segment}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// GitHub's `owned` for a personal account: the org endpoint answers `404`, and the same listing
+/// is asked of the user endpoint (GitHub REST `2022-11-28`, "List repositories for a user").
+/// GitLab's counterpart is gap 1 of `docs/forges.md` (#803).
+mod github_personal_account {
+    use super::*;
+
+    fn page(path: &str, reply: Value) -> Value {
+        json!({"call": {"endpoint": {"rest": {"method": null, "path": path}}, "fields": []},
+               "reply": reply})
+    }
+
+    #[test]
+    fn owned_falls_back_to_the_user_endpoint_on_a_404_and_answers_the_same_shape() {
+        charter_core::unsteered!();
+        let repos = json!([{"id": 1, "name": "api", "full_name": "acme/api",
+            "default_branch": "main", "description": null,
+            "html_url": "https://github.com/acme/api",
+            "ssh_url": "git@github.com:acme/api.git", "topics": []}]);
+        let text = json!({"source": "GitHub REST 2022-11-28, repos: List organization \
+                                 repositories (404 for a user), List repositories for a user",
+        "exchanges": [
+            page("orgs/acme/repos?per_page=100&page=1",
+                 json!({"code": 1, "out": "{\"message\":\"Not Found\",\"status\":\"404\"}",
+                        "err": "gh: Not Found (HTTP 404)", "status": 404})),
+            page("users/acme/repos?per_page=100&page=1",
+                 json!({"code": 0, "out": repos.to_string()})),
+        ]});
+        let recorded = Arc::new(Recorded::parse(&text.to_string()).unwrap());
+        let backend = Forge::default_of(Kind::GitHub).backend_over(recorded.clone());
+        let owned = backend.owned(&caller(), &Owner::new("acme")).unwrap();
+        assert_eq!(owned.len(), 1);
+        assert_eq!(owned[0].path_with_namespace, "acme/api");
+        assert_eq!(owned[0].forge, Kind::GitHub);
+        spent(&recorded);
+    }
+}
+
 /// FW-2a's and FW-2b's acceptance: the contract passes against the native client with no `gh`
-/// or `glab` on `PATH`, on github.com, gitlab.com and a self-managed GitLab. Every native case
+/// or `glab` on `PATH`, on github.com, gitlab.com, a GitHub Enterprise Server and a self-managed
+/// GitLab (FG-3). Every native case
 /// runs again in a child of this binary whose environment is emptied and whose `PATH` is one
 /// empty directory.
 #[test]
@@ -883,6 +995,7 @@ fn the_native_contract_passes_with_no_forge_cli_on_path() {
             .args([
                 "github_native::",
                 "gitlab_native::",
+                "github_self_managed::",
                 "gitlab_self_managed::",
                 "--test-threads=2",
             ])
@@ -898,7 +1011,7 @@ fn the_native_contract_passes_with_no_forge_cli_on_path() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(
-        said.contains(&format!("{} passed", 3 * CASES.len())),
+        said.contains(&format!("{} passed", 4 * CASES.len())),
         "the child did not run every native case:\n{said}"
     );
 }
