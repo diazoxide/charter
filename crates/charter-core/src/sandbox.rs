@@ -1084,12 +1084,13 @@ fn article(word: &str) -> &'static str {
     }
 }
 
-/// The harnesses charter can sandbox other than `but`, as a sentence names them:
-/// `Claude Code or Codex`.
+/// The harnesses charter can sandbox on this machine other than `but`, as a sentence names
+/// them: one a chat could be started on instead. A harness held back (#1123) or one this system
+/// cannot wrap is never offered.
 fn sandboxed_harnesses_but(but: Option<Harness>) -> String {
     let titles: Vec<&str> = Harness::ALL
         .into_iter()
-        .filter(|harness| compiler(*harness).is_some() && Some(*harness) != but)
+        .filter(|harness| never_on(*harness, Os::this()).is_none() && Some(*harness) != but)
         .map(Harness::title)
         .collect();
     match titles.split_last() {
