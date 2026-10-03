@@ -208,8 +208,8 @@ When two choices conflict, the higher priority wins.
 18. **Repository:** a new repo, `charter-app`, which takes over the `charter` name at M4. The
     product is still called charter. This repo stays the Python implementation and the plane.
 19. **Standard tooling, enforced in CI:**
-    - **Rust:** the stable toolchain, `rustfmt`, `clippy -D warnings`, `cargo-deny` (licences
-      and advisories).
+    - **Rust:** a stable toolchain pinned in `rust-toolchain.toml` (#888), `rustfmt`,
+      `clippy -D warnings`, `cargo-deny` (licences and advisories).
     - **TypeScript:** `strict`, ESLint, Prettier.
     - **Dependencies:** Dependabot (built into GitHub, nothing to install).
     - **Tests:** Vitest for UI units, `cargo test` for the core, and scenario tests through

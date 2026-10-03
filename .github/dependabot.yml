@@ -67,9 +67,16 @@ updates:
     multi-ecosystem-group: tauri
     patterns: ["@tauri-apps/*"]
 
+  # The Rust toolchain `rust-toolchain.toml` pins (#888, ruling V84b). Every CI job installs
+  # that version through `.github/actions/rust-toolchain`, so this one PR moves CI and local
+  # builds together; it rides the next train like any other change.
+  - package-ecosystem: rust-toolchain
+    directory: /
+    schedule: { interval: weekly }
+
   # Every workflow pins its actions by commit SHA with the version as a comment; Dependabot
   # moves the SHA and the comment together. `dtolnay/rust-toolchain` publishes no version tags
-  # for Dependabot to follow, so its pin is checked and moved by hand.
+  # for Dependabot to follow, so its pin, in `.github/actions/rust-toolchain`, is moved by hand.
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: weekly }

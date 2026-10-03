@@ -1,0 +1,29 @@
+# The Rust toolchain `rust-toolchain.toml` pins, installed the way every job installed `stable`
+# before (#888, ruling V84b): one place names the version, and a workflow never names it again.
+# A bump is one line in `rust-toolchain.toml` (Dependabot proposes it), and every job, the
+# Fedora job's own rustup and a local `cargo` all follow it.
+name: Rust toolchain
+description: Installs the toolchain rust-toolchain.toml pins, through dtolnay/rust-toolchain.
+inputs:
+  components:
+    description: Components beyond the minimal profile, comma-separated (rustfmt, clippy).
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - id: pin
+      shell: bash
+      run: |
+        channel=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' "$GITHUB_WORKSPACE/rust-toolchain.toml")
+        if [ -z "$channel" ]; then
+          echo "::error file=rust-toolchain.toml::rust-toolchain.toml names no channel"
+          exit 1
+        fi
+        echo "channel=$channel" >> "$GITHUB_OUTPUT"
+    # `dtolnay/rust-toolchain` publishes no version tags for Dependabot to follow, so this pin
+    # is checked and moved by hand.
+    - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master, 2026-09-12
+      with:
+        toolchain: ${{ steps.pin.outputs.channel }}
+        components: ${{ inputs.components }}

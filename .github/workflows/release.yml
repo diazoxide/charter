@@ -191,10 +191,8 @@ jobs:
       # `## [X.Y.Z]` section, or an empty one, is refused here, beside the check that the tag
       # agrees with Cargo.toml and before anything is built. The `changelog` crate is the one
       # the app reads the file with, so this refusal and the dialog cannot disagree.
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master, 2026-09-12
+      - uses: ./.github/actions/rust-toolchain
         if: steps.plan.outputs.channel == 'stable'
-        with:
-          toolchain: stable
       - name: A stable tag has its section in CHANGELOG.md
         if: steps.plan.outputs.channel == 'stable'
         env:
@@ -312,9 +310,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
 
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master, 2026-09-12
-        with:
-          toolchain: stable
+      - uses: ./.github/actions/rust-toolchain
       # **No cache, restored or saved.** This job holds the signing keys, so it builds from its
       # own checkout and the lockfiles alone: a cache is whatever the last job to save it left,
       # and another workflow's job is not this one. It is a cold build, slower by design.
@@ -1013,9 +1009,7 @@ jobs:
         with:
           ref: ${{ needs.plan.outputs.sha }}
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master, 2026-09-12
-        with:
-          toolchain: stable
+      - uses: ./.github/actions/rust-toolchain
       # No cache here: this job can write the release, so it builds from nothing but main's
       # own tree.
 

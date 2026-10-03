@@ -1,3 +1,7 @@
+# Pinned (#888, ruling V84b): a new stable no longer changes CI or a local build on the day it
+# ships. CI installs exactly this through `.github/actions/rust-toolchain`; rustup reads it for
+# every local `cargo`. Dependabot proposes each bump, and it lands in a train like any change.
+# `rust-version` in Cargo.toml is the oldest compiler charter builds with, and is separate.
 [toolchain]
-channel = "stable"
+channel = "1.99.0"
 components = ["rustfmt", "clippy"]
