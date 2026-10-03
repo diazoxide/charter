@@ -106,13 +106,17 @@ describe("the window's keyboard reach", () => {
           return x.left - y.left;
         })
         .map((one) => one.name);
-      // And inside the focused pane, its own controls before its terminal.
+      // And inside the focused pane, its own controls before its terminal: everything its two
+      // top corners draw, left then right — the harness it runs (HP-19) at the left, split and
+      // end at the right — and the terminal last.
       const frame = document.querySelector(".pane-frame:has(.pane.focused)");
       const inFrame = frame ? stops.filter((el) => frame.contains(el)) : [];
+      const terminal = inFrame.findIndex((el) => el.closest('[data-testid="pane"]') !== null);
       const controlsFirst =
-        inFrame.length > 0 &&
-        inFrame[0].closest(".pane-doing") !== null &&
-        inFrame[inFrame.length - 1].closest('[data-testid="pane"]') !== null;
+        terminal > 0 &&
+        terminal === inFrame.length - 1 &&
+        inFrame.slice(0, terminal).every((el) => el.closest(".pane-corner") !== null) &&
+        inFrame.some((el) => el.closest(".pane-doing") !== null);
       return { tabbed, laidOut, controlsFirst };
     });
     expect(tabbed).toEqual(laidOut);

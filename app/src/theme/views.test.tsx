@@ -396,6 +396,44 @@ const CHANGES_ANSWER: ViewAnswer = {
   ],
 };
 
+/** A harness's card (HP-19), as `charter_core::harness_card::Card::blocks` answers it. */
+const HARNESS_CARD_ANSWER: ViewAnswer = {
+  kind: "answered",
+  blocks: [
+    { kind: "note", text: "What opencode can do here", tone: "plain" },
+    {
+      kind: "facts",
+      facts: [
+        { label: "Program", value: "opencode" },
+        { label: "Declared", value: "shipped with charter" },
+      ],
+    },
+    {
+      kind: "list",
+      rows: [
+        row("reports_waiting", {
+          text: "Tells charter when it is waiting for you",
+          note: "yes",
+          detail: null,
+        }),
+        row("ready_to_type", {
+          text: "Can have a prompt typed in for you when it starts",
+          note: "no",
+          mark: "note",
+          detail: {
+            kind: "text",
+            text: "opencode cannot have a prompt typed in for you, because charter cannot tell when it has finished starting.",
+          },
+        }),
+      ],
+      empty: { headline: "Nothing to say", body: null, offer: null },
+    },
+    { kind: "note", text: "opencode says nothing until your first prompt.", tone: "plain" },
+  ],
+  took_ms: 1,
+  overreach: null,
+};
+
 const SHARED_FILE: SettingsFile = {
   which: "shared",
   file: "charter.toml",
@@ -767,6 +805,20 @@ const STATES: State[] = [
     name: "a session record",
     view: { from: null, view: "session", key: RECORD.row.path },
     drawn: /The guard ran/,
+  },
+  {
+    name: "a harness's card",
+    view: { from: null, view: "harness", key: "opencode" },
+    answers: { open_view: HARNESS_CARD_ANSWER },
+    drawn: /Can have a prompt typed in for you when it starts/,
+  },
+  {
+    name: "a harness's card for a harness that has gone",
+    view: { from: null, view: "harness", key: "gemini" },
+    answers: {
+      open_view: { kind: "gone", why: "This project has no harness called gemini any more." },
+    },
+    drawn: /no harness called gemini/,
   },
   { name: "a memory", view: MEMORY_REF, drawn: /offer menus/ },
   {

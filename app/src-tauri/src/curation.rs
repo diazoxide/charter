@@ -256,28 +256,42 @@ fn launch_profile(root: &Path) -> Result<String, String> {
         .ok_or_else(|| {
             "This project has no harness profile to open a curation chat on.".to_owned()
         })?;
-    when_typed(&profile.name, Harness::of_kind(&profile.kind))?;
+    when_typed(
+        &profile.name,
+        Harness::of_kind(&profile.kind),
+        charter_core::harness_card::named(root, &profile.kind).as_ref(),
+    )?;
     Ok(profile.name.clone())
 }
 
-/// When a chat on `harness` can have a prompt typed into it, or why it cannot, in a sentence.
-/// One answer for the menu's rows and for the start itself.
-fn when_typed(profile: &str, harness: Option<Harness>) -> Result<ReadyToType, String> {
-    match harness {
-        Some(harness) => harness.ready_to_type().ok_or_else(|| {
-            format!(
-                "The default profile '{profile}' runs {}, which says nothing until your first \
-                 prompt and goes quiet while it is still starting, so charter has no moment to \
-                 type a curation prompt into it. Make a Claude Code or Codex profile the \
-                 default to curate from here.",
-                harness.name()
-            )
-        }),
-        None => Err(format!(
-            "The default profile '{profile}' runs a program charter has not measured, so it \
-             cannot tell when to type a curation prompt into it."
-        )),
-    }
+/// When a chat on `harness` can have a prompt typed into it, or why it cannot, in a sentence:
+/// the line its capability card (`card`) says for it (HP-19, ADR 0072 §3). One answer for the
+/// menu's rows and for the start itself.
+fn when_typed(
+    profile: &str,
+    harness: Option<Harness>,
+    card: Option<&charter_core::harness_card::Card>,
+) -> Result<ReadyToType, String> {
+    harness
+        .and_then(Harness::ready_to_type)
+        .ok_or_else(|| match cannot_be_typed_into(card) {
+            Some(lacks) => format!(
+                "No curation chat can open on the default profile '{profile}': {lacks} Make \
+                 another profile the default to curate from here."
+            ),
+            None => format!(
+                "The default profile '{profile}' runs a program charter has not measured, so it \
+                 cannot tell when to type a curation prompt into it."
+            ),
+        })
+}
+
+/// What a harness's card says while a prompt cannot be typed into it: its line and its label,
+/// or none where there is no card to say it — a program no declaration describes.
+pub(crate) fn cannot_be_typed_into(
+    card: Option<&charter_core::harness_card::Card>,
+) -> Option<String> {
+    card.and_then(|card| card.lacks(charter_core::harness_card::READY_TO_TYPE))
 }
 
 /// What a curation chat's tab says: `<label> · <subject>`, held to a chat name's length.
@@ -375,7 +389,11 @@ pub fn start_typed(
     held: &Arc<Held>,
     chat: ChatTyped,
     size: Size,
-    cannot_type: impl FnOnce(&str, Option<Harness>) -> Result<ReadyToType, String>,
+    cannot_type: impl FnOnce(
+        &str,
+        Option<Harness>,
+        Option<&charter_core::harness_card::Card>,
+    ) -> Result<ReadyToType, String>,
     not_drawn: impl FnOnce(String) -> String,
 ) -> Result<StartedTyped, String> {
     let root = held.root().to_path_buf();
@@ -396,7 +414,12 @@ pub fn start_typed(
         &root,
     )?;
     // The same question the caller's menu asked, of the harness this start actually resolved.
-    let when = cannot_type(&chat.profile, ready.harness)?;
+    // Its harness's card, built-in or declared, for the line a refusal says (HP-19).
+    let card = charter_core::profiles::for_launch(&root)
+        .0
+        .get(&chat.profile)
+        .and_then(|profile| charter_core::harness_card::named(&root, &profile.kind));
+    let when = cannot_type(&chat.profile, ready.harness, card.as_ref())?;
     if let Some(why) = ready
         .harness
         .and_then(|h| h.why_drawn_as_a_placeholder(&curation::pasted(&chat.prompt)))
@@ -1703,7 +1726,8 @@ mod tests {
 
         let refused = open(&held, "workspace:alpha", "charter/compact", SIZE).unwrap_err();
 
-        assert!(refused.contains("still starting"), "{refused}");
+        // What opencode lacks, in its capability card's line (HP-19).
+        assert!(refused.contains("finished starting"), "{refused}");
         assert!(held.chats().open_now().is_empty());
     }
 
@@ -1779,20 +1803,58 @@ mod tests {
 
     #[test]
     fn claude_code_is_typed_into_on_its_start_codex_once_raw_and_quiet_and_opencode_never() {
+        let card = |harness| Some(charter_core::harness_card::built_in_card(harness));
         assert_eq!(
-            when_typed("claude", Some(Harness::ClaudeCode)),
+            when_typed(
+                "claude",
+                Some(Harness::ClaudeCode),
+                card(Harness::ClaudeCode).as_ref()
+            ),
             Ok(ReadyToType::WhenItReportsItsStart)
         );
         assert_eq!(
-            when_typed("work", Some(Harness::Codex)),
+            when_typed("work", Some(Harness::Codex), card(Harness::Codex).as_ref()),
             Ok(ReadyToType::WhenRawAndQuiet)
         );
-        let opencode = when_typed("work", Some(Harness::Opencode)).unwrap_err();
+        let opencode = when_typed(
+            "work",
+            Some(Harness::Opencode),
+            card(Harness::Opencode).as_ref(),
+        )
+        .unwrap_err();
+        // What it lacks, in its capability card's line and label (HP-19).
         assert!(
-            opencode.contains("'work'") && opencode.contains("first prompt"),
+            opencode.contains("'work'")
+                && opencode.contains(
+                    "opencode cannot have a prompt typed in for you, because charter cannot tell \
+                     when it has finished starting. See What opencode can do here."
+                ),
             "{opencode}"
         );
-        let custom = when_typed("custom", None).unwrap_err();
+        let custom = when_typed("custom", None, None).unwrap_err();
         assert!(custom.contains("'custom'"), "{custom}");
+    }
+
+    #[test]
+    fn a_harness_the_project_declares_is_refused_in_its_cards_line() {
+        // HP-19's review, M1: charter types into a harness only through an adapter it ships,
+        // so a declared harness is refused whatever its terminal says — in its card's words.
+        let declared = charter_core::harness_declaration::parse(
+            "name = \"eager\"\nprogram = \"eager\"\n[terminal]\nready_to_type = \"raw-and-quiet\"\n",
+            charter_core::harness_declaration::Origin::Project,
+            "harnesses/eager.toml",
+        )
+        .expect("a declaration");
+        let card = charter_core::harness_card::of(&declared);
+
+        let refused = when_typed("work", None, Some(&card)).unwrap_err();
+
+        assert!(
+            refused.contains(
+                "eager cannot have a prompt typed in for you, because charter cannot tell when it \
+                 has finished starting. See What eager can do here."
+            ),
+            "{refused}"
+        );
     }
 }

@@ -197,6 +197,7 @@ const PROFILES = [
     source: "built-in",
     is_default: true,
     ready_to_type: true,
+    harness: null,
     approval: null,
   },
 ];

@@ -40,6 +40,30 @@ pub const APPROVED: &str = "harness-declarations-approved.json";
 /// starts, so a planted giant is a launch that never finishes.
 const MAX_BYTES: u64 = 64 * 1024;
 
+/// The most characters of a declaration's `title` a window draws: the harness card's label
+/// (HP-19), on the picker and the tab strip.
+pub const MOST_TITLE: usize = 60;
+
+/// The most characters of a declaration's `tested`: a fact on the harness card.
+pub const MOST_TESTED: usize = 80;
+
+/// The most characters of the reason in a capability's `"no: <reason>"`: a line on the card.
+pub const MOST_REASON: usize = 200;
+
+/// Why `value`, a declaration's words a window draws, may not be drawn, or nothing: it is one
+/// line of at most `most` characters with nothing invisible in it — no control, bidi or
+/// zero-width character, which [`shown::one_line`] would escape — so a committed file can
+/// neither forge a second line, reorder the card's own words nor blow up a first-hour surface.
+fn drawn_refusal(value: &str, most: usize) -> Option<String> {
+    (shown::one_line(value, shown::NO_CLIP) != value || value.chars().count() > most).then(|| {
+        format!(
+            "is {}, and words a window draws are one line of at most {most} characters with no \
+             control, bidi or zero-width character in them. Shorten it to one plain line.",
+            shown::short(value)
+        )
+    })
+}
+
 /// Every harness capability charter reads today (ADR 0073 §6). A ticket that reads a new one
 /// adds it here and to `docs/plane-format.md`.
 pub const CAPABILITIES: [&str; 6] = [
@@ -422,6 +446,31 @@ pub fn parse(text: &str, origin: Origin, file: &str) -> Result<Declaration, Stri
         )
     })?;
     let at = |what: &str| format!("{file}'s {what}");
+    if let Some(title) = &raw.title {
+        if let Some(why) = drawn_refusal(title, MOST_TITLE) {
+            return Err(format!("{} {why}", at("title")));
+        }
+        // Read once the built-ins are: they are what this asks about (`word_launcher`'s reason).
+        if origin == Origin::Project
+            && builtins()
+                .iter()
+                .any(|built_in| built_in.title.eq_ignore_ascii_case(title.trim()))
+        {
+            return Err(format!(
+                "{} is {}, which is a harness charter ships — a card and a picker that named it \
+                 would read as that harness. Give it a title of its own.",
+                at("title"),
+                shown::short(title)
+            ));
+        }
+    }
+    if let Some(why) = raw
+        .tested
+        .as_deref()
+        .and_then(|tested| drawn_refusal(tested, MOST_TESTED))
+    {
+        return Err(format!("{} {why}", at("tested")));
+    }
     if !crate::profiles::name_ok(&raw.name) {
         return Err(format!(
             "{} {} is not a name charter accepts — letters, digits, '_' and '-', starting \
@@ -511,7 +560,12 @@ pub fn parse(text: &str, origin: Origin, file: &str) -> Result<Declaration, Stri
             "yes" => Answer::Yes,
             "unknown" => Answer::Unknown,
             other => match other.strip_prefix("no:").map(str::trim) {
-                Some(reason) if !reason.is_empty() => Answer::No(reason.to_owned()),
+                Some(reason) if !reason.is_empty() => {
+                    if let Some(why) = drawn_refusal(reason, MOST_REASON) {
+                        return Err(format!("{} {key}'s reason {why}", at("[capabilities]")));
+                    }
+                    Answer::No(reason.to_owned())
+                }
                 _ => {
                     return Err(format!(
                         "{} {key} is {}, and a capability is \"yes\", \"no: <the reason>\" or \

@@ -59,6 +59,7 @@ function chat(session: number, name: string): OpenChat {
     profile: null,
     persona: null,
     unreported: null,
+    card: null,
     guessed: null,
     pinned: false,
     label: null,

@@ -44,6 +44,7 @@ function chat(session: number): OpenChat {
     profile: null,
     persona: null,
     unreported: null,
+    card: null,
     guessed: null,
     pinned: false,
     label: null,

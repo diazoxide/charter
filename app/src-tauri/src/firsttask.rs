@@ -148,22 +148,22 @@ pub fn start(
     })
 }
 
-/// When a run's harness can have the task typed into it, or why not.
-fn cannot_type(profile: &str, harness: Option<Harness>) -> Result<ReadyToType, String> {
-    match harness {
-        Some(harness) => harness.ready_to_type().ok_or_else(|| {
-            format!(
-                "'{profile}' starts {}, which goes quiet while it is still starting, so \
-                 charter has no moment to type the first task into it. Start this chat with \
-                 Claude Code or Codex.",
-                harness.title()
-            )
-        }),
-        None => Err(format!(
-            "'{profile}' starts a program charter has not measured, so it cannot tell when \
-             to type the first task into it."
-        )),
-    }
+/// When a run's harness can have the task typed into it, or why not: the line its capability
+/// card says for it (HP-19, ADR 0072 §3).
+fn cannot_type(
+    profile: &str,
+    harness: Option<Harness>,
+    card: Option<&charter_core::harness_card::Card>,
+) -> Result<ReadyToType, String> {
+    harness.and_then(Harness::ready_to_type).ok_or_else(|| {
+        match curation::cannot_be_typed_into(card) {
+            Some(lacks) => format!("'{profile}' cannot start the first task: {lacks}"),
+            None => format!(
+                "'{profile}' starts a program charter has not measured, so it cannot tell when \
+                 to type the first task into it."
+            ),
+        }
+    })
 }
 
 #[cfg(test)]
@@ -312,7 +312,14 @@ mod tests {
 
         let refused = start(&held, None, &project.clone, "work".into(), None, 2, SIZE).unwrap_err();
 
-        assert!(refused.contains("with Claude Code or Codex"), "{refused}");
+        // What it lacks, in its capability card's line and label (HP-19).
+        assert!(
+            refused.contains(
+                "opencode cannot have a prompt typed in for you, because charter cannot tell when \
+                 it has finished starting. See What opencode can do here."
+            ),
+            "{refused}"
+        );
         assert!(held.chats().open_now().is_empty());
         assert!(
             !project
