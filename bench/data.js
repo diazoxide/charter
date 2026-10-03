@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791022435181,
+  "lastUpdate": 1791029981199,
   "repoUrl": "https://github.com/diazoxide/charter",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -420,6 +420,48 @@ window.BENCHMARK_DATA = {
             "value": 104.692088,
             "unit": "ms",
             "extra": "median of 5 runs: 103.502, 103.688, 104.692, 105.160, 105.807 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "4d5d9490c64cdc98951f54397c84974abf7a0164",
+          "message": "HY-18: ticket and ADR issue forms\n\n.github/ISSUE_TEMPLATE/ticket.yml carries the sections the program map\nfiles a ticket with, and adr.yml an ADR proposal's; both ask for the\nmilestone and each label family HY-18 set up, and adr.yml applies\ntype:adr. The community test holds both forms.\n\nCloses #1097\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-03T16:09:03+04:00",
+          "tree_id": "8c5dc2868fd48b7277ef0a00ecdb5c9b5fd88fee",
+          "url": "https://github.com/diazoxide/charter/commit/4d5d9490c64cdc98951f54397c84974abf7a0164"
+        },
+        "date": 1791029980769,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.592132,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.580, 0.590, 0.592, 0.597, 0.597 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.956614000000002,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.710, 16.882, 16.957, 17.254, 17.264 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 105.096882,
+            "unit": "ms",
+            "extra": "median of 5 runs: 102.718, 105.044, 105.097, 105.338, 105.396 ms"
           }
         ]
       }
