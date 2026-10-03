@@ -52,6 +52,8 @@ pub mod handoff;
 pub mod handoffguard;
 pub mod harness;
 pub mod harness_plugin;
+#[cfg(unix)]
+pub(crate) mod held;
 pub mod heredoc;
 pub mod hookreg;
 pub mod hookstate;

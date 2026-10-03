@@ -1074,6 +1074,23 @@ Two rules hold for the whole area and are not repeated per file:
   memory → refs → workspace.md → workspace.json → harness layer → structure stamp
   (`charter/workspace.py:1851`–`1885`), each path skipped when `_baseline_answers` says it
   cannot be checked or something is in the way (`charter/workspace.py:1849`).
+- **Its four stores, `memory/`, `todos/`, `sessions/` and `changes/`, are written with no link on
+  the way (V74, #1064).** Every writer, charter's MCP tools, the `charter` commands and the window
+  alike, and every reader except those #1083 still tracks, opens `workspaces`, the workspace and
+  the store one directory at a time without following a link, and then uses each file through the
+  directory it holds, never by its path. A store, or a file or directory in one, that is a link is
+  never followed by them, even when it lands inside the project's data directories: a write that
+  would go through it is refused and writes nothing, and a reader leaves the entry out. A link
+  that leaves the project is refused in the words it always was. A path below `workspaces/` that
+  does not name `<ws>/<store>` plainly (a `..` in it, say) is refused rather than used by path.
+  The MCP tools refuse a store holding any link whole; a command leaves such an entry out and goes
+  on, so a link a chat plants cannot stop the operator recording a todo. The commands and the
+  window wait a few seconds at most for a store's lock: one a chat keeps is answered with a
+  refusal, not a command that never returns. The readers #1083 tracks (the doctor's memory rows,
+  the persona and briefing counts, and the landing and pending logs) still open what they list by
+  path, under the containment rule. On a platform without directory descriptors (Windows) the MCP
+  tools are not offered, and the commands and the window reach the stores by path: a link that
+  leaves the project's data directories is refused there, and one that stays is followed.
 
 ### `workspaces/<ws>/workspace.md` — the living charter
 
@@ -1567,9 +1584,9 @@ and an archived one is where `memstore.archive` would have put it (ADR 0065).
   - <YYYY-MM-DD HH:MM> · [<title, [ and ] escaped>](<file>)
   ```
 
-  Newest first, by file name. A file whose name is not a record's, a link that leaves the
-  plane's data directories (a workspace's) or any link below the plane root (the plane
-  root's), and a file over the plane's 1 MiB bound are not records and are not listed.
+  Newest first, by file name. A file whose name is not a record's, any link (a workspace's
+  records are held with no link on the way, V74; the plane root's allow no link below the plane
+  root), and a file over the plane's 1 MiB bound are not records and are not listed.
 
 ### `.charter/sessions/<chat>.saved` and `workspaces/<ws>/.charter/sessions/<chat>.saved` — a saved record to pass on
 

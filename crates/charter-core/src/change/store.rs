@@ -6,7 +6,10 @@
 //!
 //! Every read and write is gated by containment first ([`contain::readable`],
 //! [`contain::writable`]): a committed `changes -> ../../elsewhere` travels to every machine
-//! that clones the plane, and would otherwise redirect both.
+//! that clones the plane, and would otherwise redirect both. And then made through the store
+//! held by descriptor (V74, [`crate::held`]): reached with no link on the way, even one that
+//! stays in the plane, and used through what was held, so a link a chat plants in its own
+//! workspace never carries a record into another workspace or a persona.
 
 use std::path::{Path, PathBuf};
 
@@ -40,10 +43,70 @@ pub fn exists(plane: &Path, ws: &str, slug: &str) -> bool {
     path_for(plane, ws, slug).is_ok_and(|p| p.symlink_metadata().is_ok())
 }
 
+/// `changes/` of workspace `ws`, held (V74), made as `make` says. A refusal is the sentence.
+#[cfg(unix)]
+fn held(
+    plane: &Path,
+    ws: &str,
+    make: crate::held::Make,
+) -> Result<Option<crate::held::Store>, String> {
+    crate::held::Store::hold(
+        plane,
+        &crate::active::Place::Workspace(ws.to_owned()),
+        DIRNAME,
+        make,
+        crate::held::Who::Operator,
+    )
+    .map_err(String::from)
+}
+
+/// The text of `name` in workspace `ws`'s held `changes/`, exactly as it is on disk.
+#[cfg(unix)]
+fn read_held(plane: &Path, ws: &str, name: &str) -> Result<String, String> {
+    let absent = || std::io::Error::from(std::io::ErrorKind::NotFound).to_string();
+    let store = held(plane, ws, crate::held::Make::Nothing)?.ok_or_else(absent)?;
+    store.read_raw(name)?.ok_or_else(absent)
+}
+
+/// Append `row` as one line to `path`, a file in a directory `below` the workspace's
+/// `changes/` (`["log"]`, `["log", "pending"]`): keys sorted, as [`crate::dispatch::append`]
+/// writes one, and through the store held by descriptor (V74), so a link a chat plants in its
+/// `changes/` never carries a landing into another workspace or a persona. `None` when
+/// containment, the hold or the disk refused it.
+pub(crate) fn append_line(
+    plane: &Path,
+    ws: &str,
+    below: &[&str],
+    path: PathBuf,
+    row: &serde_json::Value,
+) -> Option<PathBuf> {
+    #[cfg(unix)]
+    {
+        contain::writable(plane, &path).ok()?;
+        let mut held = held(plane, ws, crate::held::Make::All).ok()??;
+        for dir in below {
+            held = held.sub(dir, true).ok()??;
+        }
+        let name = path.file_name()?.to_str()?;
+        let line = format!("{}\n", crate::pyjson::dumps_sorted(row));
+        held.append(name, "", line.as_bytes()).ok()?;
+        Some(path)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (ws, below);
+        crate::dispatch::append(&path, plane, row)
+    }
+}
+
 /// The record for `slug`, validated, or what is wrong with it.
 pub fn read(plane: &Path, ws: &str, slug: &str) -> Result<Record, RecordError> {
     let path = path_for(plane, ws, slug)?;
     contain::readable(plane, &path).map_err(|e| RecordError(e.to_string()))?;
+    #[cfg(unix)]
+    let text = read_held(plane, ws, &format!("{slug}.json"))
+        .map_err(|e| RecordError(format!("change '{slug}': cannot be read ({e})")))?;
+    #[cfg(not(unix))]
     let text = std::fs::read_to_string(&path)
         .map_err(|e| RecordError(format!("change '{slug}': cannot be read ({e})")))?;
     Record::parse(&text, slug)
@@ -64,17 +127,33 @@ pub enum WriteError {
 pub fn write(plane: &Path, ws: &str, record: &Record) -> Result<PathBuf, WriteError> {
     record.validate()?;
     let path = path_for(plane, ws, &record.change)?;
-    let parent = dir(plane, ws);
     contain::writable(plane, &path).map_err(|e| WriteError::Plane(e.to_string()))?;
-    std::fs::create_dir_all(&parent).map_err(|e| WriteError::Plane(e.to_string()))?;
-    crate::rewrite::replace(
-        &parent,
-        &path,
-        record.to_json().as_bytes(),
-        crate::rewrite::Mode::Kept,
-    )
-    .map_err(|e| WriteError::Plane(format!("could not write {}: {e}", path.display())))?;
-    Ok(path)
+    #[cfg(unix)]
+    {
+        let store = held(plane, ws, crate::held::Make::All)
+            .map_err(WriteError::Plane)?
+            .ok_or_else(|| WriteError::Plane(format!("could not make {}", path.display())))?;
+        store
+            .replace(
+                &format!("{}.json", record.change),
+                record.to_json().as_bytes(),
+            )
+            .map_err(|e| WriteError::Plane(format!("could not write {}: {e}", path.display())))?;
+        Ok(path)
+    }
+    #[cfg(not(unix))]
+    {
+        let parent = dir(plane, ws);
+        std::fs::create_dir_all(&parent).map_err(|e| WriteError::Plane(e.to_string()))?;
+        crate::rewrite::replace(
+            &parent,
+            &path,
+            record.to_json().as_bytes(),
+            crate::rewrite::Mode::Kept,
+        )
+        .map_err(|e| WriteError::Plane(format!("could not write {}: {e}", path.display())))?;
+        Ok(path)
+    }
 }
 
 /// Delete the record for `slug`. Nothing else: no landing-log line, no branch, no request.
@@ -85,6 +164,16 @@ pub fn forget(plane: &Path, ws: &str, slug: &str) -> Result<Option<PathBuf>, Str
         return Ok(None);
     }
     contain::writable(plane, &path).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        let Some(store) = held(plane, ws, crate::held::Make::Nothing)? else {
+            return Ok(None);
+        };
+        store
+            .remove(&format!("{slug}.json"))
+            .map_err(|e| format!("could not delete {}: {e}", path.display()))?;
+    }
+    #[cfg(not(unix))]
     std::fs::remove_file(&path).map_err(|e| format!("could not delete {}: {e}", path.display()))?;
     Ok(Some(path))
 }
@@ -125,6 +214,22 @@ pub fn read_all(plane: &Path, ws: &str) -> Listing {
         });
         return listing;
     }
+    #[cfg(unix)]
+    let names = match held(plane, ws, crate::held::Make::Nothing).and_then(|store| match store {
+        Some(store) => store.names(),
+        None => Ok(Vec::new()),
+    }) {
+        Ok(names) => names,
+        Err(why) => {
+            listing.unread = Some(Unread {
+                path: d,
+                errno: None,
+                why,
+            });
+            return listing;
+        }
+    };
+    #[cfg(not(unix))]
     let names = match std::fs::read_dir(&d) {
         Ok(reader) => {
             let mut names: Vec<String> = reader

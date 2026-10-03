@@ -128,8 +128,8 @@ fn the_plane_itself_is_still_read_when_nothing_is_linked_out() {
 #[test]
 fn a_link_that_lands_inside_the_plane_is_read_and_labelled_by_where_it_lands() {
     charter_core::unsteered!();
-    // charter follows a link that stays inside the plane's data; a search labels the hit
-    // by the base it resolves into, a listing by the base it was listed from.
+    // charter follows a link in a persona's store that stays inside the plane's data; a search
+    // labels the hit by the base it resolves into, a listing by the base it was listed from.
     let (_dir, root) = plane();
     std::fs::write(
         root.join("personas/_shared/memory/shared-fact.md"),
@@ -138,7 +138,7 @@ fn a_link_that_lands_inside_the_plane_is_read_and_labelled_by_where_it_lands() {
     .unwrap();
     std::os::unix::fs::symlink(
         root.join("personas/_shared/memory/shared-fact.md"),
-        root.join("workspaces/alpha/memory/inside.md"),
+        root.join("personas/devops/memory/inside.md"),
     )
     .unwrap();
 
@@ -155,7 +155,7 @@ fn a_link_that_lands_inside_the_plane_is_read_and_labelled_by_where_it_lands() {
 
     assert_eq!(
         labels,
-        // One score each, so the path decides the order: `personas/…` before `workspaces/…`.
+        // One score each, so the path decides the order: `personas/_shared/…` first.
         vec![
             ("shared", "shared-fact.md".to_string()),
             ("shared", "inside.md".to_string())
@@ -165,8 +165,38 @@ fn a_link_that_lands_inside_the_plane_is_read_and_labelled_by_where_it_lands() {
     assert!(
         listed
             .iter()
-            .any(|h| h.label == "workspace:alpha" && h.path.ends_with("inside.md")),
+            .any(|h| h.label == "persona:devops" && h.path.ends_with("inside.md")),
         "{listed:?}"
+    );
+}
+
+#[test]
+fn a_link_in_a_workspaces_store_is_not_followed_even_into_the_plane() {
+    charter_core::unsteered!();
+    // V74 (#1064): a workspace's store is read through the store held by descriptor, so a
+    // link a chat planted in its own journal never shows the operator a persona's memory as
+    // the workspace's.
+    let (_dir, root) = plane();
+    std::fs::write(
+        root.join("personas/_shared/memory/shared-fact.md"),
+        "# Shared fact\n\n_2026-03-01 09:14 · persistent_\n\nshared kiwi\n",
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(
+        root.join("personas/_shared/memory/shared-fact.md"),
+        root.join("workspaces/alpha/memory/inside.md"),
+    )
+    .unwrap();
+
+    let found = recall::recall(&root, &ask(Some("kiwi"))).hits;
+    assert!(
+        found.iter().all(|h| !h.path.ends_with("inside.md")),
+        "{found:?}"
+    );
+    assert_eq!(
+        found.len(),
+        1,
+        "the shared memory itself is still found: {found:?}"
     );
 }
 

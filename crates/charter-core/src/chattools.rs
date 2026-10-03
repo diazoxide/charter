@@ -520,25 +520,21 @@ fn write_entry(
     } else {
         format!("{header}\n")
     };
-    // The index first, as `ensure_index` makes it: a refused index leaves no entry behind.
+    // The index first, as `ensure_index` makes it with the store's own header.
     store.append(crate::memstore::INDEX, &header, b"")?;
-    let body = crate::memstore::memory_body(&title, "persistent", text, now);
-    let prefix = now.format("%Y%m%d-%H%M%S-").to_string();
-    let mut n = 1;
-    let file = loop {
-        let file = crate::memstore::entry_name(&prefix, &title, n);
-        if store.create(&file, body.as_bytes())? {
-            break file;
-        }
-        n += 1;
-    };
-    let line = format!("{}\n", crate::memstore::index_line(&title, &file));
-    store.append(
-        crate::memstore::INDEX,
-        crate::memstore::INDEX_FALLBACK,
-        line.as_bytes(),
-    )?;
-    Ok(file)
+    // Then the one write of a workspace's memory and todos, which `charter` commands use too:
+    // the file and its index line together, or neither (#1058).
+    crate::memstore::write_in(
+        store,
+        &crate::memstore::NoGates,
+        text,
+        &title,
+        true,
+        "persistent",
+        true,
+        now,
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// The entry `ident` names: its exact name, or the one entry whose name ends `-<ident>.md`.
@@ -567,12 +563,7 @@ fn forget(store: &held::Store, file: &str) -> Result<(), String> {
     store.remove(file)?;
     // As `memstore::forget`: the file is gone, so a failure to drop its line is drift the next
     // `optimize` names, never a failure of the close.
-    if let Ok(Some(index)) = store.read(crate::memstore::INDEX) {
-        let _ = store.replace(
-            crate::memstore::INDEX,
-            crate::memstore::index_dropping(&index, file).as_bytes(),
-        );
-    }
+    crate::memstore::rewrite_index(store, file, None);
     Ok(())
 }
 
@@ -711,7 +702,7 @@ fn change_record(changes: Option<&held::Store>, slug: &str) -> Result<String, St
 }
 
 #[cfg(unix)]
-mod held;
+use crate::held;
 
 #[cfg(test)]
 mod tests;

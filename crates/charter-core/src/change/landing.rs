@@ -113,7 +113,8 @@ pub fn log_path(plane: &Path, ws: &str, host: &str) -> PathBuf {
 /// Append `landing` to `host`'s log: keys sorted, ASCII only, as the Python charter wrote it.
 /// `None` when containment refuses the path or the disk does.
 pub fn append(plane: &Path, ws: &str, host: &str, landing: &Landing) -> Option<PathBuf> {
-    crate::dispatch::append(&log_path(plane, ws, host), plane, &landing.to_value())
+    let path = log_path(plane, ws, host);
+    store::append_line(plane, ws, &[LOG_DIRNAME], path, &landing.to_value())
 }
 
 /// The last landing declared for each member of `slug`, by its `ts`, read from every host's

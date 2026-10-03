@@ -33,6 +33,61 @@ pub const TITLE_MAX: usize = 72;
 /// The index every store keeps beside its files.
 pub const INDEX: &str = "MEMORY.md";
 
+#[cfg(unix)]
+mod holding;
+#[cfg(unix)]
+pub(crate) use holding::{NoGates, rewrite_index, write_in};
+
+/// A store's lock, taken by [`lock_store`] and let go when this is dropped.
+pub(crate) enum StoreLock {
+    /// [`crate::rewrite::Lock`], on a store reached by path.
+    Path(#[allow(dead_code)] crate::rewrite::Lock),
+    /// A workspace's store, held and locked by descriptor for a bounded wait.
+    #[cfg(unix)]
+    Held(#[allow(dead_code)] crate::held::Store),
+    /// A workspace's store that is not there yet: nothing to take turns on.
+    None,
+}
+
+/// Take `dir`'s lock as every writer of a store takes it. A workspace's store is locked through
+/// the store held by descriptor, and a lock another process keeps for longer than the bound is
+/// refused in a sentence rather than waited on for ever (`WouldBlock`); any other store waits,
+/// as [`crate::rewrite::Lock::on`] does.
+pub(crate) fn lock_store(
+    root: &std::path::Path,
+    dir: &std::path::Path,
+) -> std::io::Result<StoreLock> {
+    #[cfg(unix)]
+    match holding::reach(root, dir) {
+        holding::Reach::Held(spot) => {
+            return match spot.held(crate::held::Make::Nothing)? {
+                Some(store) => store
+                    .locked()
+                    .map(StoreLock::Held)
+                    .map_err(|why| std::io::Error::new(std::io::ErrorKind::WouldBlock, why)),
+                None => Ok(StoreLock::None),
+            };
+        }
+        holding::Reach::Refused(why) => return Err(why),
+        holding::Reach::ByPath => {}
+    }
+    Ok(StoreLock::Path(crate::rewrite::Lock::on(dir)))
+}
+
+/// Whether `dir` is a workspace's store, which every operation here reaches through the store
+/// held by descriptor rather than by its path (V74): never on a platform without that.
+pub(crate) fn held_store(root: &std::path::Path, dir: &std::path::Path) -> bool {
+    #[cfg(unix)]
+    {
+        !matches!(holding::reach(root, dir), holding::Reach::ByPath)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (root, dir);
+        false
+    }
+}
+
 /// The filename stem charter derives from a title.
 ///
 /// Every run of characters outside `[a-z0-9]` becomes one `-`, the ends are trimmed, and
@@ -103,6 +158,12 @@ pub fn ensure_index(
     // The directory too, and before it is made: the index being contained does not stop
     // `create_dir_all` walking a symlinked store out of the plane.
     gate(root, dir)?;
+    #[cfg(unix)]
+    match holding::reach(root, dir) {
+        holding::Reach::Held(spot) => return holding::ensure_index(&spot, header),
+        holding::Reach::Refused(e) => return Err(e),
+        holding::Reach::ByPath => {}
+    }
     std::fs::create_dir_all(dir)?;
     if !index.exists() {
         let header = if header.ends_with('\n') {
@@ -154,6 +215,15 @@ pub fn write(
     // outside the plane, and a gate that runs after the side effect is no gate: this made
     // `memory/` and `todos/` appear beside an operator's files.
     gate(root, dir)?;
+    // A workspace's store is held by descriptor from here on (V74).
+    #[cfg(unix)]
+    match holding::reach(root, dir) {
+        holding::Reach::Held(spot) => {
+            return holding::write(&spot, text, &title, timestamped, kind, index, stamp);
+        }
+        holding::Reach::Refused(e) => return Err(e),
+        holding::Reach::ByPath => {}
+    }
     // charter's own state — the ephemeral quadrant under `.charter/` — is private whatever
     // the umask: directories it makes at 0700 and the file at 0600 (`config.mkdir_for`,
     // `config.write_for`). A committed store is the operator's to mode, and is left to it.
@@ -207,7 +277,12 @@ pub fn write(
     crate::rewrite::replace(dir, &path, body.as_bytes(), mode)?;
     if index {
         let name = path.file_name().unwrap_or_default().to_string_lossy();
-        index_append(root, &dir.join(INDEX), &name, &title)?;
+        if let Err(e) = index_append(root, &dir.join(INDEX), &name, &title) {
+            // The file and its line go together, or neither stays (#1058): refused at the
+            // append itself, the memory just written is taken away again.
+            let _ = std::fs::remove_file(&path);
+            return Err(e);
+        }
     }
     Ok(path)
 }
@@ -258,6 +333,17 @@ pub fn index_append(
     title: &str,
 ) -> std::io::Result<()> {
     gate(root, index)?;
+    #[cfg(unix)]
+    if let Some(dir) = index.parent() {
+        match holding::reach(root, dir) {
+            holding::Reach::Held(spot) => {
+                gate(root, dir)?;
+                return holding::index_append(&spot, filename, title);
+            }
+            holding::Reach::Refused(e) => return Err(e),
+            holding::Reach::ByPath => {}
+        }
+    }
     if let Some(parent) = index.parent()
         && std::fs::symlink_metadata(index).is_err()
     {
@@ -278,6 +364,14 @@ pub fn index_append(
             let mut more = std::fs::OpenOptions::new();
             more.append(true);
             let mut f = crate::contain::nofollow(&mut more).open(index)?;
+            // Opened without waiting (`nofollow` is non-blocking too), and only a file takes
+            // the line.
+            if !f.metadata()?.is_file() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    format!("{} is not a file", index.display()),
+                ));
+            }
             std::io::Write::write_all(&mut f, line.as_bytes())
         }
         Err(e) => Err(e),
@@ -462,6 +556,17 @@ pub fn duplicate_of(root: &std::path::Path, dir: &std::path::Path, text: &str) -
     if words.is_empty() {
         return None;
     }
+    #[cfg(unix)]
+    match holding::reach(root, dir) {
+        holding::Reach::Held(spot) => return holding::duplicate_of(&spot, text),
+        holding::Reach::Refused(e) => {
+            return {
+                let _ = e;
+                None
+            };
+        }
+        holding::Reach::ByPath => {}
+    }
     // Sorted, as charter's `files()` is: which of two near-duplicates is named must not
     // depend on directory order.
     let mut entries: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
@@ -583,6 +688,12 @@ pub fn forget(root: &std::path::Path, dir: &std::path::Path, ident: &str) -> std
     }
     // And never the index, which the lookup below cannot return but the refusal should name.
     one_segment(ident)?;
+    #[cfg(unix)]
+    match holding::reach(root, dir) {
+        holding::Reach::Held(spot) => return holding::forget(&spot, ident),
+        holding::Reach::Refused(e) => return Err(e),
+        holding::Reach::ByPath => {}
+    }
     let _held = crate::rewrite::Lock::on(dir);
     let file = resolve(root, dir, ident)?;
     gate(root, &file)?;
@@ -689,42 +800,8 @@ fn rewrite_index_lines(
     let Some(text) = read_text(&index) else {
         return;
     };
-    let retitled: Vec<String>;
-    let kept: Vec<&str> = match title {
-        None => {
-            let body = index_dropping(&text, filename);
-            let mode = if under_state(root, dir) {
-                crate::rewrite::Mode::Private
-            } else {
-                crate::rewrite::Mode::Kept
-            };
-            let _ = crate::rewrite::replace(dir, &index, body.as_bytes(), mode);
-            return;
-        }
-        Some(title) => {
-            retitled = crate::mdsection::split_lines(&text)
-                .into_iter()
-                .map(|line| match leading_link(line) {
-                    Some((end, file)) if file == filename => {
-                        format!("{}{}", index_line(title, filename), &line[end..])
-                    }
-                    _ => line.to_string(),
-                })
-                .collect();
-            if retitled
-                .iter()
-                .zip(crate::mdsection::split_lines(&text))
-                .all(|(new, old)| new == old)
-            {
-                return;
-            }
-            retitled.iter().map(String::as_str).collect()
-        }
-    };
-    let body = if kept.is_empty() {
-        String::new()
-    } else {
-        format!("{}\n", kept.join("\n"))
+    let Some(body) = index_rewritten(&text, filename, title) else {
+        return;
     };
     // Replaced whole and never through a link (#434): a link swapped in after
     // `readable_file` answered is refused or replaced rather than truncated through. Gated
@@ -736,6 +813,36 @@ fn rewrite_index_lines(
         crate::rewrite::Mode::Kept
     };
     let _ = crate::rewrite::replace(dir, &index, body.as_bytes(), mode);
+}
+
+/// An index's `text` with the lines that link `filename` dropped (`title` is `None`) or
+/// retitled in place — [`rewrite_index_lines`]'s rule, for a store held by path or by
+/// descriptor. `None` when a retitle changes nothing, so nothing is written.
+fn index_rewritten(text: &str, filename: &str, title: Option<&str>) -> Option<String> {
+    let Some(title) = title else {
+        return Some(index_dropping(text, filename));
+    };
+    let retitled: Vec<String> = crate::mdsection::split_lines(text)
+        .into_iter()
+        .map(|line| match leading_link(line) {
+            Some((end, file)) if file == filename => {
+                format!("{}{}", index_line(title, filename), &line[end..])
+            }
+            _ => line.to_string(),
+        })
+        .collect();
+    if retitled
+        .iter()
+        .zip(crate::mdsection::split_lines(text))
+        .all(|(new, old)| new == old)
+    {
+        return None;
+    }
+    Some(if retitled.is_empty() {
+        String::new()
+    } else {
+        format!("{}\n", retitled.join("\n"))
+    })
 }
 
 // ---------------------------------------------------------------------------------------
@@ -821,6 +928,17 @@ pub fn read_files(
 ) -> (Vec<std::path::PathBuf>, Unread) {
     if crate::contain::readable(root, dir).is_err() {
         return (Vec::new(), Vec::new());
+    }
+    #[cfg(unix)]
+    match holding::reach(root, dir) {
+        holding::Reach::Held(spot) => return holding::read_files(&spot),
+        holding::Reach::Refused(e) => {
+            return {
+                let _ = e;
+                (Vec::new(), Vec::new())
+            };
+        }
+        holding::Reach::ByPath => {}
     }
     let reader = match std::fs::read_dir(dir) {
         Ok(reader) => reader,
@@ -917,6 +1035,14 @@ pub fn title_in(path: &std::path::Path, text: &str) -> String {
 /// Every readable memory in `dir`, and what could not be looked at — `memstore.read_entries`.
 /// A file that fails to read after the listing is skipped, as charter skips it.
 pub fn read_entries(root: &std::path::Path, dir: &std::path::Path) -> (Vec<Found>, Unread) {
+    #[cfg(unix)]
+    if crate::contain::readable(root, dir).is_ok() {
+        match holding::reach(root, dir) {
+            holding::Reach::Held(spot) => return holding::read_entries(&spot),
+            holding::Reach::Refused(_) => return (Vec::new(), Vec::new()),
+            holding::Reach::ByPath => {}
+        }
+    }
     let (files, unread) = read_files(root, dir);
     let found = files
         .into_iter()
@@ -1213,17 +1339,33 @@ pub fn duplicates(entries: &[Found], threshold: f64) -> Vec<(f64, usize, usize)>
 /// and hostile at once.
 pub fn listed(root: &std::path::Path, dir: &std::path::Path) -> std::collections::BTreeSet<String> {
     let index = dir.join(INDEX);
-    let mut out = std::collections::BTreeSet::new();
     if gate(root, dir).is_err() || gate(root, &index).is_err() {
-        return out;
+        return std::collections::BTreeSet::new();
+    }
+    #[cfg(unix)]
+    match holding::reach(root, dir) {
+        holding::Reach::Held(spot) => return holding::listed(&spot),
+        holding::Reach::Refused(e) => {
+            return {
+                let _ = e;
+                std::collections::BTreeSet::new()
+            };
+        }
+        holding::Reach::ByPath => {}
     }
     if std::fs::symlink_metadata(&index).is_ok() && !readable_file(root, &index) {
-        return out;
+        return std::collections::BTreeSet::new();
     }
     let Some(text) = read_text(&index) else {
-        return out;
+        return std::collections::BTreeSet::new();
     };
-    for line in crate::mdsection::split_lines(&text) {
+    listed_in(&text)
+}
+
+/// The files an index's `text` lists, by [`listed`]'s reading.
+fn listed_in(text: &str) -> std::collections::BTreeSet<String> {
+    let mut out = std::collections::BTreeSet::new();
+    for line in crate::mdsection::split_lines(text) {
         match leading_link(line) {
             // The link still has to be one charter's pattern reads as a memory's file: a hand's
             // `- [docs](https://…)` lists nothing, as it never did.
@@ -1352,6 +1494,12 @@ fn archive_moving(
     ident: &str,
 ) -> std::io::Result<(std::path::PathBuf, bool)> {
     one_segment(ident)?;
+    #[cfg(unix)]
+    match holding::reach(root, dir) {
+        holding::Reach::Held(spot) => return holding::archive(&spot, ident),
+        holding::Reach::Refused(e) => return Err(e),
+        holding::Reach::ByPath => {}
+    }
     let dest_dir = dir.join(ARCHIVE);
     let _held = crate::rewrite::Lock::on(dir);
     let Some(file) = resolve_exact(root, dir, ident) else {
@@ -1409,6 +1557,12 @@ pub fn unarchive(
     one_segment(ident)?;
     if let Some(name) = restore_as {
         one_segment(name)?;
+    }
+    #[cfg(unix)]
+    match holding::reach(root, dir) {
+        holding::Reach::Held(spot) => return holding::unarchive(&spot, ident, restore_as),
+        holding::Reach::Refused(e) => return Err(e),
+        holding::Reach::ByPath => {}
     }
     let src_dir = dir.join(ARCHIVE);
     let _held = crate::rewrite::Lock::on(dir);
@@ -1532,6 +1686,12 @@ pub fn open(
     ident: &str,
 ) -> std::io::Result<(std::path::PathBuf, String)> {
     one_segment(ident)?;
+    #[cfg(unix)]
+    match holding::reach(root, dir) {
+        holding::Reach::Held(spot) => return holding::open(&spot, ident),
+        holding::Reach::Refused(e) => return Err(e),
+        holding::Reach::ByPath => {}
+    }
     let file = resolve_exact(root, dir, ident).ok_or_else(|| no_such(ident))?;
     let text = std::fs::read_to_string(&file)?;
     Ok((file, text))
@@ -1572,6 +1732,12 @@ pub fn edit(
         title
     };
     gate(root, dir)?;
+    #[cfg(unix)]
+    match holding::reach(root, dir) {
+        holding::Reach::Held(spot) => return holding::edit(&spot, ident, &title, text, base),
+        holding::Reach::Refused(e) => return Err(e.into()),
+        holding::Reach::ByPath => {}
+    }
     let _held = crate::rewrite::Lock::on(dir);
     let file = resolve_exact(root, dir, ident).ok_or_else(|| no_such(ident))?;
     let now = std::fs::read_to_string(&file)?;
@@ -2022,6 +2188,68 @@ mod gate_tests {
             std::fs::read_to_string(outside.path().join("idx")).unwrap(),
             "PRECIOUS\n"
         );
+    }
+
+    /// `write` into `store` with its index, after `plant` made the index refuse the line.
+    #[cfg(unix)]
+    fn refused_at_the_append(plant: impl FnOnce(&std::path::Path)) {
+        let (dir, store, _outside) = plane();
+        std::fs::write(store.join("fact.md"), "PRECIOUS\n").unwrap();
+        plant(&store);
+
+        let refused = write(
+            dir.path(),
+            &store,
+            "A fact",
+            None,
+            false,
+            "persistent",
+            true,
+            stamp(),
+        );
+
+        assert!(refused.is_err(), "{refused:?}");
+        assert!(
+            std::fs::symlink_metadata(store.join("a-fact.md")).is_err(),
+            "a memory file nothing indexes was left"
+        );
+        assert_eq!(
+            std::fs::read_to_string(store.join("fact.md")).unwrap(),
+            "PRECIOUS\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_index_linked_inside_the_store_refuses_the_line_and_leaves_no_memory_file() {
+        // #1058: the link passes containment, so the refusal comes at the append itself.
+        refused_at_the_append(|store| {
+            std::os::unix::fs::symlink(store.join("fact.md"), store.join(INDEX)).unwrap();
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_read_only_index_refuses_the_line_and_leaves_no_memory_file() {
+        use std::os::unix::fs::PermissionsExt;
+        refused_at_the_append(|store| {
+            std::fs::write(store.join(INDEX), "# Memory\n").unwrap();
+            std::fs::set_permissions(store.join(INDEX), std::fs::Permissions::from_mode(0o444))
+                .unwrap();
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_at_the_index_refuses_the_line_at_once_and_leaves_no_memory_file() {
+        // Opened without waiting for a reader: a FIFO must never hold the write for ever.
+        refused_at_the_append(|store| {
+            let made = crate::forklock::status(
+                std::process::Command::new("mkfifo").arg(store.join(INDEX)),
+            )
+            .expect("mkfifo runs");
+            assert!(made.success());
+        });
     }
 
     #[cfg(unix)]

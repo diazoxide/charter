@@ -582,7 +582,7 @@ impl Workspace {
     /// Released before returning: `memstore::write`, which [`Self::remember_titled`] calls
     /// next, takes the same lock, and a second `Lock::on` in one process waits for the first.
     fn index_legacy_memo(&self, dir: &Path, index: &Path) -> io::Result<()> {
-        let _held = crate::rewrite::Lock::on(dir);
+        let _held = memstore::lock_store(&self.plane_root, dir)?;
         if dir.join("notes.md").exists()
             && memstore::readable_file(&self.plane_root, index)
             && !memstore::listed(&self.plane_root, dir).contains("notes.md")
@@ -745,6 +745,25 @@ pub(crate) fn open_in(plane_root: &Path, dir: &Path, slug: &str) -> io::Result<O
 /// Every `*.md` directly in a memory store, `MEMORY.md` excepted, sorted by filename.
 pub(crate) fn read_store(plane_root: &Path, dir: &Path) -> io::Result<Vec<Entry>> {
     crate::contain::readable(plane_root, dir).map_err(refusal)?;
+    // A workspace's own store is read through the store held by descriptor (V74), so a link
+    // in it, or at it, is never followed.
+    if memstore::held_store(plane_root, dir) {
+        let (found, _) = memstore::read_entries(plane_root, dir);
+        return Ok(found
+            .into_iter()
+            .map(|found| {
+                parse_entry(
+                    found
+                        .path
+                        .file_stem()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .as_ref(),
+                    &found.text,
+                )
+            })
+            .collect());
+    }
     let mut entries: Vec<Entry> = Vec::new();
     for path in read_dir_sorted(dir)? {
         if !path.is_file() || path.extension().is_none_or(|e| e != "md") {
