@@ -631,6 +631,43 @@ fn an_ssn(candidate: &str) -> bool {
 /// What an agent's diff is checked with before it is committed (SQ-16). **Not** the plane
 /// save's rule ([`found`]): that one refuses `password: String`, which is ordinary code.
 pub fn leaks(line: &str) -> Vec<Leak> {
+    let mut all = every_leak(line);
+    all.sort_by_key(|leak| (leak.span.start, std::cmp::Reverse(leak.span.end)));
+    let mut kept: Vec<Leak> = Vec::new();
+    for leak in all {
+        if kept
+            .last()
+            .is_none_or(|last| leak.span.start >= last.span.end)
+        {
+            kept.push(leak);
+        }
+    }
+    kept
+}
+
+/// Every stretch of `line` that any of [`leaks`]' rules matches, overlapping ones joined into
+/// one, in order, each with the kind of the rule that starts it. For a caller that masks:
+/// [`leaks`] keeps the earlier of two overlapping hits whole, which can leave the tail of the
+/// later one outside every span.
+pub fn leak_spans(line: &str) -> Vec<(std::ops::Range<usize>, &'static str)> {
+    joined(every_leak(line))
+}
+
+/// `all`'s spans in order, each run of overlapping ones joined into one.
+fn joined(mut all: Vec<Leak>) -> Vec<(std::ops::Range<usize>, &'static str)> {
+    all.sort_by_key(|leak| (leak.span.start, std::cmp::Reverse(leak.span.end)));
+    let mut joined: Vec<(std::ops::Range<usize>, &'static str)> = Vec::new();
+    for leak in all {
+        match joined.last_mut() {
+            Some((span, _)) if leak.span.start < span.end => span.end = span.end.max(leak.span.end),
+            _ => joined.push((leak.span, leak.kind)),
+        }
+    }
+    joined
+}
+
+/// Every hit of every rule [`leaks`] runs, overlaps and all, in no order.
+fn every_leak(line: &str) -> Vec<Leak> {
     let mut all: Vec<Leak> = Vec::new();
     for (rule, kind, rx, _) in compiled() {
         if rule.is_a_key() {
@@ -673,17 +710,7 @@ pub fn leaks(line: &str) -> Vec<Leak> {
                 }),
         );
     }
-    all.sort_by_key(|leak| (leak.span.start, std::cmp::Reverse(leak.span.end)));
-    let mut kept: Vec<Leak> = Vec::new();
-    for leak in all {
-        if kept
-            .last()
-            .is_none_or(|last| leak.span.start >= last.span.end)
-        {
-            kept.push(leak);
-        }
-    }
-    kept
+    all
 }
 
 /// The most characters of a masked value drawn; a longer one says its length instead.
@@ -1140,5 +1167,32 @@ mod leak_tests {
             masked(&long),
             format!("xxxx{}… (200 characters)", "*".repeat(28))
         );
+    }
+}
+
+#[cfg(test)]
+mod joined_tests {
+    use super::{Leak, joined};
+
+    fn hit(kind: &'static str, span: std::ops::Range<usize>) -> Leak {
+        Leak {
+            rule: kind,
+            kind,
+            span,
+        }
+    }
+
+    #[test]
+    fn overlapping_hits_join_into_one_span_that_covers_both() {
+        // The earlier hit is shorter than the later one it overlaps: `leaks` keeps only the
+        // first, and its tail, 10..14, would go unmasked.
+        let spans = joined(vec![
+            hit("b", 6..14),
+            hit("a", 2..10),
+            hit("c", 20..25),
+            hit("d", 25..30),
+        ]);
+
+        assert_eq!(spans, [(2..14, "a"), (20..25, "c"), (25..30, "d")]);
     }
 }

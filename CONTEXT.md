@@ -474,6 +474,14 @@ title bar's ✋ menu, and each is counted in red on its tab and on any show-more
 **Ignore** clears a chat's items until the next one arrives (ADR 0076).
 _Avoid_: notification, alert (alerts are a separate drawer), waiting (for the state)
 
+**Ask**:
+A chat's harness handing control to a human: a permission, a question, or a nudge. Every
+harness's own form of it is read into one shape: what it would do, the options as the harness
+offered them, who may answer, its deadline, its risk, a masked one-line summary, and whether it
+elicits a secret. One answer per ask, and the first wins; every later one hears "answered
+elsewhere". An agent never answers one (ADR 0080 §5). A part of **Chat**.
+_Avoid_: prompt (that is what the operator types), approval (that is one kind of answer)
+
 **Kill switch**:
 Stop all on the title bar, or `charter stop --all`: every chat's and shell's program that charter
 started, in every project and window, is interrupted and ended, and no chat starts until the
