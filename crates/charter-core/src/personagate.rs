@@ -22,7 +22,7 @@
 //!   `xargs`, `find`, `make` run whatever their arguments say.
 //! - **No argument may name another program** — an executable file reachable by a path.
 //! - **Destructive subcommands still prompt** ([`dangerous`]): `kubectl delete`, `git clean`,
-//!   `charter secret`.
+//!   `charter secret`, and a forge CLI's deletions through either forge CLI.
 //! - **Nothing may touch charter's control surface** — the state directory, the vault
 //!   directory, a registered vault file, a persona definition — by any spelling, any link or
 //!   any case-folded name the filesystem would open.
@@ -67,7 +67,11 @@ fn literal(c: char) -> bool {
 }
 
 /// `_DANGEROUS`: subcommands of a declared binary that still prompt.
-const DANGEROUS: [(&str, &[&str]); 6] = [
+///
+/// The two forge CLIs carry the same verbs (#1068): an irreversible act on the forge asks first
+/// whichever CLI a persona declares. `the_forge_clis_rows_ask_about_the_same_verbs` fails when
+/// one gains a verb the other lacks.
+const DANGEROUS: [(&str, &[&str]); 7] = [
     (
         "kubectl",
         &[
@@ -86,6 +90,7 @@ const DANGEROUS: [(&str, &[&str]); 6] = [
             "run",
         ],
     ),
+    ("gh", &["delete", "remove"]),
     ("glab", &["delete", "remove"]),
     ("git", &["clean"]),
     (
@@ -246,13 +251,28 @@ pub fn is_interpreter(binary: &str) -> bool {
     INTERPRETERS.contains(&binary) || versioned().is_match(binary)
 }
 
-/// `_is_dangerous`: any word of any argument is one of the binary's destructive subcommands.
+/// A forge CLI's deletions spelled as ONE hyphenated command word, which [`DANGEROUS`]'s verbs
+/// cannot match because the word reader keeps a hyphen inside a word. Matched as whole words
+/// anywhere in the argv, since gh finds its command past flags placed before or between the
+/// command words. From each CLI's `--help` (gh 2.83, glab 1.103): glab has no such command word.
+const HYPHENATED_DELETIONS: [(&str, &[&str]); 2] = [
+    ("gh", &["delete-asset", "item-delete", "field-delete"]),
+    ("glab", &[]),
+];
+
+/// `_is_dangerous`: any word of any argument is one of the binary's destructive subcommands, or
+/// one of its hyphenated deletion command words ([`HYPHENATED_DELETIONS`]).
 pub fn dangerous(binary: &str, args: &[String]) -> bool {
     let Some((_, bad)) = DANGEROUS.iter().find(|(b, _)| *b == binary) else {
         return false;
     };
+    let hyphenated: &[&str] = HYPHENATED_DELETIONS
+        .iter()
+        .find(|(b, _)| *b == binary)
+        .map_or(&[], |(_, words)| words);
     args.iter()
         .any(|tok| word().find_iter(tok).any(|w| bad.contains(&w.as_str())))
+        || args.iter().any(|a| hyphenated.contains(&a.as_str()))
 }
 
 /// Whether `charter <args…>` runs an extension's command that charter cannot say only reads
@@ -924,6 +944,64 @@ mod tests {
         assert_eq!(ask(&root, "git clean -fdx"), None);
         assert_eq!(ask(&root, "charter secret get x"), None);
         assert!(ask(&root, "kubectl get pods").is_some());
+    }
+
+    /// #1068: an irreversible forge act asks first through either forge CLI, never through one
+    /// and not the other.
+    #[test]
+    fn a_forge_cli_deletion_still_prompts_through_either_cli() {
+        let (_d, root) = plane("gh, glab");
+        for command in [
+            "gh release delete v1 --yes",
+            "gh label delete bug",
+            "gh pr edit 12 --remove-label wip --add-label x remove",
+            "glab release delete v1",
+            "glab label delete bug",
+        ] {
+            assert_eq!(ask(&root, command), None, "{command}");
+        }
+        assert!(ask(&root, "gh pr list --state open").is_some());
+        assert!(ask(&root, "glab mr list").is_some());
+        // A flag that only CONTAINS the word is not the verb.
+        assert!(ask(&root, "gh pr edit 12 --remove-label wip").is_some());
+    }
+
+    /// A forge CLI spells some deletions as one hyphenated command word; that word still asks,
+    /// wherever flags put it, and a hyphenated NAME holding the verb does not.
+    #[test]
+    fn a_hyphenated_forge_deletion_still_prompts() {
+        let (_d, root) = plane("gh, glab, kubectl");
+        for command in [
+            "gh release delete-asset v1 a.zip",
+            "gh project item-delete 1 --id x",
+            "gh project field-delete --id x",
+            // gh finds its command past flags before and between the command words.
+            "gh -R o/r release delete-asset v1 a.zip",
+            "gh release -R o/r delete-asset v1 a.zip",
+            "gh --repo o/r release delete-asset v1 a",
+            "gh --owner me project item-delete 1 --id x",
+            "gh project --owner me item-delete 1 --id x",
+            "gh --owner me project field-delete --id x",
+            "gh project --owner me field-delete --id x",
+        ] {
+            assert_eq!(ask(&root, command), None, "{command}");
+        }
+        assert!(ask(&root, "gh pr view 12 --json title").is_some());
+        assert!(ask(&root, "gh pr checkout fix-delete-button").is_some());
+        // Only the forge CLIs read inside a hyphenated word: a pod name is a name.
+        assert!(ask(&root, "kubectl get pod api-proxy").is_some());
+    }
+
+    /// #1068: the forge CLIs' rows in [`DANGEROUS`] are one row each and ask about the same
+    /// verbs, so a verb added for one forge without the other fails here.
+    #[test]
+    fn the_forge_clis_rows_ask_about_the_same_verbs() {
+        let verbs = |cli: &str| {
+            let rows: Vec<_> = DANGEROUS.iter().filter(|(b, _)| *b == cli).collect();
+            assert_eq!(rows.len(), 1, "{cli} has exactly one row");
+            rows[0].1.iter().copied().collect::<BTreeSet<_>>()
+        };
+        assert_eq!(verbs("gh"), verbs("glab"));
     }
 
     #[test]

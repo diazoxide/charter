@@ -630,6 +630,11 @@ pub fn gh_at_path(value: &str) -> Option<String> {
 /// The local paths a `gh` command opens and uploads to the forge (#1086 class 5) —
 /// `_gh_file_operands`.
 ///
+/// **The recorded reading, kept as the oracle replay asks it** (ADR 0046): the replay records
+/// this function's answer for every segment, so it stays exactly what the Python read. The
+/// guard itself asks [`forge_file_operands`], whose table holds every spelling read here and
+/// the uploads added since, for `gh` and `glab` alike.
+///
 /// Class 5 is a plain argv-reader case wearing gh's clothes: `gh pr create -F <vault>` reads the
 /// vault and publishes it as a PR body — worse than printing it, because it leaves the value on
 /// the forge. `gh` is in no reader list (it is not a printer), so the file named by its
@@ -700,6 +705,375 @@ pub fn gh_file_operands(args: &[String]) -> Vec<String> {
             }
         }
         i += 1;
+    }
+    out
+}
+
+/// What a forge CLI does with the word a [`ForgeUpload`] row points at.
+#[derive(Debug, Clone, Copy)]
+enum Takes {
+    /// The flag's value is a local path (`--input <path>`).
+    Path(&'static str),
+    /// The flag's value is a `key=@path` field ([`gh_at_path`]); `@-` is stdin.
+    AtPath(&'static str),
+    /// The flag's value is a `key:path` pair, the path after the first `:`.
+    KeyPath(&'static str),
+    /// Every word after the subcommand that is not a flag is a local file, with a release
+    /// asset's `#label` after it (`release upload v1 'a.zip#Label'`) — except the value of each
+    /// TEXT flag named here (a title, notes, a description), which is prose, not a file.
+    Operands(&'static [&'static str]),
+}
+
+/// One way a forge CLI reads a local file and uploads it to the forge — the class #1086 class 5
+/// closed for `gh` alone at first.
+#[derive(Debug)]
+struct ForgeUpload {
+    cli: &'static str,
+    /// What kind of upload it is, so the two CLIs' rows can be paired by a test — the only
+    /// reader, hence the `allow` outside tests.
+    #[cfg_attr(not(test), allow(dead_code))]
+    kind: &'static str,
+    /// The subcommand words, in order; empty means every subcommand but `api`, where the same
+    /// short flags mean something else.
+    sub: &'static [&'static str],
+    takes: Takes,
+}
+
+const fn up(
+    cli: &'static str,
+    kind: &'static str,
+    sub: &'static [&'static str],
+    takes: Takes,
+) -> ForgeUpload {
+    ForgeUpload {
+        cli,
+        kind,
+        sub,
+        takes,
+    }
+}
+
+/// Every upload the leak guard reads for the two forge CLIs. Verified from each CLI's `--help`
+/// text (gh 2.83, glab 1.103), never from a live forge. `gh`'s first rows are the spellings
+/// [`gh_file_operands`] reads; the rest were added when the table took in `glab` and the
+/// file-OPERAND uploads.
+const FORGE_UPLOADS: &[ForgeUpload] = &[
+    up("gh", "body", &[], Takes::Path("-F")),
+    up("gh", "body", &[], Takes::Path("--body-file")),
+    up(
+        "gh",
+        "body",
+        &["agent-task", "create"],
+        Takes::Path("--from-file"),
+    ),
+    up("gh", "notes", &[], Takes::Path("--notes-file")),
+    up("gh", "template", &[], Takes::Path("-T")),
+    up("gh", "template", &[], Takes::Path("--template")),
+    up("gh", "api-body", &["api"], Takes::Path("--input")),
+    up("gh", "api-field", &["api"], Takes::AtPath("-F")),
+    up("gh", "api-field", &["api"], Takes::AtPath("--field")),
+    up("gh", "ci-input", &["workflow", "run"], Takes::AtPath("-F")),
+    up(
+        "gh",
+        "ci-input",
+        &["workflow", "run"],
+        Takes::AtPath("--field"),
+    ),
+    up(
+        "gh",
+        "paste",
+        &["gist", "create"],
+        Takes::Operands(&["-d", "--desc"]),
+    ),
+    up("gh", "paste", &["gist", "edit"], Takes::Path("-a")),
+    up("gh", "paste", &["gist", "edit"], Takes::Path("--add")),
+    up(
+        "gh",
+        "asset",
+        &["release", "create"],
+        Takes::Operands(&["-t", "--title", "-n", "--notes"]),
+    ),
+    up("gh", "asset", &["release", "upload"], Takes::Operands(&[])),
+    up(
+        "gh",
+        "key",
+        &["ssh-key", "add"],
+        Takes::Operands(&["-t", "--title"]),
+    ),
+    up(
+        "gh",
+        "key",
+        &["gpg-key", "add"],
+        Takes::Operands(&["-t", "--title"]),
+    ),
+    up(
+        "gh",
+        "key",
+        &["deploy-key", "add"],
+        Takes::Operands(&["-t", "--title"]),
+    ),
+    up("gh", "dotenv", &["secret", "set"], Takes::Path("-f")),
+    up(
+        "gh",
+        "dotenv",
+        &["secret", "set"],
+        Takes::Path("--env-file"),
+    ),
+    up("gh", "dotenv", &["variable", "set"], Takes::Path("-f")),
+    up(
+        "gh",
+        "dotenv",
+        &["variable", "set"],
+        Takes::Path("--env-file"),
+    ),
+    up(
+        "gh",
+        "remote-copy",
+        &["codespace", "cp"],
+        Takes::Operands(&[]),
+    ),
+    // glab's `-F` is `--notes-file` (release create); its mr and issue take no body file.
+    up("glab", "notes", &[], Takes::Path("-F")),
+    up("glab", "notes", &[], Takes::Path("--notes-file")),
+    // A template NAME glab looks up in the repository; read as a path too, in the guard's
+    // usual direction — a word that names a vault is refused whatever the flag meant by it.
+    up("glab", "template", &[], Takes::Path("--template")),
+    up("glab", "api-body", &["api"], Takes::Path("--input")),
+    up("glab", "api-field", &["api"], Takes::AtPath("-F")),
+    up("glab", "api-field", &["api"], Takes::AtPath("--field")),
+    up("glab", "api-field", &["api"], Takes::AtPath("--form")),
+    up(
+        "glab",
+        "ci-input",
+        &["ci", "run"],
+        Takes::KeyPath("--variables-file"),
+    ),
+    up("glab", "ci-input", &["ci", "run"], Takes::Path("-f")),
+    up(
+        "glab",
+        "ci-input",
+        &["ci", "run"],
+        Takes::Path("--variables-from"),
+    ),
+    up("glab", "ci-lint", &["ci", "lint"], Takes::Operands(&[])),
+    up(
+        "glab",
+        "paste",
+        &["snippet", "create"],
+        Takes::Operands(&["-t", "--title", "-d", "--description"]),
+    ),
+    up(
+        "glab",
+        "asset",
+        &["release", "create"],
+        Takes::Operands(&[
+            "-n",
+            "--name",
+            "-N",
+            "--notes",
+            "-T",
+            "--tag-message",
+            "-m",
+            "--milestone",
+        ]),
+    ),
+    up(
+        "glab",
+        "asset",
+        &["release", "upload"],
+        Takes::Operands(&[]),
+    ),
+    up(
+        "glab",
+        "key",
+        &["ssh-key", "add"],
+        Takes::Operands(&["-t", "--title"]),
+    ),
+    up("glab", "key", &["gpg-key", "add"], Takes::Operands(&[])),
+    up(
+        "glab",
+        "key",
+        &["deploy-key", "add"],
+        Takes::Operands(&["-t", "--title"]),
+    ),
+    up(
+        "glab",
+        "secure-file",
+        &["securefile", "create"],
+        Takes::Operands(&[]),
+    ),
+    up(
+        "glab",
+        "secure-file",
+        &["securefile", "upload"],
+        Takes::Operands(&[]),
+    ),
+];
+
+/// The kinds of upload only one forge CLI has, and why — every other kind in [`FORGE_UPLOADS`]
+/// must be read for both. Kept beside the table it answers for, and read only by its test.
+#[cfg_attr(not(test), allow(dead_code))]
+const ONE_SIDED_UPLOADS: &[(&str, &str)] = &[
+    (
+        "body",
+        "glab's mr and issue take their description as text, never from a file, and glab has \
+         no agent task",
+    ),
+    (
+        "dotenv",
+        "glab's variable set takes its value from an argument or stdin, never from a named file \
+         (a stdin redirection is read by the redirection check); glab's pipeline variables from \
+         a file are the ci-input kind, read for both CLIs",
+    ),
+    (
+        "remote-copy",
+        "glab has no hosted machine of its own to copy a local file to",
+    ),
+    (
+        "ci-lint",
+        "gh has no command that sends a CI configuration to the forge to be checked",
+    ),
+    (
+        "secure-file",
+        "gh has no secure-file store; a gh secret reads stdin, which the redirection check reads",
+    ),
+];
+
+/// The value a flag spelled `flag` takes in `rest`, read the way pflag (both CLIs' option
+/// parser) reads it: `flag value`, `--long=value`, and a short flag at the END of a cluster of
+/// short flags (`-dF value`) or with its value attached (`-Fvalue`, `-dFvalue`, `-F=value`).
+/// The scan stops at [`options_end`].
+fn flag_values<'a>(flag: &str, rest: &'a [String]) -> Vec<&'a str> {
+    let rest = &rest[..options_end(rest)];
+    let mut out = Vec::new();
+    let short = flag.len() == 2 && !flag.starts_with("--");
+    let letter = flag.chars().nth(1).unwrap_or('-');
+    let long = format!("{flag}=");
+    for (i, w) in rest.iter().enumerate() {
+        let next = || rest.get(i + 1).map(String::as_str);
+        if w == flag {
+            out.extend(next());
+        } else if short {
+            let Some(cluster) = w.strip_prefix('-').filter(|c| !c.starts_with('-')) else {
+                continue;
+            };
+            let Some(at) = cluster.find(letter) else {
+                continue;
+            };
+            let tail = &cluster[at + 1..];
+            if tail.is_empty() {
+                out.extend(next());
+            } else {
+                out.push(tail);
+                out.extend(tail.strip_prefix('='));
+            }
+        } else if let Some(v) = w.strip_prefix(long.as_str()) {
+            out.push(v);
+        }
+    }
+    out
+}
+
+/// Where a forge CLI stops reading flags: the first `--` that is not a flag's VALUE. pflag hands
+/// a `--` to a flag that takes a value and goes on parsing flags after it, and which flags take
+/// one is not known here, so a `--` right after any flag is read as its value and the scan goes
+/// on — wider, never narrower, than ending at it. A `--` after a word that is not a flag ends
+/// the flags.
+fn options_end(rest: &[String]) -> usize {
+    (0..rest.len())
+        .find(|&i| {
+            rest[i] == "--" && (i == 0 || !rest[i - 1].starts_with('-') || rest[i - 1] == "--")
+        })
+        .unwrap_or(rest.len())
+}
+
+/// The local paths a forge CLI command opens and uploads to the forge, read from
+/// [`FORGE_UPLOADS`] — what [`leak_reason`] asks for `gh` and `glab` alike.
+///
+/// Best-effort, and wider than [`gh_file_operands`] on purpose: every row reads the whole argv
+/// on its own, so one flag swallowing another's value only adds a candidate, and a spelling no
+/// row lists is a missed deny rather than a wrong one. A candidate only matters when it names a
+/// vault. An operand row skips the value of each text flag it names, so a title or notes that
+/// MENTION a vault path are prose and refuse nothing; any other flag value it reads (a tag, a
+/// branch) is refused only if it names a vault.
+///
+/// `args` is one segment's argv, program first; `cli` is its basename, already matched.
+fn forge_file_operands(cli: &str, args: &[String]) -> Vec<String> {
+    let rest: &[String] = args.get(1..).unwrap_or(&[]);
+    // Positional words with their index, read past flags as `gh_file_operands` reads them.
+    let words: Vec<(usize, &str)> = rest
+        .iter()
+        .enumerate()
+        .filter(|(_, w)| !w.starts_with('-'))
+        .map(|(i, w)| (i, w.as_str()))
+        .collect();
+    let api = words.first().is_some_and(|(_, w)| *w == "api");
+    let mut out: Vec<String> = Vec::new();
+    let mut add = |path: Option<&str>| {
+        if let Some(p) = path
+            && !p.is_empty()
+            && p != "-"
+            && !out.iter().any(|o| o == p)
+        {
+            out.push(p.to_string());
+        }
+    };
+    for row in FORGE_UPLOADS.iter().filter(|r| r.cli == cli) {
+        // Where the subcommand ends: its words in order among the positional words.
+        let after = if row.sub.is_empty() {
+            if api {
+                continue;
+            }
+            Some(0)
+        } else {
+            let mut want = row.sub.iter();
+            let mut next = want.next();
+            let mut at = None;
+            for (i, w) in &words {
+                if next == Some(w) {
+                    next = want.next();
+                    if next.is_none() {
+                        at = Some(i + 1);
+                        break;
+                    }
+                }
+            }
+            at
+        };
+        let Some(after) = after else { continue };
+        match row.takes {
+            Takes::Operands(text) => {
+                let mut positional = false;
+                let mut skip = false;
+                for w in &rest[after..] {
+                    if skip {
+                        skip = false;
+                    } else if positional || !w.starts_with('-') {
+                        add(Some(w));
+                        add(w.split_once('#').map(|(file, _)| file));
+                    } else if w == "--" {
+                        positional = true;
+                    } else {
+                        skip = text.contains(&w.as_str());
+                    }
+                }
+            }
+            Takes::Path(flag) => {
+                for v in flag_values(flag, rest) {
+                    add(Some(v));
+                }
+            }
+            Takes::AtPath(flag) => {
+                for v in flag_values(flag, rest) {
+                    add(gh_at_path(v).as_deref());
+                }
+            }
+            Takes::KeyPath(flag) => {
+                for v in flag_values(flag, rest) {
+                    add(v.split_once(':').map(|(_, path)| path));
+                }
+            }
+        }
     }
     out
 }
@@ -1149,12 +1523,13 @@ pub fn leak_reason(cmd: &str, cwd: &str, state_dir: &Path) -> Option<String> {
         {
             return Some(hit);
         }
-        // `gh` is not a reader — it prints nothing — but a body/notes/template flag naming a
-        // vault reads it and uploads it to the forge (#1086 class 5). Its file operands go
-        // through the SAME `opens` a reader's do, so `gh pr create -F <vault>` is denied and
-        // `-F <ordinary file>` (and `-F -`, the stdin body) stays allowed.
-        if base == "gh"
-            && let Some(hit) = opens(&gh_file_operands(&it.argv), &where_)
+        // A forge CLI is not a reader — it prints nothing — but a body/notes/template flag, an
+        // API body or a file operand naming a vault reads it and uploads it to the forge (#1086
+        // class 5), through `gh` and `glab` alike. Its file operands go through the SAME `opens`
+        // a reader's do, so `gh pr create -F <vault>` is denied and `-F <ordinary file>` (and
+        // `-F -`, the stdin body) stays allowed.
+        if (base == "gh" || base == "glab")
+            && let Some(hit) = opens(&forge_file_operands(&base, &it.argv), &where_)
         {
             return Some(hit);
         }
@@ -1206,6 +1581,7 @@ fn table<V: Copy>(rows: &[(&str, V)], key: &str) -> Option<V> {
 mod tests {
     use super::*;
     use proptest::prelude::*;
+    use std::collections::BTreeSet;
 
     /// CPython's `re.IGNORECASE` and the `regex` crate's `(?i)` are not the same function, and
     /// [`vault_path_re`] spells two letters where they could part company. Both are swept here
@@ -1468,6 +1844,118 @@ mod tests {
             "curl --body-file .charter/vaults/db.json",
         ] {
             assert_eq!(reason(cmd), None, "{cmd}");
+        }
+    }
+
+    /// Every upload a forge CLI reads a local file for, as each CLI spells it: a vault named
+    /// there is refused through either CLI, the same act on an ordinary file is not.
+    #[test]
+    fn either_forge_cli_uploading_a_vault_file_is_refused() {
+        const V: &str = ".charter/vaults/db.json";
+        for (gh, glab) in [
+            ("api x --input {}", "api x --input {}"),
+            ("api x --input={}", "api x --input={}"),
+            ("api x -F body=@{}", "api x -F description=@{}"),
+            ("api x --field=body=@{}", "api x --field=description=@{}"),
+            ("api x -Fbody=@{}", "api x --form file=@{}"),
+            (
+                "release create v1 --notes-file {}",
+                "release create v1 --notes-file {}",
+            ),
+            ("release create v1 -F {}", "release create v1 -F {}"),
+            (
+                "release create v1 --notes-file={}",
+                "release create v1 --notes-file={}",
+            ),
+            ("pr create --template {}", "mr create --template ../../{}"),
+            ("gist create {}", "snippet create -t x {}"),
+            ("gist edit 1 --add {}", "snippet create -t x a.md {}"),
+            ("release create v1 {}", "release create v1 {}"),
+            (
+                "release upload v1 {}#label",
+                "release upload v1 '{}#label#other'",
+            ),
+            ("ssh-key add {}", "ssh-key add {} -t x"),
+            ("gpg-key add {}", "gpg-key add {}"),
+            ("repo deploy-key add {}", "deploy-key add {}"),
+            ("secret set -f {}", "securefile create name {}"),
+            ("variable set --env-file={}", "securefile upload name {}"),
+            ("-R o/r release upload v1 {}", "release -R o/r upload v1 {}"),
+            (
+                "workflow run w --field k=@{}",
+                "ci run --variables-file KEY:{}",
+            ),
+            ("workflow run w --field=k=@{}", "ci run --variables-from {}"),
+            ("agent-task create --from-file {}", "ci run -f {}"),
+            ("codespace cp {} remote:/x", "ci lint {}"),
+            // A short flag closing a cluster of short flags, its value apart or attached.
+            ("pr create -dF {}", "release create v1 -xF {}"),
+            ("pr create -dF{}", "release create v1 -xF{}"),
+            ("api x -iF a=@{}", "api x -iF a=@{}"),
+            // A `--` handed to a flag as its value ends nothing: the parser reads on — here
+            // after a flag that takes no file, too, since which flags take a value is not known.
+            ("pr create -F -- -F {}", "release create v1 -F -- -F {}"),
+            ("api x --input -- --input {}", "api x --input -- --input {}"),
+            (
+                "pr create --title -- -F {}",
+                "release create v1 -N -- -F {}",
+            ),
+        ] {
+            for (cli, rest) in [("gh", gh), ("glab", glab)] {
+                let cmd = format!("{cli} {}", rest.replace("{}", V));
+                assert_eq!(reason(&cmd).as_deref(), Some(READ_REASON), "{cmd}");
+                let plain = format!("{cli} {}", rest.replace("{}", "notes.md"));
+                assert_eq!(reason(&plain), None, "{plain}");
+            }
+        }
+        for cmd in [
+            "glab release create v1 -F -",
+            "glab api x --input -",
+            "glab api x -F description=@-",
+            "glab snippet create -t x -f main.go",
+            // The text of a title or a body that only MENTIONS the path is not a file read.
+            "glab mr create --title x --description .charter/vaults/db.json",
+            "gh issue create --title x --body .charter/vaults/db.json",
+            "gh release create v1 --notes 'see .charter/vaults/db.json'",
+            "gh release create v1 --title 'move .charter/vaults/ to keyring' a.zip",
+            "gh release create v1 -n .charter/vaults/db.json -t .charter/vaults/db.json",
+            "gh gist create --desc 'about .charter/vaults/db.json' notes.md",
+            "gh ssh-key add key.pub --title 'from .charter/vaults/db.json'",
+            "glab release create v1 -N 'see .charter/vaults/db.json'",
+            "glab release create v1 --name .charter/vaults/db.json a.zip",
+            "glab snippet create -t .charter/vaults/db.json -d .charter/vaults/db.json a.md",
+            // A `--` after a word that is no flag ends the flags: what follows is an operand.
+            "gh pr create -- -F .charter/vaults/x.json",
+        ] {
+            assert_eq!(reason(cmd), None, "{cmd}");
+        }
+    }
+
+    /// Each kind of upload the table reads for one forge CLI is read for the other too, or the
+    /// table says why that CLI has no such upload — so a row added for one forge alone fails here.
+    #[test]
+    fn the_forge_upload_table_names_each_kind_for_both_clis() {
+        let kinds = |cli: &str| -> BTreeSet<&str> {
+            FORGE_UPLOADS
+                .iter()
+                .filter(|u| u.cli == cli)
+                .map(|u| u.kind)
+                .collect()
+        };
+        let (gh, glab) = (kinds("gh"), kinds("glab"));
+        for kind in gh.symmetric_difference(&glab) {
+            assert!(
+                ONE_SIDED_UPLOADS
+                    .iter()
+                    .any(|(k, why)| k == kind && !why.is_empty()),
+                "`{kind}` is read for one forge CLI only, with no reason in ONE_SIDED_UPLOADS"
+            );
+        }
+        for (kind, _) in ONE_SIDED_UPLOADS {
+            assert!(
+                gh.contains(kind) != glab.contains(kind),
+                "`{kind}` is listed as one-sided but is read for both CLIs, or neither"
+            );
         }
     }
 
@@ -1792,6 +2280,29 @@ mod tests {
             let _ = leak_reason(&cmd, &cwd, std::path::Path::new("/nonexistent-plane-state"));
         }
 
+        /// The guard asks the upload table, not the recorded reading ([`gh_file_operands`]), so
+        /// the table must read every file the recorded reading does, on any argv — the words
+        /// drawn mostly from the forge CLIs' own flags (and `--`), so the shapes that matter come up.
+        #[test]
+        fn the_upload_table_reads_every_file_the_recorded_gh_reading_does(
+            argv in proptest::collection::vec(
+                prop_oneof![
+                    1 => "[-a-zA-Z0-9=@/.!*\\[\\]]{0,8}",
+                    3 => proptest::sample::select(vec![
+                        "api", "pr", "--", "-F", "-T", "-dF", "--input", "--field",
+                        "--body-file", "a=@x.md", "x.md", "-Fy.md",
+                    ])
+                    .prop_map(str::to_string),
+                ],
+                0..8,
+            ),
+        ) {
+            let table = forge_file_operands("gh", &argv);
+            for file in gh_file_operands(&argv) {
+                prop_assert!(table.contains(&file), "{argv:?}: {file} not in {table:?}");
+            }
+        }
+
         /// The same, for the two option grammars a segment reaches directly.
         #[test]
         fn no_argv_makes_the_option_grammars_panic(
@@ -1802,6 +2313,8 @@ mod tests {
             let _ = excluded_names(&prog, &argv);
             let _ = walks_directories(&prog, &argv);
             let _ = gh_file_operands(&argv);
+            let _ = forge_file_operands("gh", &argv);
+            let _ = forge_file_operands("glab", &argv);
             let _ = is_charter(&prog, &argv);
         }
     }

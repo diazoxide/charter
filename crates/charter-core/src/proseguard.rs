@@ -88,6 +88,42 @@ pub const FORGE_PROSE: [(&str, &str, &str); 19] = [
     ("glab", "snippet", "create"),
 ];
 
+/// A forge CLI's `(noun, verb)`.
+type ForgeAct = (&'static str, &'static str);
+
+/// Each [`FORGE_PROSE`] row of one forge CLI beside the same act's row for the other — `gh`'s
+/// `(noun, verb)` first, `glab`'s second (#1068). Read only by its test, which fails on a row
+/// that is in neither this table nor [`FORGE_PROSE_ONE_SIDED`].
+#[cfg_attr(not(test), allow(dead_code))]
+const FORGE_PROSE_PAIRS: [(ForgeAct, ForgeAct); 8] = [
+    (("issue", "create"), ("issue", "create")),
+    (("issue", "comment"), ("issue", "note")),
+    (("issue", "edit"), ("issue", "update")),
+    (("pr", "create"), ("mr", "create")),
+    (("pr", "comment"), ("mr", "note")),
+    (("pr", "edit"), ("mr", "update")),
+    (("release", "create"), ("release", "create")),
+    (("gist", "create"), ("snippet", "create")),
+];
+
+/// The [`FORGE_PROSE`] rows with no counterpart in the other forge CLI, and why (glab 1.103).
+#[cfg_attr(not(test), allow(dead_code))]
+const FORGE_PROSE_ONE_SIDED: [(&str, &str, &str, &str); 3] = [
+    (
+        "gh",
+        "pr",
+        "review",
+        "glab's mr approve takes no text; a review comment through glab is an mr note",
+    ),
+    (
+        "gh",
+        "release",
+        "edit",
+        "glab has no release edit; its release create also updates a release, and is a row",
+    ),
+    ("gh", "gist", "edit", "glab has no snippet edit"),
+];
+
 /// `workspace`/`ws` and `worktree`/`wt` are the same command word to charter's parser —
 /// `_CHARTER_NOUN_ALIASES`. Written once and applied below, because a hand-copied second half of
 /// the table is a row that drifts the day somebody adds a verb to one of them.
@@ -463,6 +499,36 @@ pub fn charter_substitution_hit(cmd: &str) -> Option<(&'static str, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #1068: every forge row is paired with the other CLI's row for the same act, or says why
+    /// it has none — so a row added for one forge CLI alone fails here.
+    #[test]
+    fn each_forge_prose_row_has_its_counterpart_or_a_reason() {
+        let row = |cli: &str, (noun, verb): (&str, &str)| FORGE_PROSE.contains(&(cli, noun, verb));
+        for (gh, glab) in FORGE_PROSE_PAIRS {
+            assert!(row("gh", gh) && row("glab", glab), "{gh:?} / {glab:?}");
+        }
+        for (cli, noun, verb, why) in FORGE_PROSE_ONE_SIDED {
+            assert!(
+                row(cli, (noun, verb)) && !why.is_empty(),
+                "{cli} {noun} {verb}"
+            );
+        }
+        for (cli, noun, verb) in FORGE_PROSE.iter().filter(|(c, ..)| *c != "charter") {
+            let paired = FORGE_PROSE_PAIRS.iter().any(|(gh, glab)| {
+                (*cli == "gh" && *gh == (*noun, *verb))
+                    || (*cli == "glab" && *glab == (*noun, *verb))
+            });
+            let one_sided = FORGE_PROSE_ONE_SIDED
+                .iter()
+                .any(|(c, n, v, _)| (c, n, v) == (cli, noun, verb));
+            assert!(
+                paired != one_sided,
+                "{cli} {noun} {verb}: pair it in FORGE_PROSE_PAIRS or say why in \
+                 FORGE_PROSE_ONE_SIDED (and not both)"
+            );
+        }
+    }
 
     /// The #703 defect itself, and the shape the working rule prescribes, which must NOT be
     /// refused — the calibration that decides whether this guard survives its first day.

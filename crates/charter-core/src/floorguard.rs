@@ -89,6 +89,17 @@ pub const PUBLISH_FORGE: [(&str, &str, &str); 5] = [
     ("charter", "change", "land"),
 ];
 
+/// A forge CLI's `(noun, verb)`.
+type ForgeAct = (&'static str, &'static str);
+
+/// Each [`PUBLISH_FORGE`] row of `gh` beside the same act's row for `glab`, as `(noun, verb)`
+/// (#1068). Every forge row is in a pair; its test fails on one that is not.
+#[cfg_attr(not(test), allow(dead_code))]
+const PUBLISH_FORGE_PAIRS: [(ForgeAct, ForgeAct); 2] = [
+    (("release", "create"), ("release", "create")),
+    (("pr", "merge"), ("mr", "merge")),
+];
+
 /// `git tag` flags that only READ or act locally — `_TAG_HARMLESS`.
 ///
 /// An autonomous run legitimately needs to know what the tags are, and deleting a local tag
@@ -358,6 +369,25 @@ fn substitution_bodies(line: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #1068: a publishing act floored through one forge CLI is floored through the other.
+    #[test]
+    fn each_publish_forge_row_has_its_counterpart() {
+        let row =
+            |cli: &str, (noun, verb): (&str, &str)| PUBLISH_FORGE.contains(&(cli, noun, verb));
+        for (gh, glab) in PUBLISH_FORGE_PAIRS {
+            assert!(row("gh", gh) && row("glab", glab), "{gh:?} / {glab:?}");
+        }
+        for (cli, noun, verb) in PUBLISH_FORGE.iter().filter(|(c, ..)| *c != "charter") {
+            assert!(
+                PUBLISH_FORGE_PAIRS.iter().any(|(gh, glab)| {
+                    (*cli == "gh" && *gh == (*noun, *verb))
+                        || (*cli == "glab" && *glab == (*noun, *verb))
+                }),
+                "{cli} {noun} {verb} has no counterpart in PUBLISH_FORGE_PAIRS"
+            );
+        }
+    }
 
     fn deny(cmd: &str) -> Option<String> {
         release_floor_reason(cmd, true)
