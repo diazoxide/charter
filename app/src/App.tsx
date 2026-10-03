@@ -85,7 +85,8 @@ import {
 } from "./PlaneView";
 import type { Alerts } from "./StatusLine";
 import { TitleBar, useTitleBarRoom } from "./TitleBar";
-import type { Needing, Quiet } from "./NeedsYou";
+import type { Needing, PermissionAsk, Quiet } from "./NeedsYou";
+import { answerAsk, usePermissionAsks } from "./permissionAsks";
 import { useUpdates } from "./Updates";
 import { noTabs, PREFERENCES_TITLE } from "./tabs";
 import { useTextSizes } from "./textSize";
@@ -1472,6 +1473,34 @@ function App() {
     [planes, reports],
   );
 
+  /**
+   * **Every project's permission prompts, answered from the same list** (HP-6): a chat's
+   * `PermissionRequest` held on its hook, named as its tab names it.
+   */
+  const heldAsks = usePermissionAsks(planes);
+  const asks = useMemo<PermissionAsk[]>(
+    () =>
+      planes.flatMap((plane) =>
+        (heldAsks[plane] ?? []).map((one) => ({
+          plane,
+          project: calledOn(plane),
+          session: one.session,
+          name:
+            reports[plane]?.ending.find((chat) => chat.key === `${plane}#${one.session}`)?.name ??
+            `chat ${one.session}`,
+          ask: one.ask,
+          says: one.says,
+          options: one.options,
+        })),
+      ),
+    [planes, heldAsks, reports],
+  );
+  const answer = useCallback((ask: PermissionAsk, option: string) => {
+    void answerAsk(ask.plane, ask.session, ask.ask, option).then((refused) => {
+      if (refused !== undefined) setReport({ from: "needs.answer", refused: true, words: refused });
+    });
+  }, []);
+
   /** And the chats that can be waiting without saying so, for the faint hand (charter-app#52). */
   const quiet = useMemo<Quiet[]>(
     () =>
@@ -1704,7 +1733,22 @@ function App() {
         updates={updates}
         room={titleBarRoom}
         chats={ending}
-        needing={{ items: everyNeeding, quiet: everyQuiet, onPress: pressNeeding }}
+        needing={{
+          items: everyNeeding,
+          quiet: everyQuiet,
+          onPress: pressNeeding,
+          asks,
+          onAnswer: answer,
+          onOpen: (ask: PermissionAsk) =>
+            pressNeeding(ask.plane, {
+              id: `needs.show:${ask.session}`,
+              title: `Show ${ask.name}, which asks for your permission`,
+              available: true,
+              reason: "",
+              does: { verb: "showChat", session: ask.session },
+              name: ask.name,
+            }),
+        }}
         save={
           inFront !== undefined && saving !== undefined
             ? {

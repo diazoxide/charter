@@ -2508,10 +2508,30 @@ h2.sidebar-title .node-icon {
   color: var(--text-secondary);
   font-style: italic;
 }
-/* A chat asking, its Go, and its Ignore beside it. */
+/* A chat asking, its Go, and its Ignore beside it. A word longer than the menu breaks rather
+   than pushing the row past the menu's edge. */
 .needs-you-row {
   display: flex;
   align-items: stretch;
+  overflow-wrap: anywhere;
+}
+/* A chat's permission prompt (HP-6): the line it asks about first, whole, wrapped anywhere so
+   an unbroken token cannot push the command off screen, and its options under it. */
+.needs-you-row.needs-you-permission {
+  flex-direction: column;
+}
+.needs-you-says {
+  min-width: 0;
+  margin: 0.25rem 0.45rem 0.15rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.needs-you-says .needs-you-name {
+  font-weight: 600;
+}
+.needs-you-says .needs-you-where {
+  display: block;
+  white-space: normal;
 }
 .needs-you-go {
   flex: 1;

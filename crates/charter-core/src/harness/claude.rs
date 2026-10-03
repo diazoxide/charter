@@ -112,8 +112,10 @@ impl HarnessAdapter for ClaudeCode {
 /// when the chat ends, and cleaned up again after an app that crashed. What is in it is a
 /// plugin id and a path — nothing secret, so `ps` showing it costs nothing.
 ///
-/// **No hooks.** They are the bundled plugin's (`hooks/hooks.json`), so a chat has one place
-/// its hooks are declared and a hook is never armed twice.
+/// **One hook, the permission hook, and no other.** Every hook that reports or guards is the
+/// bundled plugin's (`hooks/hooks.json`), so a chat has one place those are declared and none is
+/// armed twice. The permission hook ([`permission_hook`]) can allow, so it is never put in a
+/// file a chat can write; it rides on this argument instead.
 fn settings(
     binary: &std::path::Path,
     may_fill_the_footer: bool,
@@ -180,7 +182,32 @@ fn settings(
         permissions["deny"] = serde_json::json!(sandbox.deny);
     }
     settings.insert("permissions".to_owned(), permissions);
+    settings.insert("hooks".to_owned(), permission_hook(binary));
     serde_json::Value::Object(settings).to_string()
+}
+
+/// Claude Code's `PermissionRequest` hook, pointed at `charter hook permissionrequest` for THIS
+/// session only (HP-6): the harness's permission prompt is also an ask in charter's window, and
+/// the operator's answer there goes back on the hook ([`crate::harness::hooked`]). No matcher,
+/// so every tool's prompt is asked; the timeout is the one the ask's deadline sits below.
+///
+/// **Armed on the argument, never in the plugin.** A hook that can allow a permission must not
+/// be taken from a file a chat can write (`plugin::tests`). Nothing it does allows by itself:
+/// with no answer from the window it prints nothing, and the pane asks as it always did.
+fn permission_hook(binary: &std::path::Path) -> serde_json::Value {
+    serde_json::json!({
+        "PermissionRequest": [{
+            "hooks": [{
+                "type": "command",
+                "command": format!(
+                    "{} hook {}",
+                    crate::plugin::shell_quoted(&binary.display().to_string()),
+                    super::hooked::WORD
+                ),
+                "timeout": super::hooked::HOOK_TIMEOUT.as_secs(),
+            }]
+        }]
+    })
 }
 
 /// The permission rule a Claude Code chat the app starts carries for Smart close: `charter

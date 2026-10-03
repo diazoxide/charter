@@ -553,14 +553,9 @@ impl Chat {
         // Held across the answer and the reply, so a cancel cannot slip between them and send
         // the agent `cancelled` for an ask the operator was told they answered.
         let mut waiting = lock(&shared.waiting);
-        if shared
+        let applied = shared
             .asks
-            .chat_of(id)
-            .is_some_and(|chat| chat != shared.chat)
-        {
-            return Err(Refused::Unknown);
-        }
-        let applied = shared.asks.answer(id, option, by, Instant::now())?;
+            .answer(&shared.chat, id, option, by, Instant::now())?;
         if let Some(waiter) = waiting.remove(id) {
             let _ = waiter.responder.respond(RequestPermissionResponse::new(
                 RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(

@@ -5,7 +5,7 @@ import { cleanup, render, screen, waitFor, within } from "@testing-library/react
 import userEvent from "@testing-library/user-event";
 import type { Offer } from "./actions";
 
-import { NeedsYouMenu, type Needing } from "./NeedsYou";
+import { NeedsYouMenu, type Needing, type PermissionAsk } from "./NeedsYou";
 
 afterEach(cleanup);
 
@@ -411,5 +411,121 @@ describe("the needs-you count's colours", () => {
   it("fills the number with needs-you.base under needs-you.text, the measured pair", () => {
     expect(rule(".needs-you-number")).toMatch(/background:\s*var\(--needs-you-base\)/);
     expect(rule(".needs-you-number")).toMatch(/(?:^|[;\s])color:\s*var\(--needs-you-text\)/);
+  });
+});
+
+describe("a chat's permission prompt, answered from the title bar's list (HP-6)", () => {
+  /** Claude Code asking chat ops.3 to run `npm test`, with what it offers. */
+  function permission(): PermissionAsk {
+    return {
+      plane: "/a",
+      project: "charter",
+      session: 3,
+      name: "ops.3",
+      ask: "01J9ZQ3V7K8M2N4P6R8T0V2X4Z",
+      says: "Run npm test",
+      options: [
+        { id: "allow", label: "Allow", allows: true },
+        { id: "suggestion:0", label: "Allow Bash(npm test) for this session", allows: true },
+        { id: "deny", label: "Deny", allows: false },
+      ],
+    };
+  }
+
+  it("counts the ask, says what it asks, and answers it without going to the chat", async () => {
+    const answered: string[] = [];
+    render(
+      <NeedsYouMenu
+        quiet={[]}
+        items={[]}
+        asks={[permission()]}
+        onPress={() => {}}
+        onAnswer={(ask, option) =>
+          answered.push(`${ask.plane} ${ask.session} ${ask.ask} ${option}`)
+        }
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "1 chat needs you" }));
+
+    const group = await screen.findByRole("group", { name: "ops.3: Run npm test · charter" });
+    expect(group).toHaveTextContent("Run npm test");
+    await userEvent.click(
+      within(group).getByRole("menuitem", { name: "Allow: ops.3, Run npm test" }),
+    );
+
+    expect(answered).toEqual(["/a 3 01J9ZQ3V7K8M2N4P6R8T0V2X4Z allow"]);
+  });
+
+  it("offers every option the harness offered, in its order and words", async () => {
+    render(
+      <NeedsYouMenu
+        quiet={[]}
+        items={[]}
+        asks={[permission()]}
+        onPress={() => {}}
+        onAnswer={() => {}}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "1 chat needs you" }));
+
+    const group = await screen.findByRole("group", { name: /ops\.3: Run npm test/ });
+    expect(
+      within(group)
+        .getAllByRole("menuitem")
+        .map((item) => item.textContent),
+    ).toEqual(["Allow", "Allow Bash(npm test) for this session", "Deny", "Open in its pane"]);
+  });
+
+  it("counts a chat asking and a permission prompt together", async () => {
+    render(
+      <NeedsYouMenu
+        quiet={[]}
+        items={[needing("/a", 4, "ops", "charter")]}
+        asks={[permission()]}
+        onPress={() => {}}
+        onAnswer={() => {}}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "2 chats need you" })).toBeInTheDocument();
+  });
+});
+
+describe("an ask the window cannot show whole (HP-6 review)", () => {
+  it("offers what the core offered, Deny, and the chat's own pane, which shows it whole", async () => {
+    const opened: number[] = [];
+    const answered: string[] = [];
+    render(
+      <NeedsYouMenu
+        quiet={[]}
+        items={[]}
+        asks={[
+          {
+            plane: "/a",
+            project: "charter",
+            session: 3,
+            name: "ops.3",
+            ask: "01J9ZQ3V7K8M2N4P6R8T0V2X4Z",
+            says: "Change /work/a.txt",
+            options: [{ id: "deny", label: "Deny", allows: false }],
+          },
+        ]}
+        onPress={() => {}}
+        onAnswer={(_, option) => answered.push(option)}
+        onOpen={(ask) => opened.push(ask.session)}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "1 chat needs you" }));
+
+    const group = await screen.findByRole("group", { name: /ops\.3: Change \/work\/a\.txt/ });
+    expect(
+      within(group)
+        .getAllByRole("menuitem")
+        .map((item) => item.textContent),
+    ).toEqual(["Deny", "Open in its pane"]);
+    await userEvent.click(within(group).getByRole("menuitem", { name: "Open ops.3 in its pane" }));
+
+    expect(opened).toEqual([3]);
+    expect(answered).toEqual([]);
   });
 });

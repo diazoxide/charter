@@ -53,6 +53,7 @@ impl Chat {
                 Ok(())
             }),
             tool: Box::new(|_| Ok(())),
+            permission: Box::new(|_| None),
         });
         let env = hooks.arm(vec![
             (SOCKET_ENV.into(), socket.clone().into_os_string()),

@@ -659,6 +659,8 @@ enum Line {
     Refused(CommitRefused),
     /// After every other kind: it requires `tool_hook`, which none of them carries.
     Tool(ToolCall),
+    /// After every other kind: it requires `permission_request`, which none of them carries.
+    Permission(permission::PermissionAsked),
 }
 
 impl Line {
@@ -673,6 +675,7 @@ impl Line {
             Self::Saved(saved) => saved.chat,
             Self::Refused(refused) => refused.chat,
             Self::Tool(call) => call.chat,
+            Self::Permission(asked) => asked.chat,
         }
     }
 }
@@ -845,6 +848,8 @@ pub struct Hearing {
     pub refused: Refused,
     /// Every [`ToolCall`].
     pub tool: Tooled,
+    /// Every [`PermissionAsked`]: held on its connection until it is answered ([`permission`]).
+    pub permission: Permitting,
 }
 
 /// Sends one report to the socket at `path`. Answers whether the app took it.
@@ -1108,10 +1113,13 @@ mod off_unix;
 
 #[cfg(unix)]
 pub mod spool;
+
+pub mod permission;
 #[cfg(not(unix))]
 pub use off_unix::{
     Asking, Listener, Reading, deliver_refused, deliver_report, send, tell, tell_saved,
 };
+pub use permission::{PermissionAsked, Permitting, ask_permission};
 
 /// What the app answers an ask with, told which connection it came on.
 ///
@@ -1275,6 +1283,7 @@ impl Listener {
             saved,
             refused: Box::new(|_| Ok(())),
             tool: Box::new(|_| Ok(())),
+            permission: Box::new(|_| None),
         })
     }
 
@@ -1550,6 +1559,13 @@ fn serve(
             Line::Saved(record) => (hearing.saved)(record),
             Line::Refused(refused) => recorded = Some((hearing.refused)(refused)),
             Line::Tool(call) => recorded = Some((hearing.tool)(call)),
+            Line::Permission(asked) => {
+                // Held for as long as the operator takes, so the turn is let go first, as an
+                // ask's is, and the connection ends with its one reply.
+                turn.finish();
+                permission::hold(&mut reader, &mut writer, (hearing.permission)(asked));
+                return;
+            }
         }
         // Told as taken only once it is recorded durably: a line the hearer could not record
         // gets no answer, so its hook spools it (FD-30). An older hook has closed its end
@@ -3161,6 +3177,7 @@ mod tests {
                 tx.lock().unwrap().send(call).unwrap();
                 Ok(())
             }),
+            permission: Box::new(|_| None),
         });
         one_line_with_a_deadline(&path, None, &call).expect("the line is written");
         one_line_with_a_deadline(&path, Some(&token), &call).expect("the line is written");
@@ -3205,6 +3222,7 @@ mod tests {
                 Ok(())
             }),
             tool: Box::new(|_| panic!("no tool hook ran")),
+            permission: Box::new(|_| None),
         });
         // Without the token it is dropped, as every line is.
         one_line_with_a_deadline(&path, None, &refused).expect("the line is written");

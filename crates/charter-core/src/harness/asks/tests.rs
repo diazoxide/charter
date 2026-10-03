@@ -48,12 +48,14 @@ fn two_clients_answer_one_ask_and_only_the_first_applies_while_the_other_hears_a
     let raised = raise(&asks, "chat-1", an_ask(Deadline::None), t0);
 
     let first = asks.answer(
+        "chat-1",
         &raised.id,
         "allow",
         operator("local-ui"),
         t0 + Duration::from_secs(3),
     );
     let second = asks.answer(
+        "chat-1",
         &raised.id,
         "deny",
         operator("approval"),
@@ -87,6 +89,7 @@ fn clients_racing_to_answer_one_ask_apply_exactly_one_answer() {
                     gate.wait();
                     let choice = if n % 2 == 0 { "allow" } else { "deny" };
                     asks.answer(
+                        "chat-1",
                         &id,
                         choice,
                         operator(if n % 2 == 0 { "local-ui" } else { "approval" }),
@@ -115,11 +118,11 @@ fn the_same_client_answering_twice_is_refused_the_second_time() {
     let raised = raise(&asks, "chat-1", an_ask(Deadline::None), t0);
 
     assert!(
-        asks.answer(&raised.id, "allow", operator("local-ui"), t0)
+        asks.answer("chat-1", &raised.id, "allow", operator("local-ui"), t0)
             .is_ok()
     );
     assert_eq!(
-        asks.answer(&raised.id, "allow", operator("local-ui"), t0),
+        asks.answer("chat-1", &raised.id, "allow", operator("local-ui"), t0),
         Err(Refused::AnsweredElsewhere)
     );
 }
@@ -132,6 +135,7 @@ fn an_answer_at_or_after_the_deadline_is_refused_and_the_source_decides() {
 
     // Not yet expired by anyone: the answer itself finds the deadline passed.
     let late = asks.answer(
+        "chat-1",
         &raised.id,
         "allow",
         operator("local-ui"),
@@ -162,6 +166,7 @@ fn expiring_hands_back_each_ask_past_its_deadline_and_keeps_the_rest() {
     assert_eq!(left, [long.id, none.id]);
     assert_eq!(
         asks.answer(
+            "chat-1",
             &short.id,
             "allow",
             operator("local-ui"),
@@ -179,6 +184,7 @@ fn an_answer_just_inside_the_deadline_applies() {
     let raised = raise(&asks, "chat-1", an_ask(Deadline::Within(5_000)), t0);
 
     let answer = asks.answer(
+        "chat-1",
         &raised.id,
         "deny",
         operator("local-ui"),
@@ -204,16 +210,16 @@ fn a_request_the_source_sends_again_supersedes_the_one_before_it() {
     let new = raise(&asks, "chat-1", acp("call_1"), t0);
 
     assert_eq!(
-        asks.answer(&old.id, "allow", operator("local-ui"), t0),
+        asks.answer("chat-1", &old.id, "allow", operator("local-ui"), t0),
         Err(Refused::Superseded)
     );
     assert!(Refused::Superseded.to_string().contains("newer ask"));
     assert!(
-        asks.answer(&other.id, "allow", operator("local-ui"), t0)
+        asks.answer("chat-1", &other.id, "allow", operator("local-ui"), t0)
             .is_ok()
     );
     assert!(
-        asks.answer(&new.id, "allow", operator("local-ui"), t0)
+        asks.answer("chat-1", &new.id, "allow", operator("local-ui"), t0)
             .is_ok()
     );
 }
@@ -233,7 +239,7 @@ fn a_new_nudge_in_the_pane_supersedes_the_last_one_of_the_same_chat_only() {
         .collect();
     assert_eq!(left, [elsewhere.id, second.id]);
     assert_eq!(
-        asks.answer(&first.id, "allow", operator("local-ui"), t0),
+        asks.answer("chat-1", &first.id, "allow", operator("local-ui"), t0),
         Err(Refused::Superseded)
     );
 }
@@ -247,11 +253,11 @@ fn hook_asks_of_one_chat_never_supersede_each_other() {
 
     assert_eq!(asks.pending(t0).len(), 2);
     assert!(
-        asks.answer(&one.id, "allow", operator("local-ui"), t0)
+        asks.answer("chat-1", &one.id, "allow", operator("local-ui"), t0)
             .is_ok()
     );
     assert!(
-        asks.answer(&two.id, "deny", operator("local-ui"), t0)
+        asks.answer("chat-1", &two.id, "deny", operator("local-ui"), t0)
             .is_ok()
     );
 }
@@ -265,13 +271,13 @@ fn a_withdrawn_or_unknown_ask_refuses_its_answer_with_why() {
     assert!(asks.withdraw(&raised.id));
     assert!(!asks.withdraw(&raised.id), "withdrawn once");
     assert_eq!(
-        asks.answer(&raised.id, "allow", operator("local-ui"), t0),
+        asks.answer("chat-1", &raised.id, "allow", operator("local-ui"), t0),
         Err(Refused::Withdrawn)
     );
     let never = raise(&asks, "chat-9", an_ask(Deadline::None), t0).id;
     let other = Asks::new();
     assert_eq!(
-        other.answer(&never, "allow", operator("local-ui"), t0),
+        other.answer("chat-9", &never, "allow", operator("local-ui"), t0),
         Err(Refused::Unknown)
     );
 }
@@ -283,11 +289,17 @@ fn an_answer_must_be_one_of_the_options_the_source_offered() {
     let raised = raise(&asks, "chat-1", an_ask(Deadline::None), t0);
 
     assert_eq!(
-        asks.answer(&raised.id, "allow_always", operator("local-ui"), t0),
+        asks.answer(
+            "chat-1",
+            &raised.id,
+            "allow_always",
+            operator("local-ui"),
+            t0
+        ),
         Err(Refused::NotAnOption("allow_always".into()))
     );
     assert!(
-        asks.answer(&raised.id, "allow", operator("local-ui"), t0)
+        asks.answer("chat-1", &raised.id, "allow", operator("local-ui"), t0)
             .is_ok(),
         "a refused answer leaves the ask open"
     );
@@ -300,7 +312,7 @@ fn an_ask_with_no_options_is_answered_in_the_pane() {
     let raised = raise(&asks, "chat-1", Ask::default(), t0);
 
     assert_eq!(
-        asks.answer(&raised.id, "allow", operator("local-ui"), t0),
+        asks.answer("chat-1", &raised.id, "allow", operator("local-ui"), t0),
         Err(Refused::InThePane)
     );
 }
@@ -342,11 +354,11 @@ fn an_ask_that_elicits_a_secret_is_answered_only_from_the_window() {
     );
 
     assert_eq!(
-        asks.answer(&secret.id, "allow", operator("approval"), t0),
+        asks.answer("chat-1", &secret.id, "allow", operator("approval"), t0),
         Err(Refused::NotYours)
     );
     assert!(
-        asks.answer(&secret.id, "allow", operator("local-ui"), t0)
+        asks.answer("chat-1", &secret.id, "allow", operator("local-ui"), t0)
             .is_ok()
     );
 }
@@ -380,11 +392,11 @@ fn a_source_request_with_no_id_never_supersedes_another() {
 
     assert!(two.superseded.is_empty());
     assert!(
-        asks.answer(&one.id, "allow", operator("local-ui"), t0)
+        asks.answer("chat-1", &one.id, "allow", operator("local-ui"), t0)
             .is_ok()
     );
     assert!(
-        asks.answer(&two.raised.id, "allow", operator("local-ui"), t0)
+        asks.answer("chat-1", &two.raised.id, "allow", operator("local-ui"), t0)
             .is_ok()
     );
 }
@@ -398,6 +410,7 @@ fn the_median_time_to_answer_is_read_from_the_answers_that_applied() {
     for (chat, secs) in [("a", 9), ("b", 1), ("c", 4), ("d", 30)] {
         let raised = raise(&asks, chat, an_ask(Deadline::None), t0);
         asks.answer(
+            chat,
             &raised.id,
             "allow",
             operator("local-ui"),
@@ -408,6 +421,7 @@ fn the_median_time_to_answer_is_read_from_the_answers_that_applied() {
     // A refused answer is no time to answer.
     let timed_out = raise(&asks, "e", an_ask(Deadline::Within(1)), t0);
     let _ = asks.answer(
+        "e",
         &timed_out.id,
         "allow",
         operator("local-ui"),
@@ -446,4 +460,29 @@ fn an_open_ask_names_its_chat_even_past_its_deadline_and_a_closed_one_names_none
     assert_eq!(asks.chat_of(&late.id).as_deref(), Some("chat-2"));
     asks.withdraw(&late.id);
     assert_eq!(asks.chat_of(&late.id), None);
+}
+
+#[test]
+fn an_answer_is_bound_to_the_chat_that_asked_and_another_chat_s_answer_never_lands_on_it() {
+    // HP-6: an ask's id is answered only together with the chat that raised it. An answer
+    // naming another chat hears "no such ask", as an unknown id does, so it learns nothing
+    // and the ask is still there for its own chat.
+    let asks = Asks::new();
+    let t0 = Instant::now();
+    let raised = raise(&asks, "chat-1", an_ask(Deadline::None), t0);
+
+    assert_eq!(
+        asks.answer("chat-2", &raised.id, "allow", operator("local-ui"), t0),
+        Err(Refused::Unknown)
+    );
+    assert_eq!(asks.pending(t0).len(), 1, "the ask still waits");
+    let applied = asks
+        .answer("chat-1", &raised.id, "allow", operator("local-ui"), t0)
+        .expect("its own chat's answer applies");
+    assert_eq!(applied.chat, "chat-1");
+    // And a replay of the same answer is refused, never applied twice.
+    assert_eq!(
+        asks.answer("chat-1", &raised.id, "allow", operator("local-ui"), t0),
+        Err(Refused::AnsweredElsewhere)
+    );
 }

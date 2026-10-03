@@ -4,7 +4,7 @@ import { SaveIndicator } from "./SavingView";
 import { AboutCharter } from "./About";
 import { type Ending } from "./QuitWarning";
 import { UpdateItem, type Updates } from "./Updates";
-import { NeedsYouMenu, type Needing, type Quiet } from "./NeedsYou";
+import { NeedsYouMenu, type Needing, type PermissionAsk, type Quiet } from "./NeedsYou";
 import { KillSwitch } from "./KillSwitch";
 import type { Offer } from "./actions";
 
@@ -126,6 +126,10 @@ export function TitleBar({
     items: readonly Needing[];
     quiet: readonly Quiet[];
     onPress: (plane: string, offer: Offer) => void;
+    /** The permission prompts held open for the operator, answered from the list (HP-6). */
+    asks?: readonly PermissionAsk[];
+    onAnswer?: (ask: PermissionAsk, option: string) => void;
+    onOpen?: (ask: PermissionAsk) => void;
   };
   /**
    * The project in front's save standing (charter-app#294, ADR 0051) and what its two buttons

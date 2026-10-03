@@ -78,7 +78,6 @@ async fn every_command_reaches_the_host_as_it_was_sent() {
     let chat = "01J9ZQ3V7K8M2N4P6R8T0V2X4Z";
     client.write(chat, b"ls\r\x1b[<0;3;4M\xff").await.unwrap();
     client.resize(chat, 120, 40).await.unwrap();
-    client.answer(chat, "ask-1", "yes").await.unwrap();
     client.stop(chat).await.unwrap();
     let started = client
         .start(Start {
@@ -103,11 +102,6 @@ async fn every_command_reaches_the_host_as_it_was_sent() {
                 cols: 120,
                 rows: 40,
             },
-            Command::Answer {
-                chat: chat.into(),
-                ask: "ask-1".into(),
-                answer: "yes".into(),
-            },
             Command::Stop { chat: chat.into() },
             Command::Start(Start {
                 project: "01J9PRJCT00000000000000000".into(),
@@ -116,6 +110,26 @@ async fn every_command_reaches_the_host_as_it_was_sent() {
             }),
         ]
     );
+}
+
+#[tokio::test]
+async fn an_answer_to_an_ask_is_refused_on_the_link_and_never_reaches_the_host() {
+    // HP-6, V16, V75: only a human scope answers, and which link is one is FD-27's scope check
+    // (#664), which no host has yet. Until then no link answers an ask; the window does.
+    let board = Board::default();
+    let client = linked(board.clone()).await;
+
+    let refused = client
+        .answer("01J9ZQ3V7K8M2N4P6R8T0V2X4Z", "ask-1", "yes")
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        refused.refusal().map(|r| r.code.as_str()),
+        Some(session::NOT_ALLOWED)
+    );
+    assert!(board.heard.lock().unwrap().is_empty());
+    assert_eq!(client.list().await.unwrap().len(), 1, "the link carries on");
 }
 
 #[tokio::test]

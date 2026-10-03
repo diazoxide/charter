@@ -608,3 +608,41 @@ review of FD-26.
    working. Its methods are the app's commands from `ipc_commands.rs`, and its typed TypeScript
    client (`app/src/uiRpc.ts`) is generated from the same list as the window's own, leaving out
    the commands that take a channel: on the link, a terminal's bytes are a view.
+
+## Amended by HP-6 (#672), 2026-10-04
+
+HP-6 lets a reply on a plane's hook socket carry authority: the window's answer to a chat's
+permission prompt goes back on the hook that asked, and the hook prints the harness's
+decision. The text of §5 above is left as accepted, and this note is the amendment. **Decided by
+the dispatcher (D-88n)**, tightening V68 and FD-6's mutual admission.
+
+1. **The hook authenticates the host by its peer's credentials, before it writes anything.** On
+   connecting, `charter hook permissionrequest` reads the listening process's uid and pid from
+   the kernel (`SO_PEERCRED` on Linux; `LOCAL_PEERCRED` and `LOCAL_PEERPID` on macOS). It goes
+   on only if that uid is its own and that pid is one of the hook's own ancestors
+   (`charter_same_user::admit_host`). The hook itself never counts. Otherwise it writes nothing
+   and prints nothing, and the harness's own prompt decides. A process a chat runs is a
+   descendant of the harness, never its ancestor.
+   **The peer pid is not an identity on its own.** On both kernels it is the number of the
+   process that listened, and the kernel keeps that number after the process is gone. This is
+   measured for Linux's `SO_PEERCRED` once a child keeps the socket; macOS's `LOCAL_PEERPID` is
+   a bare sample. A later process can be given the same number. So the process with that pid
+   must also **hold a socket bound at the hook's path now**, read from the kernel's own tables:
+   - **Linux:** a listening entry for the path in `/proc/net/unix`, whose inode is one of
+     `/proc/<pid>/fd`'s `socket:[inode]` links.
+   - **macOS:** `/usr/sbin/lsof -a -p <pid> -U -F n`, by its absolute path and with no
+     environment, naming the path. The `libproc` crate was the alternative, but it adds a
+     dependency whose `unsafe` is only moved out of this workspace.
+
+   Paths are compared once resolved, so `/tmp` and `/private/tmp`, or a link to the socket, name
+   the same one. Any error fails closed. A process given a dead listener's pid holds no such
+   socket, and nothing a chat runs can hand one to an ancestor. No timestamp is trusted: a
+   socket file's times are its owner's to set.
+2. **No secret is used, because none would hold.** The hook's environment and arguments are the
+   chat's to read, whatever is put there.
+3. **The sandbox's integrity denial on the socket's directory stays**, as the second layer.
+4. **When `charterd` hosts chats, the hook socket's owner must remain the chats' ancestor.**
+   Either `charterd` itself owns each plane's hook socket, or the hook is taught to admit the
+   process that does by the same test: it holds the socket at the path. A host arrangement in which the
+   process listening on a hook socket is not an ancestor of the chats it serves breaks
+   permission answers, and they fail closed: the pane asks.

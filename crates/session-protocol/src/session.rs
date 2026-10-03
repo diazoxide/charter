@@ -95,6 +95,10 @@ pub const NO_SUCH_PROJECT: &str = "no_such_project";
 /// The link's scope may not do this (FD-27).
 pub const NOT_ALLOWED: &str = "not_allowed";
 
+/// Why [`Command::Answer`] is refused on every link for now: no host tells a human scope from
+/// any other yet (FD-27, #664), and only a human answers an ask (V16, V75).
+pub const ANSWERED_IN_THE_WINDOW: &str = "an ask is answered in charter's window: no link may answer one until client scopes are checked";
+
 /// A command, as the client sends it. Unknown fields are ignored, so a later minor may add
 /// some.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -116,7 +120,8 @@ pub enum Command {
     },
     /// A chat's terminal has a new size.
     Resize { chat: String, cols: u16, rows: u16 },
-    /// The answer to one of a chat's asks (a needs-you).
+    /// The answer to one of a chat's asks (a needs-you). Refused on every link for now, with
+    /// [`NOT_ALLOWED`] ([`ANSWERED_IN_THE_WINDOW`]).
     Answer {
         chat: String,
         ask: String,
@@ -412,6 +417,13 @@ pub async fn serve<H: Host>(
                         events = None;
                         Outcome::Ok(Answer::Done)
                     }
+                    // Refused here, for every host (HP-6): only a human scope answers an ask
+                    // (V16, V75), and telling one link from another is FD-27's scope check
+                    // (#664). Until a host has it, an ask is answered in the window.
+                    Command::Answer { .. } => Outcome::Refused(Refusal {
+                        code: NOT_ALLOWED.into(),
+                        why: ANSWERED_IN_THE_WINDOW.into(),
+                    }),
                     command => match host.call(command, &peer).await {
                         Ok(answer) => Outcome::Ok(answer),
                         Err(refusal) => Outcome::Refused(refusal),

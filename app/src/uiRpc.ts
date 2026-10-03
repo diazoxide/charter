@@ -368,6 +368,8 @@ export const commands = {
 	 *  (charter-app#248). The chat is untouched: it is still waiting, and its next stop asks again.
 	 */
 	ignoreNeedsYou: (plane: PlaneId, session: number) => typedError<null, string>(__TAURI_INVOKE("ignore_needs_you", { plane, session })),
+	/**  The asks a project holds open now: what the window lists before any [`EVENT`] arrives. */
+	pendingAsks: (plane: PlaneId) => typedError<Asking, string>(__TAURI_INVOKE("pending_asks", { plane })),
 	/**
 	 *  Sends what a pane typed to the session's program. Anything but the terminal's own answer
 	 *  drops a curation prompt still waiting to be typed into it (`Held::operator_input`).
@@ -1449,6 +1451,15 @@ export type Ask = {
 	changes: string[],
 	/**  Whether this is a first approval rather than a re-ask, so the dialog can say which. */
 	first: boolean,
+};
+
+/**
+ *  Every ask a project holds open, as the window lists them: the whole list each time, so the
+ *  window never assembles it from events it might have missed one of.
+ */
+export type Asking = {
+	plane: PlaneId,
+	asks: Shown[],
 };
 
 /**
@@ -2552,6 +2563,14 @@ export type Offer = {
 	channel: string,
 	/**  The release notes, as the manifest carries them. */
 	notes: string,
+};
+
+/**  One answer an ask offers. */
+export type Offered = {
+	id: string,
+	label: string,
+	/**  Whether choosing it lets the call run. */
+	allows: boolean,
 };
 
 /**  One chat the app has open, as the UI draws it and as the quit warning lists it. */
@@ -3799,6 +3818,18 @@ export type SettingsWhich =
 "shared" | 
 /**  `charter.local.toml` — gitignored; this machine only. */
 "local";
+
+/**  One ask, as its row in the needs-you list draws it. */
+export type Shown = {
+	/**  The chat that asked. */
+	session: number,
+	/**  The ask's id, which its answer names. */
+	ask: string,
+	/**  What it asks, in one line, every credential shape masked. */
+	says: string,
+	/**  The answers it offers, in the harness's order and words. */
+	options: Offered[],
+};
 
 /**
  *  The whole left-hand side: every workspace with its chats, and the focused workspace's

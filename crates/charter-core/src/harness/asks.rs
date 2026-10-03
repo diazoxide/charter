@@ -176,8 +176,8 @@ pub struct Asks {
 struct Held {
     /// Waiting, in the order they were raised.
     open: Vec<Open>,
-    /// Closed, and why: what a late answer is refused with.
-    closed: HashMap<AskId, Refused>,
+    /// Closed, the chat that raised each, and why: what a late answer is refused with.
+    closed: HashMap<AskId, (String, Refused)>,
     closed_order: VecDeque<AskId>,
     /// How long each applied answer took, for the median (QA-16's bar for HP-5).
     waits: VecDeque<Duration>,
@@ -214,8 +214,8 @@ impl Open {
 }
 
 impl Held {
-    fn close(&mut self, id: AskId, why: Refused) {
-        self.closed.insert(id.clone(), why);
+    fn close(&mut self, id: AskId, chat: String, why: Refused) {
+        self.closed.insert(id.clone(), (chat, why));
         self.closed_order.push_back(id);
         while self.closed_order.len() > REMEMBERED {
             if let Some(old) = self.closed_order.pop_front() {
@@ -257,7 +257,7 @@ impl Asks {
         held.open = kept;
         let superseded: Vec<AskId> = again.into_iter().map(|old| old.raised.id).collect();
         for old in &superseded {
-            held.close(old.clone(), Refused::Superseded);
+            held.close(old.clone(), chat.to_owned(), Refused::Superseded);
         }
         held.open.push(Open {
             raised: raised.clone(),
@@ -266,11 +266,16 @@ impl Asks {
         Raising { raised, superseded }
     }
 
-    /// Answers ask `id` with the option `choice`, from `by`, at `now`. The first answer that
-    /// passes every check applies and closes the ask; the check and the close are one step, so
-    /// two clients racing can never both apply.
+    /// Answers ask `id` of chat `chat` with the option `choice`, from `by`, at `now`. The first
+    /// answer that passes every check applies and closes the ask; the check and the close are
+    /// one step, so two clients racing can never both apply.
+    ///
+    /// **An ask is answered only together with the chat that raised it** (HP-6). An answer
+    /// naming another chat is [`Refused::Unknown`], whether the id is open, closed or never
+    /// was, so it can neither land on another chat's ask nor learn that one exists.
     pub fn answer(
         &self,
+        chat: &str,
         id: &AskId,
         choice: &str,
         by: Answerer,
@@ -278,11 +283,15 @@ impl Asks {
     ) -> Result<Applied, Refused> {
         let mut held = self.held();
         let Some(open) = held.open.iter().find(|open| open.raised.id == *id) else {
-            return Err(held.closed.get(id).cloned().unwrap_or(Refused::Unknown));
+            let closed = held.closed.get(id).filter(|(of, _)| of == chat);
+            return Err(closed.map_or(Refused::Unknown, |(_, why)| why.clone()));
         };
+        if open.raised.chat != chat {
+            return Err(Refused::Unknown);
+        }
         if open.past_deadline(now) {
             held.take(id);
-            held.close(id.clone(), Refused::TimedOut);
+            held.close(id.clone(), chat.to_owned(), Refused::TimedOut);
             return Err(Refused::TimedOut);
         }
         let ask = &open.raised.ask;
@@ -301,7 +310,7 @@ impl Asks {
             return Err(Refused::NotAnOption(choice.to_owned()));
         };
         let open = held.take(id).expect("found above, under the same lock");
-        held.close(id.clone(), Refused::AnsweredElsewhere);
+        held.close(id.clone(), chat.to_owned(), Refused::AnsweredElsewhere);
         let waited = now.saturating_duration_since(open.at);
         held.waits.push_back(waited);
         if held.waits.len() > REMEMBERED {
@@ -323,7 +332,7 @@ impl Asks {
         let mut held = self.held();
         match held.take(id) {
             Some(open) => {
-                held.close(open.raised.id, Refused::Withdrawn);
+                held.close(open.raised.id, open.raised.chat, Refused::Withdrawn);
                 true
             }
             None => false,
@@ -341,7 +350,7 @@ impl Asks {
         late.into_iter()
             .map(|open| {
                 let id = open.raised.id;
-                held.close(id.clone(), Refused::TimedOut);
+                held.close(id.clone(), open.raised.chat, Refused::TimedOut);
                 id
             })
             .collect()

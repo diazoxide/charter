@@ -15,6 +15,9 @@ use charter_core::hookwire::{
 use charter_core::session::Exit;
 use charter_core::state::{Board, State};
 
+use charter_core::harness::asks::Asks;
+use charter_core::harness::hooked::HookAsks;
+
 use crate::host::{ChatBoard, Glance};
 use crate::planes::{PlaneId, Teller};
 
@@ -164,6 +167,11 @@ pub struct Hooks {
     /// Told each session record a chat's `charter session record` says it saved (ADR 0064) — a
     /// slot filled after the fact, for `answering`'s reason.
     saved: Arc<Mutex<Option<SavedHeard>>>,
+    /// The permission asks this project's chats hold open on their hooks (HP-6, `asking`).
+    asks: Arc<HookAsks>,
+    /// Told this project's asks each time they change — a slot filled after the fact, for
+    /// `answering`'s reason.
+    asks_told: crate::asking::Telling,
 }
 
 /// What is told a session record was saved.
@@ -299,6 +307,8 @@ impl Hooks {
             all_reports: Arc::new(Mutex::new(None)),
             saved: Arc::new(Mutex::new(None)),
             events: Arc::new(Mutex::new(None)),
+            asks: Arc::new(HookAsks::new(Arc::new(Asks::new()))),
+            asks_told: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -323,7 +333,14 @@ impl Hooks {
         let all_reports: Arc<Mutex<Option<Heard>>> = Arc::new(Mutex::new(None));
         let saved: Arc<Mutex<Option<SavedHeard>>> = Arc::new(Mutex::new(None));
         let events: Arc<Mutex<Option<Events>>> = Arc::new(Mutex::new(None));
+        let asks = Arc::new(HookAsks::new(Arc::new(Asks::new())));
+        let asks_told: crate::asking::Telling = Arc::new(Mutex::new(None));
         let reading = listener.hear(Hearing {
+            permission: crate::asking::permitting(
+                plane.clone(),
+                Arc::clone(&asks),
+                Arc::clone(&asks_told),
+            ),
             each: {
                 let board = Arc::clone(&board);
                 let plane = plane.clone();
@@ -474,7 +491,37 @@ impl Hooks {
             all_reports,
             saved,
             events,
+            asks,
+            asks_told,
         })
+    }
+
+    /// The permission asks this project's chats hold open (HP-6).
+    pub fn asks(&self) -> &HookAsks {
+        &self.asks
+    }
+
+    /// Tells `teller` this project's asks each time they change (HP-6).
+    pub fn tell_asks_to(&self, teller: crate::asking::Teller) {
+        *self
+            .asks_told
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(teller);
+    }
+
+    /// Answers chat `session`'s ask `ask` with `option`, as the operator in the window, on the
+    /// hook that waits on it; then tells the window the asks as they now are, answered or not.
+    pub fn answer(&self, session: u32, ask: &str, option: &str) -> Result<(), String> {
+        let id: charter_core::harness::asks::AskId = ask.parse()?;
+        let answered = self.asks.answer(
+            &session.to_string(),
+            &id,
+            option,
+            crate::asking::the_window(),
+            std::time::Instant::now(),
+        );
+        crate::asking::tell(&self.plane, &self.asks, &self.asks_told);
+        answered.map(|_| ()).map_err(|refused| refused.to_string())
     }
 
     /// Records every hook call this project's channel hears into `events` from now on (FD-9).
@@ -1032,6 +1079,72 @@ mod tests {
                 cwd: Some("/work/alpha".to_owned()),
             })
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_permission_prompt_is_told_to_the_window_and_the_window_s_answer_goes_back_on_its_hook() {
+        // HP-6: Claude Code's `PermissionRequest` hook, on a project's own socket, becomes an
+        // ask the window is told; the window answers it, and the hook hears the option.
+        let dir = tempfile::tempdir().expect("a directory");
+        let at = Where {
+            within: dir.path().to_path_buf(),
+            socket: dir.path().join("app").join("hooks.sock"),
+        };
+        let plane: PlaneId = serde_json::from_str("\"/plane\"").expect("a plane id");
+        let hooks = Hooks::listening_on(plane.clone(), &at, Arc::new(|_| {}), Arc::new(|_| {}))
+            .expect("listening");
+        let (tx, told) = std::sync::mpsc::channel();
+        let tx = Mutex::new(tx);
+        hooks.tell_asks_to(Arc::new(move |asking| {
+            tx.lock().unwrap().send(asking).unwrap()
+        }));
+
+        let hook = {
+            let socket = hooks.socket().expect("a socket").to_path_buf();
+            let token = hooks.token_for(3);
+            std::thread::spawn(move || {
+                // In the host's own process, which no ancestry check could admit: the
+                // exchange alone, as a hook makes it once it has admitted its host.
+                charter_core::hookwire::permission::ask_permission_of_an_admitted_host(
+                    std::os::unix::net::UnixStream::connect(&socket).expect("connects"),
+                    Some(&token),
+                    &charter_core::hookwire::PermissionAsked {
+                        chat: 3,
+                        permission_request: charter_core::harness::hooked::Source::ClaudeCode,
+                        payload: serde_json::json!({"tool_name": "Bash",
+                            "tool_input": {"command": "npm test"}}),
+                    },
+                    std::time::Duration::from_secs(30),
+                )
+            })
+        };
+        let asking = told
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the window is told");
+        assert_eq!(asking.plane, plane);
+        let [shown] = asking.asks.as_slice() else {
+            panic!("one ask: {asking:?}");
+        };
+        assert_eq!(shown.session, 3);
+        assert!(shown.says.contains("npm test"), "{}", shown.says);
+        let labels: Vec<&str> = shown.options.iter().map(|o| o.label.as_str()).collect();
+        assert_eq!(labels, ["Allow", "Deny"]);
+
+        assert_eq!(
+            hooks.answer(4, &shown.ask, "allow"),
+            Err("no such ask is waiting".to_owned()),
+            "another chat's answer never lands on it"
+        );
+        hooks
+            .answer(3, &shown.ask, "allow")
+            .expect("the window's answer applies");
+
+        assert_eq!(
+            hook.join().expect("the hook").expect("a reply"),
+            Some("allow".to_owned())
+        );
+        assert!(hooks.answer(3, &shown.ask, "allow").is_err(), "once");
     }
 
     #[test]

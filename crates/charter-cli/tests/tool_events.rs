@@ -40,6 +40,7 @@ fn hook_with(
             tx.lock().unwrap().send(call).unwrap();
             Ok(())
         }),
+        permission: Box::new(|_| None),
     });
     let mut child = Command::new(CHARTER)
         .args(["hook", word])
@@ -313,6 +314,7 @@ fn a_tool_hook_answers_only_once_the_host_has_recorded_its_call() {
                 Ok(())
             }
         }),
+        permission: Box::new(|_| None),
     });
     let mut child = Command::new(CHARTER)
         .args(["hook", "pretooluse"])
