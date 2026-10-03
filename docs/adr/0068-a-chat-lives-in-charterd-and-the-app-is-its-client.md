@@ -543,3 +543,68 @@ the amendment. **Ruled by V68** (operator, 2026-10-02): admission is mutual.
 What is left is stated in the protocol's docs: a same-user process that can already sit between
 a client and a running host could relay one live admission. Such a process can already open the
 credential files, which is why the chat sandbox denies a chat both the files and the socket.
+
+## Amended by FD-26 (#663), 2026-10-03
+
+FD-26 built §4's split as two modules of `charter-session-protocol`: `session`, the public
+session protocol, and `ui`, the private UI RPC, on one control lane. The text of §4 above is left
+as accepted, and this note is the amendment. **Ruled by V76** (operator, 2026-10-03), on the
+review of FD-26.
+
+1. **The link's version is the session protocol's version.** The version §4's link negotiates
+   before admission is the session protocol's (`session::VERSION`, 1.0), not a second number
+   inside the lane. A minor only adds: a command, a field, an event kind, a word. A reader
+   ignores fields it does not know. A host answers a command it does not know with
+   `unknown_command` and keeps going, which is how a newer client learns that an older host
+   lacks it. A frame kind it does not know is passed over. A new major is a break, and a host
+   speaks its own major and the one before (N−1).
+
+   **What this costs against E5** (*"protocol versions per capability"*): there is one version
+   for the whole session protocol, not one per capability. A capability that changes a command
+   or a reply moves the whole protocol's minor, and a client tells what a host lacks by its
+   refusals, not by a per-capability number it was told up front. Per-capability versions can
+   be added later as a field of the hello, which a minor may do. They are not built until a
+   second capability needs one.
+2. **The wire format.** Each control frame is one JSON object with one key saying what it is:
+   - `call`: a command from the client, `{"id": <n>, "command": "<word>", …its fields}`;
+   - `reply`: its answer from the host, `{"re": <n>, "ok": <answer>}` or
+     `{"re": <n>, "refused": {"code": "<code>", "why": "<sentence>"}}`, in any order relative to
+     other replies;
+   - `pushed`: from the host to a client that subscribed, `{"event": <ADR 0066's envelope>}` or
+     `{"missed": {"device", "after", "resumes_at"}}`;
+   - `ui`: a frame of the UI RPC.
+
+   The bytes `write` types into a chat cross as standard base64 in a `bytes` field, so a mouse
+   report that is not UTF-8 crosses whole. A terminal's output never crosses the lane: an
+   attach opens a view (§4) on a stream of its own.
+3. **The refusal codes** a program reads are `unknown_command`, `malformed` (a known command
+   in a shape the host cannot read), `no_such_chat`, `no_such_project` and `not_allowed` (the
+   scope may not do this, FD-27). A later minor may add codes; a client treats one it does not
+   know as a refusal and shows its `why`.
+4. **Every word on the wire is snake_case** (V76c): keys, command words, answer kinds, refusal
+   codes, and the words a value carries, such as a chat's state (`needs_you`, never
+   `needs-you`). Kebab-case is for UI text only. **The one exception is an event's `kind`**,
+   which keeps ADR 0066's dotted names (`run.started`, `hook.pretooluse`): it is the event
+   log's own word, carried unchanged inside a `pushed` frame, and the same word the log, the
+   audit and OTel use.
+5. **A project is named by a stable id from the start** (V76b). `start` and each listed chat name
+   their project by a ULID minted once into its `charter.toml` as `[project] id`
+   (`docs/plane-format.md`). A path appears only as `project_path`, a hint to show a person,
+   never a key, since one project is at another path on every clone and device.
+6. **A `missed` marker carries no snapshot. The client re-attaches** (V76a). A client that missed
+   events and shows a chat's terminal sends `attach` again: the view's stream opens with the
+   terminal's snapshot (§4). So there is one way to get a screen back, whether the view fell
+   behind, the client reconnected, or events were missed. ADR 0066's *"a fresh snapshot and a
+   marker"* is read that way; see *ADR 0066, amended by FD-26*.
+7. **The compatibility promise is held in CI.** `crates/session-protocol/tests/fixtures/session-protocol.jsonl`
+   records one frame of every kind, and every build must read each one back exactly as
+   recorded. Each frame, outcome, command, answer and pushed variant gets its word from an
+   exhaustive `match`,
+   so a new variant does not compile without a word, and then fails the test until its frame
+   is recorded. No UI RPC frame is in the record.
+8. **The UI RPC is the window's alone, for one build.** The host serves it only on a `local-ui`
+   link, and only after a hello naming the host's own build. Any other scope, another build,
+   or a call before the hello is refused, and the session protocol on the same link keeps
+   working. Its methods are the app's commands from `ipc_commands.rs`, and its typed TypeScript
+   client (`app/src/uiRpc.ts`) is generated from the same list as the window's own, leaving out
+   the commands that take a channel: on the link, a terminal's bytes are a view.

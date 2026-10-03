@@ -47,14 +47,22 @@
 //! panes flooding about 100 to 270 MB/s at a p95 of a few milliseconds, and a needs-you through
 //! fifty busy chats on a shaped 150 ms link in well under a second.
 //!
-//! **What this crate does not decide.** What a control frame means (the session protocol's
-//! commands and events, and the UI RPC beside them) is FD-26's split and LV-2a's crate. Where
-//! a view's bytes and snapshot come from is the host's (FD-5): `Engine::snapshot` and the
-//! session's output.
+//! **What the control lane's frames mean** is the last two modules (FD-26, ADR 0068 §4):
+//!
+//! 5. [`session`]: the session protocol, small, public and versioned, with the compatibility
+//!    promise; `tests/fixtures/session-protocol.jsonl` holds it in CI.
+//! 6. [`ui`]: the UI RPC beside it, the app's own commands for its own build and the `local-ui`
+//!    scope only, excluded from that promise.
+//!
+//! **What this crate does not decide.** Where a view's bytes and snapshot come from, and what
+//! each command does, is the host's (FD-5): `Engine::snapshot`, the session's output, and a
+//! [`session::Host`]. What each scope may call is FD-27's.
 
 pub mod auth;
 pub mod link;
 #[cfg(unix)]
 pub mod local;
+pub mod session;
+pub mod ui;
 pub mod version;
 pub mod view;

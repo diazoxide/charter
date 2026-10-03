@@ -1,0 +1,19 @@
+{"call":{"id":1,"command":"list"}}
+{"call":{"id":2,"command":"attach","chat":"01J9ZQ3V7K8M2N4P6R8T0V2X4Z"}}
+{"call":{"id":3,"command":"detach","chat":"01J9ZQ3V7K8M2N4P6R8T0V2X4Z","view":3}}
+{"call":{"id":4,"command":"write","chat":"01J9ZQ3V7K8M2N4P6R8T0V2X4Z","bytes":"bHMNG1s8MDszOzRN/w=="}}
+{"call":{"id":5,"command":"resize","chat":"01J9ZQ3V7K8M2N4P6R8T0V2X4Z","cols":120,"rows":40}}
+{"call":{"id":6,"command":"answer","chat":"01J9ZQ3V7K8M2N4P6R8T0V2X4Z","ask":"ask-1","answer":"yes"}}
+{"call":{"id":7,"command":"stop","chat":"01J9ZQ3V7K8M2N4P6R8T0V2X4Z"}}
+{"call":{"id":8,"command":"start","project":"01J9PRJCT00000000000000000","workspace":"login","harness":"claude"}}
+{"call":{"id":9,"command":"start","project":"01J9PRJCT00000000000000000"}}
+{"call":{"id":10,"command":"subscribe","since":{"01J9DEVCE00000000000000000":4182}}}
+{"call":{"id":11,"command":"unsubscribe"}}
+{"reply":{"re":1,"ok":{"chats":[{"chat":"01J9ZQ3V7K8M2N4P6R8T0V2X4Z","project":"01J9PRJCT00000000000000000","project_path":"/home/me/project","title":"fix the login","state":"working"},{"chat":"01J9ZQ5000000000000000000A","project":"01J9PRJCT00000000000000000","state":"needs_you"}]}}}
+{"reply":{"re":2,"ok":{"attached":{"view":3,"cols":80,"rows":24}}}}
+{"reply":{"re":8,"ok":{"started":{"chat":"01J9ZQ5000000000000000000A"}}}}
+{"reply":{"re":10,"ok":"subscribed"}}
+{"reply":{"re":7,"ok":"done"}}
+{"reply":{"re":7,"refused":{"code":"no_such_chat","why":"no chat 01J9ZQ3V7K8M2N4P6R8T0V2X4Z on this host"}}}
+{"pushed":{"event":{"v":1,"device_id":"01J9DEVCE00000000000000000","seq":4183,"ulid":"01J9ZQ6000000000000000000B","chat":"01J9ZQ3V7K8M2N4P6R8T0V2X4Z","run":"01J9ZQ7000000000000000000C","parent_run":null,"kind":"run.started","body":{"harness":"claude"}}}}
+{"pushed":{"missed":{"device":"01J9DEVCE00000000000000000","after":4182,"resumes_at":5000}}}

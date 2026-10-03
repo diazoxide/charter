@@ -317,6 +317,20 @@ The process that owns every chat's terminal on a device, one per OS user per dev
 `charter` binary run as `charter serve`. The app is its client (ADR 0068).
 _Avoid_: daemon, server (in UI text), backend
 
+**Session protocol**:
+The small, public, versioned set of commands and events a session host answers on its control
+lane: list, attach and detach, write, resize, answer, stop, start, and subscribe from a cursor.
+It carries the compatibility promise, so a client and a host one version apart always talk.
+It names a project by its stable id (`[project] id` in `charter.toml`), never by a path, and
+every word it says is snake_case (ADR 0068 §4 and *Amended by FD-26*).
+_Avoid_: API (unqualified), IPC (that is the window's Tauri calls)
+
+**UI RPC**:
+The app's own commands (`ipc_commands.rs`), called by the window on the same control lane as
+the session protocol. Private to one build of the app, served only to `local-ui`, and promising
+nothing across versions (ADR 0068 §4, FD-26).
+_Avoid_: session protocol (for any of it), public API
+
 **Runner**:
 A device, other than the one the window is on, whose own session host runs a workspace's chats,
 serves a version of one of its repos, or runs browsers, as its **label** says. A long-lived runner

@@ -17,6 +17,8 @@ tokio = { version = "1", features = ["io-std", "io-util", "macros", "net", "proc
 tokio-util = { version = "0.7", features = ["codec", "compat"] }
 futures = "0.3"
 bytes = "1"
+# A keystroke that is not UTF-8 crosses the session protocol's JSON whole, as base64 (FD-26).
+base64 = "0.23"
 # The multiplexer (ADR 0068 §4): Yamux, per-stream credit over one ordered byte stream.
 yamux = "0.14"
 # Each scope's credential (FD-6): minted from the OS generator, proved by an HMAC-SHA256 over

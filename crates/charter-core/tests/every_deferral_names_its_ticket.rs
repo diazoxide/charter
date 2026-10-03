@@ -25,7 +25,8 @@
 //! string continuations and quotes taken out ([`prose`]), so a deferral split across two lines
 //! of a doc comment or a `\`-continued string literal is found like one on a single line.
 //!
-//! `app/src/bindings.ts` is generated from the Rust doc comments, so it is checked there.
+//! `app/src/bindings.ts` and `app/src/uiRpc.ts` are generated from the Rust doc comments, so they
+//! are checked there.
 
 use std::path::{Path, PathBuf};
 
@@ -65,7 +66,8 @@ fn shipped(dir: &Path, into: &mut Vec<PathBuf>) {
             || name.ends_with("_tests.rs")
             || name.starts_with("tests_")
             || name.contains(".test.")
-            || name == "bindings.ts";
+            || name == "bindings.ts"
+            || name == "uiRpc.ts";
         let source = name.ends_with(".rs") || name.ends_with(".ts") || name.ends_with(".tsx");
         if source && !test_file {
             into.push(path);
