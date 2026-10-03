@@ -47,13 +47,15 @@ function forms(): string[] {
 const community = () => [...DOCS, CHOOSER, ...forms()];
 
 describe("the community files", () => {
-  it("are where GitHub looks for them, with a bug form, a feature form and an ideas form", () => {
+  it("are where GitHub looks for them, with bug, feature, ticket, ADR and ideas forms", () => {
     const missing = DOCS.concat(CHOOSER).filter((path) => !existsSync(join(ROOT, path)));
     expect(missing).toEqual([]);
     expect(forms().sort()).toEqual(
       [
         `${ISSUE_FORMS}/bug.yml`,
         `${ISSUE_FORMS}/feature.yml`,
+        `${ISSUE_FORMS}/ticket.yml`,
+        `${ISSUE_FORMS}/adr.yml`,
         `${DISCUSSION_FORMS}/ideas.yml`,
       ].sort(),
     );
@@ -73,7 +75,12 @@ describe("the community files", () => {
   });
 
   it('say "project", never "plane" or "piece" (ADR 0072)', () => {
-    const saying = community().filter((path) => /\b(planes?|pieces?)\b/i.test(read(path)));
+    // A label and a milestone the repository already has, which the ticket and ADR forms
+    // must spell exactly as they are named there.
+    const named = ["area:plane", "M40 · Plane knowledge & memory governance"];
+    const words = (path: string) =>
+      named.reduce((text, name) => text.split(name).join(""), read(path));
+    const saying = community().filter((path) => /\b(planes?|pieces?)\b/i.test(words(path)));
     expect(saying).toEqual([]);
   });
 
@@ -237,5 +244,58 @@ describe("the issue chooser and the forms", () => {
     const system = bug.body.find((element) => element.id === "system");
     expect(system?.attributes?.options).toEqual(["macOS", "Linux", "Other"]);
     expect(read("SUPPORT.md")).toContain("macOS or Linux");
+  });
+});
+
+describe("the ticket and ADR forms (HY-18, #1097)", () => {
+  type Form = { labels?: string[]; body: Element[] };
+  const form = (name: string) => parse(read(`${ISSUE_FORMS}/${name}`)) as Form;
+  const field = (f: Form, id: string) => f.body.find((element) => element.id === id);
+
+  it("ask for what a filed ticket's body holds, in its order", () => {
+    // The sections every ticket filed from the program map carries (V20).
+    const labels = form("ticket.yml")
+      .body.filter((element) => element.type !== "markdown")
+      .map((element) => element.attributes?.label);
+    expect(labels.slice(0, 6)).toEqual([
+      "Outcome / what",
+      "Acceptance",
+      "Blocked by",
+      "Blocks",
+      "Source",
+      "Decisions",
+    ]);
+  });
+
+  it("ask for the milestone and for each label family HY-18 set up", () => {
+    for (const name of ["ticket.yml", "adr.yml"]) {
+      const f = form(name);
+      for (const id of ["milestone", "area", "horizon", "tier", "forge", "concept"]) {
+        expect(field(f, id)?.type, `${name} ${id}`).toBe("dropdown");
+      }
+      const milestones = field(f, "milestone")?.attributes?.options as string[];
+      expect(
+        milestones.every((m) => /^M\d+ · /.test(m)),
+        name,
+      ).toBe(true);
+      for (const id of ["area", "horizon", "tier", "forge", "concept"]) {
+        const options = field(f, id)?.attributes?.options as string[];
+        expect(
+          options.every((o) => o.startsWith(`${id}:`) || o === "none"),
+          `${name} ${id}`,
+        ).toBe(true);
+      }
+    }
+    expect(field(form("ticket.yml"), "type")?.attributes?.options).toEqual([
+      "type:feature",
+      "type:chore",
+      "type:test",
+      "type:epic",
+    ]);
+  });
+
+  it("file an ADR proposal as one, and leave a ticket's type to its field", () => {
+    expect(form("adr.yml").labels).toEqual(["type:adr"]);
+    expect(form("ticket.yml").labels ?? []).toEqual([]);
   });
 });

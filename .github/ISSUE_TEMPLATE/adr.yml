@@ -1,0 +1,158 @@
+# Keep the Milestone options in step with the repository's open milestones, and the label
+# options with its labels (`gh label list`): a form cannot read either, and GitHub applies no
+# label or milestone from a dropdown. A maintainer applies what the fields name (HY-18, #1097).
+name: ADR proposal
+description: A decision to record as an architecture decision record in docs/adr/. For maintainers.
+labels: ["type:adr"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        An ADR records one decision, why it was made and what it rules out. The issue proposes
+        it; the ADR itself lands in `docs/adr/` through a pull request. Everything here is
+        public: security decisions stay at the level of their class.
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Outcome / what
+      description: The decision, as the ADR's title and first paragraph would state it.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: The forces at play, and why this needs deciding now.
+    validations:
+      required: true
+  - type: textarea
+    id: options
+    attributes:
+      label: Options considered
+      description: Each option, and why the chosen one wins.
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance
+      value: |
+        - [ ] ADR merged with status Accepted
+        - [ ] `CONTEXT.md` names any concept it adds or changes
+    validations:
+      required: true
+  - type: input
+    id: amends
+    attributes:
+      label: Amends or supersedes
+      description: The ADRs this changes, if any.
+      placeholder: ADR 0078
+  - type: textarea
+    id: blocked-by
+    attributes:
+      label: Blocked by
+      placeholder: RR-13 (#722)
+  - type: textarea
+    id: blocks
+    attributes:
+      label: Blocks
+  - type: input
+    id: decisions
+    attributes:
+      label: Decisions
+      description: The rulings it quotes.
+      placeholder: V46, V47
+  - type: dropdown
+    id: milestone
+    attributes:
+      label: Milestone
+      description: The milestone it belongs to. A maintainer sets it from this field.
+      options:
+        - "M9 · Hygiene & drift"
+        - "M11 · Security quick wins"
+        - "M12 · Quality"
+        - "M13 · First run & simplicity"
+        - "M14 · Design system & polish"
+        - "M15 · Dogfood & releases"
+        - "M17 · Oversight"
+        - "M18 · Foundations"
+        - "M19 · Harness protocol (ACP + MCP server)"
+        - "M27 · Product"
+        - "M28 · Scale & felt speed"
+        - "M29 · Observability & cost"
+        - "M30 · Audit & tamper evidence"
+        - "M31 · Secure by default"
+        - "M32 · Model sources & gateway"
+        - "M33 · Multi-harness advantage"
+        - "M34 · Git & change loop"
+        - "M35 · Review & code"
+        - "M36 · Settings & entity pages"
+        - "M37 · Forge parity & automation"
+        - "M38 · Agent coordination"
+        - "M39 · Workflows as data"
+        - "M40 · Plane knowledge & memory governance"
+        - "M41 · Editor integration & in-app views"
+        - "M44 · Remote runners"
+        - "M46 · Windows"
+        - "M47 · Extensions, packs & ecosystem"
+        - "M48 · Notifications & bridges"
+        - "M51 · Forge work"
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - "area:core"
+        - "area:app"
+        - "area:harness"
+        - "area:plane"
+        - "area:git"
+        - "area:forge"
+        - "area:obs"
+        - "area:audit"
+        - "area:security"
+        - "area:models"
+        - "area:windows"
+        - "area:ci"
+        - "area:ecosystem"
+    validations:
+      required: true
+  - type: dropdown
+    id: horizon
+    attributes:
+      label: Horizon
+      description: "`now` is in the current slot, `next` is the slot after it."
+      options:
+        - "horizon:now"
+        - "horizon:next"
+        - "none"
+  - type: dropdown
+    id: tier
+    attributes:
+      label: Tier
+      options:
+        - "tier:free-local"
+        - "none"
+  - type: dropdown
+    id: forge
+    attributes:
+      label: Forge
+      description: The forge the work depends on, if any.
+      options:
+        - "forge:github"
+        - "forge:gitlab"
+        - "forge:both"
+        - "none"
+  - type: dropdown
+    id: concept
+    attributes:
+      label: Concept
+      description: The concepts of CONTEXT.md it touches.
+      multiple: true
+      options:
+        - "concept:project"
+        - "concept:workspace"
+        - "concept:chat"
+        - "concept:persona"
+        - "concept:memory"
