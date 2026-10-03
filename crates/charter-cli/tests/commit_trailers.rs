@@ -3,7 +3,8 @@
 //! `charter` this build made running `commit-msg`.
 //!
 //! The acceptance line: trailers on agent commits, and none on a commit the operator makes by
-//! hand.
+//! hand — neither in their own terminal nor in a program that inherited the chat's environment
+//! but runs outside its harness (V82, #1018).
 #![cfg(unix)]
 
 use std::path::{Path, PathBuf};
@@ -18,6 +19,7 @@ const CHAT: &str = "01J9ZQ3W5Y7X8V6T4R2P0N1M3K";
 struct Project {
     env: Vec<(std::ffi::OsString, std::ffi::OsString)>,
     repo: PathBuf,
+    plane: PathBuf,
     dir: tempfile::TempDir,
 }
 
@@ -43,6 +45,9 @@ impl Project {
                         id: Some(CHAT.into()),
                         ..Default::default()
                     },
+                    // This test process stands in for the chat's harness, and the git it
+                    // starts for the agent's own. [`Project::harness_is`] names another.
+                    pid: Some(std::process::id()),
                     ..Default::default()
                 }],
                 dealt: 3,
@@ -66,7 +71,12 @@ impl Project {
             ("CHARTER_ROOT".into(), plane.clone().into_os_string()),
             ("CHARTER_SESSION_ID".into(), "3".into()),
         ]);
-        let project = Self { env, repo, dir };
+        let project = Self {
+            env,
+            repo,
+            plane,
+            dir,
+        };
         project.operator_git(&["init", "-q", "-b", branch, "."]);
         project
     }
@@ -84,6 +94,31 @@ impl Project {
     fn git_as(&self, args: &[&str], chat: bool) -> Output {
         let mut cmd = std::process::Command::new("git");
         cmd.arg("-C").arg(&self.repo).args(args);
+        self.environ(&mut cmd, chat);
+        charter_core::forklock::output(&mut cmd).unwrap()
+    }
+
+    /// Records `pid` as the process the app started chat 3's harness as.
+    fn harness_is(&self, pid: u32) {
+        let mut record = charter_core::reopen::read_or_refusal(&self.plane).unwrap();
+        record.chats[0].pid = Some(pid);
+        charter_core::reopen::write(&self.plane, &record).unwrap();
+    }
+
+    /// A harness of its own, started with the chat's environment, that waits for a line on its
+    /// standard input and then runs `script` in the repo — an agent's turn.
+    fn harness(&self, script: &str) -> std::process::Child {
+        let mut cmd = std::process::Command::new("/bin/sh");
+        cmd.args(["-c", &format!("read go && {script}")])
+            .current_dir(&self.repo)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        self.environ(&mut cmd, true);
+        charter_core::forklock::spawn(&mut cmd).unwrap()
+    }
+
+    fn environ(&self, cmd: &mut std::process::Command, chat: bool) {
         cmd.env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_AUTHOR_NAME", "operator")
@@ -98,7 +133,6 @@ impl Project {
                 cmd.env(k, v);
             }
         }
-        charter_core::forklock::output(&mut cmd).unwrap()
     }
 
     fn commit(&self, chat: bool, message: &str) {
@@ -178,4 +212,37 @@ fn a_repos_trailer_config_runs_nothing_and_the_agents_own_lines_stay_byte_for_by
              Assisted-by: claude-code\nCharter-Chat: {CHAT}\nCharter-Persona: steward\n\n"
         )
     );
+}
+
+#[test]
+fn a_commit_an_agent_makes_below_its_chats_harness_is_stamped() {
+    let project = Project::new("main");
+    std::fs::write(project.repo.join("bill.rs"), "fix").unwrap();
+    let mut harness = project.harness("git add bill.rs && git commit -q -m 'fix: one bill'");
+    project.harness_is(harness.id());
+
+    use std::io::Write as _;
+    harness.stdin.take().unwrap().write_all(b"go\n").unwrap();
+    let ran = harness.wait_with_output().unwrap();
+
+    assert!(ran.status.success(), "{ran:?}");
+    assert_eq!(
+        project.trailers(),
+        format!("Assisted-by: claude-code\nCharter-Chat: {CHAT}\nCharter-Persona: steward")
+    );
+}
+
+#[test]
+fn a_commit_with_the_chats_environment_from_outside_its_harness_carries_none() {
+    // An editor the chat opened keeps the chat's environment and runs on its own; the
+    // operator's commit there is theirs (V82).
+    let project = Project::new("change/billing-v2");
+    let mut harness = project.harness("true");
+    project.harness_is(harness.id());
+
+    project.commit(true, "fix: in the editor");
+
+    let _ = harness.kill();
+    let _ = harness.wait();
+    assert_eq!(project.trailers(), "");
 }

@@ -96,9 +96,192 @@ pub fn alive(_pid: u32) -> bool {
     false
 }
 
+/// The most parents [`descends_from`] climbs. A real chain from a commit to its chat's harness
+/// is a handful (`git`, a shell, the harness's tool runner, a wrapper); a table that loops, or
+/// a tree deeper than this, is not one charter can vouch for, and the answer is no.
+const MOST_GENERATIONS: usize = 64;
+
+/// Whether this process is `ancestor` or runs below it (V82, #1018): what decides that a
+/// commit is the chat's own, and not one made in a program that only inherited its
+/// environment.
+///
+/// **The parent chain as the kernel has it now**, one hop at a time from this process:
+/// `/proc/<pid>/stat` on Linux, and one `ps -A -o pid= -o ppid=` everywhere else on unix (macOS
+/// keeps no `/proc`, and reading another process's parent there without `ps` is `libproc`,
+/// which is `unsafe` this crate forbids).
+///
+/// **Every doubt answers no**, which is the direction V67 sets: a commit left unstamped loses
+/// one line of a claim, while a stamped one puts the agent's name on a human's work. So a table
+/// that cannot be read, a chain that ends before `ancestor`, and a platform with no answer
+/// (Windows) all mean "not below it".
+///
+/// What it cannot see, and says so:
+/// - **A process that left the tree.** One whose parent exited is adopted by `init` (or a
+///   subreaper) and no longer descends from anything: a background job that outlived its
+///   harness stamps nothing, and neither does an editor that detached itself — which is the
+///   case this exists for.
+/// - **A sandbox.** A sandbox that gives the chat's commands a pid namespace of their own
+///   (`bwrap --unshare-pid`) shows a chain that ends at the namespace's first process, without
+///   the host pid the app recorded; a macOS sandbox that refuses to run the setuid `/bin/ps`
+///   leaves an empty table. Either way a commit made inside is not stamped (ADR 0074, #1021).
+/// - **A recycled pid.** The app records a pid only while its program runs (it writes the
+///   record again when one ends, and names no pid at quit), so a reused pid is on disk only
+///   for the moment between a program's reap and that write, and after an app that crashed or
+///   was killed, until its next launch writes the record again.
+pub fn descends_from(ancestor: u32) -> bool {
+    // 0 is the kernel's and 1 is `init` or `launchd`, an ancestor of every process: a record
+    // naming either would vouch for anything carrying the chat's environment.
+    if ancestor <= 1 {
+        return false;
+    }
+    let parents = Parents::now();
+    walk(std::process::id(), ancestor, |pid| parents.of(pid))
+}
+
+/// Climbs from `start` through `parent` until it meets `ancestor`, runs out, or loops.
+fn walk(start: u32, ancestor: u32, parent: impl Fn(u32) -> Option<u32>) -> bool {
+    let mut at = start;
+    for _ in 0..MOST_GENERATIONS {
+        if at == ancestor {
+            return true;
+        }
+        match parent(at) {
+            // Pid 0 is the kernel's, the parent of `init` and of `launchd`: the top.
+            Some(up) if up != 0 && up != at => at = up,
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// Where a process's parent is read from.
+enum Parents {
+    /// Linux: `/proc`, asked one pid at a time.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    Proc,
+    /// Everywhere else: every process's parent, as `ps` listed them once.
+    #[cfg_attr(target_os = "linux", allow(dead_code))]
+    Table(std::collections::HashMap<u32, u32>),
+}
+
+impl Parents {
+    #[cfg(target_os = "linux")]
+    fn now() -> Self {
+        Self::Proc
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn now() -> Self {
+        Self::Table(ps_table().unwrap_or_default())
+    }
+
+    fn of(&self, pid: u32) -> Option<u32> {
+        match self {
+            Self::Proc => proc_parent(pid),
+            Self::Table(table) => table.get(&pid).copied(),
+        }
+    }
+}
+
+/// The parent `/proc/<pid>/stat` names: the fourth field, counted after the command's closing
+/// parenthesis, because the command itself may hold spaces and parentheses.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn proc_parent(pid: u32) -> Option<u32> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    stat_parent(&stat)
+}
+
+fn stat_parent(stat: &str) -> Option<u32> {
+    let (_, after) = stat.rsplit_once(')')?;
+    after.split_whitespace().nth(1)?.parse().ok()
+}
+
+/// Every process and its parent, from `/bin/ps` by its full path: the hook runs with the
+/// chat's `PATH`, and a `ps` the agent put first on it is not the one to ask.
+#[cfg(all(unix, not(target_os = "linux")))]
+fn ps_table() -> Option<std::collections::HashMap<u32, u32>> {
+    let out = crate::forklock::output(
+        std::process::Command::new("/bin/ps").args(["-A", "-o", "pid=", "-o", "ppid="]),
+    )
+    .ok()
+    .filter(|out| out.status.success())?;
+    Some(ps_lines(&String::from_utf8_lossy(&out.stdout)))
+}
+
+#[cfg(not(unix))]
+fn ps_table() -> Option<std::collections::HashMap<u32, u32>> {
+    None
+}
+
+/// `pid ppid` lines, as `ps -o pid= -o ppid=` prints them; a line that is not two numbers is
+/// skipped.
+#[cfg_attr(target_os = "linux", allow(dead_code))]
+fn ps_lines(text: &str) -> std::collections::HashMap<u32, u32> {
+    text.lines()
+        .filter_map(|line| {
+            let mut words = line.split_whitespace();
+            let pid = words.next()?.parse().ok()?;
+            let ppid = words.next()?.parse().ok()?;
+            Some((pid, ppid))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn this_process_descends_from_itself_and_its_parent_and_not_from_a_child_of_its_own() {
+        assert!(descends_from(std::process::id()));
+        assert!(descends_from(std::os::unix::process::parent_id()));
+        let mut child = crate::forklock::spawn(std::process::Command::new("sleep").arg("30"))
+            .expect("a program starts");
+        let below = descends_from(child.id());
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(!below, "a child is below this process, not above it");
+        assert!(!descends_from(0));
+        assert!(
+            !descends_from(1),
+            "init is above everything, so it vouches for nothing"
+        );
+    }
+
+    #[test]
+    fn a_walk_stops_at_the_top_at_a_gap_and_at_a_loop() {
+        let tree = |pid| match pid {
+            30 => Some(20),
+            20 => Some(10),
+            10 => Some(1),
+            1 => Some(0),
+            7 => Some(7),
+            8 => Some(9),
+            9 => Some(8),
+            _ => None,
+        };
+        assert!(walk(30, 10, tree));
+        assert!(walk(30, 1, tree));
+        assert!(!walk(30, 40, tree), "the chain ends at the top");
+        assert!(!walk(20, 30, tree), "a child is not an ancestor");
+        assert!(!walk(50, 10, tree), "no parent known");
+        assert!(!walk(7, 10, tree), "its own parent");
+        assert!(!walk(8, 10, tree), "a loop");
+    }
+
+    #[test]
+    fn a_parent_is_read_past_a_command_with_spaces_and_parentheses() {
+        assert_eq!(
+            stat_parent("4242 (my (odd) cmd) S 17 4242 4242 0"),
+            Some(17)
+        );
+        assert_eq!(stat_parent("garbage"), None);
+        assert_eq!(
+            ps_lines("  1     0\n 4242   17\nnot a line\n"),
+            [(1, 0), (4242, 17)].into_iter().collect()
+        );
+    }
 
     /// The one question this module answers, against the two pids a test can be sure of.
     #[test]

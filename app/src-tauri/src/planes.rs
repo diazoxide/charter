@@ -235,6 +235,8 @@ pub struct Held {
     closing: Arc<crate::smartclose::Closing>,
     /// The window, for each step of a smart close.
     smart: crate::smartclose::Teller,
+    /// This plane, once it is in its `Arc`: what a program's end writes the record through.
+    me: Arc<std::sync::OnceLock<std::sync::Weak<Held>>>,
 }
 
 /// `tell`, after each change has been applied to `model` — so a reader the window sends on
@@ -568,9 +570,11 @@ impl Held {
                 .unwrap_or_else(PoisonError::into_inner)
                 .take(),
         );
-        self.records.write(&reopen::Record {
-            relaunch_after_update: to_update,
-            ..self.chats.record()
+        self.chats.write_last(|record| {
+            self.records.write(&reopen::Record {
+                relaunch_after_update: to_update,
+                ..record.clone()
+            });
         });
         self.chats.end_all();
         self.hooks.stop();
@@ -855,6 +859,7 @@ impl Planes {
         // reopen record will bring back are what it keeps.
         charter_core::retention::on_open(&root, std::time::SystemTime::now());
         let held = Arc::new(self.hold(id.clone(), root));
+        let _ = held.me.set(Arc::downgrade(&held));
         // A handoff from one of this plane's chats is answered by this plane, which is the
         // only one holding the asking chat's record. A `Weak`, because the plane holds the
         // socket that holds this answer: a strong handle would keep a closed plane alive.
@@ -1508,6 +1513,9 @@ impl Planes {
         // No hook can report a program dying (the process is gone), so the operating system
         // does. That is not charter reading a harness's output (ADR 0018) — it is the
         // process's own exit status, and the only honest source for `failed`.
+        // The plane itself, once it is held, for what a program's end has to reach. Weak for
+        // the handoff's reason; set by `open` as soon as the plane is in its `Arc`.
+        let me: Arc<std::sync::OnceLock<std::sync::Weak<Held>>> = Arc::default();
         let typed = Arc::new(crate::curation::Typed::default());
         let closing = Arc::new(crate::smartclose::Closing::default());
         {
@@ -1518,6 +1526,7 @@ impl Planes {
             let typed = Arc::clone(&typed);
             let closing = Arc::clone(&closing);
             let smart = Arc::clone(&self.smart);
+            let me = Arc::clone(&me);
             chats
                 .sessions()
                 .when_one_ends(Arc::new(move |session, exit| {
@@ -1543,6 +1552,10 @@ impl Planes {
                         .lock()
                         .unwrap_or_else(PoisonError::into_inner)
                         .send(crate::autosave::Poke::SessionEnded);
+                    // And the record no longer names the ended program's pid (V82, #1018).
+                    if let Some(held) = me.get().and_then(std::sync::Weak::upgrade) {
+                        held.chats.a_program_ended();
+                    }
                 }));
         }
 
@@ -1574,6 +1587,7 @@ impl Planes {
             typed,
             closing,
             smart: Arc::clone(&self.smart),
+            me,
         }
     }
 
@@ -6337,6 +6351,64 @@ mod tests {
             .resume
             .as_ref()
             .map(|id| id.as_str().to_owned())
+    }
+
+    /// The process the record names for its first chat (V82, #1018).
+    fn recorded_pid(root: &Path) -> Option<u32> {
+        reopen::read_or_refusal(root).ok()?.chats.first()?.pid
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_chat_whose_program_ends_is_recorded_again_without_its_pid() {
+        // V82 (#1018): a pid kept after its program ended may be handed to another process,
+        // and a commit below that one would be stamped as the chat's.
+        let dir = tempfile::tempdir().expect("a directory");
+        let (planes, root, held) = a_plane_writing_its_record(dir.path());
+        let program = stand_in::program(dir.path(), "claude", "#!/bin/sh\nsleep 2\n");
+        let session = held
+            .chats()
+            .start(
+                &one_chat_on(&program.display().to_string()).chats[0],
+                STARTING,
+            )
+            .expect("the chat starts");
+        assert!(
+            recorded_pid(&root).is_some(),
+            "a running chat's pid is recorded"
+        );
+
+        assert!(
+            becomes(|| reopen::read_or_refusal(&root)
+                .is_ok_and(|r| r.chats.len() == 1 && r.chats[0].pid.is_none())),
+            "the record still names {:?} for a program that ended",
+            recorded_pid(&root)
+        );
+        held.close_chat(session).expect("it closes");
+        planes.close(&held.id).expect("it closes");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_record_written_at_quit_keeps_its_chats_and_names_no_pid() {
+        // The programs are ended right after this write, so every pid in it is a dead one for
+        // as long as the app is closed.
+        let dir = tempfile::tempdir().expect("a directory");
+        let (planes, root, held) = a_plane_writing_its_record(dir.path());
+        a_chat_on_a_stand_in(&held, dir.path(), "claude");
+        assert!(recorded_pid(&root).is_some());
+
+        planes.close(&held.id).expect("it closes");
+        // The ended programs' own notices come after the quit's write and must not undo it.
+        std::thread::sleep(std::time::Duration::from_millis(300));
+
+        let record = reopen::read_or_refusal(&root).expect("the record reads");
+        assert_eq!(
+            record.chats.len(),
+            1,
+            "the chat is kept for the next launch"
+        );
+        assert_eq!(record.chats[0].pid, None);
     }
 
     /// The words the next launch would start the recorded chat with.

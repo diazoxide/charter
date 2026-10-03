@@ -203,6 +203,9 @@ pub struct Chats {
     /// for every chat in it — fifty chats would be fifty writes of the same file, at the
     /// one moment the app is being measured for cold start.
     putting_back: AtomicBool,
+    /// Set when every chat is being ended, at quit or when the project is closed: from then on
+    /// nothing writes the record ([`Self::write_it_down`]).
+    ending: AtomicBool,
 }
 
 /// The arguments and the environment that arm a chat's harness for that chat alone.
@@ -241,6 +244,7 @@ impl Chats {
             record_it,
             writing: Mutex::new(()),
             putting_back: AtomicBool::new(false),
+            ending: AtomicBool::new(false),
         }
     }
 
@@ -1005,13 +1009,22 @@ impl Chats {
     /// What was open, to write down.
     pub fn record(&self) -> Record {
         let ordered = self.in_order();
+        // Asked before `open` is taken: a program being ended answers only once it is gone,
+        // and nothing else may wait on `open` that long (R2-2).
+        let pids: HashMap<u32, Option<u32>> = ordered
+            .iter()
+            .map(|&session| (session, self.sessions.process_id(session)))
+            .collect();
         let open = lock(&self.open);
         let front = *lock(&self.front);
         // The ones that could not be started come first, in the order they were recorded,
         // so they keep their place and are tried again at the next launch.
         let mut chats: Vec<Chat> = lock(&self.would_not_start)
             .iter()
-            .map(|(chat, _)| chat.clone())
+            .map(|(chat, _)| Chat {
+                pid: None,
+                ..chat.clone()
+            })
             .collect();
         // Then the running ones, in the strip's order — which is the order the next launch
         // puts them back in.
@@ -1023,6 +1036,9 @@ impl Chats {
                 // pointer and session lock are written at. Taken from the session and not
                 // from the chat, so the two can never come to say different things.
                 number: Some(session),
+                // The process it runs as now, which is what a commit is checked against (V82,
+                // #1018) — never one a record put back carried from an earlier launch.
+                pid: pids.get(&session).copied().flatten(),
                 ..chat.clone()
             })
         }));
@@ -1127,14 +1143,45 @@ impl Chats {
             .collect()
     }
 
+    /// Writes the record again because a chat's program ended on its own, so it no longer
+    /// names that program's pid (V82, #1018). The chat stays, as its tab does.
+    pub fn a_program_ended(&self) {
+        self.write_it_down();
+    }
+
+    /// Hands `write` the last record, the one written at quit or when the project is closed:
+    /// the chats are kept for the next launch, with no pid, because their programs are ended
+    /// right after this (V82, #1018).
+    ///
+    /// **Nothing is written after it.** Writing stops BEFORE this record is built, and it is
+    /// built and written under the lock every write takes, so a write already on its way (a
+    /// program that ended on its own, an operator's click) lands before it or not at all, and
+    /// never puts live pids back on disk after it (R2-1).
+    pub fn write_last(&self, write: impl FnOnce(&Record)) {
+        self.ending.store(true, Ordering::SeqCst);
+        let _writing = lock(&self.writing);
+        let mut record = self.record();
+        for chat in &mut record.chats {
+            chat.pid = None;
+        }
+        write(&record);
+    }
+
     /// Hands the record as it now is to whoever writes it.
     fn write_it_down(&self) {
-        if self.putting_back.load(Ordering::SeqCst) {
+        // Nothing is written once the quit has begun: its own write is the last, and a
+        // program's end heard after it would write a record with no chats in it.
+        if self.putting_back.load(Ordering::SeqCst) || self.ending.load(Ordering::SeqCst) {
             return;
         }
         // The record is built and handed over under one lock, so that two changes landing
         // together cannot write themselves out of order and leave the older one on disk.
         let _writing = lock(&self.writing);
+        // Asked again under the lock: the last record may have been written while this one
+        // waited for it ([`Self::write_last`]).
+        if self.ending.load(Ordering::SeqCst) {
+            return;
+        }
         (self.record_it)(&self.record());
     }
 
@@ -1155,6 +1202,7 @@ impl Chats {
 
     /// Ends every chat, and does not return until their programs are gone.
     pub fn end_all(&self) {
+        self.ending.store(true, Ordering::SeqCst);
         self.sessions.end_all();
         lock(&self.open).clear();
         lock(&self.would_not_start).clear();
@@ -2357,6 +2405,69 @@ mod tests {
         );
 
         assert_eq!(open[0].how, Reopened::Fresh(Fresh::NoConversationRecorded));
+    }
+
+    #[test]
+    fn the_record_names_the_process_each_chat_runs_as_now_and_not_the_one_it_was_put_back_with() {
+        // V82 (#1018): `commit-msg` stamps a commit only below this process, so a pid carried
+        // over from the last launch would name a process that is gone.
+        let dir = tempfile::tempdir().unwrap();
+        let chats = Chats::new();
+
+        let open = chats.put_back_here(
+            &Record {
+                views: Vec::new(),
+                chats: vec![Chat {
+                    pid: Some(4_000_000),
+                    ..chat(&a_claude(dir.path()), "ide.7", Some(ID))
+                }],
+                dealt: 0,
+                relaunch_after_update: false,
+                clone_seat: None,
+            },
+            SIZE,
+        );
+
+        let running = chats.sessions.process_id(open[0].session);
+        assert!(running.is_some());
+        assert_eq!(chats.record().chats[0].pid, running);
+    }
+
+    #[test]
+    fn the_last_record_is_written_after_every_other_and_names_no_pid() {
+        // R2-1: a write already on its way when the quit begins must not land after the quit's
+        // own and put live pids back on disk.
+        let dir = tempfile::tempdir().unwrap();
+        let written: std::sync::Arc<Mutex<Vec<Record>>> = std::sync::Arc::default();
+        let chats = Chats::recorded_by(Box::new({
+            let written = std::sync::Arc::clone(&written);
+            move |record| lock(&written).push(record.clone())
+        }));
+        chats
+            .start(&chat(&a_claude(dir.path()), "ide.7", None), SIZE)
+            .expect("the chat starts");
+        lock(&written).clear();
+
+        std::thread::scope(|scope| {
+            chats.write_last(|record| {
+                // A program's end heard, on its own thread, while the quit's record is being
+                // written: it must not land after it.
+                scope.spawn(|| chats.a_program_ended());
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                lock(&written).push(record.clone());
+            });
+        });
+        chats.a_program_ended();
+        chats.end_all();
+
+        let written = lock(&written);
+        assert_eq!(written.len(), 1, "{written:?}");
+        assert_eq!(
+            written[0].chats.len(),
+            1,
+            "the chat is kept for the next launch"
+        );
+        assert_eq!(written[0].chats[0].pid, None);
     }
 
     #[test]

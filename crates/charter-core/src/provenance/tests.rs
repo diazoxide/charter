@@ -205,7 +205,10 @@ fn a_commit_on_any_other_branch_or_outside_a_workspace_names_no_change() {
 
 #[test]
 fn a_process_inside_a_chat_finds_its_chat_by_the_number_the_app_set() {
-    let plane = plane_with(vec![chat(3, Some("claude"), Some("steward"), Some(CHAT))]);
+    let plane = plane_with(vec![crate::reopen::Chat {
+        pid: Some(std::process::id()),
+        ..chat(3, Some("claude"), Some("steward"), Some(CHAT))
+    }]);
     let env = |n: &str| (n == "CHARTER_SESSION_ID").then(|| "3".to_owned());
     assert_eq!(
         Provenance::in_chat(plane.path(), &env).and_then(|p| p.chat),
@@ -238,6 +241,8 @@ impl Commit {
             ..Default::default()
         };
         record.chats[0].cwd = Some(clone.clone());
+        // This test process stands in for the chat's harness: `stamp` runs inside it.
+        record.chats[0].pid = Some(std::process::id());
         crate::reopen::write(plane.path(), &record).unwrap();
         let message_file = clone.join(".git").join("COMMIT_EDITMSG");
         std::fs::write(&message_file, message).unwrap();
@@ -317,6 +322,44 @@ fn a_commit_outside_a_chat_is_left_as_it_was_written() {
         |name: &str| (name == "CHARTER_ROOT").then(|| commit.plane.path().display().to_string());
     stamp(&commit.message, &commit.clone, &operator);
     assert_eq!(commit.stamped(), "fix: one bill\n");
+}
+
+/// Chat 3's recorded harness made `pid`, as the app records it at each start.
+fn harness_is(commit: &Commit, pid: Option<u32>) {
+    let mut record = crate::reopen::read_or_refusal(commit.plane.path()).unwrap();
+    record.chats[0].pid = pid;
+    crate::reopen::write(commit.plane.path(), &record).unwrap();
+}
+
+/// A live process that is not this one and not any of its ancestors: an editor the chat
+/// started, which went on to run on its own.
+fn elsewhere() -> std::process::Child {
+    crate::forklock::spawn(std::process::Command::new("sleep").arg("30")).unwrap()
+}
+
+#[test]
+fn a_process_with_the_chats_environment_outside_its_harnesss_tree_stamps_nothing() {
+    // V82 (#1018): an IDE opened from a chat keeps the chat's environment, and the operator's
+    // commits there are theirs.
+    let commit = Commit::new("fix: by hand\n");
+    let mut editor = elsewhere();
+    harness_is(&commit, Some(editor.id()));
+
+    stamp(&commit.message, &commit.clone, &commit.env());
+
+    let _ = editor.kill();
+    let _ = editor.wait();
+    assert_eq!(commit.stamped(), "fix: by hand\n");
+}
+
+#[test]
+fn a_chat_the_record_names_no_harness_process_for_stamps_nothing() {
+    let commit = Commit::new("fix: by hand\n");
+    harness_is(&commit, None);
+
+    stamp(&commit.message, &commit.clone, &commit.env());
+
+    assert_eq!(commit.stamped(), "fix: by hand\n");
 }
 
 #[test]

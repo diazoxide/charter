@@ -155,8 +155,9 @@ pub trait SessionHost: Send + Sync {
     fn stopped_by(&mut self, switch: Arc<crate::killswitch::KillSwitch>);
 
     /// The operating system's id for a session's program, while it runs, where the host can
-    /// say. Only the tests ask, to see a stopped program is gone.
-    #[cfg(test)]
+    /// say. The record keeps it, so `commit-msg` can tell a commit the chat's harness made from
+    /// one made in a program that only inherited the chat's environment (V82, #1018); the tests
+    /// ask it to see a stopped program is gone.
     fn process_id(&self, _id: u32) -> Option<u32> {
         None
     }

@@ -99,35 +99,50 @@ impl Form {
 }
 
 impl Provenance {
-    /// Chat `number` of the project at `plane`, as the app's record holds it: its ULID, its
-    /// harness and its persona. `None` — no agent run — where the record does not hold the
-    /// chat or cannot be read, or the chat was started on no harness profile this project has
-    /// (a shell tab is the operator's). The harness is the profile's declared kind, never
-    /// guessed from the program the chat runs. Read the way `charter session record` reads it
-    /// (ADR 0066: the id is asked for by number, never carried in the environment).
-    pub fn of_chat(plane: &Path, number: u32) -> Option<Self> {
-        let record = crate::reopen::read_or_refusal(plane).ok()?;
-        let chat = record
-            .chats
-            .into_iter()
-            .find(|chat| chat.number == Some(number))?;
+    /// [`Self::of`] chat `number` of the project at `plane`, for the tests only: it knows
+    /// nothing of which process is asking, so nothing but [`Self::in_chat`], the one gate a
+    /// stamp passes, may read a chat's provenance (V82, #1018).
+    #[cfg(test)]
+    fn of_chat(plane: &Path, number: u32) -> Option<Self> {
+        Self::of(plane, &chat_numbered(plane, number)?)
+    }
+
+    /// `chat` of the project at `plane`, as the app's record holds it: its ULID, its harness
+    /// and its persona. `None` — no agent run — where the chat was started on no harness
+    /// profile this project has (a shell tab is the operator's). The harness is the profile's
+    /// declared kind, never guessed from the program the chat runs. Read the way
+    /// `charter session record` reads it (ADR 0066: the id is asked for by number, never
+    /// carried in the environment).
+    fn of(plane: &Path, chat: &crate::reopen::Chat) -> Option<Self> {
         let profiles = crate::profiles::derive(plane);
         let harness = harness_word(&profiles.get(chat.profile.as_deref()?)?.kind)?;
         Some(Self {
             harness: Some(harness.to_owned()),
             model: None,
-            chat: chat.identity.id,
-            persona: chat.persona,
+            chat: chat.identity.id.clone(),
+            persona: chat.persona.clone(),
             change: None,
         })
     }
 
     /// The chat this process runs inside, by the number the app sets in every chat's
-    /// environment (`$CHARTER_SESSION_ID`), asked of the record ([`Self::of_chat`]). `None`
-    /// outside a chat: a terminal of the operator's is not an agent run.
+    /// environment (`$CHARTER_SESSION_ID`), asked of the record. `None` outside a chat (a
+    /// terminal of the operator's is not an agent run), and where the record does not hold the
+    /// chat or cannot be read.
+    ///
+    /// **And `None` outside the chat's harness** (V82, #1018). The environment is inherited by
+    /// whatever the chat starts — an editor opened from it keeps `$CHARTER_SESSION_ID` for the
+    /// rest of its life, and the operator's commits there are not the agent's (V67). So this
+    /// process must run below the program the record says the app started for that chat
+    /// ([`crate::reopen::Chat::pid`], [`crate::process::descends_from`]); a chat recorded with
+    /// no running program has no agent run to claim.
     pub fn in_chat(plane: &Path, env: &dyn Fn(&str) -> Option<String>) -> Option<Self> {
         let number = env(crate::active::SESSION_ID_ENV)?.trim().parse().ok()?;
-        Self::of_chat(plane, number)
+        let chat = chat_numbered(plane, number)?;
+        if !chat.pid.is_some_and(crate::process::descends_from) {
+            return None;
+        }
+        Self::of(plane, &chat)
     }
 
     /// The trailer lines, `Key: value`, in V67's order, each once.
@@ -152,6 +167,16 @@ impl Provenance {
         }
         out
     }
+}
+
+/// Chat `number` as the project's record holds it, or `None` where it does not or cannot be
+/// read.
+fn chat_numbered(plane: &Path, number: u32) -> Option<crate::reopen::Chat> {
+    crate::reopen::read_or_refusal(plane)
+        .ok()?
+        .chats
+        .into_iter()
+        .find(|chat| chat.number == Some(number))
 }
 
 /// V67's word for a profile's harness kind (ruling V67(b)). A small table of its own, so the
