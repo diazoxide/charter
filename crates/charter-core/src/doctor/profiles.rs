@@ -130,7 +130,9 @@ fn not_probed(root: &Path, p: &Profile, ignored: &IgnoreCheck) -> Option<(String
     if p.source == Source::BuiltIn {
         return None;
     }
-    if !ignored.passes() {
+    // Only a profile in the local file is refused by where that file sits: a declared
+    // harness's profile comes from the committed `harnesses/` (ADR 0073).
+    if p.source == Source::Local && !ignored.passes() {
         return Some((
             "not probed — git would carry charter.local.toml, so every profile in it is \
              refused (the harness profiles row says why)"
@@ -169,7 +171,7 @@ pub(super) fn profile_rows(d: &Doctor) -> Vec<Row> {
     let rows = listed(&d.root);
     // One git call however many profiles are declared, and none for a plane that declares
     // none.
-    let ignored = if rows.iter().any(|p| p.source != Source::BuiltIn) {
+    let ignored = if rows.iter().any(|p| p.source == Source::Local) {
         profiles::ignore_check(&d.root)
     } else {
         IgnoreCheck::default()

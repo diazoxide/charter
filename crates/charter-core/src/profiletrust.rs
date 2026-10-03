@@ -76,8 +76,13 @@ impl Fingerprint {
     }
 }
 
+#[cfg(test)]
 fn path(root: &Path) -> PathBuf {
-    root.join(".charter").join(RECORD)
+    path_of(root, RECORD)
+}
+
+fn path_of(root: &Path, record: &str) -> PathBuf {
+    root.join(".charter").join(record)
 }
 
 /// The most this record may be. It is one object of short fingerprints, it is read whole,
@@ -106,8 +111,14 @@ const MAX_BYTES: u64 = 1 << 20;
 /// everything declared asks again. That direction is the whole of this module's rule, and
 /// it is why gating here can only ever add questions, never remove one.
 pub fn read(root: &Path) -> serde_json::Value {
+    read_record(root, RECORD)
+}
+
+/// [`read`] of any consent record under `.charter/`, with every one of its gates: this one, or
+/// the harness declarations' ([`crate::harness_declaration::APPROVED`]).
+fn read_record(root: &Path, record: &str) -> serde_json::Value {
     let nothing = || serde_json::Value::Object(serde_json::Map::new());
-    let Ok(mut open) = crate::contain::open_no_link(root, &path(root)) else {
+    let Ok(mut open) = crate::contain::open_no_link(root, &path_of(root, record)) else {
         return nothing();
     };
     // `fstat` of the descriptor the read will use, not of the name: the two cannot be
@@ -135,6 +146,12 @@ pub fn last_launched(root: &Path, name: &str) -> Option<Fingerprint> {
 
 /// Write `name` down as launched, keeping every other profile's record.
 pub fn record_launched(root: &Path, name: &str, print: &Fingerprint) -> io::Result<()> {
+    record(root, RECORD, name, print.to_json())
+}
+
+/// Write `name` down as `entry` in the consent record `record`, keeping every other entry.
+fn record(root: &Path, record: &str, name: &str, entry: serde_json::Value) -> io::Result<()> {
+    let path = |root: &Path| path_of(root, record);
     // This file records which commands the operator approved RUNNING, so a link that moves
     // it out of the plane moves the consent with it. `contain::writable`'s data roots do not
     // cover it — `.charter` is not one, and Python does not gate this write either — so the
@@ -155,11 +172,11 @@ pub fn record_launched(root: &Path, name: &str, print: &Fingerprint) -> io::Resu
             ),
         ));
     }
-    let mut doc = read(root);
-    // One object keyed by profile name, read and rewritten whole, so approving one profile
-    // today does not make another ask again tomorrow. An existing key keeps its position.
+    let mut doc = read_record(root, record);
+    // One object keyed by name, read and rewritten whole, so approving one profile today
+    // does not make another ask again tomorrow. An existing key keeps its position.
     if let Some(map) = doc.as_object_mut() {
-        map.insert(name.to_string(), print.to_json());
+        map.insert(name.to_string(), entry);
     }
     let dir = path(root)
         .parent()
@@ -243,8 +260,20 @@ pub fn fingerprint(p: &crate::profiles::Profile) -> Fingerprint {
 /// question that never carries risk is one an operator learns to answer yes to without
 /// reading. A profile the file DECLARES with a built-in's name (`[harness.claude]`) is a
 /// declaration and asks with the rest: the name is the built-in's, the command is the file's.
+///
+/// **And a profile on a project's harness declaration asks for the declaration** (ADR 0073
+/// §5, V24b): the program it names and the words charter adds to it come out of a committed
+/// file, so the operator approves the declaration on this machine once, and again after any
+/// change to it ([`declaration_approval_needed`]). The profile `harnesses/<name>.toml` gives
+/// has nothing else to approve; a local profile of that kind asks for both.
 pub fn approval_needed(root: &Path, p: &crate::profiles::Profile) -> Option<Approval> {
-    if p.source == crate::profiles::Source::BuiltIn {
+    profile_approval_needed(root, p)
+        .or_else(|| declaration_approval_needed(root, p).map(|(why, _)| why))
+}
+
+/// Whether `p`'s own command, as `charter.local.toml` declares it, must be approved.
+pub fn profile_approval_needed(root: &Path, p: &crate::profiles::Profile) -> Option<Approval> {
+    if p.source != crate::profiles::Source::Local {
         return None;
     }
     match last_launched(root, &p.name) {
@@ -252,6 +281,151 @@ pub fn approval_needed(root: &Path, p: &crate::profiles::Profile) -> Option<Appr
         Some(was) if was == fingerprint(p) => None,
         Some(_) => Some(Approval::Changed),
     }
+}
+
+/// Whether the project's harness declaration `p` runs on must be approved, and which one —
+/// `None` for a built-in kind, which never asks. Reads the declarations now; a launch asks
+/// [`declaration_approval_needed_in`] of the ones it runs.
+pub fn declaration_approval_needed(
+    root: &Path,
+    p: &crate::profiles::Profile,
+) -> Option<(Approval, crate::harness_declaration::Declaration)> {
+    declaration_approval_needed_in(root, p, &crate::harness_declaration::read(root))
+}
+
+/// [`declaration_approval_needed`] of the declarations as `declared` holds them: approved
+/// only where the record holds exactly that declaration's digest, all of it.
+pub fn declaration_approval_needed_in(
+    root: &Path,
+    p: &crate::profiles::Profile,
+    declared: &crate::harness_declaration::Declarations,
+) -> Option<(Approval, crate::harness_declaration::Declaration)> {
+    let d = declaration_of(p, declared)?.clone();
+    let was = read_record(root, crate::harness_declaration::APPROVED)
+        .get(&d.name)
+        .and_then(|entry| entry.get("digest"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+    match was {
+        None => Some((Approval::New, d)),
+        Some(was) if was == d.digest => None,
+        Some(_) => Some((Approval::Changed, d)),
+    }
+}
+
+/// The project's declaration `p` runs on, or none for a built-in kind.
+fn declaration_of<'a>(
+    p: &crate::profiles::Profile,
+    declared: &'a crate::harness_declaration::Declarations,
+) -> Option<&'a crate::harness_declaration::Declaration> {
+    if p.source == crate::profiles::Source::BuiltIn {
+        return None;
+    }
+    declared.projects().find(|d| d.name == p.kind)
+}
+
+/// Records the operator's yes to `p`, **only if `shown` is what charter would show for it
+/// now** ([`shown`]): its own command where `charter.local.toml` declares it, and the
+/// project's harness declaration it runs on, by the digest of the very read that `shown` was
+/// checked against. A declaration changed between the dialog and the click is not approved,
+/// and nothing is recorded.
+///
+/// The refusal is a sentence the window shows as it is.
+pub fn approve(root: &Path, p: &crate::profiles::Profile, shown: &str) -> Result<(), String> {
+    let declared = crate::harness_declaration::read(root);
+    let now = shown_in(root, p, &declared);
+    if now != shown {
+        return Err(format!(
+            "profile '{}' changed while you were reading it, so nothing was approved and \
+             nothing was started. It now runs: {now}",
+            crate::shown::short(&p.name)
+        ));
+    }
+    let could_not = |err: io::Error| {
+        format!(
+            "charter could not record that approval ({err}), so it will not start the profile \
+             — it would only ask again."
+        )
+    };
+    if p.source == crate::profiles::Source::Local {
+        record_launched(root, &p.name, &fingerprint(p)).map_err(could_not)?;
+    }
+    if let Some(d) = declaration_of(p, &declared) {
+        record(
+            root,
+            crate::harness_declaration::APPROVED,
+            &d.name,
+            serde_json::json!({ "digest": d.digest }),
+        )
+        .map_err(could_not)?;
+    }
+    Ok(())
+}
+
+/// What the approval dialog shows for `p`, and what [`approve`] checks the click against: the
+/// profile's line, and for a profile on a project's harness declaration **every word that
+/// will run** (ruling V66) — the declaration's file and whole digest, its program, and each
+/// session template's words — each escaped.
+pub fn shown(root: &Path, p: &crate::profiles::Profile) -> String {
+    shown_in(root, p, &crate::harness_declaration::read(root))
+}
+
+/// [`shown`] of the declarations as `declared` holds them.
+///
+/// Beside the words, a warning for each word or flag value that names a file or folder at
+/// the project root ([`crate::harness_declaration::names_in_project`]).
+pub fn shown_in(
+    root: &Path,
+    p: &crate::profiles::Profile,
+    declared: &crate::harness_declaration::Declarations,
+) -> String {
+    let line = crate::profiles::display(p);
+    let Some(d) = declaration_of(p, declared) else {
+        return line;
+    };
+    let words = |words: &[String]| -> String {
+        if words.is_empty() {
+            return "nothing".to_owned();
+        }
+        words
+            .iter()
+            .map(|word| crate::shown::readable(word, usize::MAX))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let mut said = format!(
+        "{line} (declared in {}, {}; program {}; a new chat adds {}; a resumed chat adds {}",
+        d.file,
+        d.digest,
+        crate::shown::readable(&d.program, usize::MAX),
+        words(&d.session.new),
+        d.session
+            .resume
+            .as_deref()
+            .map_or_else(|| "nothing, it cannot resume".to_owned(), words),
+    );
+    if let Some(acp) = &d.levels.acp {
+        said.push_str(&format!("; its ACP agent runs {}", words(acp)));
+    }
+    let after_program = d
+        .session
+        .new
+        .iter()
+        .chain(d.session.resume.iter().flatten())
+        .chain(d.levels.acp.iter().flat_map(|acp| acp.iter().skip(1)));
+    let mut warned = Vec::new();
+    for warning in
+        after_program.filter_map(|word| crate::harness_declaration::names_in_project(root, word))
+    {
+        if !warned.contains(&warning) {
+            warned.push(warning);
+        }
+    }
+    for warning in warned {
+        said.push_str(&format!("; warning: {warning}"));
+    }
+    said.push(')');
+    said
 }
 
 #[cfg(all(test, unix))]

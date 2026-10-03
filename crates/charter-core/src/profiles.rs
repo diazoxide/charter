@@ -106,6 +106,13 @@ pub const KINDS: [Kind; 3] = [
     },
 ];
 
+impl Kind {
+    /// Where an operator of this kind logs in.
+    pub fn login(&self) -> &'static str {
+        self.login
+    }
+}
+
 fn kind_of(word: &str) -> Option<&'static Kind> {
     KINDS.iter().find(|k| k.word == word)
 }
@@ -183,6 +190,9 @@ pub enum Source {
     BuiltIn,
     /// Declared in `charter.local.toml`.
     Local,
+    /// The profile a project's harness declaration gives (`harnesses/<name>.toml`, ADR 0073):
+    /// named after the harness, running its declared program.
+    Declared,
 }
 
 impl Source {
@@ -190,6 +200,7 @@ impl Source {
         match self {
             Self::BuiltIn => "built-in",
             Self::Local => LOCAL_FILE,
+            Self::Declared => crate::harness_declaration::DIR,
         }
     }
 }
@@ -292,8 +303,14 @@ pub fn builtins() -> Vec<Profile> {
 /// Never fails and runs no subprocess. The two rules that need charter's own command surface
 /// are [`current`]'s.
 pub fn derive(root: &Path) -> ProfileSet {
+    derive_in(root, &crate::harness_declaration::read(root))
+}
+
+/// [`derive`] with the project's harness declarations already read, so a launch that reads
+/// them once judges and runs the same bytes ([`crate::start::ready_in`]).
+pub fn derive_in(root: &Path, declared: &crate::harness_declaration::Declarations) -> ProfileSet {
     let committed = std::fs::read_to_string(root.join(COMMITTED_FILE)).ok();
-    derive_from(committed.as_deref(), read_local(root))
+    derive_declared(committed.as_deref(), read_local(root), declared)
 }
 
 /// The local file as [`derive_from`] takes it: its text, `None` when there is none, or the
@@ -314,10 +331,46 @@ pub fn read_local(root: &Path) -> std::io::Result<Option<String>> {
 /// `local` is the local file's read: `Ok(None)` when there is none, and the error when there is
 /// one that could not be read.
 pub fn derive_from(committed: Option<&str>, local: std::io::Result<Option<String>>) -> ProfileSet {
+    derive_declared(
+        committed,
+        local,
+        &crate::harness_declaration::Declarations {
+            declared: crate::harness_declaration::builtins().to_vec(),
+            refused: Vec::new(),
+        },
+    )
+}
+
+/// [`derive_from`] for a project whose harness declarations are `declared` (ADR 0073): each
+/// project declaration gives a profile named after it, after the built-ins, and a local
+/// profile's `kind` may name it. A refused declaration is listed with the refused profiles,
+/// under its file.
+pub fn derive_declared(
+    committed: Option<&str>,
+    local: std::io::Result<Option<String>>,
+    declared: &crate::harness_declaration::Declarations,
+) -> ProfileSet {
     let mut set = ProfileSet {
         profiles: builtins(),
         ..ProfileSet::default()
     };
+    for d in declared.projects() {
+        set.profiles.push(Profile {
+            name: d.name.clone(),
+            kind: d.name.clone(),
+            harness: d.name.clone(),
+            command: vec![d.program.clone()],
+            env: Vec::new(),
+            source: Source::Declared,
+        });
+    }
+    for refused in &declared.refused {
+        set.refused.push(Refused {
+            name: String::new(),
+            source: refused.file.clone(),
+            reason: refused.reason.clone(),
+        });
+    }
 
     // 1. The committed file: a profile there is refused with a pointer to the local file,
     //    `default` is the candidate default, and any other key is ignored as it always was.
@@ -504,7 +557,7 @@ pub fn derive_from(committed: Option<&str>, local: std::io::Result<Option<String
                 continue;
             }
         }
-        match refusal(name, table) {
+        match refusal(name, table, declared) {
             Some(reason) => {
                 // A declared profile that replaces a built-in and is refused takes the name
                 // down with it (ruling 37): the operator said how that name runs, and the
@@ -518,8 +571,9 @@ pub fn derive_from(committed: Option<&str>, local: std::io::Result<Option<String
             }
             None => {
                 let inner = table.as_table().expect("a profile that passed is a table");
-                let kind = kind_of(inner["kind"].as_str().expect("a kind that passed is text"))
-                    .expect("a kind that passed is one charter knows");
+                let word = inner["kind"].as_str().expect("a kind that passed is text");
+                // A built-in kind keeps its registry name; a declared one is its own.
+                let registry = kind_of(word).map_or(word, |kind| kind.registry);
                 let mut env: Vec<(String, String)> = inner
                     .get("env")
                     .and_then(toml::Value::as_table)
@@ -533,8 +587,8 @@ pub fn derive_from(committed: Option<&str>, local: std::io::Result<Option<String
                 env.sort();
                 set.put(Profile {
                     name: name.clone(),
-                    kind: kind.word.to_owned(),
-                    harness: kind.registry.to_owned(),
+                    kind: word.to_owned(),
+                    harness: registry.to_owned(),
                     command: inner["command"]
                         .as_array()
                         .expect("a command that passed is an array")
@@ -557,8 +611,19 @@ pub fn derive_from(committed: Option<&str>, local: std::io::Result<Option<String
 /// pairing it with the git check by hand is a pairing one caller will forget — the thing it
 /// would let through is a command out of a file every clone of this plane carries.
 pub fn for_launch(root: &Path) -> (ProfileSet, IgnoreCheck) {
+    for_launch_in(root, &crate::harness_declaration::read(root))
+}
+
+/// [`for_launch`] with the project's harness declarations already read.
+pub fn for_launch_in(
+    root: &Path,
+    declared: &crate::harness_declaration::Declarations,
+) -> (ProfileSet, IgnoreCheck) {
     let check = ignore_check(root);
-    (with_ignore_check(current(root), &check), check)
+    (
+        with_ignore_check(current_of(derive_in(root, declared)), &check),
+        check,
+    )
 }
 
 /// Every profile this plane has, with the two rules that need charter's own command surface:
@@ -676,7 +741,11 @@ fn is_charter(command: &[String]) -> bool {
 
 /// Why the profile `name` is refused, or `None`. The FIRST failure wins, in the order the
 /// rules are written, so one profile gets one sentence.
-fn refusal(name: &str, table: &toml::Value) -> Option<String> {
+fn refusal(
+    name: &str,
+    table: &toml::Value,
+    declared: &crate::harness_declaration::Declarations,
+) -> Option<String> {
     let shown_name = shown::short(name);
     let Some(inner) = table.as_table() else {
         return Some(format!(
@@ -700,8 +769,17 @@ fn refusal(name: &str, table: &toml::Value) -> Option<String> {
     }
     let kind = inner.get("kind");
     let word = kind.and_then(toml::Value::as_str).unwrap_or_default();
-    let Some(kind_found) = kind_of(word) else {
-        let kinds: Vec<&str> = KINDS.iter().map(|k| k.word).collect();
+    let login = match (kind_of(word), declared.get(word)) {
+        (Some(kind), _) => Some(kind.login),
+        (None, Some(d)) => Some(d.login.as_deref().unwrap_or("log in inside that harness")),
+        (None, None) => None,
+    };
+    let Some(login) = login else {
+        let kinds: Vec<&str> = KINDS
+            .iter()
+            .map(|k| k.word)
+            .chain(declared.projects().map(|d| d.name.as_str()))
+            .collect();
         return Some(format!(
             "profile '{shown_name}' has kind {}, which is not a harness charter can launch \
              — one of: {}. Set kind to one of them.",
@@ -754,7 +832,7 @@ fn refusal(name: &str, table: &toml::Value) -> Option<String> {
                  holds no credential in a profile, because anything set on the harness \
                  reaches the model's own shell. Log in inside that harness instead: {}.",
                 shown::short(var),
-                kind_found.login
+                login
             ));
         }
     }

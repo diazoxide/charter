@@ -140,6 +140,8 @@ prose under another heading, which is why every store gets a heading or a row.
   - [`charter.toml`](#chartertoml)
   - [`charter.local.toml`](#charterlocaltoml)
   - [`.charter/harness-profiles-launched.json`](#charterharness-profiles-launchedjson)
+  - [`harnesses/<name>.toml` — a harness declaration](#harnessesnametoml--a-harness-declaration)
+  - [`.charter/harness-declarations-approved.json`](#charterharness-declarations-approvedjson)
   - [`.charter/unattended-logins.json`](#charterunattended-loginsjson)
   - [`.gitignore` (plane root)](#gitignore-plane-root)
   - [`.gitattributes` (plane root)](#gitattributes-plane-root)
@@ -420,6 +422,7 @@ command before it runs a command that could write (`crates/charter-cli/src/main.
 ## Finding the plane, and the plane root
 
 Covered here: `charter.toml`, `charter.local.toml`, `.charter/harness-profiles-launched.json`,
+`harnesses/<name>.toml` and `.charter/harness-declarations-approved.json`,
 plane-root discovery, `.gitignore`, the baseline directories, the `charter init` front-door
 scaffold, `inventory/repos.json`, `docs/topology.md`, and the generated README roster block.
 
@@ -699,7 +702,7 @@ key refuses.
 |---|---|---|---|---|---|
 | `[harness].default` | str | optional | Which profile the selector starts on; wins over `charter.toml`'s. Kept only if it names a profile that survived validation, else recorded as `default_refused`. | stable | `charter/profiles.py:76`, `charter/profiles.py:336`, `charter/profiles.py:366` |
 | `[harness.<name>]` | table | one per profile | A profile. Name must match `^[A-Za-z0-9][A-Za-z0-9_-]*$` (no dot), may not be `default`, may not collide with a `charter` command word, and replaces a built-in of the same name (a *refused* one takes the name with it). | stable | `charter/profiles.py:69`, `charter/profiles.py:255`, `charter/profiles.py:443`, `charter/profiles.py:359` |
-| `…​.kind` | str | required | The word typed after `charter`: `claude`/`codex`/`opencode` (registry `cli_name`s). | stable | `charter/profiles.py:257` |
+| `…​.kind` | str | required | The word typed after `charter`: `claude`/`codex`/`opencode` (registry `cli_name`s), or in charter-app the name of a harness the project declares in [`harnesses/<name>.toml`](#harnessesnametoml--a-harness-declaration) (ADR 0073), which a profile then also asks approval for. | stable | `charter/profiles.py:257`; `crates/charter-core/src/profiles.rs` `refusal` |
 | `…​.command` | list[str] | required, non-empty, all non-empty strings | argv. Never a shell string — no shell runs it. Refused if its first word is charter itself. | stable | `charter/profiles.py:261`, `charter/profiles.py:445` |
 | `…​.env` | table of str→str | optional, default `{}` | Environment for the harness process. A name starting `CHARTER_` is refused; a name containing `KEY`/`TOKEN`/`SECRET`/`PASSWORD` (case-insensitive) is refused. | stable | `charter/profiles.py:265`, `charter/profiles.py:89`, `charter/profiles.py:58` |
 | any other key in a profile table | — | — | Refuses that profile (e.g. `enviroment`). | stable | `charter/profiles.py:86`, `charter/profiles.py:278` |
@@ -739,6 +742,95 @@ key refuses.
   (`charter/config.py:389`, `charter/config.py:595`).
   The fingerprint is **as declared, before `~` expansion** (`charter/profiletrust.py:121`).
   A built-in profile is never recorded and never asks (`charter/profiletrust.py:187`).
+
+### `harnesses/<name>.toml` — a harness declaration
+
+- **Format:** TOML, one file per harness, named after the harness it declares. **charter-app
+  only** ([ADR 0073](adr/0073-a-harness-is-declared-as-data-and-a-chat-runs-it-at-one-of-three-levels.md), FD-14).
+  Hand-edited and committed.
+- **Status:** **stable** — it is committed and travels to every clone, and it decides which
+  program a chat runs.
+- **Tier:** Plane — a harness this project runs that charter does not ship, committed so every clone has it.
+- **Written by:** nothing in charter. The operator writes it, or a chat does, and every clone
+  approves it before it runs (below).
+- **Read by:** `crates/charter-core/src/harness_declaration.rs` `read`, which every launch,
+  `charter harness list`, `charter harness show <name>`, `charter doctor` and the app's
+  new-chat picker go through (`profiles::derive`). Each file is opened with no link on the
+  way, must be a plain file of at most 64 KiB, and is read whole. A file whose name does not
+  end `.toml` is not a declaration and is skipped.
+- **Git:** committed.
+- **What it gives:** a profile named after the harness, of `kind` `<name>`, running its
+  `program` (`charter harness list` shows it FROM `harnesses`), and a `kind` a profile in
+  `charter.local.toml` may name. **A declared harness runs at level 1**: in its terminal, with
+  none of charter's hooks armed, because level 2 needs an adapter charter ships (V24c). A
+  project that turns the sandbox on does not start one, because nothing compiles a sandbox for
+  a harness without an adapter yet (ADR 0067 §1, SD-2).
+- **Approval:** a declared harness's program runs on this machine only after the operator
+  approves the declaration, and again after any change to its bytes (V24b), recorded in
+  [`.charter/harness-declarations-approved.json`](#charterharness-declarations-approvedjson).
+  The new-chat picker asks, and **shows every word that will run** (V66): the profile's line,
+  the declaration's file and whole digest, its program, and each template's words, escaped
+  (`profiletrust::shown`), with a warning beside any word or value that names a file or folder at the project root. The approval records the digest of exactly what was shown: a
+  declaration that changed between the dialog and the click is refused and nothing is
+  recorded, and a launch reads the declarations once and judges and runs that one read, so a
+  change between the check and the start is not what runs (`start::ready_in`). A profile in
+  `charter.local.toml` of a declared kind asks for both its own command and the declaration.
+- **Built-ins:** Claude Code (`claude`), opencode (`opencode`) and Codex (`codex`) are
+  declarations in this format that charter ships
+  (`crates/charter-core/src/harness_declaration/claude.toml`, `opencode.toml`, `codex.toml`),
+  read by the same reader. They are not files in the project, and **a project never takes a
+  built-in's name**: a built-in's declaration decides how its chats are armed (ADR 0073 §3).
+  `charter harness show <name>` prints any of them, under a comment line naming its file and
+  digest. Each line is printed escaped, so where a file holds a byte outside printable ASCII
+  the text printed is not the bytes the digest is of, and a second comment line says so.
+- **Decided, not yet read:** a declaration in `charter.local.toml`, for this machine alone or
+  replacing a built-in's (ADR 0073 §5, [#968](https://github.com/diazoxide/charter/issues/968)).
+- **Refusals:** a declaration charter will not read gives no profile and is listed with the
+  refused profiles, under its file, in one sentence. The first failure wins. Every key below
+  is the whole schema: a key it does not list refuses the file.
+
+| Field | Type | Required / default | Meaning | Status | Source |
+|---|---|---|---|---|---|
+| `name` | str | required | The word a profile's `kind` names. Letters, digits, `_` and `-`, starting with a letter or digit, and the file's own name. Not a built-in's. | stable | `crates/charter-core/src/harness_declaration.rs` `parse`, `read` |
+| `title` | str | default `name` | What the operator calls it. | stable | same |
+| `program` | str | required | **A bare program name found on `PATH`**: letters, digits, `.`, `_`, `+` and `-`, starting with a letter or digit, at most 128 characters. Never a path, `~`, a flag or a shell string. **Never a shell, an interpreter or a launcher** (`sh`, `bash`, `env`, `node`, `python3`, `npx`, `osascript`, `arch`, `xcrun`, `tmux`, `git`, `vim`, version managers such as `mise` and `pyenv`, and the like, matched without case; V66, V66c). A renamed or linked interpreter is not caught by its name; the approval dialog, which shows every word, is the control for that case. **Never a program of a harness charter ships** either, which runs only armed, through its adapter. A profile in `charter.local.toml` can point a chat at a path on this machine. | stable | same, `bare_word`, `launcher` |
+| `env` | list[str] | default `[]` | The harness's own environment namespace: a variable's name in capitals, digits and `_`, or a prefix ending `_*` (`AIDER_*`). Refused: anything reaching `CHARTER_*`; a name holding `KEY`/`TOKEN`/`SECRET`/`PASSWORD`; anything that could reach a credential family `chatenv::CREDENTIALS` lists (a forge's, a cloud's, a model provider's or a registry's: `AWS_*`, `GITHUB_*`, `OPENAI_*`, `ANTHROPIC_*`, `GEMINI_*`, …), in either direction of a prefix; and anything reaching what changes how a process loads, runs or finds programs (`LD_*`, `DYLD_*`, `NODE_OPTIONS`, `PYTHONPATH`, `PATH`, `GIT_*`, …). **Decided, not yet read** at launch: a chat on a declared harness is started with the built-in keep-list and `[chat_env] pass` until [#967](https://github.com/diazoxide/charter/issues/967) passes it. | stable | same, `env_ok` |
+| `tested` | str | optional | The harness versions these facts were measured on, as written. TS1 settles what reads it. | stable | same |
+| `login` | str | optional | Where the operator logs in, said when a profile of this kind sets a variable named like a credential. | stable | same; `profiles::refusal` |
+| `[session].chosen_by` | `"harness"` or `"charter"` | default `"harness"` | Who chooses a new session's id. `"charter"` needs `new` to hand over `{id}`; `"harness"` may not. | stable | same, `session` |
+| `[session].new` | list[str] | default `[]` | The words that start a new session. **Every word after the program has an allowed shape** (V66c), here and in `resume` and `acp`: a flag, `-x` or `--name` (letters, digits and `-`); `--name=value` with a plain value (letters, digits and `-_.:,+`, no leading `.`, no drive letter such as `C:`, and no `%`, so no percent-encoded separator), where `{id}` and `{name}` may sit (`--session={id}`, `--title={name}`); or a subcommand, lowercase letters, digits and `-` with no dot (`exec`, `run`). A bare `{id}` or `{name}` word only in a built-in. Everything else is refused: a path anywhere, a bare relative filename, `@file`, a value glued to a short flag (`-I.`), a `VAR=value` assignment, shell syntax or a space, another placeholder. Every word, and every flag's value, is also checked against the shells, interpreters, launchers and built-in programs `program` refuses. **A residual the approval covers** (ruling of 2026-10-03): a value or a subcommand-shaped word can still name a file the program resolves in the chat's folder (`--cfg=rel.toml`); where it names a file or folder at the project root, the approval dialog says so beside it (*`--cfg=rel.toml` names the file rel.toml in this project; the program may read it*). | stable | same, `template`, `word_refusal` |
+| `[session].resume` | list[str] | optional | The words that bring session `{id}` back; must name `{id}` (`--resume={id}`). The same shapes as `new`. | stable | same |
+| `[session].named_by` | list[str] | default `[]` | The flags or subcommands by which the operator names a session in a profile's own command (`--resume`, or `--resume=<id>`), so charter adds none of its own. | stable | same |
+| `[terminal].newline` | str | optional | The bytes the harness reads as a new line in its input (ESC CR, `"\u001b\r"`). Absent: the terminal's own Enter. **Decided, not yet read** for a declared harness ([#967](https://github.com/diazoxide/charter/issues/967)). | stable | same, `terminal` |
+| `[terminal].paste_drawn_whole` | inline table | optional | `{ lines = N, chars = N }`, the biggest paste it draws whole, each at least 1; a key left out has no limit. | stable | same |
+| `[terminal].ready_to_type` | `"on-start"`, `"raw-and-quiet"` or `"never"` | default `"never"` | When a curation prompt may be typed into a new chat (ADR 0061). `"on-start"` waits for a hook, so only a harness with hooks may say it. | stable | same |
+| `[levels].terminal` | bool | default `true` | Level 1. Every declaration offers it; `false` is refused. | stable | same |
+| `[levels].hooks` | bool | default `false` | Level 2. `true` only in a built-in: a project declaration that says it is refused (V24c). | stable | same |
+| `[levels].acp` | list[str] | optional | Level 3 over ACP: the argv that starts the harness's ACP agent. Its first word follows `program`'s rules and the rest `new`'s shapes. Read by HP-2's client when it lands. | stable | same |
+| `[capabilities].<name>` | str | optional | A harness capability (ADR 0073 §6): `"yes"`, `"no: <the reason>"` or `"unknown"`. One left out is unknown, which charter treats as no. The names: `reports_its_process`, `reports_its_start_before_the_first_prompt`, `keeps_conversations_by_directory`, `reports_waiting`, `resumes_by_id` (`"yes"` needs `[session].resume`), `per_chat_plugins`. A ticket that reads a new one adds it here. | stable | same, `CAPABILITIES` |
+
+---
+
+### `.charter/harness-declarations-approved.json`
+
+- **Format:** JSON object, `{ "<harness name>": {"digest": "sha256:<hex>"} }`. **charter-app
+  only** (ADR 0073 §5, V24b).
+- **Status:** **stable** — it records an operator's consent to run a committed declaration's
+  program on this clone, and it decides whether a chat starts.
+- **Tier:** Clone state — the operator's consent to run a project's harness declaration on this clone. Deleting it makes every declaration ask again.
+- **Written by:** `crates/charter-core/src/profiletrust.rs` `approve`, from the new-chat
+  picker's approval, through the same gated write as
+  [`.charter/harness-profiles-launched.json`](#charterharness-profiles-launchedjson):
+  `rewrite::replace` at `0600`, refusing a record that is a link or resolves outside the
+  project.
+- **Read by:** `profiletrust::declaration_approval_needed`, on every launch of a profile whose
+  `kind` is a project's declaration, with the same gates as the profile record: no link on the
+  way, a plain file, at most 1 MiB. Every unreadable state reads as "nothing approved".
+- **Git:** gitignored (inside `/.charter/`).
+- **Encoding details:** the digest is of the declaration file's **bytes**, so any change to the
+  file, a comment included, asks again. Kept apart from the profile record because that one is
+  keyed by profile and records a command, which a declaration does not have (ADR 0073 §5).
+  Read-modify-written whole with no lock, as the profile record is.
 
 ### `.charter/unattended-logins.json`
 
