@@ -856,15 +856,17 @@ describe("the project switcher (FR-27)", () => {
     await waitFor(() => expect(projectTabs()).toEqual(["one", "two", "three*"]));
   });
 
-  it("leaves its key alone while the window holds one project, as the button and the row do", async () => {
+  it("finds files on its key while the window holds one project, and lists no project", async () => {
     core({ launch: ONE });
     render(<App />);
     await waitFor(() => expect(projectTabs()).toEqual(["one*"]));
 
-    // Not taken: nothing to switch to, so the key goes on to whatever has the keyboard.
-    expect(switcherKey()).toBe(true);
+    // Taken (FM-7, V86 F10): ⌘P finds files, and there are files to find with one project
+    // open. Nothing to switch to, so no project is listed beside them.
+    expect(switcherKey()).toBe(false);
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByText(/Files in project one/)).toBeInTheDocument();
     expect(screen.queryByRole("listbox", { name: "Projects" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("draws no switcher in the title bar while the window holds one project", async () => {

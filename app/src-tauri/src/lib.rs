@@ -26,6 +26,7 @@ mod curation;
 mod doctor;
 mod extensions;
 mod filewatch;
+mod findfiles;
 mod firstrun;
 mod firsttask;
 mod handoff;
@@ -1880,6 +1881,10 @@ pub fn run() {
                     if let Some(watch) = window.try_state::<filewatch::FileWatch>() {
                         watch.forget(window.label());
                     }
+                    // And its ⌘P listings are let go of (FM-7).
+                    if let Some(finder) = window.try_state::<findfiles::FileFinder>() {
+                        finder.forget(window.label());
+                    }
                     windows::destroyed(window);
                 }
                 _ => {}
@@ -1953,6 +1958,8 @@ pub fn run() {
                     );
                 })
             }));
+            // Each window's ⌘P session: the branches it has listed while the palette is up (FM-7).
+            app.manage(findfiles::FileFinder::default());
             // What each window is holding, and which of its projects it has in front. Empty
             // until a window says, and an empty answer means "not looking", so a notification
             // is sent rather than suppressed.

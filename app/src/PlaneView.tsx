@@ -93,7 +93,7 @@ import { cloneRepos } from "./repoClones";
 import { StartChat } from "./StartChat";
 import { SessionPane } from "./SessionPane";
 import { Explorer, type Spot } from "./Explorer";
-import { pieceFileTitle, pieceFileView } from "./pieceViews";
+import { pieceFileTitle, pieceFileView, type Place } from "./pieceViews";
 import { BottomBar } from "./BottomBar";
 import { useWorkspaceState } from "./workspaceState";
 import {
@@ -285,6 +285,7 @@ export const PlaneView = memo(function PlaneView({
   preferencesAsked,
   firstChatAsked,
   shellAsked,
+  fileAsked,
 }: {
   plane: PlaneId;
   /** Whether this is the project the operator is looking at. */
@@ -322,6 +323,8 @@ export const PlaneView = memo(function PlaneView({
   /** The same, for the Preferences tab (`WindowDoing.openPreferences`, charter-app#283): a
    *  count that goes up each time the window asks for it on THIS project's strip. */
   preferencesAsked?: number;
+  /** A file ⌘P found in THIS project (FM-7), opened in its file tab once per `at`. */
+  fileAsked?: { place: Place; path: string; at: number };
   /** The first chat a repository opened into this project asks for (FR-4): started in that
    *  repository's clone, on the workspace named after it. `at` counts the asks, so each is
    *  answered once. */
@@ -1863,6 +1866,17 @@ export const PlaneView = memo(function PlaneView({
     handled.current = settingsAsked;
     showView(SETTINGS_VIEW, SETTINGS_TITLE);
   }, [settingsAsked, showView]);
+
+  /** A file ⌘P found here (FM-7), opened in its file tab the way the explorer opens one. */
+  const fileHandled = useRef(fileAsked?.at);
+  useEffect(() => {
+    if (fileAsked === undefined || fileHandled.current === fileAsked.at) return;
+    fileHandled.current = fileAsked.at;
+    showView(
+      pieceFileView(fileAsked.place, fileAsked.path),
+      pieceFileTitle(fileAsked.place, fileAsked.path),
+    );
+  }, [fileAsked, showView]);
 
   /** The Saving tab (charter-app#294), opened the same way and for the same reason. */
   const savingHandled = useRef(savingAsked);
@@ -3465,8 +3479,13 @@ export const PlaneView = memo(function PlaneView({
       workspace: ofWorkspace,
       colour: colourWithHue(sidebar?.workspaces.find((ws) => ws.name === ofWorkspace)?.colour),
       saving,
+      // The branch the explorer picked: where ⌘P's files are found first (FM-7).
+      branch:
+        ofWorkspace !== undefined && spot !== undefined
+          ? { workspace: ofWorkspace, repo: spot.repo, piece: spot.piece ?? null }
+          : undefined,
     }),
-    [asking, ofWorkspace, offers, quiet, report, run, saving, settled, sidebar],
+    [asking, ofWorkspace, offers, quiet, report, run, saving, settled, sidebar, spot],
   );
   // **Before the paint, not after it.** A quit — Cmd-Q, the tray, the menu — arrives whenever
   // it arrives, and the window decides on what every project has told it: a report that
@@ -4429,6 +4448,9 @@ export type PlaneReport = {
   colour?: string | null;
   /** Where this project's unsaved work sits (charter-app#302), once read. */
   saving?: PlaneSaving;
+  /** The branch the explorer has picked in the workspace in front, or none: the narrowest
+   *  scope ⌘P finds files in (FM-7). */
+  branch?: Place;
   /**
    * When anything in it last moved: the newest `movedAt` among its chats, `0` when nothing
    * has been heard. What the project strip's show-more menu orders its rows by after the ones

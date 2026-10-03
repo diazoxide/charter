@@ -122,6 +122,8 @@ macro_rules! app_commands {
                 piecefiles::open_in_your_editor,
                 piecefiles::branch_tree,
                 filewatch::files_watch,
+                findfiles::find_files,
+                findfiles::find_files_end,
                 updates::update_channel,
                 updates::set_update_channel,
                 updates::check_for_update,
