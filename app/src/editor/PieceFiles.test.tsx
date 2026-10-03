@@ -116,11 +116,13 @@ describe("one file of a piece", () => {
   });
 
   it("says the core's sentence when the file does not open", async () => {
-    core({ gone: "'gone' is not in the worktree any more" });
+    core({ gone: "'gone' is not in the branch's folder any more" });
 
     render(<PieceFileTab plane={PLANE} cut={CUT} path="gone" />);
 
-    expect(await screen.findByText("'gone' is not in the worktree any more")).toBeInTheDocument();
+    expect(
+      await screen.findByText("'gone' is not in the branch's folder any more"),
+    ).toBeInTheDocument();
   });
 });
 

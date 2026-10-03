@@ -762,6 +762,10 @@ mod pr_saves {
         assert_eq!(code, 0, "{said}");
         assert_eq!(plane.remote("release"), release, "{said}");
         assert!(said.contains("save_branch"), "{said}");
+        // V81 (#1087): prose names the `pr` and `pr-merge` modes "request mode" on every
+        // forge, and the request by the glossary's word; the config words stay as written.
+        assert!(said.contains("a request mode never pushes"), "{said}");
+        assert!(!said.contains("PR mode"), "{said}");
         assert_eq!(plane.last_journal()["outcome"], "blocked");
     }
 

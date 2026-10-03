@@ -68,7 +68,7 @@ pub enum Outcome {
     /// It landed on the branch HEAD is on.
     Pushed,
     /// The branch requires a pull request → it landed on `charter/<sha>`. `push` mode's
-    /// fallback, and `charter save`'s recorded one; the PR modes use a save branch instead.
+    /// fallback, and `charter save`'s recorded one; the request modes use a save branch instead.
     Branched,
     /// The branch requires a pull request and THAT push failed too.
     Stranded,
@@ -78,10 +78,10 @@ pub enum Outcome {
     Conflict,
     /// No origin on a forge charter knows — nothing to push to.
     Unreachable,
-    /// A PR mode pushed it to the save branch, and one pull request is open from there into
+    /// A request mode pushed it to the save branch, and one pull request is open from there into
     /// the target branch (charter-app#298).
     PrOpen,
-    /// A PR mode cannot go further without a person: its pull request was closed without
+    /// A request mode cannot go further without a person: its pull request was closed without
     /// merging, the target branch no longer holds what was pushed, or somebody else pushed to
     /// this machine's save branch.
     Blocked,
@@ -114,7 +114,7 @@ pub struct PushResult {
     /// and worlds apart in consequence.
     pub landed: Option<String>,
     pub url: Option<String>,
-    /// The pull request's number, when a PR mode opened or updated one.
+    /// The pull request's number, when a request mode opened or updated one.
     pub number: Option<u64>,
     pub detail: String,
     /// The files a rebase onto the remote conflicted in (charter-app#295).
@@ -210,7 +210,7 @@ pub fn origin_https_of(plane: &Path, root: &Path) -> Option<String> {
 /// A one-click "open a pull request for this branch" URL, or `None`. Python's `_compare_url`.
 ///
 /// A plain HTTPS link, deliberately: it closes the pull-request-gated workflow with no API call
-/// and no extra token scope. The PR modes open their PR through [`forge::pr`] instead, into an
+/// and no extra token scope. The request modes open their PR through [`forge::pr`] instead, into an
 /// explicit base (ADR 0051, #298); this link is left to `push` mode's protected-branch
 /// fallback, where it is still resolved against the repo's default branch. Which form to
 /// build is decided by RESOLVING the forge, never by
@@ -465,7 +465,7 @@ pub struct Standing {
     /// The files to settle, when conflicts are why it is blocked: those a merge or rebase
     /// stopped part-way left unmerged, else those the last save's rebase conflicted in.
     pub conflicts: Vec<String>,
-    /// What a save cannot do here that is not a block — a PR mode on a remote no forge adapter
+    /// What a save cannot do here that is not a block — a request mode on a remote no forge adapter
     /// serves, where a save still commits and goes no further.
     pub notice: Option<String>,
     /// HEAD's commit as it was read, or empty when there is none: what auto-save's
@@ -503,9 +503,9 @@ pub fn standing(root: &Path) -> Standing {
         .map(|r| r.line().trim().to_string())
         .unwrap_or_default();
     let branch = plane.branch.value.clone().unwrap_or(here);
-    // A PR mode whose settings cannot work on a forge charter knows — a save_branch that is
+    // A request mode whose settings cannot work on a forge charter knows — a save_branch that is
     // the target branch itself — is blocked until they are fixed, read from the settings as
-    // they are now (charter-app#298). A PR mode on a remote no forge adapter serves is the
+    // they are now (charter-app#298). A request mode on a remote no forge adapter serves is the
     // notice below, not a block.
     let misconfigured = plane
         .mode
@@ -538,7 +538,7 @@ pub fn standing(root: &Path) -> Standing {
         .then(|| said("url"))
         .flatten()
         .or_else(|| {
-            // A PR mode's open PR stays known when a later save failed (charter-app#298).
+            // A request mode's open PR stays known when a later save failed (charter-app#298).
             plane
                 .mode
                 .value
@@ -573,7 +573,7 @@ pub fn standing(root: &Path) -> Standing {
     // hand — a rebase finished in a terminal, a secret removed, the right branch checked out —
     // is gone the moment it is, because auto-save waits while a plane is blocked and would
     // never write the line that cleared a stored one.
-    // A PR mode's `blocked` record (charter-app#298) holds only while the plane is still on the
+    // A request mode's `blocked` record (charter-app#298) holds only while the plane is still on the
     // commit it is about and that commit is not on the target (`unlanded`): moving the plane
     // off it by hand, or a save that opens a new pull request, clears it.
     let blocked = matches!(
@@ -604,7 +604,7 @@ pub fn standing(root: &Path) -> Standing {
     // before any other block, since a save refuses it first and auto-save waits while it is.
     let stopped = gitstate::stopped(root);
     let blocked = stopped.as_ref().map(gitstate::Stopped::why).or(blocked);
-    // A PR mode's pull request carries the commit it was last pushed at; a commit made since
+    // A request mode's pull request carries the commit it was last pushed at; a commit made since
     // is not in it yet.
     let waiting = match outcome.as_deref() {
         Some("branched") => pr.is_some(),
@@ -795,7 +795,7 @@ pub fn fetch(root: &Path, fast_forward: bool) -> Result<Incoming, String> {
     if !fetched.ok() {
         return Err(tail(&fetched));
     }
-    // A pull request a PR mode opened may have merged, or been closed, since the last look:
+    // A pull request a request mode opened may have merged, or been closed, since the last look:
     // settled before the fast-forward below, which a merged PR's squash would never allow.
     let behind = count(root, &format!("HEAD..refs/remotes/origin/{branch}")).unwrap_or(0);
     let settled = fast_forward
@@ -2163,7 +2163,7 @@ fn commit_push(
             // bound, or made by an agent with plain git — are carried on by the next save,
             // which is what a launch's save is for (ADR 0051). A plane that names no mode
             // keeps `charter save`'s recorded answer.
-            // In a PR mode, a known PR is settled by any save, so a clean `charter save` is how
+            // In a request mode, a known PR is settled by any save, so a clean `charter save` is how
             // a plane with auto-save off moves onto its merged PR.
             let pr_known = plane
                 .mode
@@ -2451,7 +2451,7 @@ fn commit_push(
 
 /// How many commits a clean plane has that its mode would still push: `None` unless the plane
 /// names a mode past `commit` and the target branch on the remote lacks commits HEAD has —
-/// and, in a PR mode, the pull request does not already carry HEAD.
+/// and, in a request mode, the pull request does not already carry HEAD.
 fn unpushed(root: &Path, plane: &crate::planesave::Plane) -> Option<u32> {
     use crate::planesave::Mode;
     let mode = plane.mode.value?;
@@ -2569,7 +2569,7 @@ fn carry(
 }
 
 /// Push what a save of the plane at `root` committed, as its mode says: to the target branch,
-/// or — in a PR mode — to the save branch, with its pull request opened or updated. What
+/// or — in a request mode — to the save branch, with its pull request opened or updated. What
 /// quitting runs once its commit is made ([`crate::autosave::at_quit`]).
 pub fn push_saved(root: &Path, sign: bool, say: Sink) -> PushResult {
     let plane = crate::planesave::Settings::read(root).plane;

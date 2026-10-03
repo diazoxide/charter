@@ -22,7 +22,7 @@ export function WorktreeMark({ worktree }: { worktree: ChatWorktree }) {
       {worktree.stale && (
         <span
           className="label stale"
-          title="git still has this worktree registered, but its directory is gone"
+          title="git still has this branch's folder registered, but the folder is gone"
         >
           stale
         </span>
@@ -30,7 +30,7 @@ export function WorktreeMark({ worktree }: { worktree: ChatWorktree }) {
       {!worktree.wired && !worktree.stale && (
         <span
           className="label unwired"
-          title="No charter layer in this worktree: no persona agents, no ask/deny rules, no $CHARTER_HARNESS. A harness started here by hand runs without them. Starting a chat from charter writes the layer, or says why it could not."
+          title="No charter layer in this branch's folder: no persona agents, no ask/deny rules, no $CHARTER_HARNESS. A harness started here by hand runs without them. Starting a chat from charter writes the layer, or says why it could not."
         >
           unwired
         </span>

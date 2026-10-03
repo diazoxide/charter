@@ -378,9 +378,9 @@ export type Offer = {
    *
    * It is a field rather than something read back out of the title, because what is a name
    * and what is charter's own word is not recoverable from the finished sentence: `Switch to
-   * tab release.3` and `Remove this chat's worktree` both contain `re`. `narrow` uses it to
-   * put a row the operator's words FOUND ahead of a row that merely has those letters in
-   * somebody's name — which at fifty chats is the whole difference (charter-app#48).
+   * tab release.3` and `Remove the folder of this chat's branch` both contain `re`. `narrow`
+   * uses it to put a row the operator's words FOUND ahead of a row that merely has those
+   * letters in somebody's name — which at fifty chats is the whole difference (charter-app#48).
    */
   name?: string;
   /**
@@ -658,7 +658,10 @@ export type Doing = {
  * together. The workspace is part of it because the chat in front may be working in a piece of
  * a workspace that is not the one focused.
  */
-export type Cut = { workspace: string; repo: string; piece: string };
+/** A piece the window can act on: its workspace, its repo and its folder's name, and the branch
+ *  git has checked out there when the listing said (#989). The branch is what a row names; a
+ *  folder git has on no branch is named as the folder. */
+export type Cut = { workspace: string; repo: string; piece: string; branch?: string | null };
 
 /** One clone of the focused workspace: its name, and where it is as the core spelled it. */
 export type Clone = { repo: string; path: string };
@@ -852,7 +855,7 @@ export const ENDS_IT = "Ends the program it runs. There is no undo.";
  * workspace actually in front of the operator. This is what is true of every workspace.
  */
 export const DELETES_A_WORKSPACE =
-  "Deletes its clones, worktrees, memory and todos. There is no undo.";
+  "Deletes its clones, its branches' folders, its memory and its todos. There is no undo.";
 
 /**
  * What a pin does, said on the row that does it.
@@ -876,7 +879,7 @@ export const UNPIN_NOTE = "Puts it back in the plane's own order.";
  * worktree fix-it` reads as the harsher of the two. What IS lost is what was never committed,
  * and the core refuses over that rather than this row warning about it.
  */
-export const KEEPS_THE_BRANCH = "Takes the tree, not the branch. The branch stays where it is.";
+export const KEEPS_THE_BRANCH = "Takes the folder, not the branch. The branch stays where it is.";
 
 /** Nothing happened worth saying, which is the ordinary answer. */
 const DID: Ran = { ok: true };
@@ -1231,7 +1234,7 @@ export function catalogue(now: Now): Offer[] {
         { verb: "renameWorkspace", workspace },
         workspace,
       ),
-      note: "Its folder, its clones' worktrees and everything that names it. Not while a chat runs in it.",
+      note: "Its folder, its branches' folders and everything that names it. Not while a chat runs in it.",
     });
   }
 
@@ -1555,7 +1558,7 @@ export function catalogue(now: Now): Offer[] {
   // The worktree of the chat in front. Merging is not destructive — it is fast-forward only
   // and never pushes — so it sits above the line; removing is below it.
   const inFront = frontWorktree(now, chatInFocus);
-  const merge = "Merge this chat's worktree into its clone";
+  const merge = "Merge this chat's branch into its clone";
   offers.push(
     "cut" in inFront
       ? can("worktree.merge", merge, { verb: "mergeWorktree", cut: inFront.cut })
@@ -1570,7 +1573,7 @@ export function catalogue(now: Now): Offer[] {
   // feature. The merges are here, above the line; the removes are below with the rest.
   const pieces = now.pieces ?? [];
   const noPlane =
-    now.plane === undefined ? "charter found no plane, so it cannot reach a worktree." : undefined;
+    now.plane === undefined ? "charter found no plane, so it cannot reach a branch." : undefined;
   for (const cut of pieces) {
     // Reading first (RC-5): the piece's files, in the light editor. It reads and writes
     // nothing on disk until a file is picked, and then only reads.
@@ -1585,19 +1588,24 @@ export function catalogue(now: Now): Offer[] {
           )
         : cannot(`worktree.files:${idOf(cut)}`, browse, noPlane, cut.piece),
     );
-    const title = `Merge worktree ${cut.piece} into ${cut.repo}`;
+    // Of the branch, by its own name, which need not be the folder's; a folder git has on no
+    // branch is named as a folder (#989). The name the row carries is the one it shows.
+    const shown = cut.branch || cut.piece;
+    const title = cut.branch
+      ? `Merge branch ${cut.branch} into ${cut.repo}`
+      : `Merge folder ${cut.piece} into ${cut.repo}`;
     offers.push(
       noPlane === undefined
-        ? can(`worktree.merge:${idOf(cut)}`, title, { verb: "mergeWorktree", cut }, cut.piece)
-        : cannot(`worktree.merge:${idOf(cut)}`, title, noPlane, cut.piece),
+        ? can(`worktree.merge:${idOf(cut)}`, title, { verb: "mergeWorktree", cut }, shown)
+        : cannot(`worktree.merge:${idOf(cut)}`, title, noPlane, shown),
     );
     // Beside the merge, above the line: a declaration writes one line to the piece log and
     // touches neither the tree nor the branch (charter#368).
-    const done = `Mark worktree ${cut.piece} done`;
+    const done = cut.branch ? `Mark branch ${cut.branch} done` : `Mark folder ${cut.piece} done`;
     offers.push(
       noPlane === undefined
-        ? can(`worktree.done:${idOf(cut)}`, done, { verb: "declareWorktreeDone", cut }, cut.piece)
-        : cannot(`worktree.done:${idOf(cut)}`, done, noPlane, cut.piece),
+        ? can(`worktree.done:${idOf(cut)}`, done, { verb: "declareWorktreeDone", cut }, shown)
+        : cannot(`worktree.done:${idOf(cut)}`, done, noPlane, shown),
     );
   }
 
@@ -1649,7 +1657,7 @@ export function catalogue(now: Now): Offer[] {
     });
   }
 
-  const remove = "Remove this chat's worktree";
+  const remove = "Remove the folder of this chat's branch";
   offers.push(
     "cut" in inFront
       ? {
@@ -1664,7 +1672,8 @@ export function catalogue(now: Now): Offer[] {
   );
 
   for (const cut of pieces) {
-    const title = `Remove worktree ${cut.piece} in ${cut.repo}`;
+    // The folder goes and the branch stays (ADR 0072 §4), so the row names the folder.
+    const title = `Remove folder ${cut.piece} in ${cut.repo}`;
     offers.push(
       noPlane === undefined
         ? {
@@ -1692,7 +1701,7 @@ export function catalogue(now: Now): Offer[] {
   // to throw work away raised by one refusal about one piece.
   if (now.refused === "worktree.remove" && "cut" in inFront) {
     offers.push(
-      can("worktree.discard", "Discard that work and remove the worktree anyway", {
+      can("worktree.discard", "Discard that work and remove the folder anyway", {
         verb: "removeWorktree",
         cut: inFront.cut,
         force: true,
@@ -2174,9 +2183,9 @@ function nothingSaidSoFar(quiet: readonly string[]): string {
 function frontWorktree(now: Now, inFront: boolean): { cut: Cut } | { why: string } {
   if (!inFront) return { why: "No chat is in front." };
   if (now.plane === undefined)
-    return { why: "charter found no plane, so it cannot reach a worktree." };
+    return { why: "charter found no plane, so it cannot reach a branch." };
   if (now.worktree === undefined)
-    return { why: "The chat in front is not working in a worktree charter cut." };
+    return { why: "The chat in front is not working in a branch charter cut." };
   return { cut: now.worktree };
 }
 
@@ -2212,8 +2221,8 @@ export function matches(query: string, offer: Offer): boolean {
  * happens to carry.
  *
  * The title with the row's `name` taken out of it, plus charter's part of the id. `Switch to
- * tab release.3` answers no to `re` and yes to `switch`; `Remove this chat's worktree` has no
- * name in it and answers yes to both. A row with no name is always its own words.
+ * tab release.3` answers no to `re` and yes to `switch`; `Remove the folder of this chat's
+ * branch` has no name in it and answers yes to both. A row with no name is always its own words.
  */
 function byItsWords(query: string, offer: Offer): boolean {
   const want = query.toLowerCase();

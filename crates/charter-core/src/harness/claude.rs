@@ -25,8 +25,8 @@ impl HarnessAdapter for ClaudeCode {
     /// `--settings` MERGES with the settings already in force rather than replacing them
     /// (measured on claude 2.1.276), and a key it names wins over the project's (measured on
     /// 2.1.280). It carries the plugin pins, the project's plugin choice, the status line where
-    /// charter may fill it, Smart close's one allow, and the sandbox where the plane turned it
-    /// on.
+    /// charter may fill it, Smart close's allow and the allows for charter's five read-only
+    /// tools, and the sandbox where the plane turned it on.
     fn arm_under(
         &self,
         kit: Kit<'_>,
@@ -147,15 +147,26 @@ fn settings(
     if may_fill_the_footer {
         settings.insert("statusLine".to_owned(), status_line(binary));
     }
-    // **The one command that ends a Smart close, pre-allowed, and nothing else** (SI-8e, the
+    // **The one command that ends a Smart close, pre-allowed** (SI-8e, the
     // operator's ruling of 2026-09-28): a chat asked to write its record must not stop on a
-    // permission prompt for `charter session record`. One `allow` and no `ask`, `deny` or
+    // permission prompt for `charter session record`. Only `allow`, and no `ask`, `deny` or
     // mode, because Claude Code merges a session's permission rules with the user's and the
     // project's rather than replacing them, and its `deny` and `ask` outrank an `allow` — so
     // the operator's own rules all still stand (measured on 2.1.283 in ADR 0064: a project
     // `deny` still refused, a user `allow` still allowed, and a compound command that holds the
     // record command beside another was still asked about).
-    let mut permissions = serde_json::json!({ "allow": [SMART_CLOSE_ALLOW] });
+    //
+    // **And the five read-only tools of charter's own MCP server** (V79, #1050, amending
+    // SI-8e): a chat reading its own todos, memory, records or change status does not stop on
+    // a prompt. Each by its full name, never the server as a whole, so the writes and
+    // `ask_operator` still ask, and an operator's `ask` or `deny` for any of them still wins.
+    let mut allow = vec![SMART_CLOSE_ALLOW.to_owned()];
+    allow.extend(
+        crate::chattools::PRE_ALLOWED
+            .iter()
+            .map(|tool| format!("mcp__{}__{tool}", crate::chattools::SERVER)),
+    );
+    let mut permissions = serde_json::json!({ "allow": allow });
     // **The sandbox, where the plane turned it on** (ADR 0067), and the deny rules that keep
     // Claude Code's own Read and Edit tools out of what its sandbox denies a command
     // ([`crate::sandbox::claude`]). A deny outranks the allow above, and they name different
@@ -169,8 +180,9 @@ fn settings(
     serde_json::Value::Object(settings).to_string()
 }
 
-/// The permission rule a Claude Code chat the app starts carries: `charter session record`,
-/// with any arguments, runs without asking (SI-8e, ADR 0064).
+/// The permission rule a Claude Code chat the app starts carries for Smart close: `charter
+/// session record`, with any arguments, runs without asking (SI-8e, ADR 0064). Beside it, the
+/// read-only charter tools of [`crate::chattools::PRE_ALLOWED`] (V79).
 pub const SMART_CLOSE_ALLOW: &str = "Bash(charter session record *)";
 
 /// Claude Code's `statusLine`, pointed at `charter statusline` — for THIS session only.

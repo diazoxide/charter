@@ -221,9 +221,9 @@ export function repoStageText(repo: RepoSaving): string {
 /**
  * **Where a repo's Save goes**, said before anyone presses it (ADR 0051, amended 2026-09-25):
  * the steps `reposave::save_as` takes, by mode, including where it stops short. A save always
- * commits every changed file on the branch the clone is on; in a PR mode on the request's base
- * or the default branch, that commit is then pushed as a branch of charter's
- * own, never to the branch itself.
+ * commits every changed file on the branch the clone is on; in a request mode on the request's
+ * base or the default branch, that commit is then pushed as a branch of charter's own, never to
+ * the branch itself.
  */
 export function repoSaveGoesTo(repo: RepoSaving, workspace: string): string {
   if (repo.mode === "off") return "Nowhere — charter does not save it";

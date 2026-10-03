@@ -514,7 +514,7 @@ describe("the one list of actions", () => {
     const offers = catalogue(now({ tabs, plane: "/plane" }));
 
     expect(by(offers, "worktree.remove")?.reason).toBe(
-      "The chat in front is not working in a worktree charter cut.",
+      "The chat in front is not working in a branch charter cut.",
     );
   });
 
@@ -570,11 +570,12 @@ describe("the one list of actions", () => {
   it("offers to mark each piece of the focused workspace done, above the line", () => {
     // charter#368: a declaration is one line in the piece log. It names its piece, as the
     // merge beside it does, and it is not destructive, so nothing asks first.
-    const cut = { workspace: "alpha", repo: "svc", piece: "fix-it" };
+    const cut = { workspace: "alpha", repo: "svc", piece: "fix-it", branch: "fix/login" };
     const offers = catalogue(now({ plane: "/plane", pieces: [cut] }));
 
     const done = by(offers, "worktree.done:svc/fix-it");
-    expect(done?.title).toBe("Mark worktree fix-it done");
+    // #989: of the branch, by the branch's own name, which need not be the folder's.
+    expect(done?.title).toBe("Mark branch fix/login done");
     expect(done?.does).toEqual({ verb: "declareWorktreeDone", cut });
     expect(done?.note).toBeUndefined();
 
@@ -582,15 +583,29 @@ describe("the one list of actions", () => {
     expect(by(planeless, "worktree.done:svc/fix-it")?.available).toBe(false);
   });
 
+  it("names a folder git has on no branch as a folder, never as a branch (#989)", () => {
+    const cut = { workspace: "alpha", repo: "svc", piece: "fix-it" };
+    const offers = catalogue(now({ plane: "/plane", pieces: [cut] }));
+
+    expect(by(offers, "worktree.merge:svc/fix-it")?.title).toBe("Merge folder fix-it into svc");
+    expect(by(offers, "worktree.done:svc/fix-it")?.title).toBe("Mark folder fix-it done");
+    expect(by(offers, "worktree.remove:svc/fix-it")?.title).toBe("Remove folder fix-it in svc");
+    for (const row of offers.filter((offer) => offer.id.startsWith("worktree."))) {
+      expect(row.title).not.toMatch(/worktree/i);
+    }
+  });
+
   it("names one merge and one remove per piece of the focused workspace", () => {
     // charter-app#174: the explorer's rows had no menu because the only worktree rows there
     // were were about THE CHAT IN FRONT, and a piece nobody is running in is not in front of
     // anything. These name their piece, which is what makes a row about one possible at all.
-    const cut = { workspace: "alpha", repo: "svc", piece: "fix-it" };
+    const cut = { workspace: "alpha", repo: "svc", piece: "fix-it", branch: "fix/login" };
     const offers = catalogue(now({ plane: "/plane", pieces: [cut] }));
 
-    expect(by(offers, "worktree.merge:svc/fix-it")?.title).toBe("Merge worktree fix-it into svc");
-    expect(by(offers, "worktree.remove:svc/fix-it")?.title).toBe("Remove worktree fix-it in svc");
+    // #989: the merge names the branch by its own name; the removal takes the folder and
+    // leaves the branch, so it names the folder.
+    expect(by(offers, "worktree.merge:svc/fix-it")?.title).toBe("Merge branch fix/login into svc");
+    expect(by(offers, "worktree.remove:svc/fix-it")?.title).toBe("Remove folder fix-it in svc");
     // The clone is in the id and in the title, because two clones of one workspace can each
     // hold a piece called `fix-it` and a destructive row may not be ambiguous about which.
     expect(by(offers, "worktree.remove:svc/fix-it")?.name).toBe("fix-it");
@@ -617,7 +632,7 @@ describe("the one list of actions", () => {
     );
 
     expect(by(offers, "worktree.remove:svc/fix-it")?.reason).toBe(
-      "charter found no plane, so it cannot reach a worktree.",
+      "charter found no plane, so it cannot reach a branch.",
     );
   });
 
@@ -1539,8 +1554,8 @@ describe("the palette at fifty chats", () => {
       // second rule inside this group (charter-app#174): a row with no name in its id acts on
       // what the operator is looking at, and fifty rows about other worktrees do not get to
       // stand in front of it. Inside each half the catalogue's own order stands.
-      "Merge this chat's worktree into its clone",
-      "Remove this chat's worktree",
+      "Merge this chat's branch into its clone",
+      "Remove the folder of this chat's branch",
       // Then the rows about things that are not in front, in the catalogue's order.
       // `ignore` has `re` in it, and it is charter's word, so the two queued chats' Ignore
       // rows (charter-app#248) are verbs here too, and still behind every row about what is
@@ -1595,7 +1610,9 @@ describe("the palette at fifty chats", () => {
       );
 
     const at = (typed: string, offers: Offer[]) =>
-      narrow(typed, offers).findIndex((row) => row.title === "Remove this chat's worktree") + 1;
+      narrow(typed, offers).findIndex(
+        (row) => row.title === "Remove the folder of this chat's branch",
+      ) + 1;
 
     it("is exactly where it was before a hundred rows were added around it", () => {
       for (const typed of ["re", "r", "rem", "worktree", "remove"]) {
@@ -1627,7 +1644,7 @@ describe("the palette at fifty chats", () => {
     it("puts a piece the operator named in full first, ahead of the row about this chat", () => {
       // The rule above is about CHARTER'S words. A name typed in full is the operator saying
       // which piece they mean, and #48's first group has always won over everything.
-      const rows = narrow("Remove worktree piece-3 in repo-7", loaded());
+      const rows = narrow("Remove folder piece-3 in repo-7", loaded());
 
       expect(rows[0].id).toBe("worktree.remove:repo-7/piece-3");
     });

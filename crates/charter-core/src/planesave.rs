@@ -41,7 +41,7 @@ pub struct Plane {
     pub from_share: bool,
     /// The target branch. `None`: the remote's default branch.
     pub branch: Resolved<Option<String>>,
-    /// The rolling branch the PR modes push to. `None`: `charter/save/<host>`.
+    /// The rolling branch the request modes push to. `None`: `charter/save/<host>`.
     pub save_branch: Resolved<Option<String>>,
     /// Whether save commits are signed.
     pub sign: Resolved<bool>,
@@ -54,7 +54,7 @@ pub struct Plane {
 }
 
 impl Plane {
-    /// The branch the PR modes push to: `save_branch`, or `charter/save/<host>-<clone>` — this
+    /// The branch the request modes push to: `save_branch`, or `charter/save/<host>-<clone>` — this
     /// machine's name, as the dispatch log names it ([`crate::dispatch::host`]), and six hex
     /// digits of a hash of the plane's own path. The path is what keeps two clones apart: two
     /// on one machine, or two machines with one name, never share a save branch.

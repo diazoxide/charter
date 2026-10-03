@@ -765,7 +765,7 @@ export const commands = {
 	 */
 	worktreeAdd: (plane: PlaneId, workspace: string, repo: string, branch: string | null) => typedError<NewBranch, string>(__TAURI_INVOKE("worktree_add", { plane, workspace, repo, branch })),
 	/**
-	 *  Remove a piece. The refusal is the core's sentence, unchanged.
+	 *  Remove a piece. The refusal is the core's sentence for the window.
 	 * 
 	 *  `force` is the operator saying to discard work the guards found — it is never passed on
 	 *  their behalf, and the window asks for it only after showing them what the refusal said.
@@ -2823,7 +2823,7 @@ export type PlaneSaving = {
 	live: string[],
 	/**  The files to settle, when conflicts are why the save is blocked. */
 	conflicts: string[],
-	/**  What a save cannot do here that is not a block (a PR mode with no forge to open it on). */
+	/**  What a save cannot do here that is not a block (a request mode with no forge to open it on). */
 	notice: string | null,
 	/**  `[plane] mode`, or `null` when the plane names none. */
 	mode: string | null,
@@ -3182,15 +3182,15 @@ export type RepoSaving = {
 	/**  Whether a save would push. */
 	pushes: boolean,
 	/**
-	 *  Where a PR mode's pull request goes: `[repos.<name>] branch`, else the repo's default
+	 *  Where a request mode's pull request goes: `[repos.<name>] branch`, else the repo's default
 	 *  branch; `null` in the other modes, or when charter cannot tell — so the row and the Save
 	 *  all confirmation can say where a save goes before anyone presses it.
 	 */
 	target: string | null,
 	/**
-	 *  Whether a PR mode's save would commit on a branch of charter's own,
+	 *  Whether a request mode's save would commit on a branch of charter's own,
 	 *  `charter/<workspace>/…`, because the clone stands on its pull request's base or on the
-	 *  repo's default branch — a PR mode never pushes either (`reposave`).
+	 *  repo's default branch — a request mode never pushes either (`reposave`).
 	 */
 	ownBranch: boolean,
 };

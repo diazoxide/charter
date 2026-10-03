@@ -483,7 +483,7 @@ fn a_memory_commit_never_pushed_is_red_and_one_awaiting_a_pull_request_is_not() 
     );
     assert_eq!(got.alerts[0].severity(), Severity::Warn);
 
-    // A PR mode's pull request from the save branch (charter-app#298) is the same wait.
+    // A request mode's pull request from the save branch (charter-app#298) is the same wait.
     push_record(
         &root,
         serde_json::json!({"outcome": "pr-open", "branch": "main",

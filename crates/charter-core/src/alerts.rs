@@ -662,7 +662,7 @@ fn unlanded_memory(root: &Path) -> Option<Memory> {
     let outcome = rec.get("outcome").and_then(serde_json::Value::as_str);
     let awaiting = || Memory::AwaitingRequest(crate::forge::request_words_of(root, root));
     if outcome == Some(crate::planegit::Outcome::PrOpen.word()) {
-        // A PR mode's pull request (charter-app#298), asked of the target branch as the save
+        // A request mode's pull request (charter-app#298), asked of the target branch as the save
         // asks it.
         return crate::planegit::unlanded(root).map(|_| awaiting());
     }

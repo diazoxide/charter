@@ -811,7 +811,7 @@ fn a_push_record_cannot_forge_a_row_of_the_table() {
     );
 }
 
-/// The head of `root`, as a PR mode's push record names it.
+/// The head of `root`, as a request mode's push record names it.
 fn head_of(root: &Path) -> String {
     let head = crate::forklock::output(
         Command::new("git")

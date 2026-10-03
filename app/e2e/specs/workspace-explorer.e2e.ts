@@ -149,8 +149,10 @@ describe("the explorer", () => {
 
     const menu = await $('[role="menu"]');
     await menu.waitForDisplayed({ timeout: 20_000 });
-    await expect(menu).toHaveText("Merge worktree fix-login into svc", { containing: true });
-    await expect(menu).toHaveText("Remove worktree fix-login in svc", { containing: true });
+    await expect(menu).toHaveText("Merge branch fix-login into svc", { containing: true });
+    await expect(menu).toHaveText("Remove folder fix-login in svc", {
+      containing: true,
+    });
     // Closed again, because one app process serves the whole run and a menu left up is over
     // every row the specs after this one reach for.
     await browser.keys(["Escape"]);
@@ -161,7 +163,7 @@ describe("the explorer", () => {
     await onAlpha();
 
     const tool = await $('[data-testid="clone-tool"]');
-    await browser.waitUntil(async () => (await tool.getText()).includes("No worktrees"), {
+    await browser.waitUntil(async () => (await tool.getText()).includes("No branches"), {
       timeout: 20_000,
       timeoutMsg: "the explorer never said whether `tool` has worktrees",
     });

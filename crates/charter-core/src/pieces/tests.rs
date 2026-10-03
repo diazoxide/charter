@@ -479,3 +479,39 @@ fn a_log_that_is_a_link_is_not_written_through() {
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "");
     }
 }
+
+#[test]
+fn every_declaration_refusal_has_a_sentence_for_the_window() {
+    // #989: the window says it of a branch and its folder, and names no command to run;
+    // `charter worktree done` keeps its own sentence.
+    let refusals = [
+        NotDeclared::NoReason,
+        NotDeclared::NoSuchPiece {
+            ws: "alpha".into(),
+            repo: "svc".into(),
+            piece: "nope".into(),
+        },
+        NotDeclared::Worktree(crate::worktree::Refusal::NoSuchPiece {
+            ws: "alpha".into(),
+            repo: "svc".into(),
+            piece: "nope".into(),
+        }),
+        NotDeclared::NotWritten { ws: "alpha".into() },
+    ];
+    for refusal in refusals {
+        let said = refusal.in_window();
+        assert!(!said.is_empty());
+        for word in ["worktree", "piece", "charter worktree", "git -C", "--force"] {
+            assert!(!said.contains(word), "{word:?} in {said}");
+        }
+    }
+    assert!(
+        NotDeclared::NoSuchPiece {
+            ws: "alpha".into(),
+            repo: "svc".into(),
+            piece: "nope".into(),
+        }
+        .in_window()
+        .contains("no branch folder called 'nope'")
+    );
+}

@@ -387,10 +387,12 @@ how it is cited and nothing here is renumbered.
     (**cwd**, plane-relative) the chat ran in, from the app's own record of the chat, and Resume
     starts on that profile where this machine still has it and in that directory where it is
     still a directory inside the record's place — otherwise on the old guess and in the place's
-    own directory, and it says which. A Claude Code chat the app starts carries one permission
-    rule, `Bash(charter session record *)` as an `allow`, so a Smart close never stops to ask for
-    the command that ends it; Codex's approval and sandbox are whole-session switches, so it
-    carries none (ADR 0064's measurements). A record's tab resumes that record whichever place is
+    own directory, and it says which. A Claude Code chat the app starts carries
+    `Bash(charter session record *)` as an `allow`, so a Smart close never stops to ask for
+    the command that ends it, and, since V79, an `allow` for each of charter's five read-only
+    MCP tools (`todo_list`, `memory_search`, `session_record_list`, `session_record_read`,
+    `change_status`), while its writes and `ask_operator` still ask. Codex's approval and
+    sandbox are whole-session switches, so it carries none (ADR 0064's measurements). A record's tab resumes that record whichever place is
     in front. **Smart close puts the chat into the background** (SI-8f): its tab shrinks to a
     fixed chip — the chat's icon and the breathing mark, the name in its tooltip — at the chat
     strip's left edge before the pinned tabs, and the front goes exactly where Close would send
@@ -419,11 +421,12 @@ how it is cited and nothing here is renumbered.
 
 ### The light editor — added 2026-10-02
 
-34. **Any file of a worktree opens in the light editor, read only.** A worktree's row in the
-    explorer offers *Browse the files of*, followed by the worktree's name: a view tab listing
+34. **Any file of a worktree opens in the light editor, read only.** On screen a worktree is
+    its **branch**, and its directory the branch's **folder** (#989). A branch's row in the
+    explorer offers *Browse the files of*, followed by its folder's name: a view tab listing
     every file git tracks there and every one it does not ignore, narrowed as the operator
     types, with the file picked drawn beside the list and *Open in a tab of its own* for a tab
-    of that file alone. The window names the worktree, never a folder. The core opens only a
+    of that file alone. The window names the branch's folder, never a path. The core opens only a
     file that list offers (an ignored file, such as a `.env`, does not open by name), and
     refuses a path with a `.git` component or one that resolves, through a link, outside the
     worktree or to a file the list does not offer. A binary file, or one past 5 MiB, is said in

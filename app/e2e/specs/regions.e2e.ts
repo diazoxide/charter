@@ -94,10 +94,10 @@ describe("the bottom bar", () => {
   it("counts the worktrees cut off each clone", async () => {
     await onAlpha();
 
-    await untilSays("worktrees-svc", "1 worktree");
+    await untilSays("worktrees-svc", "1 branch");
     // Cut with plain git, so no charter layer — counted here, named on the explorer's row.
     await untilSays("worktrees-svc", "1 unwired");
-    await untilSays("worktrees-tool", "no worktrees");
+    await untilSays("worktrees-tool", "no branches");
   });
 
   it("shows the CI state the forge cache holds, and says how old it is", async () => {

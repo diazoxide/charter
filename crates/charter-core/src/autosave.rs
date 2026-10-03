@@ -33,7 +33,7 @@ pub fn repo_on(repo: &crate::planesave::Repo) -> bool {
 }
 
 /// Whether a save of a plane standing like this would do anything: files to commit, or commits
-/// a push would carry — to the target branch, or in a PR mode to the save branch and its pull
+/// a push would carry — to the target branch, or in a request mode to the save branch and its pull
 /// request (`standing` counts those as committed until the pull request carries them).
 pub fn worth_saving(standing: &Standing) -> bool {
     !standing.changed.is_empty() || (standing.stage == Stage::Committed && standing.pushes)

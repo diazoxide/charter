@@ -177,6 +177,29 @@ pub enum NotDeclared {
     NotWritten { ws: String },
 }
 
+impl NotDeclared {
+    /// The refusal as the window says it: of a branch and its folder, never of a piece or a
+    /// worktree, and with no command to run (ADR 0072 §4, #989). `charter worktree done` and
+    /// `abandon` keep the sentence `Display` gives.
+    pub fn in_window(&self) -> String {
+        match self {
+            Self::NoReason => {
+                "Abandoning needs a reason: it is what whoever picks this branch up reads first."
+                    .to_string()
+            }
+            Self::NoSuchPiece { ws, repo, piece } => format!(
+                "{repo} in workspace '{ws}' has no branch folder called '{piece}', so there is \
+                 nothing to mark."
+            ),
+            Self::Worktree(refusal) => refusal.in_window(),
+            Self::NotWritten { ws } => format!(
+                "charter could not write down what was said about this branch in workspace \
+                 '{ws}', so nothing was recorded."
+            ),
+        }
+    }
+}
+
 /// Record that the piece `(ws, repo, piece)` is done or abandoned — `commands_worktree._declare`.
 ///
 /// **The piece must be one git has**, with its directory still there: a declaration about a

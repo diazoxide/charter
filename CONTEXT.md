@@ -112,9 +112,12 @@ one chat works on its own branch. Git says which pieces exist. The piece log say
 cannot: that charter cut it (`claimed`), and whether its worker declared it `done` or
 `abandoned`. A piece that declared nothing is **silent**, reported as an age and never as a
 failure.
-On screen a piece is shown as its **branch**; "piece" stays in the plane format, the code and
-`charter worktree` (ADR 0072).
-_Avoid_: task, slot, branch (for the directory)
+On screen a piece is shown as its **branch**, and its directory as the branch's **folder**:
+the explorer's rows, the palette's titles, the bottom bar and the refusals the window shows say
+"branch" or "folder", never "worktree" (#989). A menu row names a branch by its own name, and
+a folder git has on no branch as a folder. "Piece" and "worktree" stay in the plane format, the
+code, the `[plane] worktrees` setting and `charter worktree` (ADR 0072).
+_Avoid_: task, slot, branch (for the directory), worktree (on screen)
 
 **Branch** (of a chat):
 What the window shows for a piece: one row per repo a chat works in, reading *`<branch>` in
@@ -617,8 +620,15 @@ _Avoid_: base branch, main (it need not be)
 
 **Save branch**:
 The one branch per clone of the plane (named for the machine and the clone) that the plane's
-PR modes push to, carrying one open PR into the target branch.
+request modes push to, carrying one open request into the target branch.
 _Avoid_: PR branch, `charter/<sha>` branch
+
+**Request mode**:
+A save mode that keeps one request open into the target branch instead of pushing to it: `pr`,
+and `pr-merge`, which also sets the request to auto-merge.
+Prose says "request mode" on every forge; `pr` and `pr-merge` stay the words `charter.toml` takes
+(V81).
+_Avoid_: PR mode, MR mode
 
 **Stage**:
 Where unsaved work sits. It is *changed* (not committed), *committed* (not pushed), *pushed*
