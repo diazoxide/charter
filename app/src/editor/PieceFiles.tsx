@@ -29,6 +29,7 @@ import { EmptyState } from "../EmptyState";
 import { ExternalLink } from "../ReleaseNotes";
 import { commands, type PieceFile, type PlaneId } from "../bindings";
 import { pieceFileTitle, pieceFileView, type Place } from "../pieceViews";
+import type { Offer } from "../actions";
 import type { ViewRef } from "../tabs";
 import { BranchTree } from "./BranchTree";
 import { LightEditor } from "./LightEditor";
@@ -339,10 +340,13 @@ export function PieceFilesTab({
   onOpenView,
   split,
   onSplit,
+  onPress,
 }: {
   plane: PlaneId;
   cut: Place;
   onOpenView: (view: ViewRef, title: string) => void;
+  /** A row of the tree had its menu used (FM-10): carried out as the window carries any row. */
+  onPress?: (offer: Offer) => void;
   /** Where the tab's divider was left: the tree's share in percent. */
   split?: number;
   /** The operator moved the divider. */
@@ -389,7 +393,13 @@ export function PieceFilesTab({
         minSize={`${SPLIT.least}%`}
         maxSize={`${SPLIT.most}%`}
       >
-        <BranchTree plane={plane} place={cut} picked={picked} onPick={setPicked} />
+        <BranchTree
+          plane={plane}
+          place={cut}
+          picked={picked}
+          onPick={setPicked}
+          onPress={onPress}
+        />
       </Panel>
       <Separator className="piece-files-split" aria-label="Resize the file tree" />
       <Panel id="piece-files-preview" minSize={`${100 - SPLIT.most}%`}>

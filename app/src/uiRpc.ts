@@ -355,6 +355,12 @@ export const commands = {
 	 *  the operator's shell.
 	 */
 	openSession: (plane: PlaneId, program: string | null, args: string[], cwd: string | null, name: string, columns: number, rows: number) => typedError<number, string>(__TAURI_INVOKE("open_session", { plane, program, args, cwd, name, columns, rows })),
+	/**
+	 *  A shell tab in one folder of a branch (FM-10): the operator's own shell, as `open_session`
+	 *  with no program starts it, in a folder the core resolved. `""` is the branch's own folder.
+	 *  Refused, in the core's sentence, for a folder outside the branch, a link or git's own.
+	 */
+	openShellInBranch: (plane: PlaneId, workspace: string, repo: string, piece: string | null, folder: string, name: string, columns: number, rows: number) => typedError<number, string>(__TAURI_INVOKE("open_shell_in_branch", { plane, workspace, repo, piece, folder, name, columns, rows })),
 	/**  Ends a session and everything it started. It is no longer a chat a quit would record. */
 	closeSession: (plane: PlaneId, session: number) => typedError<null, string>(__TAURI_INVOKE("close_session", { plane, session })),
 	/**
@@ -806,6 +812,17 @@ export const commands = {
 	 *  sentence, for any path the light editor would refuse.
 	 */
 	openInYourEditor: (plane: PlaneId, workspace: string, repo: string, piece: string | null, path: string, line: number, editor: YourEditor) => typedError<null, string>(__TAURI_INVOKE("open_in_your_editor", { plane, workspace, repo, piece, path, line, editor })),
+	/**
+	 *  One file or folder of a branch, its path put on the clipboard: relative to the branch's
+	 *  folder, or absolute (FM-10). Refused, in the core's sentence, for a path that leaves the
+	 *  branch, a link or git's own folder.
+	 */
+	copyBranchPath: (plane: PlaneId, workspace: string, repo: string, piece: string | null, path: string, absolute: boolean) => typedError<null, string>(__TAURI_INVOKE("copy_branch_path", { plane, workspace, repo, piece, path, absolute })),
+	/**
+	 *  One file or folder of a branch, shown in the operating system's file manager: Finder,
+	 *  Files or File Explorer (FM-10). Refused as Copy path is refused.
+	 */
+	revealBranchPath: (plane: PlaneId, workspace: string, repo: string, piece: string | null, path: string) => typedError<null, string>(__TAURI_INVOKE("reveal_branch_path", { plane, workspace, repo, piece, path })),
 	/**
 	 *  One folder of a branch, one level deep: folders first, then files, each in the order a
 	 *  person reads names, the first 5,000 and a count of the rest. `""` is the branch's own folder.

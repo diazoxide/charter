@@ -1191,6 +1191,11 @@ function App() {
       // A curation chat is opened in a project, and there is no project here.
       curate: async () => nowhere(),
       quit: windowDoes.quit,
+      // A file row is a project's: there is no branch here to have one.
+      copyPath: async () => nowhere(),
+      revealPath: async () => nowhere(),
+      openInEditor: async () => nowhere(),
+      shellInFolder: () => undefined,
     }),
     [windowDoes],
   );

@@ -66,6 +66,7 @@ import {
   PASS_THROUGH_KEY,
   RENAMES_ON_F2,
   CHAT_KEYBOARD,
+  type BranchPath,
   type Clone,
   type Cut,
   type Doing,
@@ -73,6 +74,7 @@ import {
   type Project,
   type Ran,
 } from "./actions";
+import { yourEditor } from "./yourEditor";
 import { usePlaneSaving, useRepoSavingKept, WAY_OUT, type WayOut } from "./saving";
 import { HARNESS_SETUP, type HarnessSetupAsk } from "./harnessSetup";
 import { curationSubjects, useCurations } from "./curations";
@@ -1464,11 +1466,14 @@ export const PlaneView = memo(function PlaneView({
    * Named `shell <N>` as the chat's own name, not only the tab's, so the tab that comes back
    * from the record reads the same: a chat's name is what its tab is drawn from at a relaunch.
    */
-  const openShell = useCallback(
-    (cwd: string | null, filed: string, typed?: Typed) => {
+  const startShell = useCallback(
+    (
+      start: (name: string) => ReturnType<typeof commands.openSession>,
+      filed: string,
+      typed?: Typed,
+    ) => {
       const name = `shell ${now.current.named.tabs + 1}`;
-      void commands
-        .openSession(plane, null, [], cwd, name, STARTING_SIZE.columns, STARTING_SIZE.rows)
+      void start(name)
         .then((opened) => {
           if (opened.status === "error") {
             setTrouble(opened.error);
@@ -1502,6 +1507,81 @@ export const PlaneView = memo(function PlaneView({
     },
     [change, plane],
   );
+  const openShell = useCallback(
+    (cwd: string | null, filed: string, typed?: Typed) =>
+      startShell(
+        (name) =>
+          commands.openSession(
+            plane,
+            null,
+            [],
+            cwd,
+            name,
+            STARTING_SIZE.columns,
+            STARTING_SIZE.rows,
+          ),
+        filed,
+        typed,
+      ),
+    [plane, startShell],
+  );
+
+  /**
+   * **A shell tab in a folder of a branch** (FM-10): `openShell`'s tab, started by the core in
+   * the folder it resolved — inside the branch, through no link — so the window never names the
+   * directory. Filed on the branch's workspace's strip.
+   */
+  const shellInFolder = useCallback(
+    (at: BranchPath) =>
+      startShell(
+        (name) =>
+          commands.openShellInBranch(
+            plane,
+            at.workspace,
+            at.repo,
+            at.piece,
+            at.path,
+            name,
+            STARTING_SIZE.columns,
+            STARTING_SIZE.rows,
+          ),
+        at.workspace,
+      ),
+    [plane, startShell],
+  );
+
+  /**
+   * **A file or folder row's own rows** (FM-10): its path copied, revealed, or handed to your
+   * editor. Each is the core's to place and carry out; a refusal comes back in its sentence.
+   */
+  const fileDoing = useMemo(() => {
+    const answered = (asked: Promise<{ status: "ok" } | { status: "error"; error: string }>) =>
+      asked
+        .then((said): Ran =>
+          said.status === "error" ? { ok: false, refused: said.error } : { ok: true },
+        )
+        .catch((err: unknown): Ran => ({ ok: false, refused: String(err) }));
+    return {
+      copyPath: async (at: BranchPath, absolute: boolean): Promise<Ran> => {
+        const said = await answered(
+          commands.copyBranchPath(plane, at.workspace, at.repo, at.piece, at.path, absolute),
+        );
+        return said.ok
+          ? { ok: true, said: `Copied ${absolute ? "the absolute" : "the"} path of ${at.path}.` }
+          : said;
+      },
+      revealPath: (at: BranchPath) =>
+        answered(commands.revealBranchPath(plane, at.workspace, at.repo, at.piece, at.path)),
+      openInEditor: async (at: BranchPath, line: number): Promise<Ran> => {
+        const editor = yourEditor();
+        if (editor === undefined)
+          return { ok: false, refused: "Choose your editor on the Preferences tab first." };
+        return answered(
+          commands.openInYourEditor(plane, at.workspace, at.repo, at.piece, at.path, line, editor),
+        );
+      },
+    };
+  }, [plane]);
 
   /**
    * A shell tab at the project root with `shellAsked`'s command typed in (FR-4: `gh auth
@@ -3011,6 +3091,8 @@ export const PlaneView = memo(function PlaneView({
       openPreferences: windowDoes.openPreferences,
       curate,
       quit: windowDoes.quit,
+      ...fileDoing,
+      shellInFolder,
     }),
     [
       beginRename,
@@ -3025,6 +3107,8 @@ export const PlaneView = memo(function PlaneView({
       createWorkspace,
       edits.doing,
       memoryEdits.doing,
+      fileDoing,
+      shellInFolder,
       focusWorkspace,
       ignoreNeedsYou,
       mergeWorktree,

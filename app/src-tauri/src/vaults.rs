@@ -359,6 +359,9 @@ pub(crate) trait Clipboard: Send {
     /// Put a secret on it, marked for clipboard histories to leave out where the system has a
     /// way to say so.
     fn set_secret(&mut self, text: &str) -> Result<(), String>;
+    /// Put ordinary text on it, which clipboard histories keep: a path a file row copied
+    /// (FM-10), never a secret.
+    fn set_text(&mut self, text: &str) -> Result<(), String>;
     /// Empty it.
     fn clear(&mut self) -> Result<(), String>;
 }
@@ -451,6 +454,13 @@ pub(crate) async fn clear_later(pasting: std::sync::Arc<std::sync::Mutex<Pasting
     tokio::time::sleep(CLEAR_AFTER).await;
     // Best-effort: the answer is the clipboard's sentence, never a value, and nobody waits on it.
     let _ = tokio::task::spawn_blocking(move || locked(&pasting).clear_copied(Some(copy))).await;
+}
+
+/// Put ordinary text on the clipboard, through the one handle a vault's Copy uses too (FM-10).
+/// A clear still waiting for a vault's copy leaves it alone: that clear empties the clipboard
+/// only while it still holds what the vault put there.
+pub(crate) fn put_text(pasting: &std::sync::Mutex<Pasting>, text: &str) -> Result<(), String> {
+    locked(pasting).board.set_text(text)
 }
 
 /// At quit, clear the clipboard if it still holds what a vault's Copy last put there: the clear
@@ -792,6 +802,11 @@ impl Clipboard for Arboard {
         set.text(text)
             .map_err(|e| format!("the clipboard did not take the copy: {e}"))
     }
+    fn set_text(&mut self, text: &str) -> Result<(), String> {
+        self.open()?
+            .set_text(text)
+            .map_err(|e| format!("the clipboard did not take the copy: {e}"))
+    }
     fn clear(&mut self) -> Result<(), String> {
         self.open()?
             .clear()
@@ -814,6 +829,11 @@ impl SystemClipboard {
     /// [`clear_now`], at the app's exit. A failure is not worth refusing to exit over.
     pub(crate) fn clear_at_exit(&self) {
         let _ = clear_now(&self.0);
+    }
+
+    /// [`put_text`], on the system clipboard.
+    pub(crate) fn put_text(&self, text: &str) -> Result<(), String> {
+        put_text(&self.0, text)
     }
 }
 
@@ -1197,6 +1217,10 @@ mod tests {
             self.put(text);
             Ok(())
         }
+        fn set_text(&mut self, text: &str) -> Result<(), String> {
+            self.put(text);
+            Ok(())
+        }
         fn clear(&mut self) -> Result<(), String> {
             *self.0.lock().unwrap() = None;
             Ok(())
@@ -1321,6 +1345,19 @@ mod tests {
             board.now().as_deref(),
             Some("something the operator copied since")
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_path_copied_after_a_secret_is_left_on_the_clipboard_by_the_secrets_clear() {
+        let (_dir, ctx, board, pasting) = copying();
+
+        let clear = copy_as_the_window_asks(&ctx, "A", &pasting).await;
+        after(10).await;
+        put_text(&pasting, "/work/svc/src/lib.rs").unwrap();
+        after(50).await;
+
+        assert!(done(&clear).await);
+        assert_eq!(board.now().as_deref(), Some("/work/svc/src/lib.rs"));
     }
 
     #[tokio::test(start_paused = true)]

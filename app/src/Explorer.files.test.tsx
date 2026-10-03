@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
@@ -14,6 +14,7 @@ import type {
 } from "./bindings";
 import { forgetProjectThemes } from "./projectTheme";
 import type { WorkspaceState } from "./workspaceState";
+import type { Offer } from "./actions";
 
 /**
  * **A branch's files in the explorer** (FM-1): the render states the real-app scenario
@@ -94,7 +95,7 @@ function core(
   return asked;
 }
 
-function draw(onOpenFile = vi.fn()) {
+function draw(onOpenFile = vi.fn(), onPress: (offer: Offer) => void = () => {}) {
   render(
     <ChatsHere.Provider value={fixedChats(nothingKnown)}>
       <Explorer
@@ -106,7 +107,7 @@ function draw(onOpenFile = vi.fn()) {
         onPick={() => {}}
         onShowChat={() => {}}
         offers={new Map()}
-        onPress={() => {}}
+        onPress={onPress}
         onOpenFile={onOpenFile}
       />
     </ChatsHere.Provider>,
@@ -357,5 +358,57 @@ describe("a branch's files are drawn with the project's icon theme (FM-3)", () =
     await vi.waitFor(async () => expect(iconOf(await named("^README.md"))).toBe("seti-md"));
     expect(iconOf(await named("^src"))).toBe("seti-folder");
     expect(iconOf(await named("^notes.zzz"))).toBe("seti-file");
+  });
+});
+
+describe("a file or folder row's menu (FM-10)", () => {
+  /** The rows of the menu a right-click on `name`'s row opens, by their names. */
+  async function menuOf(name: string) {
+    fireEvent.contextMenu(await named(`^${name}`));
+    const menu = await screen.findByRole("menu");
+    return within(menu)
+      .getAllByRole("menuitem")
+      .map((one) => one.getAttribute("aria-label"));
+  }
+
+  it("offers a file its paths, a reveal and your editor, and nothing that writes", async () => {
+    core({ "one:": [entry("src", { kind: "folder" }), entry("README.md")] });
+    draw();
+    await userEvent.click(row("file:svc/one:"));
+
+    const rows = await menuOf("README.md");
+
+    expect(rows).toEqual([
+      "Copy relative path",
+      "Copy absolute path",
+      expect.stringMatching(/^Reveal in /),
+      "Open in your editor",
+    ]);
+  });
+
+  it("offers a folder a shell tab there, and hands back the row with the branch and path", async () => {
+    core({ "one:": [entry("src", { kind: "folder" })] });
+    const pressed: Offer[] = [];
+    draw(vi.fn(), (offer) => pressed.push(offer));
+    await userEvent.click(row("file:svc/one:"));
+
+    expect(await menuOf("src")).toContain("Open a shell tab here");
+    await userEvent.click(screen.getByRole("menuitem", { name: "Open a shell tab here" }));
+
+    expect(pressed.map((offer) => offer.does)).toEqual([
+      {
+        verb: "shellInFolder",
+        at: { workspace: "alpha", repo: "svc", piece: "one", path: "src" },
+      },
+    ]);
+  });
+
+  it("gives the branch's own Files row no menu of its own", async () => {
+    core({ "one:": [] });
+    draw();
+
+    fireEvent.contextMenu(row("file:svc/one:"));
+
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 });

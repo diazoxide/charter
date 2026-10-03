@@ -838,6 +838,7 @@ dependencies = [
  "changelog",
  "charter-core",
  "chrono",
+ "dunce",
  "notify",
  "notify-debouncer-full",
  "rustix",

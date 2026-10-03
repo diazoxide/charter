@@ -14,6 +14,7 @@ import {
   type FilesOf,
   type TreeItem,
 } from "../Explorer";
+import type { Offer } from "../actions";
 import type { PlaneId } from "../bindings";
 import { useFileIcons } from "../projectTheme";
 import { placeName, type Place } from "../pieceViews";
@@ -39,12 +40,15 @@ export function BranchTree({
   place,
   picked,
   onPick,
+  onPress,
 }: {
   plane: PlaneId;
   place: Place;
   /** The file the preview shows, by its path in the branch. */
   picked?: string;
   onPick: (path: string) => void;
+  /** A file or folder row's menu was used (FM-10). No menu without it. */
+  onPress?: (offer: Offer) => void;
 }) {
   const workspace = place.workspace;
   const top: BranchFolderRef = { repo: place.repo, piece: place.piece, folder: "" };
@@ -143,6 +147,7 @@ export function BranchTree({
                 isDrawn: (id) => byId.get(id)?.drawn ?? false,
                 onOpenFile: (_place, path) => onPick(path),
                 icons,
+                onPress,
               }}
             />
           )}

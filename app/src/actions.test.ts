@@ -8,6 +8,8 @@ import {
   curateRows,
   curateSubjectOf,
   ENDS_IT,
+  FILE_VERBS,
+  fileRows,
   KEEPS_THE_BRANCH,
   matches,
   menuOn,
@@ -17,8 +19,10 @@ import {
   toKeep,
   OUTSIDE,
   perform,
+  revealSaid,
   SHELL_KEY_SAID,
   SWITCHER_KEY_SAID,
+  type BranchPath,
   type Cut,
   type Doing,
   type Now,
@@ -178,6 +182,21 @@ function doing(): Doing & { calls: string[] } {
     }),
     keepTab: note("keepTab"),
     quit: note("quit"),
+    copyPath: vi.fn(async (at: BranchPath, absolute: boolean) => {
+      calls.push(`copyPath:${at.repo}/${at.piece ?? ""}:${at.path},${absolute}`);
+      return { ok: true as const };
+    }),
+    revealPath: vi.fn(async (at: BranchPath) => {
+      calls.push(`revealPath:${at.repo}/${at.piece ?? ""}:${at.path}`);
+      return { ok: true as const };
+    }),
+    openInEditor: vi.fn(async (at: BranchPath, line: number) => {
+      calls.push(`openInEditor:${at.repo}/${at.piece ?? ""}:${at.path},${line}`);
+      return { ok: true as const };
+    }),
+    shellInFolder: vi.fn((at: BranchPath) => {
+      calls.push(`shellInFolder:${at.repo}/${at.piece ?? ""}:${at.path}`);
+    }),
   };
 }
 
@@ -2110,5 +2129,110 @@ describe("making a memory, and the shared list (SI-9c, ADR 0065 Q6, Q9)", () => 
     const offers = catalogue(now({ personas: ["steward"] }));
 
     expect(ids(offers).filter((id) => id.startsWith("memory."))).toEqual([]);
+  });
+});
+
+describe("a branch's file and folder rows (FM-10)", () => {
+  const at = (path: string): BranchPath => ({
+    workspace: "alpha",
+    repo: "svc",
+    piece: "fix-it",
+    path,
+  });
+  const file = fileRows({ on: "file", at: at("src/lib.rs"), kind: "file" });
+  const folder = fileRows({ on: "file", at: at("src"), kind: "folder" });
+  const link = fileRows({ on: "file", at: at("CLAUDE.md"), kind: "link" });
+  const titles = (rows: readonly Offer[]) => rows.map((row) => row.title);
+  const verbs = (rows: readonly Offer[]) => rows.map((row) => row.does.verb);
+
+  it("offers a file its paths, a reveal and your editor", () => {
+    expect(titles(file)).toEqual([
+      "Copy relative path",
+      "Copy absolute path",
+      revealSaid(navigator.platform),
+      "Open in your editor",
+    ]);
+  });
+
+  it("offers a folder its paths, a reveal and a shell tab there", () => {
+    expect(titles(folder)).toEqual([
+      "Copy relative path",
+      "Copy absolute path",
+      revealSaid(navigator.platform),
+      "Open a shell tab here",
+    ]);
+  });
+
+  it("names the file manager the platform has", () => {
+    expect(revealSaid("MacIntel")).toBe("Reveal in Finder");
+    expect(revealSaid("Win32")).toBe("Reveal in File Explorer");
+    expect(revealSaid("Linux x86_64")).toBe("Reveal in Files");
+  });
+
+  it("offers no row that creates, renames, moves or deletes, on any row (V86 F8, ADR 0081)", () => {
+    const every = [
+      ...file,
+      ...folder,
+      ...link,
+      ...fileRows({ on: "file", at: at("x"), kind: "file", refused: "ignored" }),
+    ];
+    const writes = /creat|new|renam|mov|delet|remov|trash|archiv|discard|writ|save|edit\b/i;
+
+    // A row that cannot run does nothing at all; every other does one of the four.
+    expect(new Set(verbs(every).filter((verb) => verb !== "nothing"))).toEqual(new Set(FILE_VERBS));
+    expect([...FILE_VERBS]).toEqual(["copyPath", "revealPath", "openInEditor", "shellInFolder"]);
+    for (const row of every) {
+      expect(row.title).not.toMatch(writes);
+      expect(row.id.split(":")[0]).not.toMatch(writes);
+      expect(row.does.verb).not.toMatch(writes);
+    }
+    for (const kind of ["file", "folder", "link"] as const)
+      expect(menuOn({ on: "file", at: at("a"), kind }).below).toEqual([]);
+  });
+
+  it("draws a file row's menu from its own rows, not from the catalogue", () => {
+    const rows = menuRows({ on: "file", at: at("src"), kind: "folder" }, catalogued([]));
+
+    expect(titles(rows.above)).toEqual(titles(folder));
+    expect(rows.below).toEqual([]);
+  });
+
+  it("copies a link's relative path only, saying it follows no link", () => {
+    expect(link.map((row) => [row.title, row.available])).toEqual([
+      ["Copy relative path", true],
+      ["Copy absolute path", false],
+      [revealSaid(navigator.platform), false],
+      ["Open in your editor", true],
+    ]);
+    expect(link[1].reason).toMatch(/follows no link/);
+  });
+
+  it("keeps your editor on a file that does not open, with the tree's reason", () => {
+    const ignored = fileRows({
+      on: "file",
+      at: at("target/out.log"),
+      kind: "file",
+      refused: "git ignores it",
+    });
+
+    expect(ignored.at(-1)).toMatchObject({ available: false, reason: "git ignores it" });
+    expect(ignored[0].available).toBe(true);
+  });
+
+  it("carries out each row with the branch and the path it was opened on", async () => {
+    const hands = doing();
+
+    for (const row of [...file, ...folder]) await perform(row, hands);
+
+    expect(hands.calls).toEqual([
+      "copyPath:svc/fix-it:src/lib.rs,false",
+      "copyPath:svc/fix-it:src/lib.rs,true",
+      "revealPath:svc/fix-it:src/lib.rs",
+      "openInEditor:svc/fix-it:src/lib.rs,1",
+      "copyPath:svc/fix-it:src,false",
+      "copyPath:svc/fix-it:src,true",
+      "revealPath:svc/fix-it:src",
+      "shellInFolder:svc/fix-it:src",
+    ]);
   });
 });
