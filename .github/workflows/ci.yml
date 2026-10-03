@@ -45,10 +45,12 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Tauri's Linux build dependencies
+      # bubblewrap and socat: Claude Code's Linux sandbox runs through them, and a project
+      # charter makes runs its chats sandboxed (ADR 0067 §1), so the start tests need them.
+      - name: Tauri's Linux build dependencies, and the sandbox's programs
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev bubblewrap socat
       - uses: ./.github/actions/rust-toolchain
         with:
           components: rustfmt, clippy
@@ -295,11 +297,12 @@ jobs:
           if [ "$got" != "$EXPECT" ]; then
             echo "::warning::${{ matrix.os }} runs $got, but docs/platforms.md says it covers $EXPECT: update the row and this matrix"
           fi
-      - name: Tauri's Linux build dependencies, and an X server and i3 to start it in
+      # bubblewrap and socat: Claude Code's Linux sandbox runs through them (ADR 0067 §1).
+      - name: Tauri's Linux build dependencies, an X server and i3 to start it in, and the sandbox's programs
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xvfb xauth dbus-x11 i3
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xvfb xauth dbus-x11 i3 bubblewrap socat
       - uses: ./.github/actions/rust-toolchain
       # Not on the newer images: rust-cache's key has the OS and architecture but not the image,
       # so they would restore objects compiled on macOS 26 or Ubuntu 24.04 and only link them.
@@ -392,7 +395,7 @@ jobs:
             gcc gcc-c++ make pkgconf-pkg-config perl git tar gzip xz which findutils procps-ng \
             curl wget file openssl-devel webkit2gtk4.1-devel libxdo-devel \
             libappindicator-gtk3-devel librsvg2-devel \
-            xorg-x11-server-Xvfb xauth dbus-daemon dbus-x11 mesa-dri-drivers
+            xorg-x11-server-Xvfb xauth dbus-daemon dbus-x11 mesa-dri-drivers             bubblewrap socat
           cat /etc/fedora-release
           got=$(. /etc/os-release && echo "$VERSION_ID")
           if [ "$got" != "$FEDORA" ]; then
@@ -471,11 +474,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Tauri's Linux build dependencies, and a display to run in
+      # bubblewrap and socat: Claude Code's Linux sandbox runs through them, and a project
+      # charter makes runs its chats sandboxed (ADR 0067 §1).
+      - name: Tauri's Linux build dependencies, a display to run in, and the sandbox's programs
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xvfb dbus-x11
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xvfb dbus-x11 bubblewrap socat
       - uses: ./.github/actions/rust-toolchain
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
