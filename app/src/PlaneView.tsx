@@ -93,6 +93,7 @@ import { cloneRepos } from "./repoClones";
 import { StartChat } from "./StartChat";
 import { SessionPane } from "./SessionPane";
 import { Explorer, type Spot } from "./Explorer";
+import { pieceFileTitle, pieceFileView } from "./pieceViews";
 import { BottomBar } from "./BottomBar";
 import { useWorkspaceState } from "./workspaceState";
 import {
@@ -4004,6 +4005,7 @@ export const PlaneView = memo(function PlaneView({
         content={{
           explorer: (
             <Explorer
+              plane={plane}
               workspace={ofWorkspace}
               live={ofWorkspace !== undefined && liveOf(ofWorkspace)}
               state={workspaceState}
@@ -4014,6 +4016,9 @@ export const PlaneView = memo(function PlaneView({
               wrapping={wrapping}
               offers={found}
               onPress={press}
+              onOpenFile={(place, path) =>
+                showView(pieceFileView(place, path), pieceFileTitle(place, path))
+              }
             />
           ),
           aside: (

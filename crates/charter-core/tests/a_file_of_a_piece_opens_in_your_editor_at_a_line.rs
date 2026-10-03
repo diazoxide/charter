@@ -7,7 +7,7 @@
 
 mod support;
 
-use charter_core::piecefiles;
+use charter_core::files::{self, Branch};
 use charter_core::worktree;
 use charter_core::youreditor::{self, Editor, Launch};
 
@@ -29,8 +29,15 @@ fn launch(
     line: u32,
     editor: Editor,
     var: &dyn Fn(&str) -> Option<String>,
-) -> Result<Launch, piecefiles::Refused> {
-    piecefiles::in_your_editor(&f.plane, &f.ws, &f.repo, "piece", path, line, editor, var)
+) -> Result<Launch, files::Refused> {
+    files::in_your_editor(
+        &f.plane,
+        Branch::piece(&f.ws, &f.repo, "piece"),
+        path,
+        line,
+        editor,
+        var,
+    )
 }
 
 #[test]

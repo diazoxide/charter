@@ -347,17 +347,22 @@ describe("a list is one Tab stop", () => {
     await theWholeWindow();
     const explorer = screen.getByRole("navigation", { name: "Explorer" });
     const rows = rowsIn(explorer);
-    // The workspace row, three chats working in it, the clone, its one worktree.
+    // The workspace row, three chats working in it, the clone, its own files, its one branch
+    // and that branch's files (FM-1).
     expect(rows.map(said)).toEqual([
       expect.stringMatching(/^treeitem alpha/),
       expect.stringMatching(/^treeitem steward one/),
       expect.stringMatching(/^treeitem steward two/),
       expect.stringMatching(/^treeitem steward three/),
       "treeitem svc1",
+      "treeitem Files",
       "treeitem one",
+      "treeitem Files",
     ]);
     expect(rows.map((row) => row.getAttribute("tabindex"))).toEqual([
       "0",
+      "-1",
+      "-1",
       "-1",
       "-1",
       "-1",
@@ -369,9 +374,9 @@ describe("a list is one Tab stop", () => {
     await userEvent.keyboard("{ArrowDown}");
     await waitFor(() => expect(rows[1]).toHaveFocus());
     await userEvent.keyboard("{End}");
-    await waitFor(() => expect(rows[5]).toHaveFocus());
+    await waitFor(() => expect(rows[7]).toHaveFocus());
     await userEvent.keyboard("{ArrowUp}");
-    await waitFor(() => expect(rows[4]).toHaveFocus());
+    await waitFor(() => expect(rows[6]).toHaveFocus());
     await userEvent.keyboard("{Home}");
     await waitFor(() => expect(rows[0]).toHaveFocus());
     // And it is a tree (#238): Right goes into the workspace row, Left climbs back out. The

@@ -120,6 +120,8 @@ macro_rules! app_commands {
                 piecefiles::piece_files,
                 piecefiles::piece_file,
                 piecefiles::open_in_your_editor,
+                piecefiles::branch_tree,
+                filewatch::files_watch,
                 updates::update_channel,
                 updates::set_update_channel,
                 updates::check_for_update,

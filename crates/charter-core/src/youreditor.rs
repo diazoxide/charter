@@ -15,7 +15,7 @@
 //!   program and its first arguments, and `+line` and the file are two more arguments after
 //!   them. The file is an absolute path, so it can never be read as an option.
 //!
-//! **The file is always one [`crate::piecefiles::in_your_editor`] checked**: inside the piece,
+//! **The file is always one [`crate::files::in_your_editor`] checked**: inside the piece,
 //! and one the light editor's file list offers. This module takes it as already checked.
 
 use std::path::Path;
