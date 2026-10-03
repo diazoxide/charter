@@ -22,10 +22,10 @@ const CHARTER_TEMPLATE: &str = "# {name}\n\n> **Living charter** for this worksp
 pub const VISION_PLACEHOLDER: &str = "_Not set yet — describe the goal: what are we building or fixing, and why? Set it with `charter workspace vision \"…\"` (or edit this file)._";
 
 /// The header `memory/MEMORY.md` is created with, `{name}` to fill.
-const WS_MEMORY_HEADER: &str = "# {name} — task memory\n\nOne file per memory — a small, programmatically-explorable DB, not a single log to\nmerge-conflict on. Files are timestamp-prefixed, so this index (and the directory) list chronologically. **Committed + shared** for LIVE workspaces. Write with `charter workspace remember \"…\"`, search with `charter workspace recall [--query …]`, drop one with `charter workspace forget <slug>`. Never put secrets here (vault only).\n";
+pub(crate) const WS_MEMORY_HEADER: &str = "# {name} — task memory\n\nOne file per memory — a small, programmatically-explorable DB, not a single log to\nmerge-conflict on. Files are timestamp-prefixed, so this index (and the directory) list chronologically. **Committed + shared** for LIVE workspaces. Write with `charter workspace remember \"…\"`, search with `charter workspace recall [--query …]`, drop one with `charter workspace forget <slug>`. Never put secrets here (vault only).\n";
 
 /// The header `todos/MEMORY.md` is created with, `{name}` to fill.
-const TODOS_HEADER: &str = "# Todos — workspace `{name}`\n\nOne line per todo; each links a file holding one thing this task still means to do.\nOpen or done — and done removes it, leaving its trace in the journal instead.\n";
+pub(crate) const TODOS_HEADER: &str = "# Todos — workspace `{name}`\n\nOne line per todo; each links a file holding one thing this task still means to do.\nOpen or done — and done removes it, leaving its trace in the journal instead.\n";
 
 /// A name that cannot name a workspace or a persona this plane contains.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -791,7 +791,7 @@ pub(crate) fn read_store(plane_root: &Path, dir: &Path) -> io::Result<Vec<Entry>
 /// no stamp line, after the heading when the heading is the file's first line that is not blank.
 /// Anything above a later heading — a hand's frontmatter — is body, so nothing a person wrote is
 /// dropped from what the window shows and an edit writes back.
-fn parse_entry(slug: &str, text: &str) -> Entry {
+pub(crate) fn parse_entry(slug: &str, text: &str) -> Entry {
     let lines = crate::mdsection::split_lines(text);
     let (heading, stamped) = crate::memstore::top_lines(&lines);
     // `[2..]` ONCE — a stored title of `# Hello` reads as `# Hello`, not `Hello`, because

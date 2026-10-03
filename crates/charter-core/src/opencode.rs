@@ -267,7 +267,10 @@ pub fn binary_in(text: &str) -> Option<PathBuf> {
 /// directory as its option, which it adds to the skills opencode discovers (ADR 0063). Not a
 /// `skills` key beside `plugin`: opencode merges its configs with arrays replaced, so one here
 /// would drop every skills path the operator's own config names (measured on 1.18.32).
-pub fn session_config(shim: &Path, skills: Option<&Path>) -> String {
+///
+/// With `binary`, charter's MCP server is named under `mcp` too (HP-7). `mcp` is an object, and
+/// opencode merges objects key by key, so the operator's own servers stay.
+pub fn session_config(shim: &Path, skills: Option<&Path>, binary: Option<&Path>) -> String {
     let mut url = String::from("file://");
     for byte in shim.display().to_string().bytes() {
         if byte.is_ascii_alphanumeric() || b"/-._~".contains(&byte) {
@@ -280,7 +283,13 @@ pub fn session_config(shim: &Path, skills: Option<&Path>) -> String {
         Some(dir) => serde_json::json!([url, { SKILLS_OPTION: dir.display().to_string() }]),
         None => serde_json::Value::from(url),
     };
-    serde_json::json!({ "plugin": [spec] }).to_string()
+    let mut config = serde_json::json!({ "plugin": [spec] });
+    if let Some(binary) = binary {
+        config["mcp"] = serde_json::json!({
+            crate::chattools::SERVER: crate::chattools::opencode_entry(binary)
+        });
+    }
+    config.to_string()
 }
 
 /// The shim's option that names charter's skills directory.

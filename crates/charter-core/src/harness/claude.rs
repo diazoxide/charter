@@ -48,6 +48,10 @@ impl HarnessAdapter for ClaudeCode {
             args: words([
                 "--plugin-dir",
                 &plugin.display().to_string(),
+                // charter's MCP server (HP-7), before `--settings`: `--mcp-config` takes every
+                // word up to the next flag, and the chat's own words end the line.
+                "--mcp-config",
+                &crate::chattools::claude_code_config(kit.binary),
                 "--settings",
                 &settings(
                     kit.binary,
@@ -263,12 +267,41 @@ mod tests {
         else {
             panic!("armed per session");
         };
-        assert_eq!(args[..3], ["--plugin-dir", "/app/plugin", "--settings"]);
+        assert_eq!(args[..2], ["--plugin-dir", "/app/plugin"]);
+        assert!(args.contains(&"--settings".to_owned()), "{args:?}");
         assert_eq!(
             env,
             [("CHARTER_HOOK_BINARY".to_owned(), "/bin/charter".to_owned())]
         );
         assert!(cannot_report.is_empty());
+    }
+
+    #[test]
+    fn a_claude_code_chat_is_handed_charter_s_mcp_server_for_that_chat_alone() {
+        // HP-7: `--mcp-config` loads a server for this session and writes nothing.
+        let StateHooks::ThisSessionOnly { args, .. } = adapter().arm(
+            Kit {
+                binary: std::path::Path::new("/bin/charter"),
+                plugin: Some(std::path::Path::new("/app/plugin")),
+            },
+            None,
+            &crate::harness_plugin::Chosen::new(),
+            None,
+        ) else {
+            panic!("armed per session");
+        };
+        let at = args
+            .iter()
+            .position(|arg| arg == "--mcp-config")
+            .expect("--mcp-config");
+        let config: serde_json::Value = serde_json::from_str(&args[at + 1]).expect("JSON");
+        assert_eq!(
+            config["mcpServers"]["charter"],
+            serde_json::json!({"type": "stdio", "command": "/bin/charter", "args": ["mcp"]})
+        );
+        // `--mcp-config` takes every word up to the next flag, so a flag follows it and the
+        // chat's own words that end the line are never read as a config.
+        assert!(args[at + 2].starts_with("--"), "{args:?}");
     }
 
     #[test]

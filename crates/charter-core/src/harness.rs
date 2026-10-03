@@ -802,7 +802,8 @@ mod tests {
 
         assert_eq!(args[0], "--plugin-dir");
         assert_eq!(args[1], "/app/plugin");
-        assert_eq!(args[2], "--settings");
+        assert_eq!(args[2], "--mcp-config");
+        assert_eq!(args[4], "--settings");
         assert_eq!(
             env,
             [(
@@ -820,7 +821,7 @@ mod tests {
         // otherwise turn the guard off by the plugin's id — measured, and this wins over it.
         let empty = tempfile::tempdir().expect("a directory");
         let (args, _) = claude("/bin/charter", empty.path());
-        let settings: serde_json::Value = serde_json::from_str(&args[3]).expect("JSON");
+        let settings: serde_json::Value = serde_json::from_str(settings_of(&args)).expect("JSON");
 
         assert_eq!(
             settings["enabledPlugins"],
@@ -846,7 +847,7 @@ mod tests {
             ("charter-app@inline".to_owned(), true),
         ]);
         let (args, _) = claude_with("/bin/charter", empty.path(), &chosen);
-        let settings: serde_json::Value = serde_json::from_str(&args[3]).expect("JSON");
+        let settings: serde_json::Value = serde_json::from_str(settings_of(&args)).expect("JSON");
 
         assert_eq!(
             settings["enabledPlugins"],
@@ -882,7 +883,7 @@ mod tests {
         // compound command holding it is still asked about).
         let empty = tempfile::tempdir().expect("a directory");
         let (args, _) = claude("/bin/charter", empty.path());
-        let settings: serde_json::Value = serde_json::from_str(&args[3]).expect("JSON");
+        let settings: serde_json::Value = serde_json::from_str(settings_of(&args)).expect("JSON");
 
         assert_eq!(
             settings["permissions"],
@@ -1010,7 +1011,7 @@ mod tests {
         ) else {
             panic!("armed per session");
         };
-        let settings: serde_json::Value = serde_json::from_str(&args[3]).expect("JSON");
+        let settings: serde_json::Value = serde_json::from_str(settings_of(&args)).expect("JSON");
 
         assert_eq!(settings["sandbox"], compiled.sandbox);
         assert_eq!(
@@ -1028,7 +1029,7 @@ mod tests {
         // Absent, not `enabled: false`: the operator's own settings decide, as before.
         let empty = tempfile::tempdir().expect("a directory");
         let (args, _) = claude("/bin/charter", empty.path());
-        let settings: serde_json::Value = serde_json::from_str(&args[3]).expect("JSON");
+        let settings: serde_json::Value = serde_json::from_str(settings_of(&args)).expect("JSON");
 
         assert!(settings.get("sandbox").is_none(), "{settings}");
         assert!(settings["permissions"].get("deny").is_none(), "{settings}");
@@ -1040,7 +1041,7 @@ mod tests {
         // report every event twice.
         let empty = tempfile::tempdir().expect("a directory");
         let (args, _) = claude("/bin/charter", empty.path());
-        let settings: serde_json::Value = serde_json::from_str(&args[3]).expect("JSON");
+        let settings: serde_json::Value = serde_json::from_str(settings_of(&args)).expect("JSON");
 
         assert!(settings.get("hooks").is_none(), "{settings}");
     }
@@ -1068,7 +1069,7 @@ mod tests {
         // through `/bin/sh -c` too.
         let empty = tempfile::tempdir().expect("a directory with no settings in it");
         let (args, _) = claude("/home/o'brien/charter", empty.path());
-        let settings: serde_json::Value = serde_json::from_str(&args[3]).expect("JSON");
+        let settings: serde_json::Value = serde_json::from_str(settings_of(&args)).expect("JSON");
 
         assert_eq!(
             settings["statusLine"],
@@ -1092,11 +1093,11 @@ mod tests {
         .expect("their settings");
 
         let (args, _) = claude("/bin/charter", dir.path());
-        let settings: serde_json::Value = serde_json::from_str(&args[3]).expect("JSON");
+        let settings: serde_json::Value = serde_json::from_str(settings_of(&args)).expect("JSON");
         assert!(
             settings.get("statusLine").is_none(),
             "charter armed a statusLine over the operator's: {}",
-            args[3]
+            settings_of(&args)
         );
         assert_eq!(args[0], "--plugin-dir");
     }
@@ -1124,7 +1125,7 @@ mod tests {
         }
         let empty = tempfile::tempdir().expect("a directory");
         let (args, _) = claude("/bin/charter", empty.path());
-        let settings: serde_json::Value = serde_json::from_str(&args[3]).expect("JSON");
+        let settings: serde_json::Value = serde_json::from_str(settings_of(&args)).expect("JSON");
         let plugin: serde_json::Value =
             serde_json::from_str(&crate::plugin::hooks_json()).expect("JSON");
 
@@ -1142,6 +1143,17 @@ mod tests {
     }
 
     /// Codex's `-c` pairs as (dotted key, parsed TOML value), failing on anything else.
+    /// The `--settings` a Claude Code chat is armed with: the word after the flag.
+    fn settings_of(args: &[String]) -> &str {
+        let at = args
+            .iter()
+            .position(|arg| arg == "--settings")
+            .expect("--settings");
+        &args[at + 1]
+    }
+
+    /// The `-c` pairs that arm Codex's hooks, without the one that hands it charter's MCP
+    /// server (HP-7, which `codex::tests` holds).
     fn codex_flags(binary: &str) -> Vec<(String, toml::Value)> {
         let StateHooks::ThisSessionOnly { args, env, .. } =
             Harness::Codex.state_hooks(kit(binary), None, &BTreeMap::new(), None)
@@ -1163,6 +1175,7 @@ mod tests {
                     toml::from_str(&format!("v = {value}")).expect("the value is TOML");
                 (key.to_owned(), parsed["v"].clone())
             })
+            .filter(|(key, _)| !key.starts_with("mcp_servers."))
             .collect()
     }
 
@@ -1430,8 +1443,8 @@ mod tests {
             serde_json::from_str(&env["OPENCODE_CONFIG_CONTENT"]).expect("JSON");
         let shim = plugin.path().join("opencode/charter.ts");
         assert_eq!(
-            config,
-            serde_json::json!({ "plugin": [format!("file://{}", shim.display())] }),
+            config["plugin"],
+            serde_json::json!([format!("file://{}", shim.display())]),
             "the shim, and no plugin choice: opencode cannot turn one plugin off"
         );
         assert_eq!(cannot_report, ["sessionend"]);

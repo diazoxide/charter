@@ -361,7 +361,7 @@ fn readable_record(root: &Path, place: &Place, path: &Path) -> bool {
 }
 
 /// Whether `name` is a record's file name: `YYYYMMDD-HHMMSS-<slug>.md`.
-fn is_record_name(name: &str) -> bool {
+pub(crate) fn is_record_name(name: &str) -> bool {
     let Some(stem) = name.strip_suffix(".md") else {
         return false;
     };
@@ -556,7 +556,7 @@ pub fn list(root: &Path, place: &Place) -> Vec<Listed> {
 /// LIVE workspace can change it, and only the title is ever drawn as it is. A persona is kept
 /// only as a name charter would read, a harness only as a short word, and a conversation only
 /// in a session id's shape.
-fn listed(place: &Place, file: String, text: &str) -> Listed {
+pub(crate) fn listed(place: &Place, file: String, text: &str) -> Listed {
     let pairs = crate::personas::frontmatter(text);
     let value = |key: &str| {
         pairs

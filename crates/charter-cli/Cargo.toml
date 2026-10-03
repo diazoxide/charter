@@ -16,7 +16,16 @@ path = "src/main.rs"
 charter-core.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 clap.workspace = true
+# charter's MCP server (HP-7): the official Rust SDK, Apache-2.0, serving stdio only. No HTTP
+# transport and no auth features, so it pulls no HTTP client and no TLS. Its `build.rs` runs
+# `git config core.hooksPath .githooks` only when `$CARGO_MANIFEST_DIR/../../.githooks` and
+# `../../.git` both exist, which is rmcp's own checkout. Built from the registry that is
+# `~/.cargo/registry/src/`, where neither does, so it is inert here. It would fire only if charter
+# vendored the crate at `<repo>/vendor/rmcp-*` and this repo grew a `.githooks/`: never vendor it.
+rmcp = { version = "3.5", default-features = false, features = ["server", "transport-io", "elicitation"] }
 serde_json.workspace = true
+# The runtime `rmcp` serves on: one thread, for one chat's server.
+tokio = { version = "1", default-features = false, features = ["rt"] }
 
 [dev-dependencies]
 # Fenced, so the `charter` binary these tests spawn cannot act on a plane the run did not

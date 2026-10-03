@@ -10,6 +10,7 @@ pub mod browser;
 pub mod change;
 pub mod chatenv;
 pub mod chatpiece;
+pub mod chattools;
 pub mod cistate;
 pub mod clipath;
 pub mod commitgate;
