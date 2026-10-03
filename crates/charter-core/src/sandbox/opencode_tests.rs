@@ -99,7 +99,7 @@ fn on_linux_an_opencode_chat_is_refused_until_charter_can_wrap_it_there() {
         refused.to_string(),
         "this plane runs every chat sandboxed, and opencode has no sandbox of its own, which \
          charter can wrap it in on macOS but not yet on Linux (#1040), so it was not started. \
-         Start this chat on a Claude Code or Codex profile."
+         Start this chat on a Claude Code profile."
     );
 }
 

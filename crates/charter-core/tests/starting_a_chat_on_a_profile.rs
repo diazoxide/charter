@@ -1147,8 +1147,10 @@ fn a_sandboxed_chat_whose_program_is_inside_the_plane_is_not_started_sandboxed()
         "[sandbox]\nmode = \"on\"\n",
     )
     .unwrap();
-    let bin = plane.harness_as("opencode");
-    plane.profile("opencode", &bin, "");
+    // Claude Code, whose sandbox every system charter runs on can apply; opencode is wrapped on
+    // macOS only, and on Linux its refusal would come first.
+    let bin = plane.harness_as("claude");
+    plane.profile("claude", &bin, "");
 
     let refused = start::ready(&plane.start("work"), plane.root()).expect_err("not started");
 
@@ -1169,7 +1171,7 @@ fn a_sandboxed_chat_whose_program_is_a_relative_path_is_not_started_sandboxed() 
         "[sandbox]\nmode = \"on\"\n",
     )
     .unwrap();
-    plane.declares("[harness.work]\nkind = \"opencode\"\ncommand = [\"./opencode\"]\n");
+    plane.declares("[harness.work]\nkind = \"claude\"\ncommand = [\"./claude\"]\n");
     plane.approve("work");
 
     let refused = start::ready(&plane.start("work"), plane.root()).expect_err("not started");
