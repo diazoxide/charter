@@ -168,6 +168,11 @@ const PIPELINE_BREAKS: [&str; 6] = ["&&", "||", ";;", ";", "&", "\n"];
 const BEFORE_COMMENT: &str = " \t\n;|&()<>";
 
 /// The `gh` commands whose `--body-file -` reads a body gh posts and never runs.
+///
+/// **`glab` has no counterpart, on purpose (#1068).** Its mr and issue commands take a
+/// description as text, and `-` there opens an EDITOR rather than reading stdin (glab 1.103's
+/// help), so a heredoc after a glab command is never a body glab posts. Read it as one and a body
+/// a shell might run would be dropped; `a_glab_description_is_never_a_body_on_stdin` pins this.
 const GH_BODY_COMMANDS: [(&str, &str); 4] = [
     ("pr", "create"),
     ("pr", "comment"),
@@ -1966,4 +1971,27 @@ pub fn strip_reader_heredocs(cmd: &str) -> String {
         .map(|l| l.text)
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn argv(line: &str) -> Vec<String> {
+        line.split_whitespace().map(str::to_owned).collect()
+    }
+
+    /// #1068: the body-on-stdin reading is gh's alone, for the reason [`GH_BODY_COMMANDS`] gives.
+    #[test]
+    fn a_glab_description_is_never_a_body_on_stdin() {
+        assert!(gh_body_on_stdin(&argv("gh pr create --body-file -")));
+        assert!(gh_body_on_stdin(&argv("gh issue comment 1 -F -")));
+        for line in [
+            "glab mr create -d -",
+            "glab issue create --description -",
+            "glab mr note 1 -m -",
+        ] {
+            assert!(!gh_body_on_stdin(&argv(line)), "{line}");
+        }
+    }
 }
