@@ -1,9 +1,10 @@
 import { StrictMode } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render as renderBare, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
+import { type Interrupts, countInterrupts, withinTheBudget } from "./interruptBudget";
 
 /**
  * The first run (FR-4, #603): a new machine reaches a working chat with no prompt about
@@ -23,9 +24,24 @@ vi.mock("./SessionPane", () => ({
 
 const render = (ui: React.ReactElement) => renderBare(<StrictMode>{ui}</StrictMode>);
 
+/**
+ * **Every path here holds W10's interrupt budget** (DS-9, #631): at most three prompts before the
+ * first answered agent turn. No agent answers in this file — the pane is a stand-in — so every
+ * prompt a scenario shows is one the operator meets before that turn, and a scenario that
+ * shows a fourth fails, naming all four. `interruptBudget.ts` says what counts as a prompt.
+ */
+let interrupts: Interrupts;
+
+beforeEach(() => {
+  interrupts = countInterrupts();
+});
+
 afterEach(() => {
+  interrupts.stop();
+  const asked = interrupts.asked();
   cleanup();
   clearMocks();
+  withinTheBudget(asked);
 });
 
 const LOCAL = "/home/dev/.config/charter/local-plane";
@@ -184,6 +200,46 @@ describe("the first run's project template (FR-17)", () => {
 });
 
 describe("the first run", () => {
+  it("costs three prompts at most, on its longest way to a chat (W10)", async () => {
+    // A new machine, so the local project is asked about; a repo whose remote does not say
+    // which forge; and two signed-in harnesses, so there is a choice to pick from.
+    const { calls } = core((cmd, args) => {
+      if (cmd === "open_repo" && args.forge === null)
+        return { opened: null, asks_forge: `${REPO} has no \`origin\` remote` };
+      if (cmd === "open_repo")
+        return {
+          opened: {
+            opened: { plane: null, ask: ASK },
+            workspace: "widget",
+            cwd: CLONE,
+            harness: null,
+            instructions: 0,
+          },
+          asks_forge: null,
+        };
+      if (cmd === "approve_plane") return LOCAL;
+      return undefined;
+    });
+    render(<App />);
+
+    const person = await openRepoByPath(REPO);
+    const question = await screen.findByRole("group", { name: "Which forge are its repos on?" });
+    await person.click(within(question).getByRole("button", { name: "GitHub" }));
+    const asking = await screen.findByRole("dialog", { name: "Open this project?" });
+    await person.click(within(asking).getByRole("button", { name: "Open project" }));
+    const picker = await screen.findByRole("dialog", { name: "Start a chat" });
+    await person.click(within(picker).getByRole("button", { name: "Start" }));
+    await vi.waitFor(() => expect(calls("start_chat")).toHaveLength(1));
+
+    // The budget, spent to the last prompt: one more on this way fails every scenario that
+    // takes it.
+    expect(interrupts.asked()).toEqual([
+      "Which forge are its repos on?",
+      "Open this project?",
+      "Start a chat",
+    ]);
+  });
+
   it("asks for a repo, says what a project is, and nothing about where it goes", async () => {
     core();
     render(<App />);

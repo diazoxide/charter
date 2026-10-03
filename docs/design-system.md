@@ -502,6 +502,31 @@ The rules an icon has to meet here:
   state colour that is too weak for words (`needs-you.base` measures 3.64:1 on `surface.base` in
   charter-dark) may colour the mark beside the words and never the words.
 
+## The interrupt budget
+
+**At most three prompts stand between a new machine and the first answered agent turn** (W10,
+DS-9). It is part of ST9's definition of done, and the first run's scenario tests hold it: every
+scenario in `app/src/FirstRun.test.tsx` counts the prompts it shows and fails above three,
+naming each one. The longest way to a chat those scenarios take spends all three today: the
+forge question when the repo's remote does not say, the trust question on a new machine, and the
+picker when there is a choice. A new prompt on that way fails the build until another one goes.
+
+A prompt is anything that stops the operator until they answer it, read from what the page says
+it is (`app/src/interruptBudget.ts`):
+
+- every `dialog` and `alertdialog`, an open native `<dialog>` included;
+- every inline question: a `group` or `radiogroup` named by its question, ending in "?", and a
+  `<fieldset>` whose `<legend>` is one. Moving an ask out of a dialog onto the page does not
+  make it free.
+
+It cannot see a question named without its "?", a toast or status line that carries an action,
+or a native OS dialog such as the folder picker; a review has to.
+
+So a surface that has to ask something on the way to the first chat is named by its question,
+and the budget sees it. What costs nothing is a tab opened beside the chat (the first task, the
+repo's agent instructions, the harness setup), a `status` line, and a sign-in run in a shell tab
+the operator can leave.
+
 ## What it costs
 
 Measured on this branch, against `origin/main`:

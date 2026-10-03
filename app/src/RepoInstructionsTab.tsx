@@ -9,9 +9,10 @@ import { commands, type InstructionFile, type PlaneId } from "./bindings";
  * workspace's memory only when **Add to memory** is pressed — the preview's yes (W10).
  *
  * **A tab, not a dialog.** The first run opens it beside the first chat and not in front of it,
- * so it asks nothing until the operator goes to it: W10's budget of three questions before the
- * first answered turn — the repo, the trust question and, only when there is a choice, the
- * picker — is not spent on it. Leaving it unanswered costs nothing; closing it writes nothing.
+ * so it asks nothing until the operator goes to it: W10's budget of three prompts before the
+ * first answered turn — the forge question when the repo's remote does not say, the trust
+ * question and, only when there is a choice, the picker (`interruptBudget.ts`) — is not spent
+ * on it. Leaving it unanswered costs nothing; closing it writes nothing.
  *
  * Every file the core offers starts ticked, since the operator is looking at exactly what would
  * be written. A file already in memory, or left out — a link, a file too large, one that looks

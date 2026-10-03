@@ -1923,8 +1923,9 @@ export const PlaneView = memo(function PlaneView({
     const where: Where = { tab: true, in: cwd };
     // **The repo's agent instructions, offered beside the chat and not in front of it**
     // (FR-18a): a tab that asks nothing until the operator goes to it, so W10's budget —
-    // the repo, the trust question and, only when there is a choice, the picker — is not
-    // spent on it. Nothing is written until its own press.
+    // the forge question when the repo's remote does not say, the trust question and, only
+    // when there is a choice, the picker (`interruptBudget.ts`) — is not spent on it.
+    // Nothing is written until its own press.
     // **The first task, offered the same way** (FR-28): a tab beside the first chat, so a
     // partner session has the script one press away and nobody is asked anything for it.
     const offerInstructions = () => {
