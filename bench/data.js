@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790999210681,
+  "lastUpdate": 1791000892199,
   "repoUrl": "https://github.com/diazoxide/charter",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -252,6 +252,48 @@ window.BENCHMARK_DATA = {
             "value": 101.4633965,
             "unit": "ms",
             "extra": "median of 5 runs: 101.131, 101.259, 101.463, 101.639, 101.723 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "d7d8244356d26b66f1426859cecc6e636e33f704",
+          "message": "e2e: Undo of a memory waits for its index line as well as its file\n\nThe memory store's unarchive renames the file back, then appends its\nindex line, under its own lock. The test polled for the file and then\nread the index straight away, so it could land between the two writes.\nIt failed once on train 1 (passed on re-run) and on both platforms on\ntrain 2.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-03T08:13:50+04:00",
+          "tree_id": "8daa4763c488e2a4c588673e0940ada30215a949",
+          "url": "https://github.com/diazoxide/charter/commit/d7d8244356d26b66f1426859cecc6e636e33f704"
+        },
+        "date": 1791000891269,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.3439535,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.341, 0.343, 0.344, 0.345, 0.359 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.673347999999997,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.653, 16.672, 16.673, 16.708, 16.775 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.08881500000001,
+            "unit": "ms",
+            "extra": "median of 5 runs: 100.316, 100.334, 101.089, 101.230, 101.267 ms"
           }
         ]
       }
