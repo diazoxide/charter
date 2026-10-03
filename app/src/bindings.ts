@@ -1481,6 +1481,17 @@ export type ChatWorktree = {
 	stale: boolean,
 };
 
+/**  One child agent of a chat, as the window draws it under the chat (ADR 0066, ADR 0076 §6). */
+export type ChildAgent = {
+	/**  The harness's id for it, unique within the chat. */
+	agent: string,
+	/**
+	 *  `running` while it works, `done` once its own stop is heard, or the word its chat
+	 *  ended as when the chat ended first: a stop of the chat stops its children.
+	 */
+	state: string,
+};
+
 /**
  *  One file the operator ticked, with the text the preview showed them: the wire's spelling of
  *  `repoinstructions::Shown`, which the core keeps free of serde and specta.
@@ -2222,6 +2233,11 @@ export type Moved = {
 	 *  in the order the board was read. [`sequence`] is the whole definition.
 	 */
 	sequence: number,
+	/**
+	 *  The child agents of this chat's current run, oldest first (FD-18, W8): each sub-agent
+	 *  or child its harness spawned, drawn under the chat. Empty for nearly every chat.
+	 */
+	children: ChildAgent[],
 };
 
 /**  A branch the window cut: the piece it is, and what git calls it (ADR 0072 §4). */

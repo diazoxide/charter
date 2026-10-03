@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  childrenOf,
   moved,
   movedAt,
   nothingKnown,
@@ -10,7 +11,7 @@ import {
   stateOf,
   underneath,
 } from "./chatState";
-import type { Moved, OpenChat } from "./bindings";
+import type { ChildAgent, Moved, OpenChat } from "./bindings";
 
 /** One plane, because these are about the reducer and not about telling planes apart. */
 const PLANE = "/home/dev/plane";
@@ -30,6 +31,7 @@ function doing(
   movedAt = 0,
   reports: string[] = [],
   refusals: string[] = [],
+  children: ChildAgent[] = [],
 ): Moved {
   taken += 1;
   return {
@@ -42,8 +44,50 @@ function doing(
     sequence: taken,
     reports,
     refusals,
+    children,
   };
 }
+
+describe("a chat's child agents (FD-18)", () => {
+  const working = (agent: string): ChildAgent => ({ agent, state: "running" });
+
+  it("knows each chat's child agents from that chat's newest snapshot", () => {
+    const spawned = moved(nothingKnown, doing(3, "running", [], 0, [], [], [working("a1")]));
+    expect(childrenOf(spawned, 3)).toEqual([working("a1")]);
+    expect(childrenOf(spawned, 4)).toEqual([]);
+
+    const stopped = moved(
+      spawned,
+      doing(3, "failed", [], 0, [], [], [{ agent: "a1", state: "failed" }]),
+    );
+    expect(childrenOf(stopped, 3)).toEqual([{ agent: "a1", state: "failed" }]);
+  });
+
+  it("does not let an older snapshot bring back a child that has ended", () => {
+    const older = doing(3, "running", [], 0, [], [], [working("a1")]);
+    const newer = doing(3, "done", [], 0, [], [], [{ agent: "a1", state: "done" }]);
+
+    expect(childrenOf(moved(moved(nothingKnown, newer), older), 3)).toEqual([
+      { agent: "a1", state: "done" },
+    ]);
+  });
+
+  it("keeps a chat's children the same object when a move says nothing new about them", () => {
+    const before = moved(nothingKnown, doing(3, "running", [], 1, [], [], [working("a1")]));
+
+    const after = moved(before, doing(3, "waiting", [3], 2, [], [], [working("a1")]));
+
+    expect(after.children).toBe(before.children);
+  });
+
+  it("takes a move from a core older than the field as a chat with no children", () => {
+    const before = moved(nothingKnown, doing(3, "running", [], 0, [], [], [working("a1")]));
+    const bare = { ...doing(3, "running") } as Partial<Moved>;
+    delete bare.children;
+
+    expect(childrenOf(moved(before, bare as Moved), 3)).toEqual([]);
+  });
+});
 
 describe("a report back (charter-app#259)", () => {
   it("knows which chats reported back to a chat, and forgets them with its next snapshot", () => {

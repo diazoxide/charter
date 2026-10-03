@@ -1652,6 +1652,22 @@ h2.sidebar-title .node-icon {
   color: color-mix(in srgb, currentcolor 70%, transparent);
 }
 
+/* A chat's child agents, under it (FD-18): one line each, indented under the chat, in the
+   note's size. Each line is the sub-agent and its state mark. */
+.explorer .child-agents {
+  margin: 0.1rem 0 0 1rem;
+  padding: 0;
+  list-style: none;
+  font-size: 0.8em;
+}
+
+.explorer .child-agent {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  white-space: nowrap;
+}
+
 /* The bottom region: what the focused workspace's repos are doing. Nothing in it can be
    pressed, which is the half of ADR 0038's reading a test can hold. */
 .state-bar {

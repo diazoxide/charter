@@ -163,6 +163,7 @@ function asking(plane: string, session: number, queue: number[], sequence: numbe
     sequence,
     reports: [],
     refusals: [],
+    children: [],
   };
 }
 

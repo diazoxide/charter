@@ -258,6 +258,7 @@ describe("the explorer", () => {
       reports: [],
       refusals: [],
       sequence: 1,
+      children: [],
     });
     draw({ chats: [chat(1, "shell 1", `${CUT}/one`, { harness: null, profile: null })], states });
 
@@ -295,6 +296,54 @@ describe("the explorer", () => {
     await userEvent.click(screen.getByRole("treeitem", { name: /ide\.1/ }));
 
     expect(onShowChat).toHaveBeenCalledWith(1);
+  });
+
+  it("shows a chat's child agents under it, each with what it is doing (FD-18)", () => {
+    const states = moved(nothingKnown, {
+      plane: "/home/dev/plane",
+      session: 1,
+      state: "failed",
+      needs_you: false,
+      queue: [],
+      moved_at: 1,
+      reports: [],
+      refusals: [],
+      sequence: 1,
+      children: [
+        { agent: "a1b2c3d4e5f6a7b8c9d0", state: "failed" },
+        { agent: "thread-1", state: "done" },
+        { agent: "thread-10", state: "running" },
+      ],
+    });
+    draw({ chats: [chat(1, "ide.1", `${CUT}/one`), chat(2, "ide.2", `${CUT}/one`)], states });
+
+    const children = screen.getByRole("list", { name: "Sub-agents of ide.1" });
+    const rows = within(children).getAllByRole("listitem");
+    // Long enough to tell two ids apart that differ late, and the whole id on hover.
+    expect(rows.map((row) => row.textContent)).toEqual([
+      "sub-agent a1b2c3d4e5f6a7b8…",
+      "sub-agent thread-1",
+      "sub-agent thread-10",
+    ]);
+    expect(rows.map((row) => row.querySelector(".agent")?.getAttribute("title"))).toEqual([
+      "a1b2c3d4e5f6a7b8c9d0",
+      "thread-1",
+      "thread-10",
+    ]);
+    expect(
+      rows.map((row) => row.querySelector("[data-state]")?.getAttribute("data-state")),
+    ).toEqual(["failed", "done", "running"]);
+    // The chat's row is described by them, so a screen reader on it hears what it spawned.
+    expect(screen.getByRole("treeitem", { name: /ide\.1/ })).toHaveAccessibleDescription(
+      /sub-agent thread-10/,
+    );
+    expect(screen.getByRole("treeitem", { name: /ide\.2/ })).not.toHaveAccessibleDescription(
+      /sub-agent/,
+    );
+    expect(screen.queryByRole("list", { name: "Sub-agents of ide.2" })).toBeNull();
+    // Not rows of the tree: a child agent is drawn under its chat, and the chat is what the
+    // arrows stop on and what a press brings forward.
+    expect(screen.queryByRole("treeitem", { name: /sub-agent/ })).toBeNull();
   });
 
   it("says on a chat what its harness cannot report, rather than leaving it unexplained", () => {
