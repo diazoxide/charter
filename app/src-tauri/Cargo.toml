@@ -61,9 +61,9 @@ arboard = { version = "3.6.1", default-features = false }
 sha2 = "0.11"
 # The plane changing under the window (charter-app#264): the todos a terminal closed, a workspace
 # another process made. notify is the standard cross-platform watcher (FSEvents, inotify,
-# ReadDirectoryChangesW); the debouncer folds a burst into one read.
+# ReadDirectoryChangesW). Its events are folded into bursts by hand (`watchset.rs`), not by
+# notify-debouncer-full, which drops a file made and removed inside one fold (#1139).
 notify = "8.2"
-notify-debouncer-full = "0.7"
 
 # The desktop portal, asked on the session bus before GTK asks it (charter-app#24,
 # `portal.rs`). The version `tauri-plugin-single-instance` already brings in on Linux, so
