@@ -219,6 +219,29 @@ fn a_chat_never_writes_charters_integrity_state() {
     );
 }
 
+/// The second acceptance line of #667, as V22a words it: a chat cannot write another chat's
+/// spool. A sandboxed chat neither reads nor writes any chat's, its own included, nor the keys
+/// that check them: the hooks of the harnesses charter sandboxes run outside the sandbox their
+/// tools run in (ADR 0068 §6, V63).
+#[cfg(unix)]
+#[test]
+fn a_chat_never_reads_or_writes_any_chats_hook_spool_or_its_keys() {
+    let (plane, denied) = denied_with(None, Os::Linux);
+    let spool = crate::hookwire::spool::dir_for(&plane.path().join(".charter/app/hooks.sock"));
+
+    let held = paths(&denied, Class::Integrity, Access::ReadWrite);
+    for file in [
+        spool.join("6.jsonl"),
+        spool.join(crate::hookwire::spool::KEYS),
+    ] {
+        assert!(
+            held.iter().any(|denied| file.starts_with(denied)),
+            "{} is not under {held:?}",
+            file.display()
+        );
+    }
+}
+
 #[test]
 fn a_chat_never_writes_the_approvals_a_person_gave() {
     let (_plane, denied) = denied_with(None, Os::Linux);

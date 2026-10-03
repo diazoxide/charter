@@ -50,16 +50,6 @@ pub fn tell(
     Err(no_channel())
 }
 
-/// [`send`]'s refusal, for a refused commit: no chat here is armed with charter's git hooks,
-/// so nothing calls this, and it says why all the same.
-pub fn tell_refused(
-    _path: &std::path::Path,
-    _token: Option<&ChatToken>,
-    _refused: &CommitRefused,
-) -> io::Result<()> {
-    Err(no_channel())
-}
-
 /// [`send`]'s refusal, for a saved session record: the record is written all the same, and
 /// `charter session record` says the tab will not close by itself.
 pub fn tell_saved(
@@ -67,6 +57,25 @@ pub fn tell_saved(
     _token: Option<&ChatToken>,
     _saved: &SessionSaved,
 ) -> io::Result<()> {
+    Err(no_channel())
+}
+
+/// [`send`]'s refusal, for every line a hook delivers: nothing is spooled either, since the
+/// spool sits beside a socket there is none of here.
+pub fn deliver_report(
+    _path: &std::path::Path,
+    _token: Option<&ChatToken>,
+    _report: &Report,
+) -> io::Result<super::Delivered> {
+    Err(no_channel())
+}
+
+/// [`deliver_report`]'s refusal, for a refused commit.
+pub fn deliver_refused(
+    _path: &std::path::Path,
+    _token: Option<&ChatToken>,
+    _refused: &CommitRefused,
+) -> io::Result<super::Delivered> {
     Err(no_channel())
 }
 

@@ -7,7 +7,7 @@ use std::sync::{Mutex, mpsc};
 use std::time::Duration;
 
 use charter_core::hookwire::{
-    CHAT_ENV, Decision, Hearing, Listener, SOCKET_ENV, TOKEN_ENV, ToolCall,
+    CHAT_ENV, Decision, Hearing, Listener, SOCKET_ENV, TOKEN_ENV, ToolCall, spool,
 };
 
 const CHARTER: &str = env!("CARGO_BIN_EXE_charter");
@@ -31,12 +31,15 @@ fn hook_with(
     let (tx, heard) = mpsc::channel();
     let tx = Mutex::new(tx);
     let _reading = listener.hear(Hearing {
-        each: Box::new(|_| {}),
+        each: Box::new(|_| Ok(())),
         answer: Box::new(|_, _| panic!("no ask")),
         noticed: Box::new(|_| {}),
         saved: Box::new(|_| {}),
-        refused: Box::new(|_| {}),
-        tool: Box::new(move |call| tx.lock().unwrap().send(call).unwrap()),
+        refused: Box::new(|_| Ok(())),
+        tool: Box::new(move |call| {
+            tx.lock().unwrap().send(call).unwrap();
+            Ok(())
+        }),
     });
     let mut child = Command::new(CHARTER)
         .args(["hook", word])
@@ -219,4 +222,137 @@ fn a_crashed_guard_with_its_stderr_closed_still_refuses_with_exit_2() {
         "a host that cannot be told and a stderr that cannot be written still refuse"
     );
     assert_eq!(crash_with_stderr_closed(None).code(), Some(2));
+}
+
+/// Runs `charter hook <word>` as chat 7 with `payload`, against a socket nobody listens on: the
+/// host issued the chat its token and went away.
+fn hook_with_no_host(word: &str, payload: &serde_json::Value) -> (i32, String, Vec<ToolCall>) {
+    let dir = tempfile::tempdir().expect("a directory");
+    let path = dir.path().join(".charter/app/hooks.sock");
+    let token = {
+        let listener = Listener::bind(dir.path(), &path).expect("a socket");
+        listener.tokens().issue(7).expect("a token")
+    };
+    let mut child = Command::new(CHARTER)
+        .args(["hook", word])
+        .current_dir(dir.path())
+        .env_clear()
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .env("HOME", dir.path())
+        .env(SOCKET_ENV, &path)
+        .env(CHAT_ENV, "7")
+        .env(TOKEN_ENV, token.expose())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("charter runs");
+    stand_in::feed(&mut child, payload.to_string().as_bytes());
+    let out = child.wait_with_output().expect("charter finishes");
+    let mut spooled = Vec::new();
+    spool::drain(&spool::dir_for(&path), &mut |item| {
+        if let spool::Drained::Line {
+            line: spool::Spooled::Tool(call),
+            ..
+        } = item
+        {
+            spooled.push(call);
+        }
+        Ok(())
+    })
+    .expect("the spool drains");
+    (
+        out.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        spooled,
+    )
+}
+
+#[test]
+fn a_tool_call_no_host_takes_is_spooled_and_the_harness_gets_the_same_answer() {
+    let (code, said, spooled) = hook_with_no_host(
+        "pretooluse",
+        &serde_json::json!({
+            "tool_name": "Bash",
+            "tool_use_id": "toolu_5",
+            "tool_input": {"command": "GIT_CONFIG_COUNT=1 git commit -m x"},
+            "cwd": "/tmp",
+        }),
+    );
+
+    assert_eq!(code, 0);
+    assert!(
+        said.contains("deny"),
+        "the harness still gets the refusal: {said}"
+    );
+    assert_eq!(spooled.len(), 1, "{spooled:?}");
+    assert_eq!(spooled[0].call.as_deref(), Some("toolu_5"));
+    assert_eq!(spooled[0].decision, Decision::Deny);
+}
+
+#[test]
+fn a_tool_hook_answers_only_once_the_host_has_recorded_its_call() {
+    use std::io::BufRead;
+    use std::time::Instant;
+    let dir = tempfile::tempdir().expect("a directory");
+    let path = dir.path().join("hooks.sock");
+    let listener = Listener::bind(dir.path(), &path).expect("a socket");
+    let token = listener.tokens().issue(7).expect("a token");
+    let recorded_at = std::sync::Arc::new(Mutex::new(None::<Instant>));
+    let _reading = listener.hear(Hearing {
+        each: Box::new(|_| Ok(())),
+        answer: Box::new(|_, _| panic!("no ask")),
+        noticed: Box::new(|_| {}),
+        saved: Box::new(|_| {}),
+        refused: Box::new(|_| Ok(())),
+        tool: Box::new({
+            let recorded_at = std::sync::Arc::clone(&recorded_at);
+            move |_| {
+                std::thread::sleep(Duration::from_millis(120));
+                *recorded_at.lock().unwrap() = Some(Instant::now());
+                Ok(())
+            }
+        }),
+    });
+    let mut child = Command::new(CHARTER)
+        .args(["hook", "pretooluse"])
+        .current_dir(dir.path())
+        .env_clear()
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .env("HOME", dir.path())
+        .env(SOCKET_ENV, &path)
+        .env(CHAT_ENV, "7")
+        .env(TOKEN_ENV, token.expose())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("charter runs");
+    stand_in::feed(
+        &mut child,
+        serde_json::json!({
+            "tool_name": "Bash",
+            "tool_use_id": "t",
+            "tool_input": {"command": "GIT_CONFIG_COUNT=1 git commit -m x"},
+            "cwd": "/tmp",
+        })
+        .to_string()
+        .as_bytes(),
+    );
+    let mut said = String::new();
+    std::io::BufReader::new(child.stdout.take().expect("stdout"))
+        .read_line(&mut said)
+        .expect("the answer");
+    let answered_at = Instant::now();
+    let _ = child.wait();
+
+    assert!(said.contains("deny"), "{said}");
+    let recorded_at = recorded_at
+        .lock()
+        .unwrap()
+        .expect("the host recorded the call");
+    assert!(
+        answered_at >= recorded_at,
+        "the hook answered before the host had recorded its call"
+    );
 }

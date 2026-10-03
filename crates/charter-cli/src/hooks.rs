@@ -69,26 +69,60 @@ pub fn with_hook<T>(payload: &str, now: Option<&str>, handler: impl FnOnce(&Hook
     handler(&hook)
 }
 
-/// What a tool hook answered: the exit status the harness reads, and what the host's event
-/// log records of it (FD-9).
+/// What a tool hook decided, before it is printed: what the host's event log records of it
+/// (FD-9), and what the harness is told.
+///
+/// **Decided first, printed last** (FD-30): the hook tells the host, or spools, before it
+/// answers, so an answer the harness has is one whose event is recorded or durable.
 pub struct Answered {
-    pub code: ExitCode,
     pub decision: Decision,
     /// The guard rule that refused, for a denial.
     pub rule: Option<String>,
+    said: Said,
 }
 
-/// A tool hook's handler, run over `payload` and printed.
-pub fn run(handler: Handler, payload: &str, now: Option<&str>) -> Answered {
-    let answer = with_hook(payload, now, handler);
-    Answered {
-        code: answered(&answer),
-        decision: decision_of(&answer),
-        rule: match &answer {
-            Answer::Deny(verdict) => Some(verdict.reason.clone()),
-            Answer::Nothing | Answer::Say(_) => None,
-        },
+/// What an [`Answered`] tells the harness.
+enum Said {
+    /// An answer, printed by [`answered`].
+    Answer(Answer),
+    /// An exit status already decided, with nothing to print.
+    Exit(ExitCode),
+}
+
+impl Answered {
+    /// `answer`, decided and not printed.
+    pub fn of(answer: Answer) -> Self {
+        Self {
+            decision: decision_of(&answer),
+            rule: match &answer {
+                Answer::Deny(verdict) => Some(verdict.reason.clone()),
+                Answer::Nothing | Answer::Say(_) => None,
+            },
+            said: Said::Answer(answer),
+        }
     }
+
+    /// An exit status with nothing printed: a refusal whose reason is on stderr, or nothing.
+    pub fn exit(code: ExitCode, decision: Decision, rule: Option<&str>) -> Self {
+        Self {
+            decision,
+            rule: rule.map(str::to_owned),
+            said: Said::Exit(code),
+        }
+    }
+
+    /// Tells the harness, and answers the exit status it reads.
+    pub fn print(self) -> ExitCode {
+        match self.said {
+            Said::Answer(answer) => answered(&answer),
+            Said::Exit(code) => code,
+        }
+    }
+}
+
+/// A tool hook's handler, run over `payload`, its answer decided and not printed yet.
+pub fn run(handler: Handler, payload: &str, now: Option<&str>) -> Answered {
+    Answered::of(with_hook(payload, now, handler))
 }
 
 /// What answers one tool hook word.
