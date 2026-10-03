@@ -13,8 +13,9 @@ export type ForgeAsk = {
  * Which forge a new project's repos are on, asked only when the repo's remote does not say
  * (#839). `charter init`'s rule, in the window: the forge comes from the `origin` of the repo
  * the project is made for, and a remote that is not on github.com or gitlab.com, or no remote
- * at all, is asked about rather than guessed. Inline and one press, so it is not one more
- * modal on the way to the first chat (W10's interrupt budget).
+ * at all, is asked about rather than guessed. Inline and one press. Inline does not make it
+ * free: it is a group named by its question, so W10's interrupt budget counts it
+ * (`interruptBudget.ts`), and on a new machine it is one of the three the first run can spend.
  */
 export function ForgeQuestion({ ask }: { ask: ForgeAsk }) {
   const heading = useId();
