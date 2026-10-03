@@ -3556,10 +3556,11 @@ mod tests {
         let (argv, plugin) = argv_of_a_profile_chat(&["ccs", "work"]);
         assert_eq!(argv.first().map(String::as_str), Some("work"), "{argv:?}");
         assert_eq!(argv[1..3], ["--plugin-dir".to_owned(), plugin], "{argv:?}");
-        assert_eq!(argv[3], "--settings", "{argv:?}");
+        assert_eq!(argv[3], "--mcp-config", "{argv:?}");
+        assert_eq!(argv[5], "--settings", "{argv:?}");
         // The app's own session words come after the flags, where they always were.
-        assert_eq!(argv[5], "--session-id", "{argv:?}");
-        assert_eq!(argv[7..], ["--name", "ide.7"], "{argv:?}");
+        assert_eq!(argv[7], "--session-id", "{argv:?}");
+        assert_eq!(argv[9..], ["--name", "ide.7"], "{argv:?}");
     }
 
     #[test]
@@ -3585,7 +3586,11 @@ mod tests {
                 )
             },
         );
-        let settings: serde_json::Value = serde_json::from_str(&argv[3]).expect("JSON");
+        let at = argv
+            .iter()
+            .position(|word| word == "--settings")
+            .expect("--settings");
+        let settings: serde_json::Value = serde_json::from_str(&argv[at + 1]).expect("JSON");
         assert_eq!(
             settings["enabledPlugins"],
             serde_json::json!({
@@ -3602,9 +3607,10 @@ mod tests {
     fn a_plain_profile_is_started_exactly_as_before() {
         let (argv, plugin) = argv_of_a_profile_chat(&["claude"]);
         assert_eq!(argv[..2], ["--plugin-dir".to_owned(), plugin], "{argv:?}");
-        assert_eq!(argv[2], "--settings", "{argv:?}");
-        assert_eq!(argv[4], "--session-id", "{argv:?}");
-        assert_eq!(argv[6..], ["--name", "ide.7"], "{argv:?}");
+        assert_eq!(argv[2], "--mcp-config", "{argv:?}");
+        assert_eq!(argv[4], "--settings", "{argv:?}");
+        assert_eq!(argv[6], "--session-id", "{argv:?}");
+        assert_eq!(argv[8..], ["--name", "ide.7"], "{argv:?}");
     }
 
     // --- charter's git hooks in a chat (SQ-16) ----------------------------------------------- //

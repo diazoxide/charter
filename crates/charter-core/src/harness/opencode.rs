@@ -58,6 +58,7 @@ impl HarnessAdapter for Opencode {
                     crate::opencode::session_config(
                         &shim,
                         kit.plugin.and_then(crate::skills::in_bundle).as_deref(),
+                        Some(kit.binary),
                     ),
                 ),
                 (crate::opencode::PURE_ENV.to_owned(), "0".to_owned()),
@@ -96,5 +97,42 @@ impl HarnessAdapter for Opencode {
         _charters: Vec<String>,
     ) -> Result<Vec<String>, String> {
         Err(super::adapter::not_compiled_for(Harness::Opencode))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_opencode_chat_is_handed_charter_s_mcp_server_in_its_session_config() {
+        // HP-7: opencode merges the config in OPENCODE_CONFIG_CONTENT key by key, so the server
+        // sits beside the operator's own and nothing is written.
+        let bundle = tempfile::tempdir().expect("a bundle");
+        let shim = bundle.path().join(crate::opencode::SHIM_IN_BUNDLE);
+        std::fs::create_dir_all(shim.parent().expect("a parent")).expect("dirs");
+        std::fs::write(&shim, "").expect("the shim");
+        let StateHooks::ThisSessionOnly { env, .. } = ADAPTER.arm(
+            Kit {
+                binary: std::path::Path::new("/bin/charter"),
+                plugin: Some(bundle.path()),
+            },
+            None,
+            &crate::harness_plugin::Chosen::new(),
+            None,
+        ) else {
+            panic!("armed per session");
+        };
+        let config = env
+            .iter()
+            .find(|(name, _)| name == crate::opencode::CONFIG_ENV)
+            .map(|(_, value)| value)
+            .expect("the session config");
+        let config: serde_json::Value = serde_json::from_str(config).expect("JSON");
+        assert_eq!(
+            config["mcp"]["charter"],
+            serde_json::json!({"type": "local", "command": ["/bin/charter", "mcp"], "enabled": true})
+        );
+        assert!(config["plugin"].is_array(), "{config}");
     }
 }

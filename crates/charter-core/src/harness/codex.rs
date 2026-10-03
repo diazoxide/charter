@@ -79,8 +79,11 @@ impl HarnessAdapter for Codex {
         _plugins: &crate::harness_plugin::Chosen,
         _sandbox: Sandbox<'_>,
     ) -> StateHooks {
+        let mut args = session_flags(kit.binary);
+        // charter's MCP server (HP-7), for this session beside the operator's own servers.
+        args.extend(["-c".to_owned(), crate::chattools::codex_flag(kit.binary)]);
         StateHooks::ThisSessionOnly {
-            args: session_flags(kit.binary),
+            args,
             env: kit
                 .plugin
                 .and_then(crate::skills::in_bundle)
@@ -240,6 +243,41 @@ mod tests {
         assert_eq!(args[0], "-c");
         assert!(args[1].starts_with("hooks."), "{args:?}");
         assert_eq!(cannot_report, ["notification"]);
+    }
+
+    #[test]
+    fn a_codex_chat_is_handed_charter_s_mcp_server_for_that_session_alone() {
+        // HP-7: `-c mcp_servers.charter=…` adds a server for one session beside the operator's.
+        let StateHooks::ThisSessionOnly { args, .. } =
+            adapter().arm(kit(), None, &crate::harness_plugin::Chosen::new(), None)
+        else {
+            panic!("armed per session");
+        };
+        let flag = args
+            .iter()
+            .find_map(|arg| arg.strip_prefix("mcp_servers.charter="))
+            .expect("the server's -c pair");
+        let at = args
+            .iter()
+            .position(|arg| arg.starts_with("mcp_servers."))
+            .unwrap();
+        assert_eq!(args[at - 1], "-c");
+        let server: toml::Table = format!("v = {flag}").parse::<toml::Table>().expect("TOML")["v"]
+            .as_table()
+            .expect("a table")
+            .clone();
+        assert_eq!(server["command"].as_str(), Some("/bin/charter"));
+        assert_eq!(server["args"].as_array().unwrap()[0].as_str(), Some("mcp"));
+        // Codex hands an MCP server only the variables it is told to: the chat's place, and
+        // never its token.
+        let passed: Vec<&str> = server["env_vars"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(toml::Value::as_str)
+            .collect();
+        assert!(passed.contains(&"CHARTER_WORKSPACE"), "{passed:?}");
+        assert!(!passed.contains(&"CHARTER_CHAT_TOKEN"), "{passed:?}");
     }
 
     #[test]

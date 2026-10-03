@@ -104,6 +104,7 @@ fn a_session_config_names_the_shim_as_a_url_no_character_can_end() {
     let config = session_config(
         Path::new("/Apps/my charter#1/plugin/opencode/charter.ts"),
         None,
+        None,
     );
     let doc: serde_json::Value = serde_json::from_str(&config).expect("JSON");
     assert_eq!(
@@ -122,6 +123,7 @@ fn a_session_config_hands_the_shim_the_skills_directory_as_its_option() {
     let config = session_config(
         Path::new("/Apps/plugin/opencode/charter.ts"),
         Some(Path::new("/Apps/my charter/plugin/skills")),
+        None,
     );
     let doc: serde_json::Value = serde_json::from_str(&config).expect("JSON");
     assert_eq!(

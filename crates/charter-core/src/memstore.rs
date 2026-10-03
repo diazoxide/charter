@@ -175,19 +175,15 @@ pub fn write(
     } else {
         String::new()
     };
-    let base = slug(&title);
-    let mut path = dir.join(format!("{prefix}{base}.md"));
-    let mut n = 2;
+    let mut n = 1;
+    let mut path = dir.join(entry_name(&prefix, &title, n));
     // Same title in the same second: keep both, numbered, as charter does.
     while path.exists() {
-        path = dir.join(format!("{prefix}{base}-{n}.md"));
         n += 1;
+        path = dir.join(entry_name(&prefix, &title, n));
     }
 
-    let body = format!(
-        "# {title}\n\n_{} · {kind}_\n\n{text}\n",
-        stamp.format("%Y-%m-%d %H:%M")
-    );
+    let body = memory_body(&title, kind, text, stamp);
     // The chosen name too: the collision loop stops on the first name nothing occupies,
     // and a dangling link occupies nothing.
     gate(root, &path)?;
@@ -214,6 +210,34 @@ pub fn write(
         index_append(root, &dir.join(INDEX), &name, &title)?;
     }
     Ok(path)
+}
+
+/// The `n`th name a memory titled `title` may take: `<prefix><slug>.md`, then `-2`, `-3`… for
+/// the same title in the same second. One spelling for every writer of a store, the CLI's and
+/// the MCP tools' alike.
+pub(crate) fn entry_name(prefix: &str, title: &str, n: usize) -> String {
+    let base = slug(title);
+    if n <= 1 {
+        format!("{prefix}{base}.md")
+    } else {
+        format!("{prefix}{base}-{n}.md")
+    }
+}
+
+/// What an index is made with when its store's own header was not written first.
+pub(crate) const INDEX_FALLBACK: &str = "# Memory Index\n\n";
+
+/// A memory file's whole text, as [`write()`] writes it.
+pub(crate) fn memory_body(
+    title: &str,
+    kind: &str,
+    text: &str,
+    stamp: chrono::NaiveDateTime,
+) -> String {
+    format!(
+        "# {title}\n\n_{} · {kind}_\n\n{text}\n",
+        stamp.format("%Y-%m-%d %H:%M")
+    )
 }
 
 /// Is `path` in the plane's state directory, `.charter/` — charter's own, and private?
@@ -248,7 +272,7 @@ pub fn index_append(
     fresh.write(true).create_new(true);
     match crate::contain::nofollow(&mut fresh).open(index) {
         Ok(mut f) => {
-            std::io::Write::write_all(&mut f, format!("# Memory Index\n\n{line}").as_bytes())
+            std::io::Write::write_all(&mut f, format!("{INDEX_FALLBACK}{line}").as_bytes())
         }
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
             let mut more = std::fs::OpenOptions::new();
@@ -460,8 +484,26 @@ pub fn duplicate_of(root: &std::path::Path, dir: &std::path::Path, text: &str) -
         let Ok(raw) = std::fs::read_to_string(&path) else {
             continue;
         };
-        let title = title_of_stored(&raw);
-        let other = wordset(&format!("{title} {}", comparable_body(&raw)));
+        if let Some(title) = duplicate_in(text, [raw.as_str()]) {
+            return Some(title);
+        }
+    }
+    None
+}
+
+/// The title of the first of `stored` (each a stored todo's whole text) that already says
+/// `text`, by [`duplicate_of`]'s rule, or `None`.
+pub(crate) fn duplicate_in<'a>(
+    text: &str,
+    stored: impl IntoIterator<Item = &'a str>,
+) -> Option<String> {
+    let words = wordset(text);
+    if words.is_empty() {
+        return None;
+    }
+    for raw in stored {
+        let title = title_of_stored(raw);
+        let other = wordset(&format!("{title} {}", comparable_body(raw)));
         if other.is_empty() {
             continue;
         }
@@ -565,6 +607,25 @@ fn drop_index_line(root: &std::path::Path, dir: &std::path::Path, filename: &str
     rewrite_index_lines(root, dir, filename, None);
 }
 
+/// An index's text with every line that links `filename` dropped: the surviving lines joined
+/// with `\n` plus one trailing `\n`, and nothing at all when none survive.
+pub(crate) fn index_dropping(text: &str, filename: &str) -> String {
+    let needle = format!("({filename})");
+    let kept: Vec<&str> = crate::mdsection::split_lines(text)
+        .into_iter()
+        .filter(|line| match leading_link(line) {
+            Some((_, file)) => file != filename,
+            // A line in a shape charter never writes is read as charter always read it.
+            None => !line.contains(&needle),
+        })
+        .collect();
+    if kept.is_empty() {
+        String::new()
+    } else {
+        format!("{}\n", kept.join("\n"))
+    }
+}
+
 /// One index line, `- [title](file)`, with `\\`, `[` and `]` in the title escaped (SI-9d): a
 /// title holding `](b.md)` would otherwise read as the end of its own line's link, and a retitle
 /// of `b.md` rewrote the line of the memory whose title mentioned it. Escaped, the title is
@@ -628,18 +689,18 @@ fn rewrite_index_lines(
     let Some(text) = read_text(&index) else {
         return;
     };
-    let needle = format!("({filename})");
-    let links_it = |line: &str| match leading_link(line) {
-        Some((_, file)) => file == filename,
-        // A line in a shape charter never writes is read as charter always read it.
-        None => line.contains(&needle),
-    };
     let retitled: Vec<String>;
     let kept: Vec<&str> = match title {
-        None => crate::mdsection::split_lines(&text)
-            .into_iter()
-            .filter(|line| !links_it(line))
-            .collect(),
+        None => {
+            let body = index_dropping(&text, filename);
+            let mode = if under_state(root, dir) {
+                crate::rewrite::Mode::Private
+            } else {
+                crate::rewrite::Mode::Kept
+            };
+            let _ = crate::rewrite::replace(dir, &index, body.as_bytes(), mode);
+            return;
+        }
         Some(title) => {
             retitled = crate::mdsection::split_lines(&text)
                 .into_iter()
@@ -816,7 +877,11 @@ pub fn is_absent(e: &std::io::Error) -> bool {
 /// `UnicodeDecodeError` is not one — charter#1142). This skips it, as it skips a file it
 /// cannot read.
 pub fn read_text(path: &std::path::Path) -> Option<String> {
-    let bytes = std::fs::read(path).ok()?;
+    text_of(std::fs::read(path).ok()?)
+}
+
+/// A store file's bytes as [`read_text`] reads them: UTF-8, with line endings made `\n`.
+pub(crate) fn text_of(bytes: Vec<u8>) -> Option<String> {
     let text = String::from_utf8(bytes).ok()?;
     if text.contains('\r') {
         Some(text.replace("\r\n", "\n").replace('\r', "\n"))
@@ -959,12 +1024,21 @@ pub fn search(
     limit: usize,
     unread: &mut Unread,
 ) -> Vec<(Found, usize)> {
+    if terms(query).is_empty() {
+        return Vec::new();
+    }
+    rank(gather(root, dirs, unread), query, limit)
+}
+
+/// [`search`]'s ranking of memories already read: a title hit weighs three, a hit anywhere in
+/// the text one, best first, ties by the path as a string.
+pub fn rank(found: Vec<Found>, query: &str, limit: usize) -> Vec<(Found, usize)> {
     let terms = terms(query);
     if terms.is_empty() {
         return Vec::new();
     }
     let mut scored: Vec<(usize, String, Found)> = Vec::new();
-    for found in gather(root, dirs, unread) {
+    for found in found {
         let low = found.text.to_lowercase();
         let title = found.title.to_lowercase();
         let score: usize = terms
@@ -1549,7 +1623,7 @@ fn one_segment(ident: &str) -> std::io::Result<()> {
 }
 
 /// `ident` as a filename: `x` and `x.md` both name `x.md`.
-fn md_name(ident: &str) -> String {
+pub(crate) fn md_name(ident: &str) -> String {
     if ident.ends_with(".md") {
         ident.to_string()
     } else {

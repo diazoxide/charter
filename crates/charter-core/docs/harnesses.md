@@ -233,6 +233,37 @@ the command line, for that session alone, and writes nothing into any config fol
   `skills/` as its option: the shim carries every hook, and adds that directory to the skills
   opencode discovers, beside the operator's own `skills.paths` (ADR 0058, ADR 0063).
 
+**Every chat is also handed charter's MCP server**, `charter mcp`, the same way on each harness
+and for that chat alone: Claude Code on `--mcp-config`, Codex on
+`-c mcp_servers.charter={…}`, and opencode under `mcp` in the same `OPENCODE_CONFIG_CONTENT`.
+Your own MCP servers stay beside it. Its tools act on the workspace the chat works in (or the
+project root), which the server reads by the same rules a `charter` command in the chat does,
+and none takes a workspace, a project or a path:
+
+| Tool | What it does |
+| --- | --- |
+| `todo_list`, `todo_add`, `todo_done` | The workspace's todos; closing one writes its trace to memory |
+| `memory_search`, `memory_add` | The workspace's memory |
+| `session_record_list`, `session_record_read` | The session records where the chat works, by file name |
+| `change_status` | The workspace's cross-repo changes, from their records; the forge is not asked |
+| `ask_operator` | A question put to you through the harness's own prompt; the model never answers it |
+
+The server runs where each harness runs its MCP servers, which for Claude Code and Codex is
+outside the sandbox its commands run in, so what it may do is the tool set above and nothing
+more: no tool reads a vault, the environment, the audit or a forge. Every store a tool reads or
+writes must sit inside `workspaces/<ws>/` with no link on the way and no link inside it,
+symbolic or hard, or the call is refused and nothing is written (V74). Each store is opened
+one component at a time without following a link and is then used only through that open
+directory, so a link swapped in while a tool runs cannot carry a read or a write anywhere else.
+On a platform where charter cannot do that yet (Windows), the tools refuse. A tool that writes
+re-reads `charter.toml` first, so a project that has become read-only to this charter (FR-24)
+is not written by a server that started before it did. `ask_operator` shows your harness
+*This chat asks: …*, and its answer field says not to type a password or secret there. Codex hands a server only
+the variables it is told to, so it is told the ones that say where the chat works
+(`CHARTER_ROOT`, `CHARTER_WORKSPACE`, `CHARTER_PLANE_ROOT_SESSION`, `CHARTER_PERSONA`,
+`CHARTER_SESSION_ID`) and not the chat's token. A Codex call may take an hour, because
+`ask_operator` waits on a person.
+
 Every chat also carries `$CHARTER_HARNESS` (the registry's name for its kind, whatever the
 profile is called), `$CHARTER_HARNESS_PROFILE` and `$CHARTER_ROOT` in its environment, and a
 `PATH` with the app's own `charter` first unless the profile sets its own.

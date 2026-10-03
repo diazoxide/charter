@@ -42,6 +42,7 @@ mod githook;
 mod guard;
 mod handoff;
 mod hooks;
+mod mcp;
 mod memory;
 mod piece;
 mod report;
@@ -384,6 +385,14 @@ enum Command {
         #[arg(last = true, allow_hyphen_values = true)]
         args: Vec<std::ffi::OsString>,
     },
+
+    /// charter's MCP server, on stdin and stdout: the tools a chat is offered for its
+    /// workspace's todos, memory, session records and changes, and a question for the operator
+    /// (HP-7).
+    ///
+    /// Hidden: nobody types it. Each harness starts it for a chat the app armed.
+    #[command(name = "mcp", hide = true)]
+    Mcp,
 
     /// Scan what is staged here as a chat's commit would be scanned: secrets and personal data
     /// in the lines it adds, and what the allowlist lets through. Commits nothing.
@@ -2423,6 +2432,7 @@ fn run(command: Command) -> Result<u8, String> {
         | Command::Handoff { .. }
         | Command::Report(_)
         | Command::ShellGuard { .. }
+        | Command::Mcp
         | Command::GitHook { .. }
         | Command::Scan { .. }
         | Command::Workspace(WorkspaceCommand::Remove { .. })
@@ -3103,6 +3113,16 @@ fn main() -> ExitCode {
             ReadOnly::RunsAndSays => eprintln!("charter: {why}"),
             ReadOnly::Refused => return refused(&why),
         }
+    }
+    // After the gate: on a project this charter cannot write, the server is refused whole.
+    if let Command::Mcp = &cli.command {
+        return match mcp::serve() {
+            Ok(code) => ExitCode::from(code),
+            Err(why) => {
+                voice::err(&why);
+                ExitCode::FAILURE
+            }
+        };
     }
     // `init`, `reinit` and `doctor` each say several lines of their own and choose their own
     // exit status — and for `doctor` the status IS the verdict, where a blocker is not an
