@@ -5,14 +5,15 @@
 //! never had — `edit-memory`, `archive-memory` and `unarchive-memory` (ADR 0065) — which call
 //! the same [`crate::personas::Persona`] methods the window's memory tab calls.
 //!
-//! # What was not ported
+//! # What the Python charter had that this leaves out, and why
 //!
 //! - **`persona migrate`** (legacy `personas/<name>.md` → `<name>/persona.md` + `memory/`).
 //!   Every reader here still reads the flat layout ([`crate::personas::def_path`]), so a
 //!   plane that never migrated loses nothing; moving one is a `git mv` to
 //!   `personas/<name>/persona.md`.
 //! - **`persona dispatch-backfill`**, a one-off seeding of the dispatch tally from old
-//!   transcripts. The tally has been written live for months; there is nothing left to seed.
+//!   transcripts, as a one-off command. Seeding and reconciling the tally from past sessions
+//!   is planned through the event log instead: OB-13, #995.
 //! - **`persona memory-sync`**: a memory goes with the plane's next save (ADR 0051).
 //!
 //! # What the CLI does around these

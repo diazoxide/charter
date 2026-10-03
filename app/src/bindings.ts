@@ -1565,10 +1565,11 @@ export type DoctorRow = {
 	/**
 	 *  Whether this build runs this check at all ([`Row::deferred`]).
 	 * 
-	 *  `false` is about twenty rows on every plane, each a WARN that says *not checked (…not
-	 *  ported…)*. They are drawn, because a doctor that dropped them would read as those
-	 *  problems being fixed — but a summary that COUNTED them would draw a warning count that
-	 *  never moves, and the one real warning among them would be invisible on its first day.
+	 *  `false` is about twenty rows on every plane, each a WARN that says *not checked (…)*, for
+	 *  checks this build does not run (planned in OB-8, #994, and FG-2, #802). They are drawn,
+	 *  because a doctor that dropped them would read as those problems being fixed — but a
+	 *  summary that COUNTED them would draw a warning count that never moves, and the one real
+	 *  warning among them would be invisible on its first day.
 	 */
 	checked: boolean,
 };

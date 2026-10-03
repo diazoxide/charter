@@ -32,9 +32,12 @@
 //!
 //! # A harness whose adapter cannot apply
 //!
-//! It still lists what it has installed, and says [`not_supported`]: "plugins for <harness> are
-//! not supported yet", with the measured reason. A chat on it is handed nothing, and every choice
-//! a file makes for it is said to be ignored. It is never left out of the list.
+//! It still lists what it has installed, and says [`not_supported`]: "plugins for <harness> are not
+//! supported yet", with the measured reason (the sentence is ADR 0050's). The "yet" waits on the
+//! harness gaining a per-session switch; charter's own channel to every harness is the MCP server,
+//! HP-7 (#674), which superseded per-project plugins for Codex and opencode. A chat on it is handed
+//! nothing, and every choice a file makes for it is said to be ignored. It is never left out of the
+//! list.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -160,10 +163,12 @@ pub fn adapter(kind: &str) -> Option<&'static dyn Adapter> {
     crate::harness::Harness::of_kind(kind).map(|harness| harness.adapter().plugins())
 }
 
-/// "plugins for <harness> are not supported yet — <why>", or none for an adapter that applies.
+/// "plugins for <harness> are not supported yet — <why>" (ADR 0050), or none for an adapter
+/// that applies.
 pub fn not_supported(adapter: &dyn Adapter) -> Option<String> {
     match adapter.support() {
         Support::PerChat => None,
+        // ADR 0050 fixes the sentence; the module header says what the "yet" waits on.
         Support::NotYet(why) => Some(format!(
             "plugins for {} are not supported yet — {why}",
             adapter.title()

@@ -316,7 +316,7 @@ pub fn search_dirs() -> Vec<PathBuf> {
 ///
 /// What made last the right answer before no longer holds. It was there because the Python
 /// charter's plugin wired nine tool-hook words by the bare word, and this binary blocks every
-/// one it has not ported — first, it would have refused every `Read` in every chat. An app
+/// one it does not answer — first, it would have refused every `Read` in every chat. An app
 /// chat no longer loads that plugin (`crate::plugin::SUPERSEDED` is turned off for the
 /// session), and the bundled plugin wires only words this binary answers.
 ///

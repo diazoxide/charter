@@ -81,7 +81,7 @@ impl HarnessAdapter for Opencode {
         &crate::harness_plugin::OPENCODE
     }
 
-    /// None yet (SD-2), so a chat of opencode in a sandboxed plane is refused.
+    /// None yet (SD-2, #695), so a chat of opencode in a sandboxed plane is refused.
     fn sandbox_compiler(&self) -> Option<crate::sandbox::Compiler> {
         None
     }

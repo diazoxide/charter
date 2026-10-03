@@ -31,7 +31,7 @@
 //! it unlinks only files whose current digest still matches the marker, and keeps every
 //! exclude line another wired checkout of the same repository still needs — and a narrower
 //! port of it would be a delete inside a repository the operator owns, decided by rules the
-//! two charters do not yet share. So the block is left, and every exclude file outside the
+//! this charter does not have yet (#998). So the block is left, and every exclude file outside the
 //! workspace is **named** with the one command that clears it. The operator loses a tidy-up,
 //! not a file.
 

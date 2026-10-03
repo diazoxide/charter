@@ -24,12 +24,14 @@
 //!
 //! # What is NOT here, and what it would take
 //!
-//! - **A checkout's layer read WITHOUT writing it.** [`reinit`] wires every checkout and
-//!   piece and reports all of charter's row states ([`crate::wslayer::Did`]), but the
-//!   read-only half — charter's `guest_layer`, which derives `withheld`, `unaccounted` and
-//!   `unrecorded` without writing — is not ported, because nothing in this binary reads a
-//!   workspace's layer without writing it. [`crate::wslayer::status`] says what it would cost
-//!   when something does.
+//! All three are planned in #998.
+//!
+//! - **A checkout's layer read WITHOUT writing it.** [`reinit`] wires every checkout and piece and
+//!   reports all of charter's row states ([`crate::wslayer::Did`]), but the read-only half —
+//!   charter's `guest_layer`, which derives `withheld`, `unaccounted` and `unrecorded` without
+//!   writing — is not here yet, because nothing in this binary reads a workspace's layer without
+//!   writing it until doctor's `workspace layer` row does (#994). [`crate::wslayer::status`] says
+//!   what it would cost when something does.
 //! - **A withdrawal inside a CHECKOUT.** [`crate::wslayer::wire`] removes a file the plane
 //!   stopped declaring from the workspace directory; [`crate::guest::wire`] does not do the
 //!   same inside a checkout, so such a file stays (hidden, and its line kept) until an

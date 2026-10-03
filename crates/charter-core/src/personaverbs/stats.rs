@@ -549,6 +549,7 @@ pub fn stats(root: &Path, name: Option<&str>, recent_days: i64, today: NaiveDate
         ));
     }
     if total == 0 {
+        // Seeding the tally from past sessions: OB-13, #995.
         say(Say::Info(
             "No dispatches recorded yet — the tally starts filling as sub-agents are dispatched; \
              seeding it from past sessions is not in this version yet."
@@ -559,6 +560,7 @@ pub fn stats(root: &Path, name: Option<&str>, recent_days: i64, today: NaiveDate
         || "never reconciled".to_string(),
         |d| format!("last reconciled {}", d.format("%Y-%m-%d")),
     );
+    // Reconciling the tally against past sessions: OB-13, #995.
     say(Say::Info(format!(
         "Tallied live from a PostToolUse hook, which can miss background dispatches — treat \
          DISP and ⚑ as a FLOOR ({when}). Reconciling it against this project's transcripts \

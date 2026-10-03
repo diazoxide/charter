@@ -10,11 +10,10 @@
 //!
 //! `charter/toolgate.py` is the persona tool-gate: an ALLOW-only gate that reads a persona's
 //! declared tools and tells the harness not to prompt. It is the last thing `pretooluse` does,
-//! after every refusal here, and **it is not ported**. This module is the refusals, and it
-//! takes the name because in this binary the refusals are what a tool call meets. The gap is
-//! stated rather than hidden: an operator running this charter gets every denial and no
-//! smoothing, which is the safe half to have first — `toolgate.py`'s own promise is that "a
-//! bug here can't block work, only fail to smooth it", and the inverse is true of its absence.
+//! after every refusal here, and in this binary it is [`crate::personagate`]. This module is
+//! the refusals, and it took the name because the refusals were ported first, which was the
+//! safe half to have first — `toolgate.py`'s own promise is that "a bug here can't block work,
+//! only fail to smooth it", and the inverse is true of its absence.
 //!
 //! # The order is MEASURED, not chosen
 //!
