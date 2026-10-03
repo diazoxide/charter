@@ -4,7 +4,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import * as RadioGroup from "@radix-ui/react-radio-group";
 import { HarnessSummary } from "./HarnessCard";
 import { ApprovalSentence, ProfileMeta } from "./ProfileApproval";
-import type { ProfileRow, StartOptions } from "./bindings";
+import type { ProfileRow, StartOptions, WithoutSandbox } from "./bindings";
 
 /**
  * The value that stands for "no persona at all".
@@ -56,6 +56,14 @@ const NO_PERSONA = "";
  * is refused, so cancelling here or being refused leaves nothing behind. Not remembered between
  * chats, for the footer box's reason: a box that silently stayed cleared would be a setting.
  *
+ * **"Start without the sandbox" is asked here, for this one chat** (ADR 0067 §7, ruling V78 a).
+ * Shown only where the project turned the sandbox on, beside what the sandbox does for the
+ * picked profile: on, or the reason it cannot be applied here — a missing program, with the
+ * distribution's install command (SD-30), or a system with no backend. Where it cannot be
+ * applied, the one way on is to start without it, said on the button itself. Not remembered
+ * between chats, for the footer box's reason, and never offered by anything but this picker:
+ * no CLI word, file or chat makes one, and charter records who turned it off and why.
+ *
  * **Every control here is a Radix primitive** (`docs/ui-primitives.md`). It was hand-rolled
  * markup, and the hand-rolling is what broke it: five spans in one `<label>` with no rule to
  * lay them out ran together into `claudeclaudeclaudebuilt-indefault`, and the accessible name
@@ -86,6 +94,7 @@ export function StartChat({
   trouble,
   onStart,
   onApprove,
+  onInstall,
   onCancel,
 }: {
   options: StartOptions;
@@ -104,13 +113,15 @@ export function StartChat({
   /** Why the last attempt did not start, if it did not. */
   trouble?: string;
   /** `label` is the Name field, or `null` when it was left empty. `newBranch` is the branch
-   *  box, and `false` when there is none to tick. */
+   *  box, and `false` when there is none to tick. `withoutSandbox` is the person's opt-out for
+   *  this chat, with the reason typed, or `null` for a sandboxed start. */
   onStart: (
     profile: string,
     persona: string | null,
     showFooter: boolean,
     label: string | null,
     newBranch: boolean,
+    withoutSandbox: WithoutSandbox | null,
   ) => void;
   /** The profile, the persona, the footer choice, and the exact line the operator read — so
    *  the approval is for what was on screen and not for whatever the file says by the time
@@ -122,7 +133,11 @@ export function StartChat({
     shown: string,
     label: string | null,
     newBranch: boolean,
+    withoutSandbox: WithoutSandbox | null,
   ) => void;
+  /** SD-30's install action: the window opens a shell tab at the project root with the
+   *  install command typed and not run (ruling V78 c). Absent, the command is only shown. */
+  onInstall?: () => void;
   onCancel: () => void;
 }) {
   const [profile, setProfile] = useState<string | undefined>(() => {
@@ -156,6 +171,19 @@ export function StartChat({
   const label = name.trim() === "" ? null : name;
   const nameId = useId();
   const picked = options.profiles.find((p) => p.name === profile);
+  // What the sandbox does for a chat on the picked profile, where the project turned it on.
+  const sandbox = picked?.sandbox ?? null;
+  // The opt-out box, for a chat the sandbox would hold. Off, and not remembered between chats.
+  const [optedOut, setOptedOut] = useState(false);
+  // Where the sandbox cannot be applied, the start IS the opt-out, and the button says so.
+  const refused = sandbox?.state === "refused";
+  const [reason, setReason] = useState("");
+  const reasonId = useId();
+  const withoutSandbox: WithoutSandbox | null =
+    (sandbox?.state === "sandboxed" && optedOut) || refused
+      ? { reason: reason.trim() === "" ? null : reason }
+      : null;
+  const startWord = withoutSandbox !== null ? "Start without the sandbox" : "Start";
   // Cancel, so the dialog can put the keyboard on it itself. React's `autoFocus` and the
   // focus trap's own opening move both aim at mount, and which of them lands last is not
   // something to leave to ordering: the trap is told to do nothing and this is focused here.
@@ -358,6 +386,82 @@ export function StartChat({
             </p>
           </div>
 
+          {sandbox !== null && (
+            <>
+              <h3 className="choices-name">Sandbox</h3>
+              {sandbox.state === "sandboxed" && (
+                <div className="choices surface">
+                  <div className="choice">
+                    <Checkbox.Root
+                      className="box"
+                      name="no-sandbox"
+                      id="no-sandbox"
+                      // In the tab sequence, said out loud, for the footer box's reason above.
+                      tabIndex={0}
+                      checked={optedOut}
+                      onCheckedChange={(checked) => setOptedOut(checked === true)}
+                      aria-describedby="no-sandbox-why"
+                    >
+                      <Checkbox.Indicator className="box-mark">✓</Checkbox.Indicator>
+                    </Checkbox.Root>
+                    <label className="who" htmlFor="no-sandbox">
+                      start without the sandbox
+                    </label>
+                    <span className="meta" id="no-sandbox-why">
+                      <span className="what">
+                        this project runs every chat sandboxed: it reaches only the hosts the
+                        project allows, and never your vaults. Ticked, this one chat runs without
+                        it, its tab says so, and charter records that you turned it off. Nothing
+                        inherits it: a relaunch or a resume asks the sandbox again.
+                      </span>
+                    </span>
+                  </div>
+                </div>
+              )}
+              {/* Sandboxed, with what the picker could not check yet: a profile nobody has
+                  approved is not run, not even to ask its version (ruling V87g). */}
+              {sandbox.state === "sandboxed" && sandbox.said !== "" && (
+                <p className="honest">{sandbox.said}</p>
+              )}
+              {sandbox.state === "unsandboxed" && <p className="honest">{sandbox.said}</p>}
+              {refused && (
+                <>
+                  <p className="honest mid-turn" role="alert">
+                    {sandbox.said}
+                  </p>
+                  {sandbox.install !== null && (
+                    <p className="honest">
+                      Install it with <code>{sandbox.install}</code>. It needs sudo, so charter
+                      types it in a shell tab and leaves running it to you.{" "}
+                      {onInstall && (
+                        <button type="button" className="dismiss" tabIndex={0} onClick={onInstall}>
+                          Type it in a shell tab
+                        </button>
+                      )}
+                    </p>
+                  )}
+                </>
+              )}
+              {withoutSandbox !== null && (
+                <div className="asks">
+                  <input
+                    id={reasonId}
+                    value={reason}
+                    autoComplete="off"
+                    spellCheck={false}
+                    aria-label="Why, if you want it recorded"
+                    aria-describedby={`${reasonId}-why`}
+                    onChange={(event) => setReason(event.target.value)}
+                  />
+                  <p className="came-back" id={`${reasonId}-why`}>
+                    Optional. Kept on this machine with the record that this chat ran without the
+                    sandbox.
+                  </p>
+                </div>
+              )}
+            </>
+          )}
+
           {options.refused.length > 0 && (
             <details className="refused">
               {/* A missing profile is a row that is not in the list — easy to miss in a way a
@@ -398,19 +502,29 @@ export function StartChat({
                 className="ends-it"
                 tabIndex={0}
                 onClick={() =>
-                  onApprove(picked.name, persona, showFooter, picked.shown, label, newBranch)
+                  onApprove(
+                    picked.name,
+                    persona,
+                    showFooter,
+                    picked.shown,
+                    label,
+                    newBranch,
+                    withoutSandbox,
+                  )
                 }
                 disabled={!picked || starting}
               >
-                {starting ? "Starting…" : "Approve and start"}
+                {starting ? "Starting…" : `Approve and ${startWord.toLowerCase()}`}
               </button>
             ) : (
               <button
                 tabIndex={0}
-                onClick={() => profile && onStart(profile, persona, showFooter, label, newBranch)}
+                onClick={() =>
+                  profile && onStart(profile, persona, showFooter, label, newBranch, withoutSandbox)
+                }
                 disabled={!profile || starting}
               >
-                {starting ? "Starting…" : "Start"}
+                {starting ? "Starting…" : startWord}
               </button>
             )}
           </div>

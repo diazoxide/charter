@@ -100,6 +100,7 @@ impl Plane {
             // it ships (ADR 0029).
             show_footer: false,
             resuming: None,
+            without_sandbox: None,
         }
     }
 }
@@ -1230,4 +1231,394 @@ fn an_opencode_chat_in_a_sandboxed_plane_is_not_started_rather_than_started_unco
         "{refused}"
     );
     assert!(!plane.root().join("ran").exists(), "the harness was run");
+}
+
+/// The per-chat opt-out (ADR 0067 §7, ruling V78 a): the picker's "Start without the
+/// sandbox" starts this one chat unsandboxed, says so on its tab, and hands the app what the
+/// audit records — on every system, the ones the sandbox cannot be applied on included.
+#[test]
+fn a_person_starts_one_chat_without_the_sandbox_and_its_tab_says_so() {
+    charter_core::unsteered!();
+    let (plane, _outside, _) = an_opencode_chat_in_a_sandboxed_plane();
+    let start = Start {
+        without_sandbox: Some(charter_core::sandbox::OptOut {
+            reason: Some("needs the network".to_owned()),
+        }),
+        ..plane.start("work")
+    };
+
+    let ready = start::ready(&start, plane.root()).expect("it starts");
+
+    assert_eq!(ready.sandbox, None);
+    let lifted = ready.unsandboxed.expect("audited as lifted");
+    assert_eq!(lifted.by, charter_core::sandbox::By::Person);
+    assert_eq!(lifted.reason.as_deref(), Some("needs the network"));
+    assert!(
+        ready.notices.contains(&lifted.notice()),
+        "{:?}",
+        ready.notices
+    );
+}
+
+#[test]
+fn a_chat_with_no_opt_out_is_never_started_as_if_it_had_one() {
+    charter_core::unsteered!();
+    let plane = Plane::new();
+    let bin = plane.harness();
+    plane.profile("claude", &bin, "");
+
+    let ready = start::ready(&plane.start("work"), plane.root()).expect("it starts");
+
+    assert_eq!(ready.unsandboxed, None, "nothing lifted, nothing to audit");
+}
+
+// -------------------------------------------------------------------------------------
+// The picker's view of the sandbox, asked as the start asks it (ruling V87g)
+// -------------------------------------------------------------------------------------
+
+/// A machine where every harness has a sandbox charter compiles.
+fn a_mac() -> charter_core::sandbox::Machine {
+    charter_core::sandbox::Machine {
+        env: charter_core::secrets::Env::of(&[]),
+        home: None,
+        os: charter_core::sandbox::Os::MacOs,
+    }
+}
+
+/// What the picker says for the `work` profile, approved or not, with every program run
+/// recorded in `ran`.
+fn picker_says(
+    plane: &Plane,
+    ran: &std::sync::Mutex<Vec<Vec<String>>>,
+) -> charter_core::sandbox::Ahead {
+    picker_says_on(plane, ran, &a_mac(), &|_| true)
+}
+
+/// [`picker_says`] on `machine`, with `has` saying which backend programs it has.
+fn picker_says_on(
+    plane: &Plane,
+    ran: &std::sync::Mutex<Vec<Vec<String>>>,
+    machine: &charter_core::sandbox::Machine,
+    has: &dyn Fn(&str) -> bool,
+) -> charter_core::sandbox::Ahead {
+    let set = profiles::current(plane.root());
+    let profile = set.get("work").expect("declared");
+    let probe = |words: &[String]| {
+        ran.lock().unwrap().push(words.to_vec());
+        Some("2.1.288 (Claude Code)".to_owned())
+    };
+    start::sandbox_ahead(profile, plane.root(), machine, has, "", Some(&probe)).expect("a harness")
+}
+
+/// What the start answers for `work` on the machine [`picker_says`] asks about, so the two are
+/// compared on one machine whatever the one the test runs on can apply.
+fn start_on_a_mac(plane: &Plane) -> Result<start::Ready, String> {
+    start::ready_on(
+        &plane.start("work"),
+        plane.root(),
+        &charter_core::harness_declaration::read(plane.root()),
+        &a_mac(),
+        &|_| true,
+    )
+}
+
+/// The picker gives the start's FIRST refusal: on a machine that cannot apply the sandbox, the
+/// start refuses for the machine before it looks at the program, and so does the picker — even
+/// for a program the check would refuse too.
+#[test]
+fn on_a_machine_that_cannot_sandbox_the_picker_and_the_start_say_the_same_first_refusal() {
+    charter_core::unsteered!();
+    let plane = Plane::new();
+    let inside = plane.root().join("bin/claude");
+    fs::create_dir_all(inside.parent().unwrap()).unwrap();
+    fs::write(&inside, "#!/bin/sh\n").unwrap();
+    fs::write(
+        plane.root().join("charter.toml"),
+        "[sandbox]\nmode = \"on\"\n",
+    )
+    .unwrap();
+    plane.profile("claude", &inside, "");
+    let linux = charter_core::sandbox::Machine {
+        os: charter_core::sandbox::Os::Linux,
+        ..a_mac()
+    };
+    let without_socat = |program: &str| program == "bwrap";
+    let ran = std::sync::Mutex::new(Vec::new());
+
+    let charter_core::sandbox::Ahead::Refused { why, install } =
+        picker_says_on(&plane, &ran, &linux, &without_socat)
+    else {
+        panic!("refused");
+    };
+    let started = start::ready_on(
+        &plane.start("work"),
+        plane.root(),
+        &charter_core::harness_declaration::read(plane.root()),
+        &linux,
+        &without_socat,
+    );
+
+    assert!(
+        why.contains("socat is not installed"),
+        "the machine first: {why}"
+    );
+    assert_eq!(started.err().as_deref(), Some(why.as_str()));
+    assert!(install.is_none() || install.as_deref().is_some_and(|it| it.contains("socat")));
+    assert!(ran.lock().unwrap().is_empty(), "nothing was run");
+}
+
+#[test]
+fn the_picker_checks_an_approved_program_with_the_starts_own_check() {
+    charter_core::unsteered!();
+    let outside = stand_in::NoChatWrites::new();
+    let plane = Plane::new();
+    let script = harness_outside(&plane, &outside, "claude");
+    fs::write(
+        plane.root().join("charter.toml"),
+        "[sandbox]\nmode = \"on\"\n",
+    )
+    .unwrap();
+    command_profile(
+        &plane,
+        "claude",
+        &["/bin/sh".to_owned(), script.display().to_string()],
+    );
+    let ran = std::sync::Mutex::new(Vec::new());
+
+    let said = picker_says(&plane, &ran);
+
+    assert_eq!(said, charter_core::sandbox::Ahead::Sandboxed);
+    let real = Path::new("/bin/sh")
+        .canonicalize()
+        .unwrap()
+        .display()
+        .to_string();
+    let ran = ran.lock().unwrap();
+    assert_eq!(ran.len(), 1, "{ran:?}");
+    assert_eq!(
+        ran[0][0], real,
+        "the resolved real file, as the start runs it"
+    );
+    assert_eq!(
+        ran[0][1],
+        script.display().to_string(),
+        "the whole command, as the start checks it, not the program alone"
+    );
+}
+
+#[test]
+fn the_picker_runs_no_program_nobody_approved() {
+    charter_core::unsteered!();
+    let outside = stand_in::NoChatWrites::new();
+    let plane = Plane::new();
+    let script = harness_outside(&plane, &outside, "claude");
+    fs::write(
+        plane.root().join("charter.toml"),
+        "[sandbox]\nmode = \"on\"\n",
+    )
+    .unwrap();
+    // Declared, and nobody approved it.
+    plane.declares(&format!(
+        "[harness.work]\nkind = \"claude\"\ncommand = [\"/bin/sh\", {:?}]\n",
+        script.display().to_string()
+    ));
+    let ran = std::sync::Mutex::new(Vec::new());
+
+    let said = picker_says(&plane, &ran);
+
+    assert_eq!(said, charter_core::sandbox::Ahead::Sandboxed);
+    assert!(
+        ran.lock().unwrap().is_empty(),
+        "an unapproved program was run"
+    );
+}
+
+/// The picker's gate is the start's own (`wiring::refusal`), not the approval alone: an
+/// approved profile from a `charter.local.toml` git would carry is refused by the start, so
+/// the picker does not run its program either.
+#[test]
+fn the_picker_runs_no_program_the_starts_gate_refuses() {
+    charter_core::unsteered!();
+    let outside = stand_in::NoChatWrites::new();
+    let plane = Plane::new();
+    let script = harness_outside(&plane, &outside, "claude");
+    fs::write(
+        plane.root().join("charter.toml"),
+        "[sandbox]\nmode = \"on\"\n",
+    )
+    .unwrap();
+    command_profile(
+        &plane,
+        "claude",
+        &["/bin/sh".to_owned(), script.display().to_string()],
+    );
+    // A repository that would carry `charter.local.toml`: nothing ignores it.
+    let mut init = std::process::Command::new("git");
+    init.args([
+        "init",
+        "-q",
+        &format!(
+            "--template={}",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/support/git-template")
+        ),
+    ])
+    .current_dir(plane.root())
+    .env("GIT_CONFIG_GLOBAL", "/dev/null")
+    .env("GIT_CONFIG_SYSTEM", "/dev/null");
+    let out = charter_core::forklock::output(&mut init).expect("git runs");
+    assert!(out.status.success(), "{out:?}");
+    let set = profiles::current(plane.root());
+    let profile = set.get("work").expect("declared");
+    assert!(
+        charter_core::profiletrust::approval_needed(plane.root(), profile).is_none(),
+        "approved"
+    );
+    assert!(
+        !start::may_check_program(profile, plane.root()),
+        "the start refuses it"
+    );
+    let ran = std::sync::Mutex::new(Vec::new());
+
+    let _ = picker_says(&plane, &ran);
+
+    assert!(
+        ran.lock().unwrap().is_empty(),
+        "a program the start would refuse was run"
+    );
+}
+
+#[test]
+fn the_picker_shows_a_program_where_the_chat_can_write_as_the_starts_refusal() {
+    charter_core::unsteered!();
+    let plane = Plane::new();
+    let inside = plane.root().join("bin/claude");
+    fs::create_dir_all(inside.parent().unwrap()).unwrap();
+    fs::write(&inside, "#!/bin/sh\n").unwrap();
+    let plane = {
+        fs::write(
+            plane.root().join("charter.toml"),
+            "[sandbox]\nmode = \"on\"\n",
+        )
+        .unwrap();
+        plane.profile("claude", &inside, "");
+        plane
+    };
+    let ran = std::sync::Mutex::new(Vec::new());
+
+    let charter_core::sandbox::Ahead::Refused { why, install } = picker_says(&plane, &ran) else {
+        panic!("refused");
+    };
+
+    assert!(
+        matches!(
+            start_on_a_mac(&plane),
+            Err(ref refused) if *refused == why
+        ),
+        "the picker says what the start says: {why}"
+    );
+    assert_eq!(install, None);
+    assert!(
+        ran.lock().unwrap().is_empty(),
+        "a refused program is not run"
+    );
+}
+
+#[test]
+fn the_picker_shows_a_relative_program_as_the_starts_refusal() {
+    charter_core::unsteered!();
+    let plane = Plane::new();
+    fs::write(
+        plane.root().join("charter.toml"),
+        "[sandbox]\nmode = \"on\"\n",
+    )
+    .unwrap();
+    plane.profile("claude", Path::new("./bin/claude"), "");
+    fs::create_dir_all(plane.root().join("bin")).unwrap();
+    fs::write(plane.root().join("bin/claude"), "#!/bin/sh\n").unwrap();
+    let ran = std::sync::Mutex::new(Vec::new());
+
+    let said = picker_says(&plane, &ran);
+
+    assert!(
+        matches!(&said, charter_core::sandbox::Ahead::Refused { .. }),
+        "{said:?}"
+    );
+    assert!(
+        ran.lock().unwrap().is_empty(),
+        "a refused program is not run"
+    );
+}
+
+/// D-88g, before the start: a command that names a file where the chat can write — a script
+/// in a temp folder, run by `/bin/sh` — is shown as the start's own refusal, and nothing runs.
+#[test]
+fn the_picker_shows_a_command_word_where_the_chat_can_write_as_the_starts_refusal() {
+    charter_core::unsteered!();
+    let temp = tempfile::tempdir().unwrap();
+    let plane = Plane::new();
+    let script = temp.path().join("claude.sh");
+    fs::write(&script, "echo '2.1.288 (Claude Code)'\n").unwrap();
+    fs::write(
+        plane.root().join("charter.toml"),
+        "[sandbox]\nmode = \"on\"\n",
+    )
+    .unwrap();
+    command_profile(
+        &plane,
+        "claude",
+        &["/bin/sh".to_owned(), script.display().to_string()],
+    );
+    let ran = std::sync::Mutex::new(Vec::new());
+
+    let charter_core::sandbox::Ahead::Refused { why, install } = picker_says(&plane, &ran) else {
+        panic!("refused");
+    };
+
+    assert!(why.contains("this profile's command names"), "{why}");
+    assert!(
+        matches!(
+            start_on_a_mac(&plane),
+            Err(ref refused) if *refused == why
+        ),
+        "the picker says what the start says: {why}"
+    );
+    assert_eq!(install, None);
+    assert!(ran.lock().unwrap().is_empty(), "nothing was run");
+}
+
+/// Round 10's every-path rule, before the start: a path embedded in a word — here a
+/// `--import=file://` URL into the plane — is refused by the picker exactly as by the start.
+#[test]
+fn the_picker_refuses_a_path_embedded_in_a_word_as_the_start_does() {
+    charter_core::unsteered!();
+    let outside = stand_in::NoChatWrites::new();
+    let plane = Plane::new();
+    let script = harness_outside(&plane, &outside, "claude");
+    fs::write(
+        plane.root().join("charter.toml"),
+        "[sandbox]\nmode = \"on\"\n",
+    )
+    .unwrap();
+    let embedded = format!("--import=file://{}/x.mjs", plane.root().display());
+    command_profile(
+        &plane,
+        "claude",
+        &["/bin/sh".to_owned(), script.display().to_string(), embedded],
+    );
+    let ran = std::sync::Mutex::new(Vec::new());
+
+    let charter_core::sandbox::Ahead::Refused { why, install } = picker_says(&plane, &ran) else {
+        panic!("refused");
+    };
+
+    assert!(why.contains("this profile's command names"), "{why}");
+    assert!(
+        matches!(
+            start_on_a_mac(&plane),
+            Err(ref refused) if *refused == why
+        ),
+        "the picker refuses the word the start refuses: {why}"
+    );
+    assert_eq!(install, None);
+    assert!(ran.lock().unwrap().is_empty(), "nothing was run");
 }

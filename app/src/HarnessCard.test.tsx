@@ -45,6 +45,7 @@ const row = (name: string, harness: HarnessGlance, isDefault: boolean): ProfileR
   approval: null,
   ready_to_type: harness.cannot_type === null,
   harness,
+  sandbox: null,
 });
 
 const OPTIONS: StartOptions = {

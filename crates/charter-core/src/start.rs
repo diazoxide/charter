@@ -56,6 +56,11 @@ pub struct Start {
     /// record from. `None` for every other chat, and for a relaunch: the conversation carries
     /// the record from then on.
     pub resuming: Option<String>,
+    /// A person's choice, in the window's new-chat picker, to start this one chat without the
+    /// sandbox (ADR 0067 §7, ruling V78 a). `None` for every start the window's picker did not
+    /// make: a relaunch, a resume, a handoff and the CLI all leave it so, which is what keeps
+    /// an opt-out from being inherited by anything.
+    pub without_sandbox: Option<crate::sandbox::OptOut>,
 }
 
 /// Where a chat is told to draw charter's footer rather than a blank line.
@@ -119,6 +124,11 @@ pub struct Ready {
     /// on ([`crate::sandbox::for_start`], ADR 0067). It reaches the harness through
     /// [`crate::harness::Harness::state_hooks_under`].
     pub sandbox: Option<crate::sandbox::Applied>,
+    /// Where the project turned the sandbox on and this chat starts without it — a person's
+    /// opt-out, or a system with no backend — who chose it and why: what its
+    /// `trust.sandbox.off` event records. `None` for a sandboxed chat, and for every chat in a
+    /// project that has not turned the sandbox on.
+    pub unsandboxed: Option<crate::sandbox::Lifted>,
     /// What the window says on this chat's tab as it starts, one line each, non-modal: why its
     /// `AGENTS.md` was not written, and every `AGENTS.md` that charter's exclude line hides
     /// and charter did not write (V35, ADR 0085). Empty for nearly every start.
@@ -170,6 +180,25 @@ pub fn ready_in(
     start: &Start,
     root: &Path,
     declared: &crate::harness_declaration::Declarations,
+) -> Result<Ready, String> {
+    ready_on(
+        start,
+        root,
+        declared,
+        &crate::sandbox::Machine::this(),
+        &crate::sandbox::backend::installed,
+    )
+}
+
+/// [`ready_in`] on `machine`, with `has` answering whether a program the sandbox's backend
+/// needs is installed: the seam a test names a machine through, so what [`sandbox_ahead`]
+/// answers for the same machine can be held to what the start answers.
+pub fn ready_on(
+    start: &Start,
+    root: &Path,
+    declared: &crate::harness_declaration::Declarations,
+    machine: &crate::sandbox::Machine,
+    has: &dyn Fn(&str) -> bool,
 ) -> Result<Ready, String> {
     let Some(name) = start.profile.as_deref() else {
         return Err(
@@ -231,15 +260,26 @@ pub fn ready_in(
             .cloned(),
     };
     // The sandbox, or no chat (ADR 0067 §1): asked before anything is resolved or run, so a
-    // chat that cannot be confined never reaches the program.
-    let sandbox = match harness {
-        Some(harness) => crate::sandbox::for_start(
+    // chat that cannot be confined never reaches the program. A person's opt-out, or a system
+    // with no backend, starts it unsandboxed instead, and the tab says so for the chat's whole
+    // life (§7).
+    let (sandbox, unsandboxed) = match harness {
+        Some(harness) => match crate::sandbox::decide(
             harness,
             root,
-            &crate::sandbox::Machine::this(),
-            &crate::sandbox::backend::installed,
+            machine,
+            has,
+            start.without_sandbox.as_ref(),
         )
-        .map_err(|refused| refused.to_string())?,
+        .map_err(|refused| refused.to_string())?
+        {
+            Some(crate::sandbox::Decided::Sandboxed(applied)) => (Some(applied), None),
+            Some(crate::sandbox::Decided::Unsandboxed(lifted)) => {
+                notices.push(lifted.notice());
+                (None, Some(lifted))
+            }
+            None => (None, None),
+        },
         None => {
             // A declared harness has no adapter, so nothing compiles a sandbox for it yet
             // (SD-2): in a project that turned the sandbox on, it is not started at all.
@@ -251,7 +291,7 @@ pub fn ready_in(
                     crate::shown::short(&profile.kind)
                 ));
             }
-            None
+            (None, None)
         }
     };
     let (added, session, how) = match (harness, &declared) {
@@ -343,8 +383,73 @@ pub fn ready_in(
         how,
         plugins,
         sandbox,
+        unsandboxed,
         notices,
     })
+}
+
+/// Whether the picker may run `profile`'s program to check it: exactly when the start's own
+/// gate ([`crate::wiring::refusal`]) would let it start — a startable kind, a `charter.local.toml`
+/// git would not carry, and an approved command. One gate for both, so the picker never runs
+/// what the start would refuse to.
+pub fn may_check_program(profile: &Profile, root: &Path) -> bool {
+    crate::wiring::refusal(profile, root).is_none()
+}
+
+/// What the new-chat picker says about the sandbox for a chat on `profile` in the project at
+/// `root`, before anything starts (ADR 0067 §7, ruling V78 a): every refusal [`ready`] would
+/// give, with "Start without the sandbox" beside it; `None` for a kind with no harness.
+///
+/// **In the start's order, so it gives the start's first refusal.** [`ready`] asks the
+/// project's sandbox and this machine (`sandbox::decide`: the policy, a held-back harness, the
+/// backend's programs, the compile) before it checks the program, so a machine that cannot
+/// apply the sandbox is said first here too, whatever the program is.
+///
+/// **Asked as the start asks it.** Where the chat would be sandboxed, the program is checked by
+/// [`crate::sandbox::program::checked`] with the words, folder and environment [`ready`] uses —
+/// the profile's whole command resolved once, the project root, the profile's environment — so
+/// the picker and the start cannot disagree (ruling V87g). **Only past the start's gate**: the
+/// check asks the program its `--version`, outside any sandbox, so it is not asked of a profile
+/// [`may_check_program`] refuses, as the start asks it only past that gate.
+pub fn sandbox_ahead(
+    profile: &Profile,
+    root: &Path,
+    machine: &crate::sandbox::Machine,
+    has: &dyn Fn(&str) -> bool,
+    os_release: &str,
+    probe: Option<&crate::sandbox::program::Probe<'_>>,
+) -> Option<crate::sandbox::Ahead> {
+    let harness = Harness::of_kind(&profile.kind)?;
+    let gated_in = may_check_program(profile, root);
+    let check = |applied: &crate::sandbox::Applied| -> Result<(), crate::sandbox::NotStarted> {
+        if !gated_in {
+            return Ok(());
+        }
+        let home = profiles::home().unwrap_or_else(|| PathBuf::from("~"));
+        // A program that is not there is the start's own refusal, not the sandbox's.
+        let Ok(words) = crate::programs::resolve_argv(&profiles::expanded_command(profile, &home))
+        else {
+            return Ok(());
+        };
+        let env = environment(profile, root, None, false, &Standing::of(root, root));
+        let mut writable = applied.writable();
+        writable.extend(crate::sandbox::program::temp_roots(&env));
+        crate::sandbox::program::checked(
+            harness,
+            &words,
+            applied.root(),
+            crate::sandbox::program::Chat {
+                cwd: root,
+                writable: &writable,
+                env: &env,
+            },
+            probe,
+        )
+        .map(|_| ())
+    };
+    Some(crate::sandbox::ahead(
+        harness, root, machine, has, os_release, &check,
+    ))
 }
 
 /// Where a chat starts, as the plane has it — and so what the chat is told about its

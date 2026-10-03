@@ -1441,3 +1441,113 @@ fn what_makes_events_durable_follows_each_seal_onto_the_segment_being_written() 
     );
     assert_eq!(durable.synced(), last);
 }
+
+// -------------------------------------------------------------------------------------
+// The sandbox's trust events (ADR 0067 §7, ADR 0075 as amended): until the audit exists,
+// they are written here, under the chat and the run they are about.
+// -------------------------------------------------------------------------------------
+
+#[test]
+fn a_person_turning_the_sandbox_off_is_a_trust_event_under_the_chats_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut host = recorder(dir.path());
+
+    let event = host
+        .trust(
+            RunOf {
+                chat: CHAT,
+                run: RUN,
+            },
+            &crate::sandbox::Change::Off(crate::sandbox::Lifted {
+                by: crate::sandbox::By::Person,
+                reason: Some("needs the network".to_owned()),
+            }),
+            Some(crate::harness::Harness::ClaudeCode),
+            Some("steward"),
+        )
+        .unwrap();
+
+    assert_eq!(event.kind, "trust.sandbox.off");
+    assert_eq!(
+        (event.chat.as_deref(), event.run.as_deref()),
+        (Some(CHAT), Some(RUN))
+    );
+    assert_eq!(event.device_id, DEVICE, "the machine it happened on");
+    assert_eq!(
+        event.body,
+        serde_json::json!({
+            "actor_kind": "human",
+            "actor": "operator",
+            "scope": "local-ui",
+            "harness": "claude",
+            "persona": "steward",
+            "reason": "needs the network",
+            "lifted": ["vaults", "integrity", "human-powers", "runner-internals", "later-code"],
+        })
+    );
+    assert_eq!(read(dir.path()).unwrap().last(), Some(&event), "written");
+}
+
+#[test]
+fn a_windows_start_without_the_sandbox_names_charter_as_the_actor_never_the_operator() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut host = recorder(dir.path());
+
+    let event = host
+        .trust(
+            RunOf {
+                chat: CHAT,
+                run: RUN,
+            },
+            &crate::sandbox::Change::Off(crate::sandbox::Lifted {
+                by: crate::sandbox::By::NoBackend(crate::sandbox::Os::Windows),
+                reason: None,
+            }),
+            Some(crate::harness::Harness::Codex),
+            None,
+        )
+        .unwrap();
+
+    assert_eq!(
+        event.body,
+        serde_json::json!({
+            "actor_kind": "host",
+            "actor": "charter (no backend on this OS)",
+            "os": "windows",
+            "harness": "codex",
+            "persona": null,
+            "reason": null,
+            "lifted": ["vaults", "integrity", "human-powers", "runner-internals", "later-code"],
+        })
+    );
+}
+
+#[test]
+fn the_sandbox_coming_back_on_for_a_chat_is_a_trust_event_too() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut host = recorder(dir.path());
+
+    let event = host
+        .trust(
+            RunOf {
+                chat: CHAT,
+                run: RUN,
+            },
+            &crate::sandbox::Change::On,
+            Some(crate::harness::Harness::ClaudeCode),
+            None,
+        )
+        .unwrap();
+
+    assert_eq!(event.kind, "trust.sandbox.on");
+    assert_eq!(
+        event.body,
+        serde_json::json!({
+            "actor_kind": "host",
+            "actor": "charter",
+            "harness": "claude",
+            "persona": null,
+            "restored": ["vaults", "integrity", "human-powers", "runner-internals", "later-code"],
+        })
+    );
+}

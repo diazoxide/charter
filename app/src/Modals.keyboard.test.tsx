@@ -198,6 +198,7 @@ const PROFILES = [
     is_default: true,
     ready_to_type: true,
     harness: null,
+    sandbox: null,
     approval: null,
   },
 ];

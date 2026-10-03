@@ -242,6 +242,31 @@ fn init_in_an_empty_directory_leaves_exactly_the_plane_the_python_charter_leaves
             Node::File(text.replacen(from, to, 1).into_bytes()),
         );
     }
+    // And the sandbox, which every project charter makes now runs its chats in (ADR 0067 §1,
+    // ruling V21 1 and 5): the block `init` writes after `[memory]`, ahead of the front door's
+    // `[persona]` that it sets afterwards.
+    let manifest = PathBuf::from("charter.toml");
+    let Some(Node::File(python)) = want.get(&manifest) else {
+        panic!("the fixture has a charter.toml");
+    };
+    let text = String::from_utf8(python.clone()).expect("UTF-8");
+    let persona = "\n[persona]\n";
+    assert!(
+        text.contains(persona) && !text.contains("[sandbox]"),
+        "{text}"
+    );
+    want.insert(
+        manifest,
+        Node::File(
+            text.replacen(
+                persona,
+                "\n[sandbox]\nmode = \"on\"\negress = [\"model-providers\", \"forge\", \
+                 \"toolchains\"]\n\n[persona]\n",
+                1,
+            )
+            .into_bytes(),
+        ),
+    );
     assert_eq!(tree(&scene.plane), want);
 }
 

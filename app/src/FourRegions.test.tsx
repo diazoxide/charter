@@ -290,10 +290,10 @@ describe("the four regions", () => {
     await openAChat();
 
     expect(boxes()).toEqual([
-      { show_footer: false, new_branch: true },
-      { show_footer: false, new_branch: false },
+      { show_footer: false, new_branch: true, without_sandbox: null },
+      { show_footer: false, new_branch: false, without_sandbox: null },
       // The workspace's own directory is in no repo: nothing to cut, and nothing asked for.
-      { show_footer: false, new_branch: false },
+      { show_footer: false, new_branch: false, without_sandbox: null },
     ]);
   });
 
