@@ -665,6 +665,41 @@ fn read(plane_root: &Path) -> Record {
 /// otherwise render identically, and the operator would read "nothing to reopen" and conclude
 /// their chats were never recorded rather than that a committed file is defective.
 pub fn read_or_refusal(plane_root: &Path) -> Result<Record, std::io::Error> {
+    Ok(match read_held(plane_root)? {
+        Held::Record(record) => record,
+        Held::Absent | Held::Garbled => Record::default(),
+    })
+}
+
+/// What was open, with "no record" told apart from "a record this charter cannot use".
+///
+/// `Ok(None)` is no record at all — a plane no app has quit in. A record that is there and does
+/// not parse, or is of another [`VERSION`], is an `InvalidData` error here, where
+/// [`read_or_refusal`] reads it as nothing open: a launch may start empty, but a caller that
+/// deletes what the record's chats need (`retention::on_open`) may not read "garbled" as
+/// "no chats".
+pub fn read_strictly(plane_root: &Path) -> Result<Option<Record>, std::io::Error> {
+    match read_held(plane_root)? {
+        Held::Record(record) => Ok(Some(record)),
+        Held::Absent => Ok(None),
+        Held::Garbled => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "{} is not a version {VERSION} record",
+                path(plane_root).display()
+            ),
+        )),
+    }
+}
+
+/// What reading the record found.
+enum Held {
+    Absent,
+    Garbled,
+    Record(Record),
+}
+
+fn read_held(plane_root: &Path) -> Result<Held, std::io::Error> {
     // Reading is guarded as well as writing, and the reason is the whole of ADR 0035: this
     // file says what to RUN. A test that reads a real plane's record starts the operator's
     // programs — which is what the reproduction for charter-app#129 did, from a checkout
@@ -681,7 +716,7 @@ pub fn read_or_refusal(plane_root: &Path) -> Result<Record, std::io::Error> {
         // No record is a first launch. A record that exists and cannot be read — no
         // permission, a failing disk — is a defect with a repair, and saying "nothing to
         // reopen" would send the operator looking in the wrong place.
-        Err(gone) if gone.kind() == std::io::ErrorKind::NotFound => return Ok(Record::default()),
+        Err(gone) if gone.kind() == std::io::ErrorKind::NotFound => return Ok(Held::Absent),
         Err(unreadable) => return Err(unreadable),
     };
     // Asked of the descriptor the read will use, not of the name: `fstat` and the read
@@ -694,10 +729,10 @@ pub fn read_or_refusal(plane_root: &Path) -> Result<Record, std::io::Error> {
         text
     };
     let Ok(on_disk) = serde_json::from_str::<OnDisk>(&text) else {
-        return Ok(Record::default());
+        return Ok(Held::Garbled);
     };
     if on_disk.version != VERSION {
-        return Ok(Record::default());
+        return Ok(Held::Garbled);
     }
     let record = Record {
         chats: on_disk.chats.into_iter().map(Chat::from).collect(),
@@ -715,10 +750,10 @@ pub fn read_or_refusal(plane_root: &Path) -> Result<Record, std::io::Error> {
     // below a number it still names — hand-edited, or written by a charter that did not know
     // about numbers — would otherwise deal that number to a second chat, which is the defect
     // (charter-app#90). Raising it here costs a gap in the counting and nothing else.
-    Ok(Record {
+    Ok(Held::Record(Record {
         dealt: highest_dealt(&record),
         ..record
-    })
+    }))
 }
 
 /// The conversation chat `number` is in now, as the app last recorded it in `plane_root` — or
