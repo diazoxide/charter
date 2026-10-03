@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791000892199,
+  "lastUpdate": 1791006460549,
   "repoUrl": "https://github.com/diazoxide/charter",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -294,6 +294,48 @@ window.BENCHMARK_DATA = {
             "value": 101.08881500000001,
             "unit": "ms",
             "extra": "median of 5 runs: 100.316, 100.334, 101.089, 101.230, 101.267 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "47940265034a153fe1aee01065882e3afa21bb1c",
+          "message": "changelog fold: a guessed flag folds nothing, and a stray file is refused\n\nTwo agents ran `node tools/changelog-fold.mjs --help` expecting help. It\nfolded their fragments into CHANGELOG.md and deleted them instead. The\nscript now:\n\n- answers `--help` and `-h` with its usage;\n- refuses any other argument with usage and exit 2, writing nothing;\n- refuses a file in changes/ that isn't README.md or a <slug>.md\n  fragment, because it used to be skipped silently and its entry lost;\n- recognises itself when run through a symlinked path. It used to do\n  nothing and exit 0, so `--check` passed with a fragment waiting.\n\nRefs #1023\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-03T09:46:36+04:00",
+          "tree_id": "940b06ffea13112343e0b7d3cdd69af6f69ea332",
+          "url": "https://github.com/diazoxide/charter/commit/47940265034a153fe1aee01065882e3afa21bb1c"
+        },
+        "date": 1791006459617,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.587981,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.581, 0.586, 0.588, 0.597, 0.598 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.904024,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.375, 16.466, 16.904, 17.328, 17.488 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 103.4111,
+            "unit": "ms",
+            "extra": "median of 5 runs: 103.167, 103.278, 103.411, 104.357, 106.405 ms"
           }
         ]
       }
