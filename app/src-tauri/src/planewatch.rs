@@ -31,35 +31,38 @@
 //! REPORTED, not what is watched.) The set is re-read after every batch, so a workspace made
 //! in a terminal is watched from then on.
 //!
-//! # One event, debounced
+//! # One event per burst
 //!
-//! `notify-debouncer-full` folds a burst — `git pull` landing ten todos, an editor's
-//! write-then-rename — into one batch, and a batch is one `plane-changed` carrying the plane
+//! The platform's events are folded into bursts ([`crate::watchset::bursts`]) — `git pull`
+//! landing ten todos, an editor's write-then-rename — and a burst is one `plane-changed` carrying the plane
 //! **and what changed in it**: each path, and what it is part of
 //! ([`charter_core::planechange`]) — a todo of `alpha`, a memory of `steward`, the root's
 //! session records. A panel reads again only on a change its answer is made of (FD-10), so a
 //! memory an agent saves no longer makes the sidebar list every workspace's todos once more.
 //!
-//! A batch this cannot place — a path outside the plane, an event notify could not name a path
-//! for, a rescan — is told as `changes: null`, "anything may have moved", and every reader
+//! A burst this cannot place — a path outside the plane, an event notify could not name a path
+//! for, a rescan, more paths than a burst holds — is told as `changes: null`, "anything may have moved", and every reader
 //! reads again, as each one did before there were kinds.
 //!
 //! **An access is not a change.** notify's inotify backend watches `IN_OPEN`, and reading a
 //! todo opens it — so a window that re-read on every event would re-read because it re-read,
 //! forever. [`crate::watchset::matters`] is where that loop is cut.
+//!
+//! **A file made and removed inside one burst is still told** (#1139). The debouncer this used
+//! to fold through took a removal that arrived while the creation was still queued as the file
+//! never having been there, and told neither — but a read the window made on another change
+//! may already have drawn that file.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, PoisonError, Weak};
-use std::time::Duration;
+use std::sync::{Arc, Mutex, PoisonError, Weak, mpsc};
+use std::time::{Duration, Instant};
 
 use charter_core::planechange::{self, Answer, Change, Kind};
 use charter_core::workspaces::Plane;
 
-use notify::EventKind;
-use notify_debouncer_full::{DebounceEventResult, Debouncer, RecommendedCache, new_debouncer_opt};
-
 use crate::planes::PlaneId;
+use crate::watchset::Burst;
 
 /// The event the window is sent.
 pub(crate) const CHANGED: &str = "plane-changed";
@@ -187,11 +190,53 @@ pub type Changed = Arc<dyn Fn(PlaneId, What) + Send + Sync + 'static>;
 /// panel within the second #264 asks for; long enough that a `git pull` is one read, not ten.
 const QUIET_FOR: Duration = Duration::from_millis(250);
 
+/// The most changed paths one burst holds. Past it the burst is told as "anything may have
+/// moved": a flood costs a fixed amount of memory, and every reader reads again.
+const MOST_PATHS: usize = 256;
+
 /// The watcher and the directories it is watching, behind one lock: the set is re-read on the
-/// watcher's own thread after every batch.
+/// watch's own thread after every burst.
 struct Inner<W: notify::Watcher> {
-    debouncer: Option<Debouncer<W, RecommendedCache>>,
+    watcher: Option<W>,
     watched: HashSet<PathBuf>,
+    rewatch: Rewatch,
+}
+
+/// The least time between two drops of every watch ([`Rewatch`]).
+const REWATCH_EVERY: Duration = Duration::from_secs(1);
+
+/// When a burst that was everything drops every watch and watches the set again.
+///
+/// **Only on inotify**, whose watch goes with its directory: a directory removed and made
+/// again inside a burst too big to say which paths it held would otherwise never be watched
+/// again. FSEvents and the others watch a path, not a directory, and dropping every watch there
+/// restarts the stream once per folder for nothing, so they only follow the set again.
+/// **And at most once a [`REWATCH_EVERY`]**: a drop owed sooner is made on the first burst
+/// after it.
+#[derive(Debug, Default)]
+struct Rewatch {
+    owed: bool,
+    last: Option<Instant>,
+}
+
+impl Rewatch {
+    /// Whether to drop every watch now, at `at`, after a burst on `kind` that was or was not
+    /// `everything`.
+    fn now(&mut self, kind: notify::WatcherKind, everything: bool, at: Instant) -> bool {
+        if everything && kind == notify::WatcherKind::Inotify {
+            self.owed = true;
+        }
+        if !self.owed
+            || self
+                .last
+                .is_some_and(|last| at.saturating_duration_since(last) < REWATCH_EVERY)
+        {
+            return false;
+        }
+        self.owed = false;
+        self.last = Some(at);
+        true
+    }
 }
 
 /// One plane's watch. Dropping it stops it.
@@ -221,48 +266,47 @@ impl<W: notify::Watcher + Send + 'static> Watch<W> {
         changed: Changed,
         config: notify::Config,
     ) -> notify::Result<Self> {
+        let (sent, events) = mpsc::channel();
+        let watcher = W::new(crate::watchset::sender(sent), config)?;
         let inner = Arc::new(Mutex::new(Inner {
-            debouncer: None,
+            watcher: Some(watcher),
             watched: HashSet::new(),
+            rewatch: Rewatch::default(),
         }));
+        inner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .follow(root);
         let handle: Weak<Mutex<Inner<W>>> = Arc::downgrade(&inner);
         let at = root.to_path_buf();
         // The platform reports paths as the disk spells them, which a root opened through a
         // link (`/var` for `/private/var` on macOS) is not.
         let spelled = root.canonicalize().ok();
-        let tell = move |batch: DebounceEventResult| {
-            let Ok(events) = batch else { return };
-            let events: Vec<_> = events
-                .iter()
-                .filter(|event| crate::watchset::matters(&event.kind))
-                .collect();
-            if events.is_empty() {
-                return;
-            }
-            let what = what_changed(&at, spelled.as_deref(), &events);
-            // The set first, so a workspace made in this batch is watched before the window
+        let tell = move |burst: Burst| {
+            let what = what_changed(&at, spelled.as_deref(), &burst);
+            // The set first, so a workspace made in this burst is watched before the window
             // reads it, and a change inside it straight after is not missed.
             //
-            // **And nothing at all once the watch is dropped.** The debouncer's drop only asks
-            // its thread to stop; a batch it had already gathered still arrives here, and a
-            // plane that has been closed must not be reported.
+            // **And nothing at all once the watch is dropped.** Dropping it ends this thread,
+            // but a burst already gathered still arrives here, and a plane that has been
+            // closed must not be reported.
             {
                 let Some(inner) = handle.upgrade() else {
                     return;
                 };
                 let mut inner = inner.lock().unwrap_or_else(PoisonError::into_inner);
-                if inner.debouncer.is_none() {
+                if inner.watcher.is_none() {
                     return;
                 }
-                for event in &events {
-                    if matches!(event.kind, EventKind::Remove(_)) {
-                        // Gone, so its watch is gone with it (inotify drops it on its own). A
-                        // directory removed and made again in one batch has to be watched
-                        // again, so it must not still be counted as watched.
-                        for path in &event.paths {
-                            inner.forget(path);
-                        }
-                    }
+                // What went is not known, so on inotify nothing watched can be trusted to still be.
+                if inner
+                    .rewatch
+                    .now(W::kind(), burst.everything, Instant::now())
+                {
+                    inner.forget_all();
+                }
+                for path in &burst.removed {
+                    inner.forget(path);
                 }
                 inner.follow(&at);
             }
@@ -271,68 +315,65 @@ impl<W: notify::Watcher + Send + 'static> Watch<W> {
             charter_core::planegit::touch(&at);
             changed(plane.clone(), what);
         };
-        let debouncer = new_debouncer_opt(QUIET_FOR, None, tell, RecommendedCache::new(), config)?;
-        {
-            let mut held = inner.lock().unwrap_or_else(PoisonError::into_inner);
-            held.debouncer = Some(debouncer);
-            held.follow(root);
-        }
+        std::thread::Builder::new()
+            .name("charter-plane-watch".into())
+            .spawn(move || {
+                for burst in crate::watchset::bursts(events, QUIET_FOR, MOST_PATHS) {
+                    tell(burst);
+                }
+            })
+            .map_err(notify::Error::io)?;
         Ok(Self { inner })
     }
 }
 
 impl<W: notify::Watcher> Drop for Watch<W> {
     fn drop(&mut self) {
-        // Taken out under the lock and dropped outside it, so the watcher's thread, which takes
-        // the same lock, never waits on a drop. An empty slot is also what tells a batch
+        // Taken out under the lock and dropped outside it, so the watch's thread, which takes
+        // the same lock, never waits on a drop. An empty slot is also what tells a burst
         // already in flight that nobody is listening any more.
-        let debouncer = self
+        let watcher = self
             .inner
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .debouncer
+            .watcher
             .take();
-        drop(debouncer);
+        drop(watcher);
     }
 }
 
 impl<W: notify::Watcher> Inner<W> {
     /// Watches what the plane has now, and stops watching what it no longer has.
     fn follow(&mut self, root: &Path) {
-        let Some(debouncer) = self.debouncer.as_mut() else {
-            return;
-        };
-        crate::watchset::follow(debouncer, &mut self.watched, wanted(root));
+        if let Some(watcher) = self.watcher.as_mut() {
+            crate::watchset::follow(watcher, &mut self.watched, wanted(root));
+        }
     }
 
     fn forget(&mut self, path: &Path) {
-        if self.watched.remove(path)
-            && let Some(debouncer) = self.debouncer.as_mut()
-        {
-            let _ = debouncer.unwatch(path);
+        if let Some(watcher) = self.watcher.as_mut() {
+            crate::watchset::forget(watcher, &mut self.watched, path);
+        }
+    }
+
+    fn forget_all(&mut self) {
+        for path in std::mem::take(&mut self.watched) {
+            if let Some(watcher) = self.watcher.as_mut() {
+                let _ = watcher.unwatch(&path);
+            }
         }
     }
 }
 
-/// What a batch changed, each path placed by [`planechange`] against the root as it was given
-/// or, failing that, as the disk spells it — or `None` when any one of them cannot be placed,
-/// an event names no path, or notify asks for a rescan (it dropped events it cannot name).
-fn what_changed(
-    root: &Path,
-    spelled: Option<&Path>,
-    events: &[&notify_debouncer_full::DebouncedEvent],
-) -> What {
-    if events
-        .iter()
-        .any(|event| event.paths.is_empty() || event.need_rescan())
-    {
+/// What a burst changed, each path placed by [`planechange`] against the root as it was given
+/// or, failing that, as the disk spells it — or `None` when any one of them cannot be placed
+/// or the burst is everything: an event named no path, notify asked for a rescan (it dropped
+/// events it cannot name), or there were more paths than a burst holds.
+fn what_changed(root: &Path, spelled: Option<&Path>, burst: &Burst) -> What {
+    if burst.everything {
         return None;
     }
-    let paths = || {
-        events
-            .iter()
-            .flat_map(|event| event.paths.iter().map(PathBuf::as_path))
-    };
+    let paths = || burst.paths.iter().map(PathBuf::as_path);
     planechange::of_batch(root, paths())
         .or_else(|| spelled.and_then(|spelled| planechange::of_batch(spelled, paths())))
 }
@@ -402,7 +443,6 @@ fn wanted(root: &Path) -> HashSet<PathBuf> {
 mod tests {
     use super::*;
     use std::sync::mpsc;
-    use std::time::Instant;
 
     /// How long a test waits to be told before it fails. Only a failure waits this long; a
     /// pass comes back in a quarter of a second.
@@ -535,27 +575,46 @@ mod tests {
 
     #[test]
     fn a_burst_of_changes_is_folded_rather_than_told_per_write() {
+        // On the platform the test plays (#1139): a busy machine spread ten writes past the
+        // debouncer's quarter-second tick and the poller's look, and they were told three
+        // times. A burst now runs a quarter of a second from its first event, so what decides
+        // is how the watch folds what it is handed, and that is what is tested.
+        use crate::watchset::raw::{Raw, raw};
+        use notify::event::{CreateKind, EventKind};
         let plane = plane_with_todos(&[]);
         let root = plane.path().canonicalize().expect("canonical");
-        let (_watch, told) = watching(&root);
+        let (_watch, told) = watching_on::<Raw>(&root);
 
         for n in 0..10 {
-            std::fs::write(
-                root.join(format!("workspaces/alpha/todos/t{n}.md")),
-                "# t\n",
-            )
-            .expect("a todo");
+            raw(
+                EventKind::Create(CreateKind::File),
+                &root.join(format!("workspaces/alpha/todos/t{n}.md")),
+            );
         }
 
         told.recv_timeout(PATIENCE).expect("told");
-        // Once, and twice at most on a loaded runner where the burst straddles a window —
-        // never once per write.
-        let more = std::iter::from_fn(|| told.recv_timeout(QUIET_FOR * 4).ok()).count();
         assert!(
-            more <= 1,
-            "a burst of ten writes was told {} times",
-            more + 1
+            told.recv_timeout(QUIET_FOR * 4).is_err(),
+            "a burst of ten writes was told more than once"
         );
+    }
+
+    #[test]
+    fn a_todo_made_and_removed_inside_one_burst_is_still_told() {
+        // The window may have drawn the todo on a read some other change set off; a watch that
+        // took the removal as cancelling the creation would never tell it to draw it gone.
+        use crate::watchset::raw::{Raw, raw};
+        use notify::event::{CreateKind, EventKind, RemoveKind};
+        let plane = plane_with_todos(&[]);
+        let root = plane.path().canonicalize().expect("canonical");
+        let (_watch, told) = telling_on::<Raw>(&root);
+        let todo = root.join("workspaces/alpha/todos/brief.md");
+
+        raw(EventKind::Create(CreateKind::File), &todo);
+        raw(EventKind::Remove(RemoveKind::File), &todo);
+
+        let change = told_about(&told, "workspaces/alpha/todos/brief.md");
+        assert_eq!(change.kind, Kind::Todos);
     }
 
     #[test]
@@ -655,6 +714,7 @@ mod tests {
         // The loop inotify would otherwise close: the window reads because it was told, and
         // the read opens the files it was told about.
         use crate::watchset::matters;
+        use notify::EventKind;
         use notify::event::{
             AccessKind, AccessMode, CreateKind, MetadataKind, ModifyKind, RemoveKind,
         };
@@ -688,45 +748,63 @@ mod tests {
         panic!("never told about {path}");
     }
 
-    fn event(kind: EventKind, paths: &[&Path]) -> notify_debouncer_full::DebouncedEvent {
-        let event = paths.iter().fold(notify::Event::new(kind), |event, path| {
-            event.add_path(path.to_path_buf())
-        });
-        notify_debouncer_full::DebouncedEvent::new(event, Instant::now())
+    /// A burst of the changes the platform reported on `paths`.
+    fn burst(paths: &[&Path]) -> Burst {
+        Burst {
+            paths: paths.iter().map(|path| path.to_path_buf()).collect(),
+            ..Burst::default()
+        }
     }
 
     #[test]
-    fn a_batch_is_told_as_unknown_when_an_event_names_no_path_or_asks_for_a_rescan() {
-        use notify::event::{CreateKind, Flag};
+    fn every_watch_is_dropped_on_inotify_only_and_at_most_once_a_second() {
+        use notify::WatcherKind::{Inotify, PollWatcher};
+        let start = Instant::now();
+        let at = |ms: u64| start + Duration::from_millis(ms);
+
+        let mut elsewhere = Rewatch::default();
+        assert!(!elsewhere.now(PollWatcher, true, at(0)));
+
+        let mut inotify = Rewatch::default();
+        assert!(
+            !inotify.now(Inotify, false, at(0)),
+            "nothing was everything"
+        );
+        assert!(inotify.now(Inotify, true, at(0)));
+        assert!(!inotify.now(Inotify, true, at(300)), "too soon: owed");
+        assert!(!inotify.now(Inotify, false, at(900)), "still too soon");
+        assert!(inotify.now(Inotify, false, at(1000)), "the owed drop, made");
+        assert!(!inotify.now(Inotify, false, at(3000)), "nothing owed");
+    }
+
+    #[test]
+    fn a_burst_is_told_as_unknown_when_anything_may_have_moved() {
         let root = Path::new("/home/dev/plane");
         let todo = root.join("workspaces/alpha/todos/a.md");
-        let placed = event(EventKind::Create(CreateKind::File), &[&todo]);
-        let named = what_changed(root, None, &[&placed]).expect("placed");
+        let named = what_changed(root, None, &burst(&[&todo])).expect("placed");
         assert_eq!(named.len(), 1);
         assert_eq!(named[0].kind, Kind::Todos);
 
-        let pathless = event(EventKind::Any, &[]);
-        assert_eq!(what_changed(root, None, &[&placed, &pathless]), None);
-
-        let mut rescan = event(EventKind::Other, &[&todo]);
-        rescan.event = rescan.event.set_flag(Flag::Rescan);
-        assert_eq!(what_changed(root, None, &[&placed, &rescan]), None);
+        let everything = Burst {
+            everything: true,
+            ..Burst::default()
+        };
+        assert_eq!(what_changed(root, None, &everything), None);
     }
 
     #[test]
     fn a_root_opened_through_a_link_places_paths_the_disk_spells_its_own_way() {
         // macOS hands FSEvents paths as `/private/var/...` for a root opened as `/var/...`.
-        use notify::event::CreateKind;
         let plane = plane_with_todos(&[]);
         let real = plane.path().canonicalize().expect("canonical");
         let links = tempfile::tempdir().expect("a place for the link");
         let link = links.path().join("plane");
         std::os::unix::fs::symlink(&real, &link).expect("a link to the plane");
         let todo = real.join("workspaces/alpha/todos/a.md");
-        let written = event(EventKind::Create(CreateKind::File), &[&todo]);
+        let written = burst(&[&todo]);
 
-        assert_eq!(what_changed(&link, None, &[&written]), None);
-        let placed = what_changed(&link, Some(&real), &[&written]).expect("placed");
+        assert_eq!(what_changed(&link, None, &written), None);
+        let placed = what_changed(&link, Some(&real), &written).expect("placed");
         assert_eq!(placed[0].path, "workspaces/alpha/todos/a.md");
         assert_eq!(placed[0].workspace.as_deref(), Some("alpha"));
     }
