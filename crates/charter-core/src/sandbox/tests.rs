@@ -124,10 +124,16 @@ fn paths(denied: &Denied, class: Class, access: Access) -> Vec<std::path::PathBu
 }
 
 #[test]
-fn the_four_classes_are_the_adrs_four() {
+fn the_five_classes_are_the_adrs_five() {
     assert_eq!(
         Class::ALL.map(Class::word),
-        ["vaults", "integrity", "human-powers", "runner-internals"]
+        [
+            "vaults",
+            "integrity",
+            "human-powers",
+            "runner-internals",
+            "later-code"
+        ]
     );
 }
 
@@ -356,6 +362,7 @@ fn compiled(denied: Denied, os: Os) -> Compiled {
         denied,
         hosts: vec!["github.com".to_owned()],
         os,
+        homes: Homes::default(),
     }
 }
 
@@ -387,7 +394,29 @@ fn a_claude_code_chat_reaches_only_the_presets_hosts_and_is_never_asked_to_widen
 #[test]
 fn claude_codes_web_tools_are_denied_because_the_allowed_hosts_do_not_hold_them() {
     let settings = claude::settings(&compiled(Denied::default(), Os::MacOs)).expect("compiles");
-    assert_eq!(settings.deny, ["WebFetch", "WebSearch"]);
+    assert_eq!(settings.deny[..2], ["WebFetch", "WebSearch"]);
+}
+
+/// `rules` without the later-code class's, which name a path at any depth (`**/`).
+fn by_path(rules: &[String]) -> Vec<String> {
+    rules
+        .iter()
+        .filter(|rule| !rule.contains("**/"))
+        .cloned()
+        .collect()
+}
+
+/// A Claude Code sandbox's `denyRead` and `denyWrite`, each without the later-code class's.
+fn filesystem_by_path(settings: &claude::Settings) -> (Vec<String>, Vec<String>) {
+    let list = |key: &str| -> Vec<String> {
+        settings.sandbox["filesystem"][key]
+            .as_array()
+            .expect("a list")
+            .iter()
+            .map(|it| it.as_str().expect("a path").to_owned())
+            .collect()
+    };
+    (by_path(&list("denyRead")), by_path(&list("denyWrite")))
 }
 
 #[test]
@@ -398,14 +427,14 @@ fn a_path_denied_to_read_is_denied_to_the_sandbox_and_to_claude_codes_own_tools(
     };
     let settings = claude::settings(&compiled(denied, Os::Linux)).expect("compiles");
     assert_eq!(
-        settings.sandbox["filesystem"],
-        serde_json::json!({
-            "denyRead": ["/p/.charter/vaults"],
-            "denyWrite": ["/p/.charter/vaults"],
-        })
+        filesystem_by_path(&settings),
+        (
+            vec!["/p/.charter/vaults".to_owned()],
+            vec!["/p/.charter/vaults".to_owned()]
+        )
     );
     assert_eq!(
-        settings.deny[2..],
+        by_path(&settings.deny)[2..],
         [
             "Read(//p/.charter/vaults)",
             "Read(//p/.charter/vaults/**)",
@@ -423,11 +452,11 @@ fn a_path_denied_to_write_stays_readable() {
     };
     let settings = claude::settings(&compiled(denied, Os::Linux)).expect("compiles");
     assert_eq!(
-        settings.sandbox["filesystem"],
-        serde_json::json!({"denyRead": [], "denyWrite": ["/p/.charter/app"]})
+        filesystem_by_path(&settings),
+        (Vec::new(), vec!["/p/.charter/app".to_owned()])
     );
     assert_eq!(
-        settings.deny[2..],
+        by_path(&settings.deny)[2..],
         ["Edit(//p/.charter/app)", "Edit(//p/.charter/app/**)"]
     );
 }
@@ -442,7 +471,7 @@ fn claude_code_cannot_hold_the_credential_store_on_any_system_so_the_chat_does_n
             services: vec![Service::CredentialStore],
         };
         let refused = claude::settings(&compiled(denied, os)).expect_err("refused");
-        assert_eq!(refused.class(), Class::Vaults, "{os:?}");
+        assert_eq!(refused.class(), Some(Class::Vaults), "{os:?}");
     }
 }
 
@@ -587,7 +616,7 @@ fn codex_cannot_hold_the_credential_store_on_any_system_so_the_chat_does_not_sta
         };
         let refused = codex::flags_named(&compiled(denied, os), "n").expect_err("refused");
         assert_eq!(refused.harness, Harness::Codex, "{os:?}");
-        assert_eq!(refused.class(), Class::Vaults, "{os:?}");
+        assert_eq!(refused.class(), Some(Class::Vaults), "{os:?}");
     }
 }
 
@@ -699,10 +728,32 @@ fn a_codex_command_that_only_tightens_or_does_not_touch_the_sandbox_is_not_named
     assert_eq!(codex::loosened_by(&["-a quick fix".to_owned()]), None);
 }
 
+/// The arguments `applied` gives a chat with these words, or why it may not start.
+fn args_of(
+    applied: &Applied,
+    command: Vec<String>,
+    armed: Vec<String>,
+    charters: Vec<String>,
+) -> Result<Vec<String>, String> {
+    applied
+        .line(
+            Words {
+                program: "codex".to_owned(),
+                command,
+                armed,
+                charters,
+            },
+            &At {
+                cwd: Some(applied.root()),
+                ..At::default()
+            },
+        )
+        .map(|line| line.args)
+}
+
+/// What a Codex chat would start under in `plane` once #1123 lands; held back today (V87f).
 fn codex_sandbox_in(plane: &tempfile::TempDir) -> Applied {
-    for_start(Harness::Codex, plane.path(), &machine(Os::MacOs), &|_| true)
-        .expect("starts")
-        .expect("sandboxed")
+    compiled_anyway(Harness::Codex, plane.path(), &machine(Os::MacOs)).expect("compiles")
 }
 
 #[test]
@@ -712,15 +763,15 @@ fn a_codex_line_puts_the_sandbox_last_among_the_flags_and_before_a_first_message
     let Form::Codex(flags) = applied.form() else {
         panic!("compiled for Codex");
     };
-    let sandbox = flags.args.clone();
+    let sandbox = [flags.args.clone(), codex::later_code(flags, plane.path())].concat();
 
-    let line = applied
-        .line(
-            words("work"),
-            words("-c hooks.Stop=[]"),
-            vec!["-m".to_owned(), "o3".to_owned(), "fix the bug".to_owned()],
-        )
-        .expect("starts");
+    let line = args_of(
+        &applied,
+        words("work"),
+        words("-c hooks.Stop=[]"),
+        vec!["-m".to_owned(), "o3".to_owned(), "fix the bug".to_owned()],
+    )
+    .expect("starts");
     let want: Vec<String> = [words("work -c hooks.Stop=[] -m o3"), sandbox.clone()]
         .concat()
         .into_iter()
@@ -730,9 +781,7 @@ fn a_codex_line_puts_the_sandbox_last_among_the_flags_and_before_a_first_message
 
     // A resume is a subcommand and its id: the flags go in front of both, where the hooks'
     // own `-c` flags already stand.
-    let line = applied
-        .line(Vec::new(), Vec::new(), words("resume 0199"))
-        .expect("starts");
+    let line = args_of(&applied, Vec::new(), Vec::new(), words("resume 0199")).expect("starts");
     assert_eq!(line, [sandbox, words("resume 0199")].concat());
 }
 
@@ -741,7 +790,12 @@ fn a_sandbox_is_refused_a_line_that_would_drop_it_and_says_where_the_flag_came_f
     let plane = plane_saying(ON);
     let applied = codex_sandbox_in(&plane);
     assert_eq!(
-        applied.line(words("-s danger-full-access"), Vec::new(), Vec::new()),
+        args_of(
+            &applied,
+            words("-s danger-full-access"),
+            Vec::new(),
+            Vec::new()
+        ),
         Err(
             "this plane runs every chat sandboxed, and the profile's command names `-s`, which \
              would run Codex outside the sandbox charter compiled for it, so nothing was \
@@ -750,7 +804,8 @@ fn a_sandbox_is_refused_a_line_that_would_drop_it_and_says_where_the_flag_came_f
         )
     );
     assert_eq!(
-        applied.line(
+        args_of(
+            &applied,
             Vec::new(),
             Vec::new(),
             words("-c sandbox_mode=\"danger-full-access\"")
@@ -812,11 +867,26 @@ fn a_claude_code_chat_in_a_sandboxed_plane_starts_sandboxed_for_claude_code() {
 }
 
 #[test]
-fn a_codex_chat_in_a_sandboxed_plane_starts_sandboxed_for_codex() {
+fn a_codex_chat_in_a_sandboxed_plane_is_refused_until_charter_wraps_it() {
+    // Ruling V87f: Codex resolves its paths again at every command, so its compiled sandbox
+    // cannot be kept to while it runs. The opt-out stays a person's.
     let plane = plane_saying(ON);
-    let applied = for_start(Harness::Codex, plane.path(), &machine(Os::MacOs), &|_| true)
-        .expect("starts")
-        .expect("sandboxed");
+    let refused = for_start(Harness::Codex, plane.path(), &machine(Os::MacOs), &|_| true)
+        .expect_err("refused");
+    assert_eq!(refused, NotStarted::HeldBack(Harness::Codex, 1123));
+    assert_eq!(
+        refused.to_string(),
+        "charter cannot keep a Codex chat inside its sandbox yet (#1123), so in this project it \
+         starts only without the sandbox."
+    );
+    // A plane that says nothing still starts Codex as it always has.
+    let plain = plane_saying("schema = 1\n");
+    assert_eq!(
+        for_start(Harness::Codex, plain.path(), &machine(Os::MacOs), &|_| true),
+        Ok(None)
+    );
+    // What the compiler gives, kept for #1123.
+    let applied = codex_sandbox_in(&plane);
     assert_eq!(applied.harness(), Harness::Codex);
     let Form::Codex(flags) = applied.form() else {
         panic!("compiled for Codex: {:?}", applied.form());
@@ -830,23 +900,6 @@ fn a_codex_chat_in_a_sandboxed_plane_starts_sandboxed_for_codex() {
 }
 
 #[test]
-fn a_harness_charter_has_no_compiler_for_does_not_start_in_a_sandboxed_plane() {
-    let plane = plane_saying(ON);
-    let refused = for_start(
-        Harness::Opencode,
-        plane.path(),
-        &machine(Os::Linux),
-        &|_| true,
-    );
-    assert_eq!(refused, Err(NotStarted::NoCompiler(Harness::Opencode)));
-    assert_eq!(
-        refused.expect_err("refused").to_string(),
-        "this plane runs every chat sandboxed, and charter cannot sandbox an opencode chat yet, \
-         so it was not started. Start this chat on a Claude Code or Codex profile."
-    );
-}
-
-#[test]
 fn a_mistyped_mode_does_not_start_a_chat_unsandboxed() {
     let plane = plane_saying("[sandbox]\nmode = \"of\"\n");
     let refused = for_start(
@@ -855,7 +908,13 @@ fn a_mistyped_mode_does_not_start_a_chat_unsandboxed() {
         &machine(Os::Linux),
         &|_| true,
     );
-    assert_eq!(refused, Err(NotStarted::NoCompiler(Harness::Opencode)));
+    assert_eq!(
+        refused,
+        Err(NotStarted::Uncompilable(Uncompilable {
+            harness: Harness::Opencode,
+            unheld: Unheld::Wrap(Os::Linux),
+        }))
+    );
 }
 
 #[test]
@@ -926,4 +985,525 @@ fn a_keyring_vault_in_a_sandboxed_plane_is_named_in_the_refusal() {
          for it, a sandboxed plane with a keyring vault starts no Claude Code chat. Nothing was \
          started."
     );
+}
+
+#[test]
+fn a_sandboxed_codex_chat_with_no_directory_is_refused_because_later_code_is_held_by_path() {
+    let plane = plane_saying(ON);
+    let applied = codex_sandbox_in(&plane);
+    let refused = applied
+        .line(
+            Words {
+                program: "codex".to_owned(),
+                command: Vec::new(),
+                armed: Vec::new(),
+                charters: Vec::new(),
+            },
+            &At::default(),
+        )
+        .expect_err("refused");
+    assert_eq!(refused, FOLDER_MISSING);
+}
+
+#[test]
+fn a_codex_chat_is_held_from_writing_later_code_in_its_directory_and_each_clone_in_it() {
+    let chat = tempfile::tempdir().expect("a chat directory");
+    std::fs::create_dir_all(chat.path().join("ws/repo/.git")).expect("a clone");
+    std::fs::create_dir_all(chat.path().join("node_modules/dep/.git")).expect("a package");
+    let flags = codex::flags_named(&compiled(Denied::default(), Os::MacOs), "n").expect("flags");
+    let args = codex::later_code(&flags, chat.path());
+    assert_eq!(args[0], "-c");
+    let (key, table) = args[1].split_once('=').expect("key=value");
+    assert_eq!(key, "permissions.n.filesystem");
+    let table: toml::Table = format!("t = {table}").parse().expect("toml");
+    let read = |path: std::path::PathBuf| table["t"].get(path.display().to_string()).cloned();
+    for base in [chat.path().to_path_buf(), chat.path().join("ws/repo")] {
+        for name in [
+            ".git/config",
+            ".git/hooks",
+            ".mcp.json",
+            "opencode.json",
+            "charter.toml",
+        ] {
+            assert_eq!(
+                read(base.join(name)),
+                Some(toml::Value::from("read")),
+                "{name}"
+            );
+        }
+    }
+    // What is not walked: a package's own repository.
+    assert_eq!(read(chat.path().join("node_modules/dep/.git/config")), None);
+}
+
+#[test]
+fn claude_code_is_denied_submodule_git_config_and_hook_managers_at_any_depth() {
+    // Measured on 2.1.288: a `**` in the middle of a `denyWrite` glob holds at any depth.
+    let settings = claude::settings(&compiled(Denied::default(), Os::MacOs)).expect("compiles");
+    let write = &settings.sandbox["filesystem"]["denyWrite"];
+    for glob in [
+        "**/.git/modules/**/config",
+        "**/.git/modules/**/hooks",
+        "**/.husky",
+        "**/.githooks",
+    ] {
+        assert!(
+            write
+                .as_array()
+                .expect("a list")
+                .iter()
+                .any(|it| it == glob),
+            "{glob} in {write}"
+        );
+        assert!(settings.deny.contains(&format!("Edit({glob})")), "{glob}");
+    }
+}
+
+#[test]
+fn codex_is_held_from_writing_each_submodule_s_config_and_hooks_found_at_its_start() {
+    let chat = tempfile::tempdir().expect("a chat directory");
+    let module = chat.path().join("repo/.git/modules/sub");
+    std::fs::create_dir_all(&module).expect("a submodule");
+    std::fs::write(module.join("HEAD"), "ref: x\n").expect("HEAD");
+    let flags = codex::flags_named(&compiled(Denied::default(), Os::MacOs), "n").expect("flags");
+    let args = codex::later_code(&flags, chat.path());
+    let table: toml::Table = format!("t = {}", args[1].split_once('=').expect("kv").1)
+        .parse()
+        .expect("toml");
+    for name in ["config", "hooks"] {
+        assert_eq!(
+            table["t"].get(module.join(name).display().to_string()),
+            Some(&toml::Value::from("read")),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn what_a_hooks_path_or_a_project_config_names_is_denied_to_every_harness_from_the_start() {
+    // Ruling V73d: resolved when the chat starts, as path denials of the later-code class.
+    let plane = plane_saying(ON);
+    let clone = plane.path().join("workspaces/w/repo");
+    std::fs::create_dir_all(clone.join(".git")).expect("a clone");
+    std::fs::write(clone.join(".git/config"), "[core]\nhooksPath = hooks\n").expect("config");
+    std::fs::create_dir_all(clone.join(".claude")).expect(".claude");
+    std::fs::write(
+        clone.join(".claude/settings.local.json"),
+        r#"{"hooks": {"PreToolUse": [{"hooks": [{"command": "./guard.sh"}]}]}}"#,
+    )
+    .expect("settings");
+    let denied = Denied::of(plane.path(), &machine(Os::MacOs));
+    for want in [clone.join("hooks"), clone.join("guard.sh")] {
+        assert!(
+            denied.paths.iter().any(|it| it.path == want
+                && it.class == Class::LaterCode
+                && it.access == Access::Write),
+            "{want:?} not denied: {:?}",
+            denied.paths
+        );
+    }
+}
+
+#[test]
+fn a_charter_toml_that_cannot_be_read_starts_no_chat_rather_than_one_unsandboxed() {
+    // Absent `[sandbox]` is "not set", so a file charter cannot parse must not read as that.
+    let plane = plane_saying("[sandbox\nmode = \"on\"\n");
+    for harness in Harness::ALL {
+        let refused =
+            for_start(harness, plane.path(), &machine(Os::MacOs), &|_| true).expect_err("refused");
+        assert_eq!(refused, NotStarted::PlaneUnreadable, "{harness:?}");
+        assert_eq!(
+            refused.to_string(),
+            "charter.toml in this plane cannot be read as TOML, so charter cannot tell whether \
+             it runs chats sandboxed, and nothing was started. Fix charter.toml and start the \
+             chat again."
+        );
+    }
+    // No file at all says nothing, as before.
+    let none = tempfile::tempdir().expect("a directory");
+    assert_eq!(
+        for_start(Harness::Codex, none.path(), &machine(Os::MacOs), &|_| true),
+        Ok(None)
+    );
+}
+
+#[test]
+fn a_codex_chat_at_the_plane_root_cannot_move_charters_state_aside() {
+    // Measured with `codex sandbox` on 0.147.0: with only `.charter/app` read-only, a command
+    // moved `.charter` aside and wrote the record under its new name.
+    let plane = tempfile::tempdir().expect("a plane");
+    std::fs::create_dir_all(plane.path().join(".charter/app")).expect(".charter/app");
+    std::fs::create_dir_all(plane.path().join(".charter/sessions")).expect("sessions");
+    let app = plane.path().join(".charter/app");
+    let denied = Denied {
+        paths: vec![one(
+            Class::Integrity,
+            &app.display().to_string(),
+            Access::Write,
+        )],
+        services: vec![],
+    };
+    let flags = codex::flags_named(&compiled(denied, Os::MacOs), "n").expect("flags");
+    let args = codex::later_code(&flags, plane.path());
+    let table: toml::Table = format!("t = {}", args[1].split_once('=').expect("kv").1)
+        .parse()
+        .expect("toml");
+    let access = |path: std::path::PathBuf| {
+        table["t"]
+            .get(path.display().to_string())
+            .and_then(toml::Value::as_str)
+            .map(str::to_owned)
+    };
+    assert_eq!(
+        access(plane.path().join(".charter")).as_deref(),
+        Some("read")
+    );
+    assert_eq!(access(app).as_deref(), Some("read"));
+    assert_eq!(
+        access(plane.path().join(".charter/sessions")).as_deref(),
+        Some("write")
+    );
+}
+
+#[test]
+fn the_directories_between_a_root_and_a_path_are_each_named_once() {
+    let root = std::path::Path::new("/p");
+    assert_eq!(
+        ancestors_within(std::path::Path::new("/p/.charter/app/spool"), root),
+        [
+            std::path::PathBuf::from("/p/.charter"),
+            std::path::PathBuf::from("/p/.charter/app")
+        ]
+    );
+    assert!(ancestors_within(std::path::Path::new("/p/x"), root).is_empty());
+    assert!(ancestors_within(std::path::Path::new("/q/x/y"), root).is_empty());
+}
+
+/// What `for_start` answers in a plane whose `charter.toml` is `make`'s.
+#[cfg(unix)]
+fn started_with(make: impl Fn(&std::path::Path)) -> Result<Option<Applied>, NotStarted> {
+    let plane = tempfile::tempdir().expect("a plane");
+    make(&plane.path().join("charter.toml"));
+    for_start(Harness::Codex, plane.path(), &machine(Os::MacOs), &|_| true)
+}
+
+/// What puts something at a path, for a test of what is there.
+#[cfg(unix)]
+type Maker = dyn Fn(&std::path::Path) + Send;
+
+#[cfg(unix)]
+#[test]
+fn a_charter_toml_that_is_not_a_regular_file_starts_no_chat() {
+    let sandboxed = |dir: &std::path::Path| {
+        let target = dir.join("real.toml");
+        std::fs::write(&target, ON).expect("a real file");
+        target
+    };
+    // A link to a file that turns the sandbox on, a dangling link, a directory, a FIFO, a socket.
+    let cases: Vec<(&str, Box<Maker>)> = vec![
+        (
+            "a link",
+            Box::new(move |at: &std::path::Path| {
+                let target = sandboxed(at.parent().expect("a parent"));
+                std::os::unix::fs::symlink(target, at).expect("a link");
+            }),
+        ),
+        (
+            "a dangling link",
+            Box::new(|at: &std::path::Path| {
+                std::os::unix::fs::symlink(at.with_extension("gone"), at).expect("a link");
+            }),
+        ),
+        (
+            "a directory",
+            Box::new(|at: &std::path::Path| std::fs::create_dir(at).expect("a directory")),
+        ),
+        (
+            "a FIFO",
+            Box::new(|at: &std::path::Path| {
+                let made = crate::forklock::status(std::process::Command::new("mkfifo").arg(at))
+                    .expect("mkfifo runs");
+                assert!(made.success(), "a FIFO");
+            }),
+        ),
+        (
+            "a socket",
+            Box::new(|at: &std::path::Path| {
+                std::mem::forget(std::os::unix::net::UnixListener::bind(at).expect("a socket"));
+            }),
+        ),
+    ];
+    for (what, make) in cases {
+        let (sender, answer) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(started_with(make).map(|it| it.is_some()));
+        });
+        // A FIFO with no writer must not hold the start up.
+        let started = answer
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap_or_else(|_| panic!("{what}: the start blocked"));
+        assert_eq!(started, Err(NotStarted::PlaneUnreadable), "{what}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_device_is_not_read_as_a_plane_file() {
+    // An endless device would otherwise be read until memory ran out.
+    for device in ["/dev/zero", "/dev/null"] {
+        assert_eq!(
+            read_plane_file(std::path::Path::new(device)),
+            Err(()),
+            "{device}"
+        );
+    }
+}
+
+#[test]
+fn a_charter_toml_over_the_cap_starts_no_chat() {
+    let plane = tempfile::tempdir().expect("a plane");
+    let mut text = String::from(ON);
+    text.push_str(&"# padding\n".repeat(PLANE_FILE_MAX / 10 + 1));
+    std::fs::write(plane.path().join("charter.toml"), &text).expect("charter.toml");
+    assert_eq!(
+        for_start(Harness::Codex, plane.path(), &machine(Os::MacOs), &|_| true),
+        Err(NotStarted::PlaneUnreadable)
+    );
+    // Under the cap, the same words are read.
+    std::fs::write(plane.path().join("charter.toml"), ON).expect("charter.toml");
+    assert!(
+        for_start(
+            Harness::ClaudeCode,
+            plane.path(),
+            &machine(Os::MacOs),
+            &|_| true
+        )
+        .expect("starts")
+        .is_some()
+    );
+}
+
+#[test]
+fn codex_is_never_handed_a_write_entry_at_or_under_a_denied_path() {
+    // A more exact entry wins in Codex's profile (measured), so a `write` for a file inside a
+    // denied directory would undo the denial.
+    let plane = tempfile::tempdir().expect("a plane");
+    let app = plane.path().join(".charter/app");
+    std::fs::create_dir_all(app.join("spool")).expect("a spool");
+    std::fs::write(app.join("keys.json"), "{}").expect("a key file");
+    std::fs::write(app.join("spool/1"), "x").expect("a spooled line");
+    std::fs::create_dir_all(plane.path().join(".charter/sessions")).expect("sessions");
+    let denied = Denied {
+        paths: vec![
+            one(Class::Integrity, &app.display().to_string(), Access::Write),
+            one(
+                Class::Integrity,
+                &app.join("spool").display().to_string(),
+                Access::ReadWrite,
+            ),
+        ],
+        services: vec![],
+    };
+    let flags = codex::flags_named(&compiled(denied.clone(), Os::MacOs), "n").expect("flags");
+    let args = codex::later_code(&flags, plane.path());
+    let table: toml::Table = format!("t = {}", args[1].split_once('=').expect("kv").1)
+        .parse()
+        .expect("toml");
+    let writes: Vec<std::path::PathBuf> = table["t"]
+        .as_table()
+        .expect("a table")
+        .iter()
+        .filter(|(_, access)| access.as_str() == Some("write"))
+        .map(|(path, _)| std::path::PathBuf::from(path))
+        .collect();
+    assert!(
+        !writes.is_empty(),
+        "the pinned directory's other children stay writable"
+    );
+    for write in &writes {
+        for denial in &denied.paths {
+            assert!(
+                !write.starts_with(&denial.path),
+                "{} is handed write under {}",
+                write.display(),
+                denial.path.display()
+            );
+        }
+    }
+    let access = |path: std::path::PathBuf| {
+        table["t"]
+            .get(path.display().to_string())
+            .and_then(toml::Value::as_str)
+            .map(str::to_owned)
+    };
+    assert_eq!(access(app.clone()).as_deref(), Some("read"));
+    assert_eq!(access(app.join("spool")).as_deref(), Some("deny"));
+    assert_eq!(access(app.join("keys.json")), None);
+}
+
+#[cfg(unix)]
+#[test]
+fn no_sandboxed_chat_starts_in_a_folder_reached_through_a_link() {
+    // Ruling of 2026-10-03, every harness: a plane-root chat could swap a workspace folder for
+    // a link, and a chat started there would take that folder's rules to the link's target.
+    let plane = plane_saying(ON);
+    let workspaces = plane.path().join("workspaces");
+    std::fs::create_dir_all(workspaces.join("real")).expect("a real workspace");
+    let elsewhere = tempfile::tempdir().expect("somewhere outside");
+    std::os::unix::fs::symlink(elsewhere.path(), workspaces.join("swapped")).expect("a link");
+    std::fs::write(workspaces.join("a-file"), "").expect("a file");
+    std::os::unix::fs::symlink(workspaces.join("real"), plane.path().join("ws-link"))
+        .expect("a link to a real folder inside");
+    let words = |program: &str| Words {
+        program: program.to_owned(),
+        command: Vec::new(),
+        armed: Vec::new(),
+        charters: Vec::new(),
+    };
+    for harness in Harness::ALL {
+        let applied =
+            compiled_anyway(harness, plane.path(), &machine(Os::MacOs)).expect("compiles");
+        let confinement = applied.confine().expect("confined");
+        let at = |cwd: std::path::PathBuf| (cwd, confinement.as_ref());
+        for (cwd, want) in [
+            (workspaces.join("swapped"), FOLDER_LINKED),
+            (workspaces.join("swapped/below"), FOLDER_LINKED),
+            (plane.path().join("ws-link"), FOLDER_LINKED),
+            (workspaces.join("a-file"), FOLDER_LINKED),
+            (workspaces.join("missing"), FOLDER_LINKED),
+            (elsewhere.path().to_path_buf(), FOLDER_OUTSIDE),
+        ] {
+            let (cwd, confinement) = at(cwd);
+            assert_eq!(
+                applied.line(
+                    words("harness"),
+                    &At {
+                        cwd: Some(&cwd),
+                        confinement,
+                        ..At::default()
+                    }
+                ),
+                Err(want.to_owned()),
+                "{harness:?} in {}",
+                cwd.display()
+            );
+        }
+        // A real folder inside the plane starts.
+        assert!(
+            applied
+                .line(
+                    words("harness"),
+                    &At {
+                        cwd: Some(&workspaces.join("real")),
+                        confinement: confinement.as_ref(),
+                        ..At::default()
+                    }
+                )
+                .is_ok(),
+            "{harness:?}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_charter_toml_above_a_folder_that_is_not_a_regular_file_is_seen() {
+    // The plane's own walk takes only a regular file for a plane, so a start that asked it
+    // alone would read "no plane" and start the chat unsandboxed.
+    for kind in ["link", "dangling", "directory", "fifo"] {
+        let plane = tempfile::tempdir().expect("a plane");
+        let marker = plane.path().join("charter.toml");
+        match kind {
+            "link" => {
+                std::fs::write(plane.path().join("real.toml"), ON).expect("a file");
+                std::os::unix::fs::symlink(plane.path().join("real.toml"), &marker)
+                    .expect("a link");
+            }
+            "dangling" => std::os::unix::fs::symlink("gone", &marker).expect("a link"),
+            "directory" => std::fs::create_dir(&marker).expect("a directory"),
+            _ => {
+                let made =
+                    crate::forklock::status(std::process::Command::new("mkfifo").arg(&marker))
+                        .expect("mkfifo runs");
+                assert!(made.success());
+            }
+        }
+        let below = plane.path().join("workspaces/w");
+        std::fs::create_dir_all(&below).expect("a workspace");
+        assert!(marker_unreadable(&below), "{kind}");
+    }
+    let plain = plane_saying(ON);
+    assert!(!marker_unreadable(plain.path()));
+    let none = tempfile::tempdir().expect("no plane");
+    assert!(!marker_unreadable(none.path()));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_folder_is_found_inside_its_plane_whichever_side_names_it_through_a_link() {
+    // The no-profile path takes the plane as the kernel names it and the folder as the chat
+    // recorded it (`/tmp/…` against `/private/tmp/…` on macOS, or a linked parent anywhere).
+    let base = tempfile::tempdir().expect("a base");
+    let real_parent = base.path().join("real");
+    std::fs::create_dir_all(real_parent.join("plane/workspaces/w")).expect("a plane");
+    std::fs::write(real_parent.join("plane/charter.toml"), ON).expect("charter.toml");
+    std::os::unix::fs::symlink(&real_parent, base.path().join("linked")).expect("a linked parent");
+    let real = real_parent.join("plane").canonicalize().expect("real");
+    let linked = base.path().join("linked/plane");
+    for (root, cwd) in [
+        (real.clone(), linked.join("workspaces/w")),
+        (linked.clone(), real.join("workspaces/w")),
+        (linked.clone(), linked.join("workspaces/w")),
+        (real.clone(), real.join("workspaces/w")),
+    ] {
+        assert_eq!(
+            folder_refusal(&root, &cwd),
+            None,
+            "{} in {}",
+            cwd.display(),
+            root.display()
+        );
+    }
+    // A link inside the plane is still one, from either side.
+    std::os::unix::fs::symlink(real.join("workspaces/w"), real.join("workspaces/again"))
+        .expect("a link inside");
+    for (root, cwd) in [
+        (real.clone(), linked.join("workspaces/again")),
+        (linked.clone(), real.join("workspaces/again")),
+    ] {
+        assert_eq!(
+            folder_refusal(&root, &cwd),
+            Some(FOLDER_LINKED),
+            "{}",
+            cwd.display()
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn every_harness_is_compiled_against_the_plane_as_the_kernel_names_it() {
+    // A plane reached through a link (`/tmp` on macOS, a linked parent anywhere): one spelling
+    // for every harness, so no rule depends on how the caller wrote the root.
+    let base = tempfile::tempdir().expect("a base");
+    std::fs::create_dir_all(base.path().join("real/plane")).expect("a plane");
+    std::fs::write(base.path().join("real/plane/charter.toml"), ON).expect("charter.toml");
+    std::os::unix::fs::symlink(base.path().join("real"), base.path().join("tmp"))
+        .expect("a linked parent");
+    let linked = base.path().join("tmp/plane");
+    let real = linked.canonicalize().expect("real");
+    assert_ne!(linked, real);
+    let applied = for_start(Harness::ClaudeCode, &linked, &machine(Os::MacOs), &|_| true)
+        .expect("starts")
+        .expect("sandboxed");
+    assert_eq!(applied.root(), real.as_path());
+    let Form::ClaudeCode(settings) = applied.form() else {
+        panic!("compiled for Claude Code");
+    };
+    let write = settings.sandbox["filesystem"]["denyWrite"].to_string();
+    assert!(
+        write.contains(&real.join(".charter/app").display().to_string()),
+        "{write}"
+    );
+    assert!(!write.contains(&linked.display().to_string()), "{write}");
 }

@@ -265,7 +265,7 @@ pub fn ready_in(
     // `/usr/bin:/bin:/usr/sbin:/sbin` and holds no harness.
     let mut argv = crate::programs::resolve_argv(&profiles::expanded_command(profile, &home))
         .map_err(|gone| format!("{} Nothing was started.", gone.said()))?;
-    let program = argv.remove(0);
+    let mut program = argv.remove(0);
     let standing = Standing::of(&here, root);
     let mut env = environment(
         profile,
@@ -274,6 +274,29 @@ pub fn ready_in(
         start.show_footer,
         &standing,
     );
+    // Ruling V87g: a sandbox binds only the harness it was compiled for, and never a program a
+    // sandboxed chat could have changed. Resolved once, here: the real file it names is what the
+    // check asks and what the chat then runs.
+    if let (Some(harness), Some(applied)) = (harness, &sandbox) {
+        let words: Vec<String> = std::iter::once(program.clone())
+            .chain(argv.iter().cloned())
+            .collect();
+        let mut writable = applied.writable();
+        writable.extend(crate::sandbox::program::temp_roots(&env));
+        let checked = crate::sandbox::program::checked(
+            harness,
+            &words,
+            applied.root(),
+            crate::sandbox::program::Chat {
+                cwd: &here,
+                writable: &writable,
+                env: &env,
+            },
+            None,
+        )
+        .map_err(|refused| refused.to_string())?;
+        program = checked[0].clone();
+    }
     // Only a record's path: the briefing reads it through `sessionrecord::open`, which refuses
     // anything else, and a profile cannot set a `CHARTER_` name to forge one.
     if let Some(record) = start

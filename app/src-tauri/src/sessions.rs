@@ -385,6 +385,12 @@ impl SessionHost for Sessions {
     fn already_dealt(&self, dealt: u32) {
         self.opened.fetch_max(dealt, Ordering::Relaxed);
     }
+
+    fn reports_to(&self) -> Option<std::path::PathBuf> {
+        self.reporting
+            .as_ref()
+            .map(|reporting| reporting.socket.clone())
+    }
 }
 
 impl Default for Sessions {

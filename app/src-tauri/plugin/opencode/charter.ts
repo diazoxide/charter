@@ -14,6 +14,9 @@
 
 const BINARY = process.env.CHARTER_HOOK_BINARY || ""
 
+// How a hook's stderr begins when the app did not take its line.
+const NOT_TAKEN = "charter: the app did not take this"
+
 const ROUTES = {
   "bash": {
     "name": "Bash",
@@ -141,6 +144,22 @@ export const CharterPlugin = async (plugin, options) => {
     return at
   }
 
+  // A line the app did not take is said in this window, never dropped in silence: a chat
+  // charter wraps cannot keep it for later (ruling V73c). The hook's own sentence, at most
+  // once in a while, so a closed app does not bury the pane in them.
+  let toldAt = 0
+  const notTaken = (said) => {
+    const line = String(said?.err ?? "").split("\n").find((it) => it.startsWith(NOT_TAKEN))
+    if (!line || Date.now() - toldAt < 30000) return
+    toldAt = Date.now()
+    try {
+      const shown = plugin?.client?.tui?.showToast?.({
+        body: { title: "charter", message: line, variant: "warning", duration: 15000 },
+      })
+      if (shown && typeof shown.catch === "function") shown.catch(() => {})
+    } catch {}
+  }
+
   // `charter hook <word>` with `payload` on stdin: its exit status, stdout and stderr.
   const run = async (word, payload, sid) => {
     if (!BINARY) return { code: -1, out: "", err: "no charter to run (CHARTER_HOOK_BINARY is not set)", missing: true }
@@ -174,11 +193,14 @@ export const CharterPlugin = async (plugin, options) => {
       ([out, err, code]) => ({ code, out, err }),
       (e) => ({ code: -1, out: "", err: String(e) }),
     )
+    let said
     try {
-      return await Promise.race([answered, late])
+      said = await Promise.race([answered, late])
     } finally {
       clearTimeout(timer)
     }
+    notTaken(said)
+    return said
   }
 
   // Awaited before the tool runs; throwing is what refusing is.

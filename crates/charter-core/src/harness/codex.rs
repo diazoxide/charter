@@ -110,6 +110,14 @@ impl HarnessAdapter for Codex {
         &crate::harness_plugin::CODEX
     }
 
+    /// Held back (ruling V87f): Codex resolves its paths again at every command, so a running
+    /// chat, or another chat that can write above its folder, could move what the compiled
+    /// profile names. A sandboxed project refuses Codex until charter runs it inside its own
+    /// compiled sandbox, as it runs opencode (#1123).
+    fn sandbox_held_back(&self) -> Option<u32> {
+        Some(1123)
+    }
+
     /// Flags on the chat's line ([`crate::sandbox::codex`] has the measurements).
     fn sandbox_compiler(&self) -> Option<crate::sandbox::Compiler> {
         Some(|compiled| crate::sandbox::codex::flags(compiled).map(Form::Codex))
@@ -122,13 +130,18 @@ impl HarnessAdapter for Codex {
     fn sandboxed_line(
         &self,
         form: &Form,
-        command: Vec<String>,
-        armed: Vec<String>,
-        charters: Vec<String>,
-    ) -> Result<Vec<String>, String> {
+        words: crate::sandbox::Words,
+        at: &crate::sandbox::At<'_>,
+    ) -> Result<crate::sandbox::Line, String> {
         let Form::Codex(flags) = form else {
             return Err(super::adapter::not_compiled_for(Harness::Codex));
         };
+        let crate::sandbox::Words {
+            program,
+            command,
+            armed,
+            charters,
+        } = words;
         for (words, named, fix) in [
             (
                 &command,
@@ -150,10 +163,32 @@ impl HarnessAdapter for Codex {
                 ));
             }
         }
+        // The later-code class is held by exact paths in the chat's directory, so a chat with
+        // none cannot hold it.
+        let Some(cwd) = at.cwd else {
+            return Err(
+                "this plane runs every chat sandboxed, and a Codex chat with no directory of \
+                 its own cannot be kept from writing what a later program loads, so nothing \
+                 was started."
+                    .to_owned(),
+            );
+        };
         let mut charters = charters;
         let tail =
             charters.split_off(charters.len() - crate::sandbox::codex::positional_tail(&charters));
-        Ok([command, armed, charters, flags.args.clone(), tail].concat())
+        Ok(crate::sandbox::Line {
+            program,
+            args: [
+                command,
+                armed,
+                charters,
+                flags.args.clone(),
+                crate::sandbox::codex::later_code(flags, cwd),
+                tail,
+            ]
+            .concat(),
+            env: Vec::new(),
+        })
     }
 }
 

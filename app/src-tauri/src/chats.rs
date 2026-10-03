@@ -151,6 +151,10 @@ struct Running {
     chat: Chat,
     how: Reopened,
     harness: Option<Harness>,
+    /// What runs beside a chat charter wraps — its egress proxy and its own temp directory —
+    /// for as long as the chat is open (ADR 0067 §2). Dropped with it.
+    #[allow(dead_code)]
+    confinement: Option<charter_core::sandbox::Confinement>,
 }
 
 /// Every chat the app has open, and which of them is in front.
@@ -372,10 +376,24 @@ impl Chats {
     /// `charter_core::start::ready` makes for one that is (ADR 0067). A chat whose program is a
     /// harness, in a plane that turned the sandbox on, is sandboxed or refused. A shell, or a
     /// chat outside any plane, is the operator's own and is left as it was.
-    fn sandbox_off_profile(chat: &Chat) -> Result<Option<charter_core::sandbox::Applied>, String> {
+    /// With the sandbox, the program the chat then runs: the real file the check asked about
+    /// (ruling V87g), never the name it was recorded by.
+    #[allow(clippy::type_complexity)]
+    fn sandbox_off_profile(
+        chat: &Chat,
+    ) -> Result<Option<(charter_core::sandbox::Applied, String)>, String> {
         let Some(harness) = chat.harness() else {
             return Ok(None);
         };
+        // A `charter.toml` above the chat that is not a regular file is no plane to the walk
+        // below, which would start the chat unsandboxed: it is refused instead.
+        if chat
+            .cwd
+            .as_deref()
+            .is_some_and(charter_core::sandbox::marker_unreadable)
+        {
+            return Err(charter_core::sandbox::NotStarted::PlaneUnreadable.to_string());
+        }
         let Some(root) = chat
             .cwd
             .as_deref()
@@ -383,13 +401,38 @@ impl Chats {
         else {
             return Ok(None);
         };
-        charter_core::sandbox::for_start(
+        let applied = charter_core::sandbox::for_start(
             harness,
             &root,
             &charter_core::sandbox::Machine::this(),
             &charter_core::sandbox::backend::installed,
         )
-        .map_err(|refused| refused.to_string())
+        .map_err(|refused| refused.to_string())?;
+        // Ruling V87g: the program is the harness the sandbox was compiled for, and not a file
+        // a sandboxed chat could have changed. The real file it names is what the check asks;
+        // a chat whose program then runs by another name would not be the one checked.
+        if let Some(applied) = &applied {
+            let launch = chat.launch();
+            let words = charter_core::programs::resolve_argv(std::slice::from_ref(&launch.program))
+                .map_err(|gone| format!("{} Nothing was started.", gone.said()))?;
+            let cwd = chat.cwd.clone().unwrap_or_else(|| root.clone());
+            let mut writable = applied.writable();
+            writable.extend(charter_core::sandbox::program::temp_roots(&[]));
+            let checked = charter_core::sandbox::program::checked(
+                harness,
+                &words,
+                applied.root(),
+                charter_core::sandbox::program::Chat {
+                    cwd: &cwd,
+                    writable: &writable,
+                    env: &[],
+                },
+                None,
+            )
+            .map_err(|refused| refused.to_string())?;
+            return Ok(Some((applied.clone(), checked[0].clone())));
+        }
+        Ok(None)
     }
 
     /// Starts a chat the core has already worked out the launch for — a chat on a profile.
@@ -532,8 +575,12 @@ impl Chats {
         why: Why,
     ) -> Result<u32, String> {
         // Before anything is resolved or run, as for a chat on a profile.
-        let sandbox = Self::sandbox_off_profile(chat)?;
-        let launch = chat.launch();
+        let sandboxed = Self::sandbox_off_profile(chat)?;
+        let mut launch = chat.launch();
+        let sandbox = sandboxed.map(|(applied, program)| {
+            launch.program = program;
+            applied
+        });
         // A shell tab's shims, and the start files that keep them first. Never recorded: they
         // are this build's, and worked out again at every start.
         let (args, env) = self.shell_start(chat, &launch.program, launch.args);
@@ -653,15 +700,52 @@ impl Chats {
         // arguments may end in a positional prompt that nothing may come after.
         // `charter_core::start::Ready::command_line` is the one place that order is decided.
         let (hooks, armed) = self.state_hooks(harness, chat.cwd.as_deref(), plugins, sandbox)?;
+        // What a wrapped chat needs running beside it, started before it and kept for as long
+        // as it is open: charter's egress proxy and its own temp directory (ADR 0067 §2).
+        let confinement = match sandbox {
+            Some(applied) => applied.confine().map_err(|err| {
+                format!(
+                    "this plane runs every chat sandboxed, and charter could not start what the \
+                     sandbox needs beside this chat ({err}), so nothing was started."
+                )
+            })?,
+            None => None,
+        };
         // Under a sandbox, the sandbox decides the line: a flag of the harness's own in the
         // chat's own words can outrank it, so such a chat is refused here, where every chat
-        // opens, and flags it rides on go last among the flags (ADR 0067).
-        let all = match sandbox {
-            Some(applied) => applied.line(command, hooks, args)?,
-            None => charter_core::start::Ready::line(command, hooks, args),
+        // opens, and flags it rides on go last among the flags. A harness charter wraps runs as
+        // the wrap's program, with its whole line after it (ADR 0067).
+        let socket = self.sessions.reports_to();
+        let (program, all, wrapped) = match sandbox {
+            Some(applied) => {
+                let line = applied.line(
+                    charter_core::sandbox::Words {
+                        program,
+                        command,
+                        armed: hooks,
+                        charters: args,
+                    },
+                    &charter_core::sandbox::At {
+                        cwd: chat.cwd.as_deref(),
+                        hook_socket: socket.as_deref(),
+                        confinement: confinement.as_ref(),
+                    },
+                )?;
+                (line.program, line.args, line.env)
+            }
+            None => (
+                program,
+                charter_core::start::Ready::line(command, hooks, args),
+                Vec::new(),
+            ),
         };
         let mut env = env;
         env.extend(armed);
+        // What the wrap sets wins over a profile's or the arming's value of the same name: its
+        // proxy, its temp directory. Sorting cannot decide it, since the session applies the
+        // pairs in order and two of one name would leave the later one standing.
+        env.retain(|(key, _)| !wrapped.iter().any(|(set, _)| set == key));
+        env.extend(wrapped);
         env.sort();
         // The app's own `charter` first, then the directories charter searched for the
         // harness — so a hook the plane spells as the bare word `charter`, or a skill's
@@ -732,6 +816,7 @@ impl Chats {
                 chat: under,
                 how,
                 harness,
+                confinement,
             },
         );
         self.write_it_down();
@@ -1801,6 +1886,86 @@ mod tests {
 
     // --- the sandbox (ADR 0067): a chat on no profile goes through the same decision ------- //
 
+    #[test]
+    fn a_sandboxed_opencode_chat_runs_inside_charters_wrap_and_its_proxy_lives_as_long_as_it() {
+        // opencode has no sandbox of its own, so the whole harness runs under the profile
+        // charter writes, reaching the network through charter's proxy alone (ADR 0067 §2).
+        let plane = a_sandboxed_plane();
+        let plugin = plane.path().join("plugin");
+        let shim = plugin.join(charter_core::opencode::SHIM_IN_BUNDLE);
+        std::fs::create_dir_all(shim.parent().expect("a parent")).expect("the bundle");
+        std::fs::write(&shim, "export default {}\n").expect("the shim");
+        let socket = plane.path().join(".charter/app/hooks.sock");
+        let host = Pretend::default();
+        host.reporting_on(socket.clone());
+        let mut chats = Chats::on_host(Box::new(|_| {}), Box::new(host.clone()));
+        chats.arming_with(crate::Shipped {
+            binary: Some(plane.path().join("charter")),
+            plugin: Some(plugin),
+            shims: None,
+            git_hooks: None,
+        });
+        // A profile that names its own proxy and temp directory: the wrap's win, or the chat's
+        // traffic and temp files would go where the profile says.
+        let ready = charter_core::start::Ready {
+            env: vec![
+                ("ZZ_KEPT".to_owned(), "yes".to_owned()),
+                ("HTTPS_PROXY".to_owned(), "http://zz.example:1".to_owned()),
+                ("NO_PROXY".to_owned(), "*".to_owned()),
+                ("TMPDIR".to_owned(), "/zz".to_owned()),
+            ],
+            ..ready_under(
+                Harness::Opencode,
+                a_sandbox_for(Harness::Opencode, plane.path()),
+            )
+        };
+        let chat = Chat {
+            cwd: Some(plane.path().to_path_buf()),
+            ..chat("/bin/sh", "c", None)
+        };
+
+        let session = chats.start_ready(&chat, &ready, SIZE).expect("starts");
+
+        let opening = host.openings().pop().expect("opened");
+        assert_eq!(opening.program.as_deref(), Some("/usr/bin/sandbox-exec"));
+        assert_eq!(opening.args[0], "-p");
+        assert!(
+            opening.args[1].contains("(remote unix-socket (path-literal"),
+            "{}",
+            opening.args[1]
+        );
+        assert_eq!(opening.args[2..], ["/bin/sh", "-c", "sleep 30"]);
+        let named = |wanted: &str| -> Vec<String> {
+            opening
+                .env
+                .iter()
+                .filter(|(key, _)| key == wanted)
+                .map(|(_, value)| value.clone())
+                .collect()
+        };
+        assert_eq!(named("NO_PROXY"), [""]);
+        assert_eq!(named("ZZ_KEPT"), ["yes"]);
+        let tmp = named("TMPDIR");
+        assert!(tmp.len() == 1 && tmp[0] != "/zz", "{tmp:?}");
+        let proxy = match named("HTTPS_PROXY").as_slice() {
+            [one] => one.clone(),
+            many => panic!("pointed at {many:?}"),
+        };
+        let port: u16 = proxy
+            .rsplit(':')
+            .next()
+            .and_then(|port| port.parse().ok())
+            .expect("a port");
+        assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_ok());
+
+        chats.close(session).expect("closed");
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(
+            std::net::TcpStream::connect(("127.0.0.1", port)).is_err(),
+            "the proxy outlived its chat"
+        );
+    }
+
     /// A plane that turned the sandbox on.
     fn a_sandboxed_plane() -> tempfile::TempDir {
         let plane = tempfile::tempdir().expect("a plane");
@@ -1830,8 +1995,10 @@ mod tests {
             .start(&a_chat_in(plane.path(), "/nowhere/opencode"), SIZE)
             .expect_err("not started");
 
+        // Refused for one reason or another on every system — no compiler here, no wrap there,
+        // no shipped binary to arm it with — and never started unconfined.
         assert!(
-            refused.contains("cannot sandbox an opencode chat yet"),
+            refused.starts_with("this plane runs every chat sandboxed"),
             "{refused}"
         );
         assert!(chats.in_order().is_empty(), "a chat was opened");
@@ -1856,6 +2023,66 @@ mod tests {
         assert!(open.is_empty(), "it was put back");
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_harness_on_no_profile_whose_program_a_chat_could_write_is_refused() {
+        // Ruling V87g: the system temp folders are writable to a chat, and so is the plane.
+        let plane = a_sandboxed_plane();
+        let elsewhere = tempfile::tempdir().expect("a temp folder");
+        let opencode = stand_in::program(elsewhere.path(), "opencode", "#!/bin/sh\nsleep 600\n");
+        let chats = Chats::new();
+
+        let refused = chats
+            .start(
+                &a_chat_in(plane.path(), &opencode.display().to_string()),
+                SIZE,
+            )
+            .expect_err("not started");
+
+        assert!(
+            refused.contains("the program lives where this chat can write"),
+            "{refused}"
+        );
+        assert!(chats.in_order().is_empty(), "a chat was opened");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_harness_on_no_profile_under_a_charter_toml_that_is_not_a_file_is_refused() {
+        // The plane's walk takes only a regular file for a plane: a FIFO, or a link, there
+        // would otherwise read as no plane at all and start the chat unsandboxed.
+        for kind in ["fifo", "dangling"] {
+            let plane = tempfile::tempdir().expect("a plane");
+            let marker = plane.path().join(charter_core::plane::MANIFEST);
+            if kind == "fifo" {
+                let made = charter_core::forklock::status(
+                    std::process::Command::new("mkfifo").arg(&marker),
+                )
+                .expect("mkfifo runs");
+                assert!(made.success());
+            } else {
+                std::os::unix::fs::symlink("gone", &marker).expect("a link");
+            }
+            let below = plane.path().join("workspaces/w");
+            std::fs::create_dir_all(&below).expect("a workspace");
+            let chats = Chats::new();
+            let refused = chats
+                .start(
+                    &Chat {
+                        cwd: Some(below),
+                        ..chat("/nowhere/opencode", "off-profile", None)
+                    },
+                    SIZE,
+                )
+                .expect_err("not started");
+            assert!(
+                refused.contains("cannot be read as TOML"),
+                "{kind}: {refused}"
+            );
+            assert!(chats.in_order().is_empty(), "{kind}: a chat was opened");
+        }
+    }
+
     #[test]
     fn a_shell_in_a_sandboxed_plane_is_still_the_operators_own() {
         let plane = a_sandboxed_plane();
@@ -1874,7 +2101,8 @@ mod tests {
         let machine = charter_core::sandbox::Machine {
             env: charter_core::secrets::Env::of(&[]),
             home: None,
-            os: charter_core::sandbox::Os::Linux,
+            // Where every harness has a sandbox charter compiles.
+            os: charter_core::sandbox::Os::MacOs,
         };
         charter_core::sandbox::for_start(harness, plane, &machine, &|_| true)
             .expect("compiles")
@@ -1945,58 +2173,20 @@ mod tests {
     }
 
     #[test]
-    fn a_sandboxed_codex_chat_whose_command_would_drop_the_sandbox_is_refused() {
-        // `-s` puts Codex back on a sandbox that reads no profile (measured on 0.147.0), so the
-        // denied paths and the egress proxy would go with it.
+    fn a_codex_chat_on_no_profile_in_a_sandboxed_plane_is_refused_until_charter_wraps_it() {
+        // Ruling V87f: Codex resolves its paths again at every command, so it is held back from
+        // a sandboxed start (#1123), and never started unsandboxed in its place.
         let plane = a_sandboxed_plane();
-        let mut chats = Chats::new();
-        chats.arming_with(crate::Shipped {
-            binary: Some(plane.path().join("charter")),
-            plugin: Some(plane.path().join("plugin")),
-            shims: None,
-            git_hooks: None,
-        });
-        let ready = charter_core::start::Ready {
-            command: vec!["-s".to_owned(), "danger-full-access".to_owned()],
-            ..ready_under(Harness::Codex, a_sandbox_for(Harness::Codex, plane.path()))
-        };
+        let chats = Chats::new();
 
         let refused = chats
-            .start_ready(&chat("/bin/sh", "c", None), &ready, SIZE)
+            .start(&a_chat_in(plane.path(), "/nowhere/codex"), SIZE)
             .expect_err("not started");
 
-        assert!(refused.contains("names `-s`"), "{refused}");
-        assert!(chats.in_order().is_empty(), "a chat was opened");
-    }
-
-    #[test]
-    fn a_sandboxed_codex_chat_whose_own_arguments_would_drop_the_sandbox_is_refused() {
-        // The same, from the words that follow the command: a chat on no profile keeps its
-        // own there.
-        let plane = a_sandboxed_plane();
-        let mut chats = Chats::new();
-        chats.arming_with(crate::Shipped {
-            binary: Some(plane.path().join("charter")),
-            plugin: Some(plane.path().join("plugin")),
-            shims: None,
-            git_hooks: None,
-        });
-        let ready = charter_core::start::Ready {
-            command: Vec::new(),
-            args: vec![
-                "-c".to_owned(),
-                "sandbox_mode=\"danger-full-access\"".to_owned(),
-            ],
-            ..ready_under(Harness::Codex, a_sandbox_for(Harness::Codex, plane.path()))
-        };
-
-        let refused = chats
-            .start_ready(&chat("/bin/sh", "c", None), &ready, SIZE)
-            .expect_err("not started");
-
-        assert!(
-            refused.contains("the chat's own arguments name `-c sandbox_mode`"),
-            "{refused}"
+        assert_eq!(
+            refused,
+            "charter cannot keep a Codex chat inside its sandbox yet (#1123), so in this \
+             project it starts only without the sandbox."
         );
         assert!(chats.in_order().is_empty(), "a chat was opened");
     }

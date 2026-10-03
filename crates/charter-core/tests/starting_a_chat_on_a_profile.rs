@@ -993,9 +993,51 @@ fn a_chat_in_a_plane_that_says_nothing_of_the_sandbox_starts_unsandboxed_as_befo
     assert_eq!(ready.sandbox, None);
 }
 
+/// The plane's own stand-in harness as a script outside the plane. A sandboxed start refuses a
+/// program anywhere a chat can write, the system temp folders included (ruling V87g), so the
+/// script is the argument of a shell that lives where no chat writes: `/bin/sh`.
+fn harness_outside(plane: &Plane, outside: &tempfile::TempDir, program: &str) -> PathBuf {
+    stand_in::program(
+        outside.path(),
+        program,
+        &format!(
+            "#!/bin/sh\ntouch {:?}\n",
+            plane.root().join("ran").display().to_string()
+        ),
+    )
+}
+
+/// Declares profile `work` of `kind` as `/bin/sh <script>`, and approves it.
+fn shell_profile(plane: &Plane, kind: &str, script: &Path) {
+    plane.declares(&format!(
+        "[harness.work]\nkind = {kind:?}\ncommand = [\"/bin/sh\", {:?}]\n",
+        script.display().to_string()
+    ));
+    plane.approve("work");
+}
+
+/// A plane with the sandbox on and an opencode profile whose program is outside it, and what
+/// starting it answers.
+fn an_opencode_chat_in_a_sandboxed_plane()
+-> (Plane, tempfile::TempDir, Result<start::Ready, String>) {
+    let plane = Plane::new();
+    fs::write(
+        plane.root().join("charter.toml"),
+        "[sandbox]\nmode = \"on\"\n",
+    )
+    .unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let script = harness_outside(&plane, &outside, "opencode");
+    shell_profile(&plane, "opencode", &script);
+    let started = start::ready(&plane.start("work"), plane.root());
+    (plane, outside, started)
+}
+
 #[test]
-fn an_opencode_chat_in_a_sandboxed_plane_is_not_started_rather_than_started_unconfined() {
+fn a_sandboxed_chat_whose_program_is_inside_the_plane_is_not_started_sandboxed() {
     charter_core::unsteered!();
+    // Ruling V87g: a wrapper inside the plane is code charter runs later, which a sandboxed
+    // chat could have changed.
     let plane = Plane::new();
     fs::write(
         plane.root().join("charter.toml"),
@@ -1008,7 +1050,81 @@ fn an_opencode_chat_in_a_sandboxed_plane_is_not_started_rather_than_started_unco
     let refused = start::ready(&plane.start("work"), plane.root()).expect_err("not started");
 
     assert!(
-        refused.contains("cannot sandbox an opencode chat yet"),
+        refused.contains("the program lives where this chat can write"),
+        "{refused}"
+    );
+    assert!(!plane.root().join("ran").exists(), "the harness was run");
+}
+
+#[test]
+fn a_sandboxed_chat_whose_program_is_a_relative_path_is_not_started_sandboxed() {
+    charter_core::unsteered!();
+    // Ruling V87g: a relative program is found from the chat's folder, which the chat writes.
+    let plane = Plane::new();
+    fs::write(
+        plane.root().join("charter.toml"),
+        "[sandbox]\nmode = \"on\"\n",
+    )
+    .unwrap();
+    plane.declares("[harness.work]\nkind = \"opencode\"\ncommand = [\"./opencode\"]\n");
+    plane.approve("work");
+
+    let refused = start::ready(&plane.start("work"), plane.root()).expect_err("not started");
+
+    assert!(
+        refused.contains("this profile's program is a relative path"),
+        "{refused}"
+    );
+}
+
+#[test]
+fn a_claude_code_profile_whose_program_is_not_claude_code_is_not_started_sandboxed() {
+    charter_core::unsteered!();
+    // Ruling V87g: Claude Code's own sandbox binds only Claude Code.
+    let plane = Plane::new();
+    fs::write(
+        plane.root().join("charter.toml"),
+        "[sandbox]\nmode = \"on\"\n",
+    )
+    .unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let script = harness_outside(&plane, &outside, "claude");
+    shell_profile(&plane, "claude", &script);
+
+    let refused = start::ready(&plane.start("work"), plane.root()).expect_err("not started");
+
+    assert!(
+        refused.ends_with(
+            "this profile's program does not answer as Claude Code, whose sandbox it was \
+             given, so it was not started sandboxed."
+        ),
+        "{refused}"
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn an_opencode_chat_in_a_sandboxed_plane_starts_inside_charters_wrap() {
+    charter_core::unsteered!();
+    let (plane, _outside, started) = an_opencode_chat_in_a_sandboxed_plane();
+
+    let ready = started.expect("it starts");
+
+    let applied = ready.sandbox.expect("sandboxed");
+    assert_eq!(applied.harness(), Harness::Opencode);
+    assert!(!plane.root().join("ran").exists(), "the harness was run");
+}
+
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn an_opencode_chat_in_a_sandboxed_plane_is_not_started_rather_than_started_unconfined() {
+    charter_core::unsteered!();
+    let (plane, _outside, started) = an_opencode_chat_in_a_sandboxed_plane();
+
+    let refused = started.expect_err("not started");
+
+    assert!(
+        refused.starts_with("this plane runs every chat sandboxed"),
         "{refused}"
     );
     assert!(!plane.root().join("ran").exists(), "the harness was run");
