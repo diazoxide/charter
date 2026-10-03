@@ -366,7 +366,7 @@ pub(crate) fn relocation_refusal(plane: &Path) -> Result<(), Refusal> {
 }
 
 /// The clone a piece is cut from, checked to be one.
-fn clone_dir(plane: &Path, ws: &str, repo: &str) -> Result<PathBuf, Refusal> {
+pub(crate) fn clone_dir(plane: &Path, ws: &str, repo: &str) -> Result<PathBuf, Refusal> {
     // Checked here and not only in `path_for`: `list` and `clone_dir` are public entry
     // points that never call it, and `repo` was being joined straight on — so
     // `list(plane, ws, "../beta/repo")` ran git in another workspace's clone.

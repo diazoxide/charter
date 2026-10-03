@@ -1,6 +1,9 @@
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { browser, expect, $, $$ } from "@wdio/globals";
 import { pressAndStart } from "../opening.js";
 import { textOfEach } from "../reading.js";
+import { ask } from "../switching.js";
 
 /**
  * The left region — the repo and worktree **explorer** (ADR 0038) — against the real
@@ -159,14 +162,94 @@ describe("the explorer", () => {
     await menu.waitForDisplayed({ timeout: 20_000, reverse: true });
   });
 
-  it("says a clone has no worktrees rather than drawing nothing under it", async () => {
+  it("says a clone has no branches cut rather than drawing nothing under it", async () => {
     await onAlpha();
 
     const tool = await $('[data-testid="clone-tool"]');
-    await browser.waitUntil(async () => (await tool.getText()).includes("No branches"), {
+    await browser.waitUntil(async () => (await tool.getText()).includes("No branches cut"), {
       timeout: 20_000,
-      timeoutMsg: "the explorer never said whether `tool` has worktrees",
+      timeoutMsg: "the explorer never said whether `tool` has branches cut",
     });
+  });
+
+  /**
+   * **A branch expands into its files** (FM-1, #1104), against the real core: `branch_tree`
+   * lists the fixture branch's folder with git, and the file opens in its file tab through
+   * `piece_file`. Nothing is stubbed.
+   */
+  it("expands the fixture branch into its files and opens one in its file tab", async () => {
+    await onAlpha();
+    const files = await $('[data-testid="files-svc-fix-login"] .file-node');
+    await files.waitForExist({ timeout: 20_000 });
+
+    await files.click();
+
+    await expect(files).toHaveAttribute("aria-expanded", "true");
+    const readme = await fileRow("fix-login", "README.md");
+    await readme.click();
+
+    await browser.waitUntil(async () => (await tabInFront()) === "README.md · fix-login", {
+      timeout: 20_000,
+      timeoutMsg: `the file tab never came forward; in front is ${await tabInFront()}`,
+    });
+    const editor = await $('[data-testid="light-editor"]');
+    await editor.waitForDisplayed({ timeout: 20_000 });
+    await expect(editor).toHaveText(expect.stringContaining("# svc"));
+  });
+
+  it("shows a file an agent creates in an expanded folder without a refresh", async () => {
+    await onAlpha();
+    const files = await $('[data-testid="files-svc-fix-login"] .file-node');
+    await files.waitForExist({ timeout: 20_000 });
+    if ((await files.getAttribute("aria-expanded")) !== "true") await files.click();
+    await fileRow("fix-login", "README.md");
+
+    // What an agent writing in the branch does: a file appears in its folder on disk.
+    const plane = (await ask<string[]>("open_planes"))[0];
+    writeFileSync(
+      join(plane, "workspaces", "alpha", ".worktrees", "svc", "fix-login", "agent-wrote.md"),
+      "written by an agent\n",
+    );
+
+    // FSEvents gives no bound on when it delivers on a busy Mac (#577), so the wait is long.
+    await fileRow("fix-login", "agent-wrote.md", 60_000);
+
+    // And one it removes goes.
+    rmSync(join(plane, "workspaces", "alpha", ".worktrees", "svc", "fix-login", "agent-wrote.md"));
+    await $('[data-row="file:svc/fix-login:agent-wrote.md"]').waitForExist({
+      timeout: 60_000,
+      reverse: true,
+      timeoutMsg: "the explorer still draws a file the agent removed",
+    });
+  });
+
+  it("shows a file an agent creates in an expanded folder inside the branch", async () => {
+    await onAlpha();
+    const plane = (await ask<string[]>("open_planes"))[0];
+    const branch = join(plane, "workspaces", "alpha", ".worktrees", "svc", "fix-login");
+    mkdirSync(join(branch, "notes"), { recursive: true });
+    writeFileSync(join(branch, "notes", "first.md"), "one\n");
+    const files = await $('[data-testid="files-svc-fix-login"] .file-node');
+    await files.waitForExist({ timeout: 20_000 });
+    if ((await files.getAttribute("aria-expanded")) !== "true") await files.click();
+    const notes = await fileRow("fix-login", "notes", 60_000);
+    await notes.click();
+    await fileRow("fix-login", "notes/first.md");
+
+    writeFileSync(join(branch, "notes", "second.md"), "two\n");
+
+    await fileRow("fix-login", "notes/second.md", 60_000);
+  });
+
+  it("expands a repo into the repo's own files", async () => {
+    await onAlpha();
+    const files = await $('[data-testid="files-tool"] .file-node');
+    await files.waitForExist({ timeout: 20_000 });
+
+    await files.click();
+
+    // `scratch.txt` is in the clone and not committed: the repo's own folder, as it is.
+    await expect(await fileRow(null, "scratch.txt", 20_000, "tool")).toBeExisting();
   });
 
   it("does not list every workspace, because the strip above already answers that", async () => {
@@ -422,6 +505,21 @@ describe("the explorer's rows, in a region too narrow for them", () => {
     expect(crooked).toEqual([]);
   });
 });
+
+/** A file's row in a branch's folder — or, with no piece, in the repo's own — once it is drawn. */
+async function fileRow(
+  piece: string | null,
+  path: string,
+  timeout = 20_000,
+  repo = "svc",
+): Promise<WebdriverIO.Element> {
+  const row = await $(`[data-row="file:${repo}/${piece ?? ""}:${path}"]`).getElement();
+  await row.waitForExist({
+    timeout,
+    timeoutMsg: `the explorer never drew ${path} under ${piece ?? repo}`,
+  });
+  return row;
+}
 
 /** The chats on the strip, which is the focused workspace's and no other's. */
 async function chatTabs(): Promise<string[]> {

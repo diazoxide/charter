@@ -19,8 +19,7 @@ import { useEffect, useMemo, useState } from "react";
 import { FileText, LoaderCircle } from "lucide-react";
 import { EmptyState } from "../EmptyState";
 import { commands, type PieceFile, type PlaneId } from "../bindings";
-import type { Cut } from "../actions";
-import { pieceFileTitle, pieceFileView } from "../pieceViews";
+import { pieceFileTitle, pieceFileView, placeName, type Place } from "../pieceViews";
 import type { ViewRef } from "../tabs";
 import { LightEditor } from "./LightEditor";
 import { useYourEditor } from "../yourEditor";
@@ -40,7 +39,7 @@ function sized(bytes: number): string {
 type Read = { file?: PieceFile; trouble?: string };
 
 /** One file of the piece, read from the core each time its path changes. */
-function useFile(plane: PlaneId, cut: Cut, path: string | undefined): Read | undefined {
+function useFile(plane: PlaneId, cut: Place, path: string | undefined): Read | undefined {
   const [read, setRead] = useState<{ path: string; read: Read }>();
   useEffect(() => {
     if (path === undefined) return;
@@ -86,7 +85,7 @@ function ToYourEditor({
   line,
 }: {
   plane: PlaneId;
-  cut: Cut;
+  cut: Place;
   path: string;
   line: number;
 }) {
@@ -178,7 +177,7 @@ export function PieceFileTab({
   line,
 }: {
   plane: PlaneId;
-  cut: Cut;
+  cut: Place;
   path: string;
   line?: number;
 }) {
@@ -204,7 +203,7 @@ export function PieceFilesTab({
   onOpenView,
 }: {
   plane: PlaneId;
-  cut: Cut;
+  cut: Place;
   onOpenView: (view: ViewRef, title: string) => void;
 }) {
   const [listed, setListed] = useState<{ files?: string[]; trouble?: string }>();
@@ -235,14 +234,14 @@ export function PieceFilesTab({
   }, [listed, wanted]);
 
   if (listed === undefined) {
-    return <EmptyState mark={LoaderCircle} headline={`Listing the files of ${cut.piece}…`} />;
+    return <EmptyState mark={LoaderCircle} headline={`Listing the files of ${placeName(cut)}…`} />;
   }
   if (listed.trouble !== undefined) {
     return <EmptyState headline={listed.trouble} testid="piece-files-trouble" />;
   }
   return (
     <div className="piece-files">
-      <nav className="piece-files-list" aria-label={`Files of ${cut.piece}`}>
+      <nav className="piece-files-list" aria-label={`Files of ${placeName(cut)}`}>
         <input
           type="search"
           aria-label="Find a file"
@@ -276,7 +275,7 @@ export function PieceFilesTab({
         {picked === undefined ? (
           <EmptyState
             mark={FileText}
-            headline={`${listed.files?.length ?? 0} files in ${cut.piece}`}
+            headline={`${listed.files?.length ?? 0} files in ${placeName(cut)}`}
             body="Pick one to read it."
             size="panel"
           />

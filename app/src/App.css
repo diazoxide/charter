@@ -1297,6 +1297,7 @@ button.show-more:focus-visible {
 }
 
 .explorer .pieces,
+.explorer .files,
 .explorer .here,
 .explorer .absent ul {
   list-style: none;
@@ -1323,6 +1324,7 @@ button.show-more:focus-visible {
    elbow against the middle of the row's first line in the real WebView, so a change to them
    does go red — but this rule still had no business making one. */
 .explorer .spot,
+.explorer .file-node,
 .explorer .clone > summary,
 .explorer .chat,
 .explorer .worktree,
@@ -1348,6 +1350,7 @@ button.show-more:focus-visible {
    smaller. Each is half a line down its own row. */
 .explorer .clones,
 .explorer .pieces,
+.explorer .files,
 .explorer .here {
   margin-inline-start: 0.5rem;
   padding-inline-start: 0.85rem;
@@ -1355,12 +1358,14 @@ button.show-more:focus-visible {
 
 .explorer .clones > .clone,
 .explorer .pieces > li,
+.explorer .files > li,
 .explorer .here > li {
   position: relative;
 }
 
 .explorer .clones > .clone::before,
 .explorer .pieces > li::before,
+.explorer .files > li::before,
 .explorer .here > li::before {
   content: "";
   position: absolute;
@@ -1370,7 +1375,8 @@ button.show-more:focus-visible {
 }
 
 .explorer .clones > .clone:last-child::before,
-.explorer .pieces > li:last-child::before {
+.explorer .pieces > li:last-child::before,
+.explorer .files > li:last-child::before {
   inset-block-end: auto;
   height: 0.9em;
 }
@@ -1382,6 +1388,7 @@ button.show-more:focus-visible {
 
 .explorer .clones > .clone::after,
 .explorer .pieces > li::after,
+.explorer .files > li::after,
 .explorer .here > li::after {
   content: "";
   position: absolute;
@@ -1391,7 +1398,8 @@ button.show-more:focus-visible {
 }
 
 .explorer .clones > .clone::after,
-.explorer .pieces > li::after {
+.explorer .pieces > li::after,
+.explorer .files > li::after {
   inset-block-start: 0.9em;
 }
 
@@ -1443,6 +1451,61 @@ button.show-more:focus-visible {
 .explorer .spot-what {
   font-size: 0.75rem;
   opacity: 0.6;
+}
+
+/* A branch's folders and files (FM-1): rows of the same tree, with a spot's metrics so the
+   elbows above land on them, and nothing that marks a place a chat starts in. */
+.explorer .file-node {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+  width: 100%;
+  text-align: left;
+  padding: 0.15rem 0.3rem;
+  border: none;
+  border-inline-start: 2px solid transparent;
+  border-radius: 2px;
+  color: inherit;
+  background: none;
+  font: inherit;
+  cursor: default;
+}
+
+.explorer .file-node:hover {
+  background: var(--surface-hover);
+}
+
+.explorer .file-node .twisty {
+  color: var(--text-muted);
+}
+
+.explorer .file-node .twisty[data-open] {
+  rotate: 90deg;
+}
+
+/* What git ignores, shown on request: there, and plainly not the branch's own work. */
+.explorer [data-ignored] > .file-node {
+  opacity: 0.55;
+}
+
+/* A file charter will not open says so beside it; its name is quieter than an openable one. */
+.explorer .file-node[data-refused] .spot-name {
+  color: var(--text-muted);
+}
+
+.explorer .ignored-toggle {
+  margin-block-start: 0.5rem;
+  padding: 0.15rem 0.4rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 2px;
+  color: inherit;
+  background: none;
+  font: inherit;
+  font-size: 0.75rem;
+}
+
+.explorer .ignored-toggle[aria-pressed="true"] {
+  background: var(--accent-surface);
 }
 
 /* A clone's heading. The default disclosure marker goes, because the platform draws it at its

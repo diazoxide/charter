@@ -364,6 +364,8 @@ struct Extra {
     credentials: bool,
     /// Variables passed through by name, with their values as this process holds them.
     pass: Vec<(String, std::ffi::OsString)>,
+    /// Whether git's standard input is a pipe the caller writes, rather than nothing.
+    stdin: bool,
 }
 
 /// The [`CONFIG_LOCATION_ENV`] variables `lookup` holds, with the numbered pairs
@@ -438,9 +440,13 @@ fn spawn_with(dir: &Path, args: &[&str], extra: &Extra) -> Result<Child, GitUnav
     for (name, value) in &extra.pass {
         cmd.env(name, value);
     }
-    cmd.stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    cmd.stdin(if extra.stdin {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    })
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped());
     Ok(crate::forklock::spawn(&mut cmd)?)
 }
 
@@ -609,6 +615,35 @@ pub fn run_as_session(
     };
     counted(dir, args, || {
         Ok(wait_raw(spawn_with(dir, args, &extra)?, timeout)?)
+    })
+}
+
+/// [`run`], with `input` written to git's standard input, as BYTES back: for a `--stdin` verb,
+/// so paths reach git as data — never as arguments a name could turn into an option or a
+/// pathspec's magic — and `-z` answers can be split exactly.
+///
+/// The input is written on its own thread, so git answering before it has read all of it never
+/// deadlocks on a full pipe.
+pub fn run_with_input(
+    dir: &Path,
+    args: &[&str],
+    input: Vec<u8>,
+    timeout: Duration,
+) -> Result<RawRun, GitUnavailable> {
+    let extra = Extra {
+        stdin: true,
+        ..Extra::default()
+    };
+    counted(dir, args, || {
+        let mut child = spawn_with(dir, args, &extra)?;
+        if let Some(mut stdin) = child.stdin.take() {
+            std::thread::spawn(move || {
+                use std::io::Write as _;
+                // A git that stopped reading has answered or failed; its answer says which.
+                let _ = stdin.write_all(&input);
+            });
+        }
+        Ok(wait_raw(child, timeout)?)
     })
 }
 

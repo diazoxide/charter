@@ -422,14 +422,14 @@ export function ViewPane({
               <PieceFilesTab
                 key={`${plane}\u0000${view.key}`}
                 plane={plane}
-                cut={piece.cut}
+                cut={piece.place}
                 onOpenView={onOpenView}
               />
             ) : (
               <PieceFileTab
                 key={`${plane}\u0000${view.key}`}
                 plane={plane}
-                cut={piece.cut}
+                cut={piece.place}
                 path={piece.path}
               />
             )}

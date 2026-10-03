@@ -3,7 +3,13 @@ import { useState, type KeyboardEvent, type ReactNode } from "react";
 import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
 import {
   ChevronRight,
+  File,
+  Files,
+  FileSymlink,
+  FileX,
+  Folder,
   FolderGit2,
+  FolderOpen,
   Folders,
   FolderX,
   GitBranch,
@@ -11,7 +17,14 @@ import {
   SquareTerminal,
   TriangleAlert,
 } from "lucide-react";
-import type { OpenChat } from "./bindings";
+import type { FolderEntry, OpenChat, PlaneId } from "./bindings";
+import {
+  folderKey,
+  useBranchFolders,
+  type BranchFolderRef,
+  type FolderRead,
+} from "./branchFolders";
+import type { Place } from "./pieceViews";
 import { WRAPPING_UP, WrappingUp } from "./NeedsYou";
 import { Menued } from "./Menus";
 import { WorktreeMark } from "./Worktree";
@@ -99,8 +112,20 @@ const NONE_WRAPPING: ReadonlySet<number> = new Set();
  *
  * Left and Right are taken from the region's sideways scroll while a row has the keyboard. A
  * focused row is scrolled into view by the engine, so nothing the keyboard can reach is lost.
+ *
+ * **A branch expands into its files** (FM-1, #1103). Under each branch, and under each repo for
+ * the repo's own folder (#948), a *Files* row folds open onto that folder's first level, and
+ * each folder onto the next — read only when it is opened (`branchFolders.ts`), and read again
+ * when an agent adds or removes a file in it. They are rows of the same tree: the same levels,
+ * the same arrows, Home and End, and Enter on a file opens it in its file tab. Folders come
+ * first, in the order a person reads names. What git ignores is hidden until *Show ignored
+ * files* is pressed, and then drawn dimmed and never opened; a file charter will not open — a
+ * link out of the branch, git's own folder, a FIFO — is drawn with the reason. The *Files* row
+ * is a child of the branch rather than the branch row folding itself, because a click on a
+ * branch picks where the next chat starts and the chats working in it stay drawn under it.
  */
 export function Explorer({
+  plane,
   workspace,
   live = false,
   state,
@@ -111,7 +136,10 @@ export function Explorer({
   wrapping = NONE_WRAPPING,
   offers,
   onPress,
+  onOpenFile,
 }: {
+  /** The project, for reading a branch's folders. Without one no folder is read. */
+  plane?: PlaneId;
   /** The focused workspace, or nothing when the strip is on the chats that are in none. */
   workspace: string | undefined;
   /** Whether that workspace is LIVE (charter-app#301): its row carries the mark. */
@@ -128,11 +156,20 @@ export function Explorer({
   /** The catalogue by id, which is what a piece row's menu is drawn out of. */
   offers: Catalogued;
   onPress: (offer: Offer) => void;
+  /** A file of a branch was opened from the tree: its file tab comes forward. */
+  onOpenFile?: (place: Place, path: string) => void;
 }) {
   /** The clones the operator folded, by workspace and name: a row inside one is not drawn, so
    *  it cannot be where the keyboard comes back in. */
   const [folded, setFolded] = useState<ReadonlySet<string>>(new Set());
-  const tree = treeOf(workspace, state, chats, folded);
+  /** The folders of branches the operator opened, by {@link fileFold}: closed until opened. */
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+  /** Whether what git ignores is drawn, dimmed. */
+  const [showIgnored, setShowIgnored] = useState(false);
+  const open = openFolders(workspace, state, expanded);
+  const reads = useBranchFolders(plane, workspace, open);
+  const files: FilesOf = { expanded, reads, showIgnored };
+  const tree = treeOf(workspace, state, chats, folded, files);
   const drawn = tree.filter((row) => row.drawn);
   const picked =
     spot === undefined
@@ -145,15 +182,24 @@ export function Explorer({
     drawn.map((row) => row.id),
   );
 
-  /** Opens or closes a clone: the one fold state, whether a click or a key asked. */
+  /** Opens or closes a clone or a branch's folder: the one fold state of each, whether a click
+   *  or a key asked. A clone is open until folded; a folder is closed until opened. */
   const fold = (key: string, open: boolean) =>
-    setFolded((was) => {
-      if (open === !was.has(key)) return was;
-      const now = new Set(was);
-      if (open) now.delete(key);
-      else now.add(key);
-      return now;
-    });
+    key.startsWith(FILE_FOLD)
+      ? setExpanded((was) => {
+          if (open === was.has(key)) return was;
+          const now = new Set(was);
+          if (open) now.add(key);
+          else now.delete(key);
+          return now;
+        })
+      : setFolded((was) => {
+          if (open === !was.has(key)) return was;
+          const now = new Set(was);
+          if (open) now.delete(key);
+          else now.add(key);
+          return now;
+        });
 
   /** Whether a row is drawn. One inside a folded clone is still in the document, and the
    *  roving focus is told to pass it by: jsdom focuses it, and the arrows would stop on it. */
@@ -205,6 +251,13 @@ export function Explorer({
 
   const { panels, pieces, piecesRefused } = state;
   const clones = panels?.repos ?? [];
+  /** A branch's *Files* row, and its folders under it as they are opened. */
+  const filesOf = (repo: string, piece: string | null) => (
+    <FilesRow
+      branch={{ repo, piece, folder: "" }}
+      at={{ place: { workspace, repo, piece }, files, fold, treeitem, isDrawn, onOpenFile }}
+    />
+  );
   // The chats that are in no piece of this workspace: they work in the workspace itself or
   // in a clone, and they are listed under the workspace row rather than dropped. `treeOf`
   // decided which they are, and the render reads it rather than deciding a second time.
@@ -288,9 +341,16 @@ export function Explorer({
                       </summary>
                     </RovingFocusGroup.Item>
                   </Menued>
+                  {/* The repo's own folder (#948), before its branches: the files of whatever
+                    the repo has checked out. */}
+                  <ul className="pieces" role="group">
+                    <li role="none" data-testid={`files-${repo}`}>
+                      {filesOf(repo, null)}
+                    </li>
+                  </ul>
                   {piecesRefused[repo] ? (
                     // Said, never swallowed: a clone with no rows otherwise reads as a clone
-                    // nobody has cut a worktree in.
+                    // nobody has cut a branch in.
                     <Trouble>
                       charter could not list the branches of <code>{repo}</code>:{" "}
                       {piecesRefused[repo]}
@@ -368,6 +428,12 @@ export function Explorer({
                                 {piece.said}
                               </span>
                             )}
+                            {/* Its files (FM-1), first among its children. */}
+                            <ul className="files" role="group">
+                              <li role="none" data-testid={`files-${repo}-${piece.piece}`}>
+                                {filesOf(repo, piece.piece)}
+                              </li>
+                            </ul>
                             <ChatList
                               chats={working}
                               wrapping={wrapping}
@@ -413,6 +479,18 @@ export function Explorer({
             charter will not read <code>{name}</code>: {why}
           </Trouble>
         ))}
+
+        {open.length > 0 && (
+          // Only while some branch's files are open: with none, there is nothing it changes.
+          <button
+            type="button"
+            className="ignored-toggle"
+            aria-pressed={showIgnored}
+            onClick={() => setShowIgnored((was) => !was)}
+          >
+            Show ignored files
+          </button>
+        )}
       </nav>
     </RovingFocusGroup.Root>
   );
@@ -543,6 +621,192 @@ function ChatList({
   );
 }
 
+/** What the tree knows about branches' folders: which are open, what each holds, and whether
+ *  what git ignores is drawn. */
+type FilesOf = {
+  expanded: ReadonlySet<string>;
+  reads: ReadonlyMap<string, FolderRead>;
+  showIgnored: boolean;
+};
+
+/** Everything a branch's file rows share: the branch they are of, what the tree knows about
+ *  its folders, and what a row does to the tree and to a screen reader. */
+type FileRows = {
+  place: Place;
+  files: FilesOf;
+  fold: (key: string, open: boolean) => void;
+  treeitem: (id: string) => TreeItem;
+  isDrawn: (id: string) => boolean;
+  onOpenFile?: (place: Place, path: string) => void;
+};
+
+/** A branch folder's *Files* row, or a folder's row, with what it holds under it once opened. */
+function FilesRow({
+  branch,
+  name = "Files",
+  at,
+}: {
+  branch: BranchFolderRef;
+  /** Its name: *Files* for the branch's own folder, the folder's name below it. */
+  name?: string;
+  at: FileRows;
+}) {
+  const id = fileRow(branch);
+  const key = fileFold(at.place.workspace, branch);
+  const open = at.files.expanded.has(key);
+  const read = at.files.reads.get(folderKey(branch));
+  const Mark = branch.folder === "" ? Files : open ? FolderOpen : Folder;
+  return (
+    <>
+      <RovingFocusGroup.Item asChild tabStopId={id} focusable={at.isDrawn(id)}>
+        <button
+          type="button"
+          className="file-node"
+          {...at.treeitem(id)}
+          onClick={() => at.fold(key, !open)}
+        >
+          <ChevronRight className="twisty" data-open={open || undefined} />
+          <Mark className="node-icon" />
+          <span className="spot-name">{name}</span>
+        </button>
+      </RovingFocusGroup.Item>
+      {open &&
+        (read === undefined ? (
+          <Pending>Reading…</Pending>
+        ) : read.trouble !== undefined ? (
+          <Trouble>{read.trouble}</Trouble>
+        ) : (
+          <FolderEntries
+            branch={branch}
+            entries={shown(read.entries ?? [], at.files.showIgnored)}
+            more={read.more ?? 0}
+            at={at}
+          />
+        ))}
+    </>
+  );
+}
+
+/** What one opened folder holds, a row each: folders that open in turn, and files; and how many
+ *  more it holds than the core lists. */
+function FolderEntries({
+  branch,
+  entries,
+  more,
+  at,
+}: {
+  branch: BranchFolderRef;
+  entries: readonly FolderEntry[];
+  more: number;
+  at: FileRows;
+}) {
+  if (entries.length === 0 && more === 0) return <p className="none">Nothing here</p>;
+  return (
+    <>
+      <ul className="files" role="group">
+        {entries.map((entry) => {
+          const path = joined(branch.folder, entry.name);
+          const here = { ...branch, folder: path };
+          if (expands(entry)) {
+            return (
+              <li key={entry.name} role="none" data-ignored={entry.ignored || undefined}>
+                <FilesRow branch={here} name={entry.name} at={at} />
+              </li>
+            );
+          }
+          const id = fileRow(here);
+          const refused = entry.refused ?? undefined;
+          const Mark = refused !== undefined ? FileX : entry.kind === "link" ? FileSymlink : File;
+          return (
+            <li key={entry.name} role="none" data-ignored={entry.ignored || undefined}>
+              <RovingFocusGroup.Item asChild tabStopId={id} focusable={at.isDrawn(id)}>
+                <button
+                  type="button"
+                  className="file-node"
+                  data-refused={refused !== undefined || undefined}
+                  aria-disabled={refused !== undefined || undefined}
+                  title={refused ?? path}
+                  {...at.treeitem(id)}
+                  onClick={() => {
+                    if (refused === undefined) at.onOpenFile?.(at.place, path);
+                  }}
+                >
+                  <Mark className="node-icon" />
+                  <span className="spot-name">{entry.name}</span>
+                  {/* Why it does not open, said beside it — an ignored file's too, which is
+                      drawn only once the operator asked to see what git ignores. */}
+                  {refused !== undefined && <span className="spot-what">{refused}</span>}
+                </button>
+              </RovingFocusGroup.Item>
+            </li>
+          );
+        })}
+      </ul>
+      {more > 0 && (
+        // A folder of tens of thousands of generated files is drawn as its first entries; the
+        // rest are counted, never drawn.
+        <p className="none">{`${more.toLocaleString("en")} more not shown`}</p>
+      )}
+    </>
+  );
+}
+
+/** Whether an entry is a folder that opens onto what it holds: one charter does not refuse. */
+function expands(entry: FolderEntry): boolean {
+  return entry.kind === "folder" && entry.refused === null;
+}
+
+/** The entries drawn: every one when ignored files are shown, else those git does not ignore. */
+function shown(entries: readonly FolderEntry[], showIgnored: boolean): FolderEntry[] {
+  return showIgnored ? [...entries] : entries.filter((entry) => !entry.ignored);
+}
+
+/** A folder's path and a name in it, as a path inside the branch. */
+function joined(folder: string, name: string): string {
+  return folder === "" ? name : `${folder}/${name}`;
+}
+
+/**
+ * The folders the operator opened that are drawn: each one whose *Files* row and every folder
+ * above it is open too, of a branch the workspace still has. These are what is read and
+ * watched — a folder inside a closed one is neither.
+ */
+function openFolders(
+  workspace: string | undefined,
+  state: WorkspaceState,
+  expanded: ReadonlySet<string>,
+): BranchFolderRef[] {
+  if (workspace === undefined) return [];
+  const out: BranchFolderRef[] = [];
+  const walk = (ref: BranchFolderRef) => {
+    if (!expanded.has(fileFold(workspace, ref))) return;
+    out.push(ref);
+    for (const key of expanded) {
+      const child = childOf(key, workspace, ref);
+      if (child !== undefined) walk(child);
+    }
+  };
+  for (const repo of state.panels?.repos ?? []) {
+    walk({ repo, piece: null, folder: "" });
+    for (const piece of state.pieces[repo] ?? []) walk({ repo, piece: piece.piece, folder: "" });
+  }
+  return out;
+}
+
+/** The folder a fold key names when it is a folder directly inside `parent`. */
+function childOf(
+  key: string,
+  workspace: string,
+  parent: BranchFolderRef,
+): BranchFolderRef | undefined {
+  const prefix = fileFold(workspace, parent);
+  const into = parent.folder === "" ? prefix : `${prefix}/`;
+  if (!key.startsWith(into) || key === prefix) return undefined;
+  const rest = key.slice(into.length);
+  if (rest === "" || rest.includes("/")) return undefined;
+  return { ...parent, folder: joined(parent.folder, rest) };
+}
+
 /** Whether a chat's directory is this piece's, or inside it.
  *
  *  By path components and never by string prefix: `…/piece-two` starts with `…/piece` and is
@@ -560,6 +824,13 @@ const cloneRow = (repo: string) => `clone:${repo}`;
 const pieceRow = (repo: string, piece: string) => `piece:${repo}/${piece}`;
 /** A folded clone, by workspace as well as name: two workspaces can each clone `svc`. */
 const foldKey = (workspace: string, repo: string) => `${workspace}/${repo}`;
+/** A branch's folder, or one of its files, as a row. */
+const fileRow = (ref: BranchFolderRef) => `file:${folderKey(ref)}`;
+/** What starts every opened folder's fold key, so `fold` knows it from a clone's. */
+const FILE_FOLD = "files:";
+/** An opened folder of a branch, by workspace as well: two workspaces can each clone `svc`. */
+const fileFold = (workspace: string, ref: BranchFolderRef) =>
+  `${FILE_FOLD}${workspace}\u0000${folderKey(ref)}`;
 
 /** One row of the tree, as the keyboard and a screen reader know it (#238). */
 type Row = {
@@ -608,12 +879,13 @@ function treeOf(
   state: WorkspaceState,
   chats: readonly OpenChat[],
   folded: ReadonlySet<string>,
+  files: FilesOf,
 ): Row[] {
   if (workspace === undefined) return [];
-  /** `shows` is whether its children are drawn when it is: not in a folded clone, and not in
-   *  one whose worktrees could not be listed — the render says why instead. */
+  /** `shows` is whether its children are drawn when it is: not in a folded clone or a closed
+   *  folder. A clone whose branches could not be listed has none to draw, and says why. */
   type Node = { id: string; name: string; fold?: Row["fold"]; kids: Node[]; shows: boolean };
-  const { panels, pieces, piecesRefused } = state;
+  const { panels, pieces } = state;
   const inAPiece = new Set<number>();
   const chatNode = (chat: OpenChat): Node => ({
     id: chatRow(chat.session),
@@ -621,17 +893,34 @@ function treeOf(
     kids: [],
     shows: true,
   });
+  /** A branch's folder and, once opened, what it holds: the same walk `FilesRow` draws. */
+  const folderNode = (ref: BranchFolderRef, name: string): Node => {
+    const key = fileFold(workspace, ref);
+    const open = files.expanded.has(key);
+    const read = open ? files.reads.get(folderKey(ref)) : undefined;
+    const kids = shown(read?.entries ?? [], files.showIgnored).map((entry): Node => {
+      const here = { ...ref, folder: joined(ref.folder, entry.name) };
+      return expands(entry)
+        ? folderNode(here, entry.name)
+        : { id: fileRow(here), name: entry.name, kids: [], shows: true };
+    });
+    return { id: fileRow(ref), name, fold: { key, open }, kids, shows: open };
+  };
   const clones = (panels?.repos ?? []).map((repo): Node => {
-    const kids = (pieces[repo] ?? []).map((piece): Node => {
+    const branches = (pieces[repo] ?? []).map((piece): Node => {
       const working = chats.filter((chat) => under(chat.cwd, piece.path));
       for (const chat of working) inAPiece.add(chat.session);
       return {
         id: pieceRow(repo, piece.piece),
         name: piece.piece,
-        kids: working.map(chatNode),
+        kids: [
+          folderNode({ repo, piece: piece.piece, folder: "" }, "Files"),
+          ...working.map(chatNode),
+        ],
         shows: true,
       };
     });
+    const kids = [folderNode({ repo, piece: null, folder: "" }, "Files"), ...branches];
     const key = foldKey(workspace, repo);
     const open = !folded.has(key);
     return {
@@ -639,7 +928,7 @@ function treeOf(
       name: repo,
       fold: { key, open },
       kids,
-      shows: open && !piecesRefused[repo],
+      shows: open,
     };
   });
   const root: Node = {

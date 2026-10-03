@@ -595,12 +595,19 @@ describe("the explorer's tree guides", () => {
  * `aria-expanded` on the rows that fold, and the keys that open, close and climb.
  *
  * The tree drawn here is `alpha` → `svc` (→ `one` → the chat `seven`; `two`) and `tool`, which
- * has no worktrees.
+ * has no branches. Each repo and each branch also has its *Files* row first among its children
+ * (FM-1), closed until opened.
  */
 describe("the explorer is a WAI-ARIA tree", () => {
   const withAChat = () => draw({ chats: [chat(7, "seven", `${CUT}/one`)] });
   const tree = () => screen.getByRole("tree", { name: "Repos and branches" });
   const item = (name: RegExp) => within(tree()).getByRole("treeitem", { name });
+  /** A row by the id the tree knows it by: the *Files* rows all share a name. */
+  const row = (id: string) => {
+    const found = tree().querySelector<HTMLElement>(`[data-row="${id}"]`);
+    if (found === null) throw new Error(`no row ${id}`);
+    return found;
+  };
   /** A treeitem as its first word, its level and its place among its siblings. */
   const shape = (row: HTMLElement) =>
     [
@@ -615,10 +622,14 @@ describe("the explorer is a WAI-ARIA tree", () => {
     expect(within(tree()).getAllByRole("treeitem").map(shape)).toEqual([
       "alpha 1 1/1",
       "svc 2 1/2",
-      "one 3 1/2",
-      "seven 4 1/1",
-      "two 3 2/2",
+      "Files 3 1/3",
+      "one 3 2/3",
+      "Files 4 1/2",
+      "seven 4 2/2",
+      "two 3 3/3",
+      "Files 4 1/1",
       "tool 2 2/2",
+      "Files 3 1/1",
     ]);
   });
 
@@ -631,9 +642,10 @@ describe("the explorer is a WAI-ARIA tree", () => {
     // Parents that cannot fold are always open, and say so.
     expect(item(/^alpha/)).toHaveAttribute("aria-expanded", "true");
     expect(item(/^one/)).toHaveAttribute("aria-expanded", "true");
-    for (const leaf of [/^seven/, /^two/]) {
-      expect(item(leaf)).not.toHaveAttribute("aria-expanded");
-    }
+    expect(item(/^two/)).toHaveAttribute("aria-expanded", "true");
+    expect(item(/^seven/)).not.toHaveAttribute("aria-expanded");
+    // A branch's files fold, and are closed until opened.
+    expect(row("file:svc/one:")).toHaveAttribute("aria-expanded", "false");
 
     await userEvent.click(item(/^svc/));
     expect(item(/^svc/)).toHaveAttribute("aria-expanded", "false");
@@ -648,10 +660,15 @@ describe("the explorer is a WAI-ARIA tree", () => {
     expect(item(/^svc/)).toHaveAttribute("aria-expanded", "true");
     expect(item(/^svc/)).toHaveFocus();
 
+    // Its first child is the repo's own Files row.
     await userEvent.keyboard("{ArrowRight}");
+    expect(row("file:svc/:")).toHaveFocus();
+    await userEvent.keyboard("{ArrowDown}");
     expect(item(/^one/)).toHaveFocus();
-    // A worktree with a chat in it is a parent that is always open: Right goes in.
+    // A branch is a parent that is always open: Right goes in, to its Files row first.
     await userEvent.keyboard("{ArrowRight}");
+    expect(row("file:svc/one:")).toHaveFocus();
+    await userEvent.keyboard("{ArrowDown}");
     expect(item(/^seven/)).toHaveFocus();
     await userEvent.keyboard("{ArrowRight}");
     expect(item(/^seven/)).toHaveFocus();
@@ -692,7 +709,7 @@ describe("the explorer is a WAI-ARIA tree", () => {
     await userEvent.keyboard("{Home}");
     expect(item(/^alpha/)).toHaveFocus();
     await userEvent.keyboard("{End}");
-    expect(item(/^tool/)).toHaveFocus();
+    expect(row("file:tool/:")).toHaveFocus();
   });
 
   it("a typed letter moves to the next row whose name starts with it, and wraps", async () => {

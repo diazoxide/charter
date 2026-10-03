@@ -46,7 +46,7 @@
 //!
 //! **An access is not a change.** notify's inotify backend watches `IN_OPEN`, and reading a
 //! todo opens it — so a window that re-read on every event would re-read because it re-read,
-//! forever. [`matters`] is where that loop is cut.
+//! forever. [`crate::watchset::matters`] is where that loop is cut.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -55,8 +55,8 @@ use std::time::Duration;
 
 use charter_core::planechange::{self, Answer, Change, Kind};
 use charter_core::workspaces::Plane;
-use notify::event::{MetadataKind, ModifyKind};
-use notify::{EventKind, RecursiveMode};
+
+use notify::EventKind;
 use notify_debouncer_full::{DebounceEventResult, Debouncer, RecommendedCache, new_debouncer_opt};
 
 use crate::planes::PlaneId;
@@ -232,7 +232,10 @@ impl<W: notify::Watcher + Send + 'static> Watch<W> {
         let spelled = root.canonicalize().ok();
         let tell = move |batch: DebounceEventResult| {
             let Ok(events) = batch else { return };
-            let events: Vec<_> = events.iter().filter(|event| matters(&event.kind)).collect();
+            let events: Vec<_> = events
+                .iter()
+                .filter(|event| crate::watchset::matters(&event.kind))
+                .collect();
             if events.is_empty() {
                 return;
             }
@@ -299,23 +302,7 @@ impl<W: notify::Watcher> Inner<W> {
         let Some(debouncer) = self.debouncer.as_mut() else {
             return;
         };
-        let wanted = wanted(root);
-        let stale: Vec<PathBuf> = self.watched.difference(&wanted).cloned().collect();
-        for path in stale {
-            // An error is a watch the platform has already dropped with its directory.
-            let _ = debouncer.unwatch(&path);
-            self.watched.remove(&path);
-        }
-        for path in wanted {
-            if self.watched.contains(&path) {
-                continue;
-            }
-            // A directory that went between the listing and here is simply not watched; the
-            // next batch lists again.
-            if debouncer.watch(&path, RecursiveMode::NonRecursive).is_ok() {
-                self.watched.insert(path);
-            }
-        }
+        crate::watchset::follow(debouncer, &mut self.watched, wanted(root));
     }
 
     fn forget(&mut self, path: &Path) {
@@ -348,16 +335,6 @@ fn what_changed(
     };
     planechange::of_batch(root, paths())
         .or_else(|| spelled.and_then(|spelled| planechange::of_batch(spelled, paths())))
-}
-
-/// Whether an event is a change to the plane. Everything but an access is: reading a file
-/// changes nothing, and it is exactly what the window does when it is told. An access time
-/// moving is the same read seen from inotify's `IN_ATTRIB` under `relatime`.
-fn matters(kind: &EventKind) -> bool {
-    !matches!(
-        kind,
-        EventKind::Access(_) | EventKind::Modify(ModifyKind::Metadata(MetadataKind::AccessTime))
-    )
 }
 
 /// The directories the panels and the sidebar read, as they are on disk now. See the module's
@@ -677,7 +654,10 @@ mod tests {
     fn reading_a_todo_is_not_a_change() {
         // The loop inotify would otherwise close: the window reads because it was told, and
         // the read opens the files it was told about.
-        use notify::event::{AccessKind, AccessMode, CreateKind, RemoveKind};
+        use crate::watchset::matters;
+        use notify::event::{
+            AccessKind, AccessMode, CreateKind, MetadataKind, ModifyKind, RemoveKind,
+        };
         assert!(!matters(&EventKind::Access(AccessKind::Open(
             AccessMode::Read
         ))));

@@ -782,15 +782,32 @@ export const commands = {
 	 *  host. Refused, in the core's words, for a piece git no longer has.
 	 */
 	worktreeDone: (plane: PlaneId, workspace: string, repo: string, piece: string) => typedError<null, string>(__TAURI_INVOKE("worktree_done", { plane, workspace, repo, piece })),
-	/**  The files of a piece, relative to it: what git tracks and what it does not ignore. */
-	pieceFiles: (plane: PlaneId, workspace: string, repo: string, piece: string) => typedError<string[], string>(__TAURI_INVOKE("piece_files", { plane, workspace, repo, piece })),
-	/**  One file of a piece, by its path relative to the piece. Refused for a path that leaves it. */
-	pieceFile: (plane: PlaneId, workspace: string, repo: string, piece: string, path: string) => typedError<PieceFile, string>(__TAURI_INVOKE("piece_file", { plane, workspace, repo, piece, path })),
 	/**
-	 *  One file of a piece, opened in your editor at a line (RC-20). Refused, in the core's
+	 *  The files of a branch, relative to its folder: what git tracks and what it does not ignore.
+	 *  No `piece` is the repo's own folder.
+	 */
+	pieceFiles: (plane: PlaneId, workspace: string, repo: string, piece: string | null) => typedError<string[], string>(__TAURI_INVOKE("piece_files", { plane, workspace, repo, piece })),
+	/**
+	 *  One file of a branch, by its path relative to the branch's folder. Refused for a path that
+	 *  leaves it.
+	 */
+	pieceFile: (plane: PlaneId, workspace: string, repo: string, piece: string | null, path: string) => typedError<PieceFile, string>(__TAURI_INVOKE("piece_file", { plane, workspace, repo, piece, path })),
+	/**
+	 *  One file of a branch, opened in your editor at a line (RC-20). Refused, in the core's
 	 *  sentence, for any path the light editor would refuse.
 	 */
-	openInYourEditor: (plane: PlaneId, workspace: string, repo: string, piece: string, path: string, line: number, editor: YourEditor) => typedError<null, string>(__TAURI_INVOKE("open_in_your_editor", { plane, workspace, repo, piece, path, line, editor })),
+	openInYourEditor: (plane: PlaneId, workspace: string, repo: string, piece: string | null, path: string, line: number, editor: YourEditor) => typedError<null, string>(__TAURI_INVOKE("open_in_your_editor", { plane, workspace, repo, piece, path, line, editor })),
+	/**
+	 *  One folder of a branch, one level deep: folders first, then files, each in the order a
+	 *  person reads names, the first 5,000 and a count of the rest. `""` is the branch's own folder.
+	 */
+	branchTree: (plane: PlaneId, workspace: string, repo: string, piece: string | null, folder: string) => typedError<FolderListing, string>(__TAURI_INVOKE("branch_tree", { plane, workspace, repo, piece, folder })),
+	/**
+	 *  The folders of branches this window's explorer has expanded, watched until it names others
+	 *  (FM-1). A folder that does not resolve — gone, or refused as the tree refuses it — is not
+	 *  watched.
+	 */
+	filesWatch: (folders: BranchFolder[]) => typedError<null, string>(__TAURI_INVOKE("files_watch", { folders })),
 	/**  Which channel this machine takes charter from: `stable` or `dev`. */
 	updateChannel: () => __TAURI_INVOKE<string>("update_channel"),
 	/**  Put this machine on a channel. A word charter does not know is refused, not guessed at. */
@@ -1391,6 +1408,18 @@ export type Boxes = {
 	new_branch: boolean,
 };
 
+/**
+ *  One folder of a branch, as the window names it: the plane, the workspace, the repo, the piece
+ *  (none for the repo's own folder) and the folder's path inside the branch (`""` for its top).
+ */
+export type BranchFolder = {
+	plane: PlaneId,
+	workspace: string,
+	repo: string,
+	piece: string | null,
+	folder: string,
+};
+
 /**  What kind of build this is, which decides which section is shown. */
 export type Build = 
 /**  The changelog has a section for this version. */
@@ -1596,6 +1625,14 @@ export type DoctorRow = {
 /**  A row's verdict, as the window draws it. */
 export type DoctorStatus = "ok" | "warn" | "fail";
 
+/**  What one entry of a branch's folder is. */
+export type EntryKind = "folder" | "file" | 
+/**
+ *  A symbolic link: never expanded, and opened only when it leads to another file the
+ *  branch offers.
+ */
+"link";
+
 /**
  *  The question charter asks before an extension contributes anything.
  * 
@@ -1776,6 +1813,11 @@ export type FactColumn = {
 	cells: FactCell[],
 };
 
+/**  What `files-changed` carries: the folders, of those this window asked to watch, that moved. */
+export type FilesChanged = {
+	folders: BranchFolder[],
+};
+
 /**  What the first-run screen shows about this machine. */
 export type FirstRunFound = {
 	harnesses: HarnessRow[],
@@ -1814,6 +1856,25 @@ export type FirstTaskRun = {
 	folder: string,
 	/**  The command that shows the run's diff, run in `folder`. */
 	diff: string,
+};
+
+/**  One entry of a branch's folder, as the explorer's tree draws it (FM-1). */
+export type FolderEntry = {
+	/**  Its name in the folder, not its path. */
+	name: string,
+	kind: EntryKind,
+	/**  Whether git ignores it: hidden unless the operator asks to see ignored files. */
+	ignored: boolean,
+	/**  Why it does not open, in the core's sentence; `null` when it opens or expands. */
+	refused: string | null,
+};
+
+/**  One folder of a branch, one level deep: its first entries, and how many more it holds. */
+export type FolderListing = {
+	/**  Folders first, then files, each in the order a person reads names; at most 5,000. */
+	entries: FolderEntry[],
+	/**  How many entries past those are not listed. */
+	more: number,
 };
 
 /**  A forge, as the window is told it. */
@@ -2607,7 +2668,7 @@ export type Piece = {
 	said: string,
 };
 
-/**  One file of a piece, as the light editor draws it. */
+/**  One file of a branch, as the light editor draws it. */
 export type PieceFile = 
 /**  Text, to draw. */
 { kind: "text"; text: string } | 

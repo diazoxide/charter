@@ -25,6 +25,7 @@ mod clipath;
 mod curation;
 mod doctor;
 mod extensions;
+mod filewatch;
 mod firstrun;
 mod firsttask;
 mod handoff;
@@ -61,6 +62,7 @@ mod updates;
 mod usage;
 mod vaults;
 mod views;
+mod watchset;
 mod windowprefs;
 mod windows;
 mod worklinks;
@@ -1641,6 +1643,8 @@ fn commands() -> Builder<tauri::Wry> {
         .typ::<updates::Offer>()
         // What `plane-changed` carries, for the same reason.
         .typ::<planewatch::PlaneChanged>()
+        // What `files-changed` carries (FM-1).
+        .typ::<filewatch::FilesChanged>()
         // What `extension-heard` carries (charter-app#343).
         .typ::<heard::ExtensionHeard>()
         // What `harness-by-hand` carries (ADR 0062).
@@ -1871,7 +1875,13 @@ pub fn run() {
                 tauri::WindowEvent::CloseRequested { api, .. } => {
                     windows::close_requested(window, api);
                 }
-                tauri::WindowEvent::Destroyed => windows::destroyed(window),
+                tauri::WindowEvent::Destroyed => {
+                    // Its expanded folders are no longer watched for it (FM-1).
+                    if let Some(watch) = window.try_state::<filewatch::FileWatch>() {
+                        watch.forget(window.label());
+                    }
+                    windows::destroyed(window);
+                }
                 _ => {}
             }
         })
@@ -1931,6 +1941,18 @@ pub fn run() {
             app.manage(heard::Heard::with_built_in(built_in.clone()));
             app.manage(views::Views::with_built_in(built_in));
             app.manage(changes::Busy::default());
+            // The folders each window's explorer has expanded, watched so an agent's new file
+            // reaches the tree (FM-1).
+            app.manage(filewatch::FileWatch::new({
+                let app = app.handle().clone();
+                std::sync::Arc::new(move |window: &str, folders| {
+                    let _ = app.emit_to(
+                        window,
+                        filewatch::CHANGED,
+                        filewatch::FilesChanged { folders },
+                    );
+                })
+            }));
             // What each window is holding, and which of its projects it has in front. Empty
             // until a window says, and an empty answer means "not looking", so a notification
             // is sent rather than suppressed.
