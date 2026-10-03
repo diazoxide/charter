@@ -153,6 +153,23 @@ pub struct Chat {
     /// Who this chat is beyond this clone: its id, its origin device, its current run and the
     /// chat it was resumed from (ADR 0066). See [`Identity`].
     pub identity: Identity,
+    /// The process the app started this chat's program as, while it runs (V82, #1018).
+    ///
+    /// **Only what a commit is checked against.** `commit-msg` stamps provenance trailers on a
+    /// commit only when the committing process descends from this one
+    /// ([`crate::provenance::Provenance::in_chat`]): a program that merely inherited the chat's
+    /// environment — an editor the chat opened, which the operator then commits from — is not
+    /// the agent. It is the program the app started, which may be a wrapper profile's and not
+    /// the harness itself; the harness runs below it, so the check holds either way.
+    ///
+    /// Taken from the session at every write of the record, and only while its program runs:
+    /// the app writes the record again when a program ends, and the write at quit names no pid
+    /// at all. A pid that may be handed to another process is on disk only between a program's
+    /// reap and that rewrite, and after an app that crashed or was killed, until the next launch
+    /// writes the record again ([`crate::process::descends_from`] names both). `None` is a
+    /// chat whose program is not running, and every record written before this field — not a
+    /// format change, for [`Self::pinned`]'s reason. A chat with none stamps nothing.
+    pub pid: Option<u32>,
 }
 
 /// A chat's ids, as the record keeps them across a relaunch (ADR 0066, "What changes where").
@@ -1016,6 +1033,14 @@ struct ChatOnDisk {
     run: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     resumed_from: String,
+    /// The process the chat's program runs as, or absent — see [`Chat::pid`]. Zero, the
+    /// whole process group to `kill(2)`, is never one and reads as absent.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pid: u32,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 /// `word` where it is a ULID, else nothing: an id off a file somebody else may have written is
@@ -1109,6 +1134,7 @@ impl From<&Record> for OnDisk {
                     device: chat.identity.device.clone().unwrap_or_default(),
                     run: chat.identity.run.clone().unwrap_or_default(),
                     resumed_from: chat.identity.resumed_from.clone().unwrap_or_default(),
+                    pid: chat.pid.unwrap_or_default(),
                 })
                 .collect(),
             dealt: highest_dealt(record),
@@ -1168,6 +1194,7 @@ impl From<ChatOnDisk> for Chat {
                 run: a_ulid(&chat.run),
                 resumed_from: a_ulid(&chat.resumed_from),
             },
+            pid: (chat.pid > 0).then_some(chat.pid),
         }
     }
 }
@@ -1404,6 +1431,31 @@ pub(crate) mod tests {
 
         fs::write(path(plane.path()), text.replace("\"alpha\"", "\"../x\"")).unwrap();
         assert_eq!(read(plane.path()).chats[0].renamed_from, None);
+    }
+
+    #[test]
+    fn the_process_a_chat_runs_as_is_recorded_and_a_chat_with_none_writes_no_key() {
+        let plane = tempfile::tempdir().unwrap();
+        let running = Chat {
+            pid: Some(4242),
+            ..claude("ide.7", None)
+        };
+        write(
+            plane.path(),
+            &Record {
+                chats: vec![running.clone(), claude("ide.8", Some(ID))],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let text = fs::read_to_string(path(plane.path())).unwrap();
+        assert_eq!(text.matches("\"pid\"").count(), 1, "{text}");
+
+        assert_eq!(read(plane.path()).chats[0], running);
+        assert_eq!(read(plane.path()).chats[1].pid, None);
+
+        fs::write(path(plane.path()), text.replace("4242", "0")).unwrap();
+        assert_eq!(read(plane.path()).chats[0].pid, None, "zero is no process");
     }
 
     #[test]

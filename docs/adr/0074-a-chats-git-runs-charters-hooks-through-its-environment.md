@@ -203,6 +203,25 @@ is in `docs/plane-format.md`, *Provenance trailers*.
 - **Only an armed chat's commits get trailers.** The operator's terminal is not armed, and a shell
   tab is not a chat on a harness (the app's `Opening::git_hooks`). An agent can skip the hook
   with `--no-verify`, as it can skip the scan, and the Bash guard refuses that spelling.
+- **Only a commit made below the chat's harness gets trailers** (amended 2026-10-03, V82,
+  #1018). The environment that arms a chat is inherited by whatever it starts: an editor or
+  terminal opened from the chat keeps it, and the operator's commits there are theirs. So
+  charter stamps only when the committing process descends from the program the app started for
+  that chat, whose pid the app's record keeps (`chats[].pid`). The walk reads `/proc` on Linux
+  and one `ps` elsewhere, and every doubt answers "not the agent". The pid is recorded only
+  while that program runs: the record is written again when it ends, and the record written at
+  quit names no pid, so a pid the system may hand to another process is never one charter
+  vouches for. The same rule covers `charter save` from inside a chat.
+
+  Its limits, each of which fails closed (the commit is left as written, never stamped wrongly):
+  - **A sandboxed chat gets no trailers yet** (operator ruling, 2026-10-03). Inside the sandbox
+    ADR 0067 runs a chat's commands in, the walk cannot reach the harness: on Linux the sandbox
+    gives commands their own pid namespace, and on macOS it does not let them run `ps`. Binding
+    provenance to the sandbox charter launched is a follow-up (#1021).
+  - **Windows is never stamped.** charter has no way to read another process's parent there
+    yet, so the answer is always "not the agent".
+  - **A process that left the tree is not stamped**: a detached editor, or a job that outlived
+    its harness. For an editor that is the point.
 - **What it costs:** one more `charter` process per commit, reading the app's record and, in a
   workspace repo, the workspace's change records. This is accepted on the same grounds as above.
 
@@ -210,4 +229,5 @@ is in `docs/plane-format.md`, *Provenance trailers*.
 |---|---|
 | `charter_core::githooks::COMMIT_MSG` | the shim that runs `charter` and never refuses |
 | `charter_core::provenance` | the trailers, the chat and change they name, and `stamp` |
+| `charter_core::process::descends_from` | whether the commit runs below the chat's harness |
 | `charter git-hook commit-msg` | the stamping |

@@ -470,7 +470,10 @@ impl Session {
                 }
                 let deadline = Instant::now() + REAPING;
                 loop {
-                    match lock(&child).try_wait() {
+                    // Asked under the lock, answered without it: `tell` may ask this session
+                    // for its pid, which takes the same lock.
+                    let asked = lock(&child).try_wait();
+                    match asked {
                         Ok(Some(status)) => {
                             return tell(match status.signal() {
                                 Some(signal) => Exit::Signal(signal.to_owned()),
@@ -491,9 +494,21 @@ impl Session {
         let _ = started;
     }
 
-    /// The operating system's id for the program, while it runs.
+    /// The operating system's id for the program, while it runs, and `None` once it has an exit
+    /// status: the pid of a program that has gone may be handed to another process, and the
+    /// app's record names this one as the chat's harness (V82, #1018). Asking reaps nothing a
+    /// later [`Self::wait`] or [`Self::when_it_ends`] needs: the status is kept once read.
     pub fn process_id(&self) -> Option<u32> {
-        lock(&self.child).process_id()
+        self.program().process_id()
+    }
+
+    /// The program, to ask about without holding anything of the session's: ending a program
+    /// holds it through a hangup grace and a reap, and whoever asks waits that long, so a host
+    /// asks outside its own locks.
+    pub fn program(&self) -> Program {
+        Program {
+            child: Arc::clone(&self.child),
+        }
     }
 
     /// How long the program has written nothing to its terminal: since its last output, or
@@ -524,6 +539,22 @@ impl Session {
         #[cfg(not(unix))]
         {
             None
+        }
+    }
+}
+
+/// A session's program, to ask about apart from the session ([`Session::program`]).
+pub struct Program {
+    child: Arc<Mutex<Box<dyn Child + Send + Sync>>>,
+}
+
+impl Program {
+    /// [`Session::process_id`].
+    pub fn process_id(&self) -> Option<u32> {
+        let mut child = lock(&self.child);
+        match child.try_wait() {
+            Ok(None) => child.process_id(),
+            _ => None,
         }
     }
 }

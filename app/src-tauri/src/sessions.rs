@@ -117,13 +117,14 @@ impl Sessions {
         }
     }
 
-    /// The operating system's id for a session's program, while it runs. Only the tests ask;
-    /// the UI has no use for it yet.
-    #[cfg(test)]
+    /// The operating system's id for a session's program, while it runs.
+    ///
+    /// Asked outside `running`: a program being ended is held through its hangup grace and its
+    /// reap, and every other session's input, size and views wait on `running` (R2-2).
     pub fn process_id(&self, id: u32) -> Option<u32> {
-        self.with(id, |running| Ok(running.session.process_id()))
-            .ok()
-            .flatten()
+        self.with(id, |running| Ok(running.session.program()))
+            .ok()?
+            .process_id()
     }
 
     /// Ends one session's program and keeps the session, on a thread of its own.
@@ -354,7 +355,6 @@ impl SessionHost for Sessions {
         self.kill_switch = switch;
     }
 
-    #[cfg(test)]
     fn process_id(&self, id: u32) -> Option<u32> {
         Sessions::process_id(self, id)
     }
@@ -551,6 +551,80 @@ mod tests {
             );
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    #[test]
+    fn a_program_that_has_ended_has_no_process_id_though_its_session_stays() {
+        // V82 (#1018): the record names this pid as the chat's harness, and a pid whose
+        // program has gone may be handed to another process.
+        let sessions = Sessions::new();
+        let id = sessions
+            .open(None, &opening("printf started; read line"), &|_| {})
+            .expect("the session opens");
+        let (_view, seen) = watching(&sessions, id);
+        until_seen(&seen, "started");
+        assert!(
+            sessions.process_id(id).is_some(),
+            "a running program has one"
+        );
+
+        sessions.input(id, b"go\r").expect("the program reads it");
+
+        let deadline = Instant::now() + PATIENCE;
+        while sessions.process_id(id).is_some() {
+            assert!(
+                Instant::now() < deadline,
+                "the ended program still has a pid"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            sessions.running().contains(&id),
+            "the session stays for its tab"
+        );
+    }
+
+    #[test]
+    fn asking_a_stopping_programs_pid_holds_up_no_other_session() {
+        // R2-2: ending a program holds its child through a hangup grace and a reap. A record
+        // write asks every chat's pid meanwhile, and must not hold every other pane with it.
+        let sessions = Arc::new(Sessions::new());
+        let stubborn = sessions
+            .open(
+                None,
+                &opening("trap '' INT HUP TERM; printf ready; while :; do sleep 1; done"),
+                &|_| {},
+            )
+            .expect("the session opens");
+        let other = sessions
+            .open(None, &opening("printf ready; cat >/dev/null"), &|_| {})
+            .expect("the session opens");
+        for id in [stubborn, other] {
+            let (_view, seen) = watching(&sessions, id);
+            until_seen(&seen, "ready");
+        }
+        let _ends =
+            stand_in::Ends::group(sessions.process_id(stubborn).expect("a running program"));
+
+        sessions.stop_program(stubborn);
+        // Past the interrupt's grace, into the hangup and reap, which hold the program.
+        std::thread::sleep(Duration::from_millis(400));
+        let asking = {
+            let sessions = Arc::clone(&sessions);
+            std::thread::spawn(move || sessions.process_id(stubborn))
+        };
+        std::thread::sleep(Duration::from_millis(50));
+        let started = Instant::now();
+        sessions
+            .input(other, b"x")
+            .expect("the other chat takes input");
+        let took = started.elapsed();
+        let _ = asking.join();
+
+        assert!(
+            took < Duration::from_millis(150),
+            "input to another chat waited {took:?} on a program being stopped"
+        );
     }
 
     #[test]
