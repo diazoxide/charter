@@ -4797,17 +4797,26 @@ mod tests {
         // is canonical for a moment, and a paste written then is echoed and cut at its first
         // line break. The stand-in reports its start while still canonical, with echo on, and
         // only then asks for raw keys.
+        //
+        // **The start is reported once the stand-in is running, never before**, as a real
+        // harness's hook can only be. The app waits `KEYS_READ_WITHIN` from the report for raw
+        // keys, and on a loaded machine a freshly written program takes seconds to run its
+        // first line: measured at 1.3–6.5 s from the chat's spawn at load 50–70, and past ten
+        // at load 100, where a report sent at spawn ran out the wait before `stty` and nothing
+        // was typed (#1138).
         let dir = tempfile::tempdir().expect("a directory");
         let root = a_plane(&dir.path().join("plane"));
         let (planes, _told) = planes_telling();
         let plane = planes.open(&root);
         let held = planes.held(&plane).expect("it is held");
+        let running = dir.path().join("running");
         let typed = dir.path().join("typed");
         let program = stand_in::program(
             dir.path(),
             "slow-to-read-keys",
             &format!(
-                "#!/bin/sh\nsleep 1\nstty raw -echo\nexec cat > '{}'\n",
+                "#!/bin/sh\n: > '{}'\nsleep 1\nstty raw -echo\nexec cat > '{}'\n",
+                running.display(),
                 typed.display()
             ),
         );
@@ -4828,6 +4837,7 @@ mod tests {
             .expect("watched");
         held.typed()
             .hold(session, "Retire alpha.\nAudit it first.".to_owned());
+        assert!(becomes(|| running.exists()), "the stand-in never started");
 
         a_report_from(&held, session, charter_core::state::Event::SessionStart);
 
