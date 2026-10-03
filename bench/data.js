@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791014180781,
+  "lastUpdate": 1791022435181,
   "repoUrl": "https://github.com/diazoxide/charter",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -378,6 +378,48 @@ window.BENCHMARK_DATA = {
             "value": 101.4856775,
             "unit": "ms",
             "extra": "median of 5 runs: 100.897, 101.456, 101.486, 102.050, 102.053 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "85b76f2b126a0bfe8e7de24eda40023d74e19cc7",
+          "message": "DS-9: the first run counts its prompts and fails above three\n\nW10's interrupt budget: at most three prompts before the first answered\nagent turn. app/src/interruptBudget.ts counts every prompt a page shows:\neach dialog and alertdialog (an open native <dialog> included), and each\ninline question: a group or radiogroup named by its question, or a\nfieldset whose legend is one, so an ask moved onto the page is still\ncounted. Its docstring lists what it cannot see. Every\nscenario in FirstRun.test.tsx now counts its prompts and fails above\nthree, naming each one. A new test walks the longest way to a chat\n(forge question, trust question, picker) and pins it at exactly three,\nso one more prompt on that way fails the build.\n\nThe ForgeQuestion, RepoInstructionsTab and PlaneView comments now describe the\nbudget this way, and docs/design-system.md has a section on it.\n\nCloses #631\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-03T14:10:49+04:00",
+          "tree_id": "fa953d4b643dc47b7bebf3050bd399866f57d756",
+          "url": "https://github.com/diazoxide/charter/commit/85b76f2b126a0bfe8e7de24eda40023d74e19cc7"
+        },
+        "date": 1791022433731,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.5827484999999999,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.571, 0.578, 0.583, 0.583, 0.586 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 17.004761000000002,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.554, 16.999, 17.005, 17.041, 17.223 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 104.692088,
+            "unit": "ms",
+            "extra": "median of 5 runs: 103.502, 103.688, 104.692, 105.160, 105.807 ms"
           }
         ]
       }
