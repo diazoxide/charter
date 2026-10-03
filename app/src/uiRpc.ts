@@ -799,6 +799,14 @@ export const commands = {
 	 *  watched.
 	 */
 	filesWatch: (folders: BranchFolder[]) => typedError<null, string>(__TAURI_INVOKE("files_watch", { folders })),
+	/**
+	 *  The files of the scope whose path matches `query`, best first. `session` is the palette's:
+	 *  within one session each branch is listed once, so typing pays only for the match. An
+	 *  empty query finds nothing and lists the scope, which the window asks as the palette opens.
+	 */
+	findFiles: (session: number, scope: FileScope, query: string) => typedError<FilesFound, string>(__TAURI_INVOKE("find_files", { session, scope, query })),
+	/**  The palette session `session` closed: this window's listings are let go of. */
+	findFilesEnd: (session: number) => __TAURI_INVOKE<void>("find_files_end", { session }),
 	/**  Which channel this machine takes charter from: `stable` or `dev`. */
 	updateChannel: () => __TAURI_INVOKE<string>("update_channel"),
 	/**  Put this machine on a channel. A word charter does not know is refused, not guessed at. */
@@ -1804,9 +1812,36 @@ export type FactColumn = {
 	cells: FactCell[],
 };
 
+/**  Where ⌘P looks: the scope follows the window's focus, and Tab widens it. */
+export type FileScope = 
+/**  One branch: a piece, or no piece for the repo's own folder. */
+{ kind: "branch"; plane: PlaneId; workspace: string; repo: string; piece: string | null } | 
+/**
+ *  Every branch of one project, `near` first: the branch the window's focus is on, so the
+ *  nearest of equal hits leads.
+ */
+{ kind: "project"; plane: PlaneId; near: NearBranch | null } | 
+/**
+ *  Every branch of every project open in charter: the project in front first, and `near`
+ *  first within it.
+ */
+{ kind: "open-projects"; front: PlaneId | null; near: NearBranch | null };
+
 /**  What `files-changed` carries: the folders, of those this window asked to watch, that moved. */
 export type FilesChanged = {
 	folders: BranchFolder[],
+};
+
+/**  What one keystroke found. */
+export type FilesFound = {
+	/**  Best first, at most fifty. */
+	files: FoundFile[],
+	/**  How many branches the scope covers. */
+	branches: number,
+	/**  Each branch that could not be listed, in the core's sentence. */
+	refused: string[],
+	/**  Each branch with more files than ⌘P lists, in the core's sentence. */
+	partial: string[],
 };
 
 /**  What the first-run screen shows about this machine. */
@@ -1889,6 +1924,16 @@ export type ForgeRow = {
  *  keeps free of serde and specta.
  */
 export type ForgeWord = "github" | "gitlab";
+
+/**  One file ⌘P found: its project, its branch and its path in that branch. */
+export type FoundFile = {
+	plane: PlaneId,
+	workspace: string,
+	repo: string,
+	/**  No piece is the repo's own folder. */
+	piece: string | null,
+	path: string,
+};
 
 /**  How a number reads, as the window colours it — `charter_core::usage::Tone`. */
 export type GaugeTone = "ok" | "warn" | "bad";
@@ -2290,6 +2335,17 @@ export type Moved = {
 	 *  or child its harness spawned, drawn under the chat. Empty for nearly every chat.
 	 */
 	children: ChildAgent[],
+};
+
+/**
+ *  The branch the window's focus is on, by name, in the project a scope puts first. It only
+ *  orders the scope: a name no branch of the project has moves nothing.
+ */
+export type NearBranch = {
+	workspace: string,
+	repo: string,
+	/**  No piece is the repo's own folder. */
+	piece: string | null,
 };
 
 /**  A branch the window cut: the piece it is, and what git calls it (ADR 0072 §4). */

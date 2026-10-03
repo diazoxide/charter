@@ -198,6 +198,83 @@ describe("the explorer", () => {
     await expect(rendered).toHaveText(expect.stringContaining("svc"));
   });
 
+  /**
+   * **⌘P finds a file by fuzzy name** (FM-7, #1110), against the real core: `find_files` lists
+   * the picked branch with git and ranks its paths, and the file opens in its file tab. The
+   * key is sent as the window's own event, with the platform's modifiers, because a WebDriver
+   * chord does not carry them reliably on both engines (#176).
+   */
+  it("finds a file of the picked branch by fuzzy name on ⌘P and opens it in its file tab", async () => {
+    await onAlpha();
+    const plane = (await ask<string[]>("open_planes"))[0];
+    const branch = join(plane, "workspaces", "alpha", ".worktrees", "svc", "fix-login");
+    // In a folder of this test's own, which it removes again: the fixture's own files stay.
+    mkdirSync(join(branch, "found-by-name", "auth"), { recursive: true });
+    writeFileSync(
+      join(branch, "found-by-name", "auth", "login-form.ts"),
+      "export const form = 1;\n",
+    );
+    // **It leaves the window as it found it**, whatever happens in between: one app process
+    // serves the whole run, and a branch left picked here is where the next spec's "New tab"
+    // starts its chat — `files a chat under the workspace it was started in` needs nothing
+    // picked, and a palette left up would be a dialog over every row after this.
+    try {
+      const spot = await $('[data-testid="piece-svc-fix-login"] .spot');
+      await spot.waitForExist({ timeout: 20_000 });
+      await spot.click();
+
+      await browser.execute(() => {
+        const mac = navigator.platform.startsWith("Mac");
+        window.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "p",
+            metaKey: mac,
+            ctrlKey: !mac,
+            shiftKey: !mac,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      });
+      const scope = await $('[role="status"][aria-label="Where files are found"]');
+      await scope.waitForDisplayed({ timeout: 20_000 });
+      await expect(scope).toHaveText(expect.stringContaining("Files in branch fix-login"));
+      await browser.keys("lgnform");
+      const hit = await $('[role="listbox"][aria-label="Files"] [role="option"]');
+      await hit.waitForExist({ timeout: 20_000 });
+      await expect(hit).toHaveText(expect.stringContaining("login-form.ts"));
+      await expect(hit).toHaveText(expect.stringContaining("found-by-name/auth · fix-login"));
+
+      // Tab widens the scope to the project and says so, and the file still leads.
+      // The rung past it, every open project, is there only while another project is open,
+      // which depends on the specs before this one, so it is `Palette.files.test.tsx`'s.
+      await browser.keys(["Tab"]);
+      await expect(scope).toHaveText(expect.stringContaining("Files in project"));
+      await expect($('[role="listbox"][aria-label="Files"] [role="option"]')).toHaveText(
+        expect.stringContaining("found-by-name/auth · fix-login"),
+      );
+
+      await browser.keys(["Enter"]);
+
+      await browser.waitUntil(async () => (await tabInFront()) === "login-form.ts · fix-login", {
+        timeout: 20_000,
+        timeoutMsg: `the file tab never came forward; in front is ${await tabInFront()}`,
+      });
+      const editor = await $('[data-testid="light-editor"]');
+      await editor.waitForDisplayed({ timeout: 20_000 });
+      await expect(editor).toHaveText(expect.stringContaining("export const form"));
+
+      // The palette closed on Enter.
+      await expect($('[role="dialog"]')).not.toBeDisplayed();
+    } finally {
+      if (await $('[role="dialog"]').isDisplayed()) await browser.keys(["Escape"]);
+      const root = await $('[data-testid="explorer"] button.spot-root');
+      await root.click();
+      await expect(root).toHaveAttribute("aria-current", "true");
+      rmSync(join(branch, "found-by-name"), { recursive: true, force: true });
+    }
+  });
+
   it("shows a file an agent creates in an expanded folder without a refresh", async () => {
     await onAlpha();
     const files = await $('[data-testid="files-svc-fix-login"] .file-node');

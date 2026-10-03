@@ -2612,6 +2612,21 @@ h2.sidebar-title .node-icon {
   opacity: 0.7;
 }
 
+/* ⌘P's files (FM-7): a group of their own under the projects, headed by the scope they were
+   found in, with the way to widen it at the far end of the line. */
+.palette-files {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.palette-scope {
+  display: flex;
+  margin: 0.25rem 0 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
 /* The screen a window with no project draws. It is the first thing a new operator sees, so
    it is a page and not a message tucked into a corner of the pane area. */
 .opener {
