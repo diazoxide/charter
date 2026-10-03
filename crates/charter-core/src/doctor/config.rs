@@ -3,6 +3,8 @@
 
 use std::path::Path;
 
+use crate::adopt::PinVerdict;
+
 use super::{Config, Doctor, NOT_CHECKED_HINT, Row, deferred, first_line};
 
 /// The words `[harness] default` may name, in registration order — Python's
@@ -504,11 +506,10 @@ pub(super) fn schema(d: &Doctor) -> Row {
 
 /// `version lock`: `[charter] version`, opt-in. A plane that pins nothing reports OK.
 ///
-/// **Reported up to the pin, and no further.** The comparison is `adopt::pin_verdict`'s (ADR
-/// 0045), and `charter version` is the surface that makes it; this row still names the pin and
-/// sends the reader there rather than comparing on its own. Moving it onto the verdict changes
-/// the row the differential compares byte for byte with the Python charter's, which is its own
-/// change (ADR 0030's follow-up, still open).
+/// **The comparison is `adopt::pin_verdict`'s** (ADR 0030's follow-up, ADR 0045): the one every
+/// surface asks, so this row and `charter version` cannot disagree about a pin. A pin this
+/// charter meets, and one on the Python charter's line, are fine; drift is a warning that sends
+/// the reader to `charter version`, which says how to conform either side.
 pub(super) fn version_lock(d: &Doctor) -> Row {
     const NAME: &str = "version lock";
     let cfg = match &d.config {
@@ -534,14 +535,29 @@ pub(super) fn version_lock(d: &Doctor) -> Row {
             );
         }
     };
-    match locked {
-        None => Row::ok(NAME, "not pinned"),
-        Some(pin) => deferred::row(
+    let shown = |pin: &str| super::one_line(pin, super::DISPLAY_LIMIT);
+    match crate::adopt::pin_verdict(locked) {
+        PinVerdict::Unpinned => Row::ok(NAME, "not pinned"),
+        PinVerdict::Met(pin) => Row::ok(
             NAME,
-            &format!(
-                "pinned {}; this row does not compare it — `charter version` does",
-                super::one_line(pin, super::DISPLAY_LIMIT)
+            format!("pinned {}, which this charter is", shown(&pin)),
+        ),
+        PinVerdict::PythonLine(pin) => Row::ok(
+            NAME,
+            format!(
+                "pinned {}, a release of the Python charter (charter-cp): not drift, nothing to \
+                 compare",
+                shown(&pin)
             ),
+        ),
+        PinVerdict::Drift(pin) => Row::warn(
+            NAME,
+            format!(
+                "drift: pinned {}, and this charter is {}",
+                shown(&pin),
+                crate::adopt::app_version()
+            ),
+            "Run: charter version  (says how to conform the plane or the app)",
         ),
     }
 }

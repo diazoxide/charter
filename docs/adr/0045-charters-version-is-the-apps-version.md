@@ -136,10 +136,9 @@ draws for an older Python pin, where this app draws none, is held by `alerts/tes
 ## What this rules out
 
 - Printing the news corpus's version as this charter's version, anywhere.
-- Comparing a pin against anything but `adopt::pin_verdict`. `charter version`, the alert row
-  and the window's pin dialog all ask it. `doctor`'s `version lock` row still only names the pin
-  and sends the reader to `charter version`, and moving it onto the verdict is ADR 0030's
-  follow-up, still open.
+- Comparing a pin against anything but `adopt::pin_verdict`. `charter version`, the alert row,
+  the window's pin dialog and `doctor`'s `version lock` row all ask it (the row since #573,
+  ADR 0030's follow-up).
 - Calling a Python-line pin drift, or telling the operator to install, run or return to the
   Python charter to meet one.
 - Writing news entries about this app into the frozen corpus. (The corpus is gone since the
