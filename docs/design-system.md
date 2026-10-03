@@ -42,7 +42,7 @@ Zed's, and it is the only one that can colour the terminal at all.
 ## The vocabulary
 
 `TOKENS` in `app/src/theme/theme.ts` is the list, with a comment on each group saying what it
-means. Sixty names in twelve groups:
+means. Seventy-one names in thirteen groups:
 
 | group                                  | tokens                                                                                          | what it is                                                                                        |
 | -------------------------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
@@ -58,6 +58,7 @@ means. Sixty names in twelve groups:
 | `overlay.*`                            | `scrim` `shadow`                                                                                | what goes over the window when something is modal                                                 |
 | `terminal.*`                           | `background` `foreground` `cursor` `cursor-accent` `selection` `find-match` `find-match-active` | the two `find-*` are a find's matches in a pane, drawn under the text (`theme.searchDecorations`) |
 | `terminal.ansi.*`                      | the eight, and the eight bright                                                                 |                                                                                                   |
+| `icon.*`                               | `folder` `motive` `grey` `red` `orange` `yellow` `green` `teal` `blue` `purple` `pink`          | a file's or a folder's icon in a tree; the only colours an icon theme names (FM-3)                 |
 
 **Two tokens may look like one token and are not.** `needs-you.base` and `danger.base` were a
 single value before this — `--stop`, `#c05c5c`, "charter's red" — and splitting them by meaning
@@ -501,6 +502,19 @@ The rules an icon has to meet here:
 - **A contrast floor applies to an icon's colour as it does to text** — 3:1 for a graphic. A
   state colour that is too weak for words (`needs-you.base` measures 3.64:1 on `surface.base` in
   charter-dark) may colour the mark beside the words and never the words.
+
+**Files and folders are the one exception: they are drawn from an icon theme** (FM-3, #1106), a
+data file beside the colour theme (`app/src/theme/icons.ts`). It maps a file's whole name, then
+its extensions longest first, and a folder's name, to a symbol of path outlines, and each outline
+names one of the `icon.*` tokens — so the icons follow light and dark with the colour theme, a
+colour theme recolours every icon set, and the literal guard covers them. The hue is the point
+there: it is what tells a Rust file from a TypeScript one in a tree of hundreds. charter's own
+set, `charter-icons`, is a 67-symbol subset of Material Icon Theme (MIT), vendored with its
+licence under `app/icons/material-icon-theme/` and shown in About; `icons.vendor.test.ts` holds
+the converted symbols to those files. A project picks another with `[theme] icons`, and an
+extension contributes one as `contributes.icon_themes`. A symbol is drawn by `FileIcon.tsx` as React
+elements it builds, never as SVG text, so a contributed icon theme has nowhere to put a script, a
+link or a style.
 
 ## The interrupt budget
 

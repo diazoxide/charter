@@ -111,6 +111,21 @@ describe("a branch's files", () => {
     ]);
   });
 
+  it("draws each row with its file-type or folder icon (FM-3)", async () => {
+    core({
+      "README.md": { kind: "text", text: "# svc\n" },
+      "src/lib.rs": { kind: "text", text: "pub fn one() {}\n" },
+    });
+    render(<PieceFilesTab plane={PLANE} cut={CUT} onOpenView={() => undefined} />);
+    const icon = async (name: string) =>
+      (await row(name)).querySelector("svg.file-icon")?.getAttribute("data-icon");
+
+    expect(await icon("src")).toBe("folder-src");
+    expect(await icon("README.md")).toBe("readme");
+    await userEvent.click(await row("src"));
+    expect(await icon("lib.rs")).toBe("rust");
+  });
+
   it("draws every entry of a folder, with no cap of its own", async () => {
     const many = Object.fromEntries(
       Array.from({ length: 600 }, (_, i) => [`f${i}.txt`, { kind: "text", text: "" } as PieceFile]),

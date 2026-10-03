@@ -402,8 +402,8 @@ fn only_a_workspace_has_a_colour() {
     assert_eq!(
         refusals("[theme]\ncolour = \"teal\"\n", "charter.toml"),
         [
-            "theme.colour in charter.toml is not read — [theme] holds use and nothing else; a \
-          colour is a workspace's"
+            "theme.colour in charter.toml is not read — [theme] holds use and icons and \
+          nothing else; a colour is a workspace's"
         ]
     );
 }
@@ -420,7 +420,7 @@ fn a_workspaces_theme_table_is_refused_in_the_readers_words() {
             "settings.theme.colour in workspaces/alpha/workspace.json is \"mauve\", which is not \
              red, orange, yellow, green, teal, blue, purple, pink or #rrggbb",
             "settings.theme.font in workspaces/alpha/workspace.json is not read — a workspace's \
-             theme holds use and colour and nothing else",
+             theme holds use, icons and colour and nothing else",
         ]
     );
     let ok: toml::Table =
@@ -468,4 +468,133 @@ fn a_workspaces_theme_is_read_from_its_manifest_on_disk() {
     // Outside every workspace there is no workspace layer.
     let got = resolve(&[], None, &Said::read_in(dir.path(), None));
     assert_eq!((got.draws, got.colour), (None, None));
+}
+
+// -------------------------------------------------------------------------------------
+// The icon theme (FM-3, #1106): `[theme] icons`, in the same order as `use`
+// -------------------------------------------------------------------------------------
+
+/// The icon theme for a project whose two files are `shared` and `local`.
+fn icons(
+    installed: &[Installed],
+    offered: Option<&[Offered]>,
+    shared: &str,
+    local: &str,
+) -> Resolved {
+    let on = extensions(installed, &Choices::from_text(Some(shared), Some(local)));
+    resolve_icons(&on, offered, &Said::from_text(Some(shared), Some(local)))
+}
+
+fn seti() -> Pick {
+    Pick::Extension {
+        id: "seti".to_owned(),
+        name: "Seti".to_owned(),
+    }
+}
+
+const PICKS_SETI: &str = "[theme]\nicons = \"seti/Seti\"\n";
+
+#[test]
+fn a_project_that_picks_no_icon_theme_draws_charters_own() {
+    let got = icons(&[], None, "[theme]\nuse = \"charter-light\"\n", "");
+    assert_eq!((got.picked, got.draws), (None, None));
+    assert_eq!(got.source, Source::Default);
+    assert_eq!(ICONS_FALLBACK, "charter-icons");
+}
+
+#[test]
+fn the_icon_theme_is_picked_local_over_workspace_over_shared_apart_from_the_colours() {
+    let got = icons(
+        &[approved("seti")],
+        None,
+        "[theme]\nuse = \"charter-light\"\nicons = \"charter-icons\"\n",
+        PICKS_SETI,
+    );
+    assert_eq!((got.draws, got.source), (Some(seti()), Source::Local));
+
+    let on = extensions(
+        &[approved("seti")],
+        &Choices::from_text(Some(""), Some("")).in_workspace("alpha", Some("{}")),
+    );
+    let said = Said::from_text(Some(PICKS_SETI), Some("")).in_workspace(
+        "alpha",
+        Some(r#"{"settings": {"theme": {"icons": "charter-icons"}}}"#),
+    );
+    let got = resolve_icons(&on, None, &said);
+    assert_eq!(
+        (got.draws, got.source),
+        (Some(Pick::BuiltIn("charter-icons")), Source::Workspace)
+    );
+    // The colour theme is its own key: picking icons picks no colours.
+    assert_eq!(resolve(&on, None, &said).picked, None);
+}
+
+#[test]
+fn an_extensions_icon_theme_is_drawn_only_while_it_is_on_and_contributes_it() {
+    let offered = [Offered {
+        id: "seti".to_owned(),
+        name: "Seti".to_owned(),
+    }];
+    let got = icons(&[approved("seti")], Some(&offered), PICKS_SETI, "");
+    assert_eq!((got.draws, got.why), (Some(seti()), None));
+
+    let got = icons(
+        &[approved("seti")],
+        Some(&offered),
+        PICKS_SETI,
+        "[extensions.seti]\nenabled = false\n",
+    );
+    assert_eq!(got.draws, Some(Pick::BuiltIn("charter-icons")));
+    assert_eq!(
+        got.why.as_deref(),
+        Some(
+            "charter.toml picks “Seti” from seti, but seti is off in this project — so the \
+             built-in charter-icons is drawn"
+        )
+    );
+
+    let got = icons(&[approved("seti")], Some(&[]), PICKS_SETI, "");
+    assert_eq!(
+        got.why.as_deref(),
+        Some(
+            "charter.toml picks “Seti” from seti, but seti contributes no icon theme called \
+             “Seti” — so the built-in charter-icons is drawn"
+        )
+    );
+}
+
+#[test]
+fn a_colour_theme_is_not_an_icon_theme() {
+    let got = icons(&[], None, "[theme]\nicons = \"charter-dark\"\n", "");
+    assert_eq!(got.draws, None);
+    assert_eq!(
+        got.ignored
+            .iter()
+            .map(|it| it.why.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "charter.toml sets theme.icons to \"charter-dark\", which is not charter-icons or \
+          <extension>/<icon theme> — so charter's own icons are drawn"
+        ]
+    );
+}
+
+#[test]
+fn a_projects_theme_table_holds_icons_too() {
+    assert!(
+        refusals(
+            "[theme]\nuse = \"system\"\nicons = \"seti/Seti\"\n",
+            "charter.toml"
+        )
+        .is_empty()
+    );
+    assert_eq!(
+        refusals("[theme]\nicons = \"system\"\n", "charter.toml"),
+        [
+            "theme.icons in charter.toml is \"system\", which is not charter-icons or \
+          <extension>/<icon theme>"
+        ]
+    );
+    let top: toml::Table = toml::from_str("[theme]\nicons = \"charter-icons\"\n").unwrap();
+    assert!(refusals_in_workspace(&top, "workspaces/alpha/workspace.json").is_empty());
 }

@@ -91,6 +91,28 @@ const PAIRS: [Token, Token, number][] = [
   // own accent, and the one in front is primary text on its tinted `layer.selected`.
   ["accent.base", "layer.workspace", 3],
   ["text.primary", "layer.workspace", 4.5],
+  // A file's or a folder's icon (FM-3) is a non-text mark, on the explorer's window and the
+  // sunken file tab alike. `icon.motive` is drawn over a folder, never on the window.
+  ["icon.folder", "surface.base", 3],
+  ["icon.folder", "surface.sunken", 3],
+  ["icon.grey", "surface.base", 3],
+  ["icon.grey", "surface.sunken", 3],
+  ["icon.red", "surface.base", 3],
+  ["icon.red", "surface.sunken", 3],
+  ["icon.orange", "surface.base", 3],
+  ["icon.orange", "surface.sunken", 3],
+  ["icon.yellow", "surface.base", 3],
+  ["icon.yellow", "surface.sunken", 3],
+  ["icon.green", "surface.base", 3],
+  ["icon.green", "surface.sunken", 3],
+  ["icon.teal", "surface.base", 3],
+  ["icon.teal", "surface.sunken", 3],
+  ["icon.blue", "surface.base", 3],
+  ["icon.blue", "surface.sunken", 3],
+  ["icon.purple", "surface.base", 3],
+  ["icon.purple", "surface.sunken", 3],
+  ["icon.pink", "surface.base", 3],
+  ["icon.pink", "surface.sunken", 3],
   ["border.subtle", "surface.base", 1.2],
   ["border.strong", "surface.base", 1.5],
 ];

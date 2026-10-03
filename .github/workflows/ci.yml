@@ -90,6 +90,10 @@ jobs:
           cache: npm
           cache-dependency-path: app/package-lock.json
       - run: npm ci
+      # Every npm package the app ships, and every vendored asset (app/icons/vendored.json), is
+      # under a licence deny.toml allows (FM-3, #1106). It reads the lockfile and nothing else,
+      # under a second, so it gates as part of this job rather than as evidence.
+      - run: node ../tools/npm-licences.mjs
       - run: npm run typecheck
       - run: npm run lint
       - run: npm run format:check

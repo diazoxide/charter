@@ -2,6 +2,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { BUILT_IN_ICONS } from "./icons";
 import { BUILT_IN } from "./theme";
 
 /**
@@ -28,5 +29,15 @@ describe("charter's own themes", () => {
 
     const named = [...(declared?.[1] ?? "").matchAll(/"([^"]+)"/g)].map((hit) => hit[1]);
     expect(named.sort()).toEqual(Object.keys(BUILT_IN).sort());
+  });
+});
+
+describe("charter's own icon themes (FM-3)", () => {
+  it("are the ones the core's registry names", () => {
+    const source = readFileSync(CORE, "utf8");
+    const declared = /BUILT_IN_ICON_THEMES:\s*\[&str;\s*\d+\]\s*=\s*\[([^\]]*)\]/.exec(source);
+    expect(declared, `BUILT_IN_ICON_THEMES was not found in ${CORE}`).not.toBeNull();
+    const named = [...(declared?.[1] ?? "").matchAll(/"([^"]+)"/g)].map((hit) => hit[1]);
+    expect(named.sort()).toEqual(Object.keys(BUILT_IN_ICONS).sort());
   });
 });

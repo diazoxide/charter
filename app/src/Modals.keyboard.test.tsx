@@ -645,7 +645,9 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
     render(<AboutCharter />);
     await userEvent.click(screen.getByTestId("title-about"));
     await screen.findByRole("dialog");
+    // The notices (FM-3) are one summary that opens on Space or Enter.
     expect(await reachableByKeyboard()).toEqual([
+      'summary "Notices"',
       'button "Close"',
       'a "Discussions"',
       'a "report a bug"',

@@ -90,6 +90,17 @@
   --color-diff-inserted: var(--diff-inserted);
   --color-diff-deleted-text: var(--diff-deleted-text);
   --color-diff-inserted-text: var(--diff-inserted-text);
+  --color-icon-folder: var(--icon-folder);
+  --color-icon-motive: var(--icon-motive);
+  --color-icon-grey: var(--icon-grey);
+  --color-icon-red: var(--icon-red);
+  --color-icon-orange: var(--icon-orange);
+  --color-icon-yellow: var(--icon-yellow);
+  --color-icon-green: var(--icon-green);
+  --color-icon-teal: var(--icon-teal);
+  --color-icon-blue: var(--icon-blue);
+  --color-icon-purple: var(--icon-purple);
+  --color-icon-pink: var(--icon-pink);
   --color-state-running: var(--state-running);
   --color-state-waiting: var(--state-waiting);
   --color-state-waiting-glow: var(--state-waiting-glow);

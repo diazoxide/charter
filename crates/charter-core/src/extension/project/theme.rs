@@ -24,6 +24,15 @@
 //! A value that is none of the shapes is ignored with a sentence and the next layer down is used,
 //! as a setting's is ([`super::Ignored`]).
 //!
+//! # The icon theme (FM-3, #1106)
+//!
+//! `[theme] icons` picks the icons the file trees draw, from the same layers in the same order:
+//! `charter-icons`, charter's own, or `<extension-id>/<icon theme name>`, one an extension
+//! contributes. It is a key of its own because the two are picked apart: an icon theme takes
+//! its colours from the colour theme's `icon.*` tokens, so either one can change without the
+//! other. Nothing picked, or a pick that cannot be drawn, draws [`ICONS_FALLBACK`]
+//! ([`resolve_icons`]).
+//!
 //! # A workspace's colour
 //!
 //! `settings.theme.colour`, in a workspace's `workspace.json` and nowhere else: one of the
@@ -33,7 +42,7 @@
 //! leaves the text and the terminal alone.
 
 use super::{Effective, Ignored, Source, State, WORKSPACE_AT};
-use crate::extension::BUILT_IN_THEMES;
+use crate::extension::{BUILT_IN_ICON_THEMES, BUILT_IN_THEMES};
 use crate::profiles::{COMMITTED_FILE, LOCAL_FILE};
 
 /// The table a project's theme is picked in, in either file — and in a workspace's `settings`.
@@ -41,6 +50,12 @@ pub const TABLE: &str = "theme";
 
 /// The key in [`TABLE`] that picks the theme.
 pub const USE: &str = "use";
+
+/// The key in [`TABLE`] that picks the icon theme (FM-3, #1106).
+pub const ICONS: &str = "icons";
+
+/// The icon theme the trees draw when nothing picked one, or the pick cannot be drawn.
+pub const ICONS_FALLBACK: &str = "charter-icons";
 
 /// The key in a workspace's [`TABLE`] that gives it a colour (charter-app#281).
 pub const COLOUR: &str = "colour";
@@ -84,6 +99,19 @@ impl Pick {
         })
     }
 
+    /// `value` as an icon theme pick ([`ICONS`]), or `None` when it is not one of its shapes:
+    /// one of [`BUILT_IN_ICON_THEMES`], or `<extension-id>/<name>`. There is no `system`: an
+    /// icon theme follows the appearance through the colour theme's tokens.
+    pub fn parse_icons(value: &str) -> Option<Self> {
+        if let Some(built) = BUILT_IN_ICON_THEMES.iter().find(|name| **name == value) {
+            return Some(Self::BuiltIn(built));
+        }
+        match Self::parse(value)? {
+            extension @ Self::Extension { .. } => Some(extension),
+            Self::BuiltIn(_) | Self::System => None,
+        }
+    }
+
     /// The pick as a file holds it.
     pub fn value(&self) -> String {
         match self {
@@ -123,6 +151,14 @@ impl Colour {
     }
 }
 
+/// One key's value in each layer: Shared, the workspace, Local.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct Layers {
+    shared: Option<toml::Value>,
+    workspace: Option<toml::Value>,
+    local: Option<toml::Value>,
+}
+
 /// What a project's two files — and, in a workspace, its `workspace.json` — say about its theme:
 /// each layer's `use` as found, and the workspace's `colour`.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -131,6 +167,8 @@ pub struct Said {
     /// `None` outside a workspace, and for a workspace whose settings pick nothing.
     workspace: Option<toml::Value>,
     local: Option<toml::Value>,
+    /// Each layer's [`ICONS`], as found, in the same order (FM-3).
+    icons: Layers,
     /// The workspace's `settings.theme.colour`, as found.
     colour: Option<toml::Value>,
     /// The workspace these were read in, when they were.
@@ -143,14 +181,19 @@ pub struct Said {
 impl Said {
     /// The two files' text: `None` for a file that is not there.
     pub fn from_text(shared: Option<&str>, local: Option<&str>) -> Self {
-        let said = |text: &str| {
+        let said = |text: &str, key: &str| {
             text.parse::<toml::Table>()
                 .ok()
-                .and_then(|top| said_in(&top, USE))
+                .and_then(|top| said_in(&top, key))
         };
         Self {
-            shared: shared.and_then(said),
-            local: local.and_then(said),
+            shared: shared.and_then(|text| said(text, USE)),
+            local: local.and_then(|text| said(text, USE)),
+            icons: Layers {
+                shared: shared.and_then(|text| said(text, ICONS)),
+                local: local.and_then(|text| said(text, ICONS)),
+                workspace: None,
+            },
             ..Self::default()
         }
     }
@@ -166,6 +209,7 @@ impl Said {
 
     fn with_workspace(mut self, name: &str, settings: Option<toml::Table>) -> Self {
         self.workspace = settings.as_ref().and_then(|top| said_in(top, USE));
+        self.icons.workspace = settings.as_ref().and_then(|top| said_in(top, ICONS));
         self.colour = settings.as_ref().and_then(|top| said_in(top, COLOUR));
         self.workspace_name = Some(name.to_owned());
         self
@@ -189,7 +233,8 @@ impl Said {
         local: &crate::settings::LayerText,
     ) -> Self {
         Self {
-            local_left_out: local.left_out_where(|top| said_in(top, USE).is_some()),
+            local_left_out: local
+                .left_out_where(|top| said_in(top, USE).is_some() || said_in(top, ICONS).is_some()),
             ..Self::from_text(shared.text(), local.text())
         }
     }
@@ -264,32 +309,130 @@ pub fn resolve(extensions: &[Effective], offered: Option<&[Offered]>, said: &Sai
     let mut ignored = Vec::new();
     let workspace_file = said.workspace_file().unwrap_or_default();
     let colour = colour(said, &workspace_file, &mut ignored);
+    let layers = Layers {
+        shared: said.shared.clone(),
+        workspace: said.workspace.clone(),
+        local: said.local.clone(),
+    };
+    Resolved {
+        colour,
+        ..resolve_key(Key::Colours, &layers, extensions, offered, said, ignored)
+    }
+}
+
+/// **The icon theme, in one place** (FM-3, #1106): [`resolve`]'s order and rules for
+/// `[theme] icons`. `offered` is every icon theme the approved extensions contribute, when the
+/// caller surveyed them. [`Resolved::draws`] `None` draws [`ICONS_FALLBACK`]; a pick that cannot
+/// be drawn draws it too, with [`Resolved::why`]. A workspace's colour is not an icon theme's,
+/// so [`Resolved::colour`] is always `None` here.
+pub fn resolve_icons(
+    extensions: &[Effective],
+    offered: Option<&[Offered]>,
+    said: &Said,
+) -> Resolved {
+    resolve_key(
+        Key::Icons,
+        &said.icons,
+        extensions,
+        offered,
+        said,
+        Vec::new(),
+    )
+}
+
+/// Which of `[theme]`'s two picks is being resolved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Key {
+    Colours,
+    Icons,
+}
+
+impl Key {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Colours => USE,
+            Self::Icons => ICONS,
+        }
+    }
+
+    fn parse(self, value: &str) -> Option<Pick> {
+        match self {
+            Self::Colours => Pick::parse(value),
+            Self::Icons => Pick::parse_icons(value),
+        }
+    }
+
+    fn not_a_pick(self) -> &'static str {
+        match self {
+            Self::Colours => NOT_A_PICK,
+            Self::Icons => NOT_AN_ICON_PICK,
+        }
+    }
+
+    fn fallback(self) -> &'static str {
+        match self {
+            Self::Colours => FALLBACK,
+            Self::Icons => ICONS_FALLBACK,
+        }
+    }
+
+    /// What a contribution of this kind is called.
+    fn noun(self) -> &'static str {
+        match self {
+            Self::Colours => "theme",
+            Self::Icons => "icon theme",
+        }
+    }
+
+    /// What is drawn when no layer picks anything usable.
+    fn when_none(self) -> &'static str {
+        match self {
+            Self::Colours => "the window keeps its own theme",
+            Self::Icons => "charter's own icons are drawn",
+        }
+    }
+}
+
+/// [`resolve`] and [`resolve_icons`]: the first usable pick of `layers`, Local first.
+fn resolve_key(
+    key: Key,
+    layers: &Layers,
+    extensions: &[Effective],
+    offered: Option<&[Offered]>,
+    said: &Said,
+    mut ignored: Vec<Ignored>,
+) -> Resolved {
+    let workspace_file = said.workspace_file().unwrap_or_default();
     let mut candidates = [
-        (Source::Local, LOCAL_FILE, "", &said.local),
+        (Source::Local, LOCAL_FILE, "", &layers.local),
         (
             Source::Workspace,
             workspace_file.as_str(),
             WORKSPACE_AT,
-            &said.workspace,
+            &layers.workspace,
         ),
-        (Source::Shared, COMMITTED_FILE, "", &said.shared),
+        (Source::Shared, COMMITTED_FILE, "", &layers.shared),
     ]
     .into_iter()
     .filter_map(|(source, file, at, value)| value.as_ref().map(|value| (source, file, at, value)))
     .peekable();
     let mut picked = None;
     while let Some((source, file, at, value)) = candidates.next() {
-        if let Some(pick) = value.as_str().and_then(Pick::parse) {
+        if let Some(pick) = value.as_str().and_then(|value| key.parse(value)) {
             picked = Some((pick, source, file));
             break;
         }
         let instead = match candidates.peek() {
             Some((_, next, _, _)) => format!("{next}'s pick is used"),
-            None => "the window keeps its own theme".to_owned(),
+            None => key.when_none().to_owned(),
         };
         ignored.push(Ignored {
             source,
-            why: format!("{file} sets {at}{TABLE}.{USE} to {value}, {NOT_A_PICK} — so {instead}"),
+            why: format!(
+                "{file} sets {at}{TABLE}.{} to {value}, {} — so {instead}",
+                key.name(),
+                key.not_a_pick()
+            ),
         });
     }
     let Some((pick, source, file)) = picked else {
@@ -298,21 +441,21 @@ pub fn resolve(extensions: &[Effective], offered: Option<&[Offered]>, said: &Sai
             source: Source::Default,
             draws: None,
             why: None,
-            colour,
+            colour: None,
             ignored,
         };
     };
-    let why = unavailable(&pick, file, extensions, offered);
+    let why = unavailable(key, &pick, file, extensions, offered);
     Resolved {
         draws: Some(if why.is_some() {
-            Pick::BuiltIn(FALLBACK)
+            Pick::BuiltIn(key.fallback())
         } else {
             pick.clone()
         }),
         picked: Some(pick),
         source,
         why,
-        colour,
+        colour: None,
         ignored,
     }
 }
@@ -352,6 +495,9 @@ pub fn colour_of(ws: &crate::workspaces::Workspace) -> Option<Colour> {
 pub const NOT_A_PICK: &str = "which is not charter-dark, charter-light, system or \
                               <extension>/<theme>";
 
+/// What a value that is not an icon theme pick is told.
+pub const NOT_AN_ICON_PICK: &str = "which is not charter-icons or <extension>/<icon theme>";
+
 /// What a value that is not a colour is told.
 fn not_a_colour() -> String {
     format!("which is not {} or #rrggbb", PALETTE.join(", "))
@@ -359,6 +505,7 @@ fn not_a_colour() -> String {
 
 /// Why `pick`, which `file` made, cannot be drawn in this project, or `None` when it can.
 fn unavailable(
+    key: Key,
     pick: &Pick,
     file: &str,
     extensions: &[Effective],
@@ -375,7 +522,7 @@ fn unavailable(
             if contributes {
                 return None;
             }
-            format!("{id} contributes no theme called “{name}”")
+            format!("{id} contributes no {} called “{name}”", key.noun())
         }
         // Off in the workspace's layer is off there, not in the project (charter-app#281).
         Some((State::Off, Source::Workspace)) => format!("{id} is off in this workspace"),
@@ -386,7 +533,8 @@ fn unavailable(
         }
     };
     Some(format!(
-        "{file} picks “{name}” from {id}, but {because} — so the built-in {FALLBACK} is drawn"
+        "{file} picks “{name}” from {id}, but {because} — so the built-in {} is drawn",
+        key.fallback()
     ))
 }
 
@@ -407,18 +555,28 @@ pub fn refusals(text: &str, file: &str) -> Vec<String> {
     };
     let mut out = Vec::new();
     for (key, value) in table {
-        if key != USE {
-            let colour = if key == COLOUR {
-                "; a colour is a workspace's"
-            } else {
-                ""
-            };
-            out.push(format!(
-                "{TABLE}.{} in {file} is not read — [{TABLE}] holds {USE} and nothing else{colour}",
-                toml_edit::Key::new(key.as_str()).display_repr()
-            ));
-        } else if value.as_str().and_then(Pick::parse).is_none() {
-            out.push(format!("{TABLE}.{USE} in {file} is {value}, {NOT_A_PICK}"));
+        match key.as_str() {
+            USE if value.as_str().and_then(Pick::parse).is_none() => {
+                out.push(format!("{TABLE}.{USE} in {file} is {value}, {NOT_A_PICK}"));
+            }
+            ICONS if value.as_str().and_then(Pick::parse_icons).is_none() => {
+                out.push(format!(
+                    "{TABLE}.{ICONS} in {file} is {value}, {NOT_AN_ICON_PICK}"
+                ));
+            }
+            USE | ICONS => {}
+            _ => {
+                let colour = if key == COLOUR {
+                    "; a colour is a workspace's"
+                } else {
+                    ""
+                };
+                out.push(format!(
+                    "{TABLE}.{} in {file} is not read — [{TABLE}] holds {USE} and {ICONS} and \
+                     nothing else{colour}",
+                    toml_edit::Key::new(key.as_str()).display_repr()
+                ));
+            }
         }
     }
     out
@@ -447,10 +605,13 @@ pub fn refusals_in_workspace(top: &toml::Table, file: &str) -> Vec<String> {
             COLOUR if value.as_str().and_then(Colour::parse).is_none() => {
                 out.push(format!("{at} is {value}, {}", not_a_colour()));
             }
-            USE | COLOUR => {}
+            ICONS if value.as_str().and_then(Pick::parse_icons).is_none() => {
+                out.push(format!("{at} is {value}, {NOT_AN_ICON_PICK}"));
+            }
+            USE | COLOUR | ICONS => {}
             _ => out.push(format!(
-                "{at} is not read — a workspace's {TABLE} holds {USE} and {COLOUR} and nothing \
-                 else"
+                "{at} is not read — a workspace's {TABLE} holds {USE}, {ICONS} and {COLOUR} and \
+                 nothing else"
             )),
         }
     }

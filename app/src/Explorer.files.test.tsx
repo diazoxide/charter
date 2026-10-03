@@ -5,7 +5,14 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import { Explorer } from "./Explorer";
 import { ChatsHere, fixedChats, nothingKnown } from "./chatState";
-import type { FolderEntry, Panels as PanelsModel, Piece, PlaneId } from "./bindings";
+import type {
+  ExtensionTheme,
+  FolderEntry,
+  Panels as PanelsModel,
+  Piece,
+  PlaneId,
+} from "./bindings";
+import { forgetProjectThemes } from "./projectTheme";
 import type { WorkspaceState } from "./workspaceState";
 
 /**
@@ -18,6 +25,7 @@ import type { WorkspaceState } from "./workspaceState";
 afterEach(() => {
   cleanup();
   clearMocks();
+  forgetProjectThemes();
 });
 
 const PLANE = "/plane" as unknown as PlaneId;
@@ -62,7 +70,11 @@ const entry = (name: string, on: Partial<FolderEntry> = {}): FolderEntry => ({
 });
 
 /** The core, as the tree asks it: what each folder holds, by `<piece>:<folder>`. */
-function core(folders: Record<string, FolderEntry[]>, more: Record<string, number> = {}) {
+function core(
+  folders: Record<string, FolderEntry[]>,
+  more: Record<string, number> = {},
+  icons: { pick: string | null; offered: ExtensionTheme[] } = { pick: null, offered: [] },
+) {
   const asked: string[] = [];
   mockIPC(
     (cmd, args) => {
@@ -73,6 +85,8 @@ function core(folders: Record<string, FolderEntry[]>, more: Record<string, numbe
         return { entries: folders[key] ?? [], more: more[key] ?? 0 };
       }
       if (cmd === "files_watch") return null;
+      if (cmd === "project_icons_drawn") return icons.pick;
+      if (cmd === "extension_icon_themes") return icons.offered;
       throw new Error(`unexpected ${cmd}`);
     },
     { shouldMockEvents: true },
@@ -291,5 +305,57 @@ describe("a branch's files in the explorer", () => {
     expect(row("file:svc/one:")).toHaveFocus();
     await userEvent.keyboard("{ArrowLeft}");
     expect(row("file:svc/one:")).toHaveAttribute("aria-expanded", "false");
+  });
+});
+
+/** The icon a row is drawn with: its symbol's name in the icon theme (FM-3). */
+const iconOf = (row: HTMLElement) => row.querySelector("svg.file-icon")?.getAttribute("data-icon");
+
+describe("a branch's files are drawn with the project's icon theme (FM-3)", () => {
+  const FOLDERS = {
+    "one:": [entry("src", { kind: "folder" }), entry("README.md"), entry("notes.zzz")],
+    "one:src": [entry("lib.rs")],
+  };
+
+  it("draws charter's own icons for a file's type and a folder's name", async () => {
+    core(FOLDERS);
+    draw();
+    await userEvent.click(row("file:svc/one:"));
+    const src = await named("^src");
+    expect(iconOf(src)).toBe("folder-src");
+    expect(iconOf(await named("^README.md"))).toBe("readme");
+    expect(iconOf(await named("^notes.zzz"))).toBe("file");
+    await userEvent.click(src);
+    expect(iconOf(src)).toBe("folder-src-open");
+    expect(iconOf(await named("^lib.rs"))).toBe("rust");
+  });
+
+  it("draws the icon theme an extension contributes when the project picks it", async () => {
+    const square = { viewBox: "0 0 16 16", paths: [{ d: "M0 0h16v16H0z", tone: "icon.pink" }] };
+    core(
+      FOLDERS,
+      {},
+      {
+        pick: "seti/Seti",
+        offered: [
+          {
+            extension: "seti",
+            name: "Seti",
+            text: JSON.stringify({
+              name: "Seti",
+              symbols: { "seti-file": square, "seti-folder": square, "seti-md": square },
+              file: "seti-file",
+              folder: "seti-folder",
+              extensions: { md: "seti-md" },
+            }),
+          },
+        ],
+      },
+    );
+    draw();
+    await userEvent.click(row("file:svc/one:"));
+    await vi.waitFor(async () => expect(iconOf(await named("^README.md"))).toBe("seti-md"));
+    expect(iconOf(await named("^src"))).toBe("seti-folder");
+    expect(iconOf(await named("^notes.zzz"))).toBe("seti-file");
   });
 });

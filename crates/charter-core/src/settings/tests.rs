@@ -676,7 +676,10 @@ fn a_theme_charter_would_not_read_is_refused_in_either_file() {
                     "theme.use in {file} is \"purple\", which is not charter-dark, \
                      charter-light, system or <extension>/<theme>"
                 ),
-                format!("theme.font in {file} is not read — [theme] holds use and nothing else"),
+                format!(
+                    "theme.font in {file} is not read — [theme] holds use and icons and nothing \
+                     else"
+                ),
             ],
             "{which:?}"
         );
