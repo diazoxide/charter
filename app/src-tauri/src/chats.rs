@@ -232,6 +232,9 @@ pub struct Chats {
     /// Set when every chat is being ended, at quit or when the project is closed: from then on
     /// nothing writes the record ([`Self::write_it_down`]).
     ending: AtomicBool,
+    /// The most chats one record may start: [`MOST_AT_ONCE`], but for a test of the bound,
+    /// which would otherwise open that many terminals (#1139).
+    most_at_once: usize,
 }
 
 /// The arguments and the environment that arm a chat's harness for that chat alone.
@@ -281,6 +284,16 @@ impl Chats {
             writing: Mutex::new(()),
             putting_back: AtomicBool::new(false),
             ending: AtomicBool::new(false),
+            most_at_once: MOST_AT_ONCE,
+        }
+    }
+
+    /// These chats, starting at most `most` from a record rather than [`MOST_AT_ONCE`].
+    #[cfg(test)]
+    fn starting_at_most(self, most: usize) -> Self {
+        Self {
+            most_at_once: most,
+            ..self
         }
     }
 
@@ -1326,11 +1339,12 @@ impl Chats {
                 ),
             })
             .collect();
-        let (starting, too_many) = chats.split_at(chats.len().min(MOST_AT_ONCE));
+        let most = self.most_at_once;
+        let (starting, too_many) = chats.split_at(chats.len().min(most));
         for (chat, _) in too_many {
             lock(&self.would_not_start).push((
                 chat.clone(),
-                format!("more than {MOST_AT_ONCE} chats were recorded"),
+                format!("more than {most} chats were recorded"),
             ));
         }
         let mut front = None;
@@ -2907,14 +2921,17 @@ mod tests {
 
     #[test]
     fn a_record_cannot_ask_a_launch_to_start_an_unbounded_number_of_programs() {
+        // At a bound of four, not the app's two hundred: each start opens a terminal, and two
+        // test binaries at two hundred each ran macOS out of them (511), failing every other
+        // test that opened a chat (#1139). The bound itself is the next test's.
         let dir = tempfile::tempdir().unwrap();
         let claude = a_claude(dir.path());
-        let chats = Chats::new();
+        let chats = Chats::new().starting_at_most(4);
 
         let open = chats.put_back_here(
             &Record {
                 views: Vec::new(),
-                chats: (0..MOST_AT_ONCE + 3)
+                chats: (0..4 + 3)
                     .map(|n| chat(&claude, &format!("ide.{n}"), None))
                     .collect(),
                 dealt: 0,
@@ -2924,10 +2941,18 @@ mod tests {
             SIZE,
         );
 
-        assert_eq!(open.len(), MOST_AT_ONCE);
-        // And the ones it would not start are kept, not thrown away.
-        assert_eq!(chats.would_not_start().len(), 3);
+        assert_eq!(open.len(), 4);
+        // And the ones it would not start are kept, not thrown away, saying why.
+        let kept = chats.would_not_start();
+        assert_eq!(kept.len(), 3);
+        assert_eq!(kept[0].1, "more than 4 chats were recorded");
         chats.end_all();
+    }
+
+    #[test]
+    fn the_app_starts_at_most_two_hundred_chats_from_a_record() {
+        // The product's scale is fifty; the backstop sits far above it.
+        assert_eq!(Chats::new().most_at_once, 200);
     }
 
     #[test]
