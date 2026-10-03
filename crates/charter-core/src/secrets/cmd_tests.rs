@@ -216,7 +216,7 @@ fn a_recorded_field_has_every_resolved_value_masked_at_any_depth_and_in_keys() {
     let values = vec!["s3cr3t".to_string()];
     trace_secret_use(
         &plane.ctx,
-        "secret-test",
+        "secret-reveal",
         &values,
         &[
             ("vault", json!("v-s3cr3t")),
@@ -226,7 +226,7 @@ fn a_recorded_field_has_every_resolved_value_masked_at_any_depth_and_in_keys() {
     let events = plane.trace();
     assert_eq!(events.len(), 1, "{events:?}");
     let e = &events[0];
-    assert_eq!(e["event"], "secret-test");
+    assert_eq!(e["event"], "secret-reveal");
     assert_eq!(e["vault"], "v-***");
     assert_eq!(e["nested"], json!({"k-***": ["x ***", 7, true, null]}));
     assert!(!e.to_string().contains("s3cr3t"));

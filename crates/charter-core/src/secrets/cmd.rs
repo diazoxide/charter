@@ -159,9 +159,17 @@ fn value_free(field: &Value, values: &[String]) -> Value {
     }
 }
 
+/// Every event [`trace_secret_use`] records under. A trace holding one is kept past the 30-day
+/// sweep (`retention`, V71) until AU-5 writes these into the audit chain.
+pub const HANDED_OUT: [&str; 4] = ["secret-exec", "secret-reveal", "secret-cp", "identity-move"];
+
 /// `_trace_secret_use`: record that a credential was handed out — which command, which names,
 /// never a value. Best-effort and silent: the bookkeeping must never fail the delivery.
 pub fn trace_secret_use(ctx: &Ctx, event: &str, resolved: &[String], fields: &[(&str, Value)]) {
+    debug_assert!(
+        HANDED_OUT.contains(&event),
+        "{event} is not in HANDED_OUT, so the retention sweep would collect it"
+    );
     let scrubbed: Vec<(&str, Value)> = fields
         .iter()
         .map(|(k, v)| (*k, value_free(v, resolved)))
