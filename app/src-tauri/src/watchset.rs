@@ -1,4 +1,5 @@
-//! What the app's file watchers share (`planewatch.rs`, `filewatch.rs`, `killswitch.rs`):
+//! What the app's file watchers share (`planewatch.rs`, `filewatch.rs`, `branchwatch.rs`,
+//! `killswitch.rs`):
 //! which events are changes, folding the platform's events into bursts, and keeping a
 //! watcher's watches equal to a wanted set of folders, each watched non-recursively.
 //!
@@ -17,7 +18,7 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
 
 use notify::RecursiveMode;
-use notify::event::{EventKind, MetadataKind, ModifyKind};
+use notify::event::{CreateKind, EventKind, MetadataKind, ModifyKind};
 
 /// Whether an event is a change. Everything but an access is: reading a file changes nothing,
 /// and it is exactly what the window does when it is told. An access time moving is the same
@@ -58,6 +59,9 @@ pub(crate) struct Burst {
     /// Anything may have changed: the platform lost track, an event named no path, or the
     /// burst named more paths than it holds.
     pub everything: bool,
+    /// A folder may have been made: a creation the platform named as a folder's, or as
+    /// anything's, or a burst that is everything.
+    pub made_folder: bool,
 }
 
 impl Burst {
@@ -72,6 +76,10 @@ impl Burst {
             return self.is_everything();
         }
         let removed = matches!(event.kind, EventKind::Remove(_));
+        self.made_folder |= matches!(
+            event.kind,
+            EventKind::Create(CreateKind::Folder | CreateKind::Any)
+        );
         for path in event.paths {
             if self.paths.len() >= most && !self.paths.contains(&path) {
                 return self.is_everything();
@@ -85,6 +93,7 @@ impl Burst {
 
     fn is_everything(&mut self) {
         self.everything = true;
+        self.made_folder = true;
         self.paths = HashSet::new();
         self.removed = HashSet::new();
     }
@@ -221,7 +230,7 @@ pub(crate) mod raw {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use notify::event::{AccessKind, AccessMode, CreateKind, Flag, RemoveKind};
+    use notify::event::{AccessKind, AccessMode, Flag, RemoveKind};
     use std::sync::mpsc;
 
     fn on(kind: EventKind, path: &str) -> notify::Event {
@@ -296,6 +305,27 @@ mod tests {
         }
         assert!(burst.everything);
         assert!(burst.paths.is_empty() && burst.removed.is_empty());
+    }
+
+    #[test]
+    fn a_folder_made_or_anything_made_or_everything_may_have_made_a_folder() {
+        let mut file = Burst::default();
+        file.add(on(EventKind::Create(CreateKind::File), "/p/a"), 8);
+        file.add(on(EventKind::Remove(RemoveKind::Folder), "/p/b"), 8);
+        assert!(!file.made_folder);
+
+        for kind in [CreateKind::Folder, CreateKind::Any] {
+            let mut made = Burst::default();
+            made.add(on(EventKind::Create(kind), "/p/new"), 8);
+            assert!(made.made_folder, "{kind:?}");
+        }
+
+        let mut rescan = Burst::default();
+        rescan.add(
+            notify::Event::new(EventKind::Other).set_flag(Flag::Rescan),
+            8,
+        );
+        assert!(rescan.made_folder);
     }
 
     #[test]

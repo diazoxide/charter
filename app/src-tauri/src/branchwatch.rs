@@ -17,27 +17,30 @@
 //!   added when it appears.
 //!
 //! **A move that cannot change the status is not told**: one only inside what git ignores (a
-//! build writing `target/`), or inside git's own folder. Asked once per branch per debounced
-//! batch (`Root::matters`), of the bounded reader (`charter_core::files::Reader`, D-88h), and
+//! build writing `target/`), or inside git's own folder. Asked once per branch per burst
+//! (`Root::matters`), of the bounded reader (`charter_core::files::Reader`, D-88h), and
 //! **never on the watch's own thread**: each branch's check runs on a worker of its own, one at
 //! a time, with what moved meanwhile asked next. A branch whose check hangs (an ignore file that
 //! is a FIFO) holds only its own worker until the reader's deadline, which counts as "it
 //! matters", and every other branch's markers keep moving.
 //!
-//! **Nothing here walks a tree.** The debouncer keeps no file-id cache, and links are not
-//! followed: a link an agent puts in its branch to the operator's home is never read through.
+//! **Every burst is told by what it named** ([`crate::watchset::bursts`], #1139): a file made
+//! and removed inside one is still a move. A burst that is everything — the platform lost
+//! track, a watcher error, more paths than a burst holds — moves every branch listened to, and
+//! may have made a folder, so a branch watched folder by folder is listed again.
+//!
+//! **Nothing here walks a tree.** Nothing keeps a file-id cache, and links are not followed: a
+//! link an agent puts in its branch to the operator's home is never read through.
 //! On inotify, the folders a branch is listed again with as folders appear are listed at most
 //! once a second, and the app watches at most a quarter of the user's inotify watches.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, PoisonError, Weak};
+use std::sync::{Arc, Mutex, PoisonError, Weak, mpsc};
 use std::time::{Duration, Instant};
 
 use charter_core::files::{Reader, Root};
 use notify::RecursiveMode;
-use notify::event::{CreateKind, EventKind};
-use notify_debouncer_full::{DebounceEventResult, Debouncer, NoCache, new_debouncer_opt};
 
 use crate::planes::{PlaneId, Planes};
 
@@ -46,6 +49,12 @@ pub(crate) const CHANGED: &str = "branch-changed";
 
 /// How long a burst is folded for, as the tree's watch folds it.
 const QUIET_FOR: Duration = Duration::from_millis(250);
+
+/// The most moved paths one burst holds, across every branch. Past it the burst is everything
+/// and every branch is read again; kept well above what one check asks
+/// (`charter_core::files::ASKED`), so a burst inside git's own folder or what it ignores is
+/// sorted rather than told.
+const MOST_PATHS: usize = 4096;
 
 /// The most branches one window listens to at once.
 pub const BRANCHES: usize = 32;
@@ -99,7 +108,7 @@ struct Listened {
 }
 
 struct Inner<W: notify::Watcher> {
-    debouncer: Option<Debouncer<W, NoCache>>,
+    watcher: Option<W>,
     by_window: HashMap<String, Vec<Listened>>,
     newest: HashMap<String, u64>,
     watched: HashMap<PathBuf, RecursiveMode>,
@@ -122,7 +131,7 @@ struct Check {
 }
 
 /// How often a branch's folders are listed again as folders appear in it, at most: an agent
-/// making folders without pause lists them once a second, not on every batch.
+/// making folders without pause lists them once a second, not on every burst.
 const RELISTED_EVERY: Duration = Duration::from_secs(1);
 
 /// How many folders the app watches one by one, at most, across every window and branch.
@@ -162,7 +171,7 @@ impl<W: notify::Watcher + Send + 'static> BranchWatch<W> {
     fn with_config(told: Told, reader: Reader, config: notify::Config) -> Self {
         Self {
             inner: Arc::new(Mutex::new(Inner {
-                debouncer: None,
+                watcher: None,
                 by_window: HashMap::new(),
                 newest: HashMap::new(),
                 watched: HashMap::new(),
@@ -207,8 +216,8 @@ impl<W: notify::Watcher + Send + 'static> BranchWatch<W> {
         } else {
             inner.by_window.insert(window.to_string(), listened);
         }
-        if inner.debouncer.is_none() && !inner.by_window.is_empty() {
-            inner.debouncer = Some(self.start()?);
+        if inner.watcher.is_none() && !inner.by_window.is_empty() {
+            inner.watcher = Some(self.start()?);
         }
         inner.follow();
         Ok(())
@@ -237,64 +246,74 @@ impl<W: notify::Watcher + Send + 'static> BranchWatch<W> {
         &self.reader
     }
 
-    fn start(&self) -> Result<Debouncer<W, NoCache>, String> {
+    /// The platform's watcher, and a thread that folds what it reports into bursts and hands
+    /// each branch that something moved in to its worker. The thread ends when the watcher is
+    /// dropped, which drops the sending half it reads.
+    fn start(&self) -> Result<W, String> {
+        let (sent, events) = mpsc::channel();
         let handle: Weak<Mutex<Inner<W>>> = Arc::downgrade(&self.inner);
         let told = Arc::clone(&self.told);
         let reader = self.reader.clone();
-        let tell = move |batch: DebounceEventResult| {
-            let Ok(events) = batch else { return };
-            let mut moved: Vec<PathBuf> = Vec::new();
-            let mut made_folder = false;
-            for event in events
-                .iter()
-                .filter(|event| crate::watchset::matters(&event.kind))
-            {
-                made_folder |= matches!(
-                    event.kind,
-                    EventKind::Create(CreateKind::Folder | CreateKind::Any)
-                );
-                moved.extend(event.paths.iter().cloned());
-            }
-            if moved.is_empty() {
-                return;
-            }
-            let Some(inner) = handle.upgrade() else {
-                return;
-            };
-            // Nothing is read here: each branch that something moved in is handed to its own
-            // worker, and this thread goes back to the platform's events.
-            let roots: Vec<Root> = {
-                let held = inner.lock().unwrap_or_else(PoisonError::into_inner);
-                let mut seen: HashSet<PathBuf> = HashSet::new();
-                held.by_window
-                    .values()
-                    .flatten()
-                    .filter(|one| seen.insert(one.root.path().to_path_buf()))
-                    .map(|one| one.root.clone())
-                    .collect()
-            };
-            for root in roots {
-                let inside: Vec<PathBuf> = moved
-                    .iter()
-                    .filter(|path| path.starts_with(root.path()))
-                    .cloned()
-                    .collect();
-                if !inside.is_empty() {
-                    check(&inner, &reader, &told, root, inside, made_folder);
+        std::thread::Builder::new()
+            .name("charter-branch-watch".into())
+            .spawn(move || {
+                for burst in crate::watchset::bursts(events, QUIET_FOR, MOST_PATHS) {
+                    let Some(inner) = handle.upgrade() else {
+                        return;
+                    };
+                    heard(&inner, &reader, &told, &burst);
                 }
-            }
-        };
+            })
+            .map_err(|e| format!("charter could not watch the branch: {e}"))?;
         // No file-id cache, so nothing walks the tree under a watch — a link in the branch to
         // the operator's home is never followed and read (R2) — and links are not followed.
-        let config = self.config.with_follow_symlinks(false);
-        new_debouncer_opt(QUIET_FOR, None, tell, NoCache, config)
-            .map_err(|e| format!("charter could not watch the branch: {e}"))
+        W::new(
+            crate::watchset::sender(sent),
+            self.config.with_follow_symlinks(false),
+        )
+        .map_err(|e| format!("charter could not watch the branch: {e}"))
+    }
+}
+
+/// Hands each branch that `burst` moved something in to its worker. Nothing is read here: this
+/// thread goes straight back to the platform's events.
+fn heard<W: notify::Watcher + Send + 'static>(
+    inner: &Arc<Mutex<Inner<W>>>,
+    reader: &Reader,
+    told: &Told,
+    burst: &crate::watchset::Burst,
+) {
+    let roots: Vec<Root> = {
+        let held = inner.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut seen: HashSet<PathBuf> = HashSet::new();
+        held.by_window
+            .values()
+            .flatten()
+            .filter(|one| seen.insert(one.root.path().to_path_buf()))
+            .map(|one| one.root.clone())
+            .collect()
+    };
+    for root in roots {
+        // Everything moved the branch's folder itself, which always matters (`Root::matters`).
+        let inside: Vec<PathBuf> = if burst.everything {
+            vec![root.path().to_path_buf()]
+        } else {
+            burst
+                .paths
+                .iter()
+                .filter(|path| path.starts_with(root.path()))
+                .cloned()
+                .collect()
+        };
+        if !inside.is_empty() {
+            check(inner, reader, told, root, inside, burst.made_folder);
+        }
     }
 }
 
 /// Hands what moved in `root` to its branch's worker: started now when none is asking, else
 /// asked next. One worker per branch at a time, so a hung check holds one thread, not one per
-/// batch.
+/// burst.
 fn check<W: notify::Watcher + Send + 'static>(
     inner: &Arc<Mutex<Inner<W>>>,
     reader: &Reader,
@@ -306,7 +325,7 @@ fn check<W: notify::Watcher + Send + 'static>(
     {
         let mut held = inner.lock().unwrap_or_else(PoisonError::into_inner);
         let waiting = held.checking.entry(root.path().to_path_buf()).or_default();
-        // Past what one check looks at, the rest only says "more": the batch matters anyway.
+        // Past what one check looks at, the rest only says "more": the burst matters anyway.
         let room = (charter_core::files::ASKED + 1).saturating_sub(waiting.moved.len());
         waiting.moved.extend(moved.into_iter().take(room));
         waiting.made_folder |= made_folder;
@@ -459,7 +478,7 @@ impl<W: notify::Watcher> Inner<W> {
         for (_, folder) in one_by_one.into_iter().take(self.budget) {
             wanted.entry(folder).or_insert(RecursiveMode::NonRecursive);
         }
-        let Some(debouncer) = self.debouncer.as_mut() else {
+        let Some(watcher) = self.watcher.as_mut() else {
             return;
         };
         let stale: Vec<PathBuf> = self
@@ -469,14 +488,14 @@ impl<W: notify::Watcher> Inner<W> {
             .map(|(path, _)| path.clone())
             .collect();
         for path in stale {
-            let _ = debouncer.unwatch(&path);
+            let _ = watcher.unwatch(&path);
             self.watched.remove(&path);
         }
         for (path, mode) in wanted {
             if self.watched.contains_key(&path) {
                 continue;
             }
-            match debouncer.watch(&path, mode) {
+            match watcher.watch(&path, mode) {
                 Ok(()) => {
                     self.watched.insert(path, mode);
                 }
@@ -717,7 +736,7 @@ mod tests {
             plain = plain.min(watching("plain"));
         }
 
-        // Measured on macOS: with the debouncer's file-id cache the 90,000 files behind the link
+        // Measured on macOS: with a debouncer's file-id cache the 90,000 files behind the link
         // were walked, about a second against 25 ms without it. Without a walk the link costs
         // nothing; the bound is the baseline's, loosely.
         let bound = (plain * 4).max(plain + Duration::from_millis(250));
@@ -761,6 +780,66 @@ mod tests {
             .recv_timeout(PATIENCE)
             .expect("the hung branch was told");
         assert_eq!(then, [named("piece")]);
+    }
+
+    /// A watch on [`crate::watchset::raw::Raw`], listening to the piece whole: the test plays
+    /// the platform.
+    fn listening_raw(
+        root: &Path,
+    ) -> (
+        BranchWatch<crate::watchset::raw::Raw>,
+        mpsc::Receiver<(String, Vec<WatchedBranch>)>,
+    ) {
+        let (tx, rx) = mpsc::channel();
+        let tx = Mutex::new(tx);
+        let watch = BranchWatch::<crate::watchset::raw::Raw>::with_config(
+            Arc::new(move |window: &str, branches| {
+                let _ = tx.lock().unwrap().send((window.to_string(), branches));
+            }),
+            crate::reader(),
+            notify::Config::default(),
+        );
+        watch
+            .set_from(
+                "main",
+                watch.ticket(),
+                vec![(branch(), root_of(root, "piece"), How::Whole)],
+            )
+            .unwrap();
+        (watch, rx)
+    }
+
+    #[test]
+    fn a_platform_that_lost_track_tells_every_branch() {
+        // inotify's queue overflowed, or the watcher erred: anything may have moved, so the
+        // branch's markers are read again rather than left as they were (#1139).
+        let (_dir, root, _piece) = plane();
+        let (_watch, told) = listening_raw(&root);
+
+        crate::watchset::raw::event(
+            notify::Event::new(notify::EventKind::Other).set_flag(notify::event::Flag::Rescan),
+        );
+
+        let (window, branches) = told.recv_timeout(PATIENCE).expect("the window was told");
+        assert_eq!(window, "main");
+        assert_eq!(branches, [branch()]);
+    }
+
+    #[test]
+    fn a_file_made_and_removed_inside_one_burst_is_still_a_move() {
+        // A debouncer took the removal as cancelling the creation and told neither (#1139).
+        use notify::event::{CreateKind, EventKind, RemoveKind};
+        let (_dir, root, piece) = plane();
+        let (_watch, told) = listening_raw(&root);
+        let brief = std::fs::canonicalize(&piece)
+            .unwrap()
+            .join("src/deep/brief.rs");
+
+        crate::watchset::raw::raw(EventKind::Create(CreateKind::File), &brief);
+        crate::watchset::raw::raw(EventKind::Remove(RemoveKind::File), &brief);
+
+        let (_, branches) = told.recv_timeout(PATIENCE).expect("the window was told");
+        assert_eq!(branches, [branch()]);
     }
 
     #[test]
