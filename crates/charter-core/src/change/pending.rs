@@ -194,7 +194,13 @@ pub fn pending_dir(plane: &Path, ws: &str) -> PathBuf {
 /// Append `line` to `host`'s file. `None` when containment or the disk refused it.
 pub fn append(plane: &Path, ws: &str, host: &str, line: &Pending) -> Option<PathBuf> {
     let path = pending_dir(plane, ws).join(format!("{host}.jsonl"));
-    crate::dispatch::append(&path, plane, &line.to_value())
+    super::store::append_line(
+        plane,
+        ws,
+        &[super::landing::LOG_DIRNAME, PENDING_DIRNAME],
+        path,
+        &line.to_value(),
+    )
 }
 
 /// The latest pending line for each member of `slug`, from every host's file.

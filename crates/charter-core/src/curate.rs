@@ -196,7 +196,13 @@ pub fn apply_safe(
     // Held from reading what the index lacks to the last append (SI-9e), as `write` holds it:
     // an append between an edit's read of the index and its replace went with the old file.
     // Taken after the collapse above, whose `archive` takes it for each move.
-    let _held = crate::rewrite::Lock::on(dir);
+    let _held = match memstore::lock_store(root, dir) {
+        Ok(held) => held,
+        Err(e) => {
+            actions.push(format!("index NOT repaired — {e}"));
+            return Ok(actions);
+        }
+    };
     let missing = report(root, dir, 90, 0.5, today)?.missing;
     if !missing.is_empty() {
         let index = dir.join(memstore::INDEX);

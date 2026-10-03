@@ -360,6 +360,37 @@ fn readable_record(root: &Path, place: &Place, path: &Path) -> bool {
             .is_ok_and(|meta| meta.is_file() && meta.len() <= crate::memstore::MAX_BYTES)
 }
 
+/// A workspace's `sessions/`, held by descriptor (V74): reached from the plane with no link on
+/// the way and used through what was held, so a link a chat plants at or in it never carries a
+/// record, or a read, into another workspace or a persona. `None` for the plane root's, which
+/// [`gated`] holds to no link at all, and on a platform without descriptors to hold.
+#[cfg(unix)]
+fn held(root: &Path, place: &Place, make: bool) -> Option<io::Result<Option<crate::held::Store>>> {
+    let Place::Workspace(_) = place else {
+        return None;
+    };
+    let make = if make {
+        crate::held::Make::Store
+    } else {
+        crate::held::Make::Nothing
+    };
+    Some(
+        crate::held::Store::hold(root, place, DIR, make, crate::held::Who::Operator)
+            .map_err(io::Error::other),
+    )
+}
+
+/// The text of the record `file` in a held `sessions/`, when it is one charter reads: a plain
+/// file within the plane's bound on one file.
+#[cfg(unix)]
+fn read_held(store: &crate::held::Store, file: &str) -> Option<String> {
+    let entry = store.entry(file).ok()??;
+    if !entry.plain() || entry.size > crate::memstore::MAX_BYTES {
+        return None;
+    }
+    store.read(file).ok()?
+}
+
 /// Whether `name` is a record's file name: `YYYYMMDD-HHMMSS-<slug>.md`.
 pub(crate) fn is_record_name(name: &str) -> bool {
     let Some(stem) = name.strip_suffix(".md") else {
@@ -410,20 +441,41 @@ pub fn record(root: &Path, new: &New) -> Result<Recorded, Refused> {
         return Err(Refused::NoWorkspace(ws.clone()));
     }
     gated(root, place, &dir, Verb::Write)?;
-    std::fs::create_dir_all(&dir)?;
     let text = render(new);
     let stamp = new.facts.at.format("%Y%m%d-%H%M%S").to_string();
     let slug = crate::memstore::slug(new.title.trim());
+    let name = |n: usize| {
+        if n == 1 {
+            format!("{stamp}-{slug}.md")
+        } else {
+            format!("{stamp}-{slug}-{n}.md")
+        }
+    };
+    #[cfg(unix)]
+    if let Some(store) = held(root, place, true).transpose()?.flatten() {
+        // The name is chosen and taken under the store's lock, which is let go before the
+        // index is rebuilt: that takes it again.
+        let file = {
+            let _locked = store.lock().map_err(io::Error::other)?;
+            let mut n = 1;
+            loop {
+                if store
+                    .create_whole(&name(n), text.as_bytes())
+                    .map_err(io::Error::other)?
+                {
+                    break name(n);
+                }
+                n += 1;
+            }
+        };
+        return Ok(finish(root, place, dir.join(file)));
+    }
+    std::fs::create_dir_all(&dir)?;
     let path = {
         let _held = crate::rewrite::Lock::on(&dir);
         let mut n = 1;
         let path = loop {
-            let name = if n == 1 {
-                format!("{stamp}-{slug}.md")
-            } else {
-                format!("{stamp}-{slug}-{n}.md")
-            };
-            let candidate = dir.join(name);
+            let candidate = dir.join(name(n));
             if candidate.symlink_metadata().is_err() {
                 break candidate;
             }
@@ -432,6 +484,11 @@ pub fn record(root: &Path, new: &New) -> Result<Recorded, Refused> {
         crate::rewrite::replace(&dir, &path, text.as_bytes(), crate::rewrite::Mode::Kept)?;
         path
     };
+    Ok(finish(root, place, path))
+}
+
+/// A record written at `path`: its index and its pointer rebuilt, and what did not follow.
+fn finish(root: &Path, place: &Place, path: PathBuf) -> Recorded {
     let file = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -451,11 +508,11 @@ pub fn record(root: &Path, new: &New) -> Result<Recorded, Refused> {
              be updated: {e}"
         ));
     }
-    Ok(Recorded {
+    Recorded {
         path,
         shown: shown(place, &file),
         warnings,
-    })
+    }
 }
 
 /// The whole file: charter's frontmatter, the title as a heading, then the body.
@@ -525,6 +582,26 @@ pub fn list(root: &Path, place: &Place) -> Vec<Listed> {
     };
     if gated(root, place, &dir, Verb::Read).is_err() {
         return Vec::new();
+    }
+    #[cfg(unix)]
+    if let Some(held) = held(root, place, false) {
+        let Ok(Some(store)) = held else {
+            return Vec::new();
+        };
+        let mut names: Vec<String> = store
+            .files()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|name| is_record_name(name))
+            .collect();
+        names.sort_unstable_by(|a, b| b.cmp(a));
+        return names
+            .into_iter()
+            .filter_map(|file| {
+                let text = read_held(&store, &file)?;
+                Some(listed(place, file, &text))
+            })
+            .collect();
     }
     let Ok(entries) = std::fs::read_dir(&dir) else {
         return Vec::new();
@@ -694,6 +771,18 @@ fn write_index(root: &Path, place: &Place) -> io::Result<()> {
     let text = index_text(place, &list(root, place));
     let path = dir.join(INDEX);
     gated(root, place, &path, Verb::Write)?;
+    #[cfg(unix)]
+    if let Some(held) = held(root, place, false) {
+        let store =
+            held?.ok_or_else(|| io::Error::other(format!("{} is not there", shown(place, ""))))?;
+        let _locked = store.lock().map_err(io::Error::other)?;
+        if store.read(INDEX).ok().flatten().as_deref() == Some(text.as_str()) {
+            return Ok(());
+        }
+        return store
+            .replace(INDEX, text.as_bytes())
+            .map_err(io::Error::other);
+    }
     crate::rewrite::update(root, &path, |now| {
         Ok((now != Some(text.as_str())).then(|| text.clone()))
     })
@@ -750,6 +839,17 @@ pub fn show(root: &Path, place: &Place, file: &str) -> Result<String, String> {
         return Err(format!("no workspace '{}'", place.word()));
     };
     let path = dir.join(file);
+    #[cfg(unix)]
+    if let Some(held) = held(root, place, false) {
+        if gated(root, place, &dir, Verb::Read).is_err() {
+            return Err(format!("no session record {}", shown(place, file)));
+        }
+        return match held {
+            Ok(Some(store)) => read_held(&store, file),
+            _ => None,
+        }
+        .ok_or_else(|| format!("no session record {}", shown(place, file)));
+    }
     if !readable_record(root, place, &path) {
         return Err(format!("no session record {}", shown(place, file)));
     }

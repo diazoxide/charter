@@ -844,4 +844,64 @@ mod tests {
         assert!(edit(dir.path(), &steward(), "../persona", "t", "b", "", true).is_err());
         assert!(charter.is_file());
     }
+
+    /// Every file under `dir` with its bytes, and every link with its target.
+    #[cfg(unix)]
+    fn snapshot(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+        let mut out = Vec::new();
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return out;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let kind = std::fs::symlink_metadata(&path).unwrap().file_type();
+            if kind.is_symlink() {
+                let target = std::fs::read_link(&path).unwrap();
+                out.push((path, target.to_string_lossy().as_bytes().to_vec()));
+            } else if kind.is_dir() {
+                out.push((path.clone(), Vec::new()));
+                out.extend(snapshot(&path));
+            } else {
+                out.push((path.clone(), std::fs::read(&path).unwrap()));
+            }
+        }
+        out.sort();
+        out
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_journal_a_chat_linked_to_a_persona_is_refused_by_every_memory_command() {
+        // V74 (#1064): the window runs outside every chat's sandbox, so a journal a chat swapped
+        // for a link to a persona's memory must not carry the window's writes, or its reads,
+        // there — although the link stays inside the plane.
+        let dir = plane();
+        let theirs = dir.path().join("personas/steward/memory");
+        std::fs::create_dir_all(theirs.join("archive")).unwrap();
+        std::fs::write(
+            theirs.join("MEMORY.md"),
+            "# Theirs\n\n- [Theirs](theirs.md)\n",
+        )
+        .unwrap();
+        std::fs::write(
+            theirs.join("theirs.md"),
+            "# Theirs\n\n_2026-10-01 09:00 · persistent_\n\nTheirs.\n",
+        )
+        .unwrap();
+        std::fs::write(theirs.join("archive/gone.md"), "# Gone\n\nGone.\n").unwrap();
+        std::os::unix::fs::symlink(
+            "../../personas/steward/memory",
+            dir.path().join("workspaces/alpha/memory"),
+        )
+        .unwrap();
+        let before = snapshot(dir.path());
+
+        assert!(create(dir.path(), &alpha(), "", "Planted through a link", at()).is_err());
+        assert!(edit(dir.path(), &alpha(), "theirs", "Mine", "Mine.", "", true).is_err());
+        assert!(archive(dir.path(), &alpha(), "theirs").is_err());
+        assert!(unarchive(dir.path(), &alpha(), "gone", None).is_err());
+        assert!(!matches!(read(dir.path(), &alpha(), "theirs"), Ok(Some(_))));
+
+        assert_eq!(snapshot(dir.path()), before, "something was written");
+    }
 }
