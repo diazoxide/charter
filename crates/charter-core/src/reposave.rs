@@ -18,7 +18,7 @@
 //!   (else the clone's `origin/HEAD`). `pr-merge` then asks the forge to merge it once its
 //!   checks pass, pinned to the pushed commit.
 //!
-//! **A PR mode never pushes to the default branch or to the PR's base.** A clone standing on
+//! **A request mode never pushes to the default branch or to the PR's base.** A clone standing on
 //! either gets a branch of its own first, `charter/<workspace>/<short-sha>`, created at HEAD
 //! and pushed instead. The clone stays where it is: a save commits on the branch the repo is
 //! on, and nothing moves an agent's checkout under it. The next save from there reuses that
@@ -424,7 +424,7 @@ fn commit_push(
     let helper = forge::helper_for(&forge);
     let noun = forge.kind.request_noun();
 
-    // Where the commit goes: the branch it is on — or, in a PR mode on the branch a PR would
+    // Where the commit goes: the branch it is on — or, in a request mode on the branch a PR would
     // go into, a branch of charter's own.
     let (base, remote_branch) = if mode.opens_a_pr() {
         let default = default_branch(request.plane, request.name, clone);
@@ -489,7 +489,7 @@ fn commit_push(
             .join("\n");
         let why = if planegit::is_protected_rejection(all) {
             let fix = if mode.opens_a_pr() {
-                // Already a PR mode, on a branch that is neither the default nor the base: the
+                // Already a request mode, on a branch that is neither the default nor the base: the
                 // branch itself is protected, so saves go through a PR into it instead.
                 format!(
                     "Set [repos.{}] branch = \"{remote_branch}\" to save it through a {noun} \
@@ -636,7 +636,7 @@ fn commit_push(
     0
 }
 
-/// The branch a PR-mode save pushes when the clone stands on its PR's base or its default
+/// The branch a request-mode save pushes when the clone stands on its PR's base or its default
 /// branch: one an earlier save of this repo pushed, while HEAD still descends from it, else
 /// a fresh `charter/<workspace>/<short-sha>` at HEAD. Created or moved forward locally too, so
 /// the operator can see it; never moved backwards or sideways.

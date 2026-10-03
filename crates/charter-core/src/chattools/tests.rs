@@ -664,3 +664,27 @@ fn a_fifo_in_a_store_is_refused_at_once_and_the_store_is_let_go() {
             .expect("the store's lock was let go");
     }
 }
+
+#[test]
+fn every_tool_pre_allowed_in_claude_code_is_one_that_only_reads() {
+    // V79: the pre-allowed tools are the five reads, each a tool the server offers and marks
+    // read-only, and never `ask_operator`, which is marked read-only and still asks.
+    assert_eq!(
+        PRE_ALLOWED,
+        [
+            "todo_list",
+            "memory_search",
+            "session_record_list",
+            "session_record_read",
+            "change_status",
+        ]
+    );
+    for name in PRE_ALLOWED {
+        let tool = TOOLS
+            .iter()
+            .find(|tool| tool.name == name)
+            .unwrap_or_else(|| panic!("{name} is not a tool"));
+        assert!(tool.read_only, "{name} writes");
+        assert_ne!(name, ASK_OPERATOR);
+    }
+}

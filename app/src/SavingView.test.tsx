@@ -161,7 +161,7 @@ describe("SavingView", () => {
     ).toBeTruthy();
   });
 
-  it("says a PR mode pushes to its save branch and keeps a pull request open, and links it", async () => {
+  it("says a request mode pushes to its save branch and keeps a pull request open, and links it", async () => {
     core([
       standing({
         mode: "pr",

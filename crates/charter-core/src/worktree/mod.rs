@@ -136,6 +136,16 @@ pub enum Refusal {
     },
     #[error("git {what} failed:\n{err}")]
     GitRefused { what: String, err: String },
+    /// A refusal charter put in words itself, beside what git did: `terminal` names the
+    /// command-line repair `charter worktree` offers, and `window` says the same of a branch
+    /// and its folder with no command in it (#989). `Display` reads as [`Refusal::GitRefused`]
+    /// did, so the terminal's sentence is unchanged.
+    #[error("git {what} failed:\n{terminal}")]
+    Stuck {
+        what: String,
+        terminal: String,
+        window: String,
+    },
     #[error("could not {what} {path}: {why}")]
     Io {
         what: &'static str,
@@ -207,6 +217,7 @@ impl Refusal {
                  it did nothing."
             ),
             Self::GitRefused { err, .. } => format!("git refused:\n{err}"),
+            Self::Stuck { window, .. } => window.clone(),
             Self::Io { what, why, .. } => format!("could not {what} the branch's folder: {why}"),
             Self::Dirty { piece } => format!(
                 "'{piece}' has uncommitted changes, so charter did not merge it. Commit or stash \
@@ -691,13 +702,17 @@ pub fn remove(
             git::READ,
         )?;
         if !cleared.ok() {
-            return Err(Refusal::GitRefused {
+            return Err(Refusal::Stuck {
                 what: "worktree remove".into(),
-                err: format!(
+                terminal: format!(
                     "{}\nSomething exists at that path again, so git will not clear the stale \
                      registration. Clear it yourself: git -C {} worktree prune",
                     cleared.err.trim(),
                     clone.display()
+                ),
+                window: format!(
+                    "git still lists a folder for '{piece}' that was gone, and something is at \
+                     that place again, so git will not clear it. Nothing was removed."
                 ),
             });
         }
@@ -927,16 +942,29 @@ pub fn merge(plane: &Path, ws: &str, repo: &str, piece: &str) -> Result<Merged, 
     let path = path_for(plane, ws, repo, piece)?;
     let path = within_workspace(plane, ws, &path)?;
     let clone = clone_dir(plane, ws, repo)?;
+    // A piece that is not there is said to be not there, as `remove` says it, rather than as
+    // whatever git answers about a directory it cannot change into.
+    if path.symlink_metadata().is_err() {
+        return Err(Refusal::NoSuchPiece {
+            ws: ws.to_string(),
+            repo: repo.to_string(),
+            piece: piece.to_string(),
+        });
+    }
 
     let branch = match head_of(&path)? {
         Base::Branch(b) => b,
         Base::Detached(sha) => {
-            return Err(Refusal::GitRefused {
+            return Err(Refusal::Stuck {
                 what: "merge".into(),
-                err: format!(
+                terminal: format!(
                     "'{piece}' is on a detached HEAD at {sha}, so there is no branch to merge. \
                      Give it one: git -C {} switch -c <name>",
                     path.display()
+                ),
+                window: format!(
+                    "'{piece}' is on no branch (a detached HEAD at {sha}), so there is nothing \
+                     to merge. Give it a branch first."
                 ),
             });
         }
@@ -958,9 +986,9 @@ pub fn merge(plane: &Path, ws: &str, repo: &str, piece: &str) -> Result<Merged, 
         .collect();
     let base = match values.as_slice() {
         [] => {
-            return Err(Refusal::GitRefused {
+            return Err(Refusal::Stuck {
                 what: "merge".into(),
-                err: format!(
+                terminal: format!(
                     "the base '{branch}' was cut from was not recorded, so charter does not \
                      know what to merge it into. (A piece cut by an older charter has no \
                      such record.) Merge it yourself, or record it: git -C {} config \
@@ -968,26 +996,35 @@ pub fn merge(plane: &Path, ws: &str, repo: &str, piece: &str) -> Result<Merged, 
                     clone.display(),
                     base_key(&branch)
                 ),
+                window: format!(
+                    "charter has no record of the branch '{branch}' was cut from (a branch \
+                     cut by an older charter has none), so it does not know what to merge it \
+                     into. Nothing was merged."
+                ),
             });
         }
         [one] if one.starts_with(DETACHED_PREFIX) => {
             let sha = one.trim_start_matches(DETACHED_PREFIX);
-            return Err(Refusal::GitRefused {
+            return Err(Refusal::Stuck {
                 what: "merge".into(),
-                err: format!(
+                terminal: format!(
                     "'{piece}' was cut from a detached HEAD at {sha}, so there is no branch to \
                      merge it into. Merge it yourself, or record a base: git -C {} config \
                      --replace-all {} <branch>",
                     clone.display(),
                     base_key(&branch)
                 ),
+                window: format!(
+                    "'{branch}' was cut from a detached HEAD at {sha}, so there is no branch \
+                     to merge it into. Nothing was merged."
+                ),
             });
         }
         [one] => (*one).to_string(),
         many => {
-            return Err(Refusal::GitRefused {
+            return Err(Refusal::Stuck {
                 what: "merge".into(),
-                err: format!(
+                terminal: format!(
                     "'{}' holds more than one value ({}), so charter cannot say which base \
                      '{branch}' was cut from. Fix it: git -C {} config --replace-all {} \
                      <branch>",
@@ -995,6 +1032,11 @@ pub fn merge(plane: &Path, ws: &str, repo: &str, piece: &str) -> Result<Merged, 
                     many.join(", "),
                     clone.display(),
                     base_key(&branch)
+                ),
+                window: format!(
+                    "charter has more than one record of the branch '{branch}' was cut from \
+                     ({}), so it cannot say which to merge it into. Nothing was merged.",
+                    many.join(", ")
                 ),
             });
         }
@@ -1032,12 +1074,16 @@ pub fn merge(plane: &Path, ws: &str, repo: &str, piece: &str) -> Result<Merged, 
     match head_of(&clone)? {
         Base::Branch(on) if on == base => {}
         other => {
-            return Err(Refusal::GitRefused {
+            return Err(Refusal::Stuck {
                 what: "merge".into(),
-                err: format!(
+                terminal: format!(
                     "'{piece}' was cut from '{base}', and {repo} is on {other:?}. Switch it \
                      back first: git -C {} switch {base}",
                     clone.display()
+                ),
+                window: format!(
+                    "'{branch}' was cut from '{base}', and {repo} is not on {base} now. Switch \
+                     {repo} back to {base} first. Nothing was merged."
                 ),
             });
         }
@@ -1053,12 +1099,16 @@ pub fn merge(plane: &Path, ws: &str, repo: &str, piece: &str) -> Result<Merged, 
         &["merge", "--ff-only", "--", &name::as_ref(&branch)],
     )?;
     if !merged.ok() {
-        return Err(Refusal::GitRefused {
+        return Err(Refusal::Stuck {
             what: "merge".into(),
-            err: format!(
+            terminal: format!(
                 "'{branch}' does not fast-forward into {base} — {base} has moved on.\n  Update \
                  the piece where its conflicts belong:\n    git -C {} merge {base}",
                 path.display()
+            ),
+            window: format!(
+                "'{branch}' does not fast-forward into {base}: {base} has moved on. Merge {base} \
+                 into '{branch}' where its conflicts belong, then merge again. Nothing was merged."
             ),
         });
     }
@@ -1069,11 +1119,15 @@ pub fn merge(plane: &Path, ws: &str, repo: &str, piece: &str) -> Result<Merged, 
         // git reports "Already up to date" at exit 0 when there was nothing to land. Charter
         // reporting that as a successful merge is the same lie the `@` case produced one
         // level down, so it is caught here as well as prevented there.
-        return Err(Refusal::GitRefused {
+        return Err(Refusal::Stuck {
             what: "merge".into(),
-            err: format!(
+            terminal: format!(
                 "'{branch}' had nothing to land in {base}: {repo} is already at {now}. Nothing \
                  was merged"
+            ),
+            window: format!(
+                "'{branch}' has nothing to land in {base}: {repo} is already at it. Nothing was \
+                 merged."
             ),
         });
     }

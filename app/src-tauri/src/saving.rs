@@ -64,7 +64,7 @@ pub struct PlaneSaving {
     pub live: Vec<String>,
     /// The files to settle, when conflicts are why the save is blocked.
     pub conflicts: Vec<String>,
-    /// What a save cannot do here that is not a block (a PR mode with no forge to open it on).
+    /// What a save cannot do here that is not a block (a request mode with no forge to open it on).
     pub notice: Option<String>,
     /// `[plane] mode`, or `null` when the plane names none.
     pub mode: Option<String>,
@@ -262,13 +262,13 @@ pub struct RepoSaving {
     pub blocked: Option<String>,
     /// Whether a save would push.
     pub pushes: bool,
-    /// Where a PR mode's pull request goes: `[repos.<name>] branch`, else the repo's default
+    /// Where a request mode's pull request goes: `[repos.<name>] branch`, else the repo's default
     /// branch; `null` in the other modes, or when charter cannot tell — so the row and the Save
     /// all confirmation can say where a save goes before anyone presses it.
     pub target: Option<String>,
-    /// Whether a PR mode's save would commit on a branch of charter's own,
+    /// Whether a request mode's save would commit on a branch of charter's own,
     /// `charter/<workspace>/…`, because the clone stands on its pull request's base or on the
-    /// repo's default branch — a PR mode never pushes either (`reposave`).
+    /// repo's default branch — a request mode never pushes either (`reposave`).
     pub own_branch: bool,
 }
 

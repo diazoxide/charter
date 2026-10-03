@@ -908,20 +908,72 @@ mod tests {
     }
 
     #[test]
-    fn a_claude_code_chat_may_run_charter_session_record_without_asking_and_nothing_else() {
+    fn a_claude_code_chat_may_run_charter_session_record_and_read_charter_without_asking() {
         // SI-8e, the operator's ruling: a Smart close never stops on a permission prompt for
-        // the one command that ends it. Exactly one grant, for exactly that command — no `ask`,
-        // no `deny`, no mode — so every rule of the operator's and the project's still stands
-        // beside it (measured on 2.1.283: `--settings` permissions merge with them, and a
-        // compound command holding it is still asked about).
+        // the one command that ends it. Amended by V79 (#1050): the five read-only tools of
+        // charter's own MCP server are pre-allowed beside it. Only grants, for exactly these —
+        // no `ask`, no `deny`, no mode — so every rule of the operator's and the project's
+        // still stands beside them (measured on 2.1.283: `--settings` permissions merge with
+        // them, and a compound command holding the record command is still asked about).
         let empty = tempfile::tempdir().expect("a directory");
         let (args, _) = claude("/bin/charter", empty.path());
         let settings: serde_json::Value = serde_json::from_str(settings_of(&args)).expect("JSON");
 
         assert_eq!(
             settings["permissions"],
-            serde_json::json!({"allow": ["Bash(charter session record *)"]})
+            serde_json::json!({"allow": [
+                "Bash(charter session record *)",
+                "mcp__charter__todo_list",
+                "mcp__charter__memory_search",
+                "mcp__charter__session_record_list",
+                "mcp__charter__session_record_read",
+                "mcp__charter__change_status",
+            ]})
         );
+    }
+
+    #[test]
+    fn a_claude_code_chat_is_still_asked_before_every_other_charter_tool() {
+        // V79: the writes and `ask_operator` keep Claude Code's prompt. Every tool the server
+        // offers that is not one of the five reads has no allow, whatever it is marked.
+        let empty = tempfile::tempdir().expect("a directory");
+        let (args, _) = claude("/bin/charter", empty.path());
+        let settings: serde_json::Value = serde_json::from_str(settings_of(&args)).expect("JSON");
+        let allowed = settings["permissions"]["allow"]
+            .as_array()
+            .expect("a list")
+            .clone();
+        let reads = [
+            "todo_list",
+            "memory_search",
+            "session_record_list",
+            "session_record_read",
+            "change_status",
+        ];
+        let others: Vec<&str> = crate::chattools::TOOLS
+            .iter()
+            .map(|tool| tool.name)
+            .filter(|name| !reads.contains(name))
+            .collect();
+        assert!(others.contains(&"ask_operator"), "{others:?}");
+        assert!(others.contains(&"todo_add"), "{others:?}");
+        for name in others {
+            let rule = format!("mcp__charter__{name}");
+            assert!(
+                !allowed
+                    .iter()
+                    .any(|allow| allow == &serde_json::json!(rule)),
+                "{rule} is pre-allowed"
+            );
+        }
+        // Nor the server as a whole, which would allow every one of its tools.
+        for allow in &allowed {
+            let allow = allow.as_str().expect("a rule");
+            assert!(
+                allow != "mcp__charter" && !allow.starts_with("mcp__charter__*"),
+                "{allow}"
+            );
+        }
     }
 
     #[test]
@@ -1049,7 +1101,14 @@ mod tests {
         assert_eq!(settings["sandbox"], compiled.sandbox);
         assert_eq!(
             settings["permissions"]["allow"],
-            serde_json::json!(["Bash(charter session record *)"])
+            serde_json::json!([
+                "Bash(charter session record *)",
+                "mcp__charter__todo_list",
+                "mcp__charter__memory_search",
+                "mcp__charter__session_record_list",
+                "mcp__charter__session_record_read",
+                "mcp__charter__change_status",
+            ])
         );
         assert_eq!(
             settings["permissions"]["deny"],

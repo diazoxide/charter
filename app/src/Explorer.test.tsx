@@ -119,7 +119,7 @@ describe("the explorer", () => {
     const svc = screen.getByTestId("clone-svc");
     expect(within(svc).getByRole("treeitem", { name: /one/ })).toBeInTheDocument();
     expect(within(svc).getByRole("treeitem", { name: /two/ })).toBeInTheDocument();
-    expect(screen.getByTestId("clone-tool")).toHaveTextContent("No worktrees cut here");
+    expect(screen.getByTestId("clone-tool")).toHaveTextContent("No branches cut here");
   });
 
   it("does not list every workspace, because the strip above already answers that", () => {
@@ -218,7 +218,7 @@ describe("the explorer", () => {
 
     const svc = screen.getByTestId("clone-svc");
     expect(within(svc).getByRole("alert")).toHaveTextContent("symlink");
-    expect(svc).not.toHaveTextContent("No worktrees cut here");
+    expect(svc).not.toHaveTextContent("No branches cut here");
   });
 
   it("says the listing is still coming rather than saying there is nothing", () => {
@@ -410,7 +410,7 @@ describe("the explorer", () => {
  * here would be the second answer the whole design exists to prevent.
  */
 describe("a piece row's menu", () => {
-  const cut = { workspace: "alpha", repo: "svc", piece: "one" };
+  const cut = { workspace: "alpha", repo: "svc", piece: "one", branch: "one" };
   const offers = () =>
     catalogued(
       catalogue({
@@ -435,11 +435,7 @@ describe("a piece row's menu", () => {
       within(menu)
         .getAllByRole("menuitem")
         .map((one) => one.getAttribute("aria-label")),
-    ).toEqual([
-      "Browse the files of one",
-      "Merge worktree one into svc",
-      "Remove worktree one in svc",
-    ]);
+    ).toEqual(["Browse the files of one", "Merge branch one into svc", "Remove folder one in svc"]);
   });
 
   it("hands the catalogue's offer back when a row is pressed", async () => {
@@ -449,7 +445,7 @@ describe("a piece row's menu", () => {
     const row = within(screen.getByTestId("piece-svc-one")).getByRole("treeitem", { name: "one" });
     row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
     await screen.findByRole("menu");
-    await userEvent.click(screen.getByRole("menuitem", { name: "Remove worktree one in svc" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Remove folder one in svc" }));
 
     expect(pressed).toEqual(["worktree.remove:svc/one"]);
   });
@@ -603,7 +599,7 @@ describe("the explorer's tree guides", () => {
  */
 describe("the explorer is a WAI-ARIA tree", () => {
   const withAChat = () => draw({ chats: [chat(7, "seven", `${CUT}/one`)] });
-  const tree = () => screen.getByRole("tree", { name: "Repos and worktrees" });
+  const tree = () => screen.getByRole("tree", { name: "Repos and branches" });
   const item = (name: RegExp) => within(tree()).getByRole("treeitem", { name });
   /** A treeitem as its first word, its level and its place among its siblings. */
   const shape = (row: HTMLElement) =>

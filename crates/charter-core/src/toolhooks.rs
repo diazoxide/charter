@@ -549,7 +549,7 @@ fn ws_edit_first(hook: &Hook, ws: &str) -> bool {
 
 /// `memory_share_note`: what recording a memory will actually do on this plane — which is
 /// whatever the plane's next save does with it, by `[plane] mode` (ADR 0051). Nothing commits a
-/// memory on its own. A PR mode's request is named as the forge the plane's origin is on names it.
+/// memory on its own. A request mode's request is named as the forge the plane's origin is on names it.
 pub fn memory_share_note(root: &Path) -> String {
     use crate::planesave::Mode;
     let request = || crate::forge::request_words_of(root, root).request_noun();

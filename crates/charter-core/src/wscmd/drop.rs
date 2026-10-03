@@ -7,7 +7,7 @@
 //!
 //! **A repo with any worktree is refused, clean or not.** A linked worktree keeps its objects
 //! in the clone's store, so deleting the clone breaks every one of them whatever they hold.
-//! The operator removes the worktrees first (the app's "Remove worktree" action), and then
+//! The operator removes the worktrees first (the app's "Remove folder …" action), and then
 //! the repo.
 
 use std::path::Path;
@@ -63,8 +63,9 @@ pub fn drop_repo(root: &Path, ws: &str, repo: &str, say: Sink) -> Removal {
             return fail(
                 say,
                 format!(
-                    "Refusing to remove '{repo}' — it has worktrees ({}), and they keep their \
-                     commits in this clone. Remove them first (the \"Remove worktree\" action in the app).",
+                    "Refusing to remove '{repo}' — it has branch folders ({}), and they keep \
+                     their commits in this clone. Remove them first (the \"Remove folder …\" \
+                     action in the app).",
                     names.join(", ")
                 ),
             );

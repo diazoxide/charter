@@ -112,7 +112,7 @@ impl Repo {
     }
 
     /// The repo a clone's `origin` names, on a forge `plane`'s `charter.toml` declares or a
-    /// kind's default host. Refused for any other host: a PR mode there is a config error
+    /// kind's default host. Refused for any other host: a request mode there is a config error
     /// (ADR 0051), and charter does not guess which API an unknown host speaks.
     pub fn of_clone(plane: &Path, clone: &Path) -> Result<Repo, String> {
         let url = git::run(clone, &["remote", "get-url", "origin"], git::READ)

@@ -1722,9 +1722,9 @@ fn a_plane_whose_mode_is_commit_is_committed_and_the_remote_is_left_where_it_was
 
 #[test]
 fn a_pr_mode_whose_origin_is_on_no_forge_charter_knows_commits_and_says_so() {
-    // A PR mode opens its PR through the GitHub or GitLab adapter; on any other host a save
+    // A request mode opens its PR through the GitHub or GitLab adapter; on any other host a save
     // commits and goes no further, and the plane carries a notice rather than a block
-    // (charter-app#295). The PR modes against a forge are
+    // (charter-app#295). The request modes against a forge are
     // `tests/a_pr_mode_save_keeps_one_pr_open_…`, where a stand-in `gh` answers: here nothing
     // may reach a real one.
     for mode in ["pr", "pr-merge"] {

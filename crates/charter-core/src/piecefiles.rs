@@ -45,20 +45,22 @@ pub enum Opened {
 /// Why a piece or one of its files did not open, as the sentence the window shows.
 #[derive(Debug, thiserror::Error)]
 pub enum Refused {
-    #[error(transparent)]
+    /// The core's refusal in the window's words ([`worktree::Refusal::in_window`]): this
+    /// module serves only the window.
+    #[error("{}", .0.in_window())]
     Piece(#[from] worktree::Refusal),
-    #[error("there is no worktree '{piece}' of {repo} in workspace '{ws}'")]
+    #[error("{repo} in workspace '{ws}' has no branch folder called '{piece}'")]
     NoSuchPiece {
         ws: String,
         repo: String,
         piece: String,
     },
-    #[error("'{0}' is not a path inside the worktree")]
+    #[error("'{0}' is not a path inside the branch's folder")]
     NotInPiece(String),
-    #[error("'{0}' is not in the worktree any more")]
+    #[error("'{0}' is not in the branch's folder any more")]
     NotThere(String),
     #[error(
-        "'{0}' is not one of the worktree's files: the light editor opens what git tracks there \
+        "'{0}' is not one of the branch's files: the light editor opens what git tracks there \
          and what it does not ignore"
     )]
     NotOffered(String),

@@ -4,11 +4,13 @@
 //! this workspace's — lives in `charter_core::worktree`, and this layer converts. A rule
 //! implemented here as well would be a second rule, and the two would drift.
 //!
-//! **A refusal crosses unchanged.** The core's refusals are sentences that name the repair,
-//! and the whole point of putting these verbs in the window is that the operator reads the
-//! same sentence there as in a terminal. So `Refusal` is converted with `to_string()` and
-//! nothing else: no rewording, no "failed to remove worktree", no error code the UI would
-//! then have to translate back into English.
+//! **A refusal crosses in the window's words, which the core chose.** The core's refusals are
+//! sentences, and each has two: `charter worktree`'s, which names the command-line repair
+//! (`--force`, `git -C <clone> …`), and the window's ([`worktree::Refusal::in_window`],
+//! [`charter_core::pieces::NotDeclared::in_window`]), which says it of a branch and its folder
+//! (ADR 0072 §4, #989) and leaves the repair to the window's own rows. Nothing here rewords
+//! either: no "failed to remove worktree", no error code the UI would then have to translate
+//! back into English.
 
 use std::path::{Path, PathBuf};
 
@@ -27,7 +29,7 @@ fn piece_of_chat(plane: &Path, cwd: &Path) -> Result<Option<ChatWorktree>, Strin
         return Ok(None);
     };
     let pieces = worktree::list(plane, &found.workspace, &found.repo)
-        .map_err(|refusal| refusal.to_string())?;
+        .map_err(|refusal| refusal.in_window())?;
     let Some(row) = pieces.into_iter().find(|p| p.piece == found.piece) else {
         // git no longer has a registration for it, though the directory is where a piece
         // goes. Reported as itself rather than as nothing: the row is not a chat working
@@ -144,10 +146,10 @@ fn pieces_of(plane: &Path, workspace: &str, repo: &str) -> Result<Vec<Piece>, St
                 })
                 .collect()
         })
-        .map_err(|refusal| refusal.to_string())
+        .map_err(|refusal| refusal.in_window())
 }
 
-/// Remove a piece. The refusal is the core's sentence, unchanged.
+/// Remove a piece. The refusal is the core's sentence for the window.
 ///
 /// `force` is the operator saying to discard work the guards found — it is never passed on
 /// their behalf, and the window asks for it only after showing them what the refusal said.
@@ -182,7 +184,7 @@ fn remove_piece(
 ) -> Result<(), String> {
     worktree::remove(plane, workspace, repo, piece, force, false)
         .map(|_| ())
-        .map_err(|refusal| refusal.to_string())
+        .map_err(|refusal| refusal.in_window())
 }
 
 /// Declare a piece done, from its row (charter#368).
@@ -231,7 +233,7 @@ fn declare_done(
         chrono::Utc::now(),
     )
     .map(|_| ())
-    .map_err(|why| why.to_string())
+    .map_err(|why| why.in_window())
 }
 
 /// The window speaking for a piece: no session or persona, this machine's name as the label,
@@ -437,7 +439,7 @@ fn merge_piece(plane: &Path, workspace: &str, repo: &str, piece: &str) -> Result
             was: m.was,
             now: m.now,
         })
-        .map_err(|refusal| refusal.to_string())
+        .map_err(|refusal| refusal.in_window())
 }
 
 #[cfg(test)]
@@ -547,11 +549,22 @@ mod tests {
         assert!(!seen.wired);
     }
 
+    /// Whether `said` is in the window's words: of a branch and its folder, never of a
+    /// worktree, and with no command-line repair in it (#989, ADR 0072 §4).
+    fn in_the_windows_words(said: &str) {
+        for word in ["worktree", "git -C", "--force"] {
+            assert!(
+                !said.to_lowercase().contains(&word.to_lowercase()),
+                "the window was handed {word:?}: {said}"
+            );
+        }
+    }
+
     #[test]
-    fn a_refusal_reaches_the_window_as_the_sentence_the_core_wrote() {
-        // One message constant, two call sites. A window that rewords a refusal is a window
-        // whose users cannot search for the sentence they were shown, and cannot follow the
-        // repair it names.
+    fn a_removal_is_refused_in_the_windows_words_and_removes_nothing() {
+        // The core's refusal, in the sentence the window has for it: `charter worktree
+        // remove` keeps its own, which names `--force`, and the window's answer to the same
+        // refusal is its discard row, not a flag.
         let (_dir, root, _clone) = plane();
         let added = worktree::add(&root, "alpha", "thing", "piece", None).unwrap();
         std::fs::write(added.path.join("wip.txt"), "unsaved\n").unwrap();
@@ -559,12 +572,42 @@ mod tests {
         let through = remove_piece(&root, "alpha", "thing", "piece", false)
             .expect_err("a dirty piece is refused");
         let core = worktree::remove(&root, "alpha", "thing", "piece", false, false)
-            .expect_err("the same refusal")
-            .to_string();
+            .expect_err("the same refusal");
 
-        assert_eq!(through, core);
+        assert_eq!(through, core.in_window());
         assert!(through.contains("uncommitted"), "{through}");
+        in_the_windows_words(&through);
         assert!(added.path.is_dir(), "and nothing was removed");
+        in_the_windows_words(
+            &remove_piece(&root, "alpha", "thing", "nope", false).expect_err("no such piece"),
+        );
+    }
+
+    #[test]
+    fn a_merge_is_refused_in_the_windows_words() {
+        let (_dir, root, _clone) = plane();
+        let added = worktree::add(&root, "alpha", "thing", "piece", None).unwrap();
+        std::fs::write(added.path.join("wip.txt"), "unsaved\n").unwrap();
+
+        let dirty = merge_piece(&root, "alpha", "thing", "piece").expect_err("a dirty piece");
+        assert!(dirty.contains("uncommitted"), "{dirty}");
+        in_the_windows_words(&dirty);
+        let missing = merge_piece(&root, "alpha", "thing", "nope").expect_err("no such piece");
+        assert!(
+            missing.contains("no branch folder called 'nope'"),
+            "{missing}"
+        );
+        in_the_windows_words(&missing);
+    }
+
+    #[test]
+    fn a_listing_is_refused_in_the_windows_words() {
+        let (_dir, root, _clone) = plane();
+
+        let refused = pieces_of(&root, "alpha", "nothing-here").expect_err("no such clone");
+
+        assert!(refused.contains("nothing-here"), "{refused}");
+        in_the_windows_words(&refused);
     }
 
     #[test]
@@ -581,7 +624,11 @@ mod tests {
 
         assert_eq!(pieces_of(&root, "alpha", "thing").unwrap()[0].said, "done");
         let refused = declare_done(&root, None, "alpha", "thing", "nope").unwrap_err();
-        assert!(refused.contains("'nope' is not a worktree"), "{refused}");
+        assert!(
+            refused.contains("no branch folder called 'nope'"),
+            "{refused}"
+        );
+        in_the_windows_words(&refused);
     }
 
     /// What a start was handed, for the tests that stand in for the harness.

@@ -255,7 +255,7 @@ mod tests {
         );
         assert_eq!(
             refused,
-            Err("'../x' is not a path inside the worktree".to_string())
+            Err("'../x' is not a path inside the branch's folder".to_string())
         );
     }
 
@@ -283,7 +283,7 @@ mod tests {
 
         assert_eq!(
             refused,
-            "'../../README.md' is not a path inside the worktree"
+            "'../../README.md' is not a path inside the branch's folder"
         );
     }
 }

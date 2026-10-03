@@ -77,7 +77,7 @@ export function RenameWorkspace({
               onChange={(event) => setName(event.target.value)}
             />
             <p className="came-back">
-              Its folder under <code>workspaces/</code> moves, its clones&apos; worktrees are
+              Its folder under <code>workspaces/</code> moves, its branches&apos; folders are
               repaired, and everything that names it follows. Not while a chat is running in it.
             </p>
             {/* The core's sentence, unchanged, as `trouble` is. */}

@@ -828,7 +828,7 @@ const STATES: State[] = [
   },
   { name: "Preferences", view: { from: null, view: "preferences", key: "" }, drawn: /^Text$/ },
   {
-    name: "a worktree's files",
+    name: "a branch's files",
     view: { from: null, view: "piece-files", key: "alpha/svc/fix-it" },
     answers: {
       piece_files: ["README.md", "src/lib.rs"],
@@ -837,7 +837,7 @@ const STATES: State[] = [
     drawn: /src\/lib\.rs/,
   },
   {
-    name: "one of a worktree's files",
+    name: "one of a branch's files",
     view: { from: null, view: "piece-file", key: "alpha/svc/fix-it/README.md" },
     answers: { piece_files: ["README.md"], piece_file: { kind: "text", text: "Read me first\n" } },
     drawn: /Read me first/,

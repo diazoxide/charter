@@ -43,7 +43,7 @@ use crate::forge::Caller;
 use crate::forge::pr::{self, AutoMerge, Pr, Repo, State};
 use crate::planesave::{Mode, Plane};
 
-/// Whether a push record is one a PR mode wrote: its present tense is asked of the target
+/// Whether a push record is one a request mode wrote: its present tense is asked of the target
 /// branch and HEAD ([`still_holds`]) rather than of the branch's upstream.
 pub(super) fn is_pr_record(rec: &serde_json::Value) -> bool {
     matches!(
@@ -52,7 +52,7 @@ pub(super) fn is_pr_record(rec: &serde_json::Value) -> bool {
     )
 }
 
-/// Whether a PR mode's record is still true: the commit it is about has not reached the
+/// Whether a request mode's record is still true: the commit it is about has not reached the
 /// remote's target branch, and the plane is still on it or on a commit made after it.
 ///
 /// The second half is what lets a person clear a block by hand: a plane moved off the
@@ -104,7 +104,7 @@ fn resolve(root: &Path, rev: &str) -> Option<String> {
         .filter(|sha| !sha.is_empty())
 }
 
-/// What a PR mode needs before it can push anything: the forge repo the plane's origin names,
+/// What a request mode needs before it can push anything: the forge repo the plane's origin names,
 /// the save branch, and the target branch. `Err` is a config error, in words, and the plane is
 /// blocked on it (ADR 0051).
 pub(super) fn config(root: &Path, plane: &Plane) -> Result<(Repo, String, String), String> {
@@ -113,7 +113,7 @@ pub(super) fn config(root: &Path, plane: &Plane) -> Result<(Repo, String, String
     let target = plane.branch.value.clone().unwrap_or_else(|| here(root));
     if save == target {
         return Err(format!(
-            "[plane] save_branch is {save}, the target branch itself, and a PR mode never \
+            "[plane] save_branch is {save}, the target branch itself, and a request mode never \
              pushes to the branch its {} goes into. Name another save_branch, or \
              remove it for charter/save/<host>-<clone>",
             repo.forge.kind.request_noun()
@@ -232,7 +232,7 @@ pub(super) fn push(root: &Path, plane: &Plane, sign: bool, say: Sink) -> PushRes
         }
     };
     let Some(https) = origin_https(root) else {
-        // Not a block (charter-app#295): a PR mode on a remote no forge adapter serves commits
+        // Not a block (charter-app#295): a request mode on a remote no forge adapter serves commits
         // and goes no further, and `standing` says so as a notice.
         say(Say::Warn(
             "Not pushed: this plane's origin is not a GitHub or GitLab forge charter knows, so \

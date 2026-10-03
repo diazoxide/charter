@@ -5,11 +5,13 @@
 //! match in each is exhaustive, so a new refusal cannot reach the window without a sentence
 //! chosen for it. These hold the words; what git itself printed, and a path, pass through.
 
+mod support;
+
 use charter_core::contain::Elsewhere;
 use charter_core::worktree::confine::Outside;
 use charter_core::worktree::git::GitUnavailable;
 use charter_core::worktree::name::BadBranch;
-use charter_core::worktree::{Note, Refusal};
+use charter_core::worktree::{self, Note, Refusal};
 
 /// Words the first hour never shows (ADR 0072 §3), as charter's own nouns.
 const KEPT_OUT: &[&str] = &["piece", "worktree", "plane"];
@@ -102,7 +104,15 @@ fn every_refusal() -> Vec<Refusal> {
 fn no_refusal_a_cut_can_meet_says_piece_or_worktree_in_the_window() {
     charter_core::unsteered!();
     for refusal in every_refusal() {
-        says_none_of_them(&refusal.in_window());
+        let said = refusal.in_window();
+        says_none_of_them(&said);
+        // Nor a repair for a terminal: the window's are its own rows (#989).
+        for command in ["git -C", "--force", "charter worktree"] {
+            assert!(
+                !said.contains(command),
+                "{command:?} reached the window: {said}"
+            );
+        }
     }
 }
 
@@ -165,4 +175,132 @@ fn a_cut_taken_back_says_it_was_taken_back_and_what_remains_if_anything_does() {
          file), and could not take it back (git said no): the branch chat-1 and its folder \
          remain."
     );
+}
+
+/// A refusal charter put in words itself, met for real: the terminal keeps its repair, the
+/// window gets a sentence with no worktree and no command in it (#989).
+fn stuck_in_the_windows_words(refusal: Refusal, terminal_says: &str) {
+    assert!(
+        matches!(refusal, Refusal::Stuck { .. }),
+        "charter's own refusal, not git's: {refusal:?}"
+    );
+    assert!(refusal.to_string().contains(terminal_says), "{refusal}");
+    let said = refusal.in_window();
+    says_none_of_them(&said);
+    for command in ["git -C", "--force", "charter worktree"] {
+        assert!(
+            !said.contains(command),
+            "{command:?} reached the window: {said}"
+        );
+    }
+}
+
+/// A branch cut off the fixture's clone. Named `spike`, so a sentence that names it holds none
+/// of [`KEPT_OUT`] by the name alone.
+fn cut(f: &support::Fixture, name: &str) -> worktree::Added {
+    worktree::add(&f.plane, &f.ws, &f.repo, name, None).expect("a branch is cut")
+}
+
+fn merged(f: &support::Fixture) -> Refusal {
+    worktree::merge(&f.plane, &f.ws, &f.repo, "spike").expect_err("refused")
+}
+
+#[test]
+fn a_merge_of_a_branch_on_no_branch_is_refused_in_the_windows_words() {
+    charter_core::unsteered!();
+    let f = support::plane_with_clone("thing");
+    let added = cut(&f, "spike");
+    support::git(&added.path, &["checkout", "-q", "--detach"]);
+
+    stuck_in_the_windows_words(merged(&f), "git -C");
+}
+
+#[test]
+fn a_merge_of_a_branch_cut_from_a_detached_head_is_refused_in_the_windows_words() {
+    charter_core::unsteered!();
+    let f = support::plane_with_clone("thing");
+    support::git(&f.clone, &["checkout", "-q", "--detach"]);
+    cut(&f, "spike");
+
+    stuck_in_the_windows_words(merged(&f), "detached HEAD");
+}
+
+#[test]
+fn a_merge_with_no_recorded_base_is_refused_in_the_windows_words() {
+    charter_core::unsteered!();
+    let f = support::plane_with_clone("thing");
+    let added = cut(&f, "spike");
+    f.commit(&added.path, "work");
+    support::git(
+        &f.clone,
+        &["config", "--unset-all", "branch.spike.charterBase"],
+    );
+
+    stuck_in_the_windows_words(merged(&f), "was not recorded");
+}
+
+#[test]
+fn a_merge_with_two_recorded_bases_is_refused_in_the_windows_words() {
+    charter_core::unsteered!();
+    let f = support::plane_with_clone("thing");
+    let added = cut(&f, "spike");
+    f.commit(&added.path, "work");
+    support::git(
+        &f.clone,
+        &["config", "--add", "branch.spike.charterBase", "other"],
+    );
+
+    stuck_in_the_windows_words(merged(&f), "more than one");
+}
+
+#[test]
+fn a_merge_into_a_clone_on_another_branch_is_refused_in_the_windows_words() {
+    charter_core::unsteered!();
+    let f = support::plane_with_clone("thing");
+    let added = cut(&f, "spike");
+    f.commit(&added.path, "work");
+    support::git(&f.clone, &["switch", "-q", "-c", "elsewhere"]);
+
+    stuck_in_the_windows_words(merged(&f), "switch main");
+}
+
+#[test]
+fn a_merge_that_does_not_fast_forward_is_refused_in_the_windows_words() {
+    charter_core::unsteered!();
+    let f = support::plane_with_clone("thing");
+    let added = cut(&f, "spike");
+    f.commit(&added.path, "theirs");
+    f.commit(&f.clone, "mine");
+
+    stuck_in_the_windows_words(merged(&f), "does not fast-forward");
+}
+
+#[test]
+fn a_merge_with_nothing_to_land_is_refused_in_the_windows_words() {
+    charter_core::unsteered!();
+    let f = support::plane_with_clone("thing");
+    cut(&f, "spike");
+
+    let refusal = merged(&f);
+    assert!(refusal.in_window().contains("nothing to land"), "{refusal}");
+    stuck_in_the_windows_words(refusal, "Nothing was merged");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_removal_git_will_not_clear_is_refused_in_the_windows_words() {
+    charter_core::unsteered!();
+    // A folder that is gone while git still lists it is cleared without a check. Here git
+    // cannot clear what it keeps about it: the directory it keeps that in is read-only.
+    use std::os::unix::fs::PermissionsExt;
+    let f = support::plane_with_clone("thing");
+    let added = cut(&f, "spike");
+    std::fs::remove_dir_all(&added.path).unwrap();
+    let kept = f.clone.join(".git/worktrees");
+    std::fs::set_permissions(&kept, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+    let refusal = worktree::remove(&f.plane, &f.ws, &f.repo, "spike", false, false);
+    std::fs::set_permissions(&kept, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    stuck_in_the_windows_words(refusal.expect_err("refused"), "worktree prune");
 }

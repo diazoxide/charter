@@ -462,8 +462,8 @@ fn stranded_push(d: &Doctor) -> Result<Option<(String, String)>, String> {
     if !rec.get("outcome").is_some_and(truthy) {
         return Ok(None);
     }
-    // A PR mode's record (charter-app#298): its present tense is the save's own, asked of the
-    // target branch rather than the upstream. An open PR is where a PR mode's commits are meant
+    // A request mode's record (charter-app#298): its present tense is the save's own, asked of the
+    // target branch rather than the upstream. An open PR is where a request mode's commits are meant
     // to wait, so only a block is a finding.
     if matches!(
         rec.get("outcome").and_then(serde_json::Value::as_str),

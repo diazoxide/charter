@@ -41,6 +41,18 @@ pub const SUBCOMMAND: &str = "mcp";
 /// harness, can ask the person through it.
 pub const ASK_OPERATOR: &str = "ask_operator";
 
+/// The tools a Claude Code chat runs without asking (V79, #1050, amending SI-8e in ADR 0064):
+/// the five that only read. Named one by one, never derived from [`Tool::read_only`]:
+/// `ask_operator` is marked read-only too and still asks, and a tool added later is asked
+/// about until someone rules it in here. Writes are never in this list.
+pub const PRE_ALLOWED: [&str; 5] = [
+    "todo_list",
+    "memory_search",
+    "session_record_list",
+    "session_record_read",
+    "change_status",
+];
+
 /// The variables the server reads to find the chat's place, as a `charter` command in the chat
 /// reads them. A harness that hands an MCP server only the variables it is told to (Codex) is
 /// told these, and nothing else of charter's: not the chat's token, not its hook socket.

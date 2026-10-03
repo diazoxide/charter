@@ -222,8 +222,8 @@ describe("the palette reaching what the window can do", () => {
         "End this pane's chat",
         "End chat steward 1",
         "Focus workspace beta",
-        "Merge this chat's worktree into its clone",
-        "Remove this chat's worktree",
+        "Merge this chat's branch into its clone",
+        "Remove the folder of this chat's branch",
         "Quit charter",
       ]),
     );
@@ -358,7 +358,7 @@ describe("the palette reaching what the window can do", () => {
     render(<App />);
     await openAChat();
 
-    await runFromPalette("remove this chat");
+    await runFromPalette("remove the folder of this chat");
 
     // Verbatim, beside the rows rather than behind them, and the palette is still up.
     const alert = await within(
@@ -384,7 +384,7 @@ describe("the palette reaching what the window can do", () => {
     expect(screen.queryAllByRole("option")).toHaveLength(0);
     await userEvent.keyboard("{Escape}");
 
-    await runFromPalette("remove this chat");
+    await runFromPalette("remove the folder of this chat");
     await within(await screen.findByRole("dialog", { name: "Command palette" })).findByRole(
       "alert",
     );

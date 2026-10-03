@@ -220,7 +220,7 @@ export function Explorer({
           are outside it. The ones about ONE clone (its worktrees could not be listed, are
           still coming, or are none) stay inside that clone's `<details>`, beside the row they
           explain, and so inside the tree: moving them out would take them away from it. */}
-        <div role="tree" aria-label="Repos and worktrees" onKeyDown={onTreeKey}>
+        <div role="tree" aria-label="Repos and branches" onKeyDown={onTreeKey}>
           <RovingFocusGroup.Item asChild tabStopId={ROOT} active={spot === undefined}>
             <button
               type="button"
@@ -292,13 +292,13 @@ export function Explorer({
                     // Said, never swallowed: a clone with no rows otherwise reads as a clone
                     // nobody has cut a worktree in.
                     <Trouble>
-                      charter could not list the worktrees of <code>{repo}</code>:{" "}
+                      charter could not list the branches of <code>{repo}</code>:{" "}
                       {piecesRefused[repo]}
                     </Trouble>
                   ) : pieces[repo] === undefined ? (
                     <Pending>Asking git…</Pending>
                   ) : pieces[repo].length === 0 ? (
-                    <p className="none">No worktrees cut here</p>
+                    <p className="none">No branches cut here</p>
                   ) : (
                     <ul className="pieces" role="group">
                       {pieces[repo].map((piece) => {
@@ -461,7 +461,7 @@ function PieceCount({ pieces, refused }: { pieces?: readonly unknown[]; refused?
   if (refused !== undefined) return <span className="piece-count none">unreadable</span>;
   if (pieces === undefined) return <span className="piece-count pending">…</span>;
   return (
-    <span className="piece-count" aria-label={`${pieces.length} worktrees`}>
+    <span className="piece-count" aria-label={`${pieces.length} branches`}>
       {pieces.length}
     </span>
   );

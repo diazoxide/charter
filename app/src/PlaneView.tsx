@@ -2082,7 +2082,7 @@ export const PlaneView = memo(function PlaneView({
       setRereadWorkspace((asked) => asked + 1);
       // The branch is not named any more: a row about a piece nothing is running in carries
       // no branch, and "its branch stays" is true of every worktree charter cuts.
-      return { ok: true, said: `The worktree ${cut.piece} is gone. Its branch stays.` };
+      return { ok: true, said: `The folder of ${cut.piece} is gone. Its branch stays.` };
     },
     [plane],
   );
@@ -3044,6 +3044,7 @@ export const PlaneView = memo(function PlaneView({
               workspace: ofWorkspace,
               repo,
               piece: piece.piece,
+              branch: piece.branch,
             })),
           ),
     [ofWorkspace, workspaceState.panels, workspaceState.pieces],

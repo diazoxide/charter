@@ -144,7 +144,7 @@ export function BottomBar({
               <th scope="col">Repo</th>
               <th scope="col">Branch</th>
               <th scope="col">Changes</th>
-              <th scope="col">Worktrees</th>
+              <th scope="col">Branches</th>
               <th scope="col">Pipeline</th>
               {columns.map((column) => (
                 <th
@@ -347,23 +347,23 @@ function FactCellOf({ testId, cell }: { testId: string; cell: FactCell | undefin
 
 /** What git says about this clone's pieces, in one phrase. */
 function Worktrees({ pieces, refused }: { pieces: Piece[] | undefined; refused?: string }) {
-  // Never "no worktrees". A listing charter could not run says so, for the same reason an
+  // Never "no branches". A listing charter could not run says so, for the same reason an
   // unreadable tree is never drawn as clean.
-  if (refused !== undefined) return <span className="none">worktrees unreadable</span>;
+  if (refused !== undefined) return <span className="none">branches unreadable</span>;
   if (pieces === undefined)
     return (
       <span className="pending">
         <LoaderCircle className="node-icon spinning" />
-        worktrees: asking git…
+        branches: asking git…
       </span>
     );
-  if (pieces.length === 0) return <span className="none">no worktrees</span>;
+  if (pieces.length === 0) return <span className="none">no branches</span>;
   const stale = pieces.filter((piece) => piece.stale).length;
   const unwired = pieces.filter((piece) => !piece.wired && !piece.stale).length;
   return (
     <>
       <span className="count">
-        {pieces.length} {pieces.length === 1 ? "worktree" : "worktrees"}
+        {pieces.length} {pieces.length === 1 ? "branch" : "branches"}
       </span>
       {/* The two states that change what starting a chat in one would mean. Counted here
           rather than listed: the row a person acts on is the explorer's. */}

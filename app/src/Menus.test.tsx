@@ -109,7 +109,7 @@ describe("what a menu lists", () => {
   it("offers a worktree's own verbs on the explorer's rows (charter-app#174)", () => {
     // The surface #172 could not reach, and the reason it could not: the catalogue had two
     // worktree rows and both were about the chat in front. These are about this piece.
-    const cut = { workspace: "alpha", repo: "svc", piece: "fix-it" };
+    const cut = { workspace: "alpha", repo: "svc", piece: "fix-it", branch: "fix-it" };
     const shown = titles(
       { on: "worktree", repo: "svc", piece: "fix-it" },
       {
@@ -118,8 +118,8 @@ describe("what a menu lists", () => {
       },
     );
 
-    expect(shown.above).toEqual(["Browse the files of fix-it", "Merge worktree fix-it into svc"]);
-    expect(shown.below).toEqual(["Remove worktree fix-it in svc"]);
+    expect(shown.above).toEqual(["Browse the files of fix-it", "Merge branch fix-it into svc"]);
+    expect(shown.below).toEqual(["Remove folder fix-it in svc"]);
   });
 
   it("draws the discard row on the piece whose removal was refused, and on no other", () => {
@@ -134,11 +134,11 @@ describe("what a menu lists", () => {
     const over = { plane: "/plane", pieces, refused: "worktree.remove:svc/fix-it" };
 
     expect(titles({ on: "worktree", repo: "svc", piece: "fix-it" }, over).below).toEqual([
-      "Remove worktree fix-it in svc",
+      "Remove folder fix-it in svc",
       "Discard that work and remove fix-it anyway",
     ]);
     expect(titles({ on: "worktree", repo: "svc", piece: "other" }, over).below).toEqual([
-      "Remove worktree other in svc",
+      "Remove folder other in svc",
     ]);
   });
 

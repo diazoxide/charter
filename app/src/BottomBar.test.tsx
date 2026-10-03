@@ -206,8 +206,8 @@ describe("the bottom bar", () => {
       />,
     );
 
-    expect(screen.getByTestId("worktrees-svc")).toHaveTextContent("2 worktrees");
-    expect(screen.getByTestId("worktrees-tool")).toHaveTextContent("no worktrees");
+    expect(screen.getByTestId("worktrees-svc")).toHaveTextContent("2 branches");
+    expect(screen.getByTestId("worktrees-tool")).toHaveTextContent("no branches");
   });
 
   it("counts the worktrees a chat would run unwired or stale in", () => {
@@ -238,8 +238,8 @@ describe("the bottom bar", () => {
       />,
     );
 
-    expect(screen.getByTestId("worktrees-svc")).toHaveTextContent("worktrees unreadable");
-    expect(screen.getByTestId("worktrees-svc")).not.toHaveTextContent("no worktrees");
+    expect(screen.getByTestId("worktrees-svc")).toHaveTextContent("branches unreadable");
+    expect(screen.getByTestId("worktrees-svc")).not.toHaveTextContent("no branches");
   });
 
   it("says a listing is still on its way rather than counting nothing", () => {
@@ -433,7 +433,7 @@ describe("the bottom bar", () => {
       "Repo",
       "Branch",
       "Changes",
-      "Worktrees",
+      "Branches",
       "Pipeline",
     ]);
     expect(screen.getAllByRole("rowheader").map((one) => one.textContent)).toEqual(["svc", "tool"]);
