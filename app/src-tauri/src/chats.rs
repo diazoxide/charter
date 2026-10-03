@@ -1499,7 +1499,17 @@ mod tests {
         }
     }
 
-    /// Everything a session has printed, once it has printed `text`.
+    /// How long a chat's program may take to run its first line, which only a broken test
+    /// waits out. A freshly written stand-in is slow to start on a loaded machine: measured at
+    /// 1.3–6.5 s from the spawn at load 50–70, and past ten seconds at load 100 (#1138). The
+    /// spawn itself returned in under 0.2 s, and the script needed only milliseconds once it ran.
+    const TO_START: std::time::Duration = std::time::Duration::from_secs(60);
+
+    /// How long a stand-in that is running may take to say what a test waits for. It counts
+    /// from the stand-in's own first sign of life, never from the spawn, so how slowly the
+    /// machine starts a program does not count against it.
+    const ONCE_RUNNING: std::time::Duration = std::time::Duration::from_secs(10);
+
     /// Everything a session has printed, once `text` is among it — as a READER would see
     /// it, not as the terminal encoded it.
     ///
@@ -1523,17 +1533,29 @@ mod tests {
             .sessions()
             .watch(session, Box::new(collect))
             .expect("the view opens");
-        let deadline = Instant::now() + Duration::from_secs(10);
+        // The terminal's own drawing arrives before the program has run at all, so the
+        // program's first word on the screen is the sign it is running.
+        let watched = Instant::now();
+        let mut running_since = None;
         loop {
             let so_far = lock(&seen).clone();
             let plain = as_a_reader_sees(&so_far);
             if plain.contains(text) {
                 return plain;
             }
-            assert!(
-                Instant::now() < deadline,
-                "{text:?} never arrived, only {plain:?} (raw: {so_far:?})"
-            );
+            if running_since.is_none() && !plain.trim().is_empty() {
+                running_since = Some(Instant::now());
+            }
+            match running_since {
+                None => assert!(
+                    watched.elapsed() < TO_START,
+                    "the program printed nothing in {TO_START:?} (raw: {so_far:?})"
+                ),
+                Some(since) => assert!(
+                    since.elapsed() < ONCE_RUNNING,
+                    "{text:?} never arrived, only {plain:?} (raw: {so_far:?})"
+                ),
+            }
             std::thread::sleep(Duration::from_millis(10));
         }
     }
@@ -3582,11 +3604,13 @@ mod tests {
         std::fs::create_dir_all(&root).expect("the plane");
         std::fs::write(root.join(charter_core::plane::MANIFEST), shared).expect("charter.toml");
         let argv = root.join("argv");
+        let running = root.join("running");
         let program = stand_in::program(
             &root,
             command[0],
             &format!(
-                "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done > {argv:?}.part\n\
+                "#!/bin/sh\n: > {running:?}\n\
+                 for a in \"$@\"; do printf '%s\\n' \"$a\"; done > {argv:?}.part\n\
                  mv {argv:?}.part {argv:?}\n"
             ),
         );
@@ -3648,11 +3672,20 @@ mod tests {
             ..Default::default()
         };
         let session = chats.start_ready(&chat, &ready, SIZE).expect("it runs");
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while !argv.exists() && std::time::Instant::now() < deadline {
+        // The deadline that matters counts from the stand-in running (#1138).
+        let spawned = std::time::Instant::now();
+        while !running.exists() && spawned.elapsed() < TO_START {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let ran = std::time::Instant::now();
+        while running.exists() && !argv.exists() && ran.elapsed() < ONCE_RUNNING {
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
         let _ = chats.close(session);
+        assert!(
+            running.exists(),
+            "the stand-in did not start in {TO_START:?}"
+        );
         let said = std::fs::read_to_string(&argv).expect("the stand-in ran");
         (
             said.lines().map(str::to_owned).collect(),
