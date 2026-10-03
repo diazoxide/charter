@@ -19,6 +19,7 @@ macro_rules! tauri_context {
 mod about;
 mod alerts;
 mod autosave;
+mod branchwatch;
 mod changes;
 mod chats;
 mod clipath;
@@ -1692,6 +1693,8 @@ fn commands() -> Builder<tauri::Wry> {
         .typ::<planewatch::PlaneChanged>()
         // What `files-changed` carries (FM-1).
         .typ::<filewatch::FilesChanged>()
+        // What `branch-changed` carries (FM-4).
+        .typ::<branchwatch::BranchChanged>()
         // What `extension-heard` carries (charter-app#343).
         .typ::<heard::ExtensionHeard>()
         // What `harness-by-hand` carries (ADR 0062).
@@ -1933,6 +1936,10 @@ pub fn run() {
                     if let Some(finder) = window.try_state::<findfiles::FileFinder>() {
                         finder.forget(window.label());
                     }
+                    // Nor the branches whose changes it shows (FM-4).
+                    if let Some(watch) = window.try_state::<branchwatch::BranchWatch>() {
+                        watch.forget(window.label());
+                    }
                     windows::destroyed(window);
                 }
                 _ => {}
@@ -2009,6 +2016,21 @@ pub fn run() {
             }));
             // Each window's ⌘P session: the branches it has listed while the palette is up (FM-7).
             app.manage(findfiles::FileFinder::default());
+            // The branches each window shows the changes of, listened to whole so an agent's
+            // first write anywhere in one moves its markers (FM-4).
+            app.manage(branchwatch::BranchWatch::new(
+                {
+                    let app = app.handle().clone();
+                    std::sync::Arc::new(move |window: &str, branches| {
+                        let _ = app.emit_to(
+                            window,
+                            branchwatch::CHANGED,
+                            branchwatch::BranchChanged { branches },
+                        );
+                    })
+                },
+                reader(),
+            ));
             // What each window is holding, and which of its projects it has in front. Empty
             // until a window says, and an empty answer means "not looking", so a notification
             // is sent rather than suppressed.
@@ -2418,4 +2440,41 @@ mod tests {
     /// The window's commands that take a channel: `watch_session`, the one that streams a
     /// terminal to a pane.
     const TAKES_A_CHANNEL: &[&str] = &["watch_session"];
+}
+
+/// The bounded reader every automatic read of a branch goes through (FM-4, D-88h): this binary,
+/// started again as the reader. In a test, this test binary, run again picking
+/// [`reader_child`](tests_reader::reader_child).
+pub(crate) fn reader() -> charter_core::files::Reader {
+    #[cfg(test)]
+    {
+        charter_core::files::Reader::new(
+            std::env::current_exe().unwrap_or_default(),
+            [
+                "tests_reader::reader_child",
+                "--exact",
+                "--nocapture",
+                "--test-threads=1",
+                charter_core::files::READ_ARG,
+            ]
+            .map(std::ffi::OsString::from),
+        )
+    }
+    #[cfg(not(test))]
+    {
+        charter_core::files::Reader::this_binary()
+            .unwrap_or_else(|_| charter_core::files::Reader::new(std::path::PathBuf::new(), []))
+    }
+}
+
+#[cfg(test)]
+mod tests_reader {
+    /// The reader's child, in a run of this test binary that [`super::reader`] started: it
+    /// answers the one question asked and exits. In any other run it does nothing.
+    #[test]
+    fn reader_child() {
+        if let Some(code) = charter_core::files::serve_if_asked() {
+            std::process::exit(code);
+        }
+    }
 }

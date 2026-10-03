@@ -1516,7 +1516,8 @@ button.show-more:focus-visible {
   color: var(--text-muted);
 }
 
-.explorer .ignored-toggle {
+.explorer .ignored-toggle,
+.explorer .changed-toggle {
   margin-block-start: 0.5rem;
   padding: 0.15rem 0.4rem;
   border: 1px solid var(--border-subtle);
@@ -1527,8 +1528,93 @@ button.show-more:focus-visible {
   font-size: 0.75rem;
 }
 
-.explorer .ignored-toggle[aria-pressed="true"] {
+.explorer .ignored-toggle[aria-pressed="true"],
+.explorer .changed-toggle[aria-pressed="true"] {
   background: var(--accent-surface);
+}
+
+.explorer .files-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+/* The box that narrows the file rows (FM-4): the panels' search box, at the top of the tree. */
+.explorer .files-filter {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+  margin-block-end: 0.35rem;
+  padding: 0.1rem 0.35rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+}
+
+.explorer .files-filter:focus-within {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -1px;
+}
+
+.explorer .files-filter input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 0.8rem;
+}
+
+.explorer .files-filter input:focus {
+  outline: none;
+}
+
+.explorer .files-filter .node-icon {
+  color: var(--text-muted);
+}
+
+/* What a branch changed (FM-4): a letter on a file, a count on a folder, and its name tinted
+   the same. Added and deleted take the light editor's diff tokens (`diff-inserted-text`,
+   `diff-deleted-text`); changed takes `state-waiting` and renamed `accent-base`, which the
+   theme has no diff token for. */
+.explorer .change-mark {
+  margin-inline-start: auto;
+  padding-inline: 0.25rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.explorer [data-mark] > .file-node > .spot-name {
+  color: var(--change-colour);
+}
+
+.explorer .change-mark,
+.explorer [data-mark] {
+  --change-colour: var(--state-waiting);
+}
+
+.explorer .change-mark {
+  color: var(--change-colour);
+}
+
+.explorer [data-mark="added"],
+.explorer .change-mark[data-mark="added"] {
+  --change-colour: var(--diff-inserted-text);
+}
+
+.explorer [data-mark="deleted"],
+.explorer .change-mark[data-mark="deleted"] {
+  --change-colour: var(--diff-deleted-text);
+}
+
+.explorer [data-mark="renamed"],
+.explorer .change-mark[data-mark="renamed"] {
+  --change-colour: var(--accent-base);
+}
+
+.explorer [data-mark="deleted"] > .file-node > .spot-name {
+  text-decoration: line-through;
 }
 
 /* A clone's heading. The default disclosure marker goes, because the platform draws it at its

@@ -1,14 +1,15 @@
 import { useState, type KeyboardEvent } from "react";
 import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
 import { LoaderCircle } from "lucide-react";
-import { useBranchFolders, folderKey, type BranchFolderRef } from "../branchFolders";
+import { useBranchFolders, type BranchFolderRef } from "../branchFolders";
+import type { Indexed, StatusRead } from "../branchStatus";
 import {
   childOf,
   fileFold,
   fileRow,
   fileTreeRows,
   FolderEntries,
-  shown,
+  levelOf,
   treeKey,
   type FilesOf,
   type TreeItem,
@@ -51,7 +52,19 @@ export function BranchTree({
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set([topKey]));
   const [showIgnored, setShowIgnored] = useState(false);
   const reads = useBranchFolders(plane, workspace, openUnder(workspace, top, expanded));
-  const files: FilesOf = { expanded, reads, showIgnored };
+  // The explorer's file rows, with no change marks and nothing narrowed: the file tab shows the
+  // branch as it is (FM-4's marks and filter are the explorer's).
+  const files: FilesOf = {
+    workspace,
+    expanded,
+    reads,
+    showIgnored,
+    statuses: NONE_READ,
+    indexes: NONE_INDEXED,
+    changedOnly: false,
+    filter: "",
+    levels: new Map(),
+  };
   const rows = fileTreeRows(workspace, top, files);
   const drawn = rows.filter((row) => row.drawn);
   const pickedRow = picked === undefined ? undefined : fileRow({ ...top, folder: picked });
@@ -97,7 +110,7 @@ export function BranchTree({
         ?.focus();
   };
 
-  const read = reads.get(folderKey(top));
+  const level = levelOf(files, top);
   return (
     <div className="explorer piece-files-tree">
       <RovingFocusGroup.Root asChild orientation="vertical" {...stop}>
@@ -107,20 +120,19 @@ export function BranchTree({
           data-testid="piece-files-tree"
           onKeyDown={onKey}
         >
-          {read === undefined ? (
+          {"pending" in level ? (
             <p className="pending" aria-busy="true">
               <LoaderCircle className="node-icon spinning" />
               Reading…
             </p>
-          ) : read.trouble !== undefined ? (
+          ) : "trouble" in level ? (
             <p className="trouble" role="alert" data-testid="piece-files-trouble">
-              {read.trouble}
+              {level.trouble}
             </p>
           ) : (
             <FolderEntries
               branch={top}
-              entries={shown(read.entries ?? [], showIgnored)}
-              more={read.more ?? 0}
+              level={level}
               at={{
                 place,
                 files,
@@ -145,6 +157,9 @@ export function BranchTree({
     </div>
   );
 }
+
+const NONE_READ: ReadonlyMap<string, StatusRead> = new Map();
+const NONE_INDEXED: ReadonlyMap<string, Indexed> = new Map();
 
 /** The folders open under `top`, `top` first: each one whose every folder above is open too.
  *  These are what is read and watched — a folder inside a closed one is neither. */

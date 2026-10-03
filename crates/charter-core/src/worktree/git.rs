@@ -103,6 +103,13 @@ fn child_env(git_dirs: &str) -> Vec<(&'static str, String)> {
     env.push(("GIT_TERMINAL_PROMPT", "0".into()));
     // Deterministic messages for the few places charter matches its own output shape.
     env.push(("LC_ALL", "C".into()));
+    // No lazy fetch, ever (git 2.44+). A repository whose config names a promisor remote
+    // fetches an object it lacks the moment a read needs one — a status's rename search is
+    // enough — and that fetch starts the program the remote's config names, as the operator.
+    // A repository an agent can write is one whose config it can write, and charter's reads
+    // run outside any sandbox; with this the read fails on the missing object instead (FM-4).
+    // An explicit `fetch` or `clone` is not a lazy fetch and is unaffected.
+    env.push(("GIT_NO_LAZY_FETCH", "1".into()));
     env
 }
 

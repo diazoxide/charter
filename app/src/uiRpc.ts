@@ -794,6 +794,11 @@ export const commands = {
 	 */
 	branchTree: (plane: PlaneId, workspace: string, repo: string, piece: string | null, folder: string) => typedError<FolderListing, string>(__TAURI_INVOKE("branch_tree", { plane, workspace, repo, piece, folder })),
 	/**
+	 *  What a branch changed against the branch it was cut from, committed or not, file by file and
+	 *  rolled up onto its folders: the explorer's markers and its "Changed only" (FM-4).
+	 */
+	branchStatus: (plane: PlaneId, workspace: string, repo: string, piece: string | null) => typedError<BranchStatus, string>(__TAURI_INVOKE("branch_status", { plane, workspace, repo, piece })),
+	/**
 	 *  The folders of branches this window's explorer has expanded, watched until it names others
 	 *  (FM-1). A folder that does not resolve — gone, or refused as the tree refuses it — is not
 	 *  watched.
@@ -807,6 +812,12 @@ export const commands = {
 	findFiles: (session: number, scope: FileScope, query: string) => typedError<FilesFound, string>(__TAURI_INVOKE("find_files", { session, scope, query })),
 	/**  The palette session `session` closed: this window's listings are let go of. */
 	findFilesEnd: (session: number) => __TAURI_INVOKE<void>("find_files_end", { session }),
+	/**
+	 *  Listens to every branch named, so the window hears when anything in one moves that its
+	 *  changes could show (FM-4). A branch that does not resolve is not listened to. The set
+	 *  replaces the window's last one.
+	 */
+	branchWatch: (branches: WatchedBranch[]) => typedError<null, string>(__TAURI_INVOKE("branch_watch", { branches })),
 	/**  Which channel this machine takes charter from: `stable` or `dev`. */
 	updateChannel: () => __TAURI_INVOKE<string>("update_channel"),
 	/**  Put this machine on a channel. A word charter does not know is refused, not guessed at. */
@@ -1407,6 +1418,11 @@ export type Boxes = {
 	new_branch: boolean,
 };
 
+/**  What `branch-changed` carries: the branches, of those this window listens to, that moved. */
+export type BranchChanged = {
+	branches: WatchedBranch[],
+};
+
 /**
  *  One folder of a branch, as the window names it: the plane, the workspace, the repo, the piece
  *  (none for the repo's own folder) and the folder's path inside the branch (`""` for its top).
@@ -1417,6 +1433,18 @@ export type BranchFolder = {
 	repo: string,
 	piece: string | null,
 	folder: string,
+};
+
+/**  What a branch changed against the branch it was cut from, committed or not. */
+export type BranchStatus = {
+	/**  Sorted by path, at most 10,000. */
+	changes: FileChange[],
+	/**  Every folder holding a change, sorted by path. */
+	folders: FolderChanges[],
+	/**  How many changes past those are not listed. */
+	more: number,
+	/**  The branch the changes are counted against; `null` when against the last commit. */
+	base: string | null,
 };
 
 /**  What kind of build this is, which decides which section is shown. */
@@ -1472,6 +1500,17 @@ export type ChangeList = {
 	change: string,
 	members: ChangeMember[],
 };
+
+/**  What a branch did to one path (FM-4). */
+export type ChangeMark = 
+/**  Its content or its kind changed. */
+"changed" | 
+/**  It is new against the branch it was cut from. */
+"added" | 
+/**  It is gone. */
+"deleted" | 
+/**  It moved here from another path. */
+"renamed";
 
 /**  One member row of a [`ChangeList`]. */
 export type ChangeMember = {
@@ -1812,6 +1851,17 @@ export type FactColumn = {
 	cells: FactCell[],
 };
 
+/**  One path a branch changed. */
+export type FileChange = {
+	/**  Its path relative to the branch's folder. */
+	path: string,
+	mark: ChangeMark,
+	/**  Where a renamed file came from: a name to show, never a path to open. */
+	from: string | null,
+	/**  Whether it is not committed yet. */
+	uncommitted: boolean,
+};
+
 /**  Where ⌘P looks: the scope follows the window's focus, and Tab widens it. */
 export type FileScope = 
 /**  One branch: a piece, or no piece for the repo's own folder. */
@@ -1882,6 +1932,14 @@ export type FirstTaskRun = {
 	folder: string,
 	/**  The command that shows the run's diff, run in `folder`. */
 	diff: string,
+};
+
+/**  One folder holding changes: the mark they share (`changed` when they differ) and how many. */
+export type FolderChanges = {
+	/**  Its path relative to the branch's folder; `""` is the branch's own. */
+	folder: string,
+	mark: ChangeMark,
+	count: number,
 };
 
 /**  One entry of a branch's folder, as the explorer's tree draws it (FM-1). */
@@ -3904,6 +3962,17 @@ export type WaitingProject = {
 	plane: string,
 	chats: number,
 	views: number,
+};
+
+/**
+ *  A branch, as the window names it: the plane, the workspace, the repo and the piece (none for
+ *  the repo's own folder).
+ */
+export type WatchedBranch = {
+	plane: PlaneId,
+	workspace: string,
+	repo: string,
+	piece: string | null,
 };
 
 /**
