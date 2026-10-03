@@ -947,7 +947,7 @@ mod tests {
     fn a_notification_is_an_ask_with_no_options_said() {
         assert_eq!(
             Event::Notification.said(Detail::default()),
-            Said::Ask(Ask { options: vec![] })
+            Said::Ask(Ask::default())
         );
     }
 

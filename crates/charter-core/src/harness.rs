@@ -8,6 +8,8 @@
 use std::fmt;
 
 pub mod adapter;
+pub mod asked;
+pub mod asks;
 pub mod claude;
 pub mod codex;
 pub mod model;
