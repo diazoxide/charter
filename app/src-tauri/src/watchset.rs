@@ -1,13 +1,23 @@
-//! What the app's two file watchers share (`planewatch.rs`, `filewatch.rs`): which events are
-//! changes, and keeping a watcher's watches equal to a wanted set of folders, each watched
-//! non-recursively.
+//! What the app's file watchers share (`planewatch.rs`, `filewatch.rs`, `killswitch.rs`):
+//! which events are changes, folding the platform's events into bursts, and keeping a
+//! watcher's watches equal to a wanted set of folders, each watched non-recursively.
+//!
+//! **Every watcher folds the platform's own events, here, and none uses a debouncer**
+//! (#1138, #1139). `notify-debouncer-full` takes a file removed while its creation is still
+//! being folded as never having been there and reports neither, so a short-lived file — one an
+//! agent writes and removes, a stop marker taken away at once — went unheard. And it debounces
+//! each path on its own clock, ticked a quarter of its timeout apart, so writes spread over
+//! more than a tick by a busy machine came out as several batches rather than one. A burst
+//! here is every change from its first event until [`bursts`]' `quiet_for` after it, whatever
+//! its paths did in between.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
+use std::time::{Duration, Instant};
 
 use notify::RecursiveMode;
 use notify::event::{EventKind, MetadataKind, ModifyKind};
-use notify_debouncer_full::{Debouncer, RecommendedCache};
 
 /// Whether an event is a change. Everything but an access is: reading a file changes nothing,
 /// and it is exactly what the window does when it is told. An access time moving is the same
@@ -20,45 +30,119 @@ pub(crate) fn matters(kind: &EventKind) -> bool {
     )
 }
 
-/// What watches folders one at a time: a debouncer, or a platform watcher whose events are
-/// folded by hand ([`Plain`]).
-pub(crate) trait Folders {
-    fn watch(&mut self, path: &Path) -> notify::Result<()>;
-    fn unwatch(&mut self, path: &Path) -> notify::Result<()>;
+/// The handler a platform watcher is made with: every event that is a change, sent on to
+/// [`bursts`].
+///
+/// **An error fails closed**: the watcher could not say what changed, so it is sent on as the
+/// platform losing track (a rescan), and its burst is everything. Dropped, as the debouncer
+/// before it dropped one, it was a change nobody was ever told of.
+pub(crate) fn sender(events: Sender<notify::Event>) -> impl notify::EventHandler {
+    move |event: notify::Result<notify::Event>| {
+        let event = match event {
+            Ok(event) if matters(&event.kind) => event,
+            Ok(_) => return,
+            Err(_) => notify::Event::new(EventKind::Other).set_flag(notify::event::Flag::Rescan),
+        };
+        // The receiving half is gone only once its watch is.
+        let _ = events.send(event);
+    }
 }
 
-impl<W: notify::Watcher> Folders for Debouncer<W, RecommendedCache> {
-    fn watch(&mut self, path: &Path) -> notify::Result<()> {
-        Debouncer::watch(self, path, RecursiveMode::NonRecursive)
+/// One burst of changes, folded.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct Burst {
+    /// Every path a change named. Empty when [`Burst::everything`].
+    pub paths: HashSet<PathBuf>,
+    /// The paths among them a removal named.
+    pub removed: HashSet<PathBuf>,
+    /// Anything may have changed: the platform lost track, an event named no path, or the
+    /// burst named more paths than it holds.
+    pub everything: bool,
+}
+
+impl Burst {
+    /// Folds `event` in, holding at most `most` paths: past that the burst counts as
+    /// everything, so a flood costs a fixed amount of memory and the reader reads a little
+    /// more than it needed to rather than missing a change.
+    fn add(&mut self, event: notify::Event, most: usize) {
+        if self.everything {
+            return;
+        }
+        if event.need_rescan() || event.paths.is_empty() {
+            return self.is_everything();
+        }
+        let removed = matches!(event.kind, EventKind::Remove(_));
+        for path in event.paths {
+            if self.paths.len() >= most && !self.paths.contains(&path) {
+                return self.is_everything();
+            }
+            if removed {
+                self.removed.insert(path.clone());
+            }
+            self.paths.insert(path);
+        }
     }
-    fn unwatch(&mut self, path: &Path) -> notify::Result<()> {
-        Debouncer::unwatch(self, path)
+
+    fn is_everything(&mut self) {
+        self.everything = true;
+        self.paths = HashSet::new();
+        self.removed = HashSet::new();
     }
 }
 
-/// A platform watcher on its own, with no debouncer between it and the caller.
-pub(crate) struct Plain<W>(pub W);
+/// The changes `events` carries, one [`Burst`] at a time: each from its first event until
+/// `quiet_for` after it, holding at most `most` paths. It ends when the watcher sending them is
+/// dropped, and a burst cut short by that is not handed on: nobody is listening for it.
+///
+/// **The deadline is checked before every receive**, so a flood still ends its burst on time:
+/// `recv_timeout` with no time left answers with what is queued and never times out, and a
+/// burst that ended only on a quiet moment never ended under an agent writing without pause.
+pub(crate) fn bursts(
+    events: Receiver<notify::Event>,
+    quiet_for: Duration,
+    most: usize,
+) -> impl Iterator<Item = Burst> {
+    std::iter::from_fn(move || {
+        let first = events.recv().ok()?;
+        rest_of_burst(&events, first, quiet_for, most)
+    })
+}
 
-impl<W: notify::Watcher> Folders for Plain<W> {
-    fn watch(&mut self, path: &Path) -> notify::Result<()> {
-        self.0.watch(path, RecursiveMode::NonRecursive)
-    }
-    fn unwatch(&mut self, path: &Path) -> notify::Result<()> {
-        self.0.unwatch(path)
+/// The burst `first` begins: everything received until `quiet_for` after it, or `None` when the
+/// watcher is dropped before then.
+fn rest_of_burst(
+    events: &Receiver<notify::Event>,
+    first: notify::Event,
+    quiet_for: Duration,
+    most: usize,
+) -> Option<Burst> {
+    let mut burst = Burst::default();
+    burst.add(first, most);
+    let until = Instant::now() + quiet_for;
+    loop {
+        let left = until.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Some(burst);
+        }
+        match events.recv_timeout(left) {
+            Ok(more) => burst.add(more, most),
+            Err(RecvTimeoutError::Timeout) => return Some(burst),
+            Err(RecvTimeoutError::Disconnected) => return None,
+        }
     }
 }
 
 /// Watches every folder of `wanted`, non-recursively, and stops watching the ones in `watched`
 /// it no longer names; `watched` is kept as what is watched now.
 pub(crate) fn follow(
-    folders: &mut impl Folders,
+    watcher: &mut impl notify::Watcher,
     watched: &mut HashSet<PathBuf>,
     wanted: HashSet<PathBuf>,
 ) {
     let stale: Vec<PathBuf> = watched.difference(&wanted).cloned().collect();
     for path in stale {
         // An error is a watch the platform has already dropped with its directory.
-        let _ = folders.unwatch(&path);
+        let _ = watcher.unwatch(&path);
         watched.remove(&path);
     }
     for path in wanted {
@@ -67,8 +151,200 @@ pub(crate) fn follow(
         }
         // A directory that went between the listing and here is simply not watched; the next
         // batch lists again.
-        if folders.watch(&path).is_ok() {
+        if watcher.watch(&path, RecursiveMode::NonRecursive).is_ok() {
             watched.insert(path);
         }
+    }
+}
+
+/// Stops watching `path`, if it was watched: it is gone, and so is its watch (inotify drops it
+/// on its own). A directory removed and made again has to be watched again, so it must not
+/// still be counted as watched.
+pub(crate) fn forget(
+    watcher: &mut impl notify::Watcher,
+    watched: &mut HashSet<PathBuf>,
+    path: &Path,
+) {
+    if watched.remove(path) {
+        let _ = watcher.unwatch(path);
+    }
+}
+
+/// A watcher the tests play the platform for.
+#[cfg(test)]
+pub(crate) mod raw {
+    use std::path::Path;
+
+    thread_local! {
+        /// What [`Raw`] was handed on this test's thread.
+        static RAW: std::cell::RefCell<Option<Box<dyn notify::EventHandler>>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    /// A watcher that reports exactly the events the test sends ([`raw`], [`event`]), one at
+    /// a time as inotify does: no poller's snapshot and no FSEvents latency between the test
+    /// and what the watch makes of them. Made on the test's own thread.
+    pub(crate) struct Raw;
+
+    impl notify::Watcher for Raw {
+        fn new<F: notify::EventHandler>(handler: F, _: notify::Config) -> notify::Result<Self> {
+            RAW.with(|raw| *raw.borrow_mut() = Some(Box::new(handler)));
+            Ok(Raw)
+        }
+        fn watch(&mut self, _: &Path, _: notify::RecursiveMode) -> notify::Result<()> {
+            Ok(())
+        }
+        fn unwatch(&mut self, _: &Path) -> notify::Result<()> {
+            Ok(())
+        }
+        fn kind() -> notify::WatcherKind {
+            notify::WatcherKind::NullWatcher
+        }
+    }
+
+    /// The platform reports `kind` on `path`.
+    pub(crate) fn raw(kind: notify::EventKind, path: &Path) {
+        event(notify::Event::new(kind).add_path(path.to_path_buf()));
+    }
+
+    /// The platform reports `event`.
+    pub(crate) fn event(event: notify::Event) {
+        RAW.with(|raw| {
+            raw.borrow_mut()
+                .as_mut()
+                .expect("the watch has started")
+                .handle_event(Ok(event));
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use notify::event::{AccessKind, AccessMode, CreateKind, Flag, RemoveKind};
+    use std::sync::mpsc;
+
+    fn on(kind: EventKind, path: &str) -> notify::Event {
+        notify::Event::new(kind).add_path(PathBuf::from(path))
+    }
+
+    #[test]
+    fn a_burst_folds_every_change_queued_inside_it_into_one() {
+        let (tx, rx) = mpsc::channel();
+        for n in 0..10 {
+            tx.send(on(
+                EventKind::Create(CreateKind::File),
+                &format!("/p/t{n}.md"),
+            ))
+            .unwrap();
+        }
+        let mut bursts = bursts(rx, Duration::from_millis(500), 256);
+
+        let burst = bursts.next().expect("a burst");
+        assert_eq!(burst.paths.len(), 10);
+        assert!(!burst.everything);
+        drop(tx);
+        assert_eq!(bursts.next(), None, "a dropped watcher ends the bursts");
+    }
+
+    #[test]
+    fn a_file_made_and_removed_inside_one_burst_is_still_a_change_and_a_removal() {
+        let (tx, rx) = mpsc::channel();
+        tx.send(on(EventKind::Create(CreateKind::File), "/p/marker"))
+            .unwrap();
+        tx.send(on(EventKind::Remove(RemoveKind::File), "/p/marker"))
+            .unwrap();
+
+        let burst = bursts(rx, Duration::from_millis(100), 256)
+            .next()
+            .expect("a burst");
+        assert_eq!(burst.paths, HashSet::from([PathBuf::from("/p/marker")]));
+        assert_eq!(burst.removed, HashSet::from([PathBuf::from("/p/marker")]));
+    }
+
+    #[test]
+    fn a_burst_ends_on_time_under_a_flood_that_never_pauses() {
+        let (tx, rx) = mpsc::channel();
+        let flood = std::thread::spawn(move || {
+            let mut n: u64 = 0;
+            while tx
+                .send(on(EventKind::Create(CreateKind::File), &format!("/p/f{n}")))
+                .is_ok()
+            {
+                n += 1;
+            }
+        });
+        let started = Instant::now();
+        let burst = bursts(rx, Duration::from_millis(100), 256)
+            .next()
+            .expect("a burst");
+        let took = started.elapsed();
+        assert!(burst.everything, "a flood past the cap is everything");
+        assert!(took < Duration::from_secs(5), "the burst took {took:?}");
+        // Dropping the receiver ends the flood.
+        flood.join().unwrap();
+    }
+
+    #[test]
+    fn a_burst_past_its_cap_is_everything_and_holds_no_paths() {
+        let mut burst = Burst::default();
+        for n in 0..20 {
+            burst.add(
+                on(EventKind::Remove(RemoveKind::File), &format!("/p/{n}")),
+                8,
+            );
+        }
+        assert!(burst.everything);
+        assert!(burst.paths.is_empty() && burst.removed.is_empty());
+    }
+
+    #[test]
+    fn a_lost_track_or_a_pathless_event_is_everything() {
+        let mut rescan = Burst::default();
+        rescan.add(
+            notify::Event::new(EventKind::Other).set_flag(Flag::Rescan),
+            8,
+        );
+        assert!(rescan.everything);
+
+        let mut pathless = Burst::default();
+        pathless.add(notify::Event::new(EventKind::Any), 8);
+        assert!(pathless.everything);
+    }
+
+    #[test]
+    fn a_read_never_reaches_a_burst() {
+        let (tx, rx) = mpsc::channel();
+        let mut handler = sender(tx);
+        notify::EventHandler::handle_event(
+            &mut handler,
+            Ok(on(
+                EventKind::Access(AccessKind::Open(AccessMode::Read)),
+                "/p/a",
+            )),
+        );
+        notify::EventHandler::handle_event(
+            &mut handler,
+            Ok(on(EventKind::Create(CreateKind::File), "/p/b")),
+        );
+        assert_eq!(
+            rx.try_recv().expect("the change").paths,
+            [PathBuf::from("/p/b")]
+        );
+        assert!(rx.try_recv().is_err(), "the read was sent on");
+    }
+
+    #[test]
+    fn a_watcher_error_fails_closed_into_a_burst_that_is_everything() {
+        let (tx, rx) = mpsc::channel();
+        let mut handler = sender(tx);
+        notify::EventHandler::handle_event(
+            &mut handler,
+            Err(notify::Error::generic("the watch was lost")),
+        );
+        let burst = bursts(rx, Duration::from_millis(50), 8)
+            .next()
+            .expect("the error was sent on");
+        assert!(burst.everything);
     }
 }

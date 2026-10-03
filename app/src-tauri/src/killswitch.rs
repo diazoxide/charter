@@ -21,12 +21,11 @@
 //! the switch is there to stop agents, not to lock the operator out of their own machine.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
 use std::time::Duration;
 
 use charter_core::halt::{self, Actor};
 use notify::RecursiveMode;
-use notify_debouncer_full::{DebounceEventResult, Debouncer, RecommendedCache, new_debouncer};
 
 /// The event every window is sent when the switch moves, carrying whether agents are stopped.
 pub(crate) const CHANGED: &str = "kill-switch";
@@ -34,6 +33,10 @@ pub(crate) const CHANGED: &str = "kill-switch";
 /// How long a burst of writes to charter's directory is folded for. A stop is a marker and a
 /// journal line, two renames; this makes them one look at the switch.
 const FOLDED_FOR: Duration = Duration::from_millis(100);
+
+/// The most changed paths one burst holds; past it the burst is a look at the switch whatever
+/// it named.
+const MOST_PATHS: usize = 256;
 
 /// What a look at the files did to the switch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,8 +149,8 @@ impl KillSwitch {
 }
 
 /// A watch on the switch's files. Dropping it stops it.
-pub struct Watch {
-    _debouncer: Debouncer<notify::RecommendedWatcher, RecommendedCache>,
+pub struct Watch<W: notify::Watcher = notify::RecommendedWatcher> {
+    _watcher: W,
 }
 
 /// Watches charter's directory, non-recursively, and calls `moved` after every batch of writes
@@ -161,32 +164,40 @@ pub fn watch(
     Some(watch_in(&dir, switch, moved))
 }
 
-fn watch_in(
+/// [`watch`], in `dir`, on a watcher of the caller's choosing.
+///
+/// **A marker made and taken away inside one burst is still looked at** (#1139): every burst
+/// that names one of the switch's files is a look, whatever its events added up to. The
+/// debouncer this used to fold through took a removal that arrived while the creation was
+/// still queued as the file never having been there.
+fn watch_in<W: notify::Watcher + Send + 'static>(
     dir: &Path,
     switch: Arc<KillSwitch>,
     moved: impl Fn(Moved) + Send + 'static,
-) -> notify::Result<Watch> {
+) -> notify::Result<Watch<W>> {
+    let (sent, events) = mpsc::channel();
+    let mut watcher = W::new(crate::watchset::sender(sent), notify::Config::default())?;
+    watcher.watch(dir, RecursiveMode::NonRecursive)?;
     let looking = Arc::clone(&switch);
-    let mut debouncer = new_debouncer(FOLDED_FOR, None, move |batch: DebounceEventResult| {
-        let Ok(events) = batch else { return };
-        let ours = events.iter().any(|event| {
-            !matches!(event.kind, notify::EventKind::Access(_))
-                && event
-                    .paths
-                    .iter()
-                    .filter_map(|path| path.file_name())
-                    .any(halt::concerns)
-        });
-        if ours {
-            moved(looking.look());
-        }
-    })?;
-    debouncer.watch(dir, RecursiveMode::NonRecursive)?;
+    std::thread::Builder::new()
+        .name("charter-kill-switch-watch".into())
+        .spawn(move || {
+            for burst in crate::watchset::bursts(events, FOLDED_FOR, MOST_PATHS) {
+                let ours = burst.everything
+                    || burst
+                        .paths
+                        .iter()
+                        .filter_map(|path| path.file_name())
+                        .any(halt::concerns);
+                if ours {
+                    moved(looking.look());
+                }
+            }
+        })
+        .map_err(notify::Error::io)?;
     // Anything written before the watch began is looked at once, here.
     let _ = switch.look();
-    Ok(Watch {
-        _debouncer: debouncer,
-    })
+    Ok(Watch { _watcher: watcher })
 }
 
 /// Whether every agent is stopped, for a window drawing its title bar.
@@ -394,6 +405,54 @@ mod tests {
             "{said}"
         );
         assert!(switch.is_stopped());
+    }
+
+    #[test]
+    fn a_marker_made_and_taken_away_inside_one_burst_is_still_looked_at() {
+        use crate::watchset::raw::{Raw, raw};
+        use notify::event::{CreateKind, EventKind, RemoveKind};
+        let config = a_config_home();
+        let switch = switch_in(config.path());
+        let dir = switch.directory().expect("charter's directory");
+        let (tell, heard) = mpsc::channel();
+        let _watch = watch_in::<Raw>(&dir, Arc::clone(&switch), move |moved| {
+            let _ = tell.send(moved);
+        })
+        .expect("watching");
+        halt::stop(config.path(), Actor::Cli, 1).expect("stopped from a terminal");
+
+        // What the platform reports of it is only the marker, made and at once taken away.
+        let marker = halt::marker(config.path());
+        raw(EventKind::Create(CreateKind::File), &marker);
+        raw(EventKind::Remove(RemoveKind::File), &marker);
+
+        assert_eq!(
+            heard.recv_timeout(Duration::from_secs(10)),
+            Ok(Moved::Stopped),
+            "the watch never looked"
+        );
+    }
+
+    #[test]
+    fn a_platform_that_lost_track_is_a_look_at_the_switch() {
+        use crate::watchset::raw::{Raw, event};
+        let config = a_config_home();
+        let switch = switch_in(config.path());
+        let dir = switch.directory().expect("charter's directory");
+        let (tell, heard) = mpsc::channel();
+        let _watch = watch_in::<Raw>(&dir, Arc::clone(&switch), move |moved| {
+            let _ = tell.send(moved);
+        })
+        .expect("watching");
+        halt::stop(config.path(), Actor::Cli, 1).expect("stopped from a terminal");
+
+        event(notify::Event::new(notify::EventKind::Other).set_flag(notify::event::Flag::Rescan));
+
+        assert_eq!(
+            heard.recv_timeout(Duration::from_secs(10)),
+            Ok(Moved::Stopped),
+            "the watch never looked"
+        );
     }
 
     #[test]
