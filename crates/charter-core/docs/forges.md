@@ -5,7 +5,7 @@ forge operation `charter` performs goes through **one seam**: a small set of tra
 area, that each forge implements once ([ADR 0070](../../../docs/adr/0070-a-forge-is-one-seam-with-a-native-client-per-forge-and-gh-and-glab-are-its-fallback.md)).
 A backend builds each request once, and a **transport** sends it. There are two. The **CLI
 transport** is that forge's own official CLI (`gh api`, `glab api`), authenticated once, over
-HTTPS, so the token stays in the CLI. The **native transport** (GitHub's, FW-2a; GitLab's is
+HTTPS, so the token stays in the CLI. The **native transport** (GitHub's, FW-2a; GitLab's,
 FW-2b) sends the same request over HTTPS with a token charter holds, and makes repeated reads
 conditional against a per-account ETag store. `forge::route` decides which a call takes, from
 its account and its `Caller`: **only a human in the window, on an account charter holds a
@@ -51,7 +51,7 @@ correctly without you telling `charter` which is which per repo.
 ## What charter asks a forge
 
 Every operation is a method of an area trait in `src/forge/backend.rs`, with a GitHub body in
-`src/forge/github.rs` and a GitLab body in `src/forge/gitlab.rs`. Nothing else in the core
+`src/forge/github/` and a GitLab body in `src/forge/gitlab/`. Nothing else in the core
 builds a forge request or matches on the forge to do so. Every call carries a `Caller` (which
 surface asked, and whether a person is waiting); the account and principal join it with FW-1.
 
@@ -246,9 +246,40 @@ Open, each filed:
    19.4 still accepts it. charter keeps it on purpose: a GitLab older than `auto_merge` ignores an
    unknown parameter and would merge at once. Since 19.1, `auto_merge` on a project with merge
    trains joins the train.
-4. **No self-managed GitLab recording** (#742). ADR 0070 §7 asks for one; the recordings here are
-   GitHub's and GitLab's documented answers.
+4. **No recording captured from a live GitLab** (#742). The native contract runs on gitlab.com
+   and on a self-managed host (`gitlab_self_managed`), but both replay GitLab's documented
+   answers; FW-15's nightly records real ones.
 5. **`charter report` is outside the seam** (#806), until the work-item area (FW-6a) exists.
+
+## The native GitLab client (FW-2b)
+
+GitLab's native transport is the same `Http` as GitHub's, speaking GitLab's dialect:
+
+- **Where it asks.** `https://<host>/api/v4` for REST and `https://<host>/api/graphql` for
+  GraphQL, on gitlab.com and on a self-managed instance alike (`ApiRoot::gitlab`). The token is
+  sent as `Authorization: Bearer`, which GitLab takes for a personal, group or OAuth token, with
+  `Accept: application/json` and none of GitHub's headers.
+- **What a refusal says.** GitLab's `message`, which is an object of field errors when it
+  refuses a write, or an OAuth refusal's `error_description`, followed by `(HTTP <status>)`, as
+  `glab api` prints it. A `401` is `Auth`, a `403` `Forbidden`, a `404` `NotFound`, and a `429`
+  with GitLab's `ratelimit-remaining: 0` or a `Retry-After` is `RateLimited` with
+  `ratelimit-reset` as its reset.
+- **Conditional reads.** GitLab answers a read with a weak ETag (`W/"…"`) and a `304` to it, so
+  a repeated read is answered from the same per-account ETag store GitHub's is.
+- **What it can do** (`Capabilities`). gitlab.com has epics, iterations, boards, child items and
+  blocking links, said of the instance. Whether one group or repo has them turns on its plan
+  (epics, iterations and blocking links need Premium), which FG-2's probes ask, so a narrower
+  reach is `Unknown` and takes its fallback. A self-managed GitLab shows its edition and licence
+  to no one but an admin, so everything there is `Unknown`.
+- **Work items** (`src/forge/gitlab/work.rs`, crate-private until FW-6b maps them): issues,
+  blocking links, child items and their parent (GraphQL work items), milestones, epics and
+  iterations (Premium), boards and their label lists, and pipelines. A label with a comma is
+  refused, because GitLab reads it as two.
+- **The network log** lists a GitLab path by position: the id after `projects` or `groups` is
+  one `{}`, whether it is a number or a full path, encoded (`acme%2Fapi`, as charter sends it)
+  or not (`acme/sub/api`, up to the next word GitLab puts under a repo or group); the segment
+  after a collection word (`issues`, `merge_requests`, `epics`, `links`, …) is an id, masked
+  however it is spelled.
 
 ## The mixed-forge collision rule
 

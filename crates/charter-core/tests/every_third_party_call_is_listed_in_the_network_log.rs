@@ -124,6 +124,62 @@ mod listed {
     }
 
     #[test]
+    fn a_native_gitlab_call_is_listed_with_its_nested_group_masked() {
+        charter_core::unsteered!();
+        if !in_child() {
+            return;
+        }
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let server = rt.block_on(MockServer::start());
+        rt.block_on(
+            Mock::given(any())
+                .respond_with(ResponseTemplate::new(200).set_body_string("[]"))
+                .mount(&server),
+        );
+        let account = Account {
+            kind: Kind::GitLab,
+            host: "gitlab.com".into(),
+            login: "octocat".into(),
+        };
+        let resolver = Resolver::new(Kind::GitLab, "gitlab.com")
+            .at_root(ApiRoot::at(&server.uri()))
+            .signed_in(
+                &HostScope::for_a_test(),
+                account.clone(),
+                SignIn {
+                    tokens: Arc::new(Canary),
+                    imported_from_cli: false,
+                },
+            );
+        let backend =
+            charter_core::forge::Forge::default_of(Kind::GitLab).backend_for(Arc::new(resolver));
+        let me = Caller::window().as_account(account);
+        let _ = backend.owned(&me, &Owner::new("secret-group/api"));
+
+        let authority = server.uri().trim_start_matches("http://").to_string();
+        let native: Vec<_> = entries()
+            .into_iter()
+            .filter(|e| e.via == Via::Https && e.host == authority)
+            .collect();
+        assert_eq!(native.len(), 1, "{native:?}\n{}", log_text());
+        let one = &native[0];
+        assert_eq!(
+            (one.feature, one.to, one.method.as_str(), one.status),
+            (Feature::Forge, Party::ThirdParty, "GET", Some(200))
+        );
+        assert_eq!(one.path, "groups/{}/projects");
+        let text = log_text();
+        assert!(!text.contains(CANARY), "the network log holds the token");
+        assert!(
+            !text.contains("secret-group"),
+            "the network log names the group"
+        );
+    }
+
+    #[test]
     fn a_forge_call_through_the_cli_is_listed_with_its_host() {
         charter_core::unsteered!();
         if !in_child() {

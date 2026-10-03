@@ -179,18 +179,68 @@ pub const WORDS: &[&str] = &[
     "files",
     "tags",
     "compare",
+    "merge_trains",
+    "cancel_merge_when_pipeline_succeeds",
+    "epics",
+    "iterations",
+    "boards",
+    "lists",
+    "links",
+    "notes",
+    "discussions",
+    "subgroups",
 ];
 
 /// The words a forge's API puts before names, and how many name segments follow each: an owner
 /// and a repo after `repos`, one name after the others.
-const NAMES_AFTER: &[(&str, usize)] = &[
-    ("repos", 2),
-    ("orgs", 1),
-    ("users", 1),
-    ("groups", 1),
-    ("projects", 1),
-    ("commits", 1),
-    ("statuses", 1),
+const NAMES_AFTER: &[(&str, usize)] = &[("repos", 2), ("orgs", 1), ("users", 1)];
+
+/// The collections whose next segment is one item's id or name: a number, a commit, a login.
+/// Whatever follows one of these is masked, so an id spelled like an API word is never kept.
+const COLLECTIONS: &[&str] = &[
+    "commits",
+    "statuses",
+    "issues",
+    "pulls",
+    "merge_requests",
+    "members",
+    "comments",
+    "reviews",
+    "jobs",
+    "runs",
+    "pipelines",
+    "epics",
+    "iterations",
+    "boards",
+    "lists",
+    "links",
+    "notes",
+    "discussions",
+];
+
+/// GitLab's `projects` and `groups`, whose id is a number or a full path. GitLab wants the path
+/// encoded as one segment, and charter sends it so; a path sent unencoded runs to the first
+/// word in [`GITLAB_UNDER`], and all of it is one `{}`.
+const GITLAB_IDS: &[&str] = &["projects", "groups"];
+
+/// The words GitLab puts directly under a repo or a group that charter asks for, which end its
+/// id. Only these: a subgroup spelled like one of them ends an unencoded id early, and the
+/// shorter the list, the fewer names can.
+const GITLAB_UNDER: &[&str] = &[
+    "repository",
+    "merge_requests",
+    "merge_trains",
+    "issues",
+    "pipelines",
+    "jobs",
+    "milestones",
+    "labels",
+    "members",
+    "boards",
+    "epics",
+    "iterations",
+    "projects",
+    "subgroups",
 ];
 
 /// The words after which the rest of a path is a name or a file path: a branch, a ref, a file,
@@ -212,8 +262,10 @@ const NAMES_TO_THE_END: &[&str] = &[
 /// `path` as the log keeps it: no query, and every name masked as `{}`.
 ///
 /// **By position first.** The segments that follow a word in [`NAMES_AFTER`] are names however
-/// they are spelled, and everything after a word in [`NAMES_TO_THE_END`] is one name, so a repo
-/// called `api` or a branch called `latest` is masked. Only then does [`WORDS`] decide the
+/// they are spelled, the segment after a word in [`COLLECTIONS`] is an id, a GitLab repo's or
+/// group's id runs to the next word GitLab puts under it ([`GITLAB_IDS`]), and everything after
+/// a word in [`NAMES_TO_THE_END`] is one name, so a repo called `api`, a nested group
+/// `acme/git` or a branch called `latest` is masked. Only then does [`WORDS`] decide the
 /// segments left: a word of the API is kept, and anything else is masked.
 pub fn template(path: &str) -> String {
     let path = path.split(['?', '#']).next().unwrap_or_default();
@@ -237,10 +289,23 @@ pub fn template(path: &str) -> String {
                 }
                 break;
             }
+            if GITLAB_IDS.contains(&segment) {
+                let mut id = false;
+                while segments
+                    .next_if(|next| !GITLAB_UNDER.contains(next))
+                    .is_some()
+                {
+                    id = true;
+                }
+                if id {
+                    out.push("{}");
+                }
+                continue;
+            }
             names = NAMES_AFTER
                 .iter()
                 .find(|(word, _)| *word == segment)
-                .map_or(0, |(_, n)| *n);
+                .map_or(usize::from(COLLECTIONS.contains(&segment)), |(_, n)| *n);
         }
     }
     out.join("/")
@@ -523,6 +588,78 @@ mod tests {
         );
         assert_eq!(template("user/repos"), "user/repos");
         assert_eq!(template("repos/o/r/branches"), "repos/{}/{}/branches");
+    }
+
+    #[test]
+    fn a_gitlab_path_keeps_its_api_words_and_masks_every_id_and_name() {
+        for (sent, listed) in [
+            (
+                "projects/acme%2Fapi/merge_requests/12/merge",
+                "projects/{}/merge_requests/{}/merge",
+            ),
+            (
+                "projects/acme%2Fapi/merge_requests/12/cancel_merge_when_pipeline_succeeds",
+                "projects/{}/merge_requests/{}/cancel_merge_when_pipeline_succeeds",
+            ),
+            (
+                "projects/acme%2Fapi/merge_trains/merge_requests/12",
+                "projects/{}/merge_trains/merge_requests/{}",
+            ),
+            (
+                "projects/7/repository/tree?per_page=100&page=1&ref=main",
+                "projects/{}/repository/tree",
+            ),
+            (
+                "projects/acme%2Fapi/issues/3/links/9",
+                "projects/{}/issues/{}/links/{}",
+            ),
+            (
+                "groups/acme%2Fsub/epics/4/issues/77",
+                "groups/{}/epics/{}/issues/{}",
+            ),
+            (
+                "groups/acme/iterations?state=opened",
+                "groups/{}/iterations",
+            ),
+            (
+                "projects/acme%2Fapi/boards/2/lists",
+                "projects/{}/boards/{}/lists",
+            ),
+            (
+                "projects/acme%2Fapi/milestones/5",
+                "projects/{}/milestones/{}",
+            ),
+            ("projects?membership=true", "projects"),
+        ] {
+            assert_eq!(template(sent), listed, "{sent}");
+        }
+    }
+
+    #[test]
+    fn a_nested_group_sent_unencoded_is_one_masked_id_whatever_its_parts_are_called() {
+        // GitLab wants a nested path encoded as one segment, and charter always sends it so.
+        // A path that slipped through unencoded is still masked whole: every part of the id up
+        // to the word GitLab puts under a repo or group, API words among them.
+        assert_eq!(template("groups/acme/sub/projects"), "groups/{}/projects");
+        assert_eq!(
+            template("groups/acme/api/auth/projects?include_subgroups=true"),
+            "groups/{}/projects"
+        );
+        assert_eq!(
+            template("projects/acme/git/search/merge_requests/12"),
+            "projects/{}/merge_requests/{}"
+        );
+        assert_eq!(template("projects/acme/sub/api"), "projects/{}");
+    }
+
+    #[test]
+    fn a_name_after_any_collection_word_is_masked_however_it_is_spelled() {
+        assert_eq!(template("orgs/o/members/search"), "orgs/{}/members/{}");
+        assert_eq!(template("repos/o/r/issues/api"), "repos/{}/{}/issues/{}");
+        assert_eq!(
+            template("projects/acme%2Fapi/pipelines/latest"),
+            "projects/{}/pipelines/{}"
+        );
     }
 
     #[test]

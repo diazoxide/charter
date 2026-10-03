@@ -70,8 +70,11 @@ pub enum How {
     /// Through the recorded transport, as a CLI call's reply.
     Recorded,
     /// Through the native transport, over HTTP, against a server that answers the same
-    /// recording (`native.rs`).
+    /// recording (`native.rs`), on the forge's own instance: github.com or gitlab.com.
     Native,
+    /// As `Native`, on a self-managed instance: a GitHub Enterprise Server or a self-managed
+    /// GitLab, at `forge.example.com`.
+    SelfManaged,
 }
 
 /// A backend over a case's recording, the caller to ask as, and the check that every
@@ -79,6 +82,8 @@ pub enum How {
 pub struct Over {
     pub backend: Box<dyn ForgeBackend>,
     pub caller: Caller,
+    /// The instance the backend is on.
+    pub host: String,
     check: Box<dyn Fn()>,
 }
 
@@ -127,10 +132,23 @@ fn over(kind: &str, case: &str, how: How) -> Over {
             Over {
                 backend: forge.backend_over(recorded),
                 caller: caller(),
+                host: forge.host.clone(),
                 check: Box::new(move || check.spent()),
             }
         }
-        How::Native => native::over(kind, &text),
+        How::Native => native::over(kind, default_host(kind), &text),
+        How::SelfManaged => native::over(kind, SELF_MANAGED, &text),
+    }
+}
+
+/// The host a self-managed instance is on, in the native cases that run on one.
+const SELF_MANAGED: &str = "forge.example.com";
+
+/// The forge's own instance.
+fn default_host(kind: &str) -> &'static str {
+    match kind {
+        "github" => "github.com",
+        _ => "gitlab.com",
     }
 }
 
@@ -430,10 +448,16 @@ mod cases {
                 "{what:?}: what charter has not asked a repo about is never yes"
             );
         }
-        assert!(matches!(
-            backend.support(&recorded.caller, &Reach::Instance, Capability::Epics),
-            Support::Unavailable(_)
-        ));
+        // Epics, said of the instance: GitHub has none anywhere; gitlab.com has them (on a
+        // Premium namespace, which a narrower reach would have to probe); a self-managed GitLab
+        // has what its edition and licence have, which charter has not asked.
+        let epics = backend.support(&recorded.caller, &Reach::Instance, Capability::Epics);
+        match (kind, recorded.host.as_str()) {
+            ("github", _) => assert!(matches!(epics, Support::Unavailable(_)), "{epics:?}"),
+            ("gitlab", "gitlab.com") => assert_eq!(epics, Support::Available),
+            ("gitlab", _) => assert!(matches!(epics, Support::Unknown(_)), "{epics:?}"),
+            _ => unreachable!("two forges"),
+        }
         spent(&recorded);
     }
 
@@ -570,9 +594,11 @@ macro_rules! contract {
 
 contract!(github, github, Recorded);
 contract!(gitlab, gitlab, Recorded);
-// The native transport, against a server answering the same recordings over HTTP. GitLab's is
-// FW-2b's (W7: the twin ships one release later).
+// The native transport, against a server answering the same recordings over HTTP: on each
+// forge's own instance, and on a self-managed GitLab (ADR 0070 §7: it gates every change).
 contract!(github_native, github, Native);
+contract!(gitlab_native, gitlab, Native);
+contract!(gitlab_self_managed, gitlab, SelfManaged);
 
 /// The method names of one `pub trait <name> { … }` block in `backend.rs`.
 fn methods_of(source: &str, name: &str) -> Vec<String> {
@@ -625,12 +651,18 @@ fn every_method_of_the_seam_has_a_case_on_both_forges() {
             "{kind} is instantiated once"
         );
     }
-    assert_eq!(
-        me.matches(&format!("contract!({}, github, Native);", "github_native"))
-            .count(),
-        1,
-        "the native transport runs every case"
-    );
+    for (module, kind, how) in [
+        ("github_native", "github", "Native"),
+        ("gitlab_native", "gitlab", "Native"),
+        ("gitlab_self_managed", "gitlab", "SelfManaged"),
+    ] {
+        assert_eq!(
+            me.matches(&format!("contract!({module}, {kind}, {how});"))
+                .count(),
+            1,
+            "the native transport runs every case: {module}"
+        );
+    }
 }
 
 /// GitLab statuses its own documentation lists that the Python port did not (GitLab 19.4
@@ -837,9 +869,10 @@ mod who_can_open_an_issue {
     }
 }
 
-/// FW-2a's acceptance: the contract passes against the native client with no `gh` on `PATH`.
-/// Every `github_native` case runs again in a child of this binary whose environment is
-/// emptied and whose `PATH` is one empty directory.
+/// FW-2a's and FW-2b's acceptance: the contract passes against the native client with no `gh`
+/// or `glab` on `PATH`, on github.com, gitlab.com and a self-managed GitLab. Every native case
+/// runs again in a child of this binary whose environment is emptied and whose `PATH` is one
+/// empty directory.
 #[test]
 fn the_native_contract_passes_with_no_forge_cli_on_path() {
     charter_core::unsteered!();
@@ -847,7 +880,12 @@ fn the_native_contract_passes_with_no_forge_cli_on_path() {
     let home = tempfile::tempdir().unwrap();
     let out = charter_core::forklock::output(
         std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["github_native::", "--test-threads=2"])
+            .args([
+                "github_native::",
+                "gitlab_native::",
+                "gitlab_self_managed::",
+                "--test-threads=2",
+            ])
             .env_clear()
             .env("PATH", empty.path())
             .env("HOME", home.path()),
@@ -860,7 +898,7 @@ fn the_native_contract_passes_with_no_forge_cli_on_path() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(
-        said.contains(&format!("{} passed", CASES.len())),
+        said.contains(&format!("{} passed", 3 * CASES.len())),
         "the child did not run every native case:\n{said}"
     );
 }

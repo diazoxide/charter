@@ -1,12 +1,13 @@
 //! The GitLab backend: every operation of [`super::backend`]'s areas, as GitLab's REST API
-//! (v4, checked against the GitLab 19.4 documentation) spells it. Each request is built once,
-//! as a [`Call`], and sent by whichever transport the backend was built over.
+//! (v4, checked against the GitLab 19.4 documentation) and its GraphQL API spell it. Each
+//! request is built once, as a [`Call`], and sent by whichever transport the backend was built
+//! over: `glab api`, or the native transport ([`super::http`]) with charter's own sign-in.
 
 use serde_json::Value;
 
 use super::backend::{
     About, Asker, Caller, Capabilities, Capability, ForgeRef, Issues, NewWorkItem, Owner, Reach,
-    Reason, RepoRecord, Repos, Requests, Support, Unavailable, Visibility, WorkItems,
+    RepoRecord, Repos, Requests, Support, UnknownWhy, Visibility, WorkItems,
 };
 use super::checks::{self, Checks};
 use super::pr::{
@@ -18,6 +19,11 @@ use super::{
     ForgeError, Kind, LIST_TIMEOUT, Raised, falsy, first_field, listed_branch, listed_description,
     listed_id, listed_str, listed_topics, mapped, quote, truthy, word_of,
 };
+
+// FW-6b is the first caller of the work items; until it lands only their tests reach them, so
+// the compiler would call them dead.
+#[allow(dead_code)]
+pub(crate) mod work;
 
 /// The GitLab backend.
 pub(super) struct GitLab(pub(super) Asker);
@@ -636,9 +642,78 @@ impl Requests for GitLab {
 }
 
 impl Capabilities for GitLab {
-    /// Not built yet (W7: the GitLab twin, FW-2b #728, ships one release after GitHub's): every
-    /// capability is unavailable for that reason, and takes its fallback.
-    fn support(&self, _caller: &Caller, _at: &Reach, what: Capability) -> Support {
-        Support::Unavailable(Unavailable::because(what, Reason::NotYetBuilt))
+    /// What GitLab is known to have without asking. gitlab.com has epics, iterations, boards,
+    /// child items and blocking links, said of the instance only: epics, iterations and blocking
+    /// links need a Premium namespace, and whether one group or repo has them turns on its plan
+    /// and settings, which FG-2's probes ask, so a narrower reach is `Unknown` until then and
+    /// takes its fallback. A self-managed GitLab has what its edition, licence and version have,
+    /// which it shows a non-admin nowhere: `Unknown`.
+    fn support(&self, _caller: &Caller, at: &Reach, what: Capability) -> Support {
+        let dotcom = self.0.forge.host.eq_ignore_ascii_case("gitlab.com");
+        match what {
+            Capability::Epics
+            | Capability::Iterations
+            | Capability::Boards
+            | Capability::SubIssues
+            | Capability::Dependencies
+                if dotcom && *at == Reach::Instance =>
+            {
+                Support::Available
+            }
+            _ => Support::Unknown(UnknownWhy::NotProbed),
+        }
+    }
+}
+
+#[cfg(test)]
+mod capability_tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::forge::Forge;
+    use crate::forge::backend::{Fixed, Taken};
+    use crate::forge::recorded::Recorded;
+
+    fn on(host: &str) -> GitLab {
+        let recorded = Recorded::parse(r#"{"source": "none", "exchanges": []}"#).unwrap();
+        let mut forge = Forge::default_of(Kind::GitLab);
+        forge.host = host.to_string();
+        GitLab(Asker {
+            forge,
+            transports: Arc::new(Fixed(Arc::new(recorded))),
+        })
+    }
+
+    #[test]
+    fn gitlab_com_has_epics_said_of_the_instance_and_unknown_of_a_group_or_repo() {
+        let gitlab = on("gitlab.com");
+        let me = Caller::window();
+        for what in [
+            Capability::Epics,
+            Capability::Iterations,
+            Capability::Boards,
+        ] {
+            assert_eq!(
+                gitlab.support(&me, &Reach::Instance, what),
+                Support::Available
+            );
+            for narrower in [Reach::Owner("acme".into()), Reach::Repo("acme/api".into())] {
+                let said = gitlab.support(&me, &narrower, what);
+                assert_eq!(said, Support::Unknown(UnknownWhy::NotProbed));
+                assert_eq!(said.taken(what), Taken::Fallback(what.fallback()));
+            }
+        }
+    }
+
+    #[test]
+    fn a_self_managed_gitlab_has_what_its_licence_has_which_charter_has_not_asked() {
+        let gitlab = on("git.example.com");
+        for what in Capability::ALL {
+            assert_eq!(
+                gitlab.support(&Caller::window(), &Reach::Instance, what),
+                Support::Unknown(UnknownWhy::NotProbed),
+                "{what:?}"
+            );
+        }
     }
 }

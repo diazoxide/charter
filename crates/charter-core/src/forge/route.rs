@@ -137,7 +137,7 @@ impl Resolver {
         Resolver {
             kind,
             host: host.to_string(),
-            root: ApiRoot::github(host),
+            root: ApiRoot::of(kind, host),
             signins: HashMap::new(),
             prefer_cli: Vec::new(),
             cli: Arc::new(Cli::default()),
@@ -221,7 +221,7 @@ impl Transports for Resolver {
                 let signin = self.signins.get(account).ok_or_else(|| {
                     ForgeError::transport(format!("{} has no charter sign-in", account.login))
                 })?;
-                let native = Http::new(self.root.clone(), signin.tokens.clone())?
+                let native = Http::new(self.kind, self.root.clone(), signin.tokens.clone())?
                     .with_etags(self.etags(account));
                 Ok(Arc::new(native))
             }
@@ -279,6 +279,22 @@ mod tests {
                 assert_eq!(native, allowed, "{state:?} {caller:?}");
             }
         }
+    }
+
+    #[test]
+    fn a_resolver_sends_each_forge_to_its_own_api() {
+        assert_eq!(
+            Resolver::new(Kind::GitLab, "gitlab.com").root,
+            ApiRoot::gitlab("gitlab.com")
+        );
+        assert_eq!(
+            Resolver::new(Kind::GitLab, "git.example.com").root,
+            ApiRoot::gitlab("git.example.com")
+        );
+        assert_eq!(
+            Resolver::new(Kind::GitHub, "github.com").root,
+            ApiRoot::github("github.com")
+        );
     }
 
     #[test]
