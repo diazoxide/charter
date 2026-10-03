@@ -429,8 +429,17 @@ how it is cited and nothing here is renumbered.
     worktree or to a file the list does not offer. A binary file, or one past 5 MiB, is said in
     a sentence rather than drawn. The light editor is CodeMirror 6, with charter's fixed set of
     grammars and the theme's colours; a diff is drawn in its merge view, which marks only the
-    lines git reported and finds the changed words inside them. Editing (RC-10), the Review tab
-    (RC-4) and *open in your editor at this line* (RC-20) come after. **ADR 0081, ADR 0084.**
+    lines git reported and finds the changed words inside them. Editing (RC-10) and the Review
+    tab (RC-4) come after. **ADR 0081, ADR 0084.**
+35. **A file of a worktree opens in your editor at a line** (RC-20). Beside a file the light
+    editor shows is *Open in your editor at line N*, the line the cursor is on, and it is
+    offered too for a file past the light editor's size. Your editor is chosen on the
+    Preferences tab and kept in the layout file: VS Code, Zed and a JetBrains IDE are handed
+    the file through their own `vscode://`, `zed://` and `idea://` links, and `$VISUAL`, else
+    `$EDITOR`, is started as a program with `+line` and the file as arguments, never through a
+    shell. The core checks the path exactly as it checks a read, so a file the light editor
+    would refuse is never handed on. With no editor chosen, the button asks for one.
+    **ADR 0081 §3.**
 
 ## Limits (acceptance)
 

@@ -786,6 +786,11 @@ export const commands = {
 	pieceFiles: (plane: PlaneId, workspace: string, repo: string, piece: string) => typedError<string[], string>(__TAURI_INVOKE("piece_files", { plane, workspace, repo, piece })),
 	/**  One file of a piece, by its path relative to the piece. Refused for a path that leaves it. */
 	pieceFile: (plane: PlaneId, workspace: string, repo: string, piece: string, path: string) => typedError<PieceFile, string>(__TAURI_INVOKE("piece_file", { plane, workspace, repo, piece, path })),
+	/**
+	 *  One file of a piece, opened in your editor at a line (RC-20). Refused, in the core's
+	 *  sentence, for any path the light editor would refuse.
+	 */
+	openInYourEditor: (plane: PlaneId, workspace: string, repo: string, piece: string, path: string, line: number, editor: YourEditor) => typedError<null, string>(__TAURI_INVOKE("open_in_your_editor", { plane, workspace, repo, piece, path, line, editor })),
 	/**  Which channel this machine takes charter from: `stable` or `dev`. */
 	updateChannel: () => __TAURI_INVOKE<string>("update_channel"),
 	/**  Put this machine on a channel. A word charter does not know is refused, not guessed at. */
@@ -3784,6 +3789,20 @@ export type WorkspaceSettings = {
 
 /**  What a workspace settings save answered. */
 export type WorkspaceSettingsSaved = { kind: "saved"; settings: WorkspaceSettings } | { kind: "refused"; reasons: string[] };
+
+/**
+ *  Which editor the operator chose on the Preferences tab (RC-20, ADR 0081 §3). The window
+ *  names one of these four and nothing else: never a program, never a URL.
+ */
+export type YourEditor = 
+/**  Visual Studio Code, through `vscode://`. */
+"vscode" | 
+/**  Zed, through `zed://`. */
+"zed" | 
+/**  A JetBrains IDE, through `idea://`. */
+"idea" | 
+/**  `$VISUAL`, else `$EDITOR`, from charter's own environment, with `+line`. */
+"variable";
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {

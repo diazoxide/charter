@@ -149,3 +149,4 @@ pub mod workspaces;
 pub mod worktree;
 pub mod wscmd;
 pub mod wslayer;
+pub mod youreditor;

@@ -85,6 +85,12 @@ graphql_client = "0.16"
 secrecy = "0.10"
 zeroize = "1"
 uuid = { version = "1.26.1", features = ["v4"] }
+# RC-20's hand-off to your editor (`youreditor`): a file's path percent-encoded into a
+# `vscode://`, `zed://` or `idea://` URL, and `$VISUAL`/`$EDITOR` split into a program and its
+# arguments the way a shell splits words, with no shell. Both already in this workspace's
+# lockfile, so they add no crate to the tree.
+percent-encoding = "2"
+shell-words = "1"
 # The ids ADR 0066 gives devices, chats, runs and events: ULIDs, whose time part sorts them and
 # dates an event without a timestamp field. The standard crate for them.
 ulid = "3"

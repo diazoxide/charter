@@ -16,6 +16,7 @@ import {
   slotSize,
   useArrangement,
 } from "./regions";
+import { setYourEditor } from "./yourEditor";
 import { aboutThisMachine, GLOBAL, sayAboutThisMachine, type Reading } from "./windowprefs";
 
 const PATH = "/home/op/.config/charter/layout.json";
@@ -318,6 +319,24 @@ describe("the layout file", () => {
     await vi.waitFor(() => expect(sent).toHaveLength(1));
     const kept = JSON.parse((sent[0].args as { text: string }).text);
     expect(kept.text).toEqual({ window: 18, terminal: 11 });
+  });
+
+  it("keeps your editor (RC-20) when the arrangement changes", async () => {
+    put({ version: 1, regions: [], editor: "zed" });
+    const { result } = renderHook(() => useArrangement());
+
+    act(() => result.current.toggle("aside"));
+
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    expect(JSON.parse((sent[0].args as { text: string }).text).editor).toBe("zed");
+  });
+
+  it("is rewritten with your editor when it is chosen", async () => {
+    act(() => setYourEditor("idea"));
+
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0].cmd).toBe("write_layout");
+    expect(JSON.parse((sent[0].args as { text: string }).text).editor).toBe("idea");
   });
 
   it("that could not be read is drawn as the default, and the drawer says why and where", async () => {

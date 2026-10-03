@@ -9,6 +9,7 @@ import { Preferences } from "./Preferences";
 import { forgetThisLaunch } from "./regions";
 import { DEFAULT_TEXT, setTextSize, textSizes } from "./textSize";
 import { GLOBAL } from "./windowprefs";
+import { yourEditor } from "./yourEditor";
 
 /**
  * **Preferences** (charter-app#283): the machine's two text sizes, as a view tab reached from
@@ -79,6 +80,36 @@ describe("the Preferences tab's body", () => {
 
     expect(textSizes().terminal).toBe(DEFAULT_TEXT.terminal);
     expect(reset()).toBeDisabled();
+  });
+});
+
+describe("your editor, on the Preferences tab (RC-20)", () => {
+  beforeEach(() => mockIPC(() => null));
+
+  it("offers the four, with none chosen until the operator picks one", () => {
+    render(<Preferences />);
+
+    const group = screen.getByRole("radiogroup", { name: "Your editor" });
+    const choices = within(group).getAllByRole("radio");
+    expect(choices.map((one) => one.getAttribute("aria-checked"))).toEqual([
+      "false",
+      "false",
+      "false",
+      "false",
+    ]);
+    expect(within(group).getByRole("radio", { name: "Zed" })).toBeInTheDocument();
+  });
+
+  it("chooses one", async () => {
+    render(<Preferences />);
+
+    await userEvent.click(screen.getByRole("radio", { name: "A JetBrains IDE" }));
+
+    expect(yourEditor()).toBe("idea");
+    expect(screen.getByRole("radio", { name: "A JetBrains IDE" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
   });
 });
 

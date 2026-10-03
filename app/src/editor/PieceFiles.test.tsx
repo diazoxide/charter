@@ -4,14 +4,21 @@ import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import type { PieceFile, PlaneId } from "../bindings";
 import { PieceFileTab, PieceFilesTab } from "./PieceFiles";
+import { forgetYourEditor, setYourEditor } from "../yourEditor";
 
 const PLANE = "/plane" as unknown as PlaneId;
 const CUT = { workspace: "alpha", repo: "svc", piece: "fix-it" };
 
 /** The core, as these tabs ask it: a piece with three files. */
-function core(files: Record<string, PieceFile | string>) {
+function core(files: Record<string, PieceFile | string>, editorSays?: string) {
   const asked: string[] = [];
   mockIPC((cmd, args) => {
+    if (cmd === "open_in_your_editor") {
+      const a = args as Record<string, unknown>;
+      asked.push(`${cmd}:${a.workspace}/${a.repo}/${a.piece}:${a.path}:${a.line}:${a.editor}`);
+      if (editorSays !== undefined) throw editorSays;
+      return null;
+    }
     const a = args as Record<string, string>;
     if (cmd === "piece_files") {
       asked.push(`${cmd}:${a.workspace}/${a.repo}/${a.piece}`);
@@ -31,6 +38,7 @@ function core(files: Record<string, PieceFile | string>) {
 afterEach(() => {
   cleanup();
   clearMocks();
+  forgetYourEditor();
 });
 
 describe("a piece's files", () => {
@@ -113,5 +121,84 @@ describe("one file of a piece", () => {
     render(<PieceFileTab plane={PLANE} cut={CUT} path="gone" />);
 
     expect(await screen.findByText("'gone' is not in the worktree any more")).toBeInTheDocument();
+  });
+});
+
+describe("open in your editor (RC-20)", () => {
+  const button = () => screen.findByRole("button", { name: /Open in your editor/ });
+
+  it("hands the file and the line it was opened at to the editor chosen", async () => {
+    setYourEditor("zed");
+    const asked = core({ "src/lib.rs": { kind: "text", text: "a\nb\nc\n" } });
+    render(<PieceFileTab plane={PLANE} cut={CUT} path="src/lib.rs" line={2} />);
+    await waitFor(() => expect(screen.getByTestId("light-editor")).toHaveTextContent("a"));
+
+    await userEvent.click(await button());
+
+    await waitFor(() =>
+      expect(asked).toContain("open_in_your_editor:alpha/svc/fix-it:src/lib.rs:2:zed"),
+    );
+  });
+
+  it("opens at the first line when no line was asked for", async () => {
+    setYourEditor("vscode");
+    const asked = core({ "a.txt": { kind: "text", text: "hello\n" } });
+    render(<PieceFileTab plane={PLANE} cut={CUT} path="a.txt" />);
+
+    await userEvent.click(await button());
+
+    await waitFor(() =>
+      expect(asked).toContain("open_in_your_editor:alpha/svc/fix-it:a.txt:1:vscode"),
+    );
+  });
+
+  it("offers a file past the light editor's size to your editor, at its first line", async () => {
+    setYourEditor("idea");
+    const asked = core({ "big.log": { kind: "too-large", bytes: 6 * 1024 * 1024 } });
+    render(<PieceFileTab plane={PLANE} cut={CUT} path="big.log" />);
+
+    await userEvent.click(await button());
+
+    await waitFor(() =>
+      expect(asked).toContain("open_in_your_editor:alpha/svc/fix-it:big.log:1:idea"),
+    );
+  });
+
+  it("asks for an editor when none is chosen, and hands nothing on", async () => {
+    const asked = core({ "a.txt": { kind: "text", text: "hello\n" } });
+    render(<PieceFileTab plane={PLANE} cut={CUT} path="a.txt" />);
+
+    await userEvent.click(await button());
+
+    expect(
+      await screen.findByText(/Choose your editor on the Preferences tab/),
+    ).toBeInTheDocument();
+    expect(asked.some((one) => one.startsWith("open_in_your_editor"))).toBe(false);
+  });
+
+  it("says the core's sentence when the editor is not opened", async () => {
+    setYourEditor("variable");
+    core(
+      { "a.txt": { kind: "text", text: "hello\n" } },
+      "neither $VISUAL nor $EDITOR is set where charter was started",
+    );
+    render(<PieceFileTab plane={PLANE} cut={CUT} path="a.txt" />);
+
+    await userEvent.click(await button());
+
+    expect(await screen.findByText(/neither \$VISUAL nor \$EDITOR is set/)).toBeInTheDocument();
+  });
+
+  it("is offered beside the file the list shows, too", async () => {
+    setYourEditor("zed");
+    const asked = core({ "src/lib.rs": { kind: "text", text: "x\n" } });
+    render(<PieceFilesTab plane={PLANE} cut={CUT} onOpenView={() => undefined} />);
+    await userEvent.click(await screen.findByRole("button", { name: "src/lib.rs" }));
+
+    await userEvent.click(await button());
+
+    await waitFor(() =>
+      expect(asked).toContain("open_in_your_editor:alpha/svc/fix-it:src/lib.rs:1:zed"),
+    );
   });
 });
