@@ -316,8 +316,10 @@ fn answer(declaration: &Declaration, harness: Option<Harness>, id: &str) -> Answ
                 no("it gives no sign charter can read that it has finished starting")
             }
         },
-        SANDBOX if crate::sandbox::compiler(harness).is_some() => Answer::Yes,
-        SANDBOX => no("charter has no sandbox compiler for it yet"),
+        SANDBOX => match crate::sandbox::never_on(harness, crate::sandbox::Os::this()) {
+            None => Answer::Yes,
+            Some(why) => no(&why),
+        },
         capability => declaration.capability(capability),
     }
 }

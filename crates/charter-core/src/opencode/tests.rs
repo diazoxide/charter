@@ -105,6 +105,7 @@ fn a_session_config_names_the_shim_as_a_url_no_character_can_end() {
         Path::new("/Apps/my charter#1/plugin/opencode/charter.ts"),
         None,
         None,
+        false,
     );
     let doc: serde_json::Value = serde_json::from_str(&config).expect("JSON");
     assert_eq!(
@@ -124,6 +125,7 @@ fn a_session_config_hands_the_shim_the_skills_directory_as_its_option() {
         Path::new("/Apps/plugin/opencode/charter.ts"),
         Some(Path::new("/Apps/my charter/plugin/skills")),
         None,
+        false,
     );
     let doc: serde_json::Value = serde_json::from_str(&config).expect("JSON");
     assert_eq!(
@@ -197,4 +199,47 @@ fn the_pure_flag_is_seen_with_a_value_attached() {
 #[test]
 fn the_shim_file_is_named_the_same_in_the_bundle_and_in_opencodes_directory() {
     assert!(SHIM_IN_BUNDLE.ends_with(&format!("/{FILE_NAME}")));
+}
+
+#[test]
+fn a_line_the_app_did_not_take_is_said_in_the_pane_and_never_dropped_in_silence() {
+    // Ruling V73c: a wrapped opencode chat's hook cannot spool, so a line the app did not take
+    // is lost; the shim shows the hook's own sentence in opencode's window instead.
+    let text = shim(Arming::Session);
+    assert!(
+        text.contains(&format!(
+            "const NOT_TAKEN = {}",
+            serde_json::Value::from(crate::hookwire::NOT_TAKEN)
+        )),
+        "{text}"
+    );
+    assert!(text.contains("showToast"), "{text}");
+    assert!(
+        text.contains("said = await Promise.race([answered, late])"),
+        "{text}"
+    );
+    assert!(text.contains("notTaken(said)"), "{text}");
+}
+
+#[test]
+fn a_sandboxed_chat_makes_no_snapshot() {
+    // Ruling V73a: opencode's snapshot repositories are directories git is later run in, so a
+    // wrapped chat writes none. Measured on 1.18.33: this wins over a global and a project
+    // config that turn snapshots on, and a turn runs without them.
+    let config = session_config(
+        Path::new("/Apps/plugin/opencode/charter.ts"),
+        None,
+        None,
+        true,
+    );
+    let doc: serde_json::Value = serde_json::from_str(&config).expect("JSON");
+    assert_eq!(doc["snapshot"], serde_json::Value::Bool(false));
+    let unsandboxed = session_config(
+        Path::new("/Apps/plugin/opencode/charter.ts"),
+        None,
+        None,
+        false,
+    );
+    let doc: serde_json::Value = serde_json::from_str(&unsandboxed).expect("JSON");
+    assert_eq!(doc.get("snapshot"), None);
 }

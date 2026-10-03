@@ -551,7 +551,7 @@ mod tests {
     #[test]
     fn a_sandbox_compiled_for_one_harness_arms_no_chat_of_any_other() {
         // ADR 0067, fail closed, for every pair: a chat handed another harness's sandbox
-        // would start without its own. opencode has no compiler, which is a typed answer.
+        // would start without its own.
         let plugin = testing::bundled_plugin();
         let kit = Kit {
             binary: std::path::Path::new("/bin/charter"),
@@ -560,14 +560,7 @@ mod tests {
         let mut pairs = 0;
         for from in Harness::ALL {
             let (plane, applied) = testing::sandbox_compiled_for(from);
-            let applied = match applied {
-                Ok(applied) => applied,
-                Err(crate::sandbox::NotStarted::NoCompiler(harness)) => {
-                    assert_eq!((from, harness), (Harness::Opencode, Harness::Opencode));
-                    continue;
-                }
-                Err(other) => panic!("{from:?}: {other}"),
-            };
+            let applied = applied.unwrap_or_else(|refused| panic!("{from:?}: {refused}"));
             for to in Harness::ALL.into_iter().filter(|to| *to != from) {
                 assert_eq!(
                     to.adapter()
@@ -575,19 +568,22 @@ mod tests {
                     StateHooks::None,
                     "{from:?}'s sandbox armed a {to:?} chat"
                 );
+                let words = crate::sandbox::Words {
+                    program: "harness".to_owned(),
+                    command: Vec::new(),
+                    armed: Vec::new(),
+                    charters: Vec::new(),
+                };
                 assert!(
                     to.adapter()
-                        .sandboxed_line(applied.form(), Vec::new(), Vec::new(), Vec::new())
+                        .sandboxed_line(applied.form(), words, &crate::sandbox::At::default())
                         .is_err(),
                     "{from:?}'s sandbox gave a {to:?} chat a line"
                 );
                 pairs += 1;
             }
         }
-        assert_eq!(
-            pairs, 4,
-            "Claude Code's and Codex's sandboxes, each to the two others"
-        );
+        assert_eq!(pairs, 6, "each harness's sandbox, to the two others");
     }
 
     #[test]
@@ -1035,8 +1031,27 @@ mod tests {
             panic!("armed per session");
         };
         let charters = charters.iter().map(|word| (*word).to_owned()).collect();
-        let line = applied.line(Vec::new(), args, charters).expect("starts");
-        (line, compiled.args.clone())
+        let line = applied
+            .line(
+                crate::sandbox::Words {
+                    program: "codex".to_owned(),
+                    command: Vec::new(),
+                    armed: args,
+                    charters,
+                },
+                &crate::sandbox::At {
+                    cwd: Some(plane.path()),
+                    ..crate::sandbox::At::default()
+                },
+            )
+            .expect("starts")
+            .args;
+        let sandbox = [
+            compiled.args.clone(),
+            crate::sandbox::codex::later_code(compiled, plane.path()),
+        ]
+        .concat();
+        (line, sandbox)
     }
 
     #[test]

@@ -2,8 +2,8 @@
 
 use super::Harness;
 
-/// A plane with the sandbox on, and what a chat of `harness` starts under in it on a Linux
-/// machine that has every program the backend needs: the sandbox compiled for that harness, or
+/// A plane with the sandbox on, and what a chat of `harness` starts under in it on a macOS
+/// machine, where every harness has a sandbox charter compiles: the sandbox compiled for that harness, or
 /// why it was not started. The plane is handed back so a test can start the chat in it.
 pub(crate) fn sandbox_compiled_for(
     harness: Harness,
@@ -20,10 +20,10 @@ pub(crate) fn sandbox_compiled_for(
     let machine = crate::sandbox::Machine {
         env: crate::secrets::Env::of(&[]),
         home: None,
-        os: crate::sandbox::Os::Linux,
+        os: crate::sandbox::Os::MacOs,
     };
-    let applied = crate::sandbox::for_start(harness, plane.path(), &machine, &|_| true)
-        .map(|applied| applied.expect("the plane turned the sandbox on"));
+    // Codex is held back from a sandboxed start (V87f); its compiler is what is tested.
+    let applied = crate::sandbox::compiled_anyway(harness, plane.path(), &machine);
     (plane, applied)
 }
 

@@ -4,6 +4,7 @@
 
 use super::adapter::{HarnessAdapter, Sandbox};
 use super::{Harness, Kit, StateHooks};
+use crate::sandbox::Form;
 
 /// opencode's adapter.
 pub struct Opencode;
@@ -37,7 +38,7 @@ impl HarnessAdapter for Opencode {
         kit: Kit<'_>,
         _cwd: Option<&std::path::Path>,
         _plugins: &crate::harness_plugin::Chosen,
-        _sandbox: Sandbox<'_>,
+        sandbox: Sandbox<'_>,
     ) -> StateHooks {
         let Some(shim) = kit
             .plugin
@@ -59,6 +60,7 @@ impl HarnessAdapter for Opencode {
                         &shim,
                         kit.plugin.and_then(crate::skills::in_bundle).as_deref(),
                         Some(kit.binary),
+                        sandbox.applied().is_some(),
                     ),
                 ),
                 (crate::opencode::PURE_ENV.to_owned(), "0".to_owned()),
@@ -82,21 +84,82 @@ impl HarnessAdapter for Opencode {
         &crate::harness_plugin::OPENCODE
     }
 
-    /// None yet (SD-2, #695), so a chat of opencode in a sandboxed plane is refused.
+    /// charter's own wrap around the whole harness, which has no sandbox of its own
+    /// ([`crate::sandbox::opencode`] has the measurements).
     fn sandbox_compiler(&self) -> Option<crate::sandbox::Compiler> {
-        None
+        Some(|compiled| crate::sandbox::opencode::wrap(compiled).map(Form::Opencode))
     }
 
-    /// Never asked: with no compiler there is no form compiled for opencode, so any form is
-    /// another harness's.
+    /// The wrap's program first, with the profile written for where the chat opens, then the
+    /// chat's whole line. Its traffic is pointed at charter's egress proxy, the only place the
+    /// profile lets it connect, and its temp directory is its own.
+    ///
+    /// **Fail closed.** No directory, no proxy, or a path a profile cannot state refuses the
+    /// chat. Nothing in opencode's own words can widen an operating-system profile, so none is
+    /// refused for them.
     fn sandboxed_line(
         &self,
-        _form: &crate::sandbox::Form,
-        _command: Vec<String>,
-        _armed: Vec<String>,
-        _charters: Vec<String>,
-    ) -> Result<Vec<String>, String> {
-        Err(super::adapter::not_compiled_for(Harness::Opencode))
+        form: &Form,
+        words: crate::sandbox::Words,
+        at: &crate::sandbox::At<'_>,
+    ) -> Result<crate::sandbox::Line, String> {
+        let Form::Opencode(wrap) = form else {
+            return Err(super::adapter::not_compiled_for(Harness::Opencode));
+        };
+        let lead = "this plane runs every chat sandboxed, and";
+        let Some(cwd) = at.cwd else {
+            return Err(format!(
+                "{lead} an opencode chat with no directory of its own has nowhere the sandbox \
+                 lets it write, so nothing was started."
+            ));
+        };
+        let Some(confinement) = at.confinement else {
+            return Err(format!(
+                "{lead} charter's egress proxy was not started for this opencode chat, so \
+                 nothing was started."
+            ));
+        };
+        crate::sandbox::opencode::prepare(wrap);
+        let profile = crate::sandbox::opencode::profile(
+            wrap,
+            cwd,
+            confinement.tmp(),
+            confinement.proxy_port(),
+            at.hook_socket,
+        )
+        .map_err(|why| format!("{lead} {why}, so nothing was started."))?;
+        let proxy = confinement.proxy_url();
+        let mut env: Vec<(String, String)> = crate::sandbox::opencode::PROXY_ENV
+            .iter()
+            .map(|key| ((*key).to_owned(), proxy.clone()))
+            .collect();
+        env.extend(
+            crate::sandbox::opencode::NO_PROXY_ENV
+                .iter()
+                .map(|key| ((*key).to_owned(), String::new())),
+        );
+        env.push(("TMPDIR".to_owned(), confinement.tmp().display().to_string()));
+        env.push((
+            crate::sandbox::opencode::STATE_ENV.to_owned(),
+            confinement.tmp().join("state").display().to_string(),
+        ));
+        let crate::sandbox::Words {
+            program,
+            command,
+            armed,
+            charters,
+        } = words;
+        Ok(crate::sandbox::Line {
+            program: crate::sandbox::backend::SANDBOX_EXEC.to_owned(),
+            args: [
+                vec!["-p".to_owned(), profile, program],
+                command,
+                armed,
+                charters,
+            ]
+            .concat(),
+            env,
+        })
     }
 }
 

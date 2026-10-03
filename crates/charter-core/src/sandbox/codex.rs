@@ -1,3 +1,9 @@
+//! **Held back (ruling V87f).** A sandboxed project refuses Codex until #1123 lands: Codex
+//! resolves its paths again at every command, so a running chat, or another chat that can
+//! write above its folder, could move what this profile names (measured). The compiler stays,
+//! for #1123 to run inside charter's own compiled sandbox, and nothing starts a chat with it
+//! ([`crate::harness::HarnessAdapter::sandbox_held_back`]).
+//!
 //! The policy compiled for Codex: flags that select a permissions profile charter names for
 //! this start alone, put last among the flags on the chat's line ([`super::Applied::line`]).
 //!
@@ -43,6 +49,14 @@
 //!   the model is told why); an unlisted host is refused without a prompt (measured). Only a
 //!   person reviews what is still asked, never a reviewing model. The live web search tool,
 //!   which fetches from the provider's side, is off (it was not offered to the model).
+//! - **The later-code class** (ruling V73b). Measured with `codex sandbox` on 0.147.0: Codex's
+//!   `:workspace` let a command write a clone's `.git/config` and `.git/hooks`, `.mcp.json`,
+//!   every harness's and editor's project config, shell startup files and `charter.toml`. An
+//!   exact `read` entry for each held it; a `deny` glob kept the name from being read and not
+//!   from being written. [`later_code`] gives each name exactly, where the chat's directory and
+//!   its clones are at the start. **This does not hold the class** (ruled 2026-10-03): a folder
+//!   that holds a name can be moved aside, changed and moved back (measured). Codex holds it
+//!   once charter runs it inside its own compiled sandbox, as it runs opencode (#1123).
 //! - **The credential store** is reachable from Codex's sandbox whenever its network is on
 //!   (measured on macOS: a command still queried the keychain), so a plane with a keyring vault
 //!   starts no sandboxed Codex chat. Unmeasured on Linux, and refused there too.
@@ -65,6 +79,11 @@ pub const PROFILE_PREFIX: &str = "charter-sandbox-";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Flags {
     pub args: Vec<String>,
+    /// The profile's name, new to this start.
+    pub name: String,
+    /// The profile's paths and their access: the denial classes', before the chat's directory
+    /// is known.
+    pub filesystem: Vec<(String, &'static str)>,
 }
 
 /// `compiled`, for Codex, under a profile name new to this start — or the class it cannot
@@ -79,7 +98,7 @@ pub fn flags(compiled: &Compiled) -> Result<Flags, Uncompilable> {
 /// `compiled`, for Codex, as the profile `name`.
 pub(super) fn flags_named(compiled: &Compiled, name: &str) -> Result<Flags, Uncompilable> {
     compiled.holds_every_service(Harness::Codex)?;
-    let filesystem: toml::Table = compiled
+    let paths: Vec<(String, &'static str)> = compiled
         .denied
         .paths
         .iter()
@@ -88,9 +107,10 @@ pub(super) fn flags_named(compiled: &Compiled, name: &str) -> Result<Flags, Unco
                 super::Access::ReadWrite => "deny",
                 super::Access::Write => "read",
             };
-            (denial.path.display().to_string(), toml::Value::from(access))
+            (denial.path.display().to_string(), access)
         })
         .collect();
+    let filesystem = table(&paths);
     let domains: toml::Table = compiled
         .hosts
         .iter()
@@ -126,7 +146,110 @@ pub(super) fn flags_named(compiled: &Compiled, name: &str) -> Result<Flags, Unco
     set("approval_policy", toml::Value::Table(approval));
     set("approvals_reviewer", toml::Value::from("user"));
     set("web_search", toml::Value::from("disabled"));
-    Ok(Flags { args })
+    Ok(Flags {
+        args,
+        name: name.to_owned(),
+        filesystem: paths,
+    })
+}
+
+/// `paths` as a profile's `filesystem` table.
+fn table(paths: &[(String, &'static str)]) -> toml::Table {
+    paths
+        .iter()
+        .map(|(path, access)| (path.clone(), toml::Value::from(*access)))
+        .collect()
+}
+
+/// The flags that keep a Codex chat in `cwd` from writing the later-code names (ruling V73b)
+/// directly, which does not hold the class (see the module's docs): the profile's
+/// paths again, with every [`super::PLANTED`] name that holds what is below it made read-only
+/// in `cwd` and in each clone found below it when the chat starts.
+///
+/// Codex reads a path as `read` only exactly, and a glob only as `deny`, which was measured
+/// to keep a command from reading the name and not from writing it. So the names are given
+/// as exact paths, in the places a clone is when the chat starts. A clone the chat makes later
+/// is not among them, and the `.git` itself cannot be held without making all of it
+/// read-only (#1065). A later `-c` replaces the profile's paths whole (measured), so the
+/// classes' are given again.
+pub fn later_code(flags: &Flags, cwd: &std::path::Path) -> Vec<String> {
+    let mut filesystem = table(&flags.filesystem);
+    let dirs = super::planted::directories(cwd);
+    let clones = super::planted::clones(&dirs);
+    let mut paths = Vec::new();
+    for base in std::iter::once(cwd.to_path_buf()).chain(clones.iter().cloned()) {
+        for planted in super::PLANTED
+            .iter()
+            .filter(|planted| planted.reach == super::Reach::AndBelow)
+        {
+            match planted.path.split_once("/**/") {
+                // A name inside every submodule's git directory, found now.
+                Some((_, tail)) => {
+                    for git_dir in super::planted::git_dirs(&base) {
+                        for module in super::planted::module_git_dirs(&git_dir) {
+                            paths.push(module.join(tail));
+                        }
+                    }
+                }
+                None => paths.push(base.join(planted.path)),
+            }
+        }
+    }
+    for path in paths {
+        filesystem
+            .entry(path.display().to_string())
+            .or_insert_with(|| toml::Value::from("read"));
+    }
+    // Each directory between the chat's own and a denied path is made read-only, so it is never
+    // moved away with the denied path in it and replaced, and what is in it now stays writable
+    // (a more exact entry wins, measured). Measured: without it a plane-root chat moved
+    // `.charter` aside and wrote `.charter/app`. Not inside a `.git`, where git makes new files
+    // at every commit; that is #1065. Nor the chat's own directory, which Codex can hold only by
+    // making it read-only; charter's own sandbox around Codex holds it (#1123).
+    let denied: Vec<std::path::PathBuf> = flags
+        .filesystem
+        .iter()
+        .map(|(path, _)| std::path::PathBuf::from(path))
+        .collect();
+    let mut pinned = Vec::new();
+    for path in &denied {
+        for ancestor in super::ancestors_within(path, cwd) {
+            if ancestor.components().any(|part| part.as_os_str() == ".git") {
+                break;
+            }
+            if !pinned.contains(&ancestor) {
+                pinned.push(ancestor);
+            }
+        }
+    }
+    // Never a `write` at or under a path that is denied or made read-only, a pinned directory
+    // that is itself denied among them: the more exact entry would win over the denial.
+    let held: Vec<std::path::PathBuf> = filesystem.keys().map(std::path::PathBuf::from).collect();
+    for ancestor in &pinned {
+        filesystem.insert(ancestor.display().to_string(), toml::Value::from("read"));
+    }
+    for ancestor in &pinned {
+        let Ok(entries) = std::fs::read_dir(ancestor) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let child = entry.path();
+            if held.iter().any(|path| child.starts_with(path)) {
+                continue;
+            }
+            filesystem
+                .entry(child.display().to_string())
+                .or_insert_with(|| toml::Value::from("write"));
+        }
+    }
+    vec![
+        "-c".to_owned(),
+        format!(
+            "permissions.{}.filesystem={}",
+            flags.name,
+            toml::Value::Table(filesystem)
+        ),
+    ]
 }
 
 /// The feature whose proxy holds the egress.

@@ -191,6 +191,12 @@ pub trait SessionHost: Send + Sync {
     /// before the quit is not in the record at all, and its `.charter/sessions/<n>.workspace`
     /// and `<n>.lock` are still on disk for the 30 days `wscmd::select`'s prune leaves them.
     fn already_dealt(&self, dealt: u32);
+
+    /// The socket the sessions' hooks report on, where this host listens on one: a sandbox
+    /// charter wraps a chat in lets the chat reach it ([`charter_core::sandbox::At`]).
+    fn reports_to(&self) -> Option<std::path::PathBuf> {
+        None
+    }
 }
 
 /// One chat as the board has it, read under one hold so the three agree.
@@ -254,6 +260,8 @@ pub(crate) mod pretend {
     #[derive(Default)]
     struct Seen {
         asked: Mutex<Vec<(u32, String)>>,
+        openings: Mutex<Vec<Opening>>,
+        socket: Mutex<Option<std::path::PathBuf>>,
         running: Mutex<Vec<u32>>,
         dealt: AtomicU32,
         ends: Mutex<Option<Ends>>,
@@ -263,6 +271,16 @@ pub(crate) mod pretend {
         /// Every session it was asked to start, by number and program.
         pub fn asked(&self) -> Vec<(u32, String)> {
             lock(&self.seen.asked).clone()
+        }
+
+        /// Everything it was asked to start, whole, in the order it was asked.
+        pub fn openings(&self) -> Vec<Opening> {
+            lock(&self.seen.openings).clone()
+        }
+
+        /// Says its sessions report on `socket`.
+        pub fn reporting_on(&self, socket: std::path::PathBuf) {
+            *lock(&self.seen.socket) = Some(socket);
         }
 
         /// Session `id`'s program ends with `exit`, and whoever asked is told.
@@ -294,6 +312,7 @@ pub(crate) mod pretend {
             announce(id);
             let program = opening.program.clone().unwrap_or_default();
             lock(&self.seen.asked).push((id, program));
+            lock(&self.seen.openings).push(opening.clone());
             lock(&self.seen.running).push(id);
             Ok(id)
         }
@@ -348,6 +367,9 @@ pub(crate) mod pretend {
         }
         fn already_dealt(&self, dealt: u32) {
             self.seen.dealt.fetch_max(dealt, Ordering::SeqCst);
+        }
+        fn reports_to(&self) -> Option<std::path::PathBuf> {
+            lock(&self.seen.socket).clone()
         }
     }
 

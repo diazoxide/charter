@@ -1400,10 +1400,7 @@ fn tell_the_host_about_the_tool_call(
         hookwire::ChatToken::from_env().as_ref(),
         &call,
     ) {
-        let _ = writeln!(
-            std::io::stderr(),
-            "charter: the app did not take this {word} ({why})"
-        );
+        let _ = writeln!(std::io::stderr(), "{} {word} ({why})", hookwire::NOT_TAKEN);
     }
 }
 
@@ -1549,10 +1546,7 @@ fn hook(name: &str, now: Option<&str>) -> ExitCode {
         // everywhere: the chat simply stops changing, and there is nothing anywhere to look
         // at. A zero-exit hook's stderr goes to the harness's debug log, which costs the
         // operator nothing and is exactly where somebody debugging this would look.
-        eprintln!(
-            "charter: the app did not take this {} ({why})",
-            event.word()
-        );
+        eprintln!("{} {} ({why})", hookwire::NOT_TAKEN, event.word());
     }
     // After the report, so the app has heard the turn end before it hears the record: a
     // saved-record line the harness's sandbox kept from reaching the app (#517).

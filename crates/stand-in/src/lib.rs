@@ -415,3 +415,51 @@ fn elapsed_secs(etime: &str) -> Option<u64> {
     }
     Some(days * 86_400 + secs)
 }
+
+/// A folder of a test's own that no sandboxed chat may write, removed when this is dropped.
+///
+/// A sandboxed start refuses a program, or a file its command names, anywhere a chat can write
+/// (charter's ruling V87g): the project, the chat's folders, and the system temp folders. So a
+/// stand-in a sandboxed start is to run cannot live in a `tempfile` folder. This one is made
+/// under `$HOME/.cache`, which no charter sandbox grants.
+pub struct NoChatWrites {
+    path: PathBuf,
+}
+
+impl NoChatWrites {
+    /// Makes a fresh, empty folder.
+    ///
+    /// Panics if it cannot, or if `HOME` is unset: every caller is a test.
+    pub fn new() -> Self {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static MADE: AtomicU32 = AtomicU32::new(0);
+        let base = PathBuf::from(std::env::var_os("HOME").expect("HOME is set"))
+            .join(".cache/charter-stand-ins");
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.subsec_nanos());
+        let path = base.join(format!(
+            "{}-{}-{nanos}",
+            std::process::id(),
+            MADE.fetch_add(1, Ordering::SeqCst)
+        ));
+        std::fs::create_dir_all(&path).expect("a folder no chat writes");
+        Self { path }
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Default for NoChatWrites {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for NoChatWrites {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}

@@ -70,7 +70,7 @@ const PROFILE_KEYS: [&str; 3] = ["kind", "command", "env"];
 /// `opencode` chat, it still read the profile, because the Python charter beside it accepted
 /// one and the operator must not get two answers about one file. A refusal to start a kind
 /// belongs where a chat is launched (spec decision 6), not where a file is read — which is
-/// where a sandboxed plane still refuses an opencode chat today (SD-2, #695).
+/// where a sandboxed plane still refuses an opencode chat on Linux today (#1040).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Kind {
     /// The word typed after `charter`, and a profile's `kind`.

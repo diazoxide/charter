@@ -246,6 +246,10 @@ pub fn shim(arming: Arming<'_>) -> String {
             &serde_json::to_string(&EFFECTFUL).expect("JSON"),
         )
         .replace("{{HOOKS}}", hooks)
+        .replace(
+            "{{NOT_TAKEN}}",
+            &serde_json::Value::from(crate::hookwire::NOT_TAKEN).to_string(),
+        )
         .replace("{{MISSING}}", missing)
 }
 
@@ -270,7 +274,16 @@ pub fn binary_in(text: &str) -> Option<PathBuf> {
 ///
 /// With `binary`, charter's MCP server is named under `mcp` too (HP-7). `mcp` is an object, and
 /// opencode merges objects key by key, so the operator's own servers stay.
-pub fn session_config(shim: &Path, skills: Option<&Path>, binary: Option<&Path>) -> String {
+///
+/// A `sandboxed` chat also makes no snapshot (ruling V73a): a snapshot is a repository git is
+/// later run in, outside the sandbox, so the wrap lets no chat write one. This layer wins over
+/// a global and a project config that turn snapshots on (measured on 1.18.33).
+pub fn session_config(
+    shim: &Path,
+    skills: Option<&Path>,
+    binary: Option<&Path>,
+    sandboxed: bool,
+) -> String {
     let mut url = String::from("file://");
     for byte in shim.display().to_string().bytes() {
         if byte.is_ascii_alphanumeric() || b"/-._~".contains(&byte) {
@@ -288,6 +301,9 @@ pub fn session_config(shim: &Path, skills: Option<&Path>, binary: Option<&Path>)
         config["mcp"] = serde_json::json!({
             crate::chattools::SERVER: crate::chattools::opencode_entry(binary)
         });
+    }
+    if sandboxed {
+        config["snapshot"] = serde_json::Value::Bool(false);
     }
     config.to_string()
 }
@@ -465,6 +481,9 @@ const TEMPLATE: &str = r#"{{MARK}}
 
 const BINARY = {{BINARY}}
 
+// How a hook's stderr begins when the app did not take its line.
+const NOT_TAKEN = {{NOT_TAKEN}}
+
 const ROUTES = {{ROUTES}}
 
 const TIMEOUTS = {{TIMEOUTS}}
@@ -546,6 +565,22 @@ export const CharterPlugin = async (plugin, options) => {
     return at
   }
 
+  // A line the app did not take is said in this window, never dropped in silence: a chat
+  // charter wraps cannot keep it for later (ruling V73c). The hook's own sentence, at most
+  // once in a while, so a closed app does not bury the pane in them.
+  let toldAt = 0
+  const notTaken = (said) => {
+    const line = String(said?.err ?? "").split("\n").find((it) => it.startsWith(NOT_TAKEN))
+    if (!line || Date.now() - toldAt < 30000) return
+    toldAt = Date.now()
+    try {
+      const shown = plugin?.client?.tui?.showToast?.({
+        body: { title: "charter", message: line, variant: "warning", duration: 15000 },
+      })
+      if (shown && typeof shown.catch === "function") shown.catch(() => {})
+    } catch {}
+  }
+
   // `charter hook <word>` with `payload` on stdin: its exit status, stdout and stderr.
   const run = async (word, payload, sid) => {
     if (!BINARY) return { code: -1, out: "", err: "no charter to run ({{BINARY_ENV}} is not set)", missing: true }
@@ -579,11 +614,14 @@ export const CharterPlugin = async (plugin, options) => {
       ([out, err, code]) => ({ code, out, err }),
       (e) => ({ code: -1, out: "", err: String(e) }),
     )
+    let said
     try {
-      return await Promise.race([answered, late])
+      said = await Promise.race([answered, late])
     } finally {
       clearTimeout(timer)
     }
+    notTaken(said)
+    return said
   }
 
   // Awaited before the tool runs; throwing is what refusing is.

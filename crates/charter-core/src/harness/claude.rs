@@ -92,12 +92,15 @@ impl HarnessAdapter for ClaudeCode {
     fn sandboxed_line(
         &self,
         form: &Form,
-        command: Vec<String>,
-        armed: Vec<String>,
-        charters: Vec<String>,
-    ) -> Result<Vec<String>, String> {
+        words: crate::sandbox::Words,
+        _at: &crate::sandbox::At<'_>,
+    ) -> Result<crate::sandbox::Line, String> {
         match form {
-            Form::ClaudeCode(_) => Ok([command, armed, charters].concat()),
+            Form::ClaudeCode(_) => Ok(crate::sandbox::Line {
+                program: words.program,
+                args: [words.command, words.armed, words.charters].concat(),
+                env: Vec::new(),
+            }),
             _ => Err(super::adapter::not_compiled_for(Harness::ClaudeCode)),
         }
     }
