@@ -9,6 +9,7 @@ import {
   ask,
   jobInTheWindow,
   closeTheProjectsOfItsOwn,
+  heldToBudget,
   inFront,
   measureSwitches,
   openFromTheStrip,
@@ -149,6 +150,8 @@ describe(`switching among ${OPEN} open projects`, function () {
     logLine("project-switch.jsonl", { budgetMs: BUDGET_MS, ...switches });
     // In the job's own output too, where a reviewer reads it without downloading anything.
     console.log(`L9 project switch, ${BUDGET_MS} ms budget: ${JSON.stringify(switches)}`);
+    // The reading beside it, never a gate here: L9 is release absolute (ADR 0086).
+    console.log(`${heldToBudget(switches, ROUNDS).sentence} (reported, not gated on CI)`);
 
     expect(switches.samples).toBe(OPEN * ROUNDS);
   });

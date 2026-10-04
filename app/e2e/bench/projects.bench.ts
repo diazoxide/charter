@@ -5,11 +5,15 @@ import {
   OPEN,
   aProjectOfItsOwn,
   closeTheProjectsOfItsOwn,
+  heldToBudget,
   inFront,
   measureSwitches,
   openFromTheStrip,
 } from "../switching.js";
 import { closeEverything, job, openTab, ready, record } from "./window.js";
+
+/** How many times each project is switched to. */
+const ROUNDS = 3;
 
 /**
  * Ten open projects, each with one chat, and each brought to the front through the project
@@ -18,6 +22,11 @@ import { closeEverything, job, openTab, ready, record } from "./window.js";
  * Spec limit: row L9 of the budgets of record — switching among ten open projects ≤ 200 ms at the p95,
  * release absolute. Measured from the press of the project's row in the switcher until the
  * pane of the chat in front over there has painted (`bench.ts`, `project switch`).
+ *
+ * **This is where FR-27's acceptance is held.** The numbers are recorded first, then the spec
+ * fails when the p95 is past the budget, so `tools/bench.mjs` reports the miss beside them
+ * (ADR 0086: a release absolute row that misses is a bug filed before the release notes, not a
+ * blocked release). CI's scenario run measures the same switches and gates nothing on them.
  */
 describe(`switching among ${OPEN} open projects`, () => {
   const results: Record<string, unknown> = {};
@@ -48,10 +57,18 @@ describe(`switching among ${OPEN} open projects`, () => {
       sentinels.set(plane, `PROJECT-${n}`);
     }
 
-    const switches = await measureSwitches(planes, 3, (plane) => sentinels.get(plane) ?? "", job);
-    results["project switch"] = { budgetMs: BUDGET_MS, ...switches };
+    const switches = await measureSwitches(
+      planes,
+      ROUNDS,
+      (plane) => sentinels.get(plane) ?? "",
+      job,
+    );
+    const verdict = heldToBudget(switches, ROUNDS);
+    results["project switch"] = { budgetMs: BUDGET_MS, met: verdict.met, ...switches };
+    console.log(verdict.sentence);
 
     await closeTheProjectsOfItsOwn();
     await closeEverything();
+    if (!verdict.met) throw new Error(verdict.sentence);
   });
 });

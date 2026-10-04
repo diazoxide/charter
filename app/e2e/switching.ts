@@ -5,6 +5,9 @@ import type { Bench, Plan } from "../src/bench.ts";
 import { anEmptyRecord, copyFixturePlane } from "./harness.js";
 import { closeProject } from "./opening.js";
 import { attributesOfEach } from "./reading.js";
+import { OPEN, summarise, type Switches } from "./switchTimes.js";
+
+export { BUDGET_MS, OPEN, heldToBudget, type Switches } from "./switchTimes.js";
 
 /**
  * Ten projects open in one window, and the switch between them timed (FR-27, row L9 of the
@@ -15,12 +18,6 @@ import { attributesOfEach } from "./reading.js";
  */
 
 export const PROJECTS = '[role="tablist"][aria-label="Projects"]';
-
-/** How many projects the window holds while it is measured: the acceptance's ten. */
-export const OPEN = 10;
-
-/** FR-27's budget, in milliseconds: switching among ten open projects. */
-export const BUDGET_MS = 200;
 
 /** What the app answered a command with, insisting it answered at all. */
 export async function ask<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
@@ -111,28 +108,6 @@ export async function closeTheProjectsOfItsOwn(): Promise<void> {
   throw new Error(`${OPEN} presses did not close every project this run opened`);
 }
 
-function percentile(sorted: number[], at: number): number {
-  return sorted[Math.min(sorted.length - 1, Math.floor((at / 100) * sorted.length))];
-}
-
-/** What `measureSwitches` found. */
-export type Switches = {
-  projects: number;
-  samples: number;
-  /** From the press of the row to the paint of the pane of the project's chat. */
-  p50: number;
-  /** L9's statistic (D-0009). */
-  p95: number;
-  p99: number;
-  worst: number;
-  /** From the press to the frame after the project is in front, before its pane has painted. */
-  shownP50: number;
-  /** From the switcher's key to the frame its row is drawn in: getting to the row. */
-  openP50: number;
-  openWorst: number;
-  samples_ms: number[];
-};
-
 /**
  * Brings each project to the front `rounds` times, in the order given, through the switcher,
  * and answers with how long each took. The one in front when it starts must be the LAST one
@@ -163,21 +138,5 @@ export async function measureSwitches(
       opening.push(took.openMs);
     }
   }
-  const sorted = [...painted].sort((a, b) => a - b);
-  const opened = [...opening].sort((a, b) => a - b);
-  return {
-    projects: planes.length,
-    samples: painted.length,
-    p50: percentile(sorted, 50),
-    p95: percentile(sorted, 95),
-    p99: percentile(sorted, 99),
-    worst: sorted[sorted.length - 1],
-    shownP50: percentile(
-      [...shown].sort((a, b) => a - b),
-      50,
-    ),
-    openP50: percentile(opened, 50),
-    openWorst: opened[opened.length - 1],
-    samples_ms: painted,
-  };
+  return summarise(planes.length, painted, shown, opening);
 }
