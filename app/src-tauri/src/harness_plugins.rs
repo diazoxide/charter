@@ -54,8 +54,8 @@ pub struct HarnessPlugin {
 
 /// Every harness charter knows, with what it has installed on this machine and what this
 /// project has each plugin at — in `workspace`, when one is named, with that workspace's
-/// settings as the layer between Shared and Local (charter-app#282): what the Workspace settings
-/// tab shows. Read from the harness's own files, never written; asked when the tab opens and
+/// settings as the layer between Shared and Local (charter-app#282): what Settings shows at the
+/// Workspace level. Read from the harness's own files, never written; asked when the tab opens and
 /// after it saves.
 #[tauri::command]
 #[specta::specta]
@@ -201,7 +201,7 @@ mod tests {
 
     #[test]
     fn in_a_workspace_a_plugin_says_the_workspace_decided_it_and_names_its_manifest() {
-        // charter-app#282: the Workspace settings tab asks with its workspace, and each plugin
+        // charter-app#282: Settings at the Workspace level asks with its workspace, and each plugin
         // says which layer decided it; a value the workspace set and charter ignored names the
         // workspace's own file, so the tab draws it under that section.
         let plane = tempfile::tempdir().expect("a plane");

@@ -78,10 +78,11 @@ function liveSetting(read: WorkspaceRead, switched: () => void): LiveSetting {
     useControl: () => {
       const [asking, setAsking] = useState(false);
       return {
-        // The button is named by what it does; the row's label names the row, not the button.
+        // The button is named by what it does; the row's label names the group it is in, as the
+        // Repos row's does.
         grouped: true,
         control: (ids) => (
-          <>
+          <div role="group" aria-labelledby={ids.labelledBy}>
             <button
               type="button"
               className="panel-view"
@@ -103,7 +104,7 @@ function liveSetting(read: WorkspaceRead, switched: () => void): LiveSetting {
                 }}
               />
             )}
-          </>
+          </div>
         ),
       };
     },

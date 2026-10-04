@@ -1169,7 +1169,7 @@ export const commands = {
 	 *  Every extension this machine has installed, and every one this project's files name, with
 	 *  what each is in this project — `extension::project::resolve`, shaped for the wire. In
 	 *  `workspace`, when one is named, that workspace's settings are a layer too (charter-app#280):
-	 *  what the Workspace settings tab shows.
+	 *  what Settings shows at the Workspace level.
 	 * 
 	 *  It takes a survey, so it re-hashes every installed extension's directory: an extension that
 	 *  changed since its yes reads as needing approval here, which is the truth the tab is for. It
@@ -1200,14 +1200,14 @@ export const commands = {
 	/**
 	 *  Every harness charter knows, with what it has installed on this machine and what this
 	 *  project has each plugin at — in `workspace`, when one is named, with that workspace's
-	 *  settings as the layer between Shared and Local (charter-app#282): what the Workspace settings
-	 *  tab shows. Read from the harness's own files, never written; asked when the tab opens and
+	 *  settings as the layer between Shared and Local (charter-app#282): what Settings shows at the
+	 *  Workspace level. Read from the harness's own files, never written; asked when the tab opens and
 	 *  after it saves.
 	 */
 	projectHarnessPlugins: (plane: PlaneId, workspace: string | null) => typedError<HarnessPlugins[], string>(__TAURI_INVOKE("project_harness_plugins", { plane, workspace })),
 	/**
 	 *  This project's theme, with every theme it may pick — in `workspace`, when one is named, whose
-	 *  `workspace.json` is a layer too (charter-app#281): what the Workspace settings tab shows. It takes a survey, as
+	 *  `workspace.json` is a layer too (charter-app#281): what Settings shows at the Workspace level. It takes a survey, as
 	 *  [`project_extensions`] does, so a pick the extension no longer contributes is said here.
 	 */
 	projectTheme: (plane: PlaneId, workspace: string | null) => typedError<ProjectTheme, string>(__TAURI_INVOKE("project_theme", { plane, workspace })),
@@ -4346,8 +4346,8 @@ export type WithoutSandbox = {
 };
 
 /**
- *  A workspace's settings — the `settings` of its `workspace.json` — as the Workspace settings
- *  tab draws them. The same shape as a [`SettingsFile`], without a raw view: the manifest is
+ *  A workspace's settings — the `settings` of its `workspace.json` — as Settings draws them at
+ *  the Workspace level. The same shape as a [`SettingsFile`], without a raw view: the manifest is
  *  charter's and the team's, and a form is the one way into it here.
  */
 export type WorkspaceSettings = {

@@ -335,8 +335,8 @@ export type Does =
   /** Opens that project's Saving tab (charter-app#294) — bringing the project to the front
    *  first when it is not. It saves nothing by itself: the save is the tab's button. */
   | { verb: "openSaving"; plane: string }
-  /** Opens that workspace's Workspace settings tab (charter-app#280), on that workspace's strip.
-   *  It writes nothing by itself: a save is the tab's, through the core's own checks. */
+  /** Opens Settings at that workspace's level (SE-20; charter-app#280), on that workspace's
+   *  strip. It writes nothing by itself: a write is the tab's, through the core's own checks. */
   | { verb: "openWorkspaceSettings"; workspace: string }
   /** Asks whether to make that workspace LIVE or LOCAL (charter-app#301): a confirmation that
    *  says what it publishes and where. Nothing changes until it is answered. */

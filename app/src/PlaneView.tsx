@@ -1304,10 +1304,10 @@ export const PlaneView = memo(function PlaneView({
   /**
    * **Each workspace's colour** (charter-app#281), as the core read it out of its
    * `workspace.json` with the sidebar — so it is read again whenever the plane changes on disk,
-   * a save in the Workspace settings tab included. `null` for a workspace with none, for the
+   * a write in Settings at the Workspace level included. `null` for a workspace with none, for the
    * chats outside every workspace, which have no file to hold one, and for a grey `#rrggbb`,
    * which has no hue to tint with: no mark is drawn for a colour that tints nothing (the
-   * Workspace settings tab says why).
+   * Workspace level in Settings says why).
    */
   const colourOf = (workspace: string | undefined): string | null =>
     colourWithHue(sidebar?.workspaces.find((ws) => ws.name === workspace)?.colour);
