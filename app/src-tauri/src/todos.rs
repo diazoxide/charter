@@ -60,9 +60,11 @@ pub async fn todo_add(
 ) -> Result<String, String> {
     let held = planes.held(&plane)?;
     crate::off_the_window(WRITING, move || {
-        let said = add_in(held.root(), &workspace, &text, now())?;
+        let said = add_in(held.root(), &workspace, &text, now());
+        // Told whether or not it was written, as a persona's write is: a refusal moved
+        // nothing, and the store is read once more.
         held.wrote(&[format!("workspaces/{workspace}/todos")]);
-        Ok(said)
+        said
     })
     .await
 }
@@ -90,13 +92,13 @@ pub async fn todo_done(
 ) -> Result<String, String> {
     let held = planes.held(&plane)?;
     crate::off_the_window(WRITING, move || {
-        let said = done_in(held.root(), &workspace, &slug, now())?;
+        let said = done_in(held.root(), &workspace, &slug, now());
         // The journal records it, then the todo goes.
         held.wrote(&[
             format!("workspaces/{workspace}/memory"),
             format!("workspaces/{workspace}/todos"),
         ]);
-        Ok(said)
+        said
     })
     .await
 }
@@ -127,9 +129,9 @@ pub async fn todo_forget(
 ) -> Result<String, String> {
     let held = planes.held(&plane)?;
     crate::off_the_window(WRITING, move || {
-        let said = forget_in(held.root(), &workspace, &slug)?;
+        let said = forget_in(held.root(), &workspace, &slug);
         held.wrote(&[format!("workspaces/{workspace}/todos")]);
-        Ok(said)
+        said
     })
     .await
 }

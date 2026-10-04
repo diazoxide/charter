@@ -292,35 +292,46 @@ impl Held {
 
     /// What the sidebar draws, as the model holds it (FD-10b).
     ///
-    /// **A plane that is not watched reads it fresh on every ask**, as the sidebar did before
-    /// there was a model: nothing would ever tell the model the plane moved.
+    /// **A plane that is not watched — or not wholly: a folder the platform would not watch —
+    /// reads it fresh on every ask**, as the sidebar did before there was a model: nothing
+    /// would ever tell the model that part of the plane moved.
     pub fn sidebar_model(&self) -> Model {
         let mut model = self.model.lock().unwrap_or_else(PoisonError::into_inner);
-        let watched = self
-            .watch
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .is_some();
-        if !watched {
+        if !self.trusted(&mut model) {
             *model = Model::read(&self.root);
         }
         model.clone()
     }
 
+    /// Whether `model` (held under its lock) can be served as it is: the plane is watched,
+    /// and every folder it reads is (the FD-10 review). A watch that was partial and is whole
+    /// again has `model` read again whole first, since a change in the gap was told to nobody.
+    fn trusted(&self, model: &mut Model) -> bool {
+        let standing = self
+            .watch
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .map(crate::planewatch::Watch::standing);
+        match standing {
+            None | Some(crate::planewatch::Standing::Partial) => false,
+            Some(crate::planewatch::Standing::WholeAgain) => {
+                model.apply(&self.root, None);
+                true
+            }
+            Some(crate::planewatch::Standing::Whole) => true,
+        }
+    }
+
     /// The model, for the workspace panels to be served from (FD-10c) — or `None` for a plane
-    /// that is not watched, whose panels are read fresh from the disk on every ask, as they
-    /// were before there was a model: nothing would ever tell the model the plane moved.
+    /// that is not watched, or not wholly ([`Self::sidebar_model`]), whose panels are read
+    /// fresh from the disk on every ask, as they were before there was a model.
     ///
     /// Held for as long as the guard lives: a workspace's first ask reads its sections under
     /// it, so it is taken off the window's thread (SC-2).
     pub fn watched_model(&self) -> Option<MutexGuard<'_, Model>> {
-        let model = self.model.lock().unwrap_or_else(PoisonError::into_inner);
-        let watched = self
-            .watch
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .is_some();
-        watched.then_some(model)
+        let mut model = self.model.lock().unwrap_or_else(PoisonError::into_inner);
+        self.trusted(&mut model).then_some(model)
     }
 
     /// The window wrote these stores itself — a todo recorded, a memory saved, a persona made

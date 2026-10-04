@@ -293,14 +293,12 @@ pub async fn memory_edit(
     overwrite: bool,
 ) -> Result<MemoryEdited, String> {
     let held = planes.held(&plane)?;
-    let root = held.root().to_path_buf();
-    let store = scope.store();
-    let edited = crate::off_the_window(WRITING, move || {
-        edit(&root, &scope, &slug, &title, &text, &read, overwrite)
+    crate::off_the_window(WRITING, move || {
+        let edited = edit(held.root(), &scope, &slug, &title, &text, &read, overwrite);
+        held.wrote(&[scope.store()]);
+        edited
     })
-    .await?;
-    held.wrote(&[store]);
-    Ok(edited)
+    .await
 }
 
 fn edit(
@@ -340,11 +338,12 @@ pub async fn memory_archive(
     slug: String,
 ) -> Result<MemoryArchived, String> {
     let held = planes.held(&plane)?;
-    let root = held.root().to_path_buf();
-    let store = scope.store();
-    let archived = crate::off_the_window(WRITING, move || archive(&root, &scope, &slug)).await?;
-    held.wrote(&[store]);
-    Ok(archived)
+    crate::off_the_window(WRITING, move || {
+        let archived = archive(held.root(), &scope, &slug);
+        held.wrote(&[scope.store()]);
+        archived
+    })
+    .await
 }
 
 fn archive(root: &Path, scope: &MemoryScope, slug: &str) -> Result<MemoryArchived, String> {
@@ -369,14 +368,12 @@ pub async fn memory_unarchive(
     restore_as: Option<String>,
 ) -> Result<MemoryView, String> {
     let held = planes.held(&plane)?;
-    let root = held.root().to_path_buf();
-    let store = scope.store();
-    let back = crate::off_the_window(WRITING, move || {
-        unarchive(&root, &scope, &archived, restore_as.as_deref())
+    crate::off_the_window(WRITING, move || {
+        let back = unarchive(held.root(), &scope, &archived, restore_as.as_deref());
+        held.wrote(&[scope.store()]);
+        back
     })
-    .await?;
-    held.wrote(&[store]);
-    Ok(back)
+    .await
 }
 
 fn unarchive(
@@ -405,12 +402,12 @@ pub async fn memory_create(
     text: String,
 ) -> Result<MemoryView, String> {
     let held = planes.held(&plane)?;
-    let root = held.root().to_path_buf();
-    let store = scope.store();
-    let made =
-        crate::off_the_window(WRITING, move || create(&root, &scope, &title, &text, now())).await?;
-    held.wrote(&[store]);
-    Ok(made)
+    crate::off_the_window(WRITING, move || {
+        let made = create(held.root(), &scope, &title, &text, now());
+        held.wrote(&[scope.store()]);
+        made
+    })
+    .await
 }
 
 fn create(

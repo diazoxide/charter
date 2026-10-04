@@ -250,9 +250,15 @@ impl Model {
     }
 
     /// Workspace `name`'s sections, read on the first ask and kept current from then on — or
-    /// why the workspace could not be read, which is never held: the next ask reads again.
+    /// why the workspace could not be read, which is never held: the next ask reads again. A
+    /// workspace with a store that could not be read is read again on every ask too.
     pub fn sections(&mut self, root: &Path, name: &str) -> Result<Sections, String> {
-        if let Some(held) = self.sections.get(name) {
+        // A store that could not be read is not held either: what refused it — a link out of
+        // the plane, a permission — can change with nothing the watch hears.
+        if let Some(held) = self.sections.get(name)
+            && held.todos.is_ok()
+            && held.memories.is_ok()
+        {
             return Ok(held.clone());
         }
         let read = Sections::read(root, name)?;
@@ -807,6 +813,28 @@ mod tests {
     }
 
     #[test]
+    fn a_store_that_could_not_be_read_is_read_again_on_the_next_ask() {
+        // What refused it can change with nothing the watch hears: a link out of the plane
+        // replaced by the store itself.
+        let plane = full_plane();
+        let root = plane.path();
+        let elsewhere = tempfile::tempdir().expect("outside the plane");
+        let store = root.join("workspaces/alpha/todos");
+        std::fs::remove_dir_all(&store).expect("the store goes");
+        std::os::unix::fs::symlink(elsewhere.path(), &store).expect("a link out");
+        let mut model = Model::read(root);
+        assert!(model.sections(root, "alpha").expect("alpha").todos.is_err());
+
+        std::fs::remove_file(&store).expect("the link goes");
+        todo(root, "alpha", "a1", "Alpha one");
+
+        assert_eq!(
+            titles(&model.sections(root, "alpha").expect("alpha").todos),
+            ["Alpha one"]
+        );
+    }
+
+    #[test]
     fn a_workspace_that_is_not_there_has_no_sections() {
         let plane = plane();
         let mut model = Model::read(plane.path());
@@ -856,6 +884,8 @@ mod tests {
         Record(usize, usize),
         Clone(usize, usize),
         PersonaMemory(usize, usize),
+        Declare(usize, usize),
+        RemoveClone(usize, usize),
     }
 
     const NAMES: [&str; 3] = ["alpha", "beta", "gamma"];
@@ -876,6 +906,8 @@ mod tests {
             (0..3usize, 0..30usize).prop_map(|(a, b)| Write::Record(a, b)),
             (0..3usize, 0..3usize).prop_map(|(a, b)| Write::Clone(a, b)),
             (0..3usize, 0..3usize).prop_map(|(a, b)| Write::PersonaMemory(a, b)),
+            (0..3usize, 0..3usize).prop_map(|(a, b)| Write::Declare(a, b)),
+            (0..3usize, 0..3usize).prop_map(|(a, b)| Write::RemoveClone(a, b)),
         ]
     }
 
@@ -986,6 +1018,23 @@ mod tests {
                 }
                 clone(root, NAMES[i], &format!("r{k}"));
                 vec![ws(i).join(format!("r{k}"))]
+            }
+            Write::Declare(i, k) => {
+                if !ws(i).is_dir() {
+                    return Vec::new();
+                }
+                let file = ws(i).join("workspace.json");
+                let repos: Vec<String> = (0..=k).map(|n| format!(r#"{{"name":"r{n}"}}"#)).collect();
+                std::fs::write(&file, format!(r#"{{"repos":[{}]}}"#, repos.join(",")))
+                    .expect("a manifest");
+                vec![file]
+            }
+            Write::RemoveClone(i, k) => {
+                let repo = ws(i).join(format!("r{k}"));
+                if std::fs::remove_dir_all(&repo).is_err() {
+                    return Vec::new();
+                }
+                vec![repo]
             }
             Write::PersonaMemory(p, k) => {
                 let persona = ["steward", "p0", "_shared"][p];

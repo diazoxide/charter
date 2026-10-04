@@ -1271,7 +1271,17 @@ mod tests {
         crate::planes::Planes,
         std::sync::Arc<crate::planes::Held>,
     ) {
-        let dir = tempfile::tempdir().expect("a plane");
+        held_plane_at(tempfile::tempdir().expect("a plane"))
+    }
+
+    /// [`held_plane`] in `dir`, whatever is already in it.
+    fn held_plane_at(
+        dir: tempfile::TempDir,
+    ) -> (
+        tempfile::TempDir,
+        crate::planes::Planes,
+        std::sync::Arc<crate::planes::Held>,
+    ) {
         let root = std::fs::canonicalize(dir.path()).expect("a resolved plane");
         std::fs::write(root.join("charter.toml"), "").expect("a manifest");
         for (store, slug, title) in [("todos", "a1", "Alpha one"), ("memory", "m1", "Memory one")] {
@@ -1337,10 +1347,50 @@ mod tests {
     }
 
     #[test]
+    fn a_store_the_watch_could_not_watch_is_read_from_the_disk_on_every_ask() {
+        // A failed registration must never leave the panels serving what the model held.
+        let dir = tempfile::tempdir().expect("a plane");
+        let root = std::fs::canonicalize(dir.path()).expect("a resolved plane");
+        let memory = root.join("workspaces/alpha/memory");
+        std::fs::create_dir_all(&memory).expect("a memory store");
+        std::fs::write(memory.join("m1.md"), "# Memory one\n").expect("a memory");
+        crate::watchset::refuse::refuse(&memory);
+        let (_dir, _planes, held) = held_plane_at(dir);
+        served(&held, "alpha").expect("served once");
+        std::fs::write(memory.join("m2.md"), "# Memory two\n").expect("a memory");
+
+        assert_eq!(
+            rows_of(&served(&held, "alpha").expect("served"), "memory"),
+            ["Memory two", "Memory one"]
+        );
+    }
+
+    #[test]
+    fn a_todo_store_the_watch_could_not_watch_reaches_the_sidebar_on_the_next_ask() {
+        let dir = tempfile::tempdir().expect("a plane");
+        let root = std::fs::canonicalize(dir.path()).expect("a resolved plane");
+        let todos = root.join("workspaces/alpha/todos");
+        std::fs::create_dir_all(&todos).expect("a todo store");
+        crate::watchset::refuse::refuse(&todos);
+        let (_dir, _planes, held) = held_plane_at(dir);
+        held.sidebar_model();
+        std::fs::write(todos.join("a2.md"), "# Alpha two\n").expect("a todo");
+
+        let model = held.sidebar_model();
+        let todos: Vec<String> = model
+            .rows()
+            .expect("listed")
+            .flat_map(|row| row.todos.clone())
+            .collect();
+        assert!(todos.contains(&"Alpha two".to_owned()), "{todos:?}");
+    }
+
+    #[test]
     fn a_memory_saved_outside_the_window_reaches_the_panels_through_the_watch() {
-        // No timing is asserted: FSEvents has no delivery bound on a busy Mac (#577, #756).
-        // The panels are asked again until they have it, for as long as a loaded runner can
-        // take, and a passing run returns the moment they do.
+        // No timing is asserted. The held plane's watch runs on notify's poller in these tests
+        // on macOS (`planewatch::Platform`), since FSEvents has no delivery bound on a busy
+        // Mac (#577, #756). The panels are asked again until they have it, for as long as a
+        // loaded runner can take, and a passing run returns the moment they do.
         let (_dir, _planes, held) = held_plane();
         served(&held, "alpha").expect("served once, so the model holds alpha");
         let store = held.root().join("workspaces/alpha/memory");
