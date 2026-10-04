@@ -5,4 +5,5 @@
   `tui.json` and `tui.jsonc`, at any depth. These join the other harness config it already may
   not write. Each of them can make a later chat, run outside the sandbox, start code. In a
   sandboxed project, `charter browser install` run from a chat cannot write the skill's pages
-  either. It now says so and asks you to run it in your own terminal (#1057).
+  either. When its generator fails with a permission refusal, it now says so and asks you to
+  run it in your own terminal (#1057).

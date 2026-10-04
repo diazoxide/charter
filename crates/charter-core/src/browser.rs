@@ -248,7 +248,8 @@ pub fn install(
     let (code, output) = match generator.run(&argv, root) {
         Ok(ran) => ran,
         Err(why) => {
-            say(Say::Fail(why));
+            say(Say::Fail(why.clone()));
+            say_if_refused(&why, say);
             return 1;
         }
     };
@@ -256,14 +257,14 @@ pub fn install(
         say(Say::Fail(format!("the generator failed (exit {code}).")));
         // npm's own diagnosis, handed back as it said it.
         say(Say::Out(output.trim_end().to_string()));
-        say_if_refused(&skill_dir, say);
+        say_if_refused(&output, say);
         return 1;
     }
     if !skill_dir.is_dir() {
         say(Say::Warn(format!(
             "The generator reported success but {SKILL_DIR} is not there."
         )));
-        say_if_refused(&skill_dir, say);
+        say_if_refused(&output, say);
         return 1;
     }
     say(Say::Done(format!(
@@ -306,10 +307,11 @@ pub fn install(
     0
 }
 
-/// After a failed generator: when this process may not write `dir` at all, as a sandboxed chat
-/// may not write a project's skills (ADR 0067 §5), says who can run the command.
-fn say_if_refused(dir: &Path, say: Sink) {
-    if write_refused(dir) {
+/// After a failed generator: when its failure was a permission refusal, as a sandboxed chat is
+/// refused writing a project's skills (ADR 0067 §5), says who can run the command. Read off
+/// the failure alone: charter writes nothing to find out why a write failed.
+fn say_if_refused(failure: &str, say: Sink) {
+    if refused(failure) {
         say(Say::Info(format!(
             "charter could not write {SKILL_DIR}: a sandboxed chat may not write a project's \
              skills. Ask the operator to run `charter browser install` in their own terminal."
@@ -317,26 +319,18 @@ fn say_if_refused(dir: &Path, say: Sink) {
     }
 }
 
-/// Whether making `dir`, or a file in it, is refused for permission. Leaves nothing behind.
-fn write_refused(dir: &Path) -> bool {
-    let refused = |why: std::io::Error| why.kind() == std::io::ErrorKind::PermissionDenied;
-    // The folders this makes, deepest first, so each is taken away again.
-    let made: Vec<&Path> = dir.ancestors().take_while(|it| !it.exists()).collect();
-    if let Err(why) = std::fs::create_dir_all(dir) {
-        return refused(why);
-    }
-    let probe = dir.join(".charter-write-probe");
-    let answer = match std::fs::write(&probe, "") {
-        Ok(()) => {
-            let _ = std::fs::remove_file(&probe);
-            false
-        }
-        Err(why) => refused(why),
-    };
-    for folder in made {
-        let _ = std::fs::remove_dir(folder);
-    }
-    answer
+/// Whether a failure says it was refused for permission: the operating system's words for
+/// `EPERM` and `EACCES`, as Rust and Node print them, or their names, as npm prints them.
+fn refused(failure: &str) -> bool {
+    let failure = failure.to_lowercase();
+    [
+        "permission denied",
+        "operation not permitted",
+        "eperm",
+        "eacces",
+    ]
+    .iter()
+    .any(|words| failure.contains(words))
 }
 
 #[cfg(test)]
@@ -381,6 +375,8 @@ mod tests {
         asked: Vec<Vec<String>>,
         code: i32,
         pages: usize,
+        /// What it prints; npm's own words when empty.
+        said: &'static str,
     }
 
     impl Generator for Fake {
@@ -393,7 +389,12 @@ mod tests {
                     std::fs::write(dir.join(format!("p{n}.md")), "x").unwrap();
                 }
             }
-            Ok((self.code, "npm said so\n".into()))
+            let said = if self.said.is_empty() {
+                "npm said so\n"
+            } else {
+                self.said
+            };
+            Ok((self.code, said.into()))
         }
     }
 
@@ -417,6 +418,7 @@ mod tests {
             asked: Vec::new(),
             code: 0,
             pages: 2,
+            said: "",
         };
         let (rc, heard) = run(dir.path(), None, &mut fake);
         assert_eq!(rc, 0, "{}", heard.err);
@@ -444,6 +446,7 @@ mod tests {
             asked: Vec::new(),
             code: 0,
             pages: 1,
+            said: "",
         };
         let (rc, heard) = run(dir.path(), Some("github:attacker/x"), &mut fake);
         assert_eq!(rc, 1);
@@ -463,6 +466,7 @@ mod tests {
             asked: Vec::new(),
             code: 7,
             pages: 0,
+            said: "",
         };
         let (rc, heard) = run(dir.path(), None, &mut fake);
         assert_eq!(rc, 1);
@@ -476,38 +480,41 @@ mod tests {
         assert!(heard.err.contains("is not there"), "{}", heard.err);
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_generator_refused_the_skills_folder_says_who_can_run_it() {
-        use std::os::unix::fs::PermissionsExt;
+        const HINT: &str = "charter could not write .claude/skills/playwright-cli: a sandboxed \
+                            chat may not write a project's skills. Ask the operator to run \
+                            `charter browser install` in their own terminal.\n";
+        // As npm reports a sandboxed chat refused writing a project's skills (ADR 0067 §5).
+        for said in [
+            "npm error code EPERM\nnpm error syscall mkdir\n",
+            "Error: EACCES: permission denied, mkdir '.claude/skills/playwright-cli'\n",
+            "mkdir: .claude/skills: Operation not permitted\n",
+        ] {
+            let dir = plane();
+            let mut fake = Fake {
+                asked: Vec::new(),
+                code: 1,
+                pages: 0,
+                said,
+            };
+            let (rc, heard) = run(dir.path(), None, &mut fake);
+            assert_eq!(rc, 1);
+            assert!(heard.err.contains(HINT), "{said}: {}", heard.err);
+            // Nothing is written to find out why.
+            assert!(!dir.path().join(".claude").exists(), "{said}");
+        }
+        // A generator that failed for its own reasons is not told it was refused.
         let dir = plane();
-        let claude = dir.path().join(".claude");
-        std::fs::create_dir_all(&claude).unwrap();
-        // As a sandboxed chat is refused writing a project's skills (ADR 0067 §5).
-        std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o555)).unwrap();
         let mut fake = Fake {
             asked: Vec::new(),
             code: 1,
             pages: 0,
+            said: "npm error code E404\nnpm error 404 Not Found\n",
         };
-        let (rc, heard) = run(dir.path(), None, &mut fake);
-        std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
-        assert_eq!(rc, 1);
-        assert!(
-            heard.err.contains(
-                "charter could not write .claude/skills/playwright-cli: a sandboxed chat may \
-                 not write a project's skills. Ask the operator to run `charter browser \
-                 install` in their own terminal.\n"
-            ),
-            "{}",
-            heard.err
-        );
-        assert!(!claude.join("skills").exists());
-        // A generator that failed for its own reasons is not told it was refused.
-        let other = plane();
-        let (_, heard) = run(other.path(), None, &mut fake);
+        let (_, heard) = run(dir.path(), None, &mut fake);
         assert!(!heard.err.contains("sandboxed"), "{}", heard.err);
-        assert!(!other.path().join(".claude").exists());
+        assert!(!dir.path().join(".claude").exists());
     }
 
     #[test]
@@ -517,6 +524,7 @@ mod tests {
             asked: Vec::new(),
             code: 0,
             pages: 1,
+            said: "",
         };
         let mut heard = Heard::default();
         let rc = install(dir.path(), None, false, &mut fake, &mut heard.sink());
@@ -535,6 +543,7 @@ mod tests {
             asked: Vec::new(),
             code: 0,
             pages: 1,
+            said: "",
         };
         let (rc, _) = run(dir.path(), None, &mut fake);
         assert_eq!(rc, 1);
@@ -546,6 +555,7 @@ mod tests {
             asked: Vec::new(),
             code: 0,
             pages: 1,
+            said: "",
         };
         let (rc, heard) = run(dir.path(), None, &mut fake);
         assert_eq!(rc, 1, "{}", heard.err);
