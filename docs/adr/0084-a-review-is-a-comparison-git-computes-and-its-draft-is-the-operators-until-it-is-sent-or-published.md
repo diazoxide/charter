@@ -610,6 +610,8 @@ comparison is always git's defaults; and an `eol` or filter conversion is not ap
 working-tree side, so a file checked out with CRLF line ends compares as its bytes; and a
 submodule's pointer moving is not shown, since a comparison lists files only (the #704
 checklist carries both). Past 128 MiB of changed working-tree content in one comparison, a file
-is marked and not read, so it has no line counts and is never taken for a rename.
+is marked and not read, so it has no line counts and is never taken for a rename; and a file
+the branch changed and the working tree then put back to its base content is marked changed
+there, where git shows nothing.
 
 The rest of this record stands.

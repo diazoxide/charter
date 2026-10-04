@@ -411,6 +411,113 @@ fn a_branch_with_no_base_recorded_or_known_is_refused_saying_so() {
     assert!(said.contains("which branch"), "{said}");
 }
 
+/// A branch the repo holds by name, cut from `from`, with one commit of its own: `feature.txt`.
+fn feature_from(f: &support::Fixture, from: &str) {
+    support::git(&f.clone, &["checkout", "-q", "-b", "feature", from]);
+    write(&f.clone, "feature.txt", "the feature\n");
+    commit_all(&f.clone, "feature");
+    support::git(&f.clone, &["checkout", "-q", "main"]);
+}
+
+fn compare_feature(f: &support::Fixture) -> Result<Compared, files::Refused> {
+    files::compare(
+        &reader(),
+        &f.plane,
+        Branch::repo(&f.ws, &f.repo),
+        &Comparison::NamedBranch {
+            branch: "feature".into(),
+        },
+    )
+}
+
+fn inventory_default_branch(f: &support::Fixture, branch: &str) {
+    write(
+        &f.plane,
+        "inventory/repos.json",
+        format!(
+            r#"{{"repos": [{{"name": "{}", "default_branch": "{branch}"}}]}}"#,
+            f.repo
+        ),
+    );
+}
+
+#[test]
+fn a_branch_with_no_base_recorded_is_compared_with_the_default_branch_the_inventory_names() {
+    charter_core::unsteered!();
+    let f = support::plane_with_clone("thing");
+    support::git(&f.clone, &["branch", "trunk"]);
+    feature_from(&f, "trunk");
+    // Both move on after the cut: neither's commits are the feature's.
+    support::git(&f.clone, &["checkout", "-q", "trunk"]);
+    write(&f.clone, "trunk.txt", "on trunk since\n");
+    commit_all(&f.clone, "trunk");
+    support::git(&f.clone, &["checkout", "-q", "main"]);
+    write(&f.clone, "main.txt", "on main\n");
+    commit_all(&f.clone, "main");
+    inventory_default_branch(&f, "trunk");
+
+    let compared = compare_feature(&f).unwrap();
+
+    assert_eq!(compared.base.as_deref(), Some("trunk"));
+    assert_eq!(
+        listed(&compared),
+        git_lists(&f.clone, &["trunk...feature"], None)
+    );
+}
+
+#[test]
+fn a_branch_with_no_base_recorded_or_listed_is_compared_with_what_origin_head_names() {
+    charter_core::unsteered!();
+    let f = support::plane_with_clone("thing");
+    let at = rev(&f.clone, "main");
+    support::git(&f.clone, &["update-ref", "refs/remotes/origin/main", &at]);
+    support::git(
+        &f.clone,
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+        ],
+    );
+    feature_from(&f, "main");
+    write(&f.clone, "main.txt", "local main moved on\n");
+    commit_all(&f.clone, "main");
+
+    let compared = compare_feature(&f).unwrap();
+
+    assert_eq!(compared.base.as_deref(), Some("origin/main"));
+    assert_eq!(
+        listed(&compared),
+        git_lists(&f.clone, &["origin/main...feature"], None)
+    );
+}
+
+#[test]
+fn a_default_branch_that_shares_no_history_with_the_branch_is_passed_over_for_the_next() {
+    charter_core::unsteered!();
+    let f = support::plane_with_clone("thing");
+    let at = rev(&f.clone, "main");
+    // The inventory names `trunk`; the local `trunk` is unrelated history, and the remote's
+    // is where the feature was cut.
+    support::git(&f.clone, &["update-ref", "refs/remotes/origin/trunk", &at]);
+    support::git(&f.clone, &["checkout", "-q", "--orphan", "trunk"]);
+    support::git(&f.clone, &["rm", "-rq", "--cached", "."]);
+    write(&f.clone, "unrelated.txt", "another history\n");
+    support::git(&f.clone, &["add", "unrelated.txt"]);
+    support::git(&f.clone, &["commit", "-q", "-m", "unrelated"]);
+    support::git(&f.clone, &["checkout", "-q", "-f", "main"]);
+    feature_from(&f, "main");
+    inventory_default_branch(&f, "trunk");
+
+    let compared = compare_feature(&f).unwrap();
+
+    assert_eq!(compared.base.as_deref(), Some("origin/trunk"));
+    assert_eq!(
+        listed(&compared),
+        git_lists(&f.clone, &["origin/trunk...feature"], None)
+    );
+}
+
 // ---------------------------------------------------------------------------------------------
 // (b) any two refs
 // ---------------------------------------------------------------------------------------------
@@ -726,14 +833,10 @@ fn a_folder_swapped_for_a_link_is_never_read_through_for_the_working_tree() {
         None,
     );
 
-    // Refused as a file that cannot be read, or drawn as gone: never read through the link.
-    match diff {
-        Ok(FileDiff::Text { head, .. }) => {
-            assert!(!head.contains("SECRET"), "read through the link: {head}")
-        }
-        Ok(other) => panic!("{other:?}"),
-        Err(refused) => assert!(!refused.to_string().contains("SECRET"), "{refused}"),
-    }
+    // Refused as a file that cannot be read: never read through the link, and never drawn as
+    // an empty file either.
+    let refused = diff.expect_err("a side read through a swapped folder must be refused");
+    assert!(!refused.to_string().contains("SECRET"), "{refused}");
 }
 
 #[test]
