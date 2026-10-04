@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791128133596,
+  "lastUpdate": 1791131263018,
   "repoUrl": "https://github.com/diazoxide/charter",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -1176,6 +1176,48 @@ window.BENCHMARK_DATA = {
             "value": 101.4335515,
             "unit": "ms",
             "extra": "median of 5 runs: 100.840, 101.417, 101.434, 101.554, 102.059 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "3be8db4afd7b14e6971ce777ab88fee263b3f361",
+          "message": "Bump taiki-e/install-action\n\nBumps the actions group with 1 update in the / directory: [taiki-e/install-action](https://github.com/taiki-e/install-action).\n\n\nUpdates `taiki-e/install-action` from 2.87.21 to 2.87.22\n- [Release notes](https://github.com/taiki-e/install-action/releases)\n- [Changelog](https://github.com/taiki-e/install-action/blob/main/CHANGELOG.md)\n- [Commits](https://github.com/taiki-e/install-action/compare/4cef1412cce204788f482e778a0b9187f9626a29...83ac0ad63c0167e6f06796fab0fce28db1bf3db0)\n\n---\nupdated-dependencies:\n- dependency-name: taiki-e/install-action\n  dependency-version: 2.87.22\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: actions\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>",
+          "timestamp": "2026-10-04T20:26:16+04:00",
+          "tree_id": "0d3b5bb0fdca12fe228ec3d4a2ea010eb5044008",
+          "url": "https://github.com/diazoxide/charter/commit/3be8db4afd7b14e6971ce777ab88fee263b3f361"
+        },
+        "date": 1791131262365,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.3134925,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.311, 0.313, 0.313, 0.323, 0.328 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.571075999999998,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.529, 16.561, 16.571, 16.577, 16.590 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.35528249999999,
+            "unit": "ms",
+            "extra": "median of 5 runs: 101.135, 101.137, 101.355, 101.535, 101.736 ms"
           }
         ]
       }
