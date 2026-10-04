@@ -54,8 +54,8 @@ pub struct WorkItem {
 }
 
 impl WorkItem {
-    /// An item with only its identity and title known: open, an issue unless `kind` says
-    /// otherwise, with no milestone, label, assignee or relation. A backend fills in the rest.
+    /// An item of `kind` with only its key and title known: open, with no forge id, page,
+    /// milestone, label, assignee or relation. A backend fills in the rest.
     pub fn new(key: TrackerKey, kind: Kind, title: impl Into<String>) -> WorkItem {
         WorkItem {
             key,
@@ -102,11 +102,11 @@ pub enum State {
 }
 
 impl State {
-    /// A forge's state word: `closed` is closed, anything else (`open`, `opened`, `locked`) is
-    /// open, so an item a forge answers is never dropped from a board for a word charter does
-    /// not know.
+    /// A forge's state word, in any case (REST says `closed`, GraphQL `CLOSED`): `closed` is
+    /// closed, anything else (`open`, `opened`, `OPEN`, `locked`) is open, so an item a forge
+    /// answers is never dropped from a board for a word charter does not know.
     pub fn of_forge(word: &str) -> State {
-        if word == "closed" {
+        if word.eq_ignore_ascii_case("closed") {
             State::Closed
         } else {
             State::Open
@@ -114,13 +114,38 @@ impl State {
     }
 }
 
-/// A milestone, as the item names it. Its identity is the repo or group it belongs to and its
-/// title, which both forges keep unique there.
+/// A milestone, as the item names it. The forge's own id for it travels beside its title, as an
+/// item's [`ForgeRef`] does, so two milestones that share a title in different repos or groups
+/// are told apart.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Milestone {
+    /// The forge's id for it: GitHub's node id, GitLab's instance-wide id. `None` when the
+    /// answer named none.
+    pub forge_ref: Option<ForgeRef>,
     pub title: String,
-    /// Its due date, `YYYY-MM-DD`, when it has one.
-    pub due: Option<String>,
+    /// Its due date, when it has one.
+    pub due: Option<chrono::NaiveDate>,
+}
+
+impl Milestone {
+    /// A milestone from a forge's answer. `due` is read by its date alone, so GitHub's
+    /// `due_on` timestamp (`2026-10-31T07:00:00Z`) and GitLab's `due_date` (`2026-10-31`) give
+    /// the same day. A due date that is not one is no due date.
+    pub fn of_forge(
+        forge_ref: Option<ForgeRef>,
+        title: impl Into<String>,
+        due: Option<&str>,
+    ) -> Milestone {
+        let due = due.and_then(|text| {
+            let day = text.get(..10)?;
+            chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d").ok()
+        });
+        Milestone {
+            forge_ref,
+            title: title.into(),
+            due,
+        }
+    }
 }
 
 /// How a work item stands to another (ADR 0088 §6). "Work link" is the log's word and "link"
@@ -171,9 +196,26 @@ mod tests {
 
     #[test]
     fn closed_is_the_only_forge_word_that_closes_an_item() {
-        assert_eq!(State::of_forge("closed"), State::Closed);
-        for open in ["open", "opened", "locked", ""] {
+        for closed in ["closed", "CLOSED"] {
+            assert_eq!(State::of_forge(closed), State::Closed, "{closed:?}");
+        }
+        for open in ["open", "opened", "OPEN", "locked", ""] {
             assert_eq!(State::of_forge(open), State::Open, "{open:?}");
         }
+    }
+
+    #[test]
+    fn a_milestones_due_date_is_its_day_on_either_forge() {
+        let day = chrono::NaiveDate::from_ymd_opt(2026, 10, 31);
+        let github = Milestone::of_forge(
+            Some(ForgeRef("MI_kwDOAcme1".into())),
+            "v1",
+            Some("2026-10-31T07:00:00Z"),
+        );
+        assert_eq!(github.due, day);
+        assert_eq!(github.forge_ref, Some(ForgeRef("MI_kwDOAcme1".into())));
+        assert_eq!(Milestone::of_forge(None, "v1", Some("2026-10-31")).due, day);
+        assert_eq!(Milestone::of_forge(None, "v1", None).due, None);
+        assert_eq!(Milestone::of_forge(None, "v1", Some("soon")).due, None);
     }
 }

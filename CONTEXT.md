@@ -94,9 +94,9 @@ parent and child. It belongs to **Workspace**, with the work items it joins (ADR
 _Avoid_: link (unqualified), dependency (that is one kind of relation)
 
 **Board** (of work items):
-A view of a workspace's work items, one card per item, in an open and a closed column. It is
-derived each time from the work links and the trackers, and never stored, so a todo promoted to
-an issue is one card. It belongs to **Workspace**, in its Work section (FI5).
+A view of a workspace's (or project's) work items, one card per item. It is derived each time
+from the work links and the trackers, and never stored, so a todo promoted to an issue is one
+card. It belongs to **Workspace**, in its Work section (FI5).
 _Avoid_: project (GitHub's word for its boards), kanban
 
 **Plane root**:

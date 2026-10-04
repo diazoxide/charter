@@ -587,6 +587,10 @@ mod cases {
         };
         assert_eq!(made.labels, [label]);
         assert!(!made.is_sub_issue());
+        assert_eq!(
+            made.milestone, None,
+            "the case opens its issue in no milestone"
+        );
         match forge_ref {
             Some(forge_ref) => assert_eq!(made.forge_ref, Some(ForgeRef(forge_ref))),
             None => assert!(
@@ -1331,8 +1335,8 @@ mod the_live_scene {
         );
     }
 
-    /// The issues `create` leaves behind are found by the harness's own listing, by the case's
-    /// title, and closed by the numbers that listing names: never a pull request, never an issue
+    /// The issues `create` leaves behind are found by the harness's own listing, by the label
+    /// `create` gives them and the case's title, and closed by the numbers that listing names: never a pull request, never an issue
     /// with another title.
     #[test]
     fn the_sweep_closes_only_open_issues_with_the_cases_title() {
@@ -1340,8 +1344,8 @@ mod the_live_scene {
         let closed = std::cell::RefCell::new(Vec::new());
         let list = |path: &str| -> Result<Value, String> {
             assert_eq!(
-                path,
-                "repos/fixture/api/issues?state=open&labels=alpha&per_page=100"
+                path, "repos/fixture/api/issues?state=open&labels=ws%3Aalpha&per_page=100",
+                "by the label `create` puts on it"
             );
             Ok(json!([
                 {"number": 7, "title": live::ISSUE_TITLE},
@@ -1361,7 +1365,7 @@ mod the_live_scene {
         let gitlab = |path: &str| -> Result<Value, String> {
             assert_eq!(
                 path,
-                "projects/fixture%2Fapi/issues?state=opened&labels=alpha&per_page=100"
+                "projects/fixture%2Fapi/issues?state=opened&labels=charter%3A%3Aws%3A%3Aalpha&per_page=100"
             );
             Ok(json!([{"id": 5001, "iid": 3, "title": live::ISSUE_TITLE}]))
         };

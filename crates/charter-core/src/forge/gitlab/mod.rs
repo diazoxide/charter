@@ -261,6 +261,8 @@ impl WorkItems for GitLab {
         };
         let key = crate::work::TrackerKey::gitlab_issue(&host, place, iid)
             .map_err(|why| ForgeError::new(format!("{doing}: {why}")))?;
+        // GitHub's answer without a title is refused as malformed; GitLab's is read field by
+        // field, so a title it leaves out is the one charter sent.
         let title = issue["title"].as_str().unwrap_or(&new.title);
         let mut item = crate::work::WorkItem::new(key, crate::work::Kind::Issue, title);
         item.forge_ref = issue["id"].as_u64().map(|id| ForgeRef(id.to_string()));
@@ -272,12 +274,14 @@ impl WorkItems for GitLab {
             .flatten()
             .filter_map(|l| l.as_str().map(str::to_string))
             .collect();
-        item.milestone = issue["milestone"]["title"]
-            .as_str()
-            .map(|title| crate::work::Milestone {
-                title: title.to_string(),
-                due: issue["milestone"]["due_date"].as_str().map(str::to_string),
-            });
+        let milestone = &issue["milestone"];
+        item.milestone = milestone["title"].as_str().map(|title| {
+            crate::work::Milestone::of_forge(
+                milestone["id"].as_u64().map(|id| ForgeRef(id.to_string())),
+                title,
+                milestone["due_date"].as_str(),
+            )
+        });
         Ok(item)
     }
 }
@@ -738,5 +742,66 @@ mod capability_tests {
                 "{what:?}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod create_mapping_tests {
+    use std::sync::Arc;
+
+    use serde_json::json;
+
+    use crate::forge::Forge;
+    use crate::forge::Kind;
+    use crate::forge::backend::{Caller, ForgeRef, NewWorkItem};
+    use crate::forge::recorded::Recorded;
+    use crate::work::Milestone;
+
+    fn created(answer: serde_json::Value) -> crate::work::WorkItem {
+        let call = json!({"endpoint": {"rest": {"method": "POST", "path": "projects/acme%2Fapi/issues"}},
+                          "fields": [{"text": ["title", "Port the picker"]},
+                                     {"text": ["description", "Why."]}]});
+        let text = json!({"source": "GitLab REST API v4, issues: New issue",
+                          "exchanges": [{"call": call, "reply": {"code": 0, "out": answer.to_string()}}]});
+        let recorded = Arc::new(Recorded::parse(&text.to_string()).unwrap());
+        let backend = Forge::default_of(Kind::GitLab).backend_over(recorded);
+        let new = NewWorkItem {
+            title: "Port the picker".into(),
+            body: "Why.".into(),
+            workspace_label: None,
+        };
+        backend
+            .create(&Caller::command(), "acme/api", &new)
+            .unwrap()
+    }
+
+    fn issue() -> serde_json::Value {
+        json!({"id": 84012, "iid": 12, "project_id": 3, "title": "Port the picker",
+               "state": "opened", "labels": [], "web_url": "https://gitlab.com/acme/api/-/issues/12",
+               "references": {"full": "acme/api#12"}})
+    }
+
+    #[test]
+    fn a_milestone_in_gitlabs_answer_is_mapped_with_its_id_and_due_day() {
+        let mut answer = issue();
+        answer["milestone"] = json!({"id": 501, "iid": 1, "title": "v1", "state": "active",
+                                     "due_date": "2026-10-31"});
+        assert_eq!(
+            created(answer).milestone,
+            Some(Milestone {
+                forge_ref: Some(ForgeRef("501".into())),
+                title: "v1".into(),
+                due: chrono::NaiveDate::from_ymd_opt(2026, 10, 31),
+            })
+        );
+    }
+
+    #[test]
+    fn no_milestone_or_no_due_date_in_gitlabs_answer_maps_to_none() {
+        assert_eq!(created(issue()).milestone, None);
+        let mut answer = issue();
+        answer["milestone"] = json!({"id": 501, "iid": 1, "title": "v1", "state": "active",
+                                     "due_date": null});
+        assert_eq!(created(answer).milestone.unwrap().due, None);
     }
 }

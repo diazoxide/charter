@@ -20,6 +20,11 @@ use crate::workspaces::Workspace;
 pub trait Tracker {
     /// The item `key` names, if this tracker holds it. `key` is already resolved through its
     /// aliases ([`super::log::Fold::resolve`]).
+    ///
+    /// **A snapshot read**: it answers what the tracker held when it was built or last
+    /// refreshed, never asks the network, and cannot fail. A backend that reads a store does
+    /// so up front ([`Todos::of`]); FW-7's item cache picks this shape on purpose, refreshing
+    /// out of band and answering from what it holds.
     fn item(&self, key: &TrackerKey) -> Option<WorkItem>;
 }
 
