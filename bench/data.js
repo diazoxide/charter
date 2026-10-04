@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791092851127,
+  "lastUpdate": 1791095908418,
   "repoUrl": "https://github.com/diazoxide/charter",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -966,6 +966,48 @@ window.BENCHMARK_DATA = {
             "value": 106.17664500000001,
             "unit": "ms",
             "extra": "median of 5 runs: 105.155, 105.258, 106.177, 106.300, 106.928 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "5de2ddaef221f35838614f4780bd1c13d945b77b",
+          "message": "FG-4 re-review: catch the whole secrets context, pin the record's path\n\nFold-ins from the re-review of 8537772 (approved).\n\n- The guard test flags any use of the secrets context inside a `${{ }}` expression other than\n  exactly `secrets.FORGE_LIVE_TOKEN`: a bare `secrets` (`toJSON(secrets)` and the like sends the\n  whole context to the runner), another name, or an index. `toJSON(secrets)` in the test step's\n  env passed the guard before this commit and fails it now.\n- The ungated upload of what each forge tested is pinned to `path: ${{ runner.temp }}/outcome`,\n  so it can never upload the workspace. `path: .` passed before this commit and fails now.\n- docs/forges.md: create both environments and set their main-only deployment branch policy\n  before adding `FORGE_LIVE_TOKEN` (GitHub creates a missing environment unprotected the first\n  time a job names it), and add no required reviewers, which would hold every nightly run.\n\nRefs #712\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-04T10:36:05+04:00",
+          "tree_id": "13a5bf2963ee2f31c91662ffe872e5428f58de96",
+          "url": "https://github.com/diazoxide/charter/commit/5de2ddaef221f35838614f4780bd1c13d945b77b"
+        },
+        "date": 1791095907465,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.325017,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.318, 0.324, 0.325, 0.330, 0.331 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.581789,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.514, 16.529, 16.582, 16.585, 16.724 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.14287999999999,
+            "unit": "ms",
+            "extra": "median of 5 runs: 100.482, 100.926, 101.143, 101.646, 102.024 ms"
           }
         ]
       }
