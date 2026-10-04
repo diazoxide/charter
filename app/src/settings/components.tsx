@@ -121,12 +121,12 @@ export function SettingGroup({
 
 /** The ids a row hands its control, so the control is named and described by the row. */
 export type RowIds = {
-  /** The control's own id; the row's `<label for>` points at it. */
+  /** The control's own id; the row's `<label for>` points at it, unless the row is `grouped`. */
   id: string;
-  /** The label's id, for a control a `<label for>` cannot name — a radio group. */
+  /** The row's name's id, for a control a `<label for>` cannot name — a radio group. */
   labelledBy: string;
-  /** The help line's id. */
-  describedBy: string;
+  /** The help line's id, when the row has help. */
+  describedBy?: string;
 };
 
 /** A row's way back to the value beneath it. */
@@ -137,29 +137,41 @@ export type Reset = { label: string; disabled: boolean; onReset: () => void };
  * go back. The control is drawn by `control`, handed the ids that tie it to the label and the
  * help — a {@link Field} or a {@link Choice}.
  *
+ * A `grouped` row's control is a group of controls (a radio group), which a `<label for>` cannot
+ * name: its name is drawn as plain text, and the group is named by `aria-labelledby` instead.
+ *
  * Which file a value goes to, and where its current value comes from, join the row with SE-18.
  */
 export function SettingRow({
   label,
   help,
   reset,
+  grouped = false,
   control,
 }: {
   label: string;
   help?: string;
   reset?: Reset;
+  grouped?: boolean;
   control: (ids: RowIds) => ReactNode;
 }) {
   const id = useId();
   const labelledBy = useId();
-  const describedBy = useId();
+  const described = useId();
+  const describedBy = help ? described : undefined;
   return (
     <div className="ui-setting-row">
-      <label className="ui-setting-label" id={labelledBy} htmlFor={id}>
-        {label}
-      </label>
+      {grouped ? (
+        <span className="ui-setting-label" id={labelledBy}>
+          {label}
+        </span>
+      ) : (
+        <label className="ui-setting-label" id={labelledBy} htmlFor={id}>
+          {label}
+        </label>
+      )}
       <div className="ui-setting-control">
-        {control({ id, labelledBy, describedBy: help ? describedBy : "" })}
+        {control({ id, labelledBy, describedBy })}
         {reset && (
           <button
             type="button"
@@ -174,7 +186,7 @@ export function SettingRow({
         )}
       </div>
       {help && (
-        <p className="ui-setting-help" id={describedBy}>
+        <p className="ui-setting-help" id={described}>
           {help}
         </p>
       )}
@@ -202,15 +214,16 @@ export type FieldProps = Tied &
         min: number;
         max: number;
         step?: number;
-        /** What the value reads as, beside the slider and to a screen reader: `18px`. */
+        /** What the value reads as beside the slider: `18px`. */
         shown: (value: number) => string;
+        /** What a screen reader says it is, when that is not `shown`: `18 pixels`. */
+        spoken?: (value: number) => string;
         onChange: (to: number) => void;
       }
   );
 
 export function Field(props: FieldProps) {
   const { ids } = props;
-  const described = ids.describedBy || undefined;
   if (props.kind === "range")
     return (
       <span className="ui-field ui-field-range">
@@ -221,8 +234,8 @@ export function Field(props: FieldProps) {
           max={props.max}
           step={props.step ?? 1}
           value={props.value}
-          aria-valuetext={props.shown(props.value)}
-          aria-describedby={described}
+          aria-valuetext={(props.spoken ?? props.shown)(props.value)}
+          aria-describedby={ids.describedBy}
           onChange={(event) => props.onChange(event.currentTarget.valueAsNumber)}
         />
         <output htmlFor={ids.id} aria-live="polite">
@@ -238,7 +251,7 @@ export function Field(props: FieldProps) {
         value={props.value}
         spellCheck={false}
         rows={Math.max(2, props.value.split("\n").length)}
-        aria-describedby={described}
+        aria-describedby={ids.describedBy}
         onChange={(event) => props.onChange(event.currentTarget.value)}
       />
     );
@@ -249,7 +262,7 @@ export function Field(props: FieldProps) {
       type="text"
       value={props.value}
       spellCheck={false}
-      aria-describedby={described}
+      aria-describedby={ids.describedBy}
       onChange={(event) => props.onChange(event.currentTarget.value)}
     />
   );
@@ -283,14 +296,13 @@ export type ChoiceProps = Tied &
 
 export function Choice(props: ChoiceProps) {
   const { ids } = props;
-  const described = ids.describedBy || undefined;
   if (props.kind === "toggle")
     return (
       <Checkbox.Root
         id={ids.id}
         className="box"
         checked={props.checked}
-        aria-describedby={described}
+        aria-describedby={ids.describedBy}
         onCheckedChange={(to) => props.onCheckedChange(to === true)}
       >
         <Checkbox.Indicator>✓</Checkbox.Indicator>
@@ -304,7 +316,7 @@ export function Choice(props: ChoiceProps) {
         // #190: WebKit leaves a control out of the Tab order without `tabIndex`.
         tabIndex={0}
         value={props.value ?? ""}
-        aria-describedby={described}
+        aria-describedby={ids.describedBy}
         onChange={(event) => props.onValueChange(event.currentTarget.value)}
       >
         {props.unset !== undefined && <option value="">{props.unset}</option>}
@@ -322,7 +334,7 @@ export function Choice(props: ChoiceProps) {
       value={props.value ?? ""}
       onValueChange={props.onValueChange}
       aria-labelledby={ids.labelledBy}
-      aria-describedby={described}
+      aria-describedby={ids.describedBy}
     >
       {props.options.map((one) => (
         <div className="ui-choice-option" key={one.value}>

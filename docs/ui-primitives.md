@@ -33,10 +33,10 @@ file is the defect.
   The operator settled it: that rule was written against **a dependency that owns your markup**,
   and a file in `app/src/components/ui/` is ours, editable line by line, and visible in the diff
   that adds it. `docs/design-system.md` has what a copy must satisfy.
-- **One house set is allowed, and only this one: the settings set** (amended 2026-10-04, ruling
-  V89f, SE-16 #1166). `app/src/settings/components.tsx` holds five pieces —
+- **One house set is allowed, and only this one: the settings set** (ADR 0037, amended
+  2026-10-04, ruling V89f; SE-16 #1166). `app/src/settings/components.tsx` holds five pieces —
   **SettingsLayout**, **SettingGroup**, **SettingRow**, **Field** and **Choice** — and nothing
-  else may join it without amending this line. See
+  else may join it without a new amendment to that record. See
   [The settings set](#the-settings-set-is-the-one-house-set) below for why.
 - Charter's own look, always. Radix ships **no CSS at all** — every primitive is an unstyled
   element with `data-state` attributes to hang rules off. `App.css` stays the one place the
@@ -73,7 +73,7 @@ What keeps it from becoming the library this file forbids:
   groups and the chosen group, in two columns), `SettingGroup` (a group's heading, help and
   rows), `SettingRow` (label, help, control and reset; the file choice and the origin join it
   with SE-18), `Field` (`text`, `list` and `range`) and `Choice` (`radio`, `select` and
-  `toggle`). A sixth piece is an amendment to this file, not a commit.
+  `toggle`). A sixth piece is an amendment to ADR 0037, not a commit.
 - **Each piece is a thin layer over a primitive already in the window, and says which.**
   The level switcher is a Radix radio group; the nav is buttons under Radix roving focus
   (`roving.ts`, as the explorer's rows); `Choice` is a Radix radio group, a native `<select>`

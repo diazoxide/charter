@@ -88,6 +88,16 @@ describe("text size, in Settings", () => {
     expect(slider(/terminal text size/i)).toHaveValue(String(DEFAULT_TEXT.terminal));
   });
 
+  it("says a size in pixels to a screen reader, and in px on screen", () => {
+    render(<SettingsTab />);
+
+    expect(slider(/window text size/i)).toHaveAttribute(
+      "aria-valuetext",
+      `${DEFAULT_TEXT.window} pixels`,
+    );
+    expect(screen.getByText(`${DEFAULT_TEXT.window}px`)).toBeVisible();
+  });
+
   it("applies a size as the slider moves", () => {
     render(<SettingsTab />);
 
@@ -131,6 +141,17 @@ describe("text size, in Settings", () => {
 });
 
 describe("your editor, in Settings", () => {
+  it("names the choice by its row, and no label points at the group", async () => {
+    const { container } = render(<SettingsTab />);
+    await userEvent.click(group("Editor"));
+
+    expect(screen.getByRole("radiogroup", { name: "Your editor" })).toHaveAccessibleDescription(
+      "Where Open in your editor sends a file, at the line you are reading.",
+    );
+    const labels = [...container.querySelectorAll("label[for]")];
+    expect(labels.map((one) => one.textContent)).not.toContain("Your editor");
+  });
+
   it("offers the four, with none chosen until you pick one", async () => {
     render(<SettingsTab />);
     await userEvent.click(group("Editor"));

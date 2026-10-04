@@ -50,6 +50,14 @@ function ShownGroup({ group }: { group: SettingsGroup }) {
 }
 
 function ShownSetting({ setting }: { setting: Setting }) {
-  const { control, reset } = setting.useControl();
-  return <SettingRow label={setting.label} help={setting.help} reset={reset} control={control} />;
+  const { control, reset, grouped } = setting.useControl();
+  return (
+    <SettingRow
+      label={setting.label}
+      help={setting.help}
+      reset={reset}
+      grouped={grouped}
+      control={control}
+    />
+  );
 }

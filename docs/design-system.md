@@ -471,7 +471,11 @@ on the first three, because they are about what the window is drawn _in_:
 Still refused, unchanged by the ruling: a component library as a **dependency**, and a house
 abstraction layer over Radix — `<ConfirmModal open onConfirm>` — whether it is written here or
 copied from somewhere. Copying it would not launder it; what is refused is a charter API in
-front of the primitive.
+front of the primitive. **The one exception** is the settings set (ADR 0037, amended
+2026-10-04, V89f): SettingsLayout, SettingGroup, SettingRow, Field and Choice in
+`app/src/settings/components.tsx`, five thin pieces over the Radix primitives already in use,
+drawn in tokens. `docs/ui-primitives.md` gives the reasons. Nothing else joins it without a new
+amendment.
 
 **Lucide** is the icon set (`lucide-react`). The property that matters is that it draws with
 `stroke="currentColor"` and `fill="none"`, so an icon takes the colour of the text it sits in
