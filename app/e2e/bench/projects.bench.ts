@@ -23,10 +23,13 @@ const ROUNDS = 3;
  * release absolute. Measured from the press of the project's row in the switcher until the
  * pane of the chat in front over there has painted (`bench.ts`, `project switch`).
  *
- * **This is where FR-27's acceptance is held.** The numbers are recorded first, then the spec
- * fails when the p95 is past the budget, so `tools/bench.mjs` reports the miss beside them
- * (ADR 0086: a release absolute row that misses is a bug filed before the release notes, not a
- * blocked release). CI's scenario run measures the same switches and gates nothing on them.
+ * **This is where FR-27's acceptance is judged.** The row is recorded with `met`, then the
+ * spec fails when the p95 is past the budget. `tools/bench.mjs` keeps the failure beside the
+ * numbers and prints `projects › project switch: met` or `MISSED` for the row
+ * (`tools/window-verdicts.mjs`), so a miss reads apart from a spec that crashed before judging
+ * anything. The run's exit status is not changed by it (ADR 0086: a release absolute miss is a
+ * bug filed before the release notes, not a blocked release). CI's scenario run measures a
+ * different setup and gates nothing on it.
  */
 describe(`switching among ${OPEN} open projects`, () => {
   const results: Record<string, unknown> = {};

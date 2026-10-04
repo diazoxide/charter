@@ -42,6 +42,7 @@ import { parseArgs } from "node:util";
 import { removeProfile } from "./cleanup.mjs";
 import { coldStartGate } from "./coldstart-gate.mjs";
 import { latencyGate } from "./latency-gate.mjs";
+import { windowVerdicts } from "./window-verdicts.mjs";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const APP = join(ROOT, "app");
@@ -644,6 +645,10 @@ if (only.has("window")) {
 writeFileSync(join(OUT, "results.json"), `${JSON.stringify(results, null, 2)}\n`);
 console.log(`\n${JSON.stringify(results, null, 2)}\n\nWritten to ${join(OUT, "results.json")}`);
 if (!existsSync(COLD_START_APP) && only.has("coldstart")) console.log("(cold start needs a build first)");
+// The window rows held to a budget, each met or MISSED, apart from a spec that crashed before
+// it judged anything (ADR 0086: a release absolute miss is a bug to file, not a failed run).
+const verdicts = windowVerdicts(results.window);
+if (verdicts.length > 0) console.log(`\nthe window's budgets:\n${verdicts.join("\n")}`);
 if (results.host?.rows) {
   // main's record (ADR 0086 §1): github-action-benchmark's `customSmallerIsBetter` shape.
   const record = Object.entries(results.host.rows).map(([name, row]) => ({
