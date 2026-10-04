@@ -564,3 +564,43 @@ fn assisted_by_is_read_in_any_case() {
     assert_eq!(got.repo("api").assisted_by.value, Form::Full);
     assert!(refusals("[plane]\nassisted_by = \"LLM\"\n", false, "charter.toml").is_empty());
 }
+
+#[test]
+fn every_value_charter_reads_is_not_refused() {
+    assert_eq!(
+        refusals(
+            "[plane]\nmode = \"pr\"\nbranch = \"main\"\nsave_branch = \"charter/save/me\"\n\
+             sign = true\nautosave = false\nautosave_after = \"2m\"\n\
+             [repos.api]\nbranch = \"trunk\"\n",
+            false,
+            "charter.toml"
+        ),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_quiet_period_with_a_sign_is_not_a_number_of_seconds() {
+    // `u64::from_str` takes a leading `+`; a quiet period is digits and its unit, nothing else.
+    let text = "[plane]\nautosave_after = \"+5s\"\n";
+    assert_eq!(
+        settings(text, "").plane.autosave_after.source,
+        Source::Default
+    );
+    assert_eq!(refusals(text, false, "charter.toml").len(), 1);
+}
+
+#[test]
+fn each_value_charter_cannot_read_is_refused_in_the_words_for_its_key() {
+    let text = "[plane]\nmode = \"sometimes\"\nbranch = \"has space\"\nsign = \"yes\"\n\
+                autosave = 1\n";
+    assert_eq!(
+        refusals(text, false, "charter.toml"),
+        [
+            "plane.mode in charter.toml is not a mode — one of off, commit, push, pr, pr-merge",
+            "plane.branch in charter.toml is not a branch name git would accept",
+            "plane.sign in charter.toml is not true or false",
+            "plane.autosave in charter.toml is not true or false",
+        ]
+    );
+}

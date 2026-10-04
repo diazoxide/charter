@@ -126,3 +126,72 @@ fn a_pinned_plane_is_the_one_acted_on_and_an_empty_home_is_no_home() {
         "an empty CHARTER_HOME names no state directory"
     );
 }
+
+/// Set on the child of the doctor test below; its value is the case the child runs.
+const DOCTOR_CHILD: &str = "STEERING_REACHES_THE_DOCTOR_CHILD";
+
+const DOCTOR: &str = "the_harness_the_environment_names_is_the_one_doctor_answers_for";
+
+/// `doctor`'s `session layer` row, asked from a workspace of a fresh plane.
+fn session_layer() -> String {
+    let plane = tempfile::tempdir().unwrap();
+    std::fs::write(plane.path().join("charter.toml"), "schema = 1\n").unwrap();
+    let here = plane.path().join("workspaces/alpha");
+    std::fs::create_dir_all(&here).unwrap();
+    let rows = charter_core::doctor::Doctor::at(plane.path(), &here, true, true).run();
+    rows.into_iter()
+        .find(|row| row.name == "session layer")
+        .expect("a session layer row")
+        .detail
+}
+
+#[test]
+fn the_harness_the_environment_names_is_the_one_doctor_answers_for() {
+    charter_core::unsteered!();
+    let Some(case) = std::env::var_os(DOCTOR_CHILD) else {
+        // `CHARTER_HARNESS` names the harness, whatever it is; with none named, Claude Code's
+        // own `CLAUDE_PLUGIN_ROOT` is its evidence; an empty value of either names nothing.
+        for (case, env) in [
+            (
+                "named",
+                &[("CHARTER_HARNESS", "a-harness-charter-never-met")][..],
+            ),
+            ("plugin", &[("CLAUDE_PLUGIN_ROOT", "/plugins/charter")][..]),
+            (
+                "empty",
+                &[("CHARTER_HARNESS", ""), ("CLAUDE_PLUGIN_ROOT", "")][..],
+            ),
+        ] {
+            let mut vars: Vec<(&str, &std::ffi::OsStr)> =
+                env.iter().map(|(k, v)| (*k, v.as_ref())).collect();
+            vars.push((DOCTOR_CHILD, case.as_ref()));
+            charter_core::testrun::rerun_steered(&[DOCTOR], &vars);
+        }
+        return;
+    };
+
+    let layer = session_layer();
+    match case.to_str() {
+        Some("named") => assert!(
+            layer.contains(
+                "charter has no record of how a-harness-charter-never-met finds an in-repo layer"
+            ),
+            "{layer}"
+        ),
+        Some("plugin") => {
+            assert!(layer.contains("claude-code: "), "{layer}");
+            assert!(
+                !layer.contains("codex: "),
+                "only the running harness: {layer}"
+            );
+        }
+        Some("empty") => {
+            assert!(layer.contains("claude-code: "), "{layer}");
+            assert!(
+                layer.contains("codex: "),
+                "every harness, none named: {layer}"
+            );
+        }
+        other => panic!("no case {other:?}"),
+    }
+}

@@ -2872,3 +2872,56 @@ fn a_plane_inside_a_larger_repository_is_checked_on_that_repositorys_index() {
     let r = one(&root, "index lock");
     assert!(r.detail.starts_with("held now — 0 byte(s)"), "{r:?}");
 }
+
+// ---- where a list stops naming (#464) ---------------------------------------------------------
+
+#[test]
+fn three_unresolved_forge_blocks_are_all_named_and_a_fourth_is_counted_not_named() {
+    let blocks = |n: usize| -> String {
+        (0..n)
+            .map(|i| format!("[[forge]]\nkind = \"nope{i}\"\n"))
+            .collect()
+    };
+    let (_d, root) = plane(&blocks(3));
+    let r = one(&root, "charter.toml");
+    assert_eq!(r.detail, "3 [[forge]] block(s) failed to resolve", "{r:?}");
+    assert!(r.hint.contains("'nope2'"), "{r:?}");
+    assert!(!r.hint.contains('…'), "{r:?}");
+
+    let (_d, root) = plane(&blocks(4));
+    let r = one(&root, "charter.toml");
+    assert_eq!(r.detail, "4 [[forge]] block(s) failed to resolve", "{r:?}");
+    assert!(!r.hint.contains("'nope3'"), "{r:?}");
+    assert!(r.hint.contains(" … — those hosts"), "{r:?}");
+}
+
+#[test]
+fn git_auth_names_three_drifted_repos_without_saying_there_are_more() {
+    let (_d, root) = plane("schema = 1\n");
+    for name in ["a", "b", "c"] {
+        clone_with_origin(&root, name, &format!("https://github.com/acme/{name}.git"));
+    }
+
+    let r = one(&root, "git auth");
+
+    assert_eq!(r.detail, "3/3 repo(s) not token-only: a, b, c");
+}
+
+#[cfg(unix)]
+#[test]
+fn git_auth_names_the_workspaces_folder_itself_when_it_cannot_be_listed() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_d, root) = plane("schema = 1\n");
+    let listing = root.join("workspaces");
+    std::fs::create_dir_all(&listing).unwrap();
+    std::fs::set_permissions(&listing, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let r = one(&root, "git auth");
+    std::fs::set_permissions(&listing, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert_eq!(r.status, Status::Warn, "{r:?}");
+    assert_eq!(
+        r.detail,
+        "token-only across 0 repo(s); workspaces/ cannot be checked"
+    );
+}

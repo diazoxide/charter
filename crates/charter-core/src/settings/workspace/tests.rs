@@ -436,3 +436,16 @@ fn a_workspace_naming_a_harness_charter_does_not_know_is_refused() {
         ]
     );
 }
+
+#[test]
+fn a_manifest_that_is_there_but_cannot_be_read_is_said_and_never_saved_over() {
+    // A directory where `workspace.json` belongs: there, and nothing charter can read. Taking it
+    // for an absent manifest would show an empty form and let a save make a new one.
+    let dir = plane(None);
+    fs::create_dir(dir.path().join("workspaces/alpha/workspace.json")).unwrap();
+
+    let err = read_file(dir.path(), "alpha").unwrap_err();
+    assert!(err.contains("could not be read"), "{err}");
+    let err = save(dir.path(), "alpha", None, &[off()]).unwrap_err();
+    assert!(err[0].contains("could not be read"), "{err:?}");
+}

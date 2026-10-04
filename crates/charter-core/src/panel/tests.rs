@@ -342,6 +342,16 @@ fn an_answered_row_may_offer_its_extension_s_own_actions_and_a_declared_row_may_
     assert_eq!(rows[0].actions, ["close"]);
     assert_eq!(rows[0].runs, None);
 
+    // The most one row draws is offered, not refused.
+    let full = answering(
+        r#"[{"kind":"list","rows":[{"key":"a","text":"a","actions":["a","b","c","d"]}]}]"#,
+    )
+    .expect("as many actions as a row draws");
+    let Block::List { rows, .. } = &full[0] else {
+        panic!("not a list");
+    };
+    assert_eq!(rows[0].actions, ["a", "b", "c", "d"]);
+
     let refused = declaring(
         r#"[{"id":"p","title":"P","rows":[{"key":"a","text":"a","actions":["close"]}]}]"#,
     )

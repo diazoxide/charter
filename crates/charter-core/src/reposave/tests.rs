@@ -315,6 +315,9 @@ fn a_push_the_remote_refuses_leaves_the_repo_blocked_and_rewrites_nothing() {
 
     assert_eq!(code, 1, "{said}");
     assert!(said.contains("has commits alpha/widget does not"), "{said}");
+    // git's rejection is repeated, and its advice is not: the fix is the sentence above.
+    assert!(said.contains("[rejected]"), "{said}");
+    assert!(!said.contains("hint:"), "{said}");
     assert_eq!(
         run(&f.clone, &["log", "-1", "--format=%s"]).trim(),
         "charter save: 1 file (mine.md)",
@@ -1059,4 +1062,130 @@ fn an_operators_untracked_cache_setting_is_never_overridden_by_any_read_or_save(
             "the operator's false was overridden: {forced:?}"
         );
     }
+}
+
+#[test]
+fn a_save_asked_not_to_push_commits_and_pushes_nothing_whatever_the_mode_says() {
+    // `--no-push` (and the app's commit-only save) stops at the commit in push mode as in any
+    // other; mode off still commits nothing.
+    let f = Fixture::new("[repos.widget]\nmode = \"push\"\n");
+    let before = f.remote_has("main");
+    std::fs::write(f.clone.join("a.md"), "a").unwrap();
+    let mut said = String::new();
+    let mut say = |line: Say| said.push_str(&format!("{line}\n"));
+
+    let code = save_as(
+        &Request {
+            plane: &f.plane,
+            workspace: "alpha",
+            name: "widget",
+            clone: &f.clone,
+            message: None,
+            no_push: true,
+            mid_turn: &Vec::new,
+        },
+        Trigger::Manual,
+        &mut say,
+    );
+
+    assert_eq!(code, 0, "{said}");
+    assert_eq!(f.remote_has("main"), before, "{said}");
+    let line = f.journal().pop().expect("a journal line");
+    assert_eq!(line["mode"], "commit", "{line}");
+    assert_eq!(line["outcome"], "committed", "{line}");
+}
+
+#[test]
+fn a_blank_message_is_no_message_and_the_save_says_what_changed_itself() {
+    let f = Fixture::new("[repos.widget]\nmode = \"commit\"\n");
+    std::fs::write(f.clone.join("a.md"), "a").unwrap();
+    let mut said = String::new();
+    let mut say = |line: Say| said.push_str(&format!("{line}\n"));
+
+    let code = save_as(
+        &Request {
+            plane: &f.plane,
+            workspace: "alpha",
+            name: "widget",
+            clone: &f.clone,
+            message: Some("  \n"),
+            no_push: false,
+            mid_turn: &Vec::new,
+        },
+        Trigger::Manual,
+        &mut say,
+    );
+
+    assert_eq!(code, 0, "{said}");
+    assert_eq!(
+        run(&f.clone, &["log", "-1", "--format=%s"]).trim(),
+        "charter save: 1 file (a.md)"
+    );
+}
+
+#[test]
+fn a_push_that_fails_for_its_own_reason_is_recorded_in_gits_words_without_its_blank_lines() {
+    let f = Fixture::new("[repos.widget]\nmode = \"push\"\n");
+    std::fs::remove_dir_all(&f.bare).unwrap();
+    std::fs::write(f.clone.join("a.md"), "a").unwrap();
+
+    let (code, said) = f.save();
+
+    assert_eq!(code, 1, "{said}");
+    let line = f.journal().pop().expect("a journal line");
+    assert_eq!(line["outcome"], "failed", "{line}");
+    let detail = line["detail"].as_str().unwrap_or_default();
+    assert!(
+        detail.contains("Could not read from remote repository"),
+        "{detail:?}"
+    );
+    assert!(!detail.contains("\n\n"), "{detail:?}");
+}
+
+/// [`save_branch`] for `alpha/widget` of `f`, standing on `main` at HEAD.
+fn save_branch_of(f: &Fixture) -> Result<String, String> {
+    save_branch(
+        &Request {
+            plane: &f.plane,
+            workspace: "alpha",
+            name: "widget",
+            clone: &f.clone,
+            message: None,
+            no_push: false,
+            mid_turn: &nobody_working,
+        },
+        "main",
+        &f.head(),
+    )
+}
+
+#[test]
+fn a_save_branch_is_carried_on_from_this_repos_journal_and_never_another_repos() {
+    // Two branches HEAD descends from; the journal says this repo's saves went to `bbb`, and a
+    // newer line about another repo names `aaa`.
+    let f = Fixture::new("[repos.widget]\nmode = \"pr\"\n");
+    run(&f.clone, &["branch", "charter/alpha/aaa"]);
+    run(&f.clone, &["branch", "charter/alpha/bbb"]);
+    planegit::journal_append(
+        &f.plane,
+        &serde_json::json!({"target": "repo:alpha/widget", "outcome": "pr-open", "branch": "charter/alpha/bbb"}),
+    );
+    planegit::journal_append(
+        &f.plane,
+        &serde_json::json!({"target": "repo:alpha/gadget", "outcome": "pr-open", "branch": "charter/alpha/aaa"}),
+    );
+
+    assert_eq!(save_branch_of(&f).as_deref(), Ok("charter/alpha/bbb"));
+}
+
+#[test]
+fn a_branch_whose_name_charter_would_refuse_is_never_carried_on() {
+    // git takes a no-break space in a branch name; charter's own check does not, so the save
+    // goes to a fresh branch of its own rather than pushing that name.
+    let f = Fixture::new("[repos.widget]\nmode = \"pr\"\n");
+    run(&f.clone, &["branch", "charter/alpha/odd\u{a0}name"]);
+
+    let got = save_branch_of(&f);
+
+    assert_eq!(got, Ok(format!("charter/alpha/{}", &f.head()[..7])));
 }
