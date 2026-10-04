@@ -1,0 +1,8 @@
+# actionlint's settings for this repository's workflows (#1133).
+self-hosted-runner:
+  # GitHub-hosted images newer than the label list actionlint ships with. `ci.yml`'s
+  # `app-evidence` job runs on them as evidence only (V70). Drop a label here once actionlint
+  # knows it.
+  labels:
+    - xcode-27
+    - ubuntu-26.04
