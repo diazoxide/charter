@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791131967564,
+  "lastUpdate": 1791142398260,
   "repoUrl": "https://github.com/diazoxide/charter",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -1260,6 +1260,48 @@ window.BENCHMARK_DATA = {
             "value": 104.548031,
             "unit": "ms",
             "extra": "median of 5 runs: 103.113, 104.062, 104.548, 104.559, 106.733 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "d63df068a20ecf9892dd39257e05887afa39c0ab",
+          "message": "stress: search at scale reports its budgets in CI instead of failing\n\n`search at scale` on macOS failed on every main run since FM-12 added it\n(ten runs on 2026-10-04), and passed on every Ubuntu run with the same\ncode. Run 37216804748, job 111483533718, 100,000 files:\n- ⌘P first find 8082 ms (budget 3 s); the same find in a second session\n  of the same run took 434 ms;\n- ⌘P keystroke worst 54.4 ms (budget 50 ms; median 6.8 ms);\n- status 11.8-14.5 s (budget 30 s, not missed).\n\nDiagnosis. The runner, not charter's code:\n- writing the repo took 146 s on macOS against 29 s on Ubuntu (718 s\n  against 96 s at 300,000), and the whole-repo scan 14 s against 4 s\n  (119 s against 9 s). Neither touches the reader child;\n- the reader child is spawned once per status, never per search; ⌘P and\n  ⌘⇧F run in process. perf-1 measured the child at 6-8 ms;\n- locally (M4 Pro, load 6-9) the same 100,000-file repo reads its status\n  in 0.7-1.0 s, with gix's compare trusting all 100,000 stats: 0 racily\n  clean, 0 to update, 0 files read.\nOne real cost class was confirmed locally. A stat that stops matching\nthe index (here every file's ctime changed by an xattr) makes the reader\nhash all 826 MB on every read, because it never writes the index:\n2.3-3.2 s per status. It is not proven to be the runner's cause. The run\nnow prints gix's counters and `git status`'s time next to the reader's,\nso the next main run says which one it was. The follow-up goes on #1153.\n\nWhat changes (ADR 0086, amended 2026-10-04):\n- `CHARTER_MEASURE_BUDGETS=report` prints each miss as\n  `FM-12 | budget missed | ...` and passes. By hand, unset, the budgets\n  still fail the run on the operator's machine;\n- stress.yml runs it that way, turns each miss into a warning, writes\n  every FM-12 line to the job summary and uploads the log. A wrong\n  answer or a panic still fails the job;\n- docs/spec.md G2-G4: release absolute by hand, evidence only in CI.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-04T23:30:46+04:00",
+          "tree_id": "928f696fad931e6e304f624d9dcf3a7ca60d1485",
+          "url": "https://github.com/diazoxide/charter/commit/d63df068a20ecf9892dd39257e05887afa39c0ab"
+        },
+        "date": 1791142397566,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.5607205,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.540, 0.553, 0.561, 0.561, 0.563 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.996339,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.270, 16.762, 16.996, 17.022, 17.141 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 103.8087725,
+            "unit": "ms",
+            "extra": "median of 5 runs: 103.415, 103.652, 103.809, 104.497, 105.174 ms"
           }
         ]
       }
