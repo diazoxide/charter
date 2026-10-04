@@ -220,8 +220,21 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # bubblewrap and socat, as `ci.yml` installs them: a project charter makes runs its chats
+      # sandboxed (ADR 0067 §1), so charter-core's start tests refuse without them. On a shard
+      # their absence is worse than a red baseline: every mutant those tests cover reads as
+      # caught, by a test that fails whatever the mutant does.
+      - name: The sandbox's programs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap socat
       - uses: ./.github/actions/rust-toolchain
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # Every crate the workspace's lock names, and not only charter-core's: the gitoxide
+      # guard reads `cargo metadata --offline` over the whole workspace, which a
+      # `--package charter-core` build never downloads.
+      - name: Every crate the lock names
+        run: cargo fetch --locked
       # Exactly what cargo-mutants runs as its baseline, and the reason the shards below can
       # skip it. `--no-fail-fast` for `ci.yml`'s reason: cargo stops at the first failing test
       # binary and skips every later one, so a single flake would hide the rest.
@@ -247,8 +260,21 @@ jobs:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: plan-diff
+      # bubblewrap and socat, as `ci.yml` installs them: a project charter makes runs its chats
+      # sandboxed (ADR 0067 §1), so charter-core's start tests refuse without them. On a shard
+      # their absence is worse than a red baseline: every mutant those tests cover reads as
+      # caught, by a test that fails whatever the mutant does.
+      - name: The sandbox's programs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap socat
       - uses: ./.github/actions/rust-toolchain
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # Every crate the workspace's lock names, and not only charter-core's: the gitoxide
+      # guard reads `cargo metadata --offline` over the whole workspace, which a
+      # `--package charter-core` build never downloads.
+      - name: Every crate the lock names
+        run: cargo fetch --locked
       - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
         with:
           tool: cargo-mutants@${{ env.MUTANTS_VERSION }}
