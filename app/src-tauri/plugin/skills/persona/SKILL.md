@@ -95,12 +95,14 @@ charter persona dedupe <name>                  # near-duplicate pairs, to forget
 charter persona edit-memory <name> <slug> [--title "<title>"] ["<body>" | -]   # rewrite in place
 charter persona archive-memory <name> <slug>   # out of every list, into memory/archive/
 charter persona unarchive-memory <name> <slug> [--as <slug>]   # back from the archive
+charter persona move-memory <name> <slug> --to-persona <other> | --to-workspace <ws> | --to-shared
 charter persona forget <name> <slug>           # delete one memory
 charter persona optimize                       # read-only curation report; --apply the safe ops
 ```
 
-Each of `edit-memory`, `archive-memory` and `unarchive-memory` takes `--shared` for the
-`_shared` store. An edit keeps the memory's slug and its date, so anything that names it still
+Each of `edit-memory`, `archive-memory`, `unarchive-memory` and `move-memory` takes `--shared`
+for the `_shared` store. A move takes a memory whole to the scope it belongs to, its title and
+date kept, and refuses a target that already holds one of that name. An edit keeps the memory's slug and its date, so anything that names it still
 does; prefer it to forgetting a memory and writing it again. Archive is what the window's Delete
 does, and it can be undone; `forget` cannot.
 

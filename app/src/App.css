@@ -5463,6 +5463,14 @@ h2.sidebar-title .node-icon {
   border-top: 1px solid var(--border-subtle);
 }
 
+/* A memory's Move (KN-3): under the body, set apart from it by a rule. */
+.memory-move {
+  max-width: 60rem;
+  margin-top: 1.5rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border-subtle);
+}
+
 /* The repo's agent instructions, offered to a workspace's memory (FR-18a): each file whole, under
    its name, so what Add to memory writes is what was read. A long file scrolls inside its own
    box rather than pushing the button off the tab. */

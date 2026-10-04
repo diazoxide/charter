@@ -178,6 +178,8 @@ macro_rules! app_commands {
                 memories::memory_unarchive,
                 memories::memory_archived,
                 memories::memory_create,
+                memories::memory_move,
+                memories::memory_scopes,
                 curation::curation_offers,
                 curation::curate,
                 references::reference_into_chat,

@@ -2,12 +2,19 @@ import { useEffect, useState, type FormEvent } from "react";
 import Markdown from "react-markdown";
 import { LoaderCircle } from "lucide-react";
 import { EmptyState } from "./EmptyState";
-import { Field, SettingRow } from "./settings/components";
+import { Choice, Field, SettingRow } from "./settings/components";
 import { COMPONENTS } from "./SessionRecordTab";
-import { commands, type MemoryEdited, type MemoryView, type PlaneId } from "./bindings";
+import {
+  commands,
+  type MemoryEdited,
+  type MemoryScope,
+  type MemoryView,
+  type PlaneId,
+} from "./bindings";
 import {
   DRAFT,
   memoryKey,
+  scopeKey,
   scopeWord,
   setDraft,
   TITLE_MAX,
@@ -36,6 +43,8 @@ import {
  *
  * A new memory's tab ({@link DRAFT} slug) reads nothing and is an editor from the start; its
  * Save is the store's own remember (`memory_create`), and its Cancel closes it.
+ *
+ * Read, it can also be **moved** to another store (KN-3): {@link MoveMemory}.
  */
 export function MemoryTab({
   plane,
@@ -48,7 +57,8 @@ export function MemoryTab({
   at: MemoryRef;
   /** Bumped when the plane changes on disk or a memory is written: the tab reads again. */
   changed: number;
-  /** A save or a create wrote the memory: the tab's name, key and every list follow it. */
+  /** A save, a create or a move wrote the memory: the tab's name, key and every list follow
+   *  it. */
   onSaved: (memory: MemoryView) => void;
   /** The tab asks to be closed: a new memory's Cancel. */
   onClose: () => void;
@@ -256,6 +266,7 @@ export function MemoryTab({
           {memory.body}
         </Markdown>
       </article>
+      <MoveMemory plane={plane} at={at} onMoved={onSaved} />
     </>
   );
 }
@@ -274,5 +285,111 @@ function Meta({ at, memory }: { at: MemoryRef; memory?: MemoryView }) {
         </>
       )}
     </p>
+  );
+}
+
+/** What the Move choice calls a store. */
+function scopeLabel(scope: MemoryScope): string {
+  switch (scope.kind) {
+    case "workspace":
+      return `${scope.name} — workspace`;
+    case "persona":
+      return `${scope.name} — persona`;
+    case "shared":
+      return "shared";
+  }
+}
+
+/**
+ * **Move a memory to another store** (KN-3): a workspace's journal, a persona's memory or shared
+ * memory. The file moves whole — its title and stamp with it, nothing copied — and the tab
+ * follows it there (`onMoved`, which a save calls too).
+ *
+ * **The pick is held, and only the button moves** (`docs/ui-primitives.md`: a choice that writes
+ * something with no Undo holds the pick and writes on a button). A move a store refuses — one
+ * already holding a memory of that name, one charter may not write — says why, and nothing moved.
+ */
+function MoveMemory({
+  plane,
+  at,
+  onMoved,
+}: {
+  plane: PlaneId;
+  at: MemoryRef;
+  onMoved: (memory: MemoryView) => void;
+}) {
+  const [scopes, setScopes] = useState<MemoryScope[]>();
+  const [picked, setPicked] = useState("");
+  const [moving, setMoving] = useState(false);
+  const [refused, setRefused] = useState<string>();
+  const here = scopeKey(at.scope);
+
+  useEffect(() => {
+    let gone = false;
+    void commands
+      .memoryScopes(plane)
+      .then((answer) => {
+        if (!gone && answer.status === "ok" && Array.isArray(answer.data)) setScopes(answer.data);
+      })
+      .catch(() => {});
+    return () => {
+      gone = true;
+    };
+  }, [plane]);
+
+  const others = (scopes ?? []).filter((scope) => scopeKey(scope) !== here);
+  if (others.length === 0) return null;
+  const target = others.find((scope) => scopeKey(scope) === picked);
+
+  const move = async () => {
+    if (target === undefined) return;
+    setMoving(true);
+    setRefused(undefined);
+    try {
+      const answer = await commands.memoryMove(plane, at.scope, at.slug, target);
+      if (answer.status === "error") setRefused(answer.error);
+      else {
+        setPicked("");
+        onMoved(answer.data);
+      }
+    } catch (err: unknown) {
+      setRefused(String(err));
+    } finally {
+      setMoving(false);
+    }
+  };
+
+  return (
+    <div className="memory-move">
+      <SettingRow
+        label="Move to"
+        help="Moves the file whole, with its title and date. Nothing is copied."
+        control={(ids) => (
+          <Choice
+            ids={ids}
+            kind="select"
+            unset="Pick a store…"
+            options={others.map((scope) => ({ value: scopeKey(scope), label: scopeLabel(scope) }))}
+            value={picked}
+            onValueChange={setPicked}
+          />
+        )}
+      />
+      {refused !== undefined && (
+        <p className="trouble" role="alert">
+          {refused}
+        </p>
+      )}
+      <div className="settings-actions">
+        <button
+          type="button"
+          tabIndex={0}
+          disabled={target === undefined || moving}
+          onClick={() => void move()}
+        >
+          Move
+        </button>
+      </div>
+    </div>
   );
 }

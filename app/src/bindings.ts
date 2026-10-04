@@ -1143,6 +1143,18 @@ export const commands = {
 	 */
 	memoryCreate: (plane: PlaneId, scope: MemoryScope, title: string, text: string) => typedError<MemoryView, string>(__TAURI_INVOKE("memory_create", { plane, scope, title, text })),
 	/**
+	 *  The window's Move (KN-3): the memory `slug` in `scope` moves whole to `to` — renamed, never
+	 *  copied, its title and stamp kept, its index line moved with it — and is answered where it is
+	 *  now, so its tab follows it. A target holding a memory of that name, a store the plane does
+	 *  not have and one charter may not write are refused, and nothing moves.
+	 */
+	memoryMove: (plane: PlaneId, scope: MemoryScope, slug: string, to: MemoryScope) => typedError<MemoryView, string>(__TAURI_INVOKE("memory_move", { plane, scope, slug, to })),
+	/**
+	 *  The stores a memory can be moved to, in the order the Move choice lists them: every
+	 *  workspace, every persona, then shared memory. The tab leaves out the one it is in.
+	 */
+	memoryScopes: (plane: PlaneId) => typedError<MemoryScope[], string>(__TAURI_INVOKE("memory_scopes", { plane })),
+	/**
 	 *  What each subject the window names is offered (`subjects` in the core's spelling:
 	 *  `workspace:<name>`, `persona:<name>`, `plane`), in the order asked.
 	 */

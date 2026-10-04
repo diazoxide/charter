@@ -896,6 +896,16 @@ enum WorkspaceCommand {
         #[command(flatten)]
         common: Common,
     },
+    /// Move one workspace memory to another scope: another workspace's journal, a persona,
+    /// or shared. Its title and stamp go with it, and nothing is copied.
+    Move {
+        /// Memory slug or filename (see `charter workspace recall`).
+        slug: String,
+        #[command(flatten)]
+        to: memory::MoveTo,
+        #[command(flatten)]
+        common: Common,
+    },
     /// Move an archived workspace memory back into the journal and re-index it.
     Unarchive {
         /// The memory's slug or filename in memory/archive/.
@@ -2628,6 +2638,16 @@ fn run(command: Command) -> Result<u8, String> {
                 &here.plane,
                 &here.active_workspace(common.workspace.as_deref())?,
                 &slug,
+            );
+        }
+        Command::Workspace(WorkspaceCommand::Move { slug, to, common }) => {
+            let name = here.active_workspace(common.workspace.as_deref())?;
+            return memory::move_memory(
+                &here.plane,
+                &charter_core::memscope::Scope::Workspace(name),
+                &slug,
+                &to.scope(),
+                None,
             );
         }
         Command::Workspace(WorkspaceCommand::Unarchive {

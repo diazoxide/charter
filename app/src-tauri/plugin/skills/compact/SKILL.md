@@ -39,11 +39,15 @@ charter workspace edit -w <name> <slug> [--title "<title>"] ["<body>" | -]
 charter persona edit-memory <name> <slug> [--title "<title>"] ["<body>" | -] [--shared]
 charter workspace archive -w <name> <slug>              # undo: workspace unarchive
 charter persona archive-memory <name> <slug> [--shared] # undo: persona unarchive-memory
+charter workspace move -w <name> <slug> --to-persona <p> | --to-workspace <ws> | --to-shared
+charter persona move-memory <name> <slug> [--shared] --to-persona <p> | --to-workspace <ws> | --to-shared
 ```
 
 An edit keeps the memory's slug and date. An archive moves it to `memory/archive/`, out of every
 list, and `unarchive` / `unarchive-memory` puts it back. `workspace forget` and `persona forget`
 delete for good; keep them for a memory that must not survive, such as one holding a secret.
+A memory in the wrong scope, such as a workspace lesson every persona should know, is moved, not
+copied: the move keeps its title and date and prints the command that moves it back.
 
 Done when every finding is applied, merged, kept on purpose, or declined by the operator.
 

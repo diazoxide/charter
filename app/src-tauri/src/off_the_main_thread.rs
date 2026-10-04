@@ -48,6 +48,8 @@ mod tests {
                 crate::memories::memory_unarchive,
                 crate::memories::memory_archived,
                 crate::memories::memory_create,
+                crate::memories::memory_move,
+                crate::memories::memory_scopes,
                 crate::todos::todo_add,
                 crate::todos::todo_done,
                 crate::todos::todo_forget,
@@ -193,6 +195,11 @@ mod tests {
                 "plane": plane, "scope": alpha,
                 "archived": archived["archived"], "restoreAs": null,
             }),
+        );
+        check("memory_scopes", json!({ "plane": plane }));
+        check(
+            "memory_move",
+            json!({ "plane": plane, "scope": alpha, "slug": slug, "to": { "kind": "shared" } }),
         );
 
         // The window's writes tell the plane's model what they wrote, under the lock a change

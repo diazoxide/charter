@@ -1768,6 +1768,159 @@ pub fn edit(
     Ok(file)
 }
 
+/// `name` without a journal's `YYYYMMDD-HHMMSS-` prefix: the name a memory has in any store,
+/// and what a move asks a target store to be free of.
+pub(crate) fn unstamped(name: &str) -> &str {
+    let bytes = name.as_bytes();
+    let prefixed = bytes.len() > 16
+        && bytes[..8].iter().all(u8::is_ascii_digit)
+        && bytes[8] == b'-'
+        && bytes[9..15].iter().all(u8::is_ascii_digit)
+        && bytes[15] == b'-';
+    if prefixed { &name[16..] } else { name }
+}
+
+/// The name a memory called `name`, whose whole text is `text`, takes in a store whose names
+/// are `timestamped` or not (KN-3): its name without the journal's prefix in a persona's store;
+/// in a journal, its own name when it has a prefix already, else the prefix of its own stamp
+/// line (`_YYYY-MM-DD HH:MM · kind_`, seconds `00`), else of `now` for a file with none. So a
+/// memory moved away and back has its first name again, and a journal lists it where it was
+/// recorded rather than where it was moved.
+pub(crate) fn moved_name(
+    name: &str,
+    text: &str,
+    timestamped: bool,
+    now: chrono::NaiveDateTime,
+) -> String {
+    let bare = unstamped(name);
+    if !timestamped {
+        return bare.to_owned();
+    }
+    if bare != name {
+        return name.to_owned();
+    }
+    let lines = crate::mdsection::split_lines(text);
+    let stamped = top_lines(&lines)
+        .1
+        .and_then(|(_, line)| {
+            let inner = line.strip_prefix('_')?;
+            let when = inner.split(" · ").next()?;
+            chrono::NaiveDateTime::parse_from_str(py_strip(when), "%Y-%m-%d %H:%M").ok()
+        })
+        .unwrap_or(now);
+    format!("{}{bare}", stamped.format("%Y%m%d-%H%M%S-"))
+}
+
+/// Why a move found its target store taken.
+fn taken(to: &std::path::Path, root: &std::path::Path, dest: &str) -> std::io::Error {
+    let store = to.strip_prefix(root).unwrap_or(to);
+    std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        format!(
+            "{} already holds a memory named '{}', so nothing moved",
+            crate::shown::readable(&store.to_string_lossy(), PATH_LIMIT),
+            unstamped(dest).strip_suffix(".md").unwrap_or(dest)
+        ),
+    )
+}
+
+/// Move the memory named exactly `ident` from the store `from` into the store `to`, whose names
+/// are `timestamped` or not; the path it is at now (KN-3).
+///
+/// **Whole, or not at all.** The file is renamed, never copied, so no copy is left behind; its
+/// text is not touched, so its title and its stamp go with it. Its index line is appended in
+/// `to` (an index made with `header` when `to` has none) and dropped in `from`. A refusal moves
+/// nothing, and an append that fails after the rename renames the file back.
+///
+/// The name it takes is [`moved_name`]'s. Refused with `AlreadyExists` when `to` holds a memory
+/// of that name once a journal's prefix is taken off either, `NotFound` when `from` does not
+/// hold `ident`, `InvalidInput` for a slug that is a path or two stores that are one, and
+/// `PermissionDenied` for a store or a name a link takes out of the project. Both stores are
+/// locked for the whole move, in the order of their paths.
+pub fn move_one(
+    root: &std::path::Path,
+    from: &std::path::Path,
+    ident: &str,
+    to: &std::path::Path,
+    timestamped: bool,
+    header: &str,
+    now: chrono::NaiveDateTime,
+) -> std::io::Result<std::path::PathBuf> {
+    one_segment(ident)?;
+    if from == to {
+        return Err(invalid("a memory is moved to another store, not its own"));
+    }
+    gate(root, from)?;
+    gate(root, to)?;
+    #[cfg(unix)]
+    {
+        holding::move_one(root, from, ident, to, timestamped, header, now)
+    }
+    #[cfg(not(unix))]
+    {
+        move_by_path(root, from, ident, to, timestamped, header, now)
+    }
+}
+
+/// [`move_one`] by path, where no store is held by descriptor.
+#[cfg(not(unix))]
+fn move_by_path(
+    root: &std::path::Path,
+    from: &std::path::Path,
+    ident: &str,
+    to: &std::path::Path,
+    timestamped: bool,
+    header: &str,
+    now: chrono::NaiveDateTime,
+) -> std::io::Result<std::path::PathBuf> {
+    let file = resolve_exact(root, from, ident).ok_or_else(|| no_such(ident))?;
+    let name = file
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    std::fs::create_dir_all(to)?;
+    let (_first, _second) = if from < to {
+        (crate::rewrite::Lock::on(from), crate::rewrite::Lock::on(to))
+    } else {
+        (crate::rewrite::Lock::on(to), crate::rewrite::Lock::on(from))
+    };
+    let text = std::fs::read_to_string(&file)?;
+    let dest = moved_name(&name, &text, timestamped, now);
+    let target = to.join(&dest);
+    let held = read_files(root, to).0;
+    if std::fs::symlink_metadata(&target).is_ok()
+        || held.iter().any(|p| {
+            unstamped(&p.file_name().unwrap_or_default().to_string_lossy()) == unstamped(&dest)
+        })
+    {
+        return Err(taken(to, root, &dest));
+    }
+    let index = to.join(INDEX);
+    if let Ok(meta) = std::fs::symlink_metadata(&index)
+        && !meta.is_file()
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!("{} is not a file", index.display()),
+        ));
+    }
+    gate(root, &file)?;
+    gate(root, &target)?;
+    gate(root, &index)?;
+    let title = title_in(&target, &text);
+    std::fs::rename(&file, &target)?;
+    if !index.exists() {
+        let _ = std::fs::write(&index, header);
+    }
+    if let Err(e) = index_append(root, &index, &dest, &title) {
+        let _ = std::fs::rename(&target, &file);
+        return Err(e);
+    }
+    drop_index_line(root, from, &name);
+    Ok(target)
+}
+
 /// Could `ident` be a memory's slug? One path segment once any `.md` is taken off —
 /// `../../victim.md` is a legal FILENAME and not a legal slug (#339) — and not the store's
 /// index: `MEMORY` is `MEMORY.md`, which `archive MEMORY` moved away whole (SI-9d).

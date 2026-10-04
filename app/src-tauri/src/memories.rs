@@ -15,6 +15,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
+use charter_core::memscope::{self, Scope};
 use charter_core::memstore::{Base, EditRefused};
 use charter_core::personas::{Persona, SHARED};
 use charter_core::workspaces::{Opened, Plane, Workspace};
@@ -482,6 +483,81 @@ fn create(
     let slug = stem(&path);
     read_in(root, scope, &store, &slug)?
         .ok_or_else(|| format!("'{slug}' was written and is not there"))
+}
+
+impl MemoryScope {
+    /// The core's spelling of this scope.
+    fn core(&self) -> Scope {
+        match self {
+            Self::Workspace { name } => Scope::Workspace(name.clone()),
+            Self::Persona { name } => Scope::Persona(name.clone()),
+            Self::Shared => Scope::Shared,
+        }
+    }
+
+    /// The window's spelling of the core's scope.
+    fn of(scope: Scope) -> Self {
+        match scope {
+            Scope::Workspace(name) => Self::Workspace { name },
+            Scope::Persona(name) => Self::Persona { name },
+            Scope::Shared => Self::Shared,
+        }
+    }
+}
+
+/// The window's Move (KN-3): the memory `slug` in `scope` moves whole to `to` — renamed, never
+/// copied, its title and stamp kept, its index line moved with it — and is answered where it is
+/// now, so its tab follows it. A target holding a memory of that name, a store the plane does
+/// not have and one charter may not write are refused, and nothing moves.
+#[tauri::command]
+#[specta::specta]
+pub async fn memory_move(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    scope: MemoryScope,
+    slug: String,
+    to: MemoryScope,
+) -> Result<MemoryView, String> {
+    let held = planes.held(&plane)?;
+    crate::off_the_window(WRITING, move || {
+        let moved = move_to(held.root(), &scope, &slug, &to, now());
+        held.wrote(&[scope.store(), to.store()]);
+        moved
+    })
+    .await
+}
+
+fn move_to(
+    root: &Path,
+    scope: &MemoryScope,
+    slug: &str,
+    to: &MemoryScope,
+    stamp: chrono::NaiveDateTime,
+) -> Result<MemoryView, String> {
+    let plane = Plane::open(root);
+    let at = memscope::move_memory(&plane, &scope.core(), slug, &to.core(), stamp)
+        .map_err(|e| e.to_string())?;
+    let slug = stem(&at);
+    read_in(root, to, &Store::of(root, to)?, &slug)?
+        .ok_or_else(|| format!("'{slug}' was moved and is not there"))
+}
+
+/// The stores a memory can be moved to, in the order the Move choice lists them: every
+/// workspace, every persona, then shared memory. The tab leaves out the one it is in.
+#[tauri::command]
+#[specta::specta]
+pub async fn memory_scopes(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+) -> Result<Vec<MemoryScope>, String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    crate::off_the_window(READING, move || scopes(&root)).await
+}
+
+fn scopes(root: &Path) -> Result<Vec<MemoryScope>, String> {
+    memscope::scopes(&Plane::open(root))
+        .map(|all| all.into_iter().map(MemoryScope::of).collect())
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -1035,5 +1111,79 @@ mod tests {
         assert!(!matches!(read(dir.path(), &alpha(), "theirs"), Ok(Some(_))));
 
         assert_eq!(snapshot(dir.path()), before, "something was written");
+    }
+
+    // --- move (KN-3) ----------------------------------------------------------------------------
+
+    #[test]
+    fn a_move_takes_the_memory_whole_and_answers_it_where_it_is_now() {
+        let dir = plane();
+        let made = create(dir.path(), &alpha(), "Deploys", "Through the canary.", at()).unwrap();
+
+        let moved = move_to(dir.path(), &alpha(), &made.slug, &steward(), at()).unwrap();
+
+        assert_eq!(moved.scope, steward());
+        assert_eq!(moved.slug, "deploys");
+        assert_eq!(moved.path, "personas/steward/memory/deploys.md");
+        assert_eq!(moved.title, made.title, "the title goes with it");
+        assert_eq!(moved.stamp, made.stamp, "and so does the stamp");
+        assert_eq!(moved.text, made.text, "byte for byte");
+        assert_eq!(
+            read(dir.path(), &alpha(), &made.slug).unwrap(),
+            None,
+            "no copy stays"
+        );
+    }
+
+    #[test]
+    fn a_move_onto_a_name_the_target_holds_is_refused_and_moves_nothing() {
+        let dir = plane();
+        let made = create(dir.path(), &alpha(), "Deploys", "Through the canary.", at()).unwrap();
+        create(
+            dir.path(),
+            &MemoryScope::Shared,
+            "Deploys",
+            "Somewhere else.",
+            at(),
+        )
+        .unwrap();
+
+        let refused =
+            move_to(dir.path(), &alpha(), &made.slug, &MemoryScope::Shared, at()).unwrap_err();
+
+        assert!(refused.contains("already holds"), "{refused}");
+        assert_eq!(read(dir.path(), &alpha(), &made.slug).unwrap(), Some(made));
+    }
+
+    #[test]
+    fn a_move_to_a_store_the_plane_does_not_have_is_refused() {
+        let dir = plane();
+        let made = create(dir.path(), &alpha(), "Deploys", "Through the canary.", at()).unwrap();
+        let ghost = MemoryScope::Persona {
+            name: "ghost".into(),
+        };
+
+        let refused = move_to(dir.path(), &alpha(), &made.slug, &ghost, at()).unwrap_err();
+
+        assert!(refused.contains("ghost"), "{refused}");
+        assert!(read(dir.path(), &alpha(), &made.slug).unwrap().is_some());
+    }
+
+    #[test]
+    fn the_stores_a_memory_can_move_to_are_every_workspace_every_persona_and_shared() {
+        let dir = plane();
+        std::fs::create_dir_all(dir.path().join("workspaces/beta")).unwrap();
+
+        assert_eq!(
+            scopes(dir.path()).unwrap(),
+            [
+                alpha(),
+                MemoryScope::Workspace {
+                    name: "beta".into()
+                },
+                steward(),
+                MemoryScope::Shared,
+            ]
+        );
     }
 }

@@ -72,6 +72,7 @@ pub mod livesub;
 pub mod machine;
 pub mod manifest;
 pub mod mdsection;
+pub mod memscope;
 pub mod memstore;
 pub mod netlog;
 pub mod news;
