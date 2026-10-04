@@ -307,6 +307,38 @@ impl Held {
         model.clone()
     }
 
+    /// The model, for the workspace panels to be served from (FD-10c) — or `None` for a plane
+    /// that is not watched, whose panels are read fresh from the disk on every ask, as they
+    /// were before there was a model: nothing would ever tell the model the plane moved.
+    ///
+    /// Held for as long as the guard lives: a workspace's first ask reads its sections under
+    /// it, so it is taken off the window's thread (SC-2).
+    pub fn watched_model(&self) -> Option<MutexGuard<'_, Model>> {
+        let model = self.model.lock().unwrap_or_else(PoisonError::into_inner);
+        let watched = self
+            .watch
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_some();
+        watched.then_some(model)
+    }
+
+    /// The window wrote these stores itself — a todo recorded, a memory saved, a persona made
+    /// — and reads its panels straight after: the model takes the change now rather than when
+    /// the watch's batch arrives, which then only reads the same store once more (FD-10c).
+    ///
+    /// `stores` are plane-relative (`workspaces/alpha/todos`). One the plane format cannot
+    /// place reads the model again whole, the watch's own rule for a path it cannot name.
+    pub fn wrote(&self, stores: &[String]) {
+        let paths: Vec<PathBuf> = stores.iter().map(|store| self.root.join(store)).collect();
+        let changes =
+            charter_core::planechange::of_batch(&self.root, paths.iter().map(PathBuf::as_path));
+        self.model
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .apply(&self.root, changes.as_deref());
+    }
+
     /// The window moved the plane's workspaces itself — made, renamed or removed one, or set
     /// one LIVE — and reads the sidebar straight after: the model is read again
     /// now rather than when the watch's batch arrives, a quarter of a second or (on a busy

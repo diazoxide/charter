@@ -251,7 +251,6 @@ describe("the readers of the plane, told what changed", () => {
     changed(PLANE, [
       { answer: "sidebar" },
       { answer: "panels", workspace: "beta" },
-      { answer: "shape" },
       { answer: "git" },
       { answer: "views" },
     ]);
@@ -285,6 +284,74 @@ describe("the readers of the plane, told what changed", () => {
     expect(commits).toBe(drawn);
   });
 
+  it("ask nothing but the focused workspace's panels again for a memory saved in it", async () => {
+    // FD-10d: a memory an agent saves in the workspace in front is part of its panels and of
+    // the memory views, and of nothing else the window reads — not the sidebar, not the
+    // instructions a chat started on, not the curations, and no git reader.
+    const { asked, changed } = core();
+    render(<App />);
+    await waitFor(() => expect(todoRows()).toHaveLength(2));
+    await settle();
+    const before = asked.length;
+
+    // What the core says a memory of alpha concerns.
+    changed(PLANE, [{ answer: "panels", workspace: "alpha" }, { answer: "views" }]);
+
+    await waitFor(() => expect(asked.slice(before)).toContain("workspace_panels"));
+    await settle();
+    expect(asked.slice(before)).toEqual(["workspace_panels"]);
+  });
+
+  it("ask neither the instructions nor the curations again for a todo", async () => {
+    // FD-10d: neither is made of a todo, and a todo is closed many times a day.
+    const { asked, changed } = core();
+    render(<App />);
+    await waitFor(() => expect(todoRows()).toHaveLength(2));
+    await waitFor(() => expect(asked).toContain("chats_plane_updated"));
+    await waitFor(() => expect(asked).toContain("curation_offers"));
+    await settle();
+    const instructions = count(asked, "chats_plane_updated");
+    const curations = count(asked, "curation_offers");
+    const sidebar = count(asked, "plane_sidebar");
+
+    // What the core says a todo of beta concerns.
+    changed(PLANE, [
+      { answer: "sidebar" },
+      { answer: "panels", workspace: "beta" },
+      { answer: "git" },
+      { answer: "views" },
+    ]);
+
+    await waitFor(() => expect(count(asked, "plane_sidebar")).toBeGreaterThan(sidebar));
+    await settle();
+    expect(count(asked, "chats_plane_updated")).toBe(instructions);
+    expect(count(asked, "curation_offers")).toBe(curations);
+  });
+
+  it("ask the instructions and the curations again for a persona's charter", async () => {
+    const { asked, changed } = core();
+    render(<App />);
+    await waitFor(() => expect(todoRows()).toHaveLength(2));
+    await waitFor(() => expect(asked).toContain("chats_plane_updated"));
+    await waitFor(() => expect(asked).toContain("curation_offers"));
+    await settle();
+    const instructions = count(asked, "chats_plane_updated");
+    const curations = count(asked, "curation_offers");
+
+    // What the core says `personas/steward/persona.md` concerns.
+    changed(PLANE, [
+      { answer: "sidebar" },
+      { answer: "panels", workspace: null },
+      { answer: "instructions" },
+      { answer: "curations" },
+      { answer: "git" },
+      { answer: "views" },
+    ]);
+
+    await waitFor(() => expect(count(asked, "chats_plane_updated")).toBeGreaterThan(instructions));
+    await waitFor(() => expect(count(asked, "curation_offers")).toBeGreaterThan(curations));
+  });
+
   it("keep the newest sidebar when an older read of it answers last", async () => {
     const { asked, changed } = core();
     render(<App />);
@@ -298,7 +365,6 @@ describe("the readers of the plane, told what changed", () => {
     const todos: PlaneAnswer[] = [
       { answer: "sidebar" },
       { answer: "panels", workspace: "alpha" },
-      { answer: "shape" },
       { answer: "git" },
       { answer: "views" },
     ];

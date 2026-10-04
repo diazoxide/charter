@@ -23,6 +23,11 @@ use charter_core::repocmd::Say;
 use crate::planes::{PlaneId, Planes};
 use crate::workspaces::ran;
 
+/// What a persona command says when its blocking thread ended without an answer. Each one runs
+/// on such a thread: it writes the persona's files, and then takes the plane model's lock,
+/// which a change nobody could name holds while it reads every workspace again (SC-2, FD-10c).
+const WRITING: &str = "writing the persona";
+
 /// Make a persona: `charter persona create <name> [--role …] [--delegate-when …] [--extends …]`,
 /// where `parent` is `--extends` (a word TypeScript keeps for itself).
 ///
@@ -34,7 +39,7 @@ use crate::workspaces::ran;
 // (charter-app#127). Not a doc comment, because the generated bindings carry those.
 #[tauri::command]
 #[specta::specta]
-pub fn persona_create(
+pub async fn persona_create(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
     name: String,
@@ -42,14 +47,21 @@ pub fn persona_create(
     delegate_when: Option<String>,
     parent: Option<String>,
 ) -> Result<Vec<String>, String> {
-    let root = planes.held(&plane)?.root().to_path_buf();
-    create_in(
-        &root,
-        &name,
-        role.as_deref(),
-        delegate_when.as_deref(),
-        parent.as_deref(),
-    )
+    let held = planes.held(&plane)?;
+    crate::off_the_window(WRITING, move || {
+        let said = create_in(
+            held.root(),
+            &name,
+            role.as_deref(),
+            delegate_when.as_deref(),
+            parent.as_deref(),
+        );
+        // Told whether or not it was made: a refusal moved nothing, and listing the personas
+        // again costs one directory read.
+        held.wrote(&["personas".to_owned()]);
+        said
+    })
+    .await
 }
 
 /// A box left empty, or holding only spaces, is a flag that was not given.
@@ -91,13 +103,18 @@ fn create_in(
 /// that has no session or pane of its own.
 #[tauri::command]
 #[specta::specta]
-pub fn persona_remove(
+pub async fn persona_remove(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
     name: String,
 ) -> Result<Vec<String>, String> {
-    let root = planes.held(&plane)?.root().to_path_buf();
-    remove_in(&root, &name)
+    let held = planes.held(&plane)?;
+    crate::off_the_window(WRITING, move || {
+        let said = remove_in(held.root(), &name);
+        held.wrote(&["personas".to_owned()]);
+        said
+    })
+    .await
 }
 
 /// The removal itself, against a root the registry has already vouched for.

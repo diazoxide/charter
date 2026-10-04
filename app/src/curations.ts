@@ -19,8 +19,9 @@ export function curationSubjects(
 
 /**
  * **What each subject is offered, as the core resolves it** (`curation_offers`): asked again
- * when the subjects change and when the plane changes on disk — a persona's `curation/` file
- * edited in an editor is one of those — and never kept past the plane it was asked for.
+ * when the subjects change and when the core says a change on disk concerns the curations
+ * (`CURATIONS`, FD-10d) — a persona's `curation/` file edited in an editor is one of those, a
+ * todo or a memory never is — and never kept past the plane it was asked for.
  *
  * Written as `useVaults` is: the command's own promise, a `gone` flag, and state set only in
  * its callback. Keyed on the subjects' spelling rather than the array, so a sidebar read again
@@ -29,7 +30,7 @@ export function curationSubjects(
 export function useCurations(
   plane: string,
   subjects: readonly string[],
-  changesOnDisk: number,
+  curationsChanges: number,
 ): Curations | undefined {
   const key = subjects.join("\n");
   const [said, setSaid] = useState<{ plane: string; key: string; curations: Curations }>();
@@ -49,6 +50,6 @@ export function useCurations(
     return () => {
       gone = true;
     };
-  }, [plane, key, changesOnDisk]);
+  }, [plane, key, curationsChanges]);
   return useMemo(() => (said?.plane === plane ? said.curations : undefined), [said, plane]);
 }

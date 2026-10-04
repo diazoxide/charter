@@ -16,9 +16,12 @@ export type Interest = PlaneAnswer;
 /** The sidebar (`plane_sidebar`). */
 export const SIDEBAR: Interest = { answer: "sidebar" };
 
-/** The window's readers beside its panels: the instructions a chat started on, the
- *  curations. */
-export const SHAPE: Interest = { answer: "shape" };
+/** The instructions a chat read at its start, which mark a chat running on old ones
+ *  (`chats_plane_updated`). */
+export const INSTRUCTIONS: Interest = { answer: "instructions" };
+
+/** The curation actions offered on each subject (`curation_offers`). */
+export const CURATIONS: Interest = { answer: "curations" };
 
 /** What a project has on, and the theme it draws. */
 export const SETTINGS: Interest = { answer: "settings" };
