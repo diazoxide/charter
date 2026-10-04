@@ -845,11 +845,12 @@ fn on_linux_a_keyring_vault_refusal_offers_the_opt_out_and_moving_the_vault() {
     let said = refused.to_string();
     assert_eq!(
         said,
-        "this plane runs every chat sandboxed, and on Linux charter cannot keep a Claude Code \
-         chat away from the system keyring, where this project's keyring vaults keep their \
-         secrets, so nothing was started. Choose Start without the sandbox for this chat, or \
-         move those secrets to a plain-file or 1Password vault, which the sandbox can keep \
-         from a chat."
+        "this project runs every chat sandboxed, and on Linux charter cannot keep a Claude \
+         Code chat away from the system keyring, where this project's keyring vaults keep their \
+         secrets, so nothing was started. Start this chat without the sandbox from the \
+         new-chat picker, or move those secrets to a plain-file or 1Password vault, which the \
+         sandbox can keep from a chat. For a resumed or relaunched chat, moving them is the \
+         way on."
     );
     assert!(!said.contains("cannot keep a chat away from the operating system's credential store"));
 }

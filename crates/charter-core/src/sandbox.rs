@@ -1316,14 +1316,17 @@ impl fmt::Display for NotStarted {
                     },
                     sandboxed_harnesses_but(Some(it.harness))
                 ),
-                // Ruling V90c: never a dead end. The picker offers the opt-out beside it.
+                // Ruling V90c: never a dead end. The new-chat picker offers the opt-out beside
+                // it; a resumed or relaunched chat has no opt-out, so moving the secrets is its
+                // way on.
                 Unheld::Service(Service::CredentialStore, os) => write!(
                     f,
-                    "{lead}, and {} charter cannot keep {} {} chat away from the system \
-                     keyring, where this project's keyring vaults keep their secrets, so nothing \
-                     was started. Choose Start without the sandbox for this chat, or move those \
-                     secrets to a plain-file or 1Password vault, which the sandbox can keep from \
-                     a chat.",
+                    "this project runs every chat sandboxed, and {} charter cannot keep {} {} \
+                     chat away from the system keyring, where this project's keyring vaults \
+                     keep their secrets, so nothing was started. Start this chat without the \
+                     sandbox from the new-chat picker, or move those secrets to a plain-file or \
+                     1Password vault, which the sandbox can keep from a chat. For a resumed or \
+                     relaunched chat, moving them is the way on.",
                     match os {
                         Os::Linux => "on Linux",
                         Os::MacOs | Os::Windows | Os::Other => "on this system",

@@ -409,7 +409,7 @@ pub fn plaintext_refusal(ctx: &Ctx, v: &Vault) -> Result<(), VaultError> {
 
 /// `cmd_secret_set`: store a value, refusing an empty one unless `--allow-empty`.
 pub fn set(ctx: &Ctx, vault: &str, key: &str, from: &SetFrom, io: &mut dyn Io) -> i32 {
-    let outcome = (|| -> Result<String, VaultError> {
+    let outcome = (|| -> Result<(String, bool), VaultError> {
         let v = provider(ctx, vault)?;
         plaintext_refusal(ctx, &v)?;
         let value = read_value(ctx, key, from, io)?;
@@ -427,14 +427,20 @@ pub fn set(ctx: &Ctx, vault: &str, key: &str, from: &SetFrom, io: &mut dyn Io) -
             )));
         }
         set_value(ctx, &v, key, &value)?;
-        Ok(value)
+        let unheld = v.provider == "keyring" && keyring::left_unheld(ctx, &v, key);
+        Ok((value, unheld))
     })();
     match outcome {
-        Ok(value) => {
+        Ok((value, unheld)) => {
             io.say(Say::Ok(format!(
                 "Set '{key}' in vault '{vault}' ({}). Value not shown.",
                 fingerprint::size_band(&value)
             )));
+            // Ruling V90a: an item the store could not hold to charter's app is said, never
+            // left to look held.
+            if unheld {
+                io.say(Say::Warn(keyring::unheld_sentence(key)));
+            }
             0
         }
         Err(e) => {

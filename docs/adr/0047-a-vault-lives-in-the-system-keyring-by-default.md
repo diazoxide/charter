@@ -278,7 +278,12 @@ the person first.
   had, so one the person once let another program read ("Always Allow") would keep letting it.
   A program may delete only an item it owns, so an item the `charter` command made before is
   deleted by the command and then made by the app. If the app cannot make it, the command writes
-  it back itself, so no value is lost, and the item is tried again at its next read.
+  it back itself, and the item is tried again at its next read. The interrupt, hang-up and
+  terminate signals are held off from the delete to the new write, so the value is lost there
+  only if the command is killed in a way no program can catch.
+- **The command finds the app through a link.** The app's Install on PATH puts a link to the
+  command in `/usr/local/bin`; the app is looked for beside the file the link names, never
+  beside the link.
 - **The index records it.** Each key whose item was written held carries `"held": true` in the
   keys index (`docs/plane-format.md`).
 - **No new `unsafe`, and no shell-out.** A trusted-application list naming the app
@@ -289,7 +294,10 @@ the person first.
   credential store's service (V90b).
 
 **Existing items (V90d).** An item whose index line does not say `held` is written again, held,
-the first time charter reads it, and its value still resolves. The vault's next `charter secret
+the first time charter reads it, and its value still resolves. Only the program that made an
+item can delete it, so an item the `charter` command made is moved the next time the command
+reads it; the app cannot move it. A move is made only while the key is as it was read, so it
+never writes over a newer value. The vault's next `charter secret
 get`, `cp` or `exec` says once that its secrets were moved under the rule. Until its first read,
 an item keeps the access it had.
 
@@ -316,17 +324,21 @@ command, then made by the app, after which the command was refused and the app r
   designated requirement, which survives an update; a data-protection access group follows
   them.
 - **Where no app sits beside the `charter` command** (a command-line install, or a build of the
-  command alone), the command writes the item itself, and it is held the first time the app
-  reads it.
+  command alone), the command writes the item itself, and `charter secret set` says that the
+  item is not held. It stays the command's until a command with the app beside it reads it.
+- **After an update of an ad-hoc signed build, neither new binary owns the items an older build
+  made**, so charter cannot move them again until signed builds. They stay held to the build
+  that made them, and reads ask.
 - **The `charter` command now asks too.** It is another program, so `charter secret get`,
-  `exec` and `cp` make the Keychain ask the person before each read of a held item, unless
-  the person chose "Always Allow" for it, which lets that build read the item, a chat's run of it
-  included. Resolving a secret in `charterd` (V16b) takes the command out of that path.
+  `exec` and `cp` make the Keychain ask the person before each read of a held item. Answering
+  each ask keeps the rule. "Always Allow" for the command does not: it lets that build read the
+  item without asking, and so lets any chat that runs the command read it silently. Resolving a
+  secret in `charterd` (V16b, #1180) takes the command out of that path.
 - **The rule is about reading.** It is not an integrity boundary for the item, and the item's
   name stays visible to other programs, as every Keychain item's does. The follow-ups are
   tracked in #1180.
 - **Linux (V90c).** The Secret Service keeps no per-program rule, and no harness's sandbox was
   measured keeping a chat off the session bus, so a sandboxed project with a keyring vault still
   refuses a Claude Code chat there. The refusal says how to go on: start that chat without the
-  sandbox, or move those secrets to a plain-file or 1Password vault, which the sandbox can keep
+  sandbox from the new-chat picker, or, for a resumed or relaunched chat too, move those secrets to a plain-file or 1Password vault, which the sandbox can keep
   from a chat. Codex and opencode wait for charter's Linux wrap (#1040).

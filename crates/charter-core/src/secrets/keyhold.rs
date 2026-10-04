@@ -11,17 +11,22 @@
 //!   ([`serve_if_asked`]). It writes and never reads, so starting it gives nothing back.
 //!
 //! The item is deleted first because a replaced item keeps the access it had, and one the
-//! person once let another program read ("Always Allow") would keep letting it. A program may
-//! delete only an item it owns, so an item the `charter` command made before is deleted by the
-//! command and then made by the app. If the app cannot make it, the command writes it back
-//! itself, so no value is lost, and says the item is not held yet ([`Held::NotYet`]); the next
-//! read tries again.
+//! person once let another program read ("Always Allow") would keep letting it. **A program may
+//! delete only an item it owns**, so an item the `charter` command made before (where no app sat
+//! beside it, or before this rule) is moved by the command: it deletes its own item and the app
+//! makes it again, the next time the command reads or writes it. The app cannot move such an
+//! item itself. If the app cannot make it, the command writes it back, and says the item is not
+//! held yet ([`Held::NotYet`]); the next read through the command tries again. The termination
+//! signals a person or a closing terminal sends are held off for that window
+//! ([`Shield`]), so only a kill that cannot be caught loses the value there.
 //!
 //! **What it rests on.** Signed builds (#606) make the app's identity survive an update. Until
 //! then an ad-hoc signed app is trusted by its exact build, so the first read after an update
-//! asks the person once. Where no app sits beside the command (a command-line install, a dev
-//! build of the command alone), the command writes the item itself, and it is held to the app
-//! the first time the app reads it.
+//! asks the person once, and neither the new app nor the new command owns an item an older build
+//! made. Where no app sits beside the command (a command-line install, a dev build of the command
+//! alone), the command writes the item itself, and it stays the command's until a command with
+//! the app beside it reads it. The command is found through any link to it: the app is looked
+//! for beside the real file, never beside a link on `PATH`.
 
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -148,10 +153,15 @@ fn write_quietly(_item: &Item) -> Result<(), Refused> {
     )))
 }
 
+/// `errSecInvalidOwnerEdit`: the Keychain refused a delete because another program owns the
+/// item (measured on a delete by a program the item does not trust).
+const NOT_THE_OWNER: i32 = -25244;
+
 /// The item deleted and made again by this process, so it is this program's alone.
 fn make_here(service: &str, account: &str, value: &str) -> Result<(), Refused> {
     let entry = ::keyring::Entry::new(service, account)
         .map_err(|e| Refused::Failed(super::keyring::failure("reach", service, &e)))?;
+    let _shield = Shield::up();
     match entry.delete_credential() {
         Ok(()) | Err(::keyring::Error::NoEntry) => {}
         Err(e) if owned_by_another(&e) => return Err(Refused::Owned),
@@ -166,15 +176,14 @@ fn make_here(service: &str, account: &str, value: &str) -> Result<(), Refused> {
         .map_err(|e| Refused::Failed(super::keyring::failure("write", service, &e)))
 }
 
-/// Whether the store refused a delete because another program owns the item
-/// (`errSecInvalidOwnerEdit`, measured on a delete by a program the item does not trust).
+/// Whether the store refused a delete because another program owns the item.
 #[cfg(target_os = "macos")]
 fn owned_by_another(e: &::keyring::Error) -> bool {
     match e {
         ::keyring::Error::NoStorageAccess(inner) | ::keyring::Error::PlatformFailure(inner) => {
             inner
                 .downcast_ref::<security_framework::base::Error>()
-                .is_some_and(|e| e.code() == -25244)
+                .is_some_and(|e| e.code() == NOT_THE_OWNER)
         }
         _ => false,
     }
@@ -185,26 +194,113 @@ fn owned_by_another(_e: &::keyring::Error) -> bool {
     false
 }
 
+/// The termination signals a person or a closing terminal sends (SIGINT, SIGHUP, SIGTERM),
+/// held off while an item is gone between its delete and its new write, and acted on once it
+/// is written: the process then ends as the signal would have ended it.
+pub struct Shield {
+    #[cfg(unix)]
+    flag: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    #[cfg(unix)]
+    ids: Vec<signal_hook::SigId>,
+}
+
+impl Shield {
+    /// Hold the signals off from now.
+    pub fn up() -> Self {
+        #[cfg(unix)]
+        {
+            use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
+            let flag = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let ids = [SIGINT, SIGHUP, SIGTERM]
+                .into_iter()
+                .filter_map(|sig| {
+                    signal_hook::flag::register_usize(
+                        sig,
+                        std::sync::Arc::clone(&flag),
+                        sig as usize,
+                    )
+                    .ok()
+                })
+                .collect();
+            Self { flag, ids }
+        }
+        #[cfg(not(unix))]
+        {
+            Self {}
+        }
+    }
+
+    /// The signal that arrived while it was up, if one did.
+    pub fn caught(&self) -> Option<i32> {
+        #[cfg(unix)]
+        {
+            match self.flag.load(Ordering::SeqCst) {
+                0 => None,
+                n => i32::try_from(n).ok(),
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            None
+        }
+    }
+}
+
+impl Drop for Shield {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        {
+            for id in self.ids.drain(..) {
+                signal_hook::low_level::unregister(id);
+            }
+            if let Some(sig) = self.caught() {
+                // What the signal would have done had it not been held off: a handler another
+                // part of charter registered still runs, and with none the process ends.
+                let _ = signal_hook::low_level::raise(sig);
+            }
+        }
+    }
+}
+
 /// The app's binary beside this one, where there is one and this process is not it.
 fn the_app() -> Option<PathBuf> {
-    let here = std::env::current_exe().ok()?;
+    app_beside(&std::env::current_exe().ok()?)
+}
+
+/// The app's binary beside the program at `exe`, as the kernel names it, where there is one
+/// and `exe` is not it. A link on `PATH` (`/usr/local/bin/charter`, made by the app's Install
+/// on PATH) is followed to the bundle, and nothing beside the link is ever looked at.
+pub fn app_beside(exe: &std::path::Path) -> Option<PathBuf> {
+    let here = exe.canonicalize().ok()?;
     let app = here.parent()?.join(APP_BINARY);
     (app != here && app.is_file()).then_some(app)
 }
 
+/// Why an item is written: a new value, or the same value moved under the rule (ruling V90d),
+/// which is pointless to write again in place when it cannot be held.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Why {
+    Write,
+    Move,
+}
+
 /// Write the item held to charter's app, from whichever charter this is. See the module header.
-pub fn set(service: &str, account: &str, value: &str) -> Result<Held, VaultError> {
+pub fn set(service: &str, account: &str, value: &str, why: Why) -> Result<Held, VaultError> {
+    // Where the item cannot be held: write the value in place, or, for a move, leave it.
+    let in_place = || match why {
+        Why::Write => super::keyring::set_here(service, account, value).map(|()| Held::NotYet),
+        Why::Move => Ok(Held::NotYet),
+    };
     if THE_APP.load(Ordering::SeqCst) {
         return match make_here(service, account, value) {
             Ok(()) => Ok(Held::ToTheApp),
-            Err(Refused::Owned) => {
-                super::keyring::set_here(service, account, value).map(|()| Held::NotYet)
-            }
+            // The command's own item, which only the command can delete.
+            Err(Refused::Owned) => in_place(),
             Err(Refused::Failed(e)) => Err(e),
         };
     }
     let Some(app) = the_app() else {
-        return super::keyring::set_here(service, account, value).map(|()| Held::NotYet);
+        return in_place();
     };
     let item = Item {
         service: service.to_owned(),
@@ -213,19 +309,16 @@ pub fn set(service: &str, account: &str, value: &str) -> Result<Held, VaultError
     };
     match through(&app, &item) {
         Ok(()) => return Ok(Held::ToTheApp),
-        Err(code) if code != OWNED => {
-            return super::keyring::set_here(service, account, value).map(|()| Held::NotYet);
-        }
+        Err(code) if code != OWNED => return in_place(),
         Err(_) => {}
     }
     // This command's own item, made before: it deletes it, the app makes it again, and if the
-    // app cannot, the command writes it back so the value is never lost.
+    // app cannot, the command writes it back. No caught signal ends it in between.
+    let _shield = Shield::up();
     if let Ok(entry) = ::keyring::Entry::new(service, account) {
         match entry.delete_credential() {
             Ok(()) | Err(::keyring::Error::NoEntry) => {}
-            Err(_) => {
-                return super::keyring::set_here(service, account, value).map(|()| Held::NotYet);
-            }
+            Err(_) => return in_place(),
         }
     }
     match through(&app, &item) {
@@ -252,6 +345,9 @@ fn through(app: &std::path::Path, item: &Item) -> Result<(), i32> {
     if let Some(home) = std::env::var_os("HOME") {
         command.env("HOME", home);
     }
+    // Its own process group: a Ctrl-C to the terminal's group never ends it mid-write.
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut command, 0);
     let mut child = crate::forklock::spawn(&mut command).map_err(|_| -1)?;
     if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(&input);
@@ -307,6 +403,61 @@ mod tests {
         ] {
             assert!(asked(input).is_err(), "{}", String::from_utf8_lossy(input));
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_command_run_through_a_link_on_path_finds_the_app_in_its_bundle() {
+        // `/usr/local/bin/charter` is a link into the bundle (`clipath`), and macOS reports the
+        // program as run, by the link's path, so the app is looked for beside the real file.
+        let dir = tempfile::tempdir().expect("a directory");
+        let bundle = dir.path().join("charter.app/Contents/MacOS");
+        let bin = dir.path().join("bin");
+        std::fs::create_dir_all(&bundle).expect("the bundle");
+        std::fs::create_dir_all(&bin).expect("a bin");
+        std::fs::write(bundle.join("charter"), "").expect("the command");
+        std::fs::write(bundle.join(APP_BINARY), "").expect("the app");
+        std::os::unix::fs::symlink(bundle.join("charter"), bin.join("charter")).expect("a link");
+        assert_eq!(
+            app_beside(&bin.join("charter")),
+            Some(bundle.canonicalize().unwrap().join(APP_BINARY))
+        );
+        // A program planted beside the link is never the one handed a value.
+        std::fs::write(bin.join(APP_BINARY), "").expect("a planted app");
+        assert_eq!(
+            app_beside(&bin.join("charter")),
+            Some(bundle.canonicalize().unwrap().join(APP_BINARY))
+        );
+    }
+
+    #[test]
+    fn the_app_is_not_its_own_writer_and_a_lone_command_has_none() {
+        let dir = tempfile::tempdir().expect("a directory");
+        std::fs::write(dir.path().join(APP_BINARY), "").expect("the app");
+        assert_eq!(app_beside(&dir.path().join(APP_BINARY)), None);
+        assert_eq!(app_beside(&dir.path().join("missing")), None);
+        let lone = tempfile::tempdir().expect("a directory");
+        std::fs::write(lone.path().join("charter"), "").expect("the command");
+        assert_eq!(app_beside(&lone.path().join("charter")), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_signal_that_arrives_while_an_item_is_gone_waits_until_it_is_written() {
+        use signal_hook::consts::SIGHUP;
+        // What stands in for the rest of charter's handlers, so the signal acted on at the end
+        // does not end the test.
+        let after = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let id = signal_hook::flag::register(SIGHUP, std::sync::Arc::clone(&after)).unwrap();
+        let shield = Shield::up();
+        signal_hook::low_level::raise(SIGHUP).unwrap();
+        assert_eq!(shield.caught(), Some(SIGHUP));
+        drop(shield);
+        assert!(
+            after.load(Ordering::SeqCst),
+            "the signal was dropped, not delayed"
+        );
+        signal_hook::low_level::unregister(id);
     }
 
     #[test]
