@@ -1,5 +1,6 @@
 //! The forge contract suite: every method of the forge seam's areas, run once per forge
-//! against recorded exchanges (ADR 0070 §7, the recorded run; FG-3).
+//! against recorded exchanges (ADR 0070 §7, the recorded run; FG-3), and nightly against a real
+//! forge (the live run; FG-4).
 //!
 //! Each case is written **once**, as a function of the forge, and [`contract!`] instantiates it
 //! for GitHub and for GitLab. The two forges' recordings, under `tests/forge_contract/<forge>/`,
@@ -10,9 +11,14 @@
 //! **Where the answers come from.** Each recording names its source. Today they are taken from
 //! each forge's own API documentation (GitHub REST `2022-11-28` and its GraphQL schema; the
 //! GitLab 19.4 REST docs), not captured from a live forge: no account is signed in where this
-//! suite was written. FG-4's live nightly re-records them from github.com, gitlab.com and a
-//! self-managed GitLab with `CHARTER_FORGE_BLESS=1`, and a PR that moves a recording says which
-//! contract moved and why (ADR 0046).
+//! suite was written. A PR that moves a recording says which contract moved and why (ADR 0046).
+//!
+//! **The live run** (`live.rs`) is the same cases, through the same seam, over the native
+//! transport to a real github.com repo and a real gitlab.com repo the operator provisioned. A
+//! case names what it asks about through a [`Scene`] rather than a literal, so the recorded
+//! scene and the live fixture both answer it. It is ignored in a plain `cargo test`;
+//! `.github/workflows/forge-live.yml` runs it nightly. A case it cannot run is listed in
+//! [`NOT_LIVE`] with its reason and ticket, and says so when it is asked, never silently.
 //!
 //! **Parity is checked, not trusted.** `every_method_of_the_seam_has_a_case_on_both_forges`
 //! reads the area traits out of `src/forge/backend.rs` and fails when a method has no case here
@@ -26,17 +32,18 @@ use charter_core::forge::checks::{Checks, Ci};
 use charter_core::forge::pr::{AutoMerge, MergeAs, MergedAt, Opened, Pr, Request, State};
 use charter_core::forge::recorded::Recorded;
 use charter_core::forge::{
-    Caller, Capability, Forge, ForgeBackend, ForgeRef, Kind, Owner, Reach, RepoRecord, Support,
+    Caller, Capability, Forge, ForgeBackend, ForgeRef, Kind, Owner, Reach, Support,
 };
 use serde_json::{Value, json};
 
+#[path = "forge_contract/live.rs"]
+mod live;
 #[path = "forge_contract/native.rs"]
 mod native;
+#[path = "forge_contract/scene.rs"]
+mod scene;
 
-/// The head every recording's request is at.
-const SHA: &str = "6dcb09b5b57875f334f61aebed695e2e4193db5e";
-/// The commit a merged request landed as.
-const MERGE: &str = "e5bd3914e2e596debea16f433f57875b5b90bcd6";
+use scene::{MERGE, SAVE, SHA, Scene};
 
 /// Every case, by the seam method it covers. The parity test compares this with the traits.
 const CASES: [&str; 18] = [
@@ -60,6 +67,24 @@ const CASES: [&str; 18] = [
     "create",
 ];
 
+/// The cases the live run does not run, each with why and the ticket that will run it. Each one
+/// would merge or queue the fixture's one open request, which the read cases need open; running
+/// them needs a request opened afresh for each run.
+const NOT_LIVE: [(&str, &str); 3] = [
+    (
+        "request_auto_merge",
+        "auto-merge would land the fixture's open request; it needs a request opened per run (#712)",
+    ),
+    (
+        "merge_at",
+        "it merges the fixture's open request; it needs a request opened per run (#712)",
+    ),
+    (
+        "enqueue_at",
+        "it needs a merge queue or train on the fixture, and a request opened per run (#712)",
+    ),
+];
+
 fn recordings() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/forge_contract")
 }
@@ -75,16 +100,22 @@ pub enum How {
     /// As `Native`, on a self-managed instance: a GitHub Enterprise Server or a self-managed
     /// GitLab, at `forge.example.com`.
     SelfManaged,
+    /// Through the native transport to a real forge, about the fixture provisioned there
+    /// (`live.rs`).
+    Live,
 }
 
-/// A backend over a case's recording, the caller to ask as, and the check that every
-/// recorded exchange was asked for.
+/// A backend over a case's recording or a live forge, the caller to ask as, the scene to ask
+/// about, and the check that every recorded exchange was asked for.
 pub struct Over {
     pub backend: Box<dyn ForgeBackend>,
     pub caller: Caller,
     /// The instance the backend is on.
     pub host: String,
+    pub scene: Scene,
     check: Box<dyn Fn()>,
+    /// Closes an issue `create` opened: on a live forge, so the fixture keeps no backlog.
+    close_issue: Box<dyn Fn(u64)>,
 }
 
 /// Every recorded exchange was asked for.
@@ -121,24 +152,36 @@ pub fn recording(kind: &str, case: &str) -> String {
         .unwrap_or_else(|e| panic!("the recording {}: {e}", file.display()))
 }
 
-/// A forge's backend over its recording of `case`, answered as `how` says.
-fn over(kind: &str, case: &str, how: How) -> Over {
+/// A forge's backend for `case`, answered as `how` says, or `None`, said aloud, for a case the
+/// live run leaves out.
+fn over(kind: &str, case: &str, how: How) -> Option<Over> {
+    let forge_kind = Kind::parse(kind).unwrap();
+    if let How::Live = how {
+        if let Some((_, why)) = NOT_LIVE.iter().find(|(c, _)| *c == case) {
+            println!("not run live on {kind}: {case}: {why}");
+            return None;
+        }
+        return Some(live::over(forge_kind));
+    }
     let text = recording(kind, case);
-    match how {
+    Some(match how {
         How::Recorded => {
             let recorded = Arc::new(Recorded::parse(&text).unwrap());
-            let forge = Forge::default_of(charter_core::forge::Kind::parse(kind).unwrap());
+            let forge = Forge::default_of(forge_kind);
             let check = recorded.clone();
             Over {
                 backend: forge.backend_over(recorded),
                 caller: caller(),
                 host: forge.host.clone(),
+                scene: Scene::recorded(forge_kind),
                 check: Box::new(move || check.spent()),
+                close_issue: Box::new(|_| {}),
             }
         }
         How::Native => native::over(kind, default_host(kind), &text),
         How::SelfManaged => native::over(kind, SELF_MANAGED, &text),
-    }
+        How::Live => unreachable!("answered above"),
+    })
 }
 
 /// The host a self-managed instance is on, in the native cases that run on one.
@@ -159,293 +202,315 @@ fn caller() -> Caller {
 mod cases {
     use super::*;
 
-    /// The record a recording's repo `name` under `acme` becomes, in neutral fields. GitLab
-    /// names a repo by its `path` (`api`), not its display name (`Api`).
-    fn acme(kind: &str, id: &str, name: &str, topics: &[&str]) -> RepoRecord {
-        let host = match kind {
-            "github" => "github.com",
-            _ => "gitlab.com",
-        };
-        RepoRecord {
-            id: Some(ForgeRef(id.into())),
-            name: name.into(),
-            path_with_namespace: format!("acme/{name}"),
-            default_branch: Some("main".into()),
-            description: String::new(),
-            web_url: format!("https://{host}/acme/{name}"),
-            ssh_url: format!("git@{host}:acme/{name}.git"),
-            topics: topics.iter().map(|t| t.to_string()).collect(),
-            forge: Kind::parse(kind).unwrap(),
-        }
+    /// A listing in path order: neither forge's default order is part of the contract.
+    fn by_path(
+        mut repos: Vec<charter_core::forge::RepoRecord>,
+    ) -> Vec<charter_core::forge::RepoRecord> {
+        repos.sort_by(|a, b| a.path_with_namespace.cmp(&b.path_with_namespace));
+        repos
     }
 
     pub fn owned(kind: &str, how: How) {
-        let recorded = over(kind, "owned", how);
-        let backend = &recorded.backend;
-        let repos = backend
-            .owned(&recorded.caller, &Owner::new("acme"))
+        let Some(over) = over(kind, "owned", how) else {
+            return;
+        };
+        let scene = &over.scene;
+        let repos = over
+            .backend
+            .owned(&over.caller, &Owner::new(&scene.owner))
             .unwrap();
         assert_eq!(
-            repos,
-            [
-                acme(kind, "1", "api", &[]),
-                acme(kind, "2", "web", &["frontend"])
-            ],
+            by_path(repos),
+            [scene.api(), scene.web()],
             "every field typed; a null description is empty"
         );
-        spent(&recorded);
+        spent(&over);
     }
 
     pub fn reachable(kind: &str, how: How) {
-        let recorded = over(kind, "reachable", how);
-        let backend = &recorded.backend;
-        let repos = backend
-            .reachable(&recorded.caller, &Owner::new("acme"))
+        let Some(over) = over(kind, "reachable", how) else {
+            return;
+        };
+        let scene = &over.scene;
+        let repos = over
+            .backend
+            .reachable(&over.caller, &Owner::new(&scene.owner))
             .unwrap();
         assert_eq!(
             repos,
-            [acme(kind, "1", "api", &[])],
-            "only the declared owner's repos"
+            [scene.api()],
+            "only the declared owner's repos the account reaches"
         );
-        spent(&recorded);
+        spent(&over);
     }
 
     pub fn about(kind: &str, how: How) {
-        let recorded = over(kind, "about", how);
-        let backend = &recorded.backend;
+        let Some(over) = over(kind, "about", how) else {
+            return;
+        };
         // Asked of the repo itself, as the inventory reads it: no forge id, which `about` never
         // needs, since both forges address the repo by its path.
-        let repo = RepoRecord {
+        let repo = charter_core::forge::RepoRecord {
             id: None,
-            ..acme(kind, "1", "api", &[])
+            ..over.scene.api()
         };
         assert_eq!(
-            backend.about(&recorded.caller, &repo),
+            over.backend.about(&over.caller, &repo),
             Ok(About {
                 visibility: Visibility::Private,
                 issues: Issues::Open,
-                // The recorded account is no admin, so neither forge names the setting.
+                // The account is no admin, so neither forge names the setting.
                 push_protection: PushProtection::Unknown,
             })
         );
-        spent(&recorded);
+        spent(&over);
     }
 
     pub fn top_level(kind: &str, how: How) {
-        let recorded = over(kind, "top_level", how);
-        let backend = &recorded.backend;
-        let repo = acme(kind, "7", "api", &[]);
+        let Some(over) = over(kind, "top_level", how) else {
+            return;
+        };
+        let scene = &over.scene;
+        let repo = scene.repo(&scene.tree_id, "api", &[]);
         assert_eq!(
-            backend.top_level(&recorded.caller, &repo, None).unwrap(),
+            over.backend.top_level(&over.caller, &repo, None).unwrap(),
             ["Cargo.toml", "src"]
         );
-        spent(&recorded);
+        spent(&over);
     }
 
     pub fn open_or_update(kind: &str, how: How) {
-        let recorded = over(kind, "open_or_update", how);
-        let backend = &recorded.backend;
-        let opened = backend
+        let Some(over) = over(kind, "open_or_update", how) else {
+            return;
+        };
+        let scene = &over.scene;
+        let opened = over
+            .backend
             .open_or_update(
-                &recorded.caller,
-                "acme/api",
-                "charter/save",
+                &over.caller,
+                &scene.path("api"),
+                &scene.opened_from,
                 "main",
                 "Save",
                 "<!-- charter-save -->",
             )
             .unwrap();
-        let url = match kind {
-            "github" => "https://github.com/acme/api/pull/12",
-            _ => "https://gitlab.com/acme/api/-/merge_requests/12",
-        };
+        // On a live forge the first night opens the request and every later night updates it;
+        // its number is the forge's to give.
+        let number = scene.opened.unwrap_or(opened.pr.number);
         assert_eq!(
             opened,
             Opened {
                 pr: Pr {
-                    number: 12,
-                    url: url.into()
+                    number,
+                    url: scene.request_url(number)
                 },
                 ours: true
             }
         );
-        spent(&recorded);
+        spent(&over);
     }
 
     pub fn state(kind: &str, how: How) {
-        let recorded = over(kind, "state", how);
-        let backend = &recorded.backend;
+        let Some(over) = over(kind, "state", how) else {
+            return;
+        };
+        let scene = &over.scene;
         let pr = Pr {
-            number: 12,
+            number: scene.merged,
             url: String::new(),
         };
         assert_eq!(
-            backend.state(&recorded.caller, "acme/api", &pr),
+            over.backend.state(&over.caller, &scene.path("api"), &pr),
             Ok(State::Merged {
-                commit: Some(MERGE.into())
+                commit: Some(scene.merge.clone())
             })
         );
-        spent(&recorded);
+        spent(&over);
     }
 
     /// The body a request's description holds, as `charter change push` splices it.
-    const BODY: &str = "Why this change.\n\n<!-- END charter change -->";
+    pub const BODY: &str = "Why this change.\n\n<!-- END charter change -->";
+
+    /// The scene's open request.
+    fn open(scene: &Scene) -> Pr {
+        Pr {
+            number: scene.open,
+            url: String::new(),
+        }
+    }
 
     pub fn body(kind: &str, how: How) {
-        let recorded = over(kind, "body", how);
-        let backend = &recorded.backend;
-        let pr = Pr {
-            number: 12,
-            url: String::new(),
+        let Some(over) = over(kind, "body", how) else {
+            return;
         };
+        let scene = &over.scene;
         assert_eq!(
-            backend.body(&recorded.caller, "acme/api", &pr),
+            over.backend
+                .body(&over.caller, &scene.path("api"), &open(scene)),
             Ok(BODY.to_string())
         );
-        spent(&recorded);
+        spent(&over);
     }
 
     pub fn set_body(kind: &str, how: How) {
-        let recorded = over(kind, "set_body", how);
-        let backend = &recorded.backend;
-        let pr = Pr {
-            number: 12,
-            url: String::new(),
+        let Some(over) = over(kind, "set_body", how) else {
+            return;
         };
+        let scene = &over.scene;
         assert_eq!(
-            backend.set_body(&recorded.caller, "acme/api", &pr, BODY),
+            over.backend
+                .set_body(&over.caller, &scene.path("api"), &open(scene), BODY),
             Ok(())
         );
-        spent(&recorded);
+        spent(&over);
     }
 
     pub fn by_head(kind: &str, how: How) {
-        let recorded = over(kind, "by_head", how);
-        let backend = &recorded.backend;
-        let found = backend
-            .by_head(&recorded.caller, "acme/api", "charter/save")
+        let Some(over) = over(kind, "by_head", how) else {
+            return;
+        };
+        let scene = &over.scene;
+        let found = over
+            .backend
+            .by_head(&over.caller, &scene.path("api"), SAVE)
             .unwrap()
             .expect("a request");
         assert_eq!(
             (found.number, found.state, found.head.as_str()),
-            (12, State::Open, SHA)
+            (scene.open, State::Open, scene.head.as_str())
         );
         let _: Request = found;
-        spent(&recorded);
+        spent(&over);
     }
 
     pub fn request_auto_merge(kind: &str, how: How) {
-        let recorded = over(kind, "request_auto_merge", how);
-        let backend = &recorded.backend;
-        let pr = Pr {
-            number: 12,
-            url: String::new(),
+        let Some(over) = over(kind, "request_auto_merge", how) else {
+            return;
         };
+        let scene = &over.scene;
         assert_eq!(
-            backend.request_auto_merge(&recorded.caller, "acme/api", &pr, SHA),
+            over.backend.request_auto_merge(
+                &over.caller,
+                &scene.path("api"),
+                &open(scene),
+                &scene.head
+            ),
             Ok(AutoMerge::Queued)
         );
-        spent(&recorded);
+        spent(&over);
     }
 
     /// How every landing case asks to merge: a merge commit, carrying the trailer.
-    fn merge_as(kind: &str) -> MergeAs {
-        let sigil = charter_core::forge::Kind::parse(kind)
-            .unwrap()
-            .change_sigil();
+    fn merge_as(scene: &Scene) -> MergeAs {
+        let sigil = scene.kind.change_sigil();
         MergeAs {
             squash: false,
-            title: format!("api-2: api ({sigil}12)"),
+            title: format!("api-2: api ({sigil}{})", scene.open),
             message: "bump the api\n\nCharter-Change: api-2".to_string(),
         }
     }
 
     pub fn lands_through_queue(kind: &str, how: How) {
-        let recorded = over(kind, "lands_through_queue", how);
-        let pr = Pr {
-            number: 12,
-            url: String::new(),
+        let Some(over) = over(kind, "lands_through_queue", how) else {
+            return;
         };
+        let scene = &over.scene;
         assert_eq!(
-            recorded
-                .backend
-                .lands_through_queue(&recorded.caller, "acme/api", &pr),
-            Ok(true)
+            over.backend
+                .lands_through_queue(&over.caller, &scene.path("api"), &open(scene)),
+            Ok(scene.queue)
         );
-        spent(&recorded);
+        spent(&over);
     }
 
     pub fn merge_at(kind: &str, how: How) {
-        let recorded = over(kind, "merge_at", how);
-        let pr = Pr {
-            number: 12,
-            url: String::new(),
+        let Some(over) = over(kind, "merge_at", how) else {
+            return;
         };
+        let scene = &over.scene;
         assert_eq!(
-            recorded
-                .backend
-                .merge_at(&recorded.caller, "acme/api", &pr, SHA, &merge_as(kind)),
+            over.backend.merge_at(
+                &over.caller,
+                &scene.path("api"),
+                &open(scene),
+                &scene.head,
+                &merge_as(scene)
+            ),
             Ok(MergedAt::Now)
         );
-        spent(&recorded);
+        spent(&over);
     }
 
     pub fn enqueue_at(kind: &str, how: How) {
-        let recorded = over(kind, "enqueue_at", how);
-        let pr = Pr {
-            number: 12,
-            url: String::new(),
+        let Some(over) = over(kind, "enqueue_at", how) else {
+            return;
         };
+        let scene = &over.scene;
         assert_eq!(
-            recorded
-                .backend
-                .enqueue_at(&recorded.caller, "acme/api", &pr, SHA, &merge_as(kind)),
+            over.backend.enqueue_at(
+                &over.caller,
+                &scene.path("api"),
+                &open(scene),
+                &scene.head,
+                &merge_as(scene)
+            ),
             Ok(())
         );
-        spent(&recorded);
+        spent(&over);
     }
 
     pub fn checks_at(kind: &str, how: How) {
-        let recorded = over(kind, "checks_at", how);
-        let backend = &recorded.backend;
+        let Some(over) = over(kind, "checks_at", how) else {
+            return;
+        };
+        let scene = &over.scene;
         assert_eq!(
-            backend.checks_at(&recorded.caller, "acme/api", SHA, 12),
+            over.backend
+                .checks_at(&over.caller, &scene.path("api"), &scene.head, scene.open),
             Checks {
                 total: Some(1),
                 ci: Ci::Passed,
                 why: None
             }
         );
-        spent(&recorded);
+        spent(&over);
     }
 
     pub fn open_on_branch(kind: &str, how: How) {
-        let recorded = over(kind, "open_on_branch", how);
-        let backend = &recorded.backend;
+        let Some(over) = over(kind, "open_on_branch", how) else {
+            return;
+        };
+        let scene = &over.scene;
         assert_eq!(
-            backend.open_on_branch(&recorded.caller, "acme/api", "charter/save"),
-            Ok(Some(Value::from(12)))
+            over.backend
+                .open_on_branch(&over.caller, &scene.path("api"), SAVE),
+            Ok(Some(Value::from(scene.open)))
         );
-        spent(&recorded);
+        spent(&over);
     }
 
     pub fn ci_word(kind: &str, how: How) {
-        let recorded = over(kind, "ci_word", how);
-        let backend = &recorded.backend;
+        let Some(over) = over(kind, "ci_word", how) else {
+            return;
+        };
+        let scene = &over.scene;
         assert_eq!(
-            backend.ci_word(&recorded.caller, "acme/api", "charter/save"),
+            over.backend.ci_word(&over.caller, &scene.path("api"), SAVE),
             Ok(Some("success".to_string()))
         );
-        spent(&recorded);
+        spent(&over);
     }
 
     pub fn support(kind: &str, how: How) {
-        let recorded = over(kind, "support", how);
-        let backend = &recorded.backend;
+        let Some(over) = over(kind, "support", how) else {
+            return;
+        };
+        let backend = &over.backend;
         for what in Capability::ALL {
-            let at = Reach::Repo("acme/api".into());
+            let at = Reach::Repo(over.scene.path("api"));
             assert_ne!(
-                backend.support(&recorded.caller, &at, what),
+                backend.support(&over.caller, &at, what),
                 Support::Available,
                 "{what:?}: what charter has not asked a repo about is never yes"
             );
@@ -453,11 +518,11 @@ mod cases {
         // Epics, said of the instance: GitHub has none anywhere; gitlab.com has them (on a
         // Premium namespace, which a narrower reach would have to probe); a self-managed GitLab
         // has what its edition and licence have, which charter has not asked.
-        let epics = backend.support(&recorded.caller, &Reach::Instance, Capability::Epics);
+        let epics = backend.support(&over.caller, &Reach::Instance, Capability::Epics);
         // Sub-issues, said of the instance: github.com has them; a GitHub Enterprise Server has
         // what its version has, which charter has not asked.
-        let sub_issues = backend.support(&recorded.caller, &Reach::Instance, Capability::SubIssues);
-        match (kind, recorded.host.as_str()) {
+        let sub_issues = backend.support(&over.caller, &Reach::Instance, Capability::SubIssues);
+        match (kind, over.host.as_str()) {
             ("github", "github.com") => {
                 assert!(matches!(epics, Support::Unavailable(_)), "{epics:?}");
                 assert_eq!(sub_issues, Support::Available);
@@ -470,16 +535,19 @@ mod cases {
             ("gitlab", _) => assert!(matches!(epics, Support::Unknown(_)), "{epics:?}"),
             _ => unreachable!("two forges"),
         }
-        spent(&recorded);
+        spent(&over);
     }
 
     pub fn create(kind: &str, how: How) {
-        let recorded = over(kind, "create", how);
-        let backend = &recorded.backend;
-        let made = backend
+        let Some(over) = over(kind, "create", how) else {
+            return;
+        };
+        let scene = &over.scene;
+        let made = over
+            .backend
             .create(
-                &recorded.caller,
-                "acme/api",
+                &over.caller,
+                &scene.path("api"),
                 &NewWorkItem {
                     title: "Port the picker".into(),
                     body: "What the todo said.\n\nSecond paragraph.".into(),
@@ -487,115 +555,148 @@ mod cases {
                 },
             )
             .unwrap();
-        let (key, forge_ref, url) = match kind {
-            "github" => (
-                "github:github.com/acme/api#12",
-                "I_kwDOAcme12",
-                "https://github.com/acme/api/issues/12",
-            ),
-            _ => (
-                "gitlab:gitlab.com/acme/api#12",
-                "84012",
-                "https://gitlab.com/acme/api/-/issues/12",
+        // On a live forge the issue's number and id are the forge's to give: the number is read
+        // off the page the answer names, and must then agree with its key.
+        let (number, forge_ref) = match &scene.created {
+            Some((number, forge_ref)) => (*number, Some(forge_ref.clone())),
+            None => (
+                made.url
+                    .rsplit('/')
+                    .next()
+                    .and_then(|n| n.parse().ok())
+                    .unwrap_or_else(|| panic!("no issue number ends {}", made.url)),
+                None,
             ),
         };
-        assert_eq!(made.key.as_str(), key);
-        assert_eq!(made.forge_ref, Some(ForgeRef(forge_ref.into())));
-        assert_eq!(made.url, url);
-        spent(&recorded);
+        over.close_issue.as_ref()(number);
+        assert_eq!(made.key.as_str(), scene.issue_key(number));
+        assert_eq!(made.url, scene.issue_url(number));
+        match forge_ref {
+            Some(forge_ref) => assert_eq!(made.forge_ref, Some(ForgeRef(forge_ref))),
+            None => assert!(
+                made.forge_ref.as_ref().is_some_and(|r| !r.0.is_empty()),
+                "{:?}",
+                made.forge_ref
+            ),
+        }
+        spent(&over);
     }
 }
 
-/// One module per forge, holding every case of [`CASES`].
+/// One module per forge, holding every case of [`CASES`]. `ignore = "<why>"` ignores each.
 macro_rules! contract {
     ($module:ident, $forge:ident, $how:ident) => {
+        contract!(@cases $module, $forge, $how,);
+    };
+    ($module:ident, $forge:ident, $how:ident, ignore = $why:literal) => {
+        contract!(@cases $module, $forge, $how, ignore = $why);
+    };
+    (@cases $module:ident, $forge:ident, $how:ident, $($attr:meta)?) => {
         mod $module {
             #[test]
+            $(#[$attr])?
             fn owned_lists_every_repo_of_the_owner_in_the_neutral_shape() {
                 charter_core::unsteered!();
                 super::cases::owned(stringify!($forge), super::How::$how);
             }
             #[test]
+            $(#[$attr])?
             fn reachable_keeps_only_the_declared_owners_repos() {
                 charter_core::unsteered!();
                 super::cases::reachable(stringify!($forge), super::How::$how);
             }
             #[test]
+            $(#[$attr])?
             fn top_level_lists_the_default_branchs_top_level_names() {
                 charter_core::unsteered!();
                 super::cases::top_level(stringify!($forge), super::How::$how);
             }
             #[test]
+            $(#[$attr])?
             fn open_or_update_opens_one_request_when_none_is_open() {
                 charter_core::unsteered!();
                 super::cases::open_or_update(stringify!($forge), super::How::$how);
             }
             #[test]
+            $(#[$attr])?
             fn state_reads_a_merged_request_with_the_commit_it_landed_as() {
                 charter_core::unsteered!();
                 super::cases::state(stringify!($forge), super::How::$how);
             }
             #[test]
+            $(#[$attr])?
             fn body_reads_the_requests_description_whole() {
                 charter_core::unsteered!();
                 super::cases::body(stringify!($forge), super::How::$how);
             }
             #[test]
+            $(#[$attr])?
             fn set_body_replaces_the_requests_description_and_nothing_else() {
                 charter_core::unsteered!();
                 super::cases::set_body(stringify!($forge), super::How::$how);
             }
             #[test]
+            $(#[$attr])?
             fn by_head_finds_the_request_from_the_branch_with_its_head_commit() {
                 charter_core::unsteered!();
                 super::cases::by_head(stringify!($forge), super::How::$how);
             }
             #[test]
+            $(#[$attr])?
             fn request_auto_merge_queues_the_merge_at_the_pushed_commit() {
                 charter_core::unsteered!();
                 super::cases::request_auto_merge(stringify!($forge), super::How::$how);
             }
             #[test]
+            $(#[$attr])?
             fn lands_through_queue_reads_whether_the_target_branch_has_a_queue() {
                 charter_core::unsteered!();
                 super::cases::lands_through_queue(stringify!($forge), super::How::$how);
             }
             #[test]
+            $(#[$attr])?
             fn merge_at_merges_now_only_at_the_head_charter_read() {
                 charter_core::unsteered!();
                 super::cases::merge_at(stringify!($forge), super::How::$how);
             }
             #[test]
+            $(#[$attr])?
             fn enqueue_at_puts_the_request_in_the_queue_only_at_the_head_charter_read() {
                 charter_core::unsteered!();
                 super::cases::enqueue_at(stringify!($forge), super::How::$how);
             }
             #[test]
+            $(#[$attr])?
             fn checks_at_counts_one_passing_check_at_the_head() {
                 charter_core::unsteered!();
                 super::cases::checks_at(stringify!($forge), super::How::$how);
             }
             #[test]
+            $(#[$attr])?
             fn open_on_branch_names_the_open_requests_number() {
                 charter_core::unsteered!();
                 super::cases::open_on_branch(stringify!($forge), super::How::$how);
             }
             #[test]
+            $(#[$attr])?
             fn ci_word_maps_the_forges_success_to_success() {
                 charter_core::unsteered!();
                 super::cases::ci_word(stringify!($forge), super::How::$how);
             }
             #[test]
+            $(#[$attr])?
             fn support_never_reads_silence_as_yes() {
                 charter_core::unsteered!();
                 super::cases::support(stringify!($forge), super::How::$how);
             }
             #[test]
+            $(#[$attr])?
             fn about_says_whether_the_repo_is_public_and_takes_issues() {
                 charter_core::unsteered!();
                 super::cases::about(stringify!($forge), super::How::$how);
             }
             #[test]
+            $(#[$attr])?
             fn create_opens_an_issue_and_names_it_by_its_tracker_key_with_its_forge_ref_beside() {
                 charter_core::unsteered!();
                 super::cases::create(stringify!($forge), super::How::$how);
@@ -613,6 +714,19 @@ contract!(github_native, github, Native);
 contract!(gitlab_native, gitlab, Native);
 contract!(github_self_managed, github, SelfManaged);
 contract!(gitlab_self_managed, gitlab, SelfManaged);
+// The live run: the same cases against a real forge (FG-4). Only the nightly holds the tokens.
+contract!(
+    github_live,
+    github,
+    Live,
+    ignore = "live: a real github.com repo; run by .github/workflows/forge-live.yml"
+);
+contract!(
+    gitlab_live,
+    gitlab,
+    Live,
+    ignore = "live: a real gitlab.com repo; run by .github/workflows/forge-live.yml"
+);
 
 /// The method names of one `pub trait <name> { … }` block in `backend.rs`.
 fn methods_of(source: &str, name: &str) -> Vec<String> {
@@ -678,6 +792,36 @@ fn every_method_of_the_seam_has_a_case_on_both_forges() {
             "the native transport runs every case: {module}"
         );
     }
+    // The live run (FG-4) is the same macro over a real forge: one instantiation per forge, ignored
+    // so that only the nightly, which holds the tokens, asks for it.
+    let flat: String = me.split_whitespace().collect();
+    for kind in ["github", "gitlab"] {
+        assert_eq!(
+            flat.matches(&format!("contract!({kind}_live,{kind},Live,ignore="))
+                .count(),
+            1,
+            "the live run runs every case on {kind}"
+        );
+    }
+}
+
+/// A case the live run does not run says why, and names the ticket that will run it (ADR 0070
+/// §7: a test is never skipped silently).
+#[test]
+fn every_case_the_live_run_leaves_out_says_why_and_names_its_ticket() {
+    charter_core::unsteered!();
+    let ticket = regex::Regex::new(r"#\d+\b").unwrap();
+    for (case, why) in NOT_LIVE {
+        assert!(CASES.contains(&case), "{case} is no case of the contract");
+        assert!(
+            ticket.is_match(why),
+            "{case}: the reason names no ticket: {why}"
+        );
+    }
+    assert!(
+        NOT_LIVE.len() < CASES.len() / 2,
+        "the live run leaves out most of the contract"
+    );
 }
 
 /// GitLab statuses its own documentation lists that the Python port did not (GitLab 19.4
@@ -1067,4 +1211,120 @@ fn the_native_contract_passes_with_no_forge_cli_on_path() {
         said.contains(&format!("{} passed", 4 * CASES.len())),
         "the child did not run every native case:\n{said}"
     );
+}
+
+/// The live run reads its scene from each forge's own fields (`live.rs`): the two repos' ids, the
+/// request open from the save branch and the one that landed. Here against answers shaped as
+/// each forge's documentation shows them (GitHub REST `2022-11-28` repos and pulls; GitLab 19.4
+/// `projects.md` and `merge_requests.md`).
+mod the_live_scene {
+    use super::*;
+
+    fn answering(answers: Vec<(String, Value)>) -> impl Fn(&str) -> Result<Value, String> {
+        move |path: &str| {
+            answers
+                .iter()
+                .find(|(p, _)| p == path)
+                .map(|(_, v)| v.clone())
+                .ok_or_else(|| format!("nothing answers {path}"))
+        }
+    }
+
+    fn github(landed: Value) -> Vec<(String, Value)> {
+        vec![
+            ("repos/fixture/api".into(), json!({"id": 101, "full_name": "fixture/api"})),
+            ("repos/fixture/web".into(), json!({"id": 102, "full_name": "fixture/web"})),
+            (
+                "repos/fixture/api/pulls?state=open&head=fixture:charter%2Fsave&base=main&per_page=1"
+                    .into(),
+                json!([{"number": 2, "state": "open", "head": {"ref": "charter/save", "sha": SHA}}]),
+            ),
+            (
+                "repos/fixture/api/pulls?state=closed&head=fixture:charter%2Flanded&per_page=1"
+                    .into(),
+                landed,
+            ),
+        ]
+    }
+
+    #[test]
+    fn github_names_the_open_request_its_head_and_the_merge_commit_of_the_one_that_landed() {
+        charter_core::unsteered!();
+        let landed = json!([{"number": 1, "state": "closed",
+                             "merged_at": "2026-10-04T00:00:00Z", "merge_commit_sha": MERGE}]);
+        let get = answering(github(landed));
+        let scene = live::discover(Kind::GitHub, "github.com", "fixture", &get).unwrap();
+        assert_eq!(
+            (
+                scene.api_id.as_str(),
+                scene.web_id.as_str(),
+                scene.tree_id.as_str()
+            ),
+            ("101", "102", "101")
+        );
+        assert_eq!((scene.open, scene.head.as_str()), (2, SHA));
+        assert_eq!((scene.merged, scene.merge.as_str()), (1, MERGE));
+        assert_eq!(scene.opened_from, live::OPENED_FROM);
+        assert_eq!(
+            (scene.opened, scene.created.clone(), scene.queue),
+            (None, None, false)
+        );
+        assert_eq!(
+            scene.request_url(2),
+            "https://github.com/fixture/api/pull/2"
+        );
+    }
+
+    #[test]
+    fn a_github_request_closed_without_merging_is_no_landed_request() {
+        charter_core::unsteered!();
+        let closed = json!([{"number": 1, "state": "closed", "merged_at": null,
+                             "merge_commit_sha": MERGE}]);
+        let get = answering(github(closed));
+        let refused = live::discover(Kind::GitHub, "github.com", "fixture", &get).unwrap_err();
+        assert!(refused.contains("closed, not merged"), "{refused}");
+    }
+
+    #[test]
+    fn gitlab_reads_iids_and_escapes_the_repo_as_one_segment() {
+        charter_core::unsteered!();
+        let get = answering(vec![
+            ("projects/fixture%2Fapi".into(), json!({"id": 201})),
+            ("projects/fixture%2Fweb".into(), json!({"id": 202})),
+            (
+                "projects/fixture%2Fapi/merge_requests?state=opened&source_branch=charter%2Fsave&target_branch=main&per_page=1"
+                    .into(),
+                json!([{"id": 9001, "iid": 2, "sha": SHA}]),
+            ),
+            (
+                "projects/fixture%2Fapi/merge_requests?state=merged&source_branch=charter%2Flanded&per_page=1"
+                    .into(),
+                json!([{"id": 9000, "iid": 1, "merge_commit_sha": MERGE}]),
+            ),
+        ]);
+        let scene = live::discover(Kind::GitLab, "gitlab.com", "fixture", &get).unwrap();
+        assert_eq!(
+            (scene.api_id.as_str(), scene.web_id.as_str()),
+            ("201", "202")
+        );
+        assert_eq!((scene.open, scene.head.as_str()), (2, SHA));
+        assert_eq!((scene.merged, scene.merge.as_str()), (1, MERGE));
+        assert_eq!(
+            scene.issue_url(5),
+            "https://gitlab.com/fixture/api/-/issues/5"
+        );
+    }
+
+    #[test]
+    fn a_fixture_with_no_open_request_says_which_one_it_lacks() {
+        charter_core::unsteered!();
+        let mut answers = github(json!([]));
+        answers[2].1 = json!([]);
+        let refused =
+            live::discover(Kind::GitHub, "github.com", "fixture", &answering(answers)).unwrap_err();
+        assert!(
+            refused.contains("request open from charter/save into main"),
+            "{refused}"
+        );
+    }
 }
