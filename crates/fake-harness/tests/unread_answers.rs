@@ -72,7 +72,6 @@ fn launch(dir: &Path) -> Launch {
         ],
         cwd: dir.to_path_buf(),
         env: Vec::new(),
-        env_strip: Vec::new(),
         charter_mcp: None,
         patience: PATIENCE,
     }

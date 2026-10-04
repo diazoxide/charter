@@ -6,7 +6,10 @@
   reply in the same model it uses for hooks. It gives the agent no file system and no terminal
   of charter's, and it never answers a login prompt or supplies a credential. A permission the
   agent asks for waits, with no deadline, until you answer it; only you can answer it, and the
-  first answer wins. Nothing in the window starts such a chat yet (HP-2, #669).
+  first answer wins. Such a chat starts from the same profile approval and sandbox decision
+  as a chat in a terminal, with the same environment and nothing else of the app's, and in a
+  project that turns the sandbox on it is not started over ACP. Nothing in the window starts
+  such a chat yet (HP-2, #669).
 
 ### Changed
 

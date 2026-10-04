@@ -12,8 +12,8 @@ use charter_core::harness::model::{Began, Deadline, Plan, Said, Session, Step, T
 
 const PATIENCE: Duration = Duration::from_secs(20);
 
-fn launch(dir: &Path, flags: &[&str]) -> Launch {
-    // As the host does first thing: a chat refuses to start while the host has a terminal.
+/// As the host does first thing: a chat refuses to start while the host has a terminal.
+fn leave_the_terminal() {
     static LEFT: std::sync::Once = std::sync::Once::new();
     LEFT.call_once(|| {
         use charter_core::noterminal::{Left, leave};
@@ -21,6 +21,10 @@ fn launch(dir: &Path, flags: &[&str]) -> Launch {
             std::process::exit(code);
         }
     });
+}
+
+fn launch(dir: &Path, flags: &[&str]) -> Launch {
+    leave_the_terminal();
     let mut argv = vec![
         env!("CARGO_BIN_EXE_fake-harness").to_owned(),
         "--acp".to_owned(),
@@ -31,7 +35,6 @@ fn launch(dir: &Path, flags: &[&str]) -> Launch {
         argv,
         cwd: dir.to_path_buf(),
         env: Vec::new(),
-        env_strip: Vec::new(),
         charter_mcp: None,
         patience: PATIENCE,
     }
@@ -98,7 +101,7 @@ fn the_handshake_offers_no_file_system_and_no_terminal_and_hands_the_session_cha
         &["--acp-record", record.to_str().expect("UTF-8")],
     );
     launch.charter_mcp = Some(PathBuf::from("/bin/charter"));
-    launch.env = vec![("CHARTER_ROOT".to_owned(), "/project".to_owned())];
+    launch.env = vec![("CHARTER_ROOT".into(), "/project".into())];
     let (chat, _events) = Chat::start(launch, Arc::new(Asks::new())).expect("the agent starts");
     drop(chat);
 
@@ -359,42 +362,149 @@ fn a_chat_dropped_ends_its_agent() {
     events_until(&events, |event| *event == Event::Ended);
 }
 
-/// HP-2's acceptance on a real opencode: a chat runs over ACP with `fs` and `terminal` both off
-/// (ADR 0080 §2). It needs opencode on `PATH` with a model it can reach, and it spends one short
-/// turn of it, so it runs only when asked: `cargo test -p fake-harness --test over_acp --
-/// --ignored`.
-#[test]
-#[ignore = "runs the real opencode and spends a turn of its model"]
-fn an_opencode_chat_runs_over_acp() {
-    use charter_core::harness::Harness;
-    let dir = tempfile::tempdir().expect("a worktree");
-    let mut argv = vec!["opencode".to_owned()];
-    argv.extend(
-        Harness::Opencode
-            .acp_args()
-            .expect("opencode offers ACP")
-            .iter()
-            .map(|arg| (*arg).to_owned()),
-    );
+/// A project with one approved profile, `work`, of kind opencode, running `program`: what a
+/// chat started from the window starts from ([`charter_core::start::ready`]).
+fn an_opencode_project(program: &str) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("a project");
+    std::fs::write(dir.path().join("charter.toml"), "").expect("charter.toml");
+    std::fs::write(
+        dir.path().join(charter_core::profiles::LOCAL_FILE),
+        format!("[harness.work]\nkind = \"opencode\"\ncommand = [{program:?}]\n"),
+    )
+    .expect("the profile");
+    let set = charter_core::profiles::current(dir.path());
+    charter_core::profiletrust::record_launched(
+        dir.path(),
+        "work",
+        &charter_core::profiletrust::fingerprint(set.get("work").expect("declared")),
+    )
+    .expect("approved");
+    dir
+}
+
+/// A chat on `project`'s `work` profile, started at level 3 the way the host starts one: the
+/// start every chat makes, then its ACP agent from it, in the chat's environment from `app`.
+fn started_at_level_3(
+    project: &Path,
+    app: Vec<(std::ffi::OsString, std::ffi::OsString)>,
+) -> (Arc<Chat>, acp::Events) {
+    leave_the_terminal();
+    let start = charter_core::start::Start {
+        profile: Some("work".to_owned()),
+        name: "level three".to_owned(),
+        cwd: Some(project.to_path_buf()),
+        ..charter_core::start::Start::default()
+    };
+    let ready = charter_core::start::ready(&start, project).expect("the chat may start");
+    let launch = Launch::for_start(
+        &ready,
+        acp::Host {
+            chat: "7".to_owned(),
+            app_env: app,
+            operator: &[],
+            strip: &[],
+            own: vec![("CHARTER_SESSION_ID".to_owned(), "7".to_owned())],
+            git_hooks: None,
+            charter: None,
+        },
+    )
+    .expect("offered at level 3");
     let (chat, events) = Chat::start(
         Launch {
-            argv,
-            ..launch(dir.path(), &[])
+            patience: PATIENCE.max(launch.patience),
+            ..launch
         },
         Arc::new(Asks::new()),
     )
-    .expect("opencode starts over ACP");
+    .expect("it starts over ACP");
+    (Arc::new(chat), events)
+}
+
+/// The board's view of a chat, moved by every event it hears, until `until` accepts one.
+fn board_until(
+    board: &mut charter_core::state::Chat,
+    events: &acp::Events,
+    until: impl Fn(&Event) -> bool,
+) -> Vec<Event> {
+    let seen = events_until(events, until);
+    for said in seen.iter().filter_map(Event::said) {
+        board.heard(&said);
+    }
+    seen
+}
+
+#[test]
+fn an_opencode_chat_started_at_level_3_runs_over_acp_and_its_board_follows_its_turns() {
+    use charter_core::state::State;
+    let project = an_opencode_project(env!("CARGO_BIN_EXE_fake-harness"));
+    let (chat, events) = started_at_level_3(project.path(), Vec::new());
+    let mut board = charter_core::state::Chat::new();
+    board_until(&mut board, &events, |event| {
+        matches!(event, Event::Said(Said::Session(_)))
+    });
+    assert_eq!(board.state(), State::Waiting);
+
+    let turn = prompt_aside(&chat, "ask");
+    let seen = board_until(&mut board, &events, |event| {
+        matches!(event, Event::Raised(_))
+    });
+    assert!(board.asking() && board.needs_you(), "{seen:#?}");
+    let Some(Event::Raised(ask)) = seen.last() else {
+        panic!("{seen:#?}");
+    };
+    chat.answer(&ask.id, "once", the_operator())
+        .expect("the operator answers");
+    assert_eq!(ended(&turn), Ok(Stop::EndTurn));
+    board_until(&mut board, &events, |event| {
+        *event == Event::Said(Said::Turn(Turn::Ended))
+    });
+    assert_eq!(board.state(), State::Waiting);
+    assert!(board.needs_you() && !board.asking());
+    // The agent runs in the chat's environment: what the host set for the chat is there.
+    assert_eq!(
+        turn_text(&chat, &events, "env CHARTER_SESSION_ID"),
+        "CHARTER_SESSION_ID=7"
+    );
+}
+
+/// One turn's first piece of text.
+fn turn_text(chat: &Arc<Chat>, events: &acp::Events, prompt: &str) -> String {
+    assert_eq!(turn(chat, prompt), Ok(Stop::EndTurn));
+    let seen = events_until(events, |event| text(event).is_some());
+    seen.iter().find_map(text).unwrap_or_default().to_owned()
+}
+
+/// HP-2's acceptance on a real opencode: a chat on an opencode profile, started at level 3 the
+/// way the host starts one, runs a turn over ACP with `fs` and `terminal` both off (ADR 0080
+/// §2), and its board follows the turn. It needs opencode on `PATH` with a model it can reach
+/// (opencode's own free models answer with no login), and it spends one short turn of it, so it
+/// runs only when asked, on a HOME of its own: `env -i HOME=<scratch> PATH=<with opencode>
+/// cargo test -p fake-harness --test over_acp -- --ignored`.
+#[test]
+#[ignore = "runs the real opencode and spends a turn of its model"]
+fn an_opencode_chat_runs_over_acp() {
+    use charter_core::state::State;
+    let project = an_opencode_project("opencode");
+    let (chat, events) = started_at_level_3(project.path(), std::env::vars_os().collect());
     assert_eq!(chat.negotiated().protocol, 1);
     assert!(chat.negotiated().resumes_by_id, "{:?}", chat.negotiated());
+    let mut board = charter_core::state::Chat::new();
+
     assert_eq!(
         chat.prompt("Reply with the single word pong, and use no tools."),
         Ok(Stop::EndTurn)
     );
-    let seen = events_until(&events, |event| {
+    let seen = board_until(&mut board, &events, |event| {
         *event == Event::Said(Said::Turn(Turn::Ended))
     });
     let reply: String = seen.iter().filter_map(text).collect();
     assert!(reply.to_lowercase().contains("pong"), "{seen:#?}");
+    assert!(
+        seen.contains(&Event::Said(Said::Turn(Turn::Began))),
+        "{seen:#?}"
+    );
+    assert_eq!(board.state(), State::Waiting);
+    assert!(board.needs_you());
 }
 
 #[test]
@@ -672,7 +782,7 @@ fn the_agent_does_not_inherit_the_host_s_relaunch_marker() {
     let marker = charter_core::noterminal::RELAUNCHED_ENV;
     let (chat, events) = Chat::start(
         Launch {
-            env: vec![(marker.to_owned(), "1".to_owned())],
+            env: vec![(marker.into(), "1".into())],
             ..launch(dir.path(), &[])
         },
         Arc::new(Asks::new()),
@@ -800,4 +910,48 @@ fn a_host_that_fell_behind_still_hears_the_chat_end_and_then_that_nothing_more_c
         events.recv_timeout(Duration::from_secs(5)),
         Err(std::sync::mpsc::RecvTimeoutError::Disconnected)
     );
+}
+
+#[test]
+fn the_kill_switch_ends_a_chat_still_held_and_withdraws_its_asks() {
+    // ADR 0080 §5.5, ADR 0071: the kill switch sends nothing and waits for nothing. A chat a
+    // thread holds while it waits on a turn is never dropped, so the kill has to reach the
+    // agent's group through the chat itself, and the ask it left open goes with it.
+    let dir = tempfile::tempdir().expect("a worktree");
+    let asks = Arc::new(Asks::new());
+    let (chat, events) =
+        Chat::start(launch(dir.path(), &[]), Arc::clone(&asks)).expect("the agent starts");
+    let chat = Arc::new(chat);
+    let turn = prompt_aside(&chat, "ask");
+    raised(&events);
+
+    chat.kill();
+
+    assert_eq!(ended(&turn), Err(TurnFailed::Gone));
+    events_until(&events, |event| *event == Event::Ended);
+    assert_eq!(asks.pending(std::time::Instant::now()), Vec::new());
+}
+
+#[test]
+fn the_agent_gets_the_chat_s_environment_and_nothing_else_of_the_host_s() {
+    // ADR 0080 §1: the agent is started like a terminal chat's program, which starts from an
+    // empty environment plus what charter keeps for it (`charter_core::chatenv`).
+    assert!(std::env::var_os("HOME").is_some(), "the host has a HOME");
+    let dir = tempfile::tempdir().expect("a worktree");
+    let (chat, events) = Chat::start(
+        Launch {
+            env: vec![("CHARTER_CHAT_ONLY".into(), "kept".into())],
+            ..launch(dir.path(), &[])
+        },
+        Arc::new(Asks::new()),
+    )
+    .expect("the agent starts");
+    let chat = Arc::new(chat);
+    let mut said = Vec::new();
+    for name in ["CHARTER_CHAT_ONLY", "HOME"] {
+        assert_eq!(turn(&chat, &format!("env {name}")), Ok(Stop::EndTurn));
+        let seen = events_until(&events, |event| text(event).is_some());
+        said.extend(seen.iter().find_map(text).map(str::to_owned));
+    }
+    assert_eq!(said, ["CHARTER_CHAT_ONLY=kept", "HOME=unset"]);
 }

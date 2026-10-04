@@ -253,6 +253,52 @@ pub fn inherited(
         .collect()
 }
 
+/// What one chat's program is started with, beside what the app itself has.
+#[derive(Debug, Clone, Copy)]
+pub struct Starting<'a> {
+    /// The harness it runs, whose declared variables it keeps ([`Harness::env_passed`]).
+    pub harness: Option<Harness>,
+    /// The operator's own additions, from the chat's plane (`[chat_env] pass`, [`read`]).
+    pub operator: &'a [String],
+    /// Every identity variable a vault of the plane declares, kept out of the chat whether it
+    /// is inherited or set, as every `OP_*` is.
+    pub strip: &'a [String],
+    /// The chat's own: its profile's, charter's and its persona's ([`crate::start::Ready::env`]).
+    pub set: &'a [(String, String)],
+    /// charter's git hooks (SQ-16, ADR 0074), armed once everything else is settled.
+    pub git_hooks: Option<&'a crate::githooks::GitHooks>,
+}
+
+/// A chat's whole environment, from `app`, the app's own: what [`inherited`] keeps of it, then
+/// the chat's own variables, then charter's git hooks armed after them, so a
+/// `GIT_CONFIG_COUNT` the chat already has keeps its pairs. The program starts from this and
+/// nothing else, at every level: in a terminal, or as a level-3 agent (ADR 0080 §1).
+///
+/// A later pair wins over an earlier one of the same name, so a profile's value wins over the
+/// app's. What the host adds for the chat itself (its number, its token, its socket) goes after.
+pub fn compose(
+    app: impl IntoIterator<Item = (OsString, OsString)>,
+    chat: &Starting<'_>,
+) -> Vec<(OsString, OsString)> {
+    // A profile's `OP_*`, and any identity variable a vault declares, is dropped with the
+    // app's own (#237, and #271 review U6): a chat never carries one.
+    let strip = |name: &OsStr| {
+        crate::secrets::identity::kept_from_chats(name)
+            || chat.strip.iter().any(|s| OsStr::new(s) == name)
+    };
+    let mut env = inherited(app, chat.harness, chat.operator, &strip);
+    env.extend(
+        chat.set
+            .iter()
+            .filter(|(name, _)| !strip(OsStr::new(name)))
+            .map(|(name, value)| (name.into(), value.into())),
+    );
+    match chat.git_hooks {
+        Some(hooks) => hooks.arm(env),
+        None => env,
+    }
+}
+
 /// Puts a program the app starts on the session bus the app was given, when the app is running
 /// without it: `address` and `kept` are [`SESSION_BUS`] and [`SESSION_BUS_KEPT`] as the app has
 /// them ([`the_bus_kept`]).
@@ -893,5 +939,61 @@ mod tests {
 
         assert_eq!(read(a_plane(text, true).path()), ["JAVA_HOME"]);
         assert_eq!(read(a_plane(text, false).path()), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_chat_s_environment_is_the_kept_inherited_then_its_own_then_charter_s_git_hooks() {
+        // One composition for a chat's program at every level: a terminal chat's and a level-3
+        // agent's (ADR 0080 §1).
+        let inherited = env(&[
+            "PATH",
+            "HOME",
+            "OP_SESSION_me",
+            "PROD_1P_TOKEN",
+            "SOME_TOOL",
+        ]);
+        let set = [
+            ("PROD_1P_TOKEN".to_owned(), "from-a-profile".to_owned()),
+            (
+                "OP_SERVICE_ACCOUNT_TOKEN".to_owned(),
+                "from-a-profile".to_owned(),
+            ),
+            ("CHARTER_PERSONA".to_owned(), "steward".to_owned()),
+            ("HOME".to_owned(), "/profile-home".to_owned()),
+        ];
+        let hooks = crate::githooks::GitHooks::at("/app/git-hooks");
+
+        let composed = compose(
+            inherited,
+            &Starting {
+                harness: None,
+                operator: &[],
+                strip: &["PROD_1P_TOKEN".to_owned()],
+                set: &set,
+                git_hooks: Some(&hooks),
+            },
+        );
+
+        let said: Vec<(String, String)> = composed
+            .into_iter()
+            .map(|(name, value)| (name.into_string().unwrap(), value.into_string().unwrap()))
+            .collect();
+        let pair = |name: &str, value: &str| (name.to_owned(), value.to_owned());
+        assert_eq!(
+            said[..4],
+            [
+                pair("PATH", "v-PATH"),
+                pair("HOME", "v-HOME"),
+                pair("CHARTER_PERSONA", "steward"),
+                pair("HOME", "/profile-home"),
+            ]
+        );
+        assert!(
+            said[4..]
+                .iter()
+                .all(|(name, _)| name.starts_with("GIT_CONFIG_")),
+            "{said:?}"
+        );
+        assert!(said.contains(&pair("GIT_CONFIG_COUNT", "1")), "{said:?}");
     }
 }

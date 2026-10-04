@@ -5,6 +5,9 @@
 //! [`crate::harness::Harness::acp_args`]) in its own process group, so the kill switch and a
 //! pause reach all of it, and runs the protocol on a thread of its own:
 //!
+//! - **A level-3 chat starts from the start a terminal chat makes** ([`Launch::for_start`]):
+//!   the one profile gate and sandbox decision, then the agent in the chat's environment and
+//!   nothing else of the host's. A sandboxed chat does not run over ACP (D-87h).
 //! - **`initialize` offers nothing optional** (§2, V28a): no `fs`, no `terminal`, no elicitation.
 //!   A call to a client method charter did not offer is refused with *method not found* and
 //!   reported as [`Event::Refused`], the input to the audit's `acp.call.refused`.
@@ -25,6 +28,8 @@
 //!   human scope (V16, V75), so the agent's own stdio can ask and never answer. An ACP ask has
 //!   no deadline (V28d) and nothing answers it on a timer. [`Chat::cancel`] sends
 //!   `session/cancel` and answers every waiting request `cancelled`, as ACP requires.
+//! - **The kill switch reaches a chat a waiting turn still holds** ([`Chat::kill`]): the
+//!   agent's group ends, and every ask it left open is withdrawn as the connection ends.
 //!
 //! **What the agent writes is bounded.** A line past [`MOST_LINE_BYTES`] ends the chat; a
 //! notification charter does not follow, or a request or update naming another session, is
@@ -59,6 +64,9 @@ use agent_client_protocol::schema::v1::{
 use agent_client_protocol::{Client, ConnectionTo, Responder, UntypedMessage};
 use futures::{AsyncBufReadExt, StreamExt};
 
+mod launch;
+pub use launch::{Host, NotOffered};
+
 use crate::harness::asks::{Answerer, Applied, AskId, Asks, Raised, Refused};
 use crate::harness::model::{Plan, Said, Session, Step, Turn, Usage};
 
@@ -71,10 +79,10 @@ pub struct Launch {
     pub argv: Vec<String>,
     /// The chat's worktree: where the agent runs, and the session's `cwd`.
     pub cwd: PathBuf,
-    /// Set in the agent's environment, on top of what this process was started with.
-    pub env: Vec<(String, String)>,
-    /// Kept out of the agent's environment, set or inherited.
-    pub env_strip: Vec<String>,
+    /// The agent's whole environment: the chat's, as a terminal chat's program is started
+    /// with it ([`crate::chatenv::compose`], ADR 0080 §1). Nothing of this process's own
+    /// environment reaches the agent unless it is here.
+    pub env: Vec<(std::ffi::OsString, std::ffi::OsString)>,
     /// The `charter` binary, whose MCP server the session is handed; `None` hands it none.
     pub charter_mcp: Option<PathBuf>,
     /// How long the agent has to answer its handshake: [`HANDSHAKE_PATIENCE`], unless a test
@@ -106,6 +114,24 @@ pub enum Event {
     Refused { method: String },
     /// The agent's stdio closed: it exited, or was stopped.
     Ended,
+}
+
+impl Event {
+    /// What the board hears of this event, in the neutral model (ADR 0073): the session and
+    /// its turns, a plan and usage, and an ask raised. The agent's text and tool calls move no
+    /// chat, and neither does its end here: the host reads that from the program's exit, as it
+    /// does a terminal chat's.
+    pub fn said(&self) -> Option<Said> {
+        match self {
+            Self::Said(said) => Some(said.clone()),
+            Self::Raised(raised) => Some(Said::Ask(raised.ask.clone())),
+            Self::Text(_)
+            | Self::ToolCall { .. }
+            | Self::ToolCallStatus { .. }
+            | Self::Refused { .. }
+            | Self::Ended => None,
+        }
+    }
 }
 
 /// Why a turn ended.
@@ -571,6 +597,22 @@ impl Chat {
     pub fn cancel(&self) {
         let _ = self.commands.unbounded_send(Command::Cancel);
     }
+
+    /// Ends the agent's whole process group now, sending nothing and waiting for nothing: the
+    /// kill switch (ADR 0071, ADR 0080 §5.5). It reaches a chat a waiting turn still holds,
+    /// which is never dropped while it waits. The connection then ends as it does when the
+    /// agent exits: the turn fails as [`TurnFailed::Gone`], every ask still open is withdrawn,
+    /// and [`Event::Ended`] is heard. The leader is reaped only when the chat is dropped, so
+    /// its id names this group until then.
+    pub fn kill(&self) {
+        kill_group(self.shared.group);
+    }
+
+    /// The agent's process id, which is also its process group's: what a pause stops
+    /// (V27c) and what the run records as the chat's program.
+    pub fn process_id(&self) -> u32 {
+        self.shared.group
+    }
 }
 
 impl Drop for Chat {
@@ -614,12 +656,11 @@ fn spawn(launch: &Launch) -> Result<std::process::Child, NotStarted> {
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null());
-    for name in &launch.env_strip {
-        command.env_remove(name);
-    }
-    command.envs(launch.env.iter().map(|(name, value)| (name, value)));
-    // Never the host's relaunch marker, set or inherited: an app started from the agent leaves
-    // its own terminal (V77).
+    command
+        .env_clear()
+        .envs(launch.env.iter().map(|(name, value)| (name, value)));
+    // Never the host's relaunch marker, even where a caller set it: an app started from the
+    // agent leaves its own terminal (V77).
     command.env_remove(crate::noterminal::RELAUNCHED_ENV);
     #[cfg(unix)]
     std::os::unix::process::CommandExt::process_group(&mut command, 0);
@@ -955,6 +996,11 @@ impl Protocol {
         // chat dropped. Its group goes with it; the leader is not reaped yet, so its id is
         // still the agent's.
         kill_group(shared.group);
+        // Nothing can answer the agent any more, so nothing it asked waits on a human.
+        let open: Vec<AskId> = lock(&shared.waiting).drain().map(|(id, _)| id).collect();
+        for id in open {
+            shared.asks.withdraw(&id);
+        }
         shared.end();
     }
 }
