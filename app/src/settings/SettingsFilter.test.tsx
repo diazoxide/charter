@@ -153,9 +153,12 @@ describe("the filtered nav, by keyboard", () => {
   it("still moves between the groups left in it with the arrow keys", async () => {
     render(<SettingsTab />);
 
-    // "size" is in Text's sliders and "sends" in Editor's help: both groups, each narrowed.
-    await userEvent.type(box(), "s");
+    // "wher" is in the window size's help ("anywhere") and Your editor's ("Where"), and in
+    // neither group's own label or help: both groups stay, each narrowed to that one setting.
+    await userEvent.type(box(), "wher");
     expect(inNav()).toEqual(["Text", "Editor"]);
+    expect(screen.getByRole("slider", { name: /window text size/i })).toBeInTheDocument();
+    expect(screen.queryByRole("slider", { name: /terminal text size/i })).not.toBeInTheDocument();
     group("Text").focus();
     await userEvent.keyboard("{ArrowDown}");
     expect(group("Editor")).toHaveFocus();

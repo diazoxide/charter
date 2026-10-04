@@ -39,7 +39,8 @@ export type GroupOffer = { id: string; label: string };
  * **The filter** (SE-21, V89c) sits above the nav: a search box, labelled, whose words the
  * caller narrows its groups by — the layout draws what it is handed. While it holds words, a
  * polite live region under it says how many settings match (`found`), and when none do, the
- * right column says so in place of the group. Escape in the box clears it.
+ * right column says so where the group would be — above what the level's files refuse, which
+ * stays on screen whatever the filter. Escape in the box clears it.
  */
 export function SettingsLayout({
   levels,
@@ -121,12 +122,7 @@ export function SettingsLayout({
             }}
           />
         </div>
-        <p
-          className="ui-settings-found"
-          role="status"
-          aria-live="polite"
-          aria-label="Settings found"
-        >
+        <p className="sr-only" role="status" aria-live="polite" aria-label="Settings found">
           {said}
         </p>
         <RovingFocusGroup.Root asChild orientation="vertical" {...stop}>
@@ -146,7 +142,8 @@ export function SettingsLayout({
         </RovingFocusGroup.Root>
       </div>
       <div className="ui-settings-body">
-        {none ? <p className="ui-settings-none">{none}</p> : children}
+        {none && <p className="ui-settings-none">{none}</p>}
+        {children}
       </div>
     </div>
   );
