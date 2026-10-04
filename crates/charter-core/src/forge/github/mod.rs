@@ -417,11 +417,16 @@ impl WorkItems for GitHub {
         };
         let key = crate::work::TrackerKey::github(&host, &format!("{owner}/{repo}"), issue.number)
             .map_err(|why| ForgeError::new(format!("{doing}: {why}")))?;
-        Ok(crate::work::WorkItem {
-            key,
-            forge_ref: Some(ForgeRef(issue.node_id.clone())),
-            url: issue.html_url,
-        })
+        let mut item = crate::work::WorkItem::new(key, crate::work::Kind::Issue, issue.title);
+        item.forge_ref = Some(ForgeRef(issue.node_id));
+        item.url = issue.html_url;
+        item.state = crate::work::State::of_forge(&issue.state);
+        item.labels = issue.labels.into_iter().map(|l| l.name).collect();
+        item.milestone = issue.milestone.map(|m| crate::work::Milestone {
+            title: m.title,
+            due: m.due_on.map(|d| d.chars().take(10).collect()),
+        });
+        Ok(item)
     }
 }
 

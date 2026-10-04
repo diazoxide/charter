@@ -93,6 +93,12 @@ How one work item stands to another: a pull or merge request that closes it, blo
 parent and child. It belongs to **Workspace**, with the work items it joins (ADR 0088).
 _Avoid_: link (unqualified), dependency (that is one kind of relation)
 
+**Board** (of work items):
+A view of a workspace's work items, one card per item, in an open and a closed column. It is
+derived each time from the work links and the trackers, and never stored, so a todo promoted to
+an issue is one card. It belongs to **Workspace**, in its Work section (FI5).
+_Avoid_: project (GitHub's word for its boards), kanban
+
 **Plane root**:
 The plane's own directory, as a place a chat works — and anywhere else in the plane that is no
 workspace's, such as `docs/`: the workspace strip's first tab, drawn as an icon, always there. A chat started there is in no workspace on purpose — it looks after the

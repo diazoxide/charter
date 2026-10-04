@@ -5,8 +5,10 @@ use serde_json::{Value, json};
 use super::*;
 use crate::forge::Kind;
 use crate::forge::recorded::Recorded;
+use crate::work::board::{self, Column};
 use crate::work::list;
 use crate::work::log::Op;
+use crate::work::tracker::Todos;
 
 const DEVICE: &str = "01K6H0Z8Y3V1N3G4QK0A9T5B7C";
 const CHAT: &str = "01K6H10000AAAAAAAAAAAAAAAA";
@@ -86,10 +88,11 @@ fn the_picker(ws: &Workspace) -> String {
     path.file_stem().unwrap().to_string_lossy().into_owned()
 }
 
-/// FW-5's acceptance, at the core: a todo promoted to a GitHub issue keeps its chat link, and
-/// the Work list the board draws (FW-9) shows one item, not two.
+/// FW-5's acceptance (#732): a todo promoted to a GitHub issue keeps its chat link, and the board
+/// shows one card, not two. The issue is opened through the forge seam over GitHub's recorded
+/// answer, and the board is the one FW-9 draws.
 #[test]
-fn a_todo_promoted_to_a_github_issue_keeps_its_chat_link_and_is_one_item() {
+fn a_todo_promoted_to_a_github_issue_keeps_its_chat_link_and_is_one_card() {
     let (tmp, ws) = project(&["api"]);
     let root = tmp.path();
     let stem = the_picker(&ws);
@@ -154,9 +157,31 @@ fn a_todo_promoted_to_a_github_issue_keeps_its_chat_link_and_is_one_item() {
         "it keeps its chat link"
     );
     let listed = list::of(&ws, &folded).unwrap();
-    assert_eq!(listed.len(), 1, "one card, not two: {listed:?}");
+    assert_eq!(listed.len(), 1, "one item, not two: {listed:?}");
     assert_eq!(listed[0].key, issue);
     assert_eq!(listed[0].chats, [CHAT]);
+
+    // The board, from both trackers: the todos the plane holds, and the issue as GitHub's
+    // recorded answer named it. One card, the issue's, with the chat on it.
+    let todos = Todos::of(&ws).unwrap();
+    let answered = vec![promoted.item.clone()];
+    let board = board::of(&ws, &folded, &[&todos, &answered]).unwrap();
+    assert_eq!(board.cards.len(), 1, "one card, not two: {board:?}");
+    let card = &board.cards[0];
+    assert_eq!(card.key, issue);
+    assert_eq!(card.chats, [CHAT], "the card carries the todo's chat");
+    let item = card.item.as_ref().expect("GitHub's answer fills the card");
+    assert_eq!(item.title, "Port the picker");
+    assert_eq!(item.kind, crate::work::Kind::Issue);
+    assert_eq!(item.url, "https://github.com/acme/api/issues/12");
+    assert_eq!(
+        board
+            .column(Column::Open)
+            .map(|c| &c.key)
+            .collect::<Vec<_>>(),
+        [&issue]
+    );
+    assert_eq!(board.column(Column::Closed).count(), 0);
 
     assert!(ws.todos().unwrap().is_empty(), "the todo is closed");
     let journal: Vec<String> = ws
