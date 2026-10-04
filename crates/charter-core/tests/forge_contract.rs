@@ -34,6 +34,7 @@ use charter_core::forge::recorded::Recorded;
 use charter_core::forge::{
     Caller, Capability, Forge, ForgeBackend, ForgeRef, Kind, Owner, Reach, Support,
 };
+use charter_core::work;
 use serde_json::{Value, json};
 
 #[path = "forge_contract/live.rs"]
@@ -576,6 +577,16 @@ mod cases {
         };
         assert_eq!(made.key.as_str(), scene.issue_key(number));
         assert_eq!(made.url, scene.issue_url(number));
+        // The answer, in the neutral model (FW-5): what a board draws the new issue's card from.
+        assert_eq!(made.title, live::ISSUE_TITLE);
+        assert_eq!(made.kind, work::Kind::Issue);
+        assert_eq!(made.state, work::State::Open);
+        let label = match kind {
+            "github" => "ws:alpha",
+            _ => "charter::ws::alpha",
+        };
+        assert_eq!(made.labels, [label]);
+        assert!(!made.is_sub_issue());
         match forge_ref {
             Some(forge_ref) => assert_eq!(made.forge_ref, Some(ForgeRef(forge_ref))),
             None => assert!(

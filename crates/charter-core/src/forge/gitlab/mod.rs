@@ -261,12 +261,24 @@ impl WorkItems for GitLab {
         };
         let key = crate::work::TrackerKey::gitlab_issue(&host, place, iid)
             .map_err(|why| ForgeError::new(format!("{doing}: {why}")))?;
-        let forge_ref = issue["id"].as_u64().map(|id| ForgeRef(id.to_string()));
-        Ok(crate::work::WorkItem {
-            key,
-            forge_ref,
-            url,
-        })
+        let title = issue["title"].as_str().unwrap_or(&new.title);
+        let mut item = crate::work::WorkItem::new(key, crate::work::Kind::Issue, title);
+        item.forge_ref = issue["id"].as_u64().map(|id| ForgeRef(id.to_string()));
+        item.url = url;
+        item.state = crate::work::State::of_forge(issue["state"].as_str().unwrap_or_default());
+        item.labels = issue["labels"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|l| l.as_str().map(str::to_string))
+            .collect();
+        item.milestone = issue["milestone"]["title"]
+            .as_str()
+            .map(|title| crate::work::Milestone {
+                title: title.to_string(),
+                due: issue["milestone"]["due_date"].as_str().map(str::to_string),
+            });
+        Ok(item)
     }
 }
 
