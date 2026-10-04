@@ -614,6 +614,14 @@ impl Denied {
                 crate::machine::dir(&config_root),
                 Access::Write,
             );
+            // The human client scopes' credentials and `charterd.sock` (FD-27, V16a): a chat
+            // neither reads nor writes anything there, so it holds no person's credential;
+            // `charterd` also refuses those scopes to a chat's processes.
+            deny(
+                Class::HumanPowers,
+                crate::machine::charterd(&config_root),
+                Access::ReadWrite,
+            );
             // What the human's forge sign-in fetched: the native transport's ETag store holds
             // raw answers, private repos' among them, so a chat neither reads nor writes it
             // (ADR 0070 §3 and §4).

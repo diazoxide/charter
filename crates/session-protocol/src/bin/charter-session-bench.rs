@@ -231,7 +231,14 @@ mod bench {
                 .await
                 .expect("the client")
                 .expect("this user");
-            link::serve(stream, v1(), &held).await.expect("a host link")
+            link::serve(
+                stream,
+                v1(),
+                &held,
+                &charter_session_protocol::local::NoChats,
+            )
+            .await
+            .expect("a host link")
         });
         let stream = UnixStream::connect(&path).await.expect("the host's socket");
         let client = if o.rtt.is_zero() {

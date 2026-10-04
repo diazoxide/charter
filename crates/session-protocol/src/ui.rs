@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::auth::Scope;
+use crate::grants::Power;
 use crate::session::{Ask as LinkAsk, CallError, Peer};
 
 /// One frame of the UI RPC, inside the control lane's `{"ui":…}`.
@@ -83,8 +83,8 @@ pub struct Server {
 /// window's alone, over Tauri's IPC.
 ///
 /// `answer_ask` answers a chat's ask as the operator (HP-6). Only a human scope answers one (V16,
-/// V75), and a link's `local-ui` credential is a file that nothing yet keeps a chat from
-/// reading (FD-27, #664), so an answer over the link could be an agent's own.
+/// V75). On a link that is the session protocol's `answer`, which [`crate::grants`]' table
+/// checks (FD-27); the UI RPC does not carry a second way to do it.
 pub const WINDOW_ONLY: &[&str] = &["answer_ask"];
 
 impl Server {
@@ -154,7 +154,7 @@ impl Serving {
         let Some(server) = &self.server else {
             return refused("this host serves no UI RPC".into());
         };
-        if peer.scope() != Scope::LocalUi {
+        if !peer.scope().may(Power::UiRpc) {
             return refused(format!(
                 "the UI RPC is the app's window's alone (`local-ui`), and this link is `{}`",
                 peer.scope().word()

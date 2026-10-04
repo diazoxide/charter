@@ -249,7 +249,16 @@ async fn over_the_hosts_socket_this_uid_is_admitted_only_with_its_credential() {
         let mut scopes = Vec::new();
         for _ in 0..2 {
             let stream = listener.accept().await.unwrap().expect("this uid");
-            scopes.push(link::serve(stream, v1(), &HELD).await.map(|l| l.scope()));
+            scopes.push(
+                link::serve(
+                    stream,
+                    v1(),
+                    &HELD,
+                    &charter_session_protocol::local::NoChats,
+                )
+                .await
+                .map(|l| l.scope()),
+            );
         }
         scopes
     });
@@ -286,7 +295,7 @@ async fn over_the_hosts_socket_this_uid_is_admitted_only_with_its_credential() {
 fn credentials_are_minted_fresh_and_never_written_out_by_debug() {
     let one = Credentials::mint().unwrap();
     let two = Credentials::mint().unwrap();
-    for scope in Scope::ALL {
+    for scope in Scope::WITH_A_CREDENTIAL {
         let credential = one.of(scope);
         assert_ne!(
             credential,
@@ -299,4 +308,28 @@ fn credentials_are_minted_fresh_and_never_written_out_by_debug() {
     }
     // Each scope has its own.
     assert_ne!(one.of(Scope::LocalUi), one.of(Scope::Terminal));
+}
+
+#[tokio::test]
+async fn remote_link_is_never_admitted_by_a_credential_whatever_proof_it_brings() {
+    // `remote-link` is a device a Noise handshake proved (ADR 0078 §3), never a credential
+    // file: the exchange refuses it even with the proof the host's own copy would make (FD-27).
+    let (a, b) = duplex(1 << 16);
+    let (client, host) = tokio::join!(
+        link::connect(a, v1(), Scope::RemoteLink, HELD.of(Scope::RemoteLink)),
+        link::serve_any(b, v1(), &HELD)
+    );
+    assert!(
+        matches!(host, Err(LinkError::Refused(Refused::Unauthenticated))),
+        "the host admitted remote-link"
+    );
+    assert!(client.is_err());
+}
+
+#[test]
+fn remote_link_has_no_credential_file_to_read() {
+    let dir = tempfile::tempdir().unwrap();
+    Credentials::mint_into(dir.path()).unwrap();
+    assert!(!dir.path().join("remote-link").exists(), "none is minted");
+    assert!(Credential::read(dir.path(), Scope::RemoteLink).is_err());
 }

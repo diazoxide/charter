@@ -34,9 +34,11 @@
 //! [`crate::version::HANDSHAKE_TIMEOUT`].
 //!
 //! **Which scopes carry a credential here.** The human client scopes on `charterd.sock`:
-//! [`Scope::ALL`]. The two others authenticate elsewhere and are not scopes of this exchange: a
-//! chat reaches its host only on its plane's hook socket, with its own per-chat token
-//! (`hookwire`), and a peer device by its link key inside a Noise handshake (ADR 0078 §3).
+//! [`Scope::WITH_A_CREDENTIAL`]. The others authenticate elsewhere and are never admitted by
+//! this exchange: a chat reaches its host only on its plane's hook socket, with its own per-chat
+//! token (`hookwire`), and a peer device, [`Scope::RemoteLink`], by its link key inside a Noise
+//! handshake (ADR 0078 §3, [`crate::link::ProvenDevice`]). An answer that names `remote-link`
+//! here is refused like one that names no scope.
 //!
 //! **A credential lives as long as the host that minted it.** The host mints one per scope
 //! every time it starts ([`Credentials::mint_into`]), into one `0600` file per scope in a
@@ -71,8 +73,8 @@ pub const HOST_LABEL: &[u8] =
 /// the size of a chat's token.
 const A_CREDENTIAL_IS: usize = 32;
 
-/// A human client scope on `charterd.sock` (ADR 0068 §5, ADR 0081 for `editor`). What each
-/// may do is FD-27's; this is who it is.
+/// A client scope (ADR 0068 §5, ADR 0081 for `editor`, ADR 0078 §3 for `remote-link`): who a
+/// link is. What each may do is [`crate::grants`]' table (FD-27).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Scope {
     /// The app's window.
@@ -85,17 +87,36 @@ pub enum Scope {
     Approval,
     /// The editor's charter extension.
     Editor,
+    /// A peer device of the operator's, through a connector (V9): the desktop's `charterd` on a
+    /// runner's. Proved by its link key, never by a credential file (ADR 0078 §3).
+    RemoteLink,
 }
 
 impl Scope {
-    /// Every scope that carries a credential file.
-    pub const ALL: [Scope; 5] = [
+    /// Every scope.
+    pub const ALL: [Scope; 6] = [
+        Scope::LocalUi,
+        Scope::Terminal,
+        Scope::FleetMcp,
+        Scope::Approval,
+        Scope::Editor,
+        Scope::RemoteLink,
+    ];
+
+    /// The scopes on `charterd.sock`, each proved by a credential file this exchange checks:
+    /// every one a person's, so none is ever admitted from inside a chat (V16a).
+    pub const WITH_A_CREDENTIAL: [Scope; 5] = [
         Scope::LocalUi,
         Scope::Terminal,
         Scope::FleetMcp,
         Scope::Approval,
         Scope::Editor,
     ];
+
+    /// Whether this scope is proved by a credential file ([`Scope::WITH_A_CREDENTIAL`]).
+    pub fn has_a_credential(self) -> bool {
+        Scope::WITH_A_CREDENTIAL.contains(&self)
+    }
 
     /// The scope's word: on the wire, and as its credential file's name.
     pub fn word(self) -> &'static str {
@@ -105,6 +126,7 @@ impl Scope {
             Scope::FleetMcp => "fleet-mcp",
             Scope::Approval => "approval",
             Scope::Editor => "editor",
+            Scope::RemoteLink => "remote-link",
         }
     }
 
@@ -164,6 +186,12 @@ impl Credential {
     /// credential, are errors, never an empty credential.
     #[cfg(unix)]
     pub fn read(dir: &Path, scope: Scope) -> std::io::Result<Self> {
+        if !scope.has_a_credential() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("{scope} is proved by a device's link key, never by a credential file"),
+            ));
+        }
         let text = charter_same_user::read_private_file(&dir.join(scope.word()))?;
         text.trim_end_matches('\n')
             .parse()
@@ -206,6 +234,10 @@ impl std::fmt::Debug for Credential {
 }
 
 /// The credential of every scope, as the host holds them for one start.
+///
+/// `remote-link` is held one too, minted in memory and never written, only so that
+/// [`Credentials::of`] answers for every scope: the exchange never admits that scope, whatever
+/// proof comes with it.
 #[derive(Clone, Debug)]
 pub struct Credentials([Credential; Scope::ALL.len()]);
 
@@ -213,6 +245,7 @@ impl Credentials {
     /// A fresh credential for every scope, held in memory only.
     pub fn mint() -> std::io::Result<Self> {
         Ok(Credentials([
+            Credential::mint()?,
             Credential::mint()?,
             Credential::mint()?,
             Credential::mint()?,
@@ -231,7 +264,7 @@ impl Credentials {
 
         charter_same_user::private_directory(dir)?;
         let held = Credentials::mint()?;
-        for scope in Scope::ALL {
+        for scope in Scope::WITH_A_CREDENTIAL {
             let mut file = tempfile::Builder::new()
                 .prefix(".minting-")
                 .permissions(std::os::unix::fs::PermissionsExt::from_mode(0o600))
@@ -253,9 +286,10 @@ impl Credentials {
         &self.0[at]
     }
 
-    /// Whether `proof` is the client's proof for `scope` and `challenge`.
+    /// Whether `proof` is the client's proof for `scope` and `challenge`. Never for a scope no
+    /// credential file proves.
     fn admits(&self, scope: Scope, challenge: &str, proof: &str) -> bool {
-        same(&client_proof(self.of(scope), scope, challenge), proof)
+        scope.has_a_credential() && same(&client_proof(self.of(scope), scope, challenge), proof)
     }
 }
 
@@ -376,7 +410,7 @@ pub async fn admit<S: AsyncRead + AsyncWrite>(
     io: S,
     held: &Credentials,
 ) -> Result<(Scope, Negotiated<S>), Refused> {
-    version::within_the_deadline(admit_unbounded(io, held)).await
+    version::within_the_deadline(admit_unbounded(io, held, None)).await
 }
 
 /// [`present`] with no deadline of its own, for a caller that holds one over the whole
@@ -433,10 +467,13 @@ pub(crate) async fn present_unbounded<S: AsyncRead + AsyncWrite>(
 }
 
 /// [`admit`] with no deadline of its own, for a caller that holds one over the whole handshake
-/// ([`crate::link::serve`]).
+/// ([`crate::link::serve`]). With `inside_a_chat`, the peer is one no scope is admitted to: the
+/// answer is refused with that sentence, before its proof is checked, so the refusal says
+/// nothing about whether the proof was right.
 pub(crate) async fn admit_unbounded<S: AsyncRead + AsyncWrite>(
     io: S,
     held: &Credentials,
+    inside_a_chat: Option<String>,
 ) -> Result<(Scope, Negotiated<S>), Refused> {
     let (mut reads, mut writes) = split(io);
     let challenge = challenge()?;
@@ -448,6 +485,10 @@ pub(crate) async fn admit_unbounded<S: AsyncRead + AsyncWrite>(
     )
     .await?;
     let (answer, left): (Answer, BytesMut) = version::receive(&mut reads).await?;
+    if let Some(why) = inside_a_chat {
+        version::send(&mut writes, &Verdict::Refuse { why: why.clone() }).await?;
+        return Err(Refused::InsideAChat(why));
+    }
     let scope = answer.scope.as_deref().and_then(Scope::from_word);
     let nonce = answer
         .nonce

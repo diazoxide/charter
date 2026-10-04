@@ -13,6 +13,8 @@
 //! - [`admit_host`]: the other way round, for a client whose reply carries authority (HP-6's
 //!   permission hook): the process listening must be this user's, this process's ancestor,
 //!   and hold the socket at the path now.
+//! - [`inside_a_chat`]: whether a process runs inside a chat (its program, its session, or
+//!   below it), for `charterd`'s refusal of a person's scope to a chat's processes (FD-27).
 //!
 //! **An unmapped uid is nobody's.** Inside a user namespace, a uid the namespace does not map
 //! reads as the overflow uid, 65534 by default, whoever it really is; `(uid_t)-1` is no uid at
@@ -31,8 +33,8 @@ use std::path::Path;
 
 mod ancestry;
 pub use ancestry::{
-    MOST_GENERATIONS, NotOurHost, Parents, admit_host, holds_a_socket_at, judge, listening_at,
-    lsof_command, lsof_names, ps_command, ps_lines, stat_parent, walk,
+    MOST_GENERATIONS, NotOurHost, Parents, admit_host, holds_a_socket_at, inside_a_chat, judge,
+    listening_at, lsof_command, lsof_names, ps_command, ps_lines, session_of, stat_parent, walk,
 };
 
 /// A user id.

@@ -2577,8 +2577,9 @@ mod tests {
 
     #[test]
     fn answering_an_ask_is_the_window_s_alone_and_never_in_the_link_s_client() {
-        // HP-6, V16, V75: the window's Tauri IPC answers an ask; the link to `charterd` never
-        // carries one until FD-27 tells a human scope from any other (#664).
+        // HP-6, V16, V75: the window's Tauri IPC answers an ask. On the link to `charterd` an
+        // answer is the session protocol's `answer`, checked by FD-27's scope table, never a
+        // second route through the UI RPC.
         let bindings = std::fs::read_to_string(BINDINGS).unwrap();
         assert!(bindings.contains("(\"answer_ask\""), "the window answers");
         assert!(!ui_rpc_client().contains("(\"answer_ask\""));
