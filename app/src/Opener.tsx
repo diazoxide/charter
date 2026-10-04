@@ -166,7 +166,7 @@ export function Opener({
           sequence unless it is written down (`docs/ui-primitives.md`, charter-app#189). */}
       <div className="doing">
         <button type="button" tabIndex={0} onClick={pick}>
-          Open Project…
+          Open project…
         </button>
       </div>
 

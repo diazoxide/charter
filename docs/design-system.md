@@ -2,7 +2,7 @@
 
 **A theme is a data file. Every colour in charter comes from one, and so does every motion —
 and nothing else may write either down.** `docs/ui-primitives.md` says what the window is built _out of_; this file says what
-it is _drawn in_.
+it is _drawn in_; `docs/ui-copy.md` says how it _talks_.
 
 The rule, in one line each:
 

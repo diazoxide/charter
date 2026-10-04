@@ -267,7 +267,7 @@ describe("the opener", () => {
     render(<App />);
 
     expect(await screen.findByText(/cannot remember projects on this machine/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Open Project…" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open project…" })).toBeInTheDocument();
   });
 
   it("says why an open did not happen, in the core's own words, and stays open", async () => {
@@ -281,7 +281,7 @@ describe("the opener", () => {
     await openByPath("/home/dev/notes");
 
     expect(await screen.findByRole("alert")).toHaveTextContent("is not a plane");
-    expect(screen.getByRole("button", { name: "Open Project…" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open project…" })).toBeInTheDocument();
   });
 
   it("comes back to the opener when the project is closed, and can open it again", async () => {
