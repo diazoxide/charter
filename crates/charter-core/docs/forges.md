@@ -330,21 +330,43 @@ fixture when it starts. It never gates a pull request; a red night keeps one iss
 
 Three cases do not run live, each listed with its reason in `NOT_LIVE`: `request_auto_merge`,
 `merge_at` and `enqueue_at` would land or queue the fixture's one open request. A forge with no
-token or owner set says so in the run's summary and stops, green.
+token or owner set says so in the run's summary and stops, green, and a night that tested
+nothing leaves the nightly's issue as it is: only a night that tested both forges and passed
+closes it.
 
 ### What the operator provisions
 
 Nothing below exists until the operator makes it; no charter run creates or deletes any of it.
-Each forge gets a **fixture org or group**, a **machine account** with a token, one **secret**
-and one **variable** in `diazoxide/charter`'s Actions settings.
+Each forge gets a **fixture org or group**, a **machine account** with a token, and a **GitHub
+environment** in `diazoxide/charter` holding that token and the owner's name.
+
+**The two environments** (Settings → Environments): `forge-live-github` and `forge-live-gitlab`.
+Each one holds:
+
+- the **secret** `FORGE_LIVE_TOKEN`: that forge's token;
+- the **variable** `FORGE_LIVE_OWNER`: the GitHub org's login, or the GitLab group's full path;
+- a **deployment branch policy of `main` only** ("Selected branches and tags", `main`).
+
+The secret has one static name in every environment, so a job's runner is sent that one token
+and no other secret; a computed `secrets[…]` index would send it the whole secrets context. The
+branch policy is what keeps a `workflow_dispatch` from another branch, with changed test code,
+from running with the token. The workflow hands the token only to the step that runs the tests,
+after the build, which keeps it out of the build scripts' environment, and only that: code
+running in the job can still read the runner's memory. The environment and its branch policy are
+the boundary, not the step order.
 
 | | GitHub | GitLab |
 |---|---|---|
-| Secret | `FORGE_LIVE_GITHUB_TOKEN` | `FORGE_LIVE_GITLAB_TOKEN` |
-| Variable | `FORGE_LIVE_GITHUB_OWNER`: the org's login | `FORGE_LIVE_GITLAB_OWNER`: the group's full path |
 | Owner | a new org holding only the two repos below | a new group holding only the two repos below, no subgroups |
-| Account | a machine account that owns no repos, an outside collaborator with **Write** on `api` only, not an org member | a separate user that owns no repos, a **Developer** member of `api` only, not of the group |
-| Token | a classic personal access token with the `repo` scope (an outside collaborator's fine-grained token cannot reach the org's private repo); what it can reach is bounded by the account | a personal access token with the `api` scope; what it can reach is bounded by the account |
+| Account | a machine account that owns no repos, an **org member** with the org's base permission set to **No permission**, given **Write** on `api` only | a separate user that owns no repos, a **Developer** member of `api` only, not of the group |
+| Token | a **fine-grained** personal access token, resource owner the org, repository access `api` only, with Contents read, Pull requests read and write, Issues read and write, Checks read, Commit statuses read, Actions read, and Metadata read | a personal access token with the `api` scope; what it can reach is bounded by the account |
+| Expiry | set one (90 days or less) and rotate before it by replacing the environment's secret | the same |
+
+If a live night shows that a fine-grained token cannot answer `reachable` or `about` as an
+outside reach would, the documented fallback is an outside collaborator with **Write** on `api`
+and a classic token with the `repo` scope, which is bounded by the account's reach rather than by
+the token. It needs the same expiry and rotation. An expired token turns the night red, and the
+nightly's issue says so.
 
 The account matters as much as the token: the `reachable` case expects the account to reach
 `api` and nothing else of the owner's, and the `about` case expects no admin rights, so
@@ -374,11 +396,13 @@ And `api` holds these branches and requests, made in this order:
 
 After that, nothing is pushed to the fixture. The nightly writes only three things there: it
 sets the open request's body to the text above, opens or updates the `charter/open` request, and
-opens an issue labelled `alpha` that it closes again at once. CI on the fixture runs only when
+opens an issue labelled `alpha` titled `Port the picker`. Before and after that case it closes
+every open issue with that label and title, by the forge's own listing, so an issue a failed run
+left open is closed by the next one. CI on the fixture runs only when
 the operator pushes to it, never nightly.
 
-A self-managed GitLab is FW-15's (#742): another row of the matrix, its host in
-`FORGE_LIVE_GITLAB_HOST`, which `tests/forge_contract/live.rs` already reads.
+A self-managed GitLab is FW-15's (#742): another row of the matrix with its own environment,
+its host in `FORGE_LIVE_GITLAB_HOST`, which `tests/forge_contract/live.rs` already reads.
 
 ## The mixed-forge collision rule
 

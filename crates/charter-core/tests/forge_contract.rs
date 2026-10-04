@@ -114,8 +114,9 @@ pub struct Over {
     pub host: String,
     pub scene: Scene,
     check: Box<dyn Fn()>,
-    /// Closes an issue `create` opened: on a live forge, so the fixture keeps no backlog.
-    close_issue: Box<dyn Fn(u64)>,
+    /// Closes every open issue the `create` case opened, by the forge's own listing, and answers
+    /// their numbers: on a live forge, so the fixture keeps no backlog. Nothing on a recording.
+    sweep: Box<dyn Fn() -> Result<Vec<u64>, String>>,
 }
 
 /// Every recorded exchange was asked for.
@@ -175,7 +176,7 @@ fn over(kind: &str, case: &str, how: How) -> Option<Over> {
                 host: forge.host.clone(),
                 scene: Scene::recorded(forge_kind),
                 check: Box::new(move || check.spent()),
-                close_issue: Box::new(|_| {}),
+                sweep: Box::new(|| Ok(Vec::new())),
             }
         }
         How::Native => native::over(kind, default_host(kind), &text),
@@ -543,32 +544,36 @@ mod cases {
             return;
         };
         let scene = &over.scene;
-        let made = over
-            .backend
-            .create(
-                &over.caller,
-                &scene.path("api"),
-                &NewWorkItem {
-                    title: "Port the picker".into(),
-                    body: "What the todo said.\n\nSecond paragraph.".into(),
-                    workspace_label: Some("alpha".into()),
-                },
-            )
-            .unwrap();
+        // Swept before, for what an earlier run left, and after, whatever `create` answered.
+        (over.sweep)().unwrap_or_else(|e| panic!("sweeping before the case: {e}"));
+        let made = over.backend.create(
+            &over.caller,
+            &scene.path("api"),
+            &NewWorkItem {
+                title: live::ISSUE_TITLE.into(),
+                body: "What the todo said.\n\nSecond paragraph.".into(),
+                workspace_label: Some("alpha".into()),
+            },
+        );
+        let swept = (over.sweep)();
+        let made = made.unwrap();
+        let swept = swept.unwrap_or_else(|e| panic!("sweeping after the case: {e}"));
         // On a live forge the issue's number and id are the forge's to give: the number is read
-        // off the page the answer names, and must then agree with its key.
+        // off the page the answer names, must agree with its key, and must be one the sweep
+        // found open under the case's title.
         let (number, forge_ref) = match &scene.created {
             Some((number, forge_ref)) => (*number, Some(forge_ref.clone())),
-            None => (
-                made.url
+            None => {
+                let number = made
+                    .url
                     .rsplit('/')
                     .next()
                     .and_then(|n| n.parse().ok())
-                    .unwrap_or_else(|| panic!("no issue number ends {}", made.url)),
-                None,
-            ),
+                    .unwrap_or_else(|| panic!("no issue number ends {}", made.url));
+                assert!(swept.contains(&number), "{number} not among {swept:?}");
+                (number, None)
+            }
         };
-        over.close_issue.as_ref()(number);
         assert_eq!(made.key.as_str(), scene.issue_key(number));
         assert_eq!(made.url, scene.issue_url(number));
         match forge_ref {
@@ -1313,6 +1318,45 @@ mod the_live_scene {
             scene.issue_url(5),
             "https://gitlab.com/fixture/api/-/issues/5"
         );
+    }
+
+    /// The issues `create` leaves behind are found by the harness's own listing, by the case's
+    /// title, and closed by the numbers that listing names: never a pull request, never an issue
+    /// with another title.
+    #[test]
+    fn the_sweep_closes_only_open_issues_with_the_cases_title() {
+        charter_core::unsteered!();
+        let closed = std::cell::RefCell::new(Vec::new());
+        let list = |path: &str| -> Result<Value, String> {
+            assert_eq!(
+                path,
+                "repos/fixture/api/issues?state=open&labels=alpha&per_page=100"
+            );
+            Ok(json!([
+                {"number": 7, "title": live::ISSUE_TITLE},
+                {"number": 8, "title": "Something else"},
+                {"number": 9, "title": live::ISSUE_TITLE, "pull_request": {"url": "x"}},
+                {"number": 10, "title": live::ISSUE_TITLE},
+            ]))
+        };
+        let close = |number: u64| -> Result<(), String> {
+            closed.borrow_mut().push(number);
+            Ok(())
+        };
+        let swept = live::sweep(Kind::GitHub, "repos/fixture/api", &list, &close).unwrap();
+        assert_eq!(swept, [7, 10]);
+        assert_eq!(*closed.borrow(), [7, 10]);
+
+        let gitlab = |path: &str| -> Result<Value, String> {
+            assert_eq!(
+                path,
+                "projects/fixture%2Fapi/issues?state=opened&labels=alpha&per_page=100"
+            );
+            Ok(json!([{"id": 5001, "iid": 3, "title": live::ISSUE_TITLE}]))
+        };
+        let swept =
+            live::sweep(Kind::GitLab, "projects/fixture%2Fapi", &gitlab, &|_| Ok(())).unwrap();
+        assert_eq!(swept, [3], "by its iid, not its id");
     }
 
     #[test]

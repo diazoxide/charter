@@ -10,12 +10,16 @@ name: forge-live
 #
 # **Evidence only (V70).** It never gates a pull request and never runs on one: a fork's code must
 # never reach the tokens. A red night keeps one issue open, as `mutants.yml` does, and the first
-# green night closes it.
+# night that tests both forges and passes closes it.
 #
-# **Provisioning is the operator's.** Each forge needs a secret (its token) and a variable (the
-# org or group holding the fixture), named in the matrix below. `crates/charter-core/docs/forges.md`,
-# "The live nightly", says exactly what the fixture holds. A forge not yet provisioned says so in
-# the run's summary and stops, green: nothing about the forge was tested, and nothing claims it.
+# **Provisioning is the operator's.** Each forge has its own GitHub environment,
+# `forge-live-github` and `forge-live-gitlab`, holding one secret, `FORGE_LIVE_TOKEN`, and one
+# variable, `FORGE_LIVE_OWNER` (the org or group holding the fixture). The secret is named
+# statically, so the runner is sent that environment's token and no other secret. Each
+# environment lets only `main` deploy, so a dispatch from another branch never runs changed code
+# with the token. `crates/charter-core/docs/forges.md`, "The live nightly", says exactly what the
+# fixture holds. A forge not yet provisioned says so in the run's summary and stops, green:
+# nothing about the forge was tested, nothing claims it, and the nightly's issue is left as is.
 #
 # `crates/release-manifest/tests/the_forge_nightly_runs_live_with_least_privilege.rs` holds this
 # file to those rules.
@@ -41,41 +45,34 @@ jobs:
     name: live contract (${{ matrix.forge }})
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    environment: forge-live-${{ matrix.forge }}
     permissions:
       contents: read
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - forge: github
-            token: FORGE_LIVE_GITHUB_TOKEN
-            owner: FORGE_LIVE_GITHUB_OWNER
-          - forge: gitlab
-            token: FORGE_LIVE_GITLAB_TOKEN
-            owner: FORGE_LIVE_GITLAB_OWNER
+        forge: [github, gitlab]
     steps:
-      # Whether the token is set, never its value: the expression answers `true` or `false`.
+      # The owner variable decides whether anything runs. The token is checked again where it is
+      # handed over, which is the only step that names it.
       - name: Is the fixture provisioned?
         id: provisioned
         env:
-          TOKEN: ${{ secrets[matrix.token] != '' }}
-          OWNER: ${{ vars[matrix.owner] }}
+          OWNER: ${{ vars.FORGE_LIVE_OWNER }}
           FORGE: ${{ matrix.forge }}
-          TOKEN_NAME: ${{ matrix.token }}
-          OWNER_NAME: ${{ matrix.owner }}
+          OUTCOME: ${{ runner.temp }}/outcome
         run: |
           set -euo pipefail
-          missing=""
-          if [ "$TOKEN" != true ]; then missing="the secret $TOKEN_NAME"; fi
-          if [ -z "$OWNER" ]; then missing="${missing:+$missing and }the variable $OWNER_NAME"; fi
-          if [ -n "$missing" ]; then
+          mkdir -p "$OUTCOME"
+          echo untested > "$OUTCOME/$FORGE"
+          if [ -z "$OWNER" ]; then
             echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "::notice title=forge-live ($FORGE)::not provisioned: $missing is not set, so nothing was tested on $FORGE"
+            echo "::notice title=forge-live ($FORGE)::not provisioned: the environment forge-live-$FORGE has no FORGE_LIVE_OWNER, so nothing was tested on $FORGE"
             {
               echo "### $FORGE: not provisioned, nothing tested"
               echo
-              echo "$missing is not set. What the operator provisions is in"
-              echo "\`crates/charter-core/docs/forges.md\`, \"The live nightly\"."
+              echo "The environment \`forge-live-$FORGE\` has no variable \`FORGE_LIVE_OWNER\`. What the"
+              echo "operator provisions is in \`crates/charter-core/docs/forges.md\`, \"The live nightly\"."
             } >> "$GITHUB_STEP_SUMMARY"
           else
             echo "ready=true" >> "$GITHUB_OUTPUT"
@@ -86,7 +83,9 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/rust-toolchain
         if: steps.provisioned.outputs.ready == 'true'
-      # Built before the token is handed over, so no dependency's build script runs with it. No
+      # Built before the token is handed over, so it is not in any build script's environment.
+      # That is all this ordering buys: code running in this job can still read the runner's
+      # memory, which is why the token lives in an environment only `main` may deploy to. No
       # cache: this job holds a token, and a cache is written by whichever job saved it last.
       - name: Build the contract suite
         if: steps.provisioned.outputs.ready == 'true'
@@ -95,11 +94,18 @@ jobs:
       - name: Every contract case, against the real forge
         if: steps.provisioned.outputs.ready == 'true'
         env:
-          TOKEN: ${{ secrets[matrix.token] }}
-          OWNER: ${{ vars[matrix.owner] }}
+          TOKEN: ${{ secrets.FORGE_LIVE_TOKEN }}
+          OWNER: ${{ vars.FORGE_LIVE_OWNER }}
           FORGE: ${{ matrix.forge }}
+          OUTCOME: ${{ runner.temp }}/outcome
         run: |
           set -euo pipefail
+          if [ -z "$TOKEN" ]; then
+            echo "::notice title=forge-live ($FORGE)::not provisioned: the environment forge-live-$FORGE has no FORGE_LIVE_TOKEN, so nothing was tested on $FORGE"
+            echo "### $FORGE: not provisioned (no \`FORGE_LIVE_TOKEN\`), nothing tested" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo tested > "$OUTCOME/$FORGE"
           upper="$(echo "$FORGE" | tr '[:lower:]' '[:upper:]')"
           export "FORGE_LIVE_${upper}_TOKEN=$TOKEN" "FORGE_LIVE_${upper}_OWNER=$OWNER"
           unset TOKEN
@@ -110,19 +116,33 @@ jobs:
             echo
             grep -o 'not run live.*' live.out | sed 's/^/- /' || true
           } >> "$GITHUB_STEP_SUMMARY"
+      # Whether this forge was tested at all, for the notice job: a night that tested nothing
+      # is not a clean one.
+      - name: Keep what was tested
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: forge-live-${{ matrix.forge }}
+          path: ${{ runner.temp }}/outcome
+          if-no-files-found: warn
 
   notice:
     # A scheduled run's red X is on a page nobody opens; an issue is in the repo. One issue, found
-    # by its exact title and rewritten each red night, closed by the first green one (as
-    # `mutants.yml` does).
+    # by its exact title and rewritten each red night, closed only by a night that tested both
+    # forges and passed (as `mutants.yml` does). A night that tested nothing says so and leaves
+    # the issue as it is.
     name: say so where someone will see it
     needs: [live]
     if: always() && github.event_name == 'schedule'
     runs-on: ubuntu-24.04
     permissions:
-      contents: read
       issues: write
     steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: forge-live-*
+          merge-multiple: true
+          path: outcome
       - name: Open, update or close the nightly's issue
         env:
           GH_TOKEN: ${{ github.token }}
@@ -137,8 +157,19 @@ jobs:
           EXISTING="$(awk -v t="$TITLE" \
             '{n=$1; $1=""; sub(/^ /,""); if ($0 == t) {print n; exit}}' "$RUNNER_TEMP/issues.txt")"
           if [ "$LIVE" = success ]; then
+            untested=""
+            for forge in github gitlab; do
+              if [ "$(cat "outcome/$forge" 2>/dev/null || echo untested)" != tested ]; then
+                untested="${untested:+$untested and }$forge"
+              fi
+            done
+            if [ -n "$untested" ]; then
+              echo "nothing tested on $untested: the nightly's issue is left as it is"
+              echo "### Nothing tested on $untested; the nightly's issue is left as it is" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
             if [ -n "$EXISTING" ]; then
-              gh issue close "$EXISTING" --comment "The live forge contract is clean again: $RUN_URL"
+              gh issue close "$EXISTING" --comment "The live forge contract is clean again on both forges: $RUN_URL"
             fi
             exit 0
           fi

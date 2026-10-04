@@ -28,6 +28,9 @@ use super::scene::{SAVE, Scene};
 
 /// The branch of the request that landed when the fixture was provisioned.
 pub const LANDED: &str = "charter/landed";
+/// The title of the issue the `create` case opens; the sweep closes every open one.
+pub const ISSUE_TITLE: &str = "Port the picker";
+
 /// The branch `open_or_update` opens its request from on a live forge: not [`SAVE`], whose
 /// request's body the `body` case reads.
 pub const OPENED_FROM: &str = "charter/open";
@@ -202,6 +205,44 @@ pub fn discover(
     })
 }
 
+/// Close every open issue of `api` labelled `alpha` and titled [`ISSUE_TITLE`], by the numbers
+/// the forge's own listing names (GitHub's `number`, GitLab's `iid`), never a pull request, and
+/// answer the numbers closed. `create` runs it before and after itself, so an issue a failed run
+/// left behind is closed by the next.
+pub fn sweep(
+    kind: Kind,
+    api: &str,
+    get: &dyn Fn(&str) -> Result<Value, String>,
+    close: &dyn Fn(u64) -> Result<(), String>,
+) -> Result<Vec<u64>, String> {
+    let (path, number) = match kind {
+        Kind::GitHub => (
+            format!("{api}/issues?state=open&labels=alpha&per_page=100"),
+            "number",
+        ),
+        Kind::GitLab => (
+            format!("{api}/issues?state=opened&labels=alpha&per_page=100"),
+            "iid",
+        ),
+    };
+    let listed = get(&path)?;
+    let open = listed
+        .as_array()
+        .ok_or_else(|| format!("{path} answered no list: {listed}"))?;
+    let mut closed = Vec::new();
+    for issue in open {
+        if issue["title"].as_str() != Some(ISSUE_TITLE) || issue.get("pull_request").is_some() {
+            continue;
+        }
+        let n = issue[number]
+            .as_u64()
+            .ok_or_else(|| format!("an issue with no {number}: {issue}"))?;
+        close(n)?;
+        closed.push(n);
+    }
+    Ok(closed)
+}
+
 /// A plain `GET` through `http`, as JSON.
 fn get(http: &Http, forge: &Forge, path: &str) -> Result<Value, String> {
     let reply = http
@@ -264,28 +305,34 @@ pub fn over(kind: Kind) -> Over {
         host,
         scene,
         check: Box::new(|| {}),
-        // The issue `create` opened is closed again, so the fixture does not grow a backlog.
-        close_issue: Box::new(move |number| {
-            let call = match kind {
-                Kind::GitHub => Call::write(
-                    Method::Patch,
-                    format!("{api}/issues/{number}"),
-                    vec![Field::text("state", "closed")],
-                ),
-                Kind::GitLab => Call::write(
-                    Method::Put,
-                    format!("{api}/issues/{number}"),
-                    vec![Field::text("state_event", "close")],
-                ),
+        // The issues `create` opens are closed again, so the fixture does not grow a backlog.
+        sweep: Box::new(move || {
+            let close = |number: u64| -> Result<(), String> {
+                let call = match kind {
+                    Kind::GitHub => Call::write(
+                        Method::Patch,
+                        format!("{api}/issues/{number}"),
+                        vec![Field::text("state", "closed")],
+                    ),
+                    Kind::GitLab => Call::write(
+                        Method::Put,
+                        format!("{api}/issues/{number}"),
+                        vec![Field::text("state_event", "close")],
+                    ),
+                };
+                let reply = http
+                    .send(&forge, &call)
+                    .map_err(|e| format!("closing issue {number}: {}", e.said()))?;
+                if reply.ok() {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "closing issue {number}: {}",
+                        reply.said(forge.kind)
+                    ))
+                }
             };
-            let reply = http
-                .send(&forge, &call)
-                .unwrap_or_else(|e| panic!("closing issue {number}: {}", e.said()));
-            assert!(
-                reply.ok(),
-                "closing issue {number}: {}",
-                reply.said(forge.kind)
-            );
+            sweep(kind, &api, &|path| get(&http, &forge, path), &close)
         }),
     }
 }
