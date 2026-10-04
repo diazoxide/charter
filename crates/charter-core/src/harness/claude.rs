@@ -70,6 +70,37 @@ impl HarnessAdapter for ClaudeCode {
 
     // `disarmed_by`: none. Claude Code loads `--plugin-dir` whatever else it is told.
 
+    /// **Measured on Claude Code 2.1.288**, by reading the parser in its own bundle (FM-9): a
+    /// mention is `@` at the start of the input or after white space, then either `"…"` or a run
+    /// of non-space characters that ends on a word character; `#L<first>` or `#L<first>-<last>`
+    /// after the name names lines; a folder's mention hands the model its listing. So a name with
+    /// white space, or one ending on another character, is quoted, and a folder ends in `/` as
+    /// its own completion writes it. A `#` in the path would be read as the start of a line
+    /// range, and a `"` cannot be quoted, so such a path is handed over in plain words, which the
+    /// agent reads with its own tools.
+    fn reference(&self, reference: &crate::reference::Reference) -> String {
+        if reference.path().contains('#') {
+            return reference.plain();
+        }
+        let body = format!(
+            "{}{}",
+            reference.path_with_slash(),
+            reference.lines_after("#L", "")
+        );
+        let ends_on_a_word = body
+            .trim_end_matches('/')
+            .chars()
+            .last()
+            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
+        if ends_on_a_word && !body.chars().any(char::is_whitespace) {
+            format!("@{body}")
+        } else if !body.contains('"') {
+            format!("@\"{body}\"")
+        } else {
+            reference.plain()
+        }
+    }
+
     fn armed_with(&self) -> String {
         format!(
             "the app arms each chat with its own plugin, {}",
@@ -259,6 +290,60 @@ fn status_line(binary: &std::path::Path) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_reference_is_written_as_claude_codes_own_mention() {
+        use crate::reference::{Lines, Reference};
+        let r = |path, lines, folder| ADAPTER.reference(&Reference::for_tests(path, lines, folder));
+        assert_eq!(r("src/main.rs", None, false), "@src/main.rs");
+        assert_eq!(r("src", None, true), "@src/");
+        assert_eq!(
+            r(
+                "src/main.rs",
+                Some(Lines {
+                    first: 10,
+                    last: 20
+                }),
+                false
+            ),
+            "@src/main.rs#L10-20"
+        );
+        assert_eq!(
+            r("src/main.rs", Some(Lines::one(7)), false),
+            "@src/main.rs#L7"
+        );
+        assert_eq!(
+            r("my dir/note one.txt", Some(Lines::one(2)), false),
+            "@\"my dir/note one.txt#L2\""
+        );
+        assert_eq!(r("lib/c++", None, false), "@\"lib/c++\"");
+        assert_eq!(r("out-", None, true), "@\"out-/\"");
+        assert_eq!(r("/abs/x.rs", None, false), "@/abs/x.rs");
+        assert_eq!(r("a#b.rs", None, false), "a#b.rs");
+    }
+
+    /// Claude Code 2.1.288 turns a paste beginning with `!` into an empty input into bash mode,
+    /// and reads `/…` as a slash command: no reference begins with either, its plain-words
+    /// fallback (a `#` or a `"` in the path) included.
+    #[test]
+    fn a_reference_never_begins_as_bash_mode_or_a_slash_command() {
+        use crate::reference::{Reference, starts_safely};
+        let r = |path| ADAPTER.reference(&Reference::for_tests(path, None, false));
+        assert_eq!(r("!cmd${IFS}x#y"), "./!cmd${IFS}x#y");
+        assert_eq!(r("!cmd"), "@./!cmd");
+        assert_eq!(r("/abs/a#b"), "\"/abs/a#b\"");
+        for path in [
+            "!x",
+            "!x#y",
+            "/abs/x",
+            "/abs/a#b",
+            "/abs/a\"b c",
+            "#x",
+            "-x",
+        ] {
+            assert!(starts_safely(&r(path)), "{path} -> {}", r(path));
+        }
+    }
 
     fn adapter() -> &'static dyn HarnessAdapter {
         &ADAPTER

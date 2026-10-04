@@ -101,6 +101,20 @@ impl HarnessAdapter for Codex {
 
     // `disarmed_by`: none. Codex's session flags are charter's own.
 
+    /// **Measured on codex-cli 0.147.0** (FM-9), driving its input in a terminal with a stand-in
+    /// model: its own `@` file search replaces the word with the path relative to the folder it
+    /// works in — a folder as `src`, with no `/` — and puts a path with white space in double
+    /// quotes. Codex attaches nothing for a path; its agent reads the file with its own tools, so
+    /// lines are written in the `path:line` form its own instructions use for a file reference,
+    /// with a range as `path:10-20`.
+    fn reference(&self, reference: &crate::reference::Reference) -> String {
+        crate::reference::quoted_if_spaced_or_absolute(&format!(
+            "{}{}",
+            reference.path(),
+            reference.lines_after(":", "")
+        ))
+    }
+
     fn armed_with(&self) -> String {
         "the app arms each Codex chat with charter's hooks; Codex asks once to trust them"
             .to_owned()
@@ -246,6 +260,46 @@ fn session_flags(binary: &std::path::Path) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_reference_is_written_as_codexs_own_file_search_inserts_it() {
+        use crate::reference::{Lines, Reference};
+        let r = |path, lines, folder| ADAPTER.reference(&Reference::for_tests(path, lines, folder));
+        assert_eq!(r("src/main.rs", None, false), "src/main.rs");
+        assert_eq!(r("src", None, true), "src");
+        assert_eq!(
+            r(
+                "src/main.rs",
+                Some(Lines {
+                    first: 10,
+                    last: 20
+                }),
+                false
+            ),
+            "src/main.rs:10-20"
+        );
+        assert_eq!(
+            r("src/main.rs", Some(Lines::one(7)), false),
+            "src/main.rs:7"
+        );
+        assert_eq!(
+            r("my dir/note one.txt", None, false),
+            "\"my dir/note one.txt\""
+        );
+    }
+
+    /// codex-cli 0.147.0 runs a submitted `!…` as a shell command and reads `/…` as one of its
+    /// own commands, so no reference begins with either.
+    #[test]
+    fn a_reference_never_begins_as_a_shell_or_slash_command() {
+        use crate::reference::{Reference, starts_safely};
+        let r = |path| ADAPTER.reference(&Reference::for_tests(path, None, false));
+        assert_eq!(r("!rm${IFS}-rf${IFS}~"), "./!rm${IFS}-rf${IFS}~");
+        assert_eq!(r("/abs/x.rs"), "\"/abs/x.rs\"");
+        for path in ["!x", "/abs/x", "/abs/a\"b", "#x", "@x", "-x"] {
+            assert!(starts_safely(&r(path)), "{path} -> {}", r(path));
+        }
+    }
 
     fn adapter() -> &'static dyn HarnessAdapter {
         &ADAPTER

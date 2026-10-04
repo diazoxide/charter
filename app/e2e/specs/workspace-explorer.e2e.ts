@@ -1,8 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { browser, expect, $, $$ } from "@wdio/globals";
-import { pressAndStart } from "../opening.js";
+import { built, READY, singleQuoted } from "../harness.js";
+import { harnessRowsDrawn, pressAndStart, pressOnly } from "../opening.js";
 import { textOfEach } from "../reading.js";
 import { ask } from "../switching.js";
 
@@ -773,6 +774,117 @@ describe("the explorer", () => {
     expect(
       chats.some((one) => one.cwd?.split("\\").join("/").endsWith("/fix-login/shell-here")),
     ).toBe(true);
+  });
+
+  /**
+   * **A file dropped on a chat is typed into it as a reference, and nothing is sent** (FM-9,
+   * #1112), against the real core. The chat is the fake harness at a raw prompt — it echoes each
+   * byte typed and answers a line only on Enter — on a profile of Claude Code's kind that reports
+   * its `SessionStart`, so the core types into it once it is waiting and its terminal is raw. The drag is dispatched as the window's own events, with a real `DataTransfer`,
+   * for the reason the piece menu's right-click is: a WebDriver drag does not carry one. Last of
+   * the chats this file starts, so the profile it adds picks nothing for a spec before it.
+   */
+  it("types a dropped file into a chat as a reference, and sends nothing", async () => {
+    await onAlpha();
+    const plane = (await ask<string[]>("open_planes"))[0];
+    const program = join(plane, "raw-prompt-harness");
+    // Claude Code's way of saying it is at its prompt: `SessionStart`, reported by the real
+    // `charter hook` with the conversation charter chose (`--session-id`) and the harness's own
+    // pid, as `writeAPluginHookingShell` reports it.
+    const sessionStart = [
+      `printf '{"session_id":"%s","hook_event_name":"SessionStart","source":"startup"}'`,
+      '"$CLAUDE_CODE_SESSION_ID"',
+      '| CLAUDE_PID=$PPID "${CHARTER_HOOK_BINARY:-charter}" hook sessionstart >/dev/null',
+    ].join(" ");
+    writeFileSync(
+      program,
+      [
+        "#!/bin/sh",
+        'while [ $# -gt 0 ]; do [ "$1" = "--session-id" ] && CLAUDE_CODE_SESSION_ID=$2; shift; done',
+        "export CLAUDE_CODE_SESSION_ID",
+        `exec ${singleQuoted(built("fake-harness"))} --sentinel ${singleQuoted(READY)} \\`,
+        `  --hook ${singleQuoted(sessionStart)} --interactive --raw`,
+        "",
+      ].join("\n"),
+    );
+    chmodSync(program, 0o755);
+    const local = join(plane, "charter.local.toml");
+    writeFileSync(
+      local,
+      `${readFileSync(local, "utf8")}\n[harness.raw-prompt]\nkind = "claude"\ncommand = [${JSON.stringify(program)}]\n`,
+    );
+
+    await pressOnly("New tab");
+    await harnessRowsDrawn();
+    // The row's own radio, by the label tied to it: the label's words also hold the harness
+    // card's chip, and a click on its middle can land there.
+    const label = await $("label*=raw-prompt");
+    await (await $(`[id="${await label.getAttribute("for")}"]`)).click();
+    // Its first run asks to approve the command. Pressed from the document: the card the row
+    // draws makes the picker taller than WebDriver counts as on screen.
+    await $("button=Approve and start").waitForExist({ timeout: 20_000 });
+    await browser.execute(() =>
+      [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')]
+        .find((button) => button.textContent === "Approve and start")
+        ?.click(),
+    );
+    const rows = () =>
+      browser.execute(() =>
+        // The terminal draws a space as a no-break space.
+        [...document.querySelectorAll(".pane-frame .xterm-rows")].map((r) =>
+          (r.textContent ?? "").replace(/\s+/g, " "),
+        ),
+      );
+    await browser
+      .waitUntil(async () => (await rows()).some((text) => text.includes(READY)), {
+        timeout: 30_000,
+        timeoutMsg: "the raw-prompt chat never reached its prompt",
+      })
+      .catch(async (err: unknown) => {
+        const said = await browser.execute(() =>
+          [...document.querySelectorAll('[role="alert"],[role="status"],[role="dialog"]')]
+            .map((el) => (el as HTMLElement).innerText)
+            .join(" | "),
+        );
+        throw new Error(`${String(err)}; panes: ${(await rows()).join("|")}; said: ${said}`);
+      });
+
+    const files = await $('[data-testid="files-svc-fix-login"] .file-node');
+    await files.waitForExist({ timeout: 20_000 });
+    if ((await files.getAttribute("aria-expanded")) !== "true") await files.click();
+    await fileRow("fix-login", "README.md");
+    // Quiet for the second the core waits on a harness of this kind before it types.
+    await browser.pause(1_500);
+
+    const dropped = await browser.execute(() => {
+      const from = document.querySelector(
+        '[data-testid="explorer"] [data-row="file:svc/fix-login:README.md"]',
+      );
+      const to = document.querySelector(
+        '[role="tablist"][aria-label="Tabs"] [role="tab"][aria-selected="true"]',
+      );
+      if (!(from instanceof HTMLElement) || !(to instanceof HTMLElement)) return false;
+      const dataTransfer = new DataTransfer();
+      for (const [at, type] of [
+        [from, "dragstart"],
+        [to, "dragover"],
+        [to, "drop"],
+      ] as const)
+        at.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer }));
+      return true;
+    });
+    expect(dropped).toBe(true);
+
+    const said = await $('p[role="status"]');
+    await said.waitForExist({ timeout: 20_000 });
+    await expect(said).toHaveText(expect.stringContaining("Nothing was sent."));
+    await browser.waitUntil(
+      async () => (await rows()).some((text) => text.includes("fix-login/README.md")),
+      { timeout: 20_000, timeoutMsg: `the reference was never typed: ${(await rows()).join("|")}` },
+    );
+    // Typed and unsent: the harness answers a line only on Enter, and it answered none.
+    await browser.pause(1_000);
+    expect((await rows()).some((text) => text.includes("you said:"))).toBe(false);
   });
 });
 

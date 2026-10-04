@@ -87,6 +87,12 @@ pub trait HarnessAdapter: Sync {
         at: &crate::sandbox::At<'_>,
     ) -> Result<crate::sandbox::Line, String>;
 
+    /// `reference` — a file, a folder or a range of lines of one (FM-9) — in this harness's
+    /// own syntax for naming one in its input, as its own file completion writes it. Each
+    /// adapter says which version it measured and how; nothing is sent, so nothing here may
+    /// hold a line break.
+    fn reference(&self, reference: &crate::reference::Reference) -> String;
+
     /// What the app arms a chat of this harness with, as `charter doctor` says it.
     fn armed_with(&self) -> String;
 

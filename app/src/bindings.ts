@@ -1138,6 +1138,25 @@ export const commands = {
 	 *  directory are the core's answer. A refusal comes back before anything starts.
 	 */
 	curate: (plane: PlaneId, subject: string, action: string, columns: number, rows: number) => typedError<Curating, string>(__TAURI_INVOKE("curate", { plane, subject, action, columns, rows })),
+	/**
+	 *  One file, folder or range of lines of a branch, typed into chat `session` as a reference in
+	 *  its harness's syntax, and never sent — or copied, with the reason, where it cannot be typed
+	 *  now.
+	 */
+	referenceIntoChat: (plane: PlaneId, workspace: string, repo: string, piece: string | null, path: string, lines: {
+	first: number,
+	last: number,
+} | null, session: number) => typedError<Handed, string>(__TAURI_INVOKE("reference_into_chat", { plane, workspace, repo, piece, path, lines, session })),
+	/**
+	 *  Opens a chat on the project's default profile in the branch's own folder, with a reference
+	 *  to one of its files or folders — or a range of lines of a file — typed as its first prompt
+	 *  once its harness has started, and never sent. Where the harness cannot be typed into, the
+	 *  chat still opens and the reference is put on the clipboard.
+	 */
+	startChatHere: (plane: PlaneId, workspace: string, repo: string, piece: string | null, path: string, lines: {
+	first: number,
+	last: number,
+} | null, columns: number, rows: number) => typedError<StartedHere, string>(__TAURI_INVOKE("start_chat_here", { plane, workspace, repo, piece, path, lines, columns, rows })),
 	/**  Whether chat `session` is offered Smart close, and the answer the close dialog starts on. */
 	smartCloseOffer: (plane: PlaneId, session: number) => typedError<SmartCloseOffer, string>(__TAURI_INVOKE("smart_close_offer", { plane, session })),
 	/**
@@ -2152,6 +2171,13 @@ export type FoundFile = {
 /**  How a number reads, as the window colours it — `charter_core::usage::Tone`. */
 export type GaugeTone = "ok" | "warn" | "bad";
 
+/**  What became of a reference handed to a chat. */
+export type Handed = 
+/**  Typed into the chat, unsent: `text` is what was typed. */
+{ kind: "typed"; text: string } | 
+/**  Put on the clipboard instead, with the sentence saying why. */
+{ kind: "copied"; text: string; why: string };
+
 /**  Where a handed-off chat came from, as the window draws it. */
 export type HandedFromNote = {
 	/**  The chat it came from, by the name the operator saw it under. */
@@ -2408,6 +2434,12 @@ export type LeftOut = {
 	what: string,
 	/**  The core's whole sentence. */
 	why: string,
+};
+
+/**  A range of lines, as the window names one: both ends counted from 1 and included. */
+export type LineRange = {
+	first: number,
+	last: number,
 };
 
 /**  What switching a workspace would do, for the confirmation that asks first. */
@@ -3986,6 +4018,23 @@ export type Started = {
 	 *  `AGENTS.md` was not written, and an `AGENTS.md` charter's exclude line hides.
 	 */
 	notices: string[],
+};
+
+/**  A chat "Start a chat here" opened: what the window needs to put its tab on the right strip. */
+export type StartedHere = {
+	session: number,
+	/**  The chat's name, which is its number. */
+	name: string,
+	/**  What its tab says: `About <file>`. */
+	label: string,
+	/**  The harness, by the word the plane calls it. */
+	harness: string | null,
+	/**  The workspace it is filed under. */
+	workspace: string | null,
+	/**  The reference, as typed or copied. */
+	text: string,
+	/**  Why it was copied rather than typed, or none when it is typed once the harness starts. */
+	copied: string | null,
 };
 
 /**  What one subject is offered. */

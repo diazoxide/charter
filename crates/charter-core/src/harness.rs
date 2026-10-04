@@ -501,6 +501,11 @@ impl Harness {
         })
     }
 
+    /// `reference` in this harness's own syntax ([`HarnessAdapter::reference`]).
+    pub fn reference(self, reference: &crate::reference::Reference) -> String {
+        self.adapter().reference(reference)
+    }
+
     /// What the operator calls this harness: `Claude Code`, `Codex`, `opencode`.
     pub fn title(self) -> &'static str {
         self.adapter().plugins().title()

@@ -75,6 +75,23 @@ impl HarnessAdapter for Opencode {
         crate::opencode::disarmed_by(command, env)
     }
 
+    /// **Measured on opencode 1.18.33** (FM-9), from its input's own `@` completion, driven in
+    /// a terminal and read in its bundle: a file is `@src/main.rs`, a folder `@src/`, and lines
+    /// `@src/main.rs#10` or `@src/main.rs#10-20` — a `#` and no `L`. A typed mention ends at
+    /// white space and splits at `#`, so a path holding either is handed over in plain words.
+    /// charter does not type into opencode yet (ADR 0061); this is what the clipboard is given.
+    fn reference(&self, reference: &crate::reference::Reference) -> String {
+        let path = reference.path();
+        if path.contains('#') || path.chars().any(char::is_whitespace) {
+            return reference.plain();
+        }
+        format!(
+            "@{}{}",
+            reference.path_with_slash(),
+            reference.lines_after("#", "")
+        )
+    }
+
     fn armed_with(&self) -> String {
         "the app arms each opencode chat with charter's opencode plugin, for that chat alone"
             .to_owned()
@@ -166,6 +183,46 @@ impl HarnessAdapter for Opencode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_reference_is_written_as_opencodes_own_mention() {
+        use crate::reference::{Lines, Reference};
+        let r = |path, lines, folder| ADAPTER.reference(&Reference::for_tests(path, lines, folder));
+        assert_eq!(r("src/main.rs", None, false), "@src/main.rs");
+        assert_eq!(r("src", None, true), "@src/");
+        assert_eq!(
+            r(
+                "src/main.rs",
+                Some(Lines {
+                    first: 10,
+                    last: 20
+                }),
+                false
+            ),
+            "@src/main.rs#10-20"
+        );
+        assert_eq!(
+            r("src/main.rs", Some(Lines::one(7)), false),
+            "@src/main.rs#7"
+        );
+        assert_eq!(
+            r("my dir/note one.txt", None, false),
+            "\"my dir/note one.txt\""
+        );
+    }
+
+    /// opencode reads `!…` as a shell command and `/…` as one of its own: the clipboard is
+    /// never handed a reference beginning with either, its plain-words fallback included.
+    #[test]
+    fn a_reference_never_begins_as_a_shell_or_slash_command() {
+        use crate::reference::{Reference, starts_safely};
+        let r = |path| ADAPTER.reference(&Reference::for_tests(path, None, false));
+        assert_eq!(r("!cmd"), "@./!cmd");
+        assert_eq!(r("!a b"), "\"./!a b\"");
+        for path in ["!x", "!x#y", "/abs/x", "/abs/a b", "#x"] {
+            assert!(starts_safely(&r(path)), "{path} -> {}", r(path));
+        }
+    }
 
     #[test]
     fn an_opencode_chat_is_handed_charter_s_mcp_server_in_its_session_config() {

@@ -1,5 +1,13 @@
 import { LiveMark } from "./LiveDialog";
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type DragEvent,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
 import {
   ChevronRight,
@@ -44,6 +52,7 @@ import type { BranchPath, Catalogued, FileOn, Offer } from "./actions";
 import type { WorkspaceState } from "./workspaceState";
 import { useTabStop } from "./roving";
 import { Breadcrumb, CockpitHeader, focusStands, useAheadBehind } from "./Cockpit";
+import { dragReference } from "./references";
 
 /** No chat wrapping up, for a window that has not said. */
 const NONE_WRAPPING: ReadonlySet<number> = new Set();
@@ -388,6 +397,7 @@ export function Explorer({
     <FilesRow
       branch={{ repo, piece, folder: "" }}
       at={{
+        plane,
         place: { workspace, repo, piece },
         files,
         fold,
@@ -994,6 +1004,9 @@ function ChangeBadge({ marked, folder }: { marked: Marked | undefined; folder: b
  *  its folders, and what a row does to the tree and to a screen reader. The file tab (FM-2) draws
  *  its tree out of the same rows. */
 export type FileRows = {
+  /** The project the rows are of: what a row dragged onto a chat names (FM-9). No drag
+   *  without it. */
+  plane?: PlaneId;
   place: Place;
   files: FilesOf;
   fold: (key: string, open: boolean) => void;
@@ -1023,6 +1036,20 @@ function FileMenu({ on, at, children }: { on: FileOn; at: FileRows; children: Re
       {children}
     </Menued>
   );
+}
+
+/**
+ * What makes a file or folder row draggable onto a chat (FM-9): it carries the row's branch and
+ * path, which the core places and renders in the chat's own syntax. Nothing on a refused row,
+ * or where the tree does not know its project.
+ */
+function draggedAs(at: FileRows, path: string, folder: boolean, refused?: string) {
+  const plane = at.plane;
+  if (plane === undefined || refused !== undefined || path === "") return {};
+  return {
+    draggable: true,
+    onDragStart: (event: DragEvent) => dragReference(event, { plane, ...at.place, path, folder }),
+  };
 }
 
 /** A file row's path in the branch, as its menu names it. */
@@ -1055,6 +1082,7 @@ function FilesRow({
         type="button"
         className="file-node"
         {...at.treeitem(id)}
+        {...draggedAs(at, branch.folder, true)}
         onClick={() => {
           if (!always) at.fold(key, !open);
         }}
@@ -1163,6 +1191,7 @@ export function FolderEntries({
                     aria-disabled={refused !== undefined || undefined}
                     title={refused ?? path}
                     {...at.treeitem(id)}
+                    {...draggedAs(at, path, false, refused)}
                     onClick={() => {
                       if (refused === undefined) at.onOpenFile?.(at.place, path);
                     }}

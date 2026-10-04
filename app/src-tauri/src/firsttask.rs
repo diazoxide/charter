@@ -120,6 +120,7 @@ pub fn start(
                     cwd: dir.unwrap_or_else(|| cut.path.clone()),
                     label: label.clone(),
                     prompt: firsttask::prompt(),
+                    then_a_space: false,
                 },
                 size,
                 cannot_type,
