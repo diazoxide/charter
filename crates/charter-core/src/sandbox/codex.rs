@@ -212,8 +212,14 @@ fn tidy(dir: &Path, folders: usize) {
     }
 }
 
-/// Who a Codex login at `path` signs in as: its API key, or its account, or `None` where it
-/// says neither.
+/// Who a Codex login at `path` signs in as: its API key, or the identity the claims of its
+/// tokens name (review R2-F1), or `None` where it says neither or a token does not decode, which
+/// reseeds the project's login (fail closed).
+///
+/// The claims are decoded, never verified: what counts is that the tokens are the same account's
+/// as the operator's. A plain field beside them (`tokens.account_id`) is not asked, since a chat
+/// that writes the project's login could copy the operator's into a file holding another
+/// account's tokens.
 fn account_of(path: &Path) -> Option<String> {
     let text = std::fs::read_to_string(path).ok()?;
     let login: serde_json::Value = serde_json::from_str(&text).ok()?;
@@ -224,11 +230,72 @@ fn account_of(path: &Path) -> Option<String> {
     {
         return Some(format!("key:{key}"));
     }
-    login
-        .get("tokens")
-        .and_then(|tokens| tokens.get("account_id"))
-        .and_then(serde_json::Value::as_str)
-        .map(|account| format!("account:{account}"))
+    let tokens = login.get("tokens")?;
+    let mut identity = vec![format!(
+        "access:{}",
+        claimed(tokens.get("access_token")?.as_str()?)?
+    )];
+    if let Some(id) = tokens.get("id_token").filter(|id| !id.is_null()) {
+        identity.push(format!("id:{}", claimed(id.as_str()?)?));
+    }
+    Some(identity.join(" "))
+}
+
+/// The identity a token's claims name: its subject, email and every `*_account_id` or
+/// `*_user_id` claim at its top level or in a namespaced object (OpenAI's tokens keep the
+/// ChatGPT account and user under `https://api.openai.com/auth`), as one string; `None` where
+/// the token is not a JWT whose claims decode or name no one.
+fn claimed(token: &str) -> Option<String> {
+    let mut parts = token.split('.');
+    let (_, payload, _) = (parts.next()?, parts.next()?, parts.next()?);
+    let claims: serde_json::Value = serde_json::from_slice(&base64url(payload)?).ok()?;
+    let claims = claims.as_object()?;
+    let mut named: Vec<String> = Vec::new();
+    let mut take = |scope: &str, map: &serde_json::Map<String, serde_json::Value>| {
+        for (key, value) in map {
+            let names = key == "sub"
+                || key == "email"
+                || key.ends_with("_account_id")
+                || key.ends_with("_user_id");
+            if let (true, Some(value)) = (names, value.as_str()) {
+                named.push(format!("{scope}{key}={value}"));
+            }
+        }
+    };
+    take("", claims);
+    for (scope, value) in claims {
+        if let Some(inner) = value.as_object() {
+            take(&format!("{scope}/"), inner);
+        }
+    }
+    named.sort();
+    (!named.is_empty()).then(|| named.join(","))
+}
+
+/// `text` decoded as unpadded base64url, as a JWT's parts are written, or `None`.
+fn base64url(text: &str) -> Option<Vec<u8>> {
+    let value = |c: u8| -> Option<u32> {
+        Some(match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'-' | b'+' => 62,
+            b'_' | b'/' => 63,
+            _ => return None,
+        } as u32)
+    };
+    let text = text.trim_end_matches('=');
+    let mut out = Vec::with_capacity(text.len() * 3 / 4);
+    let (mut bits, mut held) = (0u32, 0u32);
+    for c in text.bytes() {
+        bits = (bits << 6) | value(c)?;
+        held += 6;
+        if held >= 8 {
+            held -= 8;
+            out.push(u8::try_from((bits >> held) & 0xff).ok()?);
+        }
+    }
+    Some(out)
 }
 
 /// The operator's login at `from` copied to `to`, where `to` is missing, older, dated in the
@@ -248,7 +315,12 @@ fn seed_login(from: &Path, to: &Path) {
             let now = std::time::SystemTime::now();
             match (source.modified(), target.modified()) {
                 (Ok(source), Ok(target)) => {
-                    target < source || target > now || account_of(from) != account_of(to)
+                    target < source
+                        || target > now
+                        || match (account_of(from), account_of(to)) {
+                            (Some(ours), Some(theirs)) => ours != theirs,
+                            _ => true,
+                        }
                 }
                 _ => true,
             }
