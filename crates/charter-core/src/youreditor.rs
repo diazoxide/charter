@@ -22,7 +22,7 @@ use std::path::Path;
 
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 
-/// Which editor the operator chose (Preferences, ADR 0081 §3).
+/// Which editor the operator chose (Settings, ADR 0081 §3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Editor {
     /// Visual Studio Code, by `vscode://file/<path>:<line>:<column>`.
@@ -51,7 +51,7 @@ pub enum NotLaunched {
     NoLine(u32),
     #[error(
         "neither $VISUAL nor $EDITOR is set where charter was started: set one, or choose \
-         VS Code, Zed or a JetBrains IDE in Preferences"
+         VS Code, Zed or a JetBrains IDE in Settings"
     )]
     NoVariable,
     #[error("${name} is not a command charter can split into words: {why}")]

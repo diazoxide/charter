@@ -55,7 +55,7 @@ import { useAboutThisMachine } from "./windowprefs";
 import { ApprovePlane } from "./ApprovePlane";
 import { drawThemeFor, Extensions } from "./Extensions";
 import { Opener } from "./Opener";
-import { Preferences } from "./Preferences";
+import { SettingsTab } from "./settings/SettingsTab";
 import { useExtensionsOn } from "./extensionsOn";
 import { useProjectTheme } from "./projectTheme";
 import { drawTint } from "./theme/theme";
@@ -88,7 +88,7 @@ import { TitleBar, useTitleBarRoom } from "./TitleBar";
 import type { Needing, PermissionAsk, Quiet } from "./NeedsYou";
 import { answerAsk, usePermissionAsks } from "./permissionAsks";
 import { useUpdates } from "./Updates";
-import { noTabs, PREFERENCES_TITLE } from "./tabs";
+import { noTabs, SETTINGS_TAB_TITLE } from "./tabs";
 import { useTextSizes } from "./textSize";
 import { MAIN, runElsewhere, thisWindow, useOtherWindows, useRunHere } from "./windows";
 
@@ -217,11 +217,11 @@ function App() {
   /** The last ask for a project's Saving tab (charter-app#294), the same shape as `settingsAsk`. */
   const [savingAsk, setSavingAsk] = useState<{ plane: PlaneId; at: number }>();
   /**
-   * The last ask for the Preferences tab (charter-app#283), the same shape as `settingsAsk`:
-   * the project in front when it was asked, whose strip the tab opens on. The sizes are the
-   * machine's, so any project's strip will do, and the one the operator is looking at is it.
+   * The last ask for the Settings tab (SE-16), the same shape as `settingsAsk`: the project in
+   * front when it was asked, whose strip the tab opens on. Its You level is the machine's, so
+   * any project's strip will do, and the one the operator is looking at is it.
    */
-  const [preferencesAsk, setPreferencesAsk] = useState<{ plane: PlaneId; at: number }>();
+  const [settingsTabAsk, setSettingsTabAsk] = useState<{ plane: PlaneId; at: number }>();
   /**
    * The first chat a repo opened into the local project asks for (FR-4): the workspace named
    * after the repo, the clone the chat starts in, and a count, the shape `settingsAsk` has.
@@ -250,9 +250,9 @@ function App() {
   const [repoForgeAsk, setRepoForgeAsk] = useState<ForgeAsk>();
   /** The New project dialog's, for either of its forms. */
   const [createForgeAsk, setCreateForgeAsk] = useState<ForgeAsk>();
-  /** Preferences asked for with no project in front: drawn where the opener is, because there
-   *  is no strip to open a tab on and a text size is still worth changing. */
-  const [preferencesAlone, setPreferencesAlone] = useState(false);
+  /** Settings asked for with no project in front: drawn where the opener is, because there is
+   *  no strip to open a tab on and a text size is still worth changing. */
+  const [settingsAlone, setSettingsAlone] = useState(false);
   /** The project in front, for a verb that is kept stable across renders. */
   const inFrontNow = useRef<PlaneId | undefined>(undefined);
   /** Why this launch took longer than the limit, when it did — and nothing when it did not
@@ -787,10 +787,10 @@ function App() {
         setShowing({ at: "plane", plane });
         setSavingAsk((was) => ({ plane, at: (was?.at ?? 0) + 1 }));
       },
-      openPreferences: () => {
+      openSettingsTab: () => {
         const plane = inFrontNow.current;
-        if (plane === undefined) setPreferencesAlone(true);
-        else setPreferencesAsk((was) => ({ plane, at: (was?.at ?? 0) + 1 }));
+        if (plane === undefined) setSettingsAlone(true);
+        else setSettingsTabAsk((was) => ({ plane, at: (was?.at ?? 0) + 1 }));
       },
       quit: () => void commands.askToQuit().catch(() => undefined),
     }),
@@ -942,9 +942,9 @@ function App() {
   const openerUp = inFront === undefined && launch !== undefined && !restoring;
   useLayoutEffect(() => {
     inFrontNow.current = inFront;
-    // A project arriving ends the stand-in: from here Preferences is a tab, and the opener a
-    // later close brings back must be the opener rather than a Preferences left behind.
-    if (inFront !== undefined) setPreferencesAlone(false);
+    // A project arriving ends the stand-in: from here Settings is a tab, and the opener a later
+    // close brings back must be the opener rather than a Settings left behind.
+    if (inFront !== undefined) setSettingsAlone(false);
   }, [inFront]);
   /** What the project in front last said about itself, when it has said anything yet. The
    *  palette lists its catalogue and runs its rows, so a row reaches that project's live
@@ -1080,10 +1080,10 @@ function App() {
     return () => void listening.then((stop) => stop?.()).catch(() => undefined);
   }, []);
 
-  // The app menu's Preferences… (`⌘,`), which is the core's (`lifecycle.rs`) and says so with
-  // an event, as its Quit does. The same verb the palette row runs.
+  // The app menu's Settings… (`⌘,`), which is the core's (`lifecycle.rs`) and says so with an
+  // event, as its Quit does. The same verb the palette row runs.
   useEffect(() => {
-    const listening = listen("preferences-asked", () => windowDoes.openPreferences()).catch(
+    const listening = listen("settings-asked", () => windowDoes.openSettingsTab()).catch(
       () => undefined,
     );
     return () => void listening.then((stop) => stop?.()).catch(() => undefined);
@@ -1189,7 +1189,7 @@ function App() {
       openWorkspaceSettings: () => undefined,
       switchLive: () => undefined,
       renameWorkspace: () => undefined,
-      openPreferences: windowDoes.openPreferences,
+      openSettingsTab: windowDoes.openSettingsTab,
       // A curation chat is opened in a project, and there is no project here.
       curate: async () => nowhere(),
       quit: windowDoes.quit,
@@ -1825,7 +1825,7 @@ function App() {
           commands={extensionCommands}
           settingsAsked={settingsAsk?.plane === plane ? settingsAsk.at : undefined}
           savingAsked={savingAsk?.plane === plane ? savingAsk.at : undefined}
-          preferencesAsked={preferencesAsk?.plane === plane ? preferencesAsk.at : undefined}
+          settingsTabAsked={settingsTabAsk?.plane === plane ? settingsTabAsk.at : undefined}
           firstChatAsked={firstChat?.plane === plane ? firstChat : undefined}
           shellAsked={shellAsk?.plane === plane ? shellAsk : undefined}
           fileAsked={fileAsk?.plane === plane ? fileAsk : undefined}
@@ -1853,16 +1853,16 @@ function App() {
       {openerUp && (
         <div className="body">
           <div className="panes">
-            {preferencesAlone ? (
-              <section className="view-pane" aria-label={PREFERENCES_TITLE}>
+            {settingsAlone ? (
+              <section className="view-pane" aria-label={SETTINGS_TAB_TITLE}>
                 <header className="view-head">
-                  <h2>{PREFERENCES_TITLE}</h2>
-                  <button type="button" tabIndex={0} onClick={() => setPreferencesAlone(false)}>
+                  <h2>{SETTINGS_TAB_TITLE}</h2>
+                  <button type="button" tabIndex={0} onClick={() => setSettingsAlone(false)}>
                     Done
                   </button>
                 </header>
                 <div className="view-body">
-                  <Preferences />
+                  <SettingsTab />
                 </div>
               </section>
             ) : (

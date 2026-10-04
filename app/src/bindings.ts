@@ -4387,7 +4387,7 @@ export type WorkspaceSettings = {
 export type WorkspaceSettingsSaved = { kind: "saved"; settings: WorkspaceSettings } | { kind: "refused"; reasons: string[] };
 
 /**
- *  Which editor the operator chose on the Preferences tab (RC-20, ADR 0081 §3). The window
+ *  Which editor the operator chose in Settings (RC-20, ADR 0081 §3). The window
  *  names one of these four and nothing else: never a program, never a URL.
  */
 export type YourEditor = 

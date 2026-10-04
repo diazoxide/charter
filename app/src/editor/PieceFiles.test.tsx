@@ -323,9 +323,7 @@ describe("open in your editor (RC-20)", () => {
 
     await userEvent.click(await button());
 
-    expect(
-      await screen.findByText(/Choose your editor on the Preferences tab/),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/Choose your editor in Settings/)).toBeInTheDocument();
     expect(asked.some((one) => one.startsWith("open_in_your_editor"))).toBe(false);
   });
 

@@ -345,9 +345,9 @@ export type Does =
    *  the move are the core's (`workspace_rename`, `wscmd::rename`), as they are for
    *  `charter workspace rename` (charter#367). */
   | { verb: "renameWorkspace"; workspace: string }
-  /** Opens the Preferences tab (charter-app#283) — this machine's text sizes — on the project
-   *  in front. It writes nothing by itself: a size is changed on the tab, or by its keys. */
-  | { verb: "openPreferences" }
+  /** Opens the Settings tab (SE-16) on the project in front. It writes nothing by itself: a
+   *  value is changed on the tab. */
+  | { verb: "openSettingsTab" }
   /** Opens a new chat for one curation action on one subject, with the action's prompt typed
    *  into it and never sent (ADR 0061). It carries the action's id and nothing of its text: the
    *  core resolves the subject again (`curate`), so what is typed is the core's prompt now. */
@@ -663,8 +663,8 @@ export type Doing = {
   switchLive: (workspace: string) => void;
   /** Opens the rename dialog for one workspace. Nothing is renamed until it is answered. */
   renameWorkspace: (workspace: string) => void;
-  /** Opens the Preferences tab, or brings forward the one already open. */
-  openPreferences: () => void;
+  /** Opens the Settings tab, or brings forward the one already open. */
+  openSettingsTab: () => void;
   /** Opens a curation chat. The core can refuse — the action gone, a harness that cannot be
    *  typed into — so it answers a `Ran`. */
   curate: (subject: string, action: string) => Promise<Ran>;
@@ -673,7 +673,7 @@ export type Doing = {
    *  branch, a link, a file gone meanwhile — and says so in its own sentence. */
   copyPath: (at: BranchPath, absolute: boolean) => Promise<Ran>;
   revealPath: (at: BranchPath) => Promise<Ran>;
-  /** Refused, rather than guessed, while no editor is chosen on the Preferences tab. */
+  /** Refused, rather than guessed, while no editor is chosen in Settings. */
   openInEditor: (at: BranchPath, line: number) => Promise<Ran>;
   /** A shell tab in that folder; a refusal is said the way a shell tab's is. */
   shellInFolder: (at: BranchPath) => void;
@@ -1308,12 +1308,12 @@ export function catalogue(now: Now): Offer[] {
     ...projects.window,
     ...projects.back,
   );
-  // **This machine's preferences, beside the projects' settings** (charter-app#283): the text
-  // sizes are the machine's and not a project's, so the row is there with no project open too,
-  // as `extensions.show` is.
+  // **Settings, beside the projects' own settings** (SE-16; charter-app#283 before it): it
+  // opens at the You level, which is the machine's and not a project's, so the row is there
+  // with no project open too, as `extensions.show` is.
   offers.push({
-    ...can("preferences.show", "Preferences…", { verb: "openPreferences" }),
-    note: "This machine's window and terminal text sizes.",
+    ...can("settings.show", "Settings…", { verb: "openSettingsTab" }),
+    note: "Your text sizes and your editor, on this machine.",
   });
 
   // **The plane's personas, one row each** (charter-app#174). What the row opens is the
@@ -2026,8 +2026,8 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
     case "renameWorkspace":
       doing.renameWorkspace(does.workspace);
       return DID;
-    case "openPreferences":
-      doing.openPreferences();
+    case "openSettingsTab":
+      doing.openSettingsTab();
       return DID;
     case "curate":
       return doing.curate(does.subject, does.action);

@@ -169,7 +169,7 @@ function doing(): Doing & { calls: string[] } {
     openWorkspaceSettings: note("openWorkspaceSettings"),
     switchLive: note("switchLive"),
     renameWorkspace: note("renameWorkspace"),
-    openPreferences: note("openPreferences"),
+    openSettingsTab: note("openSettingsTab"),
     openMemory: vi.fn((ref: MemoryRef, title: string, keep: boolean) => {
       calls.push(`openMemory:${memoryKey(ref)},${title},${keep}`);
     }),
@@ -452,15 +452,17 @@ describe("the one list of actions", () => {
     );
   });
 
-  it("offers Preferences everywhere, with no project open too, because it is the machine's", async () => {
-    // charter-app#283: the text sizes are this machine's, so the row does not wait for a plane.
+  it("offers Settings everywhere, with no project open too, because You is the machine's", async () => {
+    // SE-16: Settings opens at the You level, this machine's, so the row does not wait for a
+    // plane — and no row says Preferences any more.
     for (const offers of [catalogue(now()), catalogue(now({ plane: "/p/one" }))]) {
       const hands = doing();
-      const row = by(offers, "preferences.show");
-      expect(row?.title).toBe("Preferences…");
+      const row = by(offers, "settings.show");
+      expect(row?.title).toBe("Settings…");
       expect(row?.available).toBe(true);
-      await run(offers, "preferences.show", hands);
-      expect(hands.calls).toEqual(["openPreferences"]);
+      await run(offers, "settings.show", hands);
+      expect(hands.calls).toEqual(["openSettingsTab"]);
+      expect(offers.filter((one) => /preferences/i.test(one.title))).toEqual([]);
     }
   });
 
@@ -1231,7 +1233,7 @@ describe("carrying out a row", () => {
         "openProject",
         "createProject",
         "showExtensions",
-        "openPreferences",
+        "openSettingsTab",
         "installCli",
         "createWorkspace",
         "removeWorkspace:alpha",
@@ -1590,9 +1592,8 @@ describe("the palette at fifty chats", () => {
     expect(verbs).toEqual([
       "New workspace…",
       "New project…",
-      // `vault.create` is charter's `create` too (charter-app#235), and `preferences` is
-      // charter's word (charter-app#283); both join the rows that make things.
-      "Preferences…",
+      // `vault.create` is charter's `create` too (charter-app#235), and joins the rows that make
+      // things. (`Settings…`, SE-16, has no `re` in it, as `Preferences…` had.)
       "New persona…",
       // `shared` has `re` in it, and `memory.shared` is charter's word (SI-9c).
       "Open shared memory",
@@ -1611,6 +1612,7 @@ describe("the palette at fifty chats", () => {
       "Ignore chat 103 until it asks again",
       "Ignore chat 107 until it asks again",
       "Rename chat ide.1…",
+      "Rename chat charter.2…",
     ]);
     // Not a cap and not a filter: every name that matched is still listed, below.
     expect(rows.some((row) => row.title === "Switch to tab release.3")).toBe(true);
@@ -1672,12 +1674,13 @@ describe("the palette at fifty chats", () => {
 
     it("is near the top of what was typed, and not fifty rows down it", () => {
       // The numbers themselves, so "unchanged" cannot be satisfied by both being bad.
-      // Three further down than #174 left it under `re` and `r`: `New vault…` (charter-app#235),
-      // `Preferences…` (charter-app#283) and `New persona…` (SI-3) are rows that make/land
-      // near the creates. One more since SI-9c: `Open shared memory` (`shared` has `re`).
-      // And one more under `r` since FR-27: `Switch project…` (`project` has an `r`).
-      expect(at("re", loaded())).toBe(8);
-      expect(at("r", loaded())).toBe(12);
+      // Two further down than #174 left it under `re` and `r`: `New vault…` (charter-app#235)
+      // and `New persona…` (SI-3) are rows that make/land near the creates. One more since
+      // SI-9c: `Open shared memory` (`shared` has `re`). And one more under `r` since FR-27:
+      // `Switch project…` (`project` has an `r`). One up under both since SE-16: `Settings…`
+      // took `Preferences…`'s place, and has neither an `re` nor an `r`.
+      expect(at("re", loaded())).toBe(7);
+      expect(at("r", loaded())).toBe(11);
       expect(at("rem", loaded())).toBe(1);
     });
 
@@ -1761,7 +1764,7 @@ describe("the palette at fifty chats", () => {
     expect(offers.filter((row) => row.id.startsWith("workspace.changes:"))).toHaveLength(1);
     // 436 rows: 50 chats four times over, 6 workspaces SIX times, 50 pieces THRICE, 10
     // clones TWICE, 8 personas, 2 in the queue TWICE (show it, and ignore it — charter-app#248),
-    // and the sixteen verbs — the sixteenth is Preferences (charter-app#283) — plus the vault picker and New vault…
+    // and the sixteen verbs — the sixteenth is Settings (SE-16) — plus the vault picker and New vault…
     // (charter-app#235; this plane has no vaults, so no `vault.open:` rows). It was 118 before the pins, 174 before
     // the extension list (ADR 0041), 175 before a workspace could be made and deleted
     // from the window, 183 before the explorer's rows had anything to offer, 291 before

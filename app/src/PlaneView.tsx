@@ -170,12 +170,13 @@ import {
   splitOf,
   refileViews,
   followRename,
-  PREFERENCES_TITLE,
-  PREFERENCES_VIEW,
   SAVING_TITLE,
   SAVING_VIEW,
+  SETTINGS_TAB_TITLE,
   SETTINGS_TITLE,
   SETTINGS_VIEW,
+  settingsView,
+  viewNamedNow,
   workspaceSettingsTitle,
   workspaceSettingsView,
   renameTab,
@@ -322,7 +323,7 @@ export const PlaneView = memo(function PlaneView({
   commands: surveyedCommands = NONE,
   settingsAsked,
   savingAsked,
-  preferencesAsked,
+  settingsTabAsked,
   firstChatAsked,
   shellAsked,
   fileAsked,
@@ -360,9 +361,9 @@ export const PlaneView = memo(function PlaneView({
   settingsAsked?: number;
   /** The same, for THIS project's Saving tab (`WindowDoing.openSaving`, charter-app#294). */
   savingAsked?: number;
-  /** The same, for the Preferences tab (`WindowDoing.openPreferences`, charter-app#283): a
-   *  count that goes up each time the window asks for it on THIS project's strip. */
-  preferencesAsked?: number;
+  /** The same, for the Settings tab (`WindowDoing.openSettingsTab`, SE-16): a count that goes
+   *  up each time the window asks for it on THIS project's strip. */
+  settingsTabAsked?: number;
   /** A file ⌘P found in THIS project (FM-7), opened in its file tab once per `at`; with a
    *  `line`, a jump to it (a search hit, FM-8), opened in the branch's file tab at that line. */
   fileAsked?: { place: Place; path: string; line?: number; at: number };
@@ -712,7 +713,11 @@ export const PlaneView = memo(function PlaneView({
           .then((trouble) => setWouldNotStart(trouble.status === "ok" ? (trouble.data ?? []) : []))
           .catch(() => undefined);
         const open = answer?.status === "ok" ? (answer.data ?? []) : [];
-        const back = viewAnswer?.status === "ok" ? (viewAnswer.data ?? []) : [];
+        // Each as it is named now: a record an older charter wrote can hold a view since renamed.
+        const back = (viewAnswer?.status === "ok" ? (viewAnswer.data ?? []) : []).map((tab) => {
+          const now = viewNamedNow(refOf(tab), tab.title);
+          return { ...tab, ...now.view, title: now.title };
+        });
         if (open.length > 0) {
           setReopened(open);
           setHandedFrom((was) => ({
@@ -1641,7 +1646,7 @@ export const PlaneView = memo(function PlaneView({
       openInEditor: async (at: BranchPath, line: number): Promise<Ran> => {
         const editor = yourEditor();
         if (editor === undefined)
-          return { ok: false, refused: "Choose your editor on the Preferences tab first." };
+          return { ok: false, refused: "Choose your editor in Settings first." };
         return answered(
           commands.openInYourEditor(plane, at.workspace, at.repo, at.piece, at.path, line, editor),
         );
@@ -2086,13 +2091,13 @@ export const PlaneView = memo(function PlaneView({
     [showView],
   );
 
-  /** The Preferences tab, opened the same way and for the same reason (charter-app#283). */
-  const preferencesHandled = useRef(preferencesAsked);
+  /** The Settings tab, opened the same way and for the same reason (SE-16). */
+  const settingsTabHandled = useRef(settingsTabAsked);
   useEffect(() => {
-    if (preferencesAsked === undefined || preferencesHandled.current === preferencesAsked) return;
-    preferencesHandled.current = preferencesAsked;
-    showView(PREFERENCES_VIEW, PREFERENCES_TITLE);
-  }, [preferencesAsked, showView]);
+    if (settingsTabAsked === undefined || settingsTabHandled.current === settingsTabAsked) return;
+    settingsTabHandled.current = settingsTabAsked;
+    showView(settingsView("you"), SETTINGS_TAB_TITLE);
+  }, [settingsTabAsked, showView]);
 
   /**
    * Focuses a workspace: the strip below it shows that workspace's chats, and one of them
@@ -3191,7 +3196,7 @@ export const PlaneView = memo(function PlaneView({
       openWorkspaceSettings,
       switchLive: (workspace: string) => setLiveAsk(workspace),
       renameWorkspace,
-      openPreferences: windowDoes.openPreferences,
+      openSettingsTab: windowDoes.openSettingsTab,
       curate,
       quit: windowDoes.quit,
       ...fileDoing,
@@ -4840,9 +4845,9 @@ export type WindowDoing = {
   openSettings: (plane: string) => void;
   /** Brings a project to the front and opens its Saving tab (charter-app#294). */
   openSaving: (plane: string) => void;
-  /** Opens the Preferences tab (charter-app#283) on the project in front, or draws it where the
-   *  opener is when there is none. The window's, because which project is in front is. */
-  openPreferences: () => void;
+  /** Opens the Settings tab (SE-16) on the project in front, or draws it where the opener is
+   *  when there is none. The window's, because which project is in front is. */
+  openSettingsTab: () => void;
   /** Pinning a PROJECT is the window's, because the project strip is: a project that is not
    *  in front draws nothing, and its pin still has to be on that strip (ADR 0039). */
   pinProject: (plane: string, pinned: boolean) => Promise<Ran>;

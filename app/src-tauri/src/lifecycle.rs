@@ -20,9 +20,9 @@ use tauri::{AppHandle, Emitter, Manager, Runtime, Wry};
 /// calling the `quit` command, or by not calling it.
 pub const QUIT_ASKED: &str = "quit-asked";
 
-/// The event the window is sent when the menu's Preferences… is chosen (charter-app#283). The
-/// window opens its Preferences tab, which is the palette row's verb too.
-pub const PREFERENCES_ASKED: &str = "preferences-asked";
+/// The event the window is sent when the menu's Settings… is chosen (SE-16; charter-app#283 as
+/// Preferences…). The window opens its Settings tab, which is the palette row's verb too.
+pub const SETTINGS_ASKED: &str = "settings-asked";
 
 /// The main window: the one the tray and the dock bring back, and the one a quit is asked in.
 /// A split window (`windows.rs`) is never hidden — its close hands its projects back here — so
@@ -33,7 +33,7 @@ pub const WINDOW: &str = crate::windows::MAIN;
 /// cannot drift apart.
 const QUIT: &str = "quit";
 const SHOW: &str = "show";
-const PREFERENCES: &str = "preferences";
+const SETTINGS: &str = "settings";
 
 /// How long an unanswered ask keeps the next one armed to quit outright.
 ///
@@ -205,9 +205,9 @@ pub fn tray(app: &AppHandle) -> tauri::Result<()> {
 enum Item {
     /// charter's own Quit, with the accelerator it carries.
     Quit(&'static str),
-    /// Preferences… (charter-app#283), with the accelerator it carries: the window's text
-    /// sizes, which are this machine's.
-    Preferences(&'static str),
+    /// Settings… (SE-16; charter-app#283 as Preferences…), with the accelerator it carries: the
+    /// Settings tab, which opens at the You level — this machine's text sizes and editor.
+    Settings(&'static str),
     Hide,
     Separator,
     Undo,
@@ -233,7 +233,7 @@ enum Item {
 /// left out rather than left on the chat's keys. A text field in the webview keeps its own
 /// `Ctrl+C` and `Ctrl+V`, which the webview handles without any menu.
 ///
-/// **Preferences… is on both, on `⌘,` and `Ctrl+,`** (charter-app#283) — the key every Mac app
+/// **Settings… is on both, on `⌘,` and `Ctrl+,`** (charter-app#283, SE-16) — the key every Mac app
 /// opens its settings on, and VS Code's everywhere else. Neither takes anything from a chat:
 /// xterm.js 6.0.0 sends nothing for a `⌘` chord but `⌘A`, and with `Ctrl` it encodes a letter,
 /// space, `3`–`8`, `[`, `\` and `]` — not `,`.
@@ -250,7 +250,7 @@ fn layout(macos: bool) -> Vec<(&'static str, Vec<Item>)> {
         return vec![(
             "charter",
             vec![
-                Item::Preferences("Ctrl+,"),
+                Item::Settings("Ctrl+,"),
                 Item::Separator,
                 Item::Quit("Ctrl+Shift+Q"),
             ],
@@ -260,7 +260,7 @@ fn layout(macos: bool) -> Vec<(&'static str, Vec<Item>)> {
         (
             "charter",
             vec![
-                Item::Preferences("CmdOrCtrl+,"),
+                Item::Settings("CmdOrCtrl+,"),
                 Item::Separator,
                 Item::Hide,
                 Item::Separator,
@@ -302,10 +302,10 @@ pub fn menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
                     true,
                     Some(accelerator),
                 )?),
-                Item::Preferences(accelerator) => Box::new(MenuItem::with_id(
+                Item::Settings(accelerator) => Box::new(MenuItem::with_id(
                     app,
-                    PREFERENCES,
-                    "Preferences…",
+                    SETTINGS,
+                    "Settings…",
                     true,
                     Some(accelerator),
                 )?),
@@ -339,7 +339,7 @@ pub fn clicked<R: Runtime>(app: &AppHandle<R>, id: &str) {
         //
         // To the window the operator is in when there is one: with a project split into a
         // window of its own, `⌘,` pressed there is about that window.
-        PREFERENCES => {
+        SETTINGS => {
             let focused = app
                 .webview_windows()
                 .into_iter()
@@ -349,11 +349,11 @@ pub fn clicked<R: Runtime>(app: &AppHandle<R>, id: &str) {
                 .map(|(label, _)| label);
             match focused {
                 Some(label) => {
-                    let _ = app.emit_to(label.as_str(), PREFERENCES_ASKED, ());
+                    let _ = app.emit_to(label.as_str(), SETTINGS_ASKED, ());
                 }
                 None => {
                     show(app);
-                    let _ = app.emit_to(WINDOW, PREFERENCES_ASKED, ());
+                    let _ = app.emit_to(WINDOW, SETTINGS_ASKED, ());
                 }
             }
         }
@@ -392,9 +392,7 @@ mod tests {
     fn accelerator(item: Item, macos: bool) -> Option<String> {
         let chord = |key: &str| Some(format!("CmdOrCtrl+{key}"));
         match item {
-            Item::Quit(accelerator) | Item::Preferences(accelerator) => {
-                Some(accelerator.to_owned())
-            }
+            Item::Quit(accelerator) | Item::Settings(accelerator) => Some(accelerator.to_owned()),
             Item::Separator => None,
             Item::Hide => chord("H"),
             Item::Undo => chord("Z"),
@@ -454,7 +452,7 @@ mod tests {
         // Not only letters: xterm sends `^[` for `Ctrl+[` and `^\` for `Ctrl+\`.
         assert!(a_terminal_encodes("Ctrl+[", false));
         assert!(a_terminal_encodes("Ctrl+5", false));
-        // And not a comma, which is why Preferences can be on `Ctrl+,` (charter-app#283).
+        // And not a comma, which is why Settings can be on `Ctrl+,` (charter-app#283).
         assert!(!a_terminal_encodes("Ctrl+,", false));
         assert!(!a_terminal_encodes("Ctrl+0", false));
     }
@@ -476,7 +474,7 @@ mod tests {
         assert_eq!(
             accelerators(false),
             vec![
-                (Item::Preferences("Ctrl+,"), "Ctrl+,".to_owned()),
+                (Item::Settings("Ctrl+,"), "Ctrl+,".to_owned()),
                 (Item::Quit("Ctrl+Shift+Q"), "Ctrl+Shift+Q".to_owned())
             ]
         );
@@ -490,7 +488,7 @@ mod tests {
                 (
                     "charter",
                     vec![
-                        Item::Preferences("CmdOrCtrl+,"),
+                        Item::Settings("CmdOrCtrl+,"),
                         Item::Separator,
                         Item::Hide,
                         Item::Separator,

@@ -17,7 +17,7 @@
  * branch, refuses a path that leaves it, and decides what a file is by its bytes.
  *
  * **Open in your editor** (RC-20, ADR 0081 §3) is beside the file in both: the file and the
- * line the cursor is on go to the editor chosen on the Preferences tab. The window sends the
+ * line the cursor is on go to the editor chosen in Settings. The window sends the
  * branch, the path, the line and which editor; the core checks the path as it checks a read,
  * and builds the URL or the program's arguments itself.
  */
@@ -114,7 +114,7 @@ function ToYourEditor({
     setSaid(trouble === undefined ? undefined : { about, trouble });
   const open = () => {
     if (editor === undefined) {
-      say("Choose your editor on the Preferences tab first.");
+      say("Choose your editor in Settings first.");
       return;
     }
     say(undefined);

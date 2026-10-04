@@ -305,7 +305,7 @@ fn tree_of(plane: &Path, branch: Branch<'_>, folder: &str) -> Result<FolderListi
         .map_err(|refused| refused.to_string())
 }
 
-/// Which editor the operator chose on the Preferences tab (RC-20, ADR 0081 §3). The window
+/// Which editor the operator chose in Settings (RC-20, ADR 0081 §3). The window
 /// names one of these four and nothing else: never a program, never a URL.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, specta::Type)]
 #[serde(rename_all = "kebab-case")]

@@ -234,14 +234,14 @@ has it; nothing reads the key after that.
 - **`text`** is the two text sizes, in px (charter-app#283): **`window`**, the root font size
   every `rem` in the stylesheet is measured by, and **`terminal`**, every chat's terminal. Each
   is a whole number from 10 to 24; leave one out for its default, 14 and 13. A size that is
-  not one is its default, and the alerts drawer says so. The Preferences tab and the size keys
+  not one is its default, and the alerts drawer says so. Settings and the size keys
   (`⌘`/`Ctrl` with `=`, `-`, `0`, `app/src/textSize.ts`) write it; it is in this file and not in
   a plane because a size is this machine's, and a plane would carry it to every clone.
 - **`editor`** is your editor (RC-20, ADR 0081 §3), where *Open in your editor* sends a file
   at a line: `vscode`, `zed`, `idea` (a JetBrains IDE) or `variable` (`$VISUAL`, else
   `$EDITOR`, from charter's own environment, run with `+line` and the file). Leave it out and
   none is chosen: *Open in your editor* asks for one. Any other value is none, and the alerts
-  drawer says so. The Preferences tab writes it (`app/src/yourEditor.ts`). It is a word and never
+  drawer says so. Settings writes it (`app/src/yourEditor.ts`). It is a word and never
   a program: the core builds the URL, or reads the variable itself, so nothing written here is
   run.
 - **The file is read once, as the window is created.** Edit it while charter is not running,

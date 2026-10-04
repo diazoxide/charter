@@ -17,7 +17,6 @@ import {
   Save,
   Search,
   Settings2,
-  SlidersHorizontal,
   UserRound,
 } from "lucide-react";
 import { EmptyState } from "./EmptyState";
@@ -27,8 +26,8 @@ import { PanelList } from "./PanelList";
 import { HarnessSetupTab } from "./HarnessSetupTab";
 import { RepoInstructionsTab } from "./RepoInstructionsTab";
 import { FirstTaskTab, type FirstTaskDoes } from "./FirstTaskTab";
-import { Preferences } from "./Preferences";
 import { ProjectSettings, WorkspaceSettings } from "./ProjectSettings";
+import { SettingsTab } from "./settings/SettingsTab";
 import {
   commands,
   type ExtensionCommand,
@@ -53,7 +52,7 @@ import { pieceOf } from "./pieceViews";
 import { SEARCH, isSearch } from "./contentSearch";
 import { SearchTab } from "./SearchTab";
 import { SESSION_VIEW } from "./sessions";
-import { PREFERENCES_VIEW, SAVING_VIEW, SETTINGS_VIEW, viewKey, type ViewRef } from "./tabs";
+import { SAVING_VIEW, SETTINGS_VIEW, settingsView, viewKey, type ViewRef } from "./tabs";
 import { VaultTab } from "./VaultTab";
 import { listedMemoryOffers, memoryKeyRun, toKeep, type Offer } from "./actions";
 import { factsChanged } from "./extensionFacts";
@@ -215,7 +214,6 @@ export const OWN_MARKS: Record<string, React.ComponentType<{ className?: string 
   [HARNESS_SETUP_VIEW]: Download,
   /** A harness's capability card (HP-19, `tabs.harnessCardView`). */
   harness: Cpu,
-  preferences: SlidersHorizontal,
   "piece-files": FolderGit2,
   "piece-file": FileCode,
   [SEARCH]: Search,
@@ -475,10 +473,10 @@ export function ViewPane({
             onSaved={(memory) => onMemorySaved?.(view, memory)}
             onClose={() => onCloseView?.(view)}
           />
-        ) : isPreferences(view) ? (
-          /* The machine's, not the plane's (charter-app#283): the same surface whichever
-             project's strip it was opened on. */
-          <Preferences />
+        ) : isSettingsTab(view) ? (
+          /* Settings (SE-16). At the You level it is the machine's, not the plane's: the same
+             surface whichever project's strip it was opened on. */
+          <SettingsTab />
         ) : (
           /* Keyed by the view, so a pane that comes to show another view starts from "asking"
              rather than drawing the last view's answer under the new one's title. */
@@ -584,9 +582,9 @@ function isSession(view: ViewRef): boolean {
   return view.from === null && view.view === SESSION_VIEW;
 }
 
-/** Whether `view` is the Preferences view (charter-app#283). */
-function isPreferences(view: ViewRef): boolean {
-  return viewKey(view) === viewKey(PREFERENCES_VIEW);
+/** Whether `view` is the Settings tab (SE-16). */
+function isSettingsTab(view: ViewRef): boolean {
+  return viewKey(view) === viewKey(settingsView("you"));
 }
 
 /** A view asked now, and its answer, its refusal, or the sentence saying its source has gone. */
