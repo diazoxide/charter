@@ -86,8 +86,9 @@ empty state and error copy follow it.
   *Oops* and a leading *Error:* each say that nothing was found out. If charter really does not
   know, say what it was doing: *charter did not answer with a reading*.
 - **A refusal says what charter will not do, and why:** *charter cannot send {key}.*, *charter
-  will not read …*. If it does something else instead, say that too: *It is still recorded, and
-  will be tried again at the next launch.*
+  will not read …*. If it does something else instead, say that too: *{name} did not start
+  ({reason}). It is still recorded, and will be tried again at the next launch.*
+  (`PlaneView.tsx`, the notice for a chat that did not reopen).
 - **Don't blame the reader.** The subject is what failed, not what the reader did wrong.
 - **Say the cost of an act that cannot be undone, before it happens:** *There is no undo.*,
   *Its 2 secrets are destroyed in your system keychain and cannot be recovered.*
