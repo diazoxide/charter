@@ -113,7 +113,7 @@ pub struct SandboxState {
     /// only, never sent (ruling V78 d).
     pub said: Option<String>,
     /// The harnesses whose chats never start sandboxed on this machine, whatever the project,
-    /// each with why (`sandbox::never_on`): Codex until #1123, opencode off macOS. The offer
+    /// each with why (`sandbox::never_on`): Codex and opencode off macOS. The offer
     /// says them, so "every new chat runs sandboxed" is never read as covering them.
     pub never: Vec<String>,
 }
@@ -322,7 +322,9 @@ mod tests {
 
     /// Must-fix (verifier r7): the picker never runs a profile's program before the start's
     /// gate lets it start (approved, among the rest). Past the gate, its program is checked,
-    /// which runs it.
+    /// which runs it. The program answers as something other than Claude Code, so whether it
+    /// ran shows in the row: the probe runs inside charter's wrap (D-88k), where it can leave
+    /// no other trace.
     #[cfg(unix)]
     #[test]
     fn the_picker_runs_no_program_nobody_approved() {
@@ -330,7 +332,6 @@ mod tests {
         // A folder no chat writes: the start refuses a program, or any file its command
         // names, in a temp folder (ruling V87g, D-88g).
         let outside = stand_in::NoChatWrites::new();
-        let marker = outside.path().join("ran");
         std::fs::write(
             project.path().join("charter.toml"),
             "[sandbox]\nmode = \"on\"\n",
@@ -338,11 +339,7 @@ mod tests {
         .expect("charter.toml");
         // Run as `/bin/sh <script>`.
         let script = outside.path().join("claude");
-        std::fs::write(
-            &script,
-            format!("touch {:?}\necho '2.1.288 (Claude Code)'\n", marker),
-        )
-        .expect("the script");
+        std::fs::write(&script, "echo 'not claude'\n").expect("the script");
         std::fs::write(
             project.path().join(charter_core::profiles::LOCAL_FILE),
             format!(
@@ -354,14 +351,16 @@ mod tests {
         let set = charter_core::profiles::current(project.path());
         let profile = set.get("work").expect("declared");
 
-        let row = ahead_here(profile, project.path());
+        let row = ahead_here(profile, project.path()).expect("a row");
 
-        assert!(!marker.exists(), "an unapproved program was run");
-        let row = row.expect("a row");
         // Where this machine can apply the sandbox at all (not a CI runner without bubblewrap):
-        // the row says the check waits for the approval, and an approved program is checked.
+        // the row says the check waits for the approval, so the program was not run; once
+        // approved, it is checked, and its answer refuses it.
         if row.state == "sandboxed" {
-            assert_eq!(row.said, CHECKED_ONCE_APPROVED);
+            assert_eq!(
+                row.said, CHECKED_ONCE_APPROVED,
+                "an unapproved program was run"
+            );
             charter_core::profiletrust::record_launched(
                 project.path(),
                 "work",
@@ -369,9 +368,11 @@ mod tests {
             )
             .expect("approved");
             let approved = ahead_here(profile, project.path()).expect("a row");
-            assert!(marker.exists(), "an approved program is checked");
-            assert_eq!(approved.state, "sandboxed", "{approved:?}");
-            assert_eq!(approved.said, "");
+            assert_eq!(approved.state, "refused", "an approved program is checked");
+            assert!(
+                approved.said.contains("does not answer as Claude Code"),
+                "{approved:?}"
+            );
         }
     }
 
@@ -379,14 +380,12 @@ mod tests {
     /// on this system, whatever the project.
     #[test]
     fn the_offer_names_each_harness_never_sandboxed_on_this_system() {
-        assert_eq!(
-            never_here(sandbox::Os::MacOs),
-            ["Codex: charter cannot keep its chats inside the sandbox yet (#1123)"]
-        );
+        // #1123: charter wraps Codex as it wraps opencode, on macOS so far.
+        assert!(never_here(sandbox::Os::MacOs).is_empty());
         assert_eq!(
             never_here(sandbox::Os::Linux),
             [
-                "Codex: charter cannot keep its chats inside the sandbox yet (#1123)",
+                "Codex: charter can wrap it on macOS only, so far",
                 "opencode: charter can wrap it on macOS only, so far",
             ]
         );

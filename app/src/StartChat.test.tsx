@@ -565,10 +565,10 @@ describe("a chat in a project that runs every chat sandboxed (ADR 0067 §7, V78 
   });
 });
 
-describe("a harness charter holds back in a sandboxed project (V87f)", () => {
+describe("a harness charter cannot wrap on this system in a sandboxed project", () => {
   it("shows Codex's refusal and starts it only without the sandbox", async () => {
     const said =
-      "charter cannot keep a Codex chat inside its sandbox yet (#1123), so in this project a new one starts only without the sandbox, from the new-chat picker.";
+      "this plane runs every chat sandboxed, and charter runs Codex inside a sandbox of its own, which it can apply on macOS but not yet on Linux (#1040), so it was not started. Start this chat on a Claude Code profile.";
     const onStart = vi.fn();
     render(
       <StartChat

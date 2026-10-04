@@ -743,6 +743,13 @@ pub struct Homes {
     pub config: Option<PathBuf>,
     /// `$XDG_CACHE_HOME`, or `~/.cache`.
     pub cache: Option<PathBuf>,
+    /// The operator's own Codex home: `$CODEX_HOME`, or `~/.codex`. A wrapped chat neither reads
+    /// nor writes it (D-88q).
+    pub codex: Option<PathBuf>,
+    /// The Codex home of this project's sandboxed chats, of their own (D-88q): under charter's
+    /// data home ([`crate::datahome`]), one per project. Set by [`Compiled::of`], which knows the
+    /// project.
+    pub codex_project: Option<PathBuf>,
 }
 
 impl Homes {
@@ -762,7 +769,44 @@ impl Homes {
             state: xdg("XDG_STATE_HOME", ".local/state"),
             config: xdg("XDG_CONFIG_HOME", ".config"),
             cache: xdg("XDG_CACHE_HOME", ".cache"),
+            codex: xdg("CODEX_HOME", ".codex"),
+            codex_project: None,
         }
+    }
+
+    /// charter's data home on `machine` ([`crate::datahome`]'s ladder, read from `machine`): the
+    /// variable, else `$XDG_DATA_HOME/charter`, else the system's data directory under its home.
+    fn charter_data(machine: &Machine) -> Option<PathBuf> {
+        let named = |name: &str| {
+            machine
+                .env
+                .get(name)
+                .map(PathBuf::from)
+                .filter(|dir| dir.is_absolute())
+        };
+        named(crate::datahome::HOME_VAR)
+            .or_else(|| named("XDG_DATA_HOME").map(|xdg| xdg.join("charter")))
+            .or_else(|| {
+                let home = machine.home.as_ref()?;
+                Some(match machine.os {
+                    Os::MacOs => home.join("Library/Application Support/charter"),
+                    Os::Linux | Os::Windows | Os::Other => home.join(".local/share/charter"),
+                })
+            })
+    }
+
+    /// The Codex home of the project at `root`'s sandboxed chats on `machine` (D-88q): a folder
+    /// named for the project as the kernel names it, under charter's data home.
+    pub fn codex_project(machine: &Machine, root: &Path) -> Option<PathBuf> {
+        use sha2::Digest;
+        let real = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        let digest = sha2::Sha256::digest(real.as_os_str().as_encoded_bytes());
+        let key: String = digest
+            .iter()
+            .take(16)
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        Some(Self::charter_data(machine)?.join("codex-homes").join(key))
     }
 }
 
@@ -786,7 +830,10 @@ impl Compiled {
             denied: Denied::of(root, machine),
             hosts: hosts(&policy.egress, plane),
             os: machine.os,
-            homes: Homes::of(machine),
+            homes: Homes {
+                codex_project: Homes::codex_project(machine, root),
+                ..Homes::of(machine)
+            },
         }
     }
 }
@@ -843,11 +890,12 @@ impl Applied {
     }
 
     /// The folders this sandbox lets a chat write besides its own and the temp directories:
-    /// opencode's own data, under charter's wrap.
+    /// opencode's own data, or what a Codex turn writes in Codex's home, under charter's wrap.
     pub fn writable(&self) -> Vec<PathBuf> {
         match &self.form {
             Form::Opencode(wrap) => wrap.data.iter().cloned().collect(),
-            Form::ClaudeCode(_) | Form::Codex(_) => Vec::new(),
+            Form::Codex(wrap) => wrap.writable(),
+            Form::ClaudeCode(_) => Vec::new(),
         }
     }
 
@@ -880,11 +928,12 @@ impl Applied {
 
     /// What has to run for as long as a chat under this sandbox does, started now: charter's
     /// egress proxy and the chat's own temp directory, for a harness charter wraps ([`Form::
-    /// Opencode`]); `None` for a harness whose own sandbox holds the policy.
+    /// Opencode`], [`Form::Codex`]); `None` for a harness whose own sandbox holds the policy.
     pub fn confine(&self) -> std::io::Result<Option<Confinement>> {
         match &self.form {
             Form::Opencode(wrap) => Confinement::start(wrap.hosts.clone()).map(Some),
-            Form::ClaudeCode(_) | Form::Codex(_) => Ok(None),
+            Form::Codex(wrap) => Confinement::start(wrap.hosts.clone()).map(Some),
+            Form::ClaudeCode(_) => Ok(None),
         }
     }
 }
@@ -960,7 +1009,7 @@ impl Confinement {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Form {
     ClaudeCode(claude::Settings),
-    Codex(codex::Flags),
+    Codex(codex::Wrap),
     Opencode(opencode::Wrap),
 }
 
@@ -1085,8 +1134,8 @@ fn article(word: &str) -> &'static str {
 }
 
 /// The harnesses charter can sandbox on this machine other than `but`, as a sentence names
-/// them: one a chat could be started on instead. A harness held back (#1123) or one this system
-/// cannot wrap is never offered.
+/// them: one a chat could be started on instead. A harness held back or one this system cannot
+/// wrap is never offered.
 fn sandboxed_harnesses_but(but: Option<Harness>) -> String {
     let titles: Vec<&str> = Harness::ALL
         .into_iter()
@@ -1124,6 +1173,10 @@ pub enum NotStarted {
     /// The profile's program does not answer as the harness its sandbox was compiled for, so
     /// the sandbox may bind nothing (ruling V87g).
     NotTheHarness(Harness),
+    /// The profile's program did not answer `--version` in time ([`program::PATIENCE`]): a
+    /// first run of a program the system has not seen can be slow, so the person is asked to
+    /// start the chat again rather than told it is not the harness.
+    ProbeTimedOut(Harness),
     /// Charter has a compiler for the harness, and holds it back: its own sandbox cannot be
     /// kept to what the compiler says while it runs, until the issue named lands.
     HeldBack(Harness, u32),
@@ -1169,6 +1222,14 @@ impl fmt::Display for NotStarted {
                  can write, so it was not started sandboxed. Keep every file the command names \
                  outside the plane and outside what a chat may write."
             ),
+            Self::ProbeTimedOut(harness) => write!(
+                f,
+                "{lead}, and this profile's program did not answer whether it is {} within {} \
+                 seconds, so it was not started. A first run of a program can be slow: start \
+                 the chat again.",
+                harness.title(),
+                program::PATIENCE.as_secs()
+            ),
             Self::NotTheHarness(harness) => write!(
                 f,
                 "{lead}, and this profile's program does not answer as {}, whose sandbox it was \
@@ -1197,8 +1258,8 @@ impl fmt::Display for NotStarted {
                 // The Linux wrap is #1040.
                 Unheld::Wrap(os) => write!(
                     f,
-                    "{lead}, and {} has no sandbox of its own, which charter can wrap it in on \
-                     macOS but not yet on {}, so it was not started. Start this chat on a {} \
+                    "{lead}, and charter runs {} inside a sandbox of its own, which it can apply \
+                     on macOS but not yet on {}, so it was not started. Start this chat on a {} \
                      profile.",
                     it.harness.title(),
                     match os {
@@ -1267,8 +1328,7 @@ pub fn for_start(
     }))
 }
 
-/// [`for_start`] without the hold-back, for a test of a compiler charter holds back (V87f):
-/// what the chat would start under once the issue lands.
+/// [`for_start`] without asking this machine for a backend, for a test of a compiler alone.
 #[cfg(test)]
 pub(crate) fn compiled_anyway(
     harness: Harness,
@@ -1520,6 +1580,7 @@ pub fn ahead(
             | NotStarted::WordWritable(_)
             | NotStarted::WordTooLong
             | NotStarted::NotTheHarness(_)
+            | NotStarted::ProbeTimedOut(_)
             | NotStarted::Uncompilable(_)
             | NotStarted::PlaneUnreadable => None,
         },
@@ -1574,7 +1635,10 @@ pub mod local;
 pub mod opencode;
 pub mod planted;
 pub mod program;
+pub mod seatbelt;
 
+#[cfg(test)]
+mod codex_tests;
 #[cfg(test)]
 mod egress_tests;
 #[cfg(test)]

@@ -95,11 +95,14 @@ fn on_linux_an_opencode_chat_is_refused_until_charter_can_wrap_it_there() {
             unheld: Unheld::Wrap(Os::Linux),
         })
     );
-    assert_eq!(
-        refused.to_string(),
-        "this plane runs every chat sandboxed, and opencode has no sandbox of its own, which \
-         charter can wrap it in on macOS but not yet on Linux (#1040), so it was not started. \
-         Start this chat on a Claude Code profile."
+    // Which harness it names instead is this machine's to say: on Linux, Claude Code.
+    assert!(
+        refused.to_string().starts_with(
+            "this plane runs every chat sandboxed, and charter runs opencode inside a sandbox of \
+             its own, which it can apply on macOS but not yet on Linux (#1040), so it was not \
+             started. Start this chat on a Claude Code"
+        ),
+        "{refused}"
     );
 }
 
@@ -513,11 +516,9 @@ fn a_wrapped_chat_with_no_directory_or_no_confinement_is_refused() {
 #[test]
 fn a_harness_with_its_own_sandbox_is_not_confined_by_charter() {
     let plane = plane_saying(ON);
-    for harness in [Harness::ClaudeCode, Harness::Codex] {
-        let applied =
-            compiled_anyway(harness, plane.path(), &machine(Os::MacOs)).expect("compiles");
-        assert!(applied.confine().expect("nothing to start").is_none());
-    }
+    let applied =
+        compiled_anyway(Harness::ClaudeCode, plane.path(), &machine(Os::MacOs)).expect("compiles");
+    assert!(applied.confine().expect("nothing to start").is_none());
 }
 
 /// The profile, applied for real: what it denies is denied, what it allows is allowed.
@@ -754,28 +755,8 @@ fn stated(harness: Harness, plane: &Path, cwd: &Path, machine: &Machine) -> Stat
                 denies_read: Box::new(move |path| read.iter().any(|it| it == path)),
             }
         }
-        Form::Codex(_) => {
-            // The last `filesystem` table on the line is the one Codex keeps (measured).
-            let table = line
-                .args
-                .iter()
-                .rev()
-                .find_map(|arg| arg.split_once(".filesystem="))
-                .map(|(_, table)| format!("t = {table}").parse::<toml::Table>().expect("toml"))
-                .expect("a filesystem table");
-            let access = move |path: &str| {
-                table["t"]
-                    .get(path)
-                    .and_then(toml::Value::as_str)
-                    .map(str::to_owned)
-            };
-            let write = access.clone();
-            Stated {
-                denies_write: Box::new(move |path| write(path).is_some()),
-                denies_read: Box::new(move |path| access(path).as_deref() == Some("deny")),
-            }
-        }
-        Form::Opencode(_) => {
+        // Both are charter's own profile.
+        Form::Codex(_) | Form::Opencode(_) => {
             let profile = line.args[1].clone();
             let read = profile.clone();
             Stated {
@@ -790,9 +771,8 @@ fn stated(harness: Harness, plane: &Path, cwd: &Path, machine: &Machine) -> Stat
     }
 }
 
-/// Each compiler states every class. For Codex the later-code class is stated by name only,
-/// which does not hold it against a folder moved aside and back; Codex is held back from a
-/// sandboxed start until #1123 (V87f), and this tests its compiler only.
+/// Each compiler states every class: Claude Code's in its own sandbox's settings, Codex's and
+/// opencode's in charter's own profile (#1123).
 #[test]
 fn every_denial_class_is_held_by_every_harness_charter_compiles_for() {
     let plane = plane_saying(ON);
@@ -821,8 +801,7 @@ fn every_denial_class_is_held_by_every_harness_charter_compiles_for() {
                 Class::RunnerInternals => continue,
                 Class::LaterCode => match harness {
                     Harness::ClaudeCode => ("**/.git/config".to_owned(), false),
-                    Harness::Codex => (root.join(".git/config").display().to_string(), false),
-                    Harness::Opencode => {
+                    Harness::Codex | Harness::Opencode => {
                         let escaped = root.display().to_string().replace('.', "\\\\.");
                         (format!("^{escaped}/(.*/)?\\\\.git/config(/.*)?$"), false)
                     }
@@ -1013,8 +992,7 @@ fn every_harness_is_kept_from_writing_charter_local_toml() {
         let stated = stated(harness, &root, &root, &machine);
         let path = match harness {
             Harness::ClaudeCode => "**/charter.local.toml".to_owned(),
-            Harness::Codex => root.join("charter.local.toml").display().to_string(),
-            Harness::Opencode => {
+            Harness::Codex | Harness::Opencode => {
                 let escaped = root.display().to_string().replace('.', "\\\\.");
                 format!("^{escaped}/(.*/)?charter\\\\.local\\\\.toml(/.*)?$")
             }

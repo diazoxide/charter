@@ -100,12 +100,12 @@ A project charter makes has it on. A project made before the sandbox existed kee
 it did, and charter offers once to turn it on.
 
 **What it covers.** Chats that charter starts, on a harness charter compiles the policy for.
-Today those are Claude Code, through its own sandbox, and opencode on macOS. A sandboxed
-project does not start Codex at all until charter can hold it (#1123), except on a person's
-audited opt-out.
-opencode has no sandbox of its own, so charter runs the whole harness inside a profile it
-writes, and the harness's traffic leaves through a proxy charter runs on the loopback interface
-for that chat. A sandboxed chat reaches only the hosts of the plane's egress
+Today those are Claude Code, through its own sandbox, and opencode and Codex on macOS.
+charter runs the whole of opencode and of Codex inside a profile it writes, and the harness's
+traffic leaves through a proxy charter runs on the loopback interface for that chat. opencode
+has no sandbox of its own. Codex's own sandbox stays off inside charter's: macOS applies one
+sandbox to a process, so Codex's cannot be applied inside charter's, and charter's holds every
+class for Codex and for every command it runs (measured, #1123). A sandboxed chat reaches only the hosts of the plane's egress
 presets. It is always denied five classes: a vault's storage, charter's integrity state, the
 powers that belong to a person, on a runner the runner's own internals, and writing what a
 program run later outside the sandbox loads, such as git's config and hooks, shell startup
@@ -115,21 +115,25 @@ it and the plane, is a link. Nor does a chat whose program is a relative path, o
 sandboxed chat may write (the plane, the chat's folders, the system temp folders), as written
 or after its links, or whose command names a file in such a place, such as a script handed to
 an interpreter. Nor does a Claude Code profile whose program does not answer as Claude
-Code: a harness's own sandbox binds only that harness. That answer is the program's own, so it
+Code: a harness's own sandbox binds only that harness. Charter asks a program that question
+inside a profile of its own, which lets it write nothing but its own temp folder and reach no
+network, on macOS. That answer is the program's own, so it
 catches a profile that is not Claude Code by mistake, not one written to pass; the person's
 approval of the profile is what vouches for the program. The same approval is what catches a
 path no word spells, in any encoding: inline code or inline config that builds the path of a
 script in the plane, and a program that, by its own logic, reads and runs a file a chat can
 write without being handed it. The check of a command's words is a lint that catches mistakes,
-not a boundary. The boundary for every sandboxed harness, Claude Code included, is to be
-charter's own wrap around the whole harness, which is not built yet for Claude Code (#1123). A plane can turn the sandbox
-on, but never off.
+not a boundary. For opencode and Codex, the boundary is charter's own wrap around the whole
+harness. Claude Code is not inside charter's wrap: its own sandbox cannot be applied inside one,
+so for a Claude Code chat the boundary is Claude Code's own sandbox, which binds the commands it
+runs and not the harness itself, and the person's approval of the profile (#1150). A plane can
+turn the sandbox on, but never off.
 
 **The opt-out is one chat's, and it is recorded.** A person can start one chat without the
 sandbox from the window's new-chat picker, and nothing else can: there is no CLI word, file or
 setting for it, and it is for a new chat only. A relaunched or resumed chat does not inherit
-it: it starts sandboxed, or not at all where the sandbox cannot be applied (a Codex chat, a
-refused program). Continuing an opted-out chat's conversation without the sandbox is not
+it: it starts sandboxed, or not at all where the sandbox cannot be applied (a Codex or
+opencode chat on Linux, a refused program). Continuing an opted-out chat's conversation without the sandbox is not
 offered yet (#1098). That chat's tab says
 it runs without the sandbox. Charter records the start in its event log on this machine
 (`trust.sandbox.off`), with the reason the person typed, and records the sandbox coming back
@@ -148,8 +152,8 @@ it, and never sends that count anywhere.
 - **Windows.** Charter has no sandbox backend on Windows yet (#565), so every chat there
   starts without the sandbox. Its tab says so, and the start is recorded with charter, not the
   person, as the one who started it unsandboxed.
-- **opencode on Linux.** Charter cannot wrap opencode on Linux yet (#1040), so a plane with
-  the sandbox on does not start opencode chats there.
+- **opencode and Codex on Linux.** Charter cannot wrap opencode or Codex on Linux yet (#1040),
+  so a plane with the sandbox on does not start their chats there.
 - **What opencode keeps for itself.** A wrapped opencode chat can also write what an opencode
   turn writes: its sessions database, log and storage. Its state is kept in the chat's own
   temp directory, never in opencode's. opencode's
@@ -160,15 +164,29 @@ it, and never sends that count anywhere.
 - **opencode's hook reports.** A wrapped opencode chat's hooks run inside the sandbox, so what
   they report is the chat's own claim, never proof that a hook ran (#1069). A report the app
   does not take is shown in the chat's window rather than kept for later.
-- **Codex in a sandboxed project.** Codex's own sandbox resolves its paths again at every
-  command, so a running chat could move what charter's rules name, and none of the classes
-  would hold. Until charter runs Codex inside its own compiled sandbox, as it runs opencode
-  (#1123), a sandboxed project refuses Codex. A person can still start it without the sandbox,
-  and that choice is audited.
+- **What Codex keeps for itself.** A sandboxed project's Codex chats keep their Codex state
+  in a home of the project's own, which charter keeps outside the project and seeds with your
+  Codex login. They neither read nor write your own Codex home, nor another project's, so
+  nothing they write in Codex's own state reaches a conversation you resume outside the
+  sandbox; you resume theirs only through charter, in that project. What they write in their
+  own folder is another matter: a project file such as an instruction file (`AGENTS.md`, a
+  skills folder) is read by any later Codex started in that folder, unsandboxed too, as it is
+  for every harness. In the project's home, a chat can write what a Codex turn writes: the
+  threads' state, sessions, history, shell snapshots (which Codex runs before a
+  conversation's commands), its memories, goals and queue (which every conversation shares, a
+  resume hands the model, and Codex's own screen does not start without writing), locks, log,
+  installation id and a refreshed login. So one sandboxed Codex chat can influence what a
+  later sandboxed Codex chat of the same project loads, inside the sandbox, but never an
+  unsandboxed run's Codex state. It cannot write Codex's config, skills, plugins or helpers,
+  which a later Codex loads. Charter writes the project home's config itself: it marks each
+  chat's folder untrusted, so Codex loads no project-local config, hooks or exec policies
+  there, and it trusts exactly the hooks charter arms, so those run and nothing else does.
+  Codex checks certificates against the system's authorities, never ones a person added to
+  the keychain.
 - **A directory moved into place, for Claude Code.** Claude Code's own sandbox keeps a chat
   from writing a clone's git config and hooks, but cannot keep it from moving a whole `.git`
-  into place (#1065).
-- **Temp directories.** A wrapped opencode chat gets a temp directory of its own. Some macOS
+  into place (#1065). Charter's wrap holds this for opencode and Codex.
+- **Temp directories.** A wrapped opencode or Codex chat gets a temp directory of its own. Some macOS
   tools ignore `TMPDIR` and are refused (#1120).
 - **An embedded bare repository.** A chat can write a directory that git takes for a bare
   repository, and a git run *inside* it later reads its config. No protected name is in it,

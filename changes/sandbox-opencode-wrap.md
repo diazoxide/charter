@@ -22,7 +22,7 @@
 ### Security
 
 - **A sandboxed chat no longer writes what a program run later loads.** This holds for Claude
-  Code and opencode chats in every sandboxed project. Such a chat can no longer write any of
+  Code, opencode and Codex chats in every sandboxed project. Such a chat can no longer write any of
   these, at any depth of any directory it may write:
   - git's config and hooks, in every clone, worktree and submodule;
   - `.husky/` and `.githooks/`, the directory a `core.hooksPath` names, and every script a
@@ -51,12 +51,11 @@
   not one written to pass. Approving the profile is what vouches for its program. It also
   vouches for a path no word spells, in any encoding, and for a program that reads and runs
   such a file without being handed it. The check of a command's words catches mistakes; it is
-  not the boundary. That is to be charter's own wrap around every harness, which is not built
-  yet for Claude Code (#1123). A command word over 4 KiB is refused.
+  not the boundary. For opencode and Codex, the boundary is charter's own wrap around the whole
+  harness; Claude Code is not inside it yet (#1150). A command word over 4 KiB is refused.
 - **A project whose `charter.toml` cannot be read starts no chat.** Charter cannot tell whether
   such a project runs chats sandboxed. So it says so and starts nothing, rather than starting
   the chat unsandboxed.
-- **A sandboxed project no longer starts Codex.** Codex's own sandbox cannot be kept to the
-  rules charter compiles while it runs. So until charter runs Codex inside its own sandbox
-  (#1123), a sandboxed project refuses a Codex chat with a sentence that says so. A person can
-  still start it without the sandbox, and that choice is audited.
+- **Codex runs inside charter's own sandbox.** Codex's own sandbox could not be kept to the
+  rules charter compiles while it runs, so charter now runs Codex inside its own sandbox, as it
+  runs opencode (see *Codex chats run sandboxed on macOS*).

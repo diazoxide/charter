@@ -1,128 +1,554 @@
-//! **Held back (ruling V87f).** A sandboxed project refuses Codex until #1123 lands: Codex
-//! resolves its paths again at every command, so a running chat, or another chat that can
-//! write above its folder, could move what this profile names (measured). The compiler stays,
-//! for #1123 to run inside charter's own compiled sandbox, and nothing starts a chat with it
-//! ([`crate::harness::HarnessAdapter::sandbox_held_back`]).
+//! The policy compiled for Codex: charter's own Seatbelt profile around the whole harness
+//! (#1123, ADR 0067 §2), the same wrap opencode runs in ([`super::seatbelt`]), with Codex's own
+//! sandbox off inside it, and a Codex home of the project's own (D-88q).
 //!
-//! The policy compiled for Codex: flags that select a permissions profile charter names for
-//! this start alone, put last among the flags on the chat's line ([`super::Applied::line`]).
+//! Measured against codex-cli 0.147.0 on macOS 26.2, with `sandbox-exec`, real `codex exec`
+//! turns against a stand-in model server whose answers ran shell commands through Codex's own
+//! tool, and the compiler's own line:
 //!
-//! Read out of codex-cli 0.147.0's source (`rust-v0.147.0`) and measured against its binary on
-//! macOS, both through `codex sandbox` and through real `codex exec` and TUI turns against a
-//! stand-in model server:
-//!
-//! - **Workspace-write, set explicitly, as a profile.** The profile `extends = ":workspace"`,
-//!   Codex's own workspace-write, and is selected with `default_permissions`. It is not
-//!   `-s workspace-write`: that flag puts Codex on its legacy sandbox syntax, which reads no
-//!   profile, so the denied paths and the proxy below would be dropped with it (and a
-//!   `-s` in the chat's own command drops them too, which is why [`loosened_by`] refuses it).
-//! - **Paths.** A profile entry of `deny` keeps a path from being read or written; `read`
-//!   keeps a path under a writable root from being written. Measured: a command could not
-//!   read or list a denied directory, nor write a read-only one inside its workspace, nor
-//!   write outside its workspace and the temp directories; a path that does not exist yet
-//!   could not be created. Codex's in-process file tools (`view_image`) read through the same
-//!   policy (source).
-//! - **Egress through Codex's own proxy** (ADR 0067 §3: the harness's own proxy where it has
-//!   one). A profile's `network.enabled` alone opens the network whole: the proxy runs only
-//!   with the `network_proxy` feature (measured: with it turned off, an unlisted host
-//!   answered). With it, a listed host answered, an unlisted host was refused, and a
-//!   connection that skipped the proxy was refused. The feature is `experimental` in 0.147.0,
-//!   so it is turned on with `--enable network_proxy` rather than a `-c`: Codex refuses to
-//!   start, in the TUI, in `exec` and on `resume`, when `--enable` names a feature it does not
-//!   have (measured), so a Codex that has dropped the proxy never runs the profile open.
-//! - **A name no file has seen.** A config layer that names the same profile merges into it,
-//!   and its hosts are added (measured). The name is new at every start ([`flags`]), so no
-//!   file can name it first. `--enable network_proxy` replaces a table a lower layer gives
-//!   `features.network_proxy`, and its hosts with it (measured).
-//! - **The operator's own config and `-p` profiles cannot undo it.** A `~/.codex/config.toml`
-//!   holding `sandbox_mode = "danger-full-access"`, `approval_policy = "never"`,
-//!   `web_search = "live"` and a `[sandbox_workspace_write]` with the network on and an extra
-//!   writable root, and a `-p` profile holding all of those plus
-//!   `default_permissions = ":danger-full-access"` and `features.network_proxy = false`, each
-//!   left the profile whole: the denied file stayed unreadable, the extra root unwritable, the
-//!   unlisted host refused, escalation rejected without a prompt, and no web search offered
-//!   (measured, in `exec` and the TUI). Session flags select the profile syntax, and the
-//!   legacy `sandbox_mode` and `[sandbox_workspace_write]` are read only without it (source,
-//!   `resolve_permission_config_syntax`).
-//! - **No way out from inside the chat.** A command asking to run outside the sandbox, or with
-//!   more than it allows, is rejected rather than shown (measured in the TUI: no prompt, and
-//!   the model is told why); an unlisted host is refused without a prompt (measured). Only a
-//!   person reviews what is still asked, never a reviewing model. The live web search tool,
-//!   which fetches from the provider's side, is off (it was not offered to the model).
-//! - **The later-code class** (ruling V73b). Measured with `codex sandbox` on 0.147.0: Codex's
-//!   `:workspace` let a command write a clone's `.git/config` and `.git/hooks`, `.mcp.json`,
-//!   every harness's and editor's project config, shell startup files and `charter.toml`. An
-//!   exact `read` entry for each held it; a `deny` glob kept the name from being read and not
-//!   from being written. [`later_code`] gives each name exactly, where the chat's directory and
-//!   its clones are at the start. **This does not hold the class** (ruled 2026-10-03): a folder
-//!   that holds a name can be moved aside, changed and moved back (measured). Codex holds it
-//!   once charter runs it inside its own compiled sandbox, as it runs opencode (#1123).
-//! - **The credential store** is reachable from Codex's sandbox whenever its network is on
-//!   (measured on macOS: a command still queried the keychain), so a plane with a keyring vault
-//!   starts no sandboxed Codex chat. Unmeasured on Linux, and refused there too.
-//! - **Resume.** `codex resume` of a conversation that ran unsandboxed runs under the profile
-//!   it is handed now (measured).
-//! - **The chat's own words** can outrank what charter hands it: a flag of Codex's own, or a
-//!   `-c` key. [`loosened_by`] names each one that can, and the chat is refused.
-//! - **Features that may reach past the proxy** — the browser and computer-use features, stable
-//!   and unmeasured against the sandbox — are turned off with `--disable` until measured. `--full-auto`
-//!   is not among them: 0.147.0 refuses it as an unknown argument (measured).
+//! - **Why not Codex's own sandbox.** Codex resolves the paths of its own profile again at every
+//!   command, so a running chat, or another chat that can write above its folder, could move
+//!   what the profile names, and no class held (ruling V87f, measured). Charter's profile is
+//!   written once, as the kernel names each path when the chat starts.
+//! - **Why Codex's own sandbox is off inside it** (ruling V21 4). Seatbelt applies one profile
+//!   per process: under charter's, Codex's own `sandbox-exec` fails with `sandbox_apply:
+//!   Operation not permitted` and every command fails (measured). So Codex is handed
+//!   `--sandbox danger-full-access`, last among its flags, and charter's profile holds every
+//!   class for Codex and every command it runs. Measured under the wrap: what Codex's own sandbox
+//!   let through in earlier rounds is refused (a folder holding a protected name moved aside,
+//!   changed and moved back; the temp folder or the chat's folder swapped for a link), and what
+//!   its own sandbox refused is refused too (writing outside the chat's folder and temp folder,
+//!   a direct connection past the proxy).
+//! - **A Codex home of the project's own** (D-88q, tightening V73 and V73a). Codex keeps state
+//!   that every one of its threads shares and a later resume hands the model: each thread's
+//!   goals, its queue, the threads' table and the sessions a resume reads. A chat that could
+//!   write the operator's own home could plant instructions in a thread the operator later
+//!   resumes outside any sandbox (measured: a planted goal reached the model on a resume). So a
+//!   sandboxed project's Codex chats run with a home of their own under charter's data home
+//!   ([`super::Homes::codex_project`]), which only those chats, inside this wrap, ever use, and
+//!   the operator's own home is neither read nor written by them (only Codex's installed
+//!   program in it is read, to run it). Charter seeds the project's home before the wrap
+//!   ([`prepare`]): the operator's login, copied when the project's is missing or older, and a
+//!   config charter writes itself.
+//! - **What a turn writes in that home**: its sessions (a folder for each day, which a resume
+//!   reads), its threads' state, history, shell snapshots (which Codex sources before a
+//!   thread's commands), writer locks, log, its installation id, and its login, where a refresh
+//!   lands; and its memories, goals and queue ([`SHARED_STORES`], ruling D-88s), which Codex's
+//!   interactive screen opens to write at every start and does not start without (measured).
+//!   A turn was measured to stop without the locks and the id. Never written: its config (MCP
+//!   servers, hooks and what it trusts), its skills, plugins and helper links. No link is made
+//!   in it, and no folder but a day's sessions; a folder moved in under a date-shaped name is
+//!   taken out, with any link, at the next start ([`prepare`]).
+//! - **The residual** (D-88s). Every one of those stores is shared by the project's sandboxed
+//!   chats: one of them can change what a later sandboxed chat of the same project loads (its
+//!   memories, goals and queue, its sessions, shell snapshots and history), inside this wrap
+//!   only. It never reaches an unsandboxed run's Codex state: the operator's own home and other
+//!   projects' homes are neither read nor written. Per-chat isolation of the shared stores is
+//!   #1150.
+//! - **Trust.** The config charter writes marks the chat's folder and every folder above it
+//!   untrusted, so Codex asks nothing it could not save and loads no project-local config,
+//!   hooks or exec policies (measured: a persisted `untrusted` starts the TUI without asking).
+//!   It also trusts exactly the hooks charter arms (D-88r, [`hook_trust`]), and nothing else.
+//! - **What Codex still asks.** Its approval policy rejects what it would ask to run outside a
+//!   sandbox, rather than asking, and its live web search, which fetches from the provider's
+//!   side, is off. The features that may reach past the proxy stay off until measured.
+//! - **The network.** Only charter's egress proxy, and the socket the chat's hooks report on.
+//!   Codex's own requests go through the proxy (`HTTPS_PROXY`, measured), and the keychain's
+//!   service is not reachable, so a keyring vault is held. Codex checks a host's certificate
+//!   against the system's authorities in a file ([`ROOTS_ENV`]), since asking the keychain's
+//!   service is refused.
+//! - **The chat's own words** can still name a flag of Codex's own; [`loosened_by`] names each
+//!   one that would widen what charter hands Codex, and the chat is refused.
 
-use super::{Compiled, Uncompilable};
+use std::path::{Path, PathBuf};
+
+use super::seatbelt::{self, Own, quote, string, under};
+use super::{Access, Class, Compiled, Denial, Os, Uncompilable, Unheld};
 use crate::harness::Harness;
 
-/// The start of every profile name charter hands Codex.
-pub const PROFILE_PREFIX: &str = "charter-sandbox-";
-
-/// What a Codex chat is handed for the sandbox: flags, in order, that go last among the
-/// flags on its line.
+/// What a Codex chat is wrapped in, before the place it opens is known.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Flags {
-    pub args: Vec<String>,
-    /// The profile's name, new to this start.
-    pub name: String,
-    /// The profile's paths and their access: the denial classes', before the chat's directory
-    /// is known.
-    pub filesystem: Vec<(String, &'static str)>,
+pub struct Wrap {
+    /// Every path the chat is denied, with the keychain files and the operator's own Codex home
+    /// among them.
+    pub denied: Vec<Denial>,
+    /// The hosts its proxy carries.
+    pub hosts: Vec<String>,
+    /// The project's own Codex home (D-88q), of which only what a turn writes is writable.
+    pub home: Option<PathBuf>,
+    /// The operator's own Codex home, which the project's is seeded from and a chat never
+    /// reaches.
+    pub operator: Option<PathBuf>,
 }
 
-/// `compiled`, for Codex, under a profile name new to this start — or the class it cannot
-/// hold on this machine.
-pub fn flags(compiled: &Compiled) -> Result<Flags, Uncompilable> {
-    flags_named(
-        compiled,
-        &format!("{PROFILE_PREFIX}{}", uuid::Uuid::new_v4().simple()),
-    )
+/// The folders in the project's Codex home a turn writes into, each everything under it and
+/// never itself.
+pub const HOME_DIRS: [&str; 5] = [
+    "sessions",
+    "archived_sessions",
+    "shell_snapshots",
+    "thread-writer-locks",
+    "log",
+];
+
+/// The files in the project's Codex home a turn writes, besides its state databases: its
+/// history, its installation id, and its login, which a refresh rewrites.
+pub const HOME_FILES: [&str; 3] = ["history.jsonl", "installation_id", "auth.json"];
+
+/// The state databases every thread of the project shares and a resume hands the model: written
+/// by a chat in its own project's home only (ruling D-88s, amending D-88q), since Codex's
+/// interactive screen does not start without writing them (measured). They are what one
+/// sandboxed chat can leave for a later one of the same project, never for an unsandboxed run.
+pub const SHARED_STORES: [&str; 3] = ["memories", "goals", "queue"];
+
+/// The variable that names Codex's home.
+pub const HOME_ENV: &str = "CODEX_HOME";
+
+/// What in the operator's own Codex home a wrapped chat may still read: Codex's installed
+/// program, which the chat runs.
+pub const PROGRAMS: &str = "packages";
+
+/// `compiled`, for Codex, or why it cannot be wrapped on this system. The Linux wrap is #1040.
+pub fn wrap(compiled: &Compiled) -> Result<Wrap, Uncompilable> {
+    if compiled.os != Os::MacOs {
+        return Err(Uncompilable {
+            harness: Harness::Codex,
+            unheld: Unheld::Wrap(compiled.os),
+        });
+    }
+    let mut denied = compiled.denied.paths.clone();
+    denied.extend(seatbelt::keychains(compiled.homes.home.as_deref()));
+    // D-88q: the operator's own home, where every thread the operator resumes keeps its state.
+    if let Some(operator) = &compiled.homes.codex {
+        denied.push(Denial {
+            class: Class::LaterCode,
+            path: operator.clone(),
+            access: Access::ReadWrite,
+        });
+    }
+    Ok(Wrap {
+        denied,
+        hosts: compiled.hosts.clone(),
+        home: compiled.homes.codex_project.clone(),
+        operator: compiled.homes.codex.clone(),
+    })
 }
 
-/// `compiled`, for Codex, as the profile `name`.
-pub(super) fn flags_named(compiled: &Compiled, name: &str) -> Result<Flags, Uncompilable> {
-    compiled.holds_every_service(Harness::Codex)?;
-    let paths: Vec<(String, &'static str)> = compiled
-        .denied
-        .paths
-        .iter()
-        .map(|denial| {
-            let access = match denial.access {
-                super::Access::ReadWrite => "deny",
-                super::Access::Write => "read",
-            };
-            (denial.path.display().to_string(), access)
-        })
-        .collect();
-    let filesystem = table(&paths);
-    let domains: toml::Table = compiled
-        .hosts
-        .iter()
-        .map(|host| (host.clone(), toml::Value::from("allow")))
-        .collect();
-    let profile = toml::toml! {
-        extends = ":workspace"
-        filesystem = filesystem
-        [network]
-        enabled = true
-        domains = domains
+impl Wrap {
+    /// What the wrap lets a chat write in the project's Codex home, besides its state databases.
+    pub fn writable(&self) -> Vec<PathBuf> {
+        let Some(home) = &self.home else {
+            return Vec::new();
+        };
+        HOME_DIRS
+            .iter()
+            .chain(HOME_FILES.iter())
+            .map(|name| home.join(name))
+            .collect()
+    }
+}
+
+/// The project's Codex home, made ready before the wrap for a chat in `cwd` armed with
+/// `armed`, which lets a chat make none of it, and only once the chat's line is built:
+/// - its folders, empty, where missing, and the home itself readable by its owner alone;
+/// - in its folders, every link and every folder that is not a day's sessions taken out, so
+///   nothing a chat moved in under a date-shaped name stays;
+/// - the operator's login, copied where the project's is missing, older, dated in the future,
+///   or of another account ([`seed_login`]);
+/// - its config, written by charter alone: `cwd` and every folder above it untrusted, and
+///   trust for exactly the hooks charter armed ([`hook_trust`]).
+///
+/// What cannot be made is left to Codex, which then stops.
+pub fn prepare(wrap: &Wrap, cwd: &Path, armed: &[String]) {
+    let Some(home) = &wrap.home else { return };
+    for dir in HOME_DIRS {
+        let _ = std::fs::create_dir_all(home.join(dir));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(home, std::fs::Permissions::from_mode(0o700));
+    }
+    for dir in HOME_DIRS {
+        let depth = if DAY_DIRS.contains(&dir) { 3 } else { 0 };
+        tidy(&home.join(dir), depth);
+    }
+    if let Some(operator) = &wrap.operator {
+        seed_login(&operator.join("auth.json"), &home.join("auth.json"));
+    }
+    write_config(&home.join("config.toml"), cwd, hook_trust(armed));
+}
+
+/// The folders of the project's Codex home that hold a folder for each day.
+const DAY_DIRS: [&str; 2] = ["sessions", "archived_sessions"];
+
+/// Below `dir`, without following a link: every link taken out, and every folder that is not
+/// `folders` deep in a day's tree (`YYYY/MM/DD`), with all it holds; a regular file stays.
+fn tidy(dir: &Path, folders: usize) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
     };
+    let width = [4, 2, 2];
+    let level = 3 - folders.min(3);
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        let name = entry.file_name();
+        let dated = folders > 0
+            && name.to_str().is_some_and(|name| {
+                name.len() == width[level] && name.bytes().all(|b| b.is_ascii_digit())
+            });
+        if kind.is_symlink() {
+            let _ = std::fs::remove_file(&path);
+        } else if kind.is_dir() {
+            if dated {
+                tidy(&path, folders - 1);
+            } else {
+                let _ = std::fs::remove_dir_all(&path);
+            }
+        }
+    }
+}
+
+/// Who a Codex login at `path` signs in as: its API key, or its account, or `None` where it
+/// says neither.
+fn account_of(path: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let login: serde_json::Value = serde_json::from_str(&text).ok()?;
+    if let Some(key) = login
+        .get("OPENAI_API_KEY")
+        .and_then(serde_json::Value::as_str)
+        .filter(|key| !key.is_empty())
+    {
+        return Some(format!("key:{key}"));
+    }
+    login
+        .get("tokens")
+        .and_then(|tokens| tokens.get("account_id"))
+        .and_then(serde_json::Value::as_str)
+        .map(|account| format!("account:{account}"))
+}
+
+/// The operator's login at `from` copied to `to`, where `to` is missing, older, dated in the
+/// future, or of another account than `from` (a chat may write the project's login, which a
+/// refresh rewrites, and so could put another account there and date it ahead). Neither is
+/// followed if it is a link: a regular file is copied over a regular file, or nothing is done.
+fn seed_login(from: &Path, to: &Path) {
+    let regular = |path: &Path| {
+        std::fs::symlink_metadata(path)
+            .ok()
+            .filter(std::fs::Metadata::is_file)
+    };
+    let Some(source) = regular(from) else { return };
+    let stale = match std::fs::symlink_metadata(to) {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => true,
+        Ok(target) if target.is_file() => {
+            let now = std::time::SystemTime::now();
+            match (source.modified(), target.modified()) {
+                (Ok(source), Ok(target)) => {
+                    target < source || target > now || account_of(from) != account_of(to)
+                }
+                _ => true,
+            }
+        }
+        // A link, or anything else, in its place: replaced by a regular file.
+        _ => true,
+    };
+    if !stale {
+        return;
+    }
+    let Ok(text) = std::fs::read(from) else {
+        return;
+    };
+    replace(to, &text, 0o600);
+}
+
+/// `bytes` put at `path` whole: written to a temp file of this start's own, made fresh and
+/// never through a link, then renamed over `path`, which replaces the entry rather than writing
+/// through it. Two starts at once each write their own, and the last rename wins.
+fn replace(path: &Path, bytes: &[u8], mode: u32) {
+    use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static MADE: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_nanos());
+    let Some(name) = path.file_name() else { return };
+    let temp = path.with_file_name(format!(
+        "{}.charter-{}-{}-{nanos}",
+        name.to_string_lossy(),
+        std::process::id(),
+        MADE.fetch_add(1, Ordering::SeqCst)
+    ));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(mode).custom_flags(libc::O_NOFOLLOW);
+    }
+    #[cfg(not(unix))]
+    let _ = mode;
+    let Ok(mut file) = options.open(&temp) else {
+        return;
+    };
+    if file.write_all(bytes).is_ok() && file.sync_all().is_ok() {
+        let _ = std::fs::rename(&temp, path);
+    } else {
+        let _ = std::fs::remove_file(&temp);
+    }
+}
+
+/// The source Codex names the hooks given with `-c` by, in a trust record's key.
+const SESSION_FLAGS: &str = "/<session-flags>/config.toml";
+
+/// Codex's records of trust for exactly the hooks in `armed`, charter's own `-c hooks.<Event>=…`
+/// words, keyed and hashed as codex-cli 0.147.0 keys and hashes them (its `hooks` discovery):
+/// `<source>:<event>:<group>:<hook>`, and `sha256:` of the compact, key-sorted JSON of the
+/// event, the group's matcher where the event takes one, and the one hook with its timeout
+/// normalised. A record for another hook, or a hook changed since, does not match, so nothing
+/// else is trusted. Measured: a record charter computed matched the one Codex's own "Trust
+/// all" wrote.
+pub fn hook_trust(armed: &[String]) -> toml::Table {
+    let mut state = toml::Table::new();
+    let mut words = armed.iter();
+    while let Some(word) = words.next() {
+        if word != "-c" {
+            continue;
+        }
+        let Some(pair) = words.next() else { break };
+        let Some((key, value)) = pair.split_once('=') else {
+            continue;
+        };
+        let Some(event) = key.strip_prefix("hooks.").and_then(event_label) else {
+            continue;
+        };
+        let Ok(parsed) = format!("v = {value}").parse::<toml::Table>() else {
+            continue;
+        };
+        let Some(groups) = parsed.get("v").and_then(toml::Value::as_array) else {
+            continue;
+        };
+        for (group_at, group) in groups.iter().enumerate() {
+            let matcher = group
+                .get("matcher")
+                .and_then(toml::Value::as_str)
+                .filter(|_| !matches!(event, "stop" | "user_prompt_submit"));
+            let hooks = group.get("hooks").and_then(toml::Value::as_array);
+            for (hook_at, hook) in hooks.into_iter().flatten().enumerate() {
+                let Some(hash) = hook_hash(event, matcher, hook) else {
+                    continue;
+                };
+                let mut record = toml::Table::new();
+                record.insert("trusted_hash".to_owned(), toml::Value::from(hash));
+                state.insert(
+                    format!("{SESSION_FLAGS}:{event}:{group_at}:{hook_at}"),
+                    toml::Value::Table(record),
+                );
+            }
+        }
+    }
+    state
+}
+
+/// Codex's key label for the event a `-c hooks.<Event>` names.
+fn event_label(event: &str) -> Option<&'static str> {
+    Some(match event {
+        "PreToolUse" => "pre_tool_use",
+        "PermissionRequest" => "permission_request",
+        "PostToolUse" => "post_tool_use",
+        "PreCompact" => "pre_compact",
+        "PostCompact" => "post_compact",
+        "SessionStart" => "session_start",
+        "SessionEnd" => "session_end",
+        "UserPromptSubmit" => "user_prompt_submit",
+        "SubagentStart" => "subagent_start",
+        "SubagentStop" => "subagent_stop",
+        "Stop" => "stop",
+        _ => return None,
+    })
+}
+
+/// The hash Codex keeps a command hook's trust under, or `None` for a hook that is not one
+/// charter arms (only `command` hooks, without async, Windows commands or status lines).
+fn hook_hash(event: &str, matcher: Option<&str>, hook: &toml::Value) -> Option<String> {
+    use sha2::Digest;
+    let hook = hook.as_table()?;
+    if hook.get("type").and_then(toml::Value::as_str) != Some("command")
+        || hook
+            .keys()
+            .any(|key| !["type", "command", "timeout"].contains(&key.as_str()))
+    {
+        return None;
+    }
+    let command = hook.get("command")?.as_str()?;
+    let timeout = hook
+        .get("timeout")
+        .map(|timeout| timeout.as_integer().and_then(|it| u64::try_from(it).ok()))
+        .unwrap_or(None);
+    let timeout = if event == "session_end" {
+        timeout.unwrap_or(1).clamp(1, 3)
+    } else {
+        timeout.unwrap_or(600).max(1)
+    };
+    // Inserted in key order, which is Codex's canonical form, whether or not the map keeps its
+    // keys sorted itself.
+    let mut group = serde_json::Map::new();
+    group.insert("event_name".to_owned(), serde_json::Value::from(event));
+    group.insert(
+        "hooks".to_owned(),
+        serde_json::json!([{
+            "async": false,
+            "command": command,
+            "timeout": timeout,
+            "type": "command",
+        }]),
+    );
+    if let Some(matcher) = matcher {
+        group.insert("matcher".to_owned(), serde_json::Value::from(matcher));
+    }
+    let text = serde_json::to_vec(&serde_json::Value::Object(group)).ok()?;
+    let hex: String = sha2::Sha256::digest(&text)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    Some(format!("sha256:{hex}"))
+}
+
+/// The config charter writes into the project's Codex home: the folders it marked before, as
+/// charter wrote them, with `cwd` and every folder above it marked untrusted, and `trust` as
+/// the hooks' trust records, replacing any before.
+fn write_config(path: &Path, cwd: &Path, trust: toml::Table) {
+    let mut projects = std::fs::symlink_metadata(path)
+        .ok()
+        .filter(std::fs::Metadata::is_file)
+        .and_then(|_| std::fs::read_to_string(path).ok())
+        .and_then(|text| text.parse::<toml::Table>().ok())
+        .and_then(|mut top| top.remove("projects"))
+        .and_then(|projects| match projects {
+            toml::Value::Table(table) => Some(table),
+            _ => None,
+        })
+        .unwrap_or_default();
+    let real = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+    for dir in real.ancestors().filter(|dir| dir.parent().is_some()) {
+        let mut entry = toml::Table::new();
+        entry.insert("trust_level".to_owned(), toml::Value::from("untrusted"));
+        projects.insert(dir.display().to_string(), toml::Value::Table(entry));
+    }
+    let mut top = toml::Table::new();
+    top.insert("projects".to_owned(), toml::Value::Table(projects));
+    if !trust.is_empty() {
+        let mut hooks = toml::Table::new();
+        hooks.insert("state".to_owned(), toml::Value::Table(trust));
+        top.insert("hooks".to_owned(), toml::Value::Table(hooks));
+    }
+    let text = format!(
+        "# Written by charter for this project's sandboxed Codex chats; rewritten at every \
+         start.\n{top}"
+    );
+    replace(path, text.as_bytes(), 0o600);
+}
+
+/// The variable that hands Codex the certificate authorities it checks a host against, read
+/// from a file rather than asked of the keychain's service, which the wrap does not let a chat
+/// reach: without it, every HTTPS request Codex made under the wrap failed, and with it a listed
+/// host answered through the proxy and an unlisted one was refused (measured). Authorities a
+/// person added to the keychain are not among them.
+pub const ROOTS_ENV: &str = "SSL_CERT_FILE";
+
+/// The system's own certificate authorities, as macOS keeps them in a file.
+pub const ROOTS: &str = "/etc/ssl/cert.pem";
+
+/// Why a chat is not wrapped: its directory holds Codex's home, or is inside it.
+pub const OVERLAP: &str = "charter cannot wrap a Codex chat whose directory holds Codex's own \
+                           files, or is inside them";
+
+/// The Seatbelt profile for a chat in `cwd`, with its own temp directory `tmp`, reaching the
+/// network through the proxy on `proxy_port` and reporting on `hook_socket`.
+pub fn profile(
+    wrap: &Wrap,
+    cwd: &Path,
+    tmp: &Path,
+    proxy_port: u16,
+    hook_socket: Option<&Path>,
+) -> Result<String, &'static str> {
+    seatbelt::profile(&wrap.denied, &own(wrap)?, cwd, tmp, proxy_port, hook_socket)
+}
+
+/// What a wrapped Codex keeps for itself.
+fn own(wrap: &Wrap) -> Result<Own, &'static str> {
+    let mut own = Own {
+        overlap: OVERLAP,
+        ..Own::default()
+    };
+    own.dirs.extend(wrap.operator.iter().cloned());
+    // Codex's installed program, in the operator's home, is read to be run, never written.
+    if let Some(operator) = &wrap.operator {
+        own.after.push(format!(
+            "(allow file-read* (subpath {}))",
+            quote(&operator.join(PROGRAMS))?
+        ));
+    }
+    let Some(home) = &wrap.home else {
+        return Ok(own);
+    };
+    own.dirs.push(home.clone());
+    // No other project's Codex home is read: their sessions are their own. The folder of homes
+    // itself is looked up, never listed (measured: without its metadata no path below it
+    // resolves).
+    if let Some(homes) = home.parent() {
+        own.deny
+            .push(format!("(deny file-read* (subpath {}))", quote(homes)?));
+        own.after.push(format!(
+            "(allow file-read-metadata (literal {}))",
+            quote(homes)?
+        ));
+        own.after
+            .push(format!("(allow file-read* (subpath {}))", quote(home)?));
+    }
+    own.allow.push(format!(
+        "(regex {})",
+        string(&under(
+            home,
+            "[a-z_]+_[0-9]+\\.sqlite(-wal|-shm|-journal)?$"
+        ))?
+    ));
+    own.allow.push(format!(
+        "(regex {})",
+        string(&under(home, &format!("({})/.+", HOME_DIRS.join("|"))))?
+    ));
+    for file in HOME_FILES {
+        own.allow
+            .push(format!("(literal {})", quote(&home.join(file))?));
+    }
+    own.roots.extend(HOME_DIRS.iter().map(|dir| home.join(dir)));
+    // No link made where a later Codex writes, which it would write through, and no folder
+    // made but a day's sessions. A folder can still be moved in under a date-shaped name with
+    // links or anything else in it (a rename is a create here): [`prepare`] takes those out
+    // before the next chat starts, and nothing outside the wrap reads this home.
+    own.deny.push(format!(
+        "(deny file-write-create (require-all (vnode-type SYMLINK) (subpath {})))",
+        quote(home)?
+    ));
+    own.deny.push(format!(
+        "(deny file-write-create (require-all (vnode-type DIRECTORY) (subpath {}) (require-not \
+         (regex {}))))",
+        quote(home)?,
+        string(&under(
+            home,
+            "(sessions|archived_sessions)/[0-9][0-9][0-9][0-9](/[0-9][0-9](/[0-9][0-9])?)?$"
+        ))?
+    ));
+    Ok(own)
+}
+
+/// The flags that go last among a wrapped Codex's flags: its own sandbox off, since it cannot
+/// be applied inside charter's (ruling V21 4); what it would ask rejected rather than asked; no
+/// web search; and the features unmeasured against the wrap off.
+pub fn flags() -> Vec<String> {
     let approval = toml::toml! {
         [granular]
         sandbox_approval = false
@@ -131,8 +557,7 @@ pub(super) fn flags_named(compiled: &Compiled, name: &str) -> Result<Flags, Unco
         rules = true
         mcp_elicitations = true
     };
-
-    let mut args = vec!["--enable".to_owned(), PROXY_FEATURE.to_owned()];
+    let mut args = vec!["--sandbox".to_owned(), "danger-full-access".to_owned()];
     for feature in UNMEASURED_FEATURES {
         args.push("--disable".to_owned());
         args.push(feature.to_owned());
@@ -141,119 +566,11 @@ pub(super) fn flags_named(compiled: &Compiled, name: &str) -> Result<Flags, Unco
         args.push("-c".to_owned());
         args.push(format!("{key}={value}"));
     };
-    set("default_permissions", toml::Value::from(name));
-    set(&format!("permissions.{name}"), toml::Value::Table(profile));
     set("approval_policy", toml::Value::Table(approval));
     set("approvals_reviewer", toml::Value::from("user"));
     set("web_search", toml::Value::from("disabled"));
-    Ok(Flags {
-        args,
-        name: name.to_owned(),
-        filesystem: paths,
-    })
+    args
 }
-
-/// `paths` as a profile's `filesystem` table.
-fn table(paths: &[(String, &'static str)]) -> toml::Table {
-    paths
-        .iter()
-        .map(|(path, access)| (path.clone(), toml::Value::from(*access)))
-        .collect()
-}
-
-/// The flags that keep a Codex chat in `cwd` from writing the later-code names (ruling V73b)
-/// directly, which does not hold the class (see the module's docs): the profile's
-/// paths again, with every [`super::PLANTED`] name that holds what is below it made read-only
-/// in `cwd` and in each clone found below it when the chat starts.
-///
-/// Codex reads a path as `read` only exactly, and a glob only as `deny`, which was measured
-/// to keep a command from reading the name and not from writing it. So the names are given
-/// as exact paths, in the places a clone is when the chat starts. A clone the chat makes later
-/// is not among them, and the `.git` itself cannot be held without making all of it
-/// read-only (#1065). A later `-c` replaces the profile's paths whole (measured), so the
-/// classes' are given again.
-pub fn later_code(flags: &Flags, cwd: &std::path::Path) -> Vec<String> {
-    let mut filesystem = table(&flags.filesystem);
-    let dirs = super::planted::directories(cwd);
-    let clones = super::planted::clones(&dirs);
-    let mut paths = Vec::new();
-    for base in std::iter::once(cwd.to_path_buf()).chain(clones.iter().cloned()) {
-        for planted in super::PLANTED
-            .iter()
-            .filter(|planted| planted.reach == super::Reach::AndBelow)
-        {
-            match planted.path.split_once("/**/") {
-                // A name inside every submodule's git directory, found now.
-                Some((_, tail)) => {
-                    for git_dir in super::planted::git_dirs(&base) {
-                        for module in super::planted::module_git_dirs(&git_dir) {
-                            paths.push(module.join(tail));
-                        }
-                    }
-                }
-                None => paths.push(base.join(planted.path)),
-            }
-        }
-    }
-    for path in paths {
-        filesystem
-            .entry(path.display().to_string())
-            .or_insert_with(|| toml::Value::from("read"));
-    }
-    // Each directory between the chat's own and a denied path is made read-only, so it is never
-    // moved away with the denied path in it and replaced, and what is in it now stays writable
-    // (a more exact entry wins, measured). Measured: without it a plane-root chat moved
-    // `.charter` aside and wrote `.charter/app`. Not inside a `.git`, where git makes new files
-    // at every commit; that is #1065. Nor the chat's own directory, which Codex can hold only by
-    // making it read-only; charter's own sandbox around Codex holds it (#1123).
-    let denied: Vec<std::path::PathBuf> = flags
-        .filesystem
-        .iter()
-        .map(|(path, _)| std::path::PathBuf::from(path))
-        .collect();
-    let mut pinned = Vec::new();
-    for path in &denied {
-        for ancestor in super::ancestors_within(path, cwd) {
-            if ancestor.components().any(|part| part.as_os_str() == ".git") {
-                break;
-            }
-            if !pinned.contains(&ancestor) {
-                pinned.push(ancestor);
-            }
-        }
-    }
-    // Never a `write` at or under a path that is denied or made read-only, a pinned directory
-    // that is itself denied among them: the more exact entry would win over the denial.
-    let held: Vec<std::path::PathBuf> = filesystem.keys().map(std::path::PathBuf::from).collect();
-    for ancestor in &pinned {
-        filesystem.insert(ancestor.display().to_string(), toml::Value::from("read"));
-    }
-    for ancestor in &pinned {
-        let Ok(entries) = std::fs::read_dir(ancestor) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let child = entry.path();
-            if held.iter().any(|path| child.starts_with(path)) {
-                continue;
-            }
-            filesystem
-                .entry(child.display().to_string())
-                .or_insert_with(|| toml::Value::from("write"));
-        }
-    }
-    vec![
-        "-c".to_owned(),
-        format!(
-            "permissions.{}.filesystem={}",
-            flags.name,
-            toml::Value::Table(filesystem)
-        ),
-    ]
-}
-
-/// The feature whose proxy holds the egress.
-const PROXY_FEATURE: &str = "network_proxy";
 
 /// Features that are stable in 0.147.0 and may reach the network from Codex's own process,
 /// past the proxy: unmeasured against the sandbox, so off in a sandboxed chat until they are.
@@ -262,13 +579,14 @@ const PROXY_FEATURE: &str = "network_proxy";
 /// lists as removed).
 const UNMEASURED_FEATURES: [&str; 3] = ["browser_use", "computer_use", "in_app_browser"];
 
-/// Flags of Codex's own that drop or widen the sandbox charter hands it, each measured on
-/// codex-cli 0.147.0 or read from its source: `-s` of any value and the bypass put Codex back
-/// on a sandbox that reads no profile, `--add-dir` and `--cd` move what is writable,
-/// `--approve-for-me` routes what is asked to a reviewing model, and `--search` turns the web
-/// search back on. `--enable` and `--disable` because what a feature does to the sandbox is
-/// unmeasured, one feature at a time, and `--disable network_proxy` opens the network whole
-/// (measured). The hidden aliases are Codex's own (`--yolo`, `--not-so-yolo`).
+/// Flags of Codex's own that would change what charter hands it, each measured on codex-cli
+/// 0.147.0 or read from its source: `-s` of any value and the bypass outrank the flags charter
+/// puts last, `--add-dir` and `--cd` move where it works, `--approve-for-me` routes what is
+/// asked to a reviewing model, and `--search` turns the web search back on. `--enable` and
+/// `--disable` because what a feature does under the wrap is unmeasured, one feature at a time.
+/// The hidden aliases are Codex's own (`--yolo`, `--not-so-yolo`). Charter's wrap binds Codex
+/// whatever its flags say; a chat naming one is still refused, so what Codex is handed is
+/// always charter's.
 const LOOSENING: [&str; 12] = [
     "-s",
     "--sandbox",

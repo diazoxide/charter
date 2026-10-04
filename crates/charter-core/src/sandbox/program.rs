@@ -18,7 +18,9 @@
 //! - **Nor a command that names a file there** (D-88g). Every other word of the command is held
 //!   to the same places, wherever in the word a path begins: an interpreter outside, handed a
 //!   script a chat wrote, runs the chat's code. A word that names no file is left alone. This
-//!   is a lint that catches mistakes (D-88k); the boundary is to be charter's wrap (#1123).
+//!   is a lint that catches mistakes (D-88k). Where charter wraps the whole harness (opencode
+//!   and Codex, on macOS), the wrap is the boundary; Claude Code is not wrapped, because
+//!   Seatbelt cannot apply its own sandbox inside charter's (#1150).
 //! - **Claude Code answers as Claude Code.** Its program and command, asked `--version`, must
 //!   answer a line `X.Y.Z (Claude Code)`. A legitimate wrapper outside the plane passes its words
 //!   through and answers the same. It is asked with the chat's own environment, in the chat's
@@ -36,8 +38,20 @@ use std::time::{Duration, Instant};
 use super::NotStarted;
 use crate::harness::Harness;
 
-/// How long a program has to answer `--version`.
-const PATIENCE: Duration = Duration::from_secs(5);
+/// How long a program has to answer `--version`. Generous: a program the system has not seen
+/// before is assessed on its first run, and a cold start under `sandbox-exec` was measured past
+/// five seconds; a program that does not answer in time is told apart from one that answers
+/// wrong ([`NotStarted::ProbeTimedOut`]).
+pub const PATIENCE: Duration = Duration::from_secs(10);
+
+/// Why a program gave no answer to `--version` charter could read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unanswered {
+    /// It did not finish answering within [`PATIENCE`].
+    TimedOut,
+    /// It could not be run, or it failed.
+    Failed,
+}
 
 /// The longest command word a sandboxed start checks; a longer one is refused (D-88k).
 pub const WORD_MAX: usize = 4096;
@@ -112,7 +126,7 @@ pub fn checked(
     // Ruling D-88g: an interpreter outside, handed a file the chat wrote, runs the chat's code.
     // So every other word is held to the same places, wherever in the word a path begins.
     // Ruling D-88k: this is a lint that catches a mistake, bounded so it stays one; charter's
-    // own wrap around every harness (#1123) is the boundary.
+    // own wrap around the harness, where charter wraps it, is the boundary.
     if words[1..].iter().any(|word| word.len() > WORD_MAX) {
         return Err(NotStarted::WordTooLong);
     }
@@ -127,11 +141,13 @@ pub fn checked(
     words[0] = real.display().to_string();
     if harness == Harness::ClaudeCode {
         let said = match probe {
-            Some(probe) => probe(&words),
+            Some(probe) => probe(&words).ok_or(Unanswered::Failed),
             None => version_of(&words, chat),
         };
-        if !said.is_some_and(|said| is_claude_code(&said)) {
-            return Err(NotStarted::NotTheHarness(harness));
+        match said {
+            Ok(said) if is_claude_code(&said) => {}
+            Err(Unanswered::TimedOut) => return Err(NotStarted::ProbeTimedOut(harness)),
+            Ok(_) | Err(Unanswered::Failed) => return Err(NotStarted::NotTheHarness(harness)),
         }
     }
     Ok(words)
@@ -404,15 +420,44 @@ pub fn is_claude_code(said: &str) -> bool {
 
 /// What `words` answer to `--version`, run in `chat`'s folder with `chat`'s environment (and
 /// the app's `HOME` and `PATH`, which every chat also gets), within [`PATIENCE`] and at most
-/// [`ANSWER_MAX`] bytes, or `None`.
+/// [`ANSWER_MAX`] bytes, or why there is none.
+///
+/// **Inside charter's wrap** (D-88k), on macOS: the probe is the first time charter runs the
+/// program, so it runs under a profile that lets it write nothing but a temp directory of its
+/// own (its `TMPDIR`, removed after) and reach no network ([`super::seatbelt::probe_profile`]).
+/// A command that loads a file a chat wrote gets nothing out of the probe.
 ///
 /// The program runs in a process group of its own, and the whole group is killed when it does
 /// not answer in time. A child that left the group and holds the answer's pipe open does not
 /// hold the start up: the answer is read on a thread of its own, and given up on at the
 /// deadline.
-pub fn version_of(words: &[String], chat: Chat<'_>) -> Option<String> {
-    let (program, rest) = words.split_first()?;
-    let mut command = std::process::Command::new(program);
+pub fn version_of(words: &[String], chat: Chat<'_>) -> Result<String, Unanswered> {
+    answer_of(words, chat, &mut |_| {})
+}
+
+/// [`version_of`], telling `seen` the id of the probe's process, which leads its process
+/// group: a test's way to see that the whole group is gone after.
+pub(crate) fn answer_of(
+    words: &[String],
+    chat: Chat<'_>,
+    seen: &mut dyn FnMut(u32),
+) -> Result<String, Unanswered> {
+    let failed = Unanswered::Failed;
+    let (program, rest) = words.split_first().ok_or(failed)?;
+    // D-88k: inside charter's own wrap, which writes nothing but its own temp directory and
+    // reaches no network. On macOS; the Linux wrap is #1040, and there it runs as before.
+    let tmp = tempfile::Builder::new()
+        .prefix("charter-probe-")
+        .tempdir()
+        .map_err(|_| failed)?;
+    let mut command = if cfg!(target_os = "macos") {
+        let profile = super::seatbelt::probe_profile(tmp.path()).map_err(|_| failed)?;
+        let mut wrapped = std::process::Command::new(super::backend::SANDBOX_EXEC);
+        wrapped.args(["-p", &profile]).arg(program);
+        wrapped
+    } else {
+        std::process::Command::new(program)
+    };
     command
         .args(rest)
         .arg("--version")
@@ -427,13 +472,15 @@ pub fn version_of(words: &[String], chat: Chat<'_>) -> Option<String> {
         }
     }
     command.envs(chat.env.iter().map(|(key, value)| (key, value)));
+    command.env("TMPDIR", tmp.path());
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
-    let mut child = crate::forklock::spawn(&mut command).ok()?;
-    let stdout = child.stdout.take()?;
+    let mut child = crate::forklock::spawn(&mut command).map_err(|_| failed)?;
+    seen(child.id());
+    let stdout = child.stdout.take().ok_or(failed)?;
     let (sender, answer) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let mut out = Vec::new();
@@ -446,6 +493,7 @@ pub fn version_of(words: &[String], chat: Chat<'_>) -> Option<String> {
     while !exited(&mut child) && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
     }
+    let in_time = exited(&mut child);
     // Its own children may still hold the answer's pipe open: the group goes too.
     #[cfg(unix)]
     {
@@ -453,15 +501,19 @@ pub fn version_of(words: &[String], chat: Chat<'_>) -> Option<String> {
         let _ = kill_process_group(Pid::from_child(&child), Signal::KILL);
     }
     let _ = child.kill();
-    let status = child.wait().ok()?;
+    let status = child.wait().map_err(|_| failed)?;
+    if !in_time {
+        return Err(Unanswered::TimedOut);
+    }
     // A child that left the group and kept the pipe cannot hold the start past the deadline.
     let left = deadline.saturating_duration_since(Instant::now());
     let out = answer
         .recv_timeout(left.max(Duration::from_millis(100)))
-        .ok()?;
+        .map_err(|_| Unanswered::TimedOut)?;
     status
         .success()
         .then(|| String::from_utf8_lossy(&out).trim().to_owned())
+        .ok_or(failed)
 }
 
 /// Whether `child` has exited, leaving it unreaped.
@@ -1010,95 +1062,129 @@ mod tests {
     #[test]
     fn a_program_that_hangs_is_refused_and_its_whole_group_is_killed() {
         let fx = Fixture::new();
-        let pid_file = fx.outside.path().join("pid");
-        let hang = stand_in::program(
-            fx.outside.path(),
-            "claude",
-            &format!(
-                "#!/bin/sh\nsleep 60 &\necho $! > '{}'\nwait\n",
-                pid_file.display()
-            ),
-        );
+        let hang = stand_in::program(fx.outside.path(), "claude", "#!/bin/sh\nsleep 60 &\nwait\n");
         let began = Instant::now();
-        assert_eq!(
-            fx.check(Harness::ClaudeCode, &hang, &[], None),
-            Err(NotStarted::NotTheHarness(Harness::ClaudeCode))
+        let mut probe = None;
+        let said = answer_of(
+            &[hang.display().to_string()],
+            Chat {
+                cwd: &fx.cwd(),
+                writable: &[],
+                env: &[],
+            },
+            &mut |pid| probe = Some(pid),
         );
+        assert_eq!(said, Err(Unanswered::TimedOut));
         assert!(
-            began.elapsed() < Duration::from_secs(10),
+            began.elapsed() < PATIENCE + Duration::from_secs(5),
             "{:?}",
             began.elapsed()
         );
-        let pid = std::fs::read_to_string(&pid_file).expect("the child's pid");
-        std::thread::sleep(Duration::from_millis(100));
-        let alive =
-            crate::forklock::status(std::process::Command::new("kill").args(["-0", pid.trim()]))
-                .expect("kill runs");
-        assert!(!alive.success(), "the wrapper's own child was left running");
+        // The probe led its own group; nothing of the group is left, its child included.
+        let pid = probe.expect("the probe ran");
+        let leader =
+            rustix::process::Pid::from_raw(i32::try_from(pid).expect("a pid")).expect("not zero");
+        assert!(
+            rustix::process::test_kill_process_group(leader).is_err(),
+            "the wrapper's own child was left running"
+        );
+        // And the start says it timed out, not that the program is something else.
+        let refused = fx.check(Harness::ClaudeCode, &hang, &[], None);
+        assert_eq!(refused, Err(NotStarted::ProbeTimedOut(Harness::ClaudeCode)));
+        assert!(
+            refused
+                .expect_err("refused")
+                .to_string()
+                .contains("start the chat again"),
+        );
     }
 
     #[test]
     fn a_child_that_leaves_the_group_holding_the_answer_does_not_hold_the_start() {
         // It answers at once and exits, but a child it started in a group of its own keeps the
-        // answer's pipe open for a minute.
+        // answer's pipe open past the deadline. That child ends on its own, so the test kills
+        // nothing it did not start.
         let fx = Fixture::new();
-        let pid_file = fx.outside.path().join("pid");
         let leaver = stand_in::program(
             fx.outside.path(),
             "claude",
-            &format!(
-                "#!/bin/sh\necho 'not claude'\nperl -e 'setpgrp(0,0); sleep 60' &\necho $! > '{}'\nexit 0\n",
-                pid_file.display()
-            ),
+            "#!/bin/sh\necho 'not claude'\nperl -e 'setpgrp(0,0); sleep 20' &\nexit 0\n",
         );
         let began = Instant::now();
         assert!(fx.check(Harness::ClaudeCode, &leaver, &[], None).is_err());
         assert!(
-            began.elapsed() < Duration::from_secs(10),
+            began.elapsed() < PATIENCE + Duration::from_secs(5),
             "{:?}",
             began.elapsed()
         );
-        if let Ok(pid) = std::fs::read_to_string(&pid_file) {
-            let _ = crate::forklock::status(std::process::Command::new("kill").arg(pid.trim()));
-        }
     }
 
     #[test]
     fn the_answer_is_asked_in_the_chats_folder_with_its_own_environment() {
         let fx = Fixture::new();
-        let said = fx.outside.path().join("said");
         let teller = stand_in::program(
             fx.outside.path(),
             "claude",
-            &format!(
-                "#!/bin/sh\npwd > '{}'\necho \"${{CHARTER_PROBE_SEEN-unset}} ${{APP_ONLY-unset}}\" >> '{}'\necho '2.1.288 (Claude Code)'\n",
-                said.display(),
-                said.display()
-            ),
+            "#!/bin/sh\npwd\necho \"${CHARTER_PROBE_SEEN-unset} ${APP_ONLY-unset}\"\necho '2.1.288 (Claude Code)'\n",
         );
         let cwd = fx.cwd();
         let env = vec![("CHARTER_PROBE_SEEN".to_owned(), "chat".to_owned())];
         // SAFETY of the test: a variable only this test sets, read only by the child.
-        let words = checked(
-            Harness::ClaudeCode,
+        let said = version_of(
             &[teller.display().to_string()],
-            fx.plane.path(),
             Chat {
                 cwd: &cwd,
                 writable: &[],
                 env: &env,
             },
-            None,
         )
-        .expect("starts");
-        assert_eq!(words.len(), 1);
-        let text = std::fs::read_to_string(&said).expect("what it saw");
-        let mut lines = text.lines();
+        .expect("an answer");
+        let mut lines = said.lines();
         assert_eq!(
             lines.next().map(PathBuf::from),
             Some(cwd.canonicalize().expect("real"))
         );
         assert_eq!(lines.next(), Some("chat unset"));
+    }
+
+    /// D-88k: the probe is the first time charter runs the program, before any sandbox of the
+    /// chat's, so it runs inside charter's own wrap: it writes nothing but its own temp
+    /// directory and reaches no network, whatever the command loads.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_answer_is_asked_inside_charters_wrap_which_writes_nothing_and_reaches_nothing() {
+        let fx = Fixture::new();
+        let mark = fx.outside.path().join("written");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a listener");
+        let port = listener.local_addr().expect("an address").port();
+        let home_dir = stand_in::NoChatWrites::new();
+        let home_mark = home_dir.path().join("written");
+        let program = stand_in::program(
+            fx.outside.path(),
+            "claude",
+            &format!(
+                "#!/bin/sh\necho x > '{}' && echo wrote\necho x > '{}' && echo wrote-home\n\
+                 /usr/bin/nc -z -w 1 127.0.0.1 {port} && echo reached\n\
+                 echo x > \"$TMPDIR/own\" && echo own-temp\necho '2.1.288 (Claude Code)'\n",
+                mark.display(),
+                home_mark.display()
+            ),
+        );
+        let cwd = fx.cwd();
+        let said = version_of(
+            &[program.display().to_string()],
+            Chat {
+                cwd: &cwd,
+                writable: &[],
+                env: &[],
+            },
+        );
+        assert_eq!(said.as_deref(), Ok("own-temp\n2.1.288 (Claude Code)"));
+        assert!(!mark.exists(), "the probe wrote outside its temp directory");
+        assert!(
+            !home_mark.exists(),
+            "the probe wrote outside its temp directory"
+        );
     }
 
     #[test]

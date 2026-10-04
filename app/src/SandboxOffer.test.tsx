@@ -32,7 +32,7 @@ const DUE: SandboxState = {
   on: false,
   offer: true,
   said: null,
-  never: ["Codex: charter cannot keep its chats inside the sandbox yet (#1123)"],
+  never: ["Codex: charter can wrap it on macOS only, so far"],
 };
 
 describe("the sandbox offer", () => {
@@ -85,7 +85,7 @@ describe("the sandbox offer", () => {
     render(<SandboxOffer plane={PLANE} />);
 
     expect(await screen.findByTestId("sandbox-offer")).toHaveTextContent(
-      "Never sandboxed on this machine, so a new chat on them starts only without it: Codex: charter cannot keep its chats inside the sandbox yet (#1123).",
+      "Never sandboxed on this machine, so a new chat on them starts only without it: Codex: charter can wrap it on macOS only, so far.",
     );
   });
 });

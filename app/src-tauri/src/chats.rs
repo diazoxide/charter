@@ -2421,9 +2421,9 @@ mod tests {
     }
 
     #[test]
-    fn a_codex_chat_on_no_profile_in_a_sandboxed_plane_is_refused_until_charter_wraps_it() {
-        // Ruling V87f: Codex resolves its paths again at every command, so it is held back from
-        // a sandboxed start (#1123), and never started unsandboxed in its place.
+    fn a_codex_chat_on_no_profile_in_a_sandboxed_plane_is_never_started_unsandboxed() {
+        // #1123: charter wraps Codex where it can (macOS); a program that is not there, or a
+        // system charter cannot wrap it on, refuses the chat rather than starting it without.
         let plane = a_sandboxed_plane();
         let chats = Chats::new();
 
@@ -2431,11 +2431,8 @@ mod tests {
             .start(&a_chat_in(plane.path(), "/nowhere/codex"), SIZE)
             .expect_err("not started");
 
-        assert_eq!(
-            refused,
-            "charter cannot keep a Codex chat inside its sandbox yet (#1123), so in this \
-             project a new one starts only without the sandbox, from the new-chat picker."
-        );
+        assert!(!refused.contains("#1123"), "{refused}");
+        assert!(refused.contains("started"), "{refused}");
         assert!(chats.in_order().is_empty(), "a chat was opened");
     }
 

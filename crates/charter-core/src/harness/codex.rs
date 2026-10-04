@@ -68,10 +68,9 @@ impl HarnessAdapter for Codex {
     /// bundle's in [`crate::skills::LISTED_ENV`], which a Codex hook inherits, and the
     /// briefing lists them.
     ///
-    /// Its sandbox, where the plane turned it on, is not here: it rides on flags that go
-    /// last among the flags on the chat's line ([`crate::sandbox::Applied::line`], and
-    /// [`crate::sandbox::codex`] has the measurements). An unsandboxed Codex chat keeps
-    /// Codex's own settings, as it did.
+    /// Its sandbox, where the plane turned it on, is not here: charter's wrap runs the whole
+    /// line ([`crate::sandbox::Applied::line`], and [`crate::sandbox::codex`] has the
+    /// measurements). An unsandboxed Codex chat keeps Codex's own settings, as it did.
     fn arm_under(
         &self,
         kit: Kit<'_>,
@@ -124,30 +123,27 @@ impl HarnessAdapter for Codex {
         &crate::harness_plugin::CODEX
     }
 
-    /// Held back (ruling V87f): Codex resolves its paths again at every command, so a running
-    /// chat, or another chat that can write above its folder, could move what the compiled
-    /// profile names. A sandboxed project refuses Codex until charter runs it inside its own
-    /// compiled sandbox, as it runs opencode (#1123).
-    fn sandbox_held_back(&self) -> Option<u32> {
-        Some(1123)
-    }
-
-    /// Flags on the chat's line ([`crate::sandbox::codex`] has the measurements).
+    /// charter's own wrap around the whole harness, with Codex's own sandbox off inside it
+    /// (#1123; [`crate::sandbox::codex`] has the measurements).
     fn sandbox_compiler(&self) -> Option<crate::sandbox::Compiler> {
-        Some(|compiled| crate::sandbox::codex::flags(compiled).map(Form::Codex))
+        Some(|compiled| crate::sandbox::codex::wrap(compiled).map(Form::Codex))
     }
 
-    /// The sandbox's flags go last among the flags, where they win, and in front of the
-    /// subcommand, session id and first message that end the line. A flag of Codex's own in
-    /// the profile's command or the chat's own words can outrank them, so such a chat is
-    /// refused, naming where the flag is.
+    /// The wrap's program first, with the profile written for where the chat opens, then the
+    /// chat's whole line, with the flags that turn Codex's own sandbox off last among its flags
+    /// and in front of the subcommand, session id and first message that end the line. Its
+    /// traffic is pointed at charter's egress proxy, and its temp directory is its own.
+    ///
+    /// **Fail closed.** A flag of Codex's own in the profile's command or the chat's own words
+    /// that would widen what charter hands it refuses the chat, naming where the flag is; so do
+    /// no directory, no proxy, and a path a profile cannot state.
     fn sandboxed_line(
         &self,
         form: &Form,
         words: crate::sandbox::Words,
         at: &crate::sandbox::At<'_>,
     ) -> Result<crate::sandbox::Line, String> {
-        let Form::Codex(flags) = form else {
+        let Form::Codex(wrap) = form else {
             return Err(super::adapter::not_compiled_for(Harness::Codex));
         };
         let crate::sandbox::Words {
@@ -177,31 +173,64 @@ impl HarnessAdapter for Codex {
                 ));
             }
         }
-        // The later-code class is held by exact paths in the chat's directory, so a chat with
-        // none cannot hold it.
+        let lead = "this plane runs every chat sandboxed, and";
         let Some(cwd) = at.cwd else {
-            return Err(
-                "this plane runs every chat sandboxed, and a Codex chat with no directory of \
-                 its own cannot be kept from writing what a later program loads, so nothing \
-                 was started."
-                    .to_owned(),
-            );
+            return Err(format!(
+                "{lead} a Codex chat with no directory of its own has nowhere the sandbox lets \
+                 it write, so nothing was started."
+            ));
         };
+        let Some(confinement) = at.confinement else {
+            return Err(format!(
+                "{lead} charter's egress proxy was not started for this Codex chat, so nothing \
+                 was started."
+            ));
+        };
+        // D-88q: a Codex home of the project's own, never the operator's.
+        let Some(home) = &wrap.home else {
+            return Err(format!(
+                "{lead} charter has no data folder on this machine to keep this project's Codex \
+                 home in, so nothing was started."
+            ));
+        };
+        let profile = crate::sandbox::codex::profile(
+            wrap,
+            cwd,
+            confinement.tmp(),
+            confinement.proxy_port(),
+            at.hook_socket,
+        )
+        .map_err(|why| format!("{lead} {why}, so nothing was started."))?;
+        // Only now, with the line known to start (review F6): a refused chat seeds no home.
+        crate::sandbox::codex::prepare(wrap, cwd, &armed);
         let mut charters = charters;
         let tail =
             charters.split_off(charters.len() - crate::sandbox::codex::positional_tail(&charters));
         Ok(crate::sandbox::Line {
-            program,
+            program: crate::sandbox::backend::SANDBOX_EXEC.to_owned(),
             args: [
+                vec!["-p".to_owned(), profile, program],
                 command,
                 armed,
                 charters,
-                flags.args.clone(),
-                crate::sandbox::codex::later_code(flags, cwd),
+                crate::sandbox::codex::flags(),
                 tail,
             ]
             .concat(),
-            env: Vec::new(),
+            env: [
+                crate::sandbox::seatbelt::env(&confinement.proxy_url(), confinement.tmp()),
+                vec![
+                    (
+                        crate::sandbox::codex::ROOTS_ENV.to_owned(),
+                        crate::sandbox::codex::ROOTS.to_owned(),
+                    ),
+                    (
+                        crate::sandbox::codex::HOME_ENV.to_owned(),
+                        home.display().to_string(),
+                    ),
+                ],
+            ]
+            .concat(),
         })
     }
 }
