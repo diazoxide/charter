@@ -68,8 +68,11 @@ sha2 = "0.11"
 # can write. gitoxide reads the index, the working tree and the trees with no program run:
 # `files::status` drops every `filter` and `diff` section from the config it read, and gitoxide
 # has no fsmonitor, hooks or lazy fetch. MIT OR Apache-2.0. No default features: no network, no
-# credential helpers, no worktree mutation.
-gix = { version = "0.88", default-features = false, features = ["sha1", "status", "revision", "blob-diff", "excludes", "dirwalk", "index"] }
+# credential helpers, no worktree mutation. `parallel` (#1153) compares the working tree on every
+# core and walks for untracked files at the same time, as `git status` does with its preloaded
+# index: without it a status took about 4x git's at 100,000 files. It adds no crate the tree
+# lacks.
+gix = { version = "0.88", default-features = false, features = ["sha1", "status", "revision", "blob-diff", "excludes", "dirwalk", "index", "parallel"] }
 # The bounded reader's memory cap (FM-4, D-88h): the child reads its own resident memory and
 # stops past the cap. Portable where `setrlimit` is not (macOS refuses an address-space limit
 # below what a process has already mapped). MIT OR Apache-2.0.
