@@ -23,6 +23,17 @@ vi.mock("../SessionPane", () => ({
 
 const PLANE = "/home/dev/plane";
 
+/** An empty settings file, as `project_settings` answers it. */
+const FILE = (which: "shared" | "local") => ({
+  which,
+  file: which === "shared" ? "charter.toml" : "charter.local.toml",
+  exists: which === "shared",
+  text: "",
+  refusals: [],
+  parsed: true,
+  fields: [],
+});
+
 beforeEach(() => {
   forgetThisLaunch();
   (globalThis as Record<string, unknown>)[GLOBAL] = {
@@ -48,6 +59,7 @@ function core(plane: string | null, views: ViewTab[] = []) {
       if (cmd === "chat_states") return [];
       if (cmd === "plane_sidebar")
         return { root: plane, personas: [], persona: null, unfiled: [], workspaces: [] };
+      if (cmd === "project_settings") return { shared: FILE("shared"), local: FILE("local") };
       return null;
     },
     { shouldMockEvents: true },
@@ -87,6 +99,38 @@ describe("Settings, from the window", () => {
     await palette("Settings…");
     await userEvent.keyboard("{Enter}");
     expect(settingsTabs()).toHaveLength(1);
+  });
+
+  it("moves its own tab to Project, and to a level whose tab is open brings that tab forward", async () => {
+    core(PLANE);
+    render(<App />);
+    await screen.findByRole("tab", { name: /plane/ });
+    await palette("Settings…");
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() => expect(groups()).toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole("radio", { name: "Project" }));
+
+    expect(
+      await within(screen.getByRole("navigation", { name: "Groups" })).findByRole("button", {
+        name: "General",
+      }),
+    ).toBeInTheDocument();
+    expect(settingsTabs()).toHaveLength(1);
+
+    // Settings… opens at You, which no tab shows now; its switcher then finds Project's tab.
+    await palette("Settings…");
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() => expect(screen.getByRole("radio", { name: "You" })).toBeChecked());
+    expect(settingsTabs()).toHaveLength(2);
+    await userEvent.click(screen.getByRole("radio", { name: "Project" }));
+
+    expect(
+      await within(screen.getByRole("navigation", { name: "Groups" })).findByRole("button", {
+        name: "General",
+      }),
+    ).toBeInTheDocument();
+    expect(settingsTabs()).toHaveLength(2);
   });
 
   it("opens from the app menu's Settings… (⌘,), which the core says with an event", async () => {

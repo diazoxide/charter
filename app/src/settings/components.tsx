@@ -140,13 +140,20 @@ export type Reset = { label: string; disabled: boolean; onReset: () => void };
  * A `grouped` row's control is a group of controls (a radio group), which a `<label for>` cannot
  * name: its name is drawn as plain text, and the group is named by `aria-labelledby` instead.
  *
- * Which file a value goes to, and where its current value comes from, join the row with SE-18.
+ * **A write the core refused is said here** (`error`, SE-17, V89e): beside the setting, as an
+ * alert, and in the control's description, while the control shows what is on disk. And the
+ * last change's **Undo** sits in the row it was made in.
+ *
+ * Which file a value goes to as a choice, and where its current value comes from, join the row
+ * with SE-18.
  */
 export function SettingRow({
   label,
   help,
   reset,
   grouped = false,
+  error,
+  undo,
   control,
 }: {
   label: string;
@@ -155,12 +162,20 @@ export function SettingRow({
   help?: ReactNode;
   reset?: Reset;
   grouped?: boolean;
+  /** Why the last write of this setting was refused, in the core's words. */
+  error?: readonly string[];
+  /** Puts back what this setting was before the last change, when that change was here. */
+  undo?: () => void;
   control: (ids: RowIds) => ReactNode;
 }) {
   const id = useId();
   const labelledBy = useId();
   const described = useId();
-  const describedBy = help ? described : undefined;
+  const refused = useId();
+  const failed = error !== undefined && error.length > 0;
+  const describedBy =
+    [help ? described : undefined, failed ? refused : undefined].filter(Boolean).join(" ") ||
+    undefined;
   return (
     <div className="ui-setting-row">
       {grouped ? (
@@ -186,11 +201,29 @@ export function SettingRow({
             {reset.label}
           </button>
         )}
+        {undo && (
+          <button
+            type="button"
+            className="ui-setting-reset"
+            // #190: WebKit leaves a button out of the tab sequence without `tabIndex`.
+            tabIndex={0}
+            onClick={undo}
+          >
+            Undo
+          </button>
+        )}
       </div>
       {help && (
         <p className="ui-setting-help" id={described}>
           {help}
         </p>
+      )}
+      {failed && (
+        <div className="ui-setting-error" id={refused} role="alert">
+          {error.map((why, at) => (
+            <p key={at}>{why}</p>
+          ))}
+        </div>
       )}
     </div>
   );
@@ -203,6 +236,10 @@ type Tied = { ids: RowIds };
  * **A value typed or slid**: `text` is one line, `list` one entry per line, and `range` a whole
  * number between two bounds, with what it is at said beside it. Native elements, because the
  * browser already has each one (`ui-primitives.md`).
+ *
+ * A typed value is **committed** when the field is left, and a `text` one on Enter too
+ * (`onCommit`): a value written as it is changed (V89e) is written once it is typed, not at
+ * every key — half a branch name is not a value to write, or to refuse.
  */
 export type FieldProps = Tied &
   (
@@ -218,6 +255,7 @@ export type FieldProps = Tied &
         /** The input's own `disabled`: out of reach while this answer is moot or its work is
          *  running. */
         disabled?: boolean;
+        onCommit?: () => void;
       }
     /** One entry per line. The text is what is typed, kept whole — an empty line while the next
      *  entry is being typed is still there — and the caller reads the entries out of it. */
@@ -227,6 +265,7 @@ export type FieldProps = Tied &
         onChange: (to: string) => void;
         /** The fewest lines the box shows, before it grows with what is typed. Two unless said. */
         minRows?: number;
+        onCommit?: () => void;
       }
     | {
         kind: "range";
@@ -273,8 +312,10 @@ export function Field(props: FieldProps) {
         rows={Math.max(props.minRows ?? 2, props.value.split("\n").length)}
         aria-describedby={ids.describedBy}
         onChange={(event) => props.onChange(event.currentTarget.value)}
+        onBlur={props.onCommit}
       />
     );
+  const { onCommit } = props;
   return (
     <input
       id={ids.id}
@@ -289,6 +330,13 @@ export function Field(props: FieldProps) {
       spellCheck={false}
       aria-describedby={ids.describedBy}
       onChange={(event) => props.onChange(event.currentTarget.value)}
+      onBlur={onCommit}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" && onCommit) {
+          event.preventDefault();
+          onCommit();
+        }
+      }}
     />
   );
 }

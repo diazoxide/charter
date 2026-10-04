@@ -52,7 +52,15 @@ import { pieceOf } from "./pieceViews";
 import { SEARCH, isSearch } from "./contentSearch";
 import { SearchTab } from "./SearchTab";
 import { SESSION_VIEW } from "./sessions";
-import { SAVING_VIEW, SETTINGS_VIEW, settingsView, viewKey, type ViewRef } from "./tabs";
+import {
+  SAVING_VIEW,
+  SETTINGS_TAB_TITLE,
+  SETTINGS_VIEW,
+  settingsLevelOf,
+  settingsView,
+  viewKey,
+  type ViewRef,
+} from "./tabs";
 import { VaultTab } from "./VaultTab";
 import { listedMemoryOffers, memoryKeyRun, toKeep, type Offer } from "./actions";
 import { factsChanged } from "./extensionFacts";
@@ -301,6 +309,8 @@ export function ViewPane({
   // charter's own views read are any of the plane's stores. Here and not in the window, so a
   // memory an agent saves redraws this pane and not everything around it.
   const onDisk = usePlaneChanged([plane], VIEWS);
+  /** The level this is the Settings tab at, when it is that tab (SE-16, SE-17). */
+  const settingsLevel = settingsLevelOf(view);
   // **What charter can do to the thing this tab is about, on its heading** (SI-3): a persona's
   // `persona.md` handed to the operator's editor and the persona deleted, a vault deleted. The
   // catalogue's rows, so the heading, the palette and a row's menu cannot disagree, and each
@@ -473,10 +483,17 @@ export function ViewPane({
             onSaved={(memory) => onMemorySaved?.(view, memory)}
             onClose={() => onCloseView?.(view)}
           />
-        ) : isSettingsTab(view) ? (
-          /* Settings (SE-16). At the You level it is the machine's, not the plane's: the same
-             surface whichever project's strip it was opened on. */
-          <SettingsTab />
+        ) : settingsLevel !== undefined ? (
+          /* Settings (SE-16, SE-17), at the level the tab is keyed by. Its switcher moves this
+             tab to another level, or brings forward the tab already there (D-SE17a). */
+          <SettingsTab
+            plane={plane}
+            level={settingsLevel}
+            onLevelChange={(to) => {
+              if (to === "you" || to === "project")
+                onShowInstead?.(view, settingsView(to), SETTINGS_TAB_TITLE);
+            }}
+          />
         ) : (
           /* Keyed by the view, so a pane that comes to show another view starts from "asking"
              rather than drawing the last view's answer under the new one's title. */
@@ -580,11 +597,6 @@ function isSaving(view: ViewRef): boolean {
 /** Whether `view` is a session record (SI-8d). */
 function isSession(view: ViewRef): boolean {
   return view.from === null && view.view === SESSION_VIEW;
-}
-
-/** Whether `view` is the Settings tab (SE-16). */
-function isSettingsTab(view: ViewRef): boolean {
-  return viewKey(view) === viewKey(settingsView("you"));
 }
 
 /** A view asked now, and its answer, its refusal, or the sentence saying its source has gone. */

@@ -35,6 +35,9 @@ import {
   workspaceSettingsView,
   stopWaiting,
   viewKey,
+  settingsView,
+  showInstead,
+  findView,
   type ViewRef,
 } from "./tabs";
 
@@ -786,6 +789,34 @@ describe("a tab that shows a view (ADR 0043, as amended 2026-09-23)", () => {
     expect(workspaceOf(moved, other.id, filed)).toBe("other");
     // Nothing at all when the workspace has no tab, so a caller can tell.
     expect(followRename(moved, "alpha", "beta")).toBe(moved);
+  });
+});
+
+describe("the Settings tab's level (SE-17, D-SE17a)", () => {
+  it("is keyed by its level, so You and Project are told apart", () => {
+    expect(viewKey(settingsView("you"))).not.toBe(viewKey(settingsView("project")));
+  });
+
+  it("moves to another level in place: the same tab shows it, keyed by it", () => {
+    const opened = openView(openTab(noTabs(), 11), settingsView("you"), "Settings", "alpha");
+    const id = front(opened);
+
+    const moved = showInstead(opened, settingsView("you"), settingsView("project"), "Settings");
+
+    expect(moved.order).toEqual(opened.order);
+    expect(findView(moved, settingsView("project"))?.tab).toBe(id);
+    expect(findView(moved, settingsView("you"))).toBeUndefined();
+  });
+
+  it("brings forward the tab already at that level rather than showing it twice", () => {
+    const project = openView(noTabs(), settingsView("project"), "Settings", "alpha");
+    const both = openView(project, settingsView("you"), "Settings", "alpha");
+    const you = front(both);
+
+    const moved = showInstead(both, settingsView("you"), settingsView("project"), "Settings");
+
+    expect(front(moved)).toBe(findView(project, settingsView("project"))?.tab);
+    expect(findView(moved, settingsView("you"))?.tab).toBe(you);
   });
 });
 
