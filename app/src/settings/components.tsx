@@ -2,6 +2,7 @@ import { useId, useRef, type ReactNode } from "react";
 import * as Checkbox from "@radix-ui/react-checkbox";
 import * as RadioGroup from "@radix-ui/react-radio-group";
 import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
+import { ListFilter } from "lucide-react";
 import { useTabStop } from "../roving";
 
 /**
@@ -34,6 +35,11 @@ export type GroupOffer = { id: string; label: string };
  * the levels it is handed, so a level with nothing to set is not offered. The nav is buttons in
  * one Tab stop, moved through with the arrow keys (`roving.ts`, as the explorer's rows are), and
  * the chosen one says so with `aria-current`.
+ *
+ * **The filter** (SE-21, V89c) sits above the nav: a search box, labelled, whose words the
+ * caller narrows its groups by — the layout draws what it is handed. While it holds words, a
+ * polite live region under it says how many settings match (`found`), and when none do, the
+ * right column says so in place of the group. Escape in the box clears it.
  */
 export function SettingsLayout({
   levels,
@@ -43,6 +49,9 @@ export function SettingsLayout({
   groups,
   group,
   onGroupChange,
+  filter,
+  onFilterChange,
+  found,
   children,
 }: {
   levels: readonly LevelOffer[];
@@ -53,6 +62,12 @@ export function SettingsLayout({
   groups: readonly GroupOffer[];
   group: string;
   onGroupChange: (group: string) => void;
+  /** The words in the filter box, as typed. */
+  filter: string;
+  onFilterChange: (to: string) => void;
+  /** How many settings the filter leaves, while it holds words; unset while the level is still
+   *  being read, so nothing is said yet. */
+  found?: number;
   /** The chosen group: a {@link SettingGroup}. */
   children: ReactNode;
 }) {
@@ -60,6 +75,13 @@ export function SettingsLayout({
     group,
     groups.map((one) => one.id),
   );
+  const words = filter.trim();
+  const none =
+    words !== "" && found === 0 ? `No setting at this level matches “${words}”.` : undefined;
+  const said =
+    words === "" || found === undefined
+      ? ""
+      : (none ?? `${found} ${found === 1 ? "setting matches" : "settings match"}`);
   return (
     <div className="ui-settings">
       <div className="ui-settings-top">
@@ -78,22 +100,54 @@ export function SettingsLayout({
         </RadioGroup.Root>
         {about !== undefined && <p className="ui-settings-about">{about}</p>}
       </div>
-      <RovingFocusGroup.Root asChild orientation="vertical" {...stop}>
-        <nav className="ui-settings-nav" aria-label="Groups">
-          {groups.map((one) => (
-            <RovingFocusGroup.Item key={one.id} asChild tabStopId={one.id}>
-              <button
-                type="button"
-                aria-current={one.id === group ? "true" : undefined}
-                onClick={() => onGroupChange(one.id)}
-              >
-                {one.label}
-              </button>
-            </RovingFocusGroup.Item>
-          ))}
-        </nav>
-      </RovingFocusGroup.Root>
-      <div className="ui-settings-body">{children}</div>
+      <div className="ui-settings-side">
+        <div className="ui-settings-filter">
+          <ListFilter className="node-icon" aria-hidden />
+          <input
+            type="search"
+            value={filter}
+            aria-label="Filter settings"
+            placeholder="Filter settings"
+            autoComplete="off"
+            spellCheck={false}
+            onChange={(event) => onFilterChange(event.currentTarget.value)}
+            onKeyDown={(event) => {
+              if (event.key !== "Escape" || filter === "") return;
+              // Taken here: an Escape that cleared the box has done its job, and nothing
+              // behind the tab should act on it too.
+              event.preventDefault();
+              event.stopPropagation();
+              onFilterChange("");
+            }}
+          />
+        </div>
+        <p
+          className="ui-settings-found"
+          role="status"
+          aria-live="polite"
+          aria-label="Settings found"
+        >
+          {said}
+        </p>
+        <RovingFocusGroup.Root asChild orientation="vertical" {...stop}>
+          <nav className="ui-settings-nav" aria-label="Groups">
+            {groups.map((one) => (
+              <RovingFocusGroup.Item key={one.id} asChild tabStopId={one.id}>
+                <button
+                  type="button"
+                  aria-current={one.id === group ? "true" : undefined}
+                  onClick={() => onGroupChange(one.id)}
+                >
+                  {one.label}
+                </button>
+              </RovingFocusGroup.Item>
+            ))}
+          </nav>
+        </RovingFocusGroup.Root>
+      </div>
+      <div className="ui-settings-body">
+        {none ? <p className="ui-settings-none">{none}</p> : children}
+      </div>
     </div>
   );
 }
