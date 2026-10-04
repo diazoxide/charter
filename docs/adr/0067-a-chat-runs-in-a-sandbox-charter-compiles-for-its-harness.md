@@ -189,8 +189,10 @@ opt-out in section 7 lifts them, and the audit records when it does.
    name is neither made there nor built in one and moved into another with its parent: git's
    config and hooks in every clone, worktree and submodule (`.git/modules/…`), and the `.git`
    itself, so one is never moved into place; the hook managers' `.husky/` and `.githooks/`;
-   shell startup files; `.mcp.json`; `.claude`'s settings, commands and agents; editor folders;
-   opencode's and Codex's project config; and `charter.toml`, so a chat at the plane root
+   shell startup files; Claude Code's `.mcp.json` and `.claude`'s `settings.json`,
+   `settings.local.json`, `commands/`, `agents/` and `skills/`; opencode's `opencode.json`,
+   `opencode.jsonc` and `.opencode/`; Codex's `.codex/`; the editor folders `.vscode/` and
+   `.idea/`, and direnv's `.envrc`; and `charter.toml`, so a chat at the plane root
    cannot take its `[sandbox]` out. Resolved when the chat starts and denied as paths: the
    directory every `core.hooksPath` git would use names, and every script a protected config
    names for a harness to run (a hook command, an MCP server's command and arguments, a
@@ -275,6 +277,14 @@ opt-out in section 7 lifts them, and the audit records when it does.
     environment or a config it reads).
 - **`charter.local.toml`** joins the later-code names: charter reads it outside any sandbox at
   every start.
+
+*Amended 2026-10-04 (#1057):* class 5 names each harness's project config by file, and the
+list is `PLANTED` in `crates/charter-core/src/sandbox.rs`. `.claude/skills/` joins it: a skill
+runs its `` !`…` `` commands when invoked and registers the hooks in its frontmatter, as a
+command or an agent can. Left out, checked against each harness's docs: opencode's `tui.json`,
+which sets only its interface, and the `.agents/skills/` Codex and opencode read, whose skills
+are instructions the model chooses to follow, with any script run by the model's own tools
+inside the sandbox.
 
 ### 6. External enforcement backends are an option, and never the default (SD-33)
 

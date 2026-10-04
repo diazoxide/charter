@@ -461,6 +461,59 @@ fn a_path_denied_to_write_stays_readable() {
     );
 }
 
+/// A Claude Code sandbox's `denyWrite`, the later-code class's included.
+fn deny_write(settings: &claude::Settings) -> Vec<String> {
+    settings.sandbox["filesystem"]["denyWrite"]
+        .as_array()
+        .expect("a list")
+        .iter()
+        .map(|it| it.as_str().expect("a path").to_owned())
+        .collect()
+}
+
+#[test]
+fn a_claude_code_chat_is_held_from_writing_every_later_code_name_at_any_depth() {
+    let settings = claude::settings(&compiled(Denied::default(), Os::MacOs)).expect("compiles");
+    let deny_write = deny_write(&settings);
+    let held = |glob: &str| {
+        deny_write.iter().any(|it| it == glob)
+            && settings
+                .deny
+                .iter()
+                .any(|it| *it == format!("Edit({glob})"))
+            && settings
+                .deny
+                .iter()
+                .any(|it| *it == format!("Edit({glob}/**)"))
+    };
+    // Every name the class holds with what is below it, for the commands Claude Code's sandbox
+    // runs and for its own Edit and Write tools. A name that holds only itself (`.git`) is the
+    // stated gap #1065: no glob here denies it without denying what git writes below it.
+    for planted in PLANTED {
+        let glob = format!("**/{}", planted.path);
+        match planted.reach {
+            Reach::AndBelow => assert!(held(&glob), "{glob} is not held: {settings:?}"),
+            Reach::Itself => assert!(!deny_write.contains(&glob), "{glob}"),
+        }
+    }
+    // Each harness's project config that can start code or change a server's command or
+    // environment at its next launch (#1057), written out.
+    for glob in [
+        "**/.mcp.json",
+        "**/.claude/settings.json",
+        "**/.claude/settings.local.json",
+        "**/.claude/commands",
+        "**/.claude/agents",
+        "**/.claude/skills",
+        "**/opencode.json",
+        "**/opencode.jsonc",
+        "**/.opencode",
+        "**/.codex",
+    ] {
+        assert!(held(glob), "{glob} is not held");
+    }
+}
+
 #[test]
 fn claude_code_cannot_hold_the_credential_store_on_any_system_so_the_chat_does_not_start() {
     // No key in its settings denies it (its schema, 2.1.285), and no system's sandbox has been
