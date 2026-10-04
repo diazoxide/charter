@@ -5757,6 +5757,30 @@ h2.sidebar-title .node-icon {
   color: var(--text-muted);
 }
 
+/* A write the core refused (SE-17, V89e), said under the setting it was for. */
+.ui-setting-error p {
+  margin: 0.2rem 0 0;
+  padding: 0.3rem 0.5rem;
+  border-inline-start: 2px solid var(--danger-base);
+  border-radius: 3px;
+  font-size: 0.8rem;
+  color: var(--danger-text);
+  background: var(--danger-surface);
+}
+
+/* What charter refuses in a level's files as they stand, above the chosen group. */
+.ui-settings-standing ul {
+  margin: 0.2rem 0 0.6rem;
+  padding: 0;
+  list-style: none;
+}
+
+.ui-settings-standing .trouble {
+  margin: 0.2rem 0;
+  border-bottom: 0;
+  border-radius: 3px;
+}
+
 /* A row: the label, then the control with its reset beside it, then the line of help. */
 .ui-setting-row {
   display: grid;

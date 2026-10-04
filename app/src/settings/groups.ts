@@ -1,4 +1,6 @@
 import type { ReactNode } from "react";
+import type { SettingsEdit, SettingsStep, SettingsWhich } from "../bindings";
+import type { Shown } from "./fileControls";
 import type { Reset, RowIds } from "./components";
 
 /**
@@ -6,15 +8,16 @@ import type { Reset, RowIds } from "./components";
  * stable id, a label, a line of help and its settings, and the Settings tab draws whatever it is
  * handed. The group's half of that shape is what every level shares.
  *
- * **A setting's half is not yet the shape the file-backed levels need.** Project settings'
- * `Control` (`ProjectSettings.tsx`) is declarative: a `kind`, `read(file)` and `edits(draft,
- * file)`, which is what one tab-level driver needs for the per-key write, Undo and the error said
- * beside the setting, and what SE-2's registry will supply. SE-17 adds that as a second variant
- * of {@link Setting}. The one here, `useControl`, is the escape hatch for a value kept in a
- * store of its own rather than in a settings file, which is all the You level has.
+ * **A setting is one of two shapes** ({@link Setting}). A value kept in a settings file is
+ * *declared* ({@link FileSetting}): the key it is at, how its control is drawn, how it reads its
+ * value out of the file and the edits a new value makes — Project settings' `Control`
+ * (`fileControls.ts`) with the file it is kept in. One tab-level driver then writes it, undoes it
+ * and says why a write was refused (`project.ts`), and SE-2's registry can supply the same
+ * shape. A value kept in a store of its own — all the You level has — is *live*
+ * ({@link LiveSetting}): a hook that draws its control, the escape hatch.
  *
- * **The id is the group's address** (V89c): `you.text`, `you.editor`. A link that says "change X
- * in Settings" names it, so it never changes once shipped; a label can.
+ * **The id is the group's address** (V89c): `you.text`, `project.saving`. A link that says
+ * "change X in Settings" names it, so it never changes once shipped; a label can.
  */
 export type SettingsGroup = {
   /** The stable address: `<level>.<group>`. */
@@ -23,23 +26,45 @@ export type SettingsGroup = {
   /** One line on what the group is for, said under its heading. */
   help: string;
   settings: readonly Setting[];
+  /** Sentences about what is in force in this group, the core's: drawn under its help. */
+  notes?: readonly string[];
+};
+
+/** What every setting has: its stable address (`<group id>.<setting>`), label and help. */
+type Named = { id: string; label: string; help: string };
+
+/**
+ * **A setting kept in a settings file** (SE-17): the key it is at and the file it is kept in,
+ * how its control is drawn, how it reads its value out of the file, and the edits a new value
+ * makes. Every value is text while it is typed or picked; `edits` is where it becomes a key, so
+ * a setting whose value spans keys (a profile's environment) still writes only its own.
+ *
+ * `file` is fixed per setting until SE-18 gives each value its own Shared / Only on this machine
+ * choice.
+ */
+export type FileSetting = Named & {
+  file: SettingsWhich;
+  key: SettingsStep[];
+  /** `text` is one line, `choice` a closed set, `lines` one entry per line. */
+  kind: "text" | "choice" | "lines";
+  choices?: readonly string[];
+  /** What a `choice`'s empty option says; none is offered without it. */
+  unset?: string;
+  /** What a `choice` shows for each of its values, when that is not the value itself. */
+  labels?: Readonly<Record<string, string>>;
+  read: (file: Shown) => string;
+  /** The edits `draft` makes to `file`, the file it was typed over. */
+  edits: (draft: string, file: Shown) => SettingsEdit[];
 };
 
 /**
- * One setting: its stable id, its label, its line of help, and its live half — today only the
- * escape hatch for a value in a store of its own (above).
- *
- * `useControl` is a hook — the row calls it once per render, always the same one for a given
- * setting — and answers how to draw the control (handed the row's ids, which tie it to the label
- * and the help) and, when the value can go back, the reset. That is
- * how a setting whose value lives in a store of its own (a text size, your editor) reads it and
- * redraws when it changes elsewhere.
+ * **A setting kept in a store of its own** (SE-16): `useControl` is a hook — the row calls it
+ * once per render, always the same one for a given setting — answering how to draw the control
+ * (handed the row's ids, which tie it to the label and the help) and, when the value can go
+ * back, the reset. That is how a value in a store of its own (a text size, your editor) reads it
+ * and redraws when it changes elsewhere.
  */
-export type Setting = {
-  /** The stable address: `<group id>.<setting>`. */
-  id: string;
-  label: string;
-  help: string;
+export type LiveSetting = Named & {
   useControl: () => {
     control: (ids: RowIds) => ReactNode;
     reset?: Reset;
@@ -47,6 +72,13 @@ export type Setting = {
     grouped?: boolean;
   };
 };
+
+export type Setting = FileSetting | LiveSetting;
+
+/** Whether `setting` is declared over a file, rather than drawn by a hook of its own. */
+export function inAFile(setting: Setting): setting is FileSetting {
+  return "edits" in setting;
+}
 
 /** A level the switcher can offer, and the groups it holds (`CONTEXT.md`, **Level**). */
 export type Level = "you" | "project" | "workspace" | "persona";

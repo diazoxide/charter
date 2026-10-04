@@ -736,3 +736,82 @@ fn a_save_and_a_persona_default_at_once_both_land() {
     assert!(now.contains("[memory]\nshare = \"local\"\n"), "{now}");
     assert!(now.contains("[persona]\ndefault = \"ops\"\n"), "{now}");
 }
+
+/// A file a person wrote by hand: comments, a key no charter reads, and a table no form covers.
+const HAND_WRITTEN: &str = "\
+# The team's settings. Hand-edited; keep the comments.
+schema = 1
+
+[plane]
+mode = \"push\"     # how far a save goes
+autosave = true
+
+# Not charter's: a key a person keeps here for their own tools.
+[tools]
+lint = \"strict\"
+
+[[forge]]
+kind = \"github\"
+owner = \"acme\"
+";
+
+/// One Setting's write in the Settings tab (SE-17, V89e): the one key it names, through the
+/// same `edited` and `save` every write takes.
+fn write_one(root: &Path, path: &[&str], value: Option<Value>) -> Result<(), Vec<String>> {
+    let now = read(root, Which::Shared).unwrap();
+    let edit = Edit {
+        path: path.iter().map(|s| Step::Key((*s).to_owned())).collect(),
+        value,
+    };
+    let after = edited(&now.text, &[edit]).map_err(|why| vec![why])?;
+    save(root, Which::Shared, Some(&now.text), &after)
+}
+
+#[test]
+fn a_setting_written_on_its_own_changes_its_line_and_keeps_every_other_key_and_comment() {
+    let dir = plane(HAND_WRITTEN);
+
+    write_one(
+        dir.path(),
+        &["plane", "mode"],
+        Some(Value::Text("commit".into())),
+    )
+    .unwrap();
+
+    assert_eq!(
+        text(dir.path(), "charter.toml"),
+        HAND_WRITTEN.replace(
+            "mode = \"push\"     # how far a save goes",
+            "mode = \"commit\"     # how far a save goes"
+        )
+    );
+}
+
+#[test]
+fn writing_the_value_a_setting_had_before_puts_the_file_back_as_it_was() {
+    // Undo (V89e) is the previous value written the same way.
+    let dir = plane(HAND_WRITTEN);
+    write_one(dir.path(), &["plane", "autosave"], Some(Value::Bool(false))).unwrap();
+
+    write_one(dir.path(), &["plane", "autosave"], Some(Value::Bool(true))).unwrap();
+
+    assert_eq!(text(dir.path(), "charter.toml"), HAND_WRITTEN);
+}
+
+#[test]
+fn a_setting_given_a_value_charter_would_not_read_is_refused_and_nothing_is_written() {
+    let dir = plane(HAND_WRITTEN);
+
+    let refused = write_one(
+        dir.path(),
+        &["plane", "mode"],
+        Some(Value::Text("sideways".into())),
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        refused,
+        ["plane.mode in charter.toml is not a mode — one of off, commit, push, pr, pr-merge"]
+    );
+    assert_eq!(text(dir.path(), "charter.toml"), HAND_WRITTEN);
+}

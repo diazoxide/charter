@@ -71,15 +71,17 @@ What keeps it from becoming the library this file forbids:
 
 - **Five pieces, named here, and no more.** `SettingsLayout` (the level switcher, the nav of
   groups and the chosen group, in two columns), `SettingGroup` (a group's heading, help and
-  rows), `SettingRow` (label, help, control and reset; the file choice and the origin join it
-  with SE-18), `Field` (`text`, `list` and `range`) and `Choice` (`radio`, `select` and
+  rows), `SettingRow` (label, help, control and reset, and since SE-17 a refused write's reason
+  and the last change's Undo; the file choice and the origin join it with SE-18), `Field` (`text`, `list` and `range`) and `Choice` (`radio`, `select` and
   `toggle`). A sixth piece is an amendment to ADR 0037, not a commit.
 - **Each piece is a thin layer over a primitive already in the window, and says which.**
   The level switcher is a Radix radio group; the nav is buttons under Radix roving focus
   (`roving.ts`, as the explorer's rows); `Choice` is a Radix radio group, a native `<select>`
   or a Radix checkbox; `Field` is a native `<input>`, `<textarea>` or `<input type="range">`.
   The props are the primitive's own words — `value`, `onValueChange`, `checked`,
-  `onCheckedChange` — so the call site still answers "which primitive is this?".
+  `onCheckedChange` — so the call site still answers "which primitive is this?". The one word
+  of the set's own is `Field`'s `onCommit` (SE-17): a typed value is written when the field is
+  left or, on one line, at Enter, and no single native event names that.
 - **No look of its own.** The set is drawn in `App.css` under `ui-*` classes, every colour a
   design-system token, so a theme reaches it exactly as it reaches everything else.
 - **Groups are data, not markup.** A settings screen declares its groups — a stable id, a

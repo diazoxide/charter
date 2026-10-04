@@ -158,17 +158,29 @@ export function workspaceSettingsTitle(workspace: string): string {
 }
 
 /**
- * **The Settings tab** (SE-16, #1166; V89b): every setting, one level at a time. Keyed by the
- * level it opens at — `you` today; a project's and a workspace's join it with SE-17 and SE-20 —
- * so opening Settings at a level that already has its tab brings that tab forward. It is the
- * view `settings` because it is what Settings means from here on; the old Project settings page
- * is the same view with the empty key until SE-19 retires it.
+ * **The Settings tab** (SE-16, #1166; V89b): every setting, one level at a time. **Keyed by the
+ * level it shows** — `you`, `project` (SE-17); a workspace's joins with SE-20 — so opening
+ * Settings at a level that already has its tab brings that tab forward. The project is the one
+ * whose tabs hold it. Its level switcher moves the tab itself to another level
+ * ({@link showInstead}, D-SE17a), so the key always says what the tab shows. It is the view
+ * `settings` because it is what Settings means from here on; the old Project settings page is
+ * the same view with the empty key until SE-19 retires it.
  *
- * The You level is the machine's and not the plane's, so it is the same tab whichever project's
- * strip it was opened on: what it edits is the machine's layout file, never a file in the plane.
+ * The You level is the machine's and not the project's, so it is the same tab whichever project's
+ * strip it was opened on: what it edits is the machine's layout file, never a file in the project.
  */
-export function settingsView(level: "you"): ViewRef {
+export function settingsView(level: SettingsLevel): ViewRef {
   return { from: null, view: "settings", key: level };
+}
+
+/** The levels a Settings tab can be at (`settings/groups.ts`'s `Level`, as far as it is offered). */
+export type SettingsLevel = "you" | "project";
+
+/** The level a view is the Settings tab at, or `undefined` for any other view — the old
+ *  Project settings page (the same view, keyed `""`) included. */
+export function settingsLevelOf(view: ViewRef): SettingsLevel | undefined {
+  if (view.from !== null || view.view !== "settings") return undefined;
+  return view.key === "you" || view.key === "project" ? view.key : undefined;
 }
 
 /** What the Settings tab is called. */
@@ -499,10 +511,17 @@ export function keepView(tabs: Tabs, view: ViewRef): Tabs {
  * The pane showing `from` shows `to` instead, and its tab is called `name` — a new memory's tab
  * once it is saved (it shows the memory it made), and a memory's tab once it is retitled. The
  * tab keeps its place and whether it is kept. Answers `tabs` itself when `from` is not shown.
+ *
+ * **One view, one surface**, as {@link openView} keeps it: when another pane already shows `to`,
+ * that one is brought forward and `from` is left as it was — the Settings tab moved to a level
+ * whose tab is open (SE-17), a Search asked what another Search tab already shows.
  */
 export function showInstead(tabs: Tabs, from: ViewRef, to: ViewRef, name: string): Tabs {
   const open = findView(tabs, from);
   if (!open) return tabs;
+  const there = findView(tabs, to);
+  if (there && (there.tab !== open.tab || there.pane !== open.pane))
+    return openView(tabs, to, name, "");
   const tab = tabs.byId[open.tab];
   const layout = replace(tab.layout, open.pane, (found) =>
     found.content.kind === "view" ? { ...found, content: { ...found.content, view: to } } : found,

@@ -868,7 +868,7 @@ describe("the Plane group (charter-app#300, ADR 0051)", () => {
       ),
     );
     expect(within(plane).getByLabelText("Target branch")).toHaveAccessibleDescription(
-      /In this project: the branch the plane has checked out, its default\./,
+      /In this project: the branch the project has checked out, its default\./,
     );
     expect(within(plane).getByLabelText("Save branch")).toHaveAccessibleDescription(
       /In this project: charter\/save\/<this machine's name>, its default\./,
