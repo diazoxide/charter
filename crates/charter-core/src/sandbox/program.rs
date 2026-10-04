@@ -1084,6 +1084,12 @@ mod tests {
         let pid = probe.expect("the probe ran");
         let leader =
             rustix::process::Pid::from_raw(i32::try_from(pid).expect("a pid")).expect("not zero");
+        // A killed child stays a zombie, still in the group, until init reaps it,
+        // so give the reaping a moment rather than reading the group at once.
+        let reaped = Instant::now() + Duration::from_secs(5);
+        while rustix::process::test_kill_process_group(leader).is_ok() && Instant::now() < reaped {
+            std::thread::sleep(Duration::from_millis(20));
+        }
         assert!(
             rustix::process::test_kill_process_group(leader).is_err(),
             "the wrapper's own child was left running"
