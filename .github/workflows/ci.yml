@@ -428,6 +428,13 @@ jobs:
           chown -R ci: /home/ci
           runuser -u ci -- env HOME=/home/ci PATH="/home/ci/.cargo/bin:$PATH" sh -c \
             'cd app && npm ci && npx tauri build --debug --no-bundle'
+      # Every crate the workspace's lock names, as `mutants.yml` does and for its reason: the
+      # gitoxide guard reads `cargo metadata --offline` over the whole workspace, and building
+      # the app, the core and the CLI never downloads a crate only another member needs.
+      - name: Every crate the lock names
+        run: |
+          runuser -u ci -- env HOME=/home/ci PATH="/home/ci/.cargo/bin:$PATH" \
+            cargo fetch --locked
       - name: The core's and the CLI's tests, as a normal user
         run: |
           runuser -u ci -- env HOME=/home/ci PATH="/home/ci/.cargo/bin:$PATH" \

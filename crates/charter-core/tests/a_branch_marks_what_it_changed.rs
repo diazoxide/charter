@@ -762,9 +762,13 @@ fn gitoxide_has_no_network_client_transport_or_credential_helpers_anywhere_in_th
             .current_dir(env!("CARGO_MANIFEST_DIR")),
     )
     .expect("cargo metadata runs");
+    // `--offline` reads only crates already downloaded, and a build of a few packages
+    // (`cargo test -p charter-core`) downloads only theirs (fedora job, main CI, 2026-10-04).
     assert!(
         out.status.success(),
-        "{}",
+        "run `cargo fetch --locked` first: this guard reads cargo's resolution of the whole \
+         workspace offline, and a build of only some of its packages has not downloaded every \
+         crate the lock names.\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
     let metadata: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
