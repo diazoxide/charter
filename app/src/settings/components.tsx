@@ -207,7 +207,11 @@ export function SettingRow({
             className="ui-setting-reset"
             // #190: WebKit leaves a button out of the tab sequence without `tabIndex`.
             tabIndex={0}
-            onClick={undo}
+            onClick={() => {
+              undo();
+              // The button goes once it is pressed; the focus goes back to what it undid.
+              document.getElementById(id)?.focus();
+            }}
           >
             Undo
           </button>

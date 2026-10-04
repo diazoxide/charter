@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useState } from "react";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { emit } from "@tauri-apps/api/event";
 import { SettingsTab } from "./SettingsTab";
 import type { Level } from "./groups";
 import { forgetThisLaunch } from "../regions";
@@ -148,44 +149,57 @@ function core({
   harnesses = [] as HarnessPlugins[],
   refuse = undefined as string[] | undefined,
   sandboxOn = false,
+  /** Each write waits for `release()` before the core answers it. */
+  hold = false,
 } = {}) {
   const files: Record<SettingsWhich, SettingsFile> = { shared: SHARED, local: LOCAL };
   const sent: Sent[] = [];
+  const held: (() => void)[] = [];
   let reads = 0;
-  mockIPC((cmd, args) => {
-    const given = (args ?? {}) as Record<string, unknown>;
-    switch (cmd) {
-      case "project_settings":
-        reads += 1;
-        return { shared: files.shared, local: files.local };
-      case "project_extensions":
-        return { extensions, local_left_out: null };
-      case "project_harness_plugins":
-        return harnesses;
-      case "project_saving_in_force":
-        return SAVING;
-      case "project_theme":
-        return THEME;
-      case "project_theme_drawn":
-        return null;
-      case "extensions_on":
-        return [];
-      case "sandbox_state":
-        return sandboxOn
-          ? { on: true, offer: false, said: "No chat started without it", never: [] }
-          : { on: false, offer: false, said: null, never: [] };
-      case "save_project_settings": {
-        const which = given.which as SettingsWhich;
-        const change = given.change as { kind: "edits"; edits: SettingsEdit[] };
-        sent.push({ which, base: given.base as string | null, edits: change.edits });
-        if (refuse) return { kind: "refused", reasons: refuse };
-        files[which] = applied(files[which], change.edits);
-        return { kind: "saved", file: files[which] };
+  mockIPC(
+    async (cmd, args) => {
+      const given = (args ?? {}) as Record<string, unknown>;
+      switch (cmd) {
+        case "project_settings":
+          reads += 1;
+          return { shared: files.shared, local: files.local };
+        case "project_extensions":
+          return { extensions, local_left_out: null };
+        case "project_harness_plugins":
+          return harnesses;
+        case "project_saving_in_force":
+          return SAVING;
+        case "project_theme":
+          return THEME;
+        case "project_theme_drawn":
+          return null;
+        case "extensions_on":
+          return [];
+        case "sandbox_state":
+          return sandboxOn
+            ? { on: true, offer: false, said: "No chat started without it", never: [] }
+            : { on: false, offer: false, said: null, never: [] };
+        case "save_project_settings": {
+          const which = given.which as SettingsWhich;
+          const change = given.change as { kind: "edits"; edits: SettingsEdit[] };
+          sent.push({ which, base: given.base as string | null, edits: change.edits });
+          if (hold) await new Promise<void>((go) => held.push(go));
+          if (refuse) return { kind: "refused", reasons: refuse };
+          files[which] = applied(files[which], change.edits);
+          return { kind: "saved", file: files[which] };
+        }
       }
-    }
-    return undefined;
-  });
-  return { sent, reads: () => reads };
+      return undefined;
+    },
+    { shouldMockEvents: true },
+  );
+  return {
+    sent,
+    reads: () => reads,
+    files,
+    /** Lets the oldest held write be answered. */
+    release: () => act(async () => held.shift()?.()),
+  };
 }
 
 beforeEach(() => {
@@ -414,6 +428,133 @@ describe("a change at the Project level", () => {
     expect(within(row as HTMLElement).getByLabelText("Mode")).toHaveValue("push");
     expect(screen.getByRole("alert")).toHaveTextContent("plane.mode in charter.toml is not a mode");
     expect(screen.queryByRole("button", { name: "Undo" })).not.toBeInTheDocument();
+  });
+
+  it("offers no Undo that would take the sandbox off once it is turned on", async () => {
+    const { sent } = core();
+    await atProject();
+    await open("Sandbox");
+
+    await userEvent.selectOptions(screen.getByLabelText("Sandbox mode"), "on");
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    await waitFor(() => expect(screen.getByLabelText("Sandbox mode")).toHaveValue("on"));
+    expect(screen.queryByRole("button", { name: "Undo" })).not.toBeInTheDocument();
+  });
+
+  it("offers no way back to not set while turning the sandbox on is being written", async () => {
+    const { sent, release, files } = core({ hold: true });
+    await atProject();
+    await open("Sandbox");
+
+    await userEvent.selectOptions(screen.getByLabelText("Sandbox mode"), "on");
+
+    const options = within(screen.getByLabelText("Sandbox mode"))
+      .getAllByRole("option")
+      .map((one) => one.textContent);
+    expect(options).toEqual(["on"]);
+    await waitFor(() => expect(sent).toHaveLength(1));
+    await release();
+    await waitFor(() => expect(screen.getByLabelText("Sandbox mode")).toHaveValue("on"));
+    expect(sent).toHaveLength(1);
+    expect(files.shared.fields).toContainEqual(
+      field(["sandbox", "mode"], { kind: "text", value: "on" }),
+    );
+  });
+
+  it("writes an emptied list of hosts as no host, never as the default", async () => {
+    const { sent } = core();
+    await atProject();
+    await open("Sandbox");
+
+    await userEvent.clear(screen.getByLabelText("Hosts it may reach"));
+    await userEvent.tab();
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]).toMatchObject({
+      which: "shared",
+      edits: [
+        { path: [{ key: "sandbox" }, { key: "egress" }], value: { kind: "list", value: [] } },
+      ],
+    });
+  });
+
+  it("writes the environment passed to chats to charter.local.toml", async () => {
+    const { sent } = core();
+    await atProject();
+    await open("Harness & profiles");
+
+    await userEvent.type(screen.getByLabelText("Environment passed to chats"), "LANG");
+    await userEvent.tab();
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]).toMatchObject({
+      which: "local",
+      edits: [
+        { path: [{ key: "chat_env" }, { key: "pass" }], value: { kind: "list", value: ["LANG"] } },
+      ],
+    });
+  });
+
+  it("keeps a typed value that goes back to what it was while the first write is pending", async () => {
+    const { sent, release } = core({ hold: true });
+    await atProject();
+    const box = () => screen.getByLabelText("Default workspace");
+
+    await userEvent.type(box(), "main");
+    await userEvent.tab();
+    await userEvent.clear(box());
+    await userEvent.tab();
+    await release();
+    await waitFor(() => expect(sent).toHaveLength(2));
+    await release();
+
+    expect(sent[1].edits).toEqual([
+      { path: [{ key: "workspace" }, { key: "default" }], value: null },
+    ]);
+    await waitFor(() => expect(box()).toHaveValue(""));
+  });
+
+  it("offers no Undo while a change to that setting is still being written", async () => {
+    const { release } = core({ hold: true });
+    await atProject();
+    await open("Saving");
+    await userEvent.selectOptions(screen.getByLabelText("Mode"), "commit");
+    await release();
+    expect(await screen.findByRole("button", { name: "Undo" })).toBeInTheDocument();
+
+    await userEvent.selectOptions(screen.getByLabelText("Mode"), "pr");
+
+    expect(screen.queryByRole("button", { name: "Undo" })).not.toBeInTheDocument();
+    await release();
+    expect(await screen.findByRole("button", { name: "Undo" })).toBeInTheDocument();
+  });
+
+  it("puts the focus back on the setting once Undo is pressed", async () => {
+    core();
+    await atProject();
+    await open("Saving");
+    await userEvent.selectOptions(screen.getByLabelText("Mode"), "commit");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Undo" }));
+
+    expect(screen.getByLabelText("Mode")).toHaveFocus();
+  });
+
+  it("reads a file changed outside the tab again before the next write", async () => {
+    const { sent, files } = core();
+    await atProject();
+    await open("Saving");
+    const outside = `${files.shared.text}# edited by hand\n`;
+    files.shared = { ...files.shared, text: outside };
+
+    await act(async () => {
+      await emit("plane-changed", { plane: PLANE, changes: [], answers: [{ answer: "settings" }] });
+    });
+    await userEvent.selectOptions(screen.getByLabelText("Mode"), "commit");
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0].base).toBe(outside);
   });
 
   it("never offers to take the sandbox off once the project has it on", async () => {
