@@ -32,14 +32,31 @@ export async function pickAndStart(): Promise<void> {
  * costing a spec its full 20-second timeout before it failed.
  *
  * `role` is what a screen reader reads and what the operator gets; it survives whatever draws
- * it. Scoped to the harness group by the heading that names it, because the persona rows are
- * radios too and "the first radio on the page" is a different kind of accident waiting.
+ * it. Scoped to the harness group by the words that name it, because the persona rows are
+ * radios too and "the first radio on the page" is a different kind of accident waiting. The
+ * group is a settings row's choice (DS-3d), named by `aria-labelledby` pointing at the row's
+ * "Harness" label — so the group is found by what that label SAYS, never by an id, which the
+ * row draws with `useId` and which a spec cannot know.
  */
-export const HARNESS_ROWS = '[aria-labelledby="pick-harness"] [role="radio"]';
+export async function harnessRowCount(): Promise<number> {
+  return browser.execute(() => {
+    const group = Array.from(document.querySelectorAll('[role="radiogroup"]')).find((one) => {
+      const named = (one.getAttribute("aria-labelledby") ?? "")
+        .split(" ")
+        .map((id) => document.getElementById(id)?.textContent?.trim() ?? "")
+        .join(" ");
+      return named === "Harness";
+    });
+    return group ? group.querySelectorAll('[role="radio"]').length : 0;
+  });
+}
 
 /** Waits until the picker has drawn the harness it is offering. */
 export async function harnessRowsDrawn(): Promise<void> {
-  await $(HARNESS_ROWS).waitForExist({ timeout: 20_000 });
+  await browser.waitUntil(async () => (await harnessRowCount()) > 0, {
+    timeout: 20_000,
+    timeoutMsg: "the picker drew no harness rows in 20 seconds",
+  });
 }
 
 /**

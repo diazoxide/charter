@@ -5873,3 +5873,23 @@ textarea.ui-field {
   font-size: 0.8rem;
   color: var(--text-muted);
 }
+
+/* A line made of a few facts — a harness's kind, the command it runs, where it was declared —
+   wraps fact by fact. The command is what is about to run, so it is not faded with the rest,
+   and a profile charter has never run says so in its own colour (Start chat, DS-3d). Three
+   deep to outrank `.warning .where`, which dims every path in a dialog. */
+.ui-choice-says .meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem 0.5rem;
+  align-items: baseline;
+}
+
+.ui-choice-says .meta .where {
+  color: var(--text-secondary);
+  opacity: 1;
+}
+
+.ui-choice-says .needs-approval {
+  color: var(--danger-base);
+}

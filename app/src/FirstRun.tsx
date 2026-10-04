@@ -1,5 +1,4 @@
-import { useCallback, useEffect, useId, useState } from "react";
-import * as RadioGroup from "@radix-ui/react-radio-group";
+import { useCallback, useEffect, useState } from "react";
 import {
   commands,
   type FirstRunFound,
@@ -19,6 +18,7 @@ function choiceOf(value: string): TemplateChoice {
   return { kind: "named", id: value };
 }
 import { type ForgeAsk, ForgeQuestion } from "./ForgeQuestion";
+import { Choice, Field, SettingRow } from "./settings/components";
 
 /**
  * What a machine that has never opened a project sees (FR-4, #603).
@@ -73,7 +73,6 @@ export function FirstRun({
   const [found, setFound] = useState<FirstRunFound>();
   const [typed, setTyped] = useState("");
   const [template, setTemplate] = useState(FITS);
-  const templateId = useId();
   // The template that fits a typed path, by id, with the path it was asked about: `null` when
   // none fits. A folder picked in the dialog opens at once, so this is the typed path's alone,
   // and an answer about a path no longer typed is not shown.
@@ -134,67 +133,60 @@ export function FirstRun({
         </button>
       </div>
 
+      {/* The path and the template are rows of the settings set (DS-3d, #1176). */}
       <form
-        className="by-path"
         onSubmit={(event) => {
           event.preventDefault();
           if (typed.trim() && !opening) onOpenRepo(typed.trim(), choiceOf(template));
         }}
       >
-        <label htmlFor="first-run-path">Or type the repo&apos;s path</label>
-        <input
-          id="first-run-path"
-          type="text"
-          value={typed}
-          autoComplete="off"
-          spellCheck={false}
-          placeholder="/path/to/repo"
-          onChange={(event) => setTyped(event.target.value)}
+        <SettingRow
+          label="Or type the repo's path"
+          help="A repo's folder on this machine."
+          control={(ids) => (
+            <Field
+              ids={ids}
+              kind="text"
+              value={typed}
+              placeholder="/path/to/repo"
+              onChange={setTyped}
+            />
+          )}
         />
-        <button type="submit" tabIndex={0} disabled={!typed.trim() || opening}>
-          Open
-        </button>
+        <div className="doing">
+          <button type="submit" tabIndex={0} disabled={!typed.trim() || opening}>
+            Open
+          </button>
+        </div>
       </form>
 
       {found && found.templates.length > 0 && (
-        <>
-          <h2 id={templateId}>Project template</h2>
-          <p className="came-back">
-            Personas, a review checklist and the commands charter asks you about before a chat runs
-            them, for the stack you work in. Nothing is written into your repo.
-          </p>
-          <RadioGroup.Root
-            className="choices"
-            name="template"
-            value={template}
-            onValueChange={setTemplate}
-            aria-labelledby={templateId}
-            disabled={opening}
-          >
-            {[
-              { id: FITS, title: "Fits the repo", summary: fitsSays(fits, found.templates) },
-              ...found.templates,
-              { id: NONE, title: "None", summary: "Only the steward persona." },
-            ].map((one) => (
-              <div className="choice" key={one.id}>
-                <RadioGroup.Item
-                  className="dot"
-                  value={one.id}
-                  id={`${templateId}-${one.id}`}
-                  aria-describedby={`${templateId}-${one.id}-says`}
-                >
-                  <RadioGroup.Indicator className="dot-mark" />
-                </RadioGroup.Item>
-                <label className="who" htmlFor={`${templateId}-${one.id}`}>
-                  {one.title}
-                </label>
-                <span className="meta" id={`${templateId}-${one.id}-says`}>
-                  <span className="what">{one.summary}</span>
-                </span>
-              </div>
-            ))}
-          </RadioGroup.Root>
-        </>
+        <SettingRow
+          label="Project template"
+          help={
+            "Personas, a review checklist and the commands charter asks you about before a chat " +
+            "runs them, for the stack you work in. Nothing is written into your repo."
+          }
+          grouped
+          control={(ids) => (
+            <Choice
+              ids={ids}
+              kind="radio"
+              options={[
+                { value: FITS, label: "Fits the repo", says: fitsSays(fits, found.templates) },
+                ...found.templates.map((one) => ({
+                  value: one.id,
+                  label: one.title,
+                  says: one.summary,
+                })),
+                { value: NONE, label: "None", says: "Only the steward persona." },
+              ]}
+              value={template}
+              onValueChange={setTemplate}
+              disabled={opening}
+            />
+          )}
+        />
       )}
 
       {opening && (
