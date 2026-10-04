@@ -636,6 +636,9 @@ mod live {
             "mkdir -p .vscode",
             "echo {} > opencode.json",
             "mkdir -p .claude && echo {} > .claude/settings.local.json",
+            "mkdir -p .claude/skills/x",
+            "mkdir -p .opencode",
+            "mkdir -p .codex",
             "echo x > .zshrc",
             "echo x > charter.toml",
         ] {

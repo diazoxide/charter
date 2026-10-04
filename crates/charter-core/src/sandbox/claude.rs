@@ -25,6 +25,7 @@
 //! settings, commands and agents, and shell startup files, and let it write `opencode.json`,
 //! `.opencode`, `.codex`, `.envrc` and `charter.toml`. With each name added to `denyWrite` as
 //! `**/<name>`, every one was refused at any depth, and an ordinary file was still written.
+//! `.claude/skills`, added later (#1057), is held by the same `**/<name>` rule.
 //! What it does not hold: a command moved a directory holding a `config` into a nested
 //! clone's `.git` (measured), and no glob can deny the `.git` itself without denying what git
 //! writes below it (#1065).
