@@ -328,6 +328,34 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_store_that_leads_out_of_the_plane_is_refused_and_nothing_in_it_is_dated() {
+        // The persona card's refusal, in its words: a program is never handed a day read from
+        // a directory outside the plane, however its store got there.
+        let dir = plane();
+        let elsewhere = tempfile::tempdir().expect("a directory");
+        std::fs::write(
+            elsewhere.path().join("theirs.md"),
+            "# theirs\n\n_2026-01-02 10:00 · persistent_\n\nnot this plane's\n",
+        )
+        .expect("a memory");
+        let store = dir.path().join("personas/release/memory");
+        std::fs::remove_dir(&store).expect("an empty store");
+        std::os::unix::fs::symlink(elsewhere.path(), &store).expect("a link out");
+
+        let handed = personas(dir.path(), at_noon());
+
+        let release = handed["personas"]
+            .as_array()
+            .expect("a list")
+            .iter()
+            .find(|row| row["name"] == "release")
+            .expect("release is still listed");
+        assert!(release["refused"].is_string(), "{release}");
+        assert_eq!(release["written"], serde_json::json!([]), "{release}");
+    }
+
     #[test]
     fn a_memory_is_dated_as_charter_persona_stats_dates_it() {
         // No stamp line, and a `YYYYMMDD-` file name: the CLI's RECENT column counts it on that

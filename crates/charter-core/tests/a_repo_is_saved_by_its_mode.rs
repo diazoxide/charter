@@ -312,6 +312,72 @@ mod repo_saves {
     }
 
     #[test]
+    fn on_the_base_branch_the_settings_name_pr_mode_pushes_a_branch_of_its_own_and_never_it() {
+        charter_core::unsteered!();
+        if !in_child() {
+            return;
+        }
+        // `[repos.widget] branch` names where its requests go; standing on that branch is
+        // standing on the branch a request goes into, default branch or not (#299).
+        let host = "repo-base.test";
+        let scene = Scene::new(host);
+        let r = repo(
+            host,
+            "[repos.widget]\nmode = \"pr\"\nbranch = \"develop\"\n",
+        );
+        support::git(&r.clone, &["checkout", "-q", "-b", "develop"]);
+        support::git(
+            &r.clone,
+            &["push", "-q", &r.bare.display().to_string(), "develop"],
+        );
+        let develop_before = r.remote("develop");
+        r.commit("e.md", "base change");
+        let branch = format!("charter/alpha/{}", &r.head()[..7]);
+        scene.gh_api(
+            &format!(
+                "repos/acme/widget/pulls?state=open&head=acme:{}&base=develop&per_page=1",
+                branch.replace('/', "%2F")
+            ),
+            0,
+            "[]",
+            "",
+        );
+        let opened = scene.answers(
+            "gh",
+            &[
+                "api",
+                "--hostname",
+                host,
+                "-X",
+                "POST",
+                "repos/acme/widget/pulls",
+                "-f",
+                &format!("head={branch}"),
+                "-f",
+                "base=develop",
+                "-f",
+                "title=base change",
+                "-f",
+                BODY,
+            ],
+            0,
+            &format!(r#"{{"number": 6, "html_url": "https://{host}/acme/widget/pull/6"}}"#),
+            "",
+        );
+
+        let (code, said) = r.save();
+
+        assert_eq!(code, 0, "{said}");
+        assert!(was_asked(&opened), "{said}");
+        assert_eq!(r.remote(&branch), r.head(), "{said}");
+        assert_eq!(
+            r.remote("develop"),
+            develop_before,
+            "develop was pushed: {said}"
+        );
+    }
+
+    #[test]
     fn pr_merge_that_the_forge_will_not_queue_says_why_and_leaves_the_pr_open() {
         charter_core::unsteered!();
         if !in_child() {

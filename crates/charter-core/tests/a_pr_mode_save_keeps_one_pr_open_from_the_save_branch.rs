@@ -294,6 +294,11 @@ mod pr_saves {
         fn last_journal(&self) -> serde_json::Value {
             planegit::journal(&self.root).pop().expect("a journal line")
         }
+
+        /// `plane-push.json`: what the last push came to, as `doctor` and the next save read it.
+        fn record(&self) -> serde_json::Value {
+            planegit::push_record(&self.root).expect("a push record")
+        }
     }
 
     fn title(subjects: &[&str]) -> String {
@@ -344,6 +349,11 @@ mod pr_saves {
         let line = plane.last_journal();
         assert_eq!(line["outcome"], "pr-open");
         assert_eq!(line["pr"], plane.url(12).as_str());
+        let record = plane.record();
+        assert_eq!(record["outcome"], "pr-open", "{record}");
+        assert_eq!(record["landed"], SAVE, "{record}");
+        assert_eq!(record["number"], 12, "{record}");
+        assert_eq!(record["url"], plane.url(12).as_str(), "{record}");
     }
 
     #[test]
@@ -441,6 +451,13 @@ mod pr_saves {
         );
         assert_eq!(plane.remote(SAVE), head);
         assert_eq!(plane.standing().stage, Stage::PrOpen);
+        let record = plane.record();
+        assert!(
+            record["detail"]
+                .as_str()
+                .is_some_and(|why| why.contains("clean status")),
+            "{record}"
+        );
     }
 
     const SETTINGS: &str = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){autoMergeAllowed rebaseMergeAllowed mergeCommitAllowed squashMergeAllowed pullRequest(number:$number){id}}}";
@@ -653,6 +670,11 @@ mod pr_saves {
             "nothing of this machine's is thrown away"
         );
         assert_eq!(plane.remote("release"), release);
+        let record = plane.record();
+        assert_eq!(record["outcome"], "blocked", "{record}");
+        assert_eq!(record["landed"], SAVE, "{record}");
+        assert_eq!(record["number"], 12, "{record}");
+        assert_eq!(record["url"], plane.url(12).as_str(), "{record}");
 
         // A person saving again is the way out: a new PR for the same commits.
         plane.lookup(None);
@@ -730,6 +752,14 @@ mod pr_saves {
             "their commit is still there: {said}"
         );
         assert_eq!(plane.standing().stage, Stage::Blocked, "{said}");
+        let record = plane.record();
+        assert_eq!(record["landed"], SAVE, "{record}");
+        assert!(
+            record["detail"]
+                .as_str()
+                .is_some_and(|why| why.contains("this clone did not push there")),
+            "{record}"
+        );
 
         // Once the stranger's branch is gone from the remote, the next save pushes again.
         git(&theirs, &["push", "-q", "origin", &format!(":{SAVE}")]);
@@ -766,7 +796,14 @@ mod pr_saves {
         // forge, and the request by the glossary's word; the config words stay as written.
         assert!(said.contains("a request mode never pushes"), "{said}");
         assert!(!said.contains("PR mode"), "{said}");
-        assert_eq!(plane.last_journal()["outcome"], "blocked");
+        let line = plane.last_journal();
+        assert_eq!(line["outcome"], "blocked");
+        assert!(
+            line["detail"]
+                .as_str()
+                .is_some_and(|why| why.contains("[plane] save_branch is release")),
+            "{line}"
+        );
     }
 
     #[test]
@@ -844,6 +881,18 @@ mod pr_saves {
         let (code, said) = plane.save("two.md", "two.md");
         assert_eq!(code, 0, "{said}");
         assert!(said.contains("HTTP 502"), "{said}");
+        let record = plane.record();
+        assert_eq!(record["outcome"], "failed", "{record}");
+        assert_eq!(
+            record["landed"], SAVE,
+            "pushed, with no request yet: {record}"
+        );
+        assert!(
+            record["detail"]
+                .as_str()
+                .is_some_and(|why| why.contains("HTTP 502")),
+            "{record}"
+        );
         // PR 12 merges, carrying both commits.
         let at = merge(&plane, "squash");
         plane.merged(12, &at);
@@ -879,7 +928,14 @@ mod pr_saves {
         assert_eq!(code, 0, "{said}");
         assert!(said.contains("HTTP 502"), "{said}");
         assert_eq!(plane.remote(SAVE), pushed, "nothing pushed: {said}");
-        assert_eq!(plane.last_journal()["outcome"], "failed");
+        let line = plane.last_journal();
+        assert_eq!(line["outcome"], "failed");
+        assert!(
+            line["detail"]
+                .as_str()
+                .is_some_and(|why| why.contains("HTTP 502")),
+            "{line}"
+        );
         assert_ne!(plane.standing().stage, Stage::Blocked);
     }
 
@@ -900,6 +956,98 @@ mod pr_saves {
         assert_eq!(plane.head(), plane.remote("release"), "{said}");
         assert_eq!(plane.standing().stage, Stage::Saved, "{said}");
         assert_eq!(plane.standing().pr, None);
+    }
+
+    #[test]
+    fn a_save_with_nothing_new_while_its_pr_carries_everything_names_that_pr() {
+        charter_core::unsteered!();
+        if !in_child() {
+            return;
+        }
+        let plane = plane("carried.test", "pr");
+        plane.opened("work.md", 12);
+        plane.state(12, true);
+
+        let (code, said) = plane.save_as(None, Trigger::Cli);
+
+        assert_eq!(code, 0, "{said}");
+        assert!(said.contains("already carries all of it"), "{said}");
+        let record = plane.record();
+        assert_eq!(record["outcome"], "pr-open", "{record}");
+        assert_eq!(record["landed"], SAVE, "{record}");
+        assert_eq!(record["number"], 12, "{record}");
+        assert_eq!(record["url"], plane.url(12).as_str(), "{record}");
+    }
+
+    #[test]
+    fn a_push_to_the_save_branch_the_remote_refuses_is_recorded_in_its_words() {
+        charter_core::unsteered!();
+        if !in_child() {
+            return;
+        }
+        let plane = plane("refused-push.test", "pr");
+        std::fs::create_dir_all(plane.bare.join("hooks")).unwrap();
+        stand_in::program(
+            &plane.bare,
+            "hooks/pre-receive",
+            "#!/bin/sh\necho 'pushes are closed today' >&2\nexit 1\n",
+        );
+
+        let (code, said) = plane.save("work.md", "work.md");
+
+        assert_eq!(code, 0, "{said}");
+        assert_eq!(
+            git(&plane.bare, &["for-each-ref", "refs/heads/charter"]),
+            "",
+            "nothing landed: {said}"
+        );
+        let record = plane.record();
+        assert_eq!(record["outcome"], "failed", "{record}");
+        assert_eq!(record["landed"], SAVE, "{record}");
+        assert!(
+            record["detail"]
+                .as_str()
+                .is_some_and(|why| why.contains("pushes are closed today")),
+            "{record}"
+        );
+    }
+
+    #[test]
+    fn a_merged_pr_the_plane_cannot_move_onto_yet_is_said_in_the_saves_journal() {
+        charter_core::unsteered!();
+        if !in_child() {
+            return;
+        }
+        // The merge brought `shelf/incoming.md`, and this clone has an empty `shelf` nothing may
+        // be written into: the move waits, and a save with nothing to commit says why in its
+        // journal line.
+        let plane = plane("waits.test", "pr");
+        plane.opened("work.md", 12);
+        let at = merge(&plane, "squash");
+        let theirs = plane.theirs();
+        std::fs::create_dir_all(theirs.join("shelf")).unwrap();
+        std::fs::write(theirs.join("shelf/incoming.md"), "incoming").unwrap();
+        git(&theirs, &["add", "-A"]);
+        git(&theirs, &["commit", "-q", "-m", "incoming"]);
+        git(&theirs, &["push", "-q", "origin", "release"]);
+        let shelf = plane.root.join("shelf");
+        std::fs::create_dir(&shelf).unwrap();
+        std::fs::set_permissions(&shelf, std::os::unix::fs::PermissionsExt::from_mode(0o555))
+            .unwrap();
+        plane.merged(12, &at);
+
+        let (code, said) = plane.save_as(None, Trigger::Cli);
+
+        std::fs::set_permissions(&shelf, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        assert_eq!(code, 0, "{said}");
+        let line = plane.last_journal();
+        assert!(
+            line["detail"]
+                .as_str()
+                .is_some_and(|why| why.contains("once nothing here is in the way")),
+            "{line} {said}"
+        );
     }
 
     #[test]

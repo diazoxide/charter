@@ -1071,3 +1071,59 @@ fn a_failed_move_into_a_new_local_file_leaves_no_local_file() {
     assert_eq!(text(dir.path(), "charter.toml"), SAVING);
     assert!(!dir.path().join("charter.local.toml").exists());
 }
+
+
+#[test]
+fn a_local_harness_default_naming_nothing_is_refused_in_the_doctors_words() {
+    // The Local file is asked about its `[harness] default` alone, and asked all the same.
+    let dir = plane(COMMENTED);
+    let why = refusals(dir.path(), Which::Local, "[harness]\ndefault = \"work\"\n");
+    assert_eq!(why.len(), 1, "{why:?}");
+    assert!(
+        why[0].starts_with("[harness] default = \"work\" is not a harness charter can launch"),
+        "{why:?}"
+    );
+}
+
+#[test]
+fn a_list_a_form_can_write_is_text_only_and_any_other_list_is_left_to_the_raw_view() {
+    let found = fields("none = []\nnames = [\"a\", \"b\"]\nports = [1, 2]\n").unwrap();
+    let paths: Vec<(String, Found)> = found
+        .into_iter()
+        .map(|(path, value)| (dotted(&path), value))
+        .collect();
+    assert_eq!(
+        paths,
+        [
+            ("none".to_owned(), Found::Value(Value::List(Vec::new()))),
+            (
+                "names".to_owned(),
+                Found::Value(Value::List(vec!["a".into(), "b".into()]))
+            ),
+            ("ports".to_owned(), Found::Other("[1, 2]".into())),
+        ]
+    );
+}
+
+#[test]
+fn a_value_is_never_written_over_an_inline_table() {
+    let body = "[harness.work]\nkind = \"claude\"\nenv = { LANG = \"C\" }\n";
+    let err = edited(
+        body,
+        &[set(&["harness", "work", "env"], Value::Text("x".into()))],
+    )
+    .unwrap_err();
+    assert!(err.contains("harness.work.env is a table"), "{err}");
+}
+
+#[test]
+fn a_settings_file_that_is_there_but_cannot_be_read_is_said_and_not_shown_as_absent() {
+    // A directory where the file belongs: there, and not a file charter can read.
+    let dir = plane(COMMENTED);
+    fs::create_dir(dir.path().join("charter.local.toml")).unwrap();
+    let err = read(dir.path(), Which::Local).unwrap_err();
+    assert!(
+        err.starts_with("charter.local.toml could not be read"),
+        "{err}"
+    );
+}
