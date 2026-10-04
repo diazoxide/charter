@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791131263018,
+  "lastUpdate": 1791131967564,
   "repoUrl": "https://github.com/diazoxide/charter",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -1218,6 +1218,48 @@ window.BENCHMARK_DATA = {
             "value": 101.35528249999999,
             "unit": "ms",
             "extra": "median of 5 runs: 101.135, 101.137, 101.355, 101.535, 101.736 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "9bbadf17cae2520195a2230531bc2ddc7731b3a5",
+          "message": "Bump the rust group across 1 directory with 2 updates\n\nBumps the rust group with 2 updates in the / directory: [imagesize](https://github.com/Roughsketch/imagesize) and [nix](https://github.com/nix-rust/nix).\n\n\nUpdates `imagesize` from 0.14.0 to 0.15.0\n- [Release notes](https://github.com/Roughsketch/imagesize/releases)\n- [Commits](https://github.com/Roughsketch/imagesize/compare/v0.14.0...v0.15.0)\n\nUpdates `nix` from 0.28.0 to 0.31.3\n- [Changelog](https://github.com/nix-rust/nix/blob/master/CHANGELOG.md)\n- [Commits](https://github.com/nix-rust/nix/compare/v0.28.0...v0.31.3)\n\n---\nupdated-dependencies:\n- dependency-name: imagesize\n  dependency-version: 0.15.0\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n  dependency-group: rust\n- dependency-name: nix\n  dependency-version: 0.31.3\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n  dependency-group: rust\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>",
+          "timestamp": "2026-10-04T20:26:57+04:00",
+          "tree_id": "552e2080e0cdf7e54bc3998b06f2d76b109598bb",
+          "url": "https://github.com/diazoxide/charter/commit/9bbadf17cae2520195a2230531bc2ddc7731b3a5"
+        },
+        "date": 1791131966431,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.5877129999999999,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.582, 0.584, 0.588, 0.597, 0.598 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 17.073181499999997,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.687, 17.071, 17.073, 17.340, 17.499 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 104.548031,
+            "unit": "ms",
+            "extra": "median of 5 runs: 103.113, 104.062, 104.548, 104.559, 106.733 ms"
           }
         ]
       }
