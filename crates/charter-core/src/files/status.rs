@@ -112,7 +112,7 @@ pub(super) fn status_here(plane: &Path, branch: Branch<'_>) -> Result<Status, Re
         .as_deref()
         .and_then(|value| head.and_then(|head| recorded_base(&repo, value, head)));
     let (since, named) = match recorded {
-        Some((fork, named)) => (Some(fork), Some(named)),
+        Some(Based { fork, named, .. }) => (Some(fork), Some(named)),
         None => (head, None),
     };
 
@@ -363,13 +363,74 @@ fn options() -> gix::open::Options {
     gix::open::Options::isolated().permissions(permissions)
 }
 
+/// How far a branch is from the branch it was cut from (FM-5, #1108): the branch cockpit's
+/// header.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct AheadBehind {
+    /// Commits the branch has that its base does not.
+    pub ahead: usize,
+    /// Commits its base gained that the branch does not have.
+    pub behind: usize,
+    /// The base they are counted against, as recorded; `None` when the branch has no base
+    /// recorded that resolves, and then both counts are `0` and mean nothing.
+    pub base: Option<String>,
+}
+
+/// How far the branch is from its recorded base, counted as `git rev-list --left-right
+/// --count <base>...HEAD` counts, through gitoxide with the config cut down as [`open`] cuts
+/// it. Read here, in this process: only the bounded reader's child calls it (`reader.rs`).
+pub(super) fn ahead_behind_here(plane: &Path, branch: Branch<'_>) -> Result<AheadBehind, Refused> {
+    let unreadable = |why: String| Refused::Unreadable {
+        what: format!("how far {} is from its base", branch.called()),
+        why,
+    };
+    let Opened {
+        repo, charter_base, ..
+    } = open(plane, branch)?;
+    let none = AheadBehind {
+        ahead: 0,
+        behind: 0,
+        base: None,
+    };
+    let Some(head) = repo.head_commit().ok().map(|commit| commit.id) else {
+        return Ok(none);
+    };
+    let Some(Based { at, named, .. }) = charter_base
+        .as_deref()
+        .and_then(|value| recorded_base(&repo, value, head))
+    else {
+        return Ok(none);
+    };
+    let count = |from: gix::ObjectId, hidden: gix::ObjectId| -> Result<usize, String> {
+        let walk = repo
+            .rev_walk([from])
+            .with_hidden([hidden])
+            .all()
+            .map_err(|e| e.to_string())?;
+        let mut n = 0;
+        for commit in walk {
+            commit.map_err(|e| e.to_string())?;
+            n += 1;
+        }
+        Ok(n)
+    };
+    Ok(AheadBehind {
+        ahead: count(head, at).map_err(unreadable)?,
+        behind: count(at, head).map_err(unreadable)?,
+        base: Some(named),
+    })
+}
+
+/// A recorded base, resolved: the commit it names, where the branch left it, and its name.
+struct Based {
+    at: gix::ObjectId,
+    fork: gix::ObjectId,
+    named: String,
+}
+
 /// Where the branch left its recorded base, and the base's name: `None` when the record does
 /// not resolve to a commit HEAD shares.
-fn recorded_base(
-    repo: &gix::Repository,
-    value: &str,
-    head: gix::ObjectId,
-) -> Option<(gix::ObjectId, String)> {
+fn recorded_base(repo: &gix::Repository, value: &str, head: gix::ObjectId) -> Option<Based> {
     let (at, named) = match value.strip_prefix(worktree::DETACHED_PREFIX) {
         Some(sha) => {
             let sha = sha.trim();
@@ -390,7 +451,7 @@ fn recorded_base(
     };
     repo.find_commit(at).ok()?;
     let fork = repo.merge_base(at, head).ok()?.detach();
-    Some((fork, named))
+    Some(Based { at, fork, named })
 }
 
 /// What the commits from `since` to `head` changed, each path into `touched`, and each rename

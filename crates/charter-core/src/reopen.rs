@@ -372,6 +372,38 @@ pub struct Record {
     /// V43, and in one built in memory: the app's writer stamps the clone it holds onto every
     /// record it writes.
     pub clone_seat: Option<CloneSeat>,
+    /// The branch the window's sidebar was focused on — its cockpit (FM-5, #1108) — or `None`
+    /// for the whole workspace. Kept with [`Record::views`] because it is the same kind of
+    /// thing: how the window was arranged, which starts nothing.
+    pub focus: Option<Focus>,
+}
+
+/// A branch the window focused its sidebar on: its workspace, its repo, and its folder's name,
+/// or no folder for the repo's own (FM-5). Names only, each one charter would mint: the core
+/// finds the folder from them, as it does for the window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Focus {
+    pub workspace: String,
+    pub repo: String,
+    pub piece: Option<String>,
+}
+
+impl Focus {
+    /// The focus these names make, or `None` when one is not a name charter would mint: the one
+    /// check for a focus, whether the window said it or a record holds it. These words reach a
+    /// command the window sends back to the core.
+    pub fn named(workspace: &str, repo: &str, piece: Option<&str>) -> Option<Self> {
+        let ok = |word: &str| word.chars().count() <= 64 && crate::contain::workspace_name_ok(word);
+        let repo_ok = repo.chars().count() <= 64 && crate::contain::repo_name_ok(repo);
+        if !ok(workspace) || !repo_ok || !piece.is_none_or(ok) {
+            return None;
+        }
+        Some(Self {
+            workspace: workspace.to_owned(),
+            repo: repo.to_owned(),
+            piece: piece.map(str::to_owned),
+        })
+    }
 }
 
 /// What the operator answered when a launch found something to put back (charter-app#250).
@@ -780,6 +812,7 @@ fn read_held(plane_root: &Path) -> Result<Held, std::io::Error> {
         dealt: on_disk.dealt,
         relaunch_after_update: on_disk.relaunch_after_update,
         clone_seat: on_disk.clone.and_then(arrival::CloneSeatOnDisk::held),
+        focus: on_disk.focus.and_then(FocusOnDisk::held),
     };
     // Held to the same invariant on the way in as on the way out: a file whose counter sits
     // below a number it still names — hand-edited, or written by a charter that did not know
@@ -894,6 +927,55 @@ struct OnDisk {
     /// reason.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     clone: Option<arrival::CloneSeatOnDisk>,
+    /// See [`Record::focus`]. **Absent whenever the window is on the whole workspace**, so a
+    /// window that never focused a branch writes the record it always wrote; any value that
+    /// does not read as one is absent too. Not a version bump, for [`Chat::pinned`]'s reason.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient"
+    )]
+    focus: Option<FocusOnDisk>,
+}
+
+/// A value that does not read as `T` reads as absent, never as a record that does not read.
+fn lenient<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let value = <serde_json::Value as serde::Deserialize>::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).ok())
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct FocusOnDisk {
+    #[serde(default)]
+    workspace: String,
+    #[serde(default)]
+    repo: String,
+    /// The branch's folder, or empty for the repo's own.
+    #[serde(default)]
+    piece: String,
+}
+
+impl FocusOnDisk {
+    /// The focus this names, or nothing when a name in it is not one charter would mint
+    /// ([`Focus::named`]).
+    fn held(self) -> Option<Focus> {
+        let piece = (!self.piece.is_empty()).then_some(self.piece.as_str());
+        Focus::named(&self.workspace, &self.repo, piece)
+    }
+}
+
+impl From<&Focus> for FocusOnDisk {
+    fn from(focus: &Focus) -> Self {
+        Self {
+            workspace: focus.workspace.clone(),
+            repo: focus.repo.clone(),
+            piece: focus.piece.clone().unwrap_or_default(),
+        }
+    }
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -1194,6 +1276,7 @@ impl From<&Record> for OnDisk {
                 .clone_seat
                 .as_ref()
                 .and_then(arrival::CloneSeatOnDisk::of),
+            focus: record.focus.as_ref().map(FocusOnDisk::from),
         }
     }
 }
@@ -1864,6 +1947,7 @@ pub(crate) mod tests {
             dealt: 0,
             relaunch_after_update: false,
             clone_seat: None,
+            focus: None,
             chats: vec![Chat {
                 program: "/bin/sh".into(),
                 args: vec!["-c".into(), "touch /tmp/pwned".into()],
@@ -2087,6 +2171,7 @@ pub(crate) mod tests {
             dealt: 0,
             relaunch_after_update: false,
             clone_seat: None,
+            focus: None,
             chats: vec![
                 Chat {
                     pinned: true,
@@ -2161,6 +2246,7 @@ pub(crate) mod tests {
             dealt: 5,
             relaunch_after_update: false,
             clone_seat: None,
+            focus: None,
         };
 
         write(plane.path(), &record).expect("the record is written");
@@ -2221,6 +2307,7 @@ pub(crate) mod tests {
                 dealt: 1,
                 relaunch_after_update: false,
                 clone_seat: None,
+                focus: None,
             },
         )
         .expect("the record is written");
@@ -2277,6 +2364,7 @@ pub(crate) mod tests {
             dealt: 0,
             relaunch_after_update: false,
             clone_seat: None,
+            focus: None,
         };
 
         write(plane.path(), &record).expect("the record is written");
@@ -2306,6 +2394,7 @@ pub(crate) mod tests {
             dealt: 0,
             relaunch_after_update: false,
             clone_seat: None,
+            focus: None,
         };
 
         write(plane.path(), &record).expect("the record is written");
@@ -2398,6 +2487,72 @@ pub(crate) mod tests {
         write(plane.path(), &record).expect("the record is written");
 
         assert_eq!(read(plane.path()), record);
+    }
+
+    #[test]
+    fn the_branch_a_window_focused_comes_back_with_its_views() {
+        // FM-5 (#1108): the cockpit's branch is remembered with the window's saved views, so
+        // one window can stay on one branch across a relaunch.
+        let plane = tempfile::tempdir().unwrap();
+        for piece in [Some("fix-login".to_string()), None] {
+            let record = Record {
+                views: vec![persona_view("steward")],
+                focus: Some(Focus {
+                    workspace: "alpha".into(),
+                    repo: "svc".into(),
+                    piece: piece.clone(),
+                }),
+                ..Default::default()
+            };
+
+            write(plane.path(), &record).expect("the record is written");
+
+            assert_eq!(read(plane.path()), record, "{piece:?}");
+        }
+    }
+
+    #[test]
+    fn a_focus_that_names_no_branch_is_forgotten_and_the_rest_comes_back() {
+        let plane = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(plane.path().join(".charter/app")).unwrap();
+        for focus in [
+            r#"{"workspace":"alpha","repo":"../etc","piece":"fix"}"#,
+            r#"{"workspace":"","repo":"svc","piece":"fix"}"#,
+            r#"{"workspace":"alpha","repo":"svc","piece":"a/b"}"#,
+            format!(
+                r#"{{"workspace":"{}","repo":"svc","piece":"fix"}}"#,
+                "w".repeat(65)
+            )
+            .as_str(),
+            r#"{"workspace":"alpha"}"#,
+            r#""alpha/svc/fix""#,
+        ] {
+            std::fs::write(
+                path(plane.path()),
+                format!(
+                    r#"{{"version":1,"at":0,"chats":[],"views":[{{"view":"persona","key":"steward"}}],"focus":{focus}}}"#
+                ),
+            )
+            .unwrap();
+
+            let back = read(plane.path());
+
+            assert_eq!(back.focus, None, "{focus}");
+            assert_eq!(back.views.len(), 1, "{focus}");
+        }
+    }
+
+    #[test]
+    fn a_focus_alone_is_nothing_a_launch_asks_about() {
+        let record = Record {
+            focus: Some(Focus {
+                workspace: "alpha".into(),
+                repo: "svc".into(),
+                piece: None,
+            }),
+            ..Default::default()
+        };
+        assert!(!record.holds_anything());
     }
 
     #[test]

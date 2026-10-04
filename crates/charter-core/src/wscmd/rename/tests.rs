@@ -150,6 +150,11 @@ fn a_plane() -> Plane {
             dealt: 2,
             relaunch_after_update: false,
             clone_seat: None,
+            focus: Some(crate::reopen::Focus {
+                workspace: "alpha".into(),
+                repo: "svc".into(),
+                piece: Some("fix".into()),
+            }),
         },
     )
     .unwrap();
@@ -283,6 +288,11 @@ fn everything_follows(plane: &Plane) {
     assert_eq!(record.views[0].workspace.as_deref(), Some("beta"));
     assert_eq!(record.views[1].key, "beta");
     assert_eq!(record.views[1].title, "Workspace settings · beta");
+    // The branch the window focused (FM-5) follows its workspace.
+    assert_eq!(
+        record.focus.as_ref().map(|focus| focus.workspace.as_str()),
+        Some("beta")
+    );
 
     // This machine's pins, in the order they were pinned.
     let store = crate::machine::read(&plane.config).store;

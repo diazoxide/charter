@@ -1,5 +1,5 @@
 import { LiveMark } from "./LiveDialog";
-import { useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
 import {
   ChevronRight,
@@ -43,6 +43,7 @@ import { ChatStateMark, ChildAgents, childAgentsId } from "./ChatRows";
 import type { BranchPath, Catalogued, FileOn, Offer } from "./actions";
 import type { WorkspaceState } from "./workspaceState";
 import { useTabStop } from "./roving";
+import { Breadcrumb, CockpitHeader, focusStands, useAheadBehind } from "./Cockpit";
 
 /** No chat wrapping up, for a window that has not said. */
 const NONE_WRAPPING: ReadonlySet<number> = new Set();
@@ -147,6 +148,13 @@ const NONE_WRAPPING: ReadonlySet<number> = new Set();
  * for a folder (`actions.fileRows`). Never create, rename, move or delete (ADR 0081, V86 F8):
  * charter does not race an agent writing the same tree. Each row names the branch and the path
  * inside it; the core places it (`files::place`), so no path the window joined leaves it.
+ *
+ * **Focused on one branch, it is that branch's cockpit** (FM-5, #1108; V86 F2): a breadcrumb
+ * back out, the branch's state — how far it is from its base, how many files it changed, and
+ * Merge and Done — then the chats working in it and its files, as rows of a tree of their own
+ * with the same keys. Esc, or the breadcrumb, steps back out to the whole workspace, and the
+ * keyboard lands on the branch's row. Which branch is the window's (`PlaneView.tsx`), and it is
+ * remembered with the window's views.
  */
 export function Explorer({
   plane,
@@ -161,6 +169,8 @@ export function Explorer({
   offers,
   onPress,
   onOpenFile,
+  focus,
+  onFocus,
 }: {
   /** The project, for reading a branch's folders. Without one no folder is read. */
   plane?: PlaneId;
@@ -182,6 +192,11 @@ export function Explorer({
   onPress: (offer: Offer) => void;
   /** A file of a branch was opened from the tree: its file tab comes forward. */
   onOpenFile?: (place: Place, path: string) => void;
+  /** The branch the explorer is focused on, its cockpit (FM-5), or nothing for the whole
+   *  workspace. Drawn only while the workspace lists it. */
+  focus?: Place;
+  /** Focus on a branch, or step back out with nothing. */
+  onFocus?: (focus: Place | undefined) => void;
 }) {
   /** The clones the operator folded, by workspace and name: a row inside one is not drawn, so
    *  it cannot be where the keyboard comes back in. */
@@ -194,11 +209,27 @@ export function Explorer({
   const [changedOnly, setChangedOnly] = useState(false);
   /** What the file rows are narrowed to: names holding it, any case. */
   const [filter, setFilter] = useState("");
-  const open = openFolders(workspace, state, expanded);
+  /** The cockpit's *Files* rows the operator closed: open until they do (FM-5). */
+  const [shut, setShut] = useState<ReadonlySet<string>>(new Set());
+  const cockpit = cockpitOf(workspace, state, focus);
+  const cockpitFiles =
+    cockpit === undefined || workspace === undefined
+      ? undefined
+      : fileFold(workspace, { ...cockpit.ref, folder: "" });
+  const expandedNow =
+    cockpitFiles !== undefined && !shut.has(cockpitFiles) && !expanded.has(cockpitFiles)
+      ? new Set([...expanded, cockpitFiles])
+      : expanded;
+  const open = openFolders(workspace, state, expandedNow);
   const branches: BranchRef[] = open
     .filter((ref) => ref.folder === "")
     .map(({ repo, piece }) => ({ repo, piece }));
+  // The cockpit's branch is read whether or not its files are open: its header counts them.
+  if (cockpit !== undefined && !branches.some((one) => branchKey(one) === branchKey(cockpit.ref)))
+    branches.push(cockpit.ref);
   const statuses = useBranchStatus(plane, workspace, branches);
+  const cockpitStatus = cockpit === undefined ? undefined : statuses.get(branchKey(cockpit.ref));
+  const apart = useAheadBehind(plane, workspace, cockpit?.ref, cockpitStatus);
   // Indexed once per answer, not per folder per keystroke: a branch of 10,000 changes is walked
   // when its status arrives, and each folder after that is one lookup.
   const indexes = useMemo(
@@ -214,7 +245,7 @@ export function Explorer({
   const icons = useFileIcons(plane, workspace);
   const files: FilesOf = {
     workspace: workspace ?? "",
-    expanded,
+    expanded: expandedNow,
     reads,
     showIgnored,
     statuses,
@@ -223,14 +254,19 @@ export function Explorer({
     filter: filter.trim().toLocaleLowerCase(),
     levels: new Map(),
   };
-  const tree = treeOf(workspace, state, chats, folded, files);
+  const tree =
+    cockpit === undefined || workspace === undefined
+      ? treeOf(workspace, state, chats, folded, files)
+      : cockpitTreeOf(workspace, cockpit, chats, files);
   const drawn = tree.filter((row) => row.drawn);
   const picked =
-    spot === undefined
-      ? ROOT
-      : spot.piece === undefined
-        ? cloneRow(spot.repo)
-        : pieceRow(spot.repo, spot.piece);
+    cockpit !== undefined
+      ? undefined
+      : spot === undefined
+        ? ROOT
+        : spot.piece === undefined
+          ? cloneRow(spot.repo)
+          : pieceRow(spot.repo, spot.piece);
   const stop = useTabStop(
     picked,
     drawn.map((row) => row.id),
@@ -238,7 +274,18 @@ export function Explorer({
 
   /** Opens or closes a clone or a branch's folder: the one fold state of each, whether a click
    *  or a key asked. A clone is open until folded; a folder is closed until opened. */
-  const fold = (key: string, open: boolean) =>
+  const fold = (key: string, open: boolean) => {
+    if (key === cockpitFiles)
+      setShut((was) => {
+        if (open !== was.has(key)) return was;
+        const now = new Set(was);
+        if (open) now.delete(key);
+        else now.add(key);
+        return now;
+      });
+    foldHeld(key, open);
+  };
+  const foldHeld = (key: string, open: boolean) =>
     key.startsWith(FILE_FOLD)
       ? setExpanded((was) => {
           if (open === was.has(key)) return was;
@@ -272,6 +319,37 @@ export function Explorer({
       "data-row": id,
     };
   };
+
+  // Going in or coming back out of the cockpit moves the
+  // keyboard, when it was in the explorer or nowhere, to where the explorer now is: the
+  // cockpit's first row, or the branch's own row in the whole workspace.
+  const cockpitKey = cockpit === undefined ? undefined : branchKey(cockpit.ref);
+  const was = useRef(cockpitKey);
+  const navRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (workspace === undefined) return;
+    const left = was.current;
+    was.current = cockpitKey;
+    if (left === cockpitKey) return;
+    const nav = navRef.current;
+    const active = document.activeElement;
+    if (nav === null || (active !== document.body && active !== null && !nav.contains(active)))
+      return;
+    const wanted =
+      cockpit !== undefined
+        ? drawn[0]?.id
+        : left === undefined
+          ? undefined
+          : pieceRow(left.slice(0, left.indexOf("/")), left.slice(left.indexOf("/") + 1));
+    [...nav.querySelectorAll<HTMLElement>("[data-row]")]
+      .find((el) => el.dataset.row === wanted)
+      ?.focus();
+    // Only when the cockpit comes or goes; what it draws is read as it is then.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cockpitKey, workspace]);
+
+  /** Steps back out of the cockpit to the whole workspace. */
+  const leave = () => onFocus?.(undefined);
 
   /** Left, Right and type-ahead (#238). Up, Down, Home and End are the roving focus's. */
   const onTreeKey = (event: KeyboardEvent<HTMLElement>) => {
@@ -326,32 +404,105 @@ export function Explorer({
   // decided which they are, and the render reads it rather than deciding a second time.
   const atTheRoot = chats.filter((chat) => byId.get(chatRow(chat.session))?.parent === ROOT);
 
+  const filterBox = open.length > 0 && (
+    // Only while some branch's files are open: it narrows the file rows and nothing else.
+    <div className="files-filter">
+      <ListFilter className="node-icon" />
+      <input
+        type="search"
+        value={filter}
+        aria-label="Filter files"
+        placeholder="Filter files"
+        onChange={(event) => setFilter(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key !== "Escape" || filter === "") return;
+          // Taken here: an Esc that cleared the box has done its job, and nothing behind
+          // the explorer should act on it too.
+          event.preventDefault();
+          event.stopPropagation();
+          setFilter("");
+        }}
+      />
+    </div>
+  );
+  const toggles = open.length > 0 && (
+    // Only while some branch's files are open: with none, there is nothing they change.
+    <div className="files-toggles">
+      <button
+        type="button"
+        className="changed-toggle"
+        aria-pressed={changedOnly}
+        onClick={() => setChangedOnly((was) => !was)}
+      >
+        Changed only
+      </button>
+      <button
+        type="button"
+        className="ignored-toggle"
+        aria-pressed={showIgnored}
+        onClick={() => setShowIgnored((was) => !was)}
+      >
+        Show ignored files
+      </button>
+    </div>
+  );
+
+  if (cockpit !== undefined) {
+    const { ref, name } = cockpit;
+    const here = chats.filter((chat) => byId.get(chatRow(chat.session)) !== undefined);
+    return (
+      <RovingFocusGroup.Root asChild orientation="vertical" {...stop}>
+        <nav
+          ref={navRef}
+          className="explorer cockpit"
+          aria-label="Explorer"
+          data-testid="explorer"
+          onKeyDown={(event) => {
+            // Esc steps back out; one something inside already took (the filter box clearing
+            // itself, a menu closing) has done its job.
+            if (event.key !== "Escape" || event.defaultPrevented) return;
+            event.preventDefault();
+            leave();
+          }}
+        >
+          <Breadcrumb workspace={workspace} repo={ref.repo} name={name} onLeave={leave} />
+          <CockpitHeader
+            name={name}
+            repo={ref.repo}
+            piece={ref.piece}
+            apart={apart}
+            status={cockpitStatus}
+            offers={offers}
+            onPress={onPress}
+          />
+          {state.trouble && <Trouble>{state.trouble}</Trouble>}
+          {filterBox}
+          <div role="tree" aria-label={`Chats and files of ${name}`} onKeyDown={onTreeKey}>
+            <ChatList
+              chats={here}
+              wrapping={wrapping}
+              onShow={onShowChat}
+              treeitem={treeitem}
+              isDrawn={isDrawn}
+            />
+            <ul className="files" role="group">
+              <li role="none" data-testid={`files-${ref.repo}-${ref.piece}`}>
+                {filesOf(ref.repo, ref.piece)}
+              </li>
+            </ul>
+          </div>
+          {toggles}
+        </nav>
+      </RovingFocusGroup.Root>
+    );
+  }
+
   return (
     <RovingFocusGroup.Root asChild orientation="vertical" {...stop}>
-      <nav className="explorer" aria-label="Explorer" data-testid="explorer">
+      <nav ref={navRef} className="explorer" aria-label="Explorer" data-testid="explorer">
         {state.trouble && <Trouble>{state.trouble}</Trouble>}
 
-        {open.length > 0 && (
-          // Only while some branch's files are open: it narrows the file rows and nothing else.
-          <div className="files-filter">
-            <ListFilter className="node-icon" />
-            <input
-              type="search"
-              value={filter}
-              aria-label="Filter files"
-              placeholder="Filter files"
-              onChange={(event) => setFilter(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key !== "Escape" || filter === "") return;
-                // Taken here: an Esc that cleared the box has done its job, and nothing behind
-                // the explorer should act on it too.
-                event.preventDefault();
-                event.stopPropagation();
-                setFilter("");
-              }}
-            />
-          </div>
-        )}
+        {filterBox}
 
         {/* The tree is the rows and what holds them. The sentences about the whole region — the
           trouble above, the pending and empty notes and what charter would not read below —
@@ -565,27 +716,7 @@ export function Explorer({
           </Trouble>
         ))}
 
-        {open.length > 0 && (
-          // Only while some branch's files are open: with none, there is nothing they change.
-          <div className="files-toggles">
-            <button
-              type="button"
-              className="changed-toggle"
-              aria-pressed={changedOnly}
-              onClick={() => setChangedOnly((was) => !was)}
-            >
-              Changed only
-            </button>
-            <button
-              type="button"
-              className="ignored-toggle"
-              aria-pressed={showIgnored}
-              onClick={() => setShowIgnored((was) => !was)}
-            >
-              Show ignored files
-            </button>
-          </div>
-        )}
+        {toggles}
       </nav>
     </RovingFocusGroup.Root>
   );
@@ -1144,6 +1275,54 @@ const FILE_FOLD = "files:";
 /** An opened folder of a branch, by workspace as well: two workspaces can each clone `svc`. */
 export const fileFold = (workspace: string, ref: BranchFolderRef) =>
   `${FILE_FOLD}${workspace}\u0000${folderKey(ref)}`;
+
+/** The branch the explorer is focused on, while the workspace still lists it: its name as a
+ *  branch, and as the explorer names branches. */
+type Cockpit = { ref: { repo: string; piece: string }; name: string; path: string | undefined };
+
+/**
+ * The cockpit to draw for `focus` (FM-5), or none: a focus on a branch of this workspace that
+ * still stands by {@link focusStands}, the rule the window reads too.
+ */
+function cockpitOf(
+  workspace: string | undefined,
+  state: WorkspaceState,
+  focus: Place | undefined,
+): Cockpit | undefined {
+  if (workspace === undefined || focus === undefined || focus.workspace !== workspace) return;
+  const stands = focusStands(state, focus);
+  if (stands === undefined || focus.piece === null) return;
+  const { piece } = stands;
+  return {
+    ref: { repo: focus.repo, piece: focus.piece },
+    name: piece?.branch || focus.piece,
+    path: piece?.path,
+  };
+}
+
+/** The cockpit's rows (FM-5): the chats working in the branch, then its *Files* row and what it
+ *  holds, each a top-level row of the cockpit's own tree. */
+function cockpitTreeOf(
+  workspace: string,
+  cockpit: Cockpit,
+  chats: readonly OpenChat[],
+  files: FilesOf,
+): Row[] {
+  const { path } = cockpit;
+  const working = path === undefined ? [] : chats.filter((chat) => under(chat.cwd, path));
+  const kids: TreeNode[] = [
+    ...working.map((chat): TreeNode => ({
+      id: chatRow(chat.session),
+      name: chat.name,
+      kids: [],
+      shows: true,
+    })),
+    folderNode(workspace, { ...cockpit.ref, folder: "" }, "Files", files),
+  ];
+  const rows: Row[] = [];
+  kids.forEach((kid, i) => walkRows(kid, undefined, true, i, kids.length, rows));
+  return rows;
+}
 
 /** One row of the tree, as the keyboard and a screen reader know it (#238). */
 export type Row = {

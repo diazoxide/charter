@@ -136,6 +136,9 @@ function doing(): Doing & { calls: string[] } {
       return { ok: true as const };
     }),
     pickClone: note("pickClone"),
+    focusBranch: vi.fn((cut: Cut) => {
+      calls.push(`focusBranch:${cut.repo}/${cut.piece}`);
+    }),
     newBranch: note("newBranch"),
     newChatIn: note("newChatIn"),
     sendKey: vi.fn(async (key: string) => {
@@ -600,6 +603,26 @@ describe("the one list of actions", () => {
 
     const planeless = catalogue(now({ plane: undefined, pieces: [cut] }));
     expect(by(planeless, "worktree.done:svc/fix-it")?.available).toBe(false);
+  });
+
+  it("offers to focus the explorer on each branch, first in its menu (FM-5)", async () => {
+    const cut = { workspace: "alpha", repo: "svc", piece: "fix-it", branch: "fix/login" };
+    const offers = catalogue(now({ pieces: [cut] }));
+    const hands = doing();
+
+    const focus = by(offers, "worktree.focus:svc/fix-it");
+    expect(focus?.title).toBe("Focus on branch fix/login");
+    // It changes nothing on disk, so it needs no project to reach a branch.
+    expect(focus?.available).toBe(true);
+    expect(menuOn({ on: "worktree", repo: "svc", piece: "fix-it" }).above[0]).toBe(
+      "worktree.focus:svc/fix-it",
+    );
+    await run(offers, "worktree.focus:svc/fix-it", hands);
+    expect(hands.calls).toEqual(["focusBranch:svc/fix-it"]);
+    expect(
+      by(catalogue(now({ pieces: [{ ...cut, branch: null }] })), "worktree.focus:svc/fix-it")
+        ?.title,
+    ).toBe("Focus on folder fix-it");
   });
 
   it("names a folder git has on no branch as a folder, never as a branch (#989)", () => {
@@ -1181,6 +1204,7 @@ describe("carrying out a row", () => {
         "removeWorktree:svc/fix-it,true",
         "mergeWorktree:svc/fix-it",
         "declareWorktreeDone:svc/fix-it",
+        "focusBranch:svc/fix-it",
         "openView:charter/persona/steward,steward",
         "openView:charter/piece-files/alpha/svc/fix-it,Files · fix-it",
         "openView:charter/vault/ops,ops",
@@ -1753,8 +1777,9 @@ describe("the palette at fifty chats", () => {
     // 481 since GL-1: New branch… in each of the ten clones.
     // 482 since FR-27: Switch project…, one row however many projects the window holds.
     // 532 since RC-5: Browse the files of each of the 50 pieces.
+    // 582 since FM-5: Focus on each of the 50 branches.
     // This window has no todos loaded, so no `todo.` rows.
-    expect(offers).toHaveLength(532);
+    expect(offers).toHaveLength(582);
   });
 
   /**

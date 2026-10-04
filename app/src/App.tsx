@@ -1129,6 +1129,7 @@ function App() {
       unlinkWorkItem: async () => nowhere(),
       focusWorkspace: () => undefined,
       pickClone: () => undefined,
+      focusBranch: () => undefined,
       newBranch: () => undefined,
       newChatIn: () => undefined,
       // Both are rows the catalogue marks unavailable with no plane — there is nowhere to make

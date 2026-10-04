@@ -118,7 +118,11 @@ describe("what a menu lists", () => {
       },
     );
 
-    expect(shown.above).toEqual(["Browse the files of fix-it", "Merge branch fix-it into svc"]);
+    expect(shown.above).toEqual([
+      "Focus on branch fix-it",
+      "Browse the files of fix-it",
+      "Merge branch fix-it into svc",
+    ]);
     expect(shown.below).toEqual(["Remove folder fix-it in svc"]);
   });
 

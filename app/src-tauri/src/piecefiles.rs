@@ -210,6 +210,50 @@ pub async fn branch_status(
     .map_err(|err| format!("reading what the branch changed did not finish: {err}"))?
 }
 
+/// How far a branch is from the branch it was cut from: the branch cockpit's header (FM-5).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct AheadBehind {
+    /// Commits the branch has that its base does not.
+    pub ahead: u32,
+    /// Commits its base gained that the branch does not have.
+    pub behind: u32,
+    /// The base they are counted against; `null` when the branch has no base recorded, and the
+    /// counts then mean nothing.
+    pub base: Option<String>,
+}
+
+/// How far a branch is from the branch it was cut from, in commits ahead and behind.
+// Read by gitoxide in the core's bounded reader, as `branch_status` is: no git process reads
+// the branch's config for this (V88a, D-88f, D-88h). Not a doc comment, because the generated
+// bindings carry those.
+#[tauri::command]
+#[specta::specta]
+pub async fn branch_ahead_behind(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    workspace: String,
+    repo: String,
+    piece: Option<String>,
+) -> Result<AheadBehind, String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || {
+        ahead_behind_of(&root, branch(&workspace, &repo, &piece))
+    })
+    .await
+    .map_err(|err| format!("reading how far the branch is from its base did not finish: {err}"))?
+}
+
+fn ahead_behind_of(plane: &Path, branch: Branch<'_>) -> Result<AheadBehind, String> {
+    let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+    files::ahead_behind(&crate::reader(), plane, branch)
+        .map(|apart| AheadBehind {
+            ahead: count(apart.ahead),
+            behind: count(apart.behind),
+            base: apart.base,
+        })
+        .map_err(|refused| refused.to_string())
+}
+
 fn status_of(plane: &Path, branch: Branch<'_>) -> Result<BranchStatus, String> {
     let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
     files::status(&crate::reader(), plane, branch)
@@ -605,6 +649,25 @@ mod tests {
             "{status:?}"
         );
         assert_eq!(status.base.as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn how_far_a_branch_is_from_its_base_crosses_with_the_base_named() {
+        let (_dir, root, piece) = plane();
+        std::fs::write(piece.join("new.txt"), "\n").unwrap();
+        git(&piece, &["add", "-A"]);
+        git(&piece, &["commit", "-q", "-m", "on the branch"]);
+
+        let apart = ahead_behind_of(&root, PIECE).unwrap();
+
+        assert_eq!(
+            apart,
+            AheadBehind {
+                ahead: 1,
+                behind: 0,
+                base: Some("main".to_string()),
+            }
+        );
     }
 
     #[test]

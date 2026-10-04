@@ -279,6 +279,9 @@ export type Does =
   /** Records the piece `done` in its log, as `charter worktree done` run inside it would
    *  (charter#368). Not destructive: the tree and the branch are left as they are. */
   | { verb: "declareWorktreeDone"; cut: Cut }
+  /** Focuses the explorer on one branch, which turns it into that branch's cockpit (FM-5): its
+   *  state, its chats and its files. It changes nothing on disk. */
+  | { verb: "focusBranch"; cut: Cut }
   /** Makes a clone the spot the next chat starts in — the explorer's pick, one level up from a
    *  piece (charter-app#174). It starts nothing: the picker still asks, and the core still
    *  decides whether that directory can be started in. The path is the one the core spelled. */
@@ -625,6 +628,8 @@ export type Doing = {
   removeWorktree: (cut: Cut, force: boolean) => Promise<Ran>;
   mergeWorktree: (cut: Cut) => Promise<Ran>;
   declareWorktreeDone: (cut: Cut) => Promise<Ran>;
+  /** Focuses the explorer on that branch: its cockpit (FM-5). It starts and writes nothing. */
+  focusBranch: (cut: Cut) => void;
   /** Makes that clone where the next chat starts. It starts nothing, so it answers no `Ran`. */
   pickClone: (repo: string, path: string) => void;
   /** Opens the New branch dialog for that clone. It cuts nothing until it is answered. */
@@ -1602,6 +1607,16 @@ export function catalogue(now: Now): Offer[] {
   const noPlane =
     now.plane === undefined ? "charter found no plane, so it cannot reach a branch." : undefined;
   for (const cut of pieces) {
+    // The branch's cockpit first (FM-5): the explorer narrowed to it, which changes nothing.
+    const focusOn = cut.branch ? `Focus on branch ${cut.branch}` : `Focus on folder ${cut.piece}`;
+    offers.push(
+      can(
+        `worktree.focus:${idOf(cut)}`,
+        focusOn,
+        { verb: "focusBranch", cut },
+        cut.branch || cut.piece,
+      ),
+    );
     // Reading first (RC-5): the piece's files, in the light editor. It reads and writes
     // nothing on disk until a file is picked, and then only reads.
     const browse = `Browse the files of ${cut.piece}`;
@@ -1954,6 +1969,9 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
       return doing.mergeWorktree(does.cut);
     case "declareWorktreeDone":
       return doing.declareWorktreeDone(does.cut);
+    case "focusBranch":
+      doing.focusBranch(does.cut);
+      return DID;
     case "pickClone":
       doing.pickClone(does.repo, does.path);
       return DID;
@@ -2462,7 +2480,7 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
     case "worktree": {
       const at = `${what.repo}/${what.piece}`;
       return {
-        above: [`worktree.files:${at}`, `worktree.merge:${at}`],
+        above: [`worktree.focus:${at}`, `worktree.files:${at}`, `worktree.merge:${at}`],
         // The discard row is listed and is almost never found: it exists only while a removal
         // of THIS piece has been refused and not answered. That is the whole reason a menu
         // lists ids rather than rows — nothing here has to know when it exists.

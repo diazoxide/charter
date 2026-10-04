@@ -1620,6 +1620,93 @@ button.show-more:focus-visible {
   color: var(--text-muted);
 }
 
+/* The branch cockpit (FM-5): a breadcrumb back out, then the branch's state with Merge and
+   Done, above the branch's own chats and files. Sentences here wrap; the rows below do not. */
+.explorer .cockpit-crumbs ol {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem;
+  align-items: center;
+  margin: 0 0 0.35rem;
+  padding: 0;
+  list-style: none;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.explorer .cockpit-crumbs li {
+  display: flex;
+  gap: 0.15rem;
+  align-items: center;
+}
+
+.explorer .cockpit-crumbs button {
+  padding: 0 0.15rem;
+  border: none;
+  border-radius: 3px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.explorer .cockpit-crumbs button:hover {
+  color: var(--text-primary);
+  text-decoration: underline;
+}
+
+.explorer .cockpit-crumbs [aria-current] {
+  color: var(--text-primary);
+}
+
+.explorer .cockpit-head {
+  margin-block-end: 0.5rem;
+  padding-block-end: 0.5rem;
+  border-block-end: 1px solid var(--border-subtle);
+}
+
+.explorer .cockpit-name {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.explorer .cockpit-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  margin: 0.25rem 0 0.4rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.explorer .cockpit-actions {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.explorer .cockpit-action {
+  display: inline-flex;
+  gap: 0.25rem;
+  align-items: center;
+  padding: 0.1rem 0.5rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.explorer .cockpit-action:disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+
 /* What a branch changed (FM-4): a letter on a file, a count on a folder, and its name tinted
    the same. Added and deleted take the light editor's diff tokens (`diff-inserted-text`,
    `diff-deleted-text`); changed takes `state-waiting` and renamed `accent-base`, which the

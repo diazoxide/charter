@@ -4481,6 +4481,7 @@ down rather than read off the code.
 | `views[].active` | bool | default `false` | whether it was the tab in front |
 | `views[].pinned` | bool | default `false` | whether the operator pinned it (ADR 0039) |
 | `views[].split` | number | absent | where the view's divider was, as its first side's share of the tab in percent: the file tab's tree beside its preview (FM-2). Written only once the divider was moved. **Read only between 1 and 99** (rounded to a whole percent); any other number is forgotten and the tab still comes back. The window holds the tree between 10% and 70% |
+| `focus` | object | absent | the branch the window's explorer was focused on, its cockpit (FM-5, #1108): `{"workspace": "<name>", "repo": "<name>", "piece": "<name>"}`, with `piece` empty for the repo's own folder. Kept with `views`, and written only while a branch is focused, so a window that never focused one writes the record it always wrote. Held on the way in: a name charter would not mint, or a value that is not such an object, reads as absent. Not something a launch asks about: a record holding only a focus puts nothing back to ask about |
 
 Which harness a chat runs is **not** recorded: it is read from `program`'s file name, so a
 record cannot disagree with what is about to be started. Only a harness charter has

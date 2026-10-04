@@ -233,7 +233,20 @@ impl Move {
         for view in &mut record.views {
             changed |= self.view(view);
         }
+        if let Some(focus) = record.focus.as_mut() {
+            changed |= self.focus(focus);
+        }
         changed
+    }
+
+    /// Follows the move in the branch the window focused its sidebar on (FM-5); `true` when it
+    /// changed.
+    pub fn focus(&self, focus: &mut crate::reopen::Focus) -> bool {
+        if focus.workspace != self.old {
+            return false;
+        }
+        focus.workspace.clone_from(&self.new);
+        true
     }
 }
 

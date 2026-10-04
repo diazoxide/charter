@@ -29,13 +29,15 @@ mod find;
 pub use find::{Finder, Found, Hit, Named, Place, branches, find};
 // What a branch changed (FM-4): its own file, so the calls other tickets add here stay apart.
 mod status;
-pub use status::{Change, MARKED, Mark, Rolled, Status};
+pub use status::{AheadBehind, Change, MARKED, Mark, Rolled, Status};
 // Where to listen for those changes (FM-4).
 mod watch;
 pub use watch::{ASKED, KNOWN, Root, root};
 // Both read in a bounded child of charter's own binary (FM-4, D-88h).
 mod reader;
-pub use reader::{Answer, Ask, GRACE, MEMORY, OUTPUT, READ_ARG, Reader, serve_if_asked, status};
+pub use reader::{
+    Answer, Ask, GRACE, MEMORY, OUTPUT, READ_ARG, Reader, ahead_behind, serve_if_asked, status,
+};
 mod search;
 pub use search::{
     BadQuery, Ended, FILE_LINES, FILL, FileHits, HitLine, LINE_CHARS, LONGEST_LINE, LONGEST_QUERY,
