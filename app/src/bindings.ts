@@ -1379,6 +1379,15 @@ export const commands = {
 	 */
 	saveProjectSettings: (plane: PlaneId, which: SettingsWhich, base: string | null, change: SettingsChange) => typedError<SettingsSaved, string>(__TAURI_INVOKE("save_project_settings", { plane, which, base, change })),
 	/**
+	 *  Move the values at `paths` into `to`, out of the other file: the Settings tab's "Shared /
+	 *  Only on this machine" choice (SE-18). Both files are written or neither is
+	 *  (`charter_core::settings::move_keys`).
+	 * 
+	 *  `shared_base` and `local_base` are the texts the window read (`null`: not there), so a file
+	 *  changed on disk since is refused rather than overwritten.
+	 */
+	moveProjectSettings: (plane: PlaneId, to: SettingsWhich, sharedBase: string | null, localBase: string | null, paths: SettingsStep[][]) => typedError<SettingsMoved, string>(__TAURI_INVOKE("move_project_settings", { plane, to, sharedBase, localBase, paths })),
+	/**
 	 *  The plane's and each repo's save settings in force — `planesave::Settings`, the one
 	 *  resolver every save asks, shaped for the wire.
 	 * 
@@ -3964,6 +3973,9 @@ export type SettingsFile = {
 	/**  Every value in it, in file order. */
 	fields: SettingsField[],
 };
+
+/**  What a move answered: both files as they now stand, or every reason neither was written. */
+export type SettingsMoved = { kind: "moved"; settings: ProjectSettings } | { kind: "refused"; reasons: string[] };
 
 /**  What a save answered: the file as it now stands, or every reason nothing was written. */
 export type SettingsSaved = { kind: "saved"; file: SettingsFile } | { kind: "refused"; reasons: string[] };

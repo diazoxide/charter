@@ -5813,6 +5813,33 @@ h2.sidebar-title .node-icon {
   font-weight: 500;
 }
 
+/* A value that overrides another file's (SE-18): a Local value over the Shared one. */
+.ui-setting-badge {
+  justify-self: start;
+  padding: 0 0.4rem;
+  border: 1px solid var(--accent-base);
+  border-radius: 3px;
+  font-size: 0.75rem;
+  color: var(--text-primary);
+  background: var(--accent-surface);
+}
+
+/* Which level and file the value comes from (SE-18). */
+.ui-setting-origin {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+/* The file choice: Shared or Only on this machine, and the button that moves the value. */
+.ui-setting-place {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+}
+
 .ui-setting-control {
   display: flex;
   flex-wrap: wrap;

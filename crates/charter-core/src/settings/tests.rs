@@ -852,3 +852,222 @@ fn a_setting_given_a_value_charter_would_not_read_is_refused_and_nothing_is_writ
     );
     assert_eq!(text(dir.path(), "charter.toml"), HAND_WRITTEN);
 }
+
+// ---------------------------------------------------------------------------------------
+// Moving a value between the two files (SE-18, V89d)
+// ---------------------------------------------------------------------------------------
+
+fn path_of(keys: &[&str]) -> Vec<Step> {
+    keys.iter()
+        .map(|key| Step::Key((*key).to_owned()))
+        .collect()
+}
+
+const SAVING: &str = "\
+# the team's
+[plane]
+mode = \"push\"   # how far a save goes
+sign = true
+";
+
+#[test]
+fn a_value_moved_to_this_machine_leaves_charter_toml_and_lands_in_charter_local_toml() {
+    let dir = plane(SAVING);
+    move_keys(
+        dir.path(),
+        Which::Local,
+        Some(SAVING),
+        None,
+        &[path_of(&["plane", "mode"])],
+    )
+    .unwrap();
+    assert_eq!(
+        text(dir.path(), "charter.toml"),
+        "# the team's\n[plane]\nsign = true\n"
+    );
+    let local = text(dir.path(), "charter.local.toml");
+    assert_eq!(
+        fields(&local).unwrap(),
+        [(
+            path_of(&["plane", "mode"]),
+            Found::Value(Value::Text("push".into()))
+        )]
+    );
+}
+
+#[test]
+fn a_value_moved_back_to_shared_leaves_charter_local_toml_and_lands_in_charter_toml() {
+    let dir = plane("[plane]\nsign = true\n");
+    let local = "[plane]\nmode = \"pr\"\n\n[harness]\ndefault = \"work\"\n";
+    fs::write(dir.path().join("charter.local.toml"), local).unwrap();
+    move_keys(
+        dir.path(),
+        Which::Shared,
+        Some(local),
+        Some("[plane]\nsign = true\n"),
+        &[path_of(&["plane", "mode"])],
+    )
+    .unwrap();
+    assert_eq!(
+        fields(&text(dir.path(), "charter.toml")).unwrap(),
+        [
+            (path_of(&["plane", "sign"]), Found::Value(Value::Bool(true))),
+            (
+                path_of(&["plane", "mode"]),
+                Found::Value(Value::Text("pr".into()))
+            ),
+        ]
+    );
+    // A table the move emptied goes with it.
+    let local = text(dir.path(), "charter.local.toml");
+    assert!(!local.contains("[plane]"), "{local}");
+    assert_eq!(
+        fields(&local).unwrap(),
+        [(
+            path_of(&["harness", "default"]),
+            Found::Value(Value::Text("work".into()))
+        )]
+    );
+}
+
+#[test]
+fn moving_a_value_over_one_the_other_file_holds_replaces_it() {
+    let dir = plane(SAVING);
+    let local = "[plane]\nmode = \"commit\"\n";
+    fs::write(dir.path().join("charter.local.toml"), local).unwrap();
+    move_keys(
+        dir.path(),
+        Which::Shared,
+        Some(local),
+        Some(SAVING),
+        &[path_of(&["plane", "mode"])],
+    )
+    .unwrap();
+    assert_eq!(
+        text(dir.path(), "charter.toml"),
+        "# the team's\n[plane]\nmode = \"commit\"   # how far a save goes\nsign = true\n"
+    );
+}
+
+#[test]
+fn a_move_the_other_file_would_refuse_writes_neither_file() {
+    // [sandbox] is only the Shared file's: moving it to this machine is refused, and the
+    // sandbox stays on in charter.toml.
+    let shared = "[sandbox]\nmode = \"on\"\n";
+    let dir = plane(shared);
+    let err = move_keys(
+        dir.path(),
+        Which::Local,
+        Some(shared),
+        None,
+        &[path_of(&["sandbox", "mode"])],
+    )
+    .unwrap_err();
+    assert!(
+        err[0].starts_with("[sandbox] in charter.local.toml is not read"),
+        "{err:?}"
+    );
+    assert_eq!(text(dir.path(), "charter.toml"), shared);
+    assert!(!dir.path().join("charter.local.toml").exists());
+}
+
+#[test]
+fn a_move_to_a_local_file_git_would_commit_writes_neither_file() {
+    let dir = plane(SAVING);
+    fs::write(dir.path().join(".gitignore"), "").unwrap();
+    let err = move_keys(
+        dir.path(),
+        Which::Local,
+        Some(SAVING),
+        None,
+        &[path_of(&["plane", "mode"])],
+    )
+    .unwrap_err();
+    assert!(err[0].starts_with("git would commit"), "{err:?}");
+    assert_eq!(text(dir.path(), "charter.toml"), SAVING);
+    assert!(!dir.path().join("charter.local.toml").exists());
+}
+
+#[test]
+fn a_move_when_either_file_changed_since_it_was_read_writes_neither_file() {
+    let dir = plane(SAVING);
+    fs::write(dir.path().join("charter.local.toml"), "[plane]\n").unwrap();
+    let err = move_keys(
+        dir.path(),
+        Which::Local,
+        Some(SAVING),
+        None,
+        &[path_of(&["plane", "mode"])],
+    )
+    .unwrap_err();
+    assert!(
+        err[0].starts_with("charter.local.toml changed on disk"),
+        "{err:?}"
+    );
+    assert_eq!(text(dir.path(), "charter.toml"), SAVING);
+    assert_eq!(text(dir.path(), "charter.local.toml"), "[plane]\n");
+}
+
+#[test]
+fn moving_a_value_the_file_does_not_hold_is_refused() {
+    let dir = plane(SAVING);
+    let err = move_keys(
+        dir.path(),
+        Which::Local,
+        Some(SAVING),
+        None,
+        &[path_of(&["plane", "branch"])],
+    )
+    .unwrap_err();
+    assert_eq!(
+        err,
+        ["plane.branch is not in charter.toml, so there is nothing to move."]
+    );
+    assert!(!dir.path().join("charter.local.toml").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_move_whose_second_write_fails_puts_the_first_file_back() {
+    use std::os::unix::fs::PermissionsExt;
+    // The file the value comes out of is written last; a read-only one is not written, and
+    // the file the value went into is put back as it was.
+    let dir = plane(SAVING);
+    let local = "[harness]\ndefault = \"work\"\n";
+    fs::write(dir.path().join("charter.local.toml"), local).unwrap();
+    let shared = dir.path().join("charter.toml");
+    fs::set_permissions(&shared, fs::Permissions::from_mode(0o444)).unwrap();
+    let err = move_keys(
+        dir.path(),
+        Which::Local,
+        Some(SAVING),
+        Some(local),
+        &[path_of(&["plane", "mode"])],
+    )
+    .unwrap_err();
+    assert!(
+        err[0].starts_with("charter.toml could not be written"),
+        "{err:?}"
+    );
+    assert_eq!(text(dir.path(), "charter.toml"), SAVING);
+    assert_eq!(text(dir.path(), "charter.local.toml"), local);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_failed_move_into_a_new_local_file_leaves_no_local_file() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = plane(SAVING);
+    let shared = dir.path().join("charter.toml");
+    fs::set_permissions(&shared, fs::Permissions::from_mode(0o444)).unwrap();
+    move_keys(
+        dir.path(),
+        Which::Local,
+        Some(SAVING),
+        None,
+        &[path_of(&["plane", "mode"])],
+    )
+    .unwrap_err();
+    assert_eq!(text(dir.path(), "charter.toml"), SAVING);
+    assert!(!dir.path().join("charter.local.toml").exists());
+}

@@ -172,6 +172,71 @@ pub(crate) fn save(
     }
 }
 
+/// What a move answered: both files as they now stand, or every reason neither was written.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, specta::Type)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum SettingsMoved {
+    Moved { settings: ProjectSettings },
+    Refused { reasons: Vec<String> },
+}
+
+/// Move the values at `paths` into `to`, out of the other file: the Settings tab's "Shared /
+/// Only on this machine" choice (SE-18). Both files are written or neither is
+/// (`charter_core::settings::move_keys`).
+///
+/// `shared_base` and `local_base` are the texts the window read (`null`: not there), so a file
+/// changed on disk since is refused rather than overwritten.
+#[tauri::command]
+#[specta::specta]
+pub async fn move_project_settings(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    to: SettingsWhich,
+    shared_base: Option<String>,
+    local_base: Option<String>,
+    paths: Vec<Vec<SettingsStep>>,
+) -> Result<SettingsMoved, String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || {
+        move_keys(
+            &root,
+            to,
+            shared_base.as_deref(),
+            local_base.as_deref(),
+            paths,
+        )
+    })
+    .await
+    .map_err(|err| format!("moving the setting did not finish: {err}"))?
+}
+
+/// [`move_project_settings`], without a runtime.
+pub(crate) fn move_keys(
+    root: &std::path::Path,
+    to: SettingsWhich,
+    shared_base: Option<&str>,
+    local_base: Option<&str>,
+    paths: Vec<Vec<SettingsStep>>,
+) -> Result<SettingsMoved, String> {
+    let paths: Vec<Vec<Step>> = paths
+        .into_iter()
+        .map(|path| path.into_iter().map(core_step).collect())
+        .collect();
+    let (from_base, to_base) = match to {
+        SettingsWhich::Shared => (local_base, shared_base),
+        SettingsWhich::Local => (shared_base, local_base),
+    };
+    match settings::move_keys(root, to.into(), from_base, to_base, &paths) {
+        Ok(()) => Ok(SettingsMoved::Moved {
+            settings: ProjectSettings {
+                shared: file_of(root, SettingsWhich::Shared)?,
+                local: file_of(root, SettingsWhich::Local)?,
+            },
+        }),
+        Err(reasons) => Ok(SettingsMoved::Refused { reasons }),
+    }
+}
+
 pub(crate) fn file_of(
     root: &std::path::Path,
     which: SettingsWhich,
@@ -454,16 +519,16 @@ fn value_of(found: Found) -> SettingsValue {
 
 fn edit_of(edit: SettingsEdit) -> Result<Edit, String> {
     Ok(Edit {
-        path: edit
-            .path
-            .into_iter()
-            .map(|step| match step {
-                SettingsStep::Key(key) => Step::Key(key),
-                SettingsStep::Index(at) => Step::Index(at as usize),
-            })
-            .collect(),
+        path: edit.path.into_iter().map(core_step).collect(),
         value: edit.value.map(value_to_core).transpose()?,
     })
+}
+
+fn core_step(step: SettingsStep) -> Step {
+    match step {
+        SettingsStep::Key(key) => Step::Key(key),
+        SettingsStep::Index(at) => Step::Index(at as usize),
+    }
 }
 
 fn value_to_core(value: SettingsValue) -> Result<Value, String> {
@@ -714,6 +779,37 @@ mod tests {
             ]
         );
         assert_eq!((got.plane_left_out, got.repos_left_out), (None, None));
+    }
+
+    #[test]
+    fn a_move_answers_both_files_as_they_now_stand() {
+        let shared = "[plane]\nmode = \"push\"\n";
+        let dir = plane_with_local(shared, "");
+        let moved = move_keys(
+            dir.path(),
+            SettingsWhich::Local,
+            Some(shared),
+            Some(""),
+            vec![vec![
+                SettingsStep::Key("plane".into()),
+                SettingsStep::Key("mode".into()),
+            ]],
+        )
+        .unwrap();
+        let SettingsMoved::Moved { settings } = moved else {
+            panic!("moved: {moved:?}")
+        };
+        assert!(settings.shared.fields.is_empty(), "{:?}", settings.shared);
+        assert_eq!(
+            settings.local.fields,
+            [SettingsField {
+                path: vec![
+                    SettingsStep::Key("plane".into()),
+                    SettingsStep::Key("mode".into()),
+                ],
+                value: SettingsValue::Text("push".into()),
+            }]
+        );
     }
 
     #[test]

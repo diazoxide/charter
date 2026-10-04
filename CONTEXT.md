@@ -720,6 +720,8 @@ _Avoid_: ignore list, exceptions, whitelist
 **Shared / Local** (settings):
 Where a setting's value comes from: `charter.toml` (committed, the team's) or
 `charter.local.toml` (this machine's). A Local value overrides the Shared one key by key.
+In Settings a value says which it comes from, and "Shared / Only on this machine" moves it
+between the two.
 _Avoid_: global/user, project/personal
 
 **Settings**:

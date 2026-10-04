@@ -45,11 +45,17 @@ export type SettingsFileId = SettingsWhich | "workspace";
  * makes. Every value is text while it is typed or picked; `edits` is where it becomes a key, so
  * a setting whose value spans keys (a profile's environment) still writes only its own.
  *
- * `file` is fixed per setting until SE-18 gives each value its own Shared / Only on this machine
- * choice.
+ * `file` is the file a value goes to while no file holds one. A `movable` setting's value may be
+ * kept in either of the project's two files (SE-18, V89d): its row offers "Shared / Only on this
+ * machine", which moves the value between them, and the value in force is `charter.local.toml`'s
+ * where it holds one (Local overrides Shared key by key).
  */
 export type FileSetting = Named & {
   file: SettingsFileId;
+  /** Kept in either `charter.toml` or `charter.local.toml`, as the person chooses (SE-18). Only a
+   *  key both files' readers read is: never one only the Local file may hold (profiles, the
+   *  environment passed to chats, the default profile), nor one only the Shared file may. */
+  movable?: boolean;
   key: SettingsStep[];
   /** `text` is one line, `choice` a closed set, `lines` one entry per line, and `colour` a
    *  closed set whose `custom` pick is a `#rrggbb` of the operator's own (a workspace's). */
