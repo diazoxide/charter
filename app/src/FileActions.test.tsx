@@ -190,9 +190,7 @@ describe("a file or folder row's actions (FM-10)", () => {
     render(<App />);
 
     await fromTheMenu("README.md", "Open in your editor");
-    expect(
-      await screen.findByText("Choose your editor on the Preferences tab first."),
-    ).toBeInTheDocument();
+    expect(await screen.findByText("Choose your editor in Settings first.")).toBeInTheDocument();
 
     setYourEditor("zed");
     await fromTheMenu("README.md", "Open in your editor");

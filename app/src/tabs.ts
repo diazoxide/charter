@@ -158,15 +158,32 @@ export function workspaceSettingsTitle(workspace: string): string {
 }
 
 /**
- * **The Preferences view** (charter-app#283): how this machine's window is drawn — the window
- * and terminal text sizes — which is the machine's and not the plane's. A view tab all the
- * same, opened on the project in front, because a tab is where the window puts a surface; what
- * it edits is the machine's layout file (`textSize.ts`), never a file in the plane.
+ * **The Settings tab** (SE-16, #1166; V89b): every setting, one level at a time. Keyed by the
+ * level it opens at — `you` today; a project's and a workspace's join it with SE-17 and SE-20 —
+ * so opening Settings at a level that already has its tab brings that tab forward. It is the
+ * view `settings` because it is what Settings means from here on; the old Project settings page
+ * is the same view with the empty key until SE-19 retires it.
+ *
+ * The You level is the machine's and not the plane's, so it is the same tab whichever project's
+ * strip it was opened on: what it edits is the machine's layout file, never a file in the plane.
  */
-export const PREFERENCES_VIEW: ViewRef = { from: null, view: "preferences", key: "" };
+export function settingsView(level: "you"): ViewRef {
+  return { from: null, view: "settings", key: level };
+}
 
-/** What the Preferences tab is called. */
-export const PREFERENCES_TITLE = "Preferences";
+/** What the Settings tab is called. */
+export const SETTINGS_TAB_TITLE = "Settings";
+
+/**
+ * A view tab as a record from an older charter names it, as it is named now: the Preferences tab
+ * (charter-app#283) is Settings at the You level since SE-16, so a launch that put one back puts
+ * Settings back instead of a tab nothing draws. Every other view is itself.
+ */
+export function viewNamedNow(view: ViewRef, title: string): { view: ViewRef; title: string } {
+  return view.from === null && view.view === "preferences"
+    ? { view: settingsView("you"), title: SETTINGS_TAB_TITLE }
+    : { view, title };
+}
 
 /** What a pane shows. */
 export type Content =

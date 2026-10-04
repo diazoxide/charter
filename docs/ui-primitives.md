@@ -33,6 +33,11 @@ file is the defect.
   The operator settled it: that rule was written against **a dependency that owns your markup**,
   and a file in `app/src/components/ui/` is ours, editable line by line, and visible in the diff
   that adds it. `docs/design-system.md` has what a copy must satisfy.
+- **One house set is allowed, and only this one: the settings set** (amended 2026-10-04, ruling
+  V89f, SE-16 #1166). `app/src/settings/components.tsx` holds five pieces —
+  **SettingsLayout**, **SettingGroup**, **SettingRow**, **Field** and **Choice** — and nothing
+  else may join it without amending this line. See
+  [The settings set](#the-settings-set-is-the-one-house-set) below for why.
 - Charter's own look, always. Radix ships **no CSS at all** — every primitive is an unstyled
   element with `data-state` attributes to hang rules off. `App.css` stays the one place the
   window is drawn — but **no colour is written in it**: every one is `var(--<token>)` and the
@@ -42,6 +47,44 @@ file is the defect.
   no element for what you mean — a modal that traps focus, a listbox, a menu.
 - `react-resizable-panels` stays what draws resizable panes. Radix has no panel primitive and
   there is nothing to move.
+
+## The settings set is the one house set
+
+The rule above says no `<Field>` and no house component library, and it was right for every
+surface it was written against. Settings is where it stopped paying, for two reasons, and the
+operator amended it there on 2026-10-04 (V89f; the spec on #558):
+
+- **Two hand-built form styles already existed, and they had drifted.** Project settings,
+  Saving, Memory and workspace repos draw a label, a control and a hint with `settings-field`
+  and `settings-hint`; the dialogs (New project, New vault, Start chat, First run) draw a
+  choice with `choices` and `choice`. The same row — a label, a control, a line of help — was
+  written twice with different spacing, different focus rules and different names for the
+  same thing, and every new screen picked one by copying it. A rule that forbids the
+  component does not stop the drift; it moves it into CSS.
+- **It is DS-3's _expand_ step** (#626, "One component set"). The set is added beside the old
+  classes, each screen moves onto it in its own ticket (Saving, Memory, workspace repos, New
+  project, New vault, Rename workspace, Start chat, First run, Updates), and the old
+  `settings-*`, `choices` and `choice` classes are deleted in a last ticket once nothing uses
+  them — an expand–contract change, never a big-bang one.
+
+What keeps it from becoming the library this file forbids:
+
+- **Five pieces, named here, and no more.** `SettingsLayout` (the level switcher, the nav of
+  groups and the chosen group, in two columns), `SettingGroup` (a group's heading, help and
+  rows), `SettingRow` (label, help, control and reset; the file choice and the origin join it
+  with SE-18), `Field` (`text`, `list` and `range`) and `Choice` (`radio`, `select` and
+  `toggle`). A sixth piece is an amendment to this file, not a commit.
+- **Each piece is a thin layer over a primitive already in the window, and says which.**
+  The level switcher is a Radix radio group; the nav is buttons under Radix roving focus
+  (`roving.ts`, as the explorer's rows); `Choice` is a Radix radio group, a native `<select>`
+  or a Radix checkbox; `Field` is a native `<input>`, `<textarea>` or `<input type="range">`.
+  The props are the primitive's own words — `value`, `onValueChange`, `checked`,
+  `onCheckedChange` — so the call site still answers "which primitive is this?".
+- **No look of its own.** The set is drawn in `App.css` under `ui-*` classes, every colour a
+  design-system token, so a theme reaches it exactly as it reaches everything else.
+- **Groups are data, not markup.** A settings screen declares its groups — a stable id, a
+  label, a line of help and its settings (`app/src/settings/groups.ts`) — and the layout draws
+  them. A new setting is a few lines of data, and it cannot look different from its neighbours.
 
 ## Why Radix, and why not the other two
 
@@ -759,7 +802,7 @@ sends as `^_`, readline's `undo`: it is never matched, and reaches the shell unp
 real xterm sends `^_` for a plain `Ctrl+-` too; xterm.js does not, and it is the terminal in
 every pane.) They are a capture listener on the window, like the palette's, and not menu
 accelerators: which size a key changes depends on where the keystroke landed, which only the
-page knows. Preferences… is on the menu, on `⌘,` and `Ctrl+,`; xterm sends nothing for either.
+page knows. Settings… is on the menu, on `⌘,` and `Ctrl+,`; xterm sends nothing for either.
 
 **The new-shell key takes nothing either** (SI-5, ADR 0062, `shellKey.opensAShell`): `⌘⇧T` on a
 Mac and `Ctrl+Shift+T` elsewhere — "new tab" in GNOME Terminal, Konsole and Windows Terminal,

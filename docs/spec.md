@@ -438,8 +438,8 @@ how it is cited and nothing here is renumbered.
     tab (RC-4) come after. **ADR 0081, ADR 0084.**
 35. **A file of a worktree opens in your editor at a line** (RC-20). Beside a file the light
     editor shows is *Open in your editor at line N*, the line the cursor is on, and it is
-    offered too for a file past the light editor's size. Your editor is chosen on the
-    Preferences tab and kept in the layout file: VS Code, Zed and a JetBrains IDE are handed
+    offered too for a file past the light editor's size. Your editor is chosen in
+    Settings, at the You level, and kept in the layout file: VS Code, Zed and a JetBrains IDE are handed
     the file through their own `vscode://`, `zed://` and `idea://` links, and `$VISUAL`, else
     `$EDITOR`, is started as a program with `+line` and the file as arguments, never through a
     shell. The core checks the path exactly as it checks a read, so a file the light editor

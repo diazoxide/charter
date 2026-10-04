@@ -43,7 +43,7 @@ export const MOST_TEXT = 24;
  */
 export const DEFAULT_TEXT: TextSizes = { window: 14, terminal: 13 };
 
-/** What the two sizes are called, in a sentence and on the Preferences tab. */
+/** What the two sizes are called, in a sentence and in Settings. */
 export const TEXT_NAMES: Record<Which, string> = {
   window: "window text size",
   terminal: "terminal text size",
@@ -110,7 +110,7 @@ function startingText(layout: Reading = atCreation().layout): TextSizes {
     sayAboutThisMachine("text", {
       severity: "warn",
       detail: `${where}: ${said.join("; ")}`,
-      remedy: `fix ${where}, or set the size on the Preferences tab, which rewrites it`,
+      remedy: `fix ${where}, or set the size in Settings, which rewrites it`,
     });
   }
   started = sizes;

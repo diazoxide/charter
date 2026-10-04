@@ -4,7 +4,7 @@ import { atCreation, sayAboutThisMachine, type Reading } from "./windowprefs";
 
 /**
  * **Your editor** (RC-20, ADR 0081 §3): which editor *Open in your editor* hands a file and a
- * line to, chosen on the Preferences tab.
+ * line to, chosen in Settings.
  *
  * **Kept in the layout file, beside the text sizes** (`charter/layout.json`, `regions.ts`). It
  * is the operator's on this machine and could follow them to another: ADR 0081 §6 and ADR 0084
@@ -19,7 +19,7 @@ import { atCreation, sayAboutThisMachine, type Reading } from "./windowprefs";
  * sentence to say why; *Open in your editor* asks for a choice instead.
  */
 
-/** The editors, as the Preferences tab offers them, in that order. */
+/** The editors, as Settings offers them, in that order. */
 export const EDITORS: readonly { id: YourEditor; name: string; says: string }[] = [
   { id: "vscode", name: "VS Code", says: "Through its vscode:// links." },
   { id: "zed", name: "Zed", says: "Through its zed:// links." },
@@ -73,7 +73,7 @@ function startingEditor(layout: Reading = atCreation().layout): YourEditor | und
     sayAboutThisMachine("editor", {
       severity: "warn",
       detail: `${where}: ${said.join("; ")}`,
-      remedy: `fix ${where}, or choose your editor on the Preferences tab, which rewrites it`,
+      remedy: `fix ${where}, or choose your editor in Settings, which rewrites it`,
     });
   }
   started = { editor };

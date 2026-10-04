@@ -5205,28 +5205,6 @@ h2.sidebar-title .node-icon {
   outline-offset: 2px;
 }
 
-/* A text size on the Preferences tab (charter-app#283): the slider, what it is at, and its
-   reset, on one row. The slider is not a text box, so the box look `.settings-field input`
-   gives every input is taken back off it. */
-.text-size {
-  align-items: center;
-  margin: 0.2rem 0 0;
-}
-
-.text-size input[type="range"] {
-  flex: 1;
-  max-width: 16rem;
-  padding: 0;
-  background: none;
-  border: 0;
-  accent-color: var(--accent-base);
-}
-
-.text-size output {
-  min-width: 3em;
-  font-variant-numeric: tabular-nums;
-}
-
 .settings-standing ul,
 .settings-refused ul {
   margin: 0.25rem 0;
@@ -5656,5 +5634,219 @@ h2.sidebar-title .node-icon {
 }
 
 .search-unsearched {
+  color: var(--text-muted);
+}
+
+/* **The house settings set** (SE-16, DS-3's expand step; `settings/components.tsx`): the two
+   columns, a group, a row, a field and a choice. `ui-*` and not `settings-*`, so the screens
+   still on the old hand-built classes and the ones moved onto this set can be told apart until
+   the last ticket deletes the old ones. Every colour is a token (`docs/design-system.md`). */
+.ui-settings {
+  display: grid;
+  grid-template-columns: minmax(9rem, 12rem) minmax(0, 48rem);
+  grid-template-areas:
+    "top top"
+    "nav body";
+  gap: 0.75rem 1.5rem;
+}
+
+.ui-settings-top {
+  grid-area: top;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem 1rem;
+  padding-bottom: 0.6rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* The level switcher: a radio group drawn as one row of segments, the chosen one marked. */
+.ui-levels {
+  display: inline-flex;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.ui-level {
+  padding: 0.2rem 0.8rem;
+  color: var(--text-secondary);
+  background: var(--control-base);
+  border: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
+.ui-level + .ui-level {
+  border-left: 1px solid var(--border-subtle);
+}
+
+.ui-level:hover {
+  background: var(--control-hover);
+}
+
+.ui-level[data-state="checked"] {
+  color: var(--text-primary);
+  background: var(--accent-surface);
+}
+
+.ui-settings-about {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+/* The left nav: one button per group, the shown one marked. */
+.ui-settings-nav {
+  grid-area: nav;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.ui-settings-nav button {
+  padding: 0.3rem 0.6rem;
+  color: var(--text-secondary);
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: 4px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.ui-settings-nav button:hover {
+  background: var(--surface-hover);
+}
+
+.ui-settings-nav button[aria-current="true"] {
+  color: var(--text-primary);
+  background: var(--accent-surface);
+}
+
+.ui-settings-body {
+  grid-area: body;
+  min-width: 0;
+}
+
+.ui-level:focus-visible,
+.ui-settings-nav button:focus-visible,
+.ui-setting-reset:focus-visible,
+.ui-field:focus-visible,
+.ui-field-range input:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.ui-setting-group h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.ui-setting-help {
+  margin: 0.2rem 0 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+/* A row: the label, then the control with its reset beside it, then the line of help. */
+.ui-setting-row {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.7rem 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.ui-setting-label {
+  font-weight: 500;
+}
+
+.ui-setting-control {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.ui-setting-reset {
+  padding: 0.2rem 0.6rem;
+  color: var(--text-primary);
+  background: var(--control-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.ui-setting-reset:hover:not(:disabled) {
+  background: var(--control-hover);
+}
+
+.ui-setting-reset:disabled {
+  cursor: default;
+  color: var(--text-muted);
+}
+
+.ui-field {
+  padding: 0.3rem 0.5rem;
+  color: var(--text-primary);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  font: inherit;
+}
+
+textarea.ui-field {
+  resize: vertical;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+}
+
+/* A slider is not a text box: no box, and what it is at beside it in even-width digits. */
+.ui-field-range {
+  display: inline-flex;
+  flex: 1;
+  align-items: center;
+  gap: 0.5rem;
+  max-width: 20rem;
+  padding: 0;
+  background: none;
+  border: 0;
+}
+
+.ui-field-range input {
+  flex: 1;
+  accent-color: var(--accent-base);
+}
+
+.ui-field-range output {
+  min-width: 3em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* A radio choice: the mark, the name it is labelled by, and under the name what it does. The
+   mark is the window's own `.dot`. */
+.ui-choice-radio {
+  display: grid;
+  gap: 0.1rem;
+  width: 100%;
+}
+
+.ui-choice-option {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.1rem 0.5rem;
+  align-items: baseline;
+  padding: 0.3rem 0;
+}
+
+.ui-choice-option label {
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.ui-choice-says {
+  grid-column: 2;
+  font-size: 0.8rem;
   color: var(--text-muted);
 }

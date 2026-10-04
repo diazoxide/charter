@@ -884,7 +884,11 @@ const STATES: State[] = [
     },
     drawn: /^A harness is installed$/,
   },
-  { name: "Preferences", view: { from: null, view: "preferences", key: "" }, drawn: /^Text$/ },
+  {
+    name: "Settings, at the You level",
+    view: { from: null, view: "settings", key: "you" },
+    drawn: /^Text$/,
+  },
   {
     name: "a branch's files",
     view: { from: null, view: "piece-files", key: "alpha/svc/fix-it" },
