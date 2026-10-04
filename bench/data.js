@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791145925383,
+  "lastUpdate": 1791146675564,
   "repoUrl": "https://github.com/diazoxide/charter",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -1344,6 +1344,48 @@ window.BENCHMARK_DATA = {
             "value": 101.75712200000001,
             "unit": "ms",
             "extra": "median of 5 runs: 101.314, 101.554, 101.757, 101.927, 102.121 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "a37080d39c8a6ae7e2ffea3f322a57aa8a5585e2",
+          "message": "DS-3d: Rename workspace, Start chat, First run and Updates on the settings set\n\nThe four remaining hand-built forms draw their form parts from the settings\nset (SettingGroup, SettingRow, Field, Choice) instead of the dialogs'\nasks/choices/choice classes. Button rows stay on their old classes for DS-3e\n(#1177).\n\n- Rename workspace: the New name box is a row; the dialog finds the box to\n  focus and select on opening, since a Field takes no ref.\n- Start chat: harness and persona are radio Choices (a harness's ProfileMeta\n  is its option's line), the footer, branch and sandbox boxes are toggles,\n  Name and the sandbox reason are text Fields, and the sandbox block sits in\n  a \"Sandbox\" SettingGroup in every state.\n- First run: the path is a Field row (placeholder an example of the answer)\n  with Open below it; the template a radio Choice disabled while opening.\n- Updates: the channel is a radio Choice marking the current one; the pick\n  is held and written only by \"Use this channel\" (busy-guarded). Success\n  says the new channel and returns focus to it; a refusal shows the channel\n  it is still on.\n- e2e/opening.ts finds the harness rows through the radiogroup labelled\n  \"Harness\" instead of the gone `pick-harness` id.\n- docs/ui-primitives.md: the arrow-pick repair lives in Choice, and the rule\n  for radios that write with no Undo or start something.\n\nDecided in implementation:\n- D-DS3d1 (accepted globally): Choice's radio picks the option a single\n  arrow key moves to. Radix's arrow flag comes from a document listener that\n  hears the key after the roving focus has set its move going, so only a\n  held key picked; StartChat had worked around it with onFocus per row.\n  Choice hears the arrow in the capture phase, picks on the focus that\n  follows, and forgets it on key-up or when focus leaves the group. Guarded\n  by components.test.tsx. Rejected: an opt-in prop, a hand-built group in\n  StartChat. Visible effect: Settings > Your editor follows one arrow.\n- D-DS3d2: Updates' channel pick is held and written by \"Use this channel\",\n  shown only while the pick differs from the channel, forgotten on close.\n  Rejected: writing on pick (the radio trap), an always-shown disabled\n  button. The existing \"puts the machine on the channel the operator picks\"\n  test now presses it.\n- D-DS3d3, D-DS3d4: duplicates of DS-3c's toggle tabIndex={0} and text\n  input autoComplete=\"off\"; DS-3c's side was taken on rebase.\n- D-DS3d5: Option.says widens from string to ReactNode, so a harness's\n  kind, command and source keep their own marks; ProfileMeta's id becomes\n  optional.\n- D-DS3d6: Choice's radio gains Radix's own `disabled` (First run holds the\n  template while opening; Updates holds the channel while writing).\n- D-DS3d7: moot after rebase onto DS-3c: Rename's help keeps\n  <code>workspaces/</code>, First run keeps its /path/to/repo placeholder.\n  The checkbox labels keep their exact wording, which tests name.\n\nLeftover for DS-3e: Start chat's refused list still names a profile with\nthe `who` class, and `.choices-name` now has no user.\n\nCloses #1176\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-05T00:34:46+04:00",
+          "tree_id": "b5e9e0805631ddc46b481b9efe203d5a176b730c",
+          "url": "https://github.com/diazoxide/charter/commit/a37080d39c8a6ae7e2ffea3f322a57aa8a5585e2"
+        },
+        "date": 1791146674585,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.4282525,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.409, 0.419, 0.428, 0.428, 0.431 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.574596999999997,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.409, 16.475, 16.575, 16.615, 16.740 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.78090599999999,
+            "unit": "ms",
+            "extra": "median of 5 runs: 100.751, 101.756, 101.781, 101.916, 102.326 ms"
           }
         ]
       }
