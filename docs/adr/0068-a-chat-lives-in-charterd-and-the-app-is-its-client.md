@@ -723,7 +723,9 @@ that item is withdrawn.
    take turns, one frame each, as Yamux's own streams do, and a go-away goes last.
    - **Two bounds.** The streams' frames are bounded at 16 MiB (256 streams × a view's 64 KiB
      watermark), and the lane's, pings and pongs included, at 2 MiB (two of its largest
-     frames). Past either bound, the scheduler takes no next frame of any kind until it has made
+     frames). Each frame counts at least 64 bytes against its bound, what a queued frame holds
+     of the heap, so a flood of 12-byte pongs is bounded in memory, not only in bytes on the
+     wire. Past either bound, the scheduler takes no next frame of any kind until it has made
      room, and that includes a frame with no body. That is the transport's back-pressure,
      passed on: Yamux stops writing, and stops reading once a pong or a window update waits.
      So a peer that grants credit and never reads, or floods pings, cannot grow either queue.
@@ -748,5 +750,6 @@ that item is withdrawn.
    10 MB/s link with 2 MiB in it: a needs-you at a p50 of 227 ms and a worst of 386 ms, where
    Yamux alone gave 262 and 455, within #643's 1 s plus the round trip. The heap peaked at
    57 MB of the 90 MB the limits allow. `charter-session-bench`'s keystroke under ten flooding
-   panes is unchanged, with a median of 0.16 ms against main's 0.15. The same over TCP under
+   panes costs about 20 µs: a median of about 0.176 ms against main's 0.156 ms (+13%), inside
+   the `bench` job's 1.20 gate. The same over TCP under
    kernel netem is still SC-21 (#828).

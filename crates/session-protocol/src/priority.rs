@@ -25,7 +25,9 @@
 //! Every other stream takes its turn, a frame each, and a go-away goes last.
 //!
 //! **Bounded, and what that costs.** Two bounds: [`MOST_QUEUED_BYTES`] for the streams'
-//! frames, and [`MOST_LANE_BYTES`] for the lane's, pings and pongs included. Past either one,
+//! frames, and [`MOST_LANE_BYTES`] for the lane's, pings and pongs included. Each frame counts
+//! at least 64 bytes against its bound, what a queued frame holds of the heap, so a flood of
+//! 12-byte pongs is bounded in memory and not only in bytes on the wire. Past either one,
 //! this end takes no next frame of any kind, a header-only frame included, until the writing
 //! task has made room: a queue passes its bound by at most the one frame already begun. That
 //! is the transport's back-pressure, passed on: Yamux stops writing, and since it has one
@@ -78,6 +80,15 @@ const ACK: u16 = 2;
 /// frames. Past it, the multiplexer waits, whatever it writes next.
 pub(crate) const MOST_LANE_BYTES: usize = 2 * crate::link::MOST_CONTROL_FRAME_BYTES;
 
+/// What one queued frame is counted as, at least: its `Bytes`, its allocation and its slot in a
+/// queue hold this much of the heap whatever its length.
+const LEAST_FRAME_COST: usize = 64;
+
+/// What a queued frame is counted as against its bound.
+fn cost(frame: &Bytes) -> usize {
+    frame.len().max(LEAST_FRAME_COST)
+}
+
 /// The type of a Yamux go-away frame, which ends the session.
 const GO_AWAY: u8 = 3;
 
@@ -91,9 +102,9 @@ struct Queues {
     turns: VecDeque<u32>,
     /// A frame that ends the session (Yamux's go-away), sent once nothing else is queued.
     last: VecDeque<Bytes>,
-    /// The bytes in `bulk` and `last`.
+    /// What `bulk` and `last` hold, each frame counted at [`cost`].
     bulk_bytes: usize,
-    /// The bytes in `urgent`.
+    /// What `urgent` holds, each frame counted at [`cost`].
     lane_bytes: usize,
     /// The multiplexer waiting for `bulk` to have room.
     room: Option<Waker>,
@@ -128,7 +139,7 @@ impl Queues {
             }
             None => self.last.pop_front()?,
         };
-        self.bulk_bytes -= frame.len();
+        self.bulk_bytes -= cost(&frame);
         Some(frame)
     }
 }
@@ -308,10 +319,10 @@ impl Prioritized {
         let mut guard = self.shared.queues();
         let queues = &mut *guard;
         if self.stream == CONTROL_LANE_STREAM || (self.stream == 0 && self.kind == PING) {
-            queues.lane_bytes += frame.len();
+            queues.lane_bytes += cost(&frame);
             queues.urgent.push_back(frame);
         } else {
-            queues.bulk_bytes += frame.len();
+            queues.bulk_bytes += cost(&frame);
             if self.kind == GO_AWAY {
                 queues.last.push_back(frame);
             } else {
@@ -341,7 +352,7 @@ async fn write_out<W: AsyncWrite + Unpin>(mut out: W, shared: &Shared) {
         let next = {
             let mut queues = shared.queues();
             let next = if let Some(frame) = queues.urgent.pop_front() {
-                queues.lane_bytes -= frame.len();
+                queues.lane_bytes -= cost(&frame);
                 Some(Next::Lane(frame))
             } else {
                 queues.next_turn().map(Next::Bulk)
@@ -690,6 +701,28 @@ mod tests {
         assert!(
             seen.len() < 1000,
             "the whole frame went through a pipe nobody read"
+        );
+    }
+
+    /// A small frame is counted at what it holds of the heap, not its bytes on the wire, so a
+    /// flood of 12-byte pongs fills the lane's bound in as many frames as its memory allows.
+    #[tokio::test]
+    async fn a_small_frame_counts_at_what_it_holds_of_the_heap() {
+        let (near, _far) = tokio::io::duplex(16);
+        let mut ours = Prioritized::start(near);
+        let pong = ping(ACK);
+        let mut taken = 0usize;
+        while tokio::time::timeout(std::time::Duration::from_millis(50), ours.write_all(&pong))
+            .await
+            .is_ok()
+        {
+            taken += 1;
+        }
+        // A 12-byte frame holds about 64 bytes of heap: its allocation, its `Bytes`, its slot.
+        let most = MOST_LANE_BYTES / 64 + 2;
+        assert!(
+            taken <= most,
+            "{taken} pongs were queued, past the {most} the lane's bound holds in memory"
         );
     }
 }
