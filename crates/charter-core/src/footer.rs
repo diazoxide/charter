@@ -257,6 +257,7 @@ pub fn render(plane: &Path, payload: &Value, ambient: &Ambient) -> String {
         root: plane,
         active: workspace,
         standing: ambient.cwd,
+        shared: false,
     });
     let mut rows = vec![
         identity_row(plane, &active, &look, ambient),

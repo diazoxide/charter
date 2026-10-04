@@ -2143,6 +2143,16 @@ pub fn run() {
                 },
                 reader(),
             ));
+            // The clones whose save standing is shared ask the same watch to listen to their
+            // working trees (FD-11), so an idle clone's standing costs no `git status`.
+            {
+                let app = app.handle().clone();
+                charter_core::standings::watch_with(std::sync::Arc::new(move |wanted| {
+                    if let Some(watch) = app.try_state::<branchwatch::BranchWatch>() {
+                        watch.want(wanted);
+                    }
+                }));
+            }
             // Each window's ⌘⇧F searches, one per Search tab, and how their hits reach the
             // window that asked (FM-8).
             app.manage(std::sync::Arc::new(searchfiles::FileSearches::default()));
@@ -2285,6 +2295,15 @@ pub fn run() {
                             planewatch::CHANGED,
                             &planewatch::PlaneChanged::of(plane.clone(), changes),
                         );
+                    })
+                })
+                // A plane let go of: the watch stops listening to its clones (FD-11).
+                .telling_released({
+                    let app = app.handle().clone();
+                    std::sync::Arc::new(move |root: &std::path::Path| {
+                        if let Some(watch) = app.try_state::<branchwatch::BranchWatch>() {
+                            watch.let_go_of_plane(root);
+                        }
                     })
                 })
                 // Auto-save saved a plane: the extensions that hear it are told, as after the

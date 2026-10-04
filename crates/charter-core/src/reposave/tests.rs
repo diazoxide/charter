@@ -865,6 +865,53 @@ impl Fixture {
     }
 }
 
+/// Every clone the shared standing asked to have watched, in this test process.
+static WANTED: std::sync::Mutex<Vec<crate::standings::Wanted>> = std::sync::Mutex::new(Vec::new());
+
+fn wanted_for(clone: &Path) -> usize {
+    WANTED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .filter(|one| one.path == clone)
+        .count()
+}
+
+#[test]
+fn a_clone_no_watch_covers_asks_to_be_watched_until_one_does() {
+    crate::standings::watch_with(std::sync::Arc::new(|wanted: &crate::standings::Wanted| {
+        WANTED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(wanted.clone());
+    }));
+    let fx = Fixture::new("");
+
+    fx.shared();
+    let asked = wanted_for(&fx.clone);
+    let first = WANTED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .find(|one| one.path == fx.clone)
+        .cloned();
+    cover(&fx.clone, true);
+    fx.shared();
+
+    assert_eq!(asked, 1);
+    assert_eq!(wanted_for(&fx.clone), 1, "a covered clone asked again");
+    assert_eq!(
+        first,
+        Some(crate::standings::Wanted {
+            plane: fx.plane.clone(),
+            workspace: "alpha".into(),
+            repo: "widget".into(),
+            path: fx.clone.clone(),
+        })
+    );
+    assert!(covered(&fx.clone));
+}
+
 #[test]
 fn a_clone_asked_twice_with_nothing_changed_runs_git_for_it_once() {
     let fx = Fixture::new("");
@@ -918,6 +965,40 @@ fn a_repo_save_leaves_the_index_carrying_gits_untracked_cache() {
         index.windows(4).any(|w| w == b"UNTR"),
         "no untracked cache in the index"
     );
+}
+
+#[test]
+fn a_standing_read_asks_git_nothing_about_the_untracked_cache() {
+    // FD-11 (#651), measured on git 2.50 at 300,000 files: a read-only `status`
+    // (`--no-optional-locks`) uses a cache the index already holds whether or not it is handed
+    // `-c core.untrackedCache=true`, and never writes one back, so the `-c` bought the reads
+    // nothing and its `git config --get` cost each standing a git process. Only the saves'
+    // `add` asks for it.
+    let fx = Fixture::new("[repos.widget]\nmode = \"commit\"\n");
+    for argv in [
+        &["init", "-q", "-b", "main", "."][..],
+        &["config", "user.name", "Fixture"],
+        &["config", "user.email", "fixture@example.invalid"],
+        &["add", "charter.toml"],
+        &["commit", "-q", "-m", "one"],
+    ] {
+        run(&fx.plane, argv);
+    }
+    std::fs::write(fx.clone.join("README.md"), "two\n").unwrap();
+    let before = |dir: &Path| crate::worktree::git::tally::asked(dir).len();
+    let (plane_at, clone_at) = (before(&fx.plane), before(&fx.clone));
+
+    planegit::standing(&fx.plane);
+    fx.standing();
+
+    for (dir, at) in [(&fx.plane, plane_at), (&fx.clone, clone_at)] {
+        let asked = crate::worktree::git::tally::asked(dir);
+        let about: Vec<_> = asked[at..]
+            .iter()
+            .filter(|argv| argv.iter().any(|a| a.contains("untrackedCache")))
+            .collect();
+        assert!(about.is_empty(), "{}: {about:?}", dir.display());
+    }
 }
 
 #[test]

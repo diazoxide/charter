@@ -29,6 +29,17 @@
 //! track, a watcher error, more paths than a burst holds — moves every branch listened to, and
 //! may have made a folder, so a branch watched folder by folder is listed again.
 //!
+//! **The one watch per repo** (FD-11, #651). A clone whose save standing is shared
+//! (`charter_core::reposave::shared_standing`: auto-save's look, the Saving rows) asks to be
+//! watched here too ([`BranchWatch::want`]), so the explorer's markers and the standing hear
+//! one watch and one check per burst, not one each. A move that matters touches the
+//! standing (`charter_core::planegit::touch`) as well as telling the windows, and while the
+//! clone's whole tree is watched its standing is *covered*: read again on what moved, never
+//! on a clock, so a monorepo nobody touches costs no `git status`. A clone this cannot watch
+//! whole — past the app's share of inotify's watches, or of [`charter_core::files::KNOWN`]
+//! folders — is not covered, and keeps the standing's clock. Its plane let go of, it is let go
+//! of too.
+//!
 //! **Nothing here walks a tree.** Nothing keeps a file-id cache, and links are not followed: a
 //! link an agent puts in its branch to the operator's home is never read through.
 //! On inotify, the folders a branch is listed again with as folders appear are listed at most
@@ -39,7 +50,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError, Weak, mpsc};
 use std::time::{Duration, Instant};
 
-use charter_core::files::{Reader, Root};
+use charter_core::files::{Branch, Reader, Root};
+use charter_core::standings::Wanted;
 use notify::RecursiveMode;
 
 use crate::planes::{PlaneId, Planes};
@@ -120,6 +132,21 @@ struct Inner<W: notify::Watcher> {
     /// Each branch's check of what moved, by its folder: what is waiting to be asked, whether a
     /// folder appeared among it, and whether a worker is asking now.
     checking: HashMap<PathBuf, Check>,
+    /// The clones listened to for their shared standing (FD-11), by the folder the standing
+    /// names them by.
+    kept: HashMap<PathBuf, Kept>,
+    /// The clones being found, by that folder: asked once however often the standing asks.
+    finding: HashSet<PathBuf>,
+    /// The clones whose whole tree is watched now, which the standing has been told it covers.
+    covering: HashSet<PathBuf>,
+}
+
+/// A clone listened to for its shared standing.
+#[derive(Clone)]
+struct Kept {
+    plane: PathBuf,
+    root: Root,
+    how: How,
 }
 
 /// One branch's check of what moved in it.
@@ -178,6 +205,9 @@ impl<W: notify::Watcher + Send + 'static> BranchWatch<W> {
                 relisted: HashMap::new(),
                 budget: inotify_budget(),
                 checking: HashMap::new(),
+                kept: HashMap::new(),
+                finding: HashSet::new(),
+                covering: HashSet::new(),
             })),
             told,
             reader,
@@ -232,6 +262,74 @@ impl<W: notify::Watcher + Send + 'static> BranchWatch<W> {
         }
     }
 
+    /// Listens to the clone `wanted` names for its shared standing (FD-11), and covers the
+    /// standing once its whole tree is watched. Answers at once: the clone is found by the
+    /// bounded reader on a thread of its own, once however often it is asked for.
+    pub fn want(&self, wanted: &Wanted) {
+        {
+            let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+            if inner.kept.contains_key(&wanted.path) || !inner.finding.insert(wanted.path.clone()) {
+                return;
+            }
+        }
+        let handle = Arc::downgrade(&self.inner);
+        let reader = self.reader.clone();
+        let told = Arc::clone(&self.told);
+        let config = self.config;
+        let wanted = wanted.clone();
+        let _ = std::thread::Builder::new()
+            .name("charter-standing-watch".into())
+            .spawn(move || {
+                let found = charter_core::files::root(
+                    &reader,
+                    &wanted.plane,
+                    Branch::repo(&wanted.workspace, &wanted.repo),
+                )
+                .map(|root| {
+                    let how = how(&root, &reader);
+                    (root, how)
+                });
+                let Some(inner) = handle.upgrade() else {
+                    return;
+                };
+                let mut held = inner.lock().unwrap_or_else(PoisonError::into_inner);
+                held.finding.remove(&wanted.path);
+                // A clone the reader will not find is not watched; the standing keeps its clock.
+                let Ok((root, how)) = found else {
+                    return;
+                };
+                held.kept.insert(
+                    wanted.path.clone(),
+                    Kept {
+                        plane: wanted.plane.clone(),
+                        root,
+                        how,
+                    },
+                );
+                if held.watcher.is_none() {
+                    match start::<W>(&inner, &reader, &told, config) {
+                        Ok(watcher) => held.watcher = Some(watcher),
+                        Err(_) => {
+                            held.kept.remove(&wanted.path);
+                            return;
+                        }
+                    }
+                }
+                held.follow();
+            });
+    }
+
+    /// The plane at `plane` is let go of: none of its clones is listened to for its standing any
+    /// more, and none is covered.
+    pub fn let_go_of_plane(&self, plane: &std::path::Path) {
+        let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        let before = inner.kept.len();
+        inner.kept.retain(|_, kept| kept.plane != plane);
+        if inner.kept.len() != before {
+            inner.follow();
+        }
+    }
+
     /// What is watched now, for a test to see a folder added as it appears: the poller the
     /// tests run on macOS sees a write in a new folder from its parent's listing, so hearing
     /// one there would not show the new folder is watched.
@@ -250,10 +348,22 @@ impl<W: notify::Watcher + Send + 'static> BranchWatch<W> {
     /// each branch that something moved in to its worker. The thread ends when the watcher is
     /// dropped, which drops the sending half it reads.
     fn start(&self) -> Result<W, String> {
+        start::<W>(&self.inner, &self.reader, &self.told, self.config)
+    }
+}
+
+/// [`BranchWatch::start`], for a caller that holds only the watch's insides.
+fn start<W: notify::Watcher + Send + 'static>(
+    inner: &Arc<Mutex<Inner<W>>>,
+    reader: &Reader,
+    told: &Told,
+    config: notify::Config,
+) -> Result<W, String> {
+    {
         let (sent, events) = mpsc::channel();
-        let handle: Weak<Mutex<Inner<W>>> = Arc::downgrade(&self.inner);
-        let told = Arc::clone(&self.told);
-        let reader = self.reader.clone();
+        let handle: Weak<Mutex<Inner<W>>> = Arc::downgrade(inner);
+        let told = Arc::clone(told);
+        let reader = reader.clone();
         std::thread::Builder::new()
             .name("charter-branch-watch".into())
             .spawn(move || {
@@ -269,7 +379,7 @@ impl<W: notify::Watcher + Send + 'static> BranchWatch<W> {
         // the operator's home is never followed and read (R2) — and links are not followed.
         W::new(
             crate::watchset::sender(sent),
-            self.config.with_follow_symlinks(false),
+            config.with_follow_symlinks(false),
         )
         .map_err(|e| format!("charter could not watch the branch: {e}"))
     }
@@ -289,8 +399,10 @@ fn heard<W: notify::Watcher + Send + 'static>(
         held.by_window
             .values()
             .flatten()
-            .filter(|one| seen.insert(one.root.path().to_path_buf()))
-            .map(|one| one.root.clone())
+            .map(|one| &one.root)
+            .chain(held.kept.values().map(|kept| &kept.root))
+            .filter(|root| seen.insert(root.path().to_path_buf()))
+            .cloned()
             .collect()
     };
     for root in roots {
@@ -360,6 +472,20 @@ fn check<W: notify::Watcher + Send + 'static>(
             if !root.matters(&reader, &moved) {
                 continue;
             }
+            // The clone's shared standing reads git again at its next ask (FD-11), whoever
+            // listens: the explorer's branch of a clone is the clone the Saving row reads.
+            let standings: Vec<PathBuf> = {
+                let held = inner.lock().unwrap_or_else(PoisonError::into_inner);
+                held.kept
+                    .iter()
+                    .filter(|(_, kept)| kept.root.path() == root.path())
+                    .map(|(at, _)| at.clone())
+                    .collect()
+            };
+            charter_core::planegit::touch(root.path());
+            for at in standings {
+                charter_core::planegit::touch(&at);
+            }
             if made_folder {
                 relist_soon(&inner, &reader, root.clone());
             }
@@ -403,7 +529,9 @@ fn relist_soon<W: notify::Watcher + Send + 'static>(
             .by_window
             .values()
             .flatten()
-            .any(|one| one.root.path() == root.path() && matches!(one.how, How::Folders(_)));
+            .map(|one| (&one.root, &one.how))
+            .chain(held.kept.values().map(|kept| (&kept.root, &kept.how)))
+            .any(|(one, how)| one.path() == root.path() && matches!(how, How::Folders(_)));
         if !one_by_one {
             return;
         }
@@ -438,6 +566,11 @@ fn relist_soon<W: notify::Watcher + Send + 'static>(
                 one.how = How::Folders(folders.clone());
             }
         }
+        for kept in held.kept.values_mut() {
+            if kept.root.path() == root.path() && matches!(kept.how, How::Folders(_)) {
+                kept.how = How::Folders(folders.clone());
+            }
+        }
         held.follow();
     };
     match wait {
@@ -456,15 +589,21 @@ impl<W: notify::Watcher> Inner<W> {
     fn follow(&mut self) {
         let mut wanted: HashMap<PathBuf, RecursiveMode> = HashMap::new();
         let mut one_by_one: Vec<(usize, PathBuf)> = Vec::new();
-        for one in self.by_window.values().flatten() {
-            match &one.how {
+        let listened = self
+            .by_window
+            .values()
+            .flatten()
+            .map(|one| (&one.root, &one.how))
+            .chain(self.kept.values().map(|kept| (&kept.root, &kept.how)));
+        for (root, how) in listened {
+            match how {
                 How::Whole => {
-                    wanted.insert(one.root.path().to_path_buf(), RecursiveMode::Recursive);
+                    wanted.insert(root.path().to_path_buf(), RecursiveMode::Recursive);
                 }
                 How::Folders(folders) => {
                     for folder in folders {
                         let depth = folder
-                            .strip_prefix(one.root.path())
+                            .strip_prefix(root.path())
                             .map_or(usize::MAX, |below| below.components().count());
                         one_by_one.push((depth, folder.clone()));
                     }
@@ -505,6 +644,35 @@ impl<W: notify::Watcher> Inner<W> {
                 Err(_) => {}
             }
         }
+        self.cover();
+    }
+
+    /// Tells the shared standing which kept clones are watched whole now (FD-11): watched
+    /// recursively, or every folder git knows watched one by one, short of the most a listing
+    /// answers. A clone that stops being watched whole is read again at its next ask.
+    fn cover(&mut self) {
+        let whole = |kept: &Kept| match &kept.how {
+            How::Whole => self.watched.get(kept.root.path()) == Some(&RecursiveMode::Recursive),
+            How::Folders(folders) => {
+                folders.len() < charter_core::files::KNOWN
+                    && folders
+                        .iter()
+                        .all(|folder| self.watched.contains_key(folder))
+            }
+        };
+        let now: HashSet<PathBuf> = self
+            .kept
+            .iter()
+            .filter(|(_, kept)| whole(kept))
+            .map(|(at, _)| at.clone())
+            .collect();
+        for gone in self.covering.difference(&now) {
+            charter_core::reposave::cover(gone, false);
+        }
+        for new in now.difference(&self.covering) {
+            charter_core::reposave::cover(new, true);
+        }
+        self.covering = now;
     }
 }
 
@@ -840,6 +1008,78 @@ mod tests {
 
         let (_, branches) = told.recv_timeout(PATIENCE).expect("the window was told");
         assert_eq!(branches, [branch()]);
+    }
+
+    /// What the shared standing asks of the watch for the plane's clone (FD-11).
+    fn the_clone(root: &Path) -> charter_core::standings::Wanted {
+        charter_core::standings::Wanted {
+            plane: root.to_path_buf(),
+            workspace: "alpha".into(),
+            repo: "thing".into(),
+            path: root.join("workspaces/alpha/thing"),
+        }
+    }
+
+    fn standing_of(wanted: &charter_core::standings::Wanted) -> charter_core::reposave::Standing {
+        charter_core::reposave::shared_standing(
+            &wanted.plane,
+            &wanted.workspace,
+            &charter_core::repos::Repo {
+                name: wanted.repo.clone(),
+                path: wanted.path.clone(),
+            },
+        )
+    }
+
+    /// Waits, at most [`PATIENCE`], for `done`.
+    fn until(done: impl Fn() -> bool) -> bool {
+        let started = Instant::now();
+        while started.elapsed() < PATIENCE {
+            if done() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        done()
+    }
+
+    #[test]
+    fn a_clone_whose_standing_is_shared_is_read_again_when_its_tree_moves_not_on_a_clock() {
+        // FD-11 (#651): the one watch per repo covers the clone, so its standing is read again
+        // when something git would show moves in it, and an idle clone costs no `status`.
+        let (_dir, root, _piece) = plane();
+        let (watch, _told) = watch_with(crate::reader());
+        let clone = the_clone(&root);
+
+        watch.want(&clone);
+
+        assert!(until(|| charter_core::reposave::covered(&clone.path)));
+        // The poller's first look is its baseline.
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(standing_of(&clone).changed, 0);
+        let started = Instant::now();
+        std::fs::write(clone.path.join("src/deep/first.rs"), "\n").unwrap();
+        assert!(until(|| standing_of(&clone).changed == 1));
+        // Well inside the backstop a clone nothing watches is read again on.
+        assert!(
+            started.elapsed() < charter_core::planegit::SHARED_FOR,
+            "{:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn a_plane_let_go_of_no_longer_covers_its_clones() {
+        let (_dir, root, _piece) = plane();
+        let (watch, _told) = watch_with(crate::reader());
+        let clone = the_clone(&root);
+        watch.want(&clone);
+        assert!(until(|| charter_core::reposave::covered(&clone.path)));
+
+        watch.let_go_of_plane(&root);
+
+        assert!(!charter_core::reposave::covered(&clone.path));
+        assert!(watch.watching().is_empty(), "{:?}", watch.watching());
     }
 
     #[test]

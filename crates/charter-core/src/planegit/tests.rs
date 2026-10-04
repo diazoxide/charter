@@ -3113,11 +3113,28 @@ fn pollers_at_once_share_one_standing_and_never_run_git_in_the_plane_two_at_a_ti
     };
     let before = git::tally(&plane.root);
 
+    // The four pollers: auto-save's look, the title bar, the Saving tab and the alerts, which
+    // read the root's dirt from the same standing (FD-11).
     at_once(4, 2, &|| {
         assert_eq!(shared_standing(&plane.root).stage, Stage::Changed);
+        let alerts = crate::alerts::read(&crate::alerts::Asking {
+            root: &plane.root,
+            active: None,
+            standing: &plane.root,
+            shared: true,
+        });
+        assert!(alerts.stopped.is_none(), "{alerts:?}");
     });
 
     let after = git::tally(&plane.root);
+    let statuses = git::tally::asked(&plane.root)
+        .iter()
+        .filter(|argv| argv.iter().any(|arg| arg == "status"))
+        .count();
+    assert_eq!(
+        statuses, 2,
+        "one for the lone standing, one shared by every poller"
+    );
     assert_eq!(
         after.most_at_once, 1,
         "two git processes ran in the plane at once"
@@ -3171,9 +3188,9 @@ fn auto_saves_fingerprint_of_a_standing_already_read_runs_no_git() {
 }
 
 #[test]
-fn a_save_leaves_the_index_carrying_gits_untracked_cache_for_the_reads_after_it() {
+fn a_save_leaves_the_index_carrying_gits_untracked_cache() {
     // `core.untrackedCache` (FD-11): the save's `git add` already writes the index, so it is the
-    // write that adds the cache the read-only status of every later standing then uses.
+    // write that adds the cache. charter's own reads never write it (`git::UNTRACKED_CACHE`).
     let fixture = Fixture::plane();
     fixture.with_settings("[plane]\nmode = \"commit\"\n");
     std::fs::write(fixture.root.join("work.md"), "work").unwrap();

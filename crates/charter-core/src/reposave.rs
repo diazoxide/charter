@@ -889,8 +889,29 @@ static CLONES: std::sync::LazyLock<crate::standings::Shared<Standing>> =
 /// computation at a time per clone, again only when the clone's git files move,
 /// [`planegit::touch`] says something under it changed, or [`planegit::SHARED_FOR`] has passed. A save decides from
 /// [`standing`] itself.
+///
+/// A clone no watch covers yet asks to be watched ([`crate::standings::want_watched`]), so in
+/// the app its standing is read again when its working tree moves rather than on a clock.
 pub fn shared_standing(plane: &Path, workspace: &str, repo: &repos::Repo) -> Standing {
+    if !CLONES.covered(&repo.path) {
+        crate::standings::want_watched(&crate::standings::Wanted {
+            plane: plane.to_path_buf(),
+            workspace: workspace.to_string(),
+            repo: repo.name.clone(),
+            path: repo.path.clone(),
+        });
+    }
     CLONES.get(&repo.path, || standing(plane, workspace, repo))
+}
+
+/// A watch now covers the clone at `path` whole, or no longer does ([`crate::standings::Shared::cover`]).
+pub fn cover(path: &Path, covered: bool) {
+    CLONES.cover(path, covered);
+}
+
+/// Whether a watch covers the clone at `path` now.
+pub fn covered(path: &Path) -> bool {
+    CLONES.covered(path)
 }
 
 /// The clones' half of [`planegit::touch`], which is the one to call.
