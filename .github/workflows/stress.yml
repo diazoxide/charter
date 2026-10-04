@@ -227,3 +227,28 @@ jobs:
         run: cargo test -p charter-core --lib -- planegit::tests::pollers_at_once --test-threads 1 --nocapture
         env:
           CHARTER_STANDING_FILES: "300000"
+
+  search-at-scale:
+    # FM-12 (#1115): ⌘P, ⌘⇧F and a branch's status on generated repos of 100,000 and 300,000
+    # files, held to `docs/spec.md`'s rows G2–G4 (ADR 0086 L1's 50 ms for a ⌘P keystroke). It
+    # is the evidence behind V86 F9's "no index until a measurement shows the need" and #1153's
+    # index question, so a regression that would reopen either shows on `main` the day it lands.
+    # Evidence only (V70): `main` and nightly, never a pull request, and allowed to fail.
+    name: search at scale (${{ matrix.os }}, ${{ matrix.files }} files, evidence only)
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'schedule'
+    continue-on-error: true
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-24.04]
+        files: ["100000", "300000"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/rust-toolchain
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: ⌘P, ⌘⇧F and status on a generated repo
+        run: cargo test --release -p charter-core --test search_is_measured_on_large_repos -- --ignored --nocapture --test-threads=1
+        env:
+          CHARTER_MEASURE_FILES: ${{ matrix.files }}
