@@ -227,3 +227,36 @@ fn the_writer_writes_each_line_in_order_and_gives_its_bytes_back() {
     writer.join().expect("the writer ends once closed");
     assert_eq!(lock(&unwritten.queue).bytes, 0);
 }
+
+#[test]
+fn the_board_hears_a_chat_s_turns_and_asks_and_nothing_of_what_it_said() {
+    // ADR 0073: the board reads the neutral model, so a level-3 chat moves exactly as a level-2
+    // chat whose hooks said the same. Its text, its tool calls and a refused call move nothing;
+    // its end is the program's exit, which the host reads from the operating system.
+    let asks = Asks::new();
+    let ask = crate::harness::model::Ask::default();
+    let raised = asks.raise("chat-1", ask.clone(), Instant::now()).raised;
+    let began = Said::Turn(Turn::Began);
+
+    assert_eq!(Event::Said(began.clone()).said(), Some(began));
+    assert_eq!(Event::Raised(raised).said(), Some(Said::Ask(ask)));
+    for quiet in [
+        Event::Text("hello".to_owned()),
+        Event::ToolCall {
+            id: "t".to_owned(),
+            title: "ls".to_owned(),
+            kind: "execute".to_owned(),
+            status: "pending".to_owned(),
+        },
+        Event::ToolCallStatus {
+            id: "t".to_owned(),
+            status: "completed".to_owned(),
+        },
+        Event::Refused {
+            method: "fs/read_text_file".to_owned(),
+        },
+        Event::Ended,
+    ] {
+        assert_eq!(quiet.said(), None, "{quiet:?}");
+    }
+}

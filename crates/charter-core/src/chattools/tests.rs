@@ -694,10 +694,10 @@ fn an_acp_session_is_handed_the_server_with_the_chat_s_place_and_nothing_else_of
     // ADR 0080 §1 and HP-7's note on #669: a stdio server, charter's own binary, `mcp`, and
     // the scope variables alone: never the chat's token or its hook socket.
     let env = vec![
-        ("CHARTER_ROOT".to_owned(), "/p".to_owned()),
-        (crate::active::WORKSPACE_ENV.to_owned(), "ws".to_owned()),
-        ("CHARTER_CHAT_TOKEN".to_owned(), "secret".to_owned()),
-        ("PATH".to_owned(), "/bin".to_owned()),
+        ("CHARTER_ROOT".into(), "/p".into()),
+        (crate::active::WORKSPACE_ENV.into(), "ws".into()),
+        ("CHARTER_CHAT_TOKEN".into(), "secret".into()),
+        ("PATH".into(), "/bin".into()),
     ];
     let server =
         serde_json::to_value(acp_server(std::path::Path::new("/bin/charter"), &env)).expect("JSON");

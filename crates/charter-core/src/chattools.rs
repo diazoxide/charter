@@ -121,12 +121,14 @@ pub fn codex_flag(binary: &Path) -> String {
 /// by the agent, handed the [`SCOPE_ENV`] variables `chat_env` sets and nothing else of charter's.
 pub fn acp_server(
     binary: &Path,
-    chat_env: &[(String, String)],
+    chat_env: &[(std::ffi::OsString, std::ffi::OsString)],
 ) -> agent_client_protocol::schema::v1::McpServer {
     use agent_client_protocol::schema::v1::{EnvVariable, McpServer, McpServerStdio};
+    // A value that is not UTF-8 cannot be said in JSON, and is left out rather than mangled.
     let env = chat_env
         .iter()
-        .filter(|(name, _)| SCOPE_ENV.contains(&name.as_str()))
+        .filter_map(|(name, value)| Some((name.to_str()?, value.to_str()?)))
+        .filter(|(name, _)| SCOPE_ENV.contains(name))
         .map(|(name, value)| EnvVariable::new(name, value))
         .collect();
     McpServer::Stdio(

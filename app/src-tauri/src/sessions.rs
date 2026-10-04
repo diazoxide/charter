@@ -11,7 +11,6 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use charter_core::engine::{AlacrittyEngine, Size};
 use charter_core::hookwire::{CHAT_ENV, ChatTokens, SOCKET_ENV, TOKEN_ENV};
-use charter_core::secrets::identity::kept_from_chats;
 use charter_core::session::{Attachment, Session, Spec};
 
 use crate::host::{Ends, Opening, Readiness, SessionHost, Sink, Watching};
@@ -167,39 +166,25 @@ impl SessionHost for Sessions {
         // to carry it: a chat that learned its number afterwards would have a first turn
         // nothing could attribute.
         let id = self.number_for(wanted);
-        // A profile's `OP_*`, and any identity variable a vault declares, is dropped with the
-        // app's own (#237, and #271 review U6): a chat never carries one.
-        let strip = |name: &std::ffi::OsStr| {
-            kept_from_chats(name)
-                || opening
-                    .env_strip
-                    .iter()
-                    .any(|s| std::ffi::OsStr::new(s) == name)
-        };
         // **A chat starts from an empty environment plus a keep-list**, not from the app's
         // whole one minus what charter knows to remove: whatever the app inherited — from a
         // terminal, `launchctl setenv`, a login item — is not the chat's unless
         // `charter_core::chatenv` names it, the harness declares it, or the operator lists it
-        // for this plane. The chat's own come after, so a profile's value wins over the app's.
+        // for this plane. The chat's own come after, so a profile's value wins over the app's;
+        // a profile's `OP_*`, and any identity variable a vault declares, is dropped with the
+        // app's own (#237, and #271 review U6); and charter's git hooks (SQ-16, ADR 0074) are
+        // armed last. The same composition starts a level-3 agent (ADR 0080 §1).
         spec.env_clear = true;
-        spec.env = charter_core::chatenv::inherited(
+        spec.env = charter_core::chatenv::compose(
             std::env::vars_os(),
-            opening.harness,
-            &opening.env_pass,
-            &strip,
+            &charter_core::chatenv::Starting {
+                harness: opening.harness,
+                operator: &opening.env_pass,
+                strip: &opening.env_strip,
+                set: &opening.env,
+                git_hooks: opening.git_hooks.as_ref(),
+            },
         );
-        spec.env.extend(
-            opening
-                .env
-                .iter()
-                .filter(|(key, _)| !strip(std::ffi::OsStr::new(key)))
-                .map(|(key, value)| (key.into(), value.into())),
-        );
-        // charter's git hooks (SQ-16, ADR 0074), once everything else the chat is started with
-        // is settled: after the pairs it already has, not over them.
-        if let Some(hooks) = &opening.git_hooks {
-            spec.env = hooks.arm(std::mem::take(&mut spec.env));
-        }
         // **The chat is what charter's per-session state is keyed on, and this is what says
         // so** — charter-app#63. Without it `active::session_id` falls to the harness's own
         // `$CLAUDE_CODE_SESSION_ID`, which names the CONVERSATION: `/clear` starts a new one

@@ -79,6 +79,11 @@ struct Args {
     #[arg(long)]
     acp: bool,
 
+    /// `acp`, as the last word: the same as `--acp`, the way opencode's own ACP mode is
+    /// `opencode acp`, so a profile of kind opencode can run this as its program at level 3.
+    #[arg(value_parser = ["acp"])]
+    mode: Option<String>,
+
     /// With `--acp`: append each message the client sends to this file.
     #[arg(long, requires = "acp")]
     acp_record: Option<PathBuf>,
@@ -140,7 +145,7 @@ fn run(args: &Args) -> Result<(), String> {
     if args.leave_terminal {
         return leave_terminal(args.linger);
     }
-    if args.acp {
+    if args.acp || args.mode.is_some() {
         return acp::serve(&acp::Script {
             record: args.acp_record.clone(),
             version: args.acp_version,
@@ -259,7 +264,6 @@ fn leave_terminal(linger: bool) -> Result<(), String> {
             argv: vec!["true".to_owned()],
             cwd: std::env::temp_dir(),
             env: Vec::new(),
-            env_strip: Vec::new(),
             charter_mcp: None,
             patience: std::time::Duration::from_secs(5),
         },
