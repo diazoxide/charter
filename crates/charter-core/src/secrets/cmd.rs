@@ -208,9 +208,27 @@ pub fn list(ctx: &Ctx, vault: &str, io: &mut dyn Io) -> i32 {
     }
 }
 
+/// The one note a keyring vault gets when charter moved its items under its access rule
+/// (ruling V90d), said by the next command that read one of its values.
+pub fn say_held_note(ctx: &Ctx, v: &Vault, io: &mut dyn Io) {
+    if v.provider == "keyring"
+        && let Some(note) = keyring::take_note(ctx, v)
+    {
+        io.say(Say::Info(note));
+    }
+}
+
+/// The value of `key` in `vault`, with the vault's one note said where it is due.
+fn read_saying(ctx: &Ctx, vault: &str, key: &str, io: &mut dyn Io) -> Result<String, VaultError> {
+    let v = provider(ctx, vault)?;
+    let value = get_value(ctx, &v, key)?;
+    say_held_note(ctx, &v, io);
+    Ok(value)
+}
+
 /// `cmd_secret_get`: masked by default; `--reveal` only to a terminal unless `--force`.
 pub fn get(ctx: &Ctx, vault: &str, key: &str, reveal: bool, force: bool, io: &mut dyn Io) -> i32 {
-    let value = match provider(ctx, vault).and_then(|v| get_value(ctx, &v, key)) {
+    let value = match read_saying(ctx, vault, key, io) {
         Ok(value) => value,
         Err(e) => {
             io.say(Say::Err(e.message));
@@ -774,7 +792,7 @@ fn cp_unix(ctx: &Ctx, vault: &str, key: &str, dest: &str, force: bool, io: &mut 
         )));
         return 2;
     }
-    let value = match provider(ctx, vault).and_then(|v| get_value(ctx, &v, key)) {
+    let value = match read_saying(ctx, vault, key, io) {
         Ok(v) => v,
         Err(e) => {
             abandon(file);

@@ -296,6 +296,26 @@ Checked and left out of the class:
   and the agents it runs get the session's own sandbox.
 - **`.claude/output-styles/`, `.claude/rules/` and `.worktreeinclude`.** They are not code.
 
+*Amended 2026-10-04 (ruling V90, #1179):* **class 1 holds a keyring vault at the store.** No
+harness's sandbox keeps a chat off the operating system's credential store, which is a service,
+not a path, so a sandboxed project with a keyring vault started no chat at all.
+
+- **macOS (V90a).** Every keyring item charter writes is held to charter's app: only the app's
+  own binary reads it without the person's confirmation, and any other program, the `charter`
+  command and every program a chat runs included, is refused or makes the system ask the person
+  (ADR 0047 as amended). The class is then held for every harness, so a Claude Code chat
+  starts, whose own sandbox lets a command reach the service (measured live: from inside it, an
+  item was refused to every program but the one it is held to).
+- **Charter's own wrap (V90b)** denies the service as well, so Codex and opencode cannot reach it
+  at all (measured). Neither needs it for its own login: both keep it in a file.
+- **Linux (V90c).** The Secret Service answers any process of the session, and no harness's
+  sandbox has been measured keeping a chat off the session bus, so a Claude Code chat there is
+  still refused. The refusal is never a dead end: it says to start that chat without the
+  sandbox (§7) or to move those secrets to a plain-file or 1Password vault, which the sandbox
+  can keep from a chat. Codex and opencode wait for the Linux wrap (#1040).
+- **Existing items (V90d)** are written again, held, the first time charter reads them. Until
+  then an item keeps the access it had.
+
 ### 6. External enforcement backends are an option, and never the default (SD-33)
 
 A project or an org can choose a backend that wraps the whole harness: Docker Sandboxes, a

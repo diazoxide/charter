@@ -29,6 +29,7 @@ pub mod dotenv;
 pub mod exec;
 pub mod fingerprint;
 pub mod identity;
+pub mod keyhold;
 pub mod keyring;
 pub mod onepassword;
 pub mod plain_file;

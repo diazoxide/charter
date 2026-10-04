@@ -32,6 +32,14 @@
 //! `<state>/keyring-stub.json` (the state directory: `.charter/`, or `$CHARTER_HOME`) and never
 //! reaches the operating system's store. So no test in this repository can read or write the
 //! operator's login keychain, however it is written.
+//!
+//! **On macOS every item is held to charter's app** (ruling V90a, [`super::keyhold`]): written
+//! by the app's own binary, so the Keychain's default rule lets that binary alone read it
+//! without asking, and any other program, the `charter` command and every program a chat runs
+//! included, is refused or makes the Keychain ask the person. The index marks each key whose
+//! item was written that way (`held`). An item written before is written again the same way
+//! the first time charter reads it, and the vault's next read through the `charter` command
+//! says so once (ruling V90d).
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -71,6 +79,19 @@ impl std::fmt::Debug for Secret {
     }
 }
 
+/// What a write left an item under (ruling V90a).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Held {
+    /// Held to charter's app: any other program is refused or makes the store ask the person.
+    ToTheApp,
+    /// This store keeps no rule charter sets: the test stub, the Secret Service and the
+    /// Credential Manager.
+    NoRule,
+    /// This store has a rule and the write could not set it, so the item has the access the
+    /// writing program gave it. The next read tries again.
+    NotYet,
+}
+
 /// A credential store: one entry per `(service, account)`, read, written and deleted by name.
 ///
 /// **An error never carries a value**, and never an entry the store returned: an
@@ -79,10 +100,15 @@ impl std::fmt::Debug for Secret {
 pub trait Store: Send + Sync {
     /// The entry, or `None` when the store PROVABLY has none.
     fn get(&self, service: &str, account: &str) -> Result<Option<Secret>, VaultError>;
-    /// Create or replace the entry.
-    fn set(&self, service: &str, account: &str, value: &str) -> Result<(), VaultError>;
+    /// Create or replace the entry, held to charter's app where the store can hold it.
+    fn set(&self, service: &str, account: &str, value: &str) -> Result<Held, VaultError>;
     /// Delete the entry. `false` when there was none.
     fn delete(&self, service: &str, account: &str) -> Result<bool, VaultError>;
+    /// Whether this store holds an item to charter's app, so an item written before it did is
+    /// written again when read (ruling V90d).
+    fn holds(&self) -> bool {
+        false
+    }
 }
 
 /// The store this build talks to. See the module header: a fenced build never reaches the
@@ -101,10 +127,12 @@ pub fn store(ctx: &Ctx) -> Box<dyn Store> {
 /// The platform's own store, through `keyring`'s one-entry API: the login keychain on macOS,
 /// the Secret Service on Linux, the Credential Manager on Windows.
 ///
-/// **On macOS an item is created with the default access**: the program that created it may
-/// read it back without asking, and any other program — `security find-generic-password -w`,
-/// another charter binary, a script — makes the Keychain ask the operator first. ADR 0047
-/// records what was measured and what that does and does not protect.
+/// **On macOS an item is held to charter's app** (ruling V90a): it is written by the app's own
+/// binary ([`super::keyhold::set`]), and the Keychain's default rule lets the program that
+/// created an item read it without asking. Any other program — `security
+/// find-generic-password -w`, the `charter` command, a script a chat runs — is refused or
+/// makes the Keychain ask the person first. ADR 0047 records what was measured and what that
+/// does and does not protect.
 pub struct OsStore;
 
 impl std::fmt::Debug for OsStore {
@@ -128,10 +156,12 @@ impl Store for OsStore {
         }
     }
 
-    fn set(&self, service: &str, account: &str, value: &str) -> Result<(), VaultError> {
-        Self::entry(service, account)?
-            .set_password(value)
-            .map_err(|e| failure("write", service, &e))
+    fn set(&self, service: &str, account: &str, value: &str) -> Result<Held, VaultError> {
+        if cfg!(target_os = "macos") {
+            return super::keyhold::set(service, account, value);
+        }
+        set_here(service, account, value)?;
+        Ok(Held::NoRule)
     }
 
     fn delete(&self, service: &str, account: &str) -> Result<bool, VaultError> {
@@ -141,6 +171,19 @@ impl Store for OsStore {
             Err(e) => Err(failure("delete", service, &e)),
         }
     }
+
+    fn holds(&self) -> bool {
+        cfg!(target_os = "macos")
+    }
+}
+
+/// Create or replace the entry from this process, with whatever access the store gives an
+/// item this program writes (on macOS: this program alone reads a new one without asking, and
+/// a replaced one keeps the access it had).
+pub(super) fn set_here(service: &str, account: &str, value: &str) -> Result<(), VaultError> {
+    OsStore::entry(service, account)?
+        .set_password(value)
+        .map_err(|e| failure("write", service, &e))
 }
 
 /// A keyring failure as charter says it: the operation, the service, and the store's reason.
@@ -149,7 +192,7 @@ impl Store for OsStore {
 /// the credential itself — and prints nothing of them only by the crate's grace; it is named
 /// here and not formatted. The other kinds carry the platform's own error, which names a
 /// failure ("User interaction is not allowed.") and not a value.
-fn failure(what: &str, service: &str, e: &::keyring::Error) -> VaultError {
+pub(super) fn failure(what: &str, service: &str, e: &::keyring::Error) -> VaultError {
     let why = match e {
         ::keyring::Error::BadEncoding(_) => "the stored entry is not UTF-8 text".to_string(),
         ::keyring::Error::NoStorageAccess(inner) | ::keyring::Error::PlatformFailure(inner) => {
@@ -222,13 +265,14 @@ impl Store for FileStore {
             .map(|v| Secret(v.to_owned())))
     }
 
-    fn set(&self, service: &str, account: &str, value: &str) -> Result<(), VaultError> {
+    fn set(&self, service: &str, account: &str, value: &str) -> Result<Held, VaultError> {
         let mut map = self.load()?;
         map.insert(
             Self::slot(service, account),
             Value::String(value.to_owned()),
         );
-        self.save(map)
+        self.save(map)?;
+        Ok(Held::NoRule)
     }
 
     fn delete(&self, service: &str, account: &str) -> Result<bool, VaultError> {
@@ -254,19 +298,56 @@ pub struct Listed {
     pub updated: String,
 }
 
-/// What the index records about one key: its size band and when it was last written.
+/// What the index records about one key: its size band, when it was last written, and whether
+/// its item was written held to charter's app (ruling V90a).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
     pub size: String,
     pub updated: String,
+    pub held: bool,
 }
 
-/// A vault's index: the service its items live under, and what each key is.
+/// A vault's index: the service its items live under, what each key is, and where the vault's
+/// one note that its items were moved under charter's access rule stands.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Index {
     pub service: Option<String>,
     pub keys: BTreeMap<String, Entry>,
+    pub note: Note,
 }
+
+/// The one note a vault gets when charter moves its items under its access rule (ruling V90d).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Note {
+    /// No item was moved yet.
+    #[default]
+    None,
+    /// An item was moved, and the note is still to be said.
+    Due,
+    /// It was said, and never is again.
+    Said,
+}
+
+impl Note {
+    fn word(self) -> Option<&'static str> {
+        match self {
+            Self::None => None,
+            Self::Due => Some("due"),
+            Self::Said => Some("said"),
+        }
+    }
+
+    fn of(word: Option<&str>) -> Self {
+        match word {
+            Some("due") => Self::Due,
+            Some("said") => Self::Said,
+            _ => Self::None,
+        }
+    }
+}
+
+/// The index's field saying where the vault's one note about its items' access rule stands.
+const NOTE: &str = "held_note";
 
 /// Where a keyring vault's index lives: beside the local registry, in the state directory.
 pub fn index_path(ctx: &Ctx, vault: &Vault) -> PathBuf {
@@ -325,10 +406,16 @@ pub fn load_index(ctx: &Ctx, vault: &Vault) -> Result<Index, VaultError> {
             Entry {
                 size: field("size"),
                 updated: field("updated"),
+                held: v.get("held").and_then(Value::as_bool).unwrap_or(false),
             },
         );
     }
-    Ok(Index { service, keys })
+    let note = Note::of(doc.get(NOTE).and_then(Value::as_str));
+    Ok(Index {
+        service,
+        keys,
+        note,
+    })
 }
 
 fn save_index(ctx: &Ctx, vault: &Vault, index: &Index) -> Result<(), VaultError> {
@@ -337,6 +424,10 @@ fn save_index(ctx: &Ctx, vault: &Vault, index: &Index) -> Result<(), VaultError>
         let mut entry = Map::new();
         entry.insert("size".into(), Value::String(e.size.clone()));
         entry.insert("updated".into(), Value::String(e.updated.clone()));
+        // Written only when true, so a vault in a store with no rule reads as it always has.
+        if e.held {
+            entry.insert("held".into(), Value::Bool(true));
+        }
         keys.insert(k.clone(), Value::Object(entry));
     }
     let mut doc = Map::new();
@@ -345,6 +436,9 @@ fn save_index(ctx: &Ctx, vault: &Vault, index: &Index) -> Result<(), VaultError>
         index.service.clone().map_or(Value::Null, Value::String),
     );
     doc.insert("keys".into(), Value::Object(keys));
+    if let Some(word) = index.note.word() {
+        doc.insert(NOTE.into(), Value::String(word.into()));
+    }
     let p = index_path(ctx, vault);
     // The index lives in the state directory, so it is gated from the plane (#440): a
     // `.charter/` that is itself a link is refused, not written through.
@@ -434,13 +528,44 @@ pub fn get_with(
     key: &str,
 ) -> Result<String, VaultError> {
     check_key(key)?;
-    let Some(service) = load_index(ctx, vault)?.service else {
+    let mut index = load_index(ctx, vault)?;
+    let Some(service) = index.service.clone() else {
         return Err(not_found(vault, key));
     };
-    store
+    let value = store
         .get(&service, key)?
         .map(Secret::into_inner)
-        .ok_or_else(|| not_found(vault, key))
+        .ok_or_else(|| not_found(vault, key))?;
+    // Ruling V90d: an item written before the store held it is written again, held, on its
+    // first read. Best-effort: the read already succeeded, and a failure tries again next time.
+    let unheld = index.keys.get(key).is_some_and(|entry| !entry.held);
+    if store.holds() && unheld && store.set(&service, key, &value) == Ok(Held::ToTheApp) {
+        if let Some(entry) = index.keys.get_mut(key) {
+            entry.held = true;
+        }
+        if index.note == Note::None {
+            index.note = Note::Due;
+        }
+        let _ = save_index(ctx, vault, &index);
+    }
+    Ok(value)
+}
+
+/// The one note that this vault's items were moved under charter's access rule (ruling V90d),
+/// once: `None` after it was taken, and until an item was moved.
+pub fn take_note(ctx: &Ctx, vault: &Vault) -> Option<String> {
+    let mut index = load_index(ctx, vault).ok()?;
+    if index.note != Note::Due {
+        return None;
+    }
+    index.note = Note::Said;
+    save_index(ctx, vault, &index).ok()?;
+    Some(format!(
+        "charter moved the secrets of vault '{}' under its access rule in {STORE_NAME}: from \
+         now on only charter's app reads them without asking you. Any other program, this \
+         command included, makes the system ask you first.",
+        vault.name
+    ))
 }
 
 /// `set`: the value into the store, then its size band and time into the index.
@@ -470,12 +595,13 @@ pub fn set_with(
             made
         }
     };
-    store.set(&service, key, value)?;
+    let held = store.set(&service, key, value)?;
     index.keys.insert(
         key.to_owned(),
         Entry {
             size: fingerprint::size_band(value),
             updated: at.to_owned(),
+            held: held == Held::ToTheApp,
         },
     );
     save_index(ctx, vault, &index)
@@ -530,6 +656,7 @@ pub fn health(ctx: &Ctx, vault: &Vault) -> (bool, String) {
         Ok(Index {
             service: Some(service),
             keys,
+            ..
         }) => (
             true,
             format!(
@@ -852,7 +979,7 @@ mod tests {
         fn get(&self, _: &str, _: &str) -> Result<Option<Secret>, VaultError> {
             Ok(None)
         }
-        fn set(&self, _: &str, _: &str, _: &str) -> Result<(), VaultError> {
+        fn set(&self, _: &str, _: &str, _: &str) -> Result<Held, VaultError> {
             Err(VaultError::new("refused"))
         }
         fn delete(&self, _: &str, _: &str) -> Result<bool, VaultError> {
@@ -873,5 +1000,133 @@ mod tests {
         let index = load_index(&ctx, &ops).unwrap();
         assert!(index.service.is_some_and(|s| s.starts_with("charter/ops/")));
         assert!(index.keys.is_empty(), "a key the store refused was listed");
+    }
+
+    /// A store that holds items to charter's app, as macOS's does, over the stub: it counts the
+    /// writes it was asked for, and answers each with `answer`.
+    struct Holding {
+        under: FileStore,
+        writes: std::sync::atomic::AtomicUsize,
+        answer: Held,
+    }
+
+    impl Holding {
+        fn at(dir: &std::path::Path, answer: Held) -> Self {
+            Self {
+                under: FileStore::at(dir.join("k.json")),
+                writes: std::sync::atomic::AtomicUsize::new(0),
+                answer,
+            }
+        }
+
+        fn writes(&self) -> usize {
+            self.writes.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    impl Store for Holding {
+        fn get(&self, service: &str, account: &str) -> Result<Option<Secret>, VaultError> {
+            self.under.get(service, account)
+        }
+        fn set(&self, service: &str, account: &str, value: &str) -> Result<Held, VaultError> {
+            self.writes
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.under.set(service, account, value)?;
+            Ok(self.answer)
+        }
+        fn delete(&self, service: &str, account: &str) -> Result<bool, VaultError> {
+            self.under.delete(service, account)
+        }
+        fn holds(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn a_write_to_a_store_that_holds_it_marks_the_key_held() {
+        let (dir, ctx, ops) = plane();
+        let store = Holding::at(dir.path(), Held::ToTheApp);
+        set_with(&store, &ctx, &ops, "A", VALUE, "t").unwrap();
+        assert!(load_index(&ctx, &ops).unwrap().keys["A"].held);
+        // Nothing was moved, so there is nothing to say.
+        assert_eq!(take_note(&ctx, &ops), None);
+    }
+
+    #[test]
+    fn an_item_written_before_the_store_held_it_is_held_on_its_first_read_and_still_resolves() {
+        let (dir, ctx, ops) = plane();
+        // Written before: the same items, by a store that set no rule.
+        set_with(
+            &FileStore::at(dir.path().join("k.json")),
+            &ctx,
+            &ops,
+            "A",
+            VALUE,
+            "t",
+        )
+        .unwrap();
+        assert!(!load_index(&ctx, &ops).unwrap().keys["A"].held);
+
+        let store = Holding::at(dir.path(), Held::ToTheApp);
+        assert_eq!(get_with(&store, &ctx, &ops, "A").unwrap(), VALUE);
+        assert_eq!(store.writes(), 1, "the item was not written again");
+        assert!(load_index(&ctx, &ops).unwrap().keys["A"].held);
+
+        assert_eq!(get_with(&store, &ctx, &ops, "A").unwrap(), VALUE);
+        assert_eq!(store.writes(), 1, "a held item was written again");
+    }
+
+    #[test]
+    fn a_vault_whose_items_were_moved_says_so_once() {
+        let (dir, ctx, ops) = plane();
+        let before = FileStore::at(dir.path().join("k.json"));
+        set_with(&before, &ctx, &ops, "A", VALUE, "t").unwrap();
+        set_with(&before, &ctx, &ops, "B", VALUE, "t").unwrap();
+        let store = Holding::at(dir.path(), Held::ToTheApp);
+
+        get_with(&store, &ctx, &ops, "A").unwrap();
+        assert_eq!(
+            take_note(&ctx, &ops).as_deref(),
+            Some(
+                "charter moved the secrets of vault 'ops' under its access rule in the system \
+                 keyring: from now on only charter's app reads them without asking you. Any \
+                 other program, this command included, makes the system ask you first."
+            )
+        );
+        assert_eq!(take_note(&ctx, &ops), None);
+        // A later key moved is not said again.
+        get_with(&store, &ctx, &ops, "B").unwrap();
+        assert_eq!(take_note(&ctx, &ops), None);
+    }
+
+    #[test]
+    fn an_item_the_store_could_not_hold_yet_is_tried_again_at_the_next_read() {
+        let (dir, ctx, ops) = plane();
+        set_with(
+            &FileStore::at(dir.path().join("k.json")),
+            &ctx,
+            &ops,
+            "A",
+            VALUE,
+            "t",
+        )
+        .unwrap();
+        let store = Holding::at(dir.path(), Held::NotYet);
+
+        assert_eq!(get_with(&store, &ctx, &ops, "A").unwrap(), VALUE);
+        assert_eq!(get_with(&store, &ctx, &ops, "A").unwrap(), VALUE);
+        assert_eq!(store.writes(), 2);
+        assert!(!load_index(&ctx, &ops).unwrap().keys["A"].held);
+        assert_eq!(take_note(&ctx, &ops), None);
+    }
+
+    #[test]
+    fn a_store_that_keeps_no_rule_never_writes_on_a_read() {
+        let (dir, ctx, ops) = plane();
+        let store = FileStore::at(dir.path().join("k.json"));
+        set_with(&store, &ctx, &ops, "A", VALUE, "t").unwrap();
+        let before = std::fs::read(index_path(&ctx, &ops)).unwrap();
+        assert_eq!(get_with(&store, &ctx, &ops, "A").unwrap(), VALUE);
+        assert_eq!(std::fs::read(index_path(&ctx, &ops)).unwrap(), before);
     }
 }

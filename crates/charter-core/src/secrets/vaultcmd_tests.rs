@@ -572,7 +572,7 @@ impl crate::secrets::keyring::Store for RefusesDeletes {
         service: &str,
         account: &str,
         value: &str,
-    ) -> Result<(), crate::secrets::VaultError> {
+    ) -> Result<crate::secrets::keyring::Held, crate::secrets::VaultError> {
         self.0.set(service, account, value)
     }
     fn delete(&self, _service: &str, _account: &str) -> Result<bool, crate::secrets::VaultError> {

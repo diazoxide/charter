@@ -301,6 +301,7 @@ pub fn exec(ctx: &Ctx, req: &Request, io: &mut dyn Io) -> i32 {
     if let Some(sig) = signals.caught() {
         return 128 + sig;
     }
+    cmd::say_held_note(ctx, &v, io);
 
     // ONE record, above the three ways the child is started: everything that runs a command
     // passes through here, and `--exec` never comes back to record anything after.

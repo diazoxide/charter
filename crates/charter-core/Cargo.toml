@@ -192,3 +192,9 @@ libc = "0.2"
 # instead of killing charter, so the file is removed on the way out — Python's
 # `_exit_on_termination`. Already in this workspace's lockfile (alacritty_terminal uses it).
 signal-hook = "0.4"
+
+[target."cfg(target_os = \"macos\")".dependencies]
+# Keyring items held to charter's app (ruling V90a): the helper that writes them turns the
+# Keychain's dialogs off, so a write it may not make fails instead of asking, and reads the
+# Keychain's own error code. Already in this workspace's lockfile through `keyring`.
+security-framework = "3"

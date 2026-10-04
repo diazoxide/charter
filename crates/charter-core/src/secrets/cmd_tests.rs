@@ -1046,3 +1046,28 @@ fn cp_refuses_charter_s_own_standard_output_by_identity() {
             .contains("the-plaintext")
     );
 }
+
+#[test]
+fn a_keyring_vaults_note_that_its_items_were_moved_is_said_by_the_next_read_and_never_again() {
+    let plane = Plane::new(&[]);
+    plane.register("k", "keyring", json!({}), None);
+    let v = provider(&plane.ctx, "k").unwrap();
+    crate::secrets::keyring::set(&plane.ctx, &v, "tok", "moved-value-71").unwrap();
+    // An item was moved under the access rule (ruling V90d): the index says the note is due.
+    let index = crate::secrets::keyring::index_path(&plane.ctx, &v);
+    let mut doc: Value = serde_json::from_str(&std::fs::read_to_string(&index).unwrap()).unwrap();
+    doc["held_note"] = json!("due");
+    std::fs::write(&index, doc.to_string()).unwrap();
+
+    let mut io = Rec::default();
+    assert_eq!(get(&plane.ctx, "k", "tok", false, false, &mut io), 0);
+    assert!(
+        io.said()
+            .contains("charter moved the secrets of vault 'k' under its access rule"),
+        "{}",
+        io.said()
+    );
+    let mut again = Rec::default();
+    assert_eq!(get(&plane.ctx, "k", "tok", false, false, &mut again), 0);
+    assert_eq!(again.said(), "");
+}
