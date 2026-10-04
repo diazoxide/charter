@@ -617,6 +617,57 @@ pub(crate) fn window_views(
     Ok(())
 }
 
+/// The branch the window's sidebar is focused on — its cockpit (FM-5): a workspace, a repo,
+/// and a branch's folder, or none for the repo's own. Names only.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
+pub(crate) struct Focused {
+    pub workspace: String,
+    pub repo: String,
+    pub piece: Option<String>,
+}
+
+impl From<charter_core::reopen::Focus> for Focused {
+    fn from(focus: charter_core::reopen::Focus) -> Self {
+        Self {
+            workspace: focus.workspace,
+            repo: focus.repo,
+            piece: focus.piece,
+        }
+    }
+}
+
+/// The branch this plane's window had its sidebar focused on when it was last recorded — at a
+/// launch, the record's — or `null` for the whole workspace.
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn reopened_focus(
+    planes: tauri::State<'_, crate::planes::Planes>,
+    plane: crate::planes::PlaneId,
+) -> Result<Option<Focused>, String> {
+    Ok(planes.held(&plane)?.chats().focus().map(Focused::from))
+}
+
+/// Which branch the window's sidebar is focused on now, or `null` for the whole workspace, so
+/// the record brings it back with the view tabs at the next launch. A name charter would not
+/// mint is refused rather than written down.
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn window_focus(
+    planes: tauri::State<'_, crate::planes::Planes>,
+    plane: crate::planes::PlaneId,
+    focus: Option<Focused>,
+) -> Result<(), String> {
+    let focus = focus.map(held_focus).transpose()?;
+    planes.held(&plane)?.chats().hold_focus(focus);
+    Ok(())
+}
+
+/// The focus the window said, held to the names charter mints.
+fn held_focus(focus: Focused) -> Result<charter_core::reopen::Focus, String> {
+    charter_core::reopen::Focus::named(&focus.workspace, &focus.repo, focus.piece.as_deref())
+        .ok_or_else(|| "charter will not remember a focus on a branch it did not name.".to_owned())
+}
+
 fn millis(took: std::time::Duration) -> u32 {
     u32::try_from(took.as_millis()).unwrap_or(u32::MAX)
 }
@@ -644,6 +695,27 @@ mod tests {
                 .expect("approved");
         }
         (dir, config)
+    }
+
+    #[test]
+    fn a_focus_the_window_says_is_held_to_the_names_charter_mints() {
+        let focused = |workspace: &str, repo: &str, piece: Option<&str>| Focused {
+            workspace: workspace.into(),
+            repo: repo.into(),
+            piece: piece.map(Into::into),
+        };
+        assert!(held_focus(focused("alpha", "svc", Some("fix-login"))).is_ok());
+        assert!(held_focus(focused("alpha", "svc", None)).is_ok());
+        for wrong in [
+            focused("../x", "svc", None),
+            focused("alpha", "a/b", None),
+            focused("alpha", "svc", Some("../../etc")),
+            focused("", "svc", None),
+            focused(&"a".repeat(65), "svc", None),
+            focused("alpha", "svc", Some(&"b".repeat(65))),
+        ] {
+            assert!(held_focus(wrong.clone()).is_err(), "{wrong:?}");
+        }
     }
 
     #[test]

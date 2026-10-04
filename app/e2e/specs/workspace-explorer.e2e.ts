@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { browser, expect, $, $$ } from "@wdio/globals";
@@ -503,6 +504,69 @@ describe("the explorer", () => {
     } finally {
       if ((await changedOnly.getAttribute("aria-pressed")) === "true") await changedOnly.click();
       rmSync(join(branch, "changed-dir"), { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * **The branch cockpit** (FM-5, #1108), against the real core: the fixture branch's row menu
+   * focuses the explorer on it, `branch_ahead_behind` counts it against the base recorded for it
+   * in the reader's child, and its files are drawn under its state. Esc steps back out.
+   */
+  it("focuses the fixture branch into its cockpit, with its state and files, and leaves on Esc", async () => {
+    await onAlpha();
+    const plane = (await ask<string[]>("open_planes"))[0];
+    const clone = join(plane, "workspaces", "alpha", "svc");
+    // The fixture is cut by plain git, which records no base; charter records `main` for a
+    // branch it cuts, and the header counts against it.
+    const base = ["config", "branch.fix-login.charterBase"];
+    execFileSync("git", [...base, "main"], { cwd: clone, stdio: "pipe" });
+    await $('[data-testid="piece-svc-fix-login"]').waitForExist({ timeout: 20_000 });
+
+    try {
+      expect(await sendContextMenu('[data-testid="piece-svc-fix-login"] .spot')).toBe(true);
+      const menu = await $('[role="menu"]');
+      await menu.waitForDisplayed({ timeout: 20_000 });
+      await $('[role="menuitem"][aria-label="Focus on branch fix-login"]').click();
+
+      // By role and name: the header region, the breadcrumb, and the cockpit's own tree.
+      const head = await $("aria/Branch fix-login");
+      await head.waitForDisplayed({ timeout: 20_000 });
+      await browser.waitUntil(
+        async () => (await head.getText()).includes("0 ahead, 0 behind main"),
+        {
+          timeout: 60_000,
+          timeoutMsg: `the header never counted the branch against main: ${await head.getText()}`,
+        },
+      );
+      await expect(head).toHaveText(expect.stringMatching(/No changes|\d+ changes?/));
+      await expect(await $("aria/Breadcrumb")).toBeDisplayed();
+      await expect(
+        await $(inExplorer('[role="tree"][aria-label="Repos and branches"]')),
+      ).not.toBeExisting();
+      const files = await $(inExplorer('[data-row="file:svc/fix-login:"]'));
+      await expect(files).toHaveAttribute("aria-expanded", "true");
+      await explorerRow("fix-login", "README.md");
+
+      await browser.execute(() => {
+        document
+          .querySelector<HTMLElement>('[data-testid="explorer"] [data-row="file:svc/fix-login:"]')
+          ?.focus();
+      });
+      await browser.keys(["Escape"]);
+
+      await $(inExplorer('[role="tree"][aria-label="Repos and branches"]')).waitForExist({
+        timeout: 20_000,
+        timeoutMsg: "Esc did not step back out of the cockpit",
+      });
+      await expect(await $("aria/Branch fix-login")).not.toBeExisting();
+    } finally {
+      // One app process serves the whole run: the explorer and the clone are left as found.
+      const crumb = await $("aria/Breadcrumb");
+      if (await crumb.isExisting()) await crumb.$("button").click();
+      execFileSync("git", ["config", "--unset-all", "branch.fix-login.charterBase"], {
+        cwd: clone,
+        stdio: "pipe",
+      });
     }
   });
 

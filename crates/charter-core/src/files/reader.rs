@@ -29,7 +29,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use super::status::{Status, status_here};
+use super::status::{AheadBehind, Status, ahead_behind_here, status_here};
 use super::watch::{folders_here, matters_here, root_here};
 use super::{Branch, Refused};
 use crate::worktree::git;
@@ -61,6 +61,8 @@ pub enum Ask {
     Folders,
     /// Whether any of these paths, relative to its folder, is one git does not ignore.
     Matters(Vec<PathBuf>),
+    /// How far it is from the branch it was cut from (FM-5).
+    AheadBehind,
 }
 
 /// What the child answers.
@@ -70,6 +72,7 @@ pub enum Answer {
     Status(Status),
     Folders(Vec<PathBuf>),
     Matters(bool),
+    AheadBehind(AheadBehind),
 }
 
 /// One question, as it crosses to the child.
@@ -215,6 +218,19 @@ pub fn status(reader: &Reader, plane: &Path, branch: Branch<'_>) -> Result<Statu
     }
 }
 
+/// How far a branch is from the branch it was cut from, read by `reader` (see
+/// [`ahead_behind_here`]): commits ahead and behind, starting no git.
+pub fn ahead_behind(
+    reader: &Reader,
+    plane: &Path,
+    branch: Branch<'_>,
+) -> Result<AheadBehind, Refused> {
+    match reader.ask(plane, branch, Ask::AheadBehind)? {
+        Answer::AheadBehind(apart) => Ok(apart),
+        _ => Err(Refused::Read("the reader answered something else".into())),
+    }
+}
+
 /// When this process was started as the reader — [`READ_ARG`] is its last argument — answers
 /// the one question on its standard input and says the exit code; otherwise `None`.
 ///
@@ -251,6 +267,7 @@ fn serve() -> i32 {
         Ask::Status => status_here(plane, branch).map(Answer::Status),
         Ask::Folders => folders_here(plane, branch).map(Answer::Folders),
         Ask::Matters(paths) => matters_here(plane, branch, &paths).map(Answer::Matters),
+        Ask::AheadBehind => ahead_behind_here(plane, branch).map(Answer::AheadBehind),
     }
     .map_err(|refused| refused.to_string());
     let Ok(json) = serde_json::to_string(&answered) else {

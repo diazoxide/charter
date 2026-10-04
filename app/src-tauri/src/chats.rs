@@ -15,7 +15,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use charter_core::engine::Size;
 use charter_core::eventlog::{Began, RunOf};
 use charter_core::harness::{Harness, SessionId};
-use charter_core::reopen::{Chat, Record, Reopened, View};
+use charter_core::reopen::{Chat, Focus, Record, Reopened, View};
 
 use charter_core::harness::StateHooks;
 
@@ -211,6 +211,9 @@ pub struct Chats {
     /// chats only because the record is one file and is written whole, in one place, under
     /// [`Self::writing`] — a second writer of `reopen.json` would be two answers racing to disk.
     views: Mutex<Vec<View>>,
+    /// The branch the window's sidebar is focused on — its cockpit (FM-5) — as it last said,
+    /// or at a launch as the record had it. Held here for [`Self::views`]' reason.
+    focus: Mutex<Option<Focus>>,
     /// The order the window's strip draws the chats in, by session, as it last said — or, at
     /// a launch, the order the record listed them in (ADR 0039, as amended by SI-6).
     ///
@@ -279,6 +282,7 @@ impl Chats {
             front: Mutex::new(None),
             would_not_start: Mutex::new(Vec::new()),
             views: Mutex::new(Vec::new()),
+            focus: Mutex::new(None),
             order: Mutex::new(Vec::new()),
             record_it,
             writing: Mutex::new(()),
@@ -1146,6 +1150,21 @@ impl Chats {
         lock(&self.views).clone()
     }
 
+    /// What branch the window's sidebar is focused on now (FM-5), or `None` for the whole
+    /// workspace. Written down when it differs from what was held, for [`Self::hold_views`]'
+    /// reason.
+    pub fn hold_focus(&self, focus: Option<Focus>) {
+        let changed = std::mem::replace(&mut *lock(&self.focus), focus.clone()) != focus;
+        if changed {
+            self.write_it_down();
+        }
+    }
+
+    /// The branch the window last said its sidebar was focused on — at a launch, the record's.
+    pub fn focus(&self) -> Option<Focus> {
+        lock(&self.focus).clone()
+    }
+
     /// Follows a workspace rename in everything held here that names it (charter#367): a
     /// chat's directory, the workspace a handed-off chat came from, and each view tab's strip —
     /// and writes the record once if any of it moved.
@@ -1162,6 +1181,9 @@ impl Chats {
         }
         for view in lock(&self.views).iter_mut() {
             changed |= moved.view(view);
+        }
+        if let Some(focus) = lock(&self.focus).as_mut() {
+            changed |= moved.focus(focus);
         }
         if changed {
             self.write_it_down();
@@ -1282,6 +1304,7 @@ impl Chats {
         Record {
             chats,
             views: lock(&self.views).clone(),
+            focus: lock(&self.focus).clone(),
             // What the next launch must not deal again — charter-app#90. It is the high
             // water mark and not the count of what is open, so the numbers of chats that
             // were closed are spent too, and no new chat lands on a pointer one of them
@@ -1311,6 +1334,7 @@ impl Chats {
         // The view tabs start nothing, so they are simply held until the window asks for them
         // (`reopened_views`) — and written back out with everything else at the next change.
         *lock(&self.views) = record.views.clone();
+        *lock(&self.focus) = record.focus.clone();
         // Every chat here starts a program, synchronously, before it has a pane. A
         // record with thousands in it — a runaway, or a file nobody meant — would give an
         // app that hangs on launch with no way to intervene. The cap is far above the
@@ -1445,6 +1469,7 @@ impl Chats {
         lock(&self.open).clear();
         lock(&self.would_not_start).clear();
         lock(&self.views).clear();
+        *lock(&self.focus) = None;
         *lock(&self.front) = None;
     }
 }
@@ -1953,6 +1978,52 @@ mod tests {
             "the chats went missing from the record"
         );
         assert_eq!(last.views, vec![a_view("steward")]);
+    }
+
+    fn a_focus() -> Focus {
+        Focus {
+            workspace: "alpha".into(),
+            repo: "svc".into(),
+            piece: Some("fix-login".into()),
+        }
+    }
+
+    #[test]
+    fn the_branch_the_window_focused_is_written_into_the_record_once() {
+        // FM-5: the cockpit's branch is remembered with the window's views.
+        let (chats, wrote) = recorded();
+
+        chats.hold_focus(Some(a_focus()));
+        let so_far = lock(&wrote).len();
+        chats.hold_focus(Some(a_focus()));
+
+        let last = lock(&wrote).last().cloned().expect("a record was written");
+        assert_eq!(last.focus, Some(a_focus()));
+        assert_eq!(
+            lock(&wrote).len(),
+            so_far,
+            "the same focus was written twice"
+        );
+        chats.hold_focus(None);
+        assert_eq!(lock(&wrote).last().cloned().unwrap().focus, None);
+    }
+
+    #[test]
+    fn a_record_s_focus_is_held_for_the_window_when_it_is_put_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let (chats, wrote) = recorded();
+
+        chats.put_back(
+            &Record {
+                focus: Some(a_focus()),
+                ..Default::default()
+            },
+            dir.path(),
+            SIZE,
+        );
+
+        assert_eq!(chats.focus(), Some(a_focus()));
+        assert!(lock(&wrote).is_empty(), "putting a record back wrote it");
     }
 
     #[test]
@@ -2482,6 +2553,7 @@ mod tests {
                 dealt: 0,
                 relaunch_after_update: false,
                 clone_seat: None,
+                focus: None,
             },
             SIZE,
         );
@@ -2655,6 +2727,7 @@ mod tests {
                 dealt: 0,
                 relaunch_after_update: false,
                 clone_seat: None,
+                focus: None,
             },
             SIZE,
         );
@@ -2685,6 +2758,7 @@ mod tests {
                 dealt: 0,
                 relaunch_after_update: false,
                 clone_seat: None,
+                focus: None,
             },
             SIZE,
         );
@@ -2707,6 +2781,7 @@ mod tests {
                 dealt: 0,
                 relaunch_after_update: false,
                 clone_seat: None,
+                focus: None,
             },
             SIZE,
         );
@@ -2743,6 +2818,7 @@ mod tests {
                 dealt: 0,
                 relaunch_after_update: false,
                 clone_seat: None,
+                focus: None,
             },
             SIZE,
         );
@@ -2767,6 +2843,7 @@ mod tests {
                 dealt: 0,
                 relaunch_after_update: false,
                 clone_seat: None,
+                focus: None,
             },
             SIZE,
         );
@@ -2791,6 +2868,7 @@ mod tests {
                 dealt: 0,
                 relaunch_after_update: false,
                 clone_seat: None,
+                focus: None,
             },
             SIZE,
         );
@@ -2854,6 +2932,7 @@ mod tests {
             dealt: 0,
             relaunch_after_update: false,
             clone_seat: None,
+            focus: None,
         };
         // What `charter workspace rename alpha beta` does to the record.
         assert!(
@@ -2897,6 +2976,7 @@ mod tests {
                 dealt: 0,
                 relaunch_after_update: false,
                 clone_seat: None,
+                focus: None,
             },
             SIZE,
         );
@@ -2937,6 +3017,7 @@ mod tests {
                 dealt: 0,
                 relaunch_after_update: false,
                 clone_seat: None,
+                focus: None,
             },
             SIZE,
         );
@@ -2968,6 +3049,7 @@ mod tests {
                 dealt: 0,
                 relaunch_after_update: false,
                 clone_seat: None,
+                focus: None,
             },
             SIZE,
         );
@@ -2992,6 +3074,7 @@ mod tests {
                 dealt: 0,
                 relaunch_after_update: false,
                 clone_seat: None,
+                focus: None,
             },
             SIZE,
         );
@@ -3019,6 +3102,7 @@ mod tests {
                 dealt: 0,
                 relaunch_after_update: false,
                 clone_seat: None,
+                focus: None,
             },
             SIZE,
         );
@@ -3219,6 +3303,7 @@ mod tests {
                 dealt: 0,
                 relaunch_after_update: false,
                 clone_seat: None,
+                focus: None,
             },
             SIZE,
         );
@@ -3240,6 +3325,7 @@ mod tests {
                 dealt: 0,
                 relaunch_after_update: false,
                 clone_seat: None,
+                focus: None,
             },
             SIZE,
         );
@@ -3735,6 +3821,7 @@ mod tests {
                 dealt: 0,
                 relaunch_after_update: false,
                 clone_seat: None,
+                focus: None,
             },
             SIZE,
         );

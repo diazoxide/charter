@@ -231,6 +231,7 @@ import { fitting, LEAST, LEAST_CHIP, LEAST_ROOT, leastAt, useRoom } from "./fits
 import { useArrived } from "./lib/arrived";
 import type { Ending } from "./QuitWarning";
 import { useTextSizes } from "./textSize";
+import { focusStands } from "./Cockpit";
 
 /** One empty list, so a prop left out is the same list at every render. */
 const NONE: readonly never[] = [];
@@ -611,6 +612,13 @@ export const PlaneView = memo(function PlaneView({
    */
   const [pickedSpot, setPickedSpot] = useState<{ workspace: string; spot: Spot }>();
   /**
+   * The branch the explorer is focused on — its cockpit (FM-5, #1108) — with the workspace it
+   * is in. Kept when the window moves to another workspace, and drawn again on coming back,
+   * as the pick is; remembered with the window's views (`window_focus`), so one window can
+   * stay on one branch across a relaunch.
+   */
+  const [focusedBranch, setFocusedBranch] = useState<Place>();
+  /**
    * The panel row whose card is open on the right-hand region, if any, as
    * `<panel key>/<row key>` — `charter/personas/steward`, `charter/todos/<slug>`,
    * `ext/acme/reviews/<key>`.
@@ -674,8 +682,10 @@ export const PlaneView = memo(function PlaneView({
       // view has no program of charter's, and an extension's view is not asked anything until
       // the operator presses for it (`Views.tsx`), so this is a list of tabs and nothing else.
       commands.reopenedViews(plane).catch(() => undefined),
+      // The branch the window's explorer was focused on (FM-5), kept with the views.
+      commands.reopenedFocus(plane).catch(() => undefined),
     ])
-      .then(([answer, viewAnswer]) => {
+      .then(([answer, viewAnswer, focusAnswer]) => {
         setSettled(true);
         void commands
           // A window that cannot ask, or is answered with nothing, simply says nothing.
@@ -701,6 +711,13 @@ export const PlaneView = memo(function PlaneView({
           setShells(new Set(open.filter(isShell).map((chat) => chat.session)));
         }
         setPinnedViews(back.filter((view) => view.pinned).map((view) => viewKey(refOf(view))));
+        const focusedBack = focusAnswer?.status === "ok" ? focusAnswer.data : null;
+        if (focusedBack !== null && focusedBack !== undefined)
+          setFocusedBranch({
+            workspace: focusedBack.workspace,
+            repo: focusedBack.repo,
+            piece: focusedBack.piece,
+          });
         // The persona comes with the chat, so a tab put back reads `steward 3` from its first
         // frame rather than reading `3` until the sidebar has been read (charter-app#130) — and
         // so does the name the operator gave it, which rides the record (charter-app#254).
@@ -767,6 +784,18 @@ export const PlaneView = memo(function PlaneView({
     lastViewsSaid.current = text;
     void commands.windowViews(plane, said).catch(() => undefined);
   }, [pinnedViews, plane, tabs, viewsHeard]);
+
+  /** The branch the explorer is focused on (FM-5), told to the core when it changes, after the
+   *  record is heard for the views' reason: a focus said first would write over the record's. */
+  const lastFocusSaid = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!viewsHeard) return;
+    const said = focusedBranch ?? null;
+    const text = JSON.stringify(said);
+    if (text === lastFocusSaid.current) return;
+    lastFocusSaid.current = text;
+    void commands.windowFocus(plane, said).catch(() => undefined);
+  }, [focusedBranch, plane, viewsHeard]);
 
   /**
    * The order the chats are in across every strip, told to the core whenever it changes — so
@@ -1155,6 +1184,24 @@ export const PlaneView = memo(function PlaneView({
       ? sidebar?.root
       : sidebar?.workspaces.find((ws) => ws.name === focused)?.path) ??
     null;
+
+  /**
+   * The branch the explorer is focused on in the workspace in front, while the workspace still
+   * lists it (`Explorer`'s own rule), and else none: what ⌘P and ⌘⇧F look in first.
+   */
+  const cockpit = useMemo(() => {
+    if (focusedBranch === undefined || focusedBranch.workspace !== ofWorkspace) return undefined;
+    return focusStands(workspaceState, focusedBranch) === undefined ? undefined : focusedBranch;
+  }, [focusedBranch, ofWorkspace, workspaceState]);
+  /** The nearest branch to the operator: the cockpit's, else the one the explorer picked. */
+  const nearBranch = useMemo<Place | undefined>(
+    () =>
+      cockpit ??
+      (ofWorkspace !== undefined && spot !== undefined
+        ? { workspace: ofWorkspace, repo: spot.repo, piece: spot.piece ?? null }
+        : undefined),
+    [cockpit, ofWorkspace, spot],
+  );
 
   /** What the explorer picks, remembered against the workspace it was picked in. */
   const pickSpot = useCallback(
@@ -3072,6 +3119,9 @@ export const PlaneView = memo(function PlaneView({
       // A clone picked from its menu is the explorer's own pick one level up: the same state,
       // so the explorer marks it and `New tab` starts there (charter-app#174).
       pickClone: (repo, path) => pickSpot({ repo, path }),
+      // The explorer becomes that branch's cockpit (FM-5).
+      focusBranch: (cut) =>
+        setFocusedBranch({ workspace: cut.workspace, repo: cut.repo, piece: cut.piece }),
       newBranch,
       newChatIn: newTabIn,
       sendKey,
@@ -3521,17 +3571,12 @@ export const PlaneView = memo(function PlaneView({
       e.preventDefault();
       e.stopPropagation();
       if (e.repeat) return;
-      const ask = searchFromFocus(
-        ofWorkspace !== undefined && spot !== undefined
-          ? { workspace: ofWorkspace, repo: spot.repo, piece: spot.piece ?? null }
-          : undefined,
-        ofWorkspace,
-      );
+      const ask = searchFromFocus(nearBranch, ofWorkspace);
       showView(searchView(ask), searchTitle(ask));
     };
     window.addEventListener("keydown", key, true);
     return () => window.removeEventListener("keydown", key, true);
-  }, [inFront, ofWorkspace, showView, spot]);
+  }, [inFront, nearBranch, ofWorkspace, showView]);
 
   /**
    * A pane's own button: that pane becomes the focused one, and then the row runs.
@@ -3651,13 +3696,11 @@ export const PlaneView = memo(function PlaneView({
       workspace: ofWorkspace,
       colour: colourWithHue(sidebar?.workspaces.find((ws) => ws.name === ofWorkspace)?.colour),
       saving,
-      // The branch the explorer picked: where ⌘P's files are found first (FM-7).
-      branch:
-        ofWorkspace !== undefined && spot !== undefined
-          ? { workspace: ofWorkspace, repo: spot.repo, piece: spot.piece ?? null }
-          : undefined,
+      // Where ⌘P's files are found first (FM-7): the cockpit's branch, else the one the
+      // explorer picked (FM-5).
+      branch: nearBranch,
     }),
-    [asking, ofWorkspace, offers, quiet, report, run, saving, settled, sidebar, spot],
+    [asking, nearBranch, ofWorkspace, offers, quiet, report, run, saving, settled, sidebar],
   );
   // **Before the paint, not after it.** A quit — Cmd-Q, the tray, the menu — arrives whenever
   // it arrives, and the window decides on what every project has told it: a report that
@@ -4213,6 +4256,8 @@ export const PlaneView = memo(function PlaneView({
               onOpenFile={(place, path) =>
                 showView(pieceFileView(place, path), pieceFileTitle(place, path))
               }
+              focus={cockpit}
+              onFocus={setFocusedBranch}
             />
           ),
           aside: (

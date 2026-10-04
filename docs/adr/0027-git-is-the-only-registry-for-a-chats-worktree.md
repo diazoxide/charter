@@ -282,7 +282,8 @@ says every ported module, not every ported verb charter found convenient.
 **The binary stays the rule for every write and every command the operator starts.**
 
 **There is one exception.** Automatic, read-only reads of a branch an agent can write are done by
-gitoxide (`gix`), not git. These are a status, a name diff, ignore checks and a folder walk. The
+gitoxide (`gix`), not git. These are a status, a name diff, ignore checks, a folder walk, and how
+many commits a branch is ahead of and behind its recorded base (FM-5, `files::ahead_behind`). The
 repository's config is read once and cut down to an allow-list of the keys a read needs, so no
 filter or diff driver, and no memory or size setting, survives. No git process is started.
 

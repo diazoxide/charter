@@ -78,6 +78,7 @@ fn one_chat() -> Record {
         dealt: 0,
         relaunch_after_update: false,
         clone_seat: None,
+        focus: None,
         chats: vec![Chat {
             program: "claude".to_owned(),
             args: vec!["--resume".to_owned(), "abc".to_owned()],

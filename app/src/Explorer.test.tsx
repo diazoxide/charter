@@ -436,7 +436,12 @@ describe("a piece row's menu", () => {
       within(menu)
         .getAllByRole("menuitem")
         .map((one) => one.getAttribute("aria-label")),
-    ).toEqual(["Browse the files of one", "Merge branch one into svc", "Remove folder one in svc"]);
+    ).toEqual([
+      "Focus on branch one",
+      "Browse the files of one",
+      "Merge branch one into svc",
+      "Remove folder one in svc",
+    ]);
   });
 
   it("hands the catalogue's offer back when a row is pressed", async () => {

@@ -2761,6 +2761,7 @@ mod tests {
             dealt: 0,
             relaunch_after_update: false,
             clone_seat: None,
+            focus: None,
         }
     }
 

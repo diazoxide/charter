@@ -847,6 +847,8 @@ export const commands = {
 	 *  rolled up onto its folders: the explorer's markers and its "Changed only" (FM-4).
 	 */
 	branchStatus: (plane: PlaneId, workspace: string, repo: string, piece: string | null) => typedError<BranchStatus, string>(__TAURI_INVOKE("branch_status", { plane, workspace, repo, piece })),
+	/**  How far a branch is from the branch it was cut from, in commits ahead and behind. */
+	branchAheadBehind: (plane: PlaneId, workspace: string, repo: string, piece: string | null) => typedError<AheadBehind, string>(__TAURI_INVOKE("branch_ahead_behind", { plane, workspace, repo, piece })),
 	/**
 	 *  The folders of branches this window's explorer has expanded, watched until it names others
 	 *  (FM-1). A folder that does not resolve — gone, or refused as the tree refuses it — is not
@@ -1261,6 +1263,25 @@ export const commands = {
 	/**  What view tabs the window has open now, so the record brings them back at the next launch. */
 	windowViews: (plane: PlaneId, views: ViewTab[]) => typedError<null, string>(__TAURI_INVOKE("window_views", { plane, views })),
 	/**
+	 *  Which branch the window's sidebar is focused on now, or `null` for the whole workspace, so
+	 *  the record brings it back with the view tabs at the next launch. A name charter would not
+	 *  mint is refused rather than written down.
+	 */
+	windowFocus: (plane: PlaneId, focus: {
+	workspace: string,
+	repo: string,
+	piece: string | null,
+} | null) => typedError<null, string>(__TAURI_INVOKE("window_focus", { plane, focus })),
+	/**
+	 *  The branch this plane's window had its sidebar focused on when it was last recorded — at a
+	 *  launch, the record's — or `null` for the whole workspace.
+	 */
+	reopenedFocus: (plane: PlaneId) => typedError<{
+	workspace: string,
+	repo: string,
+	piece: string | null,
+} | null, string>(__TAURI_INVOKE("reopened_focus", { plane })),
+	/**
 	 *  What Push would do to `change`: each member's repo, branch and destination, and each member
 	 *  that would not be pushed. Pushes nothing.
 	 * 
@@ -1414,6 +1435,19 @@ export type ActionAnswer = {
 	took_ms: number,
 	/**  As [`ViewAnswer::Answered`]'s: what changed outside its declared paths, named. */
 	overreach: string | null,
+};
+
+/**  How far a branch is from the branch it was cut from: the branch cockpit's header (FM-5). */
+export type AheadBehind = {
+	/**  Commits the branch has that its base does not. */
+	ahead: number,
+	/**  Commits its base gained that the branch does not have. */
+	behind: number,
+	/**
+	 *  The base they are counted against; `null` when the branch has no base recorded, and the
+	 *  counts then mean nothing.
+	 */
+	base: string | null,
 };
 
 /**  One alert, as the drawer draws it. */
@@ -2044,6 +2078,16 @@ export type FirstTaskRun = {
 	folder: string,
 	/**  The command that shows the run's diff, run in `folder`. */
 	diff: string,
+};
+
+/**
+ *  The branch the window's sidebar is focused on — its cockpit (FM-5): a workspace, a repo,
+ *  and a branch's folder, or none for the repo's own. Names only.
+ */
+export type Focused = {
+	workspace: string,
+	repo: string,
+	piece: string | null,
 };
 
 /**  One folder holding changes: the mark they share (`changed` when they differ) and how many. */
