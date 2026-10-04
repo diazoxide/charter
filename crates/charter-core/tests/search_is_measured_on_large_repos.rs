@@ -54,8 +54,8 @@
 //! - ⌘⇧F's first file of hits for a common query: within [`FIRST_HIT`] (measured 0.57 s);
 //! - a status read: within [`STATUS`], the reader's deadline (measured 15–23 s);
 //! - a comparison's file list: within [`STATUS`], the same reader's deadline (measured
-//!   0.50–0.51 s for 1,000 changed files with their line counts at 100,000 files, beside
-//!   0.20–0.22 s for `git diff --numstat`; a file's hunks 13 ms median, #704).
+//!   0.37–0.51 s for 1,000 changed files with their line counts at 100,000 files, beside
+//!   0.15–0.22 s for `git diff --numstat`; a file's hunks 8–13 ms median, #704).
 //!
 //! A rare query, or one found nowhere, is measured and held to nothing. Its whole scan takes
 //! minutes at this size, which is the index question #1153 carries, not a regression.

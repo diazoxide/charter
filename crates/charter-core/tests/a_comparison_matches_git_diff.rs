@@ -496,10 +496,23 @@ fn what_is_not_committed_matches_git_diff_of_head_against_the_working_tree() {
     leave_uncommitted(&piece);
     let scratch = tempfile::tempdir().unwrap();
     let staged_before = oracle(&piece, &["diff", "--cached", "--name-status"], None);
+    let index_path = piece.join(oracle(&piece, &["rev-parse", "--git-path", "index"], None).trim());
+    let index_before = (
+        std::fs::read(&index_path).unwrap(),
+        std::fs::metadata(&index_path).unwrap().modified().unwrap(),
+    );
     let objects_before = objects(&f.clone);
 
     let compared =
         files::compare(&reader(), &f.plane, piece_of(&f), &Comparison::Uncommitted).unwrap();
+    assert_eq!(
+        (
+            std::fs::read(&index_path).unwrap(),
+            std::fs::metadata(&index_path).unwrap().modified().unwrap(),
+        ),
+        index_before,
+        "the branch's index was rewritten"
+    );
     // Read before the oracle's `git add` writes objects of its own.
     assert_eq!(
         objects(&f.clone),
@@ -711,13 +724,16 @@ fn a_folder_swapped_for_a_link_is_never_read_through_for_the_working_tree() {
         &compared.sides,
         "src/lib.rs",
         None,
-    )
-    .unwrap();
+    );
 
-    let FileDiff::Text { head, .. } = diff else {
-        panic!("{diff:?}");
-    };
-    assert!(!head.contains("SECRET"), "read through the link: {head}");
+    // Refused as a file that cannot be read, or drawn as gone: never read through the link.
+    match diff {
+        Ok(FileDiff::Text { head, .. }) => {
+            assert!(!head.contains("SECRET"), "read through the link: {head}")
+        }
+        Ok(other) => panic!("{other:?}"),
+        Err(refused) => assert!(!refused.to_string().contains("SECRET"), "{refused}"),
+    }
 }
 
 #[test]
@@ -746,6 +762,79 @@ fn a_file_git_ignores_is_never_read_for_a_files_hunks() {
 
     assert!(!said.contains("sk-live"), "{said}");
     assert!(said.contains("not one of the branch's files"), "{said}");
+}
+
+/// Review of RC-2: the working tree's changed files are read for a comparison and the
+/// explorer's markers, and many large ones must not swell the reader past its cap, or every
+/// marker is lost. Past the comparison's read budget a file is marked and not read.
+#[test]
+fn many_large_untracked_files_are_still_marked_within_the_readers_memory() {
+    charter_core::unsteered!();
+    let f = support::plane_with_clone("thing");
+    let piece = worktree::add(&f.plane, &f.ws, &f.repo, "piece", None)
+        .unwrap()
+        .path;
+    const LARGE: usize = 15 * 1024 * 1024;
+    const MANY: usize = 30;
+    // Bytes nothing compresses (the system may compress idle memory): 450 MB of files, each
+    // its own content, past the 256 MiB the reader is given here.
+    let mut noise = vec![0u8; LARGE];
+    let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
+    for byte in noise.iter_mut() {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        *byte = x as u8;
+    }
+    for n in 0..MANY {
+        noise[..8].copy_from_slice(&(n as u64).to_le_bytes());
+        std::fs::write(piece.join(format!("data-{n:02}.bin")), &noise).unwrap();
+    }
+    drop(noise);
+    write(&piece, "small.txt", "small\n");
+    let reader = reader().memory(256 * 1024 * 1024);
+
+    let status = files::status(&reader, &f.plane, piece_of(&f)).unwrap();
+    assert_eq!(status.changes.len(), MANY + 1, "{:?}", status.changes);
+    assert!(status.changes.iter().all(|one| one.mark == Mark::Added));
+
+    let compared =
+        files::compare(&reader, &f.plane, piece_of(&f), &Comparison::Uncommitted).unwrap();
+    assert_eq!(compared.files.len(), MANY + 1);
+    let small = compared
+        .files
+        .iter()
+        .find(|one| one.path == "small.txt")
+        .unwrap();
+    assert_eq!(small.lines.map(|l| (l.added, l.removed)), Some((1, 0)));
+}
+
+#[test]
+fn a_working_tree_file_that_cannot_be_read_is_refused_never_drawn_empty() {
+    charter_core::unsteered!();
+    let f = support::plane_with_clone("thing");
+    let piece = worktree::add(&f.plane, &f.ws, &f.repo, "piece", None)
+        .unwrap()
+        .path;
+    write(&piece, "README.md", "changed\n");
+    use std::os::unix::fs::PermissionsExt as _;
+    let readme = piece.join("README.md");
+    std::fs::set_permissions(&readme, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let compared =
+        files::compare(&reader(), &f.plane, piece_of(&f), &Comparison::Uncommitted).unwrap();
+    let answer = files::compare_file(
+        &reader(),
+        &f.plane,
+        piece_of(&f),
+        &compared.sides,
+        "README.md",
+        None,
+    );
+    std::fs::set_permissions(&readme, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+    let said = answer.unwrap_err().to_string();
+    assert!(said.contains("README.md"), "{said}");
 }
 
 #[test]
@@ -783,20 +872,30 @@ fn a_path_outside_the_branch_or_into_git_is_refused_for_a_files_hunks() {
     charter_core::unsteered!();
     let f = support::plane_with_clone("thing");
     worktree::add(&f.plane, &f.ws, &f.repo, "piece", None).unwrap();
-    let compared =
-        files::compare(&reader(), &f.plane, piece_of(&f), &Comparison::Uncommitted).unwrap();
-    for path in ["../out.txt", ".git/config", "/etc/passwd"] {
-        assert!(
-            files::compare_file(
+    // The repo's own folder, where `.git` is a folder, and a piece, where it is a file; git's
+    // own name in any case, which a case-insensitive folder (macOS, Windows) opens as git's.
+    for at in [Branch::repo(&f.ws, &f.repo), piece_of(&f)] {
+        let compared = files::compare(&reader(), &f.plane, at, &Comparison::Uncommitted).unwrap();
+        for path in [
+            "../out.txt",
+            ".git/config",
+            ".GIT/config",
+            ".Git/HEAD",
+            ".gIT",
+            "sub/.GiT/config",
+            "/etc/passwd",
+        ] {
+            let answer = files::compare_file(&reader(), &f.plane, at, &compared.sides, path, None);
+            assert!(answer.is_err(), "{path}: {answer:?}");
+            let answer = files::compare_file(
                 &reader(),
                 &f.plane,
-                piece_of(&f),
+                at,
                 &compared.sides,
-                path,
-                None
-            )
-            .is_err(),
-            "{path}"
-        );
+                "README.md",
+                Some(path),
+            );
+            assert!(answer.is_err(), "from {path}: {answer:?}");
+        }
     }
 }

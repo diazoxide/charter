@@ -416,7 +416,9 @@ const THREADS: usize = 8;
 /// dropped, as the tree refuses it.
 pub(super) fn plain(path: &str) -> Option<String> {
     let relative = inside(path).ok()?;
-    let git_s = relative.components().any(|step| step.as_os_str() == ".git");
+    // git's own folder in any ASCII case, as `files::open` refuses it: on a case-insensitive
+    // folder `.GIT` is `.git`.
+    let git_s = super::gits(relative);
     (!git_s && !path.contains('\\') && !path.contains('\u{FFFD}')).then(|| path.to_string())
 }
 

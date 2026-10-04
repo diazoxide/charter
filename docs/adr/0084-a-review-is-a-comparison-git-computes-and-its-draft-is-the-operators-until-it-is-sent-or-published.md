@@ -607,6 +607,9 @@ asks for **one** engine, so RC-2 builds the engine on that reader rather than be
 
 What it costs: a repo's own `diff.algorithm`, `diff.renames` and the like are not read, so a
 comparison is always git's defaults; and an `eol` or filter conversion is not applied to the
-working-tree side, so a file checked out with CRLF line ends compares as its bytes.
+working-tree side, so a file checked out with CRLF line ends compares as its bytes; and a
+submodule's pointer moving is not shown, since a comparison lists files only (the #704
+checklist carries both). Past 128 MiB of changed working-tree content in one comparison, a file
+is marked and not read, so it has no line counts and is never taken for a rename.
 
 The rest of this record stands.
