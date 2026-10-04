@@ -130,9 +130,16 @@ function Shown({
   standing?: readonly string[];
   project?: ProjectLevel;
 }) {
-  const groups = declared.filter((one) => one.settings.length > 0);
+  // Per tab and not remembered (V89c): a level drawn afresh starts with the whole nav.
+  const [filter, setFilter] = useState("");
+  const groups = narrowed(
+    declared.filter((one) => one.settings.length > 0),
+    filter,
+  );
   const [chosen, choose] = useState<string>();
   const group = groups.find((one) => one.id === chosen) ?? groups[0];
+  const found =
+    waiting === undefined ? groups.reduce((all, one) => all + one.settings.length, 0) : undefined;
   return (
     <SettingsLayout
       levels={levels}
@@ -142,6 +149,14 @@ function Shown({
       groups={groups}
       group={group?.id ?? ""}
       onGroupChange={choose}
+      filter={filter}
+      onFilterChange={(to) => {
+        // The group on screen stays the chosen one while it is still matched, and is the one
+        // shown again once the box is cleared.
+        if (group) choose(group.id);
+        setFilter(to);
+      }}
+      found={found}
     >
       {waiting ?? (
         <>
@@ -162,6 +177,24 @@ function Shown({
       )}
     </SettingsLayout>
   );
+}
+
+/**
+ * **The groups and settings a filter leaves** (SE-21, V89c): a group whose own label or help
+ * holds the words keeps every setting; any other group keeps the settings whose label or help
+ * holds them, and is left out when none does. Case is ignored, and so is space around the
+ * words; with none, every group is left as it is.
+ */
+function narrowed(groups: readonly SettingsGroup[], filter: string): readonly SettingsGroup[] {
+  const words = filter.trim().toLocaleLowerCase();
+  if (words === "") return groups;
+  const holds = (...texts: string[]) =>
+    texts.some((text) => text.toLocaleLowerCase().includes(words));
+  return groups.flatMap((one) => {
+    if (holds(one.label, one.help)) return [one];
+    const settings = one.settings.filter((setting) => holds(setting.label, setting.help));
+    return settings.length > 0 ? [{ ...one, settings }] : [];
+  });
 }
 
 /** The chosen group, drawn from its data. Keyed by the group, so each setting's hook is always

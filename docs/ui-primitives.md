@@ -70,8 +70,8 @@ operator amended it there on 2026-10-04 (V89f; the spec on #558):
 What keeps it from becoming the library this file forbids:
 
 - **Five pieces, named here, and no more.** `SettingsLayout` (the level switcher, the nav of
-  groups and the chosen group, in two columns), `SettingGroup` (a group's heading, help and
-  rows), `SettingRow` (label, help, control and reset, and since SE-17 a refused write's reason
+  groups with its filter box above it, and the chosen group, in two columns), `SettingGroup`
+  (a group's heading, help and rows), `SettingRow` (label, help, control and reset, and since SE-17 a refused write's reason
   and the last change's Undo; the file choice and the origin join it with SE-18), `Field` (`text`, `list` and `range`) and `Choice` (`radio`, `select` and
   `toggle`). A sixth piece is an amendment to ADR 0037, not a commit.
 - **Each piece is a thin layer over a primitive already in the window, and says which.**
