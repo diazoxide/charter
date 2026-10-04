@@ -47,9 +47,8 @@ use crate::planes::{Held, PlaneId, Planes};
 use charter_core::engine::Size;
 use charter_core::reopen::Chat;
 
-/// Where a bracketed paste begins and ends (xterm's `?2004` mode).
-const PASTE_BEGINS: &str = "\x1b[200~";
-const PASTE_ENDS: &str = "\x1b[201~";
+#[cfg(test)]
+use charter_core::curation::{PASTE_BEGINS, PASTE_ENDS};
 
 /// One curation action a subject is offered, as the window draws it.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
@@ -235,6 +234,19 @@ fn name_of(root: &Path, subject: &Subject) -> String {
 /// gone, or `charter.local.toml` refused because git would carry it — would otherwise open the
 /// chat on some other harness or account than the one the operator chose.
 fn launch_profile(root: &Path) -> Result<String, String> {
+    let (profile, kind) = default_profile(root, "no curation chat was opened")?;
+    when_typed(
+        &profile,
+        Harness::of_kind(&kind),
+        charter_core::harness_card::named(root, &kind).as_ref(),
+    )?;
+    Ok(profile)
+}
+
+/// The profile a chat charter opens on the operator's behalf starts on, and its `kind`: the
+/// project's default, or — with none named — the first the picker lists. A default that
+/// cannot start refuses, ending in `so <outcome>.`, and never falls back.
+pub(crate) fn default_profile(root: &Path, outcome: &str) -> Result<(String, String), String> {
     let (set, check) = charter_core::profiles::for_launch(root);
     if let Some(wanted) = &set.default_refused {
         let why = set
@@ -245,7 +257,7 @@ fn launch_profile(root: &Path) -> Result<String, String> {
             .or_else(|| (!check.passes()).then(|| format!(" {}", check.fix)))
             .unwrap_or_default();
         return Err(format!(
-            "The default profile '{wanted}' cannot start here, so no curation chat was opened.{why}"
+            "The default profile '{wanted}' cannot start here, so {outcome}.{why}"
         ));
     }
     let profile = set
@@ -253,15 +265,8 @@ fn launch_profile(root: &Path) -> Result<String, String> {
         .as_deref()
         .and_then(|name| set.get(name))
         .or_else(|| set.profiles().first())
-        .ok_or_else(|| {
-            "This project has no harness profile to open a curation chat on.".to_owned()
-        })?;
-    when_typed(
-        &profile.name,
-        Harness::of_kind(&profile.kind),
-        charter_core::harness_card::named(root, &profile.kind).as_ref(),
-    )?;
-    Ok(profile.name.clone())
+        .ok_or_else(|| format!("This project has no harness profile, so {outcome}."))?;
+    Ok((profile.name.clone(), profile.kind.clone()))
 }
 
 /// When a chat on `harness` can have a prompt typed into it, or why it cannot, in a sentence:
@@ -330,6 +335,7 @@ fn open(held: &Arc<Held>, spec: &str, action: &str, size: Size) -> Result<Curati
             cwd: chosen.cwd.clone(),
             label: label.clone(),
             prompt: chosen.prompt,
+            then_a_space: false,
         },
         size,
         when_typed,
@@ -367,6 +373,9 @@ pub struct ChatTyped {
     pub label: String,
     /// What is typed into it.
     pub prompt: String,
+    /// Whether one space follows the prompt inside its paste: a reference to a file (FM-9),
+    /// so the operator's first word does not stick to it.
+    pub then_a_space: bool,
 }
 
 /// A typed chat that started.
@@ -376,6 +385,9 @@ pub struct StartedTyped {
     pub name: String,
     /// What `start::ready` answered for it: its harness and its directory.
     pub ready: charter_core::start::Ready,
+    /// Whether its prompt is held to be typed: false only from
+    /// [`start_typed_where_it_can_be`], on a harness it cannot be typed into.
+    pub typed: bool,
 }
 
 /// Opens `chat` with its prompt typed once its harness has started, and never sent.
@@ -394,6 +406,30 @@ pub fn start_typed(
         Option<Harness>,
         Option<&charter_core::harness_card::Card>,
     ) -> Result<ReadyToType, String>,
+    not_drawn: impl FnOnce(String) -> String,
+) -> Result<StartedTyped, String> {
+    start_typed_where_it_can_be(
+        held,
+        chat,
+        size,
+        |profile, harness, card| cannot_type(profile, harness, card).map(Some),
+        not_drawn,
+    )
+}
+
+/// [`start_typed`], for a caller that starts the chat even on a harness its prompt cannot be
+/// typed into: `when` answers `Ok(None)` for one, and the chat starts with nothing held and
+/// nothing typed (`StartedTyped::typed` is false). "Start a chat here" (FM-9) does, and puts
+/// the reference on the clipboard instead.
+pub fn start_typed_where_it_can_be(
+    held: &Arc<Held>,
+    chat: ChatTyped,
+    size: Size,
+    when: impl FnOnce(
+        &str,
+        Option<Harness>,
+        Option<&charter_core::harness_card::Card>,
+    ) -> Result<Option<ReadyToType>, String>,
     not_drawn: impl FnOnce(String) -> String,
 ) -> Result<StartedTyped, String> {
     let root = held.root().to_path_buf();
@@ -420,10 +456,16 @@ pub fn start_typed(
         .0
         .get(&chat.profile)
         .and_then(|profile| charter_core::harness_card::named(&root, &profile.kind));
-    let when = cannot_type(&chat.profile, ready.harness, card.as_ref())?;
+    let when = when(&chat.profile, ready.harness, card.as_ref())?;
+    let inside = if chat.then_a_space {
+        format!("{} ", curation::pasted(&chat.prompt))
+    } else {
+        curation::pasted(&chat.prompt)
+    };
     if let Some(why) = ready
         .harness
-        .and_then(|h| h.why_drawn_as_a_placeholder(&curation::pasted(&chat.prompt)))
+        .filter(|_| when.is_some())
+        .and_then(|h| h.why_drawn_as_a_placeholder(&inside))
     {
         return Err(not_drawn(why));
     }
@@ -446,21 +488,26 @@ pub fn start_typed(
         renamed_from: None,
         ..Default::default()
     };
-    match when {
-        ReadyToType::WhenItReportsItsStart => held.typed().hold(number, chat.prompt),
-        ReadyToType::WhenRawAndQuiet => held.typed().hold_until_quiet(number, chat.prompt),
+    let paste = if chat.then_a_space {
+        curation::bracketed_then_a_space(&chat.prompt)
+    } else {
+        curation::bracketed(&chat.prompt)
+    };
+    if let Some(until) = when {
+        held.typed().hold_paste(number, paste, until);
     }
     let session = held
         .chats()
         .start_ready(&record, &ready, size)
         .inspect_err(|_| held.typed().forget(number))?;
-    if when == ReadyToType::WhenRawAndQuiet {
+    if when == Some(ReadyToType::WhenRawAndQuiet) {
         type_when_raw_and_quiet(held, session);
     }
     Ok(StartedTyped {
         session,
         name,
         ready,
+        typed: when.is_some(),
     })
 }
 
@@ -481,20 +528,33 @@ pub struct Typed {
 /// One chat's waiting prompt, and the moment it waits for.
 #[derive(Debug)]
 struct Holding {
-    prompt: String,
+    /// The one bracketed paste it is typed as, built when it was held.
+    paste: String,
     until: ReadyToType,
     /// Its start was reported, and a typist is waiting for its terminal to read keys.
     started: bool,
 }
 
 impl Typed {
-    /// Holds `prompt` for chat `session` until its harness reports its start.
+    /// Holds `prompt` for chat `session` until its harness reports its start. Tests only: a
+    /// start holds the paste it built ([`Self::hold_paste`]).
+    #[cfg(test)]
     pub fn hold(&self, session: u32, prompt: String) {
+        self.hold_paste(
+            session,
+            bracketed(&prompt),
+            ReadyToType::WhenItReportsItsStart,
+        );
+    }
+
+    /// Holds `paste`, already one bracketed paste ([`charter_core::curation::bracketed`] or
+    /// [`charter_core::curation::bracketed_then_a_space`]), for chat `session` until `until`.
+    pub fn hold_paste(&self, session: u32, paste: String, until: ReadyToType) {
         self.held().insert(
             session,
             Holding {
-                prompt,
-                until: ReadyToType::WhenItReportsItsStart,
+                paste,
+                until,
                 started: false,
             },
         );
@@ -503,15 +563,9 @@ impl Typed {
     /// Holds `prompt` for chat `session` until its terminal is raw and quiet
     /// ([`type_once_raw_and_quiet`] types it then). A start report does not type it: on a
     /// harness held this way, that report comes with the first prompt, so it drops it.
+    #[cfg(test)]
     pub fn hold_until_quiet(&self, session: u32, prompt: String) {
-        self.held().insert(
-            session,
-            Holding {
-                prompt,
-                until: ReadyToType::WhenRawAndQuiet,
-                started: false,
-            },
-        );
+        self.hold_paste(session, bracketed(&prompt), ReadyToType::WhenRawAndQuiet);
     }
 
     /// Types chat `session`'s prompt with `write`, as the one paste it is typed as, if it is
@@ -523,7 +577,7 @@ impl Typed {
         if let Some(holding) = held.remove(&session) {
             // A chat that ended between the question and this write has nothing to type into,
             // and nothing is owed to anyone about it.
-            let _ = write(&bracketed(&holding.prompt));
+            let _ = write(&holding.paste);
         }
     }
 
@@ -882,7 +936,7 @@ fn type_when_raw_and_quiet(held: &Arc<Held>, session: u32) {
 /// be read as keys, and a carriage return there is Enter — and so is the trailing white space a
 /// file's last line leaves, so the operator's cursor ends on the prompt's last word.
 pub fn bracketed(prompt: &str) -> String {
-    format!("{PASTE_BEGINS}{}{PASTE_ENDS}", curation::pasted(prompt))
+    curation::bracketed(prompt)
 }
 
 /// Whether `bytes` would submit anything: a carriage return or a line feed outside a paste.

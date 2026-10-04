@@ -383,7 +383,27 @@ describe("a file or folder row's menu (FM-10)", () => {
       "Copy absolute path",
       expect.stringMatching(/^Reveal in /),
       "Open in your editor",
+      "Start a chat here",
     ]);
+  });
+
+  it("drags a file or folder row as a reference to it, onto a chat (FM-9)", async () => {
+    core({ "one:": [entry("src", { kind: "folder" }), entry("README.md")] });
+    draw();
+    await userEvent.click(row("file:svc/one:"));
+    const set: Record<string, string> = {};
+    const dataTransfer = { setData: (type: string, value: string) => (set[type] = value) };
+
+    fireEvent.dragStart(await screen.findByRole("treeitem", { name: /README\.md/ }), {
+      dataTransfer,
+    });
+    const file = JSON.parse(set["application/x-charter-reference"]) as unknown;
+    fireEvent.dragStart(screen.getByRole("treeitem", { name: /^src/ }), { dataTransfer });
+    const folder = JSON.parse(set["application/x-charter-reference"]) as unknown;
+
+    const branch = { plane: PLANE, workspace: "alpha", repo: "svc", piece: "one" };
+    expect(file).toEqual({ ...branch, path: "README.md", folder: false });
+    expect(folder).toEqual({ ...branch, path: "src", folder: true });
   });
 
   it("offers a folder a shell tab there, and hands back the row with the branch and path", async () => {

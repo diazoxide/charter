@@ -263,6 +263,24 @@ pub fn pasted(prompt: &str) -> String {
         .collect()
 }
 
+/// Where a bracketed paste begins and ends (xterm's `?2004` mode): the one definition, for a
+/// curation prompt, a first task and a reference to a file (FM-9) alike.
+pub const PASTE_BEGINS: &str = "\x1b[200~";
+pub const PASTE_ENDS: &str = "\x1b[201~";
+
+/// `prompt` as ONE bracketed paste with nothing after it: [`pasted`] inside the markers, so
+/// nothing in it can end the paste early or submit.
+pub fn bracketed(prompt: &str) -> String {
+    format!("{PASTE_BEGINS}{}{PASTE_ENDS}", pasted(prompt))
+}
+
+/// [`bracketed`], with one space after the prompt inside the paste: for a reference to a file
+/// (FM-9), so the operator's first word does not stick to it — `@README.md what`, never
+/// `@README.mdwhat`, which would name another file.
+pub fn bracketed_then_a_space(prompt: &str) -> String {
+    format!("{PASTE_BEGINS}{} {PASTE_ENDS}", pasted(prompt))
+}
+
 /// The frontmatter keys an action file may give.
 const KEYS: [&str; 3] = ["label", "on", "runs-in"];
 

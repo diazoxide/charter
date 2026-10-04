@@ -65,6 +65,12 @@ struct Args {
     #[arg(long)]
     interactive: bool,
 
+    /// With `--interactive`: put the terminal in raw mode first (`stty raw -echo`), as a real
+    /// harness does at its prompt, echo each byte typed and answer a line on Enter — so a test
+    /// can see text typed into it and tell whether it was sent (FM-9).
+    #[arg(long, requires = "interactive")]
+    raw: bool,
+
     /// The exit code once everything else has run.
     #[arg(long, default_value_t = 0)]
     exit_code: u8,
@@ -185,6 +191,9 @@ fn run(args: &Args) -> Result<(), String> {
         }
     }
 
+    if args.interactive && args.raw {
+        return answer_raw(&mut stdout);
+    }
     if args.interactive {
         for line in io::stdin().lock().lines() {
             let line = line.map_err(|err| format!("cannot read input: {err}"))?;
@@ -195,6 +204,38 @@ fn run(args: &Args) -> Result<(), String> {
                 .and_then(|()| stdout.flush())
                 .map_err(write_err)?;
         }
+    }
+    Ok(())
+}
+
+/// `--interactive --raw`: the terminal raw, each byte echoed as it is typed, and a line answered
+/// only when Enter (a carriage return) arrives — what "sent" means to a harness at its prompt.
+fn answer_raw(stdout: &mut impl Write) -> Result<(), String> {
+    use std::io::Read;
+    let status = Command::new("stty")
+        .args(["raw", "-echo"])
+        .stdin(std::process::Stdio::inherit())
+        .status()
+        .map_err(|err| format!("cannot run stty: {err}"))?;
+    if !status.success() {
+        return Err(format!("stty raw -echo failed: {status}"));
+    }
+    let write_err = |err: io::Error| format!("cannot write output: {err}");
+    let mut line = Vec::new();
+    for byte in io::stdin().lock().bytes() {
+        let byte = byte.map_err(|err| format!("cannot read input: {err}"))?;
+        if byte == b'\r' || byte == b'\n' {
+            let said = String::from_utf8_lossy(&line).into_owned();
+            if said.trim() == "/quit" {
+                break;
+            }
+            write!(stdout, "\r\nyou said: {said}\r\n").map_err(write_err)?;
+            line.clear();
+        } else {
+            line.push(byte);
+            stdout.write_all(&[byte]).map_err(write_err)?;
+        }
+        stdout.flush().map_err(write_err)?;
     }
     Ok(())
 }

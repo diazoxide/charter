@@ -51,26 +51,45 @@ function colour(path: string, language: Compartment, views: EditorView[]): () =>
   };
 }
 
+/** The lines a selection covers, first to last, or none for a bare cursor. A selection that
+ *  ends at the very start of a line does not take that line. */
+export function linesSelected(
+  doc: EditorState["doc"],
+  from: number,
+  to: number,
+): { first: number; last: number } | undefined {
+  if (from === to) return undefined;
+  const first = doc.lineAt(from).number;
+  const end = doc.lineAt(to);
+  const last = end.from === to && end.number > first ? end.number - 1 : end.number;
+  return { first, last };
+}
+
 /** One file, read only. `line`, when given, is brought into view (a jump from a diff, a
  *  record or the knowledge graph). `onLine` hears the line the cursor moves to, which is the
- *  line *Open in your editor* hands on (RC-20). */
+ *  line *Open in your editor* hands on (RC-20); `onLines` hears the lines selected, which a
+ *  reference to part of the file names (FM-9). */
 export function LightEditor({
   path,
   text,
   line,
   onLine,
+  onLines,
 }: {
   path: string;
   text: string;
   line?: number;
   onLine?: (line: number) => void;
+  onLines?: (lines: { first: number; last: number } | undefined) => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
   // Held in a ref, so a new callback does not draw the file again.
   const hears = useRef(onLine);
+  const selects = useRef(onLines);
   useEffect(() => {
     hears.current = onLine;
-  }, [onLine]);
+    selects.current = onLines;
+  }, [onLine, onLines]);
   useEffect(() => {
     if (!host.current) return;
     const language = new Compartment();
@@ -78,6 +97,8 @@ export function LightEditor({
       if (!update.selectionSet) return;
       const state = update.state;
       hears.current?.(state.doc.lineAt(state.selection.main.head).number);
+      const { from, to } = state.selection.main;
+      selects.current?.(linesSelected(state.doc, from, to));
     });
     const view = new EditorView({
       parent: host.current,

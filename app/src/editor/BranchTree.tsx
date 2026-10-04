@@ -140,6 +140,7 @@ export function BranchTree({
               branch={top}
               level={level}
               at={{
+                plane,
                 place,
                 files,
                 fold,

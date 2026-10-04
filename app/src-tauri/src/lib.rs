@@ -56,6 +56,7 @@ mod planes;
 mod planewatch;
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod portal;
+mod references;
 mod sandboxing;
 mod saving;
 mod searchfiles;

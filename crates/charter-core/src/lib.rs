@@ -105,6 +105,7 @@ pub mod pyjson;
 pub mod pypath;
 pub mod pyrepr;
 pub mod recall;
+pub mod reference;
 pub mod reopen;
 pub mod repocmd;
 pub mod repoinstructions;

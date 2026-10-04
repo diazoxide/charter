@@ -200,6 +200,10 @@ function doing(): Doing & { calls: string[] } {
     shellInFolder: vi.fn((at: BranchPath) => {
       calls.push(`shellInFolder:${at.repo}/${at.piece ?? ""}:${at.path}`);
     }),
+    startChatHere: vi.fn(async (at: BranchPath) => {
+      calls.push(`startChatHere:${at.repo}/${at.piece ?? ""}:${at.path}`);
+      return { ok: true as const };
+    }),
   };
 }
 
@@ -2176,6 +2180,7 @@ describe("a branch's file and folder rows (FM-10)", () => {
       "Copy absolute path",
       revealSaid(navigator.platform),
       "Open in your editor",
+      "Start a chat here",
     ]);
   });
 
@@ -2185,6 +2190,7 @@ describe("a branch's file and folder rows (FM-10)", () => {
       "Copy absolute path",
       revealSaid(navigator.platform),
       "Open a shell tab here",
+      "Start a chat here",
     ]);
   });
 
@@ -2205,7 +2211,13 @@ describe("a branch's file and folder rows (FM-10)", () => {
 
     // A row that cannot run does nothing at all; every other does one of the four.
     expect(new Set(verbs(every).filter((verb) => verb !== "nothing"))).toEqual(new Set(FILE_VERBS));
-    expect([...FILE_VERBS]).toEqual(["copyPath", "revealPath", "openInEditor", "shellInFolder"]);
+    expect([...FILE_VERBS]).toEqual([
+      "copyPath",
+      "revealPath",
+      "openInEditor",
+      "shellInFolder",
+      "startChatHere",
+    ]);
     for (const row of every) {
       expect(row.title).not.toMatch(writes);
       expect(row.id.split(":")[0]).not.toMatch(writes);
@@ -2228,6 +2240,7 @@ describe("a branch's file and folder rows (FM-10)", () => {
       ["Copy absolute path", false],
       [revealSaid(navigator.platform), false],
       ["Open in your editor", true],
+      ["Start a chat here", false],
     ]);
     expect(link[1].reason).toMatch(/follows no link/);
   });
@@ -2240,7 +2253,10 @@ describe("a branch's file and folder rows (FM-10)", () => {
       refused: "git ignores it",
     });
 
-    expect(ignored.at(-1)).toMatchObject({ available: false, reason: "git ignores it" });
+    expect(ignored.find((row) => row.title === "Open in your editor")).toMatchObject({
+      available: false,
+      reason: "git ignores it",
+    });
     expect(ignored[0].available).toBe(true);
   });
 
@@ -2254,10 +2270,12 @@ describe("a branch's file and folder rows (FM-10)", () => {
       "copyPath:svc/fix-it:src/lib.rs,true",
       "revealPath:svc/fix-it:src/lib.rs",
       "openInEditor:svc/fix-it:src/lib.rs,1",
+      "startChatHere:svc/fix-it:src/lib.rs",
       "copyPath:svc/fix-it:src,false",
       "copyPath:svc/fix-it:src,true",
       "revealPath:svc/fix-it:src",
       "shellInFolder:svc/fix-it:src",
+      "startChatHere:svc/fix-it:src",
     ]);
   });
 });

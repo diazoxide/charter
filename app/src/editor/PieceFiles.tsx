@@ -35,6 +35,7 @@ import { BranchTree } from "./BranchTree";
 import { LightEditor } from "./LightEditor";
 import { useYourEditor } from "../yourEditor";
 import { settleJump, usePendingJump } from "../fileJump";
+import { DragHandle, PickAChat, type Referenced } from "../references";
 
 /** A size, as a person reads one. */
 function sized(bytes: number): string {
@@ -138,6 +139,40 @@ function ToYourEditor({
   );
 }
 
+/** The lines selected in the file at `path`, forgotten when another file is drawn. */
+function useSelectedLines(path: string | undefined) {
+  const [held, setHeld] = useState<{ path?: string; lines?: Lines }>({});
+  const lines = held.path === path ? held.lines : undefined;
+  return { lines, selected: (lines: Lines | undefined) => setHeld({ path, lines }) };
+}
+
+type Lines = { first: number; last: number };
+
+/**
+ * **The file into a chat** (FM-9): a handle to drag onto a chat, and *Ask a chat about this* and
+ * *Add to a chat's context*, each naming the file — or the lines selected in it.
+ */
+function ToAChat({
+  plane,
+  cut,
+  path,
+  lines,
+}: {
+  plane: PlaneId;
+  cut: Place;
+  path: string;
+  lines?: Lines;
+}) {
+  const referenced: Referenced = { plane, ...cut, path, folder: false, lines };
+  return (
+    <>
+      <DragHandle referenced={referenced} />
+      <PickAChat referenced={referenced} how="ask" />
+      <PickAChat referenced={referenced} how="add" />
+    </>
+  );
+}
+
 /** Whether a file is markdown, by its name: what the preview renders rather than lists. */
 function isMarkdown(path: string): boolean {
   return /\.(md|markdown)$/i.test(path);
@@ -213,12 +248,14 @@ function Shown({
   read,
   line,
   onLine,
+  onLines,
   source = false,
 }: {
   path: string;
   read: FileRead;
   line?: number;
   onLine?: (line: number) => void;
+  onLines?: (lines: Lines | undefined) => void;
   /** Markdown's source rather than the rendering. */
   source?: boolean;
 }) {
@@ -236,7 +273,7 @@ function Shown({
           </Markdown>
         </article>
       ) : (
-        <LightEditor path={path} text={read.text} line={line} onLine={onLine} />
+        <LightEditor path={path} text={read.text} line={line} onLine={onLine} onLines={onLines} />
       );
     case "image":
       return <ImagePreview name={name} mime={read.mime} base64={read.base64} />;
@@ -284,6 +321,7 @@ export function PieceFileTab({
 }) {
   const read = useFile(plane, cut, path) ?? READING;
   const at = useCursorLine(path, line);
+  const selection = useSelectedLines(path);
   // A jump to a line (a diff, a record) lands in the text at that line; a file opened to be read
   // is rendered.
   const [source, setSource] = useState(line !== undefined);
@@ -294,9 +332,17 @@ export function PieceFileTab({
         <span className="piece-files-actions">
           <SourceToggle path={path} read={read} source={source} onSource={setSource} />
           <ToYourEditor plane={plane} cut={cut} path={path} line={at.line} />
+          <ToAChat plane={plane} cut={cut} path={path} lines={selection.lines} />
         </span>
       </header>
-      <Shown path={path} read={read} line={line} onLine={at.moved} source={source} />
+      <Shown
+        path={path}
+        read={read}
+        line={line}
+        onLine={at.moved}
+        onLines={selection.selected}
+        source={source}
+      />
     </div>
   );
 }
@@ -368,6 +414,7 @@ export function PieceFilesTab({
   }, [landed]);
   const line = landed !== undefined && landed.path === picked ? landed.line : undefined;
   const at = useCursorLine(picked, line);
+  const selection = useSelectedLines(picked);
   const read = useFile(plane, cut, picked);
   // **Read once**: a panel's size is a constraint, and a constraint that changes re-registers
   // the panel (`RegionFrame.tsx`). The divider is where the operator's hand put it already.
@@ -432,9 +479,17 @@ export function PieceFilesTab({
                   >
                     Open in a tab of its own
                   </button>
+                  <ToAChat plane={plane} cut={cut} path={picked} lines={selection.lines} />
                 </span>
               </header>
-              <Shown path={picked} read={read} line={line} onLine={at.moved} source={showsSource} />
+              <Shown
+                path={picked}
+                read={read}
+                line={line}
+                onLine={at.moved}
+                onLines={selection.selected}
+                source={showsSource}
+              />
             </>
           )}
         </section>

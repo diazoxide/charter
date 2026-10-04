@@ -96,6 +96,14 @@ import { RenameWorkspace } from "./RenameWorkspace";
 import { cloneRepos } from "./repoClones";
 import { StartChat } from "./StartChat";
 import { SessionPane } from "./SessionPane";
+import {
+  droppedReference,
+  handReference,
+  overChat,
+  ReferenceChats,
+  useReferenceChats,
+  type ChatsForReferences,
+} from "./references";
 import { Explorer, type Spot } from "./Explorer";
 import {
   pieceFileTitle,
@@ -2909,6 +2917,40 @@ export const PlaneView = memo(function PlaneView({
   );
 
   /**
+   * **"Start a chat here"** on a file or folder row (FM-9): a chat the core starts on the
+   * project's default profile in the branch's folder, with a reference to the row typed as its
+   * first prompt once its harness has started, and never sent. Its tab goes on the strip it is
+   * filed under, as a curation chat's does. Where the harness cannot be typed into, the core
+   * copies the reference, and the window says so.
+   */
+  const startChatHere = useCallback(
+    async (at: BranchPath): Promise<Ran> => {
+      const started = await commands
+        .startChatHere(
+          plane,
+          at.workspace,
+          at.repo,
+          at.piece,
+          at.path,
+          null,
+          STARTING_SIZE.columns,
+          STARTING_SIZE.rows,
+        )
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      if (started.status === "error") return { ok: false, refused: started.error };
+      const chat = started.data;
+      setStartedIn((was) => ({ ...was, [chat.session]: chat.workspace ?? OUTSIDE }));
+      change((tabs) =>
+        openTab(tabs, chat.session, chat.name, whoOf(null, chat.harness), chat.label),
+      );
+      if (chat.copied === null) return { ok: true };
+      const why = chat.copied.charAt(0).toUpperCase() + chat.copied.slice(1);
+      return { ok: true, said: `${why}: ${chat.text}` };
+    },
+    [change, plane],
+  );
+
+  /**
    * **What the first task's tab asks for** (FR-28): a run started by the core — on a branch of its
    * own, with the task typed and unsent — whose tab goes on the strip it is filed under, in
    * front; and a run's diff, in a shell tab in its branch's folder with the core's diff command
@@ -3143,6 +3185,7 @@ export const PlaneView = memo(function PlaneView({
       quit: windowDoes.quit,
       ...fileDoing,
       shellInFolder,
+      startChatHere,
     }),
     [
       beginRename,
@@ -3159,6 +3202,7 @@ export const PlaneView = memo(function PlaneView({
       memoryEdits.doing,
       fileDoing,
       shellInFolder,
+      startChatHere,
       focusWorkspace,
       ignoreNeedsYou,
       mergeWorktree,
@@ -3744,6 +3788,33 @@ export const PlaneView = memo(function PlaneView({
 
   const frontChat = frontTab && reopened.find((chat) => chat.session === chatOf(tabs, frontTab.id));
 
+  /**
+   * **Files into chats** (FM-9): every chat of this project, for the preview's *Ask a chat about
+   * this* and *Add to a chat's context*, and the one way a reference reaches a chat — a drop on
+   * its tab or pane included. The core types it, unsent, or copies it and says why; what it
+   * answered is said where every row's answer is.
+   */
+  const referenceChats = useMemo<ChatsForReferences>(() => {
+    const chatsOpen = tabs.order.flatMap((id) =>
+      panesOf(tabs, id).map((pane) => ({ session: pane.session, name: tabs.byId[id].name })),
+    );
+    return {
+      plane,
+      chats: chatsOpen,
+      hand: (r, session, how) => {
+        const name = chatsOpen.find((chat) => chat.session === session)?.name ?? `chat ${session}`;
+        void handReference(plane, session, name, r).then((ran) => {
+          setReport(
+            ran.ok
+              ? { from: "reference", refused: false, words: ran.said ?? "" }
+              : { from: "reference", refused: true, words: ran.refused },
+          );
+          if (how === "ask" && ran.ok) showChat(session);
+        });
+      },
+    };
+  }, [plane, showChat, tabs]);
+
   // Each strip is ONE Tab stop, the selected tab, and the arrows move along it (charter-app#189,
   // `roving.ts`). Asked here rather than below the early return, because they are hooks.
   const workspaceStop = useTabStop(focused, workspacesShown.shown);
@@ -3757,7 +3828,7 @@ export const PlaneView = memo(function PlaneView({
   if (!inFront) return null;
 
   return (
-    <ChatsHere.Provider value={chats}>
+    <Lent chats={chats} references={referenceChats}>
       {/* The workspaces of this project, as the second of the three strips (ADR 0036). It is
           the axis the tmux frame had and the port lost: a top-level tab there was a
           WORKSPACE and the sessions lived under it, and transposing the app onto projects
@@ -3978,6 +4049,18 @@ export const PlaneView = memo(function PlaneView({
                             ref={sortable.setNodeRef}
                             style={style}
                             data-dragging={sortable.isDragging || undefined}
+                            // A file, a folder, lines or a search hit dropped on a chat's tab is
+                            // typed into that chat as a reference, unsent (FM-9).
+                            onDragOver={(event) => {
+                              if (chatOf(tabs, id) !== undefined) overChat(event);
+                            }}
+                            onDrop={(event) => {
+                              const session = chatOf(tabs, id);
+                              const r = droppedReference(event);
+                              if (session === undefined || r === undefined) return;
+                              event.preventDefault();
+                              referenceChats.hand(r, session, "add");
+                            }}
                             // A chat being smart-closed wears the closing look (ADR 0064).
                             data-wrapping-up={
                               panesOf(tabs, id).some((one) => wrapping.has(one.session)) ||
@@ -4516,7 +4599,11 @@ export const PlaneView = memo(function PlaneView({
           onClose={() => setLiveAsk(undefined)}
           onDone={(said) => {
             setLiveAsk(undefined);
-            setReport({ from: `workspace.live:${liveAsk}`, refused: false, words: said.join(" ") });
+            setReport({
+              from: `workspace.live:${liveAsk}`,
+              refused: false,
+              words: said.join(" "),
+            });
             // Read the plane again: the marks come from what is on disk, not from this press.
             setReplan((asked) => asked + 1);
           }}
@@ -4596,9 +4683,29 @@ export const PlaneView = memo(function PlaneView({
           }}
         />
       )}
-    </ChatsHere.Provider>
+    </Lent>
   );
 });
+
+/**
+ * What a project's window lends everything it draws: its chats' states (`ChatsHere`), and the
+ * chats a file can be handed to (`ReferenceChats`, FM-9).
+ */
+function Lent({
+  chats,
+  references,
+  children,
+}: {
+  chats: ComponentProps<typeof ChatsHere.Provider>["value"];
+  references: ChatsForReferences;
+  children: ReactNode;
+}) {
+  return (
+    <ChatsHere.Provider value={chats}>
+      <ReferenceChats.Provider value={references}>{children}</ReferenceChats.Provider>
+    </ChatsHere.Provider>
+  );
+}
 
 /** What this project told the window about itself. */
 /** Redraws a component when the theme in force changes: what a workspace's tint is taken from
@@ -4959,8 +5066,19 @@ function PaneFrame({
   const moved = useChatsSelect(chats, (states) => movedAt(states, session));
   const running = useChatsSelect(chats, (states) => stateOf(states, session) === "running");
   const usage = useChatUsage(plane, session, moved, running);
+  const lent = useReferenceChats();
   return (
-    <div className="pane-frame">
+    <div
+      className="pane-frame"
+      // A reference dropped on the chat's pane is typed into it, unsent (FM-9).
+      onDragOver={overChat}
+      onDrop={(event) => {
+        const r = droppedReference(event);
+        if (r === undefined || lent === undefined) return;
+        event.preventDefault();
+        lent.hand(r, session, "add");
+      }}
+    >
       {/* **The corners before the terminal, in the document**, although they are drawn over
           it: the tab order is the document's, and a terminal keeps Tab for its shell, so a
           control written after it is one Tab never reaches (charter-app#189). The pane's own

@@ -30,6 +30,7 @@ import {
   type SearchHeard,
 } from "./contentSearch";
 import { jumpTo } from "./fileJump";
+import { dragReference } from "./references";
 import { placeName } from "./pieceViews";
 import type { ViewRef } from "./tabs";
 
@@ -413,6 +414,19 @@ function Hits({
                     role="option"
                     aria-selected={n === at}
                     className={n === at ? "search-line active" : "search-line"}
+                    // A hit dragged onto a chat carries its line (FM-9).
+                    draggable
+                    onDragStart={(event) =>
+                      dragReference(event, {
+                        plane: file.plane,
+                        workspace: file.workspace,
+                        repo: file.repo,
+                        piece: file.piece,
+                        path: file.path,
+                        folder: false,
+                        lines: { first: line.number, last: line.number },
+                      })
+                    }
                     onClick={() => {
                       setActive(n);
                       open(n);

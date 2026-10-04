@@ -365,6 +365,10 @@ export type Does =
   /** Opens a shell tab whose working directory is a folder of a branch (FM-10). The core
    *  resolves the folder; the shell starts no harness, so nothing asks first. */
   | { verb: "shellInFolder"; at: BranchPath }
+  /** Starts a chat on the branch, in its folder, with a reference to this file or folder typed
+   *  as its first prompt and never sent (FM-9). The core places the path and renders it in the
+   *  harness's syntax; on a harness it cannot type into, the reference is copied instead. */
+  | { verb: "startChatHere"; at: BranchPath }
   /** A row that cannot run. It still carries a `Does`, so "what it would do" and "whether it
    *  can" stay separate questions — and `perform` refuses it rather than guessing. */
   | { verb: "nothing" };
@@ -673,6 +677,8 @@ export type Doing = {
   openInEditor: (at: BranchPath, line: number) => Promise<Ran>;
   /** A shell tab in that folder; a refusal is said the way a shell tab's is. */
   shellInFolder: (at: BranchPath) => void;
+  /** A chat on the branch with a reference to `at` typed into it (FM-9). */
+  startChatHere: (at: BranchPath) => Promise<Ran>;
 };
 
 /**
@@ -2037,6 +2043,8 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
     case "shellInFolder":
       doing.shellInFolder(does.at);
       return DID;
+    case "startChatHere":
+      return doing.startChatHere(does.at);
     case "nothing":
       return DID;
   }
@@ -2662,7 +2670,13 @@ export type FileOn = {
  * editor and a shell are where a person changes files, and each is theirs. A test holds this
  * list to exactly these verbs, so a row that writes cannot be added to it quietly.
  */
-export const FILE_VERBS = ["copyPath", "revealPath", "openInEditor", "shellInFolder"] as const;
+export const FILE_VERBS = [
+  "copyPath",
+  "revealPath",
+  "openInEditor",
+  "shellInFolder",
+  "startChatHere",
+] as const;
 
 /** What Reveal is called where the window runs: the file manager's own name. */
 export function revealSaid(platform: string): string {
@@ -2680,7 +2694,8 @@ export const NO_LINK_FOLLOWED =
 
 /**
  * The rows a file or folder's menu draws, in order (FM-10): copy its path, relative or
- * absolute; reveal it; and your editor for a file or a shell tab for a folder.
+ * absolute; reveal it; your editor for a file or a shell tab for a folder; and a chat started
+ * on the branch with the row already referenced (FM-9).
  *
  * **Built for the one row the menu was opened on**, never listed in the catalogue: a branch has
  * more files than any list could hold, and the menu is drawn only while it is open. Data like
@@ -2709,5 +2724,6 @@ export function fileRows(what: FileOn): Offer[] {
         : cannot(`file.editor:${key}`, "Open in your editor", what.refused),
     );
   }
+  rows.push(placed(`file.chat:${key}`, "Start a chat here", { verb: "startChatHere", at }));
   return rows;
 }

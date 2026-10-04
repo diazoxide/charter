@@ -1198,6 +1198,7 @@ function App() {
       revealPath: async () => nowhere(),
       openInEditor: async () => nowhere(),
       shellInFolder: () => undefined,
+      startChatHere: async () => nowhere(),
     }),
     [windowDoes],
   );
