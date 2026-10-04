@@ -233,7 +233,15 @@ jobs:
     # files, held to `docs/spec.md`'s rows G2–G4 (ADR 0086 L1's 50 ms for a ⌘P keystroke). It
     # is the evidence behind V86 F9's "no index until a measurement shows the need" and #1153's
     # index question, so a regression that would reopen either shows on `main` the day it lands.
-    # Evidence only (V70): `main` and nightly, never a pull request, and allowed to fail.
+    # Evidence only (V70): `main` and nightly, never a pull request. **It reports its budgets
+    # and does not fail for one** (ADR 0086, amended 2026-10-04): G2–G4 are timings, which §1
+    # keeps out of CI's absolute rows, and a failing evidence job still turns the commit red,
+    # `continue-on-error` or not. GitHub's macOS runners missed them on every main run since
+    # the job was added (a first ⌘P find of 8–12 s, the operator's machine's 0.2–1.7 s) while the
+    # same code met them on Ubuntu. So the test runs with `CHARTER_MEASURE_BUDGETS=report`:
+    # each miss is a warning, every number goes to the job summary and to an artifact, and the
+    # budgets fail the run by hand on the operator's machine. A run that breaks — a wrong
+    # answer, a panic — still fails.
     name: search at scale (${{ matrix.os }}, ${{ matrix.files }} files, evidence only)
     if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'schedule'
     continue-on-error: true
@@ -248,7 +256,35 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/rust-toolchain
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # `shell: bash` for `pipefail`, so the test's own failure is the step's.
       - name: ⌘P, ⌘⇧F and status on a generated repo
-        run: cargo test --release -p charter-core --test search_is_measured_on_large_repos -- --ignored --nocapture --test-threads=1
+        shell: bash
+        run: cargo test --release -p charter-core --test search_is_measured_on_large_repos -- --ignored --nocapture --test-threads=1 2>&1 | tee fm-12.log
         env:
           CHARTER_MEASURE_FILES: ${{ matrix.files }}
+          CHARTER_MEASURE_BUDGETS: report
+      - name: The numbers, and each budget missed, in the job summary
+        if: always()
+        shell: bash
+        env:
+          WHERE: ${{ matrix.os }}, ${{ matrix.files }} files
+        run: |
+          touch fm-12.log
+          grep -o 'FM-12 | budget missed | .*' fm-12.log | while IFS= read -r line; do
+            echo "::warning title=FM-12 budget (${WHERE})::${line}"
+          done
+          {
+            echo "### Search at scale (${WHERE})"
+            echo
+            echo 'Evidence only: a budget missed here is reported, not failed (ADR 0086).'
+            echo
+            echo '```text'
+            grep -o 'FM-12 | .*' fm-12.log || echo 'no measurements: the run stopped before any'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: search-at-scale-${{ matrix.os }}-${{ matrix.files }}
+          path: fm-12.log
+          if-no-files-found: warn

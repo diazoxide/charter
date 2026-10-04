@@ -14,7 +14,9 @@
 //!
 //! It is ignored by default, because building the repo takes minutes. CI runs it nightly and on
 //! `main` only, as evidence (V70; `stress.yml`'s `search at scale`), so a regression shows on
-//! `main` without ever gating a pull request. By hand:
+//! `main` without ever gating a pull request. CI runs it with `CHARTER_MEASURE_BUDGETS=report`:
+//! a shared runner reports each budget it missed and never fails for one (ADR 0086, amended
+//! 2026-10-04). The budgets fail the run by hand, on the operator's machine:
 //!
 //! ```text
 //! cargo test --release -p charter-core --test search_is_measured_on_large_repos -- \
@@ -27,11 +29,19 @@
 //!   again in between) and then warm. Unset, the repo is built in a temporary folder;
 //! - `CHARTER_MEASURE_ONLY`: one step — `find`, `search:<query name>`, `scan` or `status` — so
 //!   each cold number is the first read of a cold cache, not one warmed by the step before;
-//! - `CHARTER_MEASURE_BUDGETS=0`: print the numbers without holding them to the budgets.
+//! - `CHARTER_MEASURE_BUDGETS=0`: print the numbers without holding them to the budgets;
+//! - `CHARTER_MEASURE_BUDGETS=report`: print each budget missed, as a `FM-12 | budget missed`
+//!   line, and pass. What `stress.yml` runs.
+//!
+//! A status also prints gitoxide's own counters for the same compare and `git status`'s time on
+//! the same repo ([`probe_status`]), so a slow status says whether it was the disk or a stat
+//! that stopped matching the index.
 //!
 //! **The budgets held** (`docs/spec.md` rows G2–G4). Each is a ceiling well clear of the warm
-//! numbers measured on a loaded macOS machine at 300,000 files (#1115), and CI's repo is warm,
-//! being just written. So a miss is a regression of a different order, not noise:
+//! numbers measured on a loaded macOS machine at 300,000 files (#1115). So on that machine a
+//! miss is a regression of a different order, not noise. A shared runner is not that machine:
+//! GitHub's macOS runners took 8–12 s for a first find the operator's machine does in 0.2–1.7 s,
+//! with the repo just written, so CI only reports them:
 //! - a ⌘P keystroke's core match, median and worst: within ADR 0086 L1's 50 ms (measured 5.5 and
 //!   12.7 ms);
 //! - ⌘P's first find: within [`FIRST_FIND`] (measured 0.53–0.57 s);
@@ -290,6 +300,65 @@ struct Held {
     budgets: bool,
 }
 
+/// How the budgets are held, from `CHARTER_MEASURE_BUDGETS`: `0` not at all, `report` reported
+/// and never failed (CI's shared runners, ADR 0086), anything else failed (the default).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Budgets {
+    Off,
+    Report,
+    Fail,
+}
+
+impl Budgets {
+    fn from(value: Option<&str>) -> Self {
+        match value {
+            Some("0") => Self::Off,
+            Some("report") => Self::Report,
+            _ => Self::Fail,
+        }
+    }
+}
+
+/// What a run with `budgets` does with the budgets it `missed`: the lines it prints, and
+/// whether it fails.
+fn verdict(budgets: Budgets, count: usize, missed: &[String]) -> (Vec<String>, bool) {
+    match budgets {
+        Budgets::Off => (Vec::new(), false),
+        Budgets::Report => (
+            missed
+                .iter()
+                .map(|one| format!("FM-12 | budget missed | {count} files | {one}"))
+                .collect(),
+            false,
+        ),
+        Budgets::Fail => (Vec::new(), !missed.is_empty()),
+    }
+}
+
+#[test]
+fn a_reported_budget_is_printed_and_never_fails_the_run() {
+    charter_core::unsteered!();
+    let missed = vec!["⌘P first find (first): 8082.3 ms past 3000.0 ms".to_string()];
+    assert_eq!(
+        verdict(Budgets::Report, 100_000, &missed),
+        (
+            vec![
+                "FM-12 | budget missed | 100000 files | ⌘P first find (first): 8082.3 ms past \
+                 3000.0 ms"
+                    .to_string()
+            ],
+            false
+        )
+    );
+    assert_eq!(verdict(Budgets::Fail, 100_000, &missed), (Vec::new(), true));
+    assert_eq!(verdict(Budgets::Fail, 100_000, &[]), (Vec::new(), false));
+    assert_eq!(verdict(Budgets::Off, 100_000, &missed), (Vec::new(), false));
+    assert_eq!(Budgets::from(None), Budgets::Fail);
+    assert_eq!(Budgets::from(Some("report")), Budgets::Report);
+    assert_eq!(Budgets::from(Some("0")), Budgets::Off);
+    assert_eq!(Budgets::from(Some("1")), Budgets::Fail);
+}
+
 impl Held {
     fn within(&mut self, what: &str, took: Duration, budget: Duration) {
         if self.budgets && took > budget {
@@ -428,6 +497,58 @@ fn measure_status(plane: &Path, clone: &Path, held: &mut Held) {
     for one in clean.iter().chain(&changed) {
         held.within("status read", *one, STATUS);
     }
+    probe_status(clone);
+}
+
+/// What a status costs on this machine apart from charter: gitoxide's own counters for the
+/// same compare the reader runs, in this process, and `git status` on the same clean repo.
+/// A status far over its measured value with every entry trusted by its stat (no file read,
+/// none racily clean, none to update) is the disk's cost, not charter's; one with files read
+/// is a stat that stopped matching the index, which the reader, never writing the index,
+/// pays again on every read.
+fn probe_status(clone: &Path) {
+    let repo = gix::open(clone).expect("the clone opens");
+    let started = Instant::now();
+    let mut items = repo
+        .status(gix::progress::Discard)
+        .expect("a status")
+        .untracked_files(gix::status::UntrackedFiles::Files)
+        .index_worktree_submodules(None)
+        .into_iter(None)
+        .expect("a status");
+    for item in items.by_ref() {
+        item.expect("an item");
+    }
+    let took = started.elapsed();
+    let outcome = items.into_outcome().expect("an outcome");
+    let tracked = &outcome.index_worktree.tracked_file_modification;
+    println!(
+        "FM-12 | status | gix in process: {}; {} entries, {} stat calls, {} racily clean, {} to \
+         update, {} files read ({} bytes)",
+        ms(took),
+        tracked.entries_processed,
+        tracked.symlink_metadata_calls,
+        tracked.racy_clean,
+        tracked.entries_to_update,
+        tracked.worktree_files_read,
+        tracked.worktree_bytes,
+    );
+    let mut git = Vec::new();
+    for _ in 0..3 {
+        let one = Instant::now();
+        let out = charter_core::forklock::output(
+            std::process::Command::new("git")
+                .args(["--no-optional-locks", "status", "--porcelain", "-uall"])
+                .current_dir(clone),
+        )
+        .expect("git runs");
+        assert!(out.status.success(), "{out:?}");
+        git.push(one.elapsed());
+    }
+    println!(
+        "FM-12 | status | git status (no index write): {}",
+        git.iter().map(|d| ms(*d)).collect::<Vec<_>>().join(", ")
+    );
 }
 
 #[test]
@@ -439,9 +560,10 @@ fn search_on_a_large_repo_stays_within_its_budgets() {
         .and_then(|n| n.parse().ok())
         .unwrap_or(100_000);
     let only = std::env::var("CHARTER_MEASURE_ONLY").ok();
+    let budgets = Budgets::from(std::env::var("CHARTER_MEASURE_BUDGETS").ok().as_deref());
     let mut held = Held {
         missed: Vec::new(),
-        budgets: std::env::var("CHARTER_MEASURE_BUDGETS").as_deref() != Ok("0"),
+        budgets: budgets != Budgets::Off,
     };
     let (_dir, plane) = plane(count);
     let clone = plane.join("workspaces").join(WS).join(REPO);
@@ -464,8 +586,12 @@ fn search_on_a_large_repo_stays_within_its_budgets() {
     if runs("status") {
         measure_status(&plane, &clone, &mut held);
     }
+    let (lines, fails) = verdict(budgets, count, &held.missed);
+    for line in lines {
+        println!("{line}");
+    }
     assert!(
-        held.missed.is_empty(),
+        !fails,
         "past the budget at {count} files: {:?}",
         held.missed
     );
