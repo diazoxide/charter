@@ -239,8 +239,92 @@ describe("the update button", () => {
     await userEvent.click(button());
     const dialog = await screen.findByRole("dialog");
     await userEvent.click(within(dialog).getByRole("radio", { name: "dev" }));
+    // A pick is held until it is confirmed (DS-3d): the channel decides what is installed.
+    expect(chose).toEqual([]);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Use this channel" }));
 
     expect(chose).toEqual(["dev"]);
+  });
+
+  it("moves no machine to another channel while the arrow keys move through them", async () => {
+    // A radio's pick follows the arrow keys, and a held key repeats: writing on the pick
+    // would move the machine to a channel by moving through the list (DS-3b's lesson).
+    const chose: string[] = [];
+    render(<UpdateItem updates={updates({ kind: "quiet" }, { choose: (c) => chose.push(c) })} />);
+
+    await userEvent.click(button());
+    const dialog = await screen.findByRole("dialog");
+    within(dialog).getByRole("radio", { name: "stable" }).focus();
+    await userEvent.keyboard("{ArrowDown>}");
+    await new Promise((done) => setTimeout(done, 80));
+    await userEvent.keyboard("{/ArrowDown}");
+
+    expect(within(dialog).getByRole("radio", { name: "dev" })).toHaveFocus();
+    expect(chose).toEqual([]);
+  });
+
+  it("offers no button while the pick is the channel the machine is on", async () => {
+    render(<UpdateItem updates={updates({ kind: "quiet" })} />);
+
+    await userEvent.click(button());
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByRole("radio", { name: "stable" })).toHaveAccessibleDescription(
+      "current",
+    );
+    const use = () => within(dialog).queryByRole("button", { name: "Use this channel" });
+    expect(use()).toBeNull();
+
+    await userEvent.click(within(dialog).getByRole("radio", { name: "dev" }));
+    expect(use()).not.toBeNull();
+    await userEvent.click(within(dialog).getByRole("radio", { name: "stable" }));
+    expect(use()).toBeNull();
+  });
+
+  it("writes the channel once, however often it is pressed, and says where it went", async () => {
+    const chose: string[] = [];
+    const over = { choose: (c: string) => chose.push(c) };
+    const { rerender } = render(<UpdateItem updates={updates({ kind: "quiet" }, over)} />);
+
+    await userEvent.click(button());
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.click(within(dialog).getByRole("radio", { name: "dev" }));
+    const use = within(dialog).getByRole("button", { name: "Use this channel" });
+    await userEvent.click(use);
+    await userEvent.click(use);
+    expect(chose).toEqual(["dev"]);
+
+    rerender(<UpdateItem updates={updates({ kind: "quiet" }, { ...over, channel: "dev" })} />);
+
+    expect(within(dialog).getByRole("status")).toHaveTextContent(
+      "This machine is on the dev channel now.",
+    );
+    expect(within(dialog).getByRole("radio", { name: "dev" })).toHaveFocus();
+  });
+
+  it("shows the channel it is still on when the write is refused", async () => {
+    const { rerender } = render(<UpdateItem updates={updates({ kind: "quiet" })} />);
+
+    await userEvent.click(button());
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.click(within(dialog).getByRole("radio", { name: "dev" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Use this channel" }));
+
+    rerender(<UpdateItem updates={updates({ kind: "failed", why: "the file is read-only" })} />);
+
+    expect(within(dialog).getByRole("radio", { name: "stable" })).toBeChecked();
+    expect(within(dialog).queryByRole("button", { name: "Use this channel" })).toBeNull();
+    expect(within(dialog).getByText("the file is read-only")).toBeInTheDocument();
+  });
+
+  it("draws the channel as a setting is drawn", async () => {
+    render(<UpdateItem updates={updates({ kind: "quiet" })} />);
+
+    await userEvent.click(button());
+    const dialog = await screen.findByRole("dialog");
+
+    expect(within(dialog).getByRole("radiogroup", { name: "Channel" })).toBeInTheDocument();
+    expect(dialog.querySelector(".ui-setting-row")).not.toBeNull();
+    expect(dialog.querySelector(".choices, .choice")).toBeNull();
   });
 });
 

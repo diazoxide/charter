@@ -1,5 +1,6 @@
-import { useId, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
+import { Field, SettingRow } from "./settings/components";
 
 /**
  * Renaming a workspace (charter#367), asked where the answer is given.
@@ -32,8 +33,9 @@ export function RenameWorkspace({
   onCancel: () => void;
 }) {
   const [name, setName] = useState(workspace);
-  const nameId = useId();
-  const box = useRef<HTMLInputElement>(null);
+  // The dialog, so the box can be found in it on opening: the row draws the box, and a
+  // setting's field takes no ref.
+  const content = useRef<HTMLDivElement>(null);
   const next = name.trim();
   const ready = next !== "" && next !== workspace && !renaming && startsFresh !== undefined;
   const rename = () => {
@@ -49,37 +51,35 @@ export function RenameWorkspace({
       <Dialog.Portal>
         <Dialog.Overlay className="asking" />
         <Dialog.Content
+          ref={content}
           className="warning"
           aria-labelledby="rename-workspace"
           // A click outside answers nothing; Escape is Cancel, and nothing is renamed.
           onInteractOutside={(e) => e.preventDefault()}
           onOpenAutoFocus={(e) => {
             e.preventDefault();
-            box.current?.focus();
-            box.current?.select();
+            const box = content.current?.querySelector("input");
+            box?.focus();
+            box?.select();
           }}
         >
           <Dialog.Title id="rename-workspace">Rename workspace {workspace}</Dialog.Title>
           <form
-            className="asks"
             onSubmit={(event) => {
               event.preventDefault();
               rename();
             }}
           >
-            <label htmlFor={nameId}>New name</label>
-            <input
-              id={nameId}
-              ref={box}
-              value={name}
-              autoComplete="off"
-              spellCheck={false}
-              onChange={(event) => setName(event.target.value)}
+            <SettingRow
+              label="New name"
+              help={
+                <>
+                  Its folder under <code>workspaces/</code> moves, its branches&apos; folders are
+                  repaired, and everything that names it follows. Not while a chat is running in it.
+                </>
+              }
+              control={(ids) => <Field ids={ids} kind="text" value={name} onChange={setName} />}
             />
-            <p className="came-back">
-              Its folder under <code>workspaces/</code> moves, its branches&apos; folders are
-              repaired, and everything that names it follows. Not while a chat is running in it.
-            </p>
             {/* The core's sentence, unchanged, as `trouble` is. */}
             {startsFresh && (
               <p className="came-back" aria-label="Chats that will start fresh">

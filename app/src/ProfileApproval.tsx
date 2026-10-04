@@ -31,8 +31,8 @@ export function ProfileMeta({
   children,
 }: {
   row: ProfileRow;
-  /** The id the radio's `aria-describedby` names. */
-  id: string;
+  /** The id the radio's `aria-describedby` names, when the row does not name its own. */
+  id?: string;
   /** What the surface adds, after the picker's own detail. */
   children?: ReactNode;
 }) {

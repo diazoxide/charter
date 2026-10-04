@@ -1,4 +1,4 @@
-import { useId, type ReactNode } from "react";
+import { useId, useRef, type ReactNode } from "react";
 import * as Checkbox from "@radix-ui/react-checkbox";
 import * as RadioGroup from "@radix-ui/react-radio-group";
 import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
@@ -293,8 +293,10 @@ export function Field(props: FieldProps) {
   );
 }
 
-/** One option of a choice: its value, what it is called, and a line on what it does. */
-export type Option = { value: string; label: string; says?: string };
+/** One option of a choice: its value, what it is called, and a line on what it does. The line
+ *  is words, or a few marked-up facts (a harness's kind, command and source) that describe the
+ *  option as one line. */
+export type Option = { value: string; label: string; says?: ReactNode };
 
 /**
  * **A value picked**: `radio` one of a few, each with a line on what it does (a Radix radio
@@ -307,6 +309,8 @@ export type ChoiceProps = Tied &
         options: readonly Option[];
         value: string | undefined;
         onValueChange: (to: string) => void;
+        /** The group's own `disabled`: held while what it feeds is being done. */
+        disabled?: boolean;
       }
     | {
         kind: "select";
@@ -319,8 +323,24 @@ export type ChoiceProps = Tied &
     | { kind: "toggle"; checked: boolean; onCheckedChange: (to: boolean) => void }
   );
 
+/** The keys a radio group moves its pick with (Radix's own list). */
+const ARROWS = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"];
+
 export function Choice(props: ChoiceProps) {
   const { ids } = props;
+  /**
+   * Whether an arrow key is down in the radio group, so the option it moves to is picked.
+   *
+   * Radix means a radio's pick to follow the arrow keys, and learns that one is down from a
+   * `keydown` listener on `document`, which hears the key only after React's handlers (on the
+   * root and on each portal, below `document`) have set the focus moving. So one press moved
+   * the focus and picked nothing, and only a held key picked (`docs/ui-primitives.md`, "A radio
+   * group's pick does not follow the arrow keys on its own"). Heard here, in the capture phase,
+   * it is known before the focus moves, and forgotten when the key comes up or the focus leaves
+   * the group. A choice that writes something with no Undo, or starts something, still holds
+   * the pick and acts on a button (DS-3b, DS-3d).
+   */
+  const arrowing = useRef(false);
   if (props.kind === "toggle")
     return (
       <Checkbox.Root
@@ -361,8 +381,24 @@ export function Choice(props: ChoiceProps) {
       className="ui-choice-radio"
       value={props.value ?? ""}
       onValueChange={props.onValueChange}
+      disabled={props.disabled}
       aria-labelledby={ids.labelledBy}
       aria-describedby={ids.describedBy}
+      onKeyDownCapture={(event) => {
+        if (ARROWS.includes(event.key)) arrowing.current = true;
+      }}
+      onBlurCapture={(event) => {
+        // Out of the group, an arrow held on the way out is no longer a move between options.
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null))
+          arrowing.current = false;
+      }}
+      onKeyUpCapture={() => {
+        // After the move, not before it: the roving focus moves on a timer of its own, set
+        // when the key went down, so a quick press is up before the focus arrives.
+        setTimeout(() => {
+          arrowing.current = false;
+        });
+      }}
     >
       {props.options.map((one) => (
         <div className="ui-choice-option" key={one.value}>
@@ -371,6 +407,10 @@ export function Choice(props: ChoiceProps) {
             value={one.value}
             id={`${ids.id}-${one.value}`}
             aria-describedby={one.says ? `${ids.id}-${one.value}-says` : undefined}
+            onFocus={() => {
+              if (arrowing.current && !props.disabled && one.value !== props.value)
+                props.onValueChange(one.value);
+            }}
           >
             <RadioGroup.Indicator className="dot-mark" />
           </RadioGroup.Item>

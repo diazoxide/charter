@@ -1,10 +1,9 @@
-import { useId, useRef, useState } from "react";
-import * as Checkbox from "@radix-ui/react-checkbox";
+import { useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import * as RadioGroup from "@radix-ui/react-radio-group";
 import { HarnessSummary } from "./HarnessCard";
 import { ApprovalSentence, ProfileMeta } from "./ProfileApproval";
-import type { ProfileRow, StartOptions, WithoutSandbox } from "./bindings";
+import type { StartOptions, WithoutSandbox } from "./bindings";
+import { Choice, Field, SettingGroup, SettingRow } from "./settings/components";
 
 /**
  * The value that stands for "no persona at all".
@@ -64,27 +63,16 @@ const NO_PERSONA = "";
  * between chats, for the footer box's reason, and never offered by anything but this picker:
  * no CLI word, file or chat makes one, and charter records who turned it off and why.
  *
- * **Every control here is a Radix primitive** (`docs/ui-primitives.md`). It was hand-rolled
- * markup, and the hand-rolling is what broke it: five spans in one `<label>` with no rule to
- * lay them out ran together into `claudeclaudeclaudebuilt-indefault`, and the accessible name
- * of every row was that same run of words. A row's name is now its name, the rest of the row
- * describes it, and the layout is a grid rather than whatever the spans fell into.
+ * **Every control here is a row of the settings set** (`settings/components.tsx`, DS-3d #1176),
+ * so the picker reads as Settings does. It was hand-rolled markup once, and the hand-rolling is
+ * what broke it: five spans in one `<label>` ran together into
+ * `claudeclaudeclaudebuilt-indefault`, and the accessible name of every row was that same run
+ * of words. A harness's name is now its name, and the rest of its row describes it.
  *
- * **Every radio row picks itself on focus, and that is not decoration.** A radio group's pick
- * follows the keyboard — an arrow moves to the next row AND chooses it, which is what the
- * native inputs here did for nothing. Radix means to do it too: `RadioGroupItem` selects on
- * focus while an arrow key is down, and it learns that an arrow key is down from a `keydown`
- * listener it adds to `document`. It never learns it here, and the reason is not this app's.
- * React attaches its delegated listeners to the root container and to each portal container,
- * both of which are BELOW `document`, so one arrow press runs `document` capture, then React's
- * handler — which moves the focus — and only then `document` bubble, where Radix would have
- * set its flag. Measured rather than assumed: the three listeners were logged in that order,
- * the focus moved to the next row, and `onValueChange` was never called. Nothing about jsdom
- * causes it; the same nesting holds in the webview. Focus can only arrive at a row here by
- * arrow or by pointer — a roving tabindex is entered at the row that is already checked, so
- * tabbing in picks what was already picked — which makes "focused" and "picked" the same thing
- * for this control rather than a second behaviour. "moves between harnesses with the arrow
- * keys" goes red the moment an `onFocus` comes off a row.
+ * **An arrow key picks the harness or persona it moves to**, as a radio does. Radix learns an
+ * arrow is down too late for a single press here; `Choice` hears it first, and why is written
+ * there. A pick here starts nothing — Start does — so it needs no button of its own.
+ * "moves between harnesses with the arrow keys" goes red if `Choice` stops picking on arrows.
  */
 export function StartChat({
   options,
@@ -169,7 +157,6 @@ export function StartChat({
   // as nothing at all when there is nothing in it but spaces, which is "the default".
   const [name, setName] = useState("");
   const label = name.trim() === "" ? null : name;
-  const nameId = useId();
   const picked = options.profiles.find((p) => p.name === profile);
   // What the sandbox does for a chat on the picked profile, where the project turned it on.
   const sandbox = picked?.sandbox ?? null;
@@ -178,7 +165,6 @@ export function StartChat({
   // Where the sandbox cannot be applied, the start IS the opt-out, and the button says so.
   const refused = sandbox?.state === "refused";
   const [reason, setReason] = useState("");
-  const reasonId = useId();
   const withoutSandbox: WithoutSandbox | null =
     (sandbox?.state === "sandboxed" && optedOut) || refused
       ? { reason: reason.trim() === "" ? null : reason }
@@ -233,190 +219,121 @@ export function StartChat({
             </p>
           )}
 
-          {/* The group is the radio group itself, named by the heading above it. Not a
-              `<fieldset>` around it: the primitive's rows are buttons rather than inputs, so
-              a fieldset would add nothing but a second group with the same name in it. */}
-          <h3 className="choices-name" id="pick-harness">
-            Harness
-          </h3>
-          <RadioGroup.Root
-            className="choices profiles"
-            name="profile"
-            value={profile ?? ""}
-            onValueChange={setProfile}
-            aria-labelledby="pick-harness"
-          >
-            {options.profiles.map((row) => (
-              <Row key={row.name} row={row} onPick={setProfile} />
-            ))}
-          </RadioGroup.Root>
+          {/* Every control is a row of the settings set (DS-3d, #1176), as Settings draws one:
+              a name, the control, and the line that says what it means. */}
+          <SettingRow
+            label="Harness"
+            grouped
+            control={(ids) => (
+              <Choice
+                ids={ids}
+                kind="radio"
+                options={options.profiles.map((row) => ({
+                  value: row.name,
+                  label: row.name,
+                  says: <ProfileMeta row={row} />,
+                }))}
+                value={profile}
+                onValueChange={setProfile}
+              />
+            )}
+          />
           {/* The picked harness's card, at a glance (HP-19): what it runs at and lacks, before
               anything starts. Its whole card is a tab, opened from the chat's header. */}
           {picked?.harness && <HarnessSummary glance={picked.harness} />}
 
-          <h3 className="choices-name" id="pick-persona">
-            Persona
-          </h3>
-          <RadioGroup.Root
-            className="choices personas"
-            name="persona"
-            value={persona ?? NO_PERSONA}
-            onValueChange={(value) => setPersona(value === NO_PERSONA ? null : value)}
-            aria-labelledby="pick-persona"
-          >
-            <div className="choice">
-              <RadioGroup.Item
-                className="dot"
-                value={NO_PERSONA}
-                id="persona-none"
-                onFocus={() => setPersona(null)}
-              >
-                <RadioGroup.Indicator className="dot-mark" />
-              </RadioGroup.Item>
-              <label className="who" htmlFor="persona-none">
-                none
-              </label>
-            </div>
-            {options.personas.map((who) => (
-              <div className="choice" key={who}>
-                <RadioGroup.Item
-                  className="dot"
-                  value={who}
-                  id={`persona-${who}`}
-                  onFocus={() => setPersona(who)}
-                  aria-describedby={who === options.persona ? `persona-${who}-default` : undefined}
-                >
-                  <RadioGroup.Indicator className="dot-mark" />
-                </RadioGroup.Item>
-                <label className="who" htmlFor={`persona-${who}`}>
-                  {who}
-                </label>
-                {who === options.persona && (
-                  <span className="meta" id={`persona-${who}-default`}>
-                    <span className="what">plane default</span>
-                  </span>
-                )}
-              </div>
-            ))}
-          </RadioGroup.Root>
+          <SettingRow
+            label="Persona"
+            grouped
+            control={(ids) => (
+              <Choice
+                ids={ids}
+                kind="radio"
+                options={[
+                  { value: NO_PERSONA, label: "none" },
+                  ...options.personas.map((who) => ({
+                    value: who,
+                    label: who,
+                    says: who === options.persona ? "plane default" : undefined,
+                  })),
+                ]}
+                value={persona ?? NO_PERSONA}
+                onValueChange={(value) => setPersona(value === NO_PERSONA ? null : value)}
+              />
+            )}
+          />
 
-          <h3 className="choices-name">Footer</h3>
-          <div className="choices surface">
-            <div className="choice">
-              <Checkbox.Root
-                className="box"
-                name="pane-footer"
-                id="pane-footer"
-                // In the window's tab sequence, said out loud (`docs/ui-primitives.md`,
-                // charter-app#186). Radix's checkbox is a `<button>`, and WebKit leaves a form
-                // control out of the tab sequence unless its `tabindex` is written down. The
-                // radio rows above already carry one from the roving focus; this is the same
-                // attribute for the same reason.
-                tabIndex={0}
+          {/* The reason for the default and the reason against it both belong on screen: the
+              panels repeat most of what the footer says, and the footer says it about THIS
+              chat's own workspace. */}
+          <SettingRow
+            label="draw charter's footer in this chat"
+            help={
+              "Blank by default, because the panels already draw the plane. The footer says " +
+              "which workspace this chat is on, which the panels say only for the focused one. " +
+              "This chat only, and only from its next start."
+            }
+            control={(ids) => (
+              <Choice
+                ids={ids}
+                kind="toggle"
                 checked={showFooter}
-                onCheckedChange={(checked) => setShowFooter(checked === true)}
-                aria-describedby="pane-footer-why"
-              >
-                <Checkbox.Indicator className="box-mark">✓</Checkbox.Indicator>
-              </Checkbox.Root>
-              <label className="who" htmlFor="pane-footer">
-                draw charter&apos;s footer in this chat
-              </label>
-              {/* Said rather than left to be discovered. The reason for the default and the
-                reason against it both belong on screen: the panels repeat most of what the
-                footer says, and the footer says it about THIS chat's own workspace. */}
-              <span className="meta" id="pane-footer-why">
-                <span className="what">
-                  blank by default, because the panels already draw the plane. The footer says which
-                  workspace this chat is on, which the panels say only for the focused one. This
-                  chat only, and only from its next start.
-                </span>
-              </span>
-            </div>
-          </div>
+                onCheckedChange={setShowFooter}
+              />
+            )}
+          />
 
           {repo !== undefined && (
-            <>
-              <h3 className="choices-name">Branch</h3>
-              <div className="choices surface">
-                <div className="choice">
-                  <Checkbox.Root
-                    className="box"
-                    name="new-branch"
-                    id="new-branch"
-                    // In the tab sequence, said out loud, for the footer box's reason above.
-                    tabIndex={0}
-                    checked={onABranch}
-                    onCheckedChange={(checked) => setOnABranch(checked === true)}
-                    aria-describedby="new-branch-why"
-                  >
-                    <Checkbox.Indicator className="box-mark">✓</Checkbox.Indicator>
-                  </Checkbox.Root>
-                  <label className="who" htmlFor="new-branch">
-                    start on a new branch in {repo}
-                  </label>
-                  <span className="meta" id="new-branch-why">
-                    <span className="what">
-                      its own branch and folder, cut from what {repo} has checked out, so this
-                      chat&apos;s changes stay apart from other chats&apos;. Named after the chat,
-                      or chat-1, chat-2 and on. Cleared, it works on the branch {repo} has checked
-                      out, shared with every chat there.
-                    </span>
-                  </span>
-                </div>
-              </div>
-            </>
+            <SettingRow
+              label={`start on a new branch in ${repo}`}
+              help={
+                `Its own branch and folder, cut from what ${repo} has checked out, so this ` +
+                "chat's changes stay apart from other chats'. Named after the chat, or chat-1, " +
+                `chat-2 and on. Cleared, it works on the branch ${repo} has checked out, shared ` +
+                "with every chat there."
+              }
+              control={(ids) => (
+                <Choice
+                  ids={ids}
+                  kind="toggle"
+                  checked={onABranch}
+                  onCheckedChange={setOnABranch}
+                />
+              )}
+            />
           )}
 
-          <h3 className="choices-name">
-            <label htmlFor={nameId}>Name</label>
-          </h3>
-          <div className="asks">
-            <input
-              id={nameId}
-              value={name}
-              autoComplete="off"
-              spellCheck={false}
-              aria-describedby={`${nameId}-why`}
-              onChange={(event) => setName(event.target.value)}
-            />
-            <p className="came-back" id={`${nameId}-why`}>
-              Optional. Left empty, the chat is named after its persona, or its harness, and its
-              number. You can rename it from its tab later.
-            </p>
-          </div>
+          <SettingRow
+            label="Name"
+            help={
+              "Optional. Left empty, the chat is named after its persona, or its harness, and " +
+              "its number. You can rename it from its tab later."
+            }
+            control={(ids) => <Field ids={ids} kind="text" value={name} onChange={setName} />}
+          />
 
+          {/* One heading over every state of it, so the sentence about a sandbox that is off
+              or cannot be applied is not a stray line under the Name box. */}
           {sandbox !== null && (
-            <>
-              <h3 className="choices-name">Sandbox</h3>
+            <SettingGroup label="Sandbox">
               {sandbox.state === "sandboxed" && (
-                <div className="choices surface">
-                  <div className="choice">
-                    <Checkbox.Root
-                      className="box"
-                      name="no-sandbox"
-                      id="no-sandbox"
-                      // In the tab sequence, said out loud, for the footer box's reason above.
-                      tabIndex={0}
+                <SettingRow
+                  label="start without the sandbox"
+                  help={
+                    "This project runs every chat sandboxed: it reaches only the hosts the " +
+                    "project allows, and never your vaults. Ticked, this one chat runs without " +
+                    "it, its tab says so, and charter records that you turned it off. Nothing " +
+                    "inherits it: a relaunch or a resume asks the sandbox again."
+                  }
+                  control={(ids) => (
+                    <Choice
+                      ids={ids}
+                      kind="toggle"
                       checked={optedOut}
-                      onCheckedChange={(checked) => setOptedOut(checked === true)}
-                      aria-describedby="no-sandbox-why"
-                    >
-                      <Checkbox.Indicator className="box-mark">✓</Checkbox.Indicator>
-                    </Checkbox.Root>
-                    <label className="who" htmlFor="no-sandbox">
-                      start without the sandbox
-                    </label>
-                    <span className="meta" id="no-sandbox-why">
-                      <span className="what">
-                        this project runs every chat sandboxed: it reaches only the hosts the
-                        project allows, and never your vaults. Ticked, this one chat runs without
-                        it, its tab says so, and charter records that you turned it off. Nothing
-                        inherits it: a relaunch or a resume asks the sandbox again.
-                      </span>
-                    </span>
-                  </div>
-                </div>
+                      onCheckedChange={setOptedOut}
+                    />
+                  )}
+                />
               )}
               {/* Sandboxed, with what the picker could not check yet: a profile nobody has
                   approved is not run, not even to ask its version (ruling V87g). */}
@@ -443,23 +360,15 @@ export function StartChat({
                 </>
               )}
               {withoutSandbox !== null && (
-                <div className="asks">
-                  <input
-                    id={reasonId}
-                    value={reason}
-                    autoComplete="off"
-                    spellCheck={false}
-                    aria-label="Why, if you want it recorded"
-                    aria-describedby={`${reasonId}-why`}
-                    onChange={(event) => setReason(event.target.value)}
-                  />
-                  <p className="came-back" id={`${reasonId}-why`}>
-                    Optional. Kept on this machine with the record that this chat ran without the
-                    sandbox.
-                  </p>
-                </div>
+                <SettingRow
+                  label="Why, if you want it recorded"
+                  help="Optional. Kept on this machine with the record that this chat ran without the sandbox."
+                  control={(ids) => (
+                    <Field ids={ids} kind="text" value={reason} onChange={setReason} />
+                  )}
+                />
               )}
-            </>
+            </SettingGroup>
           )}
 
           {options.refused.length > 0 && (
@@ -531,35 +440,5 @@ export function StartChat({
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
-  );
-}
-
-/**
- * One harness profile, as a row of the group.
- *
- * **Its accessible name is the profile's name and nothing else.** Everything else the row
- * shows — what kind of harness it is, the command line, where it was declared, whether it is
- * the default, whether it needs approving — describes that name rather than joining it, so a
- * screen reader announces "work, radio" and then the detail, instead of reading a run-on of
- * every column in the row.
- */
-function Row({ row, onPick }: { row: ProfileRow; onPick: (name: string) => void }) {
-  const id = `profile-${row.name}`;
-  return (
-    <div className="choice">
-      <RadioGroup.Item
-        className="dot"
-        value={row.name}
-        id={id}
-        onFocus={() => onPick(row.name)}
-        aria-describedby={`${id}-meta`}
-      >
-        <RadioGroup.Indicator className="dot-mark" />
-      </RadioGroup.Item>
-      <label className="who" htmlFor={id}>
-        {row.name}
-      </label>
-      <ProfileMeta row={row} id={`${id}-meta`} />
-    </div>
   );
 }

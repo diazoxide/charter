@@ -288,13 +288,25 @@ Two decisions those four share, taken once so they do not have to be taken again
 **A radio group's pick does not follow the arrow keys on its own.** Radix selects an item on
 focus only while it believes an arrow key is down, and it learns that from a `keydown` listener
 on `document`. React attaches its delegated listeners to the root container and to each portal
-container, both below `document`, so React's handler moves the focus before Radix's listener
-runs. Every `RadioGroup.Item` in `StartChat` therefore carries its own `onFocus` that picks it.
-The reasoning and the measurement are in that file; the guard is the test named "moves between
-harnesses with the arrow keys".
+container, both below `document`, and the roving focus moves on a timer set when the key goes
+down, so a single press moves the focus and picks nothing; only a held key picks. The repair
+lives in the settings set's `Choice` (`app/src/settings/components.tsx`, DS-3d): it hears the
+arrow in the capture phase on the group, picks the option the focus then lands on, and forgets
+the arrow when the key comes up or the focus leaves the group. Every radio drawn with `Choice`
+has it; a hand-built `RadioGroup` does not. The guards are `components.test.tsx`'s "picks the
+next option on a single arrow, once" and `StartChat.test.tsx`'s "moves between harnesses with
+the arrow keys".
+
+**A radio whose pick writes something with no Undo, or starts something, holds the pick and
+writes on a button.** Because an arrow picks, and a held arrow repeats, a radio that wrote on
+its pick would write every option it passed through on the way to the one meant. Such a radio
+keeps the pick in the screen's own state and acts only on an explicit button: Saving's _Use
+this_ (DS-3b) and Updates' _Use this channel_ (DS-3d). A radio whose write can be undone, as
+Settings' controls can (V89e), writes on its pick. Each held pick is guarded by a test that
+holds an arrow down for about 80 ms and finds nothing written.
 
 **The arrow-key defect is the radio group's, not every primitive's — measured, not assumed.**
-The menu added under ADR 0039 was expected to need the same `onFocus` repair and does not: its
+The menu added under ADR 0039 was expected to need the same repair and does not: its
 roving focus is an `onKeyDown` on the content element rather than a `keydown` listener on
 `document`, so React's delegated listeners being below `document` never comes into it. The guard
 is `Strip.test.tsx`'s "moves between its rows with the arrow keys", which was written to fail and
@@ -816,7 +828,7 @@ on a Mac and `Ctrl+Shift+P` elsewhere. xterm.js 6.0.0 sends nothing for `⌘P`, 
 is no byte for the new-shell key's reason, so plain `Ctrl+P` still reaches the shell as
 previous-history. It is the palette's own capture listener on the window, because the switcher
 is the palette listing only the projects; a further press while it is up moves down one row.
-It finds files too (FM-7): a *Files* group after the projects, where Tab widens the scope rather
+It finds files too (FM-7): a _Files_ group after the projects, where Tab widens the scope rather
 than moving the focus, which the dialog's trap would only send round to the box again.
 
 **Find in a pane is `⌘F` on a Mac and `Ctrl+Shift+F` elsewhere, and takes nothing either** (SI-4,

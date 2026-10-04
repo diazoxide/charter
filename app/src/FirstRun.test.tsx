@@ -154,6 +154,19 @@ describe("the first run's project template (FR-17)", () => {
     expect(within(group).getByText("A Cargo crate or workspace.")).toBeInTheDocument();
   });
 
+  it("draws its path and template as settings are drawn (DS-3d)", async () => {
+    core();
+    render(<App />);
+
+    const group = await screen.findByRole("radiogroup", { name: "Project template" });
+    const page = group.closest(".first-run") as HTMLElement;
+    expect(page.querySelectorAll(".ui-setting-row")).toHaveLength(2);
+    expect(page.querySelector(".choices, .choice, .by-path")).toBeNull();
+    const box = screen.getByLabelText("Or type the repo's path");
+    expect(box).toHaveAccessibleDescription("A repo's folder on this machine.");
+    expect(box).toHaveAttribute("placeholder", "/path/to/repo");
+  });
+
   it("says which template fits the repo whose path is typed", async () => {
     const { calls } = core((cmd, args) =>
       cmd === "template_that_fits" ? (args.path === REPO ? "rust" : null) : undefined,

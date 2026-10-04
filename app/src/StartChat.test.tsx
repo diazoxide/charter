@@ -70,6 +70,18 @@ describe("a chat that starts in a repo (GL-1)", () => {
     expect(screen.queryByRole("checkbox", { name: /new branch/ })).not.toBeInTheDocument();
   });
 
+  it("draws its form from the settings set, every control a row", () => {
+    // DS-3d (#1176): the picker's harness, persona, boxes and fields are the settings set's
+    // rows, not the dialogs' own `choices` and `asks`.
+    show({}, "api");
+
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.querySelector(".choices, .choice, .asks, .choices-name")).toBeNull();
+    expect(dialog.querySelectorAll(".ui-setting-row")).toHaveLength(5);
+    expect(screen.getByRole("radiogroup", { name: "Harness" })).toBeInTheDocument();
+    expect(screen.getByRole("radiogroup", { name: "Persona" })).toBeInTheDocument();
+  });
+
   it("says nothing the first hour does not say", () => {
     // ADR 0072 §3: the picker is a first-hour surface, so it says branch and never the
     // words charter keeps for its own internals.
@@ -409,6 +421,21 @@ describe("the picker a chat starts from", () => {
       expect(onStart).toHaveBeenCalledWith("plain", "steward", false, null, false, null);
     });
 
+    it("starts nothing while an arrow key is held on the harnesses", async () => {
+      // A held key repeats, and a radio's pick follows it: the pick is only ever held, and
+      // the chat starts on Start (DS-3d).
+      const { onStart, onApprove, user } = show(WORK);
+
+      await user.click(screen.getByRole("radio", { name: "work" }));
+      await user.keyboard("{ArrowDown>}");
+      await new Promise((done) => setTimeout(done, 80));
+      await user.keyboard("{/ArrowDown}");
+
+      expect(screen.getByRole("radio", { name: "plain" })).toBeChecked();
+      expect(onStart).not.toHaveBeenCalled();
+      expect(onApprove).not.toHaveBeenCalled();
+    });
+
     it("hides the window behind it from the keyboard and from the accessibility tree", () => {
       // Modal was a word in an attribute and a grey overlay. Nothing enforced it: the tab
       // strip behind the picker was reachable by Tab and listed by every role query, and one
@@ -462,6 +489,18 @@ describe("a chat in a project that runs every chat sandboxed (ADR 0067 §7, V78 
     show();
     expect(screen.queryByRole("checkbox", { name: /without the sandbox/ })).not.toBeInTheDocument();
     expect(screen.queryByText(/sandbox/i)).not.toBeInTheDocument();
+  });
+
+  it("heads what it says about the sandbox, in every state of it", () => {
+    for (const sandbox of [
+      { state: "unsandboxed", said: "This system has no sandbox backend.", install: null },
+      { state: "refused", said: "bwrap is not installed.", install: null },
+    ] as const) {
+      showWith(sandbox);
+      const region = screen.getByRole("region", { name: "Sandbox" });
+      expect(region).toHaveTextContent(sandbox.said);
+      cleanup();
+    }
   });
 
   it("starts sandboxed unless the person ticks the box", async () => {

@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import * as RadioGroup from "@radix-ui/react-radio-group";
 import { listen } from "./here";
 import { ArrowUpCircle, LoaderCircle, Pin } from "lucide-react";
 import { commands, type Offer, type PinReport, type PlaneId } from "./bindings";
 import { MidTurn, mightBeMidTurn, type Ending } from "./QuitWarning";
 import { ReleaseNotes } from "./ReleaseNotes";
+import { Choice, SettingRow } from "./settings/components";
 
 /**
  * **"An update is available", and the pin that drifts** — the two version facts charter ADR
@@ -208,6 +208,15 @@ function said(state: UpdateState): string | undefined {
   }
 }
 
+/** The channels a machine can be on, as the Channel row offers them; the one it is on says so. */
+function channels(current: string | undefined) {
+  return ["stable", "dev"].map((name) => ({
+    value: name,
+    label: name,
+    says: name === current ? "current" : undefined,
+  }));
+}
+
 /** The sentence that has to be read before Install is pressed. */
 export const INSTALL_ENDS_SESSIONS =
   "Installing ends every running chat. On Windows charter closes at once to install; on macOS " +
@@ -229,9 +238,37 @@ export function UpdateItem({
   chats?: readonly Ending[];
 }) {
   const [open, setOpen] = useState(false);
+  /** The channel picked and not yet confirmed. A radio's pick follows the arrow keys, and the
+   *  channel decides what is installed next, so it is written by **Use this channel** and
+   *  never by the pick (DS-3d). Forgotten when the dialog closes. */
+  const [picked, setPicked] = useState<string>();
+  /** The channel being written, and the update state it was pressed in: a change of state to
+   *  a failure after the press is this write's refusal. */
+  const [writing, setWriting] = useState<{ to: string; from: UpdateState }>();
+  /** The channel the last confirmed write moved this machine to, said until the next pick. */
+  const [moved, setMoved] = useState<string>();
+  const content = useRef<HTMLDivElement>(null);
   /** Whether the dialog is asking about the chats a restart would interrupt. */
   const [asking, setAsking] = useState(false);
   const { state, channel, check, install, choose, restart } = updates;
+  // How the write went, read as soon as the props say (React's "adjusting state when a prop
+  // changes", so the row never draws a stale pick for a frame).
+  if (writing !== undefined && channel === writing.to) {
+    // Written: the pick is the channel now. The button it was pressed on is gone, so the
+    // keyboard goes to the channel it chose (the effect below), and the move is said.
+    setWriting(undefined);
+    setPicked(undefined);
+    setMoved(writing.to);
+  } else if (writing !== undefined && state !== writing.from && state.kind === "failed") {
+    // Refused, with the core's reason drawn above: the row shows the channel it is still on.
+    setWriting(undefined);
+    setPicked(undefined);
+  }
+  useEffect(() => {
+    // Once the group is enabled again, a render after the write landed.
+    if (moved !== undefined)
+      content.current?.querySelector<HTMLElement>('[role="radio"][data-state="checked"]')?.focus();
+  }, [moved]);
   // Live, so a chat that finishes its turn while the ask is up leaves it.
   const midTurn = chats.filter(mightBeMidTurn);
   const words = said(state);
@@ -245,7 +282,14 @@ export function UpdateItem({
     : `Updates — ${channel ?? "…"} channel, nothing new known`;
   return (
     <>
-      <Dialog.Root open={open} onOpenChange={setOpen}>
+      <Dialog.Root
+        open={open}
+        onOpenChange={(to) => {
+          setOpen(to);
+          setPicked(undefined);
+          setMoved(undefined);
+        }}
+      >
         <Dialog.Trigger asChild>
           <button
             type="button"
@@ -267,7 +311,7 @@ export function UpdateItem({
         </Dialog.Trigger>
         <Dialog.Portal>
           <Dialog.Overlay className="asking" />
-          <Dialog.Content className="warning update" aria-describedby="update-what">
+          <Dialog.Content ref={content} className="warning update" aria-describedby="update-what">
             <Dialog.Title>Updates</Dialog.Title>
             <div id="update-what">
               {state.kind === "offered" || state.kind === "installing" ? (
@@ -309,24 +353,44 @@ export function UpdateItem({
                 </p>
               )}
             </div>
-            <h3 id="update-channel">Channel</h3>
-            <RadioGroup.Root
-              className="choices"
-              aria-labelledby="update-channel"
-              value={channel ?? ""}
-              onValueChange={choose}
-            >
-              {["stable", "dev"].map((name) => (
-                <div className="choice" key={name}>
-                  <RadioGroup.Item className="dot" value={name} id={`update-channel-${name}`}>
-                    <RadioGroup.Indicator className="dot-mark" />
-                  </RadioGroup.Item>
-                  <label className="who" htmlFor={`update-channel-${name}`}>
-                    {name}
-                  </label>
-                </div>
-              ))}
-            </RadioGroup.Root>
+            <SettingRow
+              label="Channel"
+              grouped
+              control={(ids) => (
+                <Choice
+                  ids={ids}
+                  kind="radio"
+                  options={channels(channel)}
+                  value={picked ?? channel}
+                  onValueChange={(to) => {
+                    setPicked(to);
+                    setMoved(undefined);
+                  }}
+                  disabled={writing !== undefined}
+                />
+              )}
+            />
+            {picked !== undefined && picked !== channel && (
+              <div className="settings-actions">
+                <button
+                  type="button"
+                  tabIndex={0}
+                  disabled={writing !== undefined}
+                  onClick={() => {
+                    if (writing !== undefined) return;
+                    setWriting({ to: picked, from: state });
+                    choose(picked);
+                  }}
+                >
+                  Use this channel
+                </button>
+              </div>
+            )}
+            {moved !== undefined && (
+              <p className="honest" role="status">
+                {`This machine is on the ${moved} channel now.`}
+              </p>
+            )}
             {/* `tabIndex={0}` on every one, per `docs/ui-primitives.md` (charter-app#186). The
                 channel radios above are the scope's first edge and `Close` is its last, which
                 left `Install`, `Restart to update` and `Check now` in the middle — where Radix's
