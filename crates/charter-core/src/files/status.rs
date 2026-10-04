@@ -21,7 +21,9 @@
 //! - gitoxide has no fsmonitor, runs no hook, holds no credential helper and never fetches,
 //!   so an object the branch lacks fails the read instead of being fetched;
 //! - the status is taken HEAD → index → working tree, and the committed changes as the
-//!   difference between the fork point's tree and HEAD's, with renames found in both.
+//!   difference between the fork point's tree and HEAD's, with renames found in both. The
+//!   working tree is compared on every core, and walked for untracked files at the same time
+//!   (#1153): it is read after every write, so it must stay near `git status`'s own speed.
 //! - A file whose time moved and whose size did not is compared as it is on disk, with no
 //!   filter: such a file can be marked changed when git would not mark it. Wrong marks are
 //!   acceptable; running a program is not.
@@ -669,6 +671,15 @@ mod tests {
             assert_eq!(config.string(gone), None, "{gone} was kept");
         }
         assert_eq!(config.boolean("core.ignoreCase"), Some(true));
+    }
+
+    /// #1153: without gitoxide's `parallel` feature, the working tree is compared one file at a
+    /// time and the walk for untracked files waits behind it: 1.4 s at 100,000 files against
+    /// git's 0.3 s, and 7–24 s cold. With it, both run at once, and the compare on every core.
+    #[test]
+    fn a_status_compares_the_working_tree_on_every_core() {
+        let cores = std::thread::available_parallelism().map_or(1, usize::from);
+        assert_eq!(gix::features::parallel::num_threads(None), cores);
     }
 
     #[test]

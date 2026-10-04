@@ -2747,6 +2747,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0451a48faef8e0e7a8f6d903c8329c7d18a793b3030907ca841f889dc695d1df"
 dependencies = [
  "clru",
+ "crossbeam-deque",
  "gix-chunk",
  "gix-error",
  "gix-features",
@@ -3058,6 +3059,7 @@ dependencies = [
  "bstr",
  "gix-attributes",
  "gix-error",
+ "gix-features",
  "gix-fs",
  "gix-glob",
  "gix-hash",
