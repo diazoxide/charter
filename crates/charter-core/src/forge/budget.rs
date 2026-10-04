@@ -1,6 +1,8 @@
-//! The request budget per account (FI14, FW-4): every request charter sends as a forge account
-//! is counted at the one place an account's calls are resolved ([`super::route::Resolver`]),
-//! and a background request is held back once the account's hour is spent.
+//! The request budget per account (FI14, FW-4): every request a [`super::route::Resolver`]
+//! resolves for a forge account is counted there, on either route, and a background request is
+//! held back once the account's hour is spent. Only the resolver builds the native transport, so
+//! nothing sends with a sign-in token unmetered. Nothing in the app drives a resolver or
+//! [`super::poll`] yet: FW-7 (#735) does.
 //!
 //! # What counts
 //!
@@ -24,7 +26,8 @@
 //!   is charter's own share, a fifth of GitHub's 5,000-an-hour primary limit for a signed-in
 //!   user, so the human's own tools keep the rest. Once it is spent a **background** request
 //!   is held back until the hour turns ([`Meter::admit`]); a request a person is waiting on is
-//!   never held back.
+//!   never held back. A chat's or an MCP call is admitted as background ([`admission`]): only
+//!   a person can be waiting.
 //! - **the forge's limit**, read off each answer's rate-limit headers. Below [`FLOOR_PERCENT`]
 //!   of it remaining, polling backs off ([`super::poll`]).
 //!
@@ -43,7 +46,7 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
-use super::backend::{Account, Priority};
+use super::backend::{Account, Caller, Principal, Priority};
 use super::transport::{Call, NoAnswer, Reply, Transport};
 use super::{Forge, ForgeError, Kind};
 
@@ -135,7 +138,9 @@ impl ForgeLimit {
         if self.reset.is_some_and(|reset| reset <= now) {
             return false;
         }
-        self.limit > 0 && self.remaining * 100 < self.limit * FLOOR_PERCENT
+        // Wide enough that no forge-supplied number can overflow it.
+        self.limit > 0
+            && u128::from(self.remaining) * 100 < u128::from(self.limit) * u128::from(FLOOR_PERCENT)
     }
 }
 
@@ -173,7 +178,7 @@ impl Usage {
 
     /// When the hour turns.
     pub fn turns_at(&self) -> u64 {
-        self.since + WINDOW
+        self.since.saturating_add(WINDOW)
     }
 
     /// The hour as of `now`: a fresh one when it has turned. The forge's readings stay.
@@ -210,6 +215,17 @@ impl Usage {
             said.push_str(&format!("; the forge says {}", limits.join(", ")));
         }
         said
+    }
+}
+
+/// The priority `caller` is admitted at. **Only a person can be waiting**: a chat's or an MCP
+/// call is admitted as background whatever priority it carries, so an agent that loops on an
+/// account's calls is held back once the hour is spent, and cannot starve the person's own
+/// refreshes while it is never held itself.
+pub fn admission(caller: &Caller) -> Priority {
+    match (caller.principal(), caller.is_a_chat()) {
+        (Principal::Human, false) => caller.priority(),
+        _ => Priority::Background,
     }
 }
 
@@ -299,7 +315,7 @@ impl Meter {
             |u| {
                 let held = priority == Priority::Background && u.spent();
                 if held {
-                    u.held_back += 1;
+                    u.held_back = u.held_back.saturating_add(1);
                 }
                 held.then(|| (u.account.clone(), u.turns_at()))
             },
@@ -325,13 +341,13 @@ impl Meter {
         let counting = self.counting;
         self.change(
             |u| {
-                u.sent += 1;
+                u.sent = u.sent.saturating_add(1);
                 let not_modified = reply.is_some_and(|r| r.status == Some(304));
                 if not_modified {
-                    u.not_modified += 1;
+                    u.not_modified = u.not_modified.saturating_add(1);
                 }
                 if !(not_modified && counting == Counting::NotModifiedIsFree) {
-                    u.counted += 1;
+                    u.counted = u.counted.saturating_add(1);
                 }
                 if let Some((name, limit)) = reply.and_then(ForgeLimit::of) {
                     u.forge.insert(name, limit);
@@ -364,7 +380,7 @@ impl Meter {
 }
 
 /// A transport whose every request is admitted and counted by one account's [`Meter`]: what
-/// [`super::route::Resolver`] hands out for any call made as an account, on either route.
+/// [`super::route::Resolver`] hands out for any call it resolves for an account, on either route.
 pub struct Metered {
     inner: Arc<dyn Transport>,
     meter: Arc<Meter>,
@@ -454,6 +470,66 @@ mod tests {
                 "{kind:?}"
             );
         }
+    }
+
+    #[test]
+    fn only_a_person_is_admitted_in_the_foreground() {
+        assert_eq!(admission(&Caller::window()), Priority::Foreground);
+        assert_eq!(admission(&Caller::command()), Priority::Foreground);
+        assert_eq!(
+            admission(&Caller::window().background()),
+            Priority::Background
+        );
+        assert_eq!(admission(&Caller::trigger()), Priority::Background);
+        // A chat and an MCP call carry the foreground priority, and are admitted as background.
+        for chat in [Caller::chat("c1"), Caller::mcp("c1")] {
+            assert_eq!(chat.priority(), Priority::Foreground);
+            assert_eq!(admission(&chat), Priority::Background);
+        }
+    }
+
+    #[test]
+    fn numbers_a_forge_or_a_file_states_cannot_overflow_the_arithmetic() {
+        let meter = Meter::new(&account(Kind::GitLab), at(1_000));
+        let max = u64::MAX.to_string();
+        meter.record(Some(&reply(
+            200,
+            &[
+                ("ratelimit-limit", max.as_str()),
+                ("ratelimit-remaining", max.as_str()),
+                ("ratelimit-reset", max.as_str()),
+            ],
+        )));
+        let usage = meter.usage();
+        assert!(!usage.below_floor(1_000));
+        let limit = ForgeLimit {
+            limit: u64::MAX,
+            remaining: u64::MAX / 10,
+            reset: None,
+        };
+        assert!(
+            limit.below_floor(0),
+            "a tenth of the most is below a fifth of it"
+        );
+        // A kept file near the very end of time, its counters full.
+        let full = Usage {
+            since: u64::MAX - 10,
+            sent: u32::MAX,
+            counted: u32::MAX,
+            not_modified: u32::MAX,
+            held_back: u32::MAX,
+            ..Usage::default()
+        };
+        assert_eq!(full.turns_at(), u64::MAX);
+        let config = tempfile::tempdir().unwrap();
+        let file = root(config.path()).join(format!("{}.json", account(Kind::GitLab).key()));
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, serde_json::to_string(&full).unwrap()).unwrap();
+        let kept = Meter::kept_in(config.path(), &account(Kind::GitLab), at(u64::MAX - 5));
+        assert!(kept.admit(Priority::Background).is_err());
+        kept.record(Some(&reply(304, &[])));
+        let usage = kept.usage();
+        assert_eq!((usage.sent, usage.counted), (u32::MAX, u32::MAX));
     }
 
     #[test]

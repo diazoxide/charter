@@ -136,7 +136,26 @@ pub async fn plane_doctor(
 /// environment variable, and `pinned` is what makes the `nested plane` row talk about
 /// `$CHARTER_ROOT`.
 pub(crate) fn report(root: &std::path::Path, full: bool) -> DoctorReport {
+    report_in(
+        root,
+        full,
+        charter_core::machine::config_root_if_there().as_deref(),
+    )
+}
+
+/// [`report`], reading the forge request budgets (`forge budget` rows, FW-4) kept under the
+/// machine store `config_root`, when there is one. A test names its own, so it never reads the
+/// operator's.
+fn report_in(
+    root: &std::path::Path,
+    full: bool,
+    config_root: Option<&std::path::Path>,
+) -> DoctorReport {
     let doctor = Doctor::at(root, root, false, !full);
+    let doctor = match config_root {
+        Some(config_root) => doctor.reading_budgets_in(config_root),
+        None => doctor,
+    };
     // The full doctor is one the operator opened, so it asks the forge about the project's
     // remote, as a typed `charter doctor` does (SQ-8). The preflight asks no forge.
     let doctor = if full {
@@ -310,6 +329,12 @@ fn event_log(opened: Option<&Result<std::path::PathBuf, crate::EventLogRefused>>
 mod tests {
     use super::*;
 
+    /// [`super::report`] reading no machine store: the real one reaches the operator's own
+    /// config directory, which the plane fence refuses a test. Shadows the glob import.
+    fn report(root: &std::path::Path, full: bool) -> DoctorReport {
+        report_in(root, full, None)
+    }
+
     /// A plane charter recognises, resolved (macOS temp dirs are links).
     fn plane() -> (tempfile::TempDir, std::path::PathBuf) {
         let dir = tempfile::tempdir().expect("a directory");
@@ -328,7 +353,7 @@ mod tests {
         // row the app reworded, dropped or reordered is a failure here and not a review note.
         let (_dir, root) = plane();
 
-        let drawn = report(&root, false);
+        let drawn = report_in(&root, false, None);
         let printed: serde_json::Value = serde_json::from_str(&charter_core::doctor::json(
             &Doctor::at(&root, &root, false, true).run(),
         ))
@@ -342,6 +367,35 @@ mod tests {
             assert_eq!(serde_json::json!(row.detail), json["detail"]);
             assert_eq!(serde_json::json!(row.hint), json["hint"]);
         }
+    }
+
+    #[test]
+    fn the_window_shows_each_forge_accounts_request_budget() {
+        use charter_core::forge::budget::{Meter, SystemClock};
+        let (_dir, root) = plane();
+        let config = tempfile::tempdir().expect("a directory");
+        let budget_rows = |report: &DoctorReport| {
+            report
+                .rows
+                .iter()
+                .filter(|r| r.name == "forge budget")
+                .map(|r| r.detail.clone())
+                .collect::<Vec<_>>()
+        };
+        assert!(budget_rows(&report_in(&root, false, Some(config.path()))).is_empty());
+        let account = charter_core::forge::Account {
+            kind: charter_core::forge::Kind::GitLab,
+            host: "gitlab.com".into(),
+            login: "octocat".into(),
+        };
+        Meter::kept_in(config.path(), &account, std::sync::Arc::new(SystemClock)).record(None);
+        assert_eq!(
+            budget_rows(&report_in(&root, false, Some(config.path()))),
+            [
+                "gitlab octocat@gitlab.com: 1 of 1000 counted requests this hour (1 sent, 0 \
+              answered 304 Not Modified); the forge has stated no limit"
+            ]
+        );
     }
 
     #[test]

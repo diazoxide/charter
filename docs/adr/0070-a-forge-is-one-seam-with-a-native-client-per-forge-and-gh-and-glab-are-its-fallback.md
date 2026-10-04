@@ -552,3 +552,44 @@ above. Each holds until the ticket named, and the text above is left as accepted
 3. **Epics use v4's REST epics endpoints.** GitLab deprecated them in 17.0 in favour of work
    items and still serves them in v4. FW-6b, which maps epics onto the neutral model, moves them
    to work items ([#1032](https://github.com/diazoxide/charter/issues/1032)).
+
+## Amended by FW-4 (#731), 2026-10-04
+
+FW-4 built the request budget per account (`forge::budget`) and the polling policy
+(`forge::poll`). Six things depart from the text above, or settle what it left open. The text
+above is left as accepted.
+
+1. **The budget is a `Transport` decorator, not a `ureq` middleware (D-FW4a).** §3 lists the
+   budget third in the native transport's middleware chain. A middleware inside `Http` sees only
+   the native route, and §6 says both transports feed one count. So `Resolver::for_caller` wraps
+   whichever transport it resolves, native or CLI, in the account's `Metered` transport, which
+   admits and counts every `send` and `check_auth`. Only the resolver builds the native transport
+   outside tests, and a guard test holds that
+   (`tests/only_the_resolver_builds_the_native_transport.rs`).
+2. **FW-2a's amendment 1 is settled: the move is not made (D-FW4c).** The CLI transport keeps its
+   argv without `--include` (ADR 0046), so it makes no conditional request, and a CLI call made as
+   an account is counted but tells the budget nothing of the forge's limit. Polling is the native
+   route's.
+3. **The floor is two thresholds (D-FW4d).** §6 says the budget refuses background requests below
+   FW-4's floor. Below 20% of the forge's own limit remaining, polling **backs off**: every
+   interval is four times longer. A background request is **held back** only once charter's own
+   allowance, 1,000 counted requests an hour per account, is spent; it fails as `RateLimited`
+   with the hour's end as its reset. Holding back at 20% would stop polling, not back it off.
+4. **What a `304` costs depends on the forge.** §6 counts a `304` as unchanged. GitHub does not
+   count a `304` to an authorized conditional request against its primary rate limit. GitLab's
+   rate-limit documentation throttles API requests and makes no exception for a `304`, so it
+   counts as one request there. The budget counts each as its forge does; polling paces itself on
+   every request sent, a `304` included, because GitLab counts one and GitHub's secondary limits
+   count requests whatever their answer.
+5. **A call that names no account has no budget (D-FW4b).** It goes over the CLI with the CLI's
+   own login, not a charter account. A chat's or a `charter` command's call that names an account
+   takes the CLI route (§4), so it spends the CLI's login, and is counted against the account it
+   named.
+6. **Only a person is foreground (D-FW4j).** For admission, a call whose principal is a chat, or
+   that came over MCP, is background whatever priority it carries. A looping agent is held back
+   once the hour is spent, and cannot starve the person's own refreshes while never being held
+   itself.
+
+Nothing in the app drives the poller or a resolver yet: FW-7 (#735) wires the window's state
+into `forge::poll` and keeps the budgets in the machine tier, where `charter doctor` and the
+app's doctor show them.

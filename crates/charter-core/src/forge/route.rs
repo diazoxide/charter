@@ -263,15 +263,16 @@ impl Transports for Resolver {
             Route::Cli => self.cli.clone(),
             Route::Refused(why) => return Err(ForgeError::of(super::Failure::Forbidden, why)),
         };
-        // Every call made as an account is admitted and counted by its meter, whichever route
-        // it took: this is the one place an account's calls are resolved, so none bypasses
-        // the budget. A call that names no account is the CLI's own login, not a charter
-        // account, and has no budget here.
+        // Every call this resolves for an account is admitted and counted by its meter,
+        // whichever route it took. Only this builds the native transport outside tests
+        // (`tests/only_the_resolver_builds_the_native_transport.rs`), so nothing sends with a
+        // sign-in token unmetered. A call that names no account is the CLI's own login, not a
+        // charter account, and has no budget here.
         Ok(match caller.account() {
             Some(account) => Arc::new(Metered::new(
                 transport,
                 self.meter(account),
-                caller.priority(),
+                super::budget::admission(caller),
             )),
             None => transport,
         })
@@ -342,6 +343,59 @@ mod tests {
             Resolver::new(Kind::GitHub, "github.com").root,
             ApiRoot::github("github.com")
         );
+    }
+
+    /// A CLI route that answers every request.
+    struct Answers;
+    impl Transport for Answers {
+        fn send(
+            &self,
+            _forge: &crate::forge::Forge,
+            _call: &crate::forge::transport::Call,
+        ) -> Result<crate::forge::transport::Reply, crate::forge::transport::NoAnswer> {
+            Ok(crate::forge::transport::Reply::of(
+                0,
+                "{}".into(),
+                String::new(),
+            ))
+        }
+        fn check_auth(&self, _forge: &crate::forge::Forge) -> Result<(), ForgeError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_chat_naming_an_account_is_held_back_once_its_hour_is_spent_and_a_person_is_not() {
+        use crate::forge::transport::{Call, NoAnswer};
+        let account = Account {
+            kind: Kind::GitHub,
+            host: "github.com".into(),
+            login: "octocat".into(),
+        };
+        let resolver = Resolver::new(Kind::GitHub, "github.com").cli_over(Arc::new(Answers));
+        let meter = resolver.meter(&account);
+        for _ in 0..crate::forge::budget::HOURLY_ALLOWANCE {
+            meter.record(None);
+        }
+        let forge = crate::forge::Forge::default_of(Kind::GitHub);
+        let call = Call::get("user", crate::forge::LIST_TIMEOUT);
+        let send = |caller: Caller| {
+            resolver
+                .for_caller(&caller.as_account(account.clone()))
+                .unwrap()
+                .send(&forge, &call)
+        };
+        for chat in [Caller::chat("c1"), Caller::mcp("c1")] {
+            assert!(
+                matches!(send(chat), Err(NoAnswer::HeldBack { .. })),
+                "a chat is never a person waiting"
+            );
+        }
+        assert!(
+            send(Caller::command()).is_ok(),
+            "a person waiting goes through"
+        );
+        assert_eq!(meter.usage().held_back, 2);
     }
 
     #[test]
