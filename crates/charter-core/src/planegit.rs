@@ -468,6 +468,10 @@ pub struct Standing {
     /// What a save cannot do here that is not a block — a request mode on a remote no forge adapter
     /// serves, where a save still commits and goes no further.
     pub notice: Option<String>,
+    /// Whether a file git tracks is among [`Standing::changed`]: the plane root being worked
+    /// in, as the alerts say (`alerts::tracked_dirty`'s rule, read from this same `status` in
+    /// the app, FD-11). New files alone are not.
+    pub tracked: bool,
     /// HEAD's commit as it was read, or empty when there is none: what auto-save's
     /// [`fingerprint_of`] starts from, so a look asks git for it once.
     pub head: String,
@@ -495,6 +499,7 @@ pub fn standing(root: &Path) -> Standing {
             push_failed: None,
             conflicts: Vec::new(),
             notice: None,
+            tracked: false,
             head: String::new(),
         };
     };
@@ -521,7 +526,7 @@ pub fn standing(root: &Path) -> Standing {
         )
     ) && misconfigured.is_none()
         && origin_https(root).is_some();
-    let changed = changed_paths(root);
+    let (changed, tracked) = status_of(root);
     let ahead = count(root, &format!("refs/remotes/origin/{branch}..HEAD"));
     let behind = count(root, &format!("HEAD..refs/remotes/origin/{branch}"));
     let record = unlanded(root);
@@ -639,6 +644,7 @@ pub fn standing(root: &Path) -> Standing {
             _ => conflicts,
         },
         notice,
+        tracked,
         head,
     }
 }
@@ -923,32 +929,38 @@ pub fn pull(root: &Path, say: Sink) -> u8 {
 /// `git status --porcelain=v1 -z`'s paths: what `git add -A` would take. `-z` for the same
 /// reason the save's secret guard uses it — no quoting, NUL the only separator.
 pub(crate) fn changed_paths(root: &Path) -> Vec<String> {
+    status_of(root).0
+}
+
+/// [`changed_paths`], and whether any of them is a file git tracks (any entry but `??`).
+fn status_of(root: &Path) -> (Vec<String>, bool) {
     let Ok(run) = git::run(
         root,
         // `--no-optional-locks`, as `profiles.rs` and `guest.rs` ask: a plain `status`
         // refreshes the index and takes `index.lock`, and the title bar asks this every ten
         // seconds — a save's `git add -A` landing inside that window failed on the lock.
-        &git::with_untracked_cache(
-            root,
-            &[
-                "--no-optional-locks",
-                "status",
-                "--porcelain=v1",
-                "-z",
-                "--untracked-files=all",
-            ],
-        ),
+        // No `-c core.untrackedCache`: a read-only status uses a cache the index holds without
+        // it, and git never consults one under `--untracked-files=all` (FD-11, measured).
+        &[
+            "--no-optional-locks",
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+        ],
         git::READ,
     ) else {
-        return Vec::new();
+        return (Vec::new(), false);
     };
     let mut out = Vec::new();
+    let mut tracked = false;
     let mut entries = run.out.split('\0');
     while let Some(entry) = entries.next() {
         if entry.len() < 4 {
             continue;
         }
         let (status, path) = entry.split_at(3);
+        tracked |= !status.starts_with("??");
         out.push(path.to_string());
         // A rename or copy names where it came from next, as an entry of its own.
         if status.contains(['R', 'C']) {
@@ -956,7 +968,7 @@ pub(crate) fn changed_paths(root: &Path) -> Vec<String> {
         }
     }
     out.sort();
-    out
+    (out, tracked)
 }
 
 /// The `charter/<sha>` branch an earlier push is STILL waiting on a pull request for.
@@ -2112,8 +2124,8 @@ fn commit_push(
     // and stages nothing, and the probe below then answers 0 — because there is no difference
     // between HEAD and an index nothing was written to. Discarded, that made "charter could not
     // stage anything" and "there was nothing to stage" the same value.
-    // The write that adds git's untracked cache to the index, for the read-only status of
-    // every standing after it (FD-11, [`git::UNTRACKED_CACHE`]).
+    // The write that adds git's untracked cache to the index, which a status that can write it
+    // (the operator's own) keeps fresh and every status then uses (FD-11, [`git::UNTRACKED_CACHE`]).
     let added = match git::run_untimed(root, &git::with_untracked_cache(root, add_cmd)) {
         Ok(run) => run,
         Err(unavailable) => {

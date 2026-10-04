@@ -318,6 +318,11 @@ pub struct Asking<'a> {
     /// The directory the asker stands in — charter's `NESTED_ORIGIN` is asked of it. The app
     /// stands in the plane it opened.
     pub standing: &'a Path,
+    /// Whether the asker holds the plane's shared standing ([`crate::planegit::shared_standing`],
+    /// FD-11): the app does, and the root's tracked dirt is read from it rather than from a
+    /// `git status` of the alerts' own. The status line is a process of its own per render,
+    /// where nothing is shared, and asks git itself.
+    pub shared: bool,
 }
 
 /// Every alert the plane has, in charter's order — `_alerts`.
@@ -398,7 +403,7 @@ fn gather(ask: &Asking, out: &mut Vec<Alert>) -> Result<(), String> {
     // Last, because it is the newest and charter's one guard makes the last row the one that
     // pays when something goes wrong. It has its own guard too: a root that cannot be read
     // costs this row and nothing else.
-    out.extend(plane_root(root));
+    out.extend(plane_root(root, ask.shared));
     Ok(())
 }
 
@@ -472,7 +477,7 @@ const ELOOP: i32 = 62;
 const EBADF: i32 = 9;
 
 /// `_plane_root_alert`: the root being worked in, or `None` — the ordinary case.
-fn plane_root(root: &Path) -> Option<Alert> {
+fn plane_root(root: &Path, shared: bool) -> Option<Alert> {
     if !root.join(crate::plane::MANIFEST).is_file() {
         return None;
     }
@@ -480,7 +485,11 @@ fn plane_root(root: &Path) -> Option<Alert> {
     // of somebody else's. Asking git about the directory anyway would answer for the
     // surrounding repository.
     let gitdir = git_dir(root).ok()??;
-    let dirty = tracked_dirty(root);
+    let dirty = if shared {
+        crate::planegit::shared_standing(root).tracked
+    } else {
+        tracked_dirty(root)
+    };
     let branch = branch_of(&gitdir);
     let default = default_branch(&gitdir).ok()?;
     let detached = head_detached(&gitdir).ok()?;

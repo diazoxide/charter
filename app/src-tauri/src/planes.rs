@@ -729,6 +729,9 @@ pub struct Planes {
     changes: crate::planewatch::Changed,
     /// Told when auto-save saved a plane (charter-app#343).
     saves: crate::autosave::Saved,
+    /// Told the root of each plane let go of, so the one watch per repo stops listening to its
+    /// clones (FD-11).
+    released: Released,
     /// Told when a harness is started by hand in a shell tab of any plane (ADR 0062).
     by_hand: hooks::ByHandTeller,
     /// Told each file a chat's tool touched, confined and rated (FM-6).
@@ -749,6 +752,9 @@ pub struct Planes {
     /// the app opens it, and on a machine that has no data home.
     events: Option<hooks::Events>,
 }
+
+/// Told the root of a plane the app let go of.
+pub type Released = Arc<dyn Fn(&Path) + Send + Sync>;
 
 /// Makes a plane's session host, given where its chats are to report.
 pub type Hosting = Arc<dyn Fn(Option<Reporting>) -> Box<dyn SessionHost> + Send + Sync>;
@@ -810,6 +816,7 @@ impl Planes {
             arrivals: Arc::new(|_| {}),
             changes: Arc::new(|_, _| {}),
             saves: Arc::new(|_, _| {}),
+            released: Arc::new(|_| {}),
             by_hand: Arc::new(|_| {}),
             touches: Arc::new(|_| {}),
             smart: Arc::new(|_| {}),
@@ -850,6 +857,12 @@ impl Planes {
     /// that hear a plane being saved are told (charter-app#343).
     pub fn telling_saves(mut self, saves: crate::autosave::Saved) -> Self {
         self.saves = saves;
+        self
+    }
+
+    /// Tells `released` the root of every plane this registry lets go of (FD-11).
+    pub fn telling_released(mut self, released: Released) -> Self {
+        self.released = released;
         self
     }
 
@@ -1728,6 +1741,7 @@ impl Planes {
             .remove(plane)
             .ok_or_else(|| no_such(plane, "close"))?;
         held.let_go(false);
+        (self.released)(&held.root);
         Ok(())
     }
 
@@ -1840,6 +1854,7 @@ impl Planes {
             .collect();
         for held in all {
             held.let_go(to_update);
+            (self.released)(&held.root);
         }
         // Every way out of the app lets go of every plane here — a quit, and a restart to
         // update — so this is where each is saved: after its chats have ended, so what they
@@ -3062,6 +3077,38 @@ mod tests {
             "the socket outlived the plane that bound it"
         );
         assert!(root.join(charter_core::plane::MANIFEST).is_file());
+    }
+
+    #[test]
+    fn closing_a_plane_and_letting_go_of_every_plane_each_tell_its_root_once() {
+        // So the one watch per repo stops listening to the plane's clones (FD-11).
+        let dir = tempfile::tempdir().expect("a directory");
+        let one = a_plane(&dir.path().join("one"));
+        let two = a_plane(&dir.path().join("two"));
+        let told: Arc<Mutex<Vec<PathBuf>>> = Arc::default();
+        let planes = planes().telling_released({
+            let told = Arc::clone(&told);
+            Arc::new(move |root: &Path| {
+                told.lock().unwrap().push(root.to_path_buf());
+            })
+        });
+        let first = planes.open(&one);
+        let held_one = planes
+            .held(&first)
+            .expect("it is held")
+            .root()
+            .to_path_buf();
+        let second = planes.open(&two);
+        let held_two = planes
+            .held(&second)
+            .expect("it is held")
+            .root()
+            .to_path_buf();
+
+        planes.close(&first).expect("it closes");
+        planes.let_go_of_all();
+
+        assert_eq!(*told.lock().unwrap(), [held_one, held_two]);
     }
 
     #[test]

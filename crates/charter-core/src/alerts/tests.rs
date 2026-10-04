@@ -68,6 +68,7 @@ fn reading(root: &Path) -> Reading {
         root,
         active: None,
         standing: root,
+        shared: false,
     })
 }
 
@@ -245,6 +246,7 @@ fn another_workspace_behind_the_layout_is_counted_and_the_active_one_is_not() {
             root: &root,
             active,
             standing: &root,
+            shared: false,
         })
         .alerts
     };
@@ -323,6 +325,7 @@ fn a_plane_pinned_inside_another_planes_workspaces_says_where_memory_goes() {
             root: &inner,
             active: None,
             standing,
+            shared: false,
         })
         .alerts
     };
@@ -350,6 +353,7 @@ fn a_plane_pinned_inside_another_planes_workspaces_says_where_memory_goes() {
             root: &outer,
             active: None,
             standing: &outer,
+            shared: false,
         })
         .alerts,
         vec![Alert::Reinit {
@@ -379,6 +383,50 @@ fn a_dirty_plane_root_is_one_row_naming_the_root() {
             "{W}⚠\x1b[0m \x1b[2mplane root\x1b[0m plane\x1b[2m · \x1b[0m{W}dirty\x1b[0m{ROOT_REMEDY}"
         )]
     );
+}
+
+#[test]
+fn in_the_app_a_dirty_plane_root_is_read_from_the_shared_standing_with_no_status_of_its_own() {
+    // FD-11 (#651): the alerts were the one poller still running a `git status` of their own
+    // in a plane the shared standing already reads.
+    let (_held, root) = plane(HEALTHY);
+    repo(&root);
+    std::fs::write(root.join("notes.md"), "# notes\n\nedited\n").unwrap();
+    let shared = crate::planegit::shared_standing(&root);
+    assert!(shared.tracked, "{shared:?}");
+    let before = crate::worktree::git::tally::asked(&root).len();
+
+    let got = read(&Asking {
+        root: &root,
+        active: None,
+        standing: &root,
+        shared: true,
+    });
+
+    assert_eq!(got.alerts, reading(&root).alerts);
+    assert!(
+        matches!(got.alerts.as_slice(), [Alert::PlaneRoot { .. }]),
+        "{got:?}"
+    );
+    let ran: Vec<Vec<String>> = crate::worktree::git::tally::asked(&root)[before..]
+        .iter()
+        .filter(|args| args.iter().any(|arg| arg == "status"))
+        .cloned()
+        .collect();
+    // `reading` above is the status line's way, which asks git itself: one status.
+    assert_eq!(ran.len(), 1, "{ran:?}");
+}
+
+#[test]
+fn an_untracked_file_alone_is_not_tracked_dirt_in_the_shared_standing() {
+    let (_held, root) = plane(HEALTHY);
+    repo(&root);
+    std::fs::write(root.join("personas/steward/a-memory.md"), "# m\n").unwrap();
+
+    let shared = crate::planegit::shared_standing(&root);
+
+    assert!(!shared.tracked, "{shared:?}");
+    assert!(!shared.changed.is_empty(), "{shared:?}");
 }
 
 #[test]

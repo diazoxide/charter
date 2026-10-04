@@ -12,10 +12,22 @@
 //!   are as they were ([`Stamp`]: `HEAD`, the index, the branch's refs, a fetch, a merge or a
 //!   rebase moving), and nobody has [`Shared::touch`]ed the repo — the plane's watcher on every
 //!   batch, a save or a fetch letting go of its claim, a chat ending.
-//! - **And at most `max_age` old**, the backstop for a working-tree edit nothing reported: the
-//!   plane's watcher is not recursive, by design (`planewatch.rs`: a recursive inotify watch on
-//!   a monorepo runs the machine out of watches), so an edit deep in a clone is seen within
-//!   `max_age`, which is how stale the title bar already was between its reads.
+//! - **Watched, where a watch covers the working tree.** The app's one watch per repo
+//!   (`branchwatch.rs`) listens to a clone's whole working tree, asks whether what moved is
+//!   anything git would show, and [`Shared::touch`]es it when it is; while it covers a repo
+//!   ([`Shared::cover`]) the repo's answer is read again on what moved, and otherwise only after
+//!   [`WATCHED_FOR`] or [`WATCHED_SHARE`] times what its last read took, whichever is longer:
+//!   the backstop for a watch that went quiet without saying so. A monorepo nobody touches
+//!   costs about one `status` in twenty minutes. Where to watch is asked of whoever
+//!   [`watch_with`] names ([`want_watched`]); with nobody named — the CLI — nothing is watched.
+//! - **And at most `max_age` old where nothing watches**, the backstop for a working-tree edit
+//!   nothing reported: the plane's own watcher is not recursive, by design (`planewatch.rs`: a
+//!   recursive inotify watch on a monorepo runs the machine out of watches), and on inotify a
+//!   clone past the app's share of the watches is not covered either.
+//! - **Never more often than the idle budget allows.** However short the backstop, an answer
+//!   is kept for at least [`IDLE_SHARE`] times what it last took to read, so reading a repo
+//!   no watch covers again on a clock takes at most 1/[`IDLE_SHARE`] of the time: a monorepo
+//!   whose `status` takes a second is read every few minutes, not every ten seconds.
 //!
 //! In memory and in this process only: nothing is written, so there is no store to give a tier
 //! (ADR 0069). It is plain core code, so the host that ADR 0068 moves auto-save and the watcher
@@ -23,8 +35,25 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Condvar, Mutex, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, PoisonError, RwLock};
 use std::time::{Duration, Instant};
+
+/// How long an answer for a repo a watch covers is kept, at least, while the watch says nothing
+/// moved: the backstop for a watch that stopped hearing without an error (D-88l's rule for the
+/// kill switch: a dead watch means a slower look, never none).
+pub const WATCHED_FOR: Duration = Duration::from_secs(300);
+
+/// A covered repo's answer is kept for at least this many times what its read took. Measured
+/// at 300,000 files, a `status` took 1.2 s of wall time and about 6 s of CPU across git's
+/// threads, so a thousandth of the wall time is the half a percent of a core SC-18's idle
+/// budget allows (V8): one read in twenty minutes.
+pub const WATCHED_SHARE: u32 = 1000;
+
+/// A repo no watch covers has its answer kept for at least this many times what its read
+/// took, past the store's own backstop: a clock that never takes more than 1/200 of the wall
+/// time. Lower than [`WATCHED_SHARE`] because nothing else tells this repo's edits; a
+/// `status` reading on several threads can take a few times that in CPU.
+pub const IDLE_SHARE: u32 = 200;
 
 /// Each repo's last answer, shared by every caller.
 pub struct Shared<V> {
@@ -45,11 +74,15 @@ struct State<V> {
     generation: u64,
     /// One computation is running, and every other caller waits for it.
     computing: bool,
+    /// A watch covers the repo's working tree and touches it when something there moves.
+    covered: bool,
 }
 
 struct Kept<V> {
     value: V,
     at: Instant,
+    /// How long computing it took.
+    cost: Duration,
     generation: u64,
     stamp: Stamp,
 }
@@ -60,6 +93,7 @@ impl<V> Default for State<V> {
             kept: None,
             generation: 0,
             computing: false,
+            covered: false,
         }
     }
 }
@@ -96,7 +130,7 @@ impl<V: Clone> Shared<V> {
         loop {
             if let Some(kept) = &state.kept
                 && kept.generation == state.generation
-                && kept.at.elapsed() < self.max_age
+                && kept.at.elapsed() < self.kept_for(state.covered, kept.cost)
                 && kept.stamp == Stamp::of(repo)
             {
                 return kept.value.clone();
@@ -116,17 +150,54 @@ impl<V: Clone> Shared<V> {
         // next caller sees.
         let stamp = Stamp::of(repo);
         let done = Done { slot: &slot };
+        let started = Instant::now();
         let value = compute();
         let mut state = slot.state.lock().unwrap_or_else(PoisonError::into_inner);
         state.kept = Some(Kept {
             value: value.clone(),
             at: Instant::now(),
+            cost: started.elapsed(),
             generation,
             stamp,
         });
         drop(state);
         drop(done);
         value
+    }
+
+    /// How long an answer that took `cost` is kept without anything saying the repo moved.
+    fn kept_for(&self, covered: bool, cost: Duration) -> Duration {
+        if covered {
+            WATCHED_FOR.max(cost.saturating_mul(WATCHED_SHARE))
+        } else {
+            self.max_age.max(cost.saturating_mul(IDLE_SHARE))
+        }
+    }
+
+    /// Whether a watch covers `repo`'s working tree now ([`Shared::cover`]).
+    pub fn covered(&self, repo: &Path) -> bool {
+        self.slots
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(repo)
+            .is_some_and(|slot| {
+                slot.state
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .covered
+            })
+    }
+
+    /// A watch now covers `repo`'s whole working tree (`true`) and will [`Shared::touch`] it
+    /// when anything there moves, or no longer does (`false`). A repo a watch stopped covering
+    /// is read again at its next ask: what moved while nothing listened is not known.
+    pub fn cover(&self, repo: &Path, covered: bool) {
+        let slot = self.slot(repo);
+        let mut state = slot.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if state.covered && !covered {
+            state.generation += 1;
+        }
+        state.covered = covered;
     }
 
     /// Something changed in `repo`: the next [`Shared::get`] computes again, and an answer
@@ -156,6 +227,42 @@ impl<V: Clone> Shared<V> {
                 .unwrap_or_else(PoisonError::into_inner)
                 .generation += 1;
         }
+    }
+}
+
+/// A clone whose standing is shared and that no watch covers yet: what the app needs to find
+/// its working tree the way the explorer does (`charter_core::files::root`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Wanted {
+    pub plane: PathBuf,
+    pub workspace: String,
+    pub repo: String,
+    /// The clone's folder, as the standing reads it.
+    pub path: PathBuf,
+}
+
+/// Who is asked to watch a clone whose standing is shared ([`want_watched`]).
+pub type Watching = Arc<dyn Fn(&Wanted) + Send + Sync>;
+
+static WATCHING: RwLock<Option<Watching>> = RwLock::new(None);
+
+/// Names who watches the working trees of the clones whose standing is shared: the app, which
+/// holds the one watch per repo. Until it is named — and in the CLI, which never names one —
+/// nothing is watched and every standing keeps its clock.
+pub fn watch_with(watching: Watching) {
+    *WATCHING.write().unwrap_or_else(PoisonError::into_inner) = Some(watching);
+}
+
+/// Asks whoever [`watch_with`] named to watch `wanted`'s working tree. It is asked on every
+/// shared read of a clone no watch covers yet, and answers at once: the watch is set up on a
+/// thread of its own, and covers the clone ([`Shared::cover`]) once it is listening.
+pub fn want_watched(wanted: &Wanted) {
+    let watching = WATCHING
+        .read()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    if let Some(watching) = watching {
+        watching(wanted);
     }
 }
 
@@ -429,6 +536,57 @@ mod tests {
         });
 
         assert_eq!(shared.get(repo.path(), || 2), 2);
+    }
+
+    #[test]
+    fn a_watched_repos_answer_outlives_the_backstop_until_the_watch_says_it_moved() {
+        // FD-11: a repo whose working tree is watched is read again when the watch says so,
+        // not on a clock, so a monorepo nobody touches costs no `status` at all.
+        let shared = Shared::new(Duration::from_millis(30));
+        let counted = Counted::new();
+        let repo = a_dir();
+        shared.cover(repo.path(), true);
+
+        shared.get(repo.path(), || counted.run(0));
+        std::thread::sleep(Duration::from_millis(60));
+        let idle = shared.get(repo.path(), || counted.run(0));
+        shared.touch(repo.path());
+        let moved = shared.get(repo.path(), || counted.run(0));
+
+        assert_eq!((idle, moved), (1, 2));
+        assert!(shared.covered(repo.path()));
+    }
+
+    #[test]
+    fn a_watch_that_ends_has_the_repo_read_again() {
+        // What moved while nothing watched is not known: the next ask reads.
+        let shared = Shared::new(Duration::from_secs(60));
+        let counted = Counted::new();
+        let repo = a_dir();
+        shared.cover(repo.path(), true);
+        shared.get(repo.path(), || counted.run(0));
+
+        shared.cover(repo.path(), false);
+        let again = shared.get(repo.path(), || counted.run(0));
+
+        assert_eq!(again, 2);
+        assert!(!shared.covered(repo.path()));
+    }
+
+    #[test]
+    fn an_unwatched_repo_whose_read_is_costly_is_read_again_only_within_the_idle_budget() {
+        // A repo no watch covers is read again on the clock, but never more often than keeps
+        // the reads to 1/IDLE_SHARE of the time: a read of 20 ms waits at least four seconds,
+        // however short the backstop.
+        let shared = Shared::new(Duration::from_millis(30));
+        let counted = Counted::new();
+        let repo = a_dir();
+
+        shared.get(repo.path(), || counted.run(20));
+        std::thread::sleep(Duration::from_millis(60));
+        let again = shared.get(repo.path(), || counted.run(20));
+
+        assert_eq!(again, 1);
     }
 
     /// A repo with one commit, through `testgit`, so no developer's signer is asked.

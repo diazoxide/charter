@@ -457,12 +457,17 @@ fn spawn_with(dir: &Path, args: &[&str], extra: &Extra) -> Result<Child, GitUnav
     Ok(crate::forklock::spawn(&mut cmd)?)
 }
 
-/// `core.untrackedCache=true`, for a `status` and for the `git add` of a save (FD-11): git
-/// remembers which directories held no untracked files by their modification time, so a
-/// status in a large tree stops reading every directory. A read-only status
-/// (`--no-optional-locks`) uses a cache the index already holds and never writes one, so the
-/// save's `add`, which writes the index anyway, is what adds it. Git's own `feature.manyFiles`
-/// turns it on the same way.
+/// `core.untrackedCache=true`, for the `git add` of a save (FD-11): git remembers which
+/// directories held no untracked files by their modification time, so a status in a large tree
+/// stops reading every directory. The save's `add` writes the index anyway, so it is what adds
+/// the cache; git's own `feature.manyFiles` turns it on the same way.
+///
+/// **Not for charter's reads.** Measured on git 2.50 at 300,000 files: a read-only status
+/// (`--no-optional-locks`) uses a cache the index holds whether or not it is handed this `-c`,
+/// never writes one back — so the cache is only as fresh as the last status that could write
+/// it, the operator's own — and under `--untracked-files=all` git does not consult it at all.
+/// The branch reader (gitoxide) never reads it either. What keeps an idle repo from costing a
+/// status is the working-tree watch (`standings`), not this cache.
 pub const UNTRACKED_CACHE: &str = "core.untrackedCache=true";
 
 /// [`UNTRACKED_CACHE`] for `dir`, unless the operator's config already says what to do about
@@ -475,7 +480,7 @@ pub fn untracked_cache(dir: &Path) -> Option<&'static str> {
 }
 
 /// `args`, led by `-c` [`UNTRACKED_CACHE`] when [`untracked_cache`] says the operator's config
-/// leaves it to charter: what a standing's `status` and a save's `add` run (FD-11).
+/// leaves it to charter: what a save's `add` runs (FD-11).
 pub fn with_untracked_cache<'a>(dir: &Path, args: &[&'a str]) -> Vec<&'a str> {
     let mut out: Vec<&'a str> = untracked_cache(dir)
         .map(|cache| vec!["-c", cache])

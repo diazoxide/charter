@@ -127,6 +127,8 @@ fn rows(root: &Path) -> (Vec<AlertRow>, Option<String>) {
         root,
         active: None,
         standing: root,
+        // The app holds the plane's shared standing (FD-11): the root's dirt is read from it.
+        shared: true,
     });
     (
         reading
