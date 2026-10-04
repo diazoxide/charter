@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791095908418,
+  "lastUpdate": 1791099804595,
   "repoUrl": "https://github.com/diazoxide/charter",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -1008,6 +1008,48 @@ window.BENCHMARK_DATA = {
             "value": 101.14287999999999,
             "unit": "ms",
             "extra": "median of 5 runs: 100.482, 100.926, 101.143, 101.646, 102.024 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "65536fa8d6d99828c92d0809f9fba4c765e5b990",
+          "message": "FD-10 review: a partial watch is no watch; #935's render count stays open\n\nMust-fix from the review of f660a58:\n\n- A watch registration the platform refused was dropped, and Held trusted\n  any running watch, so a store left unwatched served stale panels, and\n  the sidebar, for ever (the sidebar's hole dated from FD-10b).\n  watchset::follow now answers the wanted folders the platform would not\n  watch that are still there. The plane watch keeps them and says its\n  Standing: Partial, WholeAgain (once, after a gap) or Whole. Held serves\n  the model only when the watch is Whole. On Partial it reads fresh, and\n  on WholeAgain it rebuilds the model first. A root the platform will\n  not watch fails Watch::start. A test-only refusal list in watchset\n  plays the platform; the tests failed before the fix.\n- The held-plane watch test is robust on macOS: in this crate's tests\n  the plane watch runs on notify's poller (planewatch::Platform), as\n  planewatch's own tests do.\n\nFold-ins:\n- A workspace with a store that could not be read is read again on\n  every ask, not held.\n- The memory commands tell the model inside their blocking task. The\n  todo commands tell it whether or not the write succeeded, as the\n  persona commands do.\n- The property test also writes workspace.json and removes clones.\n\nDecided in review:\n- D-FD10j #935's added acceptance line (count PlaneView renders) is not\n  met for a write in the workspace in front, whose panels state lives in\n  PlaneView. This branch refers to #935 and #650 instead of closing them,\n  and the render-count half is tracked in #1160. Supersedes the closing\n  lines for #935 and #650 in f660a58: the train closes #934 and refers\n  to #935 and #650.\n- D-FD10k A folder that vanished between the listing and its watch is\n  not a failure (the next burst lists again); one still on disk that the\n  platform refused is.\n\nCloses #934\nRefs #935\nRefs #650\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-04T11:41:38+04:00",
+          "tree_id": "18944feab7f68e5a4ba272cf3edb16b1d90f60f7",
+          "url": "https://github.com/diazoxide/charter/commit/65536fa8d6d99828c92d0809f9fba4c765e5b990"
+        },
+        "date": 1791099803255,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.5650584999999999,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.553, 0.558, 0.565, 0.583, 0.585 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 17.1597315,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.555, 17.076, 17.160, 17.220, 17.516 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 105.064515,
+            "unit": "ms",
+            "extra": "median of 5 runs: 104.538, 104.891, 105.065, 106.747, 106.814 ms"
           }
         ]
       }
