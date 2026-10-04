@@ -9,7 +9,6 @@ import {
   ask,
   jobInTheWindow,
   closeTheProjectsOfItsOwn,
-  heldToBudget,
   inFront,
   measureSwitches,
   openFromTheStrip,
@@ -150,8 +149,14 @@ describe(`switching among ${OPEN} open projects`, function () {
     logLine("project-switch.jsonl", { budgetMs: BUDGET_MS, ...switches });
     // In the job's own output too, where a reviewer reads it without downloading anything.
     console.log(`L9 project switch, ${BUDGET_MS} ms budget: ${JSON.stringify(switches)}`);
-    // The reading beside it, never a gate here: L9 is release absolute (ADR 0086).
-    console.log(`${heldToBudget(switches, ROUNDS).sentence} (reported, not gated on CI)`);
+    // Evidence beside it, never a verdict: L9 is release absolute (ADR 0086), and this setup is
+    // not L9's — the launch project carries the chats earlier specs left in it (about fifty),
+    // where L9's projects have one chat each. So no "met" or "MISSED" is printed here.
+    console.log(
+      `L9 evidence (launch project with ~50 chats, not L9's one chat each; not gated on CI): ` +
+        `p95 ${Math.round(switches.p95)} ms against a ${BUDGET_MS} ms budget, ` +
+        `${switches.samples} switches among ${switches.projects} projects`,
+    );
 
     expect(switches.samples).toBe(OPEN * ROUNDS);
   });
