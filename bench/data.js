@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791102895403,
+  "lastUpdate": 1791115521445,
   "repoUrl": "https://github.com/diazoxide/charter",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -1092,6 +1092,48 @@ window.BENCHMARK_DATA = {
             "value": 101.3700155,
             "unit": "ms",
             "extra": "median of 5 runs: 100.854, 101.215, 101.370, 101.920, 102.154 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "d15c62961c544de087cc9b1ce74189a05e954e23",
+          "message": "mutants: install the sandbox's programs and fetch the whole lock\n\nThe nightly's baseline (charter-core's own tests) went red on main e92d89b\nwith six failures that are its runner, not the code: the sandboxed-start\ntests refuse without bubblewrap and socat, which ci.yml installs and\nmutants.yml did not, and the gitoxide guard reads `cargo metadata\n--offline` over the whole workspace, which a `--package charter-core`\nbuild never downloads. The shards had the same gap, where it is worse:\nevery mutant those tests cover read as caught. Both jobs now install the\ntwo programs and run `cargo fetch --locked`.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-04T16:04:06+04:00",
+          "tree_id": "119164f88e2573d7c24715bb6507e9d7a9e0b091",
+          "url": "https://github.com/diazoxide/charter/commit/d15c62961c544de087cc9b1ce74189a05e954e23"
+        },
+        "date": 1791115520256,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.5799735,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.577, 0.579, 0.580, 0.580, 0.589 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.9627695,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.395, 16.729, 16.963, 17.227, 17.243 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 105.44758,
+            "unit": "ms",
+            "extra": "median of 5 runs: 103.376, 103.789, 105.448, 105.873, 106.176 ms"
           }
         ]
       }
