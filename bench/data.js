@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791081215199,
+  "lastUpdate": 1791084457501,
   "repoUrl": "https://github.com/diazoxide/charter",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -840,6 +840,48 @@ window.BENCHMARK_DATA = {
             "value": 105.1376075,
             "unit": "ms",
             "extra": "median of 5 runs: 104.246, 104.682, 105.138, 105.485, 107.709 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "ffba151e07b37cdf447cc954dcb5071e2f1a5066",
+          "message": "FM-12: measure ⌘P, ⌘⇧F and status on 100,000- and 300,000-file repos\n\nAn ignored test, search_is_measured_on_large_repos.rs, generates a\nrealistic repo: nested packages, mixed kinds and sizes, about 6%\nbinaries, and ignored build output and dependencies. It times the core\ncalls the app makes:\n- ⌘P: a palette session's first find, and each keystroke;\n- ⌘⇧F: the first hit and a 200-line page, for common, rare and absent\n  queries, and a whole scan;\n- status: a read through the bounded reader child.\n\nIt holds the results to new budget rows G2–G4 in docs/spec.md:\n- a ⌘P keystroke within L1's 50 ms;\n- a first find within 3 s;\n- a common query's first hit within 1 s;\n- status within the reader's 30 s deadline.\n\nstress.yml's new `search at scale` job runs it at both sizes on\nmacOS and Ubuntu, as evidence on main and nightly only (V70).\n\nNumbers (macOS, loaded) are on #1115.\n- ⌘P meets L1 at both sizes: 25 ms at worst.\n- A common ⌘⇧F query's first hit takes 0.19 s at 100,000 files and\n  0.57 s at 300,000, warm.\n- A rare query, or one found nowhere, fills no 10 s page: the whole\n  scan takes 61–131 s, the speed this machine reads the files at all.\n\nNo index is built. That one case goes grill → ADR in M52 (#1153),\ntogether with a parallel walk, status at scale (about 4× git status\nat 300,000), and the Linux numbers, which the new job will post.\n\nRefs #1115\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-04T07:25:30+04:00",
+          "tree_id": "cb3cafae6a9a6285036adb467894998602c79583",
+          "url": "https://github.com/diazoxide/charter/commit/ffba151e07b37cdf447cc954dcb5071e2f1a5066"
+        },
+        "date": 1791084456691,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.5901860000000001,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.580, 0.587, 0.590, 0.597, 0.604 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.741025999999998,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.558, 16.711, 16.741, 17.198, 17.373 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 103.73469449999999,
+            "unit": "ms",
+            "extra": "median of 5 runs: 102.264, 103.300, 103.735, 105.377, 106.214 ms"
           }
         ]
       }
