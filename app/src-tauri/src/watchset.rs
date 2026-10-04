@@ -159,26 +159,91 @@ fn rest_of_burst(
 
 /// Watches every folder of `wanted`, non-recursively, and stops watching the ones in `watched`
 /// it no longer names; `watched` is kept as what is watched now.
+///
+/// **Answers the folders of `wanted` the platform would not watch**, which are still there:
+/// a watcher that drops one and goes on as if it watched the whole set serves what it held
+/// for that folder for ever (the FD-10 review). A caller that trusts its watch to tell it
+/// everything treats a non-empty answer as not watching. The next call tries them again.
+#[must_use = "a folder the platform would not watch is one nothing hears about"]
 pub(crate) fn follow(
     watcher: &mut impl notify::Watcher,
     watched: &mut HashSet<PathBuf>,
     wanted: HashSet<PathBuf>,
-) {
+) -> HashSet<PathBuf> {
     let stale: Vec<PathBuf> = watched.difference(&wanted).cloned().collect();
     for path in stale {
         // An error is a watch the platform has already dropped with its directory.
         let _ = watcher.unwatch(&path);
         watched.remove(&path);
     }
+    let mut unwatched = HashSet::new();
     for path in wanted {
         if watched.contains(&path) {
             continue;
         }
-        // A directory that went between the listing and here is simply not watched; the next
-        // batch lists again.
-        if watcher.watch(&path, RecursiveMode::NonRecursive).is_ok() {
-            watched.insert(path);
+        match watch_one(watcher, &path) {
+            Ok(()) => {
+                watched.insert(path);
+            }
+            // A directory that went between the listing and here is simply not watched; the
+            // next batch lists again.
+            Err(_) if !is_a_dir(&path) => {}
+            Err(why) => {
+                tracing::warn!("charter: {} is not watched ({why})", path.display());
+                unwatched.insert(path);
+            }
         }
+    }
+    unwatched
+}
+
+/// Whether `path` is a directory itself, not a link to one.
+fn is_a_dir(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|found| found.file_type().is_dir())
+}
+
+/// One folder watched, or why not — refused here in this crate's tests when a test says so
+/// ([`refuse`]).
+fn watch_one(watcher: &mut impl notify::Watcher, path: &Path) -> notify::Result<()> {
+    #[cfg(test)]
+    if refuse::refused(path) {
+        return Err(notify::Error::generic("refused by the test"));
+    }
+    watcher.watch(path, RecursiveMode::NonRecursive)
+}
+
+/// The platform refusing a watch, played by the tests: a folder named here is never watched,
+/// whichever watcher is asked. Paths are each test's own, under a directory of its own, so
+/// tests running at once do not see each other's.
+#[cfg(test)]
+pub(crate) mod refuse {
+    use std::path::{Path, PathBuf};
+    use std::sync::{Mutex, PoisonError};
+
+    static REFUSED: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+    /// `path` is refused from now on.
+    pub(crate) fn refuse(path: &Path) {
+        REFUSED
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(path.to_path_buf());
+    }
+
+    /// `path` is watched again when next asked.
+    pub(crate) fn allow(path: &Path) {
+        REFUSED
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|refused| refused != path);
+    }
+
+    pub(super) fn refused(path: &Path) -> bool {
+        REFUSED
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .any(|refused| refused == path)
     }
 }
 

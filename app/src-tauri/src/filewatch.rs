@@ -228,7 +228,10 @@ impl<W: notify::Watcher> Inner<W> {
             .map(|(_, dir)| dir.clone())
             .collect();
         if let Some(watcher) = self.watcher.as_mut() {
-            crate::watchset::follow(watcher, &mut self.watched, wanted);
+            // A folder the platform would not watch is tried again on the next follow, and
+            // until then the explorer does not hear its changes. Saying so to the window is
+            // #1160's, not this watch's yet.
+            let _unwatched = crate::watchset::follow(watcher, &mut self.watched, wanted);
         }
     }
 }

@@ -202,7 +202,41 @@ const MOST_PATHS: usize = 256;
 struct Inner<W: notify::Watcher> {
     watcher: Option<W>,
     watched: HashSet<PathBuf>,
+    /// The folders the platform would not watch at the last follow, which are still there.
+    unwatched: HashSet<PathBuf>,
+    /// Whether any folder went unwatched since [`Watch::standing`] last said the watch was
+    /// whole.
+    lapsed: bool,
     rewatch: Rewatch,
+}
+
+/// How far a plane's watch can be trusted to tell everything the panels and the sidebar read
+/// ([`Watch::standing`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Standing {
+    /// Every folder is watched, and has been since this was last asked.
+    Whole,
+    /// Every folder is watched now, but some went unwatched since this was last asked: what
+    /// was held from the watch's word over that gap has to be read again.
+    WholeAgain,
+    /// Some folder the platform would not watch: read the disk, not what was held.
+    Partial,
+}
+
+/// The watcher the app's plane watch runs on: the platform's own (FSEvents, inotify). In this
+/// crate's tests on macOS, notify's poller, looking every 50 ms: FSEvents gives no bound on
+/// when it delivers (#577, #756), and a test of a held plane waits on it.
+#[cfg(not(all(test, target_os = "macos")))]
+pub type Platform = notify::RecommendedWatcher;
+#[cfg(all(test, target_os = "macos"))]
+pub type Platform = notify::PollWatcher;
+
+/// How [`Platform`] is configured.
+fn platform_config() -> notify::Config {
+    let config = notify::Config::default();
+    #[cfg(all(test, target_os = "macos"))]
+    let config = config.with_poll_interval(Duration::from_millis(50));
+    config
 }
 
 /// The least time between two drops of every watch ([`Rewatch`]).
@@ -250,14 +284,29 @@ impl Rewatch {
 /// build trees it was measured handing a stream a change 4 to 15 seconds late, and a stream
 /// nothing at all for minutes. What this module decides — fold a burst, follow a new workspace,
 /// fall silent when dropped — is the same whichever watcher feeds it.
-pub struct Watch<W: notify::Watcher = notify::RecommendedWatcher> {
+pub struct Watch<W: notify::Watcher = Platform> {
     inner: Arc<Mutex<Inner<W>>>,
 }
 
 impl Watch {
     /// Starts watching `root` and tells `changed` about `plane` whenever it moves.
     pub fn start(plane: PlaneId, root: &Path, changed: Changed) -> notify::Result<Self> {
-        Self::start_with(plane, root, changed, notify::Config::default())
+        Self::start_with(plane, root, changed, platform_config())
+    }
+}
+
+impl<W: notify::Watcher> Watch<W> {
+    /// Whether this watch tells everything the panels and the sidebar read, and whether it
+    /// has since it was last asked. `WholeAgain` is said once: asking again says `Whole`.
+    pub fn standing(&self) -> Standing {
+        let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        if !inner.unwatched.is_empty() {
+            Standing::Partial
+        } else if std::mem::take(&mut inner.lapsed) {
+            Standing::WholeAgain
+        } else {
+            Standing::Whole
+        }
     }
 }
 
@@ -274,12 +323,22 @@ impl<W: notify::Watcher + Send + 'static> Watch<W> {
         let inner = Arc::new(Mutex::new(Inner {
             watcher: Some(watcher),
             watched: HashSet::new(),
+            unwatched: HashSet::new(),
+            lapsed: false,
             rewatch: Rewatch::default(),
         }));
-        inner
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .follow(root);
+        {
+            let mut inner = inner.lock().unwrap_or_else(PoisonError::into_inner);
+            inner.follow(root);
+            // The root is where a workspace or a persona arriving is heard: without it the
+            // watch could never become whole, so it is no watch.
+            if inner.unwatched.contains(root) {
+                return Err(notify::Error::generic(&format!(
+                    "the platform would not watch {}",
+                    root.display()
+                )));
+            }
+        }
         let handle: Weak<Mutex<Inner<W>>> = Arc::downgrade(&inner);
         let at = root.to_path_buf();
         // The platform reports paths as the disk spells them, which a root opened through a
@@ -349,7 +408,10 @@ impl<W: notify::Watcher> Inner<W> {
     /// Watches what the plane has now, and stops watching what it no longer has.
     fn follow(&mut self, root: &Path) {
         if let Some(watcher) = self.watcher.as_mut() {
-            crate::watchset::follow(watcher, &mut self.watched, wanted(root));
+            self.unwatched = crate::watchset::follow(watcher, &mut self.watched, wanted(root));
+            if !self.unwatched.is_empty() {
+                self.lapsed = true;
+            }
         }
     }
 
@@ -637,6 +699,49 @@ mod tests {
         std::fs::write(root.join("workspaces/beta/todos/new.md"), "# new\n").expect("a todo");
         told.recv_timeout(PATIENCE)
             .expect("told about a todo in the new workspace");
+    }
+
+    #[test]
+    fn a_folder_the_platform_will_not_watch_leaves_the_watch_partial_until_it_is_watched() {
+        // A watch that dropped a folder's registration and went on as if it watched the whole
+        // plane served panels that never moved again (the FD-10 review). The watch says it is
+        // partial, so its readers read the disk; once it watches everything again it says so
+        // once, so they rebuild what they held over the gap.
+        let plane = plane_with_todos(&[]);
+        let root = plane.path().canonicalize().expect("canonical");
+        let todos = root.join("workspaces/alpha/todos");
+        crate::watchset::refuse::refuse(&todos);
+        let (watch, told) = watching(&root);
+        assert_eq!(watch.standing(), Standing::Partial);
+        assert_eq!(
+            watch.standing(),
+            Standing::Partial,
+            "still partial when asked again"
+        );
+
+        crate::watchset::refuse::allow(&todos);
+        std::fs::create_dir_all(root.join("workspaces/beta")).expect("a change it is told");
+        told.recv_timeout(PATIENCE).expect("told about beta");
+
+        assert_eq!(watch.standing(), Standing::WholeAgain);
+        assert_eq!(watch.standing(), Standing::Whole);
+    }
+
+    #[test]
+    fn a_root_the_platform_will_not_watch_is_no_watch_at_all() {
+        let plane = plane_with_todos(&[]);
+        let root = plane.path().canonicalize().expect("canonical");
+        crate::watchset::refuse::refuse(&root);
+        let started = Watch::<Source>::start_with(
+            id(&root),
+            &root,
+            Arc::new(|_, _| {}),
+            notify::Config::default().with_poll_interval(LOOK_EVERY),
+        );
+        assert!(
+            started.is_err(),
+            "a watch that cannot watch the root started"
+        );
     }
 
     /// `git` in `dir`, through charter's hardened runner, never signing.
