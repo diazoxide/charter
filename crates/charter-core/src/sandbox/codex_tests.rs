@@ -778,6 +778,71 @@ fn a_wrapped_codex_chat_with_no_confinement_is_refused() {
     );
 }
 
+/// The line `applied` gives a Codex chat in `cwd` whose hooks report on `socket`.
+fn line_reporting_on(
+    applied: &Applied,
+    cwd: &Path,
+    socket: Option<&Path>,
+    confinement: &Confinement,
+) -> Line {
+    applied
+        .line(
+            Words {
+                program: "/opt/codex".to_owned(),
+                command: Vec::new(),
+                armed: Vec::new(),
+                charters: Vec::new(),
+            },
+            &At {
+                cwd: Some(cwd),
+                hook_socket: socket,
+                confinement: Some(confinement),
+            },
+        )
+        .expect("starts")
+}
+
+/// A file denial does not stop a connect to a unix socket, which Seatbelt judges as network.
+/// So the wrap names no unix socket but the one the chat's hooks report on, and none at all
+/// when it has none: a chat cannot reach `charterd.sock` through the credentials' folder it
+/// cannot read (FD-27, ADR 0068 §5). Ported from the test of Codex's own profile, which #1123
+/// replaced with this wrap.
+#[test]
+fn the_wrap_allows_codex_no_unix_socket_but_the_hook_socket() {
+    let plane = plane_saying(ON);
+    let cwd = plane.path().join("w");
+    std::fs::create_dir(&cwd).expect("a workspace");
+    let home = tempfile::tempdir().expect("a home");
+    let applied = for_start(
+        Harness::Codex,
+        plane.path(),
+        &machine_at(home.path(), Os::MacOs),
+        &|_| true,
+    )
+    .expect("starts")
+    .expect("sandboxed");
+    let confinement = applied.confine().expect("confined").expect("a wrap");
+    let unix = |line: &Line| -> Vec<String> {
+        line.args
+            .iter()
+            .flat_map(|arg| arg.lines())
+            .filter(|rule| rule.to_lowercase().contains("unix"))
+            .map(str::to_owned)
+            .collect()
+    };
+    let none = line_reporting_on(&applied, &cwd, None, &confinement);
+    assert_eq!(unix(&none), Vec::<String>::new(), "{:?}", none.args);
+    let hook = plane.path().join("hooks.sock");
+    let hooked = line_reporting_on(&applied, &cwd, Some(&hook), &confinement);
+    assert_eq!(
+        unix(&hooked),
+        [format!(
+            "(allow network-outbound (remote unix-socket (path-literal \"{}\")))",
+            real(plane.path()).join("hooks.sock").display()
+        )]
+    );
+}
+
 /// The wrap, applied for real: what a Codex chat could do under Codex's own sandbox, measured
 /// in earlier rounds, refused under charter's.
 #[cfg(target_os = "macos")]
@@ -1182,5 +1247,96 @@ mod live {
                 wrapped.confinement.proxy_port()
             )
         ));
+    }
+
+    /// A home reached through a link (a dotfiles `~/.config`, a config root under `/var` or
+    /// `/tmp`): the human scopes' credentials are still unreadable, because Seatbelt matches the
+    /// path as the kernel names it and the wrap writes each denial so (FD-27; ported from the
+    /// opencode wrap's test, the same profile).
+    #[test]
+    fn a_denial_under_a_linked_home_is_still_held() {
+        let plane = plane_saying(ON);
+        let cwd = plane.path().join("work");
+        std::fs::create_dir(&cwd).expect("a workspace");
+        let homes = tempfile::tempdir().expect("homes");
+        let real_home = homes.path().join("real");
+        let credentials = real_home.join(".config/charter/charterd");
+        std::fs::create_dir_all(&credentials).expect("the credentials' directory");
+        std::fs::write(credentials.join("local-ui"), "c0ffee").expect("a credential");
+        let linked_home = homes.path().join("linked");
+        std::os::unix::fs::symlink(&real_home, &linked_home).expect("a linked home");
+        let applied = for_start(
+            Harness::Codex,
+            plane.path(),
+            &machine_at(&linked_home, Os::MacOs),
+            &|_| true,
+        )
+        .expect("starts")
+        .expect("sandboxed");
+        let confinement = applied.confine().expect("confined").expect("a wrap");
+        let line = line_reporting_on(&applied, &cwd, None, &confinement);
+        // A control: the wrap reads what no class denies.
+        assert!(ran_in(
+            &line,
+            &cwd,
+            &format!("cat '{}'", plane.path().join("charter.toml").display())
+        ));
+        for path in [
+            linked_home.join(".config/charter/charterd/local-ui"),
+            credentials.join("local-ui"),
+        ] {
+            assert!(
+                !ran_in(&line, &cwd, &format!("cat '{}'", path.display())),
+                "read {} under the wrap",
+                path.display()
+            );
+        }
+    }
+
+    /// The wrap connects to no unix socket but the hook socket: a socket in the credentials'
+    /// folder, and one anywhere else, is refused (FD-27, ADR 0068 §5; ported from the opencode
+    /// wrap's test, the same profile).
+    #[test]
+    fn the_wrap_connects_to_no_unix_socket_but_the_hook_socket() {
+        let plane = plane_saying(ON);
+        let cwd = plane.path().join("work");
+        std::fs::create_dir(&cwd).expect("a workspace");
+        let home = tempfile::tempdir().expect("a home");
+        let credentials = home.path().join(".config/charter/charterd");
+        std::fs::create_dir_all(&credentials).expect("the credentials' directory");
+        let sockets = tempfile::tempdir().expect("sockets");
+        let host = credentials.join("charterd.sock");
+        let other = sockets.path().join("other.sock");
+        let hook = sockets.path().join("hooks.sock");
+        let _listening: Vec<std::os::unix::net::UnixListener> = [&host, &other, &hook]
+            .into_iter()
+            .map(|path| std::os::unix::net::UnixListener::bind(path).expect("a socket"))
+            .collect();
+        let applied = for_start(
+            Harness::Codex,
+            plane.path(),
+            &machine_at(home.path(), Os::MacOs),
+            &|_| true,
+        )
+        .expect("starts")
+        .expect("sandboxed");
+        let confinement = applied.confine().expect("confined").expect("a wrap");
+        let line = line_reporting_on(&applied, &cwd, Some(&hook), &confinement);
+        let connects = |socket: &Path| {
+            // `perl`, on every macOS: macOS's `nc -U` reports failure even on a connect that
+            // succeeded.
+            let probe = "IO::Socket::UNIX->new(Peer => $ARGV[0]) or exit 1";
+            ran_in(
+                &line,
+                &cwd,
+                &format!(
+                    "/usr/bin/perl -MIO::Socket::UNIX -e '{probe}' '{}'",
+                    socket.display()
+                ),
+            )
+        };
+        assert!(connects(&hook), "the hook socket");
+        assert!(!connects(&host), "charterd.sock was reached");
+        assert!(!connects(&other), "another unix socket was reached");
     }
 }

@@ -677,10 +677,11 @@ applies V7, V16a and V75.
    - **Answering is `local-ui`'s and `approval`'s** (V75), and an ask that elicits a secret is
      `local-ui`'s alone. Which asks elicit a secret is the host's to say; a host that does not
      say is taken to hold one, so the check fails closed.
-   - **`remote-link` does not answer.** ADR 0078's amendment of this section lets a runner's
-     link carry an answer that a desktop human scope sent. V75, ruled later, names only
-     `local-ui` and `approval`. Until the operator rules on the two together, `remote-link` is
-     refused `answer`, which is the narrower reading.
+   - **Neither `terminal` nor `remote-link` answers, pending an operator ruling.** ADR 0078's
+     amendment of this section lets `terminal` answer on the desktop, and lets a runner's
+     `remote-link` carry an answer that a desktop human scope sent. V75, ruled later, names only
+     `local-ui` and `approval`. These are two conflicts, and both wait on the operator. Until
+     then both scopes are refused `answer`, which fails closed.
 2. **No scope on `charterd.sock` is admitted from inside a chat**, whatever it proves. Every
    such scope is a person's. The listener reads the peer's pid from the socket as it accepts,
    and the host's handshake asks its chats: a peer that is a chat's program, is in a chat's
@@ -690,7 +691,12 @@ applies V7, V16a and V75.
    (`charter_same_user`). §5 already calls this the second layer: the first is item 3.
 3. **A chat's sandbox denies reading and writing `<config>/charterd/`**, where the credentials
    and the socket live, under ADR 0067 §5's class 3, on every harness charter compiles a sandbox
-   for.
+   for. Each compiler writes the path as the kernel names it too, so a config root reached
+   through a link is still denied. **That denial does not stop a connect to the socket:** a
+   sandbox treats connecting to a unix socket as network, not as reading a file. What keeps a
+   chat off `charterd.sock` is that no compiler allows a unix socket beyond the hook socket, and
+   each compiler has a test for that. For Claude Code's own unix-socket default, and for Linux,
+   this is still to be checked (#664).
 4. **`remote-link` is admitted by a proved device, never by a credential file.** The admission
    exchange refuses the scope's word whatever proof comes with it. A host serves a device's link
    only through a call that takes the result of ADR 0078 §3's Noise handshake. RR-13 builds that

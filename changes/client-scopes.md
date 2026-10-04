@@ -6,4 +6,4 @@
   answer an ask, and an ask for a secret only the window. Vault values and settings writes stay
   the window's alone. A process started inside a chat is refused every one of these scopes, even
   when it holds a credential, and a chat's sandbox now denies it the directory those credentials
-  live in. Nothing serves the protocol yet: `charter serve` will (FD-27, #664).
+  live in, also when that directory is reached through a link (FD-27, #664).

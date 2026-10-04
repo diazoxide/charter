@@ -37,9 +37,10 @@
 //!   chat.
 //! - **`editor` has none of these commands.** Its four (`resolve`, `reveal`, `place`,
 //!   `changes`) are ED-2's, and are its alone (ADR 0081).
-//! - **`remote-link` is the session protocol without answers.** ADR 0078 §4 lets it carry an
-//!   answer a desktop human scope sent, but V75 names only `local-ui` and `approval` as
-//!   answerers, so it is refused until a ruling says otherwise.
+//! - **`terminal` and `remote-link` are the session protocol without answers, pending a
+//!   ruling.** ADR 0078 lets `terminal` answer and a runner's `remote-link` carry an answer a
+//!   desktop human scope sent; V75, ruled later, names only `local-ui` and `approval` as
+//!   answerers. Both are refused until the operator rules, which fails closed.
 
 use crate::auth::Scope;
 

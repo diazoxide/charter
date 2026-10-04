@@ -12,7 +12,7 @@
 
 use std::path::{Path, PathBuf};
 
-use super::{Access, Denial, PLANTED, Reach};
+use super::{Access, Denial, PLANTED, Reach, real};
 
 /// Why a profile could not be written: a path holding a control character, which a rule could
 /// not state exactly.
@@ -253,24 +253,6 @@ const DEVICES: &str = "  (literal \"/dev/null\")
   (literal \"/dev/tty\")
   (literal \"/dev/ptmx\")
   (regex #\"^/dev/ttys[0-9]+$\")";
-
-/// `path` as the kernel names it: its longest part that exists, with its links resolved, and
-/// the rest as written.
-pub fn real(path: &Path) -> PathBuf {
-    let mut existing = path.to_path_buf();
-    let mut rest = Vec::new();
-    loop {
-        if let Ok(found) = existing.canonicalize() {
-            let mut out = found;
-            out.extend(rest.into_iter().rev());
-            return out;
-        }
-        match (existing.file_name().map(ToOwned::to_owned), existing.pop()) {
-            (Some(name), true) => rest.push(name),
-            _ => return path.to_path_buf(),
-        }
-    }
-}
 
 /// The variables that point a wrapped chat's traffic at charter's egress proxy. Both cases,
 /// because programs disagree on which they read.

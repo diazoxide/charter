@@ -255,12 +255,12 @@ pub async fn serve(
     io: crate::local::SameUser,
     speaks: Speaks,
     held: &Credentials,
-    chats: &impl crate::local::Chats,
+    chats: &Arc<impl crate::local::Chats>,
 ) -> Result<Link, LinkError> {
     let pid = io.pid();
-    let programs = chats.programs();
+    let chats = Arc::clone(chats);
     within_the_handshake(async {
-        let inside = match crate::local::inside_a_chat(pid, programs).await {
+        let inside = match crate::local::inside_a_chat(pid, chats).await {
             Ok(None) => None,
             Ok(Some(chat)) => Some(format!(
                 "this connection comes from inside a chat (process {pid}, under chat program \

@@ -597,6 +597,101 @@ mod live {
         );
         assert!(proxy.status.success(), "the proxy: {proxy:?}");
     }
+    /// A home reached through a link (a dotfiles `~/.config`, a config root under `/var` or
+    /// `/tmp`): every denial is still held, because Seatbelt matches the path as the kernel
+    /// names it, and the profile writes each denial so. The human scopes' credentials stand for
+    /// every class (FD-27).
+    #[test]
+    fn a_denial_under_a_linked_home_is_still_held() {
+        let plane = plane_saying(ON);
+        let cwd = plane.path().join("work");
+        std::fs::create_dir(&cwd).expect("a workspace");
+        let homes = tempfile::tempdir().expect("homes");
+        let real_home = homes.path().join("real");
+        let credentials = real_home.join(".config/charter/charterd");
+        std::fs::create_dir_all(&credentials).expect("the credentials' directory");
+        std::fs::write(credentials.join("local-ui"), "c0ffee").expect("a credential");
+        let linked_home = homes.path().join("linked");
+        std::os::unix::fs::symlink(&real_home, &linked_home).expect("a linked home");
+        let machine = Machine {
+            env: crate::secrets::Env::of(&[]),
+            home: Some(linked_home.clone()),
+            os: Os::MacOs,
+        };
+        let applied = for_start(Harness::Opencode, plane.path(), &machine, &|_| true)
+            .expect("starts")
+            .expect("sandboxed");
+        let confinement = applied.confine().expect("confined").expect("a wrap");
+        let line = line_in(&applied, &cwd, None, &confinement).expect("starts");
+        // A control: the wrap reads what no class denies.
+        let control = run(
+            &line,
+            &format!("cat '{}'", plane.path().join("charter.toml").display()),
+        );
+        assert!(control.status.success(), "{control:?}");
+
+        for path in [
+            linked_home.join(".config/charter/charterd/local-ui"),
+            credentials.join("local-ui"),
+        ] {
+            let read = run(&line, &format!("cat '{}'", path.display()));
+            assert!(
+                !read.status.success(),
+                "read {} under the wrap: {read:?}",
+                path.display()
+            );
+        }
+    }
+
+    /// A file denial does not stop a connect to a unix socket, which Seatbelt judges as
+    /// network: the wrap refuses it because it allows no unix socket but the hook socket. So a
+    /// socket in the credentials' directory, and one anywhere else, is refused, and the hook
+    /// socket is reached (FD-27, ADR 0068 §5).
+    #[test]
+    fn the_wrap_connects_to_no_unix_socket_but_the_hook_socket() {
+        let plane = plane_saying(ON);
+        let cwd = plane.path().join("work");
+        std::fs::create_dir(&cwd).expect("a workspace");
+        let home = tempfile::tempdir().expect("a home");
+        let credentials = home.path().join(".config/charter/charterd");
+        std::fs::create_dir_all(&credentials).expect("the credentials' directory");
+        let machine = Machine {
+            env: crate::secrets::Env::of(&[]),
+            home: Some(home.path().to_path_buf()),
+            os: Os::MacOs,
+        };
+        let sockets = tempfile::tempdir().expect("sockets");
+        let host = credentials.join("charterd.sock");
+        let other = sockets.path().join("other.sock");
+        let hook = sockets.path().join("hooks.sock");
+        let _listening: Vec<std::os::unix::net::UnixListener> = [&host, &other, &hook]
+            .into_iter()
+            .map(|path| std::os::unix::net::UnixListener::bind(path).expect("a socket"))
+            .collect();
+        let applied = for_start(Harness::Opencode, plane.path(), &machine, &|_| true)
+            .expect("starts")
+            .expect("sandboxed");
+        let confinement = applied.confine().expect("confined").expect("a wrap");
+        let line = line_in(&applied, &cwd, Some(&hook), &confinement).expect("starts");
+        let connects = |socket: &Path| {
+            // `perl`, on every macOS: macOS's `nc -U` reports failure even on a connect that
+            // succeeded.
+            let probe = "IO::Socket::UNIX->new(Peer => $ARGV[0]) or exit 1";
+            run(
+                &line,
+                &format!(
+                    "/usr/bin/perl -MIO::Socket::UNIX -e '{probe}' '{}'",
+                    socket.display()
+                ),
+            )
+            .status
+            .success()
+        };
+        assert!(connects(&hook), "the hook socket");
+        assert!(!connects(&host), "charterd.sock was reached");
+        assert!(!connects(&other), "another unix socket was reached");
+    }
+
     /// `script` under the wrap, in `dir`, and whether it succeeded.
     fn ran_in(line: &Line, dir: &Path, script: &str) -> bool {
         run(line, &format!("cd '{}' && {script}", dir.display()))
@@ -813,6 +908,54 @@ fn every_harness_denies_a_chat_the_human_scopes_credentials() {
         held += 1;
     }
     assert_eq!(held, 3, "Claude Code, Codex and opencode each hold it");
+}
+
+/// A home reached through a link: every harness denies the credentials' directory by the path
+/// the kernel names it by, which is what a sandbox matches, so a linked `~/.config` (or a config
+/// root under `/var` or `/tmp`) cannot make a denial match nothing (FD-27).
+#[test]
+fn every_harness_denies_the_credentials_under_a_linked_home_by_their_real_path() {
+    let plane = plane_saying(ON);
+    let root = real(plane.path());
+    let homes = tempfile::tempdir().expect("homes");
+    let real_home = real(homes.path()).join("real");
+    std::fs::create_dir_all(real_home.join(".config/charter/charterd")).expect("the directory");
+    let linked_home = homes.path().join("linked");
+    std::os::unix::fs::symlink(&real_home, &linked_home).expect("a linked home");
+    let machine = Machine {
+        env: crate::secrets::Env::of(&[]),
+        home: Some(linked_home.clone()),
+        os: Os::MacOs,
+    };
+    let path = real_home
+        .join(".config/charter/charterd")
+        .display()
+        .to_string();
+    // Claude Code's own sandbox and its tools may compare the name as written, so its settings
+    // name both (D-FD27k). Codex and opencode run in charter's wrap, which Seatbelt matches by
+    // the kernel's name alone.
+    let as_written = linked_home
+        .join(".config/charter/charterd")
+        .display()
+        .to_string();
+    for harness in Harness::ALL {
+        let Some(_) = compiler(harness) else { continue };
+        let stated = stated(harness, &root, &root, &machine);
+        let mut names = vec![&path];
+        if harness == Harness::ClaudeCode {
+            names.push(&as_written);
+        }
+        for path in names {
+            assert!(
+                (stated.denies_read)(path),
+                "{harness:?} lets a chat read {path}"
+            );
+            assert!(
+                (stated.denies_write)(path),
+                "{harness:?} lets a chat write {path}"
+            );
+        }
+    }
 }
 
 /// Each compiler states every class: Claude Code's in its own sandbox's settings, Codex's and
