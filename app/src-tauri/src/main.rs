@@ -7,5 +7,11 @@ fn main() {
     if let Some(code) = charter_core::files::serve_if_asked() {
         std::process::exit(code);
     }
+    // Started again by the `charter` command to write one keyring item, so the item is this
+    // binary's and charter's app alone reads it without asking (ruling V90a).
+    if let Some(code) = charter_core::secrets::keyhold::serve_if_asked() {
+        std::process::exit(code);
+    }
+    charter_core::secrets::keyhold::this_process_is_the_app();
     charter_app_lib::run()
 }

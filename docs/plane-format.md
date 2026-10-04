@@ -3343,12 +3343,20 @@ charter-app only (ADR 0047); the Python charter has no keyring provider and neve
   `keys`, an object `key → {"size": <size band>, "updated": <RFC 3339 UTC, to the second>}`.
   **Never a value.** `size` is `fingerprint::size_band` of the value (`1–15 bytes`,
   `16–31 bytes`, … `1024+ bytes`), never its length.
+- **`held`** (on a key, optional, `true` only): its item was written held to charter's app, so
+  only the app reads it without the person's confirmation (ADR 0047 as amended by ruling V90).
+  Absent on every key written before, and on every key in a store with no such rule (Linux, a
+  test build's stub): on macOS such a key's item is written again, held, the first time charter
+  reads it.
+- **`held_note`** (optional): `"due"` once charter moved one of the vault's items under that
+  rule and has not said so yet, `"said"` after the vault's next `charter secret get`, `cp` or
+  `exec` said it. It is said once.
 - **Status:** **stable** — it is the only record of which keys a keyring vault holds and of
   the service its items live under: the keyring cannot be enumerated through the `keyring`
   crate. Deleting it strands the vault's items in the keyring, still there and unnamed.
 - **Tier:** Clone state — the only record of which keys a keyring vault holds; the values are in the Keyring tier.
-- **Written by:** `crates/charter-core/src/secrets/keyring.rs` (`set_with`, `delete_with`),
-  after the keyring write succeeded, through the plain-file provider's `write_private` (0600,
+- **Written by:** `crates/charter-core/src/secrets/keyring.rs` (`set_with`, `delete_with`, and
+  `get_with` and `take_note` for `held` and `held_note`), after the keyring write succeeded, through the plain-file provider's `write_private` (0600,
   settled on the descriptor first). Commands: `charter secret set`, `charter secret rm`.
 - **Read by:** the same module — `keys`, `listed`, `get`, `ages`, `health`. `secret list`,
   `vault list` and `secret audit` read only this file and never the keyring.
@@ -3364,7 +3372,7 @@ charter-app only (ADR 0047); the Python charter has no keyring provider and neve
 {
   "service": "charter/ops/3f9a2c1b",
   "keys": {
-    "API_TOKEN": { "size": "16–31 bytes", "updated": "2026-09-24T11:32:17Z" }
+    "API_TOKEN": { "size": "16–31 bytes", "updated": "2026-09-24T11:32:17Z", "held": true }
   }
 }
 ```

@@ -520,17 +520,26 @@ fn a_claude_code_chat_is_held_from_writing_every_later_code_name_at_any_depth() 
 }
 
 #[test]
-fn claude_code_cannot_hold_the_credential_store_on_any_system_so_the_chat_does_not_start() {
-    // No key in its settings denies it (its schema, 2.1.285), and no system's sandbox has been
-    // measured keeping a command away from it without one.
-    for os in [Os::MacOs, Os::Linux] {
-        let denied = Denied {
-            paths: vec![],
-            services: vec![Service::CredentialStore],
-        };
-        let refused = claude::settings(&compiled(denied, os)).expect_err("refused");
-        assert_eq!(refused.class(), Some(Class::Vaults), "{os:?}");
-    }
+fn on_macos_the_store_holds_the_credential_store_so_a_claude_code_chat_compiles() {
+    // Ruling V90a: charter writes every keyring item so that only its own app reads it without
+    // the person's confirmation, so the vaults class is held by the store for every harness.
+    let denied = Denied {
+        paths: vec![],
+        services: vec![Service::CredentialStore],
+    };
+    claude::settings(&compiled(denied, Os::MacOs)).expect("compiles on macOS");
+}
+
+#[test]
+fn on_linux_claude_code_cannot_hold_the_credential_store_so_the_chat_does_not_start() {
+    // The Secret Service keeps no per-program rule, and Claude Code's own sandbox has not been
+    // measured keeping a command off the session bus (ruling V90c).
+    let denied = Denied {
+        paths: vec![],
+        services: vec![Service::CredentialStore],
+    };
+    let refused = claude::settings(&compiled(denied, Os::Linux)).expect_err("refused");
+    assert_eq!(refused.class(), Some(Class::Vaults));
 }
 
 // -------------------------------------------------------------------------------------
@@ -802,29 +811,47 @@ fn on_windows_a_sandboxed_plane_starts_no_chat_until_a_backend_exists() {
     );
 }
 
-#[test]
-fn a_keyring_vault_in_a_sandboxed_plane_is_named_in_the_refusal() {
+fn plane_with_a_keyring_vault() -> tempfile::TempDir {
     let plane = plane_saying(ON);
     std::fs::write(
         plane.path().join("vaults.json"),
         r#"{"vaults": {"dev": {"provider": "keyring"}}}"#,
     )
     .expect("the registry");
+    plane
+}
+
+#[test]
+fn a_sandboxed_project_with_a_keyring_vault_starts_every_harness_on_macos() {
+    // Ruling V90: the store holds Claude Code's, and charter's own wrap Codex's and opencode's.
+    let plane = plane_with_a_keyring_vault();
+    for harness in [Harness::ClaudeCode, Harness::Codex, Harness::Opencode] {
+        let applied = for_start(harness, plane.path(), &machine(Os::MacOs), &|_| true)
+            .unwrap_or_else(|refused| panic!("{harness:?}: {refused}"));
+        assert!(applied.is_some(), "{harness:?} starts sandboxed");
+    }
+}
+
+#[test]
+fn on_linux_a_keyring_vault_refusal_offers_the_opt_out_and_moving_the_vault() {
+    let plane = plane_with_a_keyring_vault();
     let refused = for_start(
         Harness::ClaudeCode,
         plane.path(),
-        &machine(Os::MacOs),
+        &machine(Os::Linux),
         &|_| true,
     )
     .expect_err("refused");
+    let said = refused.to_string();
     assert_eq!(
-        refused.to_string(),
-        "this plane runs every chat sandboxed, and Claude Code cannot keep a chat away from the \
-         operating system's credential store, where this plane's keyring vaults are kept, so \
-         the vaults class cannot be held. Until charter can wrap the harness or resolve secrets \
-         for it, a sandboxed plane with a keyring vault starts no Claude Code chat. Nothing was \
-         started."
+        said,
+        "this plane runs every chat sandboxed, and on Linux charter cannot keep a Claude Code \
+         chat away from the system keyring, where this project's keyring vaults keep their \
+         secrets, so nothing was started. Choose Start without the sandbox for this chat, or \
+         move those secrets to a plain-file or 1Password vault, which the sandbox can keep \
+         from a chat."
     );
+    assert!(!said.contains("cannot keep a chat away from the operating system's credential store"));
 }
 
 #[test]
@@ -1504,7 +1531,7 @@ fn a_refusal_nothing_can_be_installed_for_offers_no_install() {
     let Ahead::Refused { install, .. } = ahead(
         Harness::ClaudeCode,
         plane.path(),
-        &machine(Os::MacOs),
+        &machine(Os::Linux),
         &|_| true,
         "ID=debian\n",
         &|_| Ok(()),
@@ -1746,5 +1773,26 @@ fn claude_code_allows_a_chat_no_unix_socket() {
             !key.to_lowercase().contains("unix"),
             "Claude Code's sandbox is handed {key}: {network:?}"
         );
+    }
+}
+
+#[test]
+fn charters_own_wrap_never_lets_a_chat_ask_the_keychains_service() {
+    // Ruling V90b: the wrap Codex and opencode run in denies the credential store's service.
+    // Seatbelt denies by default, so it is held by no lookup of it being allowed, anywhere.
+    let dir = tempfile::tempdir().expect("a directory");
+    let cwd = dir.path().join("chat");
+    let tmp = dir.path().join("tmp");
+    let profile = seatbelt::profile(&[], &seatbelt::Own::default(), &cwd, &tmp, 4040, None)
+        .expect("a profile");
+    let probe = seatbelt::probe_profile(&tmp).expect("a profile");
+    for text in [&profile, &probe] {
+        assert!(text.starts_with("(version 1)\n(deny default)\n"), "{text}");
+        for service in ["SecurityServer", "securityd", "com.apple.security"] {
+            assert!(!text.contains(service), "{service} is reachable:\n{text}");
+        }
+        for line in text.lines().filter(|line| line.contains("mach-lookup")) {
+            assert_eq!(line, "(allow mach-lookup", "a lookup not by name: {line}");
+        }
     }
 }

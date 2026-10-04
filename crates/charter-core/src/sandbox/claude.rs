@@ -11,8 +11,11 @@
 //!   limits them to a list of hosts, and an allow cannot outrank a deny, so both are denied.
 //! - `--settings` sits above project settings, and a project file is not honoured on the keys
 //!   that loosen a sandbox.
-//! - Where a class is held by a service no key in its settings can deny, the chat is refused
-//!   ([`super::NotStarted::Uncompilable`]) rather than started without it.
+//! - Where a class is held by a service no key in its settings can deny, and the service does not
+//!   hold it either, the chat is refused ([`super::NotStarted::Uncompilable`]) rather than
+//!   started without it. Its sandbox lets a command ask the keychain's service (its profile
+//!   allows the lookup), so on macOS the vaults class rests on the keyring items' own access
+//!   rule (ruling V90a): a command that reads one is refused or the person is asked.
 //!
 //! Measured live on 2.1.285 on macOS, a headless chat started with what [`settings`] writes: a
 //! command could neither read nor write a denied directory, could write its own directory,
@@ -51,9 +54,8 @@ pub struct Settings {
 
 /// `compiled`, for Claude Code — or the class it cannot hold on this machine.
 ///
-/// The credential store is refused on every system: Claude Code's settings have no key that
-/// denies it, and whether its sandbox keeps a command away from it anyway has been measured on
-/// none.
+/// The credential store is held by the store on macOS (ruling V90a) and refused elsewhere:
+/// Claude Code's settings have no key that denies it (`Compiled::holds_every_service`).
 pub fn settings(compiled: &Compiled) -> Result<Settings, Uncompilable> {
     compiled.holds_every_service(Harness::ClaudeCode)?;
     let mut deny_read = Vec::new();

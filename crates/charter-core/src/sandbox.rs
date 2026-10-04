@@ -848,14 +848,23 @@ impl Homes {
 }
 
 impl Compiled {
-    /// Whether `harness`'s compiler can hold every class a service holds here. No compiler can
-    /// yet: the credential store is refused for each harness, because no harness's settings
-    /// deny it and each one's sandbox was measured reaching it or not measured at all.
+    /// Whether every class a service holds here is held for `harness`'s chat on this system.
+    ///
+    /// **The credential store is held by the store itself on macOS** (ruling V90a): charter
+    /// writes every keyring item so that only charter's own app reads it without the person's
+    /// confirmation (`secrets::keyring::OsStore`), whatever the chat's sandbox lets it
+    /// reach. Charter's own wrap denies the service as well (V90b, [`seatbelt`]). Elsewhere the
+    /// store keeps no rule of its own (the Secret Service answers any process of the session),
+    /// and no harness's sandbox has been measured keeping a chat off it, so the chat is refused
+    /// with the ways out (V90c).
     fn holds_every_service(&self, harness: Harness) -> Result<(), Uncompilable> {
-        match self.denied.services.first() {
+        let unheld = self.denied.services.iter().find(|service| match service {
+            Service::CredentialStore => self.os != Os::MacOs,
+        });
+        match unheld {
             Some(service) => Err(Uncompilable {
                 harness,
-                unheld: Unheld::Service(*service),
+                unheld: Unheld::Service(*service, self.os),
             }),
             None => Ok(()),
         }
@@ -885,8 +894,9 @@ pub struct Uncompilable {
 /// What a compiler could not hold.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Unheld {
-    /// A class held by a service the harness's sandbox cannot deny.
-    Service(Service),
+    /// A class held by a service that neither the store nor the harness's sandbox holds on
+    /// this system.
+    Service(Service, Os),
     /// The harness has no sandbox of its own, and charter cannot wrap it on this system yet,
     /// so no class can be held.
     Wrap(Os),
@@ -896,7 +906,7 @@ impl Uncompilable {
     /// The one class that could not be held, where it was one class.
     pub fn class(self) -> Option<Class> {
         match self.unheld {
-            Unheld::Service(service) => Some(service.class()),
+            Unheld::Service(service, _) => Some(service.class()),
             Unheld::Wrap(_) => None,
         }
     }
@@ -1306,14 +1316,19 @@ impl fmt::Display for NotStarted {
                     },
                     sandboxed_harnesses_but(Some(it.harness))
                 ),
-                Unheld::Service(Service::CredentialStore) => write!(
+                // Ruling V90c: never a dead end. The picker offers the opt-out beside it.
+                Unheld::Service(Service::CredentialStore, os) => write!(
                     f,
-                    "{lead}, and {} cannot keep a chat away from the operating system's \
-                     credential store, where this plane's keyring vaults are kept, so the \
-                     vaults class cannot be held. Until charter can wrap the harness or \
-                     resolve secrets for it, a sandboxed plane with a keyring vault starts no \
-                     {} chat. Nothing was started.",
-                    it.harness.title(),
+                    "{lead}, and {} charter cannot keep {} {} chat away from the system \
+                     keyring, where this project's keyring vaults keep their secrets, so nothing \
+                     was started. Choose Start without the sandbox for this chat, or move those \
+                     secrets to a plain-file or 1Password vault, which the sandbox can keep from \
+                     a chat.",
+                    match os {
+                        Os::Linux => "on Linux",
+                        Os::MacOs | Os::Windows | Os::Other => "on this system",
+                    },
+                    article(it.harness.title()),
                     it.harness.title()
                 ),
             },

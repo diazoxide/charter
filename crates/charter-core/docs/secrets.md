@@ -58,11 +58,14 @@ the keys and the command — never a value.
   `.charter/vaults/<vault>.keys.json` (0600, gitignored with the rest of `.charter/`), with each
   key's size band and when it was last written — never a value. `list`, `vault list` and
   `audit` read only the index, so they never make the Keychain ask you anything; `get`, `exec`,
-  `cp` and `vault verify` read the item. On macOS an item is readable without a prompt only by
-  the program that created it: any other program — `security find-generic-password -w`, a
-  script, and also the other charter binary (the app and the `charter` command are two) — makes
-  the Keychain ask you first, and "Always Allow" adds it. A charter update is a new binary, so
-  with an ad-hoc signed build the first read after an update asks again.
+  `cp` and `vault verify` read the item. On macOS every item is held to charter's app: the app's
+  own binary writes it (the `charter` command hands the write to the app beside it), so only the
+  app reads it without asking. Any other program — `security find-generic-password -w`, a
+  script, a program a chat runs, and the `charter` command too — makes the Keychain ask you
+  first, and "Always Allow" adds it. An item written before is written again, held, the first
+  time charter reads it, and the vault's next read through the command says so once. A charter
+  update is a new binary, so with an ad-hoc signed build the first read after an update asks
+  again.
 - **`plain-file`** (`--provider plain-file`) — a JSON object of key → value at 0600,
   `.charter/vaults/<vault>.json` by default. It is **plaintext on disk**. Inside a plane that is a git repository, `vault add`
   refuses a `--file` git would commit, and `secret set` checks again before it writes, because
