@@ -129,7 +129,7 @@ describe("text selection", () => {
   });
 
   it("selects a dialog's or a card's words, but not its buttons", () => {
-    draw(`<div role="dialog"><h2>About</h2><div class="about-body"><p>This is Charter 0.4.0.</p></div>
+    draw(`<div role="dialog"><h2>About</h2><div class="about-body"><p>This is charter 0.4.0.</p></div>
         <div class="answer"><button>Close</button></div></div>
       <div role="alertdialog"><p class="came-back">the core refused</p></div>`);
     expect(selectable(the(".about-body p"))).toBe(true);

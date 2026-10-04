@@ -151,7 +151,7 @@ describe("About Charter", () => {
 
     expect(within(dialog).getByRole("heading", { name: "About Charter" })).toBeVisible();
     expect(await within(dialog).findByTestId("about-version")).toHaveTextContent("0.1.0");
-    expect(dialog).toHaveTextContent("This is Charter 0.1.0, released 2026-09-23.");
+    expect(dialog).toHaveTextContent("This is charter 0.1.0, released 2026-09-23.");
     expect(within(dialog).getByRole("heading", { name: "What 0.1.0 brought" })).toBeVisible();
     expect(within(dialog).getByRole("heading", { name: "Added" })).toBeVisible();
     expect(within(dialog).getByText("Tabs").tagName).toBe("STRONG");

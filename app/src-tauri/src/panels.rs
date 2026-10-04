@@ -742,7 +742,7 @@ fn charters_own(
             rows,
             empty: panel::Empty {
                 headline: "No personas on this plane".into(),
-                body: Some("Make one with New persona… in the palette.".into()),
+                body: Some("Make one with the + above, or New persona… in the palette.".into()),
                 offer: None,
             },
         }],
@@ -1686,7 +1686,7 @@ mod tests {
         );
         assert_eq!(
             body("charter/personas").as_deref(),
-            Some("Make one with New persona… in the palette.")
+            Some("Make one with the + above, or New persona… in the palette.")
         );
     }
 

@@ -13,12 +13,13 @@ empty state and error copy follow it.
 
 - **charter is lowercase**, at the start of a sentence too. It is the program's name
   (`productName`), and it does the acting: *charter could not read the alerts*, *charter checks
-  on its own every few hours*. The one capitalised form is the About dialog's title,
-  *About Charter*, because there it is a title.
+  on its own every few hours*, *This is charter {version}*. The one capitalised form is the
+  About dialog's title, *About Charter*, because there it is a title. Whether to keep even that
+  exception is still open (#1156).
 - **The reader is "you".** *You have not opened a project yet.* *Nothing is written into your
   repo.*
-- **Active and present.** Say who does what: *charter checks again when you press Delete*,
-  not *a check will be performed*.
+- **Active and present.** Say who does what: *It checks again when you press Delete*, not
+  *a check will be performed*.
 - **Say what is true, then stop.** One claim per sentence. Don't use "simply", "just", "please"
   or "successfully". A save that worked says *Session saved*, not *Session saved successfully!*
 - **No exclamation marks**, and no emoji.
@@ -54,7 +55,7 @@ empty state and error copy follow it.
 
 - **A present participle and an ellipsis:** *Reading the workspace…*, *Asking git…*, *Copying
   your repo into its workspace…*. Say what is being read or asked, not just *Loading…*.
-- Something that is not done yet is *not read yet* or *not written yet*, not blank.
+- Something that is not done yet is *Not read yet.* or *not written yet*, not blank.
 
 ## Empty states
 
@@ -63,8 +64,8 @@ empty state and error copy follow it.
 - **The headline is a claim about what is true, never an instruction.** *No workspaces yet*,
   *No chats in this workspace*, *Nothing needs you here.*, *Nothing remembered yet*. Use "yet"
   when the thing is expected to arrive.
-- **The body is the way out, named the way the window names it:** *Make one with New persona…
-  in the palette.*, *Add one in the box above.*, *charter runs each chat in its own pane. Open
+- **The body is the way out, named the way the window names it:** *Make one with the + above,
+  or New persona… in the palette.*, *Add one in the box above.*, *charter runs each chat in its own pane. Open
   the first one here.*
 - **Never the storage underneath.** Leave out file layouts, store names and ADR numbers. *Todos
   are files in this workspace's store* told the reader nothing they could act on.
@@ -89,7 +90,7 @@ empty state and error copy follow it.
   will be tried again at the next launch.*
 - **Don't blame the reader.** The subject is what failed, not what the reader did wrong.
 - **Say the cost of an act that cannot be undone, before it happens:** *There is no undo.*,
-  *Its secrets are destroyed in your system keychain and cannot be recovered.*
+  *Its 2 secrets are destroyed in your system keychain and cannot be recovered.*
 - **Uncertainty is stated, not hidden:** *{name} reports no state, so charter cannot tell
   whether it is mid-turn.*
 
@@ -101,8 +102,10 @@ empty state and error copy follow it.
   never a project.
 - **No jargon in the window:** no ADR or ticket numbers, no internal type, module or store
   names, no protocol names where the effect can be said instead.
-- **A command is written in code font** where the command line is the way to do something:
-  *The + above, or `charter workspace remember`, records one.* Only name commands the `charter` binary has.
+- **A command is written in code font** (`<code>`) where the command line is the way to do
+  something: *You can add it later with <code>charter workspace vision</code>.* Only name
+  commands the `charter` binary has. A panel's text from Rust is plain text and cannot carry
+  code font, so a command there reads as raw backticks (#1156).
 - **Counts are digits, and plurals agree:** *1 secret*, *2 secrets* (`counted` in
   `Vaults.tsx`).
 - **An `aria-label` says what the visible label says**, and an icon-only control's label is the
@@ -117,11 +120,21 @@ TypeScript's parser) and fails on:
   error*, *oops*, *please*, *successfully*, or a leading *error:*;
 - **an exclamation mark** at the end of text the window shows;
 - **title case** in text the window shows: two or more words of four letters or more, all
-  capitalised. Names are taken out first. A name the check does not know fails on its first
-  label, and adding it to `NAMES` in `copy.ts` is the fix.
+  capitalised. Names (`NAMES` in `copy.ts`) and key chords such as `Ctrl+Shift+F` are taken
+  out first. A name the check does not know fails on its first label, and adding it to
+  `NAMES` is the fix;
+- **a capital "Charter"** in text the window shows, anywhere but the About dialog's title.
 
-"Text the window shows" is JSX text and the attributes a person reads or hears: `aria-label`,
-`title`, `placeholder`, `alt`, `label`, and `EmptyState`'s `headline` and `body`. Copy written in
-Rust and sent to the window, such as a panel's empty state, is outside the check. So is copy
-assembled from parts at run time. DS-8's audit of every surface reads what the check cannot,
+"Text the window shows" is:
+
+- JSX text, and a JSX child in braces;
+- the value of an attribute a person reads or hears: `aria-label`, `title`, `placeholder`,
+  `alt`, `label`, and `EmptyState`'s `headline` and `body`;
+- a `label:` property;
+- the catalogue's titles and reasons: the second argument of `can` and `cannot` in
+  `actions.ts`, and the third of `cannot`.
+
+Through an expression, both branches of a conditional and the right-hand side of `&&`, `||` and
+`??` count as shown; the condition does not. Copy written in Rust and sent to the window, such
+as a panel's empty state, is outside the check. So is copy assembled from parts at run time. DS-8's audit of every surface reads what the check cannot,
 and a review reads every new string against this page.

@@ -263,10 +263,9 @@ export function NewProject({
                 </button>
               </div>
               <p className="came-back">
-                Optional, and the way ADR 0035 means a project to start: the plane goes in the
-                folder above and this repository becomes its first clone, in{" "}
-                <code>workspaces/</code>. Nothing is written into the repository — it is read, and
-                only read. Leave it empty for a plane with no clones yet.
+                Optional: the plane goes in the folder above and this repo becomes its first clone,
+                in <code>workspaces/</code>. Nothing is written into the repo — it is read, and only
+                read. Leave it empty for a plane with no clones yet.
               </p>
 
               {/* The one decision, and it is the operator's. Radix's checkbox, per

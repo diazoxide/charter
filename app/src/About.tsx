@@ -138,15 +138,15 @@ function Said({ about }: { about: About }) {
     <div className="about-body">
       {build.kind === "release" ? (
         <p>
-          This is Charter {version}
+          This is charter {version}
           {notes?.date ? `, released ${notes.date}` : ""}.
         </p>
       ) : build.kind === "dev" ? (
         <p>
-          This is Charter {version}, a dev build of {build.of}.
+          This is charter {version}, a dev build of {build.of}.
         </p>
       ) : (
-        <p>This is Charter {version}. The changelog this build carries has no section for it.</p>
+        <p>This is charter {version}. The changelog this build carries has no section for it.</p>
       )}
       {notes === null ? (
         // An unlisted version has already been told so, one line up.
