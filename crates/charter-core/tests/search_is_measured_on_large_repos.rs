@@ -466,7 +466,17 @@ fn measure_status(plane: &Path, clone: &Path, held: &mut Held) {
     let mut clean = Vec::new();
     for _ in 0..3 {
         let one = Instant::now();
-        let status = files::status(&reader, plane, branch).expect("a status");
+        let status = match files::status(&reader, plane, branch) {
+            Ok(status) => status,
+            // The reader's own deadline or memory cap ended the read: on a slow disk at this
+            // size that is the measurement, a status read missed by more than its budget, and
+            // it is said like any other miss rather than ending the run (ADR 0086).
+            Err(why) => {
+                held.missed
+                    .push(format!("status read: no answer ({why:?})"));
+                return;
+            }
+        };
         clean.push(one.elapsed());
         assert!(status.changes.is_empty(), "{:?}", status.changes);
     }
@@ -478,15 +488,28 @@ fn measure_status(plane: &Path, clone: &Path, held: &mut Held) {
     let readme = clone.join("README.md");
     let before = std::fs::read(&readme).unwrap();
     std::fs::write(&readme, "# big\n\nChanged by an agent.\n").unwrap();
+    let mut answered = true;
     for _ in 0..3 {
         let one = Instant::now();
-        let status = files::status(&reader, plane, branch).expect("a status");
-        changed.push(one.elapsed());
-        assert_eq!(status.changes.len(), 6, "{:?}", status.changes);
+        match files::status(&reader, plane, branch) {
+            Ok(status) => {
+                changed.push(one.elapsed());
+                assert_eq!(status.changes.len(), 6, "{:?}", status.changes);
+            }
+            Err(why) => {
+                held.missed
+                    .push(format!("status read: no answer ({why:?})"));
+                answered = false;
+                break;
+            }
+        }
     }
     std::fs::write(&readme, before).unwrap();
     for n in 0..5 {
         std::fs::remove_file(clone.join(format!("agent_added_{n}.rs"))).unwrap();
+    }
+    if !answered {
+        return;
     }
     let say = |all: &[Duration]| all.iter().map(|d| ms(*d)).collect::<Vec<_>>().join(", ");
     println!(
