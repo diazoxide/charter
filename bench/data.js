@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791115521445,
+  "lastUpdate": 1791128133596,
   "repoUrl": "https://github.com/diazoxide/charter",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -1134,6 +1134,48 @@ window.BENCHMARK_DATA = {
             "value": 105.44758,
             "unit": "ms",
             "extra": "median of 5 runs: 103.376, 103.789, 105.448, 105.873, 106.176 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "d58ad21b8751b43a8ee679ed75d7b023933415ae",
+          "message": "keyhold: the Keychain's not-the-owner code is macOS's alone\n\n`NOT_THE_OWNER` is read only by the macOS `owned_by_another`, so on Linux it\nwas dead code and `-D warnings` stopped every Linux job (train 24, #1181).\nIt is now gated to macOS like the function that reads it.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-04T19:33:20+04:00",
+          "tree_id": "c42841d2993b1e9f56de94c8e5be3cb48112ef61",
+          "url": "https://github.com/diazoxide/charter/commit/d58ad21b8751b43a8ee679ed75d7b023933415ae"
+        },
+        "date": 1791128132905,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.425822,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.418, 0.419, 0.426, 0.429, 0.430 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.518321999999998,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.462, 16.518, 16.518, 16.598, 16.628 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.4335515,
+            "unit": "ms",
+            "extra": "median of 5 runs: 100.840, 101.417, 101.434, 101.554, 102.059 ms"
           }
         ]
       }
