@@ -21,6 +21,7 @@
 //! that says it was not checked and why ([`deferred`]). The differential test holds the list of
 //! them, so a row that becomes ported has to say so there.
 
+mod budget;
 mod changes;
 mod clones;
 mod config;
@@ -302,6 +303,9 @@ pub struct Doctor {
         crate::forge::Caller,
         std::sync::Arc<dyn crate::forge::transport::Transport>,
     )>,
+    /// The machine store whose forge request budgets the `forge budget` rows read (FW-4).
+    /// `None` for a doctor a test names, which must never read the operator's own.
+    pub(crate) budgets: Option<PathBuf>,
 }
 
 impl Doctor {
@@ -321,6 +325,7 @@ impl Doctor {
         d.ids = crate::active::Ids::from_env();
         d.persona_env = std::env::var(crate::active::PERSONA_ENV).ok();
         d.home = crate::profiles::home();
+        d.budgets = crate::machine::config_root_if_there();
         d.forges = Some((
             crate::forge::Caller::command(),
             std::sync::Arc::new(crate::forge::cli::Cli::default()),
@@ -346,6 +351,13 @@ impl Doctor {
         self
     }
 
+    /// This doctor, reading the forge request budgets kept under the machine store
+    /// `config_root`.
+    pub fn reading_budgets_in(mut self, config_root: &Path) -> Self {
+        self.budgets = Some(config_root.to_path_buf());
+        self
+    }
+
     /// This doctor, reading `machine`'s harness configuration.
     pub fn with_machine(mut self, machine: crate::plugin_install::Machine) -> Self {
         self.machine = Some(machine);
@@ -366,6 +378,7 @@ impl Doctor {
             persona_env: None,
             home: None,
             forges: None,
+            budgets: None,
         }
     }
 
@@ -384,6 +397,7 @@ impl Doctor {
         rows.push(git::plane_root(self));
         rows.push(git::index_lock(self));
         rows.extend(remote::project_remote(self));
+        rows.extend(budget::budgets(self));
         rows.push(session::session_root(self));
         rows.push(session::session_layer(self));
         rows.push(deferred::row("harness", deferred::HARNESS));

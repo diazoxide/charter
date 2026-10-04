@@ -23,6 +23,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use super::backend::{Account, Caller, Principal, Surface, Transports};
+use super::budget::{Clock, Meter, Metered, SystemClock};
 use super::cli::Cli;
 use super::etag::{EtagDir, EtagStore, MemoryEtags};
 use super::http::{ApiRoot, Http, TokenSource};
@@ -128,6 +129,9 @@ pub struct Resolver {
     prefer_cli: Vec<Account>,
     cli: Arc<dyn Transport>,
     etags: Etags,
+    clock: Arc<dyn Clock>,
+    budgets: Option<PathBuf>,
+    meters: Mutex<HashMap<Account, Arc<Meter>>>,
 }
 
 impl Resolver {
@@ -142,6 +146,9 @@ impl Resolver {
             prefer_cli: Vec::new(),
             cli: Arc::new(Cli::default()),
             etags: Etags::Memory(Mutex::new(HashMap::new())),
+            clock: Arc::new(SystemClock),
+            budgets: None,
+            meters: Mutex::new(HashMap::new()),
         }
     }
 
@@ -175,6 +182,34 @@ impl Resolver {
     pub fn etags_in(mut self, config_root: &Path) -> Resolver {
         self.etags = Etags::Machine(config_root.to_path_buf());
         self
+    }
+
+    /// Keep each account's request budget in the machine tier under `config_root`, where
+    /// `charter doctor` reads it (FW-4).
+    pub fn budgets_in(mut self, config_root: &Path) -> Resolver {
+        self.budgets = Some(config_root.to_path_buf());
+        self
+    }
+
+    /// Tell the time by `clock`: a test's virtual clock.
+    pub fn clock(mut self, clock: Arc<dyn Clock>) -> Resolver {
+        self.clock = clock;
+        self
+    }
+
+    /// `account`'s meter: one per account for this resolver's life, counting every call made
+    /// as it on either route (FW-4).
+    pub fn meter(&self, account: &Account) -> Arc<Meter> {
+        let mut meters = self.meters.lock().unwrap_or_else(|e| e.into_inner());
+        meters
+            .entry(account.clone())
+            .or_insert_with(|| {
+                Arc::new(match &self.budgets {
+                    Some(root) => Meter::kept_in(root, account, self.clock.clone()),
+                    None => Meter::new(account, self.clock.clone()),
+                })
+            })
+            .clone()
     }
 
     fn state(&self, account: Option<&Account>) -> AccountState {
@@ -212,7 +247,7 @@ impl Transports for Resolver {
                 account.host
             )));
         }
-        match route(self.state(caller.account()), caller) {
+        let transport: Arc<dyn Transport> = match route(self.state(caller.account()), caller) {
             Route::Native => {
                 // `route` answers Native only for an account with a sign-in.
                 let account = caller.account().ok_or_else(|| {
@@ -223,11 +258,23 @@ impl Transports for Resolver {
                 })?;
                 let native = Http::new(self.kind, self.root.clone(), signin.tokens.clone())?
                     .with_etags(self.etags(account));
-                Ok(Arc::new(native))
+                Arc::new(native)
             }
-            Route::Cli => Ok(self.cli.clone()),
-            Route::Refused(why) => Err(ForgeError::of(super::Failure::Forbidden, why)),
-        }
+            Route::Cli => self.cli.clone(),
+            Route::Refused(why) => return Err(ForgeError::of(super::Failure::Forbidden, why)),
+        };
+        // Every call made as an account is admitted and counted by its meter, whichever route
+        // it took: this is the one place an account's calls are resolved, so none bypasses
+        // the budget. A call that names no account is the CLI's own login, not a charter
+        // account, and has no budget here.
+        Ok(match caller.account() {
+            Some(account) => Arc::new(Metered::new(
+                transport,
+                self.meter(account),
+                caller.priority(),
+            )),
+            None => transport,
+        })
     }
 }
 

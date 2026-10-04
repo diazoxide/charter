@@ -152,9 +152,10 @@ impl std::fmt::Debug for Http {
 /// The most a forge's answer may be. A page of a hundred repos is well under this.
 const MOST_BODY: u64 = 64 * 1024 * 1024;
 
-/// The headers a [`Reply`] keeps: what the backends, the ETag store and FW-4's budget read.
-/// GitHub spells its rate limit `x-ratelimit-*` and GitLab `ratelimit-*`.
-const KEPT: [&str; 10] = [
+/// The headers a [`Reply`] keeps: what the backends, the ETag store and the request budget
+/// ([`super::budget`]) read. GitHub spells its rate limit `x-ratelimit-*`, naming which limit
+/// in `x-ratelimit-resource`, and GitLab `ratelimit-*`, naming it in `ratelimit-name`.
+const KEPT: [&str; 12] = [
     "etag",
     "link",
     "retry-after",
@@ -162,9 +163,11 @@ const KEPT: [&str; 10] = [
     "x-ratelimit-remaining",
     "x-ratelimit-reset",
     "x-ratelimit-used",
+    "x-ratelimit-resource",
     "ratelimit-limit",
     "ratelimit-remaining",
     "ratelimit-reset",
+    "ratelimit-name",
 ];
 
 /// The headers that say which API a request speaks: GitHub's media type and the REST version
@@ -306,15 +309,21 @@ impl Http {
         if status == 304
             && let Some(stored) = stored
         {
+            // The stored answer, with its `Link`, under the `304`'s own status and rate-limit
+            // headers: the budget counts a `304` as its forge does.
+            let mut kept: Vec<(String, String)> = headers
+                .into_iter()
+                .filter(|(name, _)| name != "link" && name != "etag")
+                .collect();
+            if let Some(link) = stored.link {
+                kept.push(("link".to_string(), link));
+            }
             return Ok(Reply {
                 code: 0,
                 out: stored.body,
                 err: String::new(),
-                status: Some(200),
-                headers: stored
-                    .link
-                    .map(|link| vec![("link".to_string(), link)])
-                    .unwrap_or_default(),
+                status: Some(304),
+                headers: kept,
             });
         }
         let reply = reply_of(call, status, out, headers);

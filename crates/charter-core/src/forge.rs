@@ -35,12 +35,14 @@ use serde_json::Value;
 use crate::worktree::git;
 
 pub mod backend;
+pub mod budget;
 pub mod checks;
 pub mod cli;
 pub mod etag;
 mod github;
 mod gitlab;
 pub mod http;
+pub mod poll;
 pub mod pr;
 pub mod recorded;
 pub mod route;
@@ -784,7 +786,8 @@ pub fn gh_as_the_operator(args: &[String], timeout: Duration) -> Result<String, 
         Err(
             transport::NoAnswer::Timeout(why)
             | transport::NoAnswer::Missing(why)
-            | transport::NoAnswer::Refused(why),
+            | transport::NoAnswer::Refused(why)
+            | transport::NoAnswer::HeldBack { said: why, .. },
         ) => Err(ForgeError::transport(why)),
     }
 }

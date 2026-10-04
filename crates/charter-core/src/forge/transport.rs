@@ -242,14 +242,21 @@ pub enum NoAnswer {
     Missing(String),
     /// The caller may not ask at all: [`super::route`] refused it any forge credential.
     Refused(String),
+    /// A background request the account's budget held back (FW-4): its hour is spent until
+    /// `reset`, seconds since the epoch ([`super::budget`]).
+    HeldBack { said: String, reset: Option<u64> },
 }
 
 impl NoAnswer {
     /// The error a call that got no answer fails with: [`Failure::Forbidden`] for a caller
-    /// refused any credential, [`Failure::Transport`] otherwise, in `said`'s words.
+    /// refused any credential, [`Failure::RateLimited`] for a request the budget held back,
+    /// [`Failure::Transport`] otherwise, in `said`'s words.
     pub fn error(&self, said: String) -> ForgeError {
         match self {
             NoAnswer::Refused(_) => ForgeError::of(Failure::Forbidden, said),
+            NoAnswer::HeldBack { reset, .. } => {
+                ForgeError::of(Failure::RateLimited { reset: *reset }, said)
+            }
             NoAnswer::Timeout(_) | NoAnswer::Missing(_) => ForgeError::transport(said),
         }
     }
@@ -257,7 +264,10 @@ impl NoAnswer {
     /// The words this carries.
     pub fn said(&self) -> &str {
         match self {
-            NoAnswer::Timeout(why) | NoAnswer::Missing(why) | NoAnswer::Refused(why) => why,
+            NoAnswer::Timeout(why)
+            | NoAnswer::Missing(why)
+            | NoAnswer::Refused(why)
+            | NoAnswer::HeldBack { said: why, .. } => why,
         }
     }
 }

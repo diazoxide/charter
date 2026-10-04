@@ -186,7 +186,11 @@ impl Transport for Cli {
                     "{cli} did not answer for {host}: {why}"
                 )));
             }
-            Err(NoAnswer::Missing(why) | NoAnswer::Refused(why)) => {
+            Err(
+                NoAnswer::Missing(why)
+                | NoAnswer::Refused(why)
+                | NoAnswer::HeldBack { said: why, .. },
+            ) => {
                 return Err(ForgeError::transport(why));
             }
         };

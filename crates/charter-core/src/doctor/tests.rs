@@ -2569,3 +2569,64 @@ fn the_sandbox_row_sits_after_the_version_lock() {
     let at = names.iter().position(|n| n == "version lock").unwrap();
     assert_eq!(names[at + 1], "sandbox");
 }
+
+// ---- forge budget (FI14, FW-4) ----------------------------------------------------------------
+
+/// Reply `status` with GitHub's rate-limit headers saying `remaining` of 5,000 left.
+fn github_reply(status: u16, remaining: u32) -> crate::forge::transport::Reply {
+    crate::forge::transport::Reply {
+        code: 0,
+        out: String::new(),
+        err: String::new(),
+        status: Some(status),
+        headers: vec![
+            ("x-ratelimit-limit".into(), "5000".into()),
+            ("x-ratelimit-remaining".into(), remaining.to_string()),
+            ("x-ratelimit-resource".into(), "core".into()),
+        ],
+    }
+}
+
+#[test]
+fn the_doctor_shows_each_accounts_request_budget_and_its_use() {
+    use crate::forge::budget::{Meter, SystemClock};
+    let (_d, root) = plane("schema = 1\n");
+    let config = tempfile::tempdir().unwrap();
+    let names = |d: &Doctor| -> Vec<Row> {
+        d.run()
+            .into_iter()
+            .filter(|r| r.name == "forge budget")
+            .collect()
+    };
+    assert!(
+        names(&doctor(&root).reading_budgets_in(config.path())).is_empty(),
+        "no account, no row"
+    );
+    let account = crate::forge::Account {
+        kind: crate::forge::Kind::GitHub,
+        host: "github.com".into(),
+        login: "octocat".into(),
+    };
+    let meter = Meter::kept_in(config.path(), &account, std::sync::Arc::new(SystemClock));
+    meter.record(Some(&github_reply(200, 4_000)));
+    meter.record(Some(&github_reply(304, 4_000)));
+    let rows = names(&doctor(&root).reading_budgets_in(config.path()));
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].status, Status::Ok);
+    assert_eq!(
+        rows[0].detail,
+        "github octocat@github.com: 1 of 1000 counted requests this hour (2 sent, 1 answered \
+         304 Not Modified); the forge says core 4000 of 5000 left"
+    );
+    // Below a fifth of the forge's limit, the row warns that polling backed off.
+    meter.record(Some(&github_reply(200, 900)));
+    let rows = names(&doctor(&root).reading_budgets_in(config.path()));
+    assert_eq!(rows[0].status, Status::Warn);
+    assert!(
+        rows[0].hint.contains("4 times less often"),
+        "{}",
+        rows[0].hint
+    );
+    // A doctor a test names reads no machine store.
+    assert!(names(&doctor(&root)).is_empty());
+}
