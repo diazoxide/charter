@@ -84,9 +84,10 @@ function memoryPanel(journal: { slug: string; title: string }[]) {
 }
 
 /** The core, whose alpha journal is what `memory_create` has written to it. */
-function core() {
+function core(archived: { slug: string; title: string }[] = []) {
   const asked: { cmd: string; args: Record<string, unknown> }[] = [];
   const journal: { slug: string; title: string }[] = [];
+  const archive = [...archived];
   mockIPC((cmd, args) => {
     const given = (args ?? {}) as Record<string, unknown>;
     asked.push({ cmd, args: given });
@@ -114,6 +115,30 @@ function core() {
       };
     if (cmd === "workspace_repos") return { workspace: "alpha", repos: [], cache_refused: null };
     if (cmd === "vault_list") return [];
+    if (cmd === "memory_archived")
+      return archive.map((one) => ({
+        archived: one.slug,
+        title: one.title,
+        stamp: "2026-09-28 16:05",
+        body: `${one.title}, archived.`,
+        path: `workspaces/alpha/memory/archive/${one.slug}.md`,
+      }));
+    if (cmd === "memory_unarchive") {
+      const at = archive.findIndex((one) => one.slug === given.archived);
+      const [back] = archive.splice(at, 1);
+      journal.push(back);
+      const restored: MemoryView = {
+        scope: { kind: "workspace", name: "alpha" },
+        slug: back.slug,
+        title: back.title,
+        stamp: "2026-09-28 16:05",
+        place: "alpha",
+        body: `${back.title}, archived.`,
+        path: `workspaces/alpha/memory/${back.slug}.md`,
+        text: "",
+      };
+      return restored;
+    }
     if (cmd === "memory_create") {
       const title = String(given.title);
       const slug = `20260928-160500-${title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
@@ -164,4 +189,31 @@ describe("a workspace's Memory section", () => {
       text: "On Fridays.",
     });
   });
+
+  it(
+    "opens the journal's archive from its heading, and restores a memory from it (KN-4)",
+    { timeout: 20_000 },
+    async () => {
+      const { asked } = core([{ slug: "20260928-160500-freeze", title: "Freeze" }]);
+      render(<App />);
+      const section = await screen.findByTestId("panel-memory");
+
+      await userEvent.click(
+        within(section).getByRole("button", { name: "Archived memory · alpha" }),
+      );
+      await userEvent.click(await screen.findByRole("button", { name: /^Freeze/ }));
+      expect(await screen.findByTestId("archived-body")).toHaveTextContent("Freeze, archived.");
+      await userEvent.click(screen.getByRole("button", { name: "Restore memory" }));
+
+      expect(await screen.findByText("Freeze is back in alpha's memory.")).toHaveAttribute(
+        "role",
+        "status",
+      );
+      expect(asked.find((one) => one.cmd === "memory_unarchive")?.args).toMatchObject({
+        scope: { kind: "workspace", name: "alpha" },
+        archived: "20260928-160500-freeze",
+        restoreAs: null,
+      });
+    },
+  );
 });

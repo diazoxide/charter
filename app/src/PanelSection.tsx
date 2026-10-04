@@ -64,9 +64,12 @@ export function PanelSection({
 export function HeadingOffer({
   offer,
   onPress,
+  mark: Mark = Plus,
 }: {
   offer?: Offer;
   onPress: (offer: Offer) => void;
+  /** The glyph, when the row is not one that makes something: a store's archive (KN-4). */
+  mark?: ComponentType<{ className?: string; "aria-hidden"?: boolean | "true" }>;
 }) {
   if (!offer) return null;
   return (
@@ -80,7 +83,7 @@ export function HeadingOffer({
       disabled={!offer.available}
       onClick={() => onPress(offer)}
     >
-      <Plus className="node-icon" aria-hidden="true" />
+      <Mark className="node-icon" aria-hidden="true" />
     </button>
   );
 }

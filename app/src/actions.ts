@@ -42,7 +42,10 @@ import {
   MEMORY_VIEW,
   SHARED_MEMORY_TITLE,
   SHARED_MEMORY_VIEW,
+  archiveTitle,
+  archiveView,
   memoryKey,
+  memoryOf,
   memoryRefOf,
   scopeKey,
   type MemoryRef,
@@ -1366,22 +1369,36 @@ export function catalogue(now: Now): Offer[] {
       ...can(`memory.new:${scopeKey(scope)}`, title, { verb: "newMemory", scope }),
       note,
     });
+    // **And each store's archive, in a tab of its own** (KN-4, D6): what Delete moved out of
+    // it, to read and restore. The archive's button on each memory list's heading is this row.
+    const archive = (scope: MemoryScope): Offer => ({
+      ...can(`memory.archived:${scopeKey(scope)}`, archiveTitle(scope), {
+        verb: "openView",
+        view: archiveView(scope),
+        title: archiveTitle(scope),
+      }),
+      note: `What was deleted from ${memoryOf(scope)}, to read and restore.`,
+    });
     if (now.focused !== undefined && now.focused !== OUTSIDE) {
+      const journal: MemoryScope = { kind: "workspace", name: now.focused };
       offers.push(
         made(
-          { kind: "workspace", name: now.focused },
+          journal,
           `New memory in ${now.focused}…`,
           `Recorded in ${now.focused}'s journal, as \`charter workspace remember\` records one.`,
         ),
+        archive(journal),
       );
     }
     for (const persona of now.personas ?? []) {
+      const own: MemoryScope = { kind: "persona", name: persona };
       offers.push(
         made(
-          { kind: "persona", name: persona },
+          own,
           `New memory for ${persona}…`,
           `Kept in personas/${persona}/memory/, as \`charter persona remember\` keeps one.`,
         ),
+        archive(own),
       );
     }
     offers.push(
@@ -1390,6 +1407,7 @@ export function catalogue(now: Now): Offer[] {
         "New shared memory…",
         "Kept in personas/_shared/memory/, which every persona reads.",
       ),
+      archive({ kind: "shared" }),
       {
         ...can("memory.shared", "Open shared memory", {
           verb: "openView",

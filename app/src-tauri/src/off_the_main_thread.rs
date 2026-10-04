@@ -46,6 +46,7 @@ mod tests {
                 crate::memories::memory_edit,
                 crate::memories::memory_archive,
                 crate::memories::memory_unarchive,
+                crate::memories::memory_archived,
                 crate::memories::memory_create,
                 crate::todos::todo_add,
                 crate::todos::todo_done,
@@ -185,6 +186,7 @@ mod tests {
             "memory_archive",
             json!({ "plane": plane, "scope": alpha, "slug": slug }),
         );
+        check("memory_archived", json!({ "plane": plane, "scope": alpha }));
         check(
             "memory_unarchive",
             json!({

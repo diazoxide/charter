@@ -657,6 +657,16 @@ impl Workspace {
         read_store(&self.plane_root, &dir)
     }
 
+    /// What the journal's `memory/archive/` holds, sorted by filename — the window's archive
+    /// browser (KN-4); each one's slug is its name there, which [`Self::unarchive_memory`]
+    /// takes. Read through the held store as the journal is (V74), so a link planted as
+    /// `archive/` lists nothing. A journal that never archived anything has none.
+    pub fn archived_memories(&self) -> io::Result<Vec<Entry>> {
+        let dir = self.dir.join("memory").join(memstore::ARCHIVE);
+        self.readable(&dir)?;
+        read_store(&self.plane_root, &dir)
+    }
+
     /// The exact name a slug typed on the command line names, for the verb `typed`
     /// ([`memstore::typed_name`]): the slug itself when nothing matches, so the exact operation
     /// it is handed to answers for it (SI-9d).

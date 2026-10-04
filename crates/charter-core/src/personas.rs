@@ -86,6 +86,15 @@ impl Persona {
         crate::workspaces::read_store(&self.plane_root, &dir)
     }
 
+    /// What `memory/archive/` holds, sorted by filename — the window's archive browser (KN-4);
+    /// each one's slug is its name there, which [`Self::unarchive_memory`] takes. A store that
+    /// never archived anything has none.
+    pub fn archived_memories(&self) -> io::Result<Vec<crate::workspaces::Entry>> {
+        let dir = self.dir.join("memory").join(memstore::ARCHIVE);
+        self.readable(&dir)?;
+        crate::workspaces::read_store(&self.plane_root, &dir)
+    }
+
     /// Record one durable fact. Slug-only filename, `persistent`, indexed.
     ///
     /// **No index header is scaffolded here**, because charter's `persona.remember` writes

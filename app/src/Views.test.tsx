@@ -628,6 +628,40 @@ describe("the + on a memory list's heading (SI-9c, ADR 0065 Q9)", () => {
     ]);
   });
 
+  it("opens the persona's archive, and the shared store's, beside the + (KN-4)", async () => {
+    core(() => PERSONA);
+    const pressed: Offer[] = [];
+    draw(STEWARD, { offerFor: (id) => offers.get(id), onPress: (offer) => pressed.push(offer) });
+    await userEvent.click(
+      within(heading(/steward/)).getByRole("button", { name: "Archived memory · steward" }),
+    );
+    cleanup();
+    draw(
+      { from: null, view: "shared-memory", key: "" },
+      {
+        title: "Shared memory",
+        offerFor: (id) => offers.get(id),
+        onPress: (offer) => pressed.push(offer),
+      },
+    );
+    await userEvent.click(
+      within(heading(/Shared memory/)).getByRole("button", { name: "Archived shared memory" }),
+    );
+
+    expect(pressed.map((offer) => offer.does)).toEqual([
+      {
+        verb: "openView",
+        view: { from: null, view: "memory-archive", key: "persona/steward" },
+        title: "Archived memory · steward",
+      },
+      {
+        verb: "openView",
+        view: { from: null, view: "memory-archive", key: "shared" },
+        title: "Archived shared memory",
+      },
+    ]);
+  });
+
   it("makes a shared memory from the shared list's tab, which lists the shared store", async () => {
     const { opened } = core(() => ({
       kind: "answered",

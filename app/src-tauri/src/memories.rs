@@ -1,5 +1,6 @@
 //! One memory, read and written from the window's memory tab (SI-9b, ADR 0065): read it, edit
 //! it in place, archive it (the window's Delete), put it back (its Undo), and make a new one.
+//! And a store's archive, listed for the window's archive tab to read and restore from (KN-4).
 //!
 //! **Every command names its store**, as `todos.rs`'s name their workspace: a [`MemoryScope`] is a
 //! workspace's journal, a persona's `memory/`, or `personas/_shared/memory/`, and a memory is a
@@ -119,6 +120,22 @@ pub(crate) struct MemoryArchived {
     pub archived: String,
 }
 
+/// One memory in a store's `archive/`, as the window's archive tab lists it and reads it
+/// (KN-4): read-only, so it carries no text to check a save against.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub(crate) struct ArchivedMemory {
+    /// Its name in `archive/`, which `memory_unarchive` takes as `archived`.
+    pub archived: String,
+    /// The `# ` heading.
+    pub title: String,
+    /// The stamp line's date and time, as written; empty for a file with none.
+    pub stamp: String,
+    /// Everything under the heading and the stamp: what the tab renders.
+    pub body: String,
+    /// Plane-relative, with `/`.
+    pub path: String,
+}
+
 /// A memory store, whichever kind: the two core types that answer the same five questions.
 enum Store {
     Workspace(Workspace),
@@ -184,6 +201,13 @@ impl Store {
         match self {
             Self::Workspace(ws) => ws.unarchive_memory(archived, restore_as),
             Self::Persona(p) => p.unarchive_memory(archived, restore_as),
+        }
+    }
+
+    fn archived(&self) -> io::Result<Vec<charter_core::workspaces::Entry>> {
+        match self {
+            Self::Workspace(ws) => ws.archived_memories(),
+            Self::Persona(p) => p.archived_memories(),
         }
     }
 
@@ -388,6 +412,35 @@ fn unarchive(
         .map_err(|e| e.to_string())?;
     let slug = stem(&back);
     read_in(root, scope, &store, &slug)?.ok_or_else(|| format!("'{slug}' is not back"))
+}
+
+/// What the store's `archive/` holds, sorted by name — the window's archive tab (KN-4). Each
+/// one's `archived` is what `memory_unarchive` restores it by.
+#[tauri::command]
+#[specta::specta]
+pub async fn memory_archived(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    scope: MemoryScope,
+) -> Result<Vec<ArchivedMemory>, String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    crate::off_the_window(READING, move || archived(&root, &scope)).await
+}
+
+fn archived(root: &Path, scope: &MemoryScope) -> Result<Vec<ArchivedMemory>, String> {
+    let store = Store::of(root, scope)?;
+    let entries = store.archived().map_err(|e| e.to_string())?;
+    let dir = format!("{}/{}", scope.store(), charter_core::memstore::ARCHIVE);
+    Ok(entries
+        .into_iter()
+        .map(|entry| ArchivedMemory {
+            path: format!("{dir}/{}.md", entry.slug),
+            archived: entry.slug,
+            title: entry.title,
+            stamp: entry.stamp,
+            body: entry.body,
+        })
+        .collect())
 }
 
 /// A new memory, through the store's own remember: the file `charter … remember --title`
@@ -743,6 +796,61 @@ mod tests {
 
         assert_eq!(back.slug, "freeze");
         assert_eq!(back.body, "second");
+    }
+
+    #[test]
+    fn the_archive_lists_what_was_archived_and_restore_puts_its_file_and_index_line_back() {
+        // KN-4: browse a store's archive, read one, restore it.
+        let dir = plane();
+        create(dir.path(), &steward(), "Kept", "still here", at()).unwrap();
+        let gone = create(
+            dir.path(),
+            &steward(),
+            "Freeze",
+            "No deploys on Friday",
+            at(),
+        )
+        .unwrap();
+        archive(dir.path(), &steward(), &gone.slug).unwrap();
+
+        let listed = archived(dir.path(), &steward()).unwrap();
+
+        assert_eq!(
+            listed,
+            [ArchivedMemory {
+                archived: "freeze".into(),
+                title: "Freeze".into(),
+                stamp: "2026-05-04 11:32".into(),
+                body: "No deploys on Friday".into(),
+                path: "personas/steward/memory/archive/freeze.md".into(),
+            }]
+        );
+
+        let back = unarchive(dir.path(), &steward(), &listed[0].archived, None).unwrap();
+
+        assert_eq!(back.slug, "freeze");
+        assert_eq!(back.text, gone.text);
+        let index =
+            std::fs::read_to_string(dir.path().join("personas/steward/memory/MEMORY.md")).unwrap();
+        assert!(index.contains("- [Freeze](freeze.md)"), "{index}");
+        assert_eq!(archived(dir.path(), &steward()).unwrap(), []);
+    }
+
+    #[test]
+    fn a_store_that_is_not_there_has_its_archive_refused() {
+        let dir = plane();
+
+        let refused = archived(
+            dir.path(),
+            &MemoryScope::Persona {
+                name: "ghost".into(),
+            },
+        )
+        .unwrap_err();
+
+        assert!(refused.contains("ghost"), "{refused}");
+        assert_eq!(archived(dir.path(), &MemoryScope::Shared).unwrap(), []);
+        assert_eq!(archived(dir.path(), &alpha()).unwrap(), []);
     }
 
     #[test]

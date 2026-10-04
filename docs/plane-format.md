@@ -2573,10 +2573,14 @@ with `", "` (`:907`-`:908`).
   (`apply_safe`, exact-duplicate collapse) — reached by `charter persona optimize --apply`.
   **In charter-app, also** `persona archive-memory` / `workspace archive` and the window's
   Delete (`memstore::archive_one`), and emptied back into the store by `unarchive-memory` /
-  `workspace unarchive` and the window's Undo (`memstore::unarchive`) —
+  `workspace unarchive`, the window's Undo and its archive tab's Restore memory
+  (`memstore::unarchive`) —
   [Editing and archiving a memory](#editing-and-archiving-a-memory-charter-app).
 - **Read by:** nothing in charter (deliberately out of the active set); git history and
-  humans only. In charter-app, `memstore::unarchive` reads the one file it restores.
+  humans only. In charter-app, `memstore::unarchive` reads the one file it restores, and the
+  window's archive tab lists and shows the store's `archive/`, read-only
+  (`Persona::archived_memories` / `Workspace::archived_memories`, KN-4) — never in a briefing,
+  a recall or a memory list.
 - **Git:** committed.
 - **Encoding details:** `rename` into `<mem_dir>/archive/`, created with `mkdir_for`;
   collision → `<stem>-2.md` (`charter/memstore.py:521`-`:523`); the index line is dropped

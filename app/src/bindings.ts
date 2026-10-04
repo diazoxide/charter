@@ -1133,6 +1133,11 @@ export const commands = {
 	 */
 	memoryUnarchive: (plane: PlaneId, scope: MemoryScope, archived: string, restoreAs: string | null) => typedError<MemoryView, string>(__TAURI_INVOKE("memory_unarchive", { plane, scope, archived, restoreAs })),
 	/**
+	 *  What the store's `archive/` holds, sorted by name — the window's archive tab (KN-4). Each
+	 *  one's `archived` is what `memory_unarchive` restores it by.
+	 */
+	memoryArchived: (plane: PlaneId, scope: MemoryScope) => typedError<ArchivedMemory[], string>(__TAURI_INVOKE("memory_archived", { plane, scope })),
+	/**
 	 *  A new memory, through the store's own remember: the file `charter … remember --title`
 	 *  writes. An empty `title` is the text's first line.
 	 */
@@ -1497,6 +1502,23 @@ export type AlertRow = {
 	detail: string,
 	/**  The command, or the step, that fixes it. */
 	remedy: string,
+};
+
+/**
+ *  One memory in a store's `archive/`, as the window's archive tab lists it and reads it
+ *  (KN-4): read-only, so it carries no text to check a save against.
+ */
+export type ArchivedMemory = {
+	/**  Its name in `archive/`, which `memory_unarchive` takes as `archived`. */
+	archived: string,
+	/**  The `# ` heading. */
+	title: string,
+	/**  The stamp line's date and time, as written; empty for a file with none. */
+	stamp: string,
+	/**  Everything under the heading and the stamp: what the tab renders. */
+	body: string,
+	/**  Plane-relative, with `/`. */
+	path: string,
 };
 
 /**

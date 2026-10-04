@@ -1,5 +1,6 @@
 import { Fragment, Suspense, lazy, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
+  Archive,
   Brain,
   ChartColumn,
   Cpu,
@@ -44,8 +45,17 @@ import {
   type ViewAnswer,
 } from "./bindings";
 import { MemoryTab } from "./MemoryTab";
+import { MemoryArchiveTab } from "./MemoryArchiveTab";
 import { Menued } from "./Menus";
-import { DRAFT, MEMORY_VIEW, SHARED_MEMORY_VIEW, isMemory, memoryRefOf } from "./memories";
+import {
+  ARCHIVE_VIEW,
+  DRAFT,
+  MEMORY_VIEW,
+  SHARED_MEMORY_VIEW,
+  archiveOf,
+  isMemory,
+  memoryRefOf,
+} from "./memories";
 import { HeadingOffer } from "./PanelSection";
 import { SavingView } from "./SavingView";
 import { SessionRecordTab } from "./SessionRecordTab";
@@ -219,6 +229,7 @@ export const OWN_MARKS: Record<string, React.ComponentType<{ className?: string 
   [SESSION_VIEW]: History,
   [MEMORY_VIEW]: Brain,
   [SHARED_MEMORY_VIEW.view]: Brain,
+  [ARCHIVE_VIEW]: Archive,
   [WORKSPACE_SETTINGS]: Settings2,
   [REPO_INSTRUCTIONS]: FileText,
   [FIRST_TASK]: ListChecks,
@@ -326,6 +337,9 @@ export function ViewPane({
   const own = (view.from === null ? (OWN_ROWS[view.view]?.(view.key) ?? []) : []).map((id) =>
     id.startsWith("memory.new:") ? (
       onPress && <HeadingOffer key={id} offer={offerFor?.(id)} onPress={onPress} />
+    ) : id.startsWith("memory.archived:") ? (
+      // The store's archive (KN-4), beside its `+`, drawn as the Memory section draws it.
+      onPress && <HeadingOffer key={id} offer={offerFor?.(id)} onPress={onPress} mark={Archive} />
     ) : (
       <OfferButton key={id} offer={offerFor?.(id)} onPress={onPress} />
     ),
@@ -354,6 +368,7 @@ export function ViewPane({
   // charter's own views run no program, so there is nothing a press would be consent to.
   const holding = waits && view.from !== null;
   const memoryAt = isMemory(view) ? memoryRefOf(view.key) : undefined;
+  const archiveAt = archiveOf(view);
   const piece = pieceOf(view);
   const pieceDiff = pieceDiffOf(view);
   return (
@@ -495,6 +510,16 @@ export function ViewPane({
             onSaved={(memory) => onMemorySaved?.(view, memory)}
             onClose={() => onCloseView?.(view)}
           />
+        ) : archiveAt !== undefined ? (
+          /* A store's archive (KN-4): what was deleted from it, read-only, each with Restore.
+             Keyed by the store, so a pane that comes to show another store's starts from its
+             own read. */
+          <MemoryArchiveTab
+            key={`${plane}\u0000${view.key}`}
+            plane={plane}
+            scope={archiveAt}
+            changed={changed + onDisk}
+          />
         ) : settingsLevel !== undefined ? (
           /* Settings (SE-16, SE-17, SE-20), at the level the tab is keyed by. Its switcher moves
              this tab to another level, or brings forward the tab already there (D-SE17a). The
@@ -535,11 +560,12 @@ const OWN_ROWS: Record<string, (key: string) => string[]> = {
   persona: (key) => [
     `persona.edit:${key}`,
     `persona.remove:${key}`,
-    // The persona's memory list's `+` (SI-9c).
+    // The persona's memory list's `+` (SI-9c), and its archive (KN-4).
     `memory.new:persona/${key}`,
+    `memory.archived:persona/${key}`,
   ],
-  // The shared store's own list (ADR 0065 Q6): its `+`.
-  [SHARED_MEMORY_VIEW.view]: () => ["memory.new:shared"],
+  // The shared store's own list (ADR 0065 Q6): its `+`, and its archive (KN-4).
+  [SHARED_MEMORY_VIEW.view]: () => ["memory.new:shared", "memory.archived:shared"],
   vault: (key) => [`vault.remove:${key}`],
   [SESSION_VIEW]: (key) => [`session.resume:${key}`],
   // A memory's Edit and Delete (ADR 0065 Q2) — a new memory's tab has neither yet.
