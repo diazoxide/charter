@@ -44,6 +44,7 @@ import {
   SHARED_MEMORY_VIEW,
   archiveTitle,
   archiveView,
+  archiveWhere,
   memoryKey,
   memoryOf,
   memoryRefOf,
@@ -1372,7 +1373,9 @@ export function catalogue(now: Now): Offer[] {
     // **And each store's archive, in a tab of its own** (KN-4, D6): what Delete moved out of
     // it, to read and restore. The archive's button on each memory list's heading is this row.
     const archive = (scope: MemoryScope): Offer => ({
-      ...can(`memory.archived:${scopeKey(scope)}`, archiveTitle(scope), {
+      // A verb for the row and the heading's button, which is a glyph alone; the tab it opens
+      // is named for what it holds.
+      ...can(`memory.archived:${scopeKey(scope)}`, `Open ${archiveWhere(scope)}`, {
         verb: "openView",
         view: archiveView(scope),
         title: archiveTitle(scope),

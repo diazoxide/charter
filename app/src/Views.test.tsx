@@ -633,7 +633,7 @@ describe("the + on a memory list's heading (SI-9c, ADR 0065 Q9)", () => {
     const pressed: Offer[] = [];
     draw(STEWARD, { offerFor: (id) => offers.get(id), onPress: (offer) => pressed.push(offer) });
     await userEvent.click(
-      within(heading(/steward/)).getByRole("button", { name: "Archived memory · steward" }),
+      within(heading(/steward/)).getByRole("button", { name: "Open steward's archive" }),
     );
     cleanup();
     draw(
@@ -645,7 +645,7 @@ describe("the + on a memory list's heading (SI-9c, ADR 0065 Q9)", () => {
       },
     );
     await userEvent.click(
-      within(heading(/Shared memory/)).getByRole("button", { name: "Archived shared memory" }),
+      within(heading(/Shared memory/)).getByRole("button", { name: "Open the shared archive" }),
     );
 
     expect(pressed.map((offer) => offer.does)).toEqual([

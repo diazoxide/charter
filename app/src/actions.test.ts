@@ -2183,6 +2183,10 @@ describe("making a memory, and the shared list (SI-9c, ADR 0065 Q6, Q9)", () => 
       view: { from: null, view: "memory-archive", key: "shared" },
       title: "Archived shared memory",
     });
+    // The row is a verb; the tab it opens is named for what it holds.
+    expect(by(offers, "memory.archived:workspace/alpha")?.title).toBe("Open alpha's archive");
+    expect(by(offers, "memory.archived:persona/steward")?.title).toBe("Open steward's archive");
+    expect(by(offers, "memory.archived:shared")?.title).toBe("Open the shared archive");
     await run(offers, "memory.archived:shared", hands);
     expect(hands.calls).toHaveLength(1);
     // The plane root has no journal, and so no journal's archive.
