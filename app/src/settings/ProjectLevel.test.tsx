@@ -710,7 +710,9 @@ describe("one form for Shared and Local (SE-18)", () => {
 
     await userEvent.click(within(rowOf("Mode")).getByRole("radio", { name: "Shared" }));
     await userEvent.click(
-      within(rowOf("Mode")).getByRole("button", { name: "Move to charter.toml" }),
+      within(rowOf("Mode")).getByRole("button", {
+        name: "Move to charter.toml, replacing push",
+      }),
     );
 
     await waitFor(() => expect(moves).toHaveLength(1));
@@ -720,6 +722,68 @@ describe("one form for Shared and Local (SE-18)", () => {
     );
     await waitFor(() =>
       expect(screen.getByLabelText("Mode")).toHaveAccessibleDescription(/From charter\.toml/),
+    );
+  });
+
+  it("names the team's value a move to charter.toml replaces", async () => {
+    core({ local: LOCAL_MODE });
+    await atProject();
+    await open("Saving");
+
+    await userEvent.click(within(rowOf("Mode")).getByRole("radio", { name: "Shared" }));
+
+    expect(
+      within(rowOf("Mode")).getByRole("button", { name: "Move to charter.toml, replacing push" }),
+    ).toBeInTheDocument();
+  });
+
+  it("puts the focus on the file the value went to once Move is pressed", async () => {
+    const { moves } = core();
+    await atProject();
+    await open("Saving");
+    await userEvent.click(
+      within(rowOf("Mode")).getByRole("radio", { name: "Only on this machine" }),
+    );
+
+    await userEvent.click(
+      within(rowOf("Mode")).getByRole("button", { name: "Move to charter.local.toml" }),
+    );
+
+    await waitFor(() => expect(moves).toHaveLength(1));
+    expect(
+      within(rowOf("Mode")).getByRole("radio", { name: "Only on this machine" }),
+    ).toHaveFocus();
+  });
+
+  it("puts the focus back on the setting once Reset is pressed", async () => {
+    const { sent } = core({ local: LOCAL_MODE });
+    await atProject();
+    await open("Saving");
+
+    await userEvent.click(within(rowOf("Mode")).getByRole("button", { name: "Reset" }));
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(screen.getByLabelText("Mode")).toHaveFocus();
+  });
+
+  it("does not call the default profile an override of charter.toml's default harness", async () => {
+    const shared = {
+      ...SHARED,
+      fields: [...SHARED.fields, field(["harness", "default"], { kind: "text", value: "claude" })],
+    };
+    const local = {
+      ...LOCAL,
+      fields: [...LOCAL.fields, field(["harness", "default"], { kind: "text", value: "work" })],
+    };
+    core({ shared, local });
+    await atProject();
+    await open("Harness & profiles");
+
+    expect(screen.getByLabelText("Default profile")).toHaveValue("work");
+    expect(within(rowOf("Default profile")).queryByText("Overrides charter.toml")).toBeNull();
+    expect(screen.getByLabelText("Default profile")).not.toHaveAccessibleDescription(/overrides/);
+    expect(screen.getByLabelText("Default profile")).toHaveAccessibleDescription(
+      /From charter\.local\.toml, at the Project level: this machine only\./,
     );
   });
 

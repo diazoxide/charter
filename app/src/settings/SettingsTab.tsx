@@ -346,20 +346,30 @@ function LiveRow({ setting }: { setting: LiveSetting }) {
 
 /**
  * **Where a value comes from** (SE-18, V89d): the level and the file, or that no file at this
- * level holds it. A Local value that overrides a Shared one says what the Shared file has, so the
- * person sees why their value is not their team's.
+ * level holds it. A movable value kept on this machine over one the Shared file holds says what
+ * the Shared file has, so the person sees why their value is not their team's. Only a movable
+ * one: a Local-only setting at a key charter.toml also has (the default profile, where
+ * charter.toml has the default harness) is another setting, not an override of it.
  */
 function originOf(setting: FileSetting, files: Files, from: SettingsFileId | undefined): string {
   if (from === undefined) return "Not set at this level, so the value beneath it is in force.";
   const file = files[from]?.file ?? "";
   if (from === "workspace") return `From ${file}, at the Workspace level.`;
   if (from === "shared") return `From ${file}, at the Project level: shared with your team.`;
-  const shared = files.shared;
-  const under =
-    shared !== undefined && keysOf(setting, shared).length > 0
-      ? ` charter.toml has ${setting.read(shared) || "a value"}, which this overrides.`
-      : "";
+  const shared = sharedUnder(setting, files);
+  const under = shared === undefined ? "" : ` charter.toml has ${shared}, which this overrides.`;
   return `From ${file}, at the Project level: this machine only.${under}`;
+}
+
+/**
+ * What charter.toml has for a movable setting whose value this machine's file overrides — `a
+ * value` when it reads as nothing — or `undefined` when nothing is overridden.
+ */
+function sharedUnder(setting: FileSetting, files: Files): string | undefined {
+  const shared = files.shared;
+  if (!setting.movable || shared === undefined || keysOf(setting, shared).length === 0)
+    return undefined;
+  return setting.read(shared) || "a value";
 }
 
 /** The two files a movable value may be kept in, as the file choice offers them. */
@@ -408,10 +418,8 @@ function FileRow({ setting, driver: project }: { setting: FileSetting; driver: D
   const out = removals(setting, project.files, from);
   // Never one that would loosen what the level holds fast: the sandbox (D-SE17g, D-SE18e).
   const mayTakeOut = from !== undefined && !setting.oneWay && project.mayChange(out);
-  const overrides =
-    from === "local" &&
-    project.files.shared !== undefined &&
-    keysOf(setting, project.files.shared).length > 0;
+  /** What charter.toml has under this machine's value, which a move to it would replace. */
+  const overridden = from === "local" ? sharedUnder(setting, project.files) : undefined;
   return (
     <SettingRow
       label={setting.label}
@@ -419,7 +427,7 @@ function FileRow({ setting, driver: project }: { setting: FileSetting; driver: D
       error={project.refused[setting.id]}
       undo={project.undoable === setting.id && !writing ? project.undo : undefined}
       origin={originOf(setting, project.files, from)}
-      badge={overrides ? "Overrides charter.toml" : undefined}
+      badge={overridden !== undefined ? "Overrides charter.toml" : undefined}
       reset={
         mayTakeOut
           ? { label: "Reset", disabled: writing, onReset: () => project.reset(setting) }
@@ -432,6 +440,7 @@ function FileRow({ setting, driver: project }: { setting: FileSetting; driver: D
             pick={pick ?? (from === "shared" || from === "local" ? from : "shared")}
             onPick={setPick}
             mayMove={mayTakeOut}
+            replacing={overridden}
             disabled={writing}
             onMove={(to) => {
               setPick(undefined);
@@ -485,6 +494,7 @@ function Place({
   pick,
   onPick,
   mayMove,
+  replacing,
   disabled,
   onMove,
 }: {
@@ -493,6 +503,8 @@ function Place({
   pick: SettingsWhich;
   onPick: (to: SettingsWhich) => void;
   mayMove: boolean;
+  /** What a move to charter.toml writes over: the team's value, which no Undo puts back. */
+  replacing: string | undefined;
   disabled: boolean;
   onMove: (to: SettingsWhich) => void;
 }) {
@@ -506,7 +518,8 @@ function Place({
         ids={{ id, labelledBy: name }}
         options={PLACES}
         value={pick}
-        disabled={disabled || (held !== undefined && !mayMove)}
+        // Not while a write is pending: the focus comes back here once Move is pressed.
+        disabled={held !== undefined && !mayMove}
         onValueChange={(one) => onPick(one as SettingsWhich)}
       />
       {held !== undefined && pick !== held && mayMove && (
@@ -516,9 +529,15 @@ function Place({
           // #190: WebKit leaves a button out of the tab sequence without `tabIndex`.
           tabIndex={0}
           disabled={disabled}
-          onClick={() => onMove(pick)}
+          onClick={() => {
+            onMove(pick);
+            // The button goes once it is pressed; the focus goes to the file the value went to.
+            document.getElementById(`${id}-${pick}`)?.focus();
+          }}
         >
-          {`Move to ${pick === "local" ? "charter.local.toml" : "charter.toml"}`}
+          {pick === "local"
+            ? "Move to charter.local.toml"
+            : `Move to charter.toml${replacing === undefined ? "" : `, replacing ${replacing}`}`}
         </button>
       )}
     </div>

@@ -267,7 +267,11 @@ export function SettingRow({
             // #190: WebKit leaves a button out of the tab sequence without `tabIndex`.
             tabIndex={0}
             disabled={reset.disabled}
-            onClick={reset.onReset}
+            onClick={() => {
+              reset.onReset();
+              // The button goes once the value is gone; the focus goes back to the control.
+              document.getElementById(id)?.focus();
+            }}
           >
             {reset.label}
           </button>
