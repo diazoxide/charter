@@ -92,6 +92,15 @@ describe("the Search tab", () => {
     expect(asked.filter((one) => one.cmd === "search_files")).toEqual([]);
   });
 
+  it("says a tab it cannot read is unreadable, and the way out", () => {
+    core(() => 1);
+    const view = searchView(searchFromFocus(BRANCH, BRANCH.workspace));
+    render(<SearchTab plane={PLANE} view={{ ...view, key: "not a search" }} />);
+
+    expect(screen.getByText("This search tab could not be read")).toBeInTheDocument();
+    expect(screen.getByText("Close it and start a new search.")).toBeInTheDocument();
+  });
+
   it("asks the core once the query is still, over the branch it was opened on", async () => {
     const asked = core(() => 1);
     draw();

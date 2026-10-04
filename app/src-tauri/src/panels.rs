@@ -692,7 +692,7 @@ fn charters_own(
             .collect(),
         empty: panel::Empty {
             headline: "Nothing to do".into(),
-            body: Some("Todos are files in this workspace's store (charter ADR 0004).".into()),
+            body: Some("Add one in the box above.".into()),
             offer: None,
         },
     });
@@ -742,7 +742,7 @@ fn charters_own(
             rows,
             empty: panel::Empty {
                 headline: "No personas on this plane".into(),
-                body: Some("A persona arrives as a directory: personas/<name>/persona.md.".into()),
+                body: Some("Make one with New persona… in the palette.".into()),
                 offer: None,
             },
         }],
@@ -1659,6 +1659,35 @@ mod tests {
             .expect("the refusal is drawn");
         assert_eq!(told.1, "trouble");
         assert!(!told.0.is_empty());
+    }
+
+    #[test]
+    fn an_empty_todo_list_and_an_empty_personas_panel_each_say_how_to_add_one() {
+        // The copy guide (`docs/ui-copy.md`): an empty state says what is true, then the way
+        // out — never the storage it is read from.
+        let (_plane, root) = plane_with_a_clone();
+        std::fs::create_dir_all(root.join("workspaces/alpha")).expect("the workspace");
+
+        let drawn = of(&root, "alpha").expect("the panels draw");
+
+        let body = |id: &str| {
+            panel_called(&drawn, id)
+                .blocks
+                .iter()
+                .find_map(|block| match block {
+                    PanelBlock::List { empty, .. } => Some(empty.body.clone()),
+                    _ => None,
+                })
+                .expect("a list")
+        };
+        assert_eq!(
+            body("charter/todos").as_deref(),
+            Some("Add one in the box above.")
+        );
+        assert_eq!(
+            body("charter/personas").as_deref(),
+            Some("Make one with New persona… in the palette.")
+        );
     }
 
     /// The rows of a panel's one list block.

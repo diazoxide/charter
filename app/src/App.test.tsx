@@ -175,7 +175,7 @@ describe("App", () => {
       "charter found no project here",
     );
     expect(screen.getByText(/no charter.toml in \/tmp/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Open Project…" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open project…" })).toBeInTheDocument();
   });
 
   it("does not open with an error when the launch had nothing to go on at all", async () => {

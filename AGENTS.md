@@ -54,6 +54,10 @@ in `diazoxide/charter-plane` as history (ADR 0044). A new decision is the next n
   no arbitrary Tailwind values, and a test fails the build on either.
   `docs/design-system.md` says why.
 
+- **Window copy follows `docs/ui-copy.md`.** Sentence case, no stock phrases, and an error says
+  what happened and what to do. `app/src/copy.test.ts` fails the build on the rules a machine
+  can check; a review reads the rest.
+
 - **A change people would notice gets a changelog fragment, never a CHANGELOG.md edit.** Add
   `changes/<slug>.md` with a `### Added` / `### Changed` / `### Fixed` / `### Security` heading
   and the entry under it, as it will read in CHANGELOG.md (`changes/README.md`). Release prep

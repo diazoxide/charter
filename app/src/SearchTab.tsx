@@ -84,7 +84,13 @@ export function SearchTab({
   }, [ask, commit, draft]);
 
   if (ask === undefined) {
-    return <EmptyState headline="This search tab could not be read" size="panel" />;
+    return (
+      <EmptyState
+        headline="This search tab could not be read"
+        body="Close it and start a new search."
+        size="panel"
+      />
+    );
   }
   return (
     <SearchBody

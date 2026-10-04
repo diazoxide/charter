@@ -239,7 +239,7 @@ is no ADR that decided against them; they were simply not seen.
 These decisions continue the numbering rather than joining 1-8, because a decision's number is
 how it is cited and nothing here is renumbered.
 
-22. **A project is a plane.** The top-level switcher is a plane switcher, and "Open Project…"
+22. **A project is a plane.** The top-level switcher is a plane switcher, and "Open project…"
     opens a directory that has, or will get, a `charter.toml`. There is no second container:
     ADR 0007 removed the second plane shape so that no code would ask which shape it was in.
     **ADR 0033.**
