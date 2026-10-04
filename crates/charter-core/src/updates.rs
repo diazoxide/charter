@@ -105,6 +105,24 @@ impl Channel {
         }
     }
 
+    /// The weekly manifest beside [`Channel::manifest`]: the same bytes under another name
+    /// (V13, OB-17). The first check of each ISO week reads this one, so its download count
+    /// estimates how many machines checked that week, with nothing about any of them.
+    pub fn weekly_manifest(self) -> &'static str {
+        match self {
+            Channel::Stable => "latest-weekly.json",
+            Channel::Dev => "dev-weekly.json",
+        }
+    }
+
+    /// [`Channel::endpoint`] with [`Channel::weekly_manifest`] in place of the manifest, and
+    /// nothing else different: no query, and no `{{…}}` the updater would fill in with this
+    /// machine's version, target or arch.
+    pub fn weekly_endpoint(self) -> String {
+        self.endpoint()
+            .replace(self.manifest(), self.weekly_manifest())
+    }
+
     /// The URL the updater is pointed at.
     ///
     /// **Both are `https`, and that is load-bearing rather than tidy**: Tauri refuses a
@@ -317,6 +335,81 @@ pub const FIRST_CHECK_AFTER: std::time::Duration = std::time::Duration::from_sec
 /// day.
 pub const CHECK_EVERY: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
 
+/// An ISO 8601 week, in UTC: the unit the weekly count is taken in.
+///
+/// **Not an identifier, and the only thing about the count this machine keeps.** Every machine
+/// that checked in a week holds the same value for it, and it never leaves the device: it is
+/// the machine store's note that this week's count was taken ([`weekly_due`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct IsoWeek {
+    year: i32,
+    week: u32,
+}
+
+impl IsoWeek {
+    /// The week holding `secs` since the epoch, in UTC, or `None` for a time chrono cannot
+    /// place.
+    pub fn of(secs: i64) -> Option<IsoWeek> {
+        use chrono::Datelike;
+        let week = chrono::DateTime::from_timestamp(secs, 0)?.iso_week();
+        Some(IsoWeek {
+            year: week.year(),
+            week: week.week(),
+        })
+    }
+
+    /// This week, by the system clock.
+    pub fn now() -> IsoWeek {
+        use chrono::Datelike;
+        let week = chrono::Utc::now().iso_week();
+        IsoWeek {
+            year: week.year(),
+            week: week.week(),
+        }
+    }
+
+    /// The week `word` names, exactly as [`std::fmt::Display`] writes it (`2026-W41`), or
+    /// `None`. Exact for the reason [`Channel::named`] is: it reads back what charter wrote.
+    pub fn named(word: &str) -> Option<IsoWeek> {
+        let (year, week) = word.split_once("-W")?;
+        let digits =
+            |text: &str, len: usize| text.len() == len && text.bytes().all(|b| b.is_ascii_digit());
+        if !digits(year, 4) || !digits(week, 2) {
+            return None;
+        }
+        let year: i32 = year.parse().ok()?;
+        let week: u32 = week.parse().ok()?;
+        chrono::NaiveDate::from_isoywd_opt(year, week, chrono::Weekday::Mon)?;
+        Some(IsoWeek { year, week })
+    }
+}
+
+impl std::fmt::Display for IsoWeek {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:04}-W{:02}", self.year, self.week)
+    }
+}
+
+/// Whether this update check reads [`Channel::weekly_manifest`] rather than the manifest.
+///
+/// **The first check of each ISO week, and only on a machine that has not opted out.**
+/// `counted` is the week this machine last fetched it in. Any other week is due, a later one
+/// included: a clock that was once wrong ahead must not stop the count until that date comes.
+pub fn weekly_due(counted: Option<IsoWeek>, now: IsoWeek, opted_out: bool) -> bool {
+    !opted_out && counted != Some(now)
+}
+
+/// The environment variable that opts a machine out of the weekly count: the cross-tool
+/// `DO_NOT_TRACK` convention. charter has no telemetry switch of its own yet (OB-12), so this
+/// is the opt-out that already exists, and charter honours it.
+pub const DO_NOT_TRACK: &str = "DO_NOT_TRACK";
+
+/// Whether [`DO_NOT_TRACK`]'s value opts out: anything but unset, empty or `0`. Lenient in
+/// the direction that sends less.
+pub fn do_not_track(value: Option<&std::ffi::OsStr>) -> bool {
+    value.is_some_and(|value| !value.is_empty() && value != "0")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -500,6 +593,117 @@ mod tests {
             checks_on_its_own(false, false),
             "a shipped build did not check"
         );
+    }
+
+    #[test]
+    fn the_weekly_manifest_is_the_same_address_but_its_name_and_carries_nothing_of_the_machine() {
+        for channel in Channel::ALL {
+            let regular = channel.endpoint();
+            let weekly = channel.weekly_endpoint();
+            assert!(weekly.starts_with("https://"), "{weekly}");
+            assert_ne!(channel.weekly_manifest(), channel.manifest());
+            // The whole difference is the file's name: no query, no template variable the
+            // updater would fill in with this machine's version, target or arch.
+            assert_eq!(
+                weekly.replace(channel.weekly_manifest(), channel.manifest()),
+                regular
+            );
+            for marker in ['?', '#', '{', '}'] {
+                assert!(!weekly.contains(marker), "{weekly} carries {marker}");
+            }
+        }
+        assert_eq!(Channel::Stable.weekly_manifest(), "latest-weekly.json");
+        assert_eq!(Channel::Dev.weekly_manifest(), "dev-weekly.json");
+    }
+
+    #[test]
+    fn an_iso_week_is_read_off_the_calendar_including_at_the_turn_of_the_year() {
+        // Worked examples, from the ISO 8601 rule that week 1 holds the year's first Thursday.
+        let day = |y, m, d| {
+            chrono::NaiveDate::from_ymd_opt(y, m, d)
+                .unwrap()
+                .and_hms_opt(12, 0, 0)
+                .unwrap()
+                .and_utc()
+                .timestamp()
+        };
+        assert_eq!(
+            IsoWeek::of(day(2026, 10, 5)).unwrap().to_string(),
+            "2026-W41"
+        );
+        assert_eq!(
+            IsoWeek::of(day(2026, 1, 1)).unwrap().to_string(),
+            "2026-W01"
+        );
+        // A Friday on New Year's Day is still the old year's last week.
+        assert_eq!(
+            IsoWeek::of(day(2027, 1, 1)).unwrap().to_string(),
+            "2026-W53"
+        );
+        // And a Monday in December can already be the next year's first.
+        assert_eq!(
+            IsoWeek::of(day(2024, 12, 30)).unwrap().to_string(),
+            "2025-W01"
+        );
+    }
+
+    #[test]
+    fn a_week_charter_wrote_reads_back_and_nothing_else_does() {
+        let week = IsoWeek::named("2026-W41").expect("a week");
+        assert_eq!(week.to_string(), "2026-W41");
+        for junk in [
+            "",
+            "2026-41",
+            "2026-W",
+            "2026-W00",
+            "2026-W54",
+            "2026-w41",
+            " 2026-W41",
+            "W41",
+            "2026-W041",
+        ] {
+            assert_eq!(IsoWeek::named(junk), None, "{junk:?} was read as a week");
+        }
+    }
+
+    #[test]
+    fn only_the_first_check_of_each_iso_week_fetches_the_weekly_manifest() {
+        let this = IsoWeek::named("2026-W41").unwrap();
+        let last = IsoWeek::named("2026-W40").unwrap();
+        assert!(
+            weekly_due(None, this, false),
+            "a machine never counted is counted"
+        );
+        assert!(weekly_due(Some(last), this, false), "a new week is counted");
+        assert!(
+            !weekly_due(Some(this), this, false),
+            "a week was counted twice"
+        );
+        // A clock that was once wrong ahead never stops the count for good.
+        let ahead = IsoWeek::named("2031-W02").unwrap();
+        assert!(weekly_due(Some(ahead), this, false));
+    }
+
+    #[test]
+    fn a_machine_that_opted_out_is_never_counted() {
+        let this = IsoWeek::named("2026-W41").unwrap();
+        assert!(!weekly_due(None, this, true));
+        assert!(!weekly_due(
+            Some(IsoWeek::named("2026-W40").unwrap()),
+            this,
+            true
+        ));
+    }
+
+    #[test]
+    fn do_not_track_is_honoured_in_every_spelling_but_off() {
+        use std::ffi::OsStr;
+        assert!(!do_not_track(None));
+        assert!(!do_not_track(Some(OsStr::new(""))));
+        assert!(!do_not_track(Some(OsStr::new("0"))));
+        for on in ["1", "true", "yes", "TRUE"] {
+            assert!(do_not_track(Some(OsStr::new(on))), "{on:?} did not opt out");
+        }
     }
 
     #[test]

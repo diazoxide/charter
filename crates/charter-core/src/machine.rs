@@ -14,7 +14,7 @@
 //! a Reporter with several planes would be asked repeatedly until the safeguard became a
 //! reflex."* charter-app also already writes its panic log to Tauri's `app_log_dir()`.
 //!
-//! **Six things, and nothing else:**
+//! **Seven things, and nothing else:**
 //!
 //! - **the planes recently opened**, so the opener has something to offer;
 //! - **whether the operator approved each one**, and *what it would do when opened* at the
@@ -30,6 +30,10 @@
 //! - **this device's id** ([`Store::device`], [`device_id`]), argued in ADR 0066, which
 //!   amends ADR 0034 for it: a random ULID minted at the first launch that finds none, so an
 //!   event, a record or the audit can say which device it happened on without a hostname.
+//! - **the ISO week this machine last fetched the weekly manifest in** ([`Store::weekly`],
+//!   OB-17, ADR 0083 as amended for it). It is the updater's state, as the channel is, and it
+//!   is here for the channel's reasons. It is not an identifier: every machine that checked in
+//!   a week holds the same value, and it never leaves the device.
 //!
 //! **The fourth was three until ADR 0040, and the fifth and sixth are newer still; the count
 //! is load-bearing.** ADR 0040 and ADR 0066 are the amendments: ADR 0066 argues the sixth (a
@@ -904,6 +908,9 @@ pub struct Store {
     pub channel: crate::updates::Channel,
     /// This device's id, once one has been asked for ([`device_id`]).
     pub device: Option<Device>,
+    /// The ISO week this machine last fetched the weekly manifest in
+    /// ([`crate::updates::weekly_due`], OB-17). Never sent anywhere.
+    pub weekly: Option<crate::updates::IsoWeek>,
 }
 
 /// A device's id (ADR 0066): random, minted at the first launch that finds none, and the only
@@ -1836,6 +1843,10 @@ fn load(doc: &serde_json::Value, dropped: &mut Vec<Dropped>) -> Store {
         windows,
         channel: channel_of(doc.get("channel"), dropped),
         device: device_of(doc.get("device")),
+        weekly: doc
+            .get("weekly")
+            .and_then(serde_json::Value::as_str)
+            .and_then(crate::updates::IsoWeek::named),
     }
 }
 
@@ -1991,6 +2002,9 @@ struct OnDisk {
     /// Left out until one is minted, so a store that never needed one is the file it was.
     #[serde(skip_serializing_if = "Option::is_none")]
     device: Option<DeviceOnDisk>,
+    /// Left out until the first weekly count, for the same reason.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    weekly: Option<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -2058,6 +2072,7 @@ impl From<&Store> for OnDisk {
                 id: device.id.clone(),
                 created: device.created,
             }),
+            weekly: store.weekly.map(|week| week.to_string()),
             recents: store
                 .recents
                 .iter()
@@ -2238,6 +2253,42 @@ mod tests {
             "nothing minted until asked: {text}"
         );
         assert_eq!(read(machine.path()).store.device, None);
+    }
+
+    // The seventh (ADR 0083, OB-17): the ISO week this machine's weekly count was last taken.
+
+    #[test]
+    fn the_week_last_counted_survives_a_write_and_a_read_and_is_absent_until_one_is() {
+        let machine = machine();
+        let mut store = one_plane();
+        write(machine.path(), &store).unwrap();
+        let text = std::fs::read_to_string(file(machine.path())).unwrap();
+        assert!(!text.contains("weekly"), "nothing counted yet: {text}");
+        assert_eq!(read(machine.path()).store.weekly, None);
+
+        store.weekly = crate::updates::IsoWeek::named("2026-W41");
+        write(machine.path(), &store).unwrap();
+
+        let text = std::fs::read_to_string(file(machine.path())).unwrap();
+        assert!(text.contains(r#""weekly": "2026-W41""#), "{text}");
+        assert_eq!(read(machine.path()).store.weekly, store.weekly);
+    }
+
+    #[test]
+    fn a_week_charter_did_not_write_reads_as_not_counted() {
+        let machine = machine();
+        write(machine.path(), &one_plane()).unwrap();
+        for junk in [r#""soon""#, "41", "null", r#""2026-W99""#] {
+            std::fs::write(
+                file(machine.path()),
+                format!(
+                    r#"{{"version":{VERSION},"at":0,"recents":[],"windows":[],"weekly":{junk}}}"#
+                ),
+            )
+            .unwrap();
+            // Counted again this week is the cost, and the safe direction: it sends nothing more.
+            assert_eq!(read(machine.path()).store.weekly, None, "{junk}");
+        }
     }
 
     // The fifth thing this file holds (ADR 0042): which stream the app updates from.

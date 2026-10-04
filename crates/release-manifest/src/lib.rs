@@ -38,6 +38,8 @@
 
 use std::collections::BTreeMap;
 
+pub mod weekly;
+
 use charter_core::updates::{Channel, TARGETS};
 
 /// One platform's row: what to download and the signature over it.
@@ -221,6 +223,20 @@ pub fn assemble(
     let mut text = serde_json::to_string_pretty(&doc).expect("plain data serde can always write");
     text.push('\n');
     Ok((channel.manifest(), text))
+}
+
+/// Every file `text`, the manifest [`assemble`] wrote, is published as: the channel's manifest
+/// and its weekly manifest ([`Channel::weekly_manifest`]), with the same bytes.
+///
+/// The weekly one exists only to be counted (V13, OB-17): the first update check of each ISO
+/// week reads it instead of the manifest, so its download count estimates weekly users and
+/// nothing in the request says which machine made it. Written from one string here, so the
+/// two can never drift into two manifests.
+pub fn published(channel: Channel, text: &str) -> [(&'static str, &str); 2] {
+    [
+        (channel.manifest(), text),
+        (channel.weekly_manifest(), text),
+    ]
 }
 
 /// The version a `.sig` was signed for, or why it is not a signature at all.
@@ -510,6 +526,22 @@ mod tests {
         assert_eq!(stable.0, "latest.json");
         // Same release, two names, identical bodies: the channel is which FILE it lands in.
         assert_eq!(dev.1, stable.1);
+    }
+
+    #[test]
+    fn every_channel_publishes_its_weekly_manifest_as_the_manifest_byte_for_byte() {
+        let signer = Signer::new();
+        let rows = signer.entries("0.2.0");
+        for channel in Channel::ALL {
+            let (name, text) =
+                assemble(channel, &signer.pubkey(), "0.2.0", "x", "", &rows).unwrap();
+            let files = published(channel, &text);
+            let names: Vec<&str> = files.iter().map(|(name, _)| *name).collect();
+            assert_eq!(names, [name, channel.weekly_manifest()]);
+            // Identical bytes: a machine reading either is updated the same way, and the
+            // weekly one's download count is the only thing that tells them apart (OB-17).
+            assert!(files.iter().all(|(_, body)| *body == text));
+        }
     }
 
     #[test]

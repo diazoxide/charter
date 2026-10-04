@@ -1115,7 +1115,9 @@ jobs:
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
               --title "charter $VERSION" --notes-file "$RUNNER_TEMP/body.md" "${assets[@]}"
           fi
-          tools/replace-release-assets.sh "$TAG" latest.json
+          # The weekly manifest beside it, the same bytes: only its download count differs
+          # (OB-17, docs/updating.md, "Counting weekly users").
+          tools/replace-release-assets.sh "$TAG" latest.json latest-weekly.json
 
       - name: Dev — replace the assets of the one `dev` prerelease
         if: needs.plan.outputs.channel == 'dev'
@@ -1127,10 +1129,10 @@ jobs:
           # on, so `dev` stays wherever the operator created it and only the assets move.
           # Replaced by name rather than with `gh release upload --clobber`, which died twice
           # on 2026-09-23 on GitHub's asset list lagging the previous publish's replace;
-          # `tools/replace-release-assets.sh` says how. `dev.json` last, on its own, so no
-          # machine reads a manifest naming an asset that is not uploaded yet.
+          # `tools/replace-release-assets.sh` says how. `dev.json` and its weekly twin last, on
+          # their own, so no machine reads a manifest naming an asset that is not uploaded yet.
           tools/replace-release-assets.sh dev "${assets[@]}"
-          tools/replace-release-assets.sh dev dev.json
+          tools/replace-release-assets.sh dev dev.json dev-weekly.json
           gh release edit dev --repo "$GITHUB_REPOSITORY" \
             --notes "The rolling dev channel. Now: charter $VERSION, built from $SHA. Not a release — see the stable releases for those."
           {
