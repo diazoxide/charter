@@ -7,6 +7,8 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish = false
+# The release workflow runs `cargo run -p release-manifest`; `weekly-users` is the other bin.
+default-run = "release-manifest"
 
 [dependencies]
 charter-core.workspace = true

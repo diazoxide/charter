@@ -157,17 +157,67 @@ pub async fn look<R: Runtime>(app: tauri::AppHandle<R>) {
 /// The check itself, with no emitting in it, so the decision and the telling are separable.
 async fn offer<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<Option<Offer>, String> {
     let channel = channel_now();
-    offer_from(app, channel, &channel.endpoint()).await
+    offer_from(
+        app,
+        channel,
+        &channel.endpoint(),
+        &channel.weekly_endpoint(),
+    )
+    .await
 }
 
-/// [`offer`], asking `endpoint` for `channel`'s manifest: the channel's own in the app, and a
-/// manifest on loopback in a test.
+/// [`offer`], asking `endpoint` for `channel`'s manifest, or `weekly` for its weekly twin when
+/// this is the machine's first check of the ISO week: the channel's own addresses in the app,
+/// and a server on loopback in a test.
+///
+/// **The weekly count (V13, OB-17).** The weekly manifest has the manifest's bytes, so the
+/// check is answered the same either way, and the request is the same from every machine: the
+/// only trace it leaves is one more in GitHub's download count of that file. The week is
+/// claimed in the machine store **before** the request, so a machine that cannot note it (no
+/// config home, no store on this platform) is never counted, rather than counted at every
+/// check. A request that got no answer gives the week back, so a laptop offline at its first
+/// check is counted at its next. A release published before the weekly manifest existed
+/// answers 404 for it; the check then reads the manifest, and the next check tries again.
 async fn offer_from<R: Runtime>(
     app: &tauri::AppHandle<R>,
     channel: Channel,
     endpoint: &str,
+    weekly: &str,
 ) -> Result<Option<Offer>, String> {
     may_update(app)?;
+    let mut found = None;
+    if let Some(claim) = WeeklyClaim::take() {
+        let asked = ask(app, weekly).await?;
+        if came_back(&asked) {
+            found = Some(asked);
+        } else {
+            claim.give_back();
+        }
+    }
+    let found = match found {
+        Some(found) => found,
+        None => ask(app, endpoint).await?,
+    };
+    let found = found.map_err(|why| {
+        format!(
+            "charter could not reach the {} channel: {why}",
+            channel.name()
+        )
+    })?;
+    Ok(found.map(|update| Offer {
+        version: update.version.clone(),
+        current: update.current_version.clone(),
+        channel: channel.name().to_owned(),
+        notes: update.body.clone().unwrap_or_default(),
+    }))
+}
+
+/// One updater request to `endpoint`, listed in the network log (OB-15): one of the only
+/// Charter reads a run without an account makes. `Err` is a request that could not be built.
+async fn ask<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+    endpoint: &str,
+) -> Result<Result<Option<tauri_plugin_updater::Update>, tauri_plugin_updater::Error>, String> {
     let url = endpoint
         .parse()
         .map_err(|why| format!("charter's update endpoint is not a url: {why}"))?;
@@ -182,20 +232,46 @@ async fn offer_from<R: Runtime>(
         .map_err(|why| format!("charter's updater could not be built: {why}"))?;
     let started = std::time::Instant::now();
     let found = updater.check().await;
-    // The network log (OB-15): one of the only Charter reads a run without an account makes.
     charter_core::netlog::updater_read(endpoint, came_back(&found), started.elapsed());
-    let found = found.map_err(|why| {
-        format!(
-            "charter could not reach the {} channel: {why}",
-            channel.name()
-        )
-    })?;
-    Ok(found.map(|update| Offer {
-        version: update.version.clone(),
-        current: update.current_version.clone(),
-        channel: channel.name().to_owned(),
-        notes: update.body.clone().unwrap_or_default(),
-    }))
+    Ok(found)
+}
+
+/// This ISO week's weekly count, claimed in the machine store (OB-17).
+struct WeeklyClaim {
+    root: std::path::PathBuf,
+    week: charter_core::updates::IsoWeek,
+    before: Option<charter_core::updates::IsoWeek>,
+}
+
+impl WeeklyClaim {
+    /// The claim, when this check is the machine's first of the week and the week could be
+    /// noted; `None` otherwise, and always under `DO_NOT_TRACK`.
+    fn take() -> Option<WeeklyClaim> {
+        use charter_core::updates::{DO_NOT_TRACK, IsoWeek, do_not_track, weekly_due};
+        if do_not_track(std::env::var_os(DO_NOT_TRACK).as_deref()) {
+            return None;
+        }
+        let root = charter_core::machine::config_root()?;
+        let week = IsoWeek::now();
+        let mut claimed = None;
+        charter_core::machine::update(&root, |store| {
+            if weekly_due(store.weekly, week, false) {
+                claimed = Some(store.weekly);
+                store.weekly = Some(week);
+            }
+        })
+        .ok()?;
+        claimed.map(|before| WeeklyClaim { root, week, before })
+    }
+
+    /// The request got no answer: the week was not counted, so the next check may count it.
+    fn give_back(self) {
+        let _ = charter_core::machine::update(&self.root, |store| {
+            if store.weekly == Some(self.week) {
+                store.weekly = self.before;
+            }
+        });
+    }
 }
 
 /// Whether an updater request was answered, for the network log: everything but a request
@@ -466,7 +542,200 @@ mod tests {
             .plugin(tauri_plugin_updater::Builder::new().build())
             .build(context)
             .expect("the app builds with its updater");
-        let found = tauri::async_runtime::block_on(offer_from(app.handle(), Channel::Stable, &url));
+        let found =
+            tauri::async_runtime::block_on(offer_from(app.handle(), Channel::Stable, &url, &url));
+        assert!(matches!(found, Ok(None)), "{found:?}");
+        assert_eq!(served.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    /// Set in the children [`no_machine_sends_anything_of_its_own_in_the_weekly_check`] runs.
+    const WEEKLY_CHILD: &str = "CHARTER_TEST_UPDATER_WEEKLY_CHILD";
+    /// The manifest server's address, handed to those children.
+    const WEEKLY_SERVER: &str = "CHARTER_TEST_UPDATER_WEEKLY_SERVER";
+
+    /// A manifest server on loopback that answers every path with an older version, and keeps
+    /// each request's bytes as they arrived.
+    fn recording_server() -> (String, std::sync::Arc<Mutex<Vec<String>>>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let seen = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let keep = seen.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut stream = stream;
+                let mut buf = vec![0u8; 16384];
+                let n = stream.read(&mut buf).unwrap_or(0);
+                keep.lock()
+                    .unwrap()
+                    .push(String::from_utf8_lossy(&buf[..n]).into_owned());
+                let body = r#"{"version":"0.0.1","notes":"","pub_date":"2020-01-01T00:00:00Z","url":"http://127.0.0.1:1/x","signature":"x"}"#;
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            }
+        });
+        (base, seen)
+    }
+
+    /// OB-17's privacy test. Three machines, each with a device id of its own, make two update
+    /// checks each against one server. The first check of the week of each machine that has
+    /// not opted out reads the weekly manifest, and that request is **byte for byte the same
+    /// from every machine**: it carries no device id, no hostname, no user and nothing else
+    /// that tells one machine from another, so nothing can link it across devices or weeks.
+    /// The second check of the week reads the manifest, and a machine with `DO_NOT_TRACK` set
+    /// never reads the weekly one.
+    #[test]
+    fn no_machine_sends_anything_of_its_own_in_the_weekly_check() {
+        if std::env::var_os(WEEKLY_CHILD).is_none() {
+            let (base, seen) = recording_server();
+            let mut devices = Vec::new();
+            for opted_out in ["", "", "1"] {
+                let store = tempfile::tempdir().expect("a machine store");
+                devices.push(charter_core::machine::device_id(store.path()).expect("a device id"));
+                charter_core::testrun::rerun(
+                    &["updates::tests::no_machine_sends_anything_of_its_own_in_the_weekly_check"],
+                    &[
+                        (WEEKLY_CHILD, std::ffi::OsStr::new("1")),
+                        (WEEKLY_SERVER, std::ffi::OsStr::new(&base)),
+                        (
+                            charter_core::updates::DO_NOT_TRACK,
+                            std::ffi::OsStr::new(opted_out),
+                        ),
+                        (charter_core::machine::HOME_VAR, store.path().as_os_str()),
+                        ("XDG_CONFIG_HOME", std::ffi::OsStr::new("")),
+                    ],
+                );
+                let kept = charter_core::machine::read(store.path()).store.weekly;
+                if opted_out.is_empty() {
+                    assert_eq!(kept, Some(charter_core::updates::IsoWeek::now()));
+                } else {
+                    assert_eq!(kept, None, "an opted-out machine noted a count");
+                }
+            }
+            assert_ne!(devices[0], devices[1], "two machines, two device ids");
+            let seen = seen.lock().unwrap().clone();
+            let lines: Vec<&str> = seen
+                .iter()
+                .map(|r| r.lines().next().unwrap_or(""))
+                .collect();
+            assert_eq!(
+                lines,
+                [
+                    "GET /latest-weekly.json HTTP/1.1",
+                    "GET /latest.json HTTP/1.1",
+                    "GET /latest-weekly.json HTTP/1.1",
+                    "GET /latest.json HTTP/1.1",
+                    "GET /latest.json HTTP/1.1",
+                    "GET /latest.json HTTP/1.1",
+                ],
+                "{seen:#?}"
+            );
+            assert_eq!(seen[0], seen[2], "two machines' weekly checks differ");
+            let host = gethostname();
+            let user = std::env::var("USER").unwrap_or_default();
+            for request in &seen {
+                for device in &devices {
+                    assert!(!request.contains(device.as_str()), "{request}");
+                }
+                assert!(host.is_empty() || !request.contains(&host), "{request}");
+                assert!(user.len() < 3 || !request.contains(&user), "{request}");
+                // Only headers that are the same on every machine.
+                for header in request.lines().skip(1).take_while(|l| !l.is_empty()) {
+                    let name = header.split(':').next().unwrap_or("").to_ascii_lowercase();
+                    assert!(
+                        ["host", "user-agent", "accept", "accept-encoding"]
+                            .contains(&name.as_str()),
+                        "an unexpected header: {header}"
+                    );
+                }
+            }
+            return;
+        }
+        let base = std::env::var(WEEKLY_SERVER).expect("the server");
+        let mut context = tauri_context!(test = true);
+        context.config_mut().plugins.0.insert(
+            "updater".into(),
+            serde_json::json!({ "pubkey": A_KEY, "endpoints": [format!("{base}/latest.json")] }),
+        );
+        let app = tauri::test::mock_builder()
+            .plugin(tauri_plugin_updater::Builder::new().build())
+            .build(context)
+            .expect("the app builds with its updater");
+        for _ in 0..2 {
+            let found = tauri::async_runtime::block_on(offer_from(
+                app.handle(),
+                Channel::Stable,
+                &format!("{base}/latest.json"),
+                &format!("{base}/latest-weekly.json"),
+            ));
+            assert!(matches!(found, Ok(None)), "{found:?}");
+        }
+    }
+
+    /// The machine's hostname, for the test above to look for.
+    fn gethostname() -> String {
+        let mut command = std::process::Command::new("hostname");
+        charter_core::forklock::output(&mut command)
+            .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_owned())
+            .unwrap_or_default()
+    }
+
+    /// A release published before the weekly manifest existed answers 404 for it. The check
+    /// then reads the manifest, and the week is not noted, so the next check tries again.
+    #[test]
+    fn a_release_without_a_weekly_manifest_still_answers_the_check() {
+        if std::env::var_os(WEEKLY_CHILD).is_none() {
+            let store = tempfile::tempdir().expect("a machine store");
+            charter_core::testrun::rerun(
+                &["updates::tests::a_release_without_a_weekly_manifest_still_answers_the_check"],
+                &[
+                    (WEEKLY_CHILD, std::ffi::OsStr::new("1")),
+                    (
+                        charter_core::updates::DO_NOT_TRACK,
+                        std::ffi::OsStr::new(""),
+                    ),
+                    (charter_core::machine::HOME_VAR, store.path().as_os_str()),
+                    ("XDG_CONFIG_HOME", std::ffi::OsStr::new("")),
+                ],
+            );
+            assert_eq!(charter_core::machine::read(store.path()).store.weekly, None);
+            return;
+        }
+        let (url, served) = manifest_server();
+        let missing = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+        let missing_url = format!(
+            "http://{}/latest-weekly.json",
+            missing.local_addr().unwrap()
+        );
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            for mut stream in missing.incoming().flatten() {
+                let mut buf = [0u8; 4096];
+                let _ = stream.read(&mut buf);
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+                );
+            }
+        });
+        let mut context = tauri_context!(test = true);
+        context.config_mut().plugins.0.insert(
+            "updater".into(),
+            serde_json::json!({ "pubkey": A_KEY, "endpoints": [url] }),
+        );
+        let app = tauri::test::mock_builder()
+            .plugin(tauri_plugin_updater::Builder::new().build())
+            .build(context)
+            .expect("the app builds with its updater");
+        let found = tauri::async_runtime::block_on(offer_from(
+            app.handle(),
+            Channel::Stable,
+            &url,
+            &missing_url,
+        ));
         assert!(matches!(found, Ok(None)), "{found:?}");
         assert_eq!(served.load(std::sync::atomic::Ordering::SeqCst), 1);
     }

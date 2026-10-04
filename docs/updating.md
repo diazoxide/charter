@@ -16,7 +16,8 @@ updates fine (ADR 0042 §3, amended 2026-09-23).
 | **dev** | any green `main` | `releases/download/dev/dev.json` |
 
 A machine switches with `charter update --channel dev` (or `stable`). The app checks a minute
-after launch and every six hours after that. It **installs only when asked**, because
+after launch and every six hours after that. The week's first check reads the channel's weekly
+manifest instead, which is how charter counts weekly users without an identifier (below). It **installs only when asked**, because
 installing restarts charter and charter owns every running session.
 
 On macOS and Linux an installed update waits in place, and the title bar says **Restart to
@@ -254,6 +255,69 @@ The app ships its own `charter`, and every chat the app starts finds that one fi
   most likely — and says so instead; remove that one first if you want this one.
 - **Linux**: the `.deb` installs `/usr/bin/charter`. The AppImage runs from a mount point that
   changes at every launch, so there is nothing stable to link to.
+
+## Counting weekly users, without an identifier
+
+charter estimates how many machines use it each week from a download count, and from nothing
+else (OB-17, ADR 0083 as amended for it). No install id, device id, hash or salt is sent, and
+nothing is stored about anyone.
+
+**What the app does.** Each release publishes its manifest twice, with the same bytes:
+`latest.json` and `latest-weekly.json` on stable, `dev.json` and `dev-weekly.json` on dev. A
+machine's first update check of each ISO week (UTC) reads the weekly file. Every other check
+reads the usual one. The machine store notes the week (`machine.json`, `weekly`), so the next
+check knows the week's count has been taken. That note stays on the machine, and every machine
+that checked that week holds the same value. The request to GitHub is the same from every
+machine: one URL with no query, and only the updater's fixed headers: `Accept`, and a user agent that
+names the updater library's version, never the machine's. A test (`no_machine_sends_anything_of_its_own_in_the_weekly_check`) runs
+three machines with their own device ids and checks that their weekly requests are byte for
+byte identical and carry none of them.
+
+**Why it cannot be linked.** The request carries no value of its own, so no value can match
+from one week to the next or from one device to another. A per-week random salt or a hashed
+install id would still send something that a log could join on. Here there is only a count.
+
+**Opting out.** Set `DO_NOT_TRACK=1` in the environment charter starts with, and it never reads
+the weekly file. The ordinary update check goes on. Test builds and development builds make no
+checks at all. A machine that cannot keep the note is never counted, because otherwise it would
+be counted at every check: that means no config home, or a platform with no machine store.
+
+**What GitHub sees.** GitHub serves the files, so GitHub sees each request's IP address and
+user agent, as it does for every update check and download. That is GitHub's view, under
+GitHub's privacy statement. charter never receives an IP address: it reads only the per-asset
+`download_count` that GitHub's releases API returns for every public repository.
+
+**The estimator.** A download count only grows, so the estimate is a difference. Take two
+listings a week apart:
+
+```bash
+gh api --paginate repos/diazoxide/charter/releases > releases-2026-W41.json
+cargo run -p release-manifest --bin weekly-users -- releases-2026-W41.json releases-2026-W40.json
+```
+
+The report lists each release's weekly-manifest count and the downloads of its bundles and
+installers, with the growth since the earlier listing for each. Weekly users per channel are
+**the sum, over that channel's releases, of the growth of the weekly-manifest count**. The
+sum covers every release because stable's `latest/download` address hands the check to whichever
+release is newest at that moment. A count therefore belongs to the release that was newest
+then, not to the version the machine runs. Keep the listings yourself: nothing publishes them.
+
+**Its biases:**
+
+- **Undercount:** a machine that does not check during a week (switched off, offline all
+  week, or on a build that makes no checks), or that has `DO_NOT_TRACK` set.
+- **Overcount:** one machine with several OS users, or with a reset machine store, is counted
+  once per store. A machine that changes channel in a week is counted on the first only. A
+  clock that jumps between weeks can count a machine twice.
+- **Reset counts:** replacing an asset starts its count again at zero. A stable release's
+  manifests are replaced only when its publish is re-run. Dev's are replaced at every dev
+  build, so dev's count covers only the time since its last build (the report prints the
+  asset's upload time). Take dev's listings right before builds, or read its count as a lower
+  bound.
+- **Fallback:** a release published before the weekly manifest existed answers 404 for it.
+  The check then reads the usual manifest, the week is not noted, and the next check tries
+  again. Nothing is counted for such a release.
+- **Not people:** a count is of machines that checked, and says nothing of who uses them.
 
 ## What a chat brings with it
 

@@ -1,7 +1,7 @@
 //! `release-manifest`: the release workflow's one call into the rules in [`release_manifest`].
 //!
-//! Arguments in, one file out, and every decision it could get wrong is in the library beside
-//! it where a test can watch it get it right. This file reads argv, reads the `.sig` files off
+//! Arguments in, the manifest and its weekly twin out (OB-17), and every decision it could get
+//! wrong is in the library beside it where a test can watch it get it right. This file reads argv, reads the `.sig` files off
 //! the disk and prints what it wrote — nothing else, deliberately: a release tool whose logic
 //! lives in its `main` is a release tool nothing tests.
 //!
@@ -22,12 +22,14 @@
 use std::path::{Path, PathBuf};
 
 use charter_core::updates::Channel;
-use release_manifest::{Entry, assemble};
+use release_manifest::{Entry, assemble, published};
 
 fn main() -> std::process::ExitCode {
     match run(std::env::args().skip(1).collect()) {
         Ok(wrote) => {
-            println!("{}", wrote.display());
+            for path in wrote {
+                println!("{}", path.display());
+            }
             std::process::ExitCode::SUCCESS
         }
         Err(why) => {
@@ -37,7 +39,7 @@ fn main() -> std::process::ExitCode {
     }
 }
 
-fn run(args: Vec<String>) -> Result<PathBuf, String> {
+fn run(args: Vec<String>) -> Result<Vec<PathBuf>, String> {
     let mut channel = None;
     let mut version = String::new();
     let mut pub_date = String::new();
@@ -98,12 +100,18 @@ fn run(args: Vec<String>) -> Result<PathBuf, String> {
         .collect::<Result<Vec<_>, String>>()?;
 
     let pubkey = pubkey_in(&config)?;
-    let (name, text) = assemble(channel, &pubkey, &version, &pub_date, &notes, &rows)
+    let (_, text) = assemble(channel, &pubkey, &version, &pub_date, &notes, &rows)
         .map_err(|refused| refused.to_string())?;
-    let path = out.join(name);
-    std::fs::write(&path, text)
-        .map_err(|why| format!("{} could not be written: {why}", path.display()))?;
-    Ok(path)
+    // The manifest and its weekly twin (OB-17), from one string.
+    published(channel, &text)
+        .into_iter()
+        .map(|(name, body)| {
+            let path = out.join(name);
+            std::fs::write(&path, body)
+                .map_err(|why| format!("{} could not be written: {why}", path.display()))?;
+            Ok(path)
+        })
+        .collect()
 }
 
 /// `plugins.updater.pubkey` out of `tauri.conf.json` — the key the shipped app verifies with.
