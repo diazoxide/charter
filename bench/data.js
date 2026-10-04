@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791146675564,
+  "lastUpdate": 1791148538031,
   "repoUrl": "https://github.com/diazoxide/charter",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -1386,6 +1386,48 @@ window.BENCHMARK_DATA = {
             "value": 101.78090599999999,
             "unit": "ms",
             "extra": "median of 5 runs: 100.751, 101.756, 101.781, 101.916, 102.326 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "0cefd0236a739fc65dd572a6f4f1a1eda0f9e397",
+          "message": "search at scale: a status the reader cannot finish is a budget missed\n\nOn the macOS runner at 300,000 files, a status runs past the reader child's\nown deadline, and the evidence job (main d908b3c) panicked on\n`.expect(\"a status\")` instead of saying so. A read that comes back with no\nanswer is now pushed as a missed budget, \"status read: no answer (…)\", and\nthe measurement ends there: in report mode it is a warning, by hand it still\nfails the run (ADR 0086 as amended in train 25).\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-05T01:14:14+04:00",
+          "tree_id": "b20e0b80d2e0a1ee4a63c867a53b55adcc89d4a6",
+          "url": "https://github.com/diazoxide/charter/commit/0cefd0236a739fc65dd572a6f4f1a1eda0f9e397"
+        },
+        "date": 1791148536530,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.5961495,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.584, 0.592, 0.596, 0.599, 0.621 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.757609,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.590, 16.614, 16.758, 17.305, 17.424 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 104.236635,
+            "unit": "ms",
+            "extra": "median of 5 runs: 103.286, 103.601, 104.237, 104.803, 106.278 ms"
           }
         ]
       }
