@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791149337744,
+  "lastUpdate": 1791150514587,
   "repoUrl": "https://github.com/diazoxide/charter",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -1470,6 +1470,48 @@ window.BENCHMARK_DATA = {
             "value": 101.486448,
             "unit": "ms",
             "extra": "median of 5 runs: 101.042, 101.326, 101.486, 101.718, 101.989 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "08fb7c1276b471e709462ba4262f841cfc93afca",
+          "message": "SE-21 review: sr-only count, refusals stay under a no-match filter\n\n- The live count uses Tailwind's sr-only, and the hand-written hidden rule is gone.\n- A filter that matches nothing says so above the level's standing refusals instead of in\n  their place; a Project-level test holds a refusal on screen under such a filter.\n- The arrow-key test filters by a word that narrows both groups to one setting each, and\n  says so correctly.\n\nCloses #1171\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-05T01:47:20+04:00",
+          "tree_id": "38ed3871209d22c781c051aaf60d3d0872b821df",
+          "url": "https://github.com/diazoxide/charter/commit/08fb7c1276b471e709462ba4262f841cfc93afca"
+        },
+        "date": 1791150513981,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.5147295000000001,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.500, 0.504, 0.515, 0.518, 0.528 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.966683,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.483, 16.599, 16.967, 17.086, 17.485 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 104.262693,
+            "unit": "ms",
+            "extra": "median of 5 runs: 103.357, 103.905, 104.263, 106.796, 107.851 ms"
           }
         ]
       }
