@@ -112,6 +112,25 @@ describe("SavingView", () => {
     expect(screen.getByRole("status").textContent).toContain("✓ Committed");
   });
 
+  it("says under the message box what an empty one does, and holds it while a save runs", async () => {
+    let land: (lines: string[]) => void = () => undefined;
+    mockIPC((cmd) => {
+      if (cmd === "plane_saving") return standing({ stage: "changed", changed: ["a.md"] });
+      if (cmd === "save_plane") return new Promise<string[]>((done) => (land = done));
+      return null;
+    });
+    render(<SavingView plane={PLANE} />);
+    await screen.findByText("1 changed");
+
+    const message = screen.getByRole("textbox", { name: "Message" });
+    expect(message).toHaveAccessibleDescription("Leave empty for one that says what changed");
+    expect(message).toBeEnabled();
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(message).toBeDisabled());
+    land(["✓ Committed"]);
+    await waitFor(() => expect(message).toBeEnabled());
+  });
+
   it("asks for the generated message when none is typed", async () => {
     const asked = core([standing({ stage: "changed", changed: ["a.md"] })]);
     render(<SavingView plane={PLANE} />);
@@ -255,14 +274,20 @@ describe("SavingView", () => {
     core([standing({ mode: null, modeFrom: "default" }), standing({ mode: "commit" })]);
     render(<SavingView plane={PLANE} />);
 
-    const question = await screen.findByRole("group", {
+    const question = await screen.findByRole("radiogroup", {
       name: "How should this project be saved?",
     });
-    await userEvent.click(within(question).getByRole("button", { name: /^Commit only/ }));
+    const commit = within(question).getByRole("radio", { name: "Commit only" });
+    expect(commit).toHaveAccessibleDescription(
+      "Saves stay on this machine until you push them yourself.",
+    );
+    await userEvent.click(commit);
 
     await waitFor(() => expect(chosen).toEqual(["commit"]));
     await waitFor(() =>
-      expect(screen.queryByRole("group", { name: "How should this project be saved?" })).toBeNull(),
+      expect(
+        screen.queryByRole("radiogroup", { name: "How should this project be saved?" }),
+      ).toBeNull(),
     );
   });
 

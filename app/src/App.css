@@ -5300,6 +5300,13 @@ h2.sidebar-title .node-icon {
 .saving-blocked {
   color: var(--state-failed);
 }
+/* What the view says about the project's saving — its mode, its live workspaces, a notice — in
+   the muted size a setting's help line is drawn at. */
+.saving-note {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
 .saving-files,
 .saving-journal {
   margin: 0;
@@ -5425,8 +5432,8 @@ h2.sidebar-title .node-icon {
   max-width: 60rem;
 }
 
-.memory-editor .settings-field input,
-.memory-editor .settings-field textarea {
+/* A memory's title and body take the row's whole width: the body is a page, not a value. */
+.memory-editor .ui-field {
   width: 100%;
   box-sizing: border-box;
 }

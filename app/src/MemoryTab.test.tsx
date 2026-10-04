@@ -130,6 +130,7 @@ describe("editing a memory", () => {
     const title = screen.getByRole("textbox", { name: "Title" });
     expect(title).toHaveValue("Where prod-1 is");
     expect(title).toHaveAttribute("maxLength", "72");
+    expect(title).toHaveAccessibleDescription("15 / 72");
     expect(screen.getByRole("textbox", { name: "Body" })).toHaveValue(
       "It lives in **eu-west-1**.\n\n<script>alert(1)</script>",
     );
@@ -279,6 +280,15 @@ describe("a new memory's tab", () => {
       title: "Freeze",
       text: "No deploys on Friday",
     });
+  });
+
+  it("says under the title what an empty one becomes", async () => {
+    core([null]);
+    draw({ at: DRAFT_AT });
+
+    expect(await screen.findByRole("textbox", { name: "Title" })).toHaveAccessibleDescription(
+      "The body's first line, when left empty · 0 / 72",
+    );
   });
 
   it("closes its tab on Cancel, since there is nothing to go back to", async () => {

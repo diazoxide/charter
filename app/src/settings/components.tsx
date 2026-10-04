@@ -204,10 +204,24 @@ type Tied = { ids: RowIds };
  */
 export type FieldProps = Tied &
   (
-    | { kind: "text"; value: string; onChange: (to: string) => void }
+    | {
+        kind: "text";
+        value: string;
+        onChange: (to: string) => void;
+        /** The input's own cap on what can be typed. */
+        maxLength?: number;
+        /** The input's own `disabled`: held while what it feeds is being done. */
+        disabled?: boolean;
+      }
     /** One entry per line. The text is what is typed, kept whole — an empty line while the next
      *  entry is being typed is still there — and the caller reads the entries out of it. */
-    | { kind: "list"; value: string; onChange: (to: string) => void }
+    | {
+        kind: "list";
+        value: string;
+        onChange: (to: string) => void;
+        /** The fewest lines the box shows, before it grows with what is typed. Two unless said. */
+        rows?: number;
+      }
     | {
         kind: "range";
         value: number;
@@ -250,7 +264,7 @@ export function Field(props: FieldProps) {
         className="ui-field"
         value={props.value}
         spellCheck={false}
-        rows={Math.max(2, props.value.split("\n").length)}
+        rows={Math.max(props.rows ?? 2, props.value.split("\n").length)}
         aria-describedby={ids.describedBy}
         onChange={(event) => props.onChange(event.currentTarget.value)}
       />
@@ -261,6 +275,8 @@ export function Field(props: FieldProps) {
       className="ui-field"
       type="text"
       value={props.value}
+      maxLength={props.maxLength}
+      disabled={props.disabled}
       spellCheck={false}
       aria-describedby={ids.describedBy}
       onChange={(event) => props.onChange(event.currentTarget.value)}
