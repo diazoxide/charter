@@ -38,8 +38,8 @@
 //! without asking, and any other program, the `charter` command and every program a chat runs
 //! included, is refused or makes the Keychain ask the person. The index marks each key whose
 //! item was written that way (`held`). An item written before is written again the same way
-//! the first time charter reads it, and the vault's next read through the `charter` command
-//! says so once (ruling V90d).
+//! the next time charter reads it (one the `charter` command made, the next time the command
+//! does), and the vault's next read through the command says so once (ruling V90d).
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -109,6 +109,11 @@ pub trait Store: Send + Sync {
     fn holds(&self) -> bool {
         false
     }
+    /// The entry's value, unchanged, written again held to charter's app (ruling V90d). Where it
+    /// cannot be held, a store may leave the item as it is rather than write it in place.
+    fn rehold(&self, service: &str, account: &str, value: &str) -> Result<Held, VaultError> {
+        self.set(service, account, value)
+    }
 }
 
 /// The store this build talks to. See the module header: a fenced build never reaches the
@@ -158,7 +163,7 @@ impl Store for OsStore {
 
     fn set(&self, service: &str, account: &str, value: &str) -> Result<Held, VaultError> {
         if cfg!(target_os = "macos") {
-            return super::keyhold::set(service, account, value);
+            return super::keyhold::set(service, account, value, super::keyhold::Why::Write);
         }
         set_here(service, account, value)?;
         Ok(Held::NoRule)
@@ -174,6 +179,13 @@ impl Store for OsStore {
 
     fn holds(&self) -> bool {
         cfg!(target_os = "macos")
+    }
+
+    fn rehold(&self, service: &str, account: &str, value: &str) -> Result<Held, VaultError> {
+        if cfg!(target_os = "macos") {
+            return super::keyhold::set(service, account, value, super::keyhold::Why::Move);
+        }
+        Ok(Held::NoRule)
     }
 }
 
@@ -528,7 +540,7 @@ pub fn get_with(
     key: &str,
 ) -> Result<String, VaultError> {
     check_key(key)?;
-    let mut index = load_index(ctx, vault)?;
+    let index = load_index(ctx, vault)?;
     let Some(service) = index.service.clone() else {
         return Err(not_found(vault, key));
     };
@@ -536,19 +548,75 @@ pub fn get_with(
         .get(&service, key)?
         .map(Secret::into_inner)
         .ok_or_else(|| not_found(vault, key))?;
-    // Ruling V90d: an item written before the store held it is written again, held, on its
-    // first read. Best-effort: the read already succeeded, and a failure tries again next time.
-    let unheld = index.keys.get(key).is_some_and(|entry| !entry.held);
-    if store.holds() && unheld && store.set(&service, key, &value) == Ok(Held::ToTheApp) {
-        if let Some(entry) = index.keys.get_mut(key) {
-            entry.held = true;
-        }
-        if index.note == Note::None {
-            index.note = Note::Due;
-        }
-        let _ = save_index(ctx, vault, &index);
+    if store.holds()
+        && let Some(read) = index.keys.get(key).filter(|entry| !entry.held)
+    {
+        rehold(store, ctx, vault, &service, key, &value, &read.updated);
     }
     Ok(value)
+}
+
+/// Ruling V90d: an item written before the store held it is written again, held, on its first
+/// read. Best-effort: the read already succeeded, and a failure tries again next time.
+///
+/// **Never over a newer write.** A `secret set` of the key between the read and now would be
+/// undone by writing the value read, so the index is read again first and the move is made only
+/// while the key's `updated` is still `read_at`; afterwards only `held` and the note change.
+fn rehold(
+    store: &dyn Store,
+    ctx: &Ctx,
+    vault: &Vault,
+    service: &str,
+    key: &str,
+    value: &str,
+    read_at: &str,
+) {
+    let unchanged = |index: &Index| {
+        index.service.as_deref() == Some(service)
+            && index
+                .keys
+                .get(key)
+                .is_some_and(|entry| !entry.held && entry.updated == read_at)
+    };
+    if !load_index(ctx, vault).is_ok_and(|index| unchanged(&index)) {
+        return;
+    }
+    if store.rehold(service, key, value) != Ok(Held::ToTheApp) {
+        return;
+    }
+    let Ok(mut index) = load_index(ctx, vault) else {
+        return;
+    };
+    if let Some(entry) = index.keys.get_mut(key) {
+        entry.held = true;
+    }
+    if index.note == Note::None {
+        index.note = Note::Due;
+    }
+    let _ = save_index(ctx, vault, &index);
+}
+
+/// Whether `key`'s item was just written where its store holds items to charter's app and
+/// could not be held this time ([`Held::NotYet`]), as its index says.
+pub fn left_unheld(ctx: &Ctx, vault: &Vault, key: &str) -> bool {
+    left_unheld_in(&*store(ctx), ctx, vault, key)
+}
+
+/// [`left_unheld`] against a store the caller chose.
+pub fn left_unheld_in(store: &dyn Store, ctx: &Ctx, vault: &Vault, key: &str) -> bool {
+    store.holds()
+        && load_index(ctx, vault)
+            .ok()
+            .and_then(|index| index.keys.get(key).map(|entry| !entry.held))
+            .unwrap_or(false)
+}
+
+/// What `secret set` says when the item it wrote could not be held to charter's app.
+pub fn unheld_sentence(key: &str) -> String {
+    format!(
+        "charter could not hold '{key}' to its app, so the program that wrote it reads it \
+         without asking you. charter tries again the next time the charter command reads it."
+    )
 }
 
 /// The one note that this vault's items were moved under charter's access rule (ruling V90d),
@@ -1128,5 +1196,93 @@ mod tests {
         let before = std::fs::read(index_path(&ctx, &ops)).unwrap();
         assert_eq!(get_with(&store, &ctx, &ops, "A").unwrap(), VALUE);
         assert_eq!(std::fs::read(index_path(&ctx, &ops)).unwrap(), before);
+    }
+
+    /// A holding store over which another charter's `secret set` of the same key lands right
+    /// after each read.
+    struct Racing {
+        holding: Holding,
+        ctx: Ctx,
+        vault: Vault,
+    }
+
+    impl Store for Racing {
+        fn get(&self, service: &str, account: &str) -> Result<Option<Secret>, VaultError> {
+            let read = self.holding.get(service, account)?;
+            set_with(
+                &self.holding.under,
+                &self.ctx,
+                &self.vault,
+                account,
+                "newer-value-9d2",
+                "2026-10-04T12:00:00Z",
+            )?;
+            Ok(read)
+        }
+        fn set(&self, service: &str, account: &str, value: &str) -> Result<Held, VaultError> {
+            self.holding.set(service, account, value)
+        }
+        fn delete(&self, service: &str, account: &str) -> Result<bool, VaultError> {
+            self.holding.delete(service, account)
+        }
+        fn holds(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn a_move_never_writes_the_value_it_read_over_a_newer_one() {
+        let (dir, ctx, ops) = plane();
+        set_with(
+            &FileStore::at(dir.path().join("k.json")),
+            &ctx,
+            &ops,
+            "A",
+            VALUE,
+            "t",
+        )
+        .unwrap();
+        let racing = Racing {
+            holding: Holding::at(dir.path(), Held::ToTheApp),
+            ctx: Ctx::new(dir.path(), Env::of(&[])),
+            vault: vault("ops"),
+        };
+
+        assert_eq!(get_with(&racing, &ctx, &ops, "A").unwrap(), VALUE);
+
+        let after = FileStore::at(dir.path().join("k.json"));
+        assert_eq!(
+            get_with(&after, &ctx, &ops, "A").unwrap(),
+            "newer-value-9d2"
+        );
+        let entry = &load_index(&ctx, &ops).unwrap().keys["A"];
+        assert_eq!(entry.updated, "2026-10-04T12:00:00Z");
+        assert_eq!(
+            racing.holding.writes(),
+            0,
+            "the move wrote over the newer value"
+        );
+    }
+
+    #[test]
+    fn a_write_the_store_could_not_hold_is_told_apart_from_one_it_held() {
+        let (dir, ctx, ops) = plane();
+        let held = Holding::at(dir.path(), Held::ToTheApp);
+        set_with(&held, &ctx, &ops, "A", VALUE, "t").unwrap();
+        assert!(!left_unheld_in(&held, &ctx, &ops, "A"));
+
+        let not_yet = Holding::at(dir.path(), Held::NotYet);
+        set_with(&not_yet, &ctx, &ops, "B", VALUE, "t").unwrap();
+        assert!(left_unheld_in(&not_yet, &ctx, &ops, "B"));
+
+        // A store with no rule never says it.
+        let stub = FileStore::at(dir.path().join("k.json"));
+        set_with(&stub, &ctx, &ops, "C", VALUE, "t").unwrap();
+        assert!(!left_unheld_in(&stub, &ctx, &ops, "C"));
+        assert_eq!(
+            unheld_sentence("C"),
+            "charter could not hold 'C' to its app, so the program that wrote it reads it \
+             without asking you. charter tries again the next time the charter command reads it."
+        );
     }
 }

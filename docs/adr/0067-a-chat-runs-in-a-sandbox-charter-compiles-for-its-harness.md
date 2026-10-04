@@ -310,11 +310,13 @@ not a path, so a sandboxed project with a keyring vault started no chat at all.
   at all (measured). Neither needs it for its own login: both keep it in a file.
 - **Linux (V90c).** The Secret Service answers any process of the session, and no harness's
   sandbox has been measured keeping a chat off the session bus, so a Claude Code chat there is
-  still refused. The refusal is never a dead end: it says to start that chat without the
-  sandbox (§7) or to move those secrets to a plain-file or 1Password vault, which the sandbox
-  can keep from a chat. Codex and opencode wait for the Linux wrap (#1040).
-- **Existing items (V90d)** are written again, held, the first time charter reads them. Until
-  then an item keeps the access it had.
+  still refused. The refusal is never a dead end: it says to start that chat without the sandbox
+  from the new-chat picker (§7), or to move those secrets to a plain-file or 1Password vault,
+  which the sandbox can keep from a chat. A resumed or relaunched chat has no opt-out, so moving
+  them is its way on. Codex and opencode wait for the Linux wrap (#1040).
+- **Existing items (V90d)** are written again, held, the next time charter reads them; one the
+  `charter` command made is moved by the command, since only an item's maker can delete it.
+  Until then an item keeps the access it had.
 
 ### 6. External enforcement backends are an option, and never the default (SD-33)
 

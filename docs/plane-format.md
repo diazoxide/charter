@@ -3346,8 +3346,8 @@ charter-app only (ADR 0047); the Python charter has no keyring provider and neve
 - **`held`** (on a key, optional, `true` only): its item was written held to charter's app, so
   only the app reads it without the person's confirmation (ADR 0047 as amended by ruling V90).
   Absent on every key written before, and on every key in a store with no such rule (Linux, a
-  test build's stub): on macOS such a key's item is written again, held, the first time charter
-  reads it.
+  test build's stub): on macOS such a key's item is written again, held, the next time charter
+  reads it (one the `charter` command made, the next time the command reads it).
 - **`held_note`** (optional): `"due"` once charter moved one of the vault's items under that
   rule and has not said so yet, `"said"` after the vault's next `charter secret get`, `cp` or
   `exec` said it. It is said once.
