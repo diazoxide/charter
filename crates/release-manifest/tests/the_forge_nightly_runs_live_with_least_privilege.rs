@@ -54,6 +54,39 @@ fn secret_refs(line: &str) -> Vec<String> {
     found
 }
 
+/// Every use of the secrets context inside a `${{ … }}` expression on `line` that is not exactly
+/// [`TOKEN`]: a bare `secrets` (`toJSON(secrets)`, `fromJSON(format(..., secrets))`) sends the
+/// whole context to the runner, and so does any other name or index.
+fn other_secret_uses(line: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut rest = line;
+    while let Some(open) = rest.find("${{") {
+        let inner = &rest[open + 3..];
+        let close = inner.find("}}").unwrap_or(inner.len());
+        let expr = &inner[..close];
+        let mut at = 0;
+        while let Some(i) = expr[at..].find("secrets") {
+            let start = at + i;
+            let end = start + "secrets".len();
+            let before = expr[..start].chars().last();
+            let after = expr[end..].chars().next();
+            let word = |c: Option<char>| c.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
+            if !word(before) && before != Some('.') && !word(after) {
+                let tail = &expr[start..];
+                let exact = tail.strip_prefix(TOKEN).is_some_and(|t| {
+                    !t.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
+                });
+                if !exact {
+                    found.push(expr.trim().to_owned());
+                }
+            }
+            at = end;
+        }
+        rest = &inner[close..];
+    }
+    found
+}
+
 /// The lines that reference a secret, comments dropped.
 fn secret_lines<'a>(lines: impl Iterator<Item = &'a String>) -> Vec<String> {
     lines
@@ -96,6 +129,24 @@ fn the_secret_reader_sees_both_forms() {
     assert_eq!(secret_refs("x: ${{ secrets ['B'] }}"), ["secrets['B']"]);
     assert!(secret_refs("x: ${{ github.token }} # the secrets we hold").is_empty());
     assert!(secret_refs("mysecrets.x").is_empty());
+
+    assert_eq!(
+        other_secret_uses("x: ${{ secrets.FORGE_LIVE_TOKEN }}"),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        other_secret_uses("x: ${{ toJSON(secrets) }}"),
+        ["toJSON(secrets)"]
+    );
+    assert_eq!(
+        other_secret_uses("x: ${{ secrets.FORGE_LIVE_TOKEN_2 }}"),
+        ["secrets.FORGE_LIVE_TOKEN_2"]
+    );
+    assert_eq!(
+        other_secret_uses("x: ${{ secrets[format('A{0}', 1)] }}"),
+        ["secrets[format('A{0}', 1)]"]
+    );
+    assert!(other_secret_uses("x: ${{ github.token }} secrets outside").is_empty());
 }
 
 #[test]
@@ -136,6 +187,14 @@ fn only_the_live_job_names_a_secret_and_only_its_own_environments_token() {
             secret_refs(line),
             [TOKEN],
             "a secret other than the environment's one token, or a computed index: {line}"
+        );
+    }
+    // Any other use of the context inside an expression, however it is written.
+    for line in text.lines().filter(|l| !l.trim_start().starts_with('#')) {
+        assert_eq!(
+            other_secret_uses(line),
+            Vec::<String>::new(),
+            "the secrets context used other than as {TOKEN}: {line}"
         );
     }
     let notice = job_named(&jobs, "notice", FILE);
@@ -231,5 +290,20 @@ fn an_unprovisioned_forge_says_so_and_runs_nothing() {
             gated || record,
             "a step runs on an unprovisioned forge: {step:#?}"
         );
+        // The record runs ungated, so it uploads the one folder that holds it and nothing of
+        // the workspace.
+        if record {
+            assert_eq!(
+                step_value(step, "with", "path"),
+                Some("${{ runner.temp }}/outcome"),
+                "the record uploads only what was tested: {step:#?}"
+            );
+        }
     }
+    assert!(
+        steps
+            .iter()
+            .any(|s| step_uses(s).is_some_and(|u| u.starts_with("actions/upload-artifact@"))),
+        "the record of what was tested, which the notice job reads"
+    );
 }
