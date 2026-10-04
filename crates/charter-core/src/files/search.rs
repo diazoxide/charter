@@ -27,10 +27,20 @@
 //! time are heard inside a file too, a [`FILL`] at a time, and a line longer than
 //! [`LONGEST_LINE`] is not matched at all. The walk's place is kept between pages, so "Show
 //! more" continues where the page stopped rather than starting again.
+//!
+//! **Read on several threads, heard in walk order** (#1153). A rare query reads every offered
+//! file, so one thread reading them one after another left the disk mostly idle. The walk stays
+//! on the caller's thread and hands each searchable file to [`READERS`] threads, at most
+//! [`AHEAD`] files ahead of the one heard next; what they find is heard strictly in walk order, so
+//! a page, and "Show more" after it, says the same files in the same order as one thread would.
+//! A file read ahead but not heard when the page ends is read again by the next page, so
+//! nothing heard is older than its page.
 
+use std::collections::VecDeque;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use grep_matcher::Matcher as _;
@@ -167,6 +177,24 @@ struct Walking {
     held: super::Held,
     offered: std::sync::Arc<Vec<String>>,
     walk: ignore::Walk,
+    /// Files the walk handed out that no page has heard yet, in walk order: read ahead by the
+    /// page that ended, and read again by the next.
+    unheard: VecDeque<String>,
+}
+
+/// How many threads read a page's files at once: the machine's cores, at most four. A rare
+/// query's page is bound by the system's file reads, not by matching: on the measuring Mac
+/// (#1153) eight readers took the same time as four and three times the system's CPU, and the
+/// app shares its machine with the agents' builds.
+const READERS: usize = 4;
+
+/// How many files past the next one to be heard are handed to the readers: enough to keep each
+/// busy, few enough that a page ending throws away little that was read.
+const AHEAD: usize = 4 * READERS;
+
+/// How many readers this machine gets.
+fn readers() -> usize {
+    std::thread::available_parallelism().map_or(1, |n| n.get().min(READERS))
 }
 
 /// A search of `scope` for `query`, matched as `options` say. Nothing is read until
@@ -264,38 +292,172 @@ impl Search {
                 }
             }
             let walking = self.walking.as_mut().expect("set above");
-            let Some(entry) = walking.walk.next() else {
-                self.walking = None;
-                self.at += 1;
-                continue;
+            let page = Page {
+                matcher: &self.matcher,
+                at: self.at,
+                lines,
+                stop,
+                until,
             };
-            let Ok(entry) = entry else { continue };
-            let Some(path) = searchable(walking, &entry) else {
-                continue;
-            };
-            let watch = Watch { stop, until };
-            match file_hits(&self.matcher, self.at, &walking.held, path, &watch) {
-                Read::Hits(found) => {
-                    shown += found.lines.len();
-                    heard(Searched::File(found));
-                }
-                Read::Nothing => {}
-                Read::NotSearched(path, why) => heard(Searched::NotSearched {
-                    at: self.at,
-                    path,
-                    why,
-                }),
-                Read::Cut(Cut::Stop) => return Ended::Stopped,
-                Read::Cut(Cut::Time(path)) => {
-                    heard(Searched::NotSearched {
-                        at: self.at,
-                        path,
-                        why: "matching it took longer than a page may".to_string(),
-                    });
-                    return Ended::OutOfTime;
+            match page.run(walking, &mut shown, heard) {
+                Some(ended) => return ended,
+                None => {
+                    self.walking = None;
+                    self.at += 1;
                 }
             }
         }
+    }
+}
+
+/// One page's run over one branch.
+struct Page<'a> {
+    matcher: &'a RegexMatcher,
+    at: usize,
+    lines: usize,
+    stop: &'a AtomicBool,
+    until: Instant,
+}
+
+/// A file handed to the readers, and what they found once they have.
+struct Slot {
+    path: String,
+    read: Option<Read>,
+}
+
+impl Page<'_> {
+    /// Searches `walking` on, the readers reading ahead and each file heard in walk order, until
+    /// the page ends — `Some` of why — or the branch is done: `None`. `shown` counts the page's
+    /// lines heard so far, across the places it has walked.
+    fn run(
+        &self,
+        walking: &mut Walking,
+        shown: &mut usize,
+        heard: &mut dyn FnMut(Searched),
+    ) -> Option<Ended> {
+        let Walking {
+            base,
+            held,
+            offered,
+            walk,
+            unheard,
+        } = walking;
+        let held: &super::Held = held;
+        // Raised once the page has ended: what a reader is still matching is cut, as by a stop.
+        let over = AtomicBool::new(false);
+        let watch = Watch {
+            stop: self.stop,
+            over: &over,
+            until: self.until,
+        };
+        let mut slots: VecDeque<Slot> = VecDeque::new();
+        let (ask, asked) = mpsc::channel::<(usize, String)>();
+        let asked = Mutex::new(asked);
+        let (tell, told) = mpsc::channel::<(usize, Read)>();
+        let ended = std::thread::scope(|scope| {
+            let ask = ask;
+            for _ in 0..readers() {
+                let (asked, tell, watch) = (&asked, tell.clone(), &watch);
+                scope.spawn(move || {
+                    loop {
+                        let next = asked.lock().map(|asked| asked.recv());
+                        let Ok(Ok((seq, path))) = next else { return };
+                        let read = file_hits(self.matcher, self.at, held, path, watch);
+                        if tell.send((seq, read)).is_err() {
+                            return;
+                        }
+                    }
+                });
+            }
+            drop(tell);
+            // `slots[0]` is the file heard next, numbered `first`; `first + slots.len()` is the
+            // next file handed out.
+            let mut first = 0usize;
+            let mut walked = false;
+            let ended = 'page: loop {
+                while slots.len() < AHEAD + 1 {
+                    let path = match unheard.pop_front() {
+                        Some(path) => path,
+                        None if walked => break,
+                        None => match next_searchable(walk, base, offered) {
+                            Some(path) => path,
+                            None => {
+                                walked = true;
+                                break;
+                            }
+                        },
+                    };
+                    if ask.send((first + slots.len(), path.clone())).is_err() {
+                        break;
+                    }
+                    slots.push_back(Slot { path, read: None });
+                }
+                if slots.is_empty() {
+                    break 'page None;
+                }
+                while slots.front().is_some_and(|slot| slot.read.is_some()) {
+                    let Slot { path, read } = slots.pop_front().expect("one is there");
+                    first += 1;
+                    match read.expect("one is there") {
+                        Read::Hits(found) => {
+                            *shown += found.lines.len();
+                            heard(Searched::File(found));
+                        }
+                        Read::Nothing => {}
+                        Read::NotSearched(path, why) => heard(Searched::NotSearched {
+                            at: self.at,
+                            path,
+                            why,
+                        }),
+                        Read::Cut(Cut::Stop) => {
+                            slots.push_front(Slot { path, read: None });
+                            break 'page Some(Ended::Stopped);
+                        }
+                        // The file heard next was cut by the page's end, as one thread would have
+                        // been: it is said, and the page goes on past it. Files behind it that
+                        // were cut too are read again by the next page.
+                        Read::Cut(Cut::Time(path)) => {
+                            heard(Searched::NotSearched {
+                                at: self.at,
+                                path,
+                                why: "matching it took longer than a page may".to_string(),
+                            });
+                            break 'page Some(Ended::OutOfTime);
+                        }
+                    }
+                    if self.stop.load(Ordering::Relaxed) {
+                        break 'page Some(Ended::Stopped);
+                    }
+                    if *shown > 0 && *shown >= self.lines {
+                        break 'page Some(Ended::Capped);
+                    }
+                    if Instant::now() >= self.until {
+                        break 'page Some(Ended::OutOfTime);
+                    }
+                }
+                if slots.is_empty() {
+                    continue;
+                }
+                // Every reader cuts its file at the stop or the page's end, so this wait ends.
+                match told.recv() {
+                    Ok((seq, read)) => {
+                        if let Some(slot) = seq.checked_sub(first).and_then(|at| slots.get_mut(at))
+                        {
+                            slot.read = Some(read);
+                        }
+                    }
+                    Err(_) => break 'page Some(Ended::OutOfTime),
+                }
+            };
+            over.store(true, Ordering::Relaxed);
+            drop(ask);
+            ended
+        });
+        // What was handed out and not heard is read again, first, by the next page.
+        for slot in slots.into_iter().rev() {
+            unheard.push_front(slot.path);
+        }
+        ended
     }
 }
 
@@ -311,6 +473,8 @@ pub const LONGEST_LINE: usize = 256 * 1024;
 /// What a file's matching is asked to hear.
 struct Watch<'a> {
     stop: &'a AtomicBool,
+    /// Raised when the page has ended without this file: cut as by a stop.
+    over: &'a AtomicBool,
     until: Instant,
 }
 
@@ -340,7 +504,7 @@ struct Watched<'a> {
 
 impl std::io::Read for Watched<'_> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        if self.watch.stop.load(Ordering::Relaxed) {
+        if self.watch.stop.load(Ordering::Relaxed) || self.watch.over.load(Ordering::Relaxed) {
             self.cut = Some(true);
             return Err(std::io::Error::other("stopped"));
         }
@@ -489,6 +653,7 @@ fn walking(plane: &Path, named: &Named) -> Result<Walking, String> {
             held,
             offered,
             walk,
+            unheard: VecDeque::new(),
         })
     };
     ready().map_err(|refused| refused.to_string())
@@ -508,27 +673,34 @@ fn holds_offered(offered: &[String], folder: &str) -> bool {
     under(folder) || under(&folder.nfc().collect::<String>())
 }
 
+/// The next file of `walk` the search reads, as [`searchable`] says; `None` once the walk is
+/// done.
+fn next_searchable(walk: &mut ignore::Walk, base: &Path, offered: &[String]) -> Option<String> {
+    for entry in walk.by_ref() {
+        let Ok(entry) = entry else { continue };
+        if let Some(path) = searchable(base, offered, &entry) {
+            return Some(path);
+        }
+    }
+    None
+}
+
 /// The path, relative to the branch and as git's list spells it, of an entry the search reads;
 /// `None` for anything it does not.
-fn searchable(walking: &Walking, entry: &ignore::DirEntry) -> Option<String> {
+fn searchable(base: &Path, offered: &[String], entry: &ignore::DirEntry) -> Option<String> {
     use unicode_normalization::UnicodeNormalization as _;
     // Never a link, whatever it leads to, and never a folder, a FIFO or a socket.
     if entry.path_is_symlink() || !entry.file_type().is_some_and(|kind| kind.is_file()) {
         return None;
     }
-    let relative = entry.path().strip_prefix(&walking.base).ok()?;
-    if super::names_git(entry.path(), &walking.base) {
+    let relative = entry.path().strip_prefix(base).ok()?;
+    if super::names_git(entry.path(), base) {
         return None;
     }
     let path = super::slashed(relative);
     // git lists a name composed where the system composes (macOS), whatever the disk holds.
     let composed: String = path.nfc().collect();
-    let offers = |one: &str| {
-        walking
-            .offered
-            .binary_search_by(|o| o.as_str().cmp(one))
-            .is_ok()
-    };
+    let offers = |one: &str| offered.binary_search_by(|o| o.as_str().cmp(one)).is_ok();
     if !offers(&path) && !offers(&composed) {
         return None;
     }
