@@ -496,7 +496,7 @@ pub struct ProjectExtensionIgnored {
 /// Every extension this machine has installed, and every one this project's files name, with
 /// what each is in this project — `extension::project::resolve`, shaped for the wire. In
 /// `workspace`, when one is named, that workspace's settings are a layer too (charter-app#280):
-/// what the Workspace settings tab shows.
+/// what Settings shows at the Workspace level.
 ///
 /// It takes a survey, so it re-hashes every installed extension's directory: an extension that
 /// changed since its yes reads as needing approval here, which is the truth the tab is for. It
@@ -834,7 +834,7 @@ pub struct ProjectTheme {
 }
 
 /// This project's theme, with every theme it may pick — in `workspace`, when one is named, whose
-/// `workspace.json` is a layer too (charter-app#281): what the Workspace settings tab shows. It takes a survey, as
+/// `workspace.json` is a layer too (charter-app#281): what Settings shows at the Workspace level. It takes a survey, as
 /// [`project_extensions`] does, so a pick the extension no longer contributes is said here.
 #[tauri::command]
 #[specta::specta]

@@ -6,7 +6,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { SettingsTab } from "./SettingsTab";
 import type { Level } from "./groups";
 import { ViewPane } from "../Views";
-import { workspaceSettingsTitle, workspaceSettingsView } from "../tabs";
+import { settingsView, workspaceSettingsTitle, workspaceSettingsView } from "../tabs";
 import type {
   HarnessPlugin,
   HarnessPlugins,
@@ -192,6 +192,22 @@ function core(
       const given = (args ?? {}) as Record<string, unknown>;
       asked.push([cmd, given]);
       if (cmd === "workspace_settings") return file;
+      // The project's two files, empty, for a tab that is at the Project level.
+      if (cmd === "project_settings")
+        return Object.fromEntries(
+          (["shared", "local"] as const).map((which) => [
+            which,
+            {
+              which,
+              file: which === "shared" ? "charter.toml" : "charter.local.toml",
+              exists: false,
+              text: "",
+              refusals: [],
+              parsed: true,
+              fields: [],
+            },
+          ]),
+        );
       if (cmd === "project_extensions") return { extensions, local_left_out: leftOut };
       if (cmd === "project_harness_plugins")
         return harnesses.map((one) => ({ ...one, local_left_out: leftOut }));
@@ -371,6 +387,15 @@ describe("every workspace setting there is, at the Workspace level", () => {
 });
 
 describe("Live", () => {
+  it("names the switch's group by its row", async () => {
+    core();
+    const group = await at("Live");
+
+    expect(
+      within(group).getByRole("group", { name: "Published with the project" }),
+    ).toContainElement(within(group).getByRole("button", { name: "Make local…" }));
+  });
+
   it("offers the same switch as the workspace's menu, through the same confirmation", async () => {
     core({ ...ALPHA, live: false });
     const group = await at("Live");
@@ -643,6 +668,31 @@ describe("Appearance (charter-app#281)", () => {
     ]);
   });
 
+  it("writes a colour dragged in the well once, when the well is left", async () => {
+    const { sent } = core(
+      {
+        ...ALPHA,
+        fields: [
+          { path: [{ key: "theme" }, { key: "colour" }], value: { kind: "text", value: HELD } },
+        ],
+      },
+      undefined,
+      { ...NO_THEME, colour: HELD },
+    );
+    const group = await at("Appearance");
+    const custom = await within(group).findByLabelText("Custom colour");
+
+    fireEvent.input(custom, { target: { value: PICKED } });
+    fireEvent.blur(custom);
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    await act(() => new Promise((settle) => setTimeout(settle, 20)));
+    expect(sent).toHaveLength(1);
+    expect(sent[0].edits).toEqual([
+      { path: [{ key: "theme" }, { key: "colour" }], value: { kind: "text", value: PICKED } },
+    ]);
+  });
+
   it("shows a custom colour the file holds as custom, with its value", async () => {
     core(
       {
@@ -788,7 +838,7 @@ describe("Settings at a workspace's level, as a view", () => {
     expect(asked("open_view")).toEqual([]);
   });
 
-  it("moves to the Project level and back through the pane it is in", async () => {
+  it("moves the pane it is in to the Project level", async () => {
     core();
     const moved: [string, string][] = [];
     render(
@@ -812,5 +862,28 @@ describe("Settings at a workspace's level, as a view", () => {
     await userEvent.click(screen.getByRole("radio", { name: "Project" }));
 
     expect(moved).toEqual([["settings/project", "Settings"]]);
+  });
+
+  it("moves a Project-level pane on a workspace's strip to that workspace's level", async () => {
+    core();
+    const moved: [string, string][] = [];
+    render(
+      <ViewPane
+        plane={PLANE}
+        view={settingsView("project")}
+        title="Settings"
+        workspace="alpha"
+        waits={false}
+        offered={[]}
+        onOpenView={() => undefined}
+        onAsk={() => undefined}
+        onVaultChanged={() => undefined}
+        onShowInstead={(_from, to, title) => moved.push([`${to.view}/${to.key}`, title])}
+      />,
+    );
+
+    await userEvent.click(await screen.findByRole("radio", { name: "Workspace" }));
+
+    expect(moved).toEqual([["workspace-settings/alpha", "Workspace settings · alpha"]]);
   });
 });

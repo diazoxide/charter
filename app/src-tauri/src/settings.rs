@@ -321,8 +321,8 @@ fn quiet_period(period: std::time::Duration) -> String {
 // A workspace's settings (charter-app#280)
 // ---------------------------------------------------------------------------------------
 
-/// A workspace's settings — the `settings` of its `workspace.json` — as the Workspace settings
-/// tab draws them. The same shape as a [`SettingsFile`], without a raw view: the manifest is
+/// A workspace's settings — the `settings` of its `workspace.json` — as Settings draws them at
+/// the Workspace level. The same shape as a [`SettingsFile`], without a raw view: the manifest is
 /// charter's and the team's, and a form is the one way into it here.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, specta::Type)]
 pub struct WorkspaceSettings {
