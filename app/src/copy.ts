@@ -6,7 +6,8 @@
  *
  * - **No stock phrase.** "Something went wrong" says that nothing was found out. A message names
  *   what happened, so a phrase that fits every failure is refused wherever it is written.
- * - **Sentence case on what the window shows.** "Open project…", never "Open Project…".
+ * - **Sentence case on what the window shows.** "Open project…", never "Open Project…". And
+ *   charter is lowercase, but for the About dialog's title.
  *
  * `copy.test.ts` runs both over every string in `app/src` (`uiStrings.ts` finds them).
  */
@@ -22,19 +23,35 @@ const STOCK =
  * here fails the guard on its first label; adding it is the fix, and it is the only list.
  */
 const NAMES =
-  /\b(Charter|Claude Code|Codex|opencode|GitHub|GitLab|Keychain|Touch ID|Windows Hello|LM Studio|Ollama|Finder|macOS|Linux|Windows)\b/g;
+  /\b(Claude Code|Codex|opencode|GitHub|GitLab|Keychain|Touch ID|Windows Hello|LM Studio|Ollama|Finder|File Explorer|Files|macOS|Linux|Windows)\b/g;
+
+/** A key chord — `Ctrl+Shift+F`, `CmdOrCtrl+W` — is keys, not words, so it has no case. */
+const CHORD = /\b[A-Za-z]+(\+[A-Za-z0-9,.]+)+/g;
+
+/**
+ * **charter is lowercase** (`productName`), so it is not a name the case rule takes out. The
+ * one capitalised form is the About dialog's title, a label of its own.
+ */
+const ABOUT = "About Charter";
+
+/** The labels a string holds: `·` and `—` split "Stopped · Re-arm" into a state and an action. */
+function labels(text: string): string[] {
+  return text.split(/\s[·—]\s/);
+}
 
 /**
  * A label is in title case when every word of four letters or more starts with a capital and
  * there are at least two of them. Short words are skipped because title case leaves some of
  * them small ("in", "to", "a"). A label with one long word cannot be told apart, so it passes.
- *
- * `·` and `—` split a string into labels: "Stopped · Re-arm" is a state and an action.
  */
 function titleCased(text: string): boolean {
-  return text.split(/\s[·—]\s/).some((label) => {
+  return labels(text).some((label) => {
+    if (label.trim() === ABOUT) return false;
     const words = label
+      .replace(CHORD, " ")
       .replace(NAMES, " ")
+      // A capital Charter is its own fault, below, and is said once.
+      .replace(/\bCharter\b/g, " ")
       .replace(/[^A-Za-z'-]+/g, " ")
       .split(" ")
       .filter((word) => word.length >= 4);
@@ -50,6 +67,8 @@ export function copyFaults(text: string, seen: Seen = "source"): string[] {
   if (seen === "shown") {
     if (/[A-Za-z]!$/.test(said)) faults.push("an exclamation mark: say it plainly");
     if (titleCased(said)) faults.push("title case: write labels in sentence case");
+    if (labels(said).some((label) => label.trim() !== ABOUT && /\bCharter\b/.test(label)))
+      faults.push("a capital Charter: charter is lowercase outside the About title");
   }
   return faults;
 }
