@@ -1,5 +1,7 @@
 //! Who a process was started under: the one parent-chain walker charter has (V82's commit
-//! stamping and HP-6's permission hook both climb it), and the host check a hook makes with it.
+//! stamping and HP-6's permission hook both climb it), the host check a hook makes with it, and
+//! the check `charterd` makes that a client is not inside a chat ([`inside_a_chat`], FD-27),
+//! which reads the same parents and fails closed where the others answer no.
 //!
 //! **Read from the kernel, never from `PATH`.** Linux answers from `/proc`. Everywhere else on
 //! unix it is a tool by its absolute path with no environment (`/bin/ps`, `/usr/sbin/lsof`):
@@ -95,6 +97,64 @@ pub fn walk(start: u32, ancestor: u32, parent: impl Fn(u32) -> Option<u32>) -> b
         }
     }
     false
+}
+
+/// The session process `pid` is in: the pid of its session's leader, from the kernel
+/// (`getsid`).
+pub fn session_of(pid: u32) -> io::Result<u32> {
+    let pid = i32::try_from(pid).map_err(|_| io::Error::other("not a pid"))?;
+    let sid = nix::unistd::getsid(Some(nix::unistd::Pid::from_raw(pid)))?;
+    u32::try_from(sid.as_raw()).map_err(|_| io::Error::other("not a session id"))
+}
+
+/// Which of `chats` (each chat's program, by pid) process `peer` runs inside, or `None` when it
+/// is in none of them (V16a, ADR 0068 §5). Inside is any of:
+///
+/// - it IS a chat's program;
+/// - its session is a chat's: every chat's program leads its own session, so a process it
+///   started stays in that session after its parent has gone;
+/// - a chat's program is among its ancestors.
+///
+/// **Every doubt is an error, never `None`:** a peer whose parent or session cannot be read (it
+/// has gone), or whose ancestry loops or runs deeper than [`MOST_GENERATIONS`], is not vouched
+/// for as outside. A process that leaves its session AND its parents on purpose is not caught;
+/// this is the second layer, and the credential the sandbox keeps from a chat is the first.
+pub fn inside_a_chat(
+    peer: u32,
+    chats: &[u32],
+    parent: impl Fn(u32) -> Option<u32>,
+    session: impl Fn(u32) -> io::Result<u32>,
+) -> io::Result<Option<u32>> {
+    if chats.contains(&peer) {
+        return Ok(Some(peer));
+    }
+    let sid = session(peer)?;
+    if chats.contains(&sid) {
+        return Ok(Some(sid));
+    }
+    let mut at = peer;
+    for _ in 0..MOST_GENERATIONS {
+        let up = parent(at).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("process {at} has no parent this host can read"),
+            )
+        })?;
+        if chats.contains(&up) {
+            return Ok(Some(up));
+        }
+        // Pid 1 (`init`, `launchd`) and pid 0 are the top: nothing above them is a chat.
+        if up <= 1 {
+            return Ok(None);
+        }
+        if up == at {
+            break;
+        }
+        at = up;
+    }
+    Err(io::Error::other(format!(
+        "process {peer}'s ancestry loops or runs deeper than {MOST_GENERATIONS} generations"
+    )))
 }
 
 /// The parent `/proc/<pid>/stat` names.
@@ -281,6 +341,67 @@ fn resolves_to(name: &str, target: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 50 → 40 → 30 (a chat's program) → 20 → 1; 60 → 1, in session 30, its parent gone.
+    fn tree(pid: u32) -> Option<u32> {
+        [(50, 40), (40, 30), (30, 20), (20, 1), (60, 1), (70, 1)]
+            .into_iter()
+            .find(|(child, _)| *child == pid)
+            .map(|(_, parent)| parent)
+    }
+
+    fn session(pid: u32) -> io::Result<u32> {
+        Ok(if matches!(pid, 50 | 40 | 30 | 60) {
+            30
+        } else {
+            1
+        })
+    }
+
+    #[test]
+    fn a_process_below_a_chat_s_program_is_inside_it() {
+        assert_eq!(inside_a_chat(50, &[30], tree, session).unwrap(), Some(30));
+    }
+
+    #[test]
+    fn a_chat_s_program_itself_is_inside_it() {
+        assert_eq!(inside_a_chat(30, &[30], tree, session).unwrap(), Some(30));
+    }
+
+    #[test]
+    fn a_process_orphaned_from_a_chat_is_inside_it_by_its_session() {
+        assert_eq!(inside_a_chat(60, &[30], tree, session).unwrap(), Some(30));
+    }
+
+    #[test]
+    fn a_process_in_no_chat_s_tree_or_session_is_outside() {
+        assert_eq!(inside_a_chat(70, &[30], tree, session).unwrap(), None);
+        assert_eq!(inside_a_chat(20, &[30], tree, session).unwrap(), None);
+    }
+
+    #[test]
+    fn a_process_whose_parent_or_session_cannot_be_read_is_never_vouched_outside() {
+        assert!(
+            inside_a_chat(99, &[30], tree, session).is_err(),
+            "no parent"
+        );
+        assert!(
+            inside_a_chat(70, &[30], tree, |_| Err(io::Error::other("gone"))).is_err(),
+            "no session"
+        );
+    }
+
+    #[test]
+    fn a_parent_table_that_loops_is_never_vouched_outside() {
+        let looping = |pid: u32| Some(if pid == 5 { 6 } else { 5 });
+        assert!(inside_a_chat(5, &[30], looping, session).is_err());
+    }
+
+    #[test]
+    fn this_process_s_session_is_read_from_the_kernel() {
+        let ours = session_of(std::process::id()).unwrap();
+        assert!(ours > 0);
+    }
 
     #[test]
     fn an_ancestor_that_holds_the_socket_is_the_host() {

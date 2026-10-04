@@ -264,9 +264,11 @@ fn a_chat_never_reads_or_writes_the_forge_answers_the_humans_token_fetched() {
     let (_plane, denied) = denied_with(None, Os::Linux);
     assert_eq!(
         paths(&denied, Class::HumanPowers, Access::ReadWrite),
-        [std::path::PathBuf::from(
-            "/home/op/.config/charter/forge-etags"
-        )]
+        [
+            // The human client scopes' credentials and `charterd.sock` (FD-27).
+            std::path::PathBuf::from("/home/op/.config/charter/charterd"),
+            std::path::PathBuf::from("/home/op/.config/charter/forge-etags"),
+        ]
     );
 }
 

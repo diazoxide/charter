@@ -349,6 +349,13 @@ pub fn dir(config_root: &Path) -> PathBuf {
     config_root.join(DIR)
 }
 
+/// Where `charterd` keeps `charterd.sock` and one credential file per human client scope
+/// (`<config>/charterd/<scope>`, ADR 0068 §5, plane-format.md): a directory a chat's sandbox
+/// denies reading and writing (ADR 0067 §5, class 3; FD-27).
+pub fn charterd(config_root: &Path) -> PathBuf {
+    dir(config_root).join("charterd")
+}
+
 /// The store's own path inside `config_root`.
 pub fn file(config_root: &Path) -> PathBuf {
     dir(config_root).join(FILE)

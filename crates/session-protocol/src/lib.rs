@@ -56,9 +56,11 @@
 //!
 //! **What this crate does not decide.** Where a view's bytes and snapshot come from, and what
 //! each command does, is the host's (FD-5): `Engine::snapshot`, the session's output, and a
-//! [`session::Host`]. What each scope may call is FD-27's.
+//! [`session::Host`]. What each scope may call is [`grants`]' one table (FD-27), which
+//! [`session::serve`] checks before any host hears of a command.
 
 pub mod auth;
+pub mod grants;
 pub mod link;
 #[cfg(unix)]
 pub mod local;

@@ -646,3 +646,53 @@ the dispatcher (D-88n)**, tightening V68 and FD-6's mutual admission.
    process that does by the same test: it holds the socket at the path. A host arrangement in which the
    process listening on a hook socket is not an ancestor of the chats it serves breaks
    permission answers, and they fail closed: the pane asks.
+
+## Amended by FD-27 (#664), 2026-10-04
+
+FD-27 built §5's client scopes: what each may call, and the refusal of a person's scope to a
+chat's processes. The text of §5 above is left as accepted, and this note is the amendment. It
+applies V7, V16a and V75.
+
+1. **One table says what each scope may call, and `session::serve` checks it** before any host
+   hears of a command (`charter_session_protocol::grants`). A command the scope is not granted
+   is refused `not_allowed`, and the link carries on. The UI RPC's hello asks the same table.
+
+   | Command | `local-ui` | `terminal` | `fleet-mcp` | `approval` | `editor` | `remote-link` |
+   |---|---|---|---|---|---|---|
+   | `list` | yes | yes | yes | yes | | yes |
+   | `attach`, `detach` | yes | yes | | | | yes |
+   | `write`, `resize` | yes | yes | | | | yes |
+   | `answer` an ask | yes | | | yes | | |
+   | `answer` an ask that elicits a secret | yes | | | | | |
+   | `stop` | yes | yes | yes | yes | | yes |
+   | `start` | yes | yes | | | | yes |
+   | `subscribe`, `unsubscribe` | yes | yes | yes | yes | | yes |
+   | the UI RPC: vault values, settings writes, the app's commands | yes | | | | | |
+
+   - **`editor`** has a row now. It has none of these commands: its four are ADR 0081's, built
+     by ED-2, and are its alone.
+   - **`fleet-mcp`** lists, watches events and stops. Its clients are outside agents (HP-20),
+     and an agent holds no human power (V16): it never types into, starts, resizes, views or
+     answers a chat. A view is left out until HP-20 asks for one.
+   - **Answering is `local-ui`'s and `approval`'s** (V75), and an ask that elicits a secret is
+     `local-ui`'s alone. Which asks elicit a secret is the host's to say; a host that does not
+     say is taken to hold one, so the check fails closed.
+   - **`remote-link` does not answer.** ADR 0078's amendment of this section lets a runner's
+     link carry an answer that a desktop human scope sent. V75, ruled later, names only
+     `local-ui` and `approval`. Until the operator rules on the two together, `remote-link` is
+     refused `answer`, which is the narrower reading.
+2. **No scope on `charterd.sock` is admitted from inside a chat**, whatever it proves. Every
+   such scope is a person's. The listener reads the peer's pid from the socket as it accepts,
+   and the host's handshake asks its chats: a peer that is a chat's program, is in a chat's
+   session, or has a chat's program among its ancestors is refused, with a sentence that says
+   so, before its proof is checked. A peer whose ancestry or session cannot be read is refused
+   the same way. The ancestry is read by the same code HP-6's hook uses
+   (`charter_same_user`). §5 already calls this the second layer: the first is item 3.
+3. **A chat's sandbox denies reading and writing `<config>/charterd/`**, where the credentials
+   and the socket live, under ADR 0067 §5's class 3, on every harness charter compiles a sandbox
+   for.
+4. **`remote-link` is admitted by a proved device, never by a credential file.** The admission
+   exchange refuses the scope's word whatever proof comes with it. A host serves a device's link
+   only through a call that takes the result of ADR 0078 §3's Noise handshake. RR-13 builds that
+   handshake, so until then no build of the host admits `remote-link` at all. The crate's own
+   tests stand in for it, and drive a stub `remote-link` client in a separate process.

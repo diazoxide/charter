@@ -107,6 +107,11 @@ pub enum Refused {
         "the other end admitted this client without proving it is the host that minted its credential"
     )]
     HostUnproven,
+    /// The client's peer runs inside a chat, or could not be shown not to, and no scope on
+    /// `charterd.sock` is ever a chat's (FD-27, V16a; [`crate::local`]). Said to the client
+    /// whatever its proof was.
+    #[error("{0}")]
+    InsideAChat(String),
     /// The client presented no credential that admits it as a scope ([`crate::auth`]).
     #[error("the client presented no credential that admits it")]
     Unauthenticated,

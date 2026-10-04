@@ -48,6 +48,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::auth::Scope;
+use crate::grants::Power;
 use crate::link::{Acceptor, Link, LinkError, Opener};
 use crate::ui;
 use crate::version::{Speaks, Version};
@@ -95,10 +96,6 @@ pub const NO_SUCH_PROJECT: &str = "no_such_project";
 /// The link's scope may not do this (FD-27).
 pub const NOT_ALLOWED: &str = "not_allowed";
 
-/// Why [`Command::Answer`] is refused on every link for now: no host tells a human scope from
-/// any other yet (FD-27, #664), and only a human answers an ask (V16, V75).
-pub const ANSWERED_IN_THE_WINDOW: &str = "an ask is answered in charter's window: no link may answer one until client scopes are checked";
-
 /// A command, as the client sends it. Unknown fields are ignored, so a later minor may add
 /// some.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -120,8 +117,9 @@ pub enum Command {
     },
     /// A chat's terminal has a new size.
     Resize { chat: String, cols: u16, rows: u16 },
-    /// The answer to one of a chat's asks (a needs-you). Refused on every link for now, with
-    /// [`NOT_ALLOWED`] ([`ANSWERED_IN_THE_WINDOW`]).
+    /// The answer to one of a chat's asks (a needs-you). Only a human scope answers one
+    /// (`local-ui` and `approval`), and an ask that elicits a secret only `local-ui`
+    /// ([`crate::grants`]).
     Answer {
         chat: String,
         ask: String,
@@ -242,6 +240,24 @@ wire_words!(Command {
     Unsubscribe => "unsubscribe",
 });
 
+impl Command {
+    /// What a scope must be granted to send this command ([`crate::grants`]). An answer's power
+    /// depends on the ask, which only the host knows, so it is [`Power::Answer`] here and
+    /// [`serve`] asks the host whether it is a secret's.
+    pub fn power(&self) -> Power {
+        match self {
+            Command::List => Power::List,
+            Command::Attach { .. } | Command::Detach { .. } => Power::View,
+            Command::Write { .. } => Power::Write,
+            Command::Resize { .. } => Power::Resize,
+            Command::Answer { .. } => Power::Answer,
+            Command::Stop { .. } => Power::Stop,
+            Command::Start(_) => Power::Start,
+            Command::Subscribe { .. } | Command::Unsubscribe => Power::Subscribe,
+        }
+    }
+}
+
 wire_words!(Answer {
     Chats => "chats",
     Attached => "attached",
@@ -354,6 +370,13 @@ pub trait Host: Send + Sync + 'static {
         peer: &Peer,
     ) -> impl Future<Output = Result<Answer, Refusal>> + Send;
 
+    /// Whether `chat`'s ask `ask` elicits a secret, which only `local-ui` may answer (V75).
+    /// A host that does not say is taken to say yes, so the check fails closed.
+    fn elicits_a_secret(&self, chat: &str, ask: &str) -> impl Future<Output = bool> + Send {
+        let _ = (chat, ask);
+        async { true }
+    }
+
     /// Every event after `since`, then each as it is written, until the receiver is dropped.
     fn subscribe(
         &self,
@@ -405,28 +428,24 @@ pub async fn serve<H: Host>(
         };
         let answer = match serde_json::from_slice::<Frame>(&frame) {
             Ok(Frame::Call(Call { id, command })) => {
-                let outcome = match command {
-                    Command::Subscribe { since } => match host.subscribe(since, &peer).await {
-                        Ok(receiver) => {
-                            events = Some(receiver);
-                            Outcome::Ok(Answer::Subscribed)
+                let outcome = match refused(&command, &peer, &host).await {
+                    Some(refusal) => Outcome::Refused(refusal),
+                    None => match command {
+                        Command::Subscribe { since } => match host.subscribe(since, &peer).await {
+                            Ok(receiver) => {
+                                events = Some(receiver);
+                                Outcome::Ok(Answer::Subscribed)
+                            }
+                            Err(refusal) => Outcome::Refused(refusal),
+                        },
+                        Command::Unsubscribe => {
+                            events = None;
+                            Outcome::Ok(Answer::Done)
                         }
-                        Err(refusal) => Outcome::Refused(refusal),
-                    },
-                    Command::Unsubscribe => {
-                        events = None;
-                        Outcome::Ok(Answer::Done)
-                    }
-                    // Refused here, for every host (HP-6): only a human scope answers an ask
-                    // (V16, V75), and telling one link from another is FD-27's scope check
-                    // (#664). Until a host has it, an ask is answered in the window.
-                    Command::Answer { .. } => Outcome::Refused(Refusal {
-                        code: NOT_ALLOWED.into(),
-                        why: ANSWERED_IN_THE_WINDOW.into(),
-                    }),
-                    command => match host.call(command, &peer).await {
-                        Ok(answer) => Outcome::Ok(answer),
-                        Err(refusal) => Outcome::Refused(refusal),
+                        command => match host.call(command, &peer).await {
+                            Ok(answer) => Outcome::Ok(answer),
+                            Err(refusal) => Outcome::Refused(refusal),
+                        },
                     },
                 };
                 Some(Frame::Reply(Reply { re: id, outcome }))
@@ -440,6 +459,32 @@ pub async fn serve<H: Host>(
             link.control().send(answer.to_bytes()).await?;
         }
     }
+}
+
+/// Why `peer` may not send `command`, by [`crate::grants`]' table, or `None` when it may. Asked
+/// once, here, before any host hears of the command.
+async fn refused<H: Host>(command: &Command, peer: &Peer, host: &H) -> Option<Refusal> {
+    let scope = peer.scope();
+    let word = command.word();
+    if !scope.may(command.power()) {
+        return Some(Refusal {
+            code: NOT_ALLOWED.into(),
+            why: format!("a `{scope}` link may not `{word}`"),
+        });
+    }
+    if let Command::Answer { chat, ask, .. } = command
+        && !scope.may(Power::AnswerASecret)
+        && host.elicits_a_secret(chat, ask).await
+    {
+        return Some(Refusal {
+            code: NOT_ALLOWED.into(),
+            why: format!(
+                "this ask elicits a secret, which is answered in charter's window only, and \
+                 this link is `{scope}`"
+            ),
+        });
+    }
+    None
 }
 
 enum Next {

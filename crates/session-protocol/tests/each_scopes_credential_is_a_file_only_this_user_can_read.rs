@@ -25,7 +25,7 @@ fn minting_writes_one_private_file_per_scope_that_a_client_reads_back() {
     let held = Credentials::mint_into(&dir).unwrap();
 
     assert_eq!(mode(&dir), 0o700);
-    for scope in Scope::ALL {
+    for scope in Scope::WITH_A_CREDENTIAL {
         let file = dir.join(scope.word());
         assert_eq!(mode(&file), 0o600, "{scope}");
         let read = Credential::read(&dir, scope).unwrap();

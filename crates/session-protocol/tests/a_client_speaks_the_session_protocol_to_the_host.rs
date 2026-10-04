@@ -113,9 +113,9 @@ async fn every_command_reaches_the_host_as_it_was_sent() {
 }
 
 #[tokio::test]
-async fn an_answer_to_an_ask_is_refused_on_the_link_and_never_reaches_the_host() {
-    // HP-6, V16, V75: only a human scope answers, and which link is one is FD-27's scope check
-    // (#664), which no host has yet. Until then no link answers an ask; the window does.
+async fn an_answer_from_terminal_is_refused_and_never_reaches_the_host() {
+    // V16, V75: only `local-ui` and `approval` answer an ask; `terminal` is refused before the
+    // host hears of it (FD-27's table, `grants`).
     let board = Board::default();
     let client = linked(board.clone()).await;
 

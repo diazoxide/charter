@@ -14,6 +14,17 @@
 //!   as `local-ui` with the credential in `$CHARTER_SESSION_PEER_CREDENTIAL`, because a
 //!   hostile client the host has admitted is the one whose limits matter: one it has not
 //!   admitted never reaches the multiplexer.
+//! - `--present <scope> <socket> [--when-orphaned-from <pid>]` (unix): a client that connects to
+//!   a host's socket and asks to be `<scope>` with the credential in
+//!   `$CHARTER_SESSION_PEER_CREDENTIAL`. It exits 0 when admitted and 1, saying why on stderr,
+//!   when not, once the host has closed the link. With `--when-orphaned-from`, it first waits (up to 20 s) until its parent is no
+//!   longer `<pid>`, so it connects as an orphan. The tests run it inside a "chat" to show
+//!   such a client is refused whatever credential it holds (FD-27).
+//! - `--remote-link <chat> <build>` (only with the `any-stream` feature, as the crate's tests
+//!   build it): a stub `remote-link` client on stdio, as a device whose link a handshake has
+//!   already proved (V7, FD-27). It lists, attaches `<chat>` and reads its snapshot and first
+//!   live bytes, tries to answer an ask, tries the UI RPC as `<build>` for a vault's reveal and a
+//!   settings write, and stops the chat, saying what came of each on stderr, one line each.
 
 use std::process::ExitCode;
 
@@ -40,8 +51,8 @@ fn speaks(arg: &str) -> Option<Speaks> {
 /// Where `--flood` finds the `local-ui` credential it presents.
 const CREDENTIAL_ENV: &str = "CHARTER_SESSION_PEER_CREDENTIAL";
 
-const USAGE: &str =
-    "usage: charter-session-peer --speaks <major>.<minor>[,…] | --flood <streams> <bytes>";
+const USAGE: &str = "usage: charter-session-peer --speaks <major>.<minor>[,…] | --flood <streams> \
+     <bytes> | --present <scope> <socket> [--when-orphaned-from <pid>]";
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
@@ -56,7 +67,159 @@ async fn main() -> ExitCode {
             (Ok(streams), Ok(bytes)) => flood(stdio, streams, bytes).await,
             _ => usage(),
         },
+        #[cfg(unix)]
+        [flag, scope, socket, rest @ ..] if flag == "--present" => {
+            let orphaned_from = match rest {
+                [] => None,
+                [flag, pid] if flag == "--when-orphaned-from" => match pid.parse() {
+                    Ok(pid) => Some(pid),
+                    Err(_) => return usage(),
+                },
+                _ => return usage(),
+            };
+            match Scope::from_word(scope) {
+                Some(scope) => present(scope, socket, orphaned_from).await,
+                None => usage(),
+            }
+        }
+        #[cfg(feature = "any-stream")]
+        [flag, chat, build] if flag == "--remote-link" => remote_link(stdio, chat, build).await,
         _ => usage(),
+    }
+}
+
+/// What came of a refused call, as one word: its code.
+#[cfg(feature = "any-stream")]
+fn refused(error: &charter_session_protocol::session::CallError) -> String {
+    error
+        .refusal()
+        .map_or_else(|| format!("failed: {error}"), |r| r.code.clone())
+}
+
+#[cfg(feature = "any-stream")]
+async fn remote_link<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static>(
+    stdio: S,
+    chat: &str,
+    build: &str,
+) -> ExitCode {
+    use charter_session_protocol::session::{Client, speaks};
+    use charter_session_protocol::view::{Chunk, Viewer};
+
+    let link = match charter_session_protocol::link::connect_as_a_device(stdio, speaks()).await {
+        Ok(link) => link,
+        Err(e) => {
+            eprintln!("no link: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let (client, mut views, _events) = Client::new(link);
+    match client.list().await {
+        Ok(chats) => {
+            for listed in chats {
+                eprintln!("listed {} {}", listed.chat, listed.state);
+            }
+        }
+        Err(e) => eprintln!("list refused {}", refused(&e)),
+    }
+    match client.attach(chat).await {
+        Ok(_) => {
+            let stream = match views.accept().await {
+                Ok(stream) => stream,
+                Err(e) => {
+                    eprintln!("no view: {e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            let mut reader = match Viewer::default().accept(stream).await {
+                Ok(reader) => reader,
+                Err(e) => {
+                    eprintln!("no view: {e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            let mut snapshot = Vec::new();
+            loop {
+                match reader.next().await {
+                    Some(Ok(Chunk::Snapshot(bytes))) => {
+                        let _ = reader.ack(bytes.len()).await;
+                        snapshot.extend_from_slice(&bytes);
+                    }
+                    Some(Ok(Chunk::Live(bytes))) => {
+                        let _ = reader.ack(bytes.len()).await;
+                        eprintln!("snapshot {}", String::from_utf8_lossy(&snapshot));
+                        eprintln!("live {}", String::from_utf8_lossy(&bytes));
+                        break;
+                    }
+                    _ => {
+                        eprintln!("the view ended");
+                        return ExitCode::FAILURE;
+                    }
+                }
+            }
+        }
+        Err(e) => eprintln!("attach refused {}", refused(&e)),
+    }
+    match client.answer(chat, "ask-1", "yes").await {
+        Ok(()) => eprintln!("answered"),
+        Err(e) => eprintln!("answer refused {}", refused(&e)),
+    }
+    for method in ["vault_secret_reveal", "save_project_settings"] {
+        match client.ui(build).await {
+            Ok(ui) => match ui.call(method, serde_json::json!({})).await {
+                Ok(Ok(value)) => eprintln!("{method} answered {value}"),
+                Ok(Err(value)) => eprintln!("{method} failed {value}"),
+                Err(e) => eprintln!("{method} refused {}", refused(&e)),
+            },
+            Err(e) => eprintln!("{method} refused {}", refused(&e)),
+        }
+    }
+    match client.stop(chat).await {
+        Ok(()) => eprintln!("stopped"),
+        Err(e) => eprintln!("stop refused {}", refused(&e)),
+    }
+    // Leave now: tokio's stdin reads on a blocking thread that would hold the runtime open
+    // until the host wrote again, and closing this end is what tells the host the link is done.
+    std::process::exit(0)
+}
+
+#[cfg(unix)]
+async fn present(scope: Scope, socket: &str, orphaned_from: Option<u32>) -> ExitCode {
+    if let Some(parent) = orphaned_from {
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while std::os::unix::process::parent_id() == parent {
+            if std::time::Instant::now() > until {
+                eprintln!("still a child of {parent}");
+                return ExitCode::FAILURE;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    }
+    let Some(credential) = std::env::var(CREDENTIAL_ENV)
+        .ok()
+        .and_then(|text| text.parse::<Credential>().ok())
+    else {
+        eprintln!("no credential in ${CREDENTIAL_ENV}");
+        return ExitCode::FAILURE;
+    };
+    let stream = match tokio::net::UnixStream::connect(socket).await {
+        Ok(stream) => stream,
+        Err(e) => {
+            eprintln!("could not connect: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let ours = Speaks::new([Version { major: 1, minor: 0 }]);
+    match charter_session_protocol::link::connect(stream, ours, scope, &credential).await {
+        Ok(mut link) => {
+            eprintln!("admitted as {}", link.scope());
+            // Held until the host closes it, so the host takes its control lane first.
+            while let Some(Ok(_)) = link.control().next().await {}
+            ExitCode::SUCCESS
+        }
+        Err(refused) => {
+            eprintln!("refused: {refused}");
+            ExitCode::FAILURE
+        }
     }
 }
 

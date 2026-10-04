@@ -246,15 +246,35 @@ pub async fn connect<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
 /// and take the control lane the client opens, all within one [`version::HANDSHAKE_TIMEOUT`].
 ///
 /// It takes a [`crate::local::SameUser`] and nothing else, so a connection that skipped the
-/// uid check cannot be served. A runner's link (ADR 0078 §3) is admitted by its Noise identity,
-/// not by these credentials, and is served by a path of its own.
+/// uid check cannot be served. A peer inside one of `chats` is refused whatever it proves, and
+/// so is one whose ancestry cannot be read (FD-27, V16a, [`crate::local`]). A runner's link
+/// (ADR 0078 §3) is admitted by its Noise identity, not by these credentials, and is served by
+/// [`serve_as_a_device`].
 #[cfg(unix)]
 pub async fn serve(
     io: crate::local::SameUser,
     speaks: Speaks,
     held: &Credentials,
+    chats: &impl crate::local::Chats,
 ) -> Result<Link, LinkError> {
-    serve_over(io.into_stream(), speaks, held).await
+    let pid = io.pid();
+    let programs = chats.programs();
+    within_the_handshake(async {
+        let inside = match crate::local::inside_a_chat(pid, programs).await {
+            Ok(None) => None,
+            Ok(Some(chat)) => Some(format!(
+                "this connection comes from inside a chat (process {pid}, under chat program \
+                 {chat}), and a chat never holds a person's scope: ask in the chat, and answer \
+                 in charter's window"
+            )),
+            Err(why) => Some(format!(
+                "whether this connection comes from inside a chat could not be read ({why}), so \
+                 it is refused as if it did"
+            )),
+        };
+        serve_unbounded(io.into_stream(), speaks, held, inside).await
+    })
+    .await
 }
 
 /// [`serve`] over any ordered byte stream, for the crate's own tests, which drive the host over
@@ -266,31 +286,98 @@ pub async fn serve_any<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     speaks: Speaks,
     held: &Credentials,
 ) -> Result<Link, LinkError> {
-    serve_over(io, speaks, held).await
+    within_the_handshake(serve_unbounded(io, speaks, held, None)).await
 }
 
-async fn serve_over<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
+/// A peer device a link's Noise `XX` handshake proved against the keys pinned at pairing (ADR
+/// 0078 §3): what admits a link as [`Scope::RemoteLink`], since no credential file does.
+///
+/// **Nothing in a build of the host makes one yet.** RR-13 builds that handshake, and its
+/// result is the only thing that should. Until then `remote-link` is admitted nowhere: it fails
+/// closed. The crate's own tests stand in for the handshake with [`ProvenDevice::stand_in`],
+/// which exists only with the `any-stream` feature.
+#[derive(Debug)]
+pub struct ProvenDevice(());
+
+#[cfg(feature = "any-stream")]
+impl ProvenDevice {
+    /// A device taken as proved, for the crate's tests only.
+    pub fn stand_in() -> ProvenDevice {
+        ProvenDevice(())
+    }
+}
+
+/// The host end of a link from a peer device that `device` proved: answer with what `speaks`
+/// names, start the multiplexer and take the control lane, all within one
+/// [`version::HANDSHAKE_TIMEOUT`]. The link is [`Scope::RemoteLink`], whatever the device says.
+pub async fn serve_as_a_device<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     io: S,
     speaks: Speaks,
-    held: &Credentials,
+    device: ProvenDevice,
 ) -> Result<Link, LinkError> {
+    let ProvenDevice(()) = device;
     within_the_handshake(async {
         let (version, io) = version::answer_unbounded(io, &speaks).await?;
-        let (scope, io) = auth::admit_unbounded(io, held).await?;
-        let (opener, mut inbound) = drive(io, yamux::Mode::Server);
-        let mut lane = inbound.accept().await?;
-        if lane.read_u8().await? != CONTROL_LANE {
-            return Err(LinkError::NoControlLane);
-        }
+        take_the_lane(version, Scope::RemoteLink, io).await
+    })
+    .await
+}
+
+/// The device's end of [`serve_as_a_device`], for the crate's tests: negotiate and open the
+/// control lane, with no credential, since the stream stands for one a handshake has already
+/// proved.
+#[cfg(feature = "any-stream")]
+pub async fn connect_as_a_device<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
+    io: S,
+    speaks: Speaks,
+) -> Result<Link, LinkError> {
+    within_the_handshake(async {
+        let (version, io) = version::offer_unbounded(io, &speaks).await?;
+        let (opener, inbound) = drive(io, yamux::Mode::Client);
+        let mut lane = opener.open().await?;
+        lane.write_all(&[CONTROL_LANE]).await?;
+        lane.flush().await?;
         Ok(Link {
             version,
-            scope,
+            scope: Scope::RemoteLink,
             control: lane_framed(lane),
             opener,
             inbound,
         })
     })
     .await
+}
+
+/// The host's last step of a handshake: start the multiplexer and take the control lane the
+/// client opens, for a link admitted as `scope`.
+async fn take_the_lane<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
+    version: Version,
+    scope: Scope,
+    io: S,
+) -> Result<Link, LinkError> {
+    let (opener, mut inbound) = drive(io, yamux::Mode::Server);
+    let mut lane = inbound.accept().await?;
+    if lane.read_u8().await? != CONTROL_LANE {
+        return Err(LinkError::NoControlLane);
+    }
+    Ok(Link {
+        version,
+        scope,
+        control: lane_framed(lane),
+        opener,
+        inbound,
+    })
+}
+
+async fn serve_unbounded<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
+    io: S,
+    speaks: Speaks,
+    held: &Credentials,
+    inside_a_chat: Option<String>,
+) -> Result<Link, LinkError> {
+    let (version, io) = version::answer_unbounded(io, &speaks).await?;
+    let (scope, io) = auth::admit_unbounded(io, held, inside_a_chat).await?;
+    take_the_lane(version, scope, io).await
 }
 
 /// One deadline over the whole handshake, so a peer that takes nearly the whole of it at each

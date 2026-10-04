@@ -776,6 +776,45 @@ fn stated(harness: Harness, plane: &Path, cwd: &Path, machine: &Machine) -> Stat
     }
 }
 
+/// The human client scopes' credentials, and `charterd.sock` beside them, are one directory
+/// every harness charter compiles a sandbox for denies a chat reading and writing (FD-27, V16a,
+/// ADR 0067 §5 class 3): a chat never holds the credential of `local-ui`, `terminal`,
+/// `fleet-mcp`, `approval` or `editor`.
+#[test]
+fn every_harness_denies_a_chat_the_human_scopes_credentials() {
+    let plane = plane_saying(ON);
+    let root = real(plane.path());
+    let home = tempfile::tempdir().expect("a home");
+    let home_dir = real(home.path());
+    let machine = Machine {
+        env: crate::secrets::Env::of(&[]),
+        home: Some(home_dir.clone()),
+        os: Os::MacOs,
+    };
+    let credentials = home_dir.join(".config/charter/charterd");
+    assert_eq!(
+        crate::machine::charterd(&home_dir.join(".config")),
+        credentials,
+        "where charterd keeps them"
+    );
+    let path = credentials.display().to_string();
+    let mut held = 0;
+    for harness in Harness::ALL {
+        let Some(_) = compiler(harness) else { continue };
+        let stated = stated(harness, &root, &root, &machine);
+        assert!(
+            (stated.denies_read)(&path),
+            "{harness:?} lets a chat read {path}"
+        );
+        assert!(
+            (stated.denies_write)(&path),
+            "{harness:?} lets a chat write {path}"
+        );
+        held += 1;
+    }
+    assert_eq!(held, 3, "Claude Code, Codex and opencode each hold it");
+}
+
 /// Each compiler states every class: Claude Code's in its own sandbox's settings, Codex's and
 /// opencode's in charter's own profile (#1123).
 #[test]
