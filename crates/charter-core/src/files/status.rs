@@ -106,98 +106,21 @@ pub(super) fn status_here(plane: &Path, branch: Branch<'_>) -> Result<Status, Re
         what: format!("the changes of {}", branch.called()),
         why,
     };
-    let Opened {
-        repo, charter_base, ..
-    } = open(plane, branch)?;
+    let opened = open(plane, branch)?;
+    let charter_base = opened.head_base();
+    let held = super::compare::hold(plane, &opened.base).map_err(unreadable)?;
+    let repo = opened.repo;
     let head = repo.head_commit().ok().map(|commit| commit.id);
-    let recorded = charter_base
-        .as_deref()
-        .and_then(|value| head.and_then(|head| recorded_base(&repo, value, head)));
-    let (since, named) = match recorded {
+    let based =
+        charter_base.and_then(|value| head.and_then(|head| recorded_base(&repo, &value, head)));
+    let (since, named) = match based {
         Some(Based { fork, named, .. }) => (Some(fork), Some(named)),
         None => (head, None),
     };
-
-    // Committed: the fork point's tree against HEAD's.
-    let mut changes: BTreeMap<String, Change> = BTreeMap::new();
-    let mut renamed: Vec<(String, String)> = Vec::new();
-    let mut touched: BTreeSet<String> = BTreeSet::new();
-    if let (Some(since), Some(head)) = (since, head)
-        && since != head
-    {
-        committed(&repo, since, head, &mut touched, &mut renamed).map_err(unreadable)?;
-    }
-
-    // Not committed: HEAD → index → working tree, and what git does not track.
-    let mut loose: BTreeSet<String> = BTreeSet::new();
-    let mut untracked: BTreeSet<String> = BTreeSet::new();
-    let mut gone: BTreeSet<String> = BTreeSet::new();
-    uncommitted(&repo, &mut loose, &mut untracked, &mut gone, &mut renamed).map_err(unreadable)?;
-    touched.extend(loose.iter().cloned());
-    touched.extend(untracked.iter().cloned());
-
-    let index = repo
-        .index_or_empty()
-        .map_err(|e| unreadable(e.to_string()))?;
-    let fork_tree = match since {
-        Some(id) => Some(
-            repo.find_commit(id)
-                .and_then(|commit| commit.tree())
-                .map_err(|e| unreadable(e.to_string()))?,
-        ),
-        None => None,
-    };
-    let at_fork = |path: &str| -> bool {
-        fork_tree.as_ref().is_some_and(|tree| {
-            tree.lookup_entry_by_path(path)
-                .ok()
-                .flatten()
-                .is_some_and(|entry| !entry.mode().is_tree())
-        })
-    };
-    for path in &touched {
-        let Some(plain) = plain(path) else { continue };
-        let now = untracked.contains(path)
-            || (index
-                .entry_by_path(path.as_str().into())
-                .is_some_and(|entry| !entry.mode.is_submodule())
-                && !gone.contains(path));
-        let then = at_fork(path);
-        let mark = match (then, now) {
-            (true, true) => Mark::Changed,
-            (false, true) => Mark::Added,
-            (true, false) => Mark::Deleted,
-            (false, false) => continue,
-        };
-        changes.insert(
-            plain.clone(),
-            Change {
-                path: plain,
-                mark,
-                from: None,
-                uncommitted: loose.contains(path) || untracked.contains(path),
-            },
-        );
-    }
-    // A file added where one the fork point had is now gone is that file, moved.
-    for (from, to) in renamed {
-        let (Some(from), Some(to)) = (plain(&from), plain(&to)) else {
-            continue;
-        };
-        let moved = changes.get(&to).is_some_and(|one| one.mark == Mark::Added)
-            && changes
-                .get(&from)
-                .is_some_and(|one| one.mark == Mark::Deleted);
-        if moved {
-            changes.remove(&from);
-            if let Some(one) = changes.get_mut(&to) {
-                one.mark = Mark::Renamed;
-                one.from = Some(from);
-            }
-        }
-    }
-
-    let all: Vec<Change> = changes.into_values().collect();
+    // The one diff engine's file list, without its line counts (RC-2).
+    let all = super::compare::changed(&repo, since, super::compare::At::WorkingTree, Some(&held))
+        .map_err(unreadable)?
+        .changes;
     let folders = rolled_up(&all);
     let more = all.len().saturating_sub(MARKED);
     let mut changes = all;
@@ -262,7 +185,7 @@ pub(super) fn open(plane: &Path, branch: Branch<'_>) -> Result<Opened, Refused> 
             return Err(missing());
         }
     }
-    let charter_base = recorded_value(&opened);
+    let recorded = recorded_values(&opened);
     allowed_only(&mut opened).map_err(|why| Refused::Unreadable {
         what: branch.called().to_string(),
         why,
@@ -270,7 +193,7 @@ pub(super) fn open(plane: &Path, branch: Branch<'_>) -> Result<Opened, Refused> 
     Ok(Opened {
         base,
         repo: opened,
-        charter_base,
+        recorded,
     })
 }
 
@@ -279,8 +202,17 @@ pub(super) struct Opened {
     /// The branch's folder, resolved.
     pub(super) base: PathBuf,
     pub(super) repo: gix::Repository,
-    /// The base the branch was cut from, as recorded: one value, or `None` for none or several.
-    charter_base: Option<String>,
+    /// The base each branch was cut from, as recorded (`branch.<name>.charterBase`), read before
+    /// the config was cut: by branch name, for the branches that record exactly one value.
+    pub(super) recorded: BTreeMap<String, String>,
+}
+
+impl Opened {
+    /// The base recorded for the branch checked out in the folder, if it records one.
+    pub(super) fn head_base(&self) -> Option<String> {
+        let current = self.repo.head_name().ok()??;
+        self.recorded.get(&current.shorten().to_string()).cloned()
+    }
 }
 
 /// The config keys a read uses, `section.key`, lower-cased: how the working tree is read and
@@ -305,27 +237,33 @@ pub(super) const ALLOWED: [&str; 15] = [
     "extensions.refstorage",
 ];
 
-/// `branch.<HEAD's branch>.charterBase`, when it holds exactly one value.
-fn recorded_value(repo: &gix::Repository) -> Option<String> {
-    let current = repo.head_name().ok()??;
-    let branch = current.shorten().to_string();
-    name::branch_name_ok(&branch).ok()?;
-    let values: Vec<String> = repo
-        .config_snapshot()
-        .plumbing()
-        .strings_by(
-            "branch",
-            Some(gix::bstr::BStr::new(branch.as_bytes())),
-            "charterBase",
-        )?
-        .into_iter()
-        .map(|value| value.to_string().trim().to_string())
-        .filter(|value| !value.is_empty())
-        .collect();
-    match values.as_slice() {
-        [one] => Some(one.clone()),
-        _ => None,
+/// Every `branch.<name>.charterBase` that holds exactly one value, by branch name: the names
+/// charter would hand git only.
+fn recorded_values(repo: &gix::Repository) -> BTreeMap<String, String> {
+    let config = repo.config_snapshot();
+    let mut values: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let Some(sections) = config.plumbing().sections_by_name("branch") else {
+        return BTreeMap::new();
+    };
+    for section in sections {
+        let Some(name) = section.header().subsection_name() else {
+            continue;
+        };
+        let name = name.to_string();
+        if name::branch_name_ok(&name).is_err() {
+            continue;
+        }
+        for value in section.values("charterBase") {
+            let value = value.to_string().trim().to_string();
+            if !value.is_empty() {
+                values.entry(name.clone()).or_default().push(value);
+            }
+        }
     }
+    values
+        .into_iter()
+        .filter_map(|(name, mut all)| (all.len() == 1).then(|| (name, all.remove(0))))
+        .collect()
 }
 
 /// Cuts what was read of the config down to [`ALLOWED`], in memory.
@@ -386,9 +324,9 @@ pub(super) fn ahead_behind_here(plane: &Path, branch: Branch<'_>) -> Result<Ahea
         what: format!("how far {} is from its base", branch.called()),
         why,
     };
-    let Opened {
-        repo, charter_base, ..
-    } = open(plane, branch)?;
+    let opened = open(plane, branch)?;
+    let charter_base = opened.head_base();
+    let repo = opened.repo;
     let none = AheadBehind {
         ahead: 0,
         behind: 0,
@@ -424,15 +362,19 @@ pub(super) fn ahead_behind_here(plane: &Path, branch: Branch<'_>) -> Result<Ahea
 }
 
 /// A recorded base, resolved: the commit it names, where the branch left it, and its name.
-struct Based {
-    at: gix::ObjectId,
-    fork: gix::ObjectId,
-    named: String,
+pub(super) struct Based {
+    pub(super) at: gix::ObjectId,
+    pub(super) fork: gix::ObjectId,
+    pub(super) named: String,
 }
 
 /// Where the branch left its recorded base, and the base's name: `None` when the record does
 /// not resolve to a commit HEAD shares.
-fn recorded_base(repo: &gix::Repository, value: &str, head: gix::ObjectId) -> Option<Based> {
+pub(super) fn recorded_base(
+    repo: &gix::Repository,
+    value: &str,
+    head: gix::ObjectId,
+) -> Option<Based> {
     let (at, named) = match value.strip_prefix(worktree::DETACHED_PREFIX) {
         Some(sha) => {
             let sha = sha.trim();
@@ -456,145 +398,9 @@ fn recorded_base(repo: &gix::Repository, value: &str, head: gix::ObjectId) -> Op
     Some(Based { at, fork, named })
 }
 
-/// What the commits from `since` to `head` changed, each path into `touched`, and each rename
-/// found among them into `renamed`.
-fn committed(
-    repo: &gix::Repository,
-    since: gix::ObjectId,
-    head: gix::ObjectId,
-    touched: &mut BTreeSet<String>,
-    renamed: &mut Vec<(String, String)>,
-) -> Result<(), String> {
-    let tree = |id: gix::ObjectId| {
-        repo.find_commit(id)
-            .and_then(|commit| commit.tree())
-            .map_err(|e| e.to_string())
-    };
-    let (old, new) = (tree(since)?, tree(head)?);
-    let options = gix::diff::Options::default().with_rewrites(Some(gix::diff::Rewrites::default()));
-    let changes = repo
-        .diff_tree_to_tree(&old, &new, options)
-        .map_err(|e| e.to_string())?;
-    use gix::object::tree::diff::ChangeDetached;
-    for change in changes {
-        match change {
-            ChangeDetached::Addition {
-                location,
-                entry_mode,
-                ..
-            }
-            | ChangeDetached::Deletion {
-                location,
-                entry_mode,
-                ..
-            }
-            | ChangeDetached::Modification {
-                location,
-                entry_mode,
-                ..
-            } => {
-                if !entry_mode.is_tree() {
-                    touched.insert(location.to_string());
-                }
-            }
-            ChangeDetached::Rewrite {
-                source_location,
-                location,
-                entry_mode,
-                copy,
-                ..
-            } => {
-                if entry_mode.is_tree() {
-                    continue;
-                }
-                touched.insert(location.to_string());
-                if !copy {
-                    touched.insert(source_location.to_string());
-                    renamed.push((source_location.to_string(), location.to_string()));
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-/// What is not committed: each path HEAD → index → working tree changed into `loose`, each
-/// file git does not track and does not ignore into `untracked`, each tracked file gone from
-/// the working tree into `gone`, and each rename staged into `renamed`.
-fn uncommitted(
-    repo: &gix::Repository,
-    loose: &mut BTreeSet<String>,
-    untracked: &mut BTreeSet<String>,
-    gone: &mut BTreeSet<String>,
-    renamed: &mut Vec<(String, String)>,
-) -> Result<(), String> {
-    use gix::status::{Item, index_worktree};
-    let items = repo
-        .status(gix::progress::Discard)
-        .map_err(|e| e.to_string())?
-        .untracked_files(gix::status::UntrackedFiles::Files)
-        .index_worktree_submodules(None)
-        .index_worktree_options_mut(|options| options.thread_limit = Some(threads()))
-        .tree_index_track_renames(gix::status::tree_index::TrackRenames::Given(
-            gix::diff::Rewrites::default(),
-        ))
-        .into_iter(None)
-        .map_err(|e| e.to_string())?;
-    for item in items {
-        let item = item.map_err(|e| e.to_string())?;
-        match item {
-            Item::TreeIndex(change) => {
-                use gix::diff::index::ChangeRef;
-                match change {
-                    ChangeRef::Rewrite {
-                        source_location,
-                        location,
-                        copy,
-                        ..
-                    } => {
-                        loose.insert(location.to_string());
-                        if !copy {
-                            loose.insert(source_location.to_string());
-                            renamed.push((source_location.to_string(), location.to_string()));
-                        }
-                    }
-                    other => {
-                        loose.insert(other.location().to_string());
-                    }
-                }
-            }
-            Item::IndexWorktree(index_worktree::Item::Modification {
-                rela_path, status, ..
-            }) => {
-                use gix::status::plumbing::index_as_worktree::{Change as Worktree, EntryStatus};
-                match status {
-                    EntryStatus::Change(Worktree::Removed) => {
-                        gone.insert(rela_path.to_string());
-                        loose.insert(rela_path.to_string());
-                    }
-                    EntryStatus::Change(Worktree::SubmoduleModification(_)) => {}
-                    EntryStatus::NeedsUpdate(_) => {}
-                    _ => {
-                        loose.insert(rela_path.to_string());
-                    }
-                }
-            }
-            Item::IndexWorktree(index_worktree::Item::DirectoryContents { entry, .. }) => {
-                use gix::dir::entry::{Kind, Status};
-                let file = matches!(entry.disk_kind, Some(Kind::File | Kind::Symlink));
-                if entry.status == Status::Untracked && file {
-                    untracked.insert(entry.rela_path.to_string());
-                }
-            }
-            Item::IndexWorktree(index_worktree::Item::Rewrite { .. }) => {}
-        }
-    }
-    Ok(())
-}
-
 /// The most threads a status compares the working tree on: the machine's cores, at most
 /// [`THREADS`].
-fn threads() -> usize {
+pub(super) fn threads() -> usize {
     std::thread::available_parallelism().map_or(1, |cores| cores.get().min(THREADS))
 }
 
@@ -608,7 +414,7 @@ const THREADS: usize = 8;
 /// `path` when it is a plain path inside the branch: relative, no `..`, and never git's own.
 /// gitoxide's paths are bytes, read here lossily: a name that was not UTF-8 holds U+FFFD and is
 /// dropped, as the tree refuses it.
-fn plain(path: &str) -> Option<String> {
+pub(super) fn plain(path: &str) -> Option<String> {
     let relative = inside(path).ok()?;
     let git_s = relative.components().any(|step| step.as_os_str() == ".git");
     (!git_s && !path.contains('\\') && !path.contains('\u{FFFD}')).then(|| path.to_string())

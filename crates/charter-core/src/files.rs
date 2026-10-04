@@ -38,6 +38,12 @@ mod reader;
 pub use reader::{
     Answer, Ask, GRACE, MEMORY, OUTPUT, READ_ARG, Reader, ahead_behind, serve_if_asked, status,
 };
+// The one diff engine (RC-2): every comparison, read in the same bounded child.
+mod compare;
+pub use compare::{
+    COUNTED, Compared, Comparison, FileChange, FileDiff, Head, Hunk, Lines, MemberCompared, Sides,
+    compare, compare_change, compare_file,
+};
 mod search;
 pub use search::{
     BadQuery, Ended, FILE_LINES, FILL, FileHits, HitLine, LINE_CHARS, LONGEST_LINE, LONGEST_QUERY,
@@ -509,6 +515,65 @@ fn open_inside(held: &Held, relative: &Path) -> std::io::Result<std::fs::File> {
         None => rustix::fs::openat(&held.0, leaf, file, Mode::empty())?,
     };
     Ok(std::fs::File::from(opened))
+}
+
+/// The target of the link `relative` names in the held folder, as git stores a link: `None`
+/// when it is not a link. The folders on the way are opened one at a time following no link,
+/// and the link itself is read, never followed.
+#[cfg(unix)]
+fn link_inside(held: &Held, relative: &Path) -> Option<Vec<u8>> {
+    use rustix::fs::{Mode, OFlags};
+    let folder = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let mut steps: Vec<&std::ffi::OsStr> = relative
+        .components()
+        .filter_map(|step| match step {
+            Component::Normal(name) => Some(name),
+            _ => None,
+        })
+        .collect();
+    let leaf = steps.pop()?;
+    let mut fd: Option<rustix::fd::OwnedFd> = None;
+    for name in steps {
+        let next = match &fd {
+            Some(at) => rustix::fs::openat(at, name, folder, Mode::empty()).ok()?,
+            None => rustix::fs::openat(&held.0, name, folder, Mode::empty()).ok()?,
+        };
+        fd = Some(next);
+    }
+    let target = match &fd {
+        Some(at) => rustix::fs::readlinkat(at, leaf, Vec::new()).ok()?,
+        None => rustix::fs::readlinkat(&held.0, leaf, Vec::new()).ok()?,
+    };
+    Some(target.into_bytes())
+}
+
+/// [`link_inside`] where there is no descriptor to hold: the link read by path, its folders
+/// checked to be no link.
+#[cfg(not(unix))]
+fn link_inside(held: &Held, relative: &Path) -> Option<Vec<u8>> {
+    let path = held.0.join(relative);
+    let mut at = held.0.clone();
+    let mut steps: Vec<_> = relative.components().collect();
+    steps.pop()?;
+    for step in steps {
+        at.push(step);
+        if std::fs::symlink_metadata(&at)
+            .ok()?
+            .file_type()
+            .is_symlink()
+        {
+            return None;
+        }
+    }
+    if !std::fs::symlink_metadata(&path)
+        .ok()?
+        .file_type()
+        .is_symlink()
+    {
+        return None;
+    }
+    let target = std::fs::read_link(&path).ok()?;
+    Some(target.to_string_lossy().replace('\\', "/").into_bytes())
 }
 
 /// [`open_inside`] where there is no open that refuses a link: every component is refused when
