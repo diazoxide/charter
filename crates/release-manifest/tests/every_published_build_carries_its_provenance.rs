@@ -195,10 +195,22 @@ fn provenance_and_publish_take_only_the_build_artifacts_by_their_exact_names() {
     for want in [
         "aarch64-apple-darwin) slug=macos-arm64; updater=darwin-aarch64 ;;",
         "x86_64-unknown-linux-gnu) slug=linux-x86_64; updater=linux-x86_64-appimage ;;",
-        // One `{ … } >> "$GITHUB_OUTPUT"` group writes the step's outputs (shellcheck SC2129).
-        r#"echo "artifact=charter-$slug-${VERSION}""#,
-        r#"} >> "$GITHUB_OUTPUT""#,
     ] {
         assert!(lines.iter().any(|l| l == want), "{want} not in {lines:#?}");
     }
+    // One `{ … } >> "$GITHUB_OUTPUT"` group writes the step's outputs (shellcheck SC2129), the
+    // artifact's name among them. Read as one run of lines, so an echo moved out of the group,
+    // where it would print to the log instead of becoming an output, fails here.
+    let outputs = [
+        "{",
+        r#"echo "triple=$triple""#,
+        r#"echo "slug=$slug""#,
+        r#"echo "updater=$updater""#,
+        r#"echo "artifact=charter-$slug-${VERSION}""#,
+        r#"} >> "$GITHUB_OUTPUT""#,
+    ];
+    assert!(
+        lines.windows(outputs.len()).any(|w| w == outputs),
+        "{outputs:#?} not one run of lines in {lines:#?}"
+    );
 }
