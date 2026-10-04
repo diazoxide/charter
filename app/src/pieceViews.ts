@@ -27,6 +27,7 @@ function keyOf(place: Place): string {
 
 const FILES = "piece-files";
 const FILE = "piece-file";
+const DIFF = "piece-diff";
 
 /** The view listing a piece's files, with the light editor beside the list. */
 export function pieceFilesView(place: Place): ViewRef {
@@ -36,6 +37,24 @@ export function pieceFilesView(place: Place): ViewRef {
 /** One file of a piece, in a tab of its own. */
 export function pieceFileView(place: Place, path: string): ViewRef {
   return { from: null, view: FILE, key: `${keyOf(place)}/${path}` };
+}
+
+/** One file of a piece against the branch's base, in a tab of its own: "Show what changed"
+ *  (FM-11). */
+export function pieceDiffView(place: Place, path: string): ViewRef {
+  return { from: null, view: DIFF, key: `${keyOf(place)}/${path}` };
+}
+
+/** What a file's comparison tab is called: what it shows, the file's name, and the piece. */
+export function pieceDiffTitle(place: Place, path: string): string {
+  return `What changed · ${path.slice(path.lastIndexOf("/") + 1)} · ${placeName(place)}`;
+}
+
+/** The piece and the file a comparison view is about; `undefined` for every other view. */
+export function pieceDiffOf(view: ViewRef): { place: Place; path: string } | undefined {
+  if (view.from !== null || view.view !== DIFF) return undefined;
+  const of = pieceOf({ ...view, view: FILE });
+  return of?.path === undefined ? undefined : { place: of.place, path: of.path };
 }
 
 /** What a piece tab is called. */

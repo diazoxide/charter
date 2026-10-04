@@ -856,6 +856,12 @@ export const commands = {
 	/**  How far a branch is from the branch it was cut from, in commits ahead and behind. */
 	branchAheadBehind: (plane: PlaneId, workspace: string, repo: string, piece: string | null) => typedError<AheadBehind, string>(__TAURI_INVOKE("branch_ahead_behind", { plane, workspace, repo, piece })),
 	/**
+	 *  One file of a branch compared against the branch it was cut from, committed or not: its
+	 *  lines and git's hunks, or what it is when it is not drawn as lines. Refused, in the core's
+	 *  sentence, for a path any file command would refuse and for a file the branch did not change.
+	 */
+	whatChanged: (plane: PlaneId, workspace: string, repo: string, piece: string | null, path: string) => typedError<WhatChanged, string>(__TAURI_INVOKE("what_changed", { plane, workspace, repo, piece, path })),
+	/**
 	 *  The folders of branches this window's explorer has expanded, watched until it names others
 	 *  (FM-1). A folder that does not resolve — gone, or refused as the tree refuses it — is not
 	 *  watched.
@@ -2025,6 +2031,15 @@ export type FileChange = {
 	uncommitted: boolean,
 };
 
+/**  One file's change, as the comparison tab draws it. */
+export type FileDiff = 
+/**  Text: each side (empty where the file is absent) and git's hunks between them. */
+{ kind: "text"; base: string; head: string; hunks: GitHunk[] } | 
+/**  A side git would call binary: said, not drawn. */
+{ kind: "binary" } | 
+/**  A side past the largest file the preview draws (2 MiB), by its size in bytes. */
+{ kind: "too-large"; bytes: number };
+
 /**
  *  Where ⌘P and ⌘⇧F look: for ⌘P the scope follows the window's focus, and Tab widens it; the
  *  Search tab (FM-8) offers the four as a choice.
@@ -2190,6 +2205,17 @@ export type FoundFile = {
 
 /**  How a number reads, as the window colours it — `charter_core::usage::Tone`. */
 export type GaugeTone = "ok" | "warn" | "bad";
+
+/**
+ *  One hunk, in `git diff -U0`'s numbers: lines counted from 1, and a side with no lines naming
+ *  the line the hunk comes after (`0` for the top). The window's `GitHunk`.
+ */
+export type GitHunk = {
+	oldStart: number,
+	oldLines: number,
+	newStart: number,
+	newLines: number,
+};
 
 /**  What became of a reference handed to a chat. */
 export type Handed = 
@@ -4332,6 +4358,18 @@ export type Watching = {
 	 *  (`Harness::newline`), or none for a shell, which keeps the terminal's own Enter.
 	 */
 	newline: string | null,
+};
+
+/**  One file of a branch against the branch it was cut from: "Show what changed" (FM-11). */
+export type WhatChanged = {
+	mark: ChangeMark,
+	/**  Where a renamed file came from: a name to show, never a path to open. */
+	from: string | null,
+	/**  Whether some of its change is not committed yet. */
+	uncommitted: boolean,
+	/**  The branch it is compared against; `null` when against the last commit. */
+	base: string | null,
+	diff: FileDiff,
 };
 
 /**

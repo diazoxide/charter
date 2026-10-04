@@ -243,6 +243,101 @@ pub async fn branch_ahead_behind(
     .map_err(|err| format!("reading how far the branch is from its base did not finish: {err}"))?
 }
 
+/// One hunk, in `git diff -U0`'s numbers: lines counted from 1, and a side with no lines naming
+/// the line the hunk comes after (`0` for the top). The window's `GitHunk`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHunk {
+    pub old_start: u32,
+    pub old_lines: u32,
+    pub new_start: u32,
+    pub new_lines: u32,
+}
+
+/// One file's change, as the comparison tab draws it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum FileDiff {
+    /// Text: each side (empty where the file is absent) and git's hunks between them.
+    Text {
+        base: String,
+        head: String,
+        hunks: Vec<GitHunk>,
+    },
+    /// A side git would call binary: said, not drawn.
+    Binary,
+    /// A side past the largest file the preview draws (2 MiB), by its size in bytes.
+    TooLarge { bytes: u32 },
+}
+
+/// One file of a branch against the branch it was cut from: "Show what changed" (FM-11).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct WhatChanged {
+    pub mark: ChangeMark,
+    /// Where a renamed file came from: a name to show, never a path to open.
+    pub from: Option<String>,
+    /// Whether some of its change is not committed yet.
+    pub uncommitted: bool,
+    /// The branch it is compared against; `null` when against the last commit.
+    pub base: Option<String>,
+    pub diff: FileDiff,
+}
+
+/// One file of a branch compared against the branch it was cut from, committed or not: its
+/// lines and git's hunks, or what it is when it is not drawn as lines. Refused, in the core's
+/// sentence, for a path any file command would refuse and for a file the branch did not change.
+// Read by gitoxide in the core's bounded reader, as `branch_status` is (RC-2, D-88f, D-88h): no
+// git process starts. On a blocking thread and never the one that draws (SC-2). Not a doc
+// comment, because the generated bindings carry those.
+#[tauri::command]
+#[specta::specta]
+pub async fn what_changed(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    workspace: String,
+    repo: String,
+    piece: Option<String>,
+    path: String,
+) -> Result<WhatChanged, String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || {
+        what_changed_of(&root, branch(&workspace, &repo, &piece), &path)
+    })
+    .await
+    .map_err(|err| format!("comparing the file did not finish: {err}"))?
+}
+
+fn what_changed_of(plane: &Path, branch: Branch<'_>, path: &str) -> Result<WhatChanged, String> {
+    let shown =
+        files::what_changed(&crate::reader(), plane, branch, path).map_err(|e| e.to_string())?;
+    let diff = match shown.diff {
+        files::FileDiff::Text { base, head, hunks } => FileDiff::Text {
+            base,
+            head,
+            hunks: hunks
+                .into_iter()
+                .map(|one| GitHunk {
+                    old_start: one.old_start,
+                    old_lines: one.old_lines,
+                    new_start: one.new_start,
+                    new_lines: one.new_lines,
+                })
+                .collect(),
+        },
+        files::FileDiff::Binary => FileDiff::Binary,
+        files::FileDiff::TooLarge { bytes } => FileDiff::TooLarge {
+            bytes: u32::try_from(bytes).unwrap_or(u32::MAX),
+        },
+    };
+    Ok(WhatChanged {
+        mark: shown.change.mark.into(),
+        from: shown.change.from,
+        uncommitted: shown.change.uncommitted,
+        base: shown.base,
+        diff,
+    })
+}
+
 fn ahead_behind_of(plane: &Path, branch: Branch<'_>) -> Result<AheadBehind, String> {
     let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
     files::ahead_behind(&crate::reader(), plane, branch)
@@ -649,6 +744,49 @@ mod tests {
             "{status:?}"
         );
         assert_eq!(status.base.as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn what_changed_in_a_file_crosses_with_both_sides_and_gits_hunks() {
+        let (_dir, root, piece) = plane();
+        std::fs::write(piece.join("README.md"), "one\ntwo\n").unwrap();
+
+        let shown = what_changed_of(&root, PIECE, "README.md").unwrap();
+
+        assert_eq!(
+            shown,
+            WhatChanged {
+                mark: ChangeMark::Changed,
+                from: None,
+                uncommitted: true,
+                base: Some("main".to_string()),
+                diff: FileDiff::Text {
+                    base: "one\n".to_string(),
+                    head: "one\ntwo\n".to_string(),
+                    hunks: vec![GitHunk {
+                        old_start: 1,
+                        old_lines: 0,
+                        new_start: 2,
+                        new_lines: 1,
+                    }],
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn what_changed_refuses_in_the_cores_sentence() {
+        let (_dir, root, piece) = plane();
+        std::fs::write(piece.join("other.txt"), "\n").unwrap();
+
+        assert_eq!(
+            what_changed_of(&root, PIECE, "README.md"),
+            Err("'README.md' is not a file this branch changed against its base".to_string())
+        );
+        assert_eq!(
+            what_changed_of(&root, PIECE, ".git/config"),
+            Err("'.git/config' is not a path inside the branch's folder".to_string())
+        );
     }
 
     #[test]

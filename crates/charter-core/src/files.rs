@@ -42,7 +42,7 @@ pub use reader::{
 mod compare;
 pub use compare::{
     COUNTED, Compared, Comparison, FileChange, FileDiff, Head, Hunk, Lines, MemberCompared, Sides,
-    compare, compare_change, compare_file,
+    WhatChanged, compare, compare_change, compare_file, what_changed,
 };
 mod search;
 pub use search::{
@@ -188,6 +188,9 @@ pub enum Refused {
     NotOffered(String),
     #[error("'{0}' is not a file")]
     NotAFile(String),
+    /// "Show what changed" for a file the branch did not change (FM-11).
+    #[error("'{0}' is not a file this branch changed against its base")]
+    NotChanged(String),
     #[error("'{0}' is not a folder")]
     NotAFolder(String),
     #[error(transparent)]

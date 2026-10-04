@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import type { FolderEntry, PieceFile, PlaneId } from "../bindings";
+import type { ChangeMark, FolderEntry, PieceFile, PlaneId } from "../bindings";
 import { PieceFileTab, PieceFilesTab } from "./PieceFiles";
 import { forgetYourEditor, setYourEditor } from "../yourEditor";
 import type { Offer } from "../actions";
@@ -26,6 +26,7 @@ function core(
   files: Record<string, PieceFile | string>,
   editorSays?: string,
   folders?: Record<string, FolderEntry[]>,
+  changed: Record<string, ChangeMark> = {},
 ) {
   const asked: string[] = [];
   const tree = folders ?? foldersOf(Object.keys(files));
@@ -43,6 +44,19 @@ function core(
         return { entries: tree[a.folder] ?? [], more: 0 };
       }
       if (cmd === "files_watch") return null;
+      if (cmd === "branch_status") {
+        return {
+          changes: Object.entries(changed).map(([path, mark]) => ({
+            path,
+            mark,
+            from: null,
+            uncommitted: true,
+          })),
+          folders: [],
+          more: 0,
+          base: "main",
+        };
+      }
       if (cmd === "piece_file") {
         asked.push(`${cmd}:${a.path}`);
         const found = files[a.path];
@@ -165,6 +179,76 @@ describe("a branch's files", () => {
       { from: null, view: "piece-file", key: "alpha/svc/fix-it/src/lib.rs" },
       "lib.rs · fix-it",
     );
+  });
+});
+
+describe("Show what changed (FM-11)", () => {
+  it("is offered for a file the branch changed, and opens its comparison as a view tab", async () => {
+    core(
+      {
+        "notes.txt": { kind: "text", text: "plain notes\n" },
+        "src/lib.rs": { kind: "text", text: "pub fn one() {}\n" },
+      },
+      undefined,
+      undefined,
+      { "src/lib.rs": "changed" },
+    );
+    const opened = vi.fn();
+    render(<PieceFilesTab plane={PLANE} cut={CUT} onOpenView={opened} />);
+    await userEvent.click(await row("src"));
+    await userEvent.click(await row("lib.rs"));
+
+    await userEvent.click(await screen.findByRole("button", { name: "Show what changed" }));
+
+    expect(opened).toHaveBeenCalledWith(
+      { from: null, view: "piece-diff", key: "alpha/svc/fix-it/src/lib.rs" },
+      "What changed · lib.rs · fix-it",
+    );
+  });
+
+  it("is absent for a file the branch did not change", async () => {
+    core(
+      {
+        "notes.txt": { kind: "text", text: "plain notes\n" },
+        "src/lib.rs": { kind: "text", text: "pub fn one() {}\n" },
+      },
+      undefined,
+      undefined,
+      { "src/lib.rs": "changed" },
+    );
+    render(<PieceFilesTab plane={PLANE} cut={CUT} onOpenView={() => undefined} />);
+    await userEvent.click(await row("src"));
+    await userEvent.click(await row("lib.rs"));
+    await screen.findByRole("button", { name: "Show what changed" });
+
+    await userEvent.click(await row("notes.txt"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("light-editor")).toHaveTextContent("plain notes"),
+    );
+    expect(screen.queryByRole("button", { name: "Show what changed" })).toBeNull();
+  });
+
+  it("is absent when what the branch changed could not be read", async () => {
+    mockIPC(
+      (cmd, args) => {
+        const a = args as Record<string, string>;
+        if (cmd === "branch_tree")
+          return { entries: a.folder === "" ? [file("notes.txt")] : [], more: 0 };
+        if (cmd === "files_watch") return null;
+        if (cmd === "piece_file") return { kind: "text", text: "plain notes\n" };
+        if (cmd === "branch_status") throw "charter could not read the branch";
+        throw new Error(`unexpected ${cmd}`);
+      },
+      { shouldMockEvents: true },
+    );
+    render(<PieceFilesTab plane={PLANE} cut={CUT} onOpenView={() => undefined} />);
+    await userEvent.click(await row("notes.txt"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("light-editor")).toHaveTextContent("plain notes"),
+    );
+    expect(screen.queryByRole("button", { name: "Show what changed" })).toBeNull();
   });
 });
 

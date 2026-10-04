@@ -5,6 +5,7 @@ import {
   Cpu,
   Download,
   FileCode,
+  GitCompare,
   FileText,
   FolderGit2,
   GitPullRequest,
@@ -48,7 +49,7 @@ import { DRAFT, MEMORY_VIEW, SHARED_MEMORY_VIEW, isMemory, memoryRefOf } from ".
 import { HeadingOffer } from "./PanelSection";
 import { SavingView } from "./SavingView";
 import { SessionRecordTab } from "./SessionRecordTab";
-import { pieceOf } from "./pieceViews";
+import { pieceDiffOf, pieceOf } from "./pieceViews";
 import { SEARCH, isSearch } from "./contentSearch";
 import { SearchTab } from "./SearchTab";
 import { SESSION_VIEW } from "./sessions";
@@ -224,6 +225,8 @@ export const OWN_MARKS: Record<string, React.ComponentType<{ className?: string 
   harness: Cpu,
   "piece-files": FolderGit2,
   "piece-file": FileCode,
+  /** One file against its branch's base (FM-11). */
+  "piece-diff": GitCompare,
   [SEARCH]: Search,
 };
 
@@ -350,6 +353,7 @@ export function ViewPane({
   const holding = waits && view.from !== null;
   const memoryAt = isMemory(view) ? memoryRefOf(view.key) : undefined;
   const piece = pieceOf(view);
+  const pieceDiff = pieceDiffOf(view);
   return (
     <section
       className="view-pane"
@@ -466,6 +470,16 @@ export function ViewPane({
               />
             )}
           </Suspense>
+        ) : pieceDiff !== undefined ? (
+          /* One file against its branch's base (FM-11), in the light editor's merge view. */
+          <Suspense fallback={OPENING}>
+            <PieceDiffTab
+              key={`${plane}\u0000${view.key}`}
+              plane={plane}
+              cut={pieceDiff.place}
+              path={pieceDiff.path}
+            />
+          </Suspense>
         ) : isSession(view) ? (
           /* A session record (SI-8d): read-only Markdown the window renders from the core's
              `session_record`, keyed by the record so a pane that comes to show another starts
@@ -559,6 +573,10 @@ const PieceFilesTab = lazy(() =>
 );
 const PieceFileTab = lazy(() =>
   import("./editor/PieceFiles").then((module) => ({ default: module.PieceFileTab })),
+);
+
+const PieceDiffTab = lazy(() =>
+  import("./editor/PieceDiff").then((module) => ({ default: module.PieceDiffTab })),
 );
 
 /** What a light editor tab shows while its chunk arrives. */
