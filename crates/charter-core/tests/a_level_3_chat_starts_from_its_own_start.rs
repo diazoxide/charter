@@ -166,19 +166,22 @@ fn a_harness_charter_runs_over_acp_nowhere_yet_starts_in_its_terminal_and_says_w
     let not = Launch::for_start(&ready, host(&[])).expect_err("not at level 3");
 
     assert_eq!(not, NotOffered::NoAgent("codex".to_owned()));
-    assert!(not.starts_in_its_terminal());
     assert_eq!(
         not.to_string(),
         "charter runs no ACP agent for a codex chat yet, so it starts in its terminal"
     );
 }
 
-/// D-87h: a level-3 start goes through the same sandbox decision as a terminal start, and in a
-/// sandboxed project it is refused until charter can wrap a level-3 agent. opencode is wrapped
+/// The message every refusal in a sandboxed project gives: it starts in its terminal, and it
+/// never offers running unconfined as the way to get ACP.
+const SANDBOXED: &str = "this project turns the sandbox on, and charter cannot sandbox a chat over ACP yet, so it starts in its terminal, where its sandbox is shown for as long as it runs";
+
+/// D-87h: a level-3 start goes through the same sandbox decision as a terminal start, and a
+/// sandboxed project refuses level 3 until charter can wrap a level-3 agent. opencode is wrapped
 /// on macOS only; elsewhere its sandboxed start is refused before this is asked.
 #[cfg(target_os = "macos")]
 #[test]
-fn a_sandboxed_chat_does_not_run_over_acp_and_does_not_start_at_all() {
+fn a_sandboxed_chat_does_not_run_over_acp_and_starts_in_its_terminal() {
     charter_core::unsteered!();
     let outside = stand_in::NoChatWrites::new();
     let opencode = program(&outside, "opencode");
@@ -190,18 +193,15 @@ fn a_sandboxed_chat_does_not_run_over_acp_and_does_not_start_at_all() {
     let not = Launch::for_start(&ready, host(&[])).expect_err("not at level 3");
 
     assert_eq!(not, NotOffered::Sandboxed);
-    assert!(!not.starts_in_its_terminal());
-    assert!(
-        not.to_string().contains("Start it without the sandbox"),
-        "{not}"
-    );
+    assert_eq!(not.to_string(), SANDBOXED);
 }
 
 #[test]
-fn a_chat_a_person_started_without_the_sandbox_may_run_over_acp() {
+fn a_chat_a_person_started_without_the_sandbox_does_not_run_over_acp_either() {
     charter_core::unsteered!();
-    // The audited opt-out (ADR 0067 §7, V78a) is the one way a level-3 chat runs in a sandboxed
-    // project, and its start already says so on the chat (`Ready::unsandboxed`).
+    // D-87h refuses level 3 in a sandboxed PROJECT, whatever the chat. A person's opt-out
+    // (ADR 0067 §7, V78a) needs its unsandboxed badge shown for the chat's whole life, and a
+    // chat at level 3 has no terminal to show it on (V24a), so it is a terminal chat.
     let outside = stand_in::NoChatWrites::new();
     let opencode = program(&outside, "opencode");
     let plane = Plane::new("[sandbox]\nmode = \"on\"\n");
@@ -213,7 +213,8 @@ fn a_chat_a_person_started_without_the_sandbox_may_run_over_acp() {
     let ready = start::ready(&start, plane.root()).expect("it starts unsandboxed");
     assert!(ready.unsandboxed.is_some(), "{ready:?}");
 
-    let launch = Launch::for_start(&ready, host(&[])).expect("offered at level 3");
+    let not = Launch::for_start(&ready, host(&[])).expect_err("not at level 3");
 
-    assert_eq!(launch.argv, [opencode, "acp".to_owned()]);
+    assert_eq!(not, NotOffered::Sandboxed);
+    assert_eq!(not.to_string(), SANDBOXED);
 }

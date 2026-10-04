@@ -955,3 +955,46 @@ fn the_agent_gets_the_chat_s_environment_and_nothing_else_of_the_host_s() {
     }
     assert_eq!(said, ["CHARTER_CHAT_ONLY=kept", "HOME=unset"]);
 }
+
+#[test]
+fn the_kill_switch_ends_a_chat_whose_escaped_descendant_holds_its_stdout() {
+    // A process that left the agent's group keeps its stdout open, so the connection never sees
+    // the agent go. The kill ends the chat by charter's own act all the same: the turn is gone,
+    // its asks are withdrawn and cannot be answered, and the host hears the end.
+    let dir = tempfile::tempdir().expect("a worktree");
+    let record = dir.path().join("record.jsonl");
+    let asks = Arc::new(Asks::new());
+    let (chat, events) = Chat::start(
+        launch(
+            dir.path(),
+            &[
+                "--acp-escape",
+                "--acp-record",
+                record.to_str().expect("UTF-8"),
+            ],
+        ),
+        Arc::clone(&asks),
+    )
+    .expect("the agent starts");
+    let escaped = std::fs::read_to_string(&record)
+        .ok()
+        .and_then(|text| text.lines().next().map(str::to_owned))
+        .and_then(|line| serde_json::from_str::<serde_json::Value>(&line).ok())
+        .and_then(|line| line["escaped"].as_u64())
+        .expect("a process left the agent's group");
+    let chat = Arc::new(chat);
+    let turn = prompt_aside(&chat, "ask");
+    let ask = raised(&events);
+
+    chat.kill();
+
+    let gone = ended(&turn);
+    let seen = events_until(&events, |event| *event == Event::Ended);
+    let answered = chat.answer(&ask.id, "once", the_operator());
+    let _ = std::process::Command::new("kill")
+        .arg(escaped.to_string())
+        .status();
+    assert_eq!(gone, Err(TurnFailed::Gone), "{seen:#?}");
+    assert_eq!(asks.pending(std::time::Instant::now()), Vec::new());
+    assert!(answered.is_err(), "{answered:?}");
+}

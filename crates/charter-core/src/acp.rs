@@ -7,7 +7,8 @@
 //!
 //! - **A level-3 chat starts from the start a terminal chat makes** ([`Launch::for_start`]):
 //!   the one profile gate and sandbox decision, then the agent in the chat's environment and
-//!   nothing else of the host's. A sandboxed chat does not run over ACP (D-87h).
+//!   nothing else of the host's. No chat in a sandboxed project runs over ACP, opted out or
+//!   not (D-87h); it starts in its terminal.
 //! - **`initialize` offers nothing optional** (§2, V28a): no `fs`, no `terminal`, no elicitation.
 //!   A call to a client method charter did not offer is refused with *method not found* and
 //!   reported as [`Event::Refused`], the input to the audit's `acp.call.refused`.
@@ -604,12 +605,20 @@ impl Chat {
     /// agent exits: the turn fails as [`TurnFailed::Gone`], every ask still open is withdrawn,
     /// and [`Event::Ended`] is heard. The leader is reaped only when the chat is dropped, so
     /// its id names this group until then.
+    ///
+    /// The connection is ended by charter's own act too, not only by the agent's stdout
+    /// closing: a process that left the group can hold that open, and must not keep a killed
+    /// chat, or its asks, alive.
     pub fn kill(&self) {
+        self.commands.close_channel();
         kill_group(self.shared.group);
     }
 
     /// The agent's process id, which is also its process group's: what a pause stops
     /// (V27c) and what the run records as the chat's program.
+    ///
+    /// Valid only while this `Chat` is alive: the leader is reaped when it is dropped, and the
+    /// id can then name another process. A pause holds the chat for as long as it uses the id.
     pub fn process_id(&self) -> u32 {
         self.shared.group
     }
@@ -996,10 +1005,14 @@ impl Protocol {
         // chat dropped. Its group goes with it; the leader is not reaped yet, so its id is
         // still the agent's.
         kill_group(shared.group);
-        // Nothing can answer the agent any more, so nothing it asked waits on a human.
-        let open: Vec<AskId> = lock(&shared.waiting).drain().map(|(id, _)| id).collect();
-        for id in open {
-            shared.asks.withdraw(&id);
+        // Nothing can answer the agent any more, so nothing it asked waits on a human. Under
+        // the lock from the first ask to the last, as a cancel and a drop withdraw them, so an
+        // answer never finds an ask still raised for an agent that is gone.
+        {
+            let mut waiting = lock(&shared.waiting);
+            for (id, _) in waiting.drain() {
+                shared.asks.withdraw(&id);
+            }
         }
         shared.end();
     }
