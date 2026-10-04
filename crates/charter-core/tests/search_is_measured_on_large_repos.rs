@@ -1,0 +1,472 @@
+//! FM-12 (#1115): **⌘P, ⌘⇧F and a branch's status, measured on a large repo** (#1103, V86 F9:
+//! no index until a measurement shows the need). One generated repo of many files, shaped like
+//! a real one: nested packages, mixed sizes and kinds, some binaries, and a `.gitignore` with
+//! build output and dependencies that hold files of their own.
+//!
+//! What is timed, through the core's public calls the app makes:
+//! - **⌘P** (`files::Finder`): a palette session's first find — the listing plus a match, as
+//!   the app asks with an empty query when the palette opens — and each keystroke after it;
+//! - **⌘⇧F** (`files::search`): a page of [`PAGE_LINES`] lines, as the Search tab asks for one,
+//!   timed to its first file of hits and to its end, for common, rare and absent queries; and a
+//!   whole scan of the repo, page after page, for a query found nowhere;
+//! - **status** (`files::status`, through the bounded reader child): what runs after every
+//!   write an agent makes, on a clean branch and on one with a few changes.
+//!
+//! It is ignored by default, because building the repo takes minutes. CI runs it nightly and on
+//! `main` only, as evidence (V70; `stress.yml`'s `search at scale`), so a regression shows on
+//! `main` without ever gating a pull request. By hand:
+//!
+//! ```text
+//! cargo test --release -p charter-core --test search_is_measured_on_large_repos -- \
+//!   --ignored --nocapture --test-threads=1
+//! ```
+//!
+//! - `CHARTER_MEASURE_FILES`: how many tracked files (100,000 by default);
+//! - `CHARTER_MEASURE_PLANE`: a folder to build the repo in once and measure again later, so a
+//!   run can be timed with the file cache cold (the folder on a volume detached and attached
+//!   again in between) and then warm. Unset, the repo is built in a temporary folder;
+//! - `CHARTER_MEASURE_ONLY`: one step — `find`, `search:<query name>`, `scan` or `status` — so
+//!   each cold number is the first read of a cold cache, not one warmed by the step before;
+//! - `CHARTER_MEASURE_BUDGETS=0`: print the numbers without holding them to the budgets.
+//!
+//! **The budgets held** (`docs/spec.md` rows G2–G4). Each is a ceiling well clear of the warm
+//! numbers measured on a loaded macOS machine at 300,000 files (#1115), and CI's repo is warm,
+//! being just written. So a miss is a regression of a different order, not noise:
+//! - a ⌘P keystroke's core match, median and worst: within ADR 0086 L1's 50 ms (measured 5.5 and
+//!   12.7 ms);
+//! - ⌘P's first find: within [`FIRST_FIND`] (measured 0.53–0.57 s);
+//! - ⌘⇧F's first file of hits for a common query: within [`FIRST_HIT`] (measured 0.57 s);
+//! - a status read: within [`STATUS`], the reader's deadline (measured 15–23 s).
+//!
+//! A rare query, or one found nowhere, is measured and held to nothing. Its whole scan takes
+//! minutes at this size, which is the index question #1153 carries, not a regression.
+
+mod support;
+
+use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
+use std::time::{Duration, Instant};
+
+use charter_core::files::{self, Branch, Ended, Finder, Place, SearchOptions, Searched};
+
+/// The app's page of ⌘⇧F lines (`searchfiles.rs`).
+const PAGE_LINES: usize = 200;
+
+/// The app's most ⌘P hits (`findfiles.rs`).
+const MOST: usize = 50;
+
+/// ADR 0086 L1, keystroke to screen: the most one keystroke's core match may take.
+const KEYSTROKE: Duration = Duration::from_millis(50);
+
+/// ⌘P's first find of a session at the measured size: the listing plus a match.
+const FIRST_FIND: Duration = Duration::from_secs(3);
+
+/// ⌘⇧F's first file of hits for a common query.
+const FIRST_HIT: Duration = Duration::from_secs(1);
+
+/// One status read through the reader child: the reader's own deadline, past which the read
+/// fails and the window says so.
+const STATUS: Duration = charter_core::worktree::git::READ;
+
+const WS: &str = "alpha";
+const REPO: &str = "big";
+
+/// The bounded reader, as the app starts it, but this test binary run again.
+fn reader() -> files::Reader {
+    files::Reader::new(
+        std::env::current_exe().expect("the test binary"),
+        [
+            "reader_child",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1",
+            files::READ_ARG,
+        ]
+        .map(std::ffi::OsString::from),
+    )
+}
+
+/// The reader's child: in a run of this binary that [`reader`] started, it answers the one
+/// question it was asked and exits; in any other run it does nothing.
+#[test]
+fn reader_child() {
+    charter_core::unsteered!();
+    if let Some(code) = files::serve_if_asked() {
+        std::process::exit(code);
+    }
+}
+
+/// A small, steady random source, so every run builds the same repo.
+struct Dice(u64);
+
+impl Dice {
+    fn next(&mut self) -> u64 {
+        // xorshift64*
+        self.0 ^= self.0 >> 12;
+        self.0 ^= self.0 << 25;
+        self.0 ^= self.0 >> 27;
+        self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    }
+
+    fn below(&mut self, n: u64) -> u64 {
+        self.next() % n
+    }
+
+    fn pick<'a>(&mut self, of: &[&'a str]) -> &'a str {
+        of[self.below(of.len() as u64) as usize]
+    }
+}
+
+const WORDS: [&str; 24] = [
+    "widget", "handler", "service", "model", "view", "util", "config", "parser", "render", "store",
+    "client", "server", "index", "types", "hooks", "api", "auth", "cache", "queue", "router",
+    "schema", "event", "layout", "session",
+];
+
+const AREAS: [&str; 10] = [
+    "src",
+    "src/core",
+    "src/ui",
+    "src/net",
+    "lib",
+    "tests",
+    "docs",
+    "scripts",
+    "src/core/impl",
+    "assets",
+];
+
+/// The rare word: in about one file in 10,000.
+const RARE: &str = "frobnicate_lattice";
+
+/// A line of code-like text.
+fn line(dice: &mut Dice, out: &mut String) {
+    let a = dice.pick(&WORDS);
+    let b = dice.pick(&WORDS);
+    let n = dice.below(1000);
+    match dice.below(12) {
+        0 => out.push_str(&format!("    // TODO: {a} the {b} before {n}\n")),
+        1 => out.push_str(&format!("import {{ {a}{n} }} from \"../{b}/{a}\";\n")),
+        2 => out.push_str(&format!(
+            "fn {a}_{b}_handler(x: u32) -> u32 {{ x + {n} }}\n"
+        )),
+        3 => out.push_str(&format!("const [{a}, set_{a}] = useState({n});\n")),
+        4 => out.push('\n'),
+        5 => out.push_str(&format!("    let {a}_{n} = {b}::new();\n")),
+        6 => out.push_str(&format!("/// The {a} of a {b}, kept for {n} turns.\n")),
+        7 => out.push_str(&format!("    if {a}.len() > {n} {{ return {b}; }}\n")),
+        8 => out.push_str(&format!(
+            "export function {a}{b}(n) {{ return n * {n}; }}\n"
+        )),
+        9 => out.push_str(&format!("    {a}.{b}(\"{a}-{n}\")?;\n")),
+        10 => out.push_str(&format!("}} // end {a}\n")),
+        _ => out.push_str(&format!("    {a} = {b} + {n};\n")),
+    }
+}
+
+/// How many lines a text file holds: most small, some medium, a few large.
+fn lines(dice: &mut Dice) -> u64 {
+    match dice.below(100) {
+        0..70 => 20 + dice.below(100),
+        70..95 => 120 + dice.below(480),
+        _ => 600 + dice.below(2400),
+    }
+}
+
+fn write(at: &Path, bytes: &[u8]) {
+    std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+    std::fs::write(at, bytes).unwrap();
+}
+
+/// Builds the plane with one repo of `count` tracked files at `plane`, and commits them.
+fn build(plane: &Path, count: usize) {
+    let clone = plane.join("workspaces").join(WS).join(REPO);
+    std::fs::create_dir_all(&clone).unwrap();
+    support::git(&clone, &["init", "-q", "-b", "main", "."]);
+    write(
+        &clone.join(".gitignore"),
+        b"target/\nnode_modules/\ndist/\n*.log\n.env\n",
+    );
+    write(&clone.join("README.md"), b"# big\n\nA generated repo.\n");
+    let mut dice = Dice(0x05EE_DF12);
+    let packages = (count / 2000).max(1);
+    let mut text = String::new();
+    for n in 0..count.saturating_sub(2) {
+        let package = n % packages;
+        let area = dice.pick(&AREAS);
+        let sub = dice.below(8);
+        let name = format!("{}_{}{}", dice.pick(&WORDS), dice.pick(&WORDS), n);
+        let kind = dice.below(100);
+        let folder = clone.join(format!("packages/pkg{package}/{area}/m{sub}"));
+        let (ext, binary) = match kind {
+            0..30 => ("rs", false),
+            30..55 => ("ts", false),
+            55..65 => ("tsx", false),
+            65..73 => ("md", false),
+            73..80 => ("json", false),
+            80..88 => ("py", false),
+            88..93 => ("go", false),
+            93..97 => ("png", true),
+            97..99 => ("wasm", true),
+            _ => ("txt", false),
+        };
+        let at = folder.join(format!("{name}.{ext}"));
+        if binary {
+            let size = 2048 + dice.below(14 * 1024) as usize;
+            let mut bytes = Vec::with_capacity(size);
+            bytes.extend_from_slice(b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR");
+            while bytes.len() < size {
+                bytes.extend_from_slice(&dice.next().to_le_bytes());
+            }
+            write(&at, &bytes);
+            continue;
+        }
+        text.clear();
+        for _ in 0..lines(&mut dice) {
+            line(&mut dice, &mut text);
+        }
+        if dice.below(10_000) == 0 {
+            text.push_str(&format!("    {RARE}({n});\n"));
+        }
+        write(&at, text.as_bytes());
+    }
+    // Build output and dependencies: ignored, never listed, never read.
+    for n in 0..count / 20 {
+        write(
+            &clone.join(format!("target/debug/deps/m{}/{n}.o", n % 50)),
+            b"\0\x01ignored object\n",
+        );
+        write(
+            &clone.join(format!("node_modules/dep{}/lib/{n}.js", n % 200)),
+            b"module.exports = 'TODO ignored';\n",
+        );
+    }
+    support::git(&clone, &["add", "-A"]);
+    support::git(&clone, &["commit", "-q", "-m", "generated"]);
+    std::fs::write(plane.join("charter.toml"), "schema = 1\n").unwrap();
+}
+
+/// The plane to measure: the one at `CHARTER_MEASURE_PLANE`, built there the first time, or a
+/// new one in a temporary folder.
+fn plane(count: usize) -> (Option<tempfile::TempDir>, PathBuf) {
+    if let Some(at) = std::env::var_os("CHARTER_MEASURE_PLANE") {
+        let at = PathBuf::from(at);
+        if !at.join("charter.toml").exists() {
+            let started = Instant::now();
+            build(&at, count);
+            println!("FM-12 | built {count} files in {:?}", started.elapsed());
+        }
+        return (None, std::fs::canonicalize(at).unwrap());
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let at = std::fs::canonicalize(dir.path()).unwrap();
+    let started = Instant::now();
+    build(&at, count);
+    println!("FM-12 | built {count} files in {:?}", started.elapsed());
+    (Some(dir), at)
+}
+
+fn ms(d: Duration) -> String {
+    format!("{:.1} ms", d.as_secs_f64() * 1000.0)
+}
+
+fn median(mut all: Vec<Duration>) -> Duration {
+    all.sort();
+    all[all.len() / 2]
+}
+
+/// The queries ⌘⇧F is timed with: a name, the query, whether it is a regex.
+const QUERIES: [(&str, &str, bool); 5] = [
+    ("common", "TODO", false),
+    ("word", "useState", false),
+    ("regex", r"fn \w+_router_handler\(", true),
+    ("rare", RARE, false),
+    ("absent", "qqzx_found_nowhere", false),
+];
+
+/// What one step measured, and whether it kept its budget.
+struct Held {
+    missed: Vec<String>,
+    budgets: bool,
+}
+
+impl Held {
+    fn within(&mut self, what: &str, took: Duration, budget: Duration) {
+        if self.budgets && took > budget {
+            self.missed
+                .push(format!("{what}: {} past {}", ms(took), ms(budget)));
+        }
+    }
+}
+
+fn measure_find(scope: &[Place<'_>], held: &mut Held) {
+    for session in ["first", "second"] {
+        let mut finder = Finder::default();
+        let opened = Instant::now();
+        let answer = finder.find(scope, "", MOST);
+        let first = opened.elapsed();
+        assert!(answer.refused.is_empty(), "{:?}", answer.refused);
+        let typed = "routerhandler";
+        let mut each = Vec::new();
+        for end in 1..=typed.len() {
+            let one = Instant::now();
+            let answer = finder.find(scope, &typed[..end], MOST);
+            each.push(one.elapsed());
+            assert!(!answer.hits.is_empty(), "{}", &typed[..end]);
+        }
+        let worst = *each.iter().max().unwrap();
+        let mid = median(each.clone());
+        println!(
+            "FM-12 | find | {session} session: first find {}{}; keystrokes median {}, worst {}",
+            ms(first),
+            if answer.partial.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", answer.partial[0].1)
+            },
+            ms(mid),
+            ms(worst)
+        );
+        held.within(&format!("⌘P first find ({session})"), first, FIRST_FIND);
+        held.within(&format!("⌘P keystroke median ({session})"), mid, KEYSTROKE);
+        held.within(&format!("⌘P keystroke worst ({session})"), worst, KEYSTROKE);
+    }
+}
+
+fn measure_search(scope: &[Place<'_>], name: &str, held: &mut Held) {
+    let (_, query, regex) = QUERIES
+        .iter()
+        .find(|(called, ..)| *called == name)
+        .expect("a query of QUERIES");
+    let options = SearchOptions {
+        regex: *regex,
+        ..SearchOptions::default()
+    };
+    let stop = AtomicBool::new(false);
+    let mut search = files::search(scope, query, options).expect("a query that searches");
+    let started = Instant::now();
+    let mut first: Option<Duration> = None;
+    let mut files_hit = 0usize;
+    let mut lines = 0usize;
+    let ended = search.more(PAGE_LINES, &stop, &mut |heard| {
+        if let Searched::File(hits) = heard {
+            first.get_or_insert_with(|| started.elapsed());
+            files_hit += 1;
+            lines += hits.lines.len();
+        }
+    });
+    let page = started.elapsed();
+    println!(
+        "FM-12 | search:{name} | {query:?}: first hit {}, page {} ({ended:?}, {files_hit} files, \
+         {lines} lines)",
+        first.map_or("none".to_string(), ms),
+        ms(page),
+    );
+    if name == "common" {
+        held.within(
+            "⌘⇧F first hit (common)",
+            first.unwrap_or(Duration::MAX),
+            FIRST_HIT,
+        );
+    }
+}
+
+/// A query found nowhere, run page after page to the end of the repo: the whole scan's cost.
+fn measure_scan(scope: &[Place<'_>]) {
+    let stop = AtomicBool::new(false);
+    let mut search = files::search(scope, "qqzx_found_nowhere", SearchOptions::default())
+        .expect("a query that searches");
+    let started = Instant::now();
+    let mut pages = 0;
+    loop {
+        pages += 1;
+        if search.more(PAGE_LINES, &stop, &mut |_| {}) == Ended::Done {
+            break;
+        }
+    }
+    println!(
+        "FM-12 | scan | the whole repo, nothing found: {} over {pages} page(s) of at most {:?}",
+        ms(started.elapsed()),
+        files::PAGE_TIME
+    );
+}
+
+fn measure_status(plane: &Path, clone: &Path, held: &mut Held) {
+    let reader = reader();
+    let branch = Branch::repo(WS, REPO);
+    let mut clean = Vec::new();
+    for _ in 0..3 {
+        let one = Instant::now();
+        let status = files::status(&reader, plane, branch).expect("a status");
+        clean.push(one.elapsed());
+        assert!(status.changes.is_empty(), "{:?}", status.changes);
+    }
+    // An agent's few writes: five files changed, five added.
+    let mut changed = Vec::new();
+    for n in 0..5 {
+        std::fs::write(clone.join(format!("agent_added_{n}.rs")), "fn added() {}\n").unwrap();
+    }
+    let readme = clone.join("README.md");
+    let before = std::fs::read(&readme).unwrap();
+    std::fs::write(&readme, "# big\n\nChanged by an agent.\n").unwrap();
+    for _ in 0..3 {
+        let one = Instant::now();
+        let status = files::status(&reader, plane, branch).expect("a status");
+        changed.push(one.elapsed());
+        assert_eq!(status.changes.len(), 6, "{:?}", status.changes);
+    }
+    std::fs::write(&readme, before).unwrap();
+    for n in 0..5 {
+        std::fs::remove_file(clone.join(format!("agent_added_{n}.rs"))).unwrap();
+    }
+    let say = |all: &[Duration]| all.iter().map(|d| ms(*d)).collect::<Vec<_>>().join(", ");
+    println!(
+        "FM-12 | status | clean: {}; six changes: {}",
+        say(&clean),
+        say(&changed)
+    );
+    for one in clean.iter().chain(&changed) {
+        held.within("status read", *one, STATUS);
+    }
+}
+
+#[test]
+#[ignore = "builds a repo of 100,000 files or more; run by hand, or by stress.yml nightly"]
+fn search_on_a_large_repo_stays_within_its_budgets() {
+    charter_core::unsteered!();
+    let count: usize = std::env::var("CHARTER_MEASURE_FILES")
+        .ok()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(100_000);
+    let only = std::env::var("CHARTER_MEASURE_ONLY").ok();
+    let mut held = Held {
+        missed: Vec::new(),
+        budgets: std::env::var("CHARTER_MEASURE_BUDGETS").as_deref() != Ok("0"),
+    };
+    let (_dir, plane) = plane(count);
+    let clone = plane.join("workspaces").join(WS).join(REPO);
+    let scope = [Place {
+        plane: &plane,
+        branch: Branch::repo(WS, REPO),
+    }];
+    let runs = |step: &str| only.as_deref().is_none_or(|one| one == step);
+    if runs("find") {
+        measure_find(&scope, &mut held);
+    }
+    for (name, ..) in QUERIES {
+        if runs(&format!("search:{name}")) {
+            measure_search(&scope, name, &mut held);
+        }
+    }
+    if runs("scan") {
+        measure_scan(&scope);
+    }
+    if runs("status") {
+        measure_status(&plane, &clone, &mut held);
+    }
+    assert!(
+        held.missed.is_empty(),
+        "past the budget at {count} files: {:?}",
+        held.missed
+    );
+}
