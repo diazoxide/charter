@@ -191,7 +191,8 @@ opt-out in section 7 lifts them, and the audit records when it does.
    itself, so one is never moved into place; the hook managers' `.husky/` and `.githooks/`;
    shell startup files; Claude Code's `.mcp.json` and `.claude`'s `settings.json`,
    `settings.local.json`, `commands/`, `agents/` and `skills/`; opencode's `opencode.json`,
-   `opencode.jsonc` and `.opencode/`; Codex's `.codex/`; the editor folders `.vscode/` and
+   `opencode.jsonc`, `tui.json`, `tui.jsonc` and `.opencode/`; Codex's `.codex/` and
+   `.agents/`; the editor folders `.vscode/` and
    `.idea/`, and direnv's `.envrc`; and `charter.toml`, so a chat at the plane root
    cannot take its `[sandbox]` out. Resolved when the chat starts and denied as paths: the
    directory every `core.hooksPath` git would use names, and every script a protected config
@@ -279,12 +280,21 @@ opt-out in section 7 lifts them, and the audit records when it does.
   every start.
 
 *Amended 2026-10-04 (#1057):* class 5 names each harness's project config by file, and the
-list is `PLANTED` in `crates/charter-core/src/sandbox.rs`. `.claude/skills/` joins it: a skill
-runs its `` !`…` `` commands when invoked and registers the hooks in its frontmatter, as a
-command or an agent can. Left out, checked against each harness's docs: opencode's `tui.json`,
-which sets only its interface, and the `.agents/skills/` Codex and opencode read, whose skills
-are instructions the model chooses to follow, with any script run by the model's own tools
-inside the sandbox.
+list is `PLANTED` in `crates/charter-core/src/sandbox.rs`. Three joined it, each checked
+against the harness's own source or docs:
+
+- **`.claude/skills/`.** A skill runs its `` !`…` `` commands when invoked and registers the
+  hooks in its frontmatter, as a command or an agent can.
+- **opencode's `tui.json` and `tui.jsonc`.** Their `plugin` key loads code into the next
+  opencode started there. The `.opencode/` copy was already held.
+- **The whole `.agents/`.** What Codex reads from a project's skills there can start code
+  outside any sandbox. All of `.agents/` is held, failing closed, so its plugins are held too.
+
+Checked and left out of the class:
+
+- **Claude Code's `.claude/workflows/`.** A workflow has no file or shell access of its own,
+  and the agents it runs get the session's own sandbox.
+- **`.claude/output-styles/`, `.claude/rules/` and `.worktreeinclude`.** They are not code.
 
 ### 6. External enforcement backends are an option, and never the default (SD-33)
 

@@ -639,6 +639,8 @@ mod live {
             "mkdir -p .claude/skills/x",
             "mkdir -p .opencode",
             "mkdir -p .codex",
+            "mkdir -p .agents/skills/x",
+            "echo {} > tui.json",
             "echo x > .zshrc",
             "echo x > charter.toml",
         ] {

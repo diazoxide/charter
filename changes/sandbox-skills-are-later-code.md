@@ -1,7 +1,8 @@
 ### Security
 
-- **A sandboxed chat can no longer write Claude Code's project skills.** `.claude/skills/` joins
-  the harness config a sandboxed chat may never write, at any depth, in every harness. A skill
-  runs commands when it is invoked, so a chat could otherwise leave code that runs outside the
-  sandbox in a later chat. In a sandboxed project, a chat that runs `charter browser install`
-  is refused writing the skill's pages too; run it from your own terminal (#1057).
+- **A sandboxed chat can no longer author or edit a project's skills at all.** In every
+  harness, a sandboxed chat may never write `.claude/skills/`, `.agents/`, or opencode's
+  `tui.json` and `tui.jsonc`, at any depth. These join the other harness config it already may
+  not write. Each of them can make a later chat, run outside the sandbox, start code. In a
+  sandboxed project, `charter browser install` run from a chat cannot write the skill's pages
+  either. It now says so and asks you to run it in your own terminal (#1057).

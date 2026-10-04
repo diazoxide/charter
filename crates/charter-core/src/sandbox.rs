@@ -397,7 +397,7 @@ impl Planted {
 /// files; the project config of every harness and editor; and `charter.toml`, which turns the
 /// sandbox on. A chat writing one of these could have code run outside its sandbox the next
 /// time a person, an editor or another chat opens the directory.
-pub const PLANTED: [Planted; 35] = [
+pub const PLANTED: [Planted; 38] = [
     // A `.git` moved into place brings its own config and hooks.
     Planted::itself(".git"),
     Planted::and_below(".git/config"),
@@ -424,7 +424,13 @@ pub const PLANTED: [Planted; 35] = [
     Planted::and_below("opencode.json"),
     Planted::and_below("opencode.jsonc"),
     Planted::and_below(".opencode"),
+    // opencode's interface config, whose `plugin` key loads code (#1057).
+    Planted::and_below("tui.json"),
+    Planted::and_below("tui.jsonc"),
     Planted::and_below(".codex"),
+    // The skills and plugins Codex reads from a project, which can start code outside any
+    // sandbox (#1057).
+    Planted::and_below(".agents"),
     Planted::and_below(".vscode"),
     Planted::and_below(".idea"),
     Planted::and_below(".envrc"),

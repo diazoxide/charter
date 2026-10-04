@@ -256,12 +256,14 @@ pub fn install(
         say(Say::Fail(format!("the generator failed (exit {code}).")));
         // npm's own diagnosis, handed back as it said it.
         say(Say::Out(output.trim_end().to_string()));
+        say_if_refused(&skill_dir, say);
         return 1;
     }
     if !skill_dir.is_dir() {
         say(Say::Warn(format!(
             "The generator reported success but {SKILL_DIR} is not there."
         )));
+        say_if_refused(&skill_dir, say);
         return 1;
     }
     say(Say::Done(format!(
@@ -302,6 +304,39 @@ pub fn install(
          rewrites under you. Both answers are fine; charter does not pick for you."
     )));
     0
+}
+
+/// After a failed generator: when this process may not write `dir` at all, as a sandboxed chat
+/// may not write a project's skills (ADR 0067 §5), says who can run the command.
+fn say_if_refused(dir: &Path, say: Sink) {
+    if write_refused(dir) {
+        say(Say::Info(format!(
+            "charter could not write {SKILL_DIR}: a sandboxed chat may not write a project's \
+             skills. Ask the operator to run `charter browser install` in their own terminal."
+        )));
+    }
+}
+
+/// Whether making `dir`, or a file in it, is refused for permission. Leaves nothing behind.
+fn write_refused(dir: &Path) -> bool {
+    let refused = |why: std::io::Error| why.kind() == std::io::ErrorKind::PermissionDenied;
+    // The folders this makes, deepest first, so each is taken away again.
+    let made: Vec<&Path> = dir.ancestors().take_while(|it| !it.exists()).collect();
+    if let Err(why) = std::fs::create_dir_all(dir) {
+        return refused(why);
+    }
+    let probe = dir.join(".charter-write-probe");
+    let answer = match std::fs::write(&probe, "") {
+        Ok(()) => {
+            let _ = std::fs::remove_file(&probe);
+            false
+        }
+        Err(why) => refused(why),
+    };
+    for folder in made {
+        let _ = std::fs::remove_dir(folder);
+    }
+    answer
 }
 
 #[cfg(test)]
@@ -439,6 +474,40 @@ mod tests {
         let (rc, heard) = run(dir.path(), None, &mut fake);
         assert_eq!(rc, 1);
         assert!(heard.err.contains("is not there"), "{}", heard.err);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_generator_refused_the_skills_folder_says_who_can_run_it() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = plane();
+        let claude = dir.path().join(".claude");
+        std::fs::create_dir_all(&claude).unwrap();
+        // As a sandboxed chat is refused writing a project's skills (ADR 0067 §5).
+        std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let mut fake = Fake {
+            asked: Vec::new(),
+            code: 1,
+            pages: 0,
+        };
+        let (rc, heard) = run(dir.path(), None, &mut fake);
+        std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(rc, 1);
+        assert!(
+            heard.err.contains(
+                "charter could not write .claude/skills/playwright-cli: a sandboxed chat may \
+                 not write a project's skills. Ask the operator to run `charter browser \
+                 install` in their own terminal.\n"
+            ),
+            "{}",
+            heard.err
+        );
+        assert!(!claude.join("skills").exists());
+        // A generator that failed for its own reasons is not told it was refused.
+        let other = plane();
+        let (_, heard) = run(other.path(), None, &mut fake);
+        assert!(!heard.err.contains("sandboxed"), "{}", heard.err);
+        assert!(!other.path().join(".claude").exists());
     }
 
     #[test]

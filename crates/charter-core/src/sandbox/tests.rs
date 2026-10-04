@@ -508,7 +508,10 @@ fn a_claude_code_chat_is_held_from_writing_every_later_code_name_at_any_depth() 
         "**/opencode.json",
         "**/opencode.jsonc",
         "**/.opencode",
+        "**/tui.json",
+        "**/tui.jsonc",
         "**/.codex",
+        "**/.agents",
     ] {
         assert!(held(glob), "{glob} is not held");
     }
