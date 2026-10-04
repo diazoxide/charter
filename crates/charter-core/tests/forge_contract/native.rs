@@ -35,7 +35,7 @@ impl TokenSource for Fixed {
 }
 
 /// The CLI route of a native run: it never answers.
-struct NoCli;
+pub struct NoCli;
 impl Transport for NoCli {
     fn send(&self, _forge: &Forge, call: &Call) -> Result<Reply, NoAnswer> {
         Err(NoAnswer::Missing(format!(
@@ -229,6 +229,8 @@ pub fn over(kind: &str, host: &str, recording: &str) -> Over {
         backend,
         caller: Caller::window().as_account(account(kind, host)),
         host: host.to_string(),
+        scene: super::Scene::recorded(kind),
         check: Box::new(move || rt.block_on(server.verify())),
+        close_issue: Box::new(|_| {}),
     }
 }

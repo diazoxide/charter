@@ -281,8 +281,9 @@ Open, each filed:
    unknown parameter and would merge at once. Since 19.1, `auto_merge` on a project with merge
    trains joins the train.
 4. **No recording captured from a live forge** (#742). The native contract runs on each forge's
-   own instance and on a self-managed one, but every run replays the forge's documented answers;
-   FW-15's nightly records real ones.
+   own instance and on a self-managed one, but every run replays the forge's documented answers.
+   The live nightly (FG-4, below) now runs the same cases against github.com and gitlab.com;
+   re-recording from what it sees, and the self-managed GitLab, are FW-15's.
 5. **`charter report` is outside the seam** (#806), until the work-item area (FW-6a) exists.
 6. **A request-mode save on GitLab says "pull request"** (#1067). The project's and a repo's
    `pr` and `pr-merge` saves, their doctor rows and alerts, and the app's saving view name a
@@ -318,6 +319,66 @@ GitLab's native transport is the same `Http` as GitHub's, speaking GitLab's dial
   or not (`acme/sub/api`, up to the next word GitLab puts under a repo or group); the segment
   after a collection word (`issues`, `merge_requests`, `epics`, `links`, …) is an id, masked
   however it is spelled.
+
+## The live nightly (FG-4)
+
+`.github/workflows/forge-live.yml` runs the contract suite's cases, the same ones the recordings
+answer, against a real github.com repo and a real gitlab.com repo, every night, through the
+native transport (ADR 0070 §7, the live run). The cases ask about a scene (`tests/forge_contract/
+scene.rs`), not literal names, and the live run reads the scene's numbers and commits from the
+fixture when it starts. It never gates a pull request; a red night keeps one issue open.
+
+Three cases do not run live, each listed with its reason in `NOT_LIVE`: `request_auto_merge`,
+`merge_at` and `enqueue_at` would land or queue the fixture's one open request. A forge with no
+token or owner set says so in the run's summary and stops, green.
+
+### What the operator provisions
+
+Nothing below exists until the operator makes it; no charter run creates or deletes any of it.
+Each forge gets a **fixture org or group**, a **machine account** with a token, one **secret**
+and one **variable** in `diazoxide/charter`'s Actions settings.
+
+| | GitHub | GitLab |
+|---|---|---|
+| Secret | `FORGE_LIVE_GITHUB_TOKEN` | `FORGE_LIVE_GITLAB_TOKEN` |
+| Variable | `FORGE_LIVE_GITHUB_OWNER`: the org's login | `FORGE_LIVE_GITLAB_OWNER`: the group's full path |
+| Owner | a new org holding only the two repos below | a new group holding only the two repos below, no subgroups |
+| Account | a machine account that owns no repos, an outside collaborator with **Write** on `api` only, not an org member | a separate user that owns no repos, a **Developer** member of `api` only, not of the group |
+| Token | a classic personal access token with the `repo` scope (an outside collaborator's fine-grained token cannot reach the org's private repo); what it can reach is bounded by the account | a personal access token with the `api` scope; what it can reach is bounded by the account |
+
+The account matters as much as the token: the `reachable` case expects the account to reach
+`api` and nothing else of the owner's, and the `about` case expects no admin rights, so
+neither forge shows the push-protection setting.
+
+Each forge's owner holds exactly two repos:
+
+- **`web`**: public, no description, topic `frontend`, default branch `main`.
+- **`api`**: private, no description, no topics, default branch `main`, issues on, a label
+  `alpha`. Its `main` holds at the top level exactly `Cargo.toml` and `src/` (a `src/lib.rs`).
+
+And `api` holds these branches and requests, made in this order:
+
+1. **`charter/landed`**: one commit off `main` that changes `src/lib.rs` only. Its request into
+   `main` is merged **with a merge commit** (GitHub's "Create a merge commit"; GitLab's merge
+   method "Merge commit"), so `main`'s top level stays `Cargo.toml` and `src`.
+2. **`charter/save`**: one commit off the new `main` that adds one CI job and nothing else, run
+   on push only: `.github/workflows/check.yml` with `on: push` and one job that runs `true` on
+   GitHub, `.gitlab-ci.yml` with one job that runs `true` on GitLab. The push runs it once and
+   green: one check at the head, one pipeline. GitLab needs an instance runner for that, which
+   gitlab.com grants once the account's identity is verified. Its request into `main` stays
+   **open**, with the body exactly `Why this change.` + a blank line + `<!-- END charter change
+   -->` and no trailing newline (`printf 'Why this change.\n\n<!-- END charter change -->'`
+   into `--body-file`, or `--description` for `glab`).
+3. **`charter/open`**: one commit off `main` that changes `src/lib.rs` only, with **no**
+   request. The first live night opens one (`open_or_update`), and every later night updates it.
+
+After that, nothing is pushed to the fixture. The nightly writes only three things there: it
+sets the open request's body to the text above, opens or updates the `charter/open` request, and
+opens an issue labelled `alpha` that it closes again at once. CI on the fixture runs only when
+the operator pushes to it, never nightly.
+
+A self-managed GitLab is FW-15's (#742): another row of the matrix, its host in
+`FORGE_LIVE_GITLAB_HOST`, which `tests/forge_contract/live.rs` already reads.
 
 ## The mixed-forge collision rule
 

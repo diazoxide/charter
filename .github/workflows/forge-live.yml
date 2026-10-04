@@ -1,0 +1,160 @@
+name: forge-live
+
+# The forge contract against a real forge (FG-4, #712; ADR 0070 §7, the live run).
+#
+# Every pull request already runs the contract suite (`crates/charter-core/tests/forge_contract.rs`)
+# against recorded answers, on both forges, over both transports. Recordings are only as true as
+# the documentation they were taken from. This runs the SAME cases, through the same seam and the
+# native transport, against a fixture the operator provisioned on github.com and on gitlab.com,
+# so a forge that renamed a field or changed an answer turns a night red.
+#
+# **Evidence only (V70).** It never gates a pull request and never runs on one: a fork's code must
+# never reach the tokens. A red night keeps one issue open, as `mutants.yml` does, and the first
+# green night closes it.
+#
+# **Provisioning is the operator's.** Each forge needs a secret (its token) and a variable (the
+# org or group holding the fixture), named in the matrix below. `crates/charter-core/docs/forges.md`,
+# "The live nightly", says exactly what the fixture holds. A forge not yet provisioned says so in
+# the run's summary and stops, green: nothing about the forge was tested, and nothing claims it.
+#
+# `crates/release-manifest/tests/the_forge_nightly_runs_live_with_least_privilege.rs` holds this
+# file to those rules.
+
+on:
+  schedule:
+    - cron: "29 4 * * *"
+  workflow_dispatch:
+
+# Nothing by default: each job names what it needs.
+permissions: {}
+
+# One night at a time; the fixture is shared, and two runs would race on its open requests.
+concurrency:
+  group: forge-live
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  live:
+    name: live contract (${{ matrix.forge }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - forge: github
+            token: FORGE_LIVE_GITHUB_TOKEN
+            owner: FORGE_LIVE_GITHUB_OWNER
+          - forge: gitlab
+            token: FORGE_LIVE_GITLAB_TOKEN
+            owner: FORGE_LIVE_GITLAB_OWNER
+    steps:
+      # Whether the token is set, never its value: the expression answers `true` or `false`.
+      - name: Is the fixture provisioned?
+        id: provisioned
+        env:
+          TOKEN: ${{ secrets[matrix.token] != '' }}
+          OWNER: ${{ vars[matrix.owner] }}
+          FORGE: ${{ matrix.forge }}
+          TOKEN_NAME: ${{ matrix.token }}
+          OWNER_NAME: ${{ matrix.owner }}
+        run: |
+          set -euo pipefail
+          missing=""
+          if [ "$TOKEN" != true ]; then missing="the secret $TOKEN_NAME"; fi
+          if [ -z "$OWNER" ]; then missing="${missing:+$missing and }the variable $OWNER_NAME"; fi
+          if [ -n "$missing" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=forge-live ($FORGE)::not provisioned: $missing is not set, so nothing was tested on $FORGE"
+            {
+              echo "### $FORGE: not provisioned, nothing tested"
+              echo
+              echo "$missing is not set. What the operator provisions is in"
+              echo "\`crates/charter-core/docs/forges.md\`, \"The live nightly\"."
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.provisioned.outputs.ready == 'true'
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/rust-toolchain
+        if: steps.provisioned.outputs.ready == 'true'
+      # Built before the token is handed over, so no dependency's build script runs with it. No
+      # cache: this job holds a token, and a cache is written by whichever job saved it last.
+      - name: Build the contract suite
+        if: steps.provisioned.outputs.ready == 'true'
+        run: cargo test -p charter-core --locked --test forge_contract --no-run
+      # One thread: the cases share one fixture, and the scene is read once per run.
+      - name: Every contract case, against the real forge
+        if: steps.provisioned.outputs.ready == 'true'
+        env:
+          TOKEN: ${{ secrets[matrix.token] }}
+          OWNER: ${{ vars[matrix.owner] }}
+          FORGE: ${{ matrix.forge }}
+        run: |
+          set -euo pipefail
+          upper="$(echo "$FORGE" | tr '[:lower:]' '[:upper:]')"
+          export "FORGE_LIVE_${upper}_TOKEN=$TOKEN" "FORGE_LIVE_${upper}_OWNER=$OWNER"
+          unset TOKEN
+          cargo test -p charter-core --locked --test forge_contract -- --ignored --test-threads=1 --nocapture "${FORGE}_live::" 2>&1 | tee live.out
+          grep -Eq 'test result: ok\. [1-9][0-9]* passed' live.out
+          {
+            echo "### $FORGE: $(grep -E '^test result:' live.out | tail -1)"
+            echo
+            grep -o 'not run live.*' live.out | sed 's/^/- /' || true
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  notice:
+    # A scheduled run's red X is on a page nobody opens; an issue is in the repo. One issue, found
+    # by its exact title and rewritten each red night, closed by the first green one (as
+    # `mutants.yml` does).
+    name: say so where someone will see it
+    needs: [live]
+    if: always() && github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Open, update or close the nightly's issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          LIVE: ${{ needs.live.result }}
+        run: |
+          set -euo pipefail
+          TITLE='the live forge contract nightly is not clean'
+          gh issue list --state open --limit 200 --json number,title \
+            --template '{{range .}}{{.number}} {{.title}}{{"\n"}}{{end}}' > "$RUNNER_TEMP/issues.txt"
+          EXISTING="$(awk -v t="$TITLE" \
+            '{n=$1; $1=""; sub(/^ /,""); if ($0 == t) {print n; exit}}' "$RUNNER_TEMP/issues.txt")"
+          if [ "$LIVE" = success ]; then
+            if [ -n "$EXISTING" ]; then
+              gh issue close "$EXISTING" --comment "The live forge contract is clean again: $RUN_URL"
+            fi
+            exit 0
+          fi
+          BODY_FILE="$RUNNER_TEMP/body.md"
+          {
+            echo "Last run: $RUN_URL"
+            echo
+            echo "The contract suite failed against a real forge (\`live\`: $LIVE). The run's summary"
+            echo "names the forge; its log names the case. A case that fails here and passes on its"
+            echo "recording means the recording no longer says what the forge answers: re-record it"
+            echo "and say in the PR which contract moved and why (ADR 0046). A fixture that no longer"
+            echo "matches \`crates/charter-core/docs/forges.md\`, \"The live nightly\", fails before"
+            echo "any case runs, and says what it lacks."
+          } > "$BODY_FILE"
+          if [ -n "$EXISTING" ]; then
+            gh issue edit "$EXISTING" --body-file "$BODY_FILE"
+          else
+            gh issue create --title "$TITLE" --body-file "$BODY_FILE"
+          fi
