@@ -372,7 +372,7 @@ fn the_project_home_is_seeded_with_the_operators_login_and_a_config_charter_writ
     let home = tempfile::tempdir().expect("a home");
     let operator = home.path().join(".codex");
     std::fs::create_dir_all(&operator).expect("the operator's home");
-    std::fs::write(operator.join("auth.json"), "{\"login\": 1}").expect("a login");
+    std::fs::write(operator.join("auth.json"), "{\"OPENAI_API_KEY\": \"sk-1\"}").expect("a login");
     std::fs::write(
         operator.join("config.toml"),
         "[mcp_servers.x]\ncommand = \"/bin/x\"\n",
@@ -391,14 +391,18 @@ fn the_project_home_is_seeded_with_the_operators_login_and_a_config_charter_writ
     let project = project_home(plane.path(), home.path());
     assert_eq!(
         std::fs::read_to_string(project.join("auth.json")).expect("seeded"),
-        "{\"login\": 1}"
+        "{\"OPENAI_API_KEY\": \"sk-1\"}"
     );
     // A newer project login, refreshed inside the wrap, is kept; an older one is replaced.
-    std::fs::write(project.join("auth.json"), "{\"login\": 2}").expect("a refresh");
+    std::fs::write(
+        project.join("auth.json"),
+        "{\"OPENAI_API_KEY\": \"sk-1\", \"refreshed\": 2}",
+    )
+    .expect("a refresh");
     line_in(&applied, &cwd, "", &confinement).expect("starts");
     assert_eq!(
         std::fs::read_to_string(project.join("auth.json")).expect("kept"),
-        "{\"login\": 2}"
+        "{\"OPENAI_API_KEY\": \"sk-1\", \"refreshed\": 2}"
     );
     let config: toml::Table = std::fs::read_to_string(project.join("config.toml"))
         .expect("written")
@@ -455,13 +459,57 @@ fn started_in(plane: &Path, home: &Path, armed: &[String]) -> PathBuf {
     project_home(plane, home)
 }
 
+/// `bytes` as unpadded base64url, as a JWT's parts are written.
+fn base64url(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut out = String::new();
+    for chunk in bytes.chunks(3) {
+        let mut n = 0u32;
+        for (at, byte) in chunk.iter().enumerate() {
+            n |= u32::from(*byte) << (16 - 8 * at);
+        }
+        for at in 0..=chunk.len() {
+            out.push(char::from(ALPHABET[((n >> (18 - 6 * at)) & 63) as usize]));
+        }
+    }
+    out
+}
+
+/// A token whose claims name `account` and `user`, unsigned: the seed decodes, never verifies.
+fn token(account: &str, user: &str) -> String {
+    let claims = serde_json::json!({
+        "sub": user,
+        "https://api.openai.com/auth": {"chatgpt_account_id": account, "chatgpt_user_id": user},
+    });
+    format!(
+        "{}.{}.sig",
+        base64url(br#"{"alg":"none"}"#),
+        base64url(claims.to_string().as_bytes())
+    )
+}
+
+/// A ChatGPT login: its tokens for `account` and `user`, and a plain `account_id` beside them.
+fn chatgpt_login(account_id: &str, account: &str, user: &str, extra: &str) -> String {
+    serde_json::json!({
+        "tokens": {
+            "id_token": token(account, user),
+            "access_token": token(account, user),
+            "refresh_token": "r",
+            "account_id": account_id,
+        },
+        "extra": extra,
+    })
+    .to_string()
+}
+
 #[test]
 fn the_seed_replaces_an_older_a_future_dated_or_another_accounts_login_and_never_follows_a_link() {
     let plane = plane_saying(ON);
     let home = tempfile::tempdir().expect("a home");
     let operator = home.path().join(".codex");
     std::fs::create_dir_all(&operator).expect("the operator's home");
-    let ours = r#"{"tokens": {"account_id": "acct-operator"}}"#;
+    let ours = chatgpt_login("acct-operator", "acct-operator", "user-op", "");
+    let ours = ours.as_str();
     std::fs::write(operator.join("auth.json"), ours).expect("a login");
     touch(&operator.join("auth.json"), "202601010000");
     let project = started_in(plane.path(), home.path(), &[]);
@@ -471,19 +519,41 @@ fn the_seed_replaces_an_older_a_future_dated_or_another_accounts_login_and_never
     // Older than the operator's: replaced.
     std::fs::write(
         &login,
-        r#"{"tokens": {"account_id": "acct-operator"}, "old": 1}"#,
+        chatgpt_login("acct-operator", "acct-operator", "user-op", "old"),
     )
     .expect("old");
     touch(&login, "202501010000");
     started_in(plane.path(), home.path(), &[]);
     assert_eq!(read(), ours);
     // A refresh of the same account, newer: kept.
-    let refreshed = r#"{"tokens": {"account_id": "acct-operator"}, "refreshed": 1}"#;
+    let refreshed = chatgpt_login("acct-operator", "acct-operator", "user-op", "refreshed");
+    let refreshed = refreshed.as_str();
     std::fs::write(&login, refreshed).expect("refreshed");
     started_in(plane.path(), home.path(), &[]);
     assert_eq!(read(), refreshed);
     // Another account, dated ahead to look newest: replaced either way.
-    std::fs::write(&login, r#"{"tokens": {"account_id": "acct-other"}}"#).expect("swapped");
+    std::fs::write(
+        &login,
+        chatgpt_login("acct-other", "acct-other", "user-other", ""),
+    )
+    .expect("swapped");
+    started_in(plane.path(), home.path(), &[]);
+    assert_eq!(read(), ours);
+    // Review R2-F1: another account's tokens with the operator's plain `account_id` copied
+    // beside them: the tokens' claims are what is compared, so it is replaced.
+    std::fs::write(
+        &login,
+        chatgpt_login("acct-operator", "acct-other", "user-other", "copied"),
+    )
+    .expect("swapped");
+    started_in(plane.path(), home.path(), &[]);
+    assert_eq!(read(), ours);
+    // A token that does not decode: replaced (fail closed).
+    std::fs::write(
+        &login,
+        r#"{"tokens": {"access_token": "not-a-jwt", "account_id": "acct-operator"}}"#,
+    )
+    .expect("garbled");
     started_in(plane.path(), home.path(), &[]);
     assert_eq!(read(), ours);
     std::fs::write(&login, refreshed).expect("refreshed");
