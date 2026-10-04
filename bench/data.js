@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791067056251,
+  "lastUpdate": 1791072077899,
   "repoUrl": "https://github.com/diazoxide/charter",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -714,6 +714,48 @@ window.BENCHMARK_DATA = {
             "value": 105.433087,
             "unit": "ms",
             "extra": "median of 5 runs: 103.935, 104.237, 105.433, 105.619, 106.473 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "0393f3736f476a866acff3c7ff1712e91f39c663",
+          "message": "SD-2: suggest only harnesses this machine can sandbox; portable program tests\n\nA refusal that suggests another harness (\"Start this chat on a … profile\") listed every\nharness with a sandbox compiler, so it still named Codex, which a sandboxed project refuses\nuntil #1123. It now names only the harnesses `never_on` lets start sandboxed on this system.\n\nTwo program-check tests used an opencode profile, which charter wraps on macOS only, so on\nLinux the \"cannot wrap opencode here\" refusal came first and they failed in CI. They now use a\nClaude Code profile and test the same rule on every system.\n\nRefs #695\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-04T03:59:43+04:00",
+          "tree_id": "a130d0b543856e86e1d358377503a6b2c26c01b2",
+          "url": "https://github.com/diazoxide/charter/commit/0393f3736f476a866acff3c7ff1712e91f39c663"
+        },
+        "date": 1791072076903,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.607289,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.575, 0.582, 0.607, 0.612, 0.621 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 17.3171395,
+            "unit": "ms",
+            "extra": "median of 5 runs: 17.161, 17.281, 17.317, 17.358, 17.358 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 105.86770100000001,
+            "unit": "ms",
+            "extra": "median of 5 runs: 104.663, 105.631, 105.868, 106.113, 108.858 ms"
           }
         ]
       }
