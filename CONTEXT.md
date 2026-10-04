@@ -660,6 +660,18 @@ Where a setting's value comes from: `charter.toml` (committed, the team's) or
 `charter.local.toml` (this machine's). A Local value overrides the Shared one key by key.
 _Avoid_: global/user, project/personal
 
+**Settings**:
+The one tab where every setting of charter is read and changed, at one level at a time. Each
+group of settings has its own place in it, and anything that tells you to change a setting can
+open it at that place. Opening it from a project or a workspace opens it at that level.
+_Avoid_: Preferences, options, config page, project settings page (as a separate thing)
+
+**Level** (of settings):
+Whose setting it is: **You** (this machine, for every project), **Project**, **Workspace** or
+**Persona**. A level's value overrides the one beneath it, and each value says which level and
+which file it came from.
+_Avoid_: scope (that word is kept off settings), layer, tier (tiers are where stores live)
+
 ### Core and extensions
 
 **Core**:
