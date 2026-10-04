@@ -1474,6 +1474,33 @@ and an archived one is where `memstore.archive` would have put it (ADR 0065).
 - **Neither is a deletion.** `archive/` is still committed and still out of every listing; a
   hard delete is `forget`, and only from the CLI.
 
+#### Moving a memory between scopes (charter-app)
+
+**charter-app only** (KN-3, #715). A memory moves from one store to another — a workspace's
+journal, a persona's `memory/` or `personas/_shared/memory/` — through `memscope::move_memory`,
+which the window's Move and `charter workspace move <slug> --to-…` / `charter persona
+move-memory <name> <slug> [--shared] --to-…` call. No file changes shape: a moved memory is a
+file `memstore.write` could have written in its new store.
+
+- **The file is renamed, never copied, and its text is not touched.** Its `# title` and its
+  stamp line go with it byte for byte, and no copy is left in the store it left.
+- **Its name is its slug in the new store's spelling.** In a persona's store or `_shared` it is
+  the name without a journal's `YYYYMMDD-HHMMSS-` prefix. In a journal it keeps its own name when
+  it has that prefix already (from another journal); otherwise the prefix is its stamp line's
+  date and time with seconds `00`, so the journal lists it where it was recorded, and the time
+  of the move only for a file with no stamp line. A memory moved away and back has its first
+  name again.
+- **Its index line moves with it**: `- [{title}]({filename})` is appended to the new store's
+  index (made with that store's header when it has none: the journal's own, or `# Memory Index`
+  for a persona's, as `remember` makes one) and dropped from the old one's.
+- **Refused, with nothing moved:** a target that already holds a memory of the same name once a
+  journal's prefix is taken off either; the store it is in already; a workspace or persona the
+  project does not have; a store or an index a link takes out of the project, or an index that
+  is not a file; and a store the filesystem will not let charter write. Both stores are locked
+  (`rewrite::Lock`'s flock) for the whole move, in the order of their paths, and reached by
+  descriptor without following a link. An index append that fails after the rename renames the
+  file back.
+
 ### `workspaces/<ws>/todos/`
 
 - **Format:** the same per-file memory store, with its own header. One file per todo plus
@@ -2523,7 +2550,9 @@ with `", "` (`:907`-`:908`).
   **In charter-app, also rewritten in place** by `charter persona edit-memory <name> <slug>
   [--shared]` and the window's memory tab (`memstore::edit`), and moved to and from `archive/`
   by `persona archive-memory|unarchive-memory` — the rules are
-  [Editing and archiving a memory](#editing-and-archiving-a-memory-charter-app).
+  [Editing and archiving a memory](#editing-and-archiving-a-memory-charter-app) — and moved in
+  from or out to another scope by `persona move-memory`, `workspace move` and the window's Move
+  ([Moving a memory between scopes](#moving-a-memory-between-scopes-charter-app)).
 - **Read by:** `charter/memstore.py:169`/`:197` (`files`/`read_files` — the one gate),
   `:289` (`entries`), `:367` (`search`), `:408` (`duplicates`), `:429` (`resolve`);
   `charter/persona.py:2330`/`:2356`/`:2411`; `charter/recall.py:204` (`charter recall`);

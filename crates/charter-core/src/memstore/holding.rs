@@ -565,3 +565,128 @@ pub(super) fn duplicate_of(spot: &Spot, text: &str) -> Option<String> {
     }
     None
 }
+
+/// Any store of the project held by descriptor: a workspace's as [`reach`] holds it, any other
+/// (a persona's, `_shared`'s) one plain name at a time from the project's root, never through a
+/// link. `make` makes what is missing on the way — which, once the caller has found the workspace
+/// or the persona there, is only ever the store itself or `_shared/` — and `Ok(None)` is a store
+/// that is not there and is not to be made.
+fn hold_any(root: &Path, dir: &Path, make: bool) -> io::Result<Option<Store>> {
+    let below_root = || {
+        refused(format!(
+            "{} is not a store in the project, so nothing was done",
+            crate::shown::readable(&dir.to_string_lossy(), super::PATH_LIMIT)
+        ))
+    };
+    match reach(root, dir) {
+        Reach::Held(spot) => spot.held(if make { Make::Store } else { Make::Nothing }),
+        Reach::Refused(e) => Err(e),
+        Reach::ByPath => {
+            let below = dir.strip_prefix(root).map_err(|_| below_root())?;
+            let parts = below
+                .components()
+                .map(|part| match part {
+                    std::path::Component::Normal(name) => name.to_str(),
+                    _ => None,
+                })
+                .collect::<Option<Vec<&str>>>()
+                .ok_or_else(below_root)?;
+            let [first, rest @ ..] = parts.as_slice() else {
+                return Err(below_root());
+            };
+            let Some(mut store) = Store::hold(
+                root,
+                &Place::PlaneRoot,
+                first,
+                if make { Make::Store } else { Make::Nothing },
+                Who::Operator,
+            )
+            .map_err(unheld)?
+            else {
+                return Ok(None);
+            };
+            for part in rest {
+                store = match store.sub(part, make).map_err(unheld)? {
+                    Some(below) => below,
+                    None => return Ok(None),
+                };
+            }
+            Ok(Some(store))
+        }
+    }
+}
+
+/// [`super::move_one`], with both stores held by descriptor: the file is renamed from one held
+/// store into the other, and nothing is looked up by path once they are open.
+pub(super) fn move_one(
+    root: &Path,
+    from: &Path,
+    ident: &str,
+    to: &Path,
+    timestamped: bool,
+    header: &str,
+    now: chrono::NaiveDateTime,
+) -> io::Result<PathBuf> {
+    let name = md_name(ident);
+    let src = hold_any(root, from, false)?.ok_or_else(|| no_such(ident))?;
+    // Asked before the target is held, which may make its store: a memory that is not there
+    // makes nothing anywhere.
+    if !md_names(&src)?.contains(&name) {
+        return Err(no_such(ident));
+    }
+    let dst = hold_any(root, to, true)?.ok_or_else(|| {
+        refused(format!(
+            "{} could not be made, so nothing moved",
+            crate::shown::readable(
+                &to.strip_prefix(root).unwrap_or(to).to_string_lossy(),
+                super::PATH_LIMIT
+            )
+        ))
+    })?;
+    // Both locks, always in the order of the stores' paths, so two moves the opposite ways
+    // cannot each hold one and wait on the other.
+    let (_first, _second) = if from < to {
+        let first = src.lock().map_err(busy)?;
+        (first, dst.lock().map_err(busy)?)
+    } else {
+        let first = dst.lock().map_err(busy)?;
+        (first, src.lock().map_err(busy)?)
+    };
+    // Again under the locks: it may have gone between the look above and now.
+    if !md_names(&src)?.contains(&name) {
+        return Err(no_such(ident));
+    }
+    let text = raw(&src, &name)?;
+    let dest = super::moved_name(&name, &text, timestamped, now);
+    let bare = super::unstamped(&dest);
+    if dst.entry(&dest).map_err(refused)?.is_some()
+        || md_names(&dst)?
+            .iter()
+            .any(|held| super::unstamped(held) == bare)
+    {
+        return Err(super::taken(to, root, &dest));
+    }
+    if let Some(entry) = dst.entry(INDEX).map_err(refused)?
+        && !entry.plain()
+    {
+        return Err(refused(dst.not_plain(INDEX, entry.kind)));
+    }
+    gate(root, &from.join(&name))?;
+    gate(root, &to.join(&dest))?;
+    gate(root, &to.join(INDEX))?;
+    let at = to.join(&dest);
+    let title = title_in(&at, &text);
+    src.rename_into(&name, &dst, &dest).map_err(|why| {
+        // The filesystem's own refusal keeps its kind: a store it will not let charter write
+        // is a permission, not a link.
+        io::Error::new(io::ErrorKind::PermissionDenied, why)
+    })?;
+    let line = format!("{}\n", index_line(&title, &dest));
+    if let Err(why) = dst.append(INDEX, header, line.as_bytes()) {
+        // The file and its line go together: back where it was, under its own name.
+        let _ = dst.rename_into(&dest, &src, &name);
+        return Err(refused(why));
+    }
+    rewrite_index(&src, &name, None);
+    Ok(at)
+}

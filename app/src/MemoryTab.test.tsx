@@ -300,3 +300,67 @@ describe("a new memory's tab", () => {
     expect(onClose).toHaveBeenCalled();
   });
 });
+
+describe("moving a memory (KN-3)", () => {
+  const SCOPES = [
+    { kind: "workspace", name: "alpha" },
+    { kind: "persona", name: "steward" },
+    { kind: "persona", name: "devops" },
+    { kind: "shared" },
+  ];
+  const MOVED = memory({
+    scope: { kind: "shared" },
+    place: "shared",
+    path: "personas/_shared/memory/where-prod-1-is.md",
+  });
+
+  it("offers every other store, and not the one the memory is in", async () => {
+    core([memory()], { memory_scopes: SCOPES });
+    draw();
+
+    const choice = await screen.findByRole("combobox", { name: "Move to" });
+    const offered = [...choice.querySelectorAll("option")].map((one) => one.textContent);
+    expect(offered).toEqual(["Pick a store…", "alpha — workspace", "devops — persona", "shared"]);
+  });
+
+  it("holds the pick, and moves only on the Move button", async () => {
+    const user = userEvent.setup();
+    const asked = core([memory()], { memory_scopes: SCOPES, memory_move: MOVED });
+    const { onSaved } = draw();
+    const choice = await screen.findByRole("combobox", { name: "Move to" });
+    const move = screen.getByRole("button", { name: "Move" });
+    expect(move).toBeDisabled();
+
+    await user.selectOptions(choice, "shared");
+
+    expect(asked.some((one) => one.cmd === "memory_move")).toBe(false);
+    expect(move).toBeEnabled();
+    await user.click(move);
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(MOVED));
+    const moved = asked.filter((one) => one.cmd === "memory_move");
+    expect(moved).toHaveLength(1);
+    expect(moved[0].args).toMatchObject({
+      plane: PLANE,
+      scope: REF.scope,
+      slug: REF.slug,
+      to: { kind: "shared" },
+    });
+  });
+
+  it("says why a move was refused, and stays where it is", async () => {
+    const user = userEvent.setup();
+    core([memory()], {
+      memory_scopes: SCOPES,
+      memory_move: new Error("personas/_shared/memory already holds a memory named 'x'"),
+    });
+    const { onSaved } = draw();
+    await user.selectOptions(await screen.findByRole("combobox", { name: "Move to" }), "shared");
+
+    await user.click(screen.getByRole("button", { name: "Move" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("already holds");
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(screen.getByTestId("memory-body")).toBeInTheDocument();
+  });
+});

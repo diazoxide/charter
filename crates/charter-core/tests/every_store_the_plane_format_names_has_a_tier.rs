@@ -59,6 +59,10 @@ const NOT_STORES: &[(&str, &str)] = &[
         "what the app does to memory files that carry their own tiers",
     ),
     (
+        "Moving a memory between scopes",
+        "a memory file moved between stores that carry their own tiers",
+    ),
+    (
         "`.charter/…` — active-workspace pointers",
         "its table's rows carry their tiers",
     ),

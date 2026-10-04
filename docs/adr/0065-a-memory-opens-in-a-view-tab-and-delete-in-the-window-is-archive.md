@@ -102,7 +102,8 @@ store already holds is refused and nothing moves.
 ### What is out (Q13, Q14)
 
 **Q13. Moving a memory between scopes** — workspace to persona, persona to shared — is out of
-this build and a follow-up todo. **Q14. Browsing and restoring the archive** is out too, and a
+this build and a follow-up todo. *(Built later by KN-3, #715: `docs/plane-format.md` → Moving
+a memory between scopes.)* **Q14. Browsing and restoring the archive** is out too, and a
 follow-up todo; until it lands, `unarchive` on the command line restores any archived memory by
 name.
 

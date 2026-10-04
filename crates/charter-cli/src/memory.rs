@@ -17,6 +17,7 @@
 
 use std::path::{Path, PathBuf};
 
+use charter_core::memscope::Scope;
 use charter_core::memstore::{self, Unread};
 use charter_core::recall::{self, Ask, Workspaces};
 use charter_core::workspaces::Plane;
@@ -294,6 +295,20 @@ pub enum PersonaCommand {
         /// In the cross-persona _shared store.
         #[arg(long)]
         shared: bool,
+    },
+    /// Move one memory to another scope: a workspace's journal, another persona, or shared.
+    /// Its title and stamp go with it, and nothing is copied.
+    ///
+    /// The work is [`charter_core::memscope::move_memory`].
+    #[command(name = "move-memory")]
+    MoveMemory {
+        name: String,
+        slug: String,
+        /// From the cross-persona _shared store.
+        #[arg(long)]
+        shared: bool,
+        #[command(flatten)]
+        to: MoveTo,
     },
     /// Report near-duplicate memories (Jaccard overlap) to prune.
     ///
@@ -927,6 +942,125 @@ pub fn workspace_unarchive(
     }
 }
 
+/// Where `workspace move` and `persona move-memory` send a memory: exactly one scope.
+#[derive(Args)]
+#[group(required = true, multiple = false)]
+pub struct MoveTo {
+    /// Into this workspace's journal.
+    #[arg(long = "to-workspace", value_name = "WORKSPACE")]
+    to_workspace: Option<String>,
+    /// Into this persona's memory.
+    #[arg(long = "to-persona", value_name = "PERSONA")]
+    to_persona: Option<String>,
+    /// Into the memory every persona shares.
+    #[arg(long = "to-shared")]
+    to_shared: bool,
+}
+
+impl MoveTo {
+    /// The scope named. Clap's group has made sure there is exactly one.
+    pub fn scope(&self) -> Scope {
+        match (&self.to_workspace, &self.to_persona) {
+            (Some(ws), _) => Scope::Workspace(ws.clone()),
+            (_, Some(persona)) => Scope::Persona(persona.clone()),
+            _ => Scope::Shared,
+        }
+    }
+}
+
+/// The flag that sends a memory to `scope`.
+fn to_flag(scope: &Scope) -> String {
+    match scope {
+        Scope::Workspace(name) => format!("--to-workspace {name}"),
+        Scope::Persona(name) => format!("--to-persona {name}"),
+        Scope::Shared => "--to-shared".to_owned(),
+    }
+}
+
+/// The command that moves the memory now named `stem` in `at` back to `home`, when there is
+/// one to print: a memory in shared memory is named through a persona, `persona` (the one the
+/// command was given) or the plane's default.
+fn way_back(
+    plane: &Plane,
+    at: &Scope,
+    stem: &str,
+    home: &Scope,
+    persona: Option<&str>,
+) -> Option<String> {
+    let back = to_flag(home);
+    match at {
+        Scope::Workspace(name) => Some(format!("charter workspace move {stem} -w {name} {back}")),
+        Scope::Persona(name) => Some(format!("charter persona move-memory {name} {stem} {back}")),
+        Scope::Shared => {
+            let persona = persona
+                .map(str::to_owned)
+                .or_else(|| plane.default_persona())?;
+            Some(format!(
+                "charter persona move-memory {persona} {stem} --shared {back}"
+            ))
+        }
+    }
+}
+
+/// `workspace move` and `persona move-memory` — move one memory from `from` to `to` (KN-3):
+/// renamed whole, its title and stamp kept, its index line moved with it. A slug typed is made
+/// exact as `edit` makes it.
+pub fn move_memory(
+    plane: &Plane,
+    from: &Scope,
+    slug: &str,
+    to: &Scope,
+    persona: Option<&str>,
+) -> Result<Code, String> {
+    if !charter_core::contain::segment_ok(slug.strip_suffix(".md").unwrap_or(slug)) {
+        voice::err(&format!(
+            "'{}' is not the slug of one memory — name a file in {}/, not a path.",
+            charter_core::shown::short(slug),
+            from.store()
+        ));
+        return Ok(1);
+    }
+    let refused = |e: &std::io::Error| {
+        if e.kind() == std::io::ErrorKind::NotFound && e.to_string().starts_with("no such memory") {
+            voice::err(&format!(
+                "no memory '{}' in {}.",
+                charter_core::shown::short(slug),
+                from.said()
+            ));
+        } else {
+            voice::err(&e.to_string());
+        }
+        Ok(1)
+    };
+    let exact = match charter_core::memscope::typed(plane, from, slug) {
+        Ok(exact) => exact,
+        Err(e) => return refused(&e),
+    };
+    let now = chrono::Local::now().naive_local();
+    match charter_core::memscope::move_memory(plane, from, &exact, to, now) {
+        Ok(path) => {
+            let stem = path
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
+            let mut said = format!(
+                "Moved '{slug}' from {} to {} → {}",
+                from.said(),
+                to.said(),
+                voice::rel(plane.root(), &path)
+            );
+            if let Some(back) = way_back(plane, to, &stem, from, persona) {
+                said.push_str(&format!(". Undo: `{back}`"));
+            }
+            voice::ok(&said);
+            reactive(plane);
+            Ok(0)
+        }
+        Err(e) => refused(&e),
+    }
+}
+
 /// `workspace optimize` — curate one journal, or every one: the safe ops with `--apply`,
 /// the rest as proposals. Read-only unless `--apply`, and a read-only run names what
 /// `--apply` would do.
@@ -1285,6 +1419,23 @@ pub fn persona(here: &crate::Here, command: PersonaCommand) -> Result<Code, Stri
                 reactive(plane);
             }
             Ok(code)
+        }
+        PersonaCommand::MoveMemory {
+            name,
+            slug,
+            shared,
+            to,
+        } => {
+            if let Some(refused) = charter_core::personas::name_refusal(plane.root(), &name) {
+                voice::err(&refused);
+                return Ok(1);
+            }
+            let from = if shared {
+                Scope::Shared
+            } else {
+                Scope::Persona(name.clone())
+            };
+            move_memory(plane, &from, &slug, &to.scope(), Some(&name))
         }
         PersonaCommand::Dedupe { name, threshold } => {
             let Some(name) = here.active_persona(name.as_deref().filter(|n| !n.is_empty())) else {
