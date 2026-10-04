@@ -877,6 +877,8 @@ mod live {
             "mkdir -p x/.codex",
             "mkdir -p .claude/skills/x",
             "mkdir -p .opencode",
+            "mkdir -p .agents/skills/x",
+            "echo {} > tui.json",
             "echo x > .zshrc",
             // Built in the temp directory, to be moved in with its parent.
             "mkdir -p \"$TMPDIR/p/.git\"",

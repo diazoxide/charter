@@ -17,6 +17,8 @@ Two different projects own the two halves of this:
   charter ships none of those pages. They are Apache-2.0, and they change far more often
   than charter releases. To update them, run that command again rather than editing them.
   It runs `npx`, so it needs Node.js. `--version` pins an exact version.
+  In a sandboxed project, ask the operator to run `charter browser install` in their own
+  terminal: a sandboxed chat may not write a project's skills.
 
   The command also gitignores `.playwright-cli/`, which is where traces and snapshots land.
   A trace holds the network traffic of whatever it recorded, logins included. Whether to
