@@ -198,9 +198,7 @@ describe("a workspace's Memory section", () => {
       render(<App />);
       const section = await screen.findByTestId("panel-memory");
 
-      await userEvent.click(
-        within(section).getByRole("button", { name: "Archived memory · alpha" }),
-      );
+      await userEvent.click(within(section).getByRole("button", { name: "Open alpha's archive" }));
       await userEvent.click(await screen.findByRole("button", { name: /^Freeze/ }));
       expect(await screen.findByTestId("archived-body")).toHaveTextContent("Freeze, archived.");
       await userEvent.click(screen.getByRole("button", { name: "Restore memory" }));

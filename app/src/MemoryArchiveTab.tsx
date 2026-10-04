@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import { Archive, LoaderCircle } from "lucide-react";
 import { EmptyState } from "./EmptyState";
@@ -37,6 +37,13 @@ export function MemoryArchiveTab({
   const [restoring, setRestoring] = useState(false);
   const [outcome, setOutcome] = useState<{ back?: string; refused?: string }>();
   const [again, setAgain] = useState(0);
+  // **Focus follows a Restore** to the line that says what it did: the button pressed is gone
+  // with the memory it restored, and focus left on nothing strands a keyboard and says
+  // nothing to a screen reader.
+  const saidBack = useRef<HTMLParagraphElement>(null);
+  useEffect(() => {
+    if (outcome?.back !== undefined) saidBack.current?.focus();
+  }, [outcome?.back]);
 
   const store = scopeKey(scope);
   useEffect(() => {
@@ -100,7 +107,7 @@ export function MemoryArchiveTab({
   return (
     <div className="memory-archive">
       {outcome?.back !== undefined && (
-        <p className="note" role="status">
+        <p className="note" role="status" tabIndex={-1} ref={saidBack}>
           {outcome.back}
         </p>
       )}

@@ -124,6 +124,17 @@ describe("a store's archive tab", () => {
     expect(asked.filter((one) => one.cmd === "memory_archived")).toHaveLength(2);
   });
 
+  it("moves focus to what Restore did, so it is read out and the keyboard is not stranded", async () => {
+    core([[archived()], []]);
+    draw();
+    await userEvent.click(await screen.findByRole("button", { name: /^Freeze/ }));
+
+    await userEvent.click(screen.getByRole("button", { name: "Restore memory" }));
+
+    const said = await screen.findByRole("status");
+    await waitFor(() => expect(document.activeElement).toBe(said));
+  });
+
   it("says what charter could not restore, and why, and keeps the memory listed", async () => {
     core([[archived()]], new Error("the store already holds freeze.md, so freeze stays archived"));
     draw();
