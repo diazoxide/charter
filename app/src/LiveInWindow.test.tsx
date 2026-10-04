@@ -3,11 +3,11 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
-import { WorkspaceSettings } from "./ProjectSettings";
+import { SettingsTab } from "./settings/SettingsTab";
 
 /**
  * LIVE and LOCAL, from the window (charter-app#301): a LIVE workspace is marked where it is
- * drawn, its menu asks before switching, and the workspace settings page offers the same.
+ * drawn, its menu asks before switching, and Settings at its level offers the same (SE-20).
  * What the confirmation says is `LiveDialog.test.tsx`'s.
  */
 
@@ -87,7 +87,7 @@ describe("LIVE and LOCAL, in the window", () => {
   });
 });
 
-describe("the workspace settings page", () => {
+describe("Settings at a workspace's level", () => {
   it("offers the same switch, through the same confirmation", async () => {
     mockIPC((cmd) => {
       if (cmd === "workspace_settings")
@@ -105,7 +105,7 @@ describe("the workspace settings page", () => {
         return { live: false, files: [], remote: null, mode: "push" };
       return null;
     });
-    render(<WorkspaceSettings plane={PLANE} workspace="beta" />);
+    render(<SettingsTab plane={PLANE} workspace="beta" level="workspace" />);
 
     await userEvent.click(await screen.findByRole("button", { name: "Make live…" }));
 

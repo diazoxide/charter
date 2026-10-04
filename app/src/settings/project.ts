@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { extensionsChanged } from "../extensionsOn";
-import { SETTINGS, usePlaneChanged } from "../planeChanged";
-import { projectThemeChanged, useProjectThemeAnswers } from "../projectTheme";
+import { useProjectThemeAnswers } from "../projectTheme";
 import {
   commands,
   type HarnessPlugins,
@@ -31,10 +29,10 @@ import {
   themeGroup,
   valueAt,
   type Control,
-  type Group,
   type Saving,
   type Shown,
 } from "./fileControls";
+import { asked, fileSetting, useSettingsDriver, type Driven } from "./driver";
 import type { FileSetting, SettingsGroup } from "./groups";
 
 /**
@@ -49,8 +47,8 @@ import type { FileSetting, SettingsGroup } from "./groups";
  * extension, a repo), so the declaration is a function of what was read; a group with no
  * setting is hidden.
  *
- * **One driver for the tab** ({@link useProjectLevel}): each change is written as its own keys
- * through the core (`save_project_settings`, `charter_core::settings::save`, which keeps every
+ * **One driver for the tab** ({@link useProjectLevel}, on `driver.ts`'s, which the Workspace
+ * level shares): each change is written as its own keys through the core (`save_project_settings`, `charter_core::settings::save`, which keeps every
  * other key and comment and refuses what the next read would refuse), one write at a time and
  * each against the file as it now stands; the last change can be undone; and a refused write is
  * kept by the setting it was for, while the files are read again so what is shown is what is on
@@ -76,36 +74,7 @@ const KEPT: Record<SettingsWhich, string> = {
 
 /** One of the old page's controls as a setting of `group`, kept in `file`. */
 function setting(group: string, file: SettingsWhich, control: Control): FileSetting {
-  // A control's id is the key it is at, as the old page keys its drafts by it.
-  const path = JSON.parse(control.id) as SettingsStep[];
-  const dotted = path.map((step) => ("key" in step ? step.key : String(step.index))).join(".");
-  return {
-    id: `${group}.${file === "local" ? "local." : ""}${dotted}`,
-    label: control.label,
-    help: [control.hint, KEPT[file]].filter(Boolean).join(" "),
-    file,
-    key: path,
-    // No project setting is a colour: a workspace's is (charter-app#281), and joins with SE-20.
-    kind: control.kind === "colour" ? "choice" : control.kind,
-    choices: control.choices,
-    unset: control.unset,
-    labels: control.labels,
-    read: control.read,
-    edits: control.edits,
-  };
-}
-
-/** An old page's group asked about `file`: its controls, and what it says. */
-function asked(group: Group, file: Shown, read: ProjectRead) {
-  const { extensions, theme, saving } = read;
-  return {
-    controls: group.controls(file, extensions.extensions, theme, saving),
-    notes: [
-      ...(group.note ? [group.note] : []),
-      group.leftOut?.(extensions, theme, saving) ?? null,
-      ...(group.notes?.(file, extensions.extensions, theme, saving) ?? []),
-    ].filter((one): one is string => one !== null),
-  };
+  return fileSetting(group, file, control, KEPT[file]);
 }
 
 /** `[plane] assisted_by` and `[repos.<name>] assisted_by` (V67): how an agent's commit says so. */
@@ -305,57 +274,27 @@ export function projectGroups(read: ProjectRead): SettingsGroup[] {
   ];
 }
 
-/** The last change made here: the setting, its file, and the edits that put it back. */
-type Change = { setting: string; file: SettingsWhich; back: SettingsEdit[] };
-
-/** What the driver answers: the files and the core's sentences, and what to do with a setting. */
+/** What the driver answers at the Project level: what was read, and what to do with a setting. */
 export type ProjectLevel =
   | { state: "reading" }
   | { state: "trouble"; trouble: string }
-  | {
-      state: "read";
-      read: ProjectRead;
-      /** A value being written, by setting: shown until the write settles. */
-      pending: Readonly<Record<string, string>>;
-      /** Why a setting's last write was refused, by setting. */
-      refused: Readonly<Record<string, readonly string[]>>;
-      /** The setting the last change was made to, which offers its Undo. */
-      undoable: string | undefined;
-      write: (setting: FileSetting, draft: string) => void;
-      undo: () => void;
-    };
+  | (Driven<ProjectFiles> & { read: ProjectRead });
 
-/** `record` without `id`'s entry. */
-function without<T>(record: Readonly<Record<string, T>>, id: string): Record<string, T> {
-  const rest = { ...record };
-  Reflect.deleteProperty(rest, id);
-  return rest;
-}
+/** The project's two files. */
+type ProjectFiles = { shared: SettingsFile; local: SettingsFile };
 
 /**
- * **The Project level's driver**: reads the files and what the core says is in force, and
- * writes one setting at a time. Writes are queued, so each is made against the file the last
- * one left; a write that would change nothing is not sent.
+ * **The Project level's driver** (`driver.ts`): reads the two files and what the core says is
+ * in force, and writes one setting at a time through `save_project_settings`.
  */
 export function useProjectLevel(plane: PlaneId): ProjectLevel {
-  const [files, setFiles] = useState<{ shared: SettingsFile; local: SettingsFile } | string>();
   const [extensions, setExtensions] = useState<ProjectExtensions>(NO_EXTENSIONS);
   const [harnesses, setHarnesses] = useState<HarnessPlugins[]>([]);
   const [theme, setTheme] = useState<ProjectTheme>();
   const [saving, setSaving] = useState<Saving>();
   const [sandbox, setSandbox] = useState<SandboxState>();
-  const [pending, setPending] = useState<Record<string, string>>({});
-  const [refused, setRefused] = useState<Record<string, readonly string[]>>({});
-  const [last, setLast] = useState<Change>();
-  /** The files as the last read or write left them, for the next write in the queue. */
-  const now = useRef<{ shared: SettingsFile; local: SettingsFile }>(undefined);
-  const queue = useRef<Promise<void>>(Promise.resolve());
-  /** The newest read out: an answer to an older one is dropped, as the old page's is. */
-  const reading = useRef(0);
-
-  const enqueue = useCallback((work: () => Promise<void>) => {
-    queue.current = queue.current.then(work, work);
-  }, []);
+  /** The newest asking of what is in force: an answer to an older one is dropped. */
+  const asking = useRef(0);
 
   const readTheme = useCallback(() => {
     void commands
@@ -364,10 +303,10 @@ export function useProjectLevel(plane: PlaneId): ProjectLevel {
       .catch(() => setTheme(undefined));
   }, [plane]);
 
-  /** What is in force, read again after every write so each sentence says what it now is. */
+  /** What is in force, read again after every read and write so each sentence says what it now is. */
   const readInForce = useCallback(() => {
-    const mine = reading.current;
-    const newest = () => reading.current === mine;
+    const mine = ++asking.current;
+    const newest = () => asking.current === mine;
     void commands
       .projectExtensions(plane, null)
       .then((said) => {
@@ -397,121 +336,37 @@ export function useProjectLevel(plane: PlaneId): ProjectLevel {
     readTheme();
   }, [plane, readTheme]);
 
-  const readFiles = useCallback((): Promise<void> => {
-    const mine = ++reading.current;
-    return commands
-      .projectSettings(plane)
-      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }))
-      .then((said) => {
-        if (reading.current !== mine) return;
-        if (said.status === "ok") {
-          now.current = said.data;
-          setFiles(said.data);
-        } else setFiles(said.error);
-        readInForce();
-      });
-  }, [plane, readInForce]);
-
-  useEffect(() => {
-    void readFiles();
-  }, [readFiles]);
-  // A settings file changed on disk — by hand, by a chat, by the old page — is read again, in
-  // the queue, so the next write is made against it rather than refused as changed on disk.
-  const changes = usePlaneChanged([plane], SETTINGS);
-  useEffect(() => {
-    if (changes > 0) enqueue(readFiles);
-  }, [changes, enqueue, readFiles]);
   // An approval or a removal in the Extensions dialog changes what the theme draws.
   const answers = useProjectThemeAnswers(plane);
   useEffect(() => {
     if (answers > 0) readTheme();
   }, [answers, readTheme]);
 
-  /** Writes `edits` to `which` for `id`; answers whether the core wrote them. */
-  const send = useCallback(
-    async (id: string, which: SettingsWhich, edits: SettingsEdit[]): Promise<boolean> => {
-      const both = now.current;
-      if (!both) return false;
-      const file = both[which];
-      const said = await commands
-        .saveProjectSettings(plane, which, file.exists ? file.text : null, {
-          kind: "edits",
-          edits,
-        })
-        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
-      const reasons =
-        said.status === "error"
-          ? [said.error]
-          : said.data.kind === "refused"
-            ? said.data.reasons
-            : undefined;
-      if (said.status === "error" || said.data.kind === "refused") {
-        setRefused((was) => ({ ...was, [id]: reasons ?? [] }));
-        // What is shown is what is on disk, which may not be what this tab last read.
-        await readFiles();
-        return false;
-      }
-      now.current = { ...both, [which]: said.data.file };
-      setFiles(now.current);
-      setRefused((was) => without(was, id));
-      readInForce();
-      extensionsChanged(plane);
-      projectThemeChanged(plane);
-      return true;
-    },
-    [plane, readFiles, readInForce],
-  );
+  const driver = useSettingsDriver<ProjectFiles>(plane, {
+    plane,
+    read: () =>
+      commands
+        .projectSettings(plane)
+        .then((said) => (said.status === "ok" ? { ok: said.data } : { trouble: said.error })),
+    files: (both) => both,
+    save: (which, base, edits, both) =>
+      commands
+        .saveProjectSettings(plane, which as SettingsWhich, base, { kind: "edits", edits })
+        .then((said) =>
+          said.status === "error"
+            ? { refused: [said.error] }
+            : said.data.kind === "refused"
+              ? { refused: said.data.reasons }
+              : { saved: { ...both, [which]: said.data.file } },
+        ),
+    inForce: readInForce,
+    // Nothing here takes the sandbox back off (D-SE17g), whichever setting's change it undoes.
+    mayUndo: (back) => !loosensTheSandbox(back),
+  });
 
-  const write = useCallback(
-    (setting: FileSetting, draft: string) => {
-      setPending((was) => ({ ...was, [setting.id]: draft }));
-      enqueue(async () => {
-        const file = now.current?.[setting.file];
-        if (file && setting.read(file) !== draft) {
-          const edits = setting.edits(draft, file);
-          const back = edits.map((edit) => ({ path: edit.path, value: valueAt(file, edit.path) }));
-          const undo = back.map((one) => ({ path: one.path, value: one.value ?? null }));
-          // A value only the file itself can hold (a date, a float) cannot be written back, and
-          // nothing here takes the sandbox back off (D-SE17g).
-          const undoable =
-            !setting.oneWay &&
-            back.every((one) => one.value?.kind !== "other") &&
-            !loosensTheSandbox(undo);
-          if (await send(setting.id, setting.file, edits))
-            setLast(
-              undoable
-                ? {
-                    setting: setting.id,
-                    file: setting.file,
-                    back: undo,
-                  }
-                : undefined,
-            );
-        }
-        setPending((was) => without(was, setting.id));
-      });
-    },
-    [enqueue, send],
-  );
-
-  const undo = useCallback(() => {
-    const change = last;
-    if (!change) return;
-    setLast(undefined);
-    enqueue(async () => {
-      await send(change.setting, change.file, change.back);
-    });
-  }, [enqueue, last, send]);
-
-  if (files === undefined) return { state: "reading" };
-  if (typeof files === "string") return { state: "trouble", trouble: files };
+  if (driver.state !== "read") return driver;
   return {
-    state: "read",
-    read: { ...files, extensions, harnesses, theme, saving, sandbox },
-    pending,
-    refused,
-    undoable: last?.setting,
-    write,
-    undo,
+    ...driver,
+    read: { ...driver.now, extensions, harnesses, theme, saving, sandbox },
   };
 }

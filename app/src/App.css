@@ -5852,6 +5852,13 @@ h2.sidebar-title .node-icon {
   min-width: 0;
 }
 
+/* A control that is a whole list — a workspace's repos, ticked and applied (SE-20) — takes the
+   row's width. */
+.ui-setting-control > [role="group"] {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+
 .ui-setting-control > .ui-field + button,
 .ui-setting-reset {
   padding: 0.2rem 0.6rem;

@@ -19,7 +19,8 @@ import type {
  * write, how it reads its value out of the file, and the edits a new value makes. Declared once
  * and drawn twice until SE-19 retires the old page: by Project settings' two sections
  * (`ProjectSettings.tsx`) and by the Settings tab's Project level (`project.ts`, SE-17), which
- * regroups the same controls into V89h's groups.
+ * regroups the same controls into V89h's groups. A workspace's (its extensions, theme, colour
+ * and plugins) are drawn only by the Workspace level (`workspace.tsx`, SE-20).
  */
 /**
  * One control: a label, how it is drawn, how it reads its value out of the file, and the edits a
@@ -717,13 +718,6 @@ const COLOUR: Control = {
     [CUSTOM]: "Custom…",
   },
 };
-
-/** A workspace's `settings` (charter-app#280): what a workspace can set — its extensions, and
- *  its theme and colour (charter-app#281). */
-export const WORKSPACE: Group[] = [
-  EXTENSIONS,
-  themeGroup("not set — the project's pick", "workspace"),
-];
 
 /** `charter.local.toml`: `[harness]`, `[plane]`'s save keys, `[repos]`, `[extensions]` and
  *  `[theme]`, which is all its readers read there. */

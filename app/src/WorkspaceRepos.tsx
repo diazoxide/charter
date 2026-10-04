@@ -1,20 +1,27 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { commands, type PlaneId } from "./bindings";
 import { RepoPicker } from "./RepoPicker";
 import { cloneRepos, useRepoClones } from "./repoClones";
+import type { RowIds } from "./settings/components";
 
 /**
- * **A workspace's repos, in its settings** (ADR 0055): the same picker as a new workspace's,
- * ticked with what is cloned here now.
+ * **A workspace's repos, in Settings at its level** (ADR 0055; SE-20): the same picker as a new
+ * workspace's, ticked with what is cloned here now, drawn as one row of the settings set — the
+ * control is the picker, what is under way is said under it, and a refusal is the row's error.
  *
- * Applying clones what was ticked and removes what was unticked. A removal goes through
- * `drop_repo`, whose guard is inside the delete: a clone holding uncommitted or unpushed work,
- * or any worktree, is refused, and the refusal is drawn here in the core's own words. There is
- * no way past it from this surface.
+ * Applying clones what was ticked and removes what was unticked. **It is a button and not a
+ * write on each tick**: a clone and a removal are things done, with no Undo, so a tick is held
+ * until it is confirmed (the rule DS-3b set for a choice that does something). A removal goes
+ * through `drop_repo`, whose guard is inside the delete: a clone holding uncommitted or unpushed
+ * work, or any worktree, is refused, and the refusal is drawn here in the core's own words.
+ * There is no way past it from this surface.
  *
  * What is cloned is read from disk (`workspace_repos`), never from what this window asked for.
  */
-export function WorkspaceRepos({ plane, workspace }: { plane: PlaneId; workspace: string }) {
+export function useWorkspaceRepos(
+  plane: PlaneId,
+  workspace: string,
+): { control: (ids: RowIds) => ReactNode; error: readonly string[] } {
   const [have, setHave] = useState<ReadonlySet<string>>();
   const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
   const [applying, setApplying] = useState(false);
@@ -58,53 +65,45 @@ export function WorkspaceRepos({ plane, workspace }: { plane: PlaneId; workspace
   const failed = [...clones].filter(([, c]) => c.state === "failed");
   const busy = [...clones].filter(([, c]) => c.state === "waiting" || c.state === "cloning");
 
-  return (
-    <fieldset className="settings-group" aria-label="Repos">
-      <legend>Repos</legend>
-      <p className="settings-who">
-        Ticked repos are cloned into this workspace; unticked ones are removed, unless they hold
-        work that is not pushed.
-      </p>
-      <RepoPicker plane={plane} picked={picked} onPicked={setPicked} />
-      {busy.map(([repo, c]) => (
-        <p key={repo} className="pending" aria-busy="true">
-          {c.state === "cloning" ? `Cloning ${repo}…` : `${repo} is waiting to be cloned.`}
-        </p>
-      ))}
-      {failed.map(([repo, c]) => (
-        <div key={repo} className="settings-actions">
-          <p className="trouble" role="alert">
-            {repo}: {c.state === "failed" ? c.said : ""}
+  return {
+    error: [
+      ...failed.map(([repo, c]) => `${repo}: ${c.state === "failed" ? c.said : ""}`),
+      ...refusals,
+    ],
+    control: (ids) => (
+      <div role="group" aria-labelledby={ids.labelledBy} aria-describedby={ids.describedBy}>
+        <RepoPicker plane={plane} picked={picked} onPicked={setPicked} />
+        {busy.map(([repo, c]) => (
+          <p key={repo} className="pending" aria-busy="true">
+            {c.state === "cloning" ? `Cloning ${repo}…` : `${repo} is waiting to be cloned.`}
           </p>
+        ))}
+        <div className="settings-actions">
+          {failed.map(([repo]) => (
+            <button
+              key={repo}
+              type="button"
+              className="panel-view"
+              tabIndex={0}
+              disabled={applying}
+              onClick={() => void cloneRepos(plane, workspace, [repo]).then(read)}
+            >
+              Retry {repo}
+            </button>
+          ))}
           <button
             type="button"
             className="panel-view"
             tabIndex={0}
-            disabled={applying}
-            onClick={() => void cloneRepos(plane, workspace, [repo]).then(read)}
+            disabled={applying || (adding.length === 0 && removing.length === 0)}
+            onClick={() => void apply()}
           >
-            Retry {repo}
+            {applyWords(adding.length, removing.length)}
           </button>
         </div>
-      ))}
-      {refusals.map((line) => (
-        <p key={line} className="trouble" role="alert">
-          {line}
-        </p>
-      ))}
-      <div className="settings-actions">
-        <button
-          type="button"
-          className="panel-view"
-          tabIndex={0}
-          disabled={applying || (adding.length === 0 && removing.length === 0)}
-          onClick={() => void apply()}
-        >
-          {applyWords(adding.length, removing.length)}
-        </button>
       </div>
-    </fieldset>
-  );
+    ),
+  };
 }
 
 function applyWords(adding: number, removing: number): string {

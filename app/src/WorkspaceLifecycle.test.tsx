@@ -647,8 +647,8 @@ describe("picking a new workspace's repos (ADR 0055)", () => {
   });
 });
 
-describe("a workspace's settings (charter-app#280)", () => {
-  it("open from the workspace tab's menu, in a tab on that workspace's strip, about that workspace", async () => {
+describe("a workspace's settings (charter-app#280, SE-20)", () => {
+  it("open Settings at that workspace's level from its tab's menu, on that workspace's strip", async () => {
     const { calls } = core();
     render(<App />);
     await settled();
@@ -659,6 +659,10 @@ describe("a workspace's settings (charter-app#280)", () => {
     expect(
       await screen.findByRole("heading", { name: "Workspace settings · beta" }),
     ).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Workspace" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
     await vi.waitFor(() =>
       expect(calls("workspace_settings").map((one) => one.args)).toContainEqual({
         plane: PLANE,
@@ -680,7 +684,12 @@ describe("a workspace's settings (charter-app#280)", () => {
     await settled();
     await menuOn("beta");
     await userEvent.click(screen.getByRole("menuitem", { name: /Workspace settings/ }));
-    const repos = await screen.findByRole("group", { name: "Repos" });
+    await userEvent.click(
+      await within(screen.getByRole("navigation", { name: "Groups" })).findByRole("button", {
+        name: "Repos",
+      }),
+    );
+    const repos = await screen.findByRole("region", { name: "Repos" });
 
     const api = await within(repos).findByRole("checkbox", { name: "api" });
     await waitFor(() => expect(api).toBeChecked());

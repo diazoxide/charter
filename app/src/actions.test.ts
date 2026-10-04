@@ -425,7 +425,7 @@ describe("the one list of actions", () => {
     const row = by(offers, "workspace.settings:alpha");
     expect(row?.title).toBe("Workspace settings…");
     expect(row?.note).toBe(
-      "alpha: its workspace.json, between charter.toml and charter.local.toml.",
+      "alpha: Settings at its level — live, repos, extensions, appearance and plugins.",
     );
     await run(offers, "workspace.settings:alpha", hands);
     expect(hands.calls).toEqual(["openWorkspaceSettings:alpha"]);

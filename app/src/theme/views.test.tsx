@@ -838,14 +838,17 @@ const STATES: State[] = [
     drawn: /Charter defects go upstream/,
   },
   {
-    name: "a workspace's settings",
+    name: "Settings at a workspace's level",
     view: { from: null, view: "workspace-settings", key: WORKSPACE },
-    drawn: /workspace\.json/,
+    drawn: /Published with the project/,
   },
   {
-    name: "a workspace's settings with a custom colour",
+    name: "Settings at a workspace's level, its custom colour",
     view: { from: null, view: "workspace-settings", key: WORKSPACE },
     answers: { workspace_settings: WORKSPACE_COLOURED },
+    then: async () => {
+      await userEvent.click(await screen.findByRole("button", { name: "Appearance" }));
+    },
     drawn: /Custom colour/,
   },
   {
