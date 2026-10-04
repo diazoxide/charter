@@ -1,22 +1,16 @@
-//! Fifty busy chats share one shaped link fairly, and the memory the views hold is bounded:
-//! a needs-you on the control lane is not starved by fifty terminals' output, and the heap
-//! stays within what the limits allow. Evidence for #643's second acceptance line, **not** a
-//! measurement of it: that line asks for kernel netem, which this is not (see below).
+//! Fifty busy chats share one shaped link, and the memory the views hold is bounded: a
+//! needs-you on the control lane gets through fifty terminals' output within 1 s plus the round
+//! trip, and the heap stays within what the limits allow. #643's second acceptance line, on the
+//! deterministic link simulator; the same over TCP shaped by kernel netem is SC-21 (#828).
 //!
-//! **The link is a model, and a simple one.** Each chunk read from the sender is held for half
-//! the round trip (150 ms) each way and serialized at 10 MB/s, with at most 2 MiB in flight,
-//! after which the sender's writes wait, as on a real socket. Loss is drawn per 1,460-byte
-//! packet at 2%; a chunk with a lost packet waits one more round trip (fast retransmit, RFC
-//! 5681), and everything behind it waits for it, since the stream is ordered. There is **no
-//! congestion control**: no slow start, no window halving after a loss, so the sender is never
-//! slowed the way TCP would slow it. What this checks is that the multiplexer shares the link
-//! when the terminals' bytes in flight are bounded, not how the protocol fares under real TCP.
-//! The real measurement, over TCP on loopback shaped by `tc netem` in CI, is its own ticket.
+//! **The link** is `common::netsim` in virtual time: 150 ms round trip, 2% loss per 1,460-byte
+//! packet as fast retransmit, 10 MB/s, 2 MiB between the sender's write and the receiver's read,
+//! no congestion control. Time moves only when every task waits, so the needs-you's delay is
+//! the link's and the protocol's, never the machine's, and the budget is asserted (ADR 0086
+//! keeps only wall-clock budgets out of `cargo test`). The ends' own work takes no time here.
 //!
-//! **No timing is asserted tightly here** (ADR 0086: plain `cargo test` holds no wall-clock
-//! budget). The numbers are printed as evidence; the asserted bound, ten seconds for every
-//! needs-you, is one a loaded runner cannot reach unless something is wrong. The memory bound
-//! is the heap of this test process, measured with dhat, both ends of the link included.
+//! **The memory bound** is the heap of this test process, measured with dhat, both ends of the
+//! link included.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -28,83 +22,25 @@ use charter_session_protocol::auth::Scope;
 use charter_session_protocol::link;
 use charter_session_protocol::version::{Speaks, Version};
 use charter_session_protocol::view::{Attacher, Chunk, Limits, ViewId, Viewer};
-use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream, ReadHalf, WriteHalf, duplex};
-use tokio::sync::mpsc;
-use tokio::time::{Instant, sleep, sleep_until};
+use tokio::time::{Instant, sleep};
 
 mod common;
 use common::HELD;
+use common::netsim::{self, Shape};
 
 const CHATS: u32 = 50;
 const ROUND_TRIP: Duration = Duration::from_millis(150);
-const RETRANSMIT: Duration = ROUND_TRIP;
-const LOSS_IN: u64 = 50; // one packet in fifty, 2%
-const PACKET: usize = 1460;
-const BYTES_PER_SECOND: f64 = 10e6;
-const IN_FLIGHT_CHUNKS: usize = 128; // of up to 16 KiB: 2 MiB
+/// #643's budget: a needs-you within 1 s plus the round trip.
+const BUDGET: Duration = Duration::from_millis(1000 + 150);
 
-/// A small, seeded generator, so a failing run is the same run again.
-struct Lcg(u64);
-
-impl Lcg {
-    fn next(&mut self) -> u64 {
-        self.0 = self
-            .0
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
-        self.0 >> 33
-    }
-}
-
-/// One direction of the shaped link.
-async fn shape(mut from: ReadHalf<DuplexStream>, mut to: WriteHalf<DuplexStream>, seed: u64) {
-    let (queue, mut due) = mpsc::channel::<(Instant, Bytes)>(IN_FLIGHT_CHUNKS);
-    tokio::spawn(async move {
-        while let Some((at, bytes)) = due.recv().await {
-            sleep_until(at).await;
-            if to.write_all(&bytes).await.is_err() {
-                return;
-            }
-        }
-    });
-    let mut random = Lcg(seed);
-    let mut free_at = Instant::now();
-    let mut last_at = Instant::now();
-    let mut buffer = vec![0u8; 16 * 1024];
-    while let Ok(n) = from.read(&mut buffer).await {
-        if n == 0 {
-            return;
-        }
-        let now = Instant::now();
-        let on_the_wire = Duration::from_secs_f64(n as f64 / BYTES_PER_SECOND);
-        free_at = free_at.max(now) + on_the_wire;
-        let mut at = free_at + ROUND_TRIP / 2;
-        if (0..n.div_ceil(PACKET)).any(|_| random.next().is_multiple_of(LOSS_IN)) {
-            at += RETRANSMIT;
-        }
-        // Ordered: nothing is delivered before a chunk sent ahead of it.
-        at = at.max(last_at);
-        last_at = at;
-        if queue
-            .send((at, Bytes::copy_from_slice(&buffer[..n])))
-            .await
-            .is_err()
-        {
-            return;
-        }
-    }
-}
-
-/// Two ends joined by the shaped link.
-fn shaped_link() -> (DuplexStream, DuplexStream) {
-    let (client, client_far) = duplex(64 * 1024);
-    let (host, host_far) = duplex(64 * 1024);
-    let (client_reads, client_writes) = tokio::io::split(client_far);
-    let (host_reads, host_writes) = tokio::io::split(host_far);
-    tokio::spawn(shape(client_reads, host_writes, 1));
-    tokio::spawn(shape(host_reads, client_writes, 2));
-    (client, host)
-}
+const SHAPE: Shape = Shape {
+    one_way: Duration::from_millis(75),
+    bytes_per_second: 10e6,
+    buffer: 2 << 20,
+    loss_one_in: 50, // 2%
+    packet: 1460,
+    retransmit: ROUND_TRIP,
+};
 
 /// A terminal's output is new bytes every time, not one buffer shared by reference, so what
 /// the views hold is what the heap holds.
@@ -119,10 +55,10 @@ fn v1() -> Speaks {
 #[global_allocator]
 static ALLOCATOR: dhat::Alloc = dhat::Alloc;
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(start_paused = true)]
 async fn every_needs_you_gets_through_fifty_busy_terminals_and_the_heap_stays_bounded() {
     let _profiler = dhat::Profiler::builder().testing().build();
-    let (client_end, host_end) = shaped_link();
+    let (client_end, host_end) = netsim::link(SHAPE, 1);
     let (client, host) = tokio::join!(
         link::connect(client_end, v1(), Scope::LocalUi, HELD.of(Scope::LocalUi)),
         link::serve_any(host_end, v1(), &HELD)
@@ -131,7 +67,7 @@ async fn every_needs_you_gets_through_fifty_busy_terminals_and_the_heap_stays_bo
     let limits = Limits::default();
     // What the limits allow, both ends of the link in this process: per chat, the host's
     // queue and its watermark's worth in flight, and the client's Yamux receive window; plus
-    // the shaped link's 2 MiB each way, and 16 MiB for everything else.
+    // the simulated link's 2 MiB each way, and 16 MiB for everything else.
     let per_chat =
         limits.most_queued_bytes + limits.high_watermark + yamux::DEFAULT_CREDIT as usize;
     let bound = CHATS as usize * per_chat + (4 << 20) + (16 << 20);
@@ -232,10 +168,10 @@ async fn every_needs_you_gets_through_fifty_busy_terminals_and_the_heap_stays_bo
         !over.load(Ordering::Relaxed),
         "the heap passed {bound} bytes while the terminals ran"
     );
-    let generous = Duration::from_secs(10);
+    assert_eq!(took.len(), CHATS as usize, "every needs-you arrived");
     assert!(
-        worst <= generous,
-        "the slowest needs-you took {worst:?}, over {generous:?}"
+        worst <= BUDGET,
+        "the slowest needs-you took {worst:?}, over {BUDGET:?}"
     );
     assert!(
         peak <= bound,

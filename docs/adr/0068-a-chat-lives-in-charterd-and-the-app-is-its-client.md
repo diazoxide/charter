@@ -702,3 +702,40 @@ applies V7, V16a and V75.
    only through a call that takes the result of ADR 0078 §3's Noise handshake. RR-13 builds that
    handshake, so until then no build of the host admits `remote-link` at all. The crate's own
    tests stand in for it, and drive a stub `remote-link` client in a separate process.
+
+## Amended again by FD-4 (#643), 2026-10-04
+
+The first FD-4 amendment's item 1 said there is no priority control lane, and named the fix if
+the lane was found waiting too long: a scheduler in `link` that drains the control lane first,
+behind the same interface. It was found waiting too long, and the scheduler is built. §4's text,
+*"a priority control lane carries commands and events past a busy terminal"*, holds again, and
+that item is withdrawn.
+
+1. **Why.** Yamux takes one frame from each stream with something to send, in turn. So a control
+   frame waits behind a 16 KiB frame of every busy stream. On a 1 MB/s link, a connector's stdio
+   to a remote host, fifty busy streams kept a control frame waiting 908 ms. The scheduler
+   brings that to 73 ms, which is the 64 KiB the link itself holds.
+2. **How.** The multiplexer writes into the scheduler (`priority` in the crate), not the
+   transport. The scheduler cuts the bytes into Yamux's own frames, sends the control lane's
+   first (Yamux stream 1, the client's first), and lets the other streams take turns, one frame
+   each, as Yamux's own streams do. A go-away goes last. Past 16 MiB queued (256 streams × a
+   view's 64 KiB watermark), the multiplexer waits to write anything but the control lane, so a
+   peer that grants credit and never reads cannot grow it. A dropped link writes what it was
+   handed and shuts the transport, for at most 10 seconds.
+3. **The wire is unchanged, and so is the version.** Every frame is Yamux's, whole, and each
+   stream's frames keep their order. Only frames of different streams are reordered, and Yamux
+   allows that, since each stream has its own window and sequence. A peer that does not schedule
+   reads the same bytes. So the protocol stays 1.0, and no capability is negotiated: there is
+   nothing for the other end to agree to.
+4. **What it cannot jump** is what the transport already holds: a socket's send buffer, a pipe,
+   `ssh`'s channel window. That wait is bounded by the windows and watermarks the first FD-4
+   amendment lists. Sizing a remote link's watermarks to its round trip is #930.
+5. **Measured** on the crate's deterministic link simulator (`tests/common/netsim.rs`): tokio's
+   virtual time, seeded loss, a rate, a delay and a buffer. The ends' own work takes no time
+   there, so the delays are the protocol's and the link's, and the tests assert them; ADR 0086
+   keeps only wall-clock budgets out of `cargo test`. Fifty busy chats on a 150 ms, 2% loss,
+   10 MB/s link with 2 MiB in it: a needs-you at a p50 of 227 ms and a worst of 386 ms, where
+   Yamux alone gave 262 and 455, within #643's 1 s plus the round trip. The heap peaked at
+   57 MB of the 90 MB the limits allow. `charter-session-bench`'s keystroke under ten flooding
+   panes is unchanged, with a median of 0.16 ms against main's 0.15. The same over TCP under
+   kernel netem is still SC-21 (#828).

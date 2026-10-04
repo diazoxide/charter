@@ -32,3 +32,5 @@ pub async fn read_frame(io: &mut (impl AsyncRead + Unpin)) -> serde_json::Value 
     io.read_exact(&mut body).await.unwrap();
     serde_json::from_slice(&body).unwrap()
 }
+
+pub mod netsim;
