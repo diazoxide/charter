@@ -458,6 +458,62 @@ never answers a reader with anything the files would not (ADR 0079).
 _Avoid_: index (unqualified: `memory/index.md` and `sessions/index.md` are lists for people),
 cache, database
 
+### Chats working together
+
+Every agent another agent starts is a chat, so each word here is a part of **Chat** (ADR 0090,
+proposed).
+
+**Dispatch**:
+A chat starting another chat with a brief, after a person's yes: one per dispatch, or given ahead
+of time as a **dispatch grant**. Its mode is a **handoff** or a **task**. The new chat has its own
+persona, sandbox, budget and asks, and nothing the dispatcher was allowed travels with the brief.
+_Avoid_: spawn, delegate, sub-agent (that is the harness's child run)
+
+**Handoff**:
+A dispatch whose work now belongs to the operator to follow: it opens as a tab, and sends back at
+most one **report**. `charter handoff` is its route from a shell.
+_Avoid_: transfer, session record (that is what a closing chat writes)
+
+**Task** (of a dispatch):
+A dispatch done for the chat that started it, which polls or subscribes for its result. It opens
+headless, listed under its dispatcher.
+_Avoid_: job, todo (that is the workspace's), work item
+
+**Report**:
+What a dispatched chat sends back to the chat that dispatched it: quoted to that chat as data,
+on its next turn, or kept for its workspace when that chat is gone.
+_Avoid_: reply, result (for a handoff), handback (in UI text)
+
+**Lineage** (of a chat):
+The chats a chat came from and the chats that came from it, by dispatch. It is what a chat may
+message and stop without a person, and what every ask the chat raises shows.
+_Avoid_: tree, family, parent (for a dispatcher: a parent run is a harness's child run's)
+
+**Headless chat**:
+A chat with no tab. It is listed, its asks reach needs you, and Stop and the kill switch reach it,
+like any chat's; the operator can open its tab at any time. Never a level-1 chat.
+_Avoid_: background chat, unattended, hidden
+
+**Peer message**:
+Words one chat sends another live chat, in its lineage or over a **message link**. It reaches the
+receiver as quoted data at a turn boundary, and is never consent for anything.
+_Avoid_: prompt (that is the operator's), message (unqualified), mail
+
+**Mailbox** (of a chat):
+Whether a chat takes peer messages: deliver, hold or refuse, set by the operator. Held messages wait
+on the chat's row.
+_Avoid_: inbox (that is `charter inbox`, a person's), queue
+
+**Dispatch grant**:
+A person's yes to a persona's dispatches, given ahead of time on a human scope: which personas it
+may start, where, in which modes, and within which caps.
+_Avoid_: permission (that is the harness's), approval (that answers an ask)
+
+**Message link**:
+A person's leave for two chats, or the chats of two personas in a workspace, to send each other
+peer messages outside their lineage, until it ends.
+_Avoid_: link (unqualified: that is a runner's), channel, subscription
+
 ### The window
 
 **Split window**:
