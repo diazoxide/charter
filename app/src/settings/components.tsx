@@ -202,8 +202,9 @@ export type Reset = { label: string; disabled: boolean; onReset: () => void };
  * alert, and in the control's description, while the control shows what is on disk. And the
  * last change's **Undo** sits in the row it was made in.
  *
- * Which file a value goes to as a choice, and where its current value comes from, join the row
- * with SE-18.
+ * **Where the value comes from** (SE-18, V89d): `origin` says which level and which file — part
+ * of the control's description — and `badge` marks a value that overrides another file's (a
+ * Local value over a Shared one). `place` is the row's file choice, drawn under the control.
  */
 export function SettingRow({
   label,
@@ -212,6 +213,9 @@ export function SettingRow({
   grouped = false,
   error,
   undo,
+  origin,
+  badge,
+  place,
   control,
 }: {
   label: string;
@@ -224,16 +228,24 @@ export function SettingRow({
   error?: readonly string[];
   /** Puts back what this setting was before the last change, when that change was here. */
   undo?: () => void;
+  /** Which level and which file the value shown comes from, or that none here holds it. */
+  origin?: string;
+  /** What the value overrides, as a badge beside its name: "Overrides charter.toml". */
+  badge?: string;
+  /** Which file the value is kept in, as a choice (SE-18). */
+  place?: ReactNode;
   control: (ids: RowIds) => ReactNode;
 }) {
   const id = useId();
   const labelledBy = useId();
   const described = useId();
+  const from = useId();
   const refused = useId();
   const failed = error !== undefined && error.length > 0;
   const describedBy =
-    [help ? described : undefined, failed ? refused : undefined].filter(Boolean).join(" ") ||
-    undefined;
+    [help ? described : undefined, origin ? from : undefined, failed ? refused : undefined]
+      .filter(Boolean)
+      .join(" ") || undefined;
   return (
     <div className="ui-setting-row">
       {grouped ? (
@@ -245,6 +257,7 @@ export function SettingRow({
           {label}
         </label>
       )}
+      {badge && <span className="ui-setting-badge">{badge}</span>}
       <div className="ui-setting-control">
         {control({ id, labelledBy, describedBy })}
         {reset && (
@@ -280,6 +293,12 @@ export function SettingRow({
           {help}
         </p>
       )}
+      {origin && (
+        <p className="ui-setting-origin" id={from}>
+          {origin}
+        </p>
+      )}
+      {place}
       {failed && (
         <div className="ui-setting-error" id={refused} role="alert">
           {error.map((why, at) => (

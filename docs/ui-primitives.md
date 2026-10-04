@@ -71,8 +71,9 @@ What keeps it from becoming the library this file forbids:
 
 - **Five pieces, named here, and no more.** `SettingsLayout` (the level switcher, the nav of
   groups with its filter box above it, and the chosen group, in two columns), `SettingGroup`
-  (a group's heading, help and rows), `SettingRow` (label, help, control and reset, and since SE-17 a refused write's reason
-  and the last change's Undo; the file choice and the origin join it with SE-18), `Field` (`text`, `list` and `range`) and `Choice` (`radio`, `select` and
+  (a group's heading, help and rows), `SettingRow` (label, help, control and reset, and since
+  SE-17 a refused write's reason and the last change's Undo; since SE-18 the value's origin, an
+  override badge and the file choice), `Field` (`text`, `list` and `range`) and `Choice` (`radio`, `select` and
   `toggle`). A sixth piece is an amendment to ADR 0037, not a commit.
 - **Each piece is a thin layer over a primitive already in the window, and says which.**
   The level switcher is a Radix radio group; the nav is buttons under Radix roving focus
@@ -303,7 +304,8 @@ the arrow keys".
 writes on a button.** Because an arrow picks, and a held arrow repeats, a radio that wrote on
 its pick would write every option it passed through on the way to the one meant. Such a radio
 keeps the pick in the screen's own state and acts only on an explicit button: Saving's _Use
-this_ (DS-3b) and Updates' _Use this channel_ (DS-3d). A radio whose write can be undone, as
+this_ (DS-3b), Updates' _Use this channel_ (DS-3d) and Settings' file choice, whose _Move to …_
+writes both files and has no Undo (SE-18). A radio whose write can be undone, as
 Settings' controls can (V89e), writes on its pick. Each held pick is guarded by a test that
 holds an arrow down for about 80 ms and finds nothing written.
 

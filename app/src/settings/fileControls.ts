@@ -434,6 +434,10 @@ export function themeGroup(unset: string, here: "project" | "workspace" = "proje
 /** Which of the project's two files a section is. */
 export type Which = "shared" | "local";
 
+/** Which file a group's controls are about: one of the two, or `either` — the Settings tab's one
+ *  row per key, whose value may be kept in either file (SE-18) and whose row says which. */
+export type Section = Which | "either";
+
 /** The modes `planesave::Mode` reads, in the ladder's order. */
 const MODES = ["off", "commit", "push", "pr", "pr-merge"] as const;
 
@@ -458,7 +462,7 @@ function decided(
   one: SaveKey,
   file: Shown,
   path: SettingsStep[],
-  section: Which,
+  section: Section,
   fromShare = false,
 ): string {
   if (it.value === null && one.kind === "mode") return `In this project: ${one.none}.`;
@@ -478,7 +482,7 @@ function saveControl(
   one: SaveKey,
   path: SettingsStep[],
   label: string,
-  section: Which,
+  section: Section,
   marker: string | null,
 ): Control {
   const hint = marker === null ? one.hint : `${one.hint} ${marker}`;
@@ -550,7 +554,7 @@ const REPO_KEYS: readonly SaveKey[] = [
  * deprecated alias of Mode that `docs/plane-format.md` still documents — the only file it is read
  * from.
  */
-export function planeGroup(section: Which): Group {
+export function planeGroup(section: Section): Group {
   return {
     title: "Plane",
     note: "How the project is saved. charter.local.toml overrides charter.toml key by key. [plane] worktrees is under General.",
@@ -573,7 +577,7 @@ export function planeGroup(section: Which): Group {
                 );
           return saveControl(one, path, one.label, section, marker);
         }),
-        ...(section === "shared"
+        ...(section !== "local"
           ? [
               textAt(key("memory", "share"), "[memory] share (deprecated)", {
                 kind: "choice",
@@ -614,7 +618,7 @@ function shareMarker(file: Shown, saving: SavingInForce | undefined): string {
  * `inventory/repos.json` catalogues, then every one only a file's `[repos]` names — with
  * `[repos.<name>]`'s keys, each marked as the Plane group's are.
  */
-export function reposGroup(section: Which): Group {
+export function reposGroup(section: Section): Group {
   return {
     title: "Repos",
     note: "How each workspace repo is saved, by its name in inventory/repos.json. A repo's defaults are mode off and auto-save off: charter saves no repo until its mode says how.",

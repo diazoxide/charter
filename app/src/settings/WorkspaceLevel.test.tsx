@@ -496,6 +496,24 @@ describe("Extensions", () => {
     );
   });
 
+  it("says the value comes from the workspace's file, and its reset takes it out (SE-18)", async () => {
+    const { sent } = core();
+    const group = await at("Extensions");
+    const box = () => within(group).getByLabelText("Persona statistics: enabled");
+    expect(box()).toHaveAccessibleDescription(
+      /From workspaces\/alpha\/workspace\.json, at the Workspace level\./,
+    );
+    const row = box().closest(".ui-setting-row") as HTMLElement;
+    expect(within(row).queryByRole("radio")).toBeNull();
+
+    await userEvent.click(within(row).getByRole("button", { name: "Reset" }));
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0].edits).toEqual([
+      { path: [{ key: "extensions" }, { key: "stats" }, { key: "enabled" }], value: null },
+    ]);
+  });
+
   it("says a refused write beside its setting, in the core's own words", async () => {
     core(ALPHA, () => ({
       kind: "refused",

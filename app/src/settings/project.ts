@@ -72,9 +72,32 @@ export const KEPT: Record<SettingsWhich, string> = {
   local: "Kept in charter.local.toml, on this machine only.",
 };
 
-/** One of the old page's controls as a setting of `group`, kept in `file`. */
+/**
+ * The tables both files' readers read (`profiles`' rule for `charter.local.toml`): a key in one
+ * of them may be kept in either file. `[plane] worktrees` is the Shared file's alone, and
+ * `[harness]`, `[chat_env]` the Local file's: those are never offered the other.
+ */
+const EITHER = new Set(["plane", "repos", "extensions", "theme", "harness_plugins"]);
+
+/** Whether a key in `charter.toml` may be moved to `charter.local.toml` and back. */
+function eitherFile(path: readonly SettingsStep[]): boolean {
+  const [table, name] = path;
+  return (
+    table?.key !== undefined &&
+    EITHER.has(table.key) &&
+    !(table.key === "plane" && name?.key === "worktrees")
+  );
+}
+
+/**
+ * One of the old page's controls as a setting of `group`, kept in `file`. A key either file may
+ * hold is `movable` (SE-18): its row's file choice says where it is kept, so its help does not.
+ */
 function setting(group: string, file: SettingsWhich, control: Control): FileSetting {
-  return fileSetting(group, file, control, KEPT[file]);
+  const one = fileSetting(group, file, control, KEPT[file]);
+  return file === "shared" && eitherFile(one.key)
+    ? { ...fileSetting(group, file, control, ""), movable: true }
+    : one;
 }
 
 /** `[plane] assisted_by` and `[repos.<name>] assisted_by` (V67): how an agent's commit says so. */
@@ -177,8 +200,8 @@ export function projectGroups(read: ProjectRead): SettingsGroup[] {
   const sharedGeneral = asked(general, shared, read).controls;
   const isDefaultHarness = (one: Control) => one.id === JSON.stringify(key("harness", "default"));
 
-  const plane = asked(planeGroup("shared"), shared, read);
-  const repos = asked(reposGroup("shared"), shared, read);
+  const plane = asked(planeGroup("either"), shared, read);
+  const repos = asked(reposGroup("either"), shared, read);
   const repoNames = (answered(read.saving)?.repos ?? []).map((repo) => repo.name);
   const savingControls = [
     ...plane.controls,
@@ -370,8 +393,25 @@ export function useProjectLevel(plane: PlaneId): ProjectLevel {
     save: (which, base, edits, both) => saveFile(which, base, { kind: "edits", edits }, both),
     saveRaw: (which, base, text, both) => saveFile(which, base, { kind: "raw", text }, both),
     inForce: readInForce,
-    // Nothing here takes the sandbox back off (D-SE17g), whichever setting's change it undoes.
+    // Nothing here takes the sandbox back off (D-SE17g): not an Undo, whichever setting's change
+    // it undoes, nor a reset, nor a move out of charter.toml (D-SE18e).
     mayUndo: (back) => !loosensTheSandbox(back),
+    move: (to, paths, both) =>
+      commands
+        .moveProjectSettings(
+          plane,
+          to,
+          both.shared.exists ? both.shared.text : null,
+          both.local.exists ? both.local.text : null,
+          paths,
+        )
+        .then((said) =>
+          said.status === "error"
+            ? { refused: [said.error] }
+            : said.data.kind === "refused"
+              ? { refused: said.data.reasons }
+              : { saved: said.data.settings },
+        ),
   });
 
   if (driver.state !== "read") return driver;

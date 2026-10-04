@@ -94,6 +94,14 @@ impl Which {
     fn path(self, root: &Path) -> PathBuf {
         root.join(self.file())
     }
+
+    /// The other of the two.
+    pub fn other(self) -> Self {
+        match self {
+            Self::Shared => Self::Local,
+            Self::Local => Self::Shared,
+        }
+    }
 }
 
 /// One layer as its readers are handed it by [`layer_text`].
@@ -577,6 +585,17 @@ fn to_edit(value: &Value) -> toml_edit::Value {
 /// the tab read it" and the rename that would overwrite it (#357).
 pub fn save(root: &Path, which: Which, base: Option<&str>, text: &str) -> Result<(), Vec<String>> {
     let _held = crate::rewrite::Lock::on(root);
+    let (exists, now) = unchanged(root, which, base)?;
+    let refused = refused_of(root, which, exists.then_some(now.as_str()), text);
+    if !refused.is_empty() {
+        return Err(refused);
+    }
+    write(root, which, text).map_err(|e| vec![not_written(which, &e)])
+}
+
+/// The file as it is on disk — whether it is there, and its text — when it is still what the
+/// caller read (`base`, `None`: it was not there); otherwise why nothing is written.
+fn unchanged(root: &Path, which: Which, base: Option<&str>) -> Result<(bool, String), Vec<String>> {
     let (exists, now) = on_disk(root, which).map_err(|why| vec![why])?;
     if (exists, now.as_str()) != (base.is_some(), base.unwrap_or_default()) {
         return Err(vec![format!(
@@ -585,31 +604,189 @@ pub fn save(root: &Path, which: Which, base: Option<&str>, text: &str) -> Result
             which.file()
         )]);
     }
-    // What the file already holds is not this save's to answer for: an edit to one key is not
-    // refused because another key was already being ignored. A secret and a Local file git
-    // would commit are, whatever the file held before. So is text that does not parse: the raw
-    // editor is how a broken file is mended, and a half-mended one is never written (SE-19).
+    Ok((exists, now))
+}
+
+/// Why `text` may not replace `now` (`None`: no file yet) as `which`.
+///
+/// What the file already holds is not this write's to answer for: an edit to one key is not
+/// refused because another key was already being ignored. A secret and a Local file git would
+/// commit are, whatever the file held before. So is text that does not parse: the raw editor is
+/// how a broken file is mended, and a half-mended one is never written (SE-19).
+fn refused_of(root: &Path, which: Which, now: Option<&str>, text: &str) -> Vec<String> {
     let parses = text.parse::<toml::Table>().is_ok();
-    let standing = if exists && parses {
-        read_refusals(root, which, &now)
-    } else {
-        Vec::new()
-    };
+    let standing = now
+        .filter(|_| parses)
+        .map_or_else(Vec::new, |now| read_refusals(root, which, now));
     let mut refused: Vec<String> = read_refusals(root, which, text)
         .into_iter()
         .filter(|why| !standing.contains(why))
         .collect();
     refused.extend(writer_refusals(root, which, text));
+    refused
+}
+
+fn not_written(which: Which, e: &std::io::Error) -> String {
+    format!(
+        "{} could not be written ({}), so nothing was saved.",
+        which.file(),
+        crate::shown::short(&e.to_string())
+    )
+}
+
+/// **Move the values at `paths` into `to`, out of the other file** (SE-18, V89d): what the
+/// Settings tab's "Shared / Only on this machine" choice does. Each value leaves the file it is
+/// in and is set in `to`, as it was written — a value `to` already held there is replaced, in
+/// place. A table the move empties goes with it.
+///
+/// `from_base` and `to_base` are the two files as the caller read them (`None`: not there), and
+/// a file changed since is not written, as [`save`]'s. **Both files or neither**: each new text
+/// is checked as [`save`] checks it before anything is written; then `to` is written first and
+/// the other file after, so the value is never in neither file; and if that second write fails,
+/// `to` is put back as it was (taken away again when the move created it).
+pub fn move_keys(
+    root: &Path,
+    to: Which,
+    from_base: Option<&str>,
+    to_base: Option<&str>,
+    paths: &[Vec<Step>],
+) -> Result<(), Vec<String>> {
+    let from = to.other();
+    let _held = crate::rewrite::Lock::on(root);
+    let (from_exists, from_now) = unchanged(root, from, from_base)?;
+    let (to_exists, to_now) = unchanged(root, to, to_base)?;
+    let (from_text, to_text) = moved(&from_now, &to_now, from, paths).map_err(|why| vec![why])?;
+    let mut refused = refused_of(
+        root,
+        from,
+        from_exists.then_some(from_now.as_str()),
+        &from_text,
+    );
+    refused.extend(refused_of(
+        root,
+        to,
+        to_exists.then_some(to_now.as_str()),
+        &to_text,
+    ));
     if !refused.is_empty() {
         return Err(refused);
     }
-    write(root, which, text).map_err(|e| {
-        vec![format!(
-            "{} could not be written ({}), so nothing was saved.",
-            which.file(),
-            crate::shown::short(&e.to_string())
-        )]
-    })
+    write(root, to, &to_text).map_err(|e| vec![not_written(to, &e)])?;
+    if let Err(e) = write(root, from, &from_text) {
+        let mut why = vec![not_written(from, &e)];
+        let back = if to_exists {
+            write(root, to, &to_now)
+        } else {
+            std::fs::remove_file(to.path(root))
+        };
+        if let Err(e) = back {
+            why.push(format!(
+                "{} could not be put back as it was ({}): the value is now in both files.",
+                to.file(),
+                crate::shown::short(&e.to_string())
+            ));
+        }
+        return Err(why);
+    }
+    Ok(())
+}
+
+/// The two texts once the values at `paths` have left `from_text` (the file `from`) and been
+/// set in `to_text`.
+fn moved(
+    from_text: &str,
+    to_text: &str,
+    from: Which,
+    paths: &[Vec<Step>],
+) -> Result<(String, String), String> {
+    let parse = |text: &str, which: Which| {
+        text.parse::<toml_edit::DocumentMut>()
+            .map_err(|e: toml_edit::TomlError| {
+                format!(
+                    "{} is not valid TOML ({}), so nothing can be moved — fix it in the raw view",
+                    which.file(),
+                    crate::shown::short(e.message())
+                )
+            })
+    };
+    let mut out = parse(from_text, from)?;
+    let mut into = parse(to_text, from.other())?;
+    for path in paths {
+        let Some((Step::Key(last), way)) = path.split_last() else {
+            return Err(format!("{} does not end in a key", dotted(path)));
+        };
+        let nothing = || {
+            format!(
+                "{} is not in {}, so there is nothing to move.",
+                dotted(path),
+                from.file()
+            )
+        };
+        let table = walk(out.as_table_mut(), way, path, false)?.ok_or_else(nothing)?;
+        let value = match table.get(last) {
+            Some(toml_edit::Item::Value(value)) if !value.is_inline_table() => value.clone(),
+            None | Some(toml_edit::Item::None) => return Err(nothing()),
+            Some(_) => {
+                return Err(format!(
+                    "{} is a table, so it is moved in the raw view",
+                    dotted(path)
+                ));
+            }
+        };
+        table.remove(last);
+        prune(out.as_table_mut(), way);
+        let Some(target) = walk(into.as_table_mut(), way, path, true)? else {
+            unreachable!("a missing table is created");
+        };
+        match target.get_mut(last) {
+            Some(toml_edit::Item::Value(old)) if !old.is_inline_table() => {
+                let mut fresh = value;
+                *fresh.decor_mut() = old.decor().clone();
+                *old = fresh;
+            }
+            None | Some(toml_edit::Item::None) => {
+                let mut fresh = value;
+                fresh.decor_mut().clear();
+                target.insert(last, toml_edit::value(fresh));
+            }
+            Some(_) => {
+                return Err(format!(
+                    "{} is a table in {}, so a value cannot be moved over it",
+                    dotted(path),
+                    from.other().file()
+                ));
+            }
+        }
+    }
+    Ok((out.to_string(), into.to_string()))
+}
+
+/// Takes out each table on `way` the move left with nothing in it, innermost first.
+fn prune(root: &mut toml_edit::Table, way: &[Step]) {
+    for depth in (1..=way.len()).rev() {
+        let (Some((Step::Key(name), above)), true) = (
+            way[..depth].split_last(),
+            way[..depth].iter().all(|step| matches!(step, Step::Key(_))),
+        ) else {
+            return;
+        };
+        let mut table: &mut toml_edit::Table = root;
+        for step in above {
+            let Step::Key(key) = step else { return };
+            match table.get_mut(key).and_then(toml_edit::Item::as_table_mut) {
+                Some(inner) => table = inner,
+                None => return,
+            }
+        }
+        let empty = table
+            .get(name)
+            .and_then(toml_edit::Item::as_table_like)
+            .is_some_and(toml_edit::TableLike::is_empty);
+        if !empty {
+            return;
+        }
+        table.remove(name);
+    }
 }
 
 fn write(root: &Path, which: Which, text: &str) -> std::io::Result<()> {

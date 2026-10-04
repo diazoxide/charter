@@ -14,6 +14,7 @@ import type {
   SettingsEdit,
   SettingsField,
   SettingsFile,
+  SettingsStep,
   SettingsWhich,
 } from "../bindings";
 
@@ -143,6 +144,33 @@ function applied(file: SettingsFile, edits: readonly SettingsEdit[]): SettingsFi
 
 type Sent = { which: SettingsWhich; base: string | null; edits: SettingsEdit[] };
 
+type Moved = {
+  to: SettingsWhich;
+  sharedBase: string | null;
+  localBase: string | null;
+  paths: SettingsStep[][];
+};
+
+/** Both files as the core would answer them after moving `paths` into `to`. */
+function moved(
+  files: Record<SettingsWhich, SettingsFile>,
+  to: SettingsWhich,
+  paths: readonly SettingsStep[][],
+) {
+  const from: SettingsWhich = to === "shared" ? "local" : "shared";
+  const at = (one: SettingsField) =>
+    paths.some((path) => JSON.stringify(path) === JSON.stringify(one.path));
+  const carried = files[from].fields.filter(at);
+  files[from] = applied(
+    files[from],
+    carried.map((one) => ({ path: one.path, value: null })),
+  );
+  files[to] = applied(
+    files[to],
+    carried.map((one) => ({ path: one.path, value: one.value })),
+  );
+}
+
 /** The core, as a mock. `refuse` answers a write with these reasons instead of writing it. */
 function core({
   extensions = [] as ProjectExtension[],
@@ -151,9 +179,14 @@ function core({
   sandboxOn = false,
   /** Each write waits for `release()` before the core answers it. */
   hold = false,
+  /** A move is answered with these reasons, and neither file changes. */
+  refuseMove = undefined as string[] | undefined,
+  shared = SHARED,
+  local = LOCAL,
 } = {}) {
-  const files: Record<SettingsWhich, SettingsFile> = { shared: SHARED, local: LOCAL };
+  const files: Record<SettingsWhich, SettingsFile> = { shared, local };
   const sent: Sent[] = [];
+  const moves: Moved[] = [];
   const held: (() => void)[] = [];
   let reads = 0;
   mockIPC(
@@ -188,6 +221,18 @@ function core({
           files[which] = applied(files[which], change.edits);
           return { kind: "saved", file: files[which] };
         }
+        case "move_project_settings": {
+          const move = {
+            to: given.to as SettingsWhich,
+            sharedBase: given.sharedBase as string | null,
+            localBase: given.localBase as string | null,
+            paths: given.paths as SettingsStep[][],
+          };
+          moves.push(move);
+          if (refuseMove) return { kind: "refused", reasons: refuseMove };
+          moved(files, move.to, move.paths);
+          return { kind: "moved", settings: { shared: files.shared, local: files.local } };
+        }
       }
       return undefined;
     },
@@ -195,6 +240,7 @@ function core({
   );
   return {
     sent,
+    moves,
     reads: () => reads,
     files,
     /** Lets the oldest held write be answered. */
@@ -590,5 +636,245 @@ describe("a change at the Project level", () => {
     } finally {
       SHARED.fields.pop();
     }
+  });
+});
+
+/** The row a setting is drawn in, found by its control's label. */
+function rowOf(label: string): HTMLElement {
+  const row = screen.getByLabelText(label).closest(".ui-setting-row");
+  if (!(row instanceof HTMLElement)) throw new Error(`no row for ${label}`);
+  return row;
+}
+
+const MODE = [{ key: "plane" }, { key: "mode" }];
+
+/** A Local file that sets the project's save mode, over charter.toml's `push`. */
+const LOCAL_MODE: SettingsFile = {
+  ...LOCAL,
+  text: `${LOCAL.text}[plane]\nmode = "pr"\n`,
+  fields: [...LOCAL.fields, field(["plane", "mode"], { kind: "text", value: "pr" })],
+};
+
+describe("one form for Shared and Local (SE-18)", () => {
+  it("says which level and file each value comes from, and offers its reset", async () => {
+    core();
+    await atProject();
+    await open("Saving");
+
+    expect(screen.getByLabelText("Mode")).toHaveAccessibleDescription(
+      /From charter\.toml, at the Project level: shared with your team\./,
+    );
+    expect(within(rowOf("Mode")).getByRole("button", { name: "Reset" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Target branch")).toHaveAccessibleDescription(
+      /Not set at this level/,
+    );
+    expect(within(rowOf("Target branch")).queryByRole("button", { name: "Reset" })).toBeNull();
+  });
+
+  it("moves a value to this machine only on its button, never on the pick", async () => {
+    const { sent, moves } = core();
+    await atProject();
+    await open("Saving");
+
+    await userEvent.click(
+      within(rowOf("Mode")).getByRole("radio", { name: "Only on this machine" }),
+    );
+    expect(moves).toEqual([]);
+    await userEvent.click(
+      within(rowOf("Mode")).getByRole("button", { name: "Move to charter.local.toml" }),
+    );
+
+    await waitFor(() => expect(moves).toHaveLength(1));
+    expect(moves[0]).toEqual({
+      to: "local",
+      sharedBase: SHARED_TEXT,
+      localBase: LOCAL.text,
+      paths: [MODE],
+    });
+    expect(sent).toEqual([]);
+    await waitFor(() =>
+      expect(screen.getByLabelText("Mode")).toHaveAccessibleDescription(
+        /From charter\.local\.toml, at the Project level: this machine only\./,
+      ),
+    );
+    expect(screen.getByLabelText("Mode")).toHaveValue("push");
+    expect(
+      within(rowOf("Mode")).getByRole("radio", { name: "Only on this machine" }),
+    ).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("moves a value back to charter.toml", async () => {
+    const { moves, files } = core({ local: LOCAL_MODE });
+    await atProject();
+    await open("Saving");
+
+    await userEvent.click(within(rowOf("Mode")).getByRole("radio", { name: "Shared" }));
+    await userEvent.click(
+      within(rowOf("Mode")).getByRole("button", { name: "Move to charter.toml" }),
+    );
+
+    await waitFor(() => expect(moves).toHaveLength(1));
+    expect(moves[0]).toMatchObject({ to: "shared", paths: [MODE] });
+    expect(files.shared.fields).toContainEqual(
+      field(["plane", "mode"], { kind: "text", value: "pr" }),
+    );
+    await waitFor(() =>
+      expect(screen.getByLabelText("Mode")).toHaveAccessibleDescription(/From charter\.toml/),
+    );
+  });
+
+  it("moves nothing while an arrow is held over the file choice", async () => {
+    const { moves, sent } = core();
+    await atProject();
+    await open("Saving");
+
+    within(rowOf("Mode")).getByRole("radio", { name: "Shared" }).focus();
+    await userEvent.keyboard("{ArrowDown>}");
+    await new Promise((done) => setTimeout(done, 80));
+    await userEvent.keyboard("{/ArrowDown}");
+
+    expect(moves).toEqual([]);
+    expect(sent).toEqual([]);
+  });
+
+  it("badges a Local value that overrides a Shared one; its reset lets the Shared value show", async () => {
+    const { sent } = core({ local: LOCAL_MODE });
+    await atProject();
+    await open("Saving");
+
+    expect(screen.getByLabelText("Mode")).toHaveValue("pr");
+    expect(within(rowOf("Mode")).getByText("Overrides charter.toml")).toBeInTheDocument();
+    expect(screen.getByLabelText("Mode")).toHaveAccessibleDescription(
+      /charter\.toml has push, which this overrides/,
+    );
+
+    await userEvent.click(within(rowOf("Mode")).getByRole("button", { name: "Reset" }));
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]).toEqual({
+      which: "local",
+      base: LOCAL_MODE.text,
+      edits: [{ path: MODE, value: null }],
+    });
+    await waitFor(() => expect(screen.getByLabelText("Mode")).toHaveValue("push"));
+    expect(within(rowOf("Mode")).queryByText("Overrides charter.toml")).toBeNull();
+    expect(screen.getByLabelText("Mode")).toHaveAccessibleDescription(/From charter\.toml/);
+  });
+
+  it("undoes a reset by writing the value back", async () => {
+    const { sent } = core({ local: LOCAL_MODE });
+    await atProject();
+    await open("Saving");
+    await userEvent.click(within(rowOf("Mode")).getByRole("button", { name: "Reset" }));
+
+    await userEvent.click(await screen.findByRole("button", { name: "Undo" }));
+
+    await waitFor(() => expect(sent).toHaveLength(2));
+    expect(sent[1]).toMatchObject({
+      which: "local",
+      edits: [{ path: MODE, value: { kind: "text", value: "pr" } }],
+    });
+  });
+
+  it("writes a value no file holds to the file picked for it, and the pick writes nothing", async () => {
+    const { sent, moves } = core();
+    await atProject();
+    await open("Saving");
+
+    await userEvent.click(
+      within(rowOf("Target branch")).getByRole("radio", { name: "Only on this machine" }),
+    );
+    expect(sent).toEqual([]);
+    expect(within(rowOf("Target branch")).queryByRole("button", { name: /Move to/ })).toBeNull();
+    await userEvent.type(screen.getByLabelText("Target branch"), "trunk");
+    await userEvent.tab();
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]).toMatchObject({
+      which: "local",
+      edits: [
+        { path: [{ key: "plane" }, { key: "branch" }], value: { kind: "text", value: "trunk" } },
+      ],
+    });
+    expect(moves).toEqual([]);
+  });
+
+  it("says a refused move beside its setting, with the value where it was", async () => {
+    core({ refuseMove: ["git would commit charter.local.toml"] });
+    await atProject();
+    await open("Saving");
+
+    await userEvent.click(
+      within(rowOf("Mode")).getByRole("radio", { name: "Only on this machine" }),
+    );
+    await userEvent.click(
+      within(rowOf("Mode")).getByRole("button", { name: "Move to charter.local.toml" }),
+    );
+
+    expect(await within(rowOf("Mode")).findByRole("alert")).toHaveTextContent(
+      "git would commit charter.local.toml",
+    );
+    expect(screen.getByLabelText("Mode")).toHaveAccessibleDescription(/From charter\.toml/);
+  });
+
+  it.each([
+    "Default profile",
+    "work: kind",
+    "work: command",
+    "work: environment",
+    "Environment passed to chats",
+  ])("never offers Shared for %s, which only this machine may hold", async (label) => {
+    core();
+    await atProject();
+    await open("Harness & profiles");
+
+    expect(within(rowOf(label)).queryByRole("radio", { name: "Shared" })).toBeNull();
+  });
+
+  it.each([
+    ["General", "Worktrees folder"],
+    ["Sandbox", "Hosts it may reach"],
+    ["Forges", "Forge 1: kind"],
+  ])(
+    "offers no file choice in %s for %s, which only charter.toml may hold",
+    async (group, label) => {
+      core();
+      await atProject();
+      await open(group);
+
+      expect(
+        within(rowOf(label)).queryByRole("radio", { name: "Only on this machine" }),
+      ).toBeNull();
+    },
+  );
+
+  it("never offers to reset or move the sandbox once it is on", async () => {
+    const shared = {
+      ...SHARED,
+      fields: [...SHARED.fields, field(["sandbox", "mode"], { kind: "text", value: "on" })],
+    };
+    core({ sandboxOn: true, shared });
+    await atProject();
+    await open("Sandbox");
+
+    expect(within(rowOf("Sandbox mode")).queryByRole("button", { name: "Reset" })).toBeNull();
+    expect(within(rowOf("Sandbox mode")).queryByRole("radio")).toBeNull();
+    expect(screen.getByLabelText("Sandbox mode")).toHaveAccessibleDescription(/From charter\.toml/);
+  });
+
+  it("shows no group twice, and each setting once", async () => {
+    core({ extensions: [LINTER], harnesses: [CLAUDE], local: LOCAL_MODE });
+    await atProject();
+    await waitFor(() => expect(groups()).toContain("Plugins"));
+
+    expect(new Set(groups()).size).toBe(groups().length);
+    const labels: string[] = [];
+    for (const name of groups() as string[]) {
+      await open(name);
+      for (const label of within(shown()).getAllByText(/./, { selector: ".ui-setting-label" }))
+        labels.push(label.textContent ?? "");
+    }
+    expect(labels.filter((one, at) => labels.indexOf(one) !== at)).toEqual([]);
+    expect(labels.filter((one) => one === "Mode")).toHaveLength(1);
   });
 });

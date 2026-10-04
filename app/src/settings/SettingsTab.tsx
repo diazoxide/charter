@@ -1,16 +1,17 @@
 import { useId, useMemo, useState, type ReactNode } from "react";
 import { LoaderCircle } from "lucide-react";
-import type { PlaneId, SettingsWhich } from "../bindings";
+import type { PlaneId, SettingsEdit, SettingsWhich } from "../bindings";
 import { DEFAULT_THEME, inForce } from "../theme/theme";
 import { atCreation } from "../windowprefs";
 import { Choice, Field, SettingGroup, SettingRow, SettingsLayout, type RowIds } from "./components";
-import type { Driven } from "./driver";
+import { heldIn, keysOf, type Driven, type Files } from "./driver";
 import {
   inAFile,
   LEVELS,
   type FileSetting,
   type Level,
   type LiveSetting,
+  type SettingsFileId,
   type SettingsGroup,
 } from "./groups";
 import { KEPT, projectGroups, useProjectLevel } from "./project";
@@ -344,37 +345,104 @@ function LiveRow({ setting }: { setting: LiveSetting }) {
 }
 
 /**
+ * **Where a value comes from** (SE-18, V89d): the level and the file, or that no file at this
+ * level holds it. A Local value that overrides a Shared one says what the Shared file has, so the
+ * person sees why their value is not their team's.
+ */
+function originOf(setting: FileSetting, files: Files, from: SettingsFileId | undefined): string {
+  if (from === undefined) return "Not set at this level, so the value beneath it is in force.";
+  const file = files[from]?.file ?? "";
+  if (from === "workspace") return `From ${file}, at the Workspace level.`;
+  if (from === "shared") return `From ${file}, at the Project level: shared with your team.`;
+  const shared = files.shared;
+  const under =
+    shared !== undefined && keysOf(setting, shared).length > 0
+      ? ` charter.toml has ${setting.read(shared) || "a value"}, which this overrides.`
+      : "";
+  return `From ${file}, at the Project level: this machine only.${under}`;
+}
+
+/** The two files a movable value may be kept in, as the file choice offers them. */
+const PLACES = [
+  { value: "shared", label: "Shared", says: "charter.toml, which your team sees" },
+  { value: "local", label: "Only on this machine", says: "charter.local.toml" },
+] as const;
+
+/** Every key the setting has in `file`, taken out. */
+function removals(setting: FileSetting, files: Files, from: SettingsFileId | undefined) {
+  const file = from === undefined ? undefined : files[from];
+  return file === undefined
+    ? []
+    : keysOf(setting, file).map((path): SettingsEdit => ({ path, value: null }));
+}
+
+/**
  * **A setting kept in a file**: drawn at what is on disk — or at what is being written, until
  * that write settles — and written as it changes. A pick is written at once; a typed value when
  * the field is left (`Field`'s `onCommit`).
+ *
+ * Every row says where its value comes from and offers a reset, which takes it out of that file
+ * so the value beneath shows through (SE-18). A movable row's file choice moves a value between
+ * `charter.toml` and `charter.local.toml`: a move writes both files and has no Undo, so the pick
+ * is held and made on a button, never as the arrows pass over it (`ui-primitives.md`). While no
+ * file holds the value, the pick only says where the next value goes, and writes nothing.
  */
 function FileRow({ setting, driver: project }: { setting: FileSetting; driver: Driven<unknown> }) {
-  const file = project.files[setting.file];
+  const from = heldIn(setting, project.files);
+  const [pick, setPick] = useState<SettingsWhich>();
+  /** The file a new value goes to: where it is, else where it was picked to go. */
+  const into: SettingsFileId = from ?? pick ?? setting.file;
+  const file = project.files[into];
   const onDisk = file === undefined ? "" : setting.read(file);
   const [draft, setDraft] = useState<string>();
   const value = draft ?? project.pending[setting.id] ?? onDisk;
   const writing = project.pending[setting.id] !== undefined;
+  const write = (to: string) => project.write(setting, to, into);
   // Always handed to the queue, which skips a write that would change nothing at its turn: a
   // value typed back to what is on disk while another write of it is pending is still written.
   const commit = () => {
     if (draft === undefined) return;
     setDraft(undefined);
-    project.write(setting, draft);
+    write(draft);
   };
+  const out = removals(setting, project.files, from);
+  // Never one that would loosen what the level holds fast: the sandbox (D-SE17g, D-SE18e).
+  const mayTakeOut = from !== undefined && !setting.oneWay && project.mayChange(out);
+  const overrides =
+    from === "local" &&
+    project.files.shared !== undefined &&
+    keysOf(setting, project.files.shared).length > 0;
   return (
     <SettingRow
       label={setting.label}
       help={setting.help}
       error={project.refused[setting.id]}
       undo={project.undoable === setting.id && !writing ? project.undo : undefined}
+      origin={originOf(setting, project.files, from)}
+      badge={overrides ? "Overrides charter.toml" : undefined}
+      reset={
+        mayTakeOut
+          ? { label: "Reset", disabled: writing, onReset: () => project.reset(setting) }
+          : undefined
+      }
+      place={
+        setting.movable && (
+          <Place
+            held={from === "shared" || from === "local" ? from : undefined}
+            pick={pick ?? (from === "shared" || from === "local" ? from : "shared")}
+            onPick={setPick}
+            mayMove={mayTakeOut}
+            disabled={writing}
+            onMove={(to) => {
+              setPick(undefined);
+              project.move(setting, to);
+            }}
+          />
+        )
+      }
       control={(ids) =>
         setting.kind === "colour" ? (
-          <Colour
-            ids={ids}
-            setting={setting}
-            value={value}
-            onValueChange={(to) => project.write(setting, to)}
-          />
+          <Colour ids={ids} setting={setting} value={value} onValueChange={write} />
         ) : setting.kind === "choice" ? (
           <Choice
             kind="select"
@@ -391,7 +459,7 @@ function FileRow({ setting, driver: project }: { setting: FileSetting; driver: D
                 ? undefined
                 : (setting.unset ?? (value === "" ? "not set" : undefined))
             }
-            onValueChange={(to) => project.write(setting, to)}
+            onValueChange={write}
           />
         ) : (
           <Field
@@ -404,6 +472,56 @@ function FileRow({ setting, driver: project }: { setting: FileSetting; driver: D
         )
       }
     />
+  );
+}
+
+/**
+ * **The file choice** (SE-18, V89d): Shared or Only on this machine, a radio group. Where a file
+ * holds the value, a pick of the other is held until its button moves it; where none does, the
+ * pick is where the next value goes.
+ */
+function Place({
+  held,
+  pick,
+  onPick,
+  mayMove,
+  disabled,
+  onMove,
+}: {
+  /** The file that holds the value, if one does. */
+  held: SettingsWhich | undefined;
+  pick: SettingsWhich;
+  onPick: (to: SettingsWhich) => void;
+  mayMove: boolean;
+  disabled: boolean;
+  onMove: (to: SettingsWhich) => void;
+}) {
+  const id = useId();
+  const name = useId();
+  return (
+    <div className="ui-setting-place">
+      <span id={name}>Where it is kept</span>
+      <Choice
+        kind="radio"
+        ids={{ id, labelledBy: name }}
+        options={PLACES}
+        value={pick}
+        disabled={disabled || (held !== undefined && !mayMove)}
+        onValueChange={(one) => onPick(one as SettingsWhich)}
+      />
+      {held !== undefined && pick !== held && mayMove && (
+        <button
+          type="button"
+          className="ui-setting-reset"
+          // #190: WebKit leaves a button out of the tab sequence without `tabIndex`.
+          tabIndex={0}
+          disabled={disabled}
+          onClick={() => onMove(pick)}
+        >
+          {`Move to ${pick === "local" ? "charter.local.toml" : "charter.toml"}`}
+        </button>
+      )}
+    </div>
   );
 }
 
