@@ -1,9 +1,9 @@
 //! `release-manifest`: the release workflow's one call into the rules in [`release_manifest`].
 //!
 //! Arguments in, the manifest and its weekly twin out (OB-17), and every decision it could get
-//! wrong is in the library beside it where a test can watch it get it right. This file reads argv, reads the `.sig` files off
-//! the disk and prints what it wrote — nothing else, deliberately: a release tool whose logic
-//! lives in its `main` is a release tool nothing tests.
+//! wrong is in the library beside it where a test can watch it get it right. This file reads
+//! argv, reads the `.sig` files off the disk and prints what it wrote — nothing else,
+//! deliberately: a release tool whose logic lives in its `main` is a release tool nothing tests.
 //!
 //! ```text
 //! release-manifest --channel dev --version 0.2.0-dev.42 \

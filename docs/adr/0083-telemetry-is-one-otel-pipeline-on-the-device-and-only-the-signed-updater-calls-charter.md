@@ -543,14 +543,15 @@ identifier"*. OB-17 (#688) builds it, and this section records how it keeps that
   `latest.json` and `latest-weekly.json`, or `dev.json` and `dev-weekly.json`. A machine's first
   update check of each ISO week (UTC) reads the weekly file in place of the manifest. No request
   is added. The request is the updater's ordinary GET: one URL with no query and no template
-  variable, and only the updater's fixed headers. It is byte for byte the same from every
-  machine. A test runs three machines with their own device ids and holds that.
+  variable, and only fixed headers: `Host`, `Accept`, `Accept-Encoding` and the updater
+  library's user agent. It is byte for byte the same from every machine. A test runs three machines with their own device ids and holds that.
 - **What is kept.** The machine store notes the week (`machine.json`'s `weekly`). The note
   never leaves the device, and every machine that checked that week holds the same value.
 - **What is counted.** GitHub's `download_count` of the weekly file, per release. The estimate
   of a channel's weekly users is the sum, over that channel's releases, of the growth of that
   count between two listings a week apart (`weekly-users`, in `crates/release-manifest`).
-  Nothing is published (V38). The operator keeps the listings.
+  charter publishes no estimate; the raw count is public, as every asset's is (V38). The
+  operator keeps the listings.
 - **What GitHub sees** is each request's IP address and user agent, as for every update check.
   This is disclosed in `docs/updating.md`. charter never receives an IP address, and no store
   of charter's holds one (X50).
@@ -569,8 +570,8 @@ identifier"*. OB-17 (#688) builds it, and this section records how it keeps that
   at the cost of sending something.
 - **D-OB17b: the week is claimed before the request and given back without an answer.** A
   machine that cannot note the week is never counted, because otherwise it would be counted at
-  every check: no config home, or a platform with no machine store. A request that got no
-  answer, including a 404 from a release published before the weekly file existed, gives the
+  every check: no config home, or a platform with no machine store. A request that was never
+  sent, or got no answer, including a 404 from a release published before the weekly file existed, gives the
   week back. That check then reads the usual manifest. Rejected: noting the week after the
   answer, which counts a machine with no store at every check.
 - **D-OB17c: the opt-out is `DO_NOT_TRACK`.** charter has no telemetry switch of its own yet:

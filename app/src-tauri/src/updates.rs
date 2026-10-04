@@ -175,8 +175,8 @@ async fn offer<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<Option<Offer>, S
 /// only trace it leaves is one more in GitHub's download count of that file. The week is
 /// claimed in the machine store **before** the request, so a machine that cannot note it (no
 /// config home, no store on this platform) is never counted, rather than counted at every
-/// check. A request that got no answer gives the week back, so a laptop offline at its first
-/// check is counted at its next. A release published before the weekly manifest existed
+/// check. A request that got no answer, or was never sent, gives the week back, so a laptop
+/// offline at its first check is counted at its next. A release published before the weekly manifest existed
 /// answers 404 for it; the check then reads the manifest, and the next check tries again.
 async fn offer_from<R: Runtime>(
     app: &tauri::AppHandle<R>,
@@ -187,11 +187,10 @@ async fn offer_from<R: Runtime>(
     may_update(app)?;
     let mut found = None;
     if let Some(claim) = WeeklyClaim::take() {
-        let asked = ask(app, weekly).await?;
-        if came_back(&asked) {
-            found = Some(asked);
-        } else {
-            claim.give_back();
+        match ask(app, weekly).await {
+            Ok(asked) if came_back(&asked) => found = Some(asked),
+            // No answer, or a request that was never sent: the week was not counted.
+            _ => claim.give_back(),
         }
     }
     let found = match found {
@@ -738,6 +737,47 @@ mod tests {
         ));
         assert!(matches!(found, Ok(None)), "{found:?}");
         assert_eq!(served.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    /// A weekly request that could not even be built (here, an address that is not a url) sent
+    /// nothing, so the week is given back for the next check, and this one reads the manifest.
+    #[test]
+    fn a_weekly_request_that_was_never_sent_gives_the_week_back() {
+        if std::env::var_os(WEEKLY_CHILD).is_none() {
+            let store = tempfile::tempdir().expect("a machine store");
+            charter_core::testrun::rerun(
+                &["updates::tests::a_weekly_request_that_was_never_sent_gives_the_week_back"],
+                &[
+                    (WEEKLY_CHILD, std::ffi::OsStr::new("1")),
+                    (
+                        charter_core::updates::DO_NOT_TRACK,
+                        std::ffi::OsStr::new(""),
+                    ),
+                    (charter_core::machine::HOME_VAR, store.path().as_os_str()),
+                    ("XDG_CONFIG_HOME", std::ffi::OsStr::new("")),
+                ],
+            );
+            assert_eq!(charter_core::machine::read(store.path()).store.weekly, None);
+            return;
+        }
+        let (url, _) = manifest_server();
+        let mut context = tauri_context!(test = true);
+        context.config_mut().plugins.0.insert(
+            "updater".into(),
+            serde_json::json!({ "pubkey": A_KEY, "endpoints": [url] }),
+        );
+        let app = tauri::test::mock_builder()
+            .plugin(tauri_plugin_updater::Builder::new().build())
+            .build(context)
+            .expect("the app builds with its updater");
+        let found = tauri::async_runtime::block_on(offer_from(
+            app.handle(),
+            Channel::Stable,
+            &url,
+            "not a url",
+        ));
+        // And the check itself still reads the manifest.
+        assert!(matches!(found, Ok(None)), "{found:?}");
     }
 
     /// `tauri.conf.json`, as the build reads it.

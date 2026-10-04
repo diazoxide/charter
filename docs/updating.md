@@ -268,17 +268,23 @@ machine's first update check of each ISO week (UTC) reads the weekly file. Every
 reads the usual one. The machine store notes the week (`machine.json`, `weekly`), so the next
 check knows the week's count has been taken. That note stays on the machine, and every machine
 that checked that week holds the same value. The request to GitHub is the same from every
-machine: one URL with no query, and only the updater's fixed headers: `Accept`, and a user agent that
-names the updater library's version, never the machine's. A test (`no_machine_sends_anything_of_its_own_in_the_weekly_check`) runs
-three machines with their own device ids and checks that their weekly requests are byte for
-byte identical and carry none of them.
+machine: one URL with no query, and only fixed headers. They are `Host`, `Accept`,
+`Accept-Encoding`, and a user agent that names the updater library's version, never the
+machine's. A test, `no_machine_sends_anything_of_its_own_in_the_weekly_check`, runs three
+machines with their own device ids. It checks that their weekly requests are byte for byte
+identical and carry none of the ids.
 
 **Why it cannot be linked.** The request carries no value of its own, so no value can match
 from one week to the next or from one device to another. A per-week random salt or a hashed
 install id would still send something that a log could join on. Here there is only a count.
+GitHub can still connect one IP address's weekly fetch to that address's usual fetches. When the
+weekly file is missing, the fallback also makes two requests back to back.
 
 **Opting out.** Set `DO_NOT_TRACK=1` in the environment charter starts with, and it never reads
-the weekly file. The ordinary update check goes on. Test builds and development builds make no
+the weekly file. The ordinary update check goes on. On macOS an app opened from the Dock or
+Finder does not see variables set in a shell profile. Run `launchctl setenv DO_NOT_TRACK 1`
+before opening charter, or start charter from a shell where the variable is set. A switch in
+charter's settings is tracked in #1185. Test builds and development builds make no
 checks at all. A machine that cannot keep the note is never counted, because otherwise it would
 be counted at every check: that means no config home, or a platform with no machine store.
 
@@ -300,7 +306,8 @@ installers, with the growth since the earlier listing for each. Weekly users per
 **the sum, over that channel's releases, of the growth of the weekly-manifest count**. The
 sum covers every release because stable's `latest/download` address hands the check to whichever
 release is newest at that moment. A count therefore belongs to the release that was newest
-then, not to the version the machine runs. Keep the listings yourself: nothing publishes them.
+then, not to the version the machine runs. Keep the listings yourself. charter publishes no
+estimate; the raw count is public, as every asset's is.
 
 **Its biases:**
 
@@ -317,6 +324,12 @@ then, not to the version the machine runs. Keep the listings yourself: nothing p
 - **Fallback:** a release published before the weekly manifest existed answers 404 for it.
   The check then reads the usual manifest, the week is not noted, and the next check tries
   again. Nothing is counted for such a release.
+- **Anyone can inflate the count:** a request needs no identity, so anyone can fetch the weekly
+  file in a loop. Read a sudden jump as suspect.
+- **A counted request that then fails is counted again:** GitHub counts the download when it
+  redirects to the file's storage host. If the request fails after that, for example behind a
+  proxy that blocks that host, the week is given back and the next check counts again. That is
+  up to about 28 times a week, one per six-hour check.
 - **Not people:** a count is of machines that checked, and says nothing of who uses them.
 
 ## What a chat brings with it

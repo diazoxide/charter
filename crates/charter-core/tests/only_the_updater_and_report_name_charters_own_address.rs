@@ -4,8 +4,8 @@
 //! The run halves (`every_third_party_call_is_listed_in_the_network_log.rs`, and the app's
 //! `updates::tests::the_real_check_lists_its_read_in_the_network_log`) show what one run listed.
 //! This shows no other feature could have listed more. Charter's address is reached three ways in
-//! code: its literal spelling, `report::UPSTREAM`, and the updater's `REPO` and
-//! `Channel::endpoint`. Each is named only in the files [`ALLOWED`] lists, each for a reason. A
+//! code: its literal spelling, `report::UPSTREAM`, and the updater's `REPO`, `Channel::endpoint`
+//! and `Channel::weekly_endpoint` (OB-17). Each is named only in the files [`ALLOWED`] lists, each for a reason. A
 //! feature that wants to reach Charter has to name one of them, so it fails here first, where its
 //! author has to say why it may (ADR 0083 §9). An allowance nothing uses any more fails too, so
 //! the list cannot grow stale.
@@ -23,6 +23,7 @@ const WAYS: &[&str] = &[
     "updates::REPO",
     ".endpoint()",
     "Channel::endpoint",
+    "weekly_endpoint",
 ];
 
 /// Where Charter's address may be named, and why.
@@ -101,11 +102,13 @@ fn named(repo: &Path, address: &str) -> Vec<(String, String)> {
         let lines: Vec<&str> = text.lines().collect();
         for (n, line) in lines.iter().enumerate() {
             let code = line.trim_start();
-            // A file's own test module, at its end, is not shipped.
+            // A file's own test module, at its end, is not shipped. Only an inline one: a
+            // `#[cfg(test)] mod name;` declaration mid-file is followed by shipped code.
             if code == "#[cfg(test)]"
-                && lines
-                    .get(n + 1)
-                    .is_some_and(|next| next.trim_start().starts_with("mod "))
+                && lines.get(n + 1).is_some_and(|next| {
+                    let next = next.trim();
+                    next.starts_with("mod ") && next.ends_with('{')
+                })
             {
                 break;
             }
