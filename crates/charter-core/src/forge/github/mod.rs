@@ -121,7 +121,9 @@ impl GitHub {
                         "listing repos for GitHub owner '{owner}' {why}"
                     ))));
                 }
-                Err(no @ (NoAnswer::Missing(_) | NoAnswer::Refused(_))) => {
+                Err(
+                    no @ (NoAnswer::Missing(_) | NoAnswer::Refused(_) | NoAnswer::HeldBack { .. }),
+                ) => {
                     return Err(Paged::Failed(no.error(no.said().to_string())));
                 }
             };
@@ -302,7 +304,7 @@ impl Repos for GitHub {
                     "listing tree for {path}@{git_ref} {why}"
                 )));
             }
-            Err(no @ (NoAnswer::Missing(_) | NoAnswer::Refused(_))) => {
+            Err(no @ (NoAnswer::Missing(_) | NoAnswer::Refused(_) | NoAnswer::HeldBack { .. })) => {
                 return Err(no.error(no.said().to_string()));
             }
         };

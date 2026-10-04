@@ -82,8 +82,8 @@ impl Surface {
     }
 }
 
-/// Whether a person is waiting on the answer. FW-4's budget refuses background calls below
-/// its floor.
+/// Whether a person is waiting on the answer. The request budget holds a background call back
+/// once its account's hour is spent, and never a foreground one ([`super::budget`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Priority {
     Foreground,
@@ -725,7 +725,7 @@ impl Asker {
             Err(NoAnswer::Timeout(why)) => {
                 return Err(ForgeError::transport(format!("{doing}: {why}")));
             }
-            Err(no @ (NoAnswer::Missing(_) | NoAnswer::Refused(_))) => {
+            Err(no @ (NoAnswer::Missing(_) | NoAnswer::Refused(_) | NoAnswer::HeldBack { .. })) => {
                 return Err(no.error(no.said().to_string()));
             }
         };
@@ -772,7 +772,7 @@ impl Asker {
                     "{what_failed} ({path}) {why}"
                 )));
             }
-            Err(no @ (NoAnswer::Missing(_) | NoAnswer::Refused(_))) => {
+            Err(no @ (NoAnswer::Missing(_) | NoAnswer::Refused(_) | NoAnswer::HeldBack { .. })) => {
                 return Err(no.error(no.said().to_string()));
             }
         };

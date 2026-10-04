@@ -1,5 +1,6 @@
 //! The native transport's ETag store (ADR 0070 §3): what makes a repeated `GET` a conditional
-//! request, so an unchanged answer costs a `304` and nothing of the account's budget.
+//! request, so an unchanged answer is a `304` with no body: not counted against a GitHub
+//! account's limit, and one request on GitLab, which counts every request ([`super::budget`]).
 //!
 //! **Per account, and the native transport's alone.** A store holds what one account's token
 //! fetched, keyed by the request's path and query. Only [`super::http::Http`] reads or writes
@@ -94,7 +95,7 @@ impl EtagStore for EtagDir {
 
 /// Write `bytes` to `file` in `dir` whole, the directory `0700` and the file `0600` on unix:
 /// written beside it, then renamed over it.
-fn write_private(dir: &Path, file: &Path, bytes: &[u8]) -> std::io::Result<()> {
+pub(super) fn write_private(dir: &Path, file: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let mut builder = std::fs::DirBuilder::new();
     builder.recursive(true);
     #[cfg(unix)]

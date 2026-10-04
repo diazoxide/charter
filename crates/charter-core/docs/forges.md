@@ -320,6 +320,41 @@ GitLab's native transport is the same `Http` as GitHub's, speaking GitLab's dial
   after a collection word (`issues`, `merge_requests`, `epics`, `links`, …) is an id, masked
   however it is spelled.
 
+## The request budget per account (FW-4)
+
+Every call made as a forge account is admitted and counted by that account's meter
+(`src/forge/budget.rs`). The meter sits where an account's calls are resolved
+(`route::Resolver::for_caller`), so a call on the native route and one on the CLI route are both
+counted, and no path sends as an account without it. A call that names no account is the CLI's
+own login, not a charter account, and has no budget.
+
+- **What counts, per forge.** GitHub does not count a `304 Not Modified` to an authorized
+  conditional request against its primary rate limit ("Best practices for using the REST API").
+  GitLab counts every request: its rate-limit pages (`user/gitlab_com/rate_limits`,
+  `administration/settings/user_and_ip_rate_limits`) throttle API requests and make no exception
+  for a `304`. So a conditional read that finds nothing new costs nothing on GitHub and one
+  request on GitLab. A call with no status (the CLI, a timeout) is counted.
+- **charter's allowance** is 1,000 counted requests an hour per account, a fifth of GitHub's
+  5,000 an hour for a signed-in user. Once it is spent, a background call is held back until the
+  hour turns (`RateLimited`, with the hour's end as its reset); a call a person is waiting on is
+  never held back.
+- **Polling** (`src/forge/poll.rs`) is conditional `GET`s only, through the native transport's
+  ETag store. An open Work view polls every minute, a visible workspace every five, anything
+  else every fifteen, and nothing polls while every window is hidden. However many watches an
+  account has, they are spread to at most 900 requests an hour, counting a `304` as sent:
+  GitLab counts it, and GitHub's secondary limits count requests whatever their answer. Below a
+  fifth of the forge's own limit remaining (`x-ratelimit-*` on GitHub, by
+  `x-ratelimit-resource`; `ratelimit-*` on GitLab), every interval is four times longer.
+- **Shown in `charter doctor`** as one `forge budget` row per account: the hour's counted
+  requests against the allowance, how many were sent and how many were `304`s, and what the forge
+  says is left. The meter keeps it in the machine tier, `<config>/forge-budget/<account>.json`.
+- **The CLI route has no rate-limit reading.** `gh api` and `glab api` print no headers without
+  `--include`, which would change every argv the recorded behaviour pins (ADR 0046), so a CLI
+  call is counted but tells the meter nothing of the forge's limit.
+- **Pinned by** `tests/a_fifty_request_workspace_polls_inside_its_budget.rs`: fifty open
+  requests in two repos, polled for an hour of a virtual clock against a stand-in forge that
+  changes, stay under 1,000 requests as each forge counts them.
+
 ## The live nightly (FG-4)
 
 `.github/workflows/forge-live.yml` runs the contract suite's cases, the same ones the recordings
