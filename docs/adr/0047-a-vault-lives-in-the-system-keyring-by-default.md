@@ -278,9 +278,10 @@ the person first.
   had, so one the person once let another program read ("Always Allow") would keep letting it.
   A program may delete only an item it owns, so an item the `charter` command made before is
   deleted by the command and then made by the app. If the app cannot make it, the command writes
-  it back itself, and the item is tried again at its next read. The interrupt, hang-up and
-  terminate signals are held off from the delete to the new write, so the value is lost there
-  only if the command is killed in a way no program can catch.
+  it back itself, and the item is tried again at its next read. The command blocks the interrupt,
+  hang-up and terminate signals from its delete to the new write and delivers them after, so
+  the value is lost there only if the command is killed in a way no program can block. The app
+  and the writer leave their signals alone; the writer runs in a process group of its own.
 - **The command finds the app through a link.** The app's Install on PATH puts a link to the
   command in `/usr/local/bin`; the app is looked for beside the file the link names, never
   beside the link.

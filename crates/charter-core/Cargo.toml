@@ -192,6 +192,10 @@ libc = "0.2"
 # instead of killing charter, so the file is removed on the way out — Python's
 # `_exit_on_termination`. Already in this workspace's lockfile (alacritty_terminal uses it).
 signal-hook = "0.4"
+# The `charter` command blocks the termination signals for the moment a keyring item is gone
+# between its delete and its new write (ruling V90a, `secrets::keyhold`), with the safe
+# `pthread_sigmask`. Already in this workspace's lockfile.
+nix = { version = "0.28", default-features = false, features = ["signal"] }
 
 [target."cfg(target_os = \"macos\")".dependencies]
 # Keyring items held to charter's app (ruling V90a): the helper that writes them turns the

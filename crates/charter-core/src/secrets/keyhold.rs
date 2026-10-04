@@ -17,8 +17,8 @@
 //! makes it again, the next time the command reads or writes it. The app cannot move such an
 //! item itself. If the app cannot make it, the command writes it back, and says the item is not
 //! held yet ([`Held::NotYet`]); the next read through the command tries again. The termination
-//! signals a person or a closing terminal sends are held off for that window
-//! ([`Shield`]), so only a kill that cannot be caught loses the value there.
+//! signals a person or a closing terminal sends are blocked for that window ([`Shield`]) and
+//! delivered after it, so only a kill that cannot be blocked loses the value there.
 //!
 //! **What it rests on.** Signed builds (#606) make the app's identity survive an update. Until
 //! then an ad-hoc signed app is trusted by its exact build, so the first read after an update
@@ -161,7 +161,6 @@ const NOT_THE_OWNER: i32 = -25244;
 fn make_here(service: &str, account: &str, value: &str) -> Result<(), Refused> {
     let entry = ::keyring::Entry::new(service, account)
         .map_err(|e| Refused::Failed(super::keyring::failure("reach", service, &e)))?;
-    let _shield = Shield::up();
     match entry.delete_credential() {
         Ok(()) | Err(::keyring::Error::NoEntry) => {}
         Err(e) if owned_by_another(&e) => return Err(Refused::Owned),
@@ -195,53 +194,37 @@ fn owned_by_another(_e: &::keyring::Error) -> bool {
 }
 
 /// The termination signals a person or a closing terminal sends (SIGINT, SIGHUP, SIGTERM),
-/// held off while an item is gone between its delete and its new write, and acted on once it
-/// is written: the process then ends as the signal would have ended it.
+/// blocked on this thread while the command's own item is gone between its delete and its new
+/// write, and unblocked after: one that arrived meanwhile is then delivered under whatever
+/// handling the process has, which by default ends it. Blocked, never handled, so the process's
+/// handling of them is the same afterwards. Only the command puts it up: the app keeps its own
+/// handling, and the writer runs in a process group of its own, where a terminal's signals do
+/// not reach it.
 pub struct Shield {
     #[cfg(unix)]
-    flag: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-    #[cfg(unix)]
-    ids: Vec<signal_hook::SigId>,
+    before: Option<nix::sys::signal::SigSet>,
 }
 
 impl Shield {
-    /// Hold the signals off from now.
+    /// Block the signals from now.
     pub fn up() -> Self {
         #[cfg(unix)]
         {
-            use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
-            let flag = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-            let ids = [SIGINT, SIGHUP, SIGTERM]
-                .into_iter()
-                .filter_map(|sig| {
-                    signal_hook::flag::register_usize(
-                        sig,
-                        std::sync::Arc::clone(&flag),
-                        sig as usize,
-                    )
-                    .ok()
-                })
-                .collect();
-            Self { flag, ids }
-        }
-        #[cfg(not(unix))]
-        {
-            Self {}
-        }
-    }
-
-    /// The signal that arrived while it was up, if one did.
-    pub fn caught(&self) -> Option<i32> {
-        #[cfg(unix)]
-        {
-            match self.flag.load(Ordering::SeqCst) {
-                0 => None,
-                n => i32::try_from(n).ok(),
+            use nix::sys::signal::{SigSet, SigmaskHow, Signal, pthread_sigmask};
+            let mut held = SigSet::empty();
+            for sig in [Signal::SIGINT, Signal::SIGHUP, Signal::SIGTERM] {
+                held.add(sig);
+            }
+            let mut before = SigSet::empty();
+            let blocked =
+                pthread_sigmask(SigmaskHow::SIG_BLOCK, Some(&held), Some(&mut before)).is_ok();
+            Self {
+                before: blocked.then_some(before),
             }
         }
         #[cfg(not(unix))]
         {
-            None
+            Self {}
         }
     }
 }
@@ -249,15 +232,12 @@ impl Shield {
 impl Drop for Shield {
     fn drop(&mut self) {
         #[cfg(unix)]
-        {
-            for id in self.ids.drain(..) {
-                signal_hook::low_level::unregister(id);
-            }
-            if let Some(sig) = self.caught() {
-                // What the signal would have done had it not been held off: a handler another
-                // part of charter registered still runs, and with none the process ends.
-                let _ = signal_hook::low_level::raise(sig);
-            }
+        if let Some(before) = self.before.take() {
+            let _ = nix::sys::signal::pthread_sigmask(
+                nix::sys::signal::SigmaskHow::SIG_SETMASK,
+                Some(&before),
+                None,
+            );
         }
     }
 }
@@ -441,23 +421,87 @@ mod tests {
         assert_eq!(app_beside(&lone.path().join("charter")), None);
     }
 
+    /// What the child runs: the window up and down, with a SIGTERM raised inside it when
+    /// `CHARTER_TEST_SIGNAL_IN_WINDOW` is set, then a line, then a wait for SIGTERM.
     #[cfg(unix)]
     #[test]
-    fn a_signal_that_arrives_while_an_item_is_gone_waits_until_it_is_written() {
-        use signal_hook::consts::SIGHUP;
-        // What stands in for the rest of charter's handlers, so the signal acted on at the end
-        // does not end the test.
-        let after = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let id = signal_hook::flag::register(SIGHUP, std::sync::Arc::clone(&after)).unwrap();
-        let shield = Shield::up();
-        signal_hook::low_level::raise(SIGHUP).unwrap();
-        assert_eq!(shield.caught(), Some(SIGHUP));
-        drop(shield);
-        assert!(
-            after.load(Ordering::SeqCst),
-            "the signal was dropped, not delayed"
-        );
-        signal_hook::low_level::unregister(id);
+    #[ignore = "run by a_process_still_ends_on_sigterm_after_the_window, in a child"]
+    fn the_window_in_a_child() {
+        if std::env::var_os("CHARTER_TEST_WINDOW_CHILD").is_none() {
+            return;
+        }
+        {
+            let _shield = Shield::up();
+            if std::env::var_os("CHARTER_TEST_SIGNAL_IN_WINDOW").is_some() {
+                let _ = signal_hook::low_level::raise(signal_hook::consts::SIGTERM);
+            }
+        }
+        println!("after the window");
+        std::thread::sleep(Duration::from_secs(10));
+        println!("survived");
+    }
+
+    /// The child's exit, after it said it left the window, with a SIGTERM sent to it then
+    /// unless one was raised inside the window.
+    #[cfg(unix)]
+    fn child_after_the_window(raised_inside: bool) -> (std::process::ExitStatus, String) {
+        use std::io::BufRead;
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "secrets::keyhold::tests::the_window_in_a_child",
+                "--ignored",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env("CHARTER_TEST_WINDOW_CHILD", "1")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        if raised_inside {
+            command.env("CHARTER_TEST_SIGNAL_IN_WINDOW", "1");
+        }
+        let mut child = crate::forklock::spawn(&mut command).unwrap();
+        let mut lines = std::io::BufReader::new(child.stdout.take().unwrap()).lines();
+        let mut said = String::new();
+        for line in lines.by_ref() {
+            let line = line.unwrap_or_default();
+            said.push_str(&line);
+            said.push('\n');
+            if line.contains("after the window") {
+                if !raised_inside {
+                    let pid = i32::try_from(child.id()).unwrap();
+                    nix::sys::signal::kill(
+                        nix::unistd::Pid::from_raw(pid),
+                        nix::sys::signal::Signal::SIGTERM,
+                    )
+                    .unwrap();
+                }
+                break;
+            }
+        }
+        for line in lines {
+            said.push_str(&line.unwrap_or_default());
+            said.push('\n');
+        }
+        (child.wait().unwrap(), said)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_process_still_ends_on_sigterm_after_the_window() {
+        use std::os::unix::process::ExitStatusExt;
+        // N1: holding the signals off must never leave the process deaf to them afterwards,
+        // whether one arrived inside the window (it is delivered as it leaves) or not.
+        for raised_inside in [true, false] {
+            let (status, said) = child_after_the_window(raised_inside);
+            assert_eq!(
+                status.signal(),
+                Some(nix::sys::signal::Signal::SIGTERM as i32),
+                "raised inside: {raised_inside}; {status:?}; said:\n{said}"
+            );
+            assert!(!said.contains("survived"), "{said}");
+        }
     }
 
     #[test]

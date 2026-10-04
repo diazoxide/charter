@@ -561,7 +561,8 @@ pub fn get_with(
 ///
 /// **Never over a newer write.** A `secret set` of the key between the read and now would be
 /// undone by writing the value read, so the index is read again first and the move is made only
-/// while the key's `updated` is still `read_at`; afterwards only `held` and the note change.
+/// while the key's `updated` is still `read_at`; afterwards only `held` and the note change, and
+/// only while it still is. A write during the move itself is not locked out (#1180).
 fn rehold(
     store: &dyn Store,
     ctx: &Ctx,
@@ -584,11 +585,14 @@ fn rehold(
     if store.rehold(service, key, value) != Ok(Held::ToTheApp) {
         return;
     }
+    // A newer write that landed during the move is its own: it is marked as it was written,
+    // never as held by this move.
     let Ok(mut index) = load_index(ctx, vault) else {
         return;
     };
-    if let Some(entry) = index.keys.get_mut(key) {
-        entry.held = true;
+    match index.keys.get_mut(key) {
+        Some(entry) if entry.updated == read_at => entry.held = true,
+        _ => return,
     }
     if index.note == Note::None {
         index.note = Note::Due;
@@ -1284,5 +1288,62 @@ mod tests {
             "charter could not hold 'C' to its app, so the program that wrote it reads it \
              without asking you. charter tries again the next time the charter command reads it."
         );
+    }
+
+    /// A holding store where another charter's `secret set` of the same key, which could not be
+    /// held, lands while the move is being made.
+    struct SetDuringTheMove {
+        under: FileStore,
+        ctx: Ctx,
+        vault: Vault,
+    }
+
+    impl Store for SetDuringTheMove {
+        fn get(&self, service: &str, account: &str) -> Result<Option<Secret>, VaultError> {
+            self.under.get(service, account)
+        }
+        fn set(&self, _: &str, account: &str, _: &str) -> Result<Held, VaultError> {
+            set_with(
+                &self.under,
+                &self.ctx,
+                &self.vault,
+                account,
+                "newer-value-4c8",
+                "2026-10-04T13:00:00Z",
+            )?;
+            Ok(Held::ToTheApp)
+        }
+        fn delete(&self, service: &str, account: &str) -> Result<bool, VaultError> {
+            self.under.delete(service, account)
+        }
+        fn holds(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn a_newer_write_that_lands_during_a_move_is_never_marked_held_by_it() {
+        let (dir, ctx, ops) = plane();
+        set_with(
+            &FileStore::at(dir.path().join("k.json")),
+            &ctx,
+            &ops,
+            "A",
+            VALUE,
+            "t",
+        )
+        .unwrap();
+        let store = SetDuringTheMove {
+            under: FileStore::at(dir.path().join("k.json")),
+            ctx: Ctx::new(dir.path(), Env::of(&[])),
+            vault: vault("ops"),
+        };
+
+        assert_eq!(get_with(&store, &ctx, &ops, "A").unwrap(), VALUE);
+
+        let entry = &load_index(&ctx, &ops).unwrap().keys["A"];
+        assert_eq!(entry.updated, "2026-10-04T13:00:00Z");
+        assert!(!entry.held, "the newer value was marked held by the move");
+        assert_eq!(take_note(&ctx, &ops), None);
     }
 }
