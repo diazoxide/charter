@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791099804595,
+  "lastUpdate": 1791102895403,
   "repoUrl": "https://github.com/diazoxide/charter",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -1050,6 +1050,48 @@ window.BENCHMARK_DATA = {
             "value": 105.064515,
             "unit": "ms",
             "extra": "median of 5 runs: 104.538, 104.891, 105.065, 106.747, 106.814 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "e92d89bed7eac847e5c309c0b42c1504c1299e16",
+          "message": "FD-11 review: fail-closed coverage, no status takes index.lock\n\nFixes the review of 35bd5c0.\n\n- Every change of a repo's coverage, either way, has its standing read\n  again (`Shared::cover`). An answer read before a watch began is not kept\n  for the covered backstop.\n- D-FD11h (delegated, fail closed): only a watch of the whole tree\n  (`How::Whole`: FSEvents, ReadDirectoryChangesW) covers a standing.\n  - inotify clones stay on the uncovered clock.\n  - Folders that could not be listed are their own state (`How::Unread`),\n    never `vec![root]`.\n  - A burst from a rescan, a watcher error or a pathless event\n    (`Burst::lost`) uncovers every kept clone and re-watches its tree. Only\n    a watch that is made covers it again, and that re-cover re-reads the\n    standing.\n- No `git status` charter runs takes `index.lock`. The runner sets\n  `GIT_OPTIONAL_LOCKS=0` for every `status`, so a new reader can't forget\n  it. The briefing's status also passes `--no-optional-locks`.\n  `no_automatic_read_takes_the_index_lock` now also covers the briefing\n  and the status line.\n- An unborn branch's staged files count as tracked dirt in the shared\n  standing.\n- `Root::matters`: a file in the index matters even under an ignore\n  pattern.\n- branchwatch:\n  - A clone found after its plane was let go of is not kept.\n  - A clone the reader refuses is not asked for again for 60 s.\n  - The repeated listing is one `listened()` helper.\n  - The leftover block in `start` is gone.\n- Docs: a covered idle monorepo costs about one read in twenty minutes,\n  not \"no status\".\n\nTests (each seen red against the code it guards):\n- cover on both edges;\n- a lost watch re-watched and re-covered, and a refused re-watch staying\n  uncovered;\n- folder-by-folder and unread clones never covered;\n- the refusal backoff;\n- the let-go race;\n- the runner's status leaving a stat-stale index alone, with a control;\n- the unborn branch;\n- a tracked file under an ignore pattern.\n\nFollow-ups are on #874: inotify coverage, and the reader-child spawn cost\nduring builds.\n\nCloses #651\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-04T12:32:34+04:00",
+          "tree_id": "f8046fbb5719e35f0cb329b9ef1e4e7809ba501b",
+          "url": "https://github.com/diazoxide/charter/commit/e92d89bed7eac847e5c309c0b42c1504c1299e16"
+        },
+        "date": 1791102893785,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.33716650000000004,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.327, 0.331, 0.337, 0.337, 0.344 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.6712695,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.589, 16.641, 16.671, 16.708, 16.714 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.3700155,
+            "unit": "ms",
+            "extra": "median of 5 runs: 100.854, 101.215, 101.370, 101.920, 102.154 ms"
           }
         ]
       }
