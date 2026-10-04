@@ -175,6 +175,7 @@ macro_rules! app_commands {
                 memories::memory_edit,
                 memories::memory_archive,
                 memories::memory_unarchive,
+                memories::memory_archived,
                 memories::memory_create,
                 curation::curation_offers,
                 curation::curate,

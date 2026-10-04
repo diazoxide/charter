@@ -1215,6 +1215,9 @@ describe("carrying out a row", () => {
         "openView:charter/piece-files/alpha/svc/fix-it,Files · fix-it",
         "openView:charter/vault/ops,ops",
         "openView:charter/changes/alpha,Changes · alpha",
+        "openView:charter/memory-archive/persona/steward,Archived memory · steward",
+        "openView:charter/memory-archive/shared,Archived shared memory",
+        "openView:charter/memory-archive/workspace/alpha,Archived memory · alpha",
         // SI-9c: a new memory in each store the window lists, and the shared list.
         `newMemory:${JSON.stringify({ kind: "workspace", name: "alpha" })}`,
         `newMemory:${JSON.stringify({ kind: "persona", name: "steward" })}`,
@@ -1785,8 +1788,10 @@ describe("the palette at fifty chats", () => {
     // 482 since FR-27: Switch project…, one row however many projects the window holds.
     // 532 since RC-5: Browse the files of each of the 50 pieces.
     // 582 since FM-5: Focus on each of the 50 branches.
+    // 592 since KN-4: the archive of the focused workspace's journal, of each of the 8
+    // personas' stores and of the shared store.
     // This window has no todos loaded, so no `todo.` rows.
-    expect(offers).toHaveLength(582);
+    expect(offers).toHaveLength(592);
   });
 
   /**
@@ -2155,6 +2160,37 @@ describe("making a memory, and the shared list (SI-9c, ADR 0065 Q6, Q9)", () => 
       view: { from: null, view: "shared-memory", key: "" },
       title: "Shared memory",
     });
+  });
+
+  it("opens each store's archive in a tab of its own (KN-4)", async () => {
+    const hands = doing();
+    const offers = catalogue(
+      now({ plane: "/p", workspaces: ["alpha"], focused: "alpha", personas: ["steward"] }),
+    );
+
+    expect(by(offers, "memory.archived:workspace/alpha")?.does).toEqual({
+      verb: "openView",
+      view: { from: null, view: "memory-archive", key: "workspace/alpha" },
+      title: "Archived memory · alpha",
+    });
+    expect(by(offers, "memory.archived:persona/steward")?.does).toEqual({
+      verb: "openView",
+      view: { from: null, view: "memory-archive", key: "persona/steward" },
+      title: "Archived memory · steward",
+    });
+    expect(by(offers, "memory.archived:shared")?.does).toEqual({
+      verb: "openView",
+      view: { from: null, view: "memory-archive", key: "shared" },
+      title: "Archived shared memory",
+    });
+    await run(offers, "memory.archived:shared", hands);
+    expect(hands.calls).toHaveLength(1);
+    // The plane root has no journal, and so no journal's archive.
+    expect(
+      ids(catalogue(now({ plane: "/p", focused: OUTSIDE }))).filter((id) =>
+        id.startsWith("memory.archived:workspace/"),
+      ),
+    ).toEqual([]);
   });
 
   it("offers neither with no plane to keep a memory in", () => {

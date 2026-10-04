@@ -101,6 +101,46 @@ export function scopeWord(scope: MemoryScope): string {
   return scope.kind === "shared" ? "shared" : scope.name;
 }
 
+/** A store in a sentence: `shared memory`, or `<name>'s memory`. */
+export function memoryOf(scope: MemoryScope): string {
+  return scope.kind === "shared" ? "shared memory" : `${scope.name}'s memory`;
+}
+
+// ---------------------------------------------------------------------------------------------
+// A store's archive (KN-4, D6).
+
+/** The view a store's archive is opened as: one tab per store, keyed by {@link scopeKey}. */
+export const ARCHIVE_VIEW = "memory-archive";
+
+/** The tab that browses `scope`'s archive. */
+export function archiveView(scope: MemoryScope): ViewRef {
+  return { from: null, view: ARCHIVE_VIEW, key: scopeKey(scope) };
+}
+
+/** What a store's archive tab is called. */
+export function archiveTitle(scope: MemoryScope): string {
+  return scope.kind === "shared" ? "Archived shared memory" : `Archived memory · ${scope.name}`;
+}
+
+/** A store's archive in a sentence: `the shared archive`, or `<name>'s archive`. */
+export function archiveWhere(scope: MemoryScope): string {
+  return scope.kind === "shared" ? "the shared archive" : `${scope.name}'s archive`;
+}
+
+/** The store a {@link scopeKey} names, or `undefined` for one that names none. */
+export function scopeOfKey(key: string): MemoryScope | undefined {
+  if (key === "shared") return { kind: "shared" };
+  const parts = key.split("/");
+  if ((parts[0] === "workspace" || parts[0] === "persona") && parts.length === 2 && parts[1] !== "")
+    return { kind: parts[0], name: parts[1] };
+  return undefined;
+}
+
+/** The store whose archive `view` browses, when it is an archive's tab. */
+export function archiveOf(view: ViewRef): MemoryScope | undefined {
+  return view.from === null && view.view === ARCHIVE_VIEW ? scopeOfKey(view.key) : undefined;
+}
+
 // ---------------------------------------------------------------------------------------------
 // An edit in progress.
 

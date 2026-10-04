@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useState } from "react";
 import {
+  Archive,
   ChartColumn,
   Circle,
   CircleDashed,
@@ -292,6 +293,14 @@ function Contributed({
             <HeadingOffer
               offer={offers.get(`memory.new:workspace/${workspace}`)}
               onPress={onPress}
+            />
+          )}
+          {/* And the journal's archive, to read and restore (KN-4). */}
+          {panel.key === MEMORY && (
+            <HeadingOffer
+              offer={offers.get(`memory.archived:workspace/${workspace}`)}
+              onPress={onPress}
+              mark={Archive}
             />
           )}
         </>

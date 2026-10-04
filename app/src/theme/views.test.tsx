@@ -667,6 +667,15 @@ const ORDINARY: Answers = {
   workspace_saving: REPO_SAVING,
   session_record: RECORD,
   memory_read: MEMORY,
+  memory_archived: [
+    {
+      archived: "freeze",
+      title: "Freeze",
+      stamp: "2026-09-28 16:05",
+      body: "No deploys on **Friday**.",
+      path: "personas/_shared/memory/archive/freeze.md",
+    },
+  ],
   workspace_settings: WORKSPACE_FILE,
   repo_instructions: INSTRUCTIONS,
   start_options: {
@@ -746,6 +755,7 @@ const PERSONA: ViewRef = { from: null, view: "persona", key: "steward" };
 const EXTENSION: ViewRef = { from: "persona-statistics", view: "statistics", key: "" };
 const CHANGES: ViewRef = { from: null, view: "changes", key: WORKSPACE };
 const MEMORY_REF: ViewRef = { from: null, view: "memory", key: "shared/grill" };
+const ARCHIVE_REF: ViewRef = { from: null, view: "memory-archive", key: "shared" };
 const VAULT_REF: ViewRef = { from: null, view: "vault", key: "ops" };
 
 const STATES: State[] = [
@@ -836,6 +846,26 @@ const STATES: State[] = [
     name: "Shared memory",
     view: { from: null, view: "shared-memory", key: "" },
     drawn: /Charter defects go upstream/,
+  },
+  {
+    name: "a store's archive, one memory read",
+    view: ARCHIVE_REF,
+    drawn: /Restore memory/,
+    then: async () => {
+      await userEvent.click(await screen.findByRole("button", { name: /^Freeze/ }));
+    },
+  },
+  {
+    name: "a store's archive with nothing in it",
+    view: ARCHIVE_REF,
+    answers: { memory_archived: [] },
+    drawn: /Nothing archived/,
+  },
+  {
+    name: "a store's archive that cannot be read",
+    view: ARCHIVE_REF,
+    answers: { memory_archived: new Error("permission denied") },
+    drawn: /could not read the shared archive/,
   },
   {
     name: "Settings at a workspace's level",

@@ -5442,6 +5442,27 @@ h2.sidebar-title .node-icon {
   margin: 0.5rem 0;
 }
 
+/* **A store's archive** (KN-4): its memories as a list's rows, the one chosen marked as the
+   explorer's pressed toggles are, and that memory read under the list. The list keeps its own
+   height and scrolls, so the memory read never pushes Restore off the tab. */
+.memory-archive {
+  max-width: 60rem;
+}
+
+.memory-archive-rows {
+  max-height: 16rem;
+  margin: 0 0 1rem;
+}
+
+.memory-archive-rows .row[aria-pressed="true"] {
+  background: var(--accent-surface);
+}
+
+.memory-archived {
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border-subtle);
+}
+
 /* The repo's agent instructions, offered to a workspace's memory (FR-18a): each file whole, under
    its name, so what Add to memory writes is what was read. A long file scrolls inside its own
    box rather than pushing the button off the tab. */
