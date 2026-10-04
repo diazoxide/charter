@@ -322,11 +322,19 @@ GitLab's native transport is the same `Http` as GitHub's, speaking GitLab's dial
 
 ## The request budget per account (FW-4)
 
-Every call made as a forge account is admitted and counted by that account's meter
-(`src/forge/budget.rs`). The meter sits where an account's calls are resolved
-(`route::Resolver::for_caller`), so a call on the native route and one on the CLI route are both
-counted, and no path sends as an account without it. A call that names no account is the CLI's
-own login, not a charter account, and has no budget.
+Every call a `route::Resolver` resolves for a caller naming an account is admitted and counted
+by that account's meter (`src/forge/budget.rs`), on the native route and the CLI route alike.
+Nothing sends with a charter sign-in token without it: only the resolver builds the native
+transport outside tests (`tests/only_the_resolver_builds_the_native_transport.rs`). A call that
+names no account, or one sent through `Forge::backend()` with no resolver, goes over the CLI with
+the CLI's own login, not a charter account, and has no budget. A chat's or a `charter` command's
+call that names an account takes the CLI route (ADR 0070 §4), so it spends the CLI's login too,
+counted against the account it named.
+
+**Nothing in the app drives the poller or the meter yet.** The window builds no resolver and
+polls nothing until FW-7 (#735) wires its state into `forge::poll` and keeps the budgets where
+doctor reads them; until then the `forge budget` rows appear only once something has sent as an
+account.
 
 - **What counts, per forge.** GitHub does not count a `304 Not Modified` to an authorized
   conditional request against its primary rate limit ("Best practices for using the REST API").
@@ -337,7 +345,8 @@ own login, not a charter account, and has no budget.
 - **charter's allowance** is 1,000 counted requests an hour per account, a fifth of GitHub's
   5,000 an hour for a signed-in user. Once it is spent, a background call is held back until the
   hour turns (`RateLimited`, with the hour's end as its reset); a call a person is waiting on is
-  never held back.
+  never held back. A chat's or an MCP call is admitted as background whatever its priority:
+  only a person can be waiting, so a looping agent is held back too.
 - **Polling** (`src/forge/poll.rs`) is conditional `GET`s only, through the native transport's
   ETag store. An open Work view polls every minute, a visible workspace every five, anything
   else every fifteen, and nothing polls while every window is hidden. However many watches an

@@ -83,7 +83,8 @@ impl Surface {
 }
 
 /// Whether a person is waiting on the answer. The request budget holds a background call back
-/// once its account's hour is spent, and never a foreground one ([`super::budget`]).
+/// once its account's hour is spent, and never a person's foreground one; a chat's or an MCP
+/// call is admitted as background whatever it carries ([`super::budget::admission`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Priority {
     Foreground,

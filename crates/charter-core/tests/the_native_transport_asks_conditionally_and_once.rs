@@ -6,6 +6,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use charter_core::forge::backend::Transports;
 use charter_core::forge::http::{ApiRoot, TokenSource};
 use charter_core::forge::pr::{Pr, State};
 use charter_core::forge::route::{HostScope, Resolver, SignIn};
@@ -116,6 +117,61 @@ fn a_second_read_is_conditional_and_a_304_is_answered_from_the_etag_store() {
     let github = backend(resolver(&server, Arc::default()));
     assert_eq!(github.state(&human(), "o/r", &pr()), Ok(State::Open));
     assert_eq!(github.state(&human(), "o/r", &pr()), Ok(State::Open));
+    rt.block_on(server.verify());
+}
+
+#[test]
+fn a_revalidated_read_is_a_304_with_its_own_rate_limit_and_the_stored_link() {
+    charter_core::unsteered!();
+    let rt = runtime();
+    let server = rt.block_on(MockServer::start());
+    let next = "<https://api.github.com/repos/o/r/pulls?page=2>; rel=\"next\"";
+    rt.block_on(
+        Mock::given(method("GET"))
+            .and(path("/repos/o/r/pulls"))
+            .and(header("if-none-match", "\"v1\""))
+            .respond_with(
+                ResponseTemplate::new(304)
+                    .insert_header("x-ratelimit-limit", "5000")
+                    .insert_header("x-ratelimit-remaining", "4321")
+                    .insert_header("x-ratelimit-resource", "core"),
+            )
+            .expect(1)
+            .mount(&server),
+    );
+    rt.block_on(
+        Mock::given(method("GET"))
+            .and(path("/repos/o/r/pulls"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string("[1]")
+                    .insert_header("etag", "\"v1\"")
+                    .insert_header("link", next)
+                    .insert_header("x-ratelimit-remaining", "4322"),
+            )
+            .up_to_n_times(1)
+            .expect(1)
+            .mount(&server),
+    );
+    let resolver = resolver(&server, Arc::default());
+    let native = resolver.for_caller(&human()).unwrap();
+    let forge = Forge::default_of(Kind::GitHub);
+    let call = Call::get("repos/o/r/pulls", charter_core::forge::LIST_TIMEOUT);
+    let first = native.send(&forge, &call).unwrap();
+    assert_eq!(first.status, Some(200));
+    let again = native.send(&forge, &call).unwrap();
+    assert!(again.ok());
+    assert_eq!(again.status, Some(304));
+    assert_eq!(again.out, "[1]", "answered from the store");
+    assert_eq!(again.header("link"), Some(next), "the stored link");
+    assert_eq!(
+        again.header("x-ratelimit-remaining"),
+        Some("4321"),
+        "the 304's own"
+    );
+    assert_eq!(again.header("x-ratelimit-resource"), Some("core"));
+    let usage = resolver.meter(&account()).usage();
+    assert_eq!((usage.sent, usage.counted, usage.not_modified), (2, 1, 1));
     rt.block_on(server.verify());
 }
 
