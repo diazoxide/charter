@@ -1,11 +1,8 @@
-import { LiveDialog } from "./LiveDialog";
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import * as RadioGroup from "@radix-ui/react-radio-group";
 import { LoaderCircle } from "lucide-react";
 import { extensionsChanged } from "./extensionsOn";
 import { projectThemeChanged, useProjectThemeAnswers } from "./projectTheme";
-import { DEFAULT_THEME, inForce } from "./theme/theme";
-import { WorkspaceRepos } from "./WorkspaceRepos";
 import {
   commands,
   type HarnessPlugins,
@@ -15,14 +12,12 @@ import {
   type SandboxState,
   type ProjectSettings as Both,
   type SettingsChange,
-  type WorkspaceSettings as OneWorkspace,
 } from "./bindings";
 import {
   harnessPluginGroups,
   LOCAL,
   NO_EXTENSIONS,
   SHARED,
-  WORKSPACE,
   type Control,
   type Group,
   type Saving,
@@ -233,183 +228,6 @@ export function ProjectSettings({ plane }: { plane: PlaneId }) {
   );
 }
 
-/**
- * **Workspace settings** (charter-app#280, ADR 0048): the `settings` of one workspace's
- * `workspace.json`, in a view tab of its own (`tabs.workspaceSettingsView`).
- *
- * The layer between the project's two files: `charter.toml`, then this workspace, then
- * `charter.local.toml`. A workspace refines its project for the team, and this machine's Local
- * file still has the last word; none of the three reaches past this machine's approval. It holds
- * the groups a workspace can set: Extensions — the same group as Project settings', asked with
- * `project_extensions` for this workspace — Harness plugins, one group per harness
- * (charter-app#282), asked with `project_harness_plugins` for this workspace, and **Theme**
- * (charter-app#281): the workspace's pick, read by the same resolver as the project's
- * (`project_theme` for this workspace), and its **colour**. Each extension, each plugin and the
- * theme says which layer decided it — and, when Local was left out, each group says why, once
- * (charter-app#319), as Project settings' do. And its **Repos** (ADR 0055): what is cloned in
- * it, added to and taken from with the new-workspace dialog's picker. A form only: the manifest holds more than settings,
- * and charter keeps the rest.
- */
-export function WorkspaceSettings({ plane, workspace }: { plane: PlaneId; workspace: string }) {
-  const [file, setFile] = useState<OneWorkspace | { trouble: string }>();
-  /** Whether the LIVE/LOCAL confirmation is open (charter-app#301). */
-  const [switching, setSwitching] = useState(false);
-  const [extensions, setExtensions] = useState<ProjectExtensions>(NO_EXTENSIONS);
-  const [theme, setTheme] = useState<ProjectTheme>();
-  const [harnesses, setHarnesses] = useState<HarnessPlugins[]>([]);
-  /** The newest read out, as in {@link ProjectSettings}. */
-  const reading = useRef(0);
-  /** And the newest theme read out, which is also read on its own, as there. */
-  const themeReading = useRef(0);
-  const readTheme = useCallback(() => {
-    const mine = ++themeReading.current;
-    const newest = () => themeReading.current === mine;
-    void commands
-      .projectTheme(plane, workspace)
-      .then((said) => {
-        if (newest()) setTheme(said.status === "ok" ? (said.data ?? undefined) : undefined);
-      })
-      .catch(() => {
-        if (newest()) setTheme(undefined);
-      });
-  }, [plane, workspace]);
-
-  const read = useCallback(() => {
-    const mine = ++reading.current;
-    const newest = () => reading.current === mine;
-    void commands
-      .workspaceSettings(plane, workspace)
-      .then((said) => {
-        if (newest()) setFile(said.status === "ok" ? said.data : { trouble: said.error });
-      })
-      .catch((err: unknown) => {
-        if (newest()) setFile({ trouble: String(err) });
-      });
-    void commands
-      .projectExtensions(plane, workspace)
-      .then((said) => {
-        if (newest())
-          setExtensions(said.status === "ok" ? (said.data ?? NO_EXTENSIONS) : NO_EXTENSIONS);
-      })
-      .catch(() => {
-        if (newest()) setExtensions(NO_EXTENSIONS);
-      });
-    void commands
-      .projectHarnessPlugins(plane, workspace)
-      .then((said) => {
-        if (newest()) setHarnesses(said.status === "ok" ? (said.data ?? []) : []);
-      })
-      .catch(() => {
-        if (newest()) setHarnesses([]);
-      });
-    readTheme();
-  }, [plane, workspace, readTheme]);
-
-  useEffect(read, [read]);
-  // What the window draws here was asked again — by a save, or by an approval in the Extensions
-  // dialog — so the sentence about it is asked again with it, as Project settings' is.
-  const answers = useProjectThemeAnswers(plane, workspace);
-  useEffect(() => {
-    if (answers > 0) readTheme();
-  }, [answers, readTheme]);
-
-  const saved = useCallback(() => {
-    read();
-    // What the window keeps of its surveyed panels and views for this workspace.
-    extensionsChanged(plane);
-    // And the theme and colour it draws while this workspace is in front (charter-app#281).
-    projectThemeChanged(plane);
-  }, [plane, read]);
-
-  if (file === undefined) {
-    return (
-      <p className="pending" aria-busy="true">
-        <LoaderCircle className="node-icon spinning" />
-        Reading the settings…
-      </p>
-    );
-  }
-  if ("trouble" in file) {
-    return (
-      <p className="trouble" role="alert">
-        {file.trouble}
-      </p>
-    );
-  }
-  return (
-    <div className="settings">
-      <p className="note">
-        Read in this order: charter.toml, then this workspace, then charter.local.toml — the
-        workspace refines its project for the team, and this machine has the last word. Never put a
-        secret here: keep it in a vault and name it as <code>vault:&lt;vault&gt;/&lt;key&gt;</code>.
-      </p>
-      {/* LIVE or LOCAL (charter-app#301): the same confirmation as the workspace's menu row. */}
-      <fieldset className="settings-group" aria-label="Live">
-        <legend>Live</legend>
-        <p className="settings-who">
-          {file.live
-            ? "LIVE: its charter, memory and todos are published with the plane."
-            : "LOCAL: its charter, memory and todos stay on this machine."}
-        </p>
-        <div className="settings-actions">
-          <button
-            type="button"
-            className="panel-view"
-            tabIndex={0}
-            onClick={() => setSwitching(true)}
-          >
-            {file.live ? "Make local…" : "Make live…"}
-          </button>
-        </div>
-      </fieldset>
-      <WorkspaceRepos plane={plane} workspace={workspace} />
-      {switching && (
-        <LiveDialog
-          plane={plane}
-          workspace={workspace}
-          onClose={() => setSwitching(false)}
-          onDone={() => {
-            setSwitching(false);
-            saved();
-          }}
-        />
-      )}
-      <Section
-        file={file}
-        testid="settings-workspace"
-        title="Workspace"
-        who={
-          file.live
-            ? "Committed with this LIVE workspace; your team sees this."
-            : "This workspace is not LIVE, so its workspace.json stays on this machine."
-        }
-        groups={[...WORKSPACE, ...harnessPluginGroups(harnesses, "workspace")]}
-        extensions={extensions}
-        theme={theme}
-        rawView={false}
-        send={(base, change) =>
-          commands
-            .saveWorkspaceSettings(
-              plane,
-              workspace,
-              base,
-              change.kind === "edits" ? change.edits : [],
-            )
-            .then((said) =>
-              said.status === "error"
-                ? said
-                : {
-                    status: "ok" as const,
-                    data: said.data.kind === "refused" ? said.data : { kind: "saved" as const },
-                  },
-            )
-        }
-        onSaved={saved}
-      />
-    </div>
-  );
-}
-
 // ------------------------------------------------------------------------------------------
 // one file
 // ------------------------------------------------------------------------------------------
@@ -432,7 +250,6 @@ function Section({
   saving: inForce,
   send,
   onSaved,
-  rawView = true,
   groupsSayLeftOut = true,
 }: {
   file: Shown;
@@ -442,20 +259,17 @@ function Section({
   groups: readonly Group[];
   extensions: ProjectExtensions;
   theme: ProjectTheme | undefined;
-  /** How far a save goes in this project, for the Plane and Repos groups; a workspace's tab has
-   *  neither. */
+  /** How far a save goes in this project, for the Plane and Repos groups. */
   saving?: Saving;
   /** Sends a change against the text it was typed over: `null` for a file not there yet. */
   send: (base: string | null, change: SettingsChange) => Promise<Sent>;
   onSaved: () => void;
-  /** Whether the file is also offered as raw TOML. A workspace's manifest is not (#280). */
-  rawView?: boolean;
   /** Whether each group that shows what is in force says why Local was left out of it
    *  (charter-app#319). The Local section's head says it for its groups. */
   groupsSayLeftOut?: boolean;
 }) {
   const heading = useId();
-  const [mode, setMode] = useState<Mode>(file.parsed || !rawView ? "form" : "raw");
+  const [mode, setMode] = useState<Mode>(file.parsed ? "form" : "raw");
   /** What the operator has typed into a control, by its id, until it is saved or discarded. */
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [raw, setRaw] = useState(file.text);
@@ -471,7 +285,7 @@ function Section({
     setSeen(file.text);
     setDrafts({});
     setRaw(file.text);
-    if (!file.parsed && rawView) setMode("raw");
+    if (!file.parsed) setMode("raw");
   }
 
   const controls = groups.map((group) => ({
@@ -483,7 +297,7 @@ function Section({
   const all = controls.flatMap((one) => one.controls);
   const changed = all.filter((one) => one.id in drafts && drafts[one.id] !== one.read(file));
   const dirty = mode === "form" ? changed.length > 0 : raw !== file.text;
-  /** The file's own name, which the save button says: `workspace.json`, not its path. */
+  /** The file's own name, which the save button says: `charter.toml`, not its path. */
   const named = file.file.split("/").pop() ?? file.file;
 
   const discard = () => {
@@ -529,32 +343,27 @@ function Section({
         />
       )}
 
-      {rawView && (
-        <RadioGroup.Root
-          className="settings-mode"
-          orientation="horizontal"
-          value={mode}
-          onValueChange={(to) => setMode(to as Mode)}
-          aria-label={`How to edit ${file.file}`}
+      <RadioGroup.Root
+        className="settings-mode"
+        orientation="horizontal"
+        value={mode}
+        onValueChange={(to) => setMode(to as Mode)}
+        aria-label={`How to edit ${file.file}`}
+      >
+        <ModeItem
+          value="form"
+          disabled={(mode === "raw" && dirty) || !file.parsed}
+          onPick={setMode}
         >
-          <ModeItem
-            value="form"
-            disabled={(mode === "raw" && dirty) || !file.parsed}
-            onPick={setMode}
-          >
-            Form
-          </ModeItem>
-          <ModeItem value="raw" disabled={mode === "form" && dirty} onPick={setMode}>
-            Raw TOML
-          </ModeItem>
-        </RadioGroup.Root>
-      )}
-      {rawView && dirty && (
-        <p className="settings-hint">Save or discard these changes to switch views.</p>
-      )}
+          Form
+        </ModeItem>
+        <ModeItem value="raw" disabled={mode === "form" && dirty} onPick={setMode}>
+          Raw TOML
+        </ModeItem>
+      </RadioGroup.Root>
+      {dirty && <p className="settings-hint">Save or discard these changes to switch views.</p>}
 
       {mode === "form" ? (
-        // A file no form can read, with no raw view to mend it in, shows only why (above).
         (file.parsed ? controls : []).map(({ group, controls: under, notes, leftOut }) => (
           <fieldset key={group.title} className="settings-group">
             <legend>{group.title}</legend>
@@ -688,15 +497,7 @@ function SettingControl({
   return (
     <div className="settings-field">
       <label htmlFor={id}>{control.label}</label>
-      {control.kind === "colour" ? (
-        <ColourControl
-          id={id}
-          described={described}
-          value={value}
-          control={control}
-          onChange={onChange}
-        />
-      ) : control.kind === "choice" ? (
+      {control.kind === "choice" || control.kind === "colour" ? (
         <select
           id={id}
           // #190: WebKit leaves a control out of the Tab order without `tabIndex`.
@@ -743,73 +544,5 @@ function SettingControl({
         </p>
       )}
     </div>
-  );
-}
-
-/**
- * A workspace's colour (charter-app#281): the palette as a select, and — while the pick is
- * custom — the platform's own colour well beside it, labelled, whose value is the `#rrggbb` the
- * file holds. `value` is what the file will hold: a palette name, a `#rrggbb`, or empty.
- */
-function ColourControl({
-  id,
-  described,
-  value,
-  control,
-  onChange,
-}: {
-  id: string;
-  described: string | undefined;
-  value: string;
-  control: Control;
-  onChange: (to: string) => void;
-}) {
-  const well = useId();
-  // A `#rrggbb`: what the colour well can hold. Anything else the file holds that is not a
-  // palette name — `#fff`, say — is shown as held, below, rather than as a custom colour the
-  // well would silently turn black.
-  const custom = /^#[0-9a-fA-F]{6}$/.test(value);
-  /** Where a new custom colour starts: the accent the window is drawn in, as `#rrggbb`. */
-  const start = () =>
-    /^#[0-9a-fA-F]{6}/.exec(inForce().values["accent.base"])?.[0] ??
-    DEFAULT_THEME.values["accent.base"];
-  return (
-    <>
-      <select
-        id={id}
-        // #190: WebKit leaves a control out of the Tab order without `tabIndex`.
-        tabIndex={0}
-        value={custom ? "custom" : value}
-        aria-describedby={described}
-        onChange={(event) => {
-          const to = event.target.value;
-          onChange(to === "custom" ? (custom ? value : start()) : to);
-        }}
-      >
-        <option value="">{control.unset ?? "not set"}</option>
-        {/* A value the file holds that is neither a name nor a colour is still shown as held,
-            for the reason `SettingControl` gives. */}
-        {value !== "" && !custom && !control.choices?.includes(value) && (
-          <option value={value}>{value}</option>
-        )}
-        {control.choices?.map((choice) => (
-          <option key={choice} value={choice}>
-            {control.labels?.[choice] ?? choice}
-          </option>
-        ))}
-      </select>
-      {custom && (
-        <>
-          <label htmlFor={well}>Custom colour</label>
-          <input
-            id={well}
-            type="color"
-            tabIndex={0}
-            value={value}
-            onChange={(event) => onChange(event.target.value)}
-          />
-        </>
-      )}
-    </>
   );
 }

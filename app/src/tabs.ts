@@ -73,12 +73,12 @@ export const SAVING_VIEW: ViewRef = { from: null, view: "saving", key: "" };
 export const SAVING_TITLE = "Saving";
 
 /**
- * **A workspace's settings view** (charter-app#280): the `settings` of its `workspace.json`, the
- * layer between the project's Shared and Local files. A view tab of its own rather than a section
- * of Project settings, because #252 made that tab one section per FILE for one holder of settings
- * — a plane — and a plane has as many `workspace.json` files as it has workspaces. So it is keyed
- * by the workspace, the way the persona view is keyed by the persona: one tab per workspace,
- * deduplicated by the same `viewKey`, and filed on that workspace's strip.
+ * **Settings at a workspace's level** (SE-20, #1170; first a page of its own, charter-app#280):
+ * the Settings tab keyed by the level and its target — the workspace — so there is one per
+ * workspace, deduplicated by the same `viewKey` and filed on that workspace's strip. It keeps the
+ * address the old Workspace settings page had (D-SE20a): a launch's record, a pin and a rename
+ * (`followRename`, and the core's `wscmd::rename`) already follow it, so a tab put back from
+ * before SE-20 opens the Settings tab at that workspace's level.
  */
 export function workspaceSettingsView(workspace: string): ViewRef {
   return { from: null, view: "workspace-settings", key: workspace };
@@ -152,14 +152,15 @@ export function harnessCardView(harness: string): ViewRef {
   return { from: null, view: "harness", key: harness };
 }
 
-/** What a workspace's settings tab is called. */
+/** What Settings at a workspace's level is called (the core's `wscmd::rename` says the same). */
 export function workspaceSettingsTitle(workspace: string): string {
   return `Workspace settings · ${workspace}`;
 }
 
 /**
  * **The Settings tab** (SE-16, #1166; V89b): every setting, one level at a time. **Keyed by the
- * level it shows** — `you`, `project` (SE-17); a workspace's joins with SE-20 — so opening
+ * level it shows** — `you`, `project` (SE-17); a workspace's is keyed by the workspace too, and
+ * is {@link workspaceSettingsView} (SE-20) — so opening
  * Settings at a level that already has its tab brings that tab forward. The project is the one
  * whose tabs hold it. Its level switcher moves the tab itself to another level
  * ({@link showInstead}, D-SE17a), so the key always says what the tab shows. It is the view
@@ -169,17 +170,19 @@ export function workspaceSettingsTitle(workspace: string): string {
  * The You level is the machine's and not the project's, so it is the same tab whichever project's
  * strip it was opened on: what it edits is the machine's layout file, never a file in the project.
  */
-export function settingsView(level: SettingsLevel): ViewRef {
+export function settingsView(level: Exclude<SettingsLevel, "workspace">): ViewRef {
   return { from: null, view: "settings", key: level };
 }
 
 /** The levels a Settings tab can be at (`settings/groups.ts`'s `Level`, as far as it is offered). */
-export type SettingsLevel = "you" | "project";
+export type SettingsLevel = "you" | "project" | "workspace";
 
 /** The level a view is the Settings tab at, or `undefined` for any other view — the old
  *  Project settings page (the same view, keyed `""`) included. */
 export function settingsLevelOf(view: ViewRef): SettingsLevel | undefined {
-  if (view.from !== null || view.view !== "settings") return undefined;
+  if (view.from !== null) return undefined;
+  if (view.view === "workspace-settings") return "workspace";
+  if (view.view !== "settings") return undefined;
   return view.key === "you" || view.key === "project" ? view.key : undefined;
 }
 

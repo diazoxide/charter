@@ -34,6 +34,12 @@ export type SettingsGroup = {
 type Named = { id: string; label: string; help: string };
 
 /**
+ * **Which settings file a value is kept in**: the project's `charter.toml` (`shared`) or
+ * `charter.local.toml` (`local`), or a workspace's `workspace.json` (`workspace`, SE-20).
+ */
+export type SettingsFileId = SettingsWhich | "workspace";
+
+/**
  * **A setting kept in a settings file** (SE-17): the key it is at and the file it is kept in,
  * how its control is drawn, how it reads its value out of the file, and the edits a new value
  * makes. Every value is text while it is typed or picked; `edits` is where it becomes a key, so
@@ -43,10 +49,11 @@ type Named = { id: string; label: string; help: string };
  * choice.
  */
 export type FileSetting = Named & {
-  file: SettingsWhich;
+  file: SettingsFileId;
   key: SettingsStep[];
-  /** `text` is one line, `choice` a closed set, `lines` one entry per line. */
-  kind: "text" | "choice" | "lines";
+  /** `text` is one line, `choice` a closed set, `lines` one entry per line, and `colour` a
+   *  closed set whose `custom` pick is a `#rrggbb` of the operator's own (a workspace's). */
+  kind: "text" | "choice" | "lines" | "colour";
   choices?: readonly string[];
   /** What a `choice`'s empty option says; none is offered without it. */
   unset?: string;
@@ -76,6 +83,8 @@ export type LiveSetting = Named & {
     reset?: Reset;
     /** The control is a group of controls (a radio group): see `SettingRow`'s `grouped`. */
     grouped?: boolean;
+    /** Why the last thing done here was refused, in the core's words: said beside it. */
+    error?: readonly string[];
   };
 };
 

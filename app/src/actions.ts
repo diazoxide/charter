@@ -1228,14 +1228,14 @@ export function catalogue(now: Now): Offer[] {
       ),
       note: held ? UNPIN_NOTE : PIN_NOTE,
     });
-    // Its settings (charter-app#280), under the words the project's row uses and told apart by
-    // the name in the note, as `project.settings` rows are.
+    // Its settings (charter-app#280): the Settings tab at this workspace's level (SE-20), told
+    // apart by the name in the note, as `project.settings` rows are.
     offers.push({
       ...can(`workspace.settings:${workspace}`, "Workspace settings…", {
         verb: "openWorkspaceSettings",
         workspace,
       }),
-      note: `${workspace}: its workspace.json, between charter.toml and charter.local.toml.`,
+      note: `${workspace}: Settings at its level — live, repos, extensions, appearance and plugins.`,
     });
     // Its cross-repo changes (charter#470), for the workspace in front of the operator: a view
     // tab keyed by the workspace and filed on its strip, which asks the forge when it opens and

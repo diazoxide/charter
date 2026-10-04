@@ -7,7 +7,7 @@ import { tellSaved } from "./saving";
 /**
  * **Make a workspace LIVE or LOCAL** (charter-app#301, ADR 0051): what it publishes, where it
  * goes, and a yes before anything happens. Opened from the workspace's menu, the palette, and
- * its settings page — one dialog, so the three say the same thing.
+ * Settings at its level (SE-20) — one dialog, so the three say the same thing.
  *
  * LIVE publishes the workspace's charter, memory and todos with the plane, and the plane is
  * saved at once: going LIVE is an explicit intent to publish. LOCAL stops publishing them (they

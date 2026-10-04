@@ -1260,13 +1260,13 @@ Two rules hold for the whole area and are not repeated per file:
   (`charter/workspace.py:1556`), `restore` (`charter/commands_workspace.py:955`), `fork`
   (`charter/commands_workspace.py:1709`), `merge_repo_rows` (`charter/workspace.py:1739`),
   `last_active` (`charter/workspace.py:4421`). In charter-app, its `settings` are read by
-  `crates/charter-core/src/extension/project.rs` (`Choices::read_in`) for the Workspace
-  settings tab, the window's filter on extension panels and views for the focused workspace, and
+  `crates/charter-core/src/extension/project.rs` (`Choices::read_in`) for Settings at the
+  Workspace level, the window's filter on extension panels and views for the focused workspace, and
   the executor's gate for a view on that workspace's strip (charter-app#280); by
-  `crates/charter-core/src/harness_plugin.rs` (`Choices::read_in`) for the Workspace settings
-  tab and for every chat started in the workspace (charter-app#282); and its `settings.theme`
+  `crates/charter-core/src/harness_plugin.rs` (`Choices::read_in`) for Settings at the Workspace
+  level and for every chat started in the workspace (charter-app#282); and its `settings.theme`
   by `crates/charter-core/src/extension/project/theme.rs` (`Said::read_in`, `colour_of`) for
-  the Workspace settings tab, the theme the window draws while the workspace is in front, and
+  Settings at the Workspace level, the theme the window draws while the workspace is in front, and
   every workspace tab's colour (charter-app#281).
 - **Git:** gitignored unless LIVE (`!/workspaces/<ws>/workspace.json`,
   `charter/workspace.py:1397`); it is the first path of the managed block.
@@ -1325,16 +1325,16 @@ next layer down answers.
 |---|---|---|---|
 | `settings.extensions.<id>.enabled` | bool | Whether this workspace has the extension on, over `charter.toml`'s `[extensions.<id>] enabled` and under `charter.local.toml`'s. It cannot reach past this machine's approval. | `crates/charter-core/src/extension/project.rs` `resolve` |
 | `settings.extensions.<id>.settings.<key>` | bool or str | A value for a setting the extension declares, over Shared's and under Local's, key by key. A value it would not accept is ignored with a sentence and the next layer down is used. | `crates/charter-core/src/extension/project.rs` `resolve` |
-| any other key in `settings.extensions.<id>` | — | Refused by the Workspace settings tab's save, and ignored by the reader, in the words it refuses `[extensions]` in a TOML file. | `crates/charter-core/src/extension/project.rs` `refusals_in` |
+| any other key in `settings.extensions.<id>` | — | Refused by the Workspace level's save, and ignored by the reader, in the words it refuses `[extensions]` in a TOML file. | `crates/charter-core/src/extension/project.rs` `refusals_in` |
 | `settings.harness_plugins.<harness>."<plugin id>"` | bool | **charter-app#282, ADR 0050.** Whether the chats charter starts in this workspace have that harness plugin on or off, over `charter.toml`'s `[harness_plugins.<harness>]` and under `charter.local.toml`'s, plugin by plugin. A chat is in the workspace when its directory is under `workspaces/<ws>/`. Everything the TOML key says holds here: only a plugin this machine has installed is handed on, Codex and opencode show it as *not supported yet* and hand it to nothing, and `charter-app@inline` cannot be `false` nor `charter@charter` `true` under `claude`. | `crates/charter-core/src/harness_plugin.rs` `resolve`, `for_start` |
-| any other shape under `settings.harness_plugins` | — | Refused by the Workspace settings tab's save, and ignored by the reader, in the words it refuses `[harness_plugins]` in a TOML file, with the key named at `settings.harness_plugins…`. | `crates/charter-core/src/harness_plugin.rs` `refusals_in` |
+| any other shape under `settings.harness_plugins` | — | Refused by the Workspace level's save, and ignored by the reader, in the words it refuses `[harness_plugins]` in a TOML file, with the key named at `settings.harness_plugins…`. | `crates/charter-core/src/harness_plugin.rs` `refusals_in` |
 | `settings.theme.use` | str | The theme the window and its terminals draw while this workspace is in front (charter-app#281): the same values as `charter.toml`'s `[theme].use`, over it and under `charter.local.toml`'s. An extension's theme is drawn only while that extension is on in this workspace, so a workspace that turns it off draws the built-in `charter-dark` and says why. A value of none of the shapes is ignored with a sentence and the next layer down is used. | `crates/charter-core/src/extension/project/theme.rs` `resolve` |
 | `settings.theme.icons` | str | The icon theme the file trees draw while this workspace is in front (FM-3, #1106): the same values as `charter.toml`'s `[theme].icons`, over it and under `charter.local.toml`'s. | `crates/charter-core/src/extension/project/theme.rs` `resolve_icons` |
 | `settings.theme.colour` | str | The workspace's colour (charter-app#281): one of `red`, `orange`, `yellow`, `green`, `teal`, `blue`, `purple`, `pink`, or `#rrggbb`, whose hue is taken. **A workspace's alone**: the project's files cannot set one, and no other layer overrides it. It picks no theme; the window tints the accent, the focus ring and this workspace's tab and chat strip shades of the theme it draws with the hue, at the same luminance, and leaves text and the terminal as they are. Any other value is ignored with a sentence, and the workspace has no colour. | `crates/charter-core/src/extension/project/theme.rs` `resolve`, `colour_of`; the tint, `app/src/theme/tint.ts` |
-| any other key in `settings.theme`, or `settings.theme` that is not an object | — | Refused by the Workspace settings tab's save, and ignored by the reader: a workspace's theme holds `use`, `icons` and `colour`. | `crates/charter-core/src/extension/project/theme.rs` `refusals_in_workspace` |
+| any other key in `settings.theme`, or `settings.theme` that is not an object | — | Refused by the Workspace level's save, and ignored by the reader: a workspace's theme holds `use`, `icons` and `colour`. | `crates/charter-core/src/extension/project/theme.rs` `refusals_in_workspace` |
 | any other key in `settings`, or `settings` that is not an object | — | Refused by the save, and ignored by the reader: a workspace's settings hold `extensions`, `harness_plugins` and `theme` and nothing else. | `crates/charter-core/src/settings/workspace.rs` `refusals` |
 
-**Written by** the Workspace settings tab (`settings::workspace::save`), which changes only
+**Written by** Settings at the Workspace level (`settings::workspace::save`, SE-20), which changes only
 `settings`: every other key keeps its place and value, a key removed takes every object it
 leaves empty with it (so removing the last setting gives the manifest back as it was), and the
 `settings` key itself keeps its place. **It keeps the manifest's owner**: a manifest charter

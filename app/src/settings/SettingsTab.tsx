@@ -1,8 +1,10 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useId, useMemo, useState, type ReactNode } from "react";
 import { LoaderCircle } from "lucide-react";
 import type { PlaneId } from "../bindings";
+import { DEFAULT_THEME, inForce } from "../theme/theme";
 import { atCreation } from "../windowprefs";
-import { Choice, Field, SettingGroup, SettingRow, SettingsLayout } from "./components";
+import { Choice, Field, SettingGroup, SettingRow, SettingsLayout, type RowIds } from "./components";
+import type { Driven } from "./driver";
 import {
   inAFile,
   LEVELS,
@@ -11,7 +13,8 @@ import {
   type LiveSetting,
   type SettingsGroup,
 } from "./groups";
-import { projectGroups, useProjectLevel, type ProjectLevel } from "./project";
+import { projectGroups, useProjectLevel } from "./project";
+import { useWorkspaceLevel, workspaceGroups } from "./workspace";
 import { youGroups } from "./you";
 
 /**
@@ -20,9 +23,10 @@ import { youGroups } from "./you";
  * (`tabs.settingsView`), opened from the app menu's Settings…, `⌘,` and the palette.
  *
  * **Two columns.** The level switcher and what that level is sit at the top; the left nav lists
- * the level's groups; the right column shows the chosen group and nothing else. **You** and,
- * where the tab is in a project, **Project** (SE-17) are offered; Workspace (SE-20) and Persona
- * join the switcher as their groups land, each declared as data the same way (`groups.ts`).
+ * the level's groups; the right column shows the chosen group and nothing else. **You**; where
+ * the tab is in a project, **Project** (SE-17); and where it is about a workspace — opened at
+ * one, or on its strip — **Workspace** (SE-20) are offered. Persona joins the switcher as its
+ * groups land, declared as data the same way (`groups.ts`).
  *
  * **The level is the tab's** (D-SE17a): the tab is keyed by it, and the switcher asks for the tab
  * to show another level (`onLevelChange`) rather than keeping one of its own — so opening
@@ -33,19 +37,35 @@ import { youGroups } from "./you";
  */
 export function SettingsTab({
   plane,
+  workspace,
   level = "you",
   onLevelChange,
 }: {
   /** The project the tab is in; without one only You is offered. */
   plane?: PlaneId;
+  /** The workspace the tab is about, in that project; without one Workspace is not offered. */
+  workspace?: string;
   level?: Level;
   onLevelChange?: (level: Level) => void;
 }) {
   const offered = LEVELS.filter(
-    (one) => one.id === "you" || (one.id === "project" && plane !== undefined),
+    (one) =>
+      one.id === "you" ||
+      (one.id === "project" && plane !== undefined) ||
+      (one.id === "workspace" && plane !== undefined && workspace !== undefined),
   );
-  const at = plane !== undefined && level === "project" ? "project" : "you";
+  const at = offered.some((one) => one.id === level) ? level : "you";
   const change = (to: string) => onLevelChange?.(to as Level);
+  if (at === "workspace" && plane !== undefined && workspace !== undefined)
+    return (
+      <WorkspaceLevelTab
+        key={`${plane}\u0000${workspace}`}
+        plane={plane}
+        workspace={workspace}
+        levels={offered}
+        onLevelChange={change}
+      />
+    );
   return at === "project" && plane !== undefined ? (
     <ProjectLevelTab key={plane} plane={plane} levels={offered} onLevelChange={change} />
   ) : (
@@ -90,20 +110,48 @@ function ProjectLevelTab({ plane, ...switcher }: Switcher & { plane: PlaneId }) 
       {...switcher}
       about="This project, for everyone who opens it. Never put a secret in its files: keep it in a vault and name it as vault:<vault>/<key>."
       groups={groups}
-      waiting={
-        project.state === "reading" ? (
-          <p className="pending" aria-busy="true">
-            <LoaderCircle className="node-icon spinning" />
-            Reading the settings…
-          </p>
-        ) : project.state === "trouble" ? (
-          <p className="trouble" role="alert">
-            {project.trouble}
-          </p>
-        ) : undefined
-      }
+      waiting={waitingFor(project)}
       standing={standing}
-      project={project}
+      driver={project.state === "read" ? project : undefined}
+    />
+  );
+}
+
+/** What stands in for a level's groups until it has been read. */
+function waitingFor(
+  level: { state: "reading" } | { state: "trouble"; trouble: string } | Driven<unknown>,
+) {
+  return level.state === "reading" ? (
+    <p className="pending" aria-busy="true">
+      <LoaderCircle className="node-icon spinning" />
+      Reading the settings…
+    </p>
+  ) : level.state === "trouble" ? (
+    <p className="trouble" role="alert">
+      {level.trouble}
+    </p>
+  ) : undefined;
+}
+
+function WorkspaceLevelTab({
+  plane,
+  workspace,
+  ...switcher
+}: Switcher & { plane: PlaneId; workspace: string }) {
+  const level = useWorkspaceLevel(plane, workspace);
+  const groups = useMemo(
+    () => (level.state === "read" ? workspaceGroups(level.read, level.reread) : []),
+    [level],
+  );
+  return (
+    <Shown
+      level="workspace"
+      {...switcher}
+      about={`The workspace ${workspace}, read between charter.toml and charter.local.toml: it refines its project for the team, and this machine has the last word. Never put a secret in its settings: keep it in a vault and name it as vault:<vault>/<key>.`}
+      groups={groups}
+      waiting={waitingFor(level)}
+      standing={level.state === "read" ? level.read.settings.refusals : []}
+      driver={level.state === "read" ? level : undefined}
     />
   );
 }
@@ -120,7 +168,7 @@ function Shown({
   groups: declared,
   waiting,
   standing = [],
-  project,
+  driver,
 }: Switcher & {
   level: Level;
   about: string;
@@ -128,7 +176,8 @@ function Shown({
   waiting?: ReactNode;
   /** What charter refuses in the level's files as they stand. */
   standing?: readonly string[];
-  project?: ProjectLevel;
+  /** What writes the level's file settings, once the level has been read. */
+  driver?: Driven<unknown>;
 }) {
   // Per tab and not remembered (V89c): a level drawn afresh starts with the whole nav.
   const [filter, setFilter] = useState("");
@@ -172,7 +221,7 @@ function Shown({
               </ul>
             </div>
           )}
-          {group && <ShownGroup key={group.id} group={group} project={project} />}
+          {group && <ShownGroup key={group.id} group={group} driver={driver} />}
         </>
       )}
     </SettingsLayout>
@@ -199,7 +248,7 @@ function narrowed(groups: readonly SettingsGroup[], filter: string): readonly Se
 
 /** The chosen group, drawn from its data. Keyed by the group, so each setting's hook is always
  *  the same one in a given row. */
-function ShownGroup({ group, project }: { group: SettingsGroup; project?: ProjectLevel }) {
+function ShownGroup({ group, driver }: { group: SettingsGroup; driver?: Driven<unknown> }) {
   return (
     <SettingGroup label={group.label} help={group.help}>
       {group.notes?.map((why, at) => (
@@ -209,9 +258,7 @@ function ShownGroup({ group, project }: { group: SettingsGroup; project?: Projec
       ))}
       {group.settings.map((setting) =>
         inAFile(setting) ? (
-          project?.state === "read" && (
-            <FileRow key={setting.id} setting={setting} project={project} />
-          )
+          driver && <FileRow key={setting.id} setting={setting} driver={driver} />
         ) : (
           <LiveRow key={setting.id} setting={setting} />
         ),
@@ -221,13 +268,14 @@ function ShownGroup({ group, project }: { group: SettingsGroup; project?: Projec
 }
 
 function LiveRow({ setting }: { setting: LiveSetting }) {
-  const { control, reset, grouped } = setting.useControl();
+  const { control, reset, grouped, error } = setting.useControl();
   return (
     <SettingRow
       label={setting.label}
       help={setting.help}
       reset={reset}
       grouped={grouped}
+      error={error}
       control={control}
     />
   );
@@ -238,14 +286,9 @@ function LiveRow({ setting }: { setting: LiveSetting }) {
  * that write settles — and written as it changes. A pick is written at once; a typed value when
  * the field is left (`Field`'s `onCommit`).
  */
-function FileRow({
-  setting,
-  project,
-}: {
-  setting: FileSetting;
-  project: Extract<ProjectLevel, { state: "read" }>;
-}) {
-  const onDisk = setting.read(project.read[setting.file]);
+function FileRow({ setting, driver: project }: { setting: FileSetting; driver: Driven<unknown> }) {
+  const file = project.files[setting.file];
+  const onDisk = file === undefined ? "" : setting.read(file);
   const [draft, setDraft] = useState<string>();
   const value = draft ?? project.pending[setting.id] ?? onDisk;
   const writing = project.pending[setting.id] !== undefined;
@@ -263,7 +306,14 @@ function FileRow({
       error={project.refused[setting.id]}
       undo={project.undoable === setting.id && !writing ? project.undo : undefined}
       control={(ids) =>
-        setting.kind === "choice" ? (
+        setting.kind === "colour" ? (
+          <Colour
+            ids={ids}
+            setting={setting}
+            value={value}
+            onValueChange={(to) => project.write(setting, to)}
+          />
+        ) : setting.kind === "choice" ? (
           <Choice
             kind="select"
             ids={ids}
@@ -292,5 +342,78 @@ function FileRow({
         )
       }
     />
+  );
+}
+
+/** The pick that says a workspace's colour is its own `#rrggbb` rather than a palette name. */
+const CUSTOM = "custom";
+
+/**
+ * **A colour** (a workspace's, charter-app#281): the palette as a select, and — while the pick
+ * is custom — the platform's own colour well beside it, labelled, whose value is the `#rrggbb`
+ * the file holds. Picking Custom writes the accent the window is drawn in, as a start; the well
+ * writes its colour once it is picked — the native `change`, when the picker closes — or left,
+ * never at every step of a drag (React's `onChange` is every step).
+ */
+function Colour({
+  ids,
+  setting,
+  value,
+  onValueChange,
+}: {
+  ids: RowIds;
+  setting: FileSetting;
+  value: string;
+  onValueChange: (to: string) => void;
+}) {
+  const well = useId();
+  const [dragged, setDragged] = useState<string>();
+  // A `#rrggbb`: what the colour well can hold. Anything else the file holds that is not a
+  // palette name — `#fff`, say — is shown as held rather than as a custom colour the well would
+  // silently turn black.
+  const custom = /^#[0-9a-fA-F]{6}$/.test(value);
+  const names = (setting.choices ?? []).filter((one) => one !== CUSTOM);
+  /** Where a new custom colour starts: the accent the window is drawn in, as `#rrggbb`. */
+  const start = () =>
+    /^#[0-9a-fA-F]{6}/.exec(inForce().values["accent.base"])?.[0] ??
+    DEFAULT_THEME.values["accent.base"];
+  const commit = (to: string | undefined) => {
+    setDragged(undefined);
+    if (to !== undefined && to !== value) onValueChange(to);
+  };
+  return (
+    <>
+      <Choice
+        kind="select"
+        ids={ids}
+        options={[
+          ...(value !== "" && !custom && !names.includes(value) ? [value] : []),
+          ...(setting.choices ?? []),
+        ].map((one) => ({ value: one, label: setting.labels?.[one] ?? one }))}
+        value={custom ? CUSTOM : value}
+        unset={setting.unset}
+        onValueChange={(to) => {
+          if (to === CUSTOM) {
+            if (!custom) onValueChange(start());
+          } else onValueChange(to);
+        }}
+      />
+      {custom && (
+        <>
+          <label htmlFor={well}>Custom colour</label>
+          <input
+            id={well}
+            type="color"
+            tabIndex={0}
+            value={dragged ?? value}
+            onChange={(event) => setDragged(event.currentTarget.value)}
+            ref={(element) => {
+              if (element) element.onchange = () => commit(element.value);
+            }}
+            onBlur={() => commit(dragged)}
+          />
+        </>
+      )}
+    </>
   );
 }

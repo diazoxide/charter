@@ -27,7 +27,7 @@ import { PanelList } from "./PanelList";
 import { HarnessSetupTab } from "./HarnessSetupTab";
 import { RepoInstructionsTab } from "./RepoInstructionsTab";
 import { FirstTaskTab, type FirstTaskDoes } from "./FirstTaskTab";
-import { ProjectSettings, WorkspaceSettings } from "./ProjectSettings";
+import { ProjectSettings } from "./ProjectSettings";
 import { SettingsTab } from "./settings/SettingsTab";
 import {
   commands,
@@ -60,6 +60,8 @@ import {
   settingsLevelOf,
   settingsView,
   viewKey,
+  workspaceSettingsTitle,
+  workspaceSettingsView,
   type ViewRef,
 } from "./tabs";
 import { VaultTab } from "./VaultTab";
@@ -67,7 +69,7 @@ import { listedMemoryOffers, memoryKeyRun, toKeep, type Offer } from "./actions"
 import { factsChanged } from "./extensionFacts";
 import { usePlaneChanged, VIEWS } from "./planeChanged";
 
-/** What `workspaceSettingsView` names a workspace's settings view (charter-app#280). */
+/** What `workspaceSettingsView` names Settings at a workspace's level (SE-20). */
 const WORKSPACE_SETTINGS = "workspace-settings";
 
 /** What `repoInstructionsView` names a workspace's repo instructions view (FR-18a). */
@@ -407,10 +409,6 @@ export function ViewPane({
              form writes, and the panel vocabulary is for reading. Keyed by the plane, so a pane
              that comes to show another project's settings starts from its own read. */
           <ProjectSettings key={plane} plane={plane} />
-        ) : isWorkspaceSettings(view) ? (
-          /* A workspace's settings (charter-app#280): Project settings' body, for the one file
-             a workspace holds. Keyed by both, for the same reason. */
-          <WorkspaceSettings key={`${plane}\u0000${view.key}`} plane={plane} workspace={view.key} />
         ) : isRepoInstructions(view) ? (
           /* The agent instructions a workspace's repo carries, offered to its memory (FR-18a):
              a preview whose press is the only thing that writes. Keyed by both, as a
@@ -498,14 +496,19 @@ export function ViewPane({
             onClose={() => onCloseView?.(view)}
           />
         ) : settingsLevel !== undefined ? (
-          /* Settings (SE-16, SE-17), at the level the tab is keyed by. Its switcher moves this
-             tab to another level, or brings forward the tab already there (D-SE17a). */
+          /* Settings (SE-16, SE-17, SE-20), at the level the tab is keyed by. Its switcher moves
+             this tab to another level, or brings forward the tab already there (D-SE17a). The
+             workspace it offers is the one it is at, else the one whose strip it is on. */
           <SettingsTab
             plane={plane}
+            workspace={settingsLevel === "workspace" ? view.key : workspace}
             level={settingsLevel}
             onLevelChange={(to) => {
+              const at = settingsLevel === "workspace" ? view.key : workspace;
               if (to === "you" || to === "project")
                 onShowInstead?.(view, settingsView(to), SETTINGS_TAB_TITLE);
+              else if (to === "workspace" && at !== undefined)
+                onShowInstead?.(view, workspaceSettingsView(at), workspaceSettingsTitle(at));
             }}
           />
         ) : (
@@ -585,11 +588,6 @@ const OPENING = <EmptyState mark={LoaderCircle} headline="Opening the light edit
 /** Whether `view` is the Project settings view (charter-app#252). */
 function isSettings(view: ViewRef): boolean {
   return viewKey(view) === viewKey(SETTINGS_VIEW);
-}
-
-/** Whether `view` is a workspace's settings view (charter-app#280). */
-function isWorkspaceSettings(view: ViewRef): boolean {
-  return view.from === null && view.view === WORKSPACE_SETTINGS;
 }
 
 /** Whether `view` is a workspace's repo instructions (FR-18a). */

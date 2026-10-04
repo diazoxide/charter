@@ -2084,7 +2084,8 @@ export const PlaneView = memo(function PlaneView({
     showView(SAVING_VIEW, SAVING_TITLE);
   }, [savingAsked, showView]);
 
-  /** A workspace's settings tab (charter-app#280), on that workspace's strip. */
+  /** Settings at a workspace's level (SE-20; charter-app#280), on that workspace's strip: what
+   *  its menu's and the palette's Workspace settings… open. */
   const openWorkspaceSettings = useCallback(
     (workspace: string) =>
       showView(workspaceSettingsView(workspace), workspaceSettingsTitle(workspace), workspace),
