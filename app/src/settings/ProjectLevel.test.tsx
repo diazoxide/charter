@@ -268,6 +268,25 @@ describe("the Project level", () => {
     );
   });
 
+  it("keeps what the files refuse on screen under a filter that matches nothing (SE-21)", async () => {
+    const { files } = core();
+    files.shared = { ...files.shared, refusals: ["[plane] mode is not one charter knows"] };
+    await atProject();
+
+    await userEvent.type(
+      screen.getByRole("searchbox", { name: "Filter settings" }),
+      "colour of the moon",
+    );
+
+    expect(within(nav()).queryAllByRole("button")).toEqual([]);
+    expect(
+      screen.getByText("No setting at this level matches “colour of the moon”.", {
+        ignore: "[role=status]",
+      }),
+    ).toBeVisible();
+    expect(screen.getByText("charter.toml: [plane] mode is not one charter knows")).toBeVisible();
+  });
+
   it("hides a group with nothing in it", async () => {
     core();
     await atProject();
