@@ -55,6 +55,9 @@ pub struct Label {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct Milestone {
     pub number: u64,
+    /// The GraphQL node id, which the work model carries beside the title.
+    #[serde(default)]
+    pub node_id: Option<String>,
     pub title: String,
     pub state: String,
     #[serde(default)]

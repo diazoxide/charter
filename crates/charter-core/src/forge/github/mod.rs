@@ -422,9 +422,8 @@ impl WorkItems for GitHub {
         item.url = issue.html_url;
         item.state = crate::work::State::of_forge(&issue.state);
         item.labels = issue.labels.into_iter().map(|l| l.name).collect();
-        item.milestone = issue.milestone.map(|m| crate::work::Milestone {
-            title: m.title,
-            due: m.due_on.map(|d| d.chars().take(10).collect()),
+        item.milestone = issue.milestone.map(|m| {
+            crate::work::Milestone::of_forge(m.node_id.map(ForgeRef), m.title, m.due_on.as_deref())
         });
         Ok(item)
     }
@@ -849,5 +848,65 @@ mod capability_tests {
             );
             assert_eq!(Support::Available.taken(what), Taken::Feature);
         }
+    }
+}
+
+#[cfg(test)]
+mod create_mapping_tests {
+    use std::sync::Arc;
+
+    use serde_json::json;
+
+    use crate::forge::Forge;
+    use crate::forge::Kind;
+    use crate::forge::backend::{Caller, ForgeRef, NewWorkItem};
+    use crate::forge::recorded::Recorded;
+    use crate::work::Milestone;
+
+    fn created(answer: serde_json::Value) -> crate::work::WorkItem {
+        let call = json!({"endpoint": {"rest": {"method": "POST", "path": "repos/acme/api/issues"}},
+                          "fields": [{"text": ["title", "Port the picker"]},
+                                     {"text": ["body", "Why."]}]});
+        let text = json!({"source": "GitHub REST API version 2022-11-28, issues: Create an issue",
+                          "exchanges": [{"call": call, "reply": {"code": 0, "out": answer.to_string()}}]});
+        let recorded = Arc::new(Recorded::parse(&text.to_string()).unwrap());
+        let backend = Forge::default_of(Kind::GitHub).backend_over(recorded);
+        let new = NewWorkItem {
+            title: "Port the picker".into(),
+            body: "Why.".into(),
+            workspace_label: None,
+        };
+        backend
+            .create(&Caller::command(), "acme/api", &new)
+            .unwrap()
+    }
+
+    fn issue() -> serde_json::Value {
+        json!({"id": 1012, "node_id": "I_kwDOAcme12", "number": 12, "title": "Port the picker",
+               "state": "open", "html_url": "https://github.com/acme/api/issues/12"})
+    }
+
+    #[test]
+    fn a_milestone_in_githubs_answer_is_mapped_with_its_node_id_and_due_day() {
+        let mut answer = issue();
+        answer["milestone"] = json!({"number": 1, "node_id": "MI_kwDOAcme1", "title": "v1",
+                                     "state": "open", "due_on": "2026-10-31T07:00:00Z"});
+        assert_eq!(
+            created(answer).milestone,
+            Some(Milestone {
+                forge_ref: Some(ForgeRef("MI_kwDOAcme1".into())),
+                title: "v1".into(),
+                due: chrono::NaiveDate::from_ymd_opt(2026, 10, 31),
+            })
+        );
+    }
+
+    #[test]
+    fn no_milestone_or_no_due_date_in_githubs_answer_maps_to_none() {
+        assert_eq!(created(issue()).milestone, None);
+        let mut answer = issue();
+        answer["milestone"] = json!({"number": 1, "title": "v1", "state": "open", "due_on": null});
+        let milestone = created(answer).milestone.unwrap();
+        assert_eq!((milestone.forge_ref, milestone.due), (None, None));
     }
 }

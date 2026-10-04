@@ -15,6 +15,7 @@
 
 use std::sync::{Arc, OnceLock};
 
+use charter_core::forge::backend::workspace_label;
 use charter_core::forge::http::{ApiRoot, Http, TokenSource};
 use charter_core::forge::route::{HostScope, Resolver, SignIn};
 use charter_core::forge::transport::{Call, Field, Method, Transport};
@@ -205,7 +206,8 @@ pub fn discover(
     })
 }
 
-/// Close every open issue of `api` labelled `alpha` and titled [`ISSUE_TITLE`], by the numbers
+/// Close every open issue of `api` carrying the label `create` gives workspace `alpha`
+/// (`ws:alpha` on GitHub, `charter::ws::alpha` on GitLab) and titled [`ISSUE_TITLE`], by the numbers
 /// the forge's own listing names (GitHub's `number`, GitLab's `iid`), never a pull request, and
 /// answer the numbers closed. `create` runs it before and after itself, so an issue a failed run
 /// left behind is closed by the next.
@@ -215,13 +217,14 @@ pub fn sweep(
     get: &dyn Fn(&str) -> Result<Value, String>,
     close: &dyn Fn(u64) -> Result<(), String>,
 ) -> Result<Vec<u64>, String> {
+    let label = workspace_label(kind, "alpha").replace(':', "%3A");
     let (path, number) = match kind {
         Kind::GitHub => (
-            format!("{api}/issues?state=open&labels=alpha&per_page=100"),
+            format!("{api}/issues?state=open&labels={label}&per_page=100"),
             "number",
         ),
         Kind::GitLab => (
-            format!("{api}/issues?state=opened&labels=alpha&per_page=100"),
+            format!("{api}/issues?state=opened&labels={label}&per_page=100"),
             "iid",
         ),
     };

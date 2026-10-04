@@ -10,10 +10,11 @@ use std::io;
 
 use super::log::Fold;
 use super::tracker::Tracker;
-use super::{State, TrackerKey, WorkItem, list};
+use super::{Kind, State, TrackerKey, WorkItem, list};
 use crate::workspaces::Workspace;
 
-/// The board's columns: what is still to do, and what is done.
+/// The board's default grouping: what is still to do, and what is done. FW-9 may group by
+/// something else (a milestone, a Projects v2 status field) and replace it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Column {
     Open,
@@ -65,10 +66,21 @@ impl Board {
 pub fn of(ws: &Workspace, folded: &Fold, trackers: &[&dyn Tracker]) -> io::Result<Board> {
     let cards = list::of(ws, folded)?
         .into_iter()
-        .map(|row| Card {
-            item: trackers.iter().find_map(|tracker| tracker.item(&row.key)),
-            key: row.key,
-            chats: row.chats,
+        .map(|row| {
+            // A todo the list read is a card with its title even when no `Todos` tracker was
+            // given: the list already holds it.
+            let item = trackers
+                .iter()
+                .find_map(|tracker| tracker.item(&row.key))
+                .or_else(|| {
+                    let title = row.todo.clone()?;
+                    Some(WorkItem::new(row.key.clone(), Kind::Todo, title))
+                });
+            Card {
+                item,
+                key: row.key,
+                chats: row.chats,
+            }
         })
         .collect();
     Ok(Board { cards })
@@ -77,7 +89,6 @@ pub fn of(ws: &Workspace, folded: &Fold, trackers: &[&dyn Tracker]) -> io::Resul
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::work::Kind;
     use crate::work::log::{self, Op};
     use crate::work::tracker::Todos;
     use crate::workspaces::Plane;
@@ -179,6 +190,25 @@ mod tests {
             of(&ws, &folded, &[&first, &second]).unwrap(),
             board,
             "a board rebuilt from the same sources is the same board"
+        );
+    }
+
+    #[test]
+    fn a_todo_is_a_card_with_its_title_even_with_no_todo_tracker_given() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = Plane::open(tmp.path()).workspace("alpha").unwrap();
+        let picker = ws.add_todo("Port the picker", stamp(0)).unwrap();
+        let stem = picker.file_stem().unwrap().to_string_lossy().into_owned();
+
+        let board = of(&ws, &log::fold(tmp.path()), &[]).unwrap();
+        let item = board.cards[0]
+            .item
+            .as_ref()
+            .expect("the list's todo fills it");
+        assert_eq!(item.key, TrackerKey::todo("alpha", &stem).unwrap());
+        assert_eq!(
+            (item.kind, item.title.as_str()),
+            (Kind::Todo, "Port the picker")
         );
     }
 }
