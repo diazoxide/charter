@@ -1,18 +1,26 @@
 //! The live forge nightly (FG-4, #712) runs the forge contract against a real GitHub repo and a
 //! real GitLab repo, with tokens the operator provisioned, and grants nothing else.
 //!
-//! It is evidence, never a gate (V70): nightly and by hand, never on a pull request, where a
-//! fork's code could reach the tokens. Each forge's job holds exactly one token, its own, and
-//! hands it only to the step that runs the tests, after the build: a dependency's build script
-//! never sees it. That job restores no cache, as the release jobs that hold a key do not (ADR
-//! 0042). Unprovisioned, a job says so and stops, green. The workflow grants nothing by default;
-//! the one job that may write, the issue that a red night keeps open, holds no token.
+//! It is evidence, never a gate (V70): nightly and by hand, and nothing else can start it, so a
+//! fork's or a pull request's code never runs where a token is. Each forge's job runs in that
+//! forge's own GitHub environment (`forge-live-github`, `forge-live-gitlab`), which holds one
+//! secret under one static name, so the runner is sent that one token and no other secret (a
+//! computed `secrets[…]` index sends the whole secrets context). The environments allow only
+//! `main` to deploy, so a dispatch from another branch never runs changed code with the token.
+//! The token's value is handed only to the step that runs the tests, after the build, which
+//! keeps it out of the build scripts' environment; it does not keep it from code that reads the
+//! runner's memory, which is why the environment and its branch policy are the boundary. The
+//! job restores no cache, as the release jobs that hold a key do not (ADR 0042). Unprovisioned, a
+//! job says so and stops, green. The job that keeps the nightly's issue holds no secret.
 
 mod workflow;
 
 use workflow::{Job, job_named, jobs, read, run_lines, step_uses, step_value, workflows_dir};
 
 const FILE: &str = "forge-live.yml";
+
+/// The one secret the workflow may name, and how.
+const TOKEN: &str = "secrets.FORGE_LIVE_TOKEN";
 
 fn nightly() -> (String, Vec<Job>) {
     let text = read(&workflows_dir().join(FILE));
@@ -26,107 +34,143 @@ fn pairs(list: &[(&str, &str)]) -> Vec<(String, String)> {
         .collect()
 }
 
-/// The workflow's `on:` block, comments dropped, as its trimmed lines.
-fn triggers(text: &str) -> Vec<String> {
-    text.lines()
-        .skip_while(|l| *l != "on:")
-        .skip(1)
-        .take_while(|l| l.is_empty() || l.starts_with(' ') || l.starts_with('#'))
-        .filter(|l| !l.trim().is_empty() && !l.trim_start().starts_with('#'))
+/// Every reference to the secrets context on `line`, in either form: `secrets.NAME`, or a
+/// `secrets[…]` index, with or without spaces.
+fn secret_refs(line: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut rest = line;
+    while let Some(at) = rest.find("secrets") {
+        let before = rest[..at].chars().last();
+        let after = rest[at + "secrets".len()..].trim_start();
+        let word = before.is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '_' || c == '.'));
+        if word && (after.starts_with('.') || after.starts_with('[')) {
+            let end = after
+                .find(|c: char| !(c.is_ascii_alphanumeric() || "._[]'\"".contains(c)))
+                .unwrap_or(after.len());
+            found.push(format!("secrets{}", &after[..end]));
+        }
+        rest = &rest[at + "secrets".len()..];
+    }
+    found
+}
+
+/// The lines that reference a secret, comments dropped.
+fn secret_lines<'a>(lines: impl Iterator<Item = &'a String>) -> Vec<String> {
+    lines
+        .filter(|l| !l.trim_start().starts_with('#'))
+        .filter(|l| !secret_refs(l).is_empty())
         .map(|l| l.trim().to_owned())
         .collect()
 }
 
-#[test]
-fn it_runs_nightly_and_by_hand_and_never_on_a_pull_request_or_a_push() {
-    let (text, _) = nightly();
-    let on = triggers(&text);
-    let cron = on
+/// The workflow's `on:` events: the keys directly under `on:`.
+fn events(text: &str) -> Vec<String> {
+    text.lines()
+        .skip_while(|l| *l != "on:")
+        .skip(1)
+        .take_while(|l| l.is_empty() || l.starts_with(' ') || l.starts_with('#'))
+        .filter(|l| l.starts_with("  ") && !l.starts_with("   ") && !l.trim().starts_with('#'))
+        .map(|l| l.trim().trim_end_matches(':').to_owned())
+        .collect()
+}
+
+/// The lines of the job's own `env:` block, if it has one.
+fn job_env(job: &Job) -> Vec<String> {
+    let Some(start) = job.body.iter().position(|l| l.trim_end() == "    env:") else {
+        return Vec::new();
+    };
+    job.body[start + 1..]
         .iter()
-        .find_map(|l| l.strip_prefix("- cron:"))
-        .map(|c| c.trim().trim_matches('"').to_owned())
-        .unwrap_or_else(|| panic!("no schedule in {on:?}"));
-    let fields: Vec<&str> = cron.split_whitespace().collect();
-    assert_eq!(fields[2..], ["*", "*", "*"], "every night: {cron}");
-    assert!(on.iter().any(|l| l == "workflow_dispatch:"), "{on:?}");
-    for event in [
-        "pull_request",
-        "pull_request_target",
-        "push",
-        "workflow_run",
-    ] {
-        assert!(
-            !on.iter().any(|l| l.starts_with(&format!("{event}:"))),
-            "the tokens are reachable from `{event}`: {on:?}"
-        );
-    }
+        .take_while(|l| l.trim().is_empty() || l.starts_with("      "))
+        .cloned()
+        .collect()
 }
 
 #[test]
-fn the_workflow_grants_nothing_and_the_live_job_only_reads_the_code() {
+fn the_secret_reader_sees_both_forms() {
+    assert_eq!(secret_refs("x: ${{ secrets.A }}"), ["secrets.A"]);
+    assert_eq!(
+        secret_refs("x: ${{ secrets[matrix.token] }}"),
+        ["secrets[matrix.token]"]
+    );
+    assert_eq!(secret_refs("x: ${{ secrets ['B'] }}"), ["secrets['B']"]);
+    assert!(secret_refs("x: ${{ github.token }} # the secrets we hold").is_empty());
+    assert!(secret_refs("mysecrets.x").is_empty());
+}
+
+#[test]
+fn it_runs_nightly_and_by_hand_and_on_nothing_else() {
+    let (text, _) = nightly();
+    assert_eq!(events(&text), ["schedule", "workflow_dispatch"]);
+    let cron = text
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("- cron:"))
+        .map(|c| c.trim().trim_matches('"').to_owned())
+        .expect("a schedule");
+    let fields: Vec<&str> = cron.split_whitespace().collect();
+    assert_eq!(fields[2..], ["*", "*", "*"], "every night: {cron}");
+}
+
+#[test]
+fn the_workflow_grants_nothing_and_each_job_only_what_it_needs() {
     let (text, jobs) = nightly();
     assert!(
         text.lines().any(|l| l == "permissions: {}"),
         "the workflow grants nothing by default; each job names what it needs"
     );
+    let names: Vec<&str> = jobs.iter().map(|j| j.name.as_str()).collect();
+    assert_eq!(names, ["live", "notice"]);
     let live = job_named(&jobs, "live", FILE);
     assert_eq!(live.permissions(), Some(pairs(&[("contents", "read")])));
     let notice = job_named(&jobs, "notice", FILE);
-    assert_eq!(
-        notice.permissions(),
-        Some(pairs(&[("contents", "read"), ("issues", "write")]))
-    );
-    assert!(
-        !notice.reads_a_secret(),
-        "the job that writes holds no token"
-    );
-    let names: Vec<&str> = jobs.iter().map(|j| j.name.as_str()).collect();
-    assert_eq!(names, ["live", "notice"]);
+    assert_eq!(notice.permissions(), Some(pairs(&[("issues", "write")])));
 }
 
 #[test]
-fn each_forge_job_holds_its_own_token_and_only_the_test_step_is_handed_it() {
+fn only_the_live_job_names_a_secret_and_only_its_own_environments_token() {
+    let (text, jobs) = nightly();
+    // Every reference anywhere in the file, the workflow's own `env:` included.
+    let all = secret_lines(text.lines().map(str::to_owned).collect::<Vec<_>>().iter());
+    for line in &all {
+        assert_eq!(
+            secret_refs(line),
+            [TOKEN],
+            "a secret other than the environment's one token, or a computed index: {line}"
+        );
+    }
+    let notice = job_named(&jobs, "notice", FILE);
+    assert_eq!(
+        secret_lines(notice.body.iter()),
+        Vec::<String>::new(),
+        "the job that writes the issue holds no secret"
+    );
+    let live = job_named(&jobs, "live", FILE);
+    assert_eq!(
+        live.environment(),
+        Some("forge-live-${{ matrix.forge }}"),
+        "each forge's job runs in that forge's environment"
+    );
+    assert_eq!(
+        secret_lines(job_env(live).iter()),
+        Vec::<String>::new(),
+        "a job-level env hands the token to every step"
+    );
+}
+
+#[test]
+fn the_token_reaches_only_the_test_step_after_the_build() {
     let (_, jobs) = nightly();
     let live = job_named(&jobs, "live", FILE);
-    // One row per forge, each naming its own secret and its own owner variable.
-    for forge in ["GITHUB", "GITLAB"] {
-        for line in [
-            format!("token: FORGE_LIVE_{forge}_TOKEN"),
-            format!("owner: FORGE_LIVE_{forge}_OWNER"),
-        ] {
-            assert!(
-                live.body.iter().any(|l| l.trim() == line),
-                "the matrix has no `{line}`"
-            );
-        }
-    }
-    let reading: Vec<String> = live
-        .body
-        .iter()
-        .filter(|l| l.contains("secrets."))
-        .cloned()
-        .collect();
-    assert!(
-        reading.is_empty(),
-        "a secret named outright rather than the row's own: {reading:#?}"
-    );
     let steps = live.steps();
-    let handed: Vec<&Vec<String>> = steps
-        .iter()
-        .filter(|s| s.iter().any(|l| l.contains("secrets[matrix.token]")))
+    let handed: Vec<usize> = (0..steps.len())
+        .filter(|&i| !secret_lines(steps[i].iter()).is_empty())
         .collect();
+    assert_eq!(handed.len(), 1, "the token reaches one step: {handed:?}");
+    let run = &steps[handed[0]];
     assert_eq!(
-        handed.len(),
-        2,
-        "the token reaches the provisioning check and the test run, and nothing else"
+        step_value(run, "env", "TOKEN"),
+        Some("${{ secrets.FORGE_LIVE_TOKEN }}")
     );
-    let check = handed[0];
-    assert_eq!(
-        step_value(check, "env", "TOKEN"),
-        Some("${{ secrets[matrix.token] != '' }}"),
-        "the check sees whether the token is set, not its value"
-    );
-    let run = handed[1];
     let commands = run_lines(run).join("\n");
     assert!(
         commands.contains("--ignored") && commands.contains("_live::"),
@@ -135,9 +179,11 @@ fn each_forge_job_holds_its_own_token_and_only_the_test_step_is_handed_it() {
     let build = steps
         .iter()
         .position(|s| run_lines(s).join(" ").contains("--no-run"))
-        .expect("a build step before the token is handed over");
-    let at = steps.iter().position(|s| std::ptr::eq(s, run)).unwrap();
-    assert!(build < at, "the build runs before the token is handed over");
+        .expect("a build step");
+    assert!(
+        build < handed[0],
+        "the build runs before the token is handed over"
+    );
     for step in &steps {
         let action = step_uses(step).unwrap_or_default();
         assert!(
@@ -160,7 +206,7 @@ fn each_forge_job_holds_its_own_token_and_only_the_test_step_is_handed_it() {
 }
 
 #[test]
-fn an_unprovisioned_forge_says_so_and_stops_green() {
+fn an_unprovisioned_forge_says_so_and_runs_nothing() {
     let (_, jobs) = nightly();
     let live = job_named(&jobs, "live", FILE);
     let steps = live.steps();
@@ -174,10 +220,15 @@ fn an_unprovisioned_forge_says_so_and_stops_green() {
         said.contains("GITHUB_STEP_SUMMARY") && said.contains("::notice"),
         "an unprovisioned run says what is missing where it is read: {said}"
     );
+    // Everything that checks out, builds or runs code is gated; only the record of what was
+    // tested, which the notice job reads, is kept either way.
     for step in &steps[1..] {
+        let gated = step
+            .iter()
+            .any(|l| l.trim() == "if: steps.provisioned.outputs.ready == 'true'");
+        let record = step_uses(step).is_some_and(|u| u.starts_with("actions/upload-artifact@"));
         assert!(
-            step.iter()
-                .any(|l| l.trim() == "if: steps.provisioned.outputs.ready == 'true'"),
+            gated || record,
             "a step runs on an unprovisioned forge: {step:#?}"
         );
     }

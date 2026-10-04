@@ -231,6 +231,6 @@ pub fn over(kind: &str, host: &str, recording: &str) -> Over {
         host: host.to_string(),
         scene: super::Scene::recorded(kind),
         check: Box::new(move || rt.block_on(server.verify())),
-        close_issue: Box::new(|_| {}),
+        sweep: Box::new(|| Ok(Vec::new())),
     }
 }
