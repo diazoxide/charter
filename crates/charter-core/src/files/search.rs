@@ -354,20 +354,35 @@ impl Page<'_> {
         let (ask, asked) = mpsc::channel::<(usize, String)>();
         let asked = Mutex::new(asked);
         let (tell, told) = mpsc::channel::<(usize, Read)>();
-        let ended = std::thread::scope(|scope| {
+        let (ended, panicked) = std::thread::scope(|scope| {
             let ask = ask;
+            let mut readers_of_page = Vec::new();
             for _ in 0..readers() {
                 let (asked, tell, watch) = (&asked, tell.clone(), &watch);
-                scope.spawn(move || {
+                readers_of_page.push(scope.spawn(move || {
                     loop {
                         let next = asked.lock().map(|asked| asked.recv());
                         let Ok(Ok((seq, path))) = next else { return };
-                        let read = file_hits(self.matcher, self.at, held, path, watch);
-                        if tell.send((seq, read)).is_err() {
-                            return;
+                        let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            file_hits(self.matcher, self.at, held, path, watch)
+                        }));
+                        match read {
+                            Ok(read) => {
+                                if tell.send((seq, read)).is_err() {
+                                    return;
+                                }
+                            }
+                            // A reader that panicked still answers its file, as cut, and ends
+                            // the page, so nobody waits on it; its panic is then raised on the
+                            // caller's thread.
+                            Err(panic) => {
+                                let _ = tell.send((seq, Read::Cut(Cut::Stop)));
+                                watch.over.store(true, Ordering::Relaxed);
+                                std::panic::resume_unwind(panic);
+                            }
                         }
                     }
-                });
+                }));
             }
             drop(tell);
             // `slots[0]` is the file heard next, numbered `first`; `first + slots.len()` is the
@@ -451,8 +466,16 @@ impl Page<'_> {
             };
             over.store(true, Ordering::Relaxed);
             drop(ask);
-            ended
+            // Every reader joined here, so the first one's panic reaches the caller as itself.
+            let panicked = readers_of_page.into_iter().fold(None, |first, reader| {
+                let panic = reader.join().err();
+                first.or(panic)
+            });
+            (ended, panicked)
         });
+        if let Some(panic) = panicked {
+            std::panic::resume_unwind(panic);
+        }
         // What was handed out and not heard is read again, first, by the next page.
         for slot in slots.into_iter().rev() {
             unheard.push_front(slot.path);
@@ -530,6 +553,10 @@ fn file_hits(
     path: String,
     watch: &Watch<'_>,
 ) -> Read {
+    #[cfg(test)]
+    if path.ends_with(tests::READER_PANICS) {
+        panic!("a reader panicked, as the test asked");
+    }
     let Ok(mut file) = super::open_inside(held, Path::new(&path)) else {
         return Read::Nothing;
     };
@@ -788,4 +815,66 @@ fn window(line: &str, first: usize) -> (usize, usize, bool) {
         .nth(LINE_CHARS)
         .map_or(line.len(), |(at, _)| from + at);
     (from, to, from > 0 || to < line.len())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::files::{Branch, Place};
+
+    /// A file whose name ends so makes its reader panic.
+    pub(super) const READER_PANICS: &str = "a-reader-panics-here.txt";
+
+    /// #1153 review: a reader that panics must not leave the page waiting on it for ever. The
+    /// panic reaches the caller, and the page ends at once.
+    #[test]
+    fn a_reader_that_panics_ends_the_page_with_its_panic_and_nothing_hangs() {
+        let dir = tempfile::tempdir().unwrap();
+        let plane = std::fs::canonicalize(dir.path()).unwrap();
+        std::fs::write(plane.join("charter.toml"), "schema = 1\n").unwrap();
+        let clone = plane.join("workspaces/alpha/thing");
+        std::fs::create_dir_all(&clone).unwrap();
+        let ran = crate::forklock::output(
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&clone)
+                .args(["init", "-q"])
+                .env("GIT_CONFIG_GLOBAL", "/dev/null"),
+        )
+        .unwrap();
+        assert!(ran.status.success(), "{ran:?}");
+        for n in 0..40 {
+            std::fs::write(clone.join(format!("f{n:02}.txt")), "needle\n").unwrap();
+        }
+        std::fs::write(clone.join(format!("f20-{READER_PANICS}")), "needle\n").unwrap();
+
+        let searching = std::thread::spawn(move || {
+            let scope = [Place {
+                plane: &plane,
+                branch: Branch::repo("alpha", "thing"),
+            }];
+            let mut search = search(&scope, "needle", SearchOptions::default()).unwrap();
+            let stop = AtomicBool::new(false);
+            search.more(usize::MAX, &stop, &mut |_| {})
+        });
+        let started = Instant::now();
+        while !searching.is_finished() {
+            assert!(
+                started.elapsed() < Duration::from_secs(30),
+                "the page hung on a reader that panicked"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        let panicked = searching
+            .join()
+            .expect_err("the reader's panic reaches the caller");
+        let said = panicked
+            .downcast_ref::<&str>()
+            .map(|said| said.to_string())
+            .or_else(|| panicked.downcast_ref::<String>().cloned())
+            .unwrap_or_default();
+        assert!(said.contains("a reader panicked"), "{said:?}");
+        drop(dir);
+    }
 }
