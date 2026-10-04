@@ -65,6 +65,7 @@ function textSize(which: Which): Setting {
             max={MOST_TEXT}
             value={size}
             shown={(px) => `${px}px`}
+            spoken={(px) => `${px} pixels`}
             onChange={(to) => setTextSize(which, to)}
           />
         ),
@@ -95,6 +96,7 @@ const editor: Setting = {
           onValueChange={(to) => setYourEditor(to as YourEditor)}
         />
       ),
+      grouped: true,
     };
   },
 };
