@@ -146,7 +146,7 @@ function useCursorLine(path: string | undefined, start?: number) {
  * *Open in your editor*: the button, and the sentence when nothing opened. With no editor
  * chosen it asks for one rather than guess.
  */
-function ToYourEditor({
+export function ToYourEditor({
   plane,
   cut,
   path,

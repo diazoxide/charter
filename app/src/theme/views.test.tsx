@@ -908,6 +908,25 @@ const STATES: State[] = [
     drawn: /Read me first/,
   },
   {
+    name: "what changed in one of a branch's files",
+    view: { from: null, view: "piece-diff", key: "alpha/svc/fix-it/notes.txt" },
+    answers: {
+      what_changed: {
+        mark: "changed",
+        from: null,
+        uncommitted: true,
+        base: "main",
+        diff: {
+          kind: "text",
+          base: "kept line\n",
+          head: "kept line\nadded line\n",
+          hunks: [{ oldStart: 1, oldLines: 0, newStart: 2, newLines: 1 }],
+        },
+      },
+    },
+    drawn: /^added line$/,
+  },
+  {
     name: "a Search tab before anything is typed",
     view: { from: null, view: "search", key: "branch|alpha|alpha/svc/fix-it||" },
     drawn: /^Search the content of the files$/,
