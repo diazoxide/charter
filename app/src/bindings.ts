@@ -1662,6 +1662,20 @@ export type ChangeMember = {
 	repo: string,
 };
 
+/**
+ *  A file a chat's tool touched, as the window marks it in the tree for a few seconds (FM-6,
+ *  #1109). It travels in memory only and is never written anywhere (D-86a).
+ */
+export type ChatTouching = {
+	plane: PlaneId,
+	session: number,
+	/**
+	 *  The path inside the chat's own folder, `/`-separated, with no `..` and no `.git`:
+	 *  confined by `charter_core::touching::confine` before it is sent.
+	 */
+	path: string,
+};
+
 /**  Everything the chat's gauge draws. Every part is absent when charter does not know it. */
 export type ChatUsage = {
 	/**  `ctx NN%`: how full the context window was at the last turn that said. */

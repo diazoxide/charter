@@ -661,6 +661,8 @@ enum Line {
     Tool(ToolCall),
     /// After every other kind: it requires `permission_request`, which none of them carries.
     Permission(permission::PermissionAsked),
+    /// After every other kind: it requires `touching`, which none of them carries.
+    Touching(Touching),
 }
 
 impl Line {
@@ -676,6 +678,7 @@ impl Line {
             Self::Refused(refused) => refused.chat,
             Self::Tool(call) => call.chat,
             Self::Permission(asked) => asked.chat,
+            Self::Touching(touching) => touching.chat,
         }
     }
 }
@@ -830,6 +833,27 @@ impl Decision {
 /// It answers as a [`Refused`] does: `Ok` once the call is recorded durably.
 pub type Tooled = Box<dyn Fn(ToolCall) -> std::io::Result<()> + Send + Sync + 'static>;
 
+/// A file tool of a chat touched a path (FM-6, #1109): what the window marks in its tree.
+///
+/// **Never recorded, anywhere** (D-86a). It is a line of its own so that nothing that records
+/// a line ever holds it: it is not a [`ToolCall`], whose line the event log keeps and the spool
+/// writes to disk, and it is never spooled ([`touch`] sends it once, or not at all). The host
+/// hands it to the window in memory and forgets it. What the event log keeps of the same call is
+/// the digest of its arguments (ADR 0066).
+///
+/// The path is the chat's own word, so the host believes none of it until
+/// [`crate::touching::confine`] has put it inside the chat's folder.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Touching {
+    /// The app's number for the chat whose tool it was, from [`CHAT_ENV`].
+    pub chat: u32,
+    /// The path the tool was given, as the harness spelled it.
+    pub touching: String,
+}
+
+/// What hears a [`Touching`]. Nothing is answered: the hook does not wait for it.
+pub type Touched = Box<dyn Fn(Touching) + Send + Sync + 'static>;
+
 /// What hears a [`Report`]. It answers as a [`Refused`] does.
 pub type Reported = Box<dyn Fn(Report) -> std::io::Result<()> + Send + Sync + 'static>;
 
@@ -850,6 +874,8 @@ pub struct Hearing {
     pub tool: Tooled,
     /// Every [`PermissionAsked`]: held on its connection until it is answered ([`permission`]).
     pub permission: Permitting,
+    /// Every [`Touching`].
+    pub touching: Touched,
 }
 
 /// Sends one report to the socket at `path`. Answers whether the app took it.
@@ -880,6 +906,20 @@ pub fn tell(
     notice: &StartedByHand,
 ) -> io::Result<()> {
     one_line_with_a_deadline(path, token, notice)
+}
+
+/// Tells the app at `path` which file a chat's tool touched (FM-6). Answers whether it was
+/// written.
+///
+/// [`tell`]'s shape and deadline, and **never spooled**: a marker the app did not take is a
+/// marker nobody needed, and a spool is a file the path would then be in (D-86a).
+#[cfg(unix)]
+pub fn touch(
+    path: &std::path::Path,
+    token: Option<&ChatToken>,
+    touching: &Touching,
+) -> io::Result<()> {
+    one_line_with_a_deadline(path, token, touching)
 }
 
 /// Tells the app at `path` a chat's session record is saved. Answers whether the app took it.
@@ -1284,6 +1324,7 @@ impl Listener {
             refused: Box::new(|_| Ok(())),
             tool: Box::new(|_| Ok(())),
             permission: Box::new(|_| None),
+            touching: Box::new(|_| {}),
         })
     }
 
@@ -1566,6 +1607,7 @@ fn serve(
                 permission::hold(&mut reader, &mut writer, (hearing.permission)(asked));
                 return;
             }
+            Line::Touching(touching) => (hearing.touching)(touching),
         }
         // Told as taken only once it is recorded durably: a line the hearer could not record
         // gets no answer, so its hook spools it (FD-30). An older hook has closed its end
@@ -3168,6 +3210,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let tx = std::sync::Mutex::new(tx);
         let _reading = listener.hear(Hearing {
+            touching: Box::new(|_| {}),
             each: Box::new(|_| panic!("no report was sent")),
             answer: Box::new(|_, _| panic!("no ask was sent")),
             noticed: Box::new(|_| panic!("no harness was started by hand")),
@@ -3187,6 +3230,92 @@ mod tests {
                 .is_err(),
             "the line without the chat's token was dropped"
         );
+    }
+
+    #[test]
+    fn a_touched_path_is_its_own_line_handed_to_the_app_with_its_chats_token() {
+        let touching = Touching {
+            chat: 4,
+            touching: "/w/branch/src/a.rs".to_owned(),
+        };
+        let line = serde_json::to_string(&touching).unwrap();
+        assert!(
+            matches!(serde_json::from_str::<Line>(&line), Ok(Line::Touching(_))),
+            "{line}"
+        );
+        for other in [
+            serde_json::to_string(&saved()).unwrap(),
+            r#"{"chat":4,"event":"stop"}"#.to_owned(),
+            r#"{"chat":4,"tool_hook":"pretooluse-read"}"#.to_owned(),
+        ] {
+            assert!(
+                !matches!(serde_json::from_str::<Line>(&other), Ok(Line::Touching(_))),
+                "no other line reads as a touch: {other}"
+            );
+        }
+
+        let dir = tempfile::tempdir().expect("a directory");
+        let path = dir.path().join("hooks.sock");
+        let listener = Listener::bind(dir.path(), &path).expect("a socket");
+        let token = listener.tokens().issue(4).expect("a token");
+        let (tx, rx) = mpsc::channel();
+        let tx = std::sync::Mutex::new(tx);
+        let _reading = listener.hear(Hearing {
+            each: Box::new(|_| panic!("no report was sent")),
+            answer: Box::new(|_, _| panic!("no ask was sent")),
+            noticed: Box::new(|_| panic!("no harness was started by hand")),
+            saved: Box::new(|_| panic!("no record was saved")),
+            refused: Box::new(|_| panic!("no commit was refused")),
+            tool: Box::new(|_| panic!("no tool call was sent")),
+            touching: Box::new(move |touching| tx.lock().unwrap().send(touching).unwrap()),
+            permission: Box::new(|_| None),
+        });
+        touch(&path, None, &touching).expect("the line is written");
+        touch(&path, Some(&token), &touching).expect("the line is written");
+        assert_eq!(
+            rx.recv_timeout(std::time::Duration::from_secs(5)),
+            Ok(touching.clone())
+        );
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_millis(200))
+                .is_err(),
+            "the line without the chat's token was dropped"
+        );
+    }
+
+    #[test]
+    fn a_touch_no_app_takes_is_lost_and_never_spooled() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let path = dir.path().join("hooks.sock");
+        let touching = Touching {
+            chat: 4,
+            touching: "/w/branch/CANARY-touched.rs".to_owned(),
+        };
+        assert!(touch(&path, Some(&ChatToken::from("t")), &touching).is_err());
+        let mut written = Vec::new();
+        for entry in walkdir_all(dir.path()) {
+            written.push(entry.display().to_string());
+            let text = std::fs::read(&entry).unwrap_or_default();
+            assert!(
+                !String::from_utf8_lossy(&text).contains("CANARY-touched"),
+                "{} holds the touched path",
+                entry.display()
+            );
+        }
+        assert!(written.is_empty(), "nothing was written: {written:?}");
+    }
+
+    fn walkdir_all(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+        let mut out = Vec::new();
+        for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                out.extend(walkdir_all(&path));
+            } else {
+                out.push(path);
+            }
+        }
+        out
     }
 
     #[test]
@@ -3213,6 +3342,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let tx = std::sync::Mutex::new(tx);
         let _reading = listener.hear(Hearing {
+            touching: Box::new(|_| {}),
             each: Box::new(|_| panic!("no report was sent")),
             answer: Box::new(|_, _| panic!("no ask was sent")),
             noticed: Box::new(|_| panic!("no harness was started by hand")),

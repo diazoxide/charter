@@ -1751,6 +1751,25 @@ button.show-more:focus-visible {
   text-decoration: line-through;
 }
 
+/* **A chat is touching this right now** (FM-6): a dot in the running colour, breathing as a
+   running chat's mark does, on the file and on each folder above it. It sits where the change
+   mark would, and pushes it over when both are there. The window drops it a few seconds after
+   the chat goes quiet on the file (`touching.ts`). */
+.explorer .touch-mark {
+  flex: none;
+  margin-inline-start: auto;
+  inline-size: 0.45rem;
+  block-size: 0.45rem;
+  border-radius: 50%;
+  background: var(--state-running);
+  animation: charter-breathe var(--motion-duration-breathe) var(--motion-easing-breathe) infinite
+    alternate;
+}
+
+.explorer .touch-mark + .change-mark {
+  margin-inline-start: 0.25rem;
+}
+
 /* A clone's heading. The default disclosure marker goes, because the platform draws it at its
    own size in its own glyph and the tree already has a column for a twisty. The rule that put
    a line above every clone goes with it — the tree's own guides say where a branch starts now,

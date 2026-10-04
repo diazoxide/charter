@@ -44,6 +44,7 @@ impl Chat {
         let (tx, heard) = mpsc::channel();
         let tx = Mutex::new(tx);
         let reading = listener.hear(Hearing {
+            touching: Box::new(|_| {}),
             each: Box::new(|_| Ok(())),
             answer: Box::new(|_, _| panic!("no ask")),
             noticed: Box::new(|_| {}),

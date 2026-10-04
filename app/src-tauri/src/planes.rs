@@ -688,6 +688,8 @@ pub struct Planes {
     saves: crate::autosave::Saved,
     /// Told when a harness is started by hand in a shell tab of any plane (ADR 0062).
     by_hand: hooks::ByHandTeller,
+    /// Told each file a chat's tool touched, confined and rated (FM-6).
+    touches: hooks::TouchTeller,
     /// Told each step of a smart close in any plane (ADR 0064).
     smart: crate::smartclose::Teller,
     /// Told a plane's permission asks each time they change (HP-6).
@@ -766,6 +768,7 @@ impl Planes {
             changes: Arc::new(|_, _| {}),
             saves: Arc::new(|_, _| {}),
             by_hand: Arc::new(|_| {}),
+            touches: Arc::new(|_| {}),
             smart: Arc::new(|_| {}),
             asks: Arc::new(|_| {}),
             relaunching: Mutex::new(Relaunching::default()),
@@ -818,6 +821,13 @@ impl Planes {
     /// in needs-you and answer them there (HP-6).
     pub fn telling_asks(mut self, asks: crate::asking::Teller) -> Self {
         self.asks = asks;
+        self
+    }
+
+    /// Tells `touches` each file a chat's tool touches in a plane this registry holds, once
+    /// confined to the chat's folder, so the window can mark it in the tree (FM-6).
+    pub fn telling_touches(mut self, touches: hooks::TouchTeller) -> Self {
+        self.touches = touches;
         self
     }
 
@@ -923,6 +933,31 @@ impl Planes {
             Arc::new(move |saved| {
                 if let Some(held) = held.upgrade() {
                     crate::smartclose::saved(&held, &saved);
+                }
+            })
+        });
+        // A file a chat's tool touched (FM-6): confined to the chat's own folder and rated
+        // before the window hears of it, and written nowhere (D-86a). Weak for the handoff's
+        // reason.
+        held.hooks.when_touching({
+            let held = Arc::downgrade(&held);
+            let plane = id.clone();
+            let touches = Arc::clone(&self.touches);
+            let gate = Mutex::new(charter_core::touching::Gate::default());
+            Arc::new(move |touching| {
+                let Some(strong) = held.upgrade() else { return };
+                let folder = strong
+                    .chats()
+                    .chat_at(touching.chat)
+                    .and_then(|chat| chat.cwd);
+                if let Some(told) = hooks::touched(
+                    &plane,
+                    folder.as_deref(),
+                    &gate,
+                    &touching,
+                    std::time::Instant::now(),
+                ) {
+                    touches(told);
                 }
             })
         });

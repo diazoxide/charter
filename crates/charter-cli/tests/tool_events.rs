@@ -31,6 +31,7 @@ fn hook_with(
     let (tx, heard) = mpsc::channel();
     let tx = Mutex::new(tx);
     let _reading = listener.hear(Hearing {
+        touching: Box::new(|_| {}),
         each: Box::new(|_| Ok(())),
         answer: Box::new(|_, _| panic!("no ask")),
         noticed: Box::new(|_| {}),
@@ -301,6 +302,7 @@ fn a_tool_hook_answers_only_once_the_host_has_recorded_its_call() {
     let token = listener.tokens().issue(7).expect("a token");
     let recorded_at = std::sync::Arc::new(Mutex::new(None::<Instant>));
     let _reading = listener.hear(Hearing {
+        touching: Box::new(|_| {}),
         each: Box::new(|_| Ok(())),
         answer: Box::new(|_, _| panic!("no ask")),
         noticed: Box::new(|_| {}),
