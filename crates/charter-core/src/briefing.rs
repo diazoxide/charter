@@ -693,7 +693,14 @@ fn uncommitted_memory_nudge(root: &Path) -> Option<String> {
     use crate::worktree::git;
     let asked = git::run(
         root,
-        &["status", "--porcelain", "--", "personas", "workspaces"],
+        &[
+            "--no-optional-locks",
+            "status",
+            "--porcelain",
+            "--",
+            "personas",
+            "workspaces",
+        ],
         std::time::Duration::from_secs(3),
     );
     let run = match asked {

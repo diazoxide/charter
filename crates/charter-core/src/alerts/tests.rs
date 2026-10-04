@@ -418,6 +418,27 @@ fn in_the_app_a_dirty_plane_root_is_read_from_the_shared_standing_with_no_status
 }
 
 #[test]
+fn an_unborn_plane_root_with_staged_files_is_dirty_from_the_shared_standing_too() {
+    // No commit yet: `rev-parse --abbrev-ref HEAD` fails, and the standing is blocked as
+    // nothing to commit to — but what is staged is still the root being worked in.
+    let (_held, root) = plane(HEALTHY);
+    std::fs::write(root.join("notes.md"), "# notes\n").unwrap();
+    git(&root, &["init", "-q", "-b", "main"]);
+    git(&root, &["add", "notes.md"]);
+    crate::planegit::touch(&root);
+
+    let shared = read(&Asking {
+        root: &root,
+        active: None,
+        standing: &root,
+        shared: true,
+    });
+
+    assert!(crate::planegit::shared_standing(&root).tracked);
+    assert_eq!(shared.alerts, reading(&root).alerts);
+}
+
+#[test]
 fn an_untracked_file_alone_is_not_tracked_dirt_in_the_shared_standing() {
     let (_held, root) = plane(HEALTHY);
     repo(&root);

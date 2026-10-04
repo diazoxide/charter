@@ -499,7 +499,9 @@ pub fn standing(root: &Path) -> Standing {
             push_failed: None,
             conflicts: Vec::new(),
             notice: None,
-            tracked: false,
+            // An unborn branch is a repository with nothing to count against, and what is
+            // staged in it is still the root being worked in (FD-11: the alerts read this).
+            tracked: status_of(root).1,
             head: String::new(),
         };
     };

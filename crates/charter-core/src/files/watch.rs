@@ -202,7 +202,21 @@ pub(super) fn matters_here(
         let plain = path
             .components()
             .all(|step| matches!(step, Component::Normal(_)));
-        !plain
+        if !plain {
+            return true;
+        }
+        // A file git tracks matters whatever the ignore rules say (`git add -f`): its edit is
+        // one `status` shows.
+        let spelled: Option<Vec<&str>> = path
+            .components()
+            .map(|step| step.as_os_str().to_str())
+            .collect();
+        let tracked = spelled.is_some_and(|steps| {
+            index
+                .entry_by_path(steps.join("/").as_str().into())
+                .is_some()
+        });
+        tracked
             || excludes
                 .at_path(path, None)
                 .map_or(true, |platform| !platform.is_excluded())

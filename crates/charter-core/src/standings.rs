@@ -189,12 +189,13 @@ impl<V: Clone> Shared<V> {
     }
 
     /// A watch now covers `repo`'s whole working tree (`true`) and will [`Shared::touch`] it
-    /// when anything there moves, or no longer does (`false`). A repo a watch stopped covering
-    /// is read again at its next ask: what moved while nothing listened is not known.
+    /// when anything there moves, or no longer does (`false`). Either way the repo is read
+    /// again at its next ask: what moved while nothing listened, or before the watch began,
+    /// is not known, and an answer read then must not be kept for a covered repo's backstop.
     pub fn cover(&self, repo: &Path, covered: bool) {
         let slot = self.slot(repo);
         let mut state = slot.state.lock().unwrap_or_else(PoisonError::into_inner);
-        if state.covered && !covered {
+        if state.covered != covered {
             state.generation += 1;
         }
         state.covered = covered;
@@ -541,7 +542,8 @@ mod tests {
     #[test]
     fn a_watched_repos_answer_outlives_the_backstop_until_the_watch_says_it_moved() {
         // FD-11: a repo whose working tree is watched is read again when the watch says so,
-        // not on a clock, so a monorepo nobody touches costs no `status` at all.
+        // and otherwise only on its long backstop: a monorepo nobody touches costs about one
+        // `status` in twenty minutes.
         let shared = Shared::new(Duration::from_millis(30));
         let counted = Counted::new();
         let repo = a_dir();
@@ -555,6 +557,21 @@ mod tests {
 
         assert_eq!((idle, moved), (1, 2));
         assert!(shared.covered(repo.path()));
+    }
+
+    #[test]
+    fn a_watch_that_begins_has_the_repo_read_again() {
+        // An answer read before the watch was listening may already miss an edit the watch
+        // will never report; it is not kept for a covered repo's long backstop.
+        let shared = Shared::new(Duration::from_secs(60));
+        let counted = Counted::new();
+        let repo = a_dir();
+        shared.get(repo.path(), || counted.run(0));
+
+        shared.cover(repo.path(), true);
+        let again = shared.get(repo.path(), || counted.run(0));
+
+        assert_eq!(again, 2);
     }
 
     #[test]

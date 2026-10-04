@@ -34,11 +34,18 @@
 //! watched here too ([`BranchWatch::want`]), so the explorer's markers and the standing hear
 //! one watch and one check per burst, not one each. A move that matters touches the
 //! standing (`charter_core::planegit::touch`) as well as telling the windows, and while the
-//! clone's whole tree is watched its standing is *covered*: read again on what moved, never
-//! on a clock, so a monorepo nobody touches costs no `git status`. A clone this cannot watch
-//! whole — past the app's share of inotify's watches, or of [`charter_core::files::KNOWN`]
-//! folders — is not covered, and keeps the standing's clock. Its plane let go of, it is let go
-//! of too.
+//! clone's whole tree is watched its standing is *covered*: read again on what moved, and
+//! otherwise only on its long backstop — about one read in twenty minutes for a monorepo
+//! nobody touches (`charter_core::standings::WATCHED_SHARE`). Its plane let go of, it is let
+//! go of too.
+//!
+//! **Only a watch of the whole tree covers** (D-FD11h, fail closed): FSEvents and
+//! `ReadDirectoryChangesW`, [`How::Whole`]. A clone watched folder by folder (inotify) is never
+//! covered, and keeps the standing's clock: a folder deleted and made again, a folder made
+//! between a listing and its watch, or folders that could not be listed ([`How::Unread`]) all
+//! leave edits no watch reports. A burst that says the platform lost track or erred
+//! ([`crate::watchset::Burst::lost`]) uncovers every clone and watches each again; a clone is
+//! covered again only once that watch has been made, and its standing is read again then.
 //!
 //! **Nothing here walks a tree.** Nothing keeps a file-id cache, and links are not followed: a
 //! link an agent puts in its branch to the operator's home is never read through.
@@ -97,6 +104,9 @@ pub enum How {
     Whole,
     /// These folders, each non-recursively, refreshed as folders appear.
     Folders(Vec<PathBuf>),
+    /// Folder by folder, but the folders git knows could not be listed (the reader refused or
+    /// ran out of time): only the branch's own folder, non-recursively, until a listing works.
+    Unread,
 }
 
 /// The platform's way: [`How::Whole`] where one watch covers a tree.
@@ -104,11 +114,13 @@ pub fn how(root: &Root, reader: &Reader) -> How {
     if cfg!(any(target_os = "macos", target_os = "windows")) {
         How::Whole
     } else {
-        How::Folders(
-            root.folders(reader)
-                .unwrap_or_else(|_| vec![root.path().to_path_buf()]),
-        )
+        listed(root, reader)
     }
+}
+
+/// [`How::Folders`] as the reader lists them now, or [`How::Unread`].
+fn listed(root: &Root, reader: &Reader) -> How {
+    root.folders(reader).map_or(How::Unread, How::Folders)
 }
 
 /// One branch a window listens to.
@@ -139,6 +151,26 @@ struct Inner<W: notify::Watcher> {
     finding: HashSet<PathBuf>,
     /// The clones whose whole tree is watched now, which the standing has been told it covers.
     covering: HashSet<PathBuf>,
+    /// How many times each plane has been let go of: a clone found for a plane let go of
+    /// while it was being found is not kept.
+    let_go: HashMap<PathBuf, u64>,
+    /// Clones the reader would not find, and until when they are not asked for again.
+    refused: HashMap<PathBuf, Instant>,
+}
+
+/// How long a clone the reader would not find is left alone before it is asked for again: the
+/// standing asks on every read, and each ask would start a reader.
+const REFUSED_FOR: Duration = Duration::from_secs(60);
+
+impl<W: notify::Watcher> Inner<W> {
+    /// Every branch and clone listened to, with how: the windows' and the standing's.
+    fn listened(&self) -> impl Iterator<Item = (&Root, &How)> {
+        self.by_window
+            .values()
+            .flatten()
+            .map(|one| (&one.root, &one.how))
+            .chain(self.kept.values().map(|kept| (&kept.root, &kept.how)))
+    }
 }
 
 /// A clone listened to for its shared standing.
@@ -185,6 +217,8 @@ pub struct BranchWatch<W: notify::Watcher = notify::RecommendedWatcher> {
     reader: Reader,
     config: notify::Config,
     tickets: std::sync::atomic::AtomicU64,
+    /// How a clone kept for its standing is listened to: [`how`], the platform's way.
+    how_of: fn(&Root, &Reader) -> How,
 }
 
 impl BranchWatch {
@@ -208,12 +242,23 @@ impl<W: notify::Watcher + Send + 'static> BranchWatch<W> {
                 kept: HashMap::new(),
                 finding: HashSet::new(),
                 covering: HashSet::new(),
+                let_go: HashMap::new(),
+                refused: HashMap::new(),
             })),
             told,
             reader,
             config,
             tickets: std::sync::atomic::AtomicU64::new(0),
+            how_of: how,
         }
+    }
+
+    /// The same watch, listening to the clones kept for their standing `how_of`'s way: for a
+    /// test to try either way on any platform.
+    #[cfg(test)]
+    fn keeping_clones(mut self, how_of: fn(&Root, &Reader) -> How) -> Self {
+        self.how_of = how_of;
+        self
     }
 
     /// A number for a set a window asks for, larger than every one before it.
@@ -266,16 +311,25 @@ impl<W: notify::Watcher + Send + 'static> BranchWatch<W> {
     /// standing once its whole tree is watched. Answers at once: the clone is found by the
     /// bounded reader on a thread of its own, once however often it is asked for.
     pub fn want(&self, wanted: &Wanted) {
-        {
+        let let_go = {
             let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+            if inner
+                .refused
+                .get(&wanted.path)
+                .is_some_and(|until| Instant::now() < *until)
+            {
+                return;
+            }
             if inner.kept.contains_key(&wanted.path) || !inner.finding.insert(wanted.path.clone()) {
                 return;
             }
-        }
+            inner.let_go.get(&wanted.plane).copied().unwrap_or_default()
+        };
         let handle = Arc::downgrade(&self.inner);
         let reader = self.reader.clone();
         let told = Arc::clone(&self.told);
         let config = self.config;
+        let how_of = self.how_of;
         let wanted = wanted.clone();
         let _ = std::thread::Builder::new()
             .name("charter-standing-watch".into())
@@ -286,7 +340,7 @@ impl<W: notify::Watcher + Send + 'static> BranchWatch<W> {
                     Branch::repo(&wanted.workspace, &wanted.repo),
                 )
                 .map(|root| {
-                    let how = how(&root, &reader);
+                    let how = how_of(&root, &reader);
                     (root, how)
                 });
                 let Some(inner) = handle.upgrade() else {
@@ -294,8 +348,15 @@ impl<W: notify::Watcher + Send + 'static> BranchWatch<W> {
                 };
                 let mut held = inner.lock().unwrap_or_else(PoisonError::into_inner);
                 held.finding.remove(&wanted.path);
-                // A clone the reader will not find is not watched; the standing keeps its clock.
+                // Its plane was let go of while it was being found.
+                if held.let_go.get(&wanted.plane).copied().unwrap_or_default() != let_go {
+                    return;
+                }
+                // A clone the reader will not find is not watched, and not asked for again for a
+                // while; the standing keeps its clock.
                 let Ok((root, how)) = found else {
+                    held.refused
+                        .insert(wanted.path.clone(), Instant::now() + REFUSED_FOR);
                     return;
                 };
                 held.kept.insert(
@@ -323,6 +384,8 @@ impl<W: notify::Watcher + Send + 'static> BranchWatch<W> {
     /// more, and none is covered.
     pub fn let_go_of_plane(&self, plane: &std::path::Path) {
         let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        *inner.let_go.entry(plane.to_path_buf()).or_default() += 1;
+        inner.refused.retain(|at, _| !at.starts_with(plane));
         let before = inner.kept.len();
         inner.kept.retain(|_, kept| kept.plane != plane);
         if inner.kept.len() != before {
@@ -359,30 +422,28 @@ fn start<W: notify::Watcher + Send + 'static>(
     told: &Told,
     config: notify::Config,
 ) -> Result<W, String> {
-    {
-        let (sent, events) = mpsc::channel();
-        let handle: Weak<Mutex<Inner<W>>> = Arc::downgrade(inner);
-        let told = Arc::clone(told);
-        let reader = reader.clone();
-        std::thread::Builder::new()
-            .name("charter-branch-watch".into())
-            .spawn(move || {
-                for burst in crate::watchset::bursts(events, QUIET_FOR, MOST_PATHS) {
-                    let Some(inner) = handle.upgrade() else {
-                        return;
-                    };
-                    heard(&inner, &reader, &told, &burst);
-                }
-            })
-            .map_err(|e| format!("charter could not watch the branch: {e}"))?;
-        // No file-id cache, so nothing walks the tree under a watch — a link in the branch to
-        // the operator's home is never followed and read (R2) — and links are not followed.
-        W::new(
-            crate::watchset::sender(sent),
-            config.with_follow_symlinks(false),
-        )
-        .map_err(|e| format!("charter could not watch the branch: {e}"))
-    }
+    let (sent, events) = mpsc::channel();
+    let handle: Weak<Mutex<Inner<W>>> = Arc::downgrade(inner);
+    let told = Arc::clone(told);
+    let reader = reader.clone();
+    std::thread::Builder::new()
+        .name("charter-branch-watch".into())
+        .spawn(move || {
+            for burst in crate::watchset::bursts(events, QUIET_FOR, MOST_PATHS) {
+                let Some(inner) = handle.upgrade() else {
+                    return;
+                };
+                heard(&inner, &reader, &told, &burst);
+            }
+        })
+        .map_err(|e| format!("charter could not watch the branch: {e}"))?;
+    // No file-id cache, so nothing walks the tree under a watch — a link in the branch to the
+    // operator's home is never followed and read (R2) — and links are not followed.
+    W::new(
+        crate::watchset::sender(sent),
+        config.with_follow_symlinks(false),
+    )
+    .map_err(|e| format!("charter could not watch the branch: {e}"))
 }
 
 /// Hands each branch that `burst` moved something in to its worker. Nothing is read here: this
@@ -394,13 +455,13 @@ fn heard<W: notify::Watcher + Send + 'static>(
     burst: &crate::watchset::Burst,
 ) {
     let roots: Vec<Root> = {
-        let held = inner.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut held = inner.lock().unwrap_or_else(PoisonError::into_inner);
+        if burst.lost {
+            held.watch_again();
+        }
         let mut seen: HashSet<PathBuf> = HashSet::new();
-        held.by_window
-            .values()
-            .flatten()
-            .map(|one| &one.root)
-            .chain(held.kept.values().map(|kept| &kept.root))
+        held.listened()
+            .map(|(root, _)| root)
             .filter(|root| seen.insert(root.path().to_path_buf()))
             .cloned()
             .collect()
@@ -525,13 +586,9 @@ fn relist_soon<W: notify::Watcher + Send + 'static>(
 ) {
     let wait = {
         let mut held = inner.lock().unwrap_or_else(PoisonError::into_inner);
-        let one_by_one = held
-            .by_window
-            .values()
-            .flatten()
-            .map(|one| (&one.root, &one.how))
-            .chain(held.kept.values().map(|kept| (&kept.root, &kept.how)))
-            .any(|(one, how)| one.path() == root.path() && matches!(how, How::Folders(_)));
+        let one_by_one = held.listened().any(|(one, how)| {
+            one.path() == root.path() && matches!(how, How::Folders(_) | How::Unread)
+        });
         if !one_by_one {
             return;
         }
@@ -552,23 +609,27 @@ fn relist_soon<W: notify::Watcher + Send + 'static>(
     let handle = Arc::downgrade(inner);
     let reader = reader.clone();
     let run = move || {
-        let folders = root
-            .folders(&reader)
-            .unwrap_or_else(|_| vec![root.path().to_path_buf()]);
+        let now = listed(&root, &reader);
         let Some(inner) = handle.upgrade() else {
             return;
         };
         let mut held = inner.lock().unwrap_or_else(PoisonError::into_inner);
         held.relisted
             .insert(root.path().to_path_buf(), (Instant::now(), false));
-        for one in held.by_window.values_mut().flatten() {
-            if one.root.path() == root.path() && matches!(one.how, How::Folders(_)) {
-                one.how = How::Folders(folders.clone());
-            }
-        }
-        for kept in held.kept.values_mut() {
-            if kept.root.path() == root.path() && matches!(kept.how, How::Folders(_)) {
-                kept.how = How::Folders(folders.clone());
+        let held = &mut *held;
+        let hows = held
+            .by_window
+            .values_mut()
+            .flatten()
+            .map(|one| (&one.root, &mut one.how))
+            .chain(
+                held.kept
+                    .values_mut()
+                    .map(|kept| (&kept.root, &mut kept.how)),
+            );
+        for (one, how) in hows {
+            if one.path() == root.path() && matches!(how, How::Folders(_) | How::Unread) {
+                *how = now.clone();
             }
         }
         held.follow();
@@ -589,17 +650,12 @@ impl<W: notify::Watcher> Inner<W> {
     fn follow(&mut self) {
         let mut wanted: HashMap<PathBuf, RecursiveMode> = HashMap::new();
         let mut one_by_one: Vec<(usize, PathBuf)> = Vec::new();
-        let listened = self
-            .by_window
-            .values()
-            .flatten()
-            .map(|one| (&one.root, &one.how))
-            .chain(self.kept.values().map(|kept| (&kept.root, &kept.how)));
-        for (root, how) in listened {
+        for (root, how) in self.listened() {
             match how {
                 How::Whole => {
                     wanted.insert(root.path().to_path_buf(), RecursiveMode::Recursive);
                 }
+                How::Unread => one_by_one.push((0, root.path().to_path_buf())),
                 How::Folders(folders) => {
                     for folder in folders {
                         let depth = folder
@@ -647,18 +703,13 @@ impl<W: notify::Watcher> Inner<W> {
         self.cover();
     }
 
-    /// Tells the shared standing which kept clones are watched whole now (FD-11): watched
-    /// recursively, or every folder git knows watched one by one, short of the most a listing
-    /// answers. A clone that stops being watched whole is read again at its next ask.
+    /// Tells the shared standing which kept clones are watched whole now (FD-11): only those
+    /// a recursive watch holds (D-FD11h). A clone that starts or stops being covered is read
+    /// again at its next ask.
     fn cover(&mut self) {
-        let whole = |kept: &Kept| match &kept.how {
-            How::Whole => self.watched.get(kept.root.path()) == Some(&RecursiveMode::Recursive),
-            How::Folders(folders) => {
-                folders.len() < charter_core::files::KNOWN
-                    && folders
-                        .iter()
-                        .all(|folder| self.watched.contains_key(folder))
-            }
+        let whole = |kept: &Kept| {
+            kept.how == How::Whole
+                && self.watched.get(kept.root.path()) == Some(&RecursiveMode::Recursive)
         };
         let now: HashSet<PathBuf> = self
             .kept
@@ -673,6 +724,29 @@ impl<W: notify::Watcher> Inner<W> {
             charter_core::reposave::cover(new, true);
         }
         self.covering = now;
+    }
+
+    /// The platform lost track, or its watcher erred: what it said about the watched trees
+    /// may be incomplete. Every kept clone is uncovered and its tree watched again, and only a
+    /// watch made now covers it once more (D-FD11h).
+    fn watch_again(&mut self) {
+        let whole: Vec<PathBuf> = self
+            .kept
+            .values()
+            .filter(|kept| kept.how == How::Whole)
+            .map(|kept| kept.root.path().to_path_buf())
+            .collect();
+        for gone in self.covering.drain() {
+            charter_core::reposave::cover(&gone, false);
+        }
+        if let Some(watcher) = self.watcher.as_mut() {
+            for root in whole {
+                if self.watched.remove(&root).is_some() {
+                    let _ = watcher.unwatch(&root);
+                }
+            }
+        }
+        self.follow();
     }
 }
 
@@ -1046,9 +1120,10 @@ mod tests {
     #[test]
     fn a_clone_whose_standing_is_shared_is_read_again_when_its_tree_moves_not_on_a_clock() {
         // FD-11 (#651): the one watch per repo covers the clone, so its standing is read again
-        // when something git would show moves in it, and an idle clone costs no `status`.
+        // when something git would show moves in it, and otherwise only on its long backstop.
         let (_dir, root, _piece) = plane();
         let (watch, _told) = watch_with(crate::reader());
+        let watch = watch.keeping_clones(|_, _| How::Whole);
         let clone = the_clone(&root);
 
         watch.want(&clone);
@@ -1072,6 +1147,7 @@ mod tests {
     fn a_plane_let_go_of_no_longer_covers_its_clones() {
         let (_dir, root, _piece) = plane();
         let (watch, _told) = watch_with(crate::reader());
+        let watch = watch.keeping_clones(|_, _| How::Whole);
         let clone = the_clone(&root);
         watch.want(&clone);
         assert!(until(|| charter_core::reposave::covered(&clone.path)));
@@ -1080,6 +1156,122 @@ mod tests {
 
         assert!(!charter_core::reposave::covered(&clone.path));
         assert!(watch.watching().is_empty(), "{:?}", watch.watching());
+    }
+
+    #[test]
+    fn a_clone_watched_folder_by_folder_is_never_covered() {
+        // D-FD11h: inotify's watches are one per folder, and a folder made, or deleted and
+        // made again, between a listing and its watch is an edit nobody hears; the standing
+        // keeps its clock there.
+        for how_of in [
+            (|root: &Root, reader: &Reader| How::Folders(root.folders(reader).unwrap()))
+                as fn(&Root, &Reader) -> How,
+            |_, _| How::Unread,
+        ] {
+            let (_dir, root, _piece) = plane();
+            let (watch, _told) = watch_with(crate::reader());
+            let watch = watch.keeping_clones(how_of);
+            let clone = the_clone(&root);
+            let at = root_of_clone(&root);
+
+            watch.want(&clone);
+
+            assert!(until(|| watch
+                .watching()
+                .contains(&at.path().to_path_buf())));
+            std::thread::sleep(Duration::from_millis(200));
+            assert!(!charter_core::reposave::covered(&clone.path));
+        }
+    }
+
+    #[test]
+    fn a_lost_watch_uncovers_the_clone_until_its_tree_is_watched_again() {
+        let (_dir, root, _piece) = plane();
+        let (tx, _rx) = mpsc::channel::<(String, Vec<WatchedBranch>)>();
+        let tx = Mutex::new(tx);
+        let watch = BranchWatch::<crate::watchset::raw::Raw>::with_config(
+            Arc::new(move |window: &str, branches| {
+                let _ = tx.lock().unwrap().send((window.to_string(), branches));
+            }),
+            crate::reader(),
+            notify::Config::default(),
+        )
+        .keeping_clones(|_, _| How::Whole);
+        // The platform's watcher, made on this thread, which plays it.
+        watch
+            .set_from(
+                "main",
+                watch.ticket(),
+                vec![(branch(), root_of(&root, "piece"), How::Whole)],
+            )
+            .unwrap();
+        let clone = the_clone(&root);
+        let at = root_of_clone(&root).path().to_path_buf();
+        watch.want(&clone);
+        assert!(until(|| charter_core::reposave::covered(&clone.path)));
+        assert_eq!(crate::watchset::raw::watched(&at), 1);
+
+        // The platform lost track: watched again, and covered once that watch is made.
+        crate::watchset::raw::event(
+            notify::Event::new(notify::EventKind::Other).set_flag(notify::event::Flag::Rescan),
+        );
+        assert!(until(|| crate::watchset::raw::watched(&at) == 2));
+        assert!(charter_core::reposave::covered(&clone.path));
+
+        // Lost again, and this time the tree cannot be watched: it stays uncovered.
+        crate::watchset::raw::refuse(&at);
+        crate::watchset::raw::event(
+            notify::Event::new(notify::EventKind::Other).set_flag(notify::event::Flag::Rescan),
+        );
+        assert!(until(|| !charter_core::reposave::covered(&clone.path)));
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(!charter_core::reposave::covered(&clone.path));
+    }
+
+    /// The plane's clone, found as the standing's watch finds it.
+    fn root_of_clone(plane: &Path) -> Root {
+        charter_core::files::root(
+            &crate::reader(),
+            plane,
+            charter_core::files::Branch::repo("alpha", "thing"),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_clone_the_reader_will_not_find_is_not_asked_for_again_at_once() {
+        let (_dir, root, _piece) = plane();
+        let (watch, _told) = watch_with(crate::reader());
+        let mut missing = the_clone(&root);
+        missing.repo = "nowhere".into();
+        missing.path = root.join("workspaces/alpha/nowhere");
+
+        watch.want(&missing);
+        assert!(until(|| {
+            let inner = watch.inner.lock().unwrap();
+            inner.refused.contains_key(&missing.path) && inner.finding.is_empty()
+        }));
+        watch.want(&missing);
+
+        assert!(
+            watch.inner.lock().unwrap().finding.is_empty(),
+            "asked again"
+        );
+    }
+
+    #[test]
+    fn a_clone_found_after_its_plane_was_let_go_of_is_not_kept() {
+        let (_dir, root, _piece) = plane();
+        let (watch, _told) = watch_with(crate::reader());
+        let watch = watch.keeping_clones(|_, _| How::Whole);
+        let clone = the_clone(&root);
+
+        watch.want(&clone);
+        watch.let_go_of_plane(&root);
+
+        assert!(until(|| watch.inner.lock().unwrap().finding.is_empty()));
+        assert!(watch.inner.lock().unwrap().kept.is_empty());
+        assert!(!charter_core::reposave::covered(&clone.path));
     }
 
     #[test]

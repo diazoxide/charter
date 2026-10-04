@@ -551,6 +551,26 @@ fn a_write_matters_unless_git_ignores_it_or_it_is_gits_own() {
     let _ = piece;
 }
 
+#[test]
+fn a_write_to_a_file_git_tracks_matters_even_under_an_ignore_pattern() {
+    charter_core::unsteered!();
+    // A file added with `git add -f` is tracked whatever the ignore rules say: an edit to it is
+    // a change `status` shows, so it is told (FD-11 review).
+    let f = support::plane_with_clone("thing");
+    write(&f.clone, ".gitignore", "*.log\n");
+    write(&f.clone, "logs/kept.log", "one\n");
+    support::git(&f.clone, &["add", ".gitignore"]);
+    support::git(&f.clone, &["add", "-f", "logs/kept.log"]);
+    support::git(&f.clone, &["commit", "-q", "-m", "a tracked log"]);
+    let piece = cut(&f, "piece");
+    let root = files::root(&reader(), &f.plane, branch(&f)).unwrap();
+    let at = |path: &str| root.path().join(path);
+
+    assert!(root.matters(&reader(), &[at("logs/kept.log")]));
+    assert!(!root.matters(&reader(), &[at("logs/other.log")]));
+    let _ = piece;
+}
+
 /// git, for the test's own setup, with `input` on its standard input; its answer, trimmed.
 #[cfg(unix)]
 fn git_with_input(dir: &std::path::Path, args: &[&str], input: &[u8]) -> String {
