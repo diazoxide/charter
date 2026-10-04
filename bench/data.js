@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791148538031,
+  "lastUpdate": 1791149337744,
   "repoUrl": "https://github.com/diazoxide/charter",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -1428,6 +1428,48 @@ window.BENCHMARK_DATA = {
             "value": 104.236635,
             "unit": "ms",
             "extra": "median of 5 runs: 103.286, 103.601, 104.237, 104.803, 106.278 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "8a4cf9719a15fe72fea40edaa76f2df68d1406b8",
+          "message": "ADR 0090: agents work together as chats that are listed, observable and stoppable, and no agent's word is consent (AC-1)\n\nProposed, for the operator's acceptance. Restates \"visibility is the\ncontrol\" as Q11 and allows headless chats once AC-12 lists them.\n\n- One primitive, dispatch, in two modes: handoff (as today, at most\n  one report) and task (AC-2, over the MCP Tasks extension).\n- Every act between chats rides the chat scope; no new client scope and\n  no new power; answer stays a human scope's (V16, V75).\n- A dispatch needs a person's yes: charter's own ask per dispatch, or a\n  dispatch grant made on a human scope (coordinator, workflows,\n  triggered chats).\n- A closed list of what a chat may ask of another: dispatch, report,\n  message along its lineage or over a person-made message link, stop\n  its own subtree, leases and claim links through the host.\n- Approvals never travel along a lineage; a dispatcher never answers\n  its task's input request; AC-11's answerer must exclude the asking\n  chat's lineage.\n- Caps on depth, live chats per lineage and message rate; audit\n  actions for every act, with no brief or message text in an entry.\n\nAmends ADR 0066 (handed_from covers both modes) and ADR 0076 (a\ndispatcher cause). CONTEXT.md gains Dispatch, Handoff, Task, Report,\nLineage, Headless chat, Peer message, Mailbox, Dispatch grant and\nMessage link.\n\nRefs #713\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-05T01:25:48+04:00",
+          "tree_id": "f72505c4b0b3e7e9827be9e10f523892a08517bd",
+          "url": "https://github.com/diazoxide/charter/commit/8a4cf9719a15fe72fea40edaa76f2df68d1406b8"
+        },
+        "date": 1791149336425,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.269614,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.254, 0.266, 0.270, 0.287, 0.287 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.425747,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.390, 16.410, 16.426, 16.432, 16.458 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.486448,
+            "unit": "ms",
+            "extra": "median of 5 runs: 101.042, 101.326, 101.486, 101.718, 101.989 ms"
           }
         ]
       }
