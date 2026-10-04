@@ -215,17 +215,20 @@ function FileRow({
   const onDisk = setting.read(project.read[setting.file]);
   const [draft, setDraft] = useState<string>();
   const value = draft ?? project.pending[setting.id] ?? onDisk;
+  const writing = project.pending[setting.id] !== undefined;
+  // Always handed to the queue, which skips a write that would change nothing at its turn: a
+  // value typed back to what is on disk while another write of it is pending is still written.
   const commit = () => {
     if (draft === undefined) return;
     setDraft(undefined);
-    if (draft !== onDisk) project.write(setting, draft);
+    project.write(setting, draft);
   };
   return (
     <SettingRow
       label={setting.label}
       help={setting.help}
       error={project.refused[setting.id]}
-      undo={project.undoable === setting.id ? project.undo : undefined}
+      undo={project.undoable === setting.id && !writing ? project.undo : undefined}
       control={(ids) =>
         setting.kind === "choice" ? (
           <Choice
@@ -238,7 +241,11 @@ function FileRow({
               ...(setting.choices ?? []),
             ].map((one) => ({ value: one, label: setting.labels?.[one] ?? one }))}
             value={value}
-            unset={setting.unset ?? (value === "" ? "not set" : undefined)}
+            unset={
+              setting.oneWay && writing
+                ? undefined
+                : (setting.unset ?? (value === "" ? "not set" : undefined))
+            }
             onValueChange={(to) => project.write(setting, to)}
           />
         ) : (

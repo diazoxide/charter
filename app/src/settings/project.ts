@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { extensionsChanged } from "../extensionsOn";
+import { SETTINGS, usePlaneChanged } from "../planeChanged";
 import { projectThemeChanged, useProjectThemeAnswers } from "../projectTheme";
 import {
   commands,
@@ -116,6 +117,26 @@ function assistedBy(path: string[]): Control {
   });
 }
 
+/** `[sandbox] mode`, which this tab turns on and never back off (D-SE17g). */
+const SANDBOX_MODE = key("sandbox", "mode");
+
+/** Whether two keys are the same key. */
+function same(a: readonly SettingsStep[], b: readonly SettingsStep[]): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/**
+ * Whether writing `back` would leave the sandbox less confining than it is: `mode` taken out,
+ * or set to anything but `on` — both read as no sandbox, or refused (ADR 0067). An Undo that
+ * would do that is never offered, whichever setting's change it undoes.
+ */
+function loosensTheSandbox(back: readonly SettingsEdit[]): boolean {
+  return back.some(
+    (edit) =>
+      same(edit.path, SANDBOX_MODE) && !(edit.value?.kind === "text" && edit.value.value === "on"),
+  );
+}
+
 /** What `[sandbox] egress` is when no file sets it: every preset (ADR 0067 §3). */
 const ALL_EGRESS = ["model-providers", "forge", "toolchains"];
 
@@ -127,14 +148,14 @@ const ALL_EGRESS = ["model-providers", "forge", "toolchains"];
  * key out, which would reach all three.
  */
 function sandboxSettings(shared: Shown, sandbox: SandboxState | undefined): Control[] {
-  const set = valueAt(shared, key("sandbox", "mode")) !== undefined;
+  const set = valueAt(shared, SANDBOX_MODE) !== undefined;
   const said = sandbox?.on
     ? `On: every chat charter starts here runs in a sandbox. ${sandbox.said ?? ""}`.trim()
     : "Not set: chats here run without a sandbox. On runs every chat sandboxed.";
   const egress = key("sandbox", "egress");
   return [
     {
-      ...textAt(key("sandbox", "mode"), "Sandbox mode", {
+      ...textAt(SANDBOX_MODE, "Sandbox mode", {
         kind: "choice",
         choices: ["on"],
         hint: said,
@@ -242,7 +263,9 @@ export function projectGroups(read: ProjectRead): SettingsGroup[] {
       id: "project.sandbox",
       label: "Sandbox",
       help: "Whether the chats charter starts here run in a sandbox, and which hosts it lets them reach.",
-      settings: fromShared("project.sandbox", sandboxSettings(shared, read.sandbox)),
+      settings: fromShared("project.sandbox", sandboxSettings(shared, read.sandbox)).map((one) =>
+        same(one.key, SANDBOX_MODE) ? { ...one, oneWay: true } : one,
+      ),
     },
     {
       id: "project.forges",
@@ -330,6 +353,10 @@ export function useProjectLevel(plane: PlaneId): ProjectLevel {
   /** The newest read out: an answer to an older one is dropped, as the old page's is. */
   const reading = useRef(0);
 
+  const enqueue = useCallback((work: () => Promise<void>) => {
+    queue.current = queue.current.then(work, work);
+  }, []);
+
   const readTheme = useCallback(() => {
     void commands
       .projectTheme(plane, null)
@@ -388,6 +415,12 @@ export function useProjectLevel(plane: PlaneId): ProjectLevel {
   useEffect(() => {
     void readFiles();
   }, [readFiles]);
+  // A settings file changed on disk — by hand, by a chat, by the old page — is read again, in
+  // the queue, so the next write is made against it rather than refused as changed on disk.
+  const changes = usePlaneChanged([plane], SETTINGS);
+  useEffect(() => {
+    if (changes > 0) enqueue(readFiles);
+  }, [changes, enqueue, readFiles]);
   // An approval or a removal in the Extensions dialog changes what the theme draws.
   const answers = useProjectThemeAnswers(plane);
   useEffect(() => {
@@ -429,10 +462,6 @@ export function useProjectLevel(plane: PlaneId): ProjectLevel {
     [plane, readFiles, readInForce],
   );
 
-  const enqueue = useCallback((work: () => Promise<void>) => {
-    queue.current = queue.current.then(work, work);
-  }, []);
-
   const write = useCallback(
     (setting: FileSetting, draft: string) => {
       setPending((was) => ({ ...was, [setting.id]: draft }));
@@ -441,15 +470,20 @@ export function useProjectLevel(plane: PlaneId): ProjectLevel {
         if (file && setting.read(file) !== draft) {
           const edits = setting.edits(draft, file);
           const back = edits.map((edit) => ({ path: edit.path, value: valueAt(file, edit.path) }));
-          // A value only the file itself can hold (a date, a float) cannot be written back.
-          const undoable = back.every((one) => one.value?.kind !== "other");
+          const undo = back.map((one) => ({ path: one.path, value: one.value ?? null }));
+          // A value only the file itself can hold (a date, a float) cannot be written back, and
+          // nothing here takes the sandbox back off (D-SE17g).
+          const undoable =
+            !setting.oneWay &&
+            back.every((one) => one.value?.kind !== "other") &&
+            !loosensTheSandbox(undo);
           if (await send(setting.id, setting.file, edits))
             setLast(
               undoable
                 ? {
                     setting: setting.id,
                     file: setting.file,
-                    back: back.map((one) => ({ path: one.path, value: one.value ?? null })),
+                    back: undo,
                   }
                 : undefined,
             );

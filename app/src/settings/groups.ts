@@ -55,6 +55,12 @@ export type FileSetting = Named & {
   read: (file: Shown) => string;
   /** The edits `draft` makes to `file`, the file it was typed over. */
   edits: (draft: string, file: Shown) => SettingsEdit[];
+  /**
+   * **Turned on here and never taken back here** — the sandbox (ADR 0067, D-SE17g): no Undo is
+   * offered for it, since what it would write back is "not set" or a value read as less
+   * confining, and its empty option is not drawn while a write of it is pending.
+   */
+  oneWay?: boolean;
 };
 
 /**
