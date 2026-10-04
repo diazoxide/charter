@@ -2,11 +2,12 @@ import { describe, expect, it } from "vitest";
 import type { PlaneAnswer } from "./bindings";
 import {
   concerns,
+  CURATIONS,
   GIT,
+  INSTRUCTIONS,
   panelsOf,
   ROOT_PANELS,
   SETTINGS,
-  SHAPE,
   SIDEBAR,
   VIEWS,
 } from "./planeChanged";
@@ -31,7 +32,8 @@ describe("whether what the core says moved concerns a reader of the plane (FD-10
     const told: PlaneAnswer[] = [{ answer: "sidebar" }, { answer: "git" }];
     expect(concerns(told, SIDEBAR)).toBe(true);
     expect(concerns(told, GIT)).toBe(true);
-    expect(concerns(told, SHAPE)).toBe(false);
+    expect(concerns(told, INSTRUCTIONS)).toBe(false);
+    expect(concerns(told, CURATIONS)).toBe(false);
     expect(concerns(told, SETTINGS)).toBe(false);
     expect(concerns(told, ROOT_PANELS)).toBe(false);
     expect(concerns(told, panelsOf("alpha"))).toBe(false);
@@ -49,7 +51,15 @@ describe("whether what the core says moved concerns a reader of the plane (FD-10
   it("tells the git readers what auto-save did, and nobody else", () => {
     const saved: PlaneAnswer[] = [{ answer: "git" }];
     expect(concerns(saved, GIT)).toBe(true);
-    for (const other of [SIDEBAR, SHAPE, SETTINGS, ROOT_PANELS, VIEWS, panelsOf("alpha")])
+    for (const other of [
+      SIDEBAR,
+      INSTRUCTIONS,
+      CURATIONS,
+      SETTINGS,
+      ROOT_PANELS,
+      VIEWS,
+      panelsOf("alpha"),
+    ])
       expect(concerns(saved, other)).toBe(false);
   });
 });

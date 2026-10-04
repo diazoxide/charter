@@ -47,6 +47,11 @@ mod tests {
                 crate::memories::memory_archive,
                 crate::memories::memory_unarchive,
                 crate::memories::memory_create,
+                crate::todos::todo_add,
+                crate::todos::todo_done,
+                crate::todos::todo_forget,
+                crate::personas::persona_create,
+                crate::personas::persona_remove,
                 crate::resize_session,
                 crate::unwatch_session,
             ])
@@ -186,6 +191,52 @@ mod tests {
                 "plane": plane, "scope": alpha,
                 "archived": archived["archived"], "restoreAs": null,
             }),
+        );
+
+        // The window's writes tell the plane's model what they wrote, under the lock a change
+        // nobody could name holds while every workspace is read again (FD-10c).
+        let todos = dir.path().join("workspaces/alpha/todos");
+        let slugs = || -> Vec<String> {
+            let mut slugs: Vec<String> = std::fs::read_dir(&todos)
+                .expect("the todo store")
+                .filter_map(Result::ok)
+                .filter_map(|entry| {
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    name.strip_suffix(".md").map(str::to_owned)
+                })
+                // The store's index, which is not a todo.
+                .filter(|slug| slug != "MEMORY")
+                .collect();
+            slugs.sort();
+            slugs
+        };
+        check(
+            "todo_add",
+            json!({ "plane": plane, "workspace": "alpha", "text": "Ship it" }),
+        );
+        check(
+            "todo_add",
+            json!({ "plane": plane, "workspace": "alpha", "text": "Drop it" }),
+        );
+        let [drop, ship] = <[String; 2]>::try_from(slugs()).expect("two todos");
+        check(
+            "todo_done",
+            json!({ "plane": plane, "workspace": "alpha", "slug": ship }),
+        );
+        check(
+            "todo_forget",
+            json!({ "plane": plane, "workspace": "alpha", "slug": drop }),
+        );
+        check(
+            "persona_create",
+            json!({
+                "plane": plane, "name": "scribe", "role": null,
+                "delegateWhen": "writing things down", "parent": null,
+            }),
+        );
+        check(
+            "persona_remove",
+            json!({ "plane": plane, "name": "scribe" }),
         );
 
         assert!(

@@ -143,10 +143,15 @@ pub enum Answer {
     Panels { workspace: Option<String> },
     /// The plane root's panels (`plane_root_panels`): its session records.
     RootPanels,
-    /// The shape of the plane the window reads beside its panels — the instructions a chat
-    /// started on, the curations: its settings, workspaces, todos, personas and harness
-    /// files, never a memory or a session record.
-    Shape,
+    /// The instructions a chat reads once at its start (`chats_plane_updated`,
+    /// [`crate::instructions::Stamp`]): `CLAUDE.md` and the project's files, the harness
+    /// settings and sub-agents, each persona's charter. Never a workspace, a todo, a memory
+    /// or a session record (FD-10d).
+    Instructions,
+    /// The curation actions offered on each subject (`curation_offers`): the personas'
+    /// curation files, the project's launch profile and harness declarations, and the
+    /// workspaces a subject can be. Never a todo, a memory or a session record (FD-10d).
+    Curations,
     /// What the project has on and the theme it draws: `charter.toml`, `charter.local.toml`
     /// and each `workspace.json`.
     Settings,
@@ -178,34 +183,35 @@ fn answers_of(change: &Change) -> Vec<Answer> {
         Kind::Project => vec![
             Answer::Sidebar,
             every_panel(),
-            Answer::Shape,
+            Answer::Instructions,
+            Answer::Curations,
             Answer::Settings,
             Answer::Git,
             Answer::Views,
         ],
-        Kind::Harness => vec![Answer::Shape, Answer::Git, Answer::Views],
+        Kind::Harness => vec![
+            Answer::Instructions,
+            Answer::Curations,
+            Answer::Git,
+            Answer::Views,
+        ],
         Kind::Workspace => vec![
             Answer::Sidebar,
             panels(),
-            Answer::Shape,
+            Answer::Curations,
             Answer::Settings,
             Answer::Git,
             Answer::Views,
         ],
-        Kind::Todos => vec![
-            Answer::Sidebar,
-            panels(),
-            Answer::Shape,
-            Answer::Git,
-            Answer::Views,
-        ],
+        Kind::Todos => vec![Answer::Sidebar, panels(), Answer::Git, Answer::Views],
         Kind::Memory => vec![panels(), Answer::Views],
         Kind::Sessions if change.workspace.is_none() => vec![Answer::RootPanels, Answer::Views],
         Kind::Sessions => vec![panels(), Answer::Views],
         Kind::Persona => vec![
             Answer::Sidebar,
             every_panel(),
-            Answer::Shape,
+            Answer::Instructions,
+            Answer::Curations,
             Answer::Git,
             Answer::Views,
         ],
@@ -378,13 +384,14 @@ mod tests {
     }
 
     #[test]
-    fn a_todo_concerns_the_sidebar_its_own_workspaces_panels_and_the_plane_shape() {
+    fn a_todo_concerns_the_sidebar_its_own_workspaces_panels_and_the_git_standings() {
+        // Not the instructions a chat started on, nor the curations: neither is made of a
+        // todo (FD-10d).
         assert_eq!(
             answers_to(at("workspaces/beta/todos/a.md")),
             vec![
                 Answer::Sidebar,
                 panels(Some("beta")),
-                Answer::Shape,
                 Answer::Git,
                 Answer::Views
             ]
@@ -417,13 +424,14 @@ mod tests {
     }
 
     #[test]
-    fn the_settings_files_concern_the_settings_and_the_harness_only_the_plane_shape() {
+    fn the_settings_files_concern_the_settings_and_the_harness_the_instructions_and_curations() {
         assert_eq!(
             answers_to(at("charter.toml")),
             vec![
                 Answer::Sidebar,
                 panels(None),
-                Answer::Shape,
+                Answer::Instructions,
+                Answer::Curations,
                 Answer::Settings,
                 Answer::Git,
                 Answer::Views
@@ -434,7 +442,7 @@ mod tests {
             vec![
                 Answer::Sidebar,
                 panels(Some("alpha")),
-                Answer::Shape,
+                Answer::Curations,
                 Answer::Settings,
                 Answer::Git,
                 Answer::Views
@@ -442,14 +450,20 @@ mod tests {
         );
         assert_eq!(
             answers_to(at(".claude/agents/x.md")),
-            vec![Answer::Shape, Answer::Git, Answer::Views]
+            vec![
+                Answer::Instructions,
+                Answer::Curations,
+                Answer::Git,
+                Answer::Views
+            ]
         );
         assert_eq!(
             answers_to(at("personas/steward/persona.md")),
             vec![
                 Answer::Sidebar,
                 panels(None),
-                Answer::Shape,
+                Answer::Instructions,
+                Answer::Curations,
                 Answer::Git,
                 Answer::Views
             ]

@@ -528,7 +528,13 @@ export const commands = {
 	 *  window showing a project the launch had not opened drew the workspaces of the one it had.
 	 *  A workspace name means nothing without its project; two projects can both have an `alpha`.
 	 * 
-	 *  On a blocking thread: it reads every todo, memory and session record of the workspace.
+	 *  **Served from the plane's model, per section** (FD-10c, [`charter_core::planemodel`]): a
+	 *  workspace's clones, todos, memories and session records are read the first time it is
+	 *  focused, and from then on each section again only when a change the watch names is part
+	 *  of it. A memory an agent saves re-reads that workspace's `memory/` and nothing else.
+	 * 
+	 *  On a blocking thread: a workspace's first ask reads every todo, memory and session record
+	 *  of it.
 	 */
 	workspacePanels: (plane: PlaneId, workspace: string) => typedError<Panels, string>(__TAURI_INVOKE("workspace_panels", { plane, workspace })),
 	/**
@@ -3089,8 +3095,10 @@ export type PlaneAnswer =
 { answer: "panels"; workspace: string | null } | 
 /**  `plane_root_panels`. */
 { answer: "rootPanels" } | 
-/**  The plane's shape beside its panels: the instructions a chat started on, the curations. */
-{ answer: "shape" } | 
+/**  `chats_plane_updated`: the instructions a chat read at its start. */
+{ answer: "instructions" } | 
+/**  `curation_offers`: the curation actions offered on each subject. */
+{ answer: "curations" } | 
 /**  What the project has on, and its theme. */
 { answer: "settings" } | 
 /**  The git standings: the alerts and the Saving rows. */

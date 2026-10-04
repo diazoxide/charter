@@ -705,7 +705,13 @@ fn sidebar_of(held: &planes::Held) -> Result<Sidebar, String> {
 /// window showing a project the launch had not opened drew the workspaces of the one it had.
 /// A workspace name means nothing without its project; two projects can both have an `alpha`.
 ///
-/// On a blocking thread: it reads every todo, memory and session record of the workspace.
+/// **Served from the plane's model, per section** (FD-10c, [`charter_core::planemodel`]): a
+/// workspace's clones, todos, memories and session records are read the first time it is
+/// focused, and from then on each section again only when a change the watch names is part
+/// of it. A memory an agent saves re-reads that workspace's `memory/` and nothing else.
+///
+/// On a blocking thread: a workspace's first ask reads every todo, memory and session record
+/// of it.
 #[tauri::command]
 #[specta::specta]
 async fn workspace_panels(
@@ -713,9 +719,9 @@ async fn workspace_panels(
     plane: PlaneId,
     workspace: String,
 ) -> Result<panels::Panels, String> {
-    let root = planes.held(&plane)?.root().to_path_buf();
+    let held = planes.held(&plane)?;
     off_the_window("reading the workspace's panels", move || {
-        panels::of(&root, &workspace)
+        panels::served(&held, &workspace)
     })
     .await
 }

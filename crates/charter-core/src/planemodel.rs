@@ -1,4 +1,5 @@
-//! What the sidebar draws, held in memory and kept current by what changed (FD-10b).
+//! What the sidebar and the workspace panels draw, held in memory and kept current by what
+//! changed (FD-10b, FD-10c).
 //!
 //! The sidebar is every workspace with its open todos, its vision and colour and whether it
 //! is LIVE, and the plane's personas with the default one. It used to be read from the disk
@@ -6,6 +7,12 @@
 //! that was a todo closed in one of them. Here it is read once, and each change the watcher
 //! names ([`crate::planechange`]) re-reads only what that change is part of: a todo of `beta`
 //! re-reads `beta/todos/` and nothing else.
+//!
+//! **The workspace panels, per section** ([`Sections`], FD-10c). A workspace's clones, todos,
+//! memories and session records are read the first time its panels are asked for, and from
+//! then on a change re-reads the one section it is part of: a memory an agent saves re-reads
+//! that workspace's `memory/`, not its todos, its records or its clones. The personas' memory
+//! counts the Personas panel draws are held the same way, one persona at a time.
 //!
 //! **In memory only.** Nothing here is written anywhere: the model is a reading of the plane,
 //! made again from the disk when the app holds the plane, and dropped with it. It is not a
@@ -19,9 +26,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+use crate::active::Place;
 use crate::extension::project::theme;
 use crate::planechange::{Change, Kind};
-use crate::workspaces::{Plane, Workspace};
+use crate::repos::{self, Clones};
+use crate::sessionrecord::{self, Listed};
+use crate::workspaces::{Entry, Plane, Workspace};
 
 /// One workspace as the sidebar draws it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,7 +47,47 @@ pub struct Row {
     pub colour: Option<String>,
 }
 
-/// The sidebar's reading of one plane.
+/// What one workspace's panels are drawn from, section by section (FD-10c): everything
+/// `workspace_panels` reads of the workspace itself. The personas and the default one are the
+/// plane's, and the model holds them once for every workspace.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Sections {
+    /// The clones on disk, and what charter would not look at. A `Workspace` change.
+    pub clones: Clones,
+    /// The repos `workspace.json` names. A `Workspace` change.
+    pub declared: Vec<String>,
+    /// Its open todos, or why the store could not be read. A `Todos` change.
+    pub todos: Result<Vec<Entry>, String>,
+    /// Its journal, oldest first as the store lists it, or why it could not be read. A
+    /// `Memory` change.
+    pub memories: Result<Vec<Entry>, String>,
+    /// Its session records, newest first. A `Sessions` change.
+    pub sessions: Vec<Listed>,
+}
+
+impl Sections {
+    /// The sections of workspace `name` of the plane at `root`, read whole from the disk — or
+    /// why the workspace could not be read at all.
+    pub fn read(root: &Path, name: &str) -> Result<Self, String> {
+        let plane = Plane::open(root);
+        let clones = repos::clones(root, name).map_err(|why| why.to_string())?;
+        let workspace = plane.workspace(name).map_err(|why| why.to_string())?;
+        Ok(Self {
+            clones,
+            declared: repos::declared(&plane, name),
+            todos: workspace.todos().map_err(|why| why.to_string()),
+            memories: workspace.memories().map_err(|why| why.to_string()),
+            sessions: sessions_of(root, name),
+        })
+    }
+}
+
+/// A workspace's session records, newest first.
+fn sessions_of(root: &Path, name: &str) -> Vec<Listed> {
+    sessionrecord::list(root, &Place::Workspace(name.to_owned()))
+}
+
+/// The plane's reading for the sidebar and the workspace panels.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Model {
     rows: BTreeMap<String, Row>,
@@ -46,6 +96,11 @@ pub struct Model {
     personas: Result<Vec<String>, String>,
     default_persona: Option<String>,
     live: BTreeSet<String>,
+    /// The sections of each workspace whose panels have been asked for, by name. Read on the
+    /// first ask, not with the model: a plane of dozens of workspaces is drawn one at a time.
+    sections: BTreeMap<String, Sections>,
+    /// Each persona's memory count (`_shared` included) that has been asked for.
+    memory_counts: BTreeMap<String, usize>,
 }
 
 impl Model {
@@ -58,6 +113,8 @@ impl Model {
             personas: Ok(Vec::new()),
             default_persona: None,
             live: BTreeSet::new(),
+            sections: BTreeMap::new(),
+            memory_counts: BTreeMap::new(),
         };
         model.read_project(&plane);
         model.read_personas(&plane);
@@ -122,6 +179,94 @@ impl Model {
                 row.todos = todos_of(&workspace);
             }
         }
+        self.apply_to_sections(root, &plane, changes);
+        self.apply_to_counts(root, changes);
+    }
+
+    /// Brings each held workspace's sections up to date with `changes`, re-reading only the
+    /// section each one is part of.
+    fn apply_to_sections(&mut self, root: &Path, plane: &Plane, changes: &[Change]) {
+        for change in changes {
+            let Some(name) = change.workspace.as_deref() else {
+                // `workspaces/` itself moved: any of them may be gone or another one.
+                if change.kind == Kind::Workspace {
+                    self.sections.clear();
+                }
+                continue;
+            };
+            let Some(held) = self.sections.get_mut(name) else {
+                // Read whole when its panels are first asked for.
+                continue;
+            };
+            match change.kind {
+                // The workspace's directory itself made, removed or renamed: everything in it
+                // may have moved, so it is read again on the next ask.
+                Kind::Workspace if change.path == format!("workspaces/{name}") => {
+                    self.sections.remove(name);
+                }
+                Kind::Workspace => match repos::clones(root, name) {
+                    Ok(clones) => {
+                        held.clones = clones;
+                        held.declared = repos::declared(plane, name);
+                    }
+                    Err(_) => {
+                        self.sections.remove(name);
+                    }
+                },
+                Kind::Todos | Kind::Memory => match plane.workspace(name) {
+                    Ok(workspace) if change.kind == Kind::Todos => {
+                        held.todos = workspace.todos().map_err(|why| why.to_string());
+                    }
+                    Ok(workspace) => {
+                        held.memories = workspace.memories().map_err(|why| why.to_string());
+                    }
+                    Err(_) => {
+                        self.sections.remove(name);
+                    }
+                },
+                Kind::Sessions => held.sessions = sessions_of(root, name),
+                Kind::Project | Kind::Harness | Kind::Persona | Kind::Git => {}
+            }
+        }
+    }
+
+    /// Brings the held memory counts up to date with `changes`: a persona's memory, or the
+    /// persona itself, counts it again; `personas/` itself moving forgets every count.
+    fn apply_to_counts(&mut self, root: &Path, changes: &[Change]) {
+        for change in changes {
+            if !matches!(change.kind, Kind::Memory | Kind::Persona) {
+                continue;
+            }
+            match change.persona.as_deref() {
+                Some(persona) => {
+                    if let Some(count) = self.memory_counts.get_mut(persona) {
+                        *count = crate::personas::memory_count(root, persona);
+                    }
+                }
+                None if change.kind == Kind::Persona => self.memory_counts.clear(),
+                None => {}
+            }
+        }
+    }
+
+    /// Workspace `name`'s sections, read on the first ask and kept current from then on — or
+    /// why the workspace could not be read, which is never held: the next ask reads again.
+    pub fn sections(&mut self, root: &Path, name: &str) -> Result<Sections, String> {
+        if let Some(held) = self.sections.get(name) {
+            return Ok(held.clone());
+        }
+        let read = Sections::read(root, name)?;
+        self.sections.insert(name.to_owned(), read.clone());
+        Ok(read)
+    }
+
+    /// How many memories `persona` holds (`_shared` for the shared store), counted on the
+    /// first ask and kept current from then on.
+    pub fn memory_count(&mut self, root: &Path, persona: &str) -> usize {
+        *self
+            .memory_counts
+            .entry(persona.to_owned())
+            .or_insert_with(|| crate::personas::memory_count(root, persona))
     }
 
     /// The workspaces, sorted by name — or why `workspaces/` could not be listed.
@@ -214,6 +359,7 @@ fn todos_of(workspace: &Workspace) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::workspaces::Entry;
 
     fn todo(root: &Path, workspace: &str, slug: &str, title: &str) {
         let store = root.join("workspaces").join(workspace).join("todos");
@@ -440,6 +586,260 @@ mod tests {
         assert_eq!(model, Model::read(root));
     }
 
+    // ---- the workspace panels' sections (FD-10c) ------------------------------------------
+
+    fn memory(root: &Path, workspace: &str, slug: &str, title: &str) {
+        let store = root.join("workspaces").join(workspace).join("memory");
+        std::fs::create_dir_all(&store).expect("a memory store");
+        std::fs::write(store.join(format!("{slug}.md")), format!("# {title}\n")).expect("memory");
+    }
+
+    fn persona_memory(root: &Path, persona: &str, slug: &str) {
+        let store = root.join("personas").join(persona).join("memory");
+        std::fs::create_dir_all(&store).expect("a persona's store");
+        std::fs::write(store.join(format!("{slug}.md")), format!("# {slug}\n")).expect("memory");
+    }
+
+    fn clone(root: &Path, workspace: &str, repo: &str) {
+        std::fs::create_dir_all(
+            root.join("workspaces")
+                .join(workspace)
+                .join(repo)
+                .join(".git"),
+        )
+        .expect("a clone");
+    }
+
+    fn session(root: &Path, workspace: &str, minute: u32, title: &str) {
+        let facts = crate::sessionrecord::Facts {
+            place: crate::active::Place::Workspace(workspace.to_owned()),
+            at: chrono::NaiveDate::from_ymd_opt(2026, 10, 4)
+                .and_then(|day| day.and_hms_opt(9, minute, 0))
+                .expect("a time"),
+            chat: None,
+            persona: None,
+            pieces: Vec::new(),
+        };
+        let body = crate::sessionrecord::SECTIONS
+            .iter()
+            .map(|section| format!("## {section}\n\nSomething.\n"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        crate::sessionrecord::record(
+            root,
+            &crate::sessionrecord::New {
+                title,
+                body: &body,
+                facts: &facts,
+            },
+        )
+        .expect("a session record");
+    }
+
+    fn titles(read: &Result<Vec<Entry>, String>) -> Vec<String> {
+        read.as_ref()
+            .expect("read")
+            .iter()
+            .map(|entry| entry.title.clone())
+            .collect()
+    }
+
+    fn session_titles(sections: &Sections) -> Vec<String> {
+        sections
+            .sessions
+            .iter()
+            .map(|record| record.title.clone())
+            .collect()
+    }
+
+    fn repo_names(sections: &Sections) -> Vec<String> {
+        sections
+            .clones
+            .repos
+            .iter()
+            .map(|repo| repo.name.clone())
+            .collect()
+    }
+
+    /// A plane whose `alpha` has a todo, a memory, a session record and a clone.
+    fn full_plane() -> tempfile::TempDir {
+        let plane = plane();
+        let root = plane.path();
+        memory(root, "alpha", "m1", "Memory one");
+        session(root, "alpha", 1, "Session one");
+        clone(root, "alpha", "svc");
+        plane
+    }
+
+    #[test]
+    fn a_workspaces_sections_read_through_the_model_equal_a_fresh_read() {
+        let plane = full_plane();
+        let root = plane.path();
+        let mut model = Model::read(root);
+
+        let sections = model.sections(root, "alpha").expect("alpha's sections");
+
+        assert_eq!(sections, Sections::read(root, "alpha").expect("read fresh"));
+        assert_eq!(titles(&sections.todos), ["Alpha one"]);
+        assert_eq!(titles(&sections.memories), ["Memory one"]);
+        assert_eq!(session_titles(&sections), ["Session one"]);
+        assert_eq!(repo_names(&sections), ["svc"]);
+    }
+
+    #[test]
+    fn a_memory_written_re_reads_that_workspaces_memory_store_only() {
+        let plane = full_plane();
+        let root = plane.path();
+        let mut model = Model::read(root);
+        model.sections(root, "alpha").expect("alpha's sections");
+        // Every section moves on disk, and the model is told about the memory only: what it
+        // then holds for the others is what it held before, so they were not read again.
+        memory(root, "alpha", "m2", "Memory two");
+        todo(root, "alpha", "a2", "Alpha two");
+        session(root, "alpha", 2, "Session two");
+        clone(root, "alpha", "web");
+
+        model.apply(
+            root,
+            Some(&[change(
+                Kind::Memory,
+                Some("alpha"),
+                "workspaces/alpha/memory/m2.md",
+            )]),
+        );
+        let sections = model.sections(root, "alpha").expect("alpha's sections");
+
+        assert_eq!(titles(&sections.memories), ["Memory one", "Memory two"]);
+        assert_eq!(titles(&sections.todos), ["Alpha one"]);
+        assert_eq!(session_titles(&sections), ["Session one"]);
+        assert_eq!(repo_names(&sections), ["svc"]);
+    }
+
+    #[test]
+    fn a_session_record_written_re_reads_that_workspaces_sessions_only() {
+        let plane = full_plane();
+        let root = plane.path();
+        let mut model = Model::read(root);
+        model.sections(root, "alpha").expect("alpha's sections");
+        memory(root, "alpha", "m2", "Memory two");
+        todo(root, "alpha", "a2", "Alpha two");
+        session(root, "alpha", 2, "Session two");
+        clone(root, "alpha", "web");
+
+        model.apply(
+            root,
+            Some(&[change(
+                Kind::Sessions,
+                Some("alpha"),
+                "workspaces/alpha/sessions/x.md",
+            )]),
+        );
+        let sections = model.sections(root, "alpha").expect("alpha's sections");
+
+        // Newest first, as the Sessions panel lists them.
+        assert_eq!(session_titles(&sections), ["Session two", "Session one"]);
+        assert_eq!(titles(&sections.memories), ["Memory one"]);
+        assert_eq!(titles(&sections.todos), ["Alpha one"]);
+        assert_eq!(repo_names(&sections), ["svc"]);
+    }
+
+    #[test]
+    fn a_todo_re_reads_its_todos_and_a_clone_arriving_re_reads_the_clones() {
+        let plane = full_plane();
+        let root = plane.path();
+        let mut model = Model::read(root);
+        model.sections(root, "alpha").expect("alpha's sections");
+        memory(root, "alpha", "m2", "Memory two");
+        todo(root, "alpha", "a2", "Alpha two");
+        clone(root, "alpha", "web");
+
+        model.apply(
+            root,
+            Some(&[
+                change(Kind::Todos, Some("alpha"), "workspaces/alpha/todos/a2.md"),
+                change(Kind::Workspace, Some("alpha"), "workspaces/alpha/web"),
+            ]),
+        );
+        let sections = model.sections(root, "alpha").expect("alpha's sections");
+
+        assert_eq!(titles(&sections.todos), ["Alpha one", "Alpha two"]);
+        assert_eq!(repo_names(&sections), ["svc", "web"]);
+        assert_eq!(titles(&sections.memories), ["Memory one"]);
+    }
+
+    #[test]
+    fn a_change_in_another_workspace_leaves_the_held_sections_as_they_are() {
+        let plane = full_plane();
+        let root = plane.path();
+        let mut model = Model::read(root);
+        let before = model.sections(root, "alpha").expect("alpha's sections");
+        memory(root, "alpha", "m2", "Memory two");
+
+        model.apply(
+            root,
+            Some(&[change(
+                Kind::Memory,
+                Some("beta"),
+                "workspaces/beta/memory/m.md",
+            )]),
+        );
+
+        assert_eq!(model.sections(root, "alpha").expect("alpha's"), before);
+    }
+
+    #[test]
+    fn not_knowing_what_changed_reads_every_section_again() {
+        let plane = full_plane();
+        let root = plane.path();
+        let mut model = Model::read(root);
+        model.sections(root, "alpha").expect("alpha's sections");
+        memory(root, "alpha", "m2", "Memory two");
+        todo(root, "alpha", "a2", "Alpha two");
+        session(root, "alpha", 2, "Session two");
+        clone(root, "alpha", "web");
+
+        model.apply(root, None);
+
+        assert_eq!(
+            model.sections(root, "alpha").expect("alpha's"),
+            Sections::read(root, "alpha").expect("read fresh")
+        );
+    }
+
+    #[test]
+    fn a_workspace_that_is_not_there_has_no_sections() {
+        let plane = plane();
+        let mut model = Model::read(plane.path());
+        assert!(model.sections(plane.path(), "nobody").is_err());
+    }
+
+    #[test]
+    fn a_personas_memory_count_follows_its_own_memory_and_no_other() {
+        let plane = plane();
+        let root = plane.path();
+        std::fs::create_dir_all(root.join("personas/scribe")).expect("a persona");
+        let mut model = Model::read(root);
+        assert_eq!(model.memory_count(root, "steward"), 0);
+        assert_eq!(model.memory_count(root, "scribe"), 0);
+        persona_memory(root, "steward", "s1");
+        persona_memory(root, "scribe", "c1");
+
+        model.apply(
+            root,
+            Some(&[Change {
+                kind: Kind::Memory,
+                workspace: None,
+                persona: Some("steward".to_owned()),
+                path: "personas/steward/memory/s1.md".to_owned(),
+            }]),
+        );
+
+        assert_eq!(model.memory_count(root, "steward"), 1);
+        assert_eq!(model.memory_count(root, "scribe"), 0);
+        model.apply(root, None);
+        assert_eq!(model.memory_count(root, "scribe"), 1);
+    }
+
     /// One thing done to a plane on disk, as the CLI, an editor or another chat does it.
     #[derive(Debug, Clone)]
     enum Write {
@@ -451,6 +851,11 @@ mod tests {
         Vision(usize, usize),
         Persona(usize),
         Default(usize),
+        Remember(usize, usize),
+        ForgetMemory(usize, usize),
+        Record(usize, usize),
+        Clone(usize, usize),
+        PersonaMemory(usize, usize),
     }
 
     const NAMES: [&str; 3] = ["alpha", "beta", "gamma"];
@@ -466,6 +871,11 @@ mod tests {
             (0..3usize, 0..3usize).prop_map(|(a, b)| Write::Vision(a, b)),
             (0..3usize).prop_map(Write::Persona),
             (0..3usize).prop_map(Write::Default),
+            (0..3usize, 0..3usize).prop_map(|(a, b)| Write::Remember(a, b)),
+            (0..3usize, 0..3usize).prop_map(|(a, b)| Write::ForgetMemory(a, b)),
+            (0..3usize, 0..30usize).prop_map(|(a, b)| Write::Record(a, b)),
+            (0..3usize, 0..3usize).prop_map(|(a, b)| Write::Clone(a, b)),
+            (0..3usize, 0..3usize).prop_map(|(a, b)| Write::PersonaMemory(a, b)),
         ]
     }
 
@@ -527,6 +937,66 @@ mod tests {
                 std::fs::write(&file, format!("[persona]\ndefault = \"p{k}\"\n")).expect("toml");
                 vec![file]
             }
+            Write::Remember(i, k) => {
+                if !ws(i).is_dir() {
+                    return Vec::new();
+                }
+                memory(
+                    root,
+                    NAMES[i],
+                    &format!("m{k}"),
+                    &format!("{} memory {k}", NAMES[i]),
+                );
+                vec![ws(i).join("memory").join(format!("m{k}.md"))]
+            }
+            Write::ForgetMemory(i, k) => {
+                let file = ws(i).join("memory").join(format!("m{k}.md"));
+                if std::fs::remove_file(&file).is_err() {
+                    return Vec::new();
+                }
+                vec![file]
+            }
+            Write::Record(i, minute) => {
+                let store = ws(i).join("sessions");
+                if !ws(i).is_dir()
+                    || store.is_dir()
+                        && std::fs::read_dir(&store).is_ok_and(|mut it| {
+                            it.any(|entry| {
+                                entry.is_ok_and(|e| {
+                                    e.file_name()
+                                        .to_string_lossy()
+                                        .contains(&format!("-09{minute:02}-"))
+                                })
+                            })
+                        })
+                {
+                    return Vec::new();
+                }
+                session(
+                    root,
+                    NAMES[i],
+                    minute as u32,
+                    &format!("{} record {minute}", NAMES[i]),
+                );
+                vec![store]
+            }
+            Write::Clone(i, k) => {
+                if !ws(i).is_dir() {
+                    return Vec::new();
+                }
+                clone(root, NAMES[i], &format!("r{k}"));
+                vec![ws(i).join(format!("r{k}"))]
+            }
+            Write::PersonaMemory(p, k) => {
+                let persona = ["steward", "p0", "_shared"][p];
+                persona_memory(root, persona, &format!("pm{k}"));
+                vec![
+                    root.join("personas")
+                        .join(persona)
+                        .join("memory")
+                        .join(format!("pm{k}.md")),
+                ]
+            }
         }
     }
 
@@ -548,6 +1018,45 @@ mod tests {
                     .expect("inside the plane");
                 model.apply(root, Some(&changes));
                 proptest::prop_assert_eq!(&model, &Model::read(root), "after {:?}", write);
+            }
+        }
+
+        /// The same for the panels (FD-10c): each workspace's sections, asked for before and
+        /// after every write so the model holds them, and each persona's memory count, equal
+        /// what a fresh read of the disk gives.
+        #[test]
+        fn the_panels_told_every_change_equal_the_panels_read_fresh(
+            writes in proptest::collection::vec(a_write(), 1..12)
+        ) {
+            let plane = plane();
+            let root = plane.path();
+            let mut model = Model::read(root);
+            let personas = ["steward", "p0", "_shared"];
+            for name in NAMES {
+                let _ = model.sections(root, name);
+            }
+            for persona in personas {
+                model.memory_count(root, persona);
+            }
+            for write in &writes {
+                let touched = done(root, write);
+                let changes = crate::planechange::of_batch(root, touched.iter().map(PathBuf::as_path))
+                    .expect("inside the plane");
+                model.apply(root, Some(&changes));
+                for name in NAMES {
+                    proptest::prop_assert_eq!(
+                        model.sections(root, name),
+                        Sections::read(root, name),
+                        "{} after {:?}", name, write
+                    );
+                }
+                for persona in personas {
+                    proptest::prop_assert_eq!(
+                        model.memory_count(root, persona),
+                        crate::personas::memory_count(root, persona),
+                        "{} after {:?}", persona, write
+                    );
+                }
             }
         }
     }

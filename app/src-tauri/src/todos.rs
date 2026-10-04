@@ -37,6 +37,11 @@ fn title_of(ws: &Workspace, slug: &str) -> String {
         .map_or_else(|| slug.to_owned(), |todo| todo.title)
 }
 
+/// What a todo command says when its blocking thread ended without an answer. Each one runs on
+/// such a thread: it takes the store's lock, and then the plane model's, which a change nobody
+/// could name holds while it reads every workspace again (SC-2, FD-10c).
+const WRITING: &str = "writing the todo";
+
 /// Now, as the store stamps a file it writes.
 fn now() -> chrono::NaiveDateTime {
     chrono::Local::now().naive_local()
@@ -47,14 +52,19 @@ fn now() -> chrono::NaiveDateTime {
 // (charter-app#127). Not a doc comment, because the generated bindings carry those.
 #[tauri::command]
 #[specta::specta]
-pub fn todo_add(
+pub async fn todo_add(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
     workspace: String,
     text: String,
 ) -> Result<String, String> {
-    let root = planes.held(&plane)?.root().to_path_buf();
-    add_in(&root, &workspace, &text, now())
+    let held = planes.held(&plane)?;
+    crate::off_the_window(WRITING, move || {
+        let said = add_in(held.root(), &workspace, &text, now())?;
+        held.wrote(&[format!("workspaces/{workspace}/todos")]);
+        Ok(said)
+    })
+    .await
 }
 
 fn add_in(
@@ -72,14 +82,23 @@ fn add_in(
 /// Close a todo as done: the journal records it, then the todo goes.
 #[tauri::command]
 #[specta::specta]
-pub fn todo_done(
+pub async fn todo_done(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
     workspace: String,
     slug: String,
 ) -> Result<String, String> {
-    let root = planes.held(&plane)?.root().to_path_buf();
-    done_in(&root, &workspace, &slug, now())
+    let held = planes.held(&plane)?;
+    crate::off_the_window(WRITING, move || {
+        let said = done_in(held.root(), &workspace, &slug, now())?;
+        // The journal records it, then the todo goes.
+        held.wrote(&[
+            format!("workspaces/{workspace}/memory"),
+            format!("workspaces/{workspace}/todos"),
+        ]);
+        Ok(said)
+    })
+    .await
 }
 
 fn done_in(
@@ -100,14 +119,19 @@ fn done_in(
 /// Forget a todo: it goes, and nothing is journalled.
 #[tauri::command]
 #[specta::specta]
-pub fn todo_forget(
+pub async fn todo_forget(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
     workspace: String,
     slug: String,
 ) -> Result<String, String> {
-    let root = planes.held(&plane)?.root().to_path_buf();
-    forget_in(&root, &workspace, &slug)
+    let held = planes.held(&plane)?;
+    crate::off_the_window(WRITING, move || {
+        let said = forget_in(held.root(), &workspace, &slug)?;
+        held.wrote(&[format!("workspaces/{workspace}/todos")]);
+        Ok(said)
+    })
+    .await
 }
 
 fn forget_in(root: &Path, name: &str, slug: &str) -> Result<String, String> {

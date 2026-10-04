@@ -109,8 +109,10 @@ pub enum PlaneAnswer {
     Panels { workspace: Option<String> },
     /// `plane_root_panels`.
     RootPanels,
-    /// The plane's shape beside its panels: the instructions a chat started on, the curations.
-    Shape,
+    /// `chats_plane_updated`: the instructions a chat read at its start.
+    Instructions,
+    /// `curation_offers`: the curation actions offered on each subject.
+    Curations,
     /// What the project has on, and its theme.
     Settings,
     /// The git standings: the alerts and the Saving rows.
@@ -125,7 +127,8 @@ impl From<Answer> for PlaneAnswer {
             Answer::Sidebar => Self::Sidebar,
             Answer::Panels { workspace } => Self::Panels { workspace },
             Answer::RootPanels => Self::RootPanels,
-            Answer::Shape => Self::Shape,
+            Answer::Instructions => Self::Instructions,
+            Answer::Curations => Self::Curations,
             Answer::Settings => Self::Settings,
             Answer::Git => Self::Git,
             Answer::Views => Self::Views,

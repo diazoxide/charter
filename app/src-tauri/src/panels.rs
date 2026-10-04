@@ -23,6 +23,7 @@ use std::path::Path;
 use charter_core::active::Place;
 use charter_core::cistate::{self, Reading};
 use charter_core::panel;
+use charter_core::planemodel::Sections;
 use charter_core::repos::{self, Head};
 use charter_core::sessionrecord;
 use charter_core::workspaces::Plane;
@@ -430,19 +431,60 @@ pub(crate) struct RepoStates {
 /// whichever project the process happened to start in, under the heading of the one on screen.
 pub(crate) fn of(root: &Path, workspace: &str) -> Result<Panels, String> {
     let plane = Plane::open(root);
-    let found = repos::clones(root, workspace).map_err(|why| why.to_string())?;
+    let sections = Sections::read(root, workspace)?;
+    let personas = plane.personas().map_err(|why| why.to_string())?;
+    Ok(drawn(
+        workspace,
+        sections,
+        personas,
+        plane.default_persona(),
+        &mut |persona| charter_core::personas::memory_count(root, persona),
+    ))
+}
+
+/// The panels of `workspace` of the plane `held`, served from its model (FD-10c): each
+/// section is read once, and from then on again only when a change the watch names is part
+/// of it — a memory saved re-reads the workspace's `memory/`, not its todos, its records or
+/// its clones. A plane that is not watched reads them fresh ([`of`]).
+pub(crate) fn served(held: &crate::planes::Held, workspace: &str) -> Result<Panels, String> {
+    let root = held.root();
+    let Some(mut model) = held.watched_model() else {
+        return of(root, workspace);
+    };
+    let sections = model.sections(root, workspace)?;
+    let personas = model.personas()?;
+    let persona = model.default_persona().map(str::to_owned);
+    Ok(drawn(workspace, sections, personas, persona, &mut |name| {
+        model.memory_count(root, name)
+    }))
+}
+
+/// The panels drawn from what was read: the workspace's sections, the plane's personas and
+/// the default one, and each persona's memory count as `count` answers it.
+fn drawn(
+    workspace: &str,
+    sections: Sections,
+    personas: Vec<String>,
+    persona: Option<String>,
+    count: &mut dyn FnMut(&str) -> usize,
+) -> Panels {
+    let Sections {
+        clones: found,
+        declared,
+        todos: read,
+        memories,
+        sessions: records,
+    } = sections;
     let here: Vec<String> = found.repos.iter().map(|repo| repo.name.clone()).collect();
     let paths = found
         .repos
         .iter()
         .map(|repo| (repo.name.clone(), repo.path.display().to_string()))
         .collect();
-    let absent = repos::declared(&plane, workspace)
+    let absent = declared
         .into_iter()
         .filter(|name| !here.contains(name))
         .collect();
-    let ws = plane.workspace(workspace).map_err(|why| why.to_string())?;
-    let read = ws.todos();
     let (todos, todos_refused): (Vec<PanelTodo>, Option<String>) = match &read {
         Ok(open) => (
             open.iter()
@@ -454,25 +496,22 @@ pub(crate) fn of(root: &Path, workspace: &str) -> Result<Panels, String> {
                 .collect(),
             None,
         ),
-        Err(why) => (Vec::new(), Some(why.to_string())),
+        Err(why) => (Vec::new(), Some(why.clone())),
     };
-    let personas = plane.personas().map_err(|why| why.to_string())?;
-    let persona = plane.default_persona();
     let place = Place::Workspace(workspace.to_owned());
-    let records = sessionrecord::list(root, &place);
     let mut contributed = charters_own(
-        root,
         read.as_deref().unwrap_or(&[]),
         todos_refused.as_deref(),
         &personas,
         persona.as_deref(),
+        count,
     );
-    contributed.push(PanelView::from(&memory_panel(workspace, ws.memories())));
+    contributed.push(PanelView::from(&memory_panel(workspace, memories)));
     // One sort over all of them, so the Memory section lands between Todos and Personas by
     // its `order` and not by where it was pushed.
     contributed.sort_by_key(|panel| panel.order);
     contributed.push(PanelView::from(&sessions_panel(&place, &records)));
-    Ok(Panels {
+    Panels {
         workspace: workspace.to_string(),
         repos: here,
         paths,
@@ -484,7 +523,7 @@ pub(crate) fn of(root: &Path, workspace: &str) -> Result<Panels, String> {
         persona,
         sessions: records.iter().map(SessionRecordRow::from).collect(),
         contributed,
-    })
+    }
 }
 
 // ---------------------------------------------------------------------------------------
@@ -648,11 +687,11 @@ pub(crate) fn session_record(root: &Path, path: &str) -> Result<Option<SessionRe
 /// first is *this extension may offer this catalogue row*, consented per extension per row —
 /// and nobody has asked for it yet, which under ADR 0041 is the reason it does not exist.
 fn charters_own(
-    root: &Path,
     todos: &[charter_core::workspaces::Entry],
     todos_refused: Option<&str>,
     personas: &[String],
     default: Option<&str>,
+    count: &mut dyn FnMut(&str) -> usize,
 ) -> Vec<PanelView> {
     let mut panels = Vec::new();
 
@@ -719,7 +758,7 @@ fn charters_own(
             // The count is `personas::memory_count`, which is a `read_dir` and no file
             // opens — once per persona on the path that has 100 ms to draw. Reading
             // them is the persona's view (`persona_view`), when a reader opens it.
-            note: Some(note_for(root, name, Some(name.as_str()) == default)),
+            note: Some(note_for(count(name), Some(name.as_str()) == default)),
             mark: panel::Mark::Persona,
             tone: if Some(name.as_str()) == default {
                 panel::Tone::Default
@@ -734,7 +773,7 @@ fn charters_own(
             actions: Vec::new(),
         })
         .collect();
-    if let Some(shared) = shared_row(root, personas) {
+    if let Some(shared) = shared_row(count(charter_core::personas::SHARED), personas) {
         rows.push(shared);
     }
     panels.push(panel::Panel {
@@ -771,8 +810,7 @@ fn charters_own(
 /// `0 memories` is said rather than left off: a persona with none reads as one nobody has
 /// taught anything, and a row that silently omits the count reads as one charter did not look
 /// at. They are different facts.
-fn note_for(root: &Path, persona: &str, is_default: bool) -> String {
-    let held = charter_core::personas::memory_count(root, persona);
+fn note_for(held: usize, is_default: bool) -> String {
     let memories = format!("{held} {}", if held == 1 { "memory" } else { "memories" });
     if is_default {
         format!("default · {memories}")
@@ -792,8 +830,7 @@ pub(crate) const SHARED_ROW: &str = charter_core::personas::SHARED;
 /// `Panels::personas` — the list the palette's persona rows are made from. The count is
 /// `memory_count`'s `read_dir`, as a persona row's is. A plane with no persona and nothing
 /// shared has no row, so its panel still says it has no personas.
-fn shared_row(root: &Path, personas: &[String]) -> Option<panel::Row> {
-    let held = charter_core::personas::memory_count(root, charter_core::personas::SHARED);
+fn shared_row(held: usize, personas: &[String]) -> Option<panel::Row> {
     if personas.is_empty() && held == 0 {
         return None;
     }
@@ -820,14 +857,14 @@ fn shared_row(root: &Path, personas: &[String]) -> Option<panel::Row> {
 /// read is said, never drawn as an empty list — `todos`' rule for the same question.
 fn memory_panel(
     workspace: &str,
-    read: std::io::Result<Vec<charter_core::workspaces::Entry>>,
+    read: Result<Vec<charter_core::workspaces::Entry>, String>,
 ) -> panel::Panel {
     let mut blocks = Vec::new();
     let mut entries = match read {
         Ok(entries) => entries,
         Err(why) => {
             blocks.push(panel::Block::Note {
-                text: why.to_string(),
+                text: why,
                 tone: panel::Tone::Trouble,
             });
             Vec::new()
@@ -1223,6 +1260,104 @@ mod tests {
         )
         .expect("a HEAD");
         (dir, root)
+    }
+
+    // ---- served from the plane's model (FD-10c) ---------------------------------------------
+
+    /// A held plane, watched, whose `alpha` has the todo `Alpha one` and the memory
+    /// `Memory one`.
+    fn held_plane() -> (
+        tempfile::TempDir,
+        crate::planes::Planes,
+        std::sync::Arc<crate::planes::Held>,
+    ) {
+        let dir = tempfile::tempdir().expect("a plane");
+        let root = std::fs::canonicalize(dir.path()).expect("a resolved plane");
+        std::fs::write(root.join("charter.toml"), "").expect("a manifest");
+        for (store, slug, title) in [("todos", "a1", "Alpha one"), ("memory", "m1", "Memory one")] {
+            let store = root.join("workspaces/alpha").join(store);
+            std::fs::create_dir_all(&store).expect("a store");
+            std::fs::write(store.join(format!("{slug}.md")), format!("# {title}\n")).expect("it");
+        }
+        let planes = crate::planes::Planes::telling(
+            std::sync::Arc::new(|_: crate::hooks::Moved| {}),
+            crate::Shipped::default(),
+            None,
+        );
+        let id = planes.open(&root);
+        let held = planes.held(&id).expect("held");
+        (dir, planes, held)
+    }
+
+    /// The titles of the panel `id` that `panels` contributes.
+    fn rows_of(panels: &Panels, id: &str) -> Vec<String> {
+        let read = serde_json::to_value(panels).expect("serialisable");
+        read["contributed"]
+            .as_array()
+            .expect("contributed")
+            .iter()
+            .find(|panel| panel["key"].as_str().is_some_and(|key| key.ends_with(id)))
+            .and_then(|panel| panel["blocks"].as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|block| block["rows"].as_array())
+            .flatten()
+            .map(|row| row["text"].as_str().expect("a row's text").to_owned())
+            .collect()
+    }
+
+    #[test]
+    fn the_panels_a_watched_plane_serves_are_the_panels_read_from_the_disk() {
+        let (_dir, _planes, held) = held_plane();
+        let served = served(&held, "alpha").expect("served");
+        let read = of(held.root(), "alpha").expect("read");
+        assert_eq!(
+            serde_json::to_value(&served).expect("serialisable"),
+            serde_json::to_value(&read).expect("serialisable")
+        );
+        assert_eq!(rows_of(&served, "memory"), ["Memory one"]);
+    }
+
+    #[test]
+    fn a_memory_the_window_saves_is_in_the_panels_it_reads_straight_after() {
+        // The window writes and reads its panels at once; the watch's batch arrives a quarter
+        // of a second later, or on a busy Mac seconds later. What the window wrote is told to
+        // the model with the write, so the read straight after already has it.
+        let (_dir, _planes, held) = held_plane();
+        served(&held, "alpha").expect("served once, so the model holds alpha");
+        let store = held.root().join("workspaces/alpha/memory");
+        std::fs::write(store.join("m2.md"), "# Memory two\n").expect("a memory");
+
+        held.wrote(&["workspaces/alpha/memory".to_owned()]);
+
+        assert_eq!(
+            rows_of(&served(&held, "alpha").expect("served"), "memory"),
+            ["Memory two", "Memory one"]
+        );
+    }
+
+    #[test]
+    fn a_memory_saved_outside_the_window_reaches_the_panels_through_the_watch() {
+        // No timing is asserted: FSEvents has no delivery bound on a busy Mac (#577, #756).
+        // The panels are asked again until they have it, for as long as a loaded runner can
+        // take, and a passing run returns the moment they do.
+        let (_dir, _planes, held) = held_plane();
+        served(&held, "alpha").expect("served once, so the model holds alpha");
+        let store = held.root().join("workspaces/alpha/memory");
+        std::fs::write(store.join("m2.md"), "# Memory two\n").expect("a memory");
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            let rows = rows_of(&served(&held, "alpha").expect("served"), "memory");
+            if rows == ["Memory two", "Memory one"] {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the memory never reached the panels: {rows:?}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
     }
 
     /// A stand-in `charter` that records how it was called and then ends at once.

@@ -125,7 +125,15 @@ import {
   type Resuming,
 } from "./sessions";
 import { useExtensionFacts } from "./extensionFacts";
-import { panelsOf, ROOT_PANELS, SETTINGS, SHAPE, SIDEBAR, usePlaneChanged } from "./planeChanged";
+import {
+  CURATIONS,
+  INSTRUCTIONS,
+  panelsOf,
+  ROOT_PANELS,
+  SETTINGS,
+  SIDEBAR,
+  usePlaneChanged,
+} from "./planeChanged";
 import { usePlaneUpdated } from "./PlaneUpdated";
 import { inSlots, SIDES, useArrangement } from "./regions";
 import { RegionFrame } from "./RegionFrame";
@@ -442,11 +450,14 @@ export const PlaneView = memo(function PlaneView({
    * (charter-app#174).
    */
   const [rereadWorkspace, setRereadWorkspace] = useState(0);
-  /** Bumped when the core says this plane changed on disk (charter-app#264): a todo closed in
-   *  a terminal, a workspace another chat made — any change to the plane's shape, never a
-   *  memory or a session record (`SHAPE`). The sidebar and the panels hear only what the
-   *  core says concerns them, below (FD-10). */
-  const changesOnDisk = usePlaneChanged([plane], SHAPE);
+  /** Bumped when the core says the instructions a chat reads at its start changed on disk
+   *  (charter-app#264, FD-10d): `CLAUDE.md`, the harness settings, a persona's charter —
+   *  never a todo, a memory or a session record. Every reader of the plane hears only what
+   *  the core says concerns it (FD-10). */
+  const instructionsChanges = usePlaneChanged([plane], INSTRUCTIONS);
+  /** The same for the curation actions (FD-10d): the personas' curation files, the project's
+   *  launch profile, the workspaces a subject can be. */
+  const curationsChanges = usePlaneChanged([plane], CURATIONS);
   /** The changes what this project has on and its theme are made of (FD-10). */
   const settingsChanges = usePlaneChanged([plane], SETTINGS);
   /** The same, counting only the changes the sidebar is made of (FD-10): a memory an agent
@@ -454,7 +465,7 @@ export const PlaneView = memo(function PlaneView({
   const sidebarChanges = usePlaneChanged([plane], SIDEBAR);
   /** The chats running on instructions the plane has changed since they started (charter#369),
    *  each marked on its tab. */
-  const planeUpdates = usePlaneUpdated(plane, changesOnDisk);
+  const planeUpdates = usePlaneUpdated(plane, instructionsChanges);
   // The plane root is watched, so an edit to `charter.toml` or `charter.local.toml` — in an
   // editor, from a `git pull` — is one of these, and what this project has on may have moved
   // with it (charter-app#253). Not at the mount: `useExtensionsOn` asks then.
@@ -3339,7 +3350,7 @@ export const PlaneView = memo(function PlaneView({
     () => curationSubjects(sidebar?.workspaces.map((ws) => ws.name) ?? [], personas ?? []),
     [personas, sidebar],
   );
-  const curations = useCurations(plane, subjects, changesOnDisk);
+  const curations = useCurations(plane, subjects, curationsChanges);
 
   /**
    * Every action this project's window can do, in one list.

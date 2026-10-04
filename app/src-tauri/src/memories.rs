@@ -33,6 +33,16 @@ pub(crate) enum MemoryScope {
 }
 
 impl MemoryScope {
+    /// The store's directory, plane-relative: what the plane's model is told a write to it
+    /// moved (FD-10c).
+    fn store(&self) -> String {
+        match self {
+            Self::Workspace { name } => format!("workspaces/{name}/memory"),
+            Self::Persona { name } => format!("personas/{name}/memory"),
+            Self::Shared => format!("personas/{SHARED}/memory"),
+        }
+    }
+
     /// The words the tab's badge says: the workspace's or the persona's name, or `shared`.
     fn word(&self) -> &str {
         match self {
@@ -282,11 +292,15 @@ pub async fn memory_edit(
     read: String,
     overwrite: bool,
 ) -> Result<MemoryEdited, String> {
-    let root = planes.held(&plane)?.root().to_path_buf();
-    crate::off_the_window(WRITING, move || {
+    let held = planes.held(&plane)?;
+    let root = held.root().to_path_buf();
+    let store = scope.store();
+    let edited = crate::off_the_window(WRITING, move || {
         edit(&root, &scope, &slug, &title, &text, &read, overwrite)
     })
-    .await
+    .await?;
+    held.wrote(&[store]);
+    Ok(edited)
 }
 
 fn edit(
@@ -325,8 +339,12 @@ pub async fn memory_archive(
     scope: MemoryScope,
     slug: String,
 ) -> Result<MemoryArchived, String> {
-    let root = planes.held(&plane)?.root().to_path_buf();
-    crate::off_the_window(WRITING, move || archive(&root, &scope, &slug)).await
+    let held = planes.held(&plane)?;
+    let root = held.root().to_path_buf();
+    let store = scope.store();
+    let archived = crate::off_the_window(WRITING, move || archive(&root, &scope, &slug)).await?;
+    held.wrote(&[store]);
+    Ok(archived)
 }
 
 fn archive(root: &Path, scope: &MemoryScope, slug: &str) -> Result<MemoryArchived, String> {
@@ -350,11 +368,15 @@ pub async fn memory_unarchive(
     archived: String,
     restore_as: Option<String>,
 ) -> Result<MemoryView, String> {
-    let root = planes.held(&plane)?.root().to_path_buf();
-    crate::off_the_window(WRITING, move || {
+    let held = planes.held(&plane)?;
+    let root = held.root().to_path_buf();
+    let store = scope.store();
+    let back = crate::off_the_window(WRITING, move || {
         unarchive(&root, &scope, &archived, restore_as.as_deref())
     })
-    .await
+    .await?;
+    held.wrote(&[store]);
+    Ok(back)
 }
 
 fn unarchive(
@@ -382,8 +404,13 @@ pub async fn memory_create(
     title: String,
     text: String,
 ) -> Result<MemoryView, String> {
-    let root = planes.held(&plane)?.root().to_path_buf();
-    crate::off_the_window(WRITING, move || create(&root, &scope, &title, &text, now())).await
+    let held = planes.held(&plane)?;
+    let root = held.root().to_path_buf();
+    let store = scope.store();
+    let made =
+        crate::off_the_window(WRITING, move || create(&root, &scope, &title, &text, now())).await?;
+    held.wrote(&[store]);
+    Ok(made)
 }
 
 fn create(

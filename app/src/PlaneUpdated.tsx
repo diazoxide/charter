@@ -15,11 +15,11 @@ export type PlaneUpdates = Readonly<Record<number, readonly string[]>>;
  * the next prompt; the ruling on #369 moved it here, onto the chat's tab, so the operator —
  * who is the one who can start it fresh — is the one told.
  *
- * Asked at the mount and whenever the core says the plane changed on disk (`changesOnDisk`,
- * from `usePlaneChanged`), which is when the answer can move. A window that cannot ask marks
- * nothing.
+ * Asked at the mount and whenever the core says a change on disk concerns the instructions
+ * (`instructionsChanges`, from `usePlaneChanged(…, INSTRUCTIONS)`, FD-10d), which is when the
+ * answer can move. A window that cannot ask marks nothing.
  */
-export function usePlaneUpdated(plane: PlaneId, changesOnDisk: number): PlaneUpdates {
+export function usePlaneUpdated(plane: PlaneId, instructionsChanges: number): PlaneUpdates {
   const [updates, setUpdates] = useState<PlaneUpdates>({});
   useEffect(() => {
     let gone = false;
@@ -33,7 +33,7 @@ export function usePlaneUpdated(plane: PlaneId, changesOnDisk: number): PlaneUpd
     return () => {
       gone = true;
     };
-  }, [plane, changesOnDisk]);
+  }, [plane, instructionsChanges]);
   return updates;
 }
 
