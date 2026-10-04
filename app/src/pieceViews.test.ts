@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { pieceFileTitle, pieceFileView, pieceFilesView, pieceOf } from "./pieceViews";
+import {
+  pieceDiffOf,
+  pieceDiffTitle,
+  pieceDiffView,
+  pieceFileTitle,
+  pieceFileView,
+  pieceFilesView,
+  pieceOf,
+} from "./pieceViews";
 
 const CUT = { workspace: "alpha", repo: "svc", piece: "fix-it" };
 
@@ -24,5 +32,17 @@ describe("a piece's files and one of its files are views named by data", () => {
     expect(pieceOf({ from: null, view: "persona", key: "steward" })).toBeUndefined();
     expect(pieceOf({ from: "ext", view: "piece-files", key: "alpha/svc/fix-it" })).toBeUndefined();
     expect(pieceOf({ from: null, view: "piece-file", key: "alpha/svc" })).toBeUndefined();
+  });
+
+  it("names a file's comparison apart from the file itself (FM-11)", () => {
+    const diff = pieceDiffView(CUT, "src/a/b.rs");
+
+    expect(pieceDiffOf(diff)).toEqual({ place: CUT, path: "src/a/b.rs" });
+    expect(pieceOf(diff)).toBeUndefined();
+    expect(pieceDiffOf(pieceFileView(CUT, "src/a/b.rs"))).toBeUndefined();
+    expect(
+      pieceDiffOf({ from: null, view: "piece-diff", key: "alpha/svc/fix-it" }),
+    ).toBeUndefined();
+    expect(pieceDiffTitle(CUT, "src/a/b.rs")).toBe("What changed · b.rs · fix-it");
   });
 });

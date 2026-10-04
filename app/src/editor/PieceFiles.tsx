@@ -16,6 +16,9 @@
  * with its size instead of its contents. Both tabs only read. The core names the folder from the
  * branch, refuses a path that leaves it, and decides what a file is by its bytes.
  *
+ * **Show what changed** (FM-11) is beside a file the branch changed against its base, and only
+ * there: it opens the file's comparison in a view tab of its own (`PieceDiff.tsx`).
+ *
  * **Open in your editor** (RC-20, ADR 0081 §3) is beside the file in both: the file and the
  * line the cursor is on go to the editor chosen in Settings. The window sends the
  * branch, the path, the line and which editor; the core checks the path as it checks a read,
@@ -27,8 +30,14 @@ import { Group, Panel, Separator, type Layout } from "react-resizable-panels";
 import { FileText, LoaderCircle } from "lucide-react";
 import { EmptyState } from "../EmptyState";
 import { ExternalLink } from "../ReleaseNotes";
-import { commands, type PieceFile, type PlaneId } from "../bindings";
-import { pieceFileTitle, pieceFileView, type Place } from "../pieceViews";
+import { commands, type ChangeMark, type PieceFile, type PlaneId } from "../bindings";
+import {
+  pieceDiffTitle,
+  pieceDiffView,
+  pieceFileTitle,
+  pieceFileView,
+  type Place,
+} from "../pieceViews";
 import type { Offer } from "../actions";
 import type { ViewRef } from "../tabs";
 import { BranchTree } from "./BranchTree";
@@ -38,7 +47,7 @@ import { settleJump, usePendingJump } from "../fileJump";
 import { DragHandle, PickAChat, type Referenced } from "../references";
 
 /** A size, as a person reads one. */
-function sized(bytes: number): string {
+export function sized(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KiB`;
   return `${Math.round(bytes / (1024 * 1024))} MiB`;
@@ -76,6 +85,50 @@ function useFile(plane: PlaneId, cut: Place, path: string | undefined): FileRead
   }, [plane, cut.workspace, cut.repo, cut.piece, path]);
   if (path === undefined) return undefined;
   return read?.path === path ? read.read : READING;
+}
+
+/**
+ * **Whether the branch changed the file at `path`** against its base, committed or not (FM-11):
+ * its mark in `branch_status`, the explorer's own markers (FM-4), or `undefined` when it did not
+ * or the status could not be read. Read when the tab opens and again when another file is picked,
+ * **one read at a time**: a pick during a read asks for one more after it, never one each.
+ */
+function useChanged(plane: PlaneId, cut: Place, path: string | undefined): ChangeMark | undefined {
+  const [marks, setMarks] = useState<ReadonlyMap<string, ChangeMark>>();
+  const flight = useRef<{ again: boolean } | undefined>(undefined);
+  const read = useRef<() => void>(() => {});
+  useEffect(() => {
+    read.current = () => {
+      if (flight.current !== undefined) {
+        flight.current.again = true;
+        return;
+      }
+      const now = { again: false };
+      flight.current = now;
+      const told = (got: ReadonlyMap<string, ChangeMark>) => {
+        flight.current = undefined;
+        setMarks(got);
+        if (now.again) read.current();
+      };
+      void commands
+        .branchStatus(plane, cut.workspace, cut.repo, cut.piece)
+        .then((said) =>
+          told(
+            said.status === "error"
+              ? new Map()
+              : new Map(said.data.changes.map((one) => [one.path, one.mark])),
+          ),
+        )
+        .catch(() => told(new Map()));
+    };
+  });
+  useEffect(() => {
+    if (path !== undefined) read.current();
+  }, [plane, cut.workspace, cut.repo, cut.piece, path]);
+  if (path === undefined) return undefined;
+  const mark = marks?.get(path);
+  // A deleted file has nothing to pick; one that was, a moment ago, is not offered either.
+  return mark === "deleted" ? undefined : mark;
 }
 
 /**
@@ -416,6 +469,7 @@ export function PieceFilesTab({
   const at = useCursorLine(picked, line);
   const selection = useSelectedLines(picked);
   const read = useFile(plane, cut, picked);
+  const changed = useChanged(plane, cut, picked);
   // **Read once**: a panel's size is a constraint, and a constraint that changes re-registers
   // the panel (`RegionFrame.tsx`). The divider is where the operator's hand put it already.
   const [started] = useState(() =>
@@ -479,6 +533,17 @@ export function PieceFilesTab({
                   >
                     Open in a tab of its own
                   </button>
+                  {changed !== undefined && (
+                    <button
+                      type="button"
+                      tabIndex={0}
+                      onClick={() =>
+                        onOpenView(pieceDiffView(cut, picked), pieceDiffTitle(cut, picked))
+                      }
+                    >
+                      Show what changed
+                    </button>
+                  )}
                   <ToAChat plane={plane} cut={cut} path={picked} lines={selection.lines} />
                 </span>
               </header>

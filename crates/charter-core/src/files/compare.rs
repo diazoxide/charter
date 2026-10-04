@@ -178,6 +178,59 @@ pub fn compare_file(
     }
 }
 
+/// One file of a branch against the branch's base: what "Show what changed" draws (FM-11).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct WhatChanged {
+    /// The file as the branch's file list has it: its mark, and where it came from if renamed.
+    pub change: FileChange,
+    /// The base's name, as [`Compared::base`]; `None` when compared against the last commit.
+    pub base: Option<String>,
+    /// Its lines and hunks, or the kind that is drawn as a sentence instead.
+    pub diff: FileDiff,
+}
+
+/// One file of `branch`, by its path relative to the branch's folder, compared against the
+/// branch's base with what is not committed yet ([`Comparison::BranchAndUncommitted`], the
+/// explorer's markers' own comparison): "Show what changed" (FM-11, #1103 story 21).
+///
+/// **The path is confined first, as every file command confines one** ([`super::named`]):
+/// refused when it is empty, absolute or walks up, names git's folder in any case, or reaches
+/// its file through a link; nothing is read for it then. Then the comparison's file list is
+/// read, and a file not in it is refused with [`Refused::NotChanged`], never answered with an
+/// empty diff. Its hunks are read at the sides the list was read at, so the two agree however
+/// the branch moved between them.
+pub fn what_changed(
+    reader: &super::Reader,
+    plane: &Path,
+    branch: Branch<'_>,
+    path: &str,
+) -> Result<WhatChanged, Refused> {
+    let relative = super::named(plane, branch, path)?;
+    let compared = compare(reader, plane, branch, &Comparison::BranchAndUncommitted)?;
+    let Some(change) = compared.files.into_iter().find(|one| one.path == relative) else {
+        if compared.more > 0 {
+            return Err(Refused::Read(format!(
+                "charter compares the first {MARKED} files this branch changed, and '{path}' is \
+                 not among them"
+            )));
+        }
+        return Err(Refused::NotChanged(path.to_string()));
+    };
+    let diff = compare_file(
+        reader,
+        plane,
+        branch,
+        &compared.sides,
+        &change.path,
+        change.from.as_deref(),
+    )?;
+    Ok(WhatChanged {
+        change,
+        base: compared.base,
+        diff,
+    })
+}
+
 /// One member of a cross-repo change, compared (e).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct MemberCompared {
