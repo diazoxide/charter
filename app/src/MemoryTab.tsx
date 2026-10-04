@@ -163,7 +163,7 @@ export function MemoryTab({
             <Field
               ids={ids}
               kind="list"
-              rows={8}
+              minRows={8}
               value={editing.body}
               onChange={(body) => change({ body })}
             />

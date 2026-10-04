@@ -220,7 +220,7 @@ export type FieldProps = Tied &
         value: string;
         onChange: (to: string) => void;
         /** The fewest lines the box shows, before it grows with what is typed. Two unless said. */
-        rows?: number;
+        minRows?: number;
       }
     | {
         kind: "range";
@@ -264,7 +264,7 @@ export function Field(props: FieldProps) {
         className="ui-field"
         value={props.value}
         spellCheck={false}
-        rows={Math.max(props.rows ?? 2, props.value.split("\n").length)}
+        rows={Math.max(props.minRows ?? 2, props.value.split("\n").length)}
         aria-describedby={ids.describedBy}
         onChange={(event) => props.onChange(event.currentTarget.value)}
       />
