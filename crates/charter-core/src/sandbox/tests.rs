@@ -1728,3 +1728,23 @@ fn the_picker_shows_every_refusal_of_the_program_check() {
         "not asked where the chat is not sandboxed"
     );
 }
+
+/// A file denial does not stop a connect to a unix socket: a sandbox treats that connect as
+/// network. So no compiler may allow one beyond what it must, or a chat could reach
+/// `charterd.sock` through a folder it cannot read (FD-27, ADR 0068 §5). Claude Code's hooks
+/// reach the hook socket from outside its sandbox, so its sandbox is handed none. Codex runs in
+/// charter's wrap, which allows the hook socket alone (`codex_tests`).
+#[test]
+fn claude_code_allows_a_chat_no_unix_socket() {
+    let (_plane, denied) = denied_with(None, Os::MacOs);
+    let settings = claude::settings(&compiled(denied, Os::MacOs)).expect("compiles");
+    let network = settings.sandbox["network"]
+        .as_object()
+        .expect("a network object");
+    for key in network.keys() {
+        assert!(
+            !key.to_lowercase().contains("unix"),
+            "Claude Code's sandbox is handed {key}: {network:?}"
+        );
+    }
+}

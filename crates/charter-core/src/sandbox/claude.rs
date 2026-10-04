@@ -60,8 +60,19 @@ pub fn settings(compiled: &Compiled) -> Result<Settings, Uncompilable> {
     let mut deny_write = Vec::new();
     let mut read_rules = Vec::new();
     let mut edit_rules = Vec::new();
-    for denial in &compiled.denied.paths {
-        let path = denial.path.display().to_string();
+    // Each denied path as written, and as the kernel names it where that differs: a path
+    // through a link (a linked `~/.config`, `/tmp`, `/var`) is denied by both names, so a rule
+    // matches whichever name the sandbox or a tool compares (FD-27).
+    let names = compiled.denied.paths.iter().flat_map(|denial| {
+        let resolved = super::real(&denial.path);
+        let mut both = vec![(denial, denial.path.clone())];
+        if resolved != denial.path {
+            both.push((denial, resolved));
+        }
+        both
+    });
+    for (denial, path) in names {
+        let path = path.display().to_string();
         let rooted = format!("/{path}");
         if denial.access == Access::ReadWrite {
             deny_read.push(path.clone());

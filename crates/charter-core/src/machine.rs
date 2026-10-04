@@ -351,7 +351,9 @@ pub fn dir(config_root: &Path) -> PathBuf {
 
 /// Where `charterd` keeps `charterd.sock` and one credential file per human client scope
 /// (`<config>/charterd/<scope>`, ADR 0068 §5, plane-format.md): a directory a chat's sandbox
-/// denies reading and writing (ADR 0067 §5, class 3; FD-27).
+/// denies reading and writing (ADR 0067 §5, class 3; FD-27). That denial holds the credentials,
+/// not the socket: a connect to a unix socket is network to a sandbox, and the socket is held by
+/// each compiler allowing no unix socket but the hook socket.
 pub fn charterd(config_root: &Path) -> PathBuf {
     dir(config_root).join("charterd")
 }

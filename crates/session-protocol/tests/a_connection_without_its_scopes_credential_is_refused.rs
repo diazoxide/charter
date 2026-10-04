@@ -254,7 +254,7 @@ async fn over_the_hosts_socket_this_uid_is_admitted_only_with_its_credential() {
                     stream,
                     v1(),
                     &HELD,
-                    &charter_session_protocol::local::NoChats,
+                    &std::sync::Arc::new(charter_session_protocol::local::NoChats),
                 )
                 .await
                 .map(|l| l.scope()),

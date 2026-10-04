@@ -45,29 +45,49 @@ impl SameUser {
 
 /// The chats a host holds, for the check that no process inside one is admitted as a person's
 /// scope.
-pub trait Chats: Sync {
+pub trait Chats: Send + Sync + 'static {
     /// Every chat's program, by pid: each leads its own session (`portable-pty` starts it with
     /// `setsid`), so a process it started is in its session or below it.
+    ///
+    /// **Two promises a host keeps, or the check passes what it should not:**
+    /// - a chat whose program has exited stays in the set while anything in its session lives,
+    ///   since a survivor in that session is still inside the chat;
+    /// - a program's pid is in the set from the moment the program can run, before its first
+    ///   instruction, never only once the start has returned.
     fn programs(&self) -> Vec<u32>;
+
+    /// Runs a program the check needs: `/bin/ps`, where the kernel's process table is not a
+    /// filesystem (everywhere but Linux). Through the host's own gate, so it is started the way
+    /// every program the host starts is (charter-core's fork lock); an error refuses.
+    fn run(&self, command: &mut std::process::Command) -> std::io::Result<std::process::Output>;
 }
 
-/// A host that holds no chats: no process is inside one.
+/// A host that holds no chats: no process is inside one, and nothing is ever run for it.
 pub struct NoChats;
 
 impl Chats for NoChats {
     fn programs(&self) -> Vec<u32> {
         Vec::new()
     }
+
+    fn run(&self, _: &mut std::process::Command) -> std::io::Result<std::process::Output> {
+        Err(std::io::Error::other("a host with no chats runs nothing"))
+    }
 }
 
-/// Which of `programs` process `pid` runs inside, if any, read from the kernel off the async
-/// runtime (`charter_same_user::inside_a_chat`). An error is a doubt, and the caller refuses.
-pub(crate) async fn inside_a_chat(pid: u32, programs: Vec<u32>) -> std::io::Result<Option<u32>> {
+/// Which of `chats`' programs process `pid` runs inside, if any, read from the kernel off the
+/// async runtime (`charter_same_user::inside_a_chat`). An error is a doubt, and the caller
+/// refuses.
+pub(crate) async fn inside_a_chat<C: Chats>(
+    pid: u32,
+    chats: std::sync::Arc<C>,
+) -> std::io::Result<Option<u32>> {
+    let programs = chats.programs();
     if programs.is_empty() {
         return Ok(None);
     }
     tokio::task::spawn_blocking(move || {
-        let parents = charter_same_user::Parents::now(|ps| ps.output())?;
+        let parents = charter_same_user::Parents::now(|ps| chats.run(ps))?;
         charter_same_user::inside_a_chat(
             pid,
             &programs,

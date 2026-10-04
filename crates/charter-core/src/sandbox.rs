@@ -614,9 +614,11 @@ impl Denied {
                 crate::machine::dir(&config_root),
                 Access::Write,
             );
-            // The human client scopes' credentials and `charterd.sock` (FD-27, V16a): a chat
-            // neither reads nor writes anything there, so it holds no person's credential;
-            // `charterd` also refuses those scopes to a chat's processes.
+            // The human client scopes' credentials (FD-27, V16a): a chat neither reads nor
+            // writes anything there, so it holds no person's credential. This does not stop a
+            // connect to `charterd.sock` beside them, which a sandbox judges as network: each
+            // compiler allows no unix socket but the hook socket for that. `charterd` also
+            // refuses those scopes to a chat's processes.
             deny(
                 Class::HumanPowers,
                 crate::machine::charterd(&config_root),
@@ -650,6 +652,25 @@ impl Denied {
             } else {
                 Vec::new()
             },
+        }
+    }
+}
+
+/// `path` as the kernel names it: its longest part that exists, with its links resolved, and
+/// the rest as written. A sandbox matches the path the kernel resolved, so a rule written on a
+/// link's name (`/tmp`, `/var`, a linked `~/.config`) would match nothing.
+pub(crate) fn real(path: &Path) -> PathBuf {
+    let mut existing = path.to_path_buf();
+    let mut rest = Vec::new();
+    loop {
+        if let Ok(found) = existing.canonicalize() {
+            let mut out = found;
+            out.extend(rest.into_iter().rev());
+            return out;
+        }
+        match (existing.file_name().map(ToOwned::to_owned), existing.pop()) {
+            (Some(name), true) => rest.push(name),
+            _ => return path.to_path_buf(),
         }
     }
 }

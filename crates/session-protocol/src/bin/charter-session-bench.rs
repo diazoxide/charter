@@ -235,7 +235,7 @@ mod bench {
                 stream,
                 v1(),
                 &held,
-                &charter_session_protocol::local::NoChats,
+                &std::sync::Arc::new(charter_session_protocol::local::NoChats),
             )
             .await
             .expect("a host link")
