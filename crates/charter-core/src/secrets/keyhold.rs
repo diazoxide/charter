@@ -155,6 +155,7 @@ fn write_quietly(_item: &Item) -> Result<(), Refused> {
 
 /// `errSecInvalidOwnerEdit`: the Keychain refused a delete because another program owns the
 /// item (measured on a delete by a program the item does not trust).
+#[cfg(target_os = "macos")]
 const NOT_THE_OWNER: i32 = -25244;
 
 /// The item deleted and made again by this process, so it is this program's alone.
