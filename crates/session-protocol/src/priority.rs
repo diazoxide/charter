@@ -8,8 +8,8 @@
 //! connector's stdio to a remote host, is about 800 ms. What the transport already holds it
 //! cannot jump, and that is the one wait left.
 //!
-//! **How.** The multiplexer writes into this end instead of the transport. It takes every
-//! byte at once, cuts the bytes into Yamux's frames (a 12-byte header: version, type, flags,
+//! **How.** The multiplexer writes into this end instead of the transport. It takes the
+//! bytes as they come, up to its bounds, cuts the bytes into Yamux's frames (a 12-byte header: version, type, flags,
 //! stream, length; then `length` bytes of body for a data frame, none for the others), and
 //! queues each frame. A task writes the frames to the transport, the control lane's first.
 //!
@@ -19,14 +19,22 @@
 //! a peer that reads Yamux reads this, and a peer that does not schedule reads the same.
 //!
 //! **Which frames go first.** The control lane's: the stream the client opens first, which
-//! Yamux numbers 1 ([`CONTROL_LANE_STREAM`]). Everything else, every terminal's bytes, the
-//! window updates and the session's pings, keeps the order the multiplexer wrote it in.
+//! Yamux numbers 1 ([`CONTROL_LANE_STREAM`]), and which the host checks is stream 1 before it
+//! takes it as the lane. With them go the session's pings and pongs on stream 0, as Yamux
+//! itself puts a pong ahead of the streams, so a round trip Yamux measures is not this queue's.
+//! Every other stream takes its turn, a frame each, and a go-away goes last.
 //!
-//! **Bounded.** A data frame is sent only with the other end's credit for its stream, and each
-//! view's bytes are held to its watermark, so what waits here is what the views have already
-//! been allowed to have in flight. Past [`MOST_QUEUED_BYTES`] of it, the multiplexer's writes
-//! of anything but the control lane wait, so a peer that grants credit and never reads cannot
-//! grow it.
+//! **Bounded, and what that costs.** Two bounds: [`MOST_QUEUED_BYTES`] for the streams'
+//! frames, and [`MOST_LANE_BYTES`] for the lane's, pings and pongs included. Past either one,
+//! this end takes no next frame of any kind, a header-only frame included, until the writing
+//! task has made room: a queue passes its bound by at most the one frame already begun. That
+//! is the transport's back-pressure, passed on: Yamux stops writing, and since it has one
+//! frame on its way at a time, it stops reading too once a pong or a window update waits. So
+//! a peer that grants credit and never reads, or floods pings, cannot grow either queue. And
+//! past a bound **everything waits, the control lane too**: Yamux cannot hand over the lane's
+//! frame while another is stuck. In use the bounds are not reached: a data frame is sent only
+//! with the other end's credit for its stream, and each view's bytes are held to its
+//! watermark, so what waits here is what the views have already been allowed in flight.
 
 use std::collections::{HashMap, VecDeque};
 use std::io;
@@ -43,8 +51,9 @@ use tokio_util::sync::CancellationToken;
 /// streams from 1.
 pub(crate) const CONTROL_LANE_STREAM: u32 = 1;
 
-/// Bytes of frames other than the control lane's that may wait here: every stream a link may
-/// carry, each a view's high watermark (64 KiB) ahead. Past it, the multiplexer waits.
+/// Bytes of frames other than the control lane's, pings and pongs that may wait here: every
+/// stream a link may carry, each a view's high watermark (64 KiB) ahead. Past it, the
+/// multiplexer waits, whatever it writes next.
 pub(crate) const MOST_QUEUED_BYTES: usize = crate::link::MOST_STREAMS * 64 * 1024;
 
 /// How long a dropped end keeps writing what it had queued, as a closed socket lingers: what
@@ -57,6 +66,17 @@ const HEADER: usize = 12;
 
 /// The type of a Yamux data frame, the only one with a body.
 const DATA: u8 = 0;
+
+/// The type of a Yamux ping or pong, on the session's stream 0.
+const PING: u8 = 2;
+
+/// The flag that makes a ping a pong.
+#[cfg(test)]
+const ACK: u16 = 2;
+
+/// Bytes of the control lane's frames, pings and pongs that may wait here: two of its largest
+/// frames. Past it, the multiplexer waits, whatever it writes next.
+pub(crate) const MOST_LANE_BYTES: usize = 2 * crate::link::MOST_CONTROL_FRAME_BYTES;
 
 /// The type of a Yamux go-away frame, which ends the session.
 const GO_AWAY: u8 = 3;
@@ -73,6 +93,8 @@ struct Queues {
     last: VecDeque<Bytes>,
     /// The bytes in `bulk` and `last`.
     bulk_bytes: usize,
+    /// The bytes in `urgent`.
+    lane_bytes: usize,
     /// The multiplexer waiting for `bulk` to have room.
     room: Option<Waker>,
     /// The multiplexer shut its end: write what is queued, then shut the transport.
@@ -84,6 +106,11 @@ struct Queues {
 }
 
 impl Queues {
+    /// Past either bound: the multiplexer waits.
+    fn full(&self) -> bool {
+        self.bulk_bytes >= MOST_QUEUED_BYTES || self.lane_bytes >= MOST_LANE_BYTES
+    }
+
     /// The next frame of a stream other than the control lane: one from the stream whose turn
     /// it is, which then goes to the back if it has more; a go-away only once nothing else is
     /// left.
@@ -195,7 +222,19 @@ impl AsyncWrite for Prioritized {
         let mut taken = 0;
         while taken < buf.len() {
             let Some(length) = this.length else {
-                // A header is always taken, so the frame's stream is known before its body.
+                // Before a frame's first byte, the bound: past it, nothing more is taken, of any
+                // stream, until the writing task makes room. Once begun, a frame is taken whole,
+                // so a queue passes its bound by at most one frame.
+                if this.frame.is_empty() {
+                    let mut queues = this.shared.queues();
+                    if queues.full() {
+                        if taken > 0 {
+                            break;
+                        }
+                        queues.room = Some(cx.waker().clone());
+                        return Poll::Pending;
+                    }
+                }
                 let n = (HEADER - this.frame.len()).min(buf.len() - taken);
                 this.frame.extend_from_slice(&buf[taken..taken + n]);
                 taken += n;
@@ -224,16 +263,6 @@ impl AsyncWrite for Prioritized {
                 }
                 continue;
             };
-            {
-                let mut queues = this.shared.queues();
-                if this.stream != CONTROL_LANE_STREAM && queues.bulk_bytes >= MOST_QUEUED_BYTES {
-                    if taken > 0 {
-                        break;
-                    }
-                    queues.room = Some(cx.waker().clone());
-                    return Poll::Pending;
-                }
-            }
             let n = (length - this.frame.len()).min(buf.len() - taken);
             this.frame.extend_from_slice(&buf[taken..taken + n]);
             taken += n;
@@ -278,7 +307,8 @@ impl Prioritized {
         self.length = None;
         let mut guard = self.shared.queues();
         let queues = &mut *guard;
-        if self.stream == CONTROL_LANE_STREAM {
+        if self.stream == CONTROL_LANE_STREAM || (self.stream == 0 && self.kind == PING) {
+            queues.lane_bytes += frame.len();
             queues.urgent.push_back(frame);
         } else {
             queues.bulk_bytes += frame.len();
@@ -310,15 +340,20 @@ async fn write_out<W: AsyncWrite + Unpin>(mut out: W, shared: &Shared) {
     let ended = loop {
         let next = {
             let mut queues = shared.queues();
-            if let Some(frame) = queues.urgent.pop_front() {
-                Next::Lane(frame)
-            } else if let Some(frame) = queues.next_turn() {
-                if queues.bulk_bytes < MOST_QUEUED_BYTES
-                    && let Some(waker) = queues.room.take()
-                {
-                    waker.wake();
-                }
-                Next::Bulk(frame)
+            let next = if let Some(frame) = queues.urgent.pop_front() {
+                queues.lane_bytes -= frame.len();
+                Some(Next::Lane(frame))
+            } else {
+                queues.next_turn().map(Next::Bulk)
+            };
+            if next.is_some()
+                && !queues.full()
+                && let Some(waker) = queues.room.take()
+            {
+                waker.wake();
+            }
+            if let Some(next) = next {
+                next
             } else if queues.closing {
                 Next::Shut
             } else {
@@ -463,17 +498,94 @@ mod tests {
         );
     }
 
-    /// Past the bound, the control lane's frame is still taken.
+    /// Past the bound everything waits, the control lane's frame too: the multiplexer has one
+    /// frame on its way at a time, so a frame that waits holds back every frame behind it.
     #[tokio::test]
-    async fn past_the_bound_the_control_lanes_frame_is_taken() {
+    async fn past_the_bound_everything_waits_the_control_lane_too() {
         let (mut ours, _far) = full().await;
-        tokio::time::timeout(
+        let waited = tokio::time::timeout(
             std::time::Duration::from_millis(50),
             ours.write_all(&frame(CONTROL_LANE_STREAM, b"needs-you")),
         )
-        .await
-        .expect("the control lane's frame waited for room")
-        .unwrap();
+        .await;
+        assert!(waited.is_err(), "the lane's frame was taken past the bound");
+    }
+
+    fn ping(flags: u16) -> Vec<u8> {
+        let mut f = vec![0, PING];
+        f.extend_from_slice(&flags.to_be_bytes());
+        f.extend_from_slice(&0u32.to_be_bytes());
+        f.extend_from_slice(&7u32.to_be_bytes());
+        f
+    }
+
+    /// Writes `frames` to an end whose transport is never read, and says whether each was taken
+    /// before a write waited.
+    async fn taken_before_waiting(
+        ours: &mut Prioritized,
+        frames: impl Iterator<Item = Vec<u8>>,
+    ) -> bool {
+        for f in frames {
+            let took =
+                tokio::time::timeout(std::time::Duration::from_millis(50), ours.write_all(&f))
+                    .await;
+            if took.is_err() {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// The control lane has a bound of its own: a peer that grants the lane credit and never
+    /// reads cannot make it queue without limit.
+    #[tokio::test]
+    async fn the_control_lane_has_a_bound_of_its_own() {
+        let (near, _far) = tokio::io::duplex(16);
+        let mut ours = Prioritized::start(near);
+        let body = vec![1u8; 16 * 1024];
+        let flood =
+            (0..(2 * MOST_LANE_BYTES / body.len())).map(|_| frame(CONTROL_LANE_STREAM, &body));
+        assert!(
+            !taken_before_waiting(&mut ours, flood).await,
+            "twice the lane's bound was queued for a transport nobody reads"
+        );
+    }
+
+    /// A frame with no body is held to the bound too: pongs, window updates.
+    #[tokio::test]
+    async fn frames_with_no_body_are_held_to_the_bound() {
+        let (mut ours, _far) = full().await;
+        let updates = (0..1000).map(|_| window_update(5, 1000));
+        assert!(
+            !taken_before_waiting(&mut ours, updates).await,
+            "window updates were taken past the bound"
+        );
+        let (near, _far) = tokio::io::duplex(16);
+        let mut ours = Prioritized::start(near);
+        let pongs = (0..(2 * MOST_LANE_BYTES / HEADER)).map(|_| ping(ACK));
+        assert!(
+            !taken_before_waiting(&mut ours, pongs).await,
+            "pongs were queued past the lane's bound"
+        );
+    }
+
+    /// Pings and pongs go with the lane, so a round trip Yamux measures is not this queue's.
+    #[tokio::test]
+    async fn pings_and_pongs_go_with_the_control_lane() {
+        let (near, mut far) = tokio::io::duplex(16);
+        let mut ours = Prioritized::start(near);
+        let busy: Vec<_> = (0..6u8).map(|n| frame(3, &[n; 40])).collect();
+        for f in &busy {
+            ours.write_all(f).await.unwrap();
+        }
+        tokio::task::yield_now().await;
+        let pong = ping(ACK);
+        ours.write_all(&pong).await.unwrap();
+        let total = busy.iter().map(Vec::len).sum::<usize>() + pong.len();
+        let mut seen = vec![0u8; total];
+        far.read_exact(&mut seen).await.unwrap();
+        let at = cut(&seen).iter().position(|f| *f == pong).unwrap();
+        assert!(at <= 1, "the pong waited behind {at} frames");
     }
 
     /// Shutting the multiplexer's end writes what is queued, then shuts the transport.
