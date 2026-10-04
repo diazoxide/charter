@@ -339,6 +339,91 @@ fn hits_stream_a_file_at_a_time_stop_at_the_page_and_more_continues_where_it_sto
     assert_eq!(ends, [Ended::Capped, Ended::Capped, Ended::Done]);
 }
 
+/// #1153: files are read on several threads, a page ahead of what is heard. What is heard is
+/// still every file once, in walk order, page after page, whatever the readers finished first.
+#[test]
+fn files_read_on_several_threads_are_heard_once_each_in_walk_order_page_after_page() {
+    charter_core::unsteered!();
+    let f = support::plane_with_clone("thing");
+    let piece = cut(&f, "piece");
+    let mut expected = Vec::new();
+    for folder in 0..12 {
+        for file in 0..25 {
+            let path = format!("d{folder}/f{file}.txt");
+            // Some files large, so the readers finish out of order.
+            let text = if file % 7 == 0 {
+                format!("{}needle\n", "filler line\n".repeat(40_000))
+            } else if file % 3 == 0 {
+                "nothing here\n".to_string()
+            } else {
+                "needle\n".to_string()
+            };
+            if file % 3 != 0 || file % 7 == 0 {
+                expected.push(path.clone());
+            }
+            write(&piece, &path, &text);
+        }
+    }
+    expected.sort();
+    let mut search = files::search(&[place(&f, "piece")], "needle", literal()).unwrap();
+    let stop = AtomicBool::new(false);
+    let mut heard = Vec::new();
+    let mut pages = 0;
+
+    loop {
+        pages += 1;
+        let ended = search.more(7, &stop, &mut |step| match step {
+            Searched::File(file) => heard.push(file.path),
+            other => panic!("{other:?}"),
+        });
+        if ended == Ended::Done {
+            break;
+        }
+        assert_eq!(ended, Ended::Capped);
+    }
+
+    assert_eq!(heard, expected);
+    assert!(pages > 20, "{pages} pages");
+}
+
+/// A stop raised mid-page loses nothing: a page asked after it goes on from the first file not
+/// yet heard, though the readers had read past it.
+#[test]
+fn a_page_after_a_stop_goes_on_from_the_first_file_not_heard() {
+    charter_core::unsteered!();
+    let f = support::plane_with_clone("thing");
+    let piece = cut(&f, "piece");
+    let mut expected = Vec::new();
+    for n in 0..200 {
+        let path = format!("f{n:03}.txt");
+        write(&piece, &path, "needle\n");
+        expected.push(path);
+    }
+    let mut search = files::search(&[place(&f, "piece")], "needle", literal()).unwrap();
+    let stop = AtomicBool::new(false);
+    let mut heard = Vec::new();
+
+    let ended = search.more(1000, &stop, &mut |step| {
+        if let Searched::File(file) = step {
+            heard.push(file.path);
+        }
+        if heard.len() == 10 {
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    });
+    assert_eq!(ended, Ended::Stopped);
+    assert_eq!(heard.len(), 10);
+    let stop = AtomicBool::new(false);
+    let ended = search.more(1000, &stop, &mut |step| {
+        if let Searched::File(file) = step {
+            heard.push(file.path);
+        }
+    });
+
+    assert_eq!(ended, Ended::Done);
+    assert_eq!(heard, expected);
+}
+
 #[test]
 fn a_raised_stop_ends_the_search_before_another_file_is_read() {
     charter_core::unsteered!();
