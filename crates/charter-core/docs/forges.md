@@ -347,6 +347,12 @@ Each one holds:
 - the **variable** `FORGE_LIVE_OWNER`: the GitHub org's login, or the GitLab group's full path;
 - a **deployment branch policy of `main` only** ("Selected branches and tags", `main`).
 
+Create each environment and set its branch policy **before** adding `FORGE_LIVE_TOKEN`: GitHub
+creates a missing environment, with no protection at all, the first time a job names it, so an
+environment made by a run rather than by hand allows every branch. Add **no required reviewers**:
+a reviewer gate holds every scheduled run until someone approves it, and the nightly would never
+run unattended.
+
 The secret has one static name in every environment, so a job's runner is sent that one token
 and no other secret; a computed `secrets[…]` index would send it the whole secrets context. The
 branch policy is what keeps a `workflow_dispatch` from another branch, with changed test code,
