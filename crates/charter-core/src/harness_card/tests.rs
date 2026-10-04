@@ -149,8 +149,11 @@ fn whether_a_harness_opens_sandboxed_comes_from_the_adapter_charter_ships() {
         );
     }
     assert!(has(card_of(&cards, "claude"), SANDBOX));
-    // A compiler is not enough: Codex's is held back (#1123), and opencode's wrap is macOS's.
-    assert!(!has(card_of(&cards, "codex"), SANDBOX));
+    // A compiler is not enough: charter's wraps around Codex (#1123) and opencode are macOS's.
+    assert_eq!(
+        has(card_of(&cards, "codex"), SANDBOX),
+        cfg!(target_os = "macos")
+    );
     assert_eq!(
         has(card_of(&cards, "opencode"), SANDBOX),
         cfg!(target_os = "macos")

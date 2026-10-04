@@ -287,13 +287,13 @@ fn claude_code_and_codex_both_deny_a_chat_the_forge_etag_store() {
         "{:?}",
         settings.deny
     );
-    let flags =
-        codex::flags_named(&compiled(denied, Os::Linux), "charter-sandbox-1").expect("compiles");
-    let profile = codex_value(&flags, "permissions.charter-sandbox-1");
-    assert_eq!(
-        profile["filesystem"][etags].as_str(),
-        Some("deny"),
-        "{profile}"
+    let wrap = codex::wrap(&compiled(denied, Os::MacOs)).expect("compiles");
+    assert!(
+        wrap.denied
+            .iter()
+            .any(|it| it.path == std::path::Path::new(etags) && it.access == Access::ReadWrite),
+        "{:?}",
+        wrap.denied
     );
 }
 
@@ -476,166 +476,8 @@ fn claude_code_cannot_hold_the_credential_store_on_any_system_so_the_chat_does_n
 }
 
 // -------------------------------------------------------------------------------------
-// Codex: `-c` flags that select a permissions profile charter names for this start alone
+// Codex: what a chat's own words may not say to the Codex charter wraps
 // -------------------------------------------------------------------------------------
-
-/// Each `-c key=value` a Codex chat is handed, the value read back as the TOML Codex parses.
-fn codex_config(flags: &codex::Flags) -> Vec<(String, toml::Value)> {
-    let mut pairs = flags.args.chunks(2);
-    let mut out = Vec::new();
-    for pair in &mut pairs {
-        if pair[0] != "-c" {
-            continue;
-        }
-        let (key, value) = pair[1].split_once('=').expect("key=value");
-        let value: toml::Table = toml::from_str(&format!("v = {value}")).expect("TOML");
-        out.push((key.to_owned(), value["v"].clone()));
-    }
-    out
-}
-
-fn codex_value(flags: &codex::Flags, key: &str) -> toml::Value {
-    codex_config(flags)
-        .into_iter()
-        .find(|(it, _)| it == key)
-        .unwrap_or_else(|| panic!("{key} is not handed: {:?}", flags.args))
-        .1
-}
-
-#[test]
-fn a_codex_chat_runs_under_a_workspace_write_profile_that_charter_selects_explicitly() {
-    let flags = codex::flags_named(&compiled(Denied::default(), Os::MacOs), "charter-sandbox-1")
-        .expect("compiles");
-    assert_eq!(
-        codex_value(&flags, "default_permissions"),
-        toml::Value::from("charter-sandbox-1")
-    );
-    assert_eq!(
-        codex_value(&flags, "permissions.charter-sandbox-1")["extends"],
-        toml::Value::from(":workspace")
-    );
-}
-
-#[test]
-fn a_codex_chat_reaches_the_presets_hosts_through_codexs_own_proxy_and_nothing_else() {
-    let flags = codex::flags_named(&compiled(Denied::default(), Os::MacOs), "charter-sandbox-1")
-        .expect("compiles");
-    let profile = codex_value(&flags, "permissions.charter-sandbox-1");
-    assert_eq!(
-        profile["network"],
-        toml::toml! { enabled = true
-        [domains]
-        "github.com" = "allow" }
-        .into()
-    );
-    // Without the proxy, a profile's `network.enabled` opens the network whole (measured).
-    // `--enable` rather than `-c`: Codex refuses to start on a feature it does not have, so a
-    // Codex without the proxy never runs this profile (measured).
-    assert!(
-        flags
-            .args
-            .windows(2)
-            .any(|pair| pair == ["--enable", "network_proxy"]),
-        "{:?}",
-        flags.args
-    );
-}
-
-#[test]
-fn a_codex_chat_has_the_features_that_may_reach_past_the_proxy_turned_off() {
-    // Stable in 0.147.0 and unmeasured against the sandbox: off until measured. A Codex that
-    // does not know one of them refuses to start (measured), so this fails closed too.
-    let flags = codex::flags_named(&compiled(Denied::default(), Os::MacOs), "charter-sandbox-1")
-        .expect("compiles");
-    let disabled: Vec<&str> = flags
-        .args
-        .windows(2)
-        .filter(|pair| pair[0] == "--disable")
-        .map(|pair| pair[1].as_str())
-        .collect();
-    assert_eq!(disabled, ["browser_use", "computer_use", "in_app_browser"]);
-}
-
-#[test]
-fn codex_denies_a_read_denied_path_outright_and_leaves_a_write_denied_one_readable() {
-    let denied = Denied {
-        paths: vec![
-            one(Class::Vaults, "/p/.charter/vaults", Access::ReadWrite),
-            one(Class::Integrity, "/p/.charter/app", Access::Write),
-        ],
-        services: vec![],
-    };
-    let flags =
-        codex::flags_named(&compiled(denied, Os::Linux), "charter-sandbox-1").expect("compiles");
-    let profile = codex_value(&flags, "permissions.charter-sandbox-1");
-    assert_eq!(
-        profile["filesystem"],
-        toml::toml! {
-            "/p/.charter/vaults" = "deny"
-            "/p/.charter/app" = "read"
-        }
-        .into()
-    );
-}
-
-#[test]
-fn a_codex_chat_cannot_be_escalated_out_of_its_sandbox_or_search_the_web() {
-    let flags = codex::flags_named(&compiled(Denied::default(), Os::MacOs), "charter-sandbox-1")
-        .expect("compiles");
-    // Every request to run a command outside the sandbox, or with more than it allows, is
-    // rejected rather than shown; the prompts that do not widen it stay.
-    assert_eq!(
-        codex_value(&flags, "approval_policy"),
-        toml::toml! { [granular]
-        sandbox_approval = false
-        request_permissions = false
-        skill_approval = false
-        rules = true
-        mcp_elicitations = true }
-        .into()
-    );
-    // A person decides what is still asked, never a reviewing model.
-    assert_eq!(
-        codex_value(&flags, "approvals_reviewer"),
-        toml::Value::from("user")
-    );
-    assert_eq!(
-        codex_value(&flags, "web_search"),
-        toml::Value::from("disabled")
-    );
-}
-
-#[test]
-fn codex_cannot_hold_the_credential_store_on_any_system_so_the_chat_does_not_start() {
-    // Measured on macOS, codex-cli 0.147.0: with the network on, a command in its sandbox
-    // still reached the keychain. Unmeasured on Linux.
-    for os in [Os::MacOs, Os::Linux] {
-        let denied = Denied {
-            paths: vec![],
-            services: vec![Service::CredentialStore],
-        };
-        let refused = codex::flags_named(&compiled(denied, os), "n").expect_err("refused");
-        assert_eq!(refused.harness, Harness::Codex, "{os:?}");
-        assert_eq!(refused.class(), Some(Class::Vaults), "{os:?}");
-    }
-}
-
-#[test]
-fn each_codex_start_names_a_profile_no_config_file_can_have_named_before_it() {
-    // A config layer that names the profile merges hosts into it (measured), so the name is
-    // new at every start.
-    let compiled = compiled(Denied::default(), Os::MacOs);
-    let one = codex::flags(&compiled).expect("compiles");
-    let two = codex::flags(&compiled).expect("compiles");
-    let name = |flags: &codex::Flags| {
-        codex_value(flags, "default_permissions")
-            .as_str()
-            .expect("a name")
-            .to_owned()
-    };
-    assert!(name(&one).starts_with("charter-sandbox-"), "{}", name(&one));
-    assert_ne!(name(&one), name(&two));
-}
 
 fn words(line: &str) -> Vec<String> {
     line.split(' ').map(str::to_owned).collect()
@@ -751,38 +593,11 @@ fn args_of(
         .map(|line| line.args)
 }
 
-/// What a Codex chat would start under in `plane` once #1123 lands; held back today (V87f).
+/// What a Codex chat starts under in `plane`, wrapped (#1123).
 fn codex_sandbox_in(plane: &tempfile::TempDir) -> Applied {
-    compiled_anyway(Harness::Codex, plane.path(), &machine(Os::MacOs)).expect("compiles")
-}
-
-#[test]
-fn a_codex_line_puts_the_sandbox_last_among_the_flags_and_before_a_first_message() {
-    let plane = plane_saying(ON);
-    let applied = codex_sandbox_in(&plane);
-    let Form::Codex(flags) = applied.form() else {
-        panic!("compiled for Codex");
-    };
-    let sandbox = [flags.args.clone(), codex::later_code(flags, plane.path())].concat();
-
-    let line = args_of(
-        &applied,
-        words("work"),
-        words("-c hooks.Stop=[]"),
-        vec!["-m".to_owned(), "o3".to_owned(), "fix the bug".to_owned()],
-    )
-    .expect("starts");
-    let want: Vec<String> = [words("work -c hooks.Stop=[] -m o3"), sandbox.clone()]
-        .concat()
-        .into_iter()
-        .chain(["fix the bug".to_owned()])
-        .collect();
-    assert_eq!(line, want);
-
-    // A resume is a subcommand and its id: the flags go in front of both, where the hooks'
-    // own `-c` flags already stand.
-    let line = args_of(&applied, Vec::new(), Vec::new(), words("resume 0199")).expect("starts");
-    assert_eq!(line, [sandbox, words("resume 0199")].concat());
+    for_start(Harness::Codex, plane.path(), &machine(Os::MacOs), &|_| true)
+        .expect("starts")
+        .expect("sandboxed")
 }
 
 #[test]
@@ -864,39 +679,6 @@ fn a_claude_code_chat_in_a_sandboxed_plane_starts_sandboxed_for_claude_code() {
         panic!("compiled for Claude Code: {:?}", applied.form());
     };
     assert_eq!(settings.sandbox["enabled"], true);
-}
-
-#[test]
-fn a_codex_chat_in_a_sandboxed_plane_is_refused_until_charter_wraps_it() {
-    // Ruling V87f: Codex resolves its paths again at every command, so its compiled sandbox
-    // cannot be kept to while it runs. The opt-out stays a person's.
-    let plane = plane_saying(ON);
-    let refused = for_start(Harness::Codex, plane.path(), &machine(Os::MacOs), &|_| true)
-        .expect_err("refused");
-    assert_eq!(refused, NotStarted::HeldBack(Harness::Codex, 1123));
-    assert_eq!(
-        refused.to_string(),
-        "charter cannot keep a Codex chat inside its sandbox yet (#1123), so in this project a \
-         new one starts only without the sandbox, from the new-chat picker."
-    );
-    // A plane that says nothing still starts Codex as it always has.
-    let plain = plane_saying("schema = 1\n");
-    assert_eq!(
-        for_start(Harness::Codex, plain.path(), &machine(Os::MacOs), &|_| true),
-        Ok(None)
-    );
-    // What the compiler gives, kept for #1123.
-    let applied = codex_sandbox_in(&plane);
-    assert_eq!(applied.harness(), Harness::Codex);
-    let Form::Codex(flags) = applied.form() else {
-        panic!("compiled for Codex: {:?}", applied.form());
-    };
-    assert!(
-        codex_value(flags, "default_permissions")
-            .as_str()
-            .is_some_and(|name| name.starts_with(codex::PROFILE_PREFIX)),
-        "{flags:?}"
-    );
 }
 
 #[test]
@@ -988,55 +770,6 @@ fn a_keyring_vault_in_a_sandboxed_plane_is_named_in_the_refusal() {
 }
 
 #[test]
-fn a_sandboxed_codex_chat_with_no_directory_is_refused_because_later_code_is_held_by_path() {
-    let plane = plane_saying(ON);
-    let applied = codex_sandbox_in(&plane);
-    let refused = applied
-        .line(
-            Words {
-                program: "codex".to_owned(),
-                command: Vec::new(),
-                armed: Vec::new(),
-                charters: Vec::new(),
-            },
-            &At::default(),
-        )
-        .expect_err("refused");
-    assert_eq!(refused, FOLDER_MISSING);
-}
-
-#[test]
-fn a_codex_chat_is_held_from_writing_later_code_in_its_directory_and_each_clone_in_it() {
-    let chat = tempfile::tempdir().expect("a chat directory");
-    std::fs::create_dir_all(chat.path().join("ws/repo/.git")).expect("a clone");
-    std::fs::create_dir_all(chat.path().join("node_modules/dep/.git")).expect("a package");
-    let flags = codex::flags_named(&compiled(Denied::default(), Os::MacOs), "n").expect("flags");
-    let args = codex::later_code(&flags, chat.path());
-    assert_eq!(args[0], "-c");
-    let (key, table) = args[1].split_once('=').expect("key=value");
-    assert_eq!(key, "permissions.n.filesystem");
-    let table: toml::Table = format!("t = {table}").parse().expect("toml");
-    let read = |path: std::path::PathBuf| table["t"].get(path.display().to_string()).cloned();
-    for base in [chat.path().to_path_buf(), chat.path().join("ws/repo")] {
-        for name in [
-            ".git/config",
-            ".git/hooks",
-            ".mcp.json",
-            "opencode.json",
-            "charter.toml",
-        ] {
-            assert_eq!(
-                read(base.join(name)),
-                Some(toml::Value::from("read")),
-                "{name}"
-            );
-        }
-    }
-    // What is not walked: a package's own repository.
-    assert_eq!(read(chat.path().join("node_modules/dep/.git/config")), None);
-}
-
-#[test]
 fn claude_code_is_denied_submodule_git_config_and_hook_managers_at_any_depth() {
     // Measured on 2.1.288: a `**` in the middle of a `denyWrite` glob holds at any depth.
     let settings = claude::settings(&compiled(Denied::default(), Os::MacOs)).expect("compiles");
@@ -1056,26 +789,6 @@ fn claude_code_is_denied_submodule_git_config_and_hook_managers_at_any_depth() {
             "{glob} in {write}"
         );
         assert!(settings.deny.contains(&format!("Edit({glob})")), "{glob}");
-    }
-}
-
-#[test]
-fn codex_is_held_from_writing_each_submodule_s_config_and_hooks_found_at_its_start() {
-    let chat = tempfile::tempdir().expect("a chat directory");
-    let module = chat.path().join("repo/.git/modules/sub");
-    std::fs::create_dir_all(&module).expect("a submodule");
-    std::fs::write(module.join("HEAD"), "ref: x\n").expect("HEAD");
-    let flags = codex::flags_named(&compiled(Denied::default(), Os::MacOs), "n").expect("flags");
-    let args = codex::later_code(&flags, chat.path());
-    let table: toml::Table = format!("t = {}", args[1].split_once('=').expect("kv").1)
-        .parse()
-        .expect("toml");
-    for name in ["config", "hooks"] {
-        assert_eq!(
-            table["t"].get(module.join(name).display().to_string()),
-            Some(&toml::Value::from("read")),
-            "{name}"
-        );
     }
 }
 
@@ -1124,44 +837,6 @@ fn a_charter_toml_that_cannot_be_read_starts_no_chat_rather_than_one_unsandboxed
     assert_eq!(
         for_start(Harness::Codex, none.path(), &machine(Os::MacOs), &|_| true),
         Ok(None)
-    );
-}
-
-#[test]
-fn a_codex_chat_at_the_plane_root_cannot_move_charters_state_aside() {
-    // Measured with `codex sandbox` on 0.147.0: with only `.charter/app` read-only, a command
-    // moved `.charter` aside and wrote the record under its new name.
-    let plane = tempfile::tempdir().expect("a plane");
-    std::fs::create_dir_all(plane.path().join(".charter/app")).expect(".charter/app");
-    std::fs::create_dir_all(plane.path().join(".charter/sessions")).expect("sessions");
-    let app = plane.path().join(".charter/app");
-    let denied = Denied {
-        paths: vec![one(
-            Class::Integrity,
-            &app.display().to_string(),
-            Access::Write,
-        )],
-        services: vec![],
-    };
-    let flags = codex::flags_named(&compiled(denied, Os::MacOs), "n").expect("flags");
-    let args = codex::later_code(&flags, plane.path());
-    let table: toml::Table = format!("t = {}", args[1].split_once('=').expect("kv").1)
-        .parse()
-        .expect("toml");
-    let access = |path: std::path::PathBuf| {
-        table["t"]
-            .get(path.display().to_string())
-            .and_then(toml::Value::as_str)
-            .map(str::to_owned)
-    };
-    assert_eq!(
-        access(plane.path().join(".charter")).as_deref(),
-        Some("read")
-    );
-    assert_eq!(access(app).as_deref(), Some("read"));
-    assert_eq!(
-        access(plane.path().join(".charter/sessions")).as_deref(),
-        Some("write")
     );
 }
 
@@ -1281,64 +956,6 @@ fn a_charter_toml_over_the_cap_starts_no_chat() {
         .expect("starts")
         .is_some()
     );
-}
-
-#[test]
-fn codex_is_never_handed_a_write_entry_at_or_under_a_denied_path() {
-    // A more exact entry wins in Codex's profile (measured), so a `write` for a file inside a
-    // denied directory would undo the denial.
-    let plane = tempfile::tempdir().expect("a plane");
-    let app = plane.path().join(".charter/app");
-    std::fs::create_dir_all(app.join("spool")).expect("a spool");
-    std::fs::write(app.join("keys.json"), "{}").expect("a key file");
-    std::fs::write(app.join("spool/1"), "x").expect("a spooled line");
-    std::fs::create_dir_all(plane.path().join(".charter/sessions")).expect("sessions");
-    let denied = Denied {
-        paths: vec![
-            one(Class::Integrity, &app.display().to_string(), Access::Write),
-            one(
-                Class::Integrity,
-                &app.join("spool").display().to_string(),
-                Access::ReadWrite,
-            ),
-        ],
-        services: vec![],
-    };
-    let flags = codex::flags_named(&compiled(denied.clone(), Os::MacOs), "n").expect("flags");
-    let args = codex::later_code(&flags, plane.path());
-    let table: toml::Table = format!("t = {}", args[1].split_once('=').expect("kv").1)
-        .parse()
-        .expect("toml");
-    let writes: Vec<std::path::PathBuf> = table["t"]
-        .as_table()
-        .expect("a table")
-        .iter()
-        .filter(|(_, access)| access.as_str() == Some("write"))
-        .map(|(path, _)| std::path::PathBuf::from(path))
-        .collect();
-    assert!(
-        !writes.is_empty(),
-        "the pinned directory's other children stay writable"
-    );
-    for write in &writes {
-        for denial in &denied.paths {
-            assert!(
-                !write.starts_with(&denial.path),
-                "{} is handed write under {}",
-                write.display(),
-                denial.path.display()
-            );
-        }
-    }
-    let access = |path: std::path::PathBuf| {
-        table["t"]
-            .get(path.display().to_string())
-            .and_then(toml::Value::as_str)
-            .map(str::to_owned)
-    };
-    assert_eq!(access(app.clone()).as_deref(), Some("read"));
-    assert_eq!(access(app.join("spool")).as_deref(), Some("deny"));
-    assert_eq!(access(app.join("keys.json")), None);
 }
 
 #[cfg(unix)]
@@ -1516,9 +1133,11 @@ fn whether_a_harness_ever_starts_sandboxed_here_is_its_compiler_its_hold_and_its
         never_on(Harness::Opencode, Os::Linux).as_deref(),
         Some("charter can wrap it on macOS only, so far")
     );
+    // #1123: charter wraps Codex as it wraps opencode.
+    assert_eq!(never_on(Harness::Codex, Os::MacOs), None);
     assert_eq!(
-        never_on(Harness::Codex, Os::MacOs).as_deref(),
-        Some("charter cannot keep its chats inside the sandbox yet (#1123)")
+        never_on(Harness::Codex, Os::Linux).as_deref(),
+        Some("charter can wrap it on macOS only, so far")
     );
 }
 
@@ -1956,28 +1575,40 @@ fn an_unreadable_charter_toml_still_refuses_rather_than_reading_as_off() {
     );
 }
 
-/// Ruling V87f: a sandboxed project holds Codex back until #1123. The picker shows that
-/// refusal before anything starts, and the opt-out inside it still starts the chat, audited.
+/// #1123 lifts ruling V87f's hold-back where charter wraps Codex. Where it cannot (Linux, #1040),
+/// the picker shows that refusal before anything starts, and the opt-out inside it still starts
+/// the chat, audited.
 #[test]
-fn the_picker_shows_codex_held_back_and_the_opt_out_still_starts_it() {
+fn the_picker_shows_codex_sandboxed_where_charter_wraps_it_and_the_opt_out_elsewhere() {
     let plane = plane_saying(ON);
+    assert_eq!(
+        ahead(
+            Harness::Codex,
+            plane.path(),
+            &machine(Os::MacOs),
+            &|_| true,
+            "",
+            &|_| Ok(()),
+        ),
+        Ahead::Sandboxed
+    );
     let Ahead::Refused { why, install } = ahead(
         Harness::Codex,
         plane.path(),
-        &machine(Os::MacOs),
+        &machine(Os::Linux),
         &|_| true,
         "ID=debian\n",
         &|_| Ok(()),
     ) else {
-        panic!("held back");
+        panic!("refused on Linux");
     };
-    assert_eq!(why, NotStarted::HeldBack(Harness::Codex, 1123).to_string());
+    assert!(why.contains("(#1040)"), "{why}");
     assert_eq!(install, None, "nothing to install fixes it");
     assert_eq!(
         decide(
             Harness::Codex,
             plane.path(),
-            &machine(Os::MacOs),
+            &machine(Os::Linux),
             &|_| true,
             Some(&off(None)),
         ),

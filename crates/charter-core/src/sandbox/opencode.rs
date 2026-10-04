@@ -53,7 +53,8 @@
 
 use std::path::{Path, PathBuf};
 
-use super::{Access, Compiled, Denial, Os, PLANTED, Reach, Uncompilable, Unheld};
+use super::seatbelt::{self, Own, quote, string, under};
+use super::{Compiled, Denial, Os, Uncompilable, Unheld};
 use crate::harness::Harness;
 
 /// What an opencode chat is wrapped in, before the place it opens is known.
@@ -90,13 +91,7 @@ pub fn wrap(compiled: &Compiled) -> Result<Wrap, Uncompilable> {
         });
     }
     let mut denied = compiled.denied.paths.clone();
-    if let Some(home) = &compiled.homes.home {
-        denied.push(Denial {
-            class: super::Class::Vaults,
-            path: home.join("Library/Keychains"),
-            access: Access::ReadWrite,
-        });
-    }
+    denied.extend(seatbelt::keychains(compiled.homes.home.as_deref()));
     let own = |dir: &Option<PathBuf>| dir.as_ref().map(|dir| dir.join("opencode"));
     Ok(Wrap {
         denied,
@@ -138,72 +133,6 @@ pub const STATE_ENV: &str = "XDG_STATE_HOME";
 pub const OVERLAP: &str = "charter cannot wrap an opencode chat whose directory holds opencode's \
                            own files, or is inside them";
 
-/// Why a profile could not be written: a path holding a control character, which a rule could
-/// not state exactly.
-pub const CONTROL: &str = "charter cannot write a sandbox profile for a path holding a control \
-                           character";
-
-/// `text` as an SBPL string, or [`CONTROL`].
-fn string(text: &str) -> Result<String, &'static str> {
-    if text.chars().any(char::is_control) {
-        return Err(CONTROL);
-    }
-    Ok(format!(
-        "\"{}\"",
-        text.replace('\\', "\\\\").replace('"', "\\\"")
-    ))
-}
-
-/// `path` as the kernel names it, as an SBPL string.
-fn quote(path: &Path) -> Result<String, &'static str> {
-    string(&real(path).display().to_string())
-}
-
-/// `text` with every regular-expression character escaped.
-fn escaped(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for c in text.chars() {
-        if "\\.^$|?*+()[]{}".contains(c) {
-            out.push('\\');
-        }
-        out.push(c);
-    }
-    out
-}
-
-/// A regular expression for `below` and its contents under `dir`, both as the kernel names them.
-fn under(dir: &Path, below: &str) -> String {
-    format!("^{}/{below}", escaped(&real(dir).display().to_string()))
-}
-
-/// The rules that keep every [`PLANTED`] name, at any depth below `root`, from being written.
-pub fn planted_rules(root: &Path) -> Result<Vec<String>, &'static str> {
-    let root = escaped(&real(root).display().to_string());
-    PLANTED
-        .iter()
-        .map(|planted| {
-            let tail = match planted.reach {
-                Reach::Itself => "$",
-                Reach::AndBelow => "(/.*)?$",
-            };
-            let mut body = String::new();
-            let parts: Vec<&str> = planted.path.split('/').collect();
-            for (at, part) in parts.iter().enumerate() {
-                if *part == "**" {
-                    body.push_str("(.*/)?");
-                    continue;
-                }
-                body.push_str(&escaped(part));
-                if at + 1 < parts.len() {
-                    body.push('/');
-                }
-            }
-            let regex = format!("^{root}/(.*/)?{body}{tail}");
-            Ok(format!("(deny file-write* (regex {}))", string(&regex)?))
-        })
-        .collect()
-}
-
 /// The Seatbelt profile for a chat in `cwd`, with its own temp directory `tmp`, reaching the
 /// network through the proxy on `proxy_port` and reporting on `hook_socket`.
 pub fn profile(
@@ -213,206 +142,67 @@ pub fn profile(
     proxy_port: u16,
     hook_socket: Option<&Path>,
 ) -> Result<String, &'static str> {
-    let mut out = String::from(BASE);
-    let mut line = |text: String| {
-        out.push_str(&text);
-        out.push('\n');
+    seatbelt::profile(&wrap.denied, &own(wrap)?, cwd, tmp, proxy_port, hook_socket)
+}
+
+/// What a wrapped opencode keeps for itself.
+fn own(wrap: &Wrap) -> Result<Own, &'static str> {
+    let mut own = Own {
+        dirs: [&wrap.data, &wrap.state, &wrap.config, &wrap.cache]
+            .into_iter()
+            .flatten()
+            .cloned()
+            .collect(),
+        overlap: OVERLAP,
+        ..Own::default()
     };
-    line(format!(
-        "(allow network-outbound (remote ip \"localhost:{proxy_port}\"))"
-    ));
-    if let Some(socket) = hook_socket {
-        line(format!(
-            "(allow network-outbound (remote unix-socket (path-literal {})))",
-            quote(socket)?
-        ));
-    }
-
-    let cwd_real = real(cwd);
-    for own in [&wrap.data, &wrap.state, &wrap.config, &wrap.cache]
-        .into_iter()
-        .flatten()
-    {
-        let own = real(own);
-        if own.starts_with(&cwd_real) || cwd_real.starts_with(&own) {
-            return Err(OVERLAP);
-        }
-    }
-
-    // What the chat may write.
-    let mut allow = vec![
-        format!("(subpath {})", quote(cwd)?),
-        format!("(subpath {})", quote(tmp)?),
-    ];
     if let Some(data) = &wrap.data {
-        allow.push(format!(
+        own.allow.push(format!(
             "(regex {})",
             string(&under(data, "opencode\\.db(-wal|-shm|-journal)?$"))?
         ));
         // What is in each, never the directory itself, which charter made ([`prepare`]): so
         // none is moved out, replaced or moved in whole.
         for written in DATA_WRITTEN {
-            allow.push(format!(
+            own.allow.push(format!(
                 "(regex {})",
                 string(&under(data, &format!("{written}/.+")))?
             ));
         }
+        own.roots
+            .extend(DATA_WRITTEN.iter().map(|written| data.join(written)));
     }
     if let Some(config) = &wrap.config {
-        allow.push(format!("(literal {})", quote(&config.join(".gitignore"))?));
-    }
-    line("(allow file-write*".to_owned());
-    for rule in allow {
-        line(format!("  {rule}"));
-    }
-    out.push_str(DEVICES);
-    out.push_str(")\n");
-
-    // What it may never write, after what it may: Seatbelt takes the last rule that matches.
-    let mut line = |text: String| {
-        out.push_str(&text);
-        out.push('\n');
-    };
-    for denial in &wrap.denied {
-        let what = match denial.access {
-            Access::ReadWrite => "file-read* file-write*",
-            Access::Write => "file-write*",
-        };
-        line(format!("(deny {what} (subpath {}))", quote(&denial.path)?));
-    }
-    // Each directory between the chat's own and a denied path, as an entry only, so it is never
-    // moved away with the denied path in it, nor replaced (measured: a plane-root chat could
-    // otherwise move `.charter` aside and write `.charter/app` under its new name).
-    let mut pinned = std::collections::BTreeSet::new();
-    // The chat's own directory and its temp directory too, as entries: moved whole into the
-    // other, every path rule under the one moved would no longer match (measured).
-    for root in [&cwd_real, &real(tmp)] {
-        if pinned.insert(root.clone()) {
-            line(format!("(deny file-write* (literal {}))", quote(root)?));
-        }
-    }
-    for denial in &wrap.denied {
-        for ancestor in super::ancestors_within(&real(&denial.path), &cwd_real) {
-            if pinned.insert(ancestor.clone()) {
-                line(format!(
-                    "(deny file-write* (literal {}))",
-                    quote(&ancestor)?
-                ));
-            }
-        }
-    }
-    // On every directory the chat may write, so a protected name made in one cannot be moved
-    // into another with its parent.
-    let mut roots = vec![cwd.to_path_buf(), tmp.to_path_buf()];
-    if let Some(data) = &wrap.data {
-        roots.extend(DATA_WRITTEN.iter().map(|written| data.join(written)));
-    }
-    for root in &roots {
-        for rule in planted_rules(root)? {
-            line(rule);
-        }
-        // No directory made under `.git/modules`, so a submodule's git directory, config and
-        // hooks inside, is never moved in whole.
-        line(format!(
-            "(deny file-write-create (require-all (vnode-type DIRECTORY) (regex {})))",
-            string(&format!(
-                "^{}/(.*/)?\\.git/modules/.+",
-                escaped(&real(root).display().to_string())
-            ))?
-        ));
+        own.allow
+            .push(format!("(literal {})", quote(&config.join(".gitignore"))?));
     }
     if let Some(data) = &wrap.data {
         for file in CREDENTIALS {
-            line(format!(
+            own.deny.push(format!(
                 "(deny file-write* (literal {}))",
                 quote(&data.join(file))?
             ));
         }
         // Every snapshot repository, its config and hooks among them, which git reads and runs
         // when opencode later runs it there: none is written, moved in or made.
-        line(format!(
+        own.deny.push(format!(
             "(deny file-write* (subpath {}))",
             quote(&data.join("snapshot"))?
         ));
-    }
-    // No link where a later opencode writes, which it would write through, and no directory,
-    // which could be one moved in with links already in it.
-    if let Some(data) = &wrap.data {
+        // No link where a later opencode writes, which it would write through, and no
+        // directory, which could be one moved in with links already in it.
         for kind in ["SYMLINK", "DIRECTORY"] {
-            line(format!(
+            own.deny.push(format!(
                 "(deny file-write-create (require-all (vnode-type {kind}) (subpath {})))",
                 quote(data)?
             ));
         }
     }
     if let Some(config) = &wrap.config {
-        line(format!(
+        own.deny.push(format!(
             "(deny file-write-create (require-all (vnode-type SYMLINK) (literal {})))",
             quote(&config.join(".gitignore"))?
         ));
     }
-    Ok(out)
+    Ok(own)
 }
-
-/// What every wrapped chat is allowed, whatever its plane: each line was needed by opencode or
-/// by a command it ran (measured), and nothing here reaches the network or writes a file.
-const BASE: &str = "(version 1)
-(deny default)
-(allow process-exec)
-(allow process-fork)
-(allow signal (target same-sandbox))
-(allow process-info* (target same-sandbox))
-(allow sysctl-read)
-(allow file-read*)
-(allow file-ioctl (literal \"/dev/ptmx\") (literal \"/dev/tty\") (regex #\"^/dev/ttys[0-9]+$\"))
-(allow pseudo-tty)
-(allow ipc-posix-shm-read* (ipc-posix-name-prefix \"apple.cfprefs.\"))
-(allow ipc-posix-sem)
-(allow user-preference-read)
-(allow mach-lookup
-  (global-name \"com.apple.system.opendirectoryd.libinfo\")
-  (global-name \"com.apple.cfprefsd.daemon\")
-  (global-name \"com.apple.cfprefsd.agent\")
-  (global-name \"com.apple.logd\")
-  (global-name \"com.apple.FSEvents\"))
-(allow system-socket)
-";
-
-/// The devices a terminal program writes, inside the `file-write*` allow.
-const DEVICES: &str = "  (literal \"/dev/null\")
-  (literal \"/dev/tty\")
-  (literal \"/dev/ptmx\")
-  (regex #\"^/dev/ttys[0-9]+$\")";
-
-/// `path` as the kernel names it: its longest part that exists, with its links resolved, and
-/// the rest as written.
-fn real(path: &Path) -> PathBuf {
-    let mut existing = path.to_path_buf();
-    let mut rest = Vec::new();
-    loop {
-        if let Ok(found) = existing.canonicalize() {
-            let mut out = found;
-            out.extend(rest.into_iter().rev());
-            return out;
-        }
-        match (existing.file_name().map(ToOwned::to_owned), existing.pop()) {
-            (Some(name), true) => rest.push(name),
-            _ => return path.to_path_buf(),
-        }
-    }
-}
-
-/// The variables that point a wrapped chat's traffic at charter's egress proxy. Both cases,
-/// because programs disagree on which they read.
-pub const PROXY_ENV: [&str; 6] = [
-    "HTTPS_PROXY",
-    "HTTP_PROXY",
-    "ALL_PROXY",
-    "https_proxy",
-    "http_proxy",
-    "all_proxy",
-];
-
-/// The variables that would send a host past the proxy, emptied. The profile refuses such a
-/// connection anyway, and this way it is refused by the proxy, which says why.
-pub const NO_PROXY_ENV: [&str; 2] = ["NO_PROXY", "no_proxy"];

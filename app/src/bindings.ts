@@ -3732,7 +3732,7 @@ export type SandboxState = {
 	said: string | null,
 	/**
 	 *  The harnesses whose chats never start sandboxed on this machine, whatever the project,
-	 *  each with why (`sandbox::never_on`): Codex until #1123, opencode off macOS. The offer
+	 *  each with why (`sandbox::never_on`): Codex and opencode off macOS. The offer
 	 *  says them, so "every new chat runs sandboxed" is never read as covering them.
 	 */
 	never: string[],

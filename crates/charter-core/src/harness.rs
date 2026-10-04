@@ -1021,13 +1021,10 @@ mod tests {
     }
 
     /// The whole line of a Codex chat in a sandboxed plane — its hooks, then `charters` — and
-    /// the flags its sandbox was compiled to.
-    fn sandboxed_codex(charters: &[&str]) -> (Vec<String>, Vec<String>) {
+    /// the flags charter hands Codex inside its wrap.
+    fn sandboxed_codex(charters: &[&str]) -> (crate::sandbox::Line, Vec<String>) {
         let (plane, applied) = testing::sandbox_compiled_for(Harness::Codex);
         let applied = applied.expect("starts");
-        let crate::sandbox::Form::Codex(compiled) = applied.form() else {
-            panic!("compiled for Codex");
-        };
         let StateHooks::ThisSessionOnly { args, .. } = Harness::Codex.state_hooks(
             kit("/bin/charter"),
             Some(plane.path()),
@@ -1036,6 +1033,9 @@ mod tests {
         ) else {
             panic!("armed per session");
         };
+        let confinement = applied.confine().expect("confined").expect("a wrap");
+        let cwd = plane.path().join("w");
+        std::fs::create_dir_all(&cwd).expect("a workspace");
         let charters = charters.iter().map(|word| (*word).to_owned()).collect();
         let line = applied
             .line(
@@ -1046,41 +1046,41 @@ mod tests {
                     charters,
                 },
                 &crate::sandbox::At {
-                    cwd: Some(plane.path()),
+                    cwd: Some(&cwd),
+                    confinement: Some(&confinement),
                     ..crate::sandbox::At::default()
                 },
             )
-            .expect("starts")
-            .args;
-        let sandbox = [
-            compiled.args.clone(),
-            crate::sandbox::codex::later_code(compiled, plane.path()),
-        ]
-        .concat();
-        (line, sandbox)
+            .expect("starts");
+        (line, crate::sandbox::codex::flags())
     }
 
     #[test]
-    fn a_sandboxed_codex_chat_is_handed_its_sandbox_after_its_hooks() {
-        let (line, compiled) = sandboxed_codex(&["resume", "0199"]);
-        let at = line
-            .windows(compiled.len())
-            .position(|run| run == compiled.as_slice())
-            .unwrap_or_else(|| panic!("{line:?}"));
+    fn a_sandboxed_codex_chat_is_handed_its_flags_after_its_hooks() {
+        let (line, flags) = sandboxed_codex(&["resume", "0199"]);
+        let args = line.args;
+        let at = args
+            .windows(flags.len())
+            .position(|run| run == flags.as_slice())
+            .unwrap_or_else(|| panic!("{args:?}"));
         assert!(
-            line[..at].iter().any(|arg| arg.starts_with("hooks.")),
-            "{line:?}"
+            args[..at].iter().any(|arg| arg.starts_with("hooks.")),
+            "{args:?}"
         );
-        assert_eq!(line[at + compiled.len()..], ["resume", "0199"]);
+        assert_eq!(args[at + flags.len()..], ["resume", "0199"]);
     }
 
     #[test]
-    fn a_sandboxed_codex_chat_is_only_ever_tightened_never_loosened() {
-        // ADR 0067: charter may tighten Codex's sandbox and may never loosen it.
-        let (args, _) = sandboxed_codex(&[]);
+    fn a_sandboxed_codex_chat_has_its_own_sandbox_off_only_inside_charters_wrap() {
+        // ADR 0067 and ruling V21 4: charter may turn Codex's own sandbox off only inside a wrap
+        // measured stricter, and never loosens what Codex asks or reaches.
+        let (line, _) = sandboxed_codex(&[]);
+        assert_eq!(line.program, crate::sandbox::backend::SANDBOX_EXEC);
+        assert_eq!(line.args[0], "-p");
+        assert!(line.args[1].starts_with("(version 1)\n(deny default)\n"));
+        assert_eq!(line.args[2], "codex");
+        let args = &line.args[3..];
         for flag in [
-            "-s",
-            "--sandbox",
             "--dangerously-bypass-approvals-and-sandbox",
             "--yolo",
             "--add-dir",
@@ -1088,34 +1088,19 @@ mod tests {
             "--ask-for-approval",
             "--approve-for-me",
             "--search",
+            "--enable",
         ] {
             assert!(!args.iter().any(|arg| arg == flag), "handed {flag}");
         }
-        assert!(
-            args.windows(2)
-                .all(|pair| pair[0] != "--enable" || pair[1] == "network_proxy"),
-            "{args:?}"
-        );
-        // Only features turned off, never the proxy.
-        assert!(
-            args.windows(2)
-                .all(|pair| pair[0] != "--disable" || pair[1] != "network_proxy"),
-            "{args:?}"
-        );
         for loosened in [
-            "danger-full-access",
-            "sandbox_mode",
             "network_access",
             "writable_roots",
-            "dangerously",
             "sandbox_approval=true",
             "request_permissions=true",
             "auto_review",
             "guardian",
             "\"live\"",
             "\"cached\"",
-            "\"write\"",
-            "\"full\"",
             "allow_local_binding=true",
         ] {
             let joined = args.join(" ").replace(' ', "");

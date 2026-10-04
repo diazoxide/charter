@@ -17,12 +17,14 @@ pub(crate) fn sandbox_compiled_for(
         "[sandbox]\nmode = \"on\"\n",
     )
     .expect("charter.toml");
+    // A data home of the plane's own, for the Codex home a sandboxed Codex chat is given
+    // (D-88q): beside the folders a test starts a chat in, never the operator's.
+    let data = plane.path().join(".data").display().to_string();
     let machine = crate::sandbox::Machine {
-        env: crate::secrets::Env::of(&[]),
+        env: crate::secrets::Env::of(&[(crate::datahome::HOME_VAR, data.as_str())]),
         home: None,
         os: crate::sandbox::Os::MacOs,
     };
-    // Codex is held back from a sandboxed start (V87f); its compiler is what is tested.
     let applied = crate::sandbox::compiled_anyway(harness, plane.path(), &machine);
     (plane, applied)
 }
