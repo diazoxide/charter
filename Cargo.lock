@@ -913,6 +913,7 @@ dependencies = [
  "log",
  "memchr",
  "memory-stats",
+ "nix",
  "nucleo-matcher",
  "percent-encoding",
  "portable-pty",
