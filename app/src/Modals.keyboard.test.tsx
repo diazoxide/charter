@@ -8,6 +8,7 @@ import { AboutCharter } from "./About";
 import { AlertsDrawer } from "./AlertsDrawer";
 import { DeleteWorkspace } from "./DeleteWorkspace";
 import { NewProject } from "./NewProject";
+import { NewVault } from "./NewVault";
 import { NewWorkspace } from "./NewWorkspace";
 import { ApproveExtension } from "./ApproveExtension";
 import { ApprovePlane } from "./ApprovePlane";
@@ -750,6 +751,26 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
       />,
     );
     expect(await reachableByKeyboard()).toEqual(['button "Cancel"', 'button "Delete workspace"']);
+  });
+
+  it("reaches every answer of New vault, its provider rows as one stop", async () => {
+    // DS-3c (#1175) moved this dialog onto the settings set; the walk is the proof that the
+    // move kept its keyboard order. The provider list is a radio group, one Tab stop whose
+    // rows are reached with the arrows, and 1Password's own box joins the walk when it is
+    // the chosen one.
+    render(
+      <NewVault plane="/home/dev/plane" making={false} onCreate={() => {}} onCancel={() => {}} />,
+    );
+    await userEvent.type(screen.getByLabelText("Name"), "ops");
+    await userEvent.click(screen.getByRole("radio", { name: "1Password" }));
+    await userEvent.type(screen.getByLabelText("1Password vault"), "Engineering");
+    expect(await reachableByKeyboard()).toEqual([
+      'input "1Password vault"',
+      'button "Create vault"',
+      'button "Cancel"',
+      'input "Name"',
+      'radio "1Password"',
+    ]);
   });
 
   it("reaches the palette's box, which was never in doubt and says why", async () => {

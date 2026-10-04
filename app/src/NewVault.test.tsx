@@ -50,6 +50,29 @@ describe("the new-vault dialog", () => {
     expect(within(dialog).getByRole("alert")).toHaveTextContent("not a vault name");
   });
 
+  it("is drawn from the settings set, each answer tied to its line of help", async () => {
+    // DS-3c (#1175): the dialog's form parts are the house set's rows, fields and choices, not
+    // the hand-built `asks` / `choice` classes, so the help under a box is the box's own
+    // description rather than a paragraph a screen reader cannot connect to it.
+    const { dialog } = draw();
+    expect(dialog.querySelector(".asks, .choices, .choice, .who")).toBeNull();
+
+    const name = within(dialog).getByLabelText("Name");
+    expect(name.closest(".ui-setting-row")).not.toBeNull();
+    expect(name).toHaveAccessibleDescription("Letters, digits, ., _ and -.");
+
+    const kept = within(dialog).getByRole("radiogroup", { name: "Kept in" });
+    expect(kept.closest(".ui-setting-row")).not.toBeNull();
+    expect(within(dialog).getByRole("radio", { name: "Plain file" })).toHaveAccessibleDescription(
+      "A plaintext file under the plane's state directory, which git never sees.",
+    );
+
+    await userEvent.click(within(dialog).getByRole("radio", { name: /1Password/ }));
+    expect(within(dialog).getByLabelText("1Password vault")).toHaveAccessibleDescription(
+      "Where charter creates this vault's items.",
+    );
+  });
+
   it("puts the keyboard in the name box, and Escape makes nothing", async () => {
     const { create, cancel, dialog } = draw();
     expect(within(dialog).getByLabelText("Name")).toHaveFocus();
