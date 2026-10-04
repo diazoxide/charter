@@ -150,7 +150,9 @@ export function SettingRow({
   control,
 }: {
   label: string;
-  help?: string;
+  /** One line on what the value does. A node and not only a string, because a dialog's help
+   *  names files and commands, and those are `<code>` (DS-3c). */
+  help?: ReactNode;
   reset?: Reset;
   grouped?: boolean;
   control: (ids: RowIds) => ReactNode;
@@ -208,9 +210,13 @@ export type FieldProps = Tied &
         kind: "text";
         value: string;
         onChange: (to: string) => void;
+        /** What the empty box shows: an example of the answer, never what to do — that is the
+         *  row's help. */
+        placeholder?: string;
         /** The input's own cap on what can be typed. */
         maxLength?: number;
-        /** The input's own `disabled`: held while what it feeds is being done. */
+        /** The input's own `disabled`: out of reach while this answer is moot or its work is
+         *  running. */
         disabled?: boolean;
       }
     /** One entry per line. The text is what is typed, kept whole — an empty line while the next
@@ -275,8 +281,11 @@ export function Field(props: FieldProps) {
       className="ui-field"
       type="text"
       value={props.value}
+      placeholder={props.placeholder}
       maxLength={props.maxLength}
       disabled={props.disabled}
+      // A path or a name, not something the webview should offer to fill from history.
+      autoComplete="off"
       spellCheck={false}
       aria-describedby={ids.describedBy}
       onChange={(event) => props.onChange(event.currentTarget.value)}
@@ -317,6 +326,9 @@ export function Choice(props: ChoiceProps) {
       <Checkbox.Root
         id={ids.id}
         className="box"
+        // #186: Radix's checkbox is a `<button>`, and WebKit leaves one out of the Tab order
+        // without `tabIndex` — New project's box was reachable by nothing until it had one.
+        tabIndex={0}
         checked={props.checked}
         aria-describedby={ids.describedBy}
         onCheckedChange={(to) => props.onCheckedChange(to === true)}

@@ -5739,6 +5739,7 @@ h2.sidebar-title .node-icon {
 .ui-level:focus-visible,
 .ui-settings-nav button:focus-visible,
 .ui-setting-reset:focus-visible,
+.ui-setting-control > .ui-field + button:focus-visible,
 .ui-field:focus-visible,
 .ui-field-range input:focus-visible {
   outline: 2px solid var(--focus-ring);
@@ -5775,6 +5776,14 @@ h2.sidebar-title .node-icon {
   gap: 0.5rem;
 }
 
+/* A text box takes the row's width, and a button beside it — a dialog's `Browse…`, which
+   picks what the box holds (DS-3c) — is drawn as the reset is: a quiet button in the row. */
+.ui-setting-control > input.ui-field {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ui-setting-control > .ui-field + button,
 .ui-setting-reset {
   padding: 0.2rem 0.6rem;
   color: var(--text-primary);
@@ -5785,10 +5794,12 @@ h2.sidebar-title .node-icon {
   cursor: pointer;
 }
 
+.ui-setting-control > .ui-field + button:hover:not(:disabled),
 .ui-setting-reset:hover:not(:disabled) {
   background: var(--control-hover);
 }
 
+.ui-setting-control > .ui-field + button:disabled,
 .ui-setting-reset:disabled {
   cursor: default;
   color: var(--text-muted);

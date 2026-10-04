@@ -155,6 +155,9 @@ describe("making a project", () => {
     render(<App />);
     const dialog = await askForOne();
 
+    // The keyboard is in the one box the default asks for, as the dialog opens.
+    expect(within(dialog).getByLabelText("Repo")).toHaveFocus();
+
     const advanced = within(dialog).getByText("Advanced").closest("details");
     expect(advanced).not.toHaveAttribute("open");
     expect(advanced).toContainElement(within(dialog).getByLabelText("Folder"));
@@ -166,6 +169,28 @@ describe("making a project", () => {
       { path: REPO, template: { kind: "no-template" }, forge: null },
     ]);
     expect(calls("create_project")).toEqual([]);
+  });
+
+  it("is drawn from the settings set, each answer tied to its line of help", async () => {
+    // DS-3c (#1175): the rows, fields and box are the house set's, not the hand-built
+    // `asks` / `picking` / `choice` classes, and each line of help describes its own box.
+    core();
+    render(<App />);
+    const dialog = await askForOne();
+    expect(dialog.querySelector(".asks, .picking, .choices, .choice, .who")).toBeNull();
+
+    for (const name of ["Repo", "Folder", "Repository to adopt", "Make this repo itself the plane"])
+      expect(within(dialog).getByLabelText(name).closest(".ui-setting-row")).not.toBeNull();
+
+    expect(within(dialog).getByLabelText("Folder")).toHaveAccessibleDescription(
+      "It does not have to exist yet. charter makes it, and writes the plane into it.",
+    );
+    expect(within(dialog).getByLabelText("Repository to adopt")).toHaveAccessibleDescription(
+      /^Optional: the plane goes in the folder above/,
+    );
+    expect(
+      within(dialog).getByLabelText("Make this repo itself the plane"),
+    ).toHaveAccessibleDescription(/^Only for a folder that is the top of a git repository/);
   });
 
   it("keeps a refused repository's words in the dialog", async () => {

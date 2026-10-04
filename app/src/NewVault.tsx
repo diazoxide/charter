@@ -1,6 +1,6 @@
-import { useId, useRef, useState } from "react";
+import { useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import * as RadioGroup from "@radix-ui/react-radio-group";
+import { Choice, Field, SettingRow } from "./settings/components";
 
 /**
  * The providers a new vault can be kept by, in the order they are offered, with what each means
@@ -39,6 +39,10 @@ const PROVIDERS = [
  * called, whether one is already registered by that name, whether a plaintext file would be
  * committed — all of it is `vaultcmd::add`'s, reached through `vault_create`, so the window and a
  * terminal refuse the same things in the same words.
+ *
+ * **Drawn from the settings set** (DS-3c, #1175; ADR 0037's 2026-10-04 amendment): each answer
+ * is a {@link SettingRow} holding a {@link Field} or a {@link Choice}, so its line of help is
+ * the box's own description, and the dialog looks like every other place charter asks.
  */
 export function NewVault({
   plane,
@@ -59,10 +63,6 @@ export function NewVault({
   const [name, setName] = useState("");
   const [provider, setProvider] = useState<string>("keyring");
   const [opVault, setOpVault] = useState("");
-  const nameId = useId();
-  const opId = useId();
-  const pickId = useId();
-  const box = useRef<HTMLInputElement>(null);
   const needsOp = provider === "1password";
   const ready = name.trim() !== "" && (!needsOp || opVault.trim() !== "") && !making;
   const create = () => {
@@ -84,10 +84,7 @@ export function NewVault({
           aria-describedby={undefined}
           // A click outside answers nothing (`docs/ui-primitives.md`). Escape is Cancel.
           onInteractOutside={(e) => e.preventDefault()}
-          onOpenAutoFocus={(e) => {
-            e.preventDefault();
-            box.current?.focus();
-          }}
+          // Radix focuses the first box as it opens, which is the name: nothing to override.
         >
           <Dialog.Title>New vault</Dialog.Title>
           <p className="where">
@@ -95,65 +92,47 @@ export function NewVault({
           </p>
 
           <form
-            className="asks"
             onSubmit={(event) => {
               event.preventDefault();
               create();
             }}
           >
-            <label htmlFor={nameId}>Name</label>
-            <input
-              id={nameId}
-              ref={box}
-              value={name}
-              autoComplete="off"
-              spellCheck={false}
-              onChange={(event) => setName(event.target.value)}
+            <SettingRow
+              label="Name"
+              help={
+                <>
+                  Letters, digits, <code>.</code>, <code>_</code> and <code>-</code>.
+                </>
+              }
+              control={(ids) => <Field kind="text" ids={ids} value={name} onChange={setName} />}
             />
-            <p className="came-back">
-              Letters, digits, <code>.</code>, <code>_</code> and <code>-</code>.
-            </p>
 
-            <label id={pickId}>Kept in</label>
-            <RadioGroup.Root
-              className="choices"
-              name="provider"
-              value={provider}
-              onValueChange={setProvider}
-              aria-labelledby={pickId}
-            >
-              {PROVIDERS.map((one) => (
-                <div className="choice" key={one.id}>
-                  <RadioGroup.Item
-                    className="dot"
-                    value={one.id}
-                    id={`${pickId}-${one.id}`}
-                    aria-describedby={`${pickId}-${one.id}-says`}
-                  >
-                    <RadioGroup.Indicator className="dot-mark" />
-                  </RadioGroup.Item>
-                  <label className="who" htmlFor={`${pickId}-${one.id}`}>
-                    {one.name}
-                  </label>
-                  <span className="meta" id={`${pickId}-${one.id}-says`}>
-                    <span className="what">{one.says}</span>
-                  </span>
-                </div>
-              ))}
-            </RadioGroup.Root>
+            <SettingRow
+              label="Kept in"
+              grouped
+              control={(ids) => (
+                <Choice
+                  kind="radio"
+                  ids={ids}
+                  options={PROVIDERS.map((one) => ({
+                    value: one.id,
+                    label: one.name,
+                    says: one.says,
+                  }))}
+                  value={provider}
+                  onValueChange={setProvider}
+                />
+              )}
+            />
 
             {needsOp && (
-              <>
-                <label htmlFor={opId}>1Password vault</label>
-                <input
-                  id={opId}
-                  value={opVault}
-                  autoComplete="off"
-                  spellCheck={false}
-                  onChange={(event) => setOpVault(event.target.value)}
-                />
-                <p className="came-back">Where charter creates this vault's items.</p>
-              </>
+              <SettingRow
+                label="1Password vault"
+                help="Where charter creates this vault's items."
+                control={(ids) => (
+                  <Field kind="text" ids={ids} value={opVault} onChange={setOpVault} />
+                )}
+              />
             )}
 
             {trouble && (
