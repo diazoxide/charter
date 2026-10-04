@@ -735,6 +735,50 @@ fn a_page_out_of_time_inside_a_slow_file_says_the_file_was_not_searched() {
     );
 }
 
+/// #1153 review: a page cut by its time inside a slow file says that file, and the files the
+/// readers had read past it are heard by the next page, each once.
+#[test]
+fn files_read_past_a_slow_file_cut_by_the_page_are_heard_once_by_the_next() {
+    charter_core::unsteered!();
+    let f = support::plane_with_clone("thing");
+    let piece = cut(&f, "piece");
+    std::fs::write(
+        piece.join("a-slow.txt"),
+        slow_text(1000, 2 * 1024 * 1024 - 4096),
+    )
+    .unwrap();
+    let small: Vec<String> = (0..6).map(|n| format!("b{n}.txt")).collect();
+    for path in &small {
+        write(&piece, path, "needle 1\n");
+    }
+    let regex = SearchOptions {
+        regex: true,
+        ..literal()
+    };
+    let mut search = files::search(&[place(&f, "piece")], SLOW, regex)
+        .unwrap()
+        .with_page_time(std::time::Duration::from_millis(500));
+    let stop = AtomicBool::new(false);
+    let mut first = Vec::new();
+
+    let ended = search.more(usize::MAX, &stop, &mut |step| first.push(step));
+
+    assert_eq!(ended, Ended::OutOfTime);
+    assert!(
+        matches!(&first[..], [Searched::NotSearched { path, .. }] if path == "a-slow.txt"),
+        "{first:?}"
+    );
+    let mut search = search.with_page_time(files::PAGE_TIME);
+    let mut rest = Vec::new();
+    let ended = search.more(usize::MAX, &stop, &mut |step| match step {
+        Searched::File(file) => rest.push(file.path),
+        other => panic!("{other:?}"),
+    });
+
+    assert_eq!(ended, Ended::Done);
+    assert_eq!(rest, small);
+}
+
 #[test]
 fn a_file_with_a_line_past_the_longest_is_said_and_not_searched() {
     charter_core::unsteered!();

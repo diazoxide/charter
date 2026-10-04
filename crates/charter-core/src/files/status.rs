@@ -534,6 +534,7 @@ fn uncommitted(
         .map_err(|e| e.to_string())?
         .untracked_files(gix::status::UntrackedFiles::Files)
         .index_worktree_submodules(None)
+        .index_worktree_options_mut(|options| options.thread_limit = Some(threads()))
         .tree_index_track_renames(gix::status::tree_index::TrackRenames::Given(
             gix::diff::Rewrites::default(),
         ))
@@ -590,6 +591,19 @@ fn uncommitted(
     }
     Ok(())
 }
+
+/// The most threads a status compares the working tree on: the machine's cores, at most
+/// [`THREADS`].
+fn threads() -> usize {
+    std::thread::available_parallelism().map_or(1, |cores| cores.get().min(THREADS))
+}
+
+/// The cap on [`threads`]. A status runs after every write an agent makes, on a machine the
+/// agents' builds share; past eight threads the compare of 100,000 files gains little (#1153).
+/// Each thread holds its own buffers under the reader's [`MEMORY`](super::MEMORY) watchdog,
+/// and on Linux each counts toward the user's `RLIMIT_NPROC`, which a busy machine's builds
+/// already spend.
+const THREADS: usize = 8;
 
 /// `path` when it is a plain path inside the branch: relative, no `..`, and never git's own.
 /// gitoxide's paths are bytes, read here lossily: a name that was not UTF-8 holds U+FFFD and is
@@ -653,6 +667,7 @@ mod tests {
             ("filter.x.clean", "/bin/false"),
             ("diff.d.textconv", "/bin/false"),
             ("core.ignoreCase", "true"),
+            ("index.threads", "1000"),
         ] {
             git(&["config", key, value]);
         }
@@ -667,6 +682,7 @@ mod tests {
             "gitoxide.objects.cacheLimit",
             "filter.x.clean",
             "diff.d.textconv",
+            "index.threads",
         ] {
             assert_eq!(config.string(gone), None, "{gone} was kept");
         }
@@ -680,6 +696,15 @@ mod tests {
     fn a_status_compares_the_working_tree_on_every_core() {
         let cores = std::thread::available_parallelism().map_or(1, usize::from);
         assert_eq!(gix::features::parallel::num_threads(None), cores);
+    }
+
+    /// #1153 review: the compare runs on every core, but never on more than eight threads,
+    /// whatever the machine or the branch's config says.
+    #[test]
+    fn a_status_compares_on_at_most_eight_threads() {
+        let cores = std::thread::available_parallelism().map_or(1, usize::from);
+        assert_eq!(THREADS, 8);
+        assert_eq!(threads(), cores.min(8));
     }
 
     #[test]
