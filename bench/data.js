@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791084457501,
+  "lastUpdate": 1791088088576,
   "repoUrl": "https://github.com/diazoxide/charter",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -882,6 +882,48 @@ window.BENCHMARK_DATA = {
             "value": 103.73469449999999,
             "unit": "ms",
             "extra": "median of 5 runs: 102.264, 103.300, 103.735, 105.377, 106.214 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "4d007619f81b4566d6279a34df454ed3b18dc4d5",
+          "message": "sandbox: let a killed probe's child be reaped before reading its group\n\nThe hang test read the probe's process group once, right after killing it.\nOn Linux a killed child stays a zombie in the group until init reaps it, so\nthe read could still find it and fail (train 17, ubuntu). Poll for up to\nfive seconds; a child that really survived the kill still fails the test.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-04T08:25:57+04:00",
+          "tree_id": "6d27fe6701186631d22dba53a5d988da8dbf2f61",
+          "url": "https://github.com/diazoxide/charter/commit/4d007619f81b4566d6279a34df454ed3b18dc4d5"
+        },
+        "date": 1791088087003,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.589099,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.570, 0.576, 0.589, 0.596, 0.601 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 17.5034435,
+            "unit": "ms",
+            "extra": "median of 5 runs: 17.195, 17.432, 17.503, 17.664, 17.873 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 105.78711799999999,
+            "unit": "ms",
+            "extra": "median of 5 runs: 103.622, 105.619, 105.787, 106.020, 106.142 ms"
           }
         ]
       }
