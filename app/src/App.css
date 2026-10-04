@@ -5803,6 +5803,11 @@ h2.sidebar-title .node-icon {
   font: inherit;
 }
 
+.ui-field:disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+
 textarea.ui-field {
   resize: vertical;
   font-family: ui-monospace, Menlo, Consolas, monospace;

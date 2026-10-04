@@ -281,7 +281,11 @@ describe("SavingView", () => {
     expect(commit).toHaveAccessibleDescription(
       "Saves stay on this machine until you push them yourself.",
     );
+    const use = screen.getByRole("button", { name: "Use this" });
+    expect(use).toBeDisabled();
     await userEvent.click(commit);
+    expect(chosen).toEqual([]);
+    await userEvent.click(use);
 
     await waitFor(() => expect(chosen).toEqual(["commit"]));
     await waitFor(() =>
@@ -289,6 +293,25 @@ describe("SavingView", () => {
         screen.queryByRole("radiogroup", { name: "How should this project be saved?" }),
       ).toBeNull(),
     );
+  });
+
+  it("writes no mode while the arrow keys move through the answers", async () => {
+    core([standing({ mode: null, modeFrom: "default" })]);
+    render(<SavingView plane={PLANE} />);
+    const question = await screen.findByRole("radiogroup", {
+      name: "How should this project be saved?",
+    });
+    within(question).getByRole("radio", { name: "Push to main" }).focus();
+
+    await userEvent.keyboard("{ArrowDown>}");
+    await new Promise((done) => setTimeout(done, 80));
+    await userEvent.keyboard("{/ArrowDown}");
+
+    expect(within(question).getByRole("radio", { name: "Commit only" })).toHaveFocus();
+    expect(chosen).toEqual([]);
+    expect(
+      screen.getByRole("radiogroup", { name: "How should this project be saved?" }),
+    ).toBeTruthy();
   });
 
   it("says how many commits came in and were not pulled", async () => {

@@ -451,29 +451,24 @@ function repoTakes(repo: RepoSaving): string {
  * settings; this asks the three a person can answer without knowing the repository's rules.
  *
  * Drawn as a setting is (DS-3b, #1174): a row whose control is a radio choice, each answer with
- * the line on what it does, and written the moment it is picked, as Settings writes a value.
+ * the line on what it does. The answer is written only when **Use this** confirms it: a radio's
+ * pick follows the arrow keys, and a mode — `push` sends every save to the team — is not one to
+ * set by moving through the answers.
  */
 function ModeQuestion({ plane, branch }: { plane: PlaneId; branch: string }) {
   const [refused, setRefused] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  /** The answer being written: shown as picked until the project reads back with its mode,
-   *  and dropped again when the write is refused. */
+  /** The answer picked and not yet written. Radix moves the pick with the arrow keys, so a
+   *  pick is only ever held here: the mode is written by **Use this**, never by the pick. */
   const [picked, setPicked] = useState<string>();
   const choose = async (mode: string) => {
-    // One answer at a time, as the buttons this question used to be were disabled while busy.
-    if (busy) return;
-    setPicked(mode);
     setBusy(true);
     setRefused(null);
     try {
       const got = await commands.choosePlaneMode(plane, mode);
-      if (got.status === "error") {
-        setRefused(got.error);
-        setPicked(undefined);
-      }
+      if (got.status === "error") setRefused(got.error);
     } catch (err: unknown) {
       setRefused(String(err));
-      setPicked(undefined);
     } finally {
       setBusy(false);
       tellSaved();
@@ -503,10 +498,22 @@ function ModeQuestion({ plane, branch }: { plane: PlaneId; branch: string }) {
             kind="radio"
             options={options}
             value={picked}
-            onValueChange={(mode) => void choose(mode)}
+            onValueChange={setPicked}
           />
         )}
       />
+      <div className="settings-actions">
+        <button
+          type="button"
+          tabIndex={0}
+          disabled={busy || picked === undefined}
+          onClick={() => {
+            if (picked !== undefined) void choose(picked);
+          }}
+        >
+          Use this
+        </button>
+      </div>
       {refused !== null && (
         <p className="trouble" role="alert">
           {refused}
