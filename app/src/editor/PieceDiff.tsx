@@ -14,7 +14,7 @@ import { EmptyState } from "../EmptyState";
 import { commands, type PlaneId, type WhatChanged } from "../bindings";
 import type { Place } from "../pieceViews";
 import { MergeViewer } from "./LightEditor";
-import { sized } from "./PieceFiles";
+import { sized, ToYourEditor } from "./PieceFiles";
 
 /** The comparison, as the tab draws it: being read, refused with the core's sentence, or read. */
 type Read =
@@ -50,6 +50,7 @@ export function PieceDiffTab({ plane, cut, path }: { plane: PlaneId; cut: Place;
         <code>{path}</code>
         {now.kind === "read" && <span>{against(now.shown)}</span>}
         <span className="piece-files-actions">
+          <ToYourEditor plane={plane} cut={cut} path={path} line={firstLine(now)} />
           <button type="button" tabIndex={0} onClick={() => setAsked((n) => n + 1)}>
             Compare again
           </button>
@@ -58,6 +59,30 @@ export function PieceDiffTab({ plane, cut, path }: { plane: PlaneId; cut: Place;
       <Compared path={path} read={now} />
     </div>
   );
+}
+
+/** The first line the change touches on the head's side, else the top: where *Open in your
+ *  editor* opens the file. */
+function firstLine(read: Read): number {
+  if (read.kind !== "read" || read.shown.diff.kind !== "text") return 1;
+  const first = read.shown.diff.hunks[0];
+  if (first === undefined) return 1;
+  return Math.max(1, first.newStart);
+}
+
+/** Where a sentence about a file the tab does not draw sends the operator. */
+const TO_YOUR_EDITOR = "Open in your editor, at the top of this tab, shows it.";
+
+/** The sentence for a change no line of which differs: what changed instead. */
+function noLine(name: string, shown: WhatChanged, on: string): { headline: string; body?: string } {
+  if (shown.mark === "renamed" && shown.from !== null)
+    return { headline: `Only its name changed: moved from ${shown.from}` };
+  if (shown.mark === "added") return { headline: `${name} was added, and it is empty` };
+  if (shown.mark === "deleted") return { headline: `${name} was deleted, and it was empty` };
+  return {
+    headline: `No line of ${name} differs from ${on}`,
+    body: "What changed is not in its lines: its mode, or whether it is a link.",
+  };
 }
 
 /** What the file is compared against, and where it came from when it moved. */
@@ -75,14 +100,14 @@ function Compared({ path, read }: { path: string; read: Read }) {
   if (read.kind === "refused")
     return <EmptyState headline={read.why} size="panel" testid="piece-diff-trouble" />;
   const { diff, base } = read.shown;
-  const on = base ?? "its last commit";
+  const said = noLine(name, read.shown, base ?? "its last commit");
   switch (diff.kind) {
     case "binary":
       return (
         <EmptyState
           mark={FileDiffMark}
           headline={`${name} is a binary file, so its lines are not compared`}
-          body="Open it in your editor to see it."
+          body={TO_YOUR_EDITOR}
           size="panel"
           testid="piece-diff-trouble"
         />
@@ -92,7 +117,7 @@ function Compared({ path, read }: { path: string; read: Read }) {
         <EmptyState
           mark={FileDiffMark}
           headline={`${name} is ${sized(diff.bytes)}, past what the comparison draws (2 MiB)`}
-          body="Open it in your editor to see it."
+          body={TO_YOUR_EDITOR}
           size="panel"
           testid="piece-diff-trouble"
         />
@@ -101,8 +126,8 @@ function Compared({ path, read }: { path: string; read: Read }) {
       return diff.hunks.length === 0 ? (
         <EmptyState
           mark={FileDiffMark}
-          headline={`No line of ${name} differs from ${on}`}
-          body="What changed is not in its lines: its mode, or whether it is a link."
+          headline={said.headline}
+          body={said.body}
           size="panel"
           testid="piece-diff-trouble"
         />

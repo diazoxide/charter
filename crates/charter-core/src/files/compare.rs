@@ -199,6 +199,10 @@ pub struct WhatChanged {
 /// read, and a file not in it is refused with [`Refused::NotChanged`], never answered with an
 /// empty diff. Its hunks are read at the sides the list was read at, so the two agree however
 /// the branch moved between them.
+///
+/// **Only the comparison is read in the reader's child.** Confining the path finds the branch's
+/// folder as every file command does, in this process: `git worktree list` for a piece, `git
+/// rev-parse` for a repo's own folder (#1189 moves that into the reader).
 pub fn what_changed(
     reader: &super::Reader,
     plane: &Path,

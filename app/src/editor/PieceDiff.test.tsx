@@ -93,6 +93,46 @@ describe("what changed in one file (FM-11)", () => {
     expect(screen.queryByTestId("merge-viewer")).toBeNull();
   });
 
+  it("says a pure rename by the name it moved from", async () => {
+    core({
+      ...changed({ kind: "text", base: "same\n", head: "same\n", hunks: [] }),
+      mark: "renamed",
+      from: "src/old.rs",
+    });
+    render(<PieceDiffTab plane={PLANE} cut={CUT} path="src/new.rs" />);
+
+    expect(await screen.findByTestId("piece-diff-trouble")).toHaveTextContent(
+      "Only its name changed: moved from src/old.rs",
+    );
+    expect(screen.getByTestId("piece-diff-trouble")).not.toHaveTextContent("its mode");
+    expect(screen.queryByTestId("merge-viewer")).toBeNull();
+  });
+
+  it("says a new empty file is added and empty", async () => {
+    core({
+      ...changed({ kind: "text", base: "", head: "", hunks: [] }),
+      mark: "added",
+    });
+    render(<PieceDiffTab plane={PLANE} cut={CUT} path="src/empty.rs" />);
+
+    expect(await screen.findByTestId("piece-diff-trouble")).toHaveTextContent(
+      "empty.rs was added, and it is empty",
+    );
+    expect(screen.getByTestId("piece-diff-trouble")).not.toHaveTextContent("its mode");
+  });
+
+  it("offers your editor beside a file it does not draw, as its sentence says", async () => {
+    core(changed({ kind: "binary" }));
+    render(<PieceDiffTab plane={PLANE} cut={CUT} path="logo.png" />);
+
+    expect(await screen.findByTestId("piece-diff-trouble")).toHaveTextContent(
+      "Open in your editor, at the top of this tab",
+    );
+    expect(
+      screen.getByRole("button", { name: "Open in your editor at line 1" }),
+    ).toBeInTheDocument();
+  });
+
   it("names where a renamed file came from, and compares again on request", async () => {
     const asked = core({
       ...changed({
