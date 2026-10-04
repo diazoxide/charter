@@ -43,7 +43,9 @@ pub struct Host<'a> {
     pub charter: Option<PathBuf>,
 }
 
-/// Why a chat that passed its start does not run over ACP. Each says so in a sentence.
+/// Why a chat that passed its start does not run over ACP. Each says so in a sentence, and the
+/// chat starts in its terminal instead (ADR 0080 §3), under the same sandbox decision: a level-3
+/// start never becomes a chat confined differently, or not at all, without a person.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum NotOffered {
     /// charter runs no ACP agent for this harness: Claude Code and Codex wait on HP-4 and HP-3,
@@ -56,19 +58,13 @@ pub enum NotOffered {
     )]
     Unsupported,
     /// D-87h: the project turns the sandbox on, and charter cannot wrap a level-3 agent yet.
+    /// Whatever the chat: a confined chat would run outside its sandbox, and a chat a person
+    /// started without it must show that on its tab for its whole life (ADR 0067 §7), which a
+    /// chat with no terminal shown cannot (V24a).
     #[error(
-        "this project turns the sandbox on, and charter cannot sandbox a chat over ACP yet, so nothing was started. Start it without the sandbox to run it over ACP unconfined."
+        "this project turns the sandbox on, and charter cannot sandbox a chat over ACP yet, so it starts in its terminal, where its sandbox is shown for as long as it runs"
     )]
     Sandboxed,
-}
-
-impl NotOffered {
-    /// Whether the chat starts at its next level instead, in its terminal, and says why (ADR
-    /// 0080 §3). A sandboxed start does not: it is refused, and only the audited opt-out is
-    /// offered (D-87h), so a level-3 start never becomes a different chat without a person.
-    pub fn starts_in_its_terminal(&self) -> bool {
-        !matches!(self, Self::Sandboxed)
-    }
 }
 
 impl Launch {
@@ -84,9 +80,10 @@ impl Launch {
         if !cfg!(unix) {
             return Err(NotOffered::Unsupported);
         }
-        // The start's own sandbox decision, read and never made again: a chat it confined is
-        // one a level-3 agent would run outside of.
-        if ready.sandbox.is_some() {
+        // The start's own sandbox decision, read and never made again. A sandboxed project
+        // refuses level 3 (D-87h): a chat it confined would run outside its sandbox, and one a
+        // person started without it (`unsandboxed`) has no tab to show that on.
+        if ready.sandbox.is_some() || ready.unsandboxed.is_some() {
             return Err(NotOffered::Sandboxed);
         }
         let mut argv = vec![ready.program.clone()];

@@ -118,18 +118,27 @@ pub fn codex_flag(binary: &Path) -> String {
 }
 
 /// The server as ACP's `session/new` takes it in `mcpServers` (ADR 0080 §1): a stdio server, run
-/// by the agent, handed the [`SCOPE_ENV`] variables `chat_env` sets and nothing else of charter's.
+/// by the agent, handed the [`SCOPE_ENV`] variables `chat_env` sets, each once with its last value,
+/// and nothing else of charter's: never the chat's token or its socket.
 pub fn acp_server(
     binary: &Path,
     chat_env: &[(std::ffi::OsString, std::ffi::OsString)],
 ) -> agent_client_protocol::schema::v1::McpServer {
     use agent_client_protocol::schema::v1::{EnvVariable, McpServer, McpServerStdio};
-    // A value that is not UTF-8 cannot be said in JSON, and is left out rather than mangled.
-    let env = chat_env
+    // Each scope name once, in `SCOPE_ENV`'s order, with its last value: the chat's own comes
+    // after what the app passed on, and an agent may read a repeated name either way. A value
+    // that is not UTF-8 cannot be said in JSON, and is left out rather than mangled.
+    let env = SCOPE_ENV
         .iter()
-        .filter_map(|(name, value)| Some((name.to_str()?, value.to_str()?)))
-        .filter(|(name, _)| SCOPE_ENV.contains(name))
-        .map(|(name, value)| EnvVariable::new(name, value))
+        .filter_map(|wanted| {
+            let value = chat_env
+                .iter()
+                .rev()
+                .find(|(name, _)| name == wanted)?
+                .1
+                .to_str()?;
+            Some(EnvVariable::new(*wanted, value))
+        })
         .collect();
     McpServer::Stdio(
         McpServerStdio::new(SERVER, binary)

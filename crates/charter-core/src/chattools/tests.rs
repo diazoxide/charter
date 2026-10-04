@@ -714,3 +714,26 @@ fn an_acp_session_is_handed_the_server_with_the_chat_s_place_and_nothing_else_of
         })
     );
 }
+
+#[test]
+fn an_acp_session_s_server_is_handed_each_scope_variable_once_with_the_chat_s_value() {
+    // A chat's environment is the app's kept one, then the chat's own: `CHARTER_ROOT` the app
+    // inherited comes first and the chat's after it. The agent is handed one value per name,
+    // the one the chat starts with, whatever order an agent would read a repeated name in.
+    let env = vec![
+        ("CHARTER_ROOT".into(), "/the-app-s".into()),
+        (crate::active::SESSION_ID_ENV.into(), "1".into()),
+        ("CHARTER_CHAT_TOKEN".into(), "secret".into()),
+        ("CHARTER_ROOT".into(), "/the-chat-s".into()),
+        (crate::active::SESSION_ID_ENV.into(), "7".into()),
+    ];
+    let server =
+        serde_json::to_value(acp_server(std::path::Path::new("/bin/charter"), &env)).expect("JSON");
+    assert_eq!(
+        server["env"],
+        json!([
+            {"name": "CHARTER_ROOT", "value": "/the-chat-s"},
+            {"name": crate::active::SESSION_ID_ENV, "value": "7"},
+        ])
+    );
+}
