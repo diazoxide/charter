@@ -73,6 +73,12 @@ fn index_of(repo: &Path) -> Index {
 fn stale_plane() -> support::Fixture {
     let f = support::plane_with_clone("thing");
     std::fs::write(f.plane.join(".gitignore"), "/workspaces/\n").unwrap();
+    // A mode, so the briefing asks git what memory is uncommitted.
+    std::fs::write(
+        f.plane.join("charter.toml"),
+        "schema = 1\n\n[plane]\nmode = \"commit\"\n",
+    )
+    .unwrap();
     for repo in [&f.plane, &f.clone] {
         if !repo.join(".git").exists() {
             support::git(repo, &["init", "-q", "-b", "main", "."]);
@@ -123,6 +129,31 @@ fn every_automatic_read(f: &support::Fixture) {
     let status = files::status(&reader(), &f.plane, Branch::repo(&f.ws, &f.repo))
         .expect("the branch's status");
     assert!(!status.changes.is_empty(), "{status:?}");
+    // A chat's start: its briefing, which asks what memory is uncommitted.
+    let no_env = |_: &str| None;
+    let payload = serde_json::json!({});
+    let _ = charter_core::briefing::parts(
+        &charter_core::briefing::Ask {
+            root: &f.plane,
+            cwd: &f.plane,
+            payload: &payload,
+            env: &no_env,
+            now: chrono::Utc::now(),
+        },
+        None,
+    );
+    // The status line, on every render.
+    let footer = charter_core::footer::render(
+        &f.plane,
+        &payload,
+        &charter_core::footer::Ambient {
+            env: &no_env,
+            cwd: &f.plane,
+            now: chrono::Utc::now(),
+            config: None,
+        },
+    );
+    assert!(footer.contains("dirty"), "{footer}");
 }
 
 #[test]

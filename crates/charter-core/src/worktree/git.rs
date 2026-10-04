@@ -419,6 +419,22 @@ fn config_location_env(
     out
 }
 
+/// The git command `args` run: the first word past git's own options (`-c key=value`,
+/// `-C dir`, and every `--option`).
+fn verb<'a>(args: &[&'a str]) -> Option<&'a str> {
+    let mut words = args.iter();
+    while let Some(word) = words.next() {
+        match *word {
+            "-c" | "-C" => {
+                words.next();
+            }
+            option if option.starts_with('-') => {}
+            verb => return Some(verb),
+        }
+    }
+    None
+}
+
 fn spawn(dir: &Path, args: &[&str]) -> Result<Child, GitUnavailable> {
     spawn_with(dir, args, &Extra::default())
 }
@@ -436,6 +452,13 @@ fn spawn_with(dir: &Path, args: &[&str], extra: &Extra) -> Result<Child, GitUnav
     cmd.env_clear();
     for (k, v) in child_env(&dirs) {
         cmd.env(k, v);
+    }
+    // `status` refreshes the index through `index.lock` whenever stat data is stale, which is
+    // the lock an agent's or the operator's `git add` then fails on (FD-11). Every `status`
+    // charter runs is a read, so git's optional locks are held back for all of them here,
+    // where no caller can forget it: `GIT_OPTIONAL_LOCKS=0` is `--no-optional-locks`.
+    if verb(args) == Some("status") {
+        cmd.env("GIT_OPTIONAL_LOCKS", "0");
     }
     if extra.credentials {
         for name in CREDENTIAL_ENV {
@@ -1099,6 +1122,66 @@ mod tests {
                 "{name} must not be given to the child"
             );
         }
+    }
+
+    #[test]
+    fn a_status_through_the_runner_never_takes_the_index_lock_even_without_the_flag() {
+        // FD-11 (#651): `status` is the one read that writes the index — its refresh, through
+        // `index.lock` — so the runner holds back git's optional locks for every `status`,
+        // and a new reader that forgets `--no-optional-locks` cannot start a lock fight.
+        let dir = repo();
+        let index = dir.path().join(".git/index");
+        for n in 0..10 {
+            std::fs::write(dir.path().join(format!("{n}.txt")), "same\n").unwrap();
+        }
+        assert!(crate::testgit::run(dir.path(), &["add", "-A"]).ok());
+        let was = std::fs::read(&index).unwrap();
+        // Past a coarse clock, the same bytes again: stat data the index no longer matches.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        for n in 0..10 {
+            std::fs::write(dir.path().join(format!("{n}.txt")), "same\n").unwrap();
+        }
+
+        let seen = run(
+            dir.path(),
+            &["-c", "core.quotePath=false", "status", "--porcelain"],
+            READ,
+        )
+        .unwrap();
+
+        assert!(seen.ok(), "{seen:?}");
+        assert_eq!(
+            std::fs::read(&index).unwrap(),
+            was,
+            "the index was rewritten"
+        );
+        // The control: git's own `status`, not through the runner and allowed its optional
+        // lock, does rewrite it.
+        let plain = crate::forklock::output(
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir.path())
+                .args(["status", "--porcelain"]),
+        )
+        .unwrap();
+        assert!(plain.status.success(), "{plain:?}");
+        assert_ne!(
+            std::fs::read(&index).unwrap(),
+            was,
+            "the control saw no rewrite"
+        );
+    }
+
+    #[test]
+    fn the_verb_is_found_past_the_options_before_it() {
+        assert_eq!(verb(&["status", "--porcelain"]), Some("status"));
+        assert_eq!(
+            verb(&["-c", "a=b", "--no-optional-locks", "status"]),
+            Some("status")
+        );
+        assert_eq!(verb(&["-C", "status", "log"]), Some("log"));
+        assert_eq!(verb(&["--git-dir=x", "add", "status"]), Some("add"));
+        assert_eq!(verb(&["--no-pager"]), None);
     }
 
     #[test]

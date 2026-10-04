@@ -62,6 +62,10 @@ pub(crate) struct Burst {
     /// A folder may have been made: a creation the platform named as a folder's, or as
     /// anything's, or a burst that is everything.
     pub made_folder: bool,
+    /// The platform lost track or its watcher erred (a rescan, or an event naming no path),
+    /// rather than the burst holding more paths than it can: what is watched may no longer be
+    /// heard, and a watch that vouched for a whole tree no longer does (FD-11).
+    pub lost: bool,
 }
 
 impl Burst {
@@ -70,9 +74,12 @@ impl Burst {
     /// more than it needed to rather than missing a change.
     fn add(&mut self, event: notify::Event, most: usize) {
         if self.everything {
+            // Already everything, by overflow perhaps: a loss after it is still a loss.
+            self.lost |= event.need_rescan() || event.paths.is_empty();
             return;
         }
         if event.need_rescan() || event.paths.is_empty() {
+            self.lost = true;
             return self.is_everything();
         }
         let removed = matches!(event.kind, EventKind::Remove(_));
@@ -280,6 +287,17 @@ pub(crate) mod raw {
     /// under a directory of its own.
     static WATCHES: std::sync::Mutex<Vec<std::path::PathBuf>> = std::sync::Mutex::new(Vec::new());
 
+    /// Paths a [`Raw`] refuses to watch, as a platform out of watches or a folder gone would.
+    static REFUSED: std::sync::Mutex<Vec<std::path::PathBuf>> = std::sync::Mutex::new(Vec::new());
+
+    /// From now on, a [`Raw`] refuses to watch `path`.
+    pub(crate) fn refuse(path: &Path) {
+        REFUSED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(path.to_path_buf());
+    }
+
     /// How many times a [`Raw`] has been asked to watch `path`.
     pub(crate) fn watched(path: &Path) -> usize {
         WATCHES
@@ -296,6 +314,14 @@ pub(crate) mod raw {
             Ok(Raw)
         }
         fn watch(&mut self, path: &Path, _: notify::RecursiveMode) -> notify::Result<()> {
+            if REFUSED
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .iter()
+                .any(|refused| refused == path)
+            {
+                return Err(notify::Error::path_not_found());
+            }
             WATCHES
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
