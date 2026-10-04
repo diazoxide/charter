@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791088088576,
+  "lastUpdate": 1791092851127,
   "repoUrl": "https://github.com/diazoxide/charter",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -924,6 +924,48 @@ window.BENCHMARK_DATA = {
             "value": 105.78711799999999,
             "unit": "ms",
             "extra": "median of 5 runs: 103.622, 105.619, 105.787, 106.020, 106.142 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "d56da346bd376a99860c4be9f081d2280e8ef4b2",
+          "message": "browser install: read a sandbox refusal off the failure, write nothing\n\nThe hint that a sandboxed chat may not write a project's skills was\nfound by a write probe: it made the skills folder and a file in it, and\ncould follow a link or leave .claude/ behind, in the very run the\noperator starts outside any sandbox.\n\nThe probe is gone. The hint is now read off the failure alone: the\ngenerator's output, or why it could not run, saying permission denied,\noperation not permitted, EPERM or EACCES. Any other failure gets no\nhint, and nothing is written to find out.\n\nCloses #1057\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-04T09:45:28+04:00",
+          "tree_id": "fa0d13c971c7c9b63af5c378be6ba788daf21ff9",
+          "url": "https://github.com/diazoxide/charter/commit/d56da346bd376a99860c4be9f081d2280e8ef4b2"
+        },
+        "date": 1791092850449,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.575094,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.570, 0.571, 0.575, 0.576, 0.589 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 17.3248925,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.986, 17.218, 17.325, 17.484, 17.539 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 106.17664500000001,
+            "unit": "ms",
+            "extra": "median of 5 runs: 105.155, 105.258, 106.177, 106.300, 106.928 ms"
           }
         ]
       }
