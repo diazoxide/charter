@@ -270,7 +270,9 @@ jobs:
           WHERE: ${{ matrix.os }}, ${{ matrix.files }} files
         run: |
           touch fm-12.log
-          grep -o 'FM-12 | budget missed | .*' fm-12.log | while IFS= read -r line; do
+          # grep finds nothing on a run that met every budget; under pipefail that
+          # exit 1 must not fail the step.
+          { grep -o 'FM-12 | budget missed | .*' fm-12.log || true; } | while IFS= read -r line; do
             echo "::warning title=FM-12 budget (${WHERE})::${line}"
           done
           {
