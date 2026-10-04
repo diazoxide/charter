@@ -490,7 +490,23 @@ fn hold_folder(root: &Path, folder: &Path) -> std::io::Result<Held> {
 #[cfg(unix)]
 fn open_inside(held: &Held, relative: &Path) -> std::io::Result<std::fs::File> {
     use rustix::fs::{Mode, OFlags};
-    let folder = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let (folder, leaf) = folder_inside(held, relative)?;
+    let at = folder.as_ref().unwrap_or(&held.0);
+    let file = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+    let opened = rustix::fs::openat(at, leaf, file, Mode::empty())?;
+    Ok(std::fs::File::from(opened))
+}
+
+/// The folder holding `relative`'s last component, opened from the held folder one component
+/// at a time following no link (`O_NOFOLLOW | O_DIRECTORY`), and that last component: `None`
+/// for the held folder itself. What [`open_inside`] and [`link_inside`] both walk.
+#[cfg(unix)]
+fn folder_inside<'p>(
+    held: &Held,
+    relative: &'p Path,
+) -> std::io::Result<(Option<rustix::fd::OwnedFd>, &'p std::ffi::OsStr)> {
+    use rustix::fs::{Mode, OFlags};
+    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
     let mut steps: Vec<&std::ffi::OsStr> = relative
         .components()
         .filter_map(|step| match step {
@@ -503,18 +519,10 @@ fn open_inside(held: &Held, relative: &Path) -> std::io::Result<std::fs::File> {
     };
     let mut fd: Option<rustix::fd::OwnedFd> = None;
     for name in steps {
-        let next = match &fd {
-            Some(at) => rustix::fs::openat(at, name, folder, Mode::empty())?,
-            None => rustix::fs::openat(&held.0, name, folder, Mode::empty())?,
-        };
-        fd = Some(next);
+        let at = fd.as_ref().unwrap_or(&held.0);
+        fd = Some(rustix::fs::openat(at, name, flags, Mode::empty())?);
     }
-    let file = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
-    let opened = match &fd {
-        Some(at) => rustix::fs::openat(at, leaf, file, Mode::empty())?,
-        None => rustix::fs::openat(&held.0, leaf, file, Mode::empty())?,
-    };
-    Ok(std::fs::File::from(opened))
+    Ok((fd, leaf))
 }
 
 /// The target of the link `relative` names in the held folder, as git stores a link: `None`
@@ -522,28 +530,9 @@ fn open_inside(held: &Held, relative: &Path) -> std::io::Result<std::fs::File> {
 /// and the link itself is read, never followed.
 #[cfg(unix)]
 fn link_inside(held: &Held, relative: &Path) -> Option<Vec<u8>> {
-    use rustix::fs::{Mode, OFlags};
-    let folder = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
-    let mut steps: Vec<&std::ffi::OsStr> = relative
-        .components()
-        .filter_map(|step| match step {
-            Component::Normal(name) => Some(name),
-            _ => None,
-        })
-        .collect();
-    let leaf = steps.pop()?;
-    let mut fd: Option<rustix::fd::OwnedFd> = None;
-    for name in steps {
-        let next = match &fd {
-            Some(at) => rustix::fs::openat(at, name, folder, Mode::empty()).ok()?,
-            None => rustix::fs::openat(&held.0, name, folder, Mode::empty()).ok()?,
-        };
-        fd = Some(next);
-    }
-    let target = match &fd {
-        Some(at) => rustix::fs::readlinkat(at, leaf, Vec::new()).ok()?,
-        None => rustix::fs::readlinkat(&held.0, leaf, Vec::new()).ok()?,
-    };
+    let (folder, leaf) = folder_inside(held, relative).ok()?;
+    let at = folder.as_ref().unwrap_or(&held.0);
+    let target = rustix::fs::readlinkat(at, leaf, Vec::new()).ok()?;
     Some(target.into_bytes())
 }
 

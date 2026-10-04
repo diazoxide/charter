@@ -374,8 +374,13 @@ pub(super) fn compare_file_here(
         }
     };
     for side in [&old, &new] {
-        if let Side::TooLarge(bytes) = side {
-            return Ok(FileDiff::TooLarge { bytes: *bytes });
+        match side {
+            Side::TooLarge(bytes) => return Ok(FileDiff::TooLarge { bytes: *bytes }),
+            // Never drawn as an empty file: a side that is there and cannot be read is said.
+            Side::Unreadable => {
+                return Err(unreadable("it is not a file charter can read".into()));
+            }
+            Side::Missing | Side::Bytes(_) => {}
         }
     }
     if old.is_binary() || new.is_binary() {
@@ -516,8 +521,11 @@ fn default_base(
         } else {
             named
         };
-        let fork = repo.merge_base(at, tip).ok()?.detach();
-        return Some((fork, named));
+        // A candidate that shares no history with the branch is not its base: the next one may.
+        let Ok(fork) = repo.merge_base(at, tip) else {
+            continue;
+        };
+        return Some((fork.detach(), named));
     }
     None
 }
@@ -541,6 +549,12 @@ pub(super) struct Changed {
 /// whether it is there and not read, so a branch that generated a hundred thousand files git
 /// does not ignore costs the walk git's status makes, not a read of each.
 pub const READ_MOST: usize = 20_000;
+
+/// The most bytes of working-tree content one comparison reads and keeps: 128 MiB, an eighth
+/// of the reader's memory cap. Every file read is kept (in memory) until the comparison ends,
+/// so past this a file is marked by its size, as there and changed, and not read: many large
+/// files a branch does not ignore cost the read nothing more, and never its markers.
+pub const READ_BUDGET: u64 = 128 * 1024 * 1024;
 
 /// What changed between `since` and `head` (see [`Changed`]), `held` being the branch's folder
 /// for a working-tree head.
@@ -601,6 +615,7 @@ fn working_tree(
     let mut editor = memory.edit_tree(start).map_err(|e| e.to_string())?;
     let mut unread = BTreeSet::new();
     let mut read = 0usize;
+    let mut budget = READ_BUDGET;
     for path in &gone {
         if let Some(plain) = plain(path) {
             editor.remove(plain.as_str()).map_err(|e| e.to_string())?;
@@ -615,8 +630,11 @@ fn working_tree(
         let (side, kind) = if read > READ_MOST {
             (Side::Unreadable, gix::object::tree::EntryKind::Blob)
         } else {
-            on_disk(held, &plain, COUNTED)
+            on_disk(held, &plain, COUNTED.min(budget))
         };
+        if let Side::Bytes(bytes) = &side {
+            budget = budget.saturating_sub(bytes.len() as u64);
+        }
         let bytes = match side {
             Side::Missing => {
                 editor.remove(plain.as_str()).map_err(|e| e.to_string())?;
