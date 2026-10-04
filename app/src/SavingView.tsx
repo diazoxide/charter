@@ -1,4 +1,4 @@
-import { useId, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import * as AlertDialog from "@radix-ui/react-alert-dialog";
 import { CircleAlert, CircleCheck, CircleDot, LoaderCircle, Save } from "lucide-react";
 import {
@@ -21,6 +21,7 @@ import {
   usePlaneSaving,
   useRepoSaving,
 } from "./saving";
+import { Choice, Field, SettingRow, type Option } from "./settings/components";
 
 /**
  * **The Saving view** (charter-app#294, ADR 0051): where this plane's unsaved work sits, what
@@ -49,7 +50,6 @@ export function SavingView({
   const [said, setSaid] = useState<string[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
-  const messageId = useId();
 
   const save = async () => {
     setBusy(true);
@@ -139,9 +139,9 @@ export function SavingView({
       ) : (
         <>
           <p className={`saving-stage saving-${saving.stage}`}>{stageText(saving)}</p>
-          <p className="settings-who">{modeText(saving)}</p>
+          <p className="saving-note">{modeText(saving)}</p>
           {saving.live.length > 0 && (
-            <p className="settings-hint">
+            <p className="saving-note">
               {`Live workspaces, published by every save: ${saving.live.join(", ")}`}
             </p>
           )}
@@ -174,13 +174,13 @@ export function SavingView({
               </div>
             </div>
           )}
-          {saving.notice !== null && <p className="settings-hint">{saving.notice}</p>}
+          {saving.notice !== null && <p className="saving-note">{saving.notice}</p>}
           {saving.pushFailed !== null && (
-            <p className="settings-hint">{`The last push did not land: ${saving.pushFailed}`}</p>
+            <p className="saving-note">{`The last push did not land: ${saving.pushFailed}`}</p>
           )}
           {saving.mode === null && <ModeQuestion plane={plane} branch={saving.branch} />}
           {saving.pr !== null && (
-            <p className="settings-hint">
+            <p className="saving-note">
               {`${capitalised(saving.request)}: `}
               <a href={saving.pr} target="_blank" rel="noreferrer">
                 {saving.pr}
@@ -194,17 +194,13 @@ export function SavingView({
               ))}
             </ul>
           )}
-          <div className="settings-field">
-            <label htmlFor={messageId}>Message</label>
-            <input
-              id={messageId}
-              type="text"
-              value={message}
-              placeholder="Leave empty for one that says what changed"
-              onChange={(e) => setMessage(e.target.value)}
-              disabled={busy}
-            />
-          </div>
+          <SettingRow
+            label="Message"
+            help="Leave empty for one that says what changed"
+            control={(ids) => (
+              <Field ids={ids} kind="text" value={message} onChange={setMessage} disabled={busy} />
+            )}
+          />
           <div className="settings-actions">
             <button
               type="button"
@@ -453,57 +449,70 @@ function repoTakes(repo: RepoSaving): string {
  * answer is written as `[plane] mode` in `charter.toml` by the core's own writer, and until
  * there is one, nothing saves the project by itself. The pull request modes are set in Project
  * settings; this asks the three a person can answer without knowing the repository's rules.
+ *
+ * Drawn as a setting is (DS-3b, #1174): a row whose control is a radio choice, each answer with
+ * the line on what it does, and written the moment it is picked, as Settings writes a value.
  */
 function ModeQuestion({ plane, branch }: { plane: PlaneId; branch: string }) {
   const [refused, setRefused] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** The answer being written: shown as picked until the project reads back with its mode,
+   *  and dropped again when the write is refused. */
+  const [picked, setPicked] = useState<string>();
   const choose = async (mode: string) => {
+    // One answer at a time, as the buttons this question used to be were disabled while busy.
+    if (busy) return;
+    setPicked(mode);
     setBusy(true);
     setRefused(null);
     try {
       const got = await commands.choosePlaneMode(plane, mode);
-      if (got.status === "error") setRefused(got.error);
+      if (got.status === "error") {
+        setRefused(got.error);
+        setPicked(undefined);
+      }
     } catch (err: unknown) {
       setRefused(String(err));
+      setPicked(undefined);
     } finally {
       setBusy(false);
       tellSaved();
     }
   };
-  const choices: { mode: string; label: string; says: string }[] = [
+  const options: Option[] = [
     {
-      mode: "push",
+      value: "push",
       label: `Push to ${branch || "the remote"}`,
       says: "Every save is committed and pushed, so the team has it.",
     },
     {
-      mode: "commit",
+      value: "commit",
       label: "Commit only",
       says: "Saves stay on this machine until you push them yourself.",
     },
-    { mode: "off", label: "Off", says: "charter commits nothing here; you use git yourself." },
+    { value: "off", label: "Off", says: "charter commits nothing here; you use git yourself." },
   ];
   return (
-    <div className="saving-question" role="group" aria-label="How should this project be saved?">
-      <p className="saving-stage">How should this project be saved?</p>
-      {choices.map((one) => (
-        <button
-          key={one.mode}
-          type="button"
-          className="panel-view"
-          tabIndex={0}
-          disabled={busy}
-          onClick={() => void choose(one.mode)}
-        >
-          {`${one.label} — ${one.says}`}
-        </button>
-      ))}
+    <>
+      <SettingRow
+        label="How should this project be saved?"
+        grouped
+        control={(ids) => (
+          <Choice
+            ids={ids}
+            kind="radio"
+            options={options}
+            value={picked}
+            onValueChange={(mode) => void choose(mode)}
+          />
+        )}
+      />
       {refused !== null && (
         <p className="trouble" role="alert">
           {refused}
         </p>
       )}
-    </div>
+    </>
   );
 }
 

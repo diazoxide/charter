@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import Markdown from "react-markdown";
 import { LoaderCircle } from "lucide-react";
 import { EmptyState } from "./EmptyState";
+import { Field, SettingRow } from "./settings/components";
 import { COMPONENTS } from "./SessionRecordTab";
 import { commands, type MemoryEdited, type MemoryView, type PlaneId } from "./bindings";
 import {
@@ -141,32 +142,33 @@ export function MemoryTab({
     return (
       <form className="memory-editor" onSubmit={submit} aria-label={`Editing ${key}`}>
         <Meta at={at} memory={memory} />
-        <div className="settings-field">
-          <label htmlFor={`${key}-title`}>Title</label>
-          <input
-            id={`${key}-title`}
-            type="text"
-            value={editing.title}
-            maxLength={TITLE_MAX}
-            spellCheck={false}
-            placeholder={isNew ? "The body's first line, when left empty" : undefined}
-            aria-describedby={`${key}-title-count`}
-            onChange={(event) => change({ title: event.target.value })}
-          />
-          <span className="note" id={`${key}-title-count`}>
-            {`${editing.title.length} / ${TITLE_MAX}`}
-          </span>
-        </div>
-        <div className="settings-field">
-          <label htmlFor={`${key}-body`}>Body</label>
-          <textarea
-            id={`${key}-body`}
-            value={editing.body}
-            spellCheck={false}
-            rows={Math.max(8, editing.body.split("\n").length + 1)}
-            onChange={(event) => change({ body: event.target.value })}
-          />
-        </div>
+        <SettingRow
+          label="Title"
+          help={`${isNew ? "The body's first line, when left empty · " : ""}${editing.title.length} / ${TITLE_MAX}`}
+          control={(ids) => (
+            <Field
+              ids={ids}
+              kind="text"
+              value={editing.title}
+              maxLength={TITLE_MAX}
+              onChange={(title) => change({ title })}
+            />
+          )}
+        />
+        {/* The body is free Markdown, not entries: `list` is the set's many-line box, and the
+            body is read whole, as typed. */}
+        <SettingRow
+          label="Body"
+          control={(ids) => (
+            <Field
+              ids={ids}
+              kind="list"
+              rows={8}
+              value={editing.body}
+              onChange={(body) => change({ body })}
+            />
+          )}
+        />
         {stale !== undefined && (
           <div className="trouble memory-stale" role="alert">
             {stale.now === null
