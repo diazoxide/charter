@@ -1,0 +1,12 @@
+# OSV-Scanner's settings for this directory's lockfile. The OpenSSF Scorecard's Vulnerabilities
+# check runs OSV-Scanner and reads this file too (#585).
+#
+# `sharp` is not installed: package.json replaces it with the local stand-in `no-sharp` (FR-5,
+# #836), which the lockfile records as a link with no version. A scanner that sees a versionless
+# `sharp` reports every sharp advisory, none of which applies to code that is not there.
+# `test/no-sharp.test.mjs` fails if this stays after real sharp comes back.
+[[PackageOverrides]]
+name = "sharp"
+ecosystem = "npm"
+ignore = true
+reason = "Not installed: replaced by the local stand-in no-sharp, which loads nothing."

@@ -343,10 +343,12 @@ jobs:
             x86_64-unknown-linux-gnu) slug=linux-x86_64; updater=linux-x86_64-appimage ;;
             *) echo "::error::$triple has no updater target in charter_core::updates::TARGETS"; exit 1 ;;
           esac
-          echo "triple=$triple" >> "$GITHUB_OUTPUT"
-          echo "slug=$slug" >> "$GITHUB_OUTPUT"
-          echo "updater=$updater" >> "$GITHUB_OUTPUT"
-          echo "artifact=charter-$slug-${VERSION}" >> "$GITHUB_OUTPUT"
+          {
+            echo "triple=$triple"
+            echo "slug=$slug"
+            echo "updater=$updater"
+            echo "artifact=charter-$slug-${VERSION}"
+          } >> "$GITHUB_OUTPUT"
 
       # The `charter` binary hooks run, built with the same profile and shipped INSIDE the
       # bundle. The app looks for it beside its own executable and deliberately ignores PATH
