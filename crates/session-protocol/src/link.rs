@@ -8,9 +8,8 @@
 //! receiver grants more as it reads. A pane that stops reading stops only its own stream. It
 //! asks nothing of the transport, so the same link runs over a unix socket, a pipe pair, a
 //! child's stdio, and inside the Noise channel ADR 0078 §3 puts around a runner's connector,
-//! unchanged. Yamux has no stream priorities; how the control lane still gets through a busy
-//! terminal is in [`crate::view`]: every terminal's bytes in flight are bounded, so the lane
-//! waits behind a bounded amount, never an unbounded one.
+//! unchanged. Yamux has no stream priorities, so the link schedules what it writes: the control
+//! lane's frames go first (`crate::priority`).
 //!
 //! **The control lane** is the first stream, which the client opens. It carries
 //! length-delimited frames (tokio-util's `LengthDelimitedCodec`: a big-endian `u32` length,
@@ -39,6 +38,7 @@ use tokio_util::codec::{Framed, LengthDelimitedCodec};
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 
 use crate::auth::{self, Credential, Credentials, Scope};
+use crate::priority::Prioritized;
 use crate::version::{self, Refused, Speaks, Version};
 
 /// The largest frame the control lane carries. A command or an event is small; a frame this
@@ -294,7 +294,7 @@ pub async fn serve_any<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
 ///
 /// **Nothing in a build of the host makes one yet.** RR-13 builds that handshake, and its
 /// result is the only thing that should. Until then `remote-link` is admitted nowhere: it fails
-/// closed. The crate's own tests stand in for the handshake with [`ProvenDevice::stand_in`],
+/// closed. The crate's own tests stand in for the handshake with `ProvenDevice::stand_in`,
 /// which exists only with the `any-stream` feature.
 #[derive(Debug)]
 pub struct ProvenDevice(());
@@ -405,6 +405,10 @@ fn drive<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     io: S,
     mode: yamux::Mode,
 ) -> (Opener, Acceptor) {
+    // The multiplexer writes through the control lane's scheduler, and reads the transport
+    // as it is (`crate::priority`).
+    let (reads, writes) = tokio::io::split(io);
+    let io = tokio::io::join(reads, Prioritized::start(writes));
     let mut connection = yamux::Connection::new(io.compat(), config(), mode);
     let (asks, mut opens) = mpsc::unbounded_channel::<Opening>();
     let (hand_over, streams) = mpsc::channel(MOST_UNACCEPTED_STREAMS);

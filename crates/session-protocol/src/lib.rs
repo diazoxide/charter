@@ -21,7 +21,8 @@
 //!    both ends have admitted (FD-6, ADR 0068 §5).
 //! 3. [`link`]: the stream is multiplexed with Yamux into a **control lane** (length-delimited
 //!    frames, the commands and events) and any number of streams, each with **its own credit
-//!    flow control**, so a pane that stops reading stops only itself.
+//!    flow control**, so a pane that stops reading stops only itself. The control lane is a
+//!    **priority lane**: its frames are sent ahead of every stream's still waiting.
 //! 4. [`view`]: a terminal's bytes to one client: a header, the snapshot, then the live bytes,
 //!    raw. The host holds a view to two bounds: it writes no more than a **high watermark**
 //!    ahead of what the client has drawn (xterm.js's flow control, with acknowledgements), and
@@ -38,14 +39,18 @@
 //! framing is tokio-util's `LengthDelimitedCodec`, the standard one for the runtime the app
 //! already uses.
 //!
-//! **What carries the control lane past a busy terminal** (ADR 0068, amended by FD-4). Yamux
-//! has no stream priorities. The lane gets through because nothing ahead of it is unbounded:
-//! every stream's bytes in flight are held to its window, every view's to its watermark, the
-//! streams on a link to [`link::MOST_STREAMS`], and Yamux sends data in frames of at most
-//! 16 KiB, so a control frame interleaves with them. The tests print what that gives as
-//! evidence (ADR 0086 keeps wall-clock budgets out of `cargo test`): a keystroke through ten
-//! panes flooding about 100 to 270 MB/s at a p95 of a few milliseconds, and a needs-you through
-//! fifty busy chats on a shaped 150 ms link in well under a second.
+//! **What carries the control lane past a busy terminal** (ADR 0068 §4, amended again by FD-4).
+//! Yamux has no stream priorities, so the link schedules its frames itself: the multiplexer
+//! writes into `priority`, which sends the control lane's frames ahead of every terminal's
+//! still waiting, and lets the other streams take turns, a frame each. Nothing on the wire
+//! changes. What the transport already holds is the one wait left, and it is bounded, since
+//! nothing ahead of it is unbounded: every stream's bytes in flight are held to its window,
+//! every view's to its watermark, the streams on a link to [`link::MOST_STREAMS`]. The tests
+//! show it on a deterministic link simulator in virtual time: a control frame through fifty busy
+//! streams on a 1 MB/s link in 73 ms, where the multiplexer alone took 908 ms, and a needs-you
+//! through fifty busy chats on a 150 ms, 2% loss link within #643's 1 s plus the round trip.
+//! A keystroke through ten flooding panes over a unix socket is `charter-session-bench`'s
+//! (ADR 0086's L1 row).
 //!
 //! **What the control lane's frames mean** is the last two modules (FD-26, ADR 0068 §4):
 //!
@@ -64,6 +69,7 @@ pub mod grants;
 pub mod link;
 #[cfg(unix)]
 pub mod local;
+mod priority;
 pub mod session;
 pub mod ui;
 pub mod version;
