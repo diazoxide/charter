@@ -1396,12 +1396,21 @@ fn tell_the_host_about_the_tool_call(
             .and_then(|since| u64::try_from(since.as_millis()).ok())
             .unwrap_or_default(),
     };
-    if let Err(why) = hookwire::deliver_tool(
-        std::path::Path::new(&socket),
-        hookwire::ChatToken::from_env().as_ref(),
-        &call,
-    ) {
+    let token = hookwire::ChatToken::from_env();
+    if let Err(why) = hookwire::deliver_tool(std::path::Path::new(&socket), token.as_ref(), &call) {
         let _ = writeln!(std::io::stderr(), "{} {word} ({why})", hookwire::NOT_TAKEN);
+    }
+    // The file a file tool touched, for the tree's live marker (FM-6): on a line of its own,
+    // sent once and never spooled, so no record holds it (D-86a). Not for a call the guard
+    // refused, which touched nothing. A marker the app missed is not worth a word on stderr.
+    if call.decision != hookwire::Decision::Deny
+        && let Some(touching) = charter_core::touching::of_tool(&data)
+    {
+        let _ = hookwire::touch(
+            std::path::Path::new(&socket),
+            token.as_ref(),
+            &hookwire::Touching { chat, touching },
+        );
     }
 }
 

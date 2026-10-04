@@ -172,6 +172,54 @@ pub struct Hooks {
     /// Told this project's asks each time they change — a slot filled after the fact, for
     /// `answering`'s reason.
     asks_told: crate::asking::Telling,
+    /// Told each path a chat's file tool touched (FM-6), as the chat said it — a slot filled
+    /// after the fact, for `answering`'s reason: confining it needs the chat's folder.
+    /// **Never recorded**: nothing here writes it, and the event log is not told (D-86a).
+    touching: Arc<Mutex<Option<Touches>>>,
+}
+
+/// What is told each path a chat's file tool touched, unconfined.
+pub type Touches = Arc<dyn Fn(charter_core::hookwire::Touching) + Send + Sync + 'static>;
+
+/// The event the window is sent when a chat's file tool touches a file (FM-6).
+pub const TOUCHING: &str = "chat-touching";
+
+/// A file a chat's tool touched, as the window marks it in the tree for a few seconds (FM-6,
+/// #1109). It travels in memory only and is never written anywhere (D-86a).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct ChatTouching {
+    pub plane: PlaneId,
+    pub session: u32,
+    /// The path inside the chat's own folder, `/`-separated, with no `..` and no `.git`:
+    /// confined by `charter_core::touching::confine` before it is sent.
+    pub path: String,
+}
+
+/// Told each file a chat touched, once confined and let through the rate gate.
+pub type TouchTeller = Arc<dyn Fn(ChatTouching) + Send + Sync + 'static>;
+
+/// What the window is told of a path chat `touched.chat` said its tool touched, or nothing.
+///
+/// **Nothing unless it is inside the chat's own folder** (`folder`, where it works): confined
+/// by core, so a chat can put no marker outside its branch. Nothing either once the chat has put
+/// up its share this second, or for the same path again at once (`gate`), so no chat can flood
+/// the window. A chat with no folder known marks nothing.
+pub fn touched(
+    plane: &PlaneId,
+    folder: Option<&Path>,
+    gate: &Mutex<charter_core::touching::Gate>,
+    touched: &charter_core::hookwire::Touching,
+    now: std::time::Instant,
+) -> Option<ChatTouching> {
+    let path = charter_core::touching::confine(folder?, &touched.touching)?;
+    gate.lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .lets(touched.chat, &path, now)
+        .then(|| ChatTouching {
+            plane: plane.clone(),
+            session: touched.chat,
+            path,
+        })
 }
 
 /// What is told a session record was saved.
@@ -309,6 +357,7 @@ impl Hooks {
             events: Arc::new(Mutex::new(None)),
             asks: Arc::new(HookAsks::new(Arc::new(Asks::new()))),
             asks_told: Arc::new(Mutex::new(None)),
+            touching: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -335,12 +384,27 @@ impl Hooks {
         let events: Arc<Mutex<Option<Events>>> = Arc::new(Mutex::new(None));
         let asks = Arc::new(HookAsks::new(Arc::new(Asks::new())));
         let asks_told: crate::asking::Telling = Arc::new(Mutex::new(None));
+        let touching: Arc<Mutex<Option<Touches>>> = Arc::new(Mutex::new(None));
         let reading = listener.hear(Hearing {
             permission: crate::asking::permitting(
                 plane.clone(),
                 Arc::clone(&asks),
                 Arc::clone(&asks_told),
             ),
+            // A file a chat's tool touched (FM-6): handed on, never recorded (D-86a). Taken out
+            // of the lock before it runs, as an answer is.
+            touching: {
+                let touching = Arc::clone(&touching);
+                Box::new(move |touched| {
+                    let listener = touching
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .clone();
+                    if let Some(listener) = listener {
+                        listener(touched);
+                    }
+                })
+            },
             each: {
                 let board = Arc::clone(&board);
                 let plane = plane.clone();
@@ -493,6 +557,7 @@ impl Hooks {
             events,
             asks,
             asks_told,
+            touching,
         })
     }
 
@@ -625,6 +690,12 @@ impl Hooks {
             .all_reports
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Some(heard);
+    }
+
+    /// Who is told, from now on, each path a chat's file tool touched (FM-6), as the chat said
+    /// it: the plane confines it to the chat's folder before the window hears of it.
+    pub fn when_touching(&self, touches: Touches) {
+        *self.touching.lock().unwrap_or_else(PoisonError::into_inner) = Some(touches);
     }
 
     /// Who is told, from now on, each session record a chat says it saved (ADR 0064).
@@ -1220,6 +1291,144 @@ mod tests {
             vec!["run.started", "hook.userpromptsubmit", "hook.pretooluse"],
             "one event per hook call, after the run it is under"
         );
+    }
+
+    #[test]
+    fn a_touched_file_reaches_the_window_only_inside_the_chats_folder_and_rated() {
+        use charter_core::hookwire::Touching;
+        let plane: PlaneId = serde_json::from_str("\"/plane\"").expect("a plane id");
+        let gate = Mutex::new(charter_core::touching::Gate::default());
+        let folder = Path::new("/w/branch");
+        let now = std::time::Instant::now();
+        let said = |path: &str| Touching {
+            chat: 3,
+            touching: path.to_owned(),
+        };
+
+        assert_eq!(
+            touched(
+                &plane,
+                Some(folder),
+                &gate,
+                &said("/w/branch/src/a.rs"),
+                now
+            ),
+            Some(ChatTouching {
+                plane: plane.clone(),
+                session: 3,
+                path: "src/a.rs".to_owned(),
+            })
+        );
+        for outside in [
+            "/w/other/a.rs",
+            "/w/branch/../other/a.rs",
+            "../x",
+            "/etc/hosts",
+        ] {
+            assert_eq!(
+                touched(&plane, Some(folder), &gate, &said(outside), now),
+                None,
+                "{outside}"
+            );
+        }
+        assert_eq!(
+            touched(&plane, None, &gate, &said("/w/branch/a.rs"), now),
+            None,
+            "a chat with no folder known marks nothing"
+        );
+        let told = (0..100)
+            .filter(|n| {
+                touched(&plane, Some(folder), &gate, &said(&format!("f{n}")), now).is_some()
+            })
+            .count();
+        assert!(told < 10, "a flood is cut at the chat's share: {told}");
+    }
+
+    #[test]
+    fn a_touched_path_reaches_the_window_and_no_file_the_host_writes() {
+        use charter_core::eventlog::{self, ArgsKey, Log, Recorder};
+        const CANARY: &str = "CANARY-touched-9e1b";
+        let dir = tempfile::tempdir().expect("a directory");
+        let at = Where {
+            within: dir.path().to_path_buf(),
+            socket: dir.path().join("app").join("hooks.sock"),
+        };
+        let plane: PlaneId = serde_json::from_str("\"/plane\"").expect("a plane id");
+        let hooks =
+            Hooks::listening_on(plane, &at, Arc::new(|_| {}), Arc::new(|_| {})).expect("listening");
+        let logs = dir.path().join("events");
+        hooks.record_into(Arc::new(Mutex::new(Recorder::new(
+            Log::open(&logs, "DEVICE").expect("a log"),
+            ArgsKey::open(&logs).expect("a key"),
+        ))));
+        let (tx, heard) = std::sync::mpsc::channel();
+        let tx = Mutex::new(tx);
+        hooks.when_touching(Arc::new(move |touching| {
+            tx.lock().unwrap().send(touching).unwrap();
+        }));
+        hooks.board().opened(3, Some(Harness::ClaudeCode), None);
+        let socket = hooks.socket().expect("a socket");
+        let token = hooks.token_for(3);
+        let file = format!("/w/branch/{CANARY}.rs");
+        let input = serde_json::json!({"file_path": file});
+
+        charter_core::hookwire::deliver_tool(
+            socket,
+            Some(&token),
+            &charter_core::hookwire::ToolCall {
+                chat: 3,
+                tool_hook: "pretooluse-read".to_owned(),
+                tool: Some("Read".to_owned()),
+                call: Some("toolu_1".to_owned()),
+                args: Some(eventlog::args_hash(&input)),
+                decision: charter_core::hookwire::Decision::None,
+                rule: None,
+                hook_ms: 1,
+                agent: None,
+                at_ms: 0,
+            },
+        )
+        .expect("told");
+        charter_core::hookwire::touch(
+            socket,
+            Some(&token),
+            &charter_core::hookwire::Touching {
+                chat: 3,
+                touching: file.clone(),
+            },
+        )
+        .expect("told");
+        let got = heard
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the touch is handed on");
+        assert_eq!(got.touching, file);
+        drop(hooks);
+
+        let kinds: Vec<String> = eventlog::read(&logs)
+            .expect("the log reads")
+            .into_iter()
+            .map(|event| event.kind)
+            .collect();
+        assert!(
+            kinds.contains(&"hook.pretooluse-read".to_owned()),
+            "{kinds:?}"
+        );
+        let mut stack = vec![dir.path().to_path_buf()];
+        while let Some(at) = stack.pop() {
+            for entry in std::fs::read_dir(&at).into_iter().flatten().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else {
+                    let text = std::fs::read(&path).unwrap_or_default();
+                    assert!(
+                        !String::from_utf8_lossy(&text).contains(CANARY),
+                        "{} holds the touched path",
+                        path.display()
+                    );
+                }
+            }
+        }
     }
 
     #[test]

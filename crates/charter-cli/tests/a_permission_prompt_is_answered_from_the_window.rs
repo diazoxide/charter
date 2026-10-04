@@ -62,6 +62,7 @@ fn host() -> Host {
         saved: Box::new(|_| {}),
         refused: Box::new(|_| Ok(())),
         tool: Box::new(|_| Ok(())),
+        touching: Box::new(|_| {}),
         permission: held_in(Arc::clone(&hooks), Arc::new(|| {})),
     });
     Host {

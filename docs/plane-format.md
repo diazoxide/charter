@@ -4494,7 +4494,10 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
 
 ### `app/hooks.sock`
 - **Format:** a unix socket, not a file. Each chat's hooks write one JSON line to it with the
-  chat's number and token (`hookwire`), and the app answers.
+  chat's number and token (`hookwire`), and the app answers. One kind of line, `touching`, names
+  the file a chat's file tool touched, for the tree's live marker (FM-6). **It is never stored**:
+  never spooled, never in the event log (which keeps only the arguments' digest), never in
+  `app/reopen.json` or any other file here (D-86a).
 - **Status:** **internal** — bound by the app while a plane is open and gone with it. Nothing
   reads it but the connection it serves. **charter-app only.**
 - **Tier:** Clone state, transient — it lives as long as the app has the plane open.

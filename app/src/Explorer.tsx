@@ -53,6 +53,7 @@ import type { WorkspaceState } from "./workspaceState";
 import { useTabStop } from "./roving";
 import { Breadcrumb, CockpitHeader, focusStands, useAheadBehind } from "./Cockpit";
 import { dragReference } from "./references";
+import { touchingIn, touchSaid, useTouching, type Touching } from "./touching";
 
 /** No chat wrapping up, for a window that has not said. */
 const NONE_WRAPPING: ReadonlySet<number> = new Set();
@@ -164,6 +165,12 @@ const NONE_WRAPPING: ReadonlySet<number> = new Set();
  * with the same keys. Esc, or the breadcrumb, steps back out to the whole workspace, and the
  * keyboard lands on the branch's row. Which branch is the window's (`PlaneView.tsx`), and it is
  * remembered with the window's views.
+ *
+ * **What a chat is touching right now is marked live** (FM-6, #1109; V86 F6): a file a chat's
+ * tool reads or edits, and every folder above it up to the branch's *Files* row, carry a dot
+ * naming the chat on hover, which fades a few seconds after the chat goes quiet on it
+ * (`touching.ts`). The core confined the path to the chat's own folder, and it was written
+ * nowhere (D-86a).
  */
 export function Explorer({
   plane,
@@ -251,6 +258,18 @@ export function Explorer({
     [statuses],
   );
   const reads = useBranchFolders(plane, workspace, open);
+  const touches = useTouching(plane);
+  // What the chats are touching in each branch read here: at most a few hundred paths over the
+  // open branches, so worked out each render rather than remembered.
+  const touching = new Map<string, Touching>();
+  for (const ref of touches.length === 0 ? [] : branches) {
+    const folder =
+      ref.piece === null
+        ? state.panels?.paths[ref.repo]
+        : state.pieces[ref.repo]?.find((one) => one.piece === ref.piece)?.path;
+    const marks = touchingIn(touches, chats, folder);
+    if (marks.size > 0) touching.set(branchKey(ref), marks);
+  }
   const icons = useFileIcons(plane, workspace);
   const files: FilesOf = {
     workspace: workspace ?? "",
@@ -262,6 +281,7 @@ export function Explorer({
     changedOnly,
     filter: filter.trim().toLocaleLowerCase(),
     levels: new Map(),
+    touching,
   };
   const tree =
     cockpit === undefined || workspace === undefined
@@ -874,6 +894,8 @@ export type FilesOf = {
   filter: string;
   /** Each folder's {@link levelOf}, worked out once per render. */
   levels: Map<string, Level>;
+  /** What the chats are touching in each open branch, by {@link branchKey} (FM-6). */
+  touching?: ReadonlyMap<string, Touching>;
 };
 
 /** One row under a folder of a branch, as both the render and {@link treeOf} walk it. */
@@ -1000,6 +1022,14 @@ function ChangeBadge({ marked, folder }: { marked: Marked | undefined; folder: b
   );
 }
 
+/** The live mark on a file or folder a chat is touching right now (FM-6): a dot, and on hover
+ *  and to a screen reader which chats. */
+function TouchMark({ names }: { names: readonly string[] | undefined }) {
+  if (names === undefined || names.length === 0) return null;
+  const said = touchSaid(names);
+  return <span className="touch-mark" role="img" title={said} aria-label={said} />;
+}
+
 /** Everything a branch's file rows share: the branch they are of, what the tree knows about
  *  its folders, and what a row does to the tree and to a screen reader. The file tab (FM-2) draws
  *  its tree out of the same rows. */
@@ -1076,6 +1106,7 @@ function FilesRow({
   const open = isOpen(at.files, branch, always);
   const level = open ? levelOf(at.files, branch) : undefined;
   const marked = at.files.indexes.get(branchKey(branch))?.marks.get(branch.folder);
+  const touchedBy = at.files.touching?.get(branchKey(branch))?.get(branch.folder);
   const row = (
     <RovingFocusGroup.Item asChild tabStopId={id} focusable={at.isDrawn(id)}>
       <button
@@ -1096,6 +1127,7 @@ function FilesRow({
         )}
         <span className="spot-name">{name}</span>
         {/* A space, so a screen reader says the mark as its own word; flex drops it. */}{" "}
+        <TouchMark names={touchedBy} />
         <ChangeBadge marked={marked} folder />
       </button>
     </RovingFocusGroup.Item>
@@ -1164,6 +1196,7 @@ export function FolderEntries({
           }
           const id = fileRow(here);
           const refused = entry.refused;
+          const touchedBy = at.files.touching?.get(branchKey(branch))?.get(path);
           // Refused and linked files keep their own marks: what they say is that this row is
           // not an ordinary file, which matters more than what kind of file it would be.
           const Mark = refused !== undefined ? FileX : entry.kind === "link" ? FileSymlink : null;
@@ -1201,7 +1234,7 @@ export function FolderEntries({
                     ) : (
                       <Mark className="node-icon" />
                     )}
-                    <span className="spot-name">{entry.name}</span>{" "}
+                    <span className="spot-name">{entry.name}</span> <TouchMark names={touchedBy} />
                     <ChangeBadge marked={entry.marked} folder={false} />
                     {/* Why it does not open, said beside it — an ignored file's too, which is
                       drawn only once the operator asked to see what git ignores. */}

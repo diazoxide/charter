@@ -144,6 +144,7 @@ mod testgit;
 pub mod testrun;
 pub mod toolgate;
 pub mod toolhooks;
+pub mod touching;
 pub mod trace;
 pub mod tui;
 pub mod updates;

@@ -1794,6 +1794,8 @@ fn commands() -> Builder<tauri::Wry> {
         .typ::<heard::ExtensionHeard>()
         // What `harness-by-hand` carries (ADR 0062).
         .typ::<hooks::ByHand>()
+        // What `chat-touching` carries (FM-6).
+        .typ::<hooks::ChatTouching>()
         // What `smart-close` carries (ADR 0064).
         .typ::<smartclose::SmartClosing>()
         // The event a launch without the session bus is told the bus answers on (`portal.rs`),
@@ -2236,6 +2238,19 @@ pub fn run() {
                             &window,
                             &told.plane.clone(),
                             hooks::BY_HAND,
+                            &told,
+                        );
+                    })
+                })
+                // A file a chat's tool touched, confined to its folder: the window marks it in
+                // the tree for a few seconds (FM-6). In memory only (D-86a).
+                .telling_touches({
+                    let window = app.handle().clone();
+                    std::sync::Arc::new(move |told: hooks::ChatTouching| {
+                        windows::emit_for_plane(
+                            &window,
+                            &told.plane.clone(),
+                            hooks::TOUCHING,
                             &told,
                         );
                     })

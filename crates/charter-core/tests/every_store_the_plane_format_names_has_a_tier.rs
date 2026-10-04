@@ -421,3 +421,186 @@ fn the_reopen_record_with_its_clone_key_is_still_clone_state() {
         assert!(reopen.contains(row), "app/reopen.json has no {row} row");
     }
 }
+
+/// **The file a chat touched is in no store** (FM-6, D-86a). The hook names it to the app on a
+/// line of its own, which the app hands to the window in memory. Every store that line's
+/// neighbours reach is searched for it: the hook spool and the socket's folder
+/// (`.charter/app/`, Clone state) when no app takes the line, the event log (Machine) when one
+/// does, and the diagnostic log (`$CHARTER_LOG_DIR`), which a touch refused for its token is
+/// said in. `app/reopen.json` is the app's to write and is held by the app's own test
+/// (`hooks::tests::a_touched_path_reaches_the_window_and_no_file_the_host_writes`); the plane
+/// format says the line is never stored, and this reads that it does.
+///
+/// The channel runs in a child of this test, so the diagnostic log can be installed there with
+/// its directory set, without touching this process's environment or its global subscriber.
+#[cfg(unix)]
+#[test]
+fn the_path_a_chat_touched_is_in_no_store_the_plane_format_names() {
+    charter_core::unsteered!();
+    const CHILD: &str = "CHARTER_TEST_TOUCHED_CHILD";
+    if let Some(run) = std::env::var_os(CHILD) {
+        charter_core::applog::install();
+        a_chat_touches_a_file(Path::new(&run));
+        return;
+    }
+
+    let doc = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/plane-format.md");
+    let text = std::fs::read_to_string(&doc).expect("docs/plane-format.md is readable");
+    let socket_entry = section(&text, "`app/hooks.sock`");
+    assert!(
+        socket_entry.contains("`touching`") && socket_entry.contains("never stored"),
+        "the plane format says the touched path is never stored"
+    );
+
+    let run = tempfile::tempdir().expect("a run directory");
+    let logs = run.path().join("logs");
+    let out = charter_core::forklock::output(
+        std::process::Command::new(std::env::current_exe().expect("this test"))
+            .args([
+                "--exact",
+                "the_path_a_chat_touched_is_in_no_store_the_plane_format_names",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD, run.path())
+            .env("CHARTER_LOG_DIR", &logs),
+    )
+    .expect("the child runs");
+    let (stdout, stderr) = (
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert!(
+        out.status.success(),
+        "the child failed:\n{stdout}\n{stderr}"
+    );
+    assert!(
+        !stdout.contains(TOUCHED) && !stderr.contains(TOUCHED),
+        "{stdout}\n{stderr}"
+    );
+
+    let mut read = Vec::new();
+    let mut stack = vec![run.path().to_path_buf()];
+    while let Some(at) = stack.pop() {
+        for entry in std::fs::read_dir(&at).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let bytes = std::fs::read(&path).unwrap_or_default();
+            let text = String::from_utf8_lossy(&bytes).into_owned();
+            assert!(
+                !text.contains(TOUCHED),
+                "{} holds the touched path",
+                path.display()
+            );
+            read.push((path, text));
+        }
+    }
+    let read_in = |dir: &Path| {
+        read.iter()
+            .filter(|(path, _)| path.starts_with(dir))
+            .count()
+    };
+    assert!(
+        read_in(&run.path().join("project")) > 0,
+        "the spool was read"
+    );
+    assert!(
+        read_in(&run.path().join("machine")) > 0,
+        "the event log was read"
+    );
+    assert!(
+        read.iter()
+            .any(|(path, text)| path.starts_with(&logs) && text.contains("did not carry")),
+        "the diagnostic log was written, and holds the refused touch: {read:?}"
+    );
+}
+
+/// The canary path a chat's tool touches.
+const TOUCHED: &str = "CANARY-touched-0b7c";
+
+/// Chat 2's tool touches a file, under `run`: once with no app listening, then once with an app
+/// that records its tool calls, and once more with no token.
+#[cfg(unix)]
+fn a_chat_touches_a_file(run: &Path) {
+    use charter_core::eventlog::{ArgsKey, Log, Recorder, args_hash};
+    use charter_core::hookwire::{
+        Decision, Hearing, Listener, ToolCall, Touching, deliver_tool, touch,
+    };
+    use std::sync::{Arc, Mutex, mpsc};
+
+    let root = run.join("project");
+    let socket = root.join(".charter/app/hooks.sock");
+    let events = run.join("machine/events/DEVICE");
+    let file = format!("{}/src/{TOUCHED}.rs", root.display());
+    let input = serde_json::json!({"file_path": file});
+    let call = ToolCall {
+        chat: 2,
+        tool_hook: "pretooluse-read".to_owned(),
+        tool: Some("Read".to_owned()),
+        call: Some("toolu_1".to_owned()),
+        args: Some(args_hash(&input)),
+        decision: Decision::None,
+        rule: None,
+        hook_ms: 1,
+        agent: None,
+        at_ms: 0,
+    };
+    let touching = Touching {
+        chat: 2,
+        touching: file.clone(),
+    };
+
+    // No app listening: the tool call is spooled, the touch is lost.
+    std::fs::create_dir_all(&root).expect("a project");
+    let token = {
+        let listener = Listener::bind(&root, &socket).expect("a socket");
+        listener.tokens().issue(2).expect("a token")
+    };
+    deliver_tool(&socket, Some(&token), &call).expect("spooled");
+    assert!(touch(&socket, Some(&token), &touching).is_err());
+
+    // An app listening: the tool call is recorded, the touch handed on in memory, and a touch
+    // without the chat's token refused in the diagnostic log.
+    let _ = std::fs::remove_file(&socket);
+    let listener = Listener::bind(&root, &socket).expect("a socket");
+    let token = listener.tokens().issue(2).expect("a token");
+    let recorder = Arc::new(Mutex::new(Recorder::new(
+        Log::open(&events, "DEVICE").expect("a log"),
+        ArgsKey::open(&events).expect("a key"),
+    )));
+    let (tx, heard) = mpsc::channel();
+    let tx = Mutex::new(tx);
+    let reading = listener.hear(Hearing {
+        each: Box::new(|_| Ok(())),
+        answer: Box::new(|_, _| panic!("no ask")),
+        noticed: Box::new(|_| {}),
+        saved: Box::new(|_| {}),
+        refused: Box::new(|_| Ok(())),
+        tool: {
+            let recorder = Arc::clone(&recorder);
+            let plane = root.clone();
+            Box::new(move |call| {
+                let mut log = recorder.lock().unwrap();
+                let event = log.tool(&plane, &call, std::time::Instant::now())?;
+                log.durable().through(event.seq)
+            })
+        },
+        touching: Box::new(move |touching| tx.lock().unwrap().send(touching).unwrap()),
+        permission: Box::new(|_| None),
+    });
+    deliver_tool(&socket, Some(&token), &call).expect("recorded");
+    touch(&socket, Some(&token), &touching).expect("told");
+    assert_eq!(
+        heard.recv_timeout(std::time::Duration::from_secs(5)),
+        Ok(touching.clone()),
+        "the app heard the touch"
+    );
+    touch(&socket, None, &touching).expect("written");
+    // The refusal is said on the listener's thread; give it its moment before the reader goes.
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    drop(reading);
+    drop(recorder);
+}
