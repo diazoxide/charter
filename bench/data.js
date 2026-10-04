@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791142398260,
+  "lastUpdate": 1791145925383,
   "repoUrl": "https://github.com/diazoxide/charter",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -1302,6 +1302,48 @@ window.BENCHMARK_DATA = {
             "value": 103.8087725,
             "unit": "ms",
             "extra": "median of 5 runs: 103.415, 103.652, 103.809, 104.497, 105.174 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "d908b3ca32f318f349f6305d9eaca93704f46f1b",
+          "message": "stress: a run that met every budget doesn't fail its own summary\n\nTrain 25's summary step greps the log for missed budgets and pipes the\nresult into a loop. On a run that met every budget, grep finds nothing and\nexits 1, and under the step's pipefail that failed the step, so every\nsearch-at-scale job went red on main d63df06 (all ubuntu ones included).\nThe grep now tolerates finding nothing.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-05T00:30:17+04:00",
+          "tree_id": "41d87aca13a53a0cd22c61f87db8ffee7e1852a8",
+          "url": "https://github.com/diazoxide/charter/commit/d908b3ca32f318f349f6305d9eaca93704f46f1b"
+        },
+        "date": 1791145924446,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.4230125,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.412, 0.413, 0.423, 0.425, 0.436 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.666341,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.387, 16.590, 16.666, 16.673, 16.792 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.75712200000001,
+            "unit": "ms",
+            "extra": "median of 5 runs: 101.314, 101.554, 101.757, 101.927, 102.121 ms"
           }
         ]
       }
