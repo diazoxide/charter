@@ -63,6 +63,14 @@ pub enum Ask {
     Matters(Vec<PathBuf>),
     /// How far it is from the branch it was cut from (FM-5).
     AheadBehind,
+    /// A comparison's file list (RC-2).
+    Compare(super::Comparison),
+    /// One file of a comparison at the sides its list was computed at (RC-2).
+    CompareFile {
+        sides: super::Sides,
+        path: String,
+        from: Option<String>,
+    },
 }
 
 /// What the child answers.
@@ -73,6 +81,8 @@ pub enum Answer {
     Folders(Vec<PathBuf>),
     Matters(bool),
     AheadBehind(AheadBehind),
+    Compared(super::Compared),
+    FileDiff(super::FileDiff),
 }
 
 /// One question, as it crosses to the child.
@@ -268,6 +278,13 @@ fn serve() -> i32 {
         Ask::Folders => folders_here(plane, branch).map(Answer::Folders),
         Ask::Matters(paths) => matters_here(plane, branch, &paths).map(Answer::Matters),
         Ask::AheadBehind => ahead_behind_here(plane, branch).map(Answer::AheadBehind),
+        Ask::Compare(comparison) => {
+            super::compare::compare_here(plane, branch, &comparison).map(Answer::Compared)
+        }
+        Ask::CompareFile { sides, path, from } => {
+            super::compare::compare_file_here(plane, branch, &sides, &path, from.as_deref())
+                .map(Answer::FileDiff)
+        }
     }
     .map_err(|refused| refused.to_string());
     let Ok(json) = serde_json::to_string(&answered) else {

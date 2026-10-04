@@ -578,3 +578,35 @@ its reason:
 - **The forge review client's threads** in the Review tab, and *fix this*, are FW-16a/b's
   (FI12), on this record's comparison and tab.
 - **Per-turn comparison** (RC-12) waits on MH-6's checkpoint refs.
+
+## Amended 2026-10-04: the engine reads with gitoxide in the bounded reader (RC-2, V88a)
+
+§2 said the engine *"runs git as a program, as the rest of `charter-core` does"*, and *What was
+rejected* listed a git library. Two days after this record, V88a amended ADR 0027: automatic,
+read-only reads of a branch an agent can write run in-process through gitoxide, in a short-lived
+child of charter's own binary with a deadline and a memory cap (D-88f, D-88h), because a git
+process started there reads config the agent can write, and blanking its programs with `-c`
+lost a race to a config swapped mid-read. The explorer's change markers are such a read, and R1
+asks for **one** engine, so RC-2 builds the engine on that reader rather than beside it:
+
+- **Every comparison is read by gitoxide in the reader's child** (`charter_core::files::compare`,
+  `compare_file`, `compare_change`), with the config cut to the reader's allow-list. No git and
+  no other program starts, so §2's "one fixed set of overrides" is the allow-list, held in one
+  place, and the fixture with a hostile config is RC-2's
+  (`tests/a_comparison_matches_git_diff.rs`).
+- **The lines are git's algorithm, not git's program**: Myers, then git's indent heuristic, on
+  lines that keep their line ends. RC-2's acceptance, *matches `git diff`*, is held by fixtures
+  that run `git diff` as the oracle for every kind.
+- **A file's working-tree side is read through the project root held open**, one component at
+  a time following no link, as search reads (D-88i).
+- **The explorer's markers are the engine's file list** without its line counts
+  (`files::status`), so the two can never disagree.
+- **Writes, and git commands the operator starts, stay on the git binary** (V88a). So does
+  §2's fetch of a request's head under `refs/charter/review/` (RC-2's remaining slice, with
+  kind (f)).
+
+What it costs: a repo's own `diff.algorithm`, `diff.renames` and the like are not read, so a
+comparison is always git's defaults; and an `eol` or filter conversion is not applied to the
+working-tree side, so a file checked out with CRLF line ends compares as its bytes.
+
+The rest of this record stands.

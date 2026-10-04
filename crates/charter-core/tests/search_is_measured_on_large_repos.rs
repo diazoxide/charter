@@ -10,7 +10,12 @@
 //!   timed to its first file of hits and to its end, for common, rare and absent queries; and a
 //!   whole scan of the repo, page after page, for a query found nowhere;
 //! - **status** (`files::status`, through the bounded reader child): what runs after every
-//!   write an agent makes, on a clean branch and on one with a few changes.
+//!   write an agent makes, on a clean branch and on one with a few changes;
+//! - **compare** (`files::compare` and `files::compare_file`, the one diff engine, RC-2 #704):
+//!   a branch that changed 1,000 files compared with its base — the file list with its line
+//!   counts (R3's 1,000-file case), and the first 50 files' hunks as their rows are drawn —
+//!   beside `git diff --numstat` timed on the same range; and what is not committed on a clean
+//!   branch.
 //!
 //! It is ignored by default, because building the repo takes minutes. CI runs it nightly and on
 //! `main` only, as evidence (V70; `stress.yml`'s `search at scale`), so a regression shows on
@@ -27,8 +32,9 @@
 //! - `CHARTER_MEASURE_PLANE`: a folder to build the repo in once and measure again later, so a
 //!   run can be timed with the file cache cold (the folder on a volume detached and attached
 //!   again in between) and then warm. Unset, the repo is built in a temporary folder;
-//! - `CHARTER_MEASURE_ONLY`: one step — `find`, `search:<query name>`, `scan` or `status` — so
-//!   each cold number is the first read of a cold cache, not one warmed by the step before;
+//! - `CHARTER_MEASURE_ONLY`: one step — `find`, `search:<query name>`, `scan`, `status` or
+//!   `compare` — so each cold number is the first read of a cold cache, not one warmed by the
+//!   step before;
 //! - `CHARTER_MEASURE_BUDGETS=0`: print the numbers without holding them to the budgets;
 //! - `CHARTER_MEASURE_BUDGETS=report`: print each budget missed, as a `FM-12 | budget missed`
 //!   line, and pass. What `stress.yml` runs.
@@ -46,7 +52,10 @@
 //!   12.7 ms);
 //! - ⌘P's first find: within [`FIRST_FIND`] (measured 0.53–0.57 s);
 //! - ⌘⇧F's first file of hits for a common query: within [`FIRST_HIT`] (measured 0.57 s);
-//! - a status read: within [`STATUS`], the reader's deadline (measured 15–23 s).
+//! - a status read: within [`STATUS`], the reader's deadline (measured 15–23 s);
+//! - a comparison's file list: within [`STATUS`], the same reader's deadline (measured
+//!   0.50–0.51 s for 1,000 changed files with their line counts at 100,000 files, beside
+//!   0.20–0.22 s for `git diff --numstat`; a file's hunks 13 ms median, #704).
 //!
 //! A rare query, or one found nowhere, is measured and held to nothing. Its whole scan takes
 //! minutes at this size, which is the index question #1153 carries, not a regression.
@@ -551,6 +560,151 @@ fn probe_status(clone: &Path) {
     );
 }
 
+/// The branch [`measure_compare`] compares: made once in the repo, 1,000 files changed.
+const REVIEWED: &str = "reviewed";
+
+/// How many files the reviewed branch changes: R3's 1,000-file diff.
+const REVIEWED_FILES: usize = 1000;
+
+/// Makes [`REVIEWED`] in `clone` unless it is there: 985 text files edited (a line inserted in
+/// the middle and one changed), 5 deleted, 5 renamed and 5 added, in one commit.
+fn reviewed_branch(clone: &Path) {
+    let mut asked = support::unsigned();
+    asked
+        .arg("-C")
+        .arg(clone)
+        .args(["rev-parse", "--verify", "--quiet", REVIEWED])
+        .env("GIT_CONFIG_GLOBAL", "/dev/null");
+    let exists = charter_core::forklock::output(&mut asked).is_ok_and(|out| out.status.success());
+    if exists {
+        return;
+    }
+    let listed = support::git(clone, &["ls-files", "-z"]);
+    let text: Vec<String> = String::from_utf8_lossy(&listed.stdout)
+        .split('\0')
+        .filter(|p| p.ends_with(".rs") || p.ends_with(".ts") || p.ends_with(".md"))
+        .take(REVIEWED_FILES)
+        .map(str::to_string)
+        .collect();
+    support::git(clone, &["checkout", "-q", "-b", REVIEWED]);
+    let (edited, rest) = text.split_at(REVIEWED_FILES - 15);
+    for path in edited {
+        let at = clone.join(path);
+        let old = std::fs::read_to_string(&at).unwrap();
+        let lines: Vec<&str> = old.lines().collect();
+        let middle = lines.len() / 2;
+        let mut new = String::new();
+        for (n, line) in lines.iter().enumerate() {
+            if n == middle {
+                new.push_str("    let reviewed = true; // inserted by the review fixture\n");
+            }
+            if n == 1 {
+                new.push_str("// changed by the review fixture\n");
+                continue;
+            }
+            new.push_str(line);
+            new.push('\n');
+        }
+        std::fs::write(&at, new).unwrap();
+    }
+    for path in &rest[..5] {
+        std::fs::remove_file(clone.join(path)).unwrap();
+    }
+    for path in &rest[5..10] {
+        support::git(clone, &["mv", path, &format!("{path}.moved")]);
+    }
+    for n in 0..5 {
+        write(
+            &clone.join(format!("reviewed/added_{n}.rs")),
+            b"fn added_by_review() {}\n",
+        );
+    }
+    support::git(clone, &["add", "-A"]);
+    support::git(clone, &["commit", "-q", "-m", "reviewed"]);
+    support::git(clone, &["checkout", "-q", "main"]);
+}
+
+fn measure_compare(plane: &Path, clone: &Path, held: &mut Held) {
+    let made = Instant::now();
+    reviewed_branch(clone);
+    println!(
+        "RC-2 | compare | the reviewed branch ready in {}",
+        ms(made.elapsed())
+    );
+    let range = format!("main...{REVIEWED}");
+    let mut git_took = Vec::new();
+    for _ in 0..3 {
+        let one = Instant::now();
+        let out = support::git(clone, &["diff", "-M", "--numstat", "-z", &range]);
+        git_took.push(one.elapsed());
+        assert!(!out.stdout.is_empty());
+    }
+    let reader = reader();
+    let branch = Branch::repo(WS, REPO);
+    let comparison = files::Comparison::Refs {
+        from: "main".into(),
+        to: REVIEWED.into(),
+        exact: false,
+    };
+    let mut listed = Vec::new();
+    let mut compared = None;
+    for _ in 0..3 {
+        let one = Instant::now();
+        let answer = files::compare(&reader, plane, branch, &comparison).expect("a comparison");
+        listed.push(one.elapsed());
+        assert_eq!(
+            answer.files.len(),
+            REVIEWED_FILES,
+            "{:?}",
+            &answer.files[..3]
+        );
+        compared = Some(answer);
+    }
+    let compared = compared.unwrap();
+    let mut rows = Vec::new();
+    for one in compared.files.iter().take(50) {
+        let started = Instant::now();
+        files::compare_file(
+            &reader,
+            plane,
+            branch,
+            &compared.sides,
+            &one.path,
+            one.from.as_deref(),
+        )
+        .expect("a file's hunks");
+        rows.push(started.elapsed());
+    }
+    let mut uncommitted = Vec::new();
+    for _ in 0..3 {
+        let one = Instant::now();
+        let answer = files::compare(&reader, plane, branch, &files::Comparison::Uncommitted)
+            .expect("a comparison");
+        uncommitted.push(one.elapsed());
+        assert!(answer.files.is_empty(), "{:?}", answer.files);
+    }
+    let say = |all: &[Duration]| all.iter().map(|d| ms(*d)).collect::<Vec<_>>().join(", ");
+    println!(
+        "RC-2 | compare | {REVIEWED_FILES} files, list with line counts: {}; git diff --numstat: \
+         {}",
+        say(&listed),
+        say(&git_took)
+    );
+    println!(
+        "RC-2 | compare | one file's hunks, 50 rows: median {}, worst {}, total {}",
+        ms(median(rows.clone())),
+        ms(*rows.iter().max().unwrap()),
+        ms(rows.iter().sum())
+    );
+    println!(
+        "RC-2 | compare | nothing uncommitted: {}",
+        say(&uncommitted)
+    );
+    for one in &listed {
+        held.within("a comparison's file list", *one, STATUS);
+    }
+}
+
 #[test]
 #[ignore = "builds a repo of 100,000 files or more; run by hand, or by stress.yml nightly"]
 fn search_on_a_large_repo_stays_within_its_budgets() {
@@ -585,6 +739,9 @@ fn search_on_a_large_repo_stays_within_its_budgets() {
     }
     if runs("status") {
         measure_status(&plane, &clone, &mut held);
+    }
+    if runs("compare") {
+        measure_compare(&plane, &clone, &mut held);
     }
     let (lines, fails) = verdict(budgets, count, &held.missed);
     for line in lines {
