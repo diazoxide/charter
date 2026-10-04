@@ -716,12 +716,23 @@ that item is withdrawn.
    to a remote host, fifty busy streams kept a control frame waiting 908 ms. The scheduler
    brings that to 73 ms, which is the 64 KiB the link itself holds.
 2. **How.** The multiplexer writes into the scheduler (`priority` in the crate), not the
-   transport. The scheduler cuts the bytes into Yamux's own frames, sends the control lane's
-   first (Yamux stream 1, the client's first), and lets the other streams take turns, one frame
-   each, as Yamux's own streams do. A go-away goes last. Past 16 MiB queued (256 streams × a
-   view's 64 KiB watermark), the multiplexer waits to write anything but the control lane, so a
-   peer that grants credit and never reads cannot grow it. A dropped link writes what it was
-   handed and shuts the transport, for at most 10 seconds.
+   transport. The scheduler cuts the bytes into Yamux's own frames and sends the control lane's
+   first: Yamux stream 1, the client's first, which the host checks is stream 1 before it takes
+   it as the lane. The session's pings and pongs go with the lane, as Yamux puts a pong ahead of
+   the streams, so the round trip Yamux measures is not the scheduler's queue. The other streams
+   take turns, one frame each, as Yamux's own streams do, and a go-away goes last.
+   - **Two bounds.** The streams' frames are bounded at 16 MiB (256 streams × a view's 64 KiB
+     watermark), and the lane's, pings and pongs included, at 2 MiB (two of its largest
+     frames). Past either bound, the scheduler takes no next frame of any kind until it has made
+     room, and that includes a frame with no body. That is the transport's back-pressure,
+     passed on: Yamux stops writing, and stops reading once a pong or a window update waits.
+     So a peer that grants credit and never reads, or floods pings, cannot grow either queue.
+   - **What that costs.** Past a bound, **everything waits, the lane too.** Yamux has one
+     frame on its way at a time, so it cannot hand over the lane's frame while another is
+     stuck. In use the bounds are not reached, since the windows and watermarks hold what is
+     in flight well under them.
+   - **A dropped link** writes what it was handed and shuts the transport, for at most
+     10 seconds.
 3. **The wire is unchanged, and so is the version.** Every frame is Yamux's, whole, and each
    stream's frames keep their order. Only frames of different streams are reordered, and Yamux
    allows that, since each stream has its own window and sequence. A peer that does not schedule

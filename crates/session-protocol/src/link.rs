@@ -38,7 +38,7 @@ use tokio_util::codec::{Framed, LengthDelimitedCodec};
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 
 use crate::auth::{self, Credential, Credentials, Scope};
-use crate::priority::Prioritized;
+use crate::priority::{CONTROL_LANE_STREAM, Prioritized};
 use crate::version::{self, Refused, Speaks, Version};
 
 /// The largest frame the control lane carries. A command or an event is small; a frame this
@@ -58,7 +58,7 @@ pub const CONTROL_LANE: u8 = 0x00;
 pub enum LinkError {
     #[error(transparent)]
     Refused(#[from] Refused),
-    /// The first stream the client opened is not the control lane.
+    /// The first stream the client opened is not the control lane, or not Yamux's stream 1.
     #[error("the client's first stream is not the control lane")]
     NoControlLane,
     #[error("the link is closed")]
@@ -227,6 +227,9 @@ pub async fn connect<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
         let io = auth::present_unbounded(io, scope, credential).await?;
         let (opener, inbound) = drive(io, yamux::Mode::Client);
         let mut lane = opener.open().await?;
+        if lane.get_ref().id().val() != CONTROL_LANE_STREAM {
+            return Err(LinkError::NoControlLane);
+        }
         lane.write_all(&[CONTROL_LANE]).await?;
         lane.flush().await?;
         Ok(Link {
@@ -335,6 +338,9 @@ pub async fn connect_as_a_device<S: AsyncRead + AsyncWrite + Unpin + Send + 'sta
         let (version, io) = version::offer_unbounded(io, &speaks).await?;
         let (opener, inbound) = drive(io, yamux::Mode::Client);
         let mut lane = opener.open().await?;
+        if lane.get_ref().id().val() != CONTROL_LANE_STREAM {
+            return Err(LinkError::NoControlLane);
+        }
         lane.write_all(&[CONTROL_LANE]).await?;
         lane.flush().await?;
         Ok(Link {
@@ -357,7 +363,9 @@ async fn take_the_lane<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
 ) -> Result<Link, LinkError> {
     let (opener, mut inbound) = drive(io, yamux::Mode::Server);
     let mut lane = inbound.accept().await?;
-    if lane.read_u8().await? != CONTROL_LANE {
+    // The lane is the client's first stream, Yamux's stream 1, which the link sends first
+    // (`crate::priority`): no other stream may stand in its place.
+    if lane.get_ref().id().val() != CONTROL_LANE_STREAM || lane.read_u8().await? != CONTROL_LANE {
         return Err(LinkError::NoControlLane);
     }
     Ok(Link {

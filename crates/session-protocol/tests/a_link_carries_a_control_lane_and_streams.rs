@@ -156,3 +156,49 @@ async fn a_link_the_multiplexer_gave_up_on_says_why() {
         Ok(_) => panic!("a stream from bytes that are not Yamux"),
     }
 }
+
+/// The control lane is the client's first stream, which Yamux numbers 1, and the link sends its
+/// frames first. A client whose first stream is another is refused, so no other stream can
+/// stand where the lane does.
+#[tokio::test]
+async fn a_lane_that_is_not_the_clients_stream_1_is_refused() {
+    use futures::FutureExt;
+    use tokio_util::compat::{FuturesAsyncWriteCompatExt, TokioAsyncReadCompatExt};
+
+    let (a, b) = duplex(64 * 1024);
+    let host = tokio::spawn(link::serve_as_a_device(
+        b,
+        v1(),
+        link::ProvenDevice::stand_in(),
+    ));
+    let (_, io) = charter_session_protocol::version::offer(a, &v1())
+        .await
+        .unwrap();
+    let mut connection =
+        yamux::Connection::new(io.compat(), yamux::Config::default(), yamux::Mode::Client);
+    // Stream 1 is opened and never written to, so the host never hears of it; stream 3 is
+    // written to first, as if it were the lane.
+    let (unused, second) = std::future::poll_fn(|cx| {
+        let first = futures::ready!(connection.poll_new_outbound(cx)).unwrap();
+        let second = futures::ready!(connection.poll_new_outbound(cx)).unwrap();
+        std::task::Poll::Ready((first, second))
+    })
+    .await;
+    assert_eq!(second.id().val(), 3);
+    let driving = tokio::spawn(async move {
+        std::future::poll_fn(|cx| connection.poll_next_inbound(cx).map(|_| ())).await;
+        connection
+    });
+    let mut lane = second.compat_write();
+    lane.write_all(&[link::CONTROL_LANE]).await.unwrap();
+    lane.flush().await.unwrap();
+
+    let refused = host.await.unwrap();
+    assert!(
+        matches!(refused, Err(LinkError::NoControlLane)),
+        "{:?}",
+        refused.map(|l| l.scope())
+    );
+    drop((unused, lane));
+    let _ = driving.now_or_never();
+}
