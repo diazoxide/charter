@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791170442562,
+  "lastUpdate": 1791172843415,
   "repoUrl": "https://github.com/diazoxide/charter",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -1806,6 +1806,48 @@ window.BENCHMARK_DATA = {
             "value": 102.254574,
             "unit": "ms",
             "extra": "median of 5 runs: 101.212, 101.277, 102.255, 102.486, 103.160 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "2a02e598adfb3101d158a6e950501f425034a750",
+          "message": "HY-8 review fold-ins: every #464 item accounted for, permission tests restore their mode\n\nRe-measuring the item-1 functions the first commit did not name turned\nup survivors that an earlier pass had wrongly read as caught (a broken\nselection in the local helper). They are fixed here.\n\nNew tests (tests/a_pr_mode_save_keeps_one_pr_open_from_the_save_branch.rs\nunless named):\n- still_holds `&&`→`||` ×2: a_block_clears_once_the_plane_is_moved_off_\n  the_commit_it_is_about\n- known_pr_url → None / delete `!`: the known PR stays on the standing\n  through a failed save (in a_pr_whose_state_the_forge_cannot_give_…)\n- knows_a_pr → true: a_clean_request_mode_plane_with_no_pr_known_has_\n  nothing_to_save_or_ask\n- tip_is_in_head → false: a_save_branch_tip_this_clone_pushed_but_lost_\n  the_note_of_is_pushed_over\n- describe `>`→`<`: a_request_carrying_more_saves_than_it_lists_says_\n  how_many_earlier_ones_it_left_out\n- push's kept-branch `!=`→`==` and `delete field branch`: a_save_branch_\n  changed_by_hand_is_pushed_and_given_its_own_pr\n- settle's merged-commit `&&`→`||`: a_merge_the_forge_names_at_a_commit_\n  not_on_the_target_blocks_the_plane\n- plane::place delete `!` (CHARTER_ROOT): a `place` assertion added to\n  HY-7's a_pinned_plane_is_the_one_acted_on_and_an_empty_home_is_no_home\n  in the steering test (one CHARTER_ROOT child, not two)\n- push_save_branch's stale-lease `&&`→`||`: a_push_the_remote_refuses_for_\n  its_own_reason_asks_it_nothing_more and a_push_the_remote_refuses_keeps_\n  the_remotes_reason_when_the_remote_then_goes_away (planegit/prsave/\n  tests.rs, from the reviewer's proof tests). Under the mutant a refused\n  push runs an extra ls-remote, and when that fails the remote's own reason\n  is replaced by \"could not read from remote\".\n- push_save_branch's gone-branch case: the `!expected.is_empty()` guard is\n  gone (D-HY8g, amended), so its mutant no longer exists. The arm that\n  replaced it, `None => Some(String::new())`, is pinned by a_save_branch_\n  deleted_on_the_remote_while_a_first_push_was_on_its_way_is_pushed_afresh:\n  the first push's absent lease is refused, the listing finds the branch\n  gone (the listing's own upload-pack deletes it first), and the second\n  push lands. That test asserts 2 pushes, 1 ls-remote and Ok, and it fails\n  under `delete match arm None` and both `delete !` mutants.\n\nRecorded as equivalent in .cargo/mutants.toml, with the proof at the site:\n- describe's `[one] if total == 1` → true: one subject of the newest 50\n  is a range of one, and `total` falls back to the subjects' count.\n\nItem-1 functions re-measured and caught, with the test that catches them:\n- Claim::within: a_claim_asked_for_within_a_bound_is_had_once_its_holder_\n  lets_go_inside_it. Its `+`→`*` and `Some(Default)` do not compile.\n- planegit summary: a_message_naming_every_group_it_has_counts_none_as_more\n- signer_said: the_signers_words_are_kept_and_gits_progress_hints_and_\n  bare_prefixes_are_not\n- Stage::word: a_stage_is_named_by_the_word_the_window_reads\n- unpushed: a_commit_left_unpushed_is_pushed_by_the_next_save_even_with_\n  nothing_new_to_commit. Its two let-chain `||` mutants do not compile.\n- still_holds → true/false, `!=`: every_pr_mode_save_is_run_against_a_\n  stand_in_forge, and alerts::tests::a_memory_commit_never_pushed_is_red_\n  and_one_awaiting_a_pull_request_is_not\n- tip_is_in_head → true, describe → constants, `==`, `>=`: the PR-mode suite\n- reposave summary: a_generated_message_lists_the_files_and_counts_the_rest\n  and a_generated_message_naming_exactly_as_many_files_as_it_shows_counts_\n  none_as_more\n- nobody_working (its non-empty mutants): autosave::tests::quitting_commits_\n  what_a_repo_with_auto_save_on_had_changed. `vec![]` was already excluded\n  as equivalent.\n- Standing::worth_saving: the autosave::tests quit and quiet-period tests,\n  and a_repo_is_worth_saving_for_changed_files_a_block_or_an_unpushed_\n  commit_and_never_when_off\n- Standing::fingerprint: the_fingerprint_moves_with_the_head_the_changed_\n  count_and_the_unpushed_count_only\n\nWhat the remaining TIMEOUTs came to:\n- plane resolve → Ok(Default): caught, by doctor::tests::a_plane_without_\n  the_report_rule_is_flagged_and_fix_adds_it.\n- plane place delete `!`: a survivor only a steered child can see, now\n  caught (above).\n- personaverbs/stats hh_mm_ss_ff `+=`→`*=` names four sites:\n  - three are caught: recorded::an_hour_alone_is_two_digits_as_\n    fromisoformat_requires, recorded::an_offset_of_hours_minutes_or_\n    seconds_moves_the_instant_and_not_the_printed, and tests::a_time_is_\n    refused_exactly_where_fromisoformat_refuses_it;\n  - the fourth, the digit-skip loop after six fraction digits, was a\n    GENUINE HANG: `p *= 1` never advanced, and only a test's timeout could\n    catch it (50 minutes locally before I stopped it). The loop is now one\n    count of the remaining digits, which reads the same input the same way;\n    its `+=` mutants fail tests::a_time_is_refused_exactly_where_\n    fromisoformat_refuses_it instead of hanging, so no exclusion is needed.\n- workspaces Workspace::manifest_text NotFound → true: a survivor, now\n  caught (first commit).\n\nThe flaky index test #464's comment named\n(reading_where_unsaved_work_sits_never_writes_the_index_a_save_needs) was\nsettled by #527 (1f864a0), which made reading a plane never write its\nindex.\n\nThe two permission tests restore their directory's mode through a drop\nguard, so a failing assertion cannot leave a mode-000/555 directory behind,\nand return early as root (rustix geteuid), which ignores the mode:\n- doctor git_auth_names_the_workspaces_folder_itself_when_it_cannot_be_listed\n- a_merged_pr_the_plane_cannot_move_onto_yet_is_said_in_the_saves_journal,\n  now `#[cfg(unix)]`\n\nDecided in implementation:\n- D-HY8a: Base the work on the last full nightly that finished its shards\n  (run 36308723145, 2026-09-27) plus local runs. The 2026-10-04 nightly\n  tested nothing (red baseline, fixed in d15c629), and the diff nightlies\n  do not cover these files.\n- D-HY8b: A mutant counts as caught when a test related to it fails under\n  it, since that implies the full suite fails. A run whose only failure is\n  an unrelated test does not count as caught (that is what misled the\n  earlier pass). A mutant that survives the targeted tests is re-run\n  against the lib tests and the relevant integration tests before a test\n  is written.\n- D-HY8c: Write behaviour tests rather than equivalence entries for every\n  live survivor. The prsave field deletions are pinned through\n  plane-push.json and the journal, which doctor and the next save read.\n  Exclusions are only for proven equivalents, with the proof at the site.\n- D-HY8d: Keep #489's charter-core steering integration test for the\n  cli-only mutants. Rejected: adding charter-cli as a mutants test package\n  (it runs the CLI suite for every mutant); and recording them as known\n  (that leaves real gaps).\n- D-HY8e: Settle's waiting path is reached with a read-only directory\n  blocking the move, because `reset --keep` overwrites ignored files. This\n  test and doctor's unreadable-workspaces test are unix-only and skip\n  themselves as root. Both restore the mode on drop.\n- D-HY8f: Survivors next to #464's lists but outside them go to #480\n  (HY-7) as one checklist comment, not a new issue.\n- D-HY8g (dispatcher), amended after review: a save branch that is gone\n  from the remote when charter lists it, after a push with nothing expected\n  was refused as stale, IS pushed again with an absent lease, as every gone\n  branch is (the contract on push_save_branch). The first ruling (block\n  instead) was reversed for these reasons:\n  - that path runs only when this clone never pushed the branch, so it has\n    no request of its own, and settle answers Nothing; the next save would\n    recreate the branch anyway;\n  - recording Blocked stops auto-save over a race that has passed;\n  - it contradicted the documented contract.\n  The block message added for it is removed.\n- D-HY8h: the hh_mm_ss_ff hang is removed at its source (a count instead of\n  a step loop) rather than excluded. An exclusion names all four `+=`\n  sites, three of them caught by tests.\n\nCloses #464\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-05T07:57:17+04:00",
+          "tree_id": "9bef8dec55f7c05140fbe4b525c9e6953af45ba2",
+          "url": "https://github.com/diazoxide/charter/commit/2a02e598adfb3101d158a6e950501f425034a750"
+        },
+        "date": 1791172842940,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.530035,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.509, 0.519, 0.530, 0.540, 0.551 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.558281,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.529, 16.546, 16.558, 16.686, 16.737 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 103.62584799999999,
+            "unit": "ms",
+            "extra": "median of 5 runs: 102.598, 102.861, 103.626, 104.104, 105.994 ms"
           }
         ]
       }
