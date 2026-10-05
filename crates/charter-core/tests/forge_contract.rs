@@ -47,7 +47,7 @@ mod scene;
 use scene::{MERGE, SAVE, SHA, Scene};
 
 /// Every case, by the seam method it covers. The parity test compares this with the traits.
-const CASES: [&str; 18] = [
+const CASES: [&str; 19] = [
     "owned",
     "about",
     "reachable",
@@ -66,12 +66,13 @@ const CASES: [&str; 18] = [
     "ci_word",
     "support",
     "create",
+    "read",
 ];
 
 /// The cases the live run does not run, each with why and the ticket that will run it. Each one
 /// would merge or queue the fixture's one open request, which the read cases need open; running
 /// them needs a request opened afresh for each run.
-const NOT_LIVE: [(&str, &str); 3] = [
+const NOT_LIVE: [(&str, &str); 4] = [
     (
         "request_auto_merge",
         "auto-merge would land the fixture's open request; it needs a request opened per run (#712)",
@@ -83,6 +84,11 @@ const NOT_LIVE: [(&str, &str); 3] = [
     (
         "enqueue_at",
         "it needs a merge queue or train on the fixture, and a request opened per run (#712)",
+    ),
+    (
+        "read",
+        "it needs a fixture issue with a type, a parent, a child, a blocker, a closing request \
+         and a board with a status and an iteration (#742)",
     ),
 ];
 
@@ -601,6 +607,69 @@ mod cases {
         }
         spent(&over);
     }
+
+    pub fn read(kind: &str, how: How) {
+        let Some(over) = over(kind, "read", how) else {
+            return;
+        };
+        let scene = &over.scene;
+        let item = over
+            .backend
+            .read(&over.caller, &scene.path("api"), 12)
+            .unwrap();
+        // What both forges answer: the issue, its fields, and who it is assigned to.
+        assert_eq!(item.key.as_str(), scene.issue_key(12));
+        assert_eq!(item.url, scene.issue_url(12));
+        assert_eq!(item.title, live::ISSUE_TITLE);
+        assert_eq!(item.kind, work::Kind::Issue);
+        assert_eq!(item.state, work::State::Closed);
+        assert_eq!(
+            item.milestone.as_ref().map(|m| m.title.as_str()),
+            Some("v1")
+        );
+        assert_eq!(item.assignees, ["octocat"]);
+        let key = |number: u64| work::TrackerKey::parse(&scene.issue_key(number)).unwrap();
+        match kind {
+            "github" => {
+                assert_eq!(item.labels, ["ws:alpha"]);
+                assert_eq!(item.issue_type.as_deref(), Some("Bug"));
+                assert_eq!(item.closed_as, Some(work::ClosedAs::Completed));
+                assert_eq!(
+                    item.relations,
+                    [
+                        work::Relation::Parent(key(3)),
+                        work::Relation::Child(key(14)),
+                        work::Relation::BlockedBy(key(11)),
+                        work::Relation::Blocks(key(15)),
+                        work::Relation::ClosedBy(Pr {
+                            number: 20,
+                            url: scene.request_url(20),
+                        }),
+                    ]
+                );
+                assert_eq!(item.placements.len(), 1);
+                assert_eq!(item.placements[0].board_title, "Roadmap");
+                assert_eq!(item.placements[0].status.as_deref(), Some("Done"));
+                let sprint = item.iteration.as_ref().expect("the board's iteration");
+                assert_eq!(sprint.title, "Sprint 3");
+                assert_eq!(
+                    (sprint.start, sprint.end),
+                    (
+                        chrono::NaiveDate::from_ymd_opt(2026, 10, 5),
+                        chrono::NaiveDate::from_ymd_opt(2026, 10, 18)
+                    )
+                );
+            }
+            _ => {
+                assert_eq!(item.labels, ["charter::ws::alpha"]);
+                // FW-6b (#734) maps the rest of GitLab's issue; until then it is left empty, and
+                // GitLab keeps no close reason at all.
+                assert_eq!(item.closed_as, None);
+                assert!(item.relations.is_empty(), "{:?}", item.relations);
+            }
+        }
+        spent(&over);
+    }
 }
 
 /// One module per forge, holding every case of [`CASES`]. `ignore = "<why>"` ignores each.
@@ -720,6 +789,12 @@ macro_rules! contract {
             fn create_opens_an_issue_and_names_it_by_its_tracker_key_with_its_forge_ref_beside() {
                 charter_core::unsteered!();
                 super::cases::create(stringify!($forge), super::How::$how);
+            }
+            #[test]
+            $(#[$attr])?
+            fn read_maps_an_issue_onto_the_work_model_with_its_relations_and_boards() {
+                charter_core::unsteered!();
+                super::cases::read(stringify!($forge), super::How::$how);
             }
         }
     };
@@ -1139,8 +1214,8 @@ mod network_log {
             // Exactly the REST calls the recordings hold, so a recording that lost one, or a
             // reader that skipped some, fails here rather than checking less.
             let expected = match kind {
-                "github" => 15,
-                _ => 20,
+                "github" => 18,
+                _ => 21,
             };
             assert_eq!(paths.len(), expected, "{kind}: the recorded REST calls");
             for path in paths {

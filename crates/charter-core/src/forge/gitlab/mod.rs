@@ -248,42 +248,75 @@ impl WorkItems for GitLab {
             fields,
         );
         let issue = self.0.ask(caller, &call, &doing)?;
-        let url = issue["web_url"].as_str().unwrap_or_default().to_string();
-        let iid = issue["iid"].as_u64();
-        // The path as GitLab spells it, from its own full reference: `group/sub/repo#12`.
-        let full = issue["references"]["full"].as_str().unwrap_or_default();
-        let place = full.rsplit_once('#').map(|(place, _)| place);
-        let host = crate::work::key::page_of(&url).map(|(host, _)| host);
-        let (Some(iid), Some(place), Some(host)) = (iid, place, host) else {
-            return Err(ForgeError::new(format!(
-                "{doing}: GitLab's answer names no page and reference charter can key the issue by"
-            )));
-        };
-        let key = crate::work::TrackerKey::gitlab_issue(&host, place, iid)
-            .map_err(|why| ForgeError::new(format!("{doing}: {why}")))?;
-        // GitHub's answer without a title is refused as malformed; GitLab's is read field by
-        // field, so a title it leaves out is the one charter sent.
-        let title = issue["title"].as_str().unwrap_or(&new.title);
-        let mut item = crate::work::WorkItem::new(key, crate::work::Kind::Issue, title);
-        item.forge_ref = issue["id"].as_u64().map(|id| ForgeRef(id.to_string()));
-        item.url = url;
-        item.state = crate::work::State::of_forge(issue["state"].as_str().unwrap_or_default());
-        item.labels = issue["labels"]
+        item_of(&issue, &new.title, &doing)
+    }
+
+    fn read(
+        &self,
+        caller: &Caller,
+        path: &str,
+        number: u64,
+    ) -> Result<crate::work::WorkItem, ForgeError> {
+        let doing = format!("reading issue #{number} of {path}");
+        let call = Call::get(
+            format!("projects/{}/issues/{number}", quote(path)),
+            LIST_TIMEOUT,
+        );
+        let issue = self.0.ask(caller, &call, &doing)?;
+        let mut item = item_of(&issue, "", &doing)?;
+        // FW-6b (#734) maps the rest of GitLab's issue: type, iteration, child items, links.
+        item.assignees = issue["assignees"]
             .as_array()
             .into_iter()
             .flatten()
-            .filter_map(|l| l.as_str().map(str::to_string))
+            .filter_map(|a| a["username"].as_str().map(str::to_string))
             .collect();
-        let milestone = &issue["milestone"];
-        item.milestone = milestone["title"].as_str().map(|title| {
-            crate::work::Milestone::of_forge(
-                milestone["id"].as_u64().map(|id| ForgeRef(id.to_string())),
-                title,
-                milestone["due_date"].as_str(),
-            )
-        });
         Ok(item)
     }
+}
+
+/// GitLab's answer for an issue, in the neutral model: its key, ids, title, state, labels and
+/// milestone. A title it leaves out is `sent`, the one charter sent.
+fn item_of(
+    issue: &serde_json::Value,
+    sent: &str,
+    doing: &str,
+) -> Result<crate::work::WorkItem, ForgeError> {
+    let url = issue["web_url"].as_str().unwrap_or_default().to_string();
+    let iid = issue["iid"].as_u64();
+    // The path as GitLab spells it, from its own full reference: `group/sub/repo#12`.
+    let full = issue["references"]["full"].as_str().unwrap_or_default();
+    let place = full.rsplit_once('#').map(|(place, _)| place);
+    let host = crate::work::key::page_of(&url).map(|(host, _)| host);
+    let (Some(iid), Some(place), Some(host)) = (iid, place, host) else {
+        return Err(ForgeError::new(format!(
+            "{doing}: GitLab's answer names no page and reference charter can key the issue by"
+        )));
+    };
+    let key = crate::work::TrackerKey::gitlab_issue(&host, place, iid)
+        .map_err(|why| ForgeError::new(format!("{doing}: {why}")))?;
+    // GitHub's answer without a title is refused as malformed; GitLab's is read field by
+    // field, so a title it leaves out is the one charter sent.
+    let title = issue["title"].as_str().unwrap_or(sent);
+    let mut item = crate::work::WorkItem::new(key, crate::work::Kind::Issue, title);
+    item.forge_ref = issue["id"].as_u64().map(|id| ForgeRef(id.to_string()));
+    item.url = url;
+    item.state = crate::work::State::of_forge(issue["state"].as_str().unwrap_or_default());
+    item.labels = issue["labels"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|l| l.as_str().map(str::to_string))
+        .collect();
+    let milestone = &issue["milestone"];
+    item.milestone = milestone["title"].as_str().map(|title| {
+        crate::work::Milestone::of_forge(
+            milestone["id"].as_u64().map(|id| ForgeRef(id.to_string())),
+            title,
+            milestone["due_date"].as_str(),
+        )
+    });
+    Ok(item)
 }
 
 impl Requests for GitLab {

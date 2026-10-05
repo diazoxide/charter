@@ -43,8 +43,21 @@ pub struct WorkItem {
     pub url: String,
     pub title: String,
     pub kind: Kind,
+    /// The tracker's own type for the item, by its name: a GitHub organisation's issue type
+    /// (`Bug`, `Feature`), GitLab's work item type. It is carried beside [`Kind`], never mapped
+    /// onto it: a tracker's types are its owner's to name, and `Kind` is only what charter
+    /// draws differently.
+    pub issue_type: Option<String>,
     pub state: State,
+    /// Why a closed item was closed, when its tracker says. `None` while it is open.
+    pub closed_as: Option<ClosedAs>,
     pub milestone: Option<Milestone>,
+    /// The iteration (sprint) the item is planned in. On GitHub it is a Projects v2 board's
+    /// iteration field, the first board in the tracker's order that gives one.
+    pub iteration: Option<Iteration>,
+    /// The tracker's own boards that hold the item, and its status on each: GitHub's Projects
+    /// v2. A board here is the tracker's, never charter's own [`board::Board`], which is a view.
+    pub placements: Vec<Placement>,
     /// Label names, as the tracker spells them.
     pub labels: Vec<String>,
     /// Assignees by the tracker's own login.
@@ -55,7 +68,8 @@ pub struct WorkItem {
 
 impl WorkItem {
     /// An item of `kind` with only its key and title known: open, with no forge id, page,
-    /// milestone, label, assignee or relation. A backend fills in the rest.
+    /// type, milestone, iteration, board, label, assignee or relation. A backend fills in the
+    /// rest.
     pub fn new(key: TrackerKey, kind: Kind, title: impl Into<String>) -> WorkItem {
         WorkItem {
             key,
@@ -63,8 +77,12 @@ impl WorkItem {
             url: String::new(),
             title: title.into(),
             kind,
+            issue_type: None,
             state: State::Open,
+            closed_as: None,
             milestone: None,
+            iteration: None,
+            placements: Vec::new(),
             labels: Vec::new(),
             assignees: Vec::new(),
             relations: Vec::new(),
@@ -114,6 +132,102 @@ impl State {
     }
 }
 
+/// Why an item was closed, as GitHub's `state_reason` says it. A tracker that keeps no reason
+/// answers none ([`crate::forge::Capability::CloseReasons`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ClosedAs {
+    /// The work was done.
+    Completed,
+    /// It will not be done.
+    NotPlanned,
+    /// Another item holds it.
+    Duplicate,
+}
+
+impl ClosedAs {
+    /// A forge's reason word, in any case. A word that is no close reason (`reopened`, which
+    /// GitHub gives an open item) or one charter does not know is none.
+    pub fn of_forge(word: &str) -> Option<ClosedAs> {
+        match word.to_ascii_lowercase().as_str() {
+            "completed" => Some(ClosedAs::Completed),
+            "not_planned" => Some(ClosedAs::NotPlanned),
+            "duplicate" => Some(ClosedAs::Duplicate),
+            _ => None,
+        }
+    }
+}
+
+/// An iteration, a sprint: a span of days the item is planned in. Its id on the forge travels
+/// beside its title, as a milestone's does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Iteration {
+    pub forge_ref: Option<ForgeRef>,
+    pub title: String,
+    /// Its first day.
+    pub start: Option<chrono::NaiveDate>,
+    /// Its last day, inclusive.
+    pub end: Option<chrono::NaiveDate>,
+}
+
+impl Iteration {
+    /// An iteration from a forge that gives its first and last days, as GitLab does
+    /// (`start_date`, `due_date`). Each is read by its date alone; one that is not a date is
+    /// none.
+    pub fn of_forge(
+        forge_ref: Option<ForgeRef>,
+        title: impl Into<String>,
+        start: Option<&str>,
+        end: Option<&str>,
+    ) -> Iteration {
+        Iteration {
+            forge_ref,
+            title: title.into(),
+            start: start.and_then(day_of),
+            end: end.and_then(day_of),
+        }
+    }
+
+    /// An iteration from a forge that gives its first day and how many days it lasts, as a
+    /// GitHub Projects v2 iteration field does (`startDate`, `duration`).
+    pub fn lasting(
+        forge_ref: Option<ForgeRef>,
+        title: impl Into<String>,
+        start: &str,
+        days: u32,
+    ) -> Iteration {
+        let start = day_of(start);
+        let end = start.and_then(|first| {
+            let more = days.checked_sub(1)?;
+            first.checked_add_days(chrono::Days::new(u64::from(more)))
+        });
+        Iteration {
+            forge_ref,
+            title: title.into(),
+            start,
+            end,
+        }
+    }
+}
+
+/// One of the tracker's own boards that holds an item, and the item's status there: a GitHub
+/// Projects v2 board and its `Status` field. FW-9 may group charter's board by the status.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Placement {
+    /// The board's id on the forge.
+    pub board: ForgeRef,
+    pub board_title: String,
+    pub board_url: String,
+    /// The item's status on that board, as the board names the option; `None` when it has
+    /// none set, or the board has no status field.
+    pub status: Option<String>,
+}
+
+/// A day from a forge's date or timestamp, read by its first ten characters.
+fn day_of(text: &str) -> Option<chrono::NaiveDate> {
+    let day = text.get(..10)?;
+    chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d").ok()
+}
+
 /// A milestone, as the item names it. The forge's own id for it travels beside its title, as an
 /// item's [`ForgeRef`] does, so two milestones that share a title in different repos or groups
 /// are told apart.
@@ -136,10 +250,7 @@ impl Milestone {
         title: impl Into<String>,
         due: Option<&str>,
     ) -> Milestone {
-        let due = due.and_then(|text| {
-            let day = text.get(..10)?;
-            chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d").ok()
-        });
+        let due = due.and_then(day_of);
         Milestone {
             forge_ref,
             title: title.into(),
@@ -202,6 +313,31 @@ mod tests {
         for open in ["open", "opened", "OPEN", "locked", ""] {
             assert_eq!(State::of_forge(open), State::Open, "{open:?}");
         }
+    }
+
+    #[test]
+    fn a_close_reason_is_read_from_a_forges_word_in_any_case() {
+        assert_eq!(ClosedAs::of_forge("completed"), Some(ClosedAs::Completed));
+        assert_eq!(
+            ClosedAs::of_forge("NOT_PLANNED"),
+            Some(ClosedAs::NotPlanned)
+        );
+        assert_eq!(ClosedAs::of_forge("duplicate"), Some(ClosedAs::Duplicate));
+        for none in ["reopened", "", "won't fix"] {
+            assert_eq!(ClosedAs::of_forge(none), None, "{none:?}");
+        }
+    }
+
+    #[test]
+    fn an_iteration_that_lasts_fourteen_days_ends_on_its_fourteenth() {
+        let day = |d| chrono::NaiveDate::from_ymd_opt(2026, 10, d);
+        let sprint = Iteration::lasting(None, "Sprint 3", "2026-10-05", 14);
+        assert_eq!((sprint.start, sprint.end), (day(5), day(18)));
+        let gitlab = Iteration::of_forge(None, "Sprint 3", Some("2026-10-05"), Some("2026-10-18"));
+        assert_eq!(gitlab, sprint);
+        let undated = Iteration::lasting(None, "Sprint 3", "soon", 14);
+        assert_eq!((undated.start, undated.end), (None, None));
+        assert_eq!(Iteration::lasting(None, "x", "2026-10-05", 0).end, None);
     }
 
     #[test]

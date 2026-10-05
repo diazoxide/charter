@@ -1,0 +1,21 @@
+{
+  "source": "GitLab 19.4 REST API docs (gitlab-org/gitlab 19-4-stable-ee, doc/api), issues.md: Single project issue",
+  "exchanges": [
+    {
+      "call": {
+        "endpoint": {
+          "rest": {
+            "method": null,
+            "path": "projects/acme%2Fapi/issues/12"
+          }
+        },
+        "fields": []
+      },
+      "reply": {
+        "code": 0,
+        "out": "{\"id\": 84012, \"iid\": 12, \"project_id\": 1, \"title\": \"Port the picker\", \"state\": \"closed\", \"labels\": [\"charter::ws::alpha\"], \"assignees\": [{\"id\": 1, \"username\": \"octocat\", \"name\": \"Octo Cat\"}], \"milestone\": {\"id\": 501, \"iid\": 1, \"title\": \"v1\", \"state\": \"active\", \"due_date\": \"2026-10-31\"}, \"web_url\": \"https://gitlab.com/acme/api/-/issues/12\", \"references\": {\"short\": \"#12\", \"relative\": \"#12\", \"full\": \"acme/api#12\"}}",
+        "err": ""
+      }
+    }
+  ]
+}
