@@ -128,13 +128,15 @@ pub struct RecentPlane {
 pub struct Recents {
     /// Most recently opened first.
     pub planes: Vec<RecentPlane>,
-    /// One line per row charter would not offer: a plane that has moved or gone, and an entry
-    /// the store itself would not take back.
+    /// One line per entry the store itself would not take back.
     ///
     /// **Never an error, and never a dialog.** ADR 0034: the file is a convenience and the
     /// plane is the truth, so a launch that showed a modal about a memory stick that is not
     /// plugged in would be worse than the thing it was reporting.
     pub dropped: Vec<String>,
+    /// The remembered projects that have moved or gone, each with Locate… and Forget (NO-5),
+    /// under the same rule: a line, never an error.
+    pub gone: Vec<GoneProject>,
     /// Why this machine remembers nothing at all, in charter's own words — a platform charter
     /// keeps no store on (ADR 0031: `0600` has no expression on Windows, so the guard refuses
     /// rather than degrades), or a store charter would not read. Null when it does remember.
@@ -154,8 +156,33 @@ pub struct Restore {
     /// as its tabs were, and which of them was in front. Empty when there is nothing to put
     /// back.
     pub windows: Vec<RestoreWindow>,
-    /// One line per project charter would not take back.
+    /// One line per window entry the store itself would not take back.
     pub dropped: Vec<String>,
+    /// The projects the last quit had open that have moved or gone, each with Locate… and
+    /// Forget (NO-5).
+    pub gone: Vec<GoneProject>,
+}
+
+/// A remembered project that is no longer a project where it was (NO-5, #1237): what the
+/// window offers **Locate…** and **Forget** for. Never acted on by charter itself, because a
+/// disk that is unplugged may come back.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct GoneProject {
+    /// The path the store holds it under: what Locate… and Forget are handed back.
+    pub path: String,
+    /// The line the window draws: the path, short, and why it is gone.
+    pub said: String,
+}
+
+impl GoneProject {
+    /// `plane`, gone for `why` ([`machine::still_a_plane`]'s words).
+    pub fn of(plane: &std::path::Path, why: &str) -> Self {
+        let path = plane.display().to_string();
+        Self {
+            said: format!("{} {why}", charter_core::shown::short(&path)),
+            path,
+        }
+    }
 }
 
 /// One window a cold launch puts back (ADR 0033, amended 2026-09-26).
@@ -274,11 +301,12 @@ fn offer(loaded: machine::Loaded) -> Recents {
     // What the store itself would not take back — a path that is not absolute, one with a
     // `..` in it, one holding a NUL. Already dropped with a reason by the read; carried
     // through so the opener can say a row went rather than silently showing one fewer.
-    let mut dropped: Vec<String> = loaded.dropped.iter().map(ToString::to_string).collect();
+    let dropped: Vec<String> = loaded.dropped.iter().map(ToString::to_string).collect();
+    let mut gone = Vec::new();
     for entry in loaded.store.recents {
         let shown = entry.plane.display().to_string();
         match machine::still_a_plane(&entry.plane) {
-            Err(why) => dropped.push(format!("{} {why}", charter_core::shown::short(&shown))),
+            Err(why) => gone.push(GoneProject::of(&entry.plane, &why)),
             Ok(()) => planes.push(RecentPlane {
                 name: entry
                     .plane
@@ -294,6 +322,7 @@ fn offer(loaded: machine::Loaded) -> Recents {
     Recents {
         planes,
         dropped,
+        gone,
         forgetful: loaded.unreadable,
     }
 }
@@ -378,6 +407,7 @@ pub async fn planes_to_restore(
         return Ok(Restore {
             windows: Vec::new(),
             dropped: Vec::new(),
+            gone: Vec::new(),
         });
     }
     // One gated open, no `stat` of anything it names: safe on the thread that asked.
@@ -398,6 +428,7 @@ pub async fn planes_to_restore(
                 })
                 .collect(),
             dropped: back.dropped,
+            gone: back.gone,
         }
     })
     .await
@@ -994,11 +1025,17 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![&there.display().to_string()],
         );
-        assert_eq!(offered.dropped.len(), 1, "{:?}", offered.dropped);
+        assert!(offered.dropped.is_empty(), "{:?}", offered.dropped);
+        assert_eq!(offered.gone.len(), 1, "{:?}", offered.gone);
+        assert_eq!(
+            offered.gone[0].path,
+            gone.display().to_string(),
+            "the path Locate… and Forget are handed back"
+        );
         assert!(
-            offered.dropped[0].contains("no longer there"),
+            offered.gone[0].said.contains("no longer there"),
             "{}",
-            offered.dropped[0]
+            offered.gone[0].said
         );
     }
 
@@ -1012,9 +1049,9 @@ mod tests {
 
         assert!(offered.planes.is_empty());
         assert!(
-            offered.dropped[0].contains(charter_core::plane::MANIFEST),
+            offered.gone[0].said.contains(charter_core::plane::MANIFEST),
             "{}",
-            offered.dropped[0]
+            offered.gone[0].said
         );
     }
 

@@ -3,6 +3,7 @@ import { commands, type ForgeRow, type Recents, type TemplateChoice } from "./bi
 import type { ForgeAsk } from "./ForgeQuestion";
 import { FirstRun } from "./FirstRun";
 import { Notice } from "./Notice";
+import { GoneProjectNotice } from "./GoneProjectNotice";
 
 /**
  * The screen a window with no project open draws.
@@ -35,6 +36,9 @@ export function Opener({
   reason,
   adding,
   onOpen,
+  onGoneListed,
+  onGoneSettled,
+  goneChanged,
   trouble,
   onOpenRepo,
   onSignInToForge,
@@ -56,6 +60,15 @@ export function Opener({
   adding?: boolean;
   /** Asks the core to open this path. It answers, or asks the operator first. */
   onOpen: (path: string) => void;
+  /** The gone projects this opener draws, told whenever they change (NO-5): while the opener
+   *  is drawn, the window draws only the ones this list does not hold. `"unread"` until the
+   *  list has answered and again when the opener goes, so the window holds its own back
+   *  rather than drawing a line that the opener's would replace under the pointer. */
+  onGoneListed?: (paths: readonly string[] | "unread") => void;
+  /** A gone project was located, forgotten or dismissed here. */
+  onGoneSettled?: (path: string) => void;
+  /** Changes when the window located or forgot a gone project, so the list is read again. */
+  goneChanged?: number;
   /** Why the last attempt opened nothing. */
   trouble?: string;
   /** Opens a repository into the local project, for the first run. Left out, the first run is
@@ -79,6 +92,8 @@ export function Opener({
   /** The operator asked for this screen rather than the first run. */
   const [passed, setPassed] = useState(false);
   const [typed, setTyped] = useState("");
+  /** Bumped when a gone recent was forgotten or re-pointed, so the list is read again. */
+  const [changed, setChanged] = useState(0);
 
   // The list is read when the opener appears and re-read whenever an attempt did not open
   // anything, because a refused open is exactly when a row may have gone. It is a command of
@@ -100,7 +115,14 @@ export function Opener({
     return () => {
       gone = true;
     };
-  }, [trouble]);
+  }, [trouble, changed, goneChanged]);
+
+  // The gone projects drawn here, said to the window, which then leaves them to this list.
+  const listed = heard ? (recents?.gone ?? []).map((gone) => gone.path).join("\n") : undefined;
+  useEffect(() => {
+    onGoneListed?.(listed === undefined ? "unread" : listed === "" ? [] : listed.split("\n"));
+    return () => onGoneListed?.("unread");
+  }, [listed, onGoneListed]);
 
   const pick = useCallback(() => {
     void commands
@@ -122,6 +144,7 @@ export function Opener({
     recents !== undefined &&
     (recents.planes?.length ?? 0) === 0 &&
     (recents.dropped?.length ?? 0) === 0 &&
+    (recents.gone?.length ?? 0) === 0 &&
     !recents.forgetful;
   if (firstRun && remembersNothing)
     return (
@@ -225,18 +248,43 @@ export function Opener({
         </>
       )}
 
-      {/* A project that has moved or gone is dropped with a line saying so, never an error
-          dialog (ADR 0034): the record is a convenience and the project is the truth. */}
+      {/* An entry the store itself would not take back is dropped with a line saying so, never
+          an error dialog (ADR 0034): the record is a convenience and the project is the truth. */}
       {recents?.dropped
-        ?.filter((line) => !dismissed.has(`project-gone:${line}`))
+        ?.filter((line) => !dismissed.has(`not-remembered:${line}`))
         .map((line) => (
           <Notice
             key={line}
-            cause={`project-gone:${line}`}
-            onDismiss={() => setDismissed((was) => new Set(was).add(`project-gone:${line}`))}
+            cause={`not-remembered:${line}`}
+            onDismiss={() => setDismissed((was) => new Set(was).add(`not-remembered:${line}`))}
           >
             {line}
           </Notice>
+        ))}
+
+      {/* A project that has moved or gone offers Locate… and Forget (NO-5): never done
+          without a press, because a disk that is unplugged may come back. */}
+      {recents?.gone
+        ?.filter((gone) => !dismissed.has(`project-gone:${gone.path}`))
+        .map((gone) => (
+          <GoneProjectNotice
+            key={gone.path}
+            gone={gone}
+            cause={`project-gone:${gone.path}`}
+            onLocated={(found) => {
+              onGoneSettled?.(gone.path);
+              setChanged((n) => n + 1);
+              onOpen(found);
+            }}
+            onForgotten={() => {
+              onGoneSettled?.(gone.path);
+              setChanged((n) => n + 1);
+            }}
+            onDismiss={() => {
+              onGoneSettled?.(gone.path);
+              setDismissed((was) => new Set(was).add(`project-gone:${gone.path}`));
+            }}
+          />
         ))}
 
       {/* A machine with no store — Windows, where `0600` has no expression, so charter's guard

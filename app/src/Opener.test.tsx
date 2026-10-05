@@ -238,7 +238,8 @@ describe("the opener", () => {
       if (cmd === "recent_planes")
         return {
           planes: [],
-          dropped: ["/home/dev/gone is no longer there"],
+          dropped: [],
+          gone: [{ path: "/home/dev/gone", said: "/home/dev/gone is no longer there" }],
           forgetful: null,
         };
       return undefined;
