@@ -240,6 +240,40 @@ describe("the default persona, workspace and harness", () => {
     expect(offered("Default persona")).not.toContain("ghost — names nothing here");
   });
 
+  it("say a value names nothing only where the core says so, not where the list lacks it", async () => {
+    // A workspace declared before it is made is one charter makes where it is first used, and
+    // a persona the new-chat picker does not list (`_shared`) is still the core's to judge: no
+    // sentence from the core, so each is shown plainly, as held (D-ST1-1, amended; V91l).
+    core({
+      shared: file("shared", [
+        field(["workspace", "default"], text("later")),
+        field(["persona", "default"], text("_shared")),
+      ]),
+    });
+    await atProject();
+    await waitFor(() => expect(offered("Default workspace")).toContain("alpha"));
+    await waitFor(() => expect(offered("Default persona")).toContain("steward"));
+
+    expect(picker("Default workspace")).toHaveValue("later");
+    expect(offered("Default workspace")).toEqual([
+      "not set",
+      "later",
+      "alpha",
+      "beta",
+      "New workspace…",
+    ]);
+    expect(within(rowOf("Default workspace")).queryByRole("alert")).toBeNull();
+    expect(picker("Default persona")).toHaveValue("_shared");
+    expect(offered("Default persona")).toEqual([
+      "not set",
+      "_shared",
+      "steward",
+      "scribe",
+      "New persona…",
+    ]);
+    expect(within(rowOf("Default persona")).queryByRole("alert")).toBeNull();
+  });
+
   it("New persona… makes one through persona_create and picks it", async () => {
     const { sent, made } = core();
     await atProject();

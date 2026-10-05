@@ -288,38 +288,21 @@ fn a_persona_default_naming_no_persona_is_refused_and_one_that_is_here_stands() 
     );
 }
 
+/// A declared `[workspace] default` is a workspace charter treats as there and makes where it
+/// is first used (`wscmd::select`'s `there`), so one not made yet is no refusal (D-ST1-1, amended).
 #[test]
-fn a_workspace_default_naming_no_workspace_is_refused_but_the_built_in_one_stands() {
+fn a_workspace_default_declared_before_it_is_made_stands() {
     let dir = plane("schema = 1\n");
-    let why = refusals(
-        dir.path(),
-        Which::Shared,
-        "[workspace]\ndefault = \"gone\"\n",
-    );
-    assert_eq!(why.len(), 1, "{why:?}");
-    assert!(
-        why[0].starts_with("[workspace] default = \"gone\" names no workspace in this project"),
-        "{why:?}"
-    );
-    // `default` is the workspace every plane has, made where it is first used.
-    assert_eq!(
-        refusals(
-            dir.path(),
-            Which::Shared,
-            "[workspace]\ndefault = \"default\"\n"
-        ),
-        Vec::<String>::new()
-    );
-    fs::create_dir_all(dir.path().join("workspaces/gone")).unwrap();
-    fs::write(dir.path().join("workspaces/gone/workspace.json"), "{}").unwrap();
-    assert_eq!(
-        refusals(
-            dir.path(),
-            Which::Shared,
-            "[workspace]\ndefault = \"gone\"\n"
-        ),
-        Vec::<String>::new()
-    );
+    for named in ["later", "default"] {
+        assert_eq!(
+            refusals(
+                dir.path(),
+                Which::Shared,
+                &format!("[workspace]\ndefault = \"{named}\"\n"),
+            ),
+            Vec::<String>::new()
+        );
+    }
 }
 
 #[test]
@@ -333,12 +316,12 @@ fn a_default_set_by_hand_to_nothing_does_not_stop_another_edit_but_a_new_one_is_
     .unwrap();
     let refused = write_one(
         dir.path(),
-        &["workspace", "default"],
-        Some(Value::Text("nowhere".into())),
+        &["persona", "default"],
+        Some(Value::Text("nobody".into())),
     )
     .unwrap_err();
     assert!(
-        refused[0].starts_with("[workspace] default = \"nowhere\""),
+        refused[0].starts_with("[persona] default = \"nobody\""),
         "{refused:?}"
     );
 }

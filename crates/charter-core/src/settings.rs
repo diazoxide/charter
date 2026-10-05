@@ -339,15 +339,14 @@ fn shared_refusals(root: &Path, text: &str) -> Vec<String> {
     out
 }
 
-/// `[persona] default` and `[workspace] default` naming nothing in this project (ST-1, #1225),
-/// one sentence each, as `[harness] default`'s is said: the Settings tab draws them as pickers
-/// over what is here, and a value set by hand that names nothing is shown with this.
+/// `[persona] default` naming no persona in this project (ST-1, #1225), as `[harness] default`'s
+/// is said: the Settings tab draws it as a picker over what is here, and a value set by hand that
+/// names nothing is shown with this. Charter already reads such a default as none
+/// ([`crate::active::plane_default_persona`]), and the alerts call it the front door.
 ///
-/// A persona default naming no persona is one charter already reads as none
-/// ([`crate::active::plane_default_persona`]), and the alerts call it the front door. The
-/// workspace `default` is exempt: it is the one every project has, made where it is first used.
-/// A `workspaces/` the filesystem will not list names nothing charter can say is missing, and a
-/// value shaped like a secret is never quoted back.
+/// Not `[workspace] default` (D-ST1-1, amended): a declared default workspace is one charter
+/// treats as there and makes where it is first used (`wscmd::select`), so naming one not made
+/// yet is no refusal. A value shaped like a secret is never quoted back.
 fn names_nothing(root: &Path, cfg: &toml::Table) -> Vec<String> {
     let named = |table: &str| {
         cfg.get(table)
@@ -367,19 +366,6 @@ fn names_nothing(root: &Path, cfg: &toml::Table) -> Vec<String> {
             "[persona] default = \"{}\" names no persona in this project, so charter reads it \
              as no default. Pick one that is here, or make it.",
             crate::shown::short(&persona)
-        ));
-    }
-    if let Some(workspace) = named("workspace")
-        && workspace != crate::active::BUILT_IN_WORKSPACE
-        && crate::workspaces::Plane::open(root)
-            .workspaces()
-            .is_ok_and(|names| !names.contains(&workspace))
-    {
-        out.push(format!(
-            "[workspace] default = \"{}\" names no workspace in this project — a session with \
-             nothing else selected lands in a workspace that is not there. Pick one that is \
-             here, or make it.",
-            crate::shown::short(&workspace)
         ));
     }
     out
