@@ -16,7 +16,6 @@ import {
   FileX,
   FolderGit2,
   Folders,
-  FolderX,
   ListFilter,
   GitBranch,
   LoaderCircle,
@@ -45,6 +44,7 @@ import {
 import type { Place } from "./pieceViews";
 import { WRAPPING_UP, WrappingUp } from "./NeedsYou";
 import { Menued } from "./Menus";
+import { NotClonedHere, type Cloning } from "./NotCloned";
 import { WorktreeMark } from "./Worktree";
 import { isShell } from "./chatState";
 import { ChatStateMark, ChildAgents, childAgentsId } from "./ChatRows";
@@ -187,6 +187,7 @@ export function Explorer({
   onOpenFile,
   focus,
   onFocus,
+  cloning,
 }: {
   /** The project, for reading a branch's folders. Without one no folder is read. */
   plane?: PlaneId;
@@ -213,6 +214,9 @@ export function Explorer({
   focus?: Place;
   /** Focus on a branch, or step back out with nothing. */
   onFocus?: (focus: Place | undefined) => void;
+  /** What this window is cloning into the workspace, so a repo that is not cloned here shows
+   *  its clone under way, or why it failed (#1215). */
+  cloning?: Cloning;
 }) {
   /** The clones the operator folded, by workspace and name: a row inside one is not drawn, so
    *  it cannot be where the keyboard comes back in. */
@@ -724,21 +728,14 @@ export function Explorer({
           clones.length === 0 && <p className="none">No repos in this workspace</p>
         )}
 
-        {(panels?.absent.length ?? 0) > 0 && (
-          <section className="absent" data-testid="absent">
-            <h2 className="sidebar-title">Not cloned here</h2>
-            <ul>
-              {panels?.absent.map((name) => (
-                // Membership without a clone. There is nothing to explore in it and nothing
-                // to start a chat in, so it is named and not made a heading.
-                <li key={name}>
-                  <FolderX className="node-icon" />
-                  {name}
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
+        {/* Membership without a clone. There is nothing to explore in it and nothing to start
+            a chat in, so it is named and not made a heading — and it can be cloned (#1215). */}
+        <NotClonedHere
+          absent={panels?.absent ?? []}
+          cloning={cloning}
+          offers={offers}
+          onPress={onPress}
+        />
 
         {panels?.refused.map(([name, why]) => (
           <Trouble key={`refused-${name}`}>

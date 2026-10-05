@@ -94,7 +94,7 @@ import { NewWorkspace } from "./NewWorkspace";
 import { NewBranch } from "./NewBranch";
 import { LinkWorkItem } from "./LinkWorkItem";
 import { RenameWorkspace } from "./RenameWorkspace";
-import { cloneRepos } from "./repoClones";
+import { cloneRepos, useRepoClones } from "./repoClones";
 import { StartChat } from "./StartChat";
 import { SessionPane } from "./SessionPane";
 import {
@@ -3270,6 +3270,29 @@ export const PlaneView = memo(function PlaneView({
     [plane],
   );
 
+  /**
+   * **A repo the workspace names, cloned from the window** (#1215): the explorer's row, its
+   * Clone all, the bottom bar's menu and the palette all end here. The same `cloneRepos` a new
+   * workspace's repos and Settings › Repos go through, so there is one clone path; each repo's
+   * progress and failure is drawn on its own row from that store, and the panels are read
+   * again so a repo that landed moves among the clones.
+   */
+  const cloneMissing = useCallback(
+    async (workspace: string, repos: string[]): Promise<Ran> => {
+      const failed = await cloneRepos(plane, workspace, repos);
+      rereadPanels();
+      return failed.length === 0
+        ? { ok: true, said: `Cloned ${repos.join(", ")} into ${workspace}.` }
+        : {
+            ok: false,
+            refused:
+              `Could not clone ${failed.map((f) => f.repo).join(", ")} into ${workspace} — ` +
+              failed.map((f) => f.said).join(" "),
+          };
+    },
+    [plane, rereadPanels],
+  );
+
   const doing = useMemo<Doing>(
     () => ({
       newChat: newTab,
@@ -3312,6 +3335,7 @@ export const PlaneView = memo(function PlaneView({
       focusBranch: (cut) =>
         setFocusedBranch({ workspace: cut.workspace, repo: cut.repo, piece: cut.piece }),
       newBranch,
+      cloneMissing,
       newChatIn: newTabIn,
       sendKey,
       openProject: windowDoes.openProject,
@@ -3355,6 +3379,7 @@ export const PlaneView = memo(function PlaneView({
       ignoreNeedsYou,
       mergeWorktree,
       newBranch,
+      cloneMissing,
       declareWorktreeDone,
       newTab,
       newShell,
@@ -3464,6 +3489,18 @@ export const PlaneView = memo(function PlaneView({
     });
   }, [ofWorkspace, workspaceState.panels]);
 
+  /** What this window is cloning into the focused workspace (#1215), by repo — each row of
+   *  "Not cloned here" draws its own progress and failure from it. */
+  const cloning = useRepoClones(plane, ofWorkspace ?? OUTSIDE);
+  const absentHere = workspaceState.panels?.absent;
+  const cloningNow = useMemo(
+    () =>
+      [...cloning]
+        .filter(([, one]) => one.state === "waiting" || one.state === "cloning")
+        .map(([repo]) => repo),
+    [cloning],
+  );
+
   /** The repo whose clone the chat being picked would start in, if it would: what the picker's
    *  branch box names (GL-1). The same directory `startOn` sends, compared with the path the
    *  core spelled for each clone. */
@@ -3515,6 +3552,8 @@ export const PlaneView = memo(function PlaneView({
             worktree,
             pieces,
             clones,
+            absent: absentHere,
+            cloning: cloningNow,
             startsIn: spot?.path,
             personas,
             vaults: vaultNames,
@@ -3554,6 +3593,8 @@ export const PlaneView = memo(function PlaneView({
           }),
     [
       clones,
+      cloningNow,
+      absentHere,
       curations,
       focused,
       inFront,
@@ -4533,6 +4574,7 @@ export const PlaneView = memo(function PlaneView({
               }
               focus={cockpit}
               onFocus={setFocusedBranch}
+              cloning={cloning}
             />
           ),
           aside: (
@@ -4558,6 +4600,7 @@ export const PlaneView = memo(function PlaneView({
               offers={found}
               onPress={press}
               columns={facts.columns}
+              cloning={cloning}
             />
           ),
         }}

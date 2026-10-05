@@ -245,6 +245,43 @@ fn a_clone_is_recorded_as_a_member_of_its_workspace_without_a_branch() {
 }
 
 #[test]
+fn a_member_the_manifest_names_and_this_machine_has_not_cloned_is_cloned_and_recorded_once() {
+    // The window's "Not cloned here" row (#1215): `workspace.json` came from another machine
+    // and names a repo this one has no folder for. One `clone` of that one member lands it
+    // where the workspace keeps its clones, and the manifest still names each member once.
+    let w = World::new();
+    w.remote("widget", "trunk");
+    w.remote("gadget", "main");
+    w.inventory(json!([
+        World::record("widget", "trunk"),
+        World::record("gadget", "main")
+    ]));
+    let both = w.charter(&["clone", "widget", "gadget", "-w", "alpha"]);
+    assert!(both.status.success(), "{}", stderr(&both));
+    let manifest = || -> Value {
+        serde_json::from_str(
+            &std::fs::read_to_string(w.root.join("workspaces/alpha/workspace.json")).unwrap(),
+        )
+        .unwrap()
+    };
+    let named = manifest()["repos"].clone();
+    std::fs::remove_dir_all(w.clone_dir("widget")).unwrap();
+
+    let out = w.charter(&["clone", "widget", "-w", "alpha"]);
+
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        w.git(&w.clone_dir("widget"), &["symbolic-ref", "--short", "HEAD"]),
+        "trunk"
+    );
+    assert_eq!(
+        manifest()["repos"],
+        named,
+        "each member is still named exactly once"
+    );
+}
+
+#[test]
 fn a_name_that_is_a_path_an_option_or_hidden_is_refused_and_nothing_lands_outside() {
     let w = World::new();
     let records: Vec<Value> = ["..", "-rf", ".github", "a/b", "../../escaped"]

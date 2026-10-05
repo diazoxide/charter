@@ -16,6 +16,8 @@ import type { FactCell, FactColumn, Piece, RepoState } from "./bindings";
 import { Menued } from "./Menus";
 import type { Catalogued, Offer } from "./actions";
 import type { WorkspaceState } from "./workspaceState";
+import type { Cloning } from "./NotCloned";
+import type { CloneState } from "./repoClones";
 import { useArrived } from "./lib/arrived";
 
 /**
@@ -42,8 +44,13 @@ import { useArrived } from "./lib/arrived";
  * exist — `worktree.merge:<repo>/<piece>` and `worktree.remove:<repo>/<piece>`, drawn on the
  * explorer's rows — but putting `Remove worktree` under the pointer in the region ADR 0038
  * says is for reading is an amendment to ADR 0038, argued on its own, and not a defect fix.
- * A right-click there, and on a repo nobody cloned, answers with nothing rather than with the
- * browser's own menu, which `useNoBrowserMenu` covers for the whole window.
+ * A right-click there answers with nothing rather than with the browser's own menu, which
+ * `useNoBrowserMenu` covers for the whole window.
+ *
+ * **A repo the workspace names and nobody cloned here has the explorer's Clone row as its menu**
+ * (#1215), by the same argument as a clone's: a menu, drawn in a portal, and a clone adds a
+ * folder beside the others without touching any repo this region reads. Its cell says what
+ * became of the clone — under way, or failed in the core's words — as text, never a control.
  *
  * **Nothing here waits on a network.** The CI cell is what a forge refresher last wrote into
  * `.charter/cache/glstate.json`; charter-app reads that file and never fetches. A cell with
@@ -103,6 +110,7 @@ export function BottomBar({
   offers,
   onPress,
   columns = [],
+  cloning = new Map(),
 }: {
   workspace: string | undefined;
   state: WorkspaceState;
@@ -115,6 +123,9 @@ export function BottomBar({
   /** The catalogue by id, which is what a repo row's menu is drawn out of. */
   offers: Catalogued;
   onPress: (offer: Offer) => void;
+  /** What this window is cloning into the workspace (#1215): a repo not cloned here says
+   *  what became of its clone, in words, never as a control. */
+  cloning?: Cloning;
 }) {
   if (workspace === undefined) {
     return (
@@ -172,17 +183,22 @@ export function BottomBar({
           ))}
           {panels.absent.map((name) => (
             <tbody key={`absent-${name}`}>
-              <tr className="repo-row absent" data-testid={`repo-${name}`}>
-                <th scope="row" className="repo">
-                  <FolderGit2 className="node-icon" />
-                  <span>{name}</span>
-                </th>
-                {/* Membership without a clone. Said, because a repo the workspace means to
-                    hold and nobody has cloned is not the same as one that is not listed. */}
-                <td className="branch none" colSpan={BUILT_IN_COLUMNS - 1 + columns.length}>
-                  not cloned here
-                </td>
-              </tr>
+              {/* Its menu is the explorer's Clone row (#1215): a menu, not a control, so the
+                  region stays unpressable. */}
+              <Menued on={{ on: "absent", repo: name }} offers={offers} onPress={onPress}>
+                <tr className="repo-row absent" data-testid={`repo-${name}`}>
+                  <th scope="row" className="repo">
+                    <FolderGit2 className="node-icon" />
+                    <span>{name}</span>
+                  </th>
+                  {/* Membership without a clone. Said, because a repo the workspace means to
+                      hold and nobody has cloned is not the same as one that is not listed —
+                      and, while one is under way, what became of the clone. */}
+                  <td className="branch none" colSpan={BUILT_IN_COLUMNS - 1 + columns.length}>
+                    {absentSaid(cloning.get(name))}
+                  </td>
+                </tr>
+              </Menued>
             </tbody>
           ))}
         </table>
@@ -201,6 +217,20 @@ export function BottomBar({
       </p>
     </footer>
   );
+}
+
+/** What a repo that is not cloned here says in its row: that, or what its clone is doing. */
+function absentSaid(clone: CloneState | undefined): string {
+  switch (clone?.state) {
+    case "waiting":
+      return "waiting to be cloned";
+    case "cloning":
+      return "cloning…";
+    case "failed":
+      return `not cloned here — the clone failed: ${clone.said}`;
+    default:
+      return "not cloned here";
+  }
 }
 
 /** A refusal, with the mark that says it is one. Lucide hides a nameless icon from a screen

@@ -702,6 +702,7 @@ describe("a repo row's menu", () => {
           { repo: "tool", path: "/p/tool" },
         ],
         pieces: [{ workspace: "alpha", repo: "svc", piece: "one" }],
+        absent: ["later"],
         needsYou: [],
         nameOf: String,
       }),
@@ -745,10 +746,20 @@ describe("a repo row's menu", () => {
     expect(pressed).toEqual(["clone.chat:tool"]);
   });
 
-  it("has none on a repo nobody cloned, nor on the worktrees under a repo", () => {
+  it("offers Clone on a repo nobody cloned here, which the explorer's row offers too (#1215)", async () => {
+    const pressed: string[] = [];
+    bar((id) => pressed.push(id));
+
+    rightClick(within(row("later")).getByText("later"));
+    await screen.findByRole("menu");
+    await userEvent.click(screen.getByRole("menuitem", { name: "Clone later" }));
+
+    expect(pressed).toEqual(["absent.clone:later"]);
+  });
+
+  it("has none on the worktrees under a repo", () => {
     bar();
 
-    rightClick(row("later"));
     rightClick(within(screen.getByTestId("worktree-tree-svc")).getByText("one"));
 
     expect(screen.queryByRole("menu")).toBeNull();
