@@ -36,6 +36,7 @@ use crate::profiles::{self, COMMITTED_FILE, LOCAL_FILE};
 
 pub mod collection;
 pub mod forges;
+pub mod harness_profiles;
 pub mod workspace;
 
 /// Where an answer came from: which layer of the Shared/Workspace/Local overlay decided it

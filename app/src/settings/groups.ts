@@ -31,6 +31,9 @@ export type SettingsGroup = {
   /** The collection the group holds, when it holds one (ST-3): its entries, each with Remove,
    *  and an Add form. A group with a collection is offered even while it has no entry. */
   collection?: Collection;
+  /** A page of the group before it in the nav (ST-4, V91e): one entry of that group's
+   *  collection with many fields — a harness profile — drawn indented under it. */
+  sub?: boolean;
 };
 
 /**
@@ -61,6 +64,19 @@ export type Collection = {
   entries: readonly CollectionEntry[];
   /** The Add form's fields, in order. */
   fields: readonly EntryField[];
+  /** Whether Add is offered here (the default). An entry's own page holds that entry alone,
+   *  with no Add: that is the collection's group's (ST-4). */
+  adds?: boolean;
+  /** Whether each entry offers Rename (ST-4, V91k): refused, naming them, while anything uses
+   *  the entry. The field it renames is the Add form's `name`. */
+  renames?: boolean;
+  /** The group the collection's writes are kept under — its Undo and its refusals — when that
+   *  is not the group drawing it: an entry's page keeps them with its collection's group, so a
+   *  Remove there is undone where the person lands (ST-4). */
+  home?: string;
+  /** The address of the page an entry called `name` has, for a collection whose entries have
+   *  pages of their own (ST-4): where a rename goes to. */
+  pageOf?: (name: string) => string;
 };
 
 /** One entry of a collection. */
@@ -72,6 +88,11 @@ export type CollectionEntry = {
   label: string;
   /** The ids of the group's settings that are this entry's keys. */
   settings: readonly string[];
+  /** The address of the entry's own page, when it has one and is not drawn on it (ST-4): its
+   *  heading opens it. */
+  page?: string;
+  /** The entry's name, as Rename starts from it (ST-4). */
+  name?: string;
 };
 
 /** One field of a collection's Add form, written to the entry's key `field`. */

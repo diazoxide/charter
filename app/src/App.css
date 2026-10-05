@@ -5670,6 +5670,11 @@ h2.sidebar-title .node-icon {
   background: var(--accent-surface);
 }
 
+/* A page of the group above it (ST-4): a harness profile's, set in under Harness & profiles. */
+.ui-settings-nav button.ui-settings-sub {
+  padding-left: 1.4rem;
+}
+
 /* **Edit as TOML** (SE-19, V89d): one link per file at the foot of the nav, set apart from the
    groups by a hairline, drawn as the nav's own buttons are. */
 .ui-settings-raw {

@@ -1509,6 +1509,27 @@ export const commands = {
 	 */
 	removeProjectForge: (plane: PlaneId, base: string | null, id: string) => typedError<EntryWritten, string>(__TAURI_INVOKE("remove_project_forge", { plane, base, id })),
 	/**
+	 *  Add a `[harness.<name>]` profile to the project's local settings file, checked whole by the
+	 *  core's profile rules (`charter_core::settings::harness_profiles::add`). Its first run still
+	 *  asks for approval.
+	 * 
+	 *  `base` is the text the window read (`null`: not there), so a file changed on disk since is
+	 *  refused rather than overwritten.
+	 */
+	addProjectProfile: (plane: PlaneId, base: string | null, entry: ProfileEntry) => typedError<EntryWritten, string>(__TAURI_INVOKE("add_project_profile", { plane, base, entry })),
+	/**
+	 *  Remove the profile called `id` (as the local file's `entries` list it) — refused, naming
+	 *  them, while a `[harness] default` uses it
+	 *  (`charter_core::settings::harness_profiles::remove`).
+	 */
+	removeProjectProfile: (plane: PlaneId, base: string | null, id: string) => typedError<EntryWritten, string>(__TAURI_INVOKE("remove_project_profile", { plane, base, id })),
+	/**
+	 *  Rename the profile called `id` to `to`, only while nothing uses it — refused, naming them,
+	 *  otherwise (`charter_core::settings::harness_profiles::rename`). Answers the renamed entry's
+	 *  identity as `added`: what its Undo renames back.
+	 */
+	renameProjectProfile: (plane: PlaneId, base: string | null, id: string, to: string) => typedError<EntryWritten, string>(__TAURI_INVOKE("rename_project_profile", { plane, base, id, to })),
+	/**
 	 *  The plane's and each repo's save settings in force — `planesave::Settings`, the one
 	 *  resolver every save asks, shaped for the wire.
 	 * 
@@ -2090,8 +2111,9 @@ export type EntryValue = {
  */
 export type EntryWritten = 
 /**
- *  Written. `added` is the new entry's identity, after an add; `removed` the entry a remove
- *  took, as the Add form would write it again: what each one's Undo is made of (D-ST3-i).
+ *  Written. `added` is the entry's identity after an add or a rename (ST-4); `removed` the
+ *  entry a remove took, as the Add form would write it again: what each one's Undo is made
+ *  of (D-ST3-i).
  */
 { kind: "saved"; file: SettingsFile; added: string | null; removed: EntryValue[] | null } | { kind: "refused"; fields: EntryFieldRefusal[]; referrers: EntryReferrer[]; reasons: string[] };
 
@@ -3632,6 +3654,16 @@ export type PlaneUpdated = {
 };
 
 /**
+ *  A harness profile as the Add form sends it, each field as typed: the command one argument
+ *  per entry.
+ */
+export type ProfileEntry = {
+	name: string,
+	kind: string,
+	command: string[],
+};
+
+/**
  *  One row of the profile picker: what it runs, where charter read it, and what pressing
  *  Enter on it would do.
  */
@@ -4254,7 +4286,7 @@ export type SettingsEdit = {
 
 /**  One entry of a collection, as the core lists it (`charter_core::settings::collection::Listed`). */
 export type SettingsEntry = {
-	/**  Which collection: `forges`. */
+	/**  Which collection: `forges` or `profiles`. */
 	collection: string,
 	/**  Opaque: what a remove is sent by. A different one once the entry moved or changed. */
 	id: string,
@@ -4290,8 +4322,9 @@ export type SettingsFile = {
 	/**  Every value in it, in file order. */
 	fields: SettingsField[],
 	/**
-	 *  The entries of each collection the file is the home of (ST-3): `charter.toml`'s
-	 *  `[[forge]]` blocks. `null` when it holds none, and left out by a caller that lists none.
+	 *  The entries of each collection the file is the home of (ST-3): the Shared file's
+	 *  `[[forge]]` blocks, and the Local file's `[harness.<name>]` profiles (ST-4). `null` when
+	 *  it holds none, and left out by a caller that lists none.
 	 */
 	entries?: SettingsEntry[] | null,
 };
