@@ -105,13 +105,10 @@ pub fn pretooluse(payload: &str, now: Option<&str>) -> crate::hooks::Answered {
     // session pinned at a directory that is not a plane resolved to it happily, and the five
     // gated arms then denied in a directory with no control plane — which is charter#852
     // exactly, reintroduced one level down.
-    let found = root
-        .join(charter_core::plane::MANIFEST)
-        .is_file()
-        .then(|| Found {
-            root: root.display().to_string(),
-            forges: charter_core::forge::known_ordered(&root),
-        });
+    let found = charter_core::plane::is_plane(&root).then(|| Found {
+        root: root.display().to_string(),
+        forges: charter_core::forge::known_ordered(&root),
+    });
     let plane = found.as_ref().map(|found| Plane {
         root: &found.root,
         forges: &found.forges,

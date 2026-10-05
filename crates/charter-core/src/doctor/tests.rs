@@ -1188,7 +1188,7 @@ fn a_project_with_only_purlis_names_has_no_leftover_row() {
 }
 
 #[test]
-fn both_names_of_one_thing_are_a_warning_naming_the_one_that_is_ignored() {
+fn both_names_of_one_thing_are_a_warning_that_names_both_and_the_reconciling_fix() {
     let (_d, root) = plane("schema = 1\n");
     std::fs::write(root.join("purlis.toml"), "schema = 1\n").unwrap();
     std::fs::create_dir(root.join(".charter")).unwrap();
@@ -1197,17 +1197,39 @@ fn both_names_of_one_thing_are_a_warning_naming_the_one_that_is_ignored() {
     let r = one(&root, "renamed leftovers");
     assert_eq!(r.status, Status::Warn);
     assert!(
-        r.detail.contains("charter.toml (purlis.toml is read)"),
+        r.detail.contains("purlis.toml and charter.toml"),
         "{}",
         r.detail
     );
-    assert!(
-        r.detail.contains(".charter (.purlis is read)"),
-        "{}",
-        r.detail
-    );
-    assert!(!r.hint.is_empty());
+    assert!(r.detail.contains(".purlis and .charter"), "{}", r.detail);
+    assert!(r.hint.contains("rename-plane"), "{}", r.hint);
+    // Neither name is the one to throw away: until the readers move, the old one is what
+    // most of charter reads.
+    assert!(!r.hint.contains("delete"), "{}", r.hint);
+    assert!(!r.detail.contains("is read"), "{}", r.detail);
     assert_eq!(r.fix, None);
+}
+
+#[test]
+fn a_directory_that_is_no_project_has_no_leftover_row_whatever_folders_it_holds() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+    std::fs::create_dir(root.join(".charter")).unwrap();
+    std::fs::create_dir(root.join(".purlis")).unwrap();
+    assert!(
+        doctor(&root)
+            .run()
+            .iter()
+            .all(|r| r.name != "renamed leftovers")
+    );
+}
+
+#[test]
+fn a_schema_too_new_in_purlis_toml_fails_the_schema_row() {
+    let (_d, root) = plane("schema = 1\n");
+    std::fs::remove_file(root.join("charter.toml")).unwrap();
+    std::fs::write(root.join("purlis.toml"), "schema = 99\n").unwrap();
+    assert_eq!(one(&root, "schema").status, Status::Fail);
 }
 
 #[test]

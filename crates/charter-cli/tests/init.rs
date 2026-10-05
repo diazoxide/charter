@@ -283,6 +283,22 @@ workspaces/*/memory/MEMORY.md merge=union
 ";
 
 #[test]
+fn init_in_a_project_marked_by_purlis_toml_writes_no_charter_toml_beside_it() {
+    // D-RN1-12's other half: a second manifest beside `purlis.toml` would be a leftover the
+    // doctor then warns about, made by charter itself.
+    let scene = Scene::new();
+    scene.write("purlis.toml", "schema = 2\n");
+
+    let _ = scene.init();
+
+    assert!(!scene.plane.join("charter.toml").exists());
+    assert_eq!(
+        std::fs::read_to_string(scene.plane.join("purlis.toml")).unwrap(),
+        "schema = 2\n"
+    );
+}
+
+#[test]
 fn running_init_twice_leaves_the_tree_the_first_run_left() {
     let scene = Scene::new();
     assert!(scene.init().status.success());
