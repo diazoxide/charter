@@ -236,8 +236,8 @@ body {
 }
 
 /* One tab: the cell, and the hairline that parts it from the next. `.project` and `.tab` are
-   wrappers holding a tab and its `×`; a workspace tab is the button itself, because there is
-   nothing about a workspace to close.
+   wrappers holding a tab and its `×`; `.workspace` holds a workspace's tab and, on the focused
+   one, its settings gear (SE-23) — there is nothing about a workspace to close.
 
    **`flex: 1 1 0` and a floor, which is what makes the collapse exact.** Every tab takes an
    equal share of its strip and is never drawn narrower than `--least`, so `n` tabs fit in a
@@ -246,7 +246,7 @@ body {
    are drawn as two wide tabs) and the number itself, which is handed to this rule on the
    element rather than written here a second time. */
 .projects .project,
-.workspaces-strip [role="tab"],
+.workspaces-strip .workspace,
 .tabs .tab {
   position: relative;
   display: flex;
@@ -261,7 +261,7 @@ body {
    It keeps its own look: where it will land is the gap the others open for it, which says
    enough, and a second look for "being dragged" is one more thing to theme. */
 .projects .project[data-dragging],
-.workspaces-strip [role="tab"][data-dragging],
+.workspaces-strip .workspace[data-dragging],
 .tabs .tab[data-dragging] {
   z-index: 1;
   cursor: grabbing;
@@ -270,7 +270,7 @@ body {
 /* A cap, so a strip with two chats on it does not draw two tabs half a window wide. The
    projects have none: the operator asked for *"large full-width segments across the top, each
    taking an equal share"*, and a cap is the one thing that would stop them filling the row. */
-.workspaces-strip [role="tab"] {
+.workspaces-strip .workspace {
   max-width: 18rem;
 }
 
@@ -287,6 +287,7 @@ body {
    what it selects; it went with the coloured rules, because it was one of the borders that
    were *"not feeling well"*, and a background is enough to say which tab you are on. */
 .projects .project:has([aria-selected="true"]),
+.workspaces-strip .workspace:has([aria-selected="true"]),
 .tabs .tab:has([aria-selected="true"]),
 .projects [role="tab"][aria-selected="true"],
 .workspaces-strip [role="tab"][aria-selected="true"],
@@ -318,26 +319,17 @@ body {
   white-space: nowrap;
 }
 
-/* **Every tab is divided from the next by one very light hairline** — the operator's *"very very
-   light visible border - just for little bit highlight separation"*. A workspace tab IS its
-   `[role="tab"]` button, so the `border: 0` reset just above used to erase the divider the cell
-   rule gave it, and the workspace strip was the one strip with none. Re-stated here, after the
-   reset, for the one strip whose cell is the button. */
-.workspaces-strip [role="tab"] {
-  border-inline-end: 1px solid var(--layer-divider);
-}
-
 /* **`min-width: 0`, or the name never truncates.** A flex item's floor is its content, so
    without this a long chat name widens its tab past the share it was given and the strip
    overflows the arithmetic that decided what fits. This is the line that makes an equal share
    actually equal.
 
-   **Only where the button is INSIDE a cell**, which is the trap this rule fell into once. A
-   workspace tab IS its own cell — there is nothing about a workspace to close, so there is no
-   wrapper — and it carries the floor itself from the rule above. A `min-width: 0` here that
-   also matched `.workspaces-strip [role="tab"]` won on source order and took that floor away,
-   so the strip squeezed eight workspaces into the room its arithmetic said four could have. */
+   **Only where the button is INSIDE a cell**, which is the trap this rule fell into once: a
+   workspace tab was its own cell until SE-23 gave it a gear, and a `min-width: 0` that also
+   matched it took its floor away, so the strip squeezed eight workspaces into the room its
+   arithmetic said four could have. Every strip's floor is now on its cell. */
 .projects .project > [role="tab"],
+.workspaces-strip .workspace > [role="tab"],
 .tabs .tab > [role="tab"] {
   flex: 1 1 auto;
   min-width: 0;
@@ -361,10 +353,13 @@ body {
 /* **The plane root's tab is an icon, not a share of the strip** (SI-1). It is always first and
    exactly `--root` wide — the width `PlaneView` takes off the strip's room before the named
    workspaces share what is left, so the arithmetic and this rule cannot disagree. */
-.workspaces-strip [role="tab"].plane-root {
+.workspaces-strip .workspace:has(> .plane-root) {
   flex: 0 0 var(--root);
   min-width: var(--root);
   max-width: var(--root);
+}
+
+.workspaces-strip [role="tab"].plane-root {
   padding-inline: 0;
 }
 
@@ -409,6 +404,46 @@ body {
 
 .tab .closer:focus-visible,
 .project .closer:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+/* **A settings gear** (SE-23, V89i): on the project in front's tab and the focused workspace's,
+   and quiet — invisible until its tab is under the pointer or the keyboard, the vault row's eye's
+   rule (`.vault-reveal`). Flat like the `×` beside it, and it hovers as a view tab's `×` does:
+   it opens a tab and ends nothing. Two classes deep, so `.projects button` does not dress it. */
+.project .gear,
+.workspace .gear {
+  display: flex;
+  align-items: center;
+  align-self: stretch;
+  flex: none;
+  padding: 0 0.35rem;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--text-muted);
+  line-height: 1;
+  cursor: pointer;
+  /* No easing: a row's hover is not animated (`docs/design-system.md`, motion). */
+  opacity: 0;
+}
+
+.project:hover .gear,
+.workspace:hover .gear,
+.project:has(:focus-visible) .gear,
+.workspace:has(:focus-visible) .gear {
+  opacity: 1;
+}
+
+.project .gear:hover,
+.workspace .gear:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.project .gear:focus-visible,
+.workspace .gear:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
 }

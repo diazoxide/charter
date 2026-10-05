@@ -77,6 +77,7 @@ import { NewProject } from "./NewProject";
 import {
   Closer,
   Doer,
+  Gear,
   Pin,
   PlaneView,
   ShowMore,
@@ -219,10 +220,14 @@ function App() {
   const [savingAsk, setSavingAsk] = useState<{ plane: PlaneId; at: number }>();
   /**
    * The last ask for the Settings tab (SE-16), the same shape as `settingsAsk`: the project in
-   * front when it was asked, whose strip the tab opens on. Its You level is the machine's, so
-   * any project's strip will do, and the one the operator is looking at is it.
+   * front when it was asked, whose strip the tab opens on. It opens at that project's focused
+   * level (SE-23) — its focused workspace's, else the project's — which only that project knows,
+   * so the project answers the ask (`PlaneView`). With no project open it is You, at the opener.
    */
   const [settingsTabAsk, setSettingsTabAsk] = useState<{ plane: PlaneId; at: number }>();
+  /** The same, for the Settings tab at the You level (SE-23's Your settings…): on the project in
+   *  front's strip, since You is the machine's and any strip will do. */
+  const [yourSettingsAsk, setYourSettingsAsk] = useState<{ plane: PlaneId; at: number }>();
   /**
    * The last link into a Settings group the window followed (SE-22): the project in front, the
    * link, and a count. Its own ask and not `settingsTabAsk`, because a link names its level and
@@ -803,6 +808,11 @@ function App() {
         if (plane === undefined) setSettingsAlone(true);
         else setSettingsTabAsk((was) => ({ plane, at: (was?.at ?? 0) + 1 }));
       },
+      openYourSettings: () => {
+        const plane = inFrontNow.current;
+        if (plane === undefined) setSettingsAlone(true);
+        else setYourSettingsAsk((was) => ({ plane, at: (was?.at ?? 0) + 1 }));
+      },
       quit: () => void commands.askToQuit().catch(() => undefined),
     }),
     [closeProject, moveProject, pinProject],
@@ -1217,6 +1227,7 @@ function App() {
       switchLive: () => undefined,
       renameWorkspace: () => undefined,
       openSettingsTab: windowDoes.openSettingsTab,
+      openYourSettings: windowDoes.openYourSettings,
       // A curation chat is opened in a project, and there is no project here.
       curate: async () => nowhere(),
       quit: windowDoes.quit,
@@ -1661,19 +1672,22 @@ function App() {
                       return (
                         <SortableTab key={project.plane} id={project.plane}>
                           {({ sortable, style }) => (
-                            /* Right-click is the third reader of the same catalogue (`Menus.tsx`).
-                       `asChild`, so the strip gains no wrapper element: this IS the `span` it
-                       always was — which is what #171's `flex: 1 1 0` cells require. */
-                            <Menued
-                              on={{ on: "project", plane: project.plane }}
-                              offers={stripFound}
-                              onPress={press}
+                            /* The cell: the tab, its gear on the project in front (SE-23)
+                               and its `×`. It is what is dragged. */
+                            <span
+                              className="project"
+                              ref={sortable.setNodeRef}
+                              style={style}
+                              data-dragging={sortable.isDragging || undefined}
                             >
-                              <span
-                                className="project"
-                                ref={sortable.setNodeRef}
-                                style={style}
-                                data-dragging={sortable.isDragging || undefined}
+                              {/* Right-click is the third reader of the same catalogue
+                                  (`Menus.tsx`). `asChild`, and on the tab and not the cell: the
+                                  context-menu key opens a menu only on the trigger that has the
+                                  keyboard (`openFromTheKeyboard`), and that is the tab. */}
+                              <Menued
+                                on={{ on: "project", plane: project.plane }}
+                                offers={stripFound}
+                                onPress={press}
                               >
                                 <RovingFocusGroup.Item
                                   asChild
@@ -1703,9 +1717,15 @@ function App() {
                                     {projectMarks(project)}
                                   </button>
                                 </RovingFocusGroup.Item>
-                                <Closer offer={strip.close[at]} onPress={press} />
-                              </span>
-                            </Menued>
+                              </Menued>
+                              {/* Its settings (SE-23, V89i): on the project in front only,
+                                  and quiet until its tab is under the pointer or the
+                                  keyboard. The row its menu's Project settings… runs. */}
+                              {project.plane === inFront && (
+                                <Gear offer={strip.settings[at]} onPress={press} />
+                              )}
+                              <Closer offer={strip.close[at]} onPress={press} />
+                            </span>
                           )}
                         </SortableTab>
                       );
@@ -1854,6 +1874,7 @@ function App() {
           savingAsked={savingAsk?.plane === plane ? savingAsk.at : undefined}
           settingsTabAsked={settingsTabAsk?.plane === plane ? settingsTabAsk.at : undefined}
           settingsLinkAsked={settingsLinkAsk?.plane === plane ? settingsLinkAsk : undefined}
+          yourSettingsAsked={yourSettingsAsk?.plane === plane ? yourSettingsAsk.at : undefined}
           firstChatAsked={firstChat?.plane === plane ? firstChat : undefined}
           shellAsked={shellAsk?.plane === plane ? shellAsk : undefined}
           fileAsked={fileAsk?.plane === plane ? fileAsk : undefined}
