@@ -676,9 +676,9 @@ pub(crate) fn session_record(root: &Path, path: &str) -> Result<Option<SessionRe
 /// **Where they differ from a stranger's, said out loud rather than smoothed over.** Two things,
 /// and both are the same thing: charter is code that is already in the process.
 ///
-/// 1. **Their rows carry `runs`** — a persona row runs `persona.show:<name>`, which is a
-///    catalogue row the palette and a context menu already run (charter-app#174). A declared or
-///    answered row may not (`panel::NO_VERB`): a row that ran a charter verb on an extension's
+/// 1. **Their rows carry `runs`** — a persona row runs `persona.show:<name>` and a todo row
+///    `todo.open:<slug>` (#1214), each a catalogue row the palette and a context menu already
+///    run (charter-app#174). A declared or answered row may not (`panel::NO_VERB`): a row that ran a charter verb on an extension's
 ///    say-so would be charter acting with nothing in front of it.
 /// 2. **What a persona row opens is a view charter itself draws** — the persona's view tab,
 ///    which reads the plane. A stranger's row opens a card of its own words and nothing else.
@@ -716,16 +716,17 @@ fn charters_own(
                 note: (!todo.stamp.is_empty()).then(|| todo.stamp.clone()),
                 mark: panel::Mark::Todo,
                 tone: panel::Tone::Plain,
-                // **The operator's own request** — *"same as persona description"*: a row is one
-                // line and the card carries the whole of it. The body when the todo has one,
-                // and the untruncated title when it does not, because the complaint the card
-                // answers is a title that broke across three lines.
+                // The whole of it, which is what the row's search reads. The body when the todo
+                // has one, and the untruncated title when it does not.
                 detail: Some(panel::Detail::Text(if todo.body.trim().is_empty() {
                     todo.title.clone()
                 } else {
                     todo.body.clone()
                 })),
-                runs: None,
+                // **A todo opens as a view tab** (#1214, the operator's ruling of 2026-09-23
+                // that tabs hold views): the catalogue row the palette and the row's menu run
+                // too. A row that runs opens no card, so the tab is the one surface for it.
+                runs: Some(format!("todo.open:{}", todo.slug)),
                 actions: Vec::new(),
             })
             .collect(),
@@ -1512,9 +1513,10 @@ mod tests {
     }
 
     #[test]
-    fn a_todo_row_carries_its_whole_body_for_the_card_the_row_opens() {
-        // The operator's own request — *"on clicking we should show full body"* — and the
-        // reason the row itself is only the title: a row is one line and the card is the rest.
+    fn a_todo_row_carries_its_whole_body_and_opens_the_todos_tab() {
+        // The operator's own request — *"on clicking we should show full body"* — answered by
+        // the todo's view tab now (#1214): the row is one line, runs the catalogue row that
+        // opens the tab, and carries the body for the search.
         let (_plane, root) = plane_with_a_todo_and_two_personas();
 
         let drawn = of(&root, "alpha").expect("the panels draw");
@@ -1529,6 +1531,11 @@ mod tests {
             Some(PanelDetail::Text {
                 text: "Every step of it.".into()
             })
+        );
+        assert_eq!(
+            rows[0].runs,
+            Some(format!("todo.open:{}", rows[0].key)),
+            "a todo row does not open the todo's tab"
         );
     }
 
@@ -1567,7 +1574,11 @@ mod tests {
         let drawn = of(&root, "alpha").expect("the panels draw");
 
         for row in list_of(&drawn.contributed[0]) {
-            assert_eq!(row.runs, None, "a todo row grew a verb nobody asked for");
+            assert_eq!(
+                row.runs,
+                Some(format!("todo.open:{}", row.key)),
+                "a todo row's verb is not the catalogue row that opens its view"
+            );
         }
         for row in list_of(panel_called(&drawn, "charter/personas")) {
             if row.key == SHARED_ROW {

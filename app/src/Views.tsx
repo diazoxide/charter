@@ -3,6 +3,7 @@ import {
   Archive,
   Brain,
   ChartColumn,
+  CircleDashed,
   Cpu,
   Download,
   FileCode,
@@ -58,6 +59,8 @@ import {
 import { HeadingOffer } from "./PanelSection";
 import { SavingView } from "./SavingView";
 import { SessionRecordTab } from "./SessionRecordTab";
+import { TodoTab } from "./TodoTab";
+import { TODO_VIEW, todoRefOf } from "./todos";
 import { pieceDiffOf, pieceOf } from "./pieceViews";
 import { SEARCH, isSearch } from "./contentSearch";
 import { SearchTab } from "./SearchTab";
@@ -226,6 +229,8 @@ export const OWN_MARKS: Record<string, React.ComponentType<{ className?: string 
   changes: GitPullRequest,
   [SESSION_VIEW]: History,
   [MEMORY_VIEW]: Brain,
+  /** One todo (#1214), drawn as the Todos panel marks one. */
+  [TODO_VIEW]: CircleDashed,
   [SHARED_MEMORY_VIEW.view]: Brain,
   [ARCHIVE_VIEW]: Archive,
   [WORKSPACE_SETTINGS]: Settings2,
@@ -366,6 +371,7 @@ export function ViewPane({
   // charter's own views run no program, so there is nothing a press would be consent to.
   const holding = waits && view.from !== null;
   const memoryAt = isMemory(view) ? memoryRefOf(view.key) : undefined;
+  const todoAt = view.from === null && view.view === TODO_VIEW ? todoRefOf(view.key) : undefined;
   const archiveAt = archiveOf(view);
   const piece = pieceOf(view);
   const pieceDiff = pieceDiffOf(view);
@@ -490,6 +496,10 @@ export function ViewPane({
              `session_record`, keyed by the record so a pane that comes to show another starts
              from its own read. */
           <SessionRecordTab key={`${plane}\u0000${view.key}`} plane={plane} path={view.key} />
+        ) : todoAt !== undefined ? (
+          /* A todo (#1214): its facts and its whole text, read again when the plane changes,
+             keyed by the todo so a pane that comes to show another starts from its own read. */
+          <TodoTab key={`${plane}\u0000${view.key}`} plane={plane} at={todoAt} changed={onDisk} />
         ) : memoryAt !== undefined ? (
           /* A memory (SI-9b, ADR 0065): read as Markdown, edited in place, keyed by the memory
              so a pane that comes to show another — the preview tab, replaced — starts from its
@@ -560,6 +570,12 @@ const OWN_ROWS: Record<string, (key: string) => string[]> = {
   [SHARED_MEMORY_VIEW.view]: () => ["memory.new:shared", "memory.archived:shared"],
   vault: (key) => [`vault.remove:${key}`],
   [SESSION_VIEW]: (key) => [`session.resume:${key}`],
+  // A todo's Mark done and Forget (#1214): the focused workspace's rows, and a todo's tab is on
+  // its workspace's strip, which is the focused one whenever the tab is in front.
+  [TODO_VIEW]: (key) => {
+    const at = todoRefOf(key);
+    return at === undefined ? [] : [`todo.done:${at.slug}`, `todo.forget:${at.slug}`];
+  },
   // A memory's Edit and Delete (ADR 0065 Q2) — a new memory's tab has neither yet.
   [MEMORY_VIEW]: (key) =>
     memoryRefOf(key)?.slug === DRAFT ? [] : [`memory.edit:${key}`, `memory.delete:${key}`],

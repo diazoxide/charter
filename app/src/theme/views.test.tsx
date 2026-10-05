@@ -668,6 +668,13 @@ const ORDINARY: Answers = {
   workspace_saving: REPO_SAVING,
   session_record: RECORD,
   memory_read: MEMORY,
+  todo_read: {
+    workspace: "alpha",
+    slug: "20260302-091400-review",
+    title: "Review the rollout plan",
+    stamp: "2026-03-02",
+    body: "Every region, **in full**.",
+  },
   memory_archived: [
     {
       archived: "freeze",
@@ -758,6 +765,7 @@ const CHANGES: ViewRef = { from: null, view: "changes", key: WORKSPACE };
 const MEMORY_REF: ViewRef = { from: null, view: "memory", key: "shared/grill" };
 const ARCHIVE_REF: ViewRef = { from: null, view: "memory-archive", key: "shared" };
 const VAULT_REF: ViewRef = { from: null, view: "vault", key: "ops" };
+const TODO_REF: ViewRef = { from: null, view: "todo", key: "alpha/20260302-091400-review" };
 
 const STATES: State[] = [
   { name: "a persona", view: PERSONA, drawn: /Charter defects go upstream/ },
@@ -831,6 +839,19 @@ const STATES: State[] = [
     name: "a session record",
     view: { from: null, view: "session", key: RECORD.row.path },
     drawn: /The guard ran/,
+  },
+  { name: "a todo", view: TODO_REF, drawn: /in full/ },
+  {
+    name: "a todo closed since its tab opened",
+    view: TODO_REF,
+    answers: { todo_read: null },
+    drawn: /not open any more/,
+  },
+  {
+    name: "a todo charter could not read",
+    view: TODO_REF,
+    answers: { todo_read: new Error("todos/ is a link out of the plane") },
+    drawn: /link out of the plane/,
   },
   {
     name: "a harness's card",

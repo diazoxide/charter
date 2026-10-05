@@ -342,8 +342,10 @@ So a persona is a **view**, and a view is what a tab's pane holds when it does n
 beyond the tablist the strip already is, and that is the point: the accessibility the sheet had to
 argue for — not modal, not hiding the queue, dismissible, focus returned — is a tab's by
 construction. A tab is not dismissed by focus leaving it, which is what closed the sheet when the
-palette handed the keyboard back to a terminal (#212's adversarial review, finding 5). Every other
-row's card is still the popover above, because a todo's six short rows are what a popover is for.
+palette handed the keyboard back to a terminal (#212's adversarial review, finding 5). A memory
+followed (SI-9b), and so did a todo (#1214): it opens as a view tab with its whole text, when it
+was opened and its actions, and its row opens no card. The popover above is left to a row that
+opens nothing else, such as an extension's declared row.
 
 An extension's view — persona statistics — opens in a tab of its own the same way, from a button
 on the personas panel's heading, a button on a persona's tab, or its palette row.

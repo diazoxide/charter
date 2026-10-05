@@ -1,5 +1,5 @@
 //! A workspace's todos, written from the window's Todos panel (SI-3): record one, close one as
-//! done, forget one.
+//! done, forget one — and read one, for its view tab (#1214).
 //!
 //! **Every command names its workspace.** The panel is about the focused workspace and says
 //! which, and what it sends is that name — never "the active one", which is a terminal's idea
@@ -45,6 +45,52 @@ const WRITING: &str = "writing the todo";
 /// Now, as the store stamps a file it writes.
 fn now() -> chrono::NaiveDateTime {
     chrono::Local::now().naive_local()
+}
+
+/// One open todo, for its view tab (#1214): the workspace it is in, its slug, and what its file
+/// says — the title, the stamp it was written with, and the text under it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct TodoView {
+    pub workspace: String,
+    pub slug: String,
+    pub title: String,
+    /// When it was opened: the date and time its stamp line records, as written.
+    pub stamp: String,
+    /// Everything under the stamp line, trimmed. Empty for a todo that is only a title.
+    pub body: String,
+}
+
+/// One open todo of `workspace`, for its tab. `null` is a todo that is not open any more —
+/// closed as done or forgotten since its tab opened, here or in a terminal — which the tab
+/// draws as a view whose source has gone, not as a failure.
+#[tauri::command]
+#[specta::specta]
+pub async fn todo_read(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    workspace: String,
+    slug: String,
+) -> Result<Option<TodoView>, String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    crate::off_the_window("reading the todo", move || {
+        read_in(&root, &workspace, &slug)
+    })
+    .await
+}
+
+fn read_in(root: &Path, name: &str, slug: &str) -> Result<Option<TodoView>, String> {
+    let ws = workspace(root, name)?;
+    let open = ws.todos().map_err(|e| e.to_string())?;
+    Ok(open
+        .into_iter()
+        .find(|todo| todo.slug == slug)
+        .map(|todo| TodoView {
+            workspace: name.to_owned(),
+            slug: todo.slug,
+            title: todo.title,
+            stamp: todo.stamp,
+            body: todo.body,
+        }))
 }
 
 /// Record a todo in `workspace`, and answer with what was said.
@@ -231,6 +277,28 @@ mod tests {
         assert!(open(dir.path(), "alpha").is_empty());
         let journal = workspace(dir.path(), "alpha").unwrap().memories().unwrap();
         assert!(journal.is_empty(), "{journal:?}");
+    }
+
+    #[test]
+    fn a_todo_is_read_whole_for_its_tab_and_a_closed_one_is_none() {
+        let dir = plane();
+        add_in(dir.path(), "alpha", "Drop the old importer", at()).unwrap();
+        let slug = open(dir.path(), "alpha")[0].0.clone();
+
+        let view = read_in(dir.path(), "alpha", &slug)
+            .unwrap()
+            .expect("an open todo");
+        assert_eq!(view.workspace, "alpha");
+        assert_eq!(view.slug, slug);
+        assert_eq!(view.title, "Drop the old importer");
+        assert_eq!(view.stamp, "2026-05-04 11:32");
+
+        // The same slug in another workspace is not this todo.
+        assert_eq!(read_in(dir.path(), "beta", &slug).unwrap(), None);
+
+        done_in(dir.path(), "alpha", &slug, at()).unwrap();
+        assert_eq!(read_in(dir.path(), "alpha", &slug).unwrap(), None);
+        assert!(read_in(dir.path(), "gamma", &slug).is_err());
     }
 
     #[test]

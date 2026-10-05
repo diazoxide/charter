@@ -5,6 +5,7 @@ import { RemovePersona } from "./RemovePersona";
 import type { Doing, Ran } from "./actions";
 import { commands, type PlaneId } from "./bindings";
 import type { ViewRef } from "./tabs";
+import { todoView } from "./todos";
 
 /** The verbs of `Doing` this hook carries out (SI-3). */
 export type PlaneEditing = Pick<
@@ -156,13 +157,25 @@ export function usePlaneEdits({
     [reread],
   );
 
+  /** A todo closed or forgotten takes its tab with it (#1214), as a deleted persona's does: the
+   *  tab would only say the todo is not open any more. */
+  const todoGone = useCallback(
+    async (workspace: string, slug: string, write: Parameters<typeof todoWrite>[0]) => {
+      const ran = await todoWrite(write);
+      if (ran.ok) closeView(todoView({ workspace, slug }));
+      return ran;
+    },
+    [closeView, todoWrite],
+  );
   const closeTodo = useCallback(
-    (workspace: string, slug: string) => todoWrite(commands.todoDone(plane, workspace, slug)),
-    [plane, todoWrite],
+    (workspace: string, slug: string) =>
+      todoGone(workspace, slug, commands.todoDone(plane, workspace, slug)),
+    [plane, todoGone],
   );
   const forgetTodo = useCallback(
-    (workspace: string, slug: string) => todoWrite(commands.todoForget(plane, workspace, slug)),
-    [plane, todoWrite],
+    (workspace: string, slug: string) =>
+      todoGone(workspace, slug, commands.todoForget(plane, workspace, slug)),
+    [plane, todoGone],
   );
   const addTodo = useCallback(
     async (workspace: string, text: string) => {

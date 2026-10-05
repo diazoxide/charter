@@ -55,6 +55,7 @@ import { pieceFilesTitle, pieceFilesView } from "./pieceViews";
 import { SESSION_VIEW, sessionTitle, sessionTitleOf, sessionView } from "./sessions";
 import { shellKeySaid } from "./shellKey";
 import { switcherKeySaid } from "./switcherKey";
+import { todoOpenId, todoView } from "./todos";
 import { onAMac } from "./tabKeys";
 import {
   changesTitle,
@@ -1500,6 +1501,21 @@ export function catalogue(now: Now): Offer[] {
   // workspace it writes to, because that is the question a row about a todo has to answer.
   if (now.focused !== undefined && now.focused !== OUTSIDE) {
     for (const todo of now.todos ?? []) {
+      // **Open it as a view tab** (#1214): the row the Todos panel's row runs, filed on the
+      // focused workspace's strip, whose todo it is. A second open brings that tab forward.
+      offers.push({
+        ...can(
+          todoOpenId(todo.slug),
+          `Open todo: ${todo.title}`,
+          {
+            verb: "openView",
+            view: todoView({ workspace: now.focused, slug: todo.slug }),
+            title: todo.title,
+          },
+          todo.title,
+        ),
+        note: `${now.focused}'s todo, in a tab of its own.`,
+      });
       offers.push({
         ...can(
           `todo.done:${todo.slug}`,
@@ -2612,7 +2628,10 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
         below: [`vault.remove:${what.vault}`],
       };
     case "todo":
-      return { above: [`todo.done:${what.slug}`], below: [`todo.forget:${what.slug}`] };
+      return {
+        above: [todoOpenId(what.slug), `todo.done:${what.slug}`],
+        below: [`todo.forget:${what.slug}`],
+      };
     case "session":
       return { above: [`session.open:${what.path}`, `session.resume:${what.path}`], below: [] };
     case "memory":

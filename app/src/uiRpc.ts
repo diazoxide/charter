@@ -1089,6 +1089,20 @@ export const commands = {
 	/**  Forget a todo: it goes, and nothing is journalled. */
 	todoForget: (plane: PlaneId, workspace: string, slug: string) => typedError<string, string>(__TAURI_INVOKE("todo_forget", { plane, workspace, slug })),
 	/**
+	 *  One open todo of `workspace`, for its tab. `null` is a todo that is not open any more —
+	 *  closed as done or forgotten since its tab opened, here or in a terminal — which the tab
+	 *  draws as a view whose source has gone, not as a failure.
+	 */
+	todoRead: (plane: PlaneId, workspace: string, slug: string) => typedError<{
+	workspace: string,
+	slug: string,
+	title: string,
+	/**  When it was opened: the date and time its stamp line records, as written. */
+	stamp: string,
+	/**  Everything under the stamp line, trimmed. Empty for a todo that is only a title. */
+	body: string,
+} | null, string>(__TAURI_INVOKE("todo_read", { plane, workspace, slug })),
+	/**
 	 *  Link the chat in `session` to `item`, and answer the item it now works on, read through its
 	 *  aliases.
 	 */
@@ -4365,6 +4379,20 @@ export type TitleBarRoom = {
 	overlaid: boolean,
 	/**  How many CSS pixels at the leading edge the system's controls occupy, or zero. */
 	reserved: number,
+};
+
+/**
+ *  One open todo, for its view tab (#1214): the workspace it is in, its slug, and what its file
+ *  says — the title, the stamp it was written with, and the text under it.
+ */
+export type TodoView = {
+	workspace: string,
+	slug: string,
+	title: string,
+	/**  When it was opened: the date and time its stamp line records, as written. */
+	stamp: string,
+	/**  Everything under the stamp line, trimmed. Empty for a todo that is only a title. */
+	body: string,
 };
 
 /**  One turn of the trend. */

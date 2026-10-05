@@ -1290,6 +1290,7 @@ describe("carrying out a row", () => {
         `newMemory:${JSON.stringify({ kind: "persona", name: "steward" })}`,
         `newMemory:${JSON.stringify({ kind: "shared" })}`,
         "openView:charter/shared-memory/,Shared memory",
+        "openView:charter/todo/alpha/20260302-091400-review,Review the plan",
         "pickVault",
         "createVault",
         // SI-3: a vault, a persona and a todo are made and deleted from the window too.

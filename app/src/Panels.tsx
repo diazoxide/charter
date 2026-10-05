@@ -81,8 +81,8 @@ export function Panels({
    *
    * **Held by the window rather than by the row.** It was held there so the palette could open a
    * persona's card from outside this panel (charter-app#174); a persona opens a tab of its own
-   * now, and what is left here is the popover card of a row that has one — a todo, a
-   * contributed row.
+   * now, and so does a todo (#1214); what is left here is the popover card of a contributed
+   * row that has one.
    */
   shownRow: string | undefined;
   onShowRow: (row: string | undefined) => void;
@@ -346,8 +346,8 @@ function Contributed({
             }}
             wrap={(row, item) =>
               panel.key === TODOS ? (
-                /* Mark done, and forget (SI-3): the catalogue's rows for this todo in the
-                   focused workspace, which is the one this panel is about. */
+                /* Open, Mark done, and Forget (SI-3, #1214): the catalogue's rows for this todo
+                   in the focused workspace, which is the one this panel is about. */
                 <Menued
                   key={row.key}
                   on={{ on: "todo", slug: row.key }}
