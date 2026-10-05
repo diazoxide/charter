@@ -399,6 +399,9 @@ jobs:
       issues: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # This job holds `issues: write`; the checkout needs no git credentials after it.
+          persist-credentials: false
       # What to say is decided by `tools/mutants-report.py notice`, which has tests; this step
       # only fetches every open issue and carries the decision out.
       - name: Open, update or close the nightly's issue

@@ -81,8 +81,8 @@ test("a mutant that outlives a timeout well above the whole suite is a hang, and
       [
         outcome("CaughtMutant", "crates/charter-core/src/c.rs:1:1: delete ! in g", 20),
         outcome("MissedMutant", MISSED, 140),
+        outcome("Timeout", HUNG, 240),
       ],
-      [outcome("Timeout", HUNG, 240)],
     ],
     ["crates/charter-core/src/a.rs: replace f -> bool with true"],
   );
@@ -94,15 +94,29 @@ test("a mutant that outlives a timeout well above the whole suite is a hang, and
   assert.equal(current().trim(), "crates/charter-core/src/a.rs: replace f -> bool with true");
 });
 
-test("a timeout on a run whose suite nears the limit is a suite cut short, and stays red", () => {
+test("a timeout on a shard whose suite nears the limit is a suite cut short, and stays red", () => {
   const { gather, current } = run(
-    [[outcome("MissedMutant", MISSED, 200)], [outcome("Timeout", HUNG, 240)]],
+    [[outcome("MissedMutant", MISSED, 200), outcome("Timeout", HUNG, 240)]],
     ["crates/charter-core/src/a.rs: replace f -> bool with true"],
   );
   const result = gather("--timeout", "240");
   assert.equal(result.code, 1, result.out);
   assert.doesNotMatch(result.out, /## \d+ hang/);
   assert.match(result.out, /too close to the 240 s limit/);
+  assert.match(result.out, /\| Timeout \| `crates\/charter-core\/src\/b\.rs` \|/);
+  assert.match(current(), /b\.rs: replace \+= with \*= in walk/);
+});
+
+test("a fast shard's suite says nothing about a slow shard's timeouts", () => {
+  // Shards run on different runners. The 2026-09-25 run had fast shards with MISSED mutants
+  // beside slow ones that reported only TIMEOUTs, every one a suite cut short.
+  const { gather, current } = run(
+    [[outcome("MissedMutant", MISSED, 100)], [outcome("Timeout", HUNG, 240)]],
+    ["crates/charter-core/src/a.rs: replace f -> bool with true"],
+  );
+  const result = gather("--timeout", "240");
+  assert.equal(result.code, 1, result.out);
+  assert.doesNotMatch(result.out, /## \d+ hang/);
   assert.match(result.out, /\| Timeout \| `crates\/charter-core\/src\/b\.rs` \|/);
   assert.match(current(), /b\.rs: replace \+= with \*= in walk/);
 });

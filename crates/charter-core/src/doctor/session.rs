@@ -314,11 +314,8 @@ fn reaches(part: &Part, here: &Path, bound: Option<&Path>) -> bool {
     })
 }
 
-/// What the harnesses with an in-repo layer gate on trust, each once, in their order.
-///
-/// Only Claude Code declares both a layer and a trust gate, so no gate is ever seen twice and
-/// none is empty: `||` for the `&&` below collects the same list, and `.cargo/mutants.toml`
-/// excludes it as equivalent. A second harness with a gate retires that entry.
+/// What the harnesses with an in-repo layer gate on trust, each once, in their order —
+/// however many of them name the same gate.
 fn trust_gates(harnesses: &[&Harness]) -> Vec<&'static str> {
     let mut gates: Vec<&'static str> = Vec::new();
     for h in harnesses.iter().filter(|h| !h.layer.is_empty()) {
@@ -471,5 +468,22 @@ mod config_home_tests {
             return;
         };
         assert_eq!(claude_config_home(), std::path::Path::new(&expected));
+    }
+}
+
+#[cfg(test)]
+mod gate_tests {
+    use super::{HARNESSES, trust_gates};
+
+    #[test]
+    fn a_gate_two_harnesses_share_is_named_once() {
+        let claude = &HARNESSES[0];
+        assert_eq!(claude.trust_gate, "hooks");
+        assert_eq!(trust_gates(&[claude, claude]), vec!["hooks"]);
+        // A harness with no in-repo layer gates nothing a session here would find.
+        assert_eq!(
+            trust_gates(&[&HARNESSES[1], &HARNESSES[2]]),
+            Vec::<&str>::new()
+        );
     }
 }

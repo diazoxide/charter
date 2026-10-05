@@ -162,7 +162,4 @@ exclude_re = [
     # so the swapped operator asks the same question. The sites say so.
     'src/doctor/git\.rs:\d+:\d+: replace && with \|\| in default_branch$',
     'src/doctor/git\.rs:\d+:\d+: replace \|\| with && in git_dir_of$',
-    # `doctor::session::trust_gates`: only Claude Code has a layer and a trust gate, so no gate
-    # repeats and none is empty. The site says so.
-    'src/doctor/session\.rs:\d+:\d+: replace && with \|\| in trust_gates$',
 ]

@@ -100,9 +100,11 @@ way to make a run green — and a mutation that provably cannot change any answe
 it at all: prove it and write it into the source, as `realpath` in `pypath.rs` does.
 
 A TIMEOUT is a **hang**, listed apart and not red, when `--timeout` sits at least half again
-above the slowest whole suite of the same run: a mutant that loops for ever is caught, and no
-test could ever retire it. Closer than that, a TIMEOUT stays a survivor, because it may be a
-suite cut short.
+above the slowest whole suite of the same shard: a mutant that loops for ever is caught, and no
+test could ever retire it. Closer than that, or with no whole suite measured on that shard, a
+TIMEOUT stays a survivor, because it may be a suite cut short. Shards run on different runners,
+so one shard's suite says nothing about another's: on 2026-09-25 ten slow shards reported 432
+TIMEOUTs and no MISSED mutant, and this rule is what keeps such a night red.
 
 When the nightly is not clean it keeps one issue in this repo up to date, and closes it, with
 any copies, only when a full run is clean. Five consecutive red nights went unread in September
