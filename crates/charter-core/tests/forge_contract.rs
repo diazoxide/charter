@@ -629,48 +629,50 @@ mod cases {
         );
         assert_eq!(item.assignees, ["octocat"]);
         let key = |number: u64| work::TrackerKey::parse(&scene.issue_key(number)).unwrap();
+        // How it stands to other items, the same on both forges: GitHub's parent, sub-issue,
+        // dependencies and closing pull request; GitLab's hierarchy, blocking links and closing
+        // merge request.
+        assert_eq!(
+            item.relations,
+            [
+                work::Relation::Parent(key(3)),
+                work::Relation::Child(key(14)),
+                work::Relation::BlockedBy(key(11)),
+                work::Relation::Blocks(key(15)),
+                work::Relation::ClosedBy(Pr {
+                    number: 20,
+                    url: scene.request_url(20),
+                }),
+            ]
+        );
+        let day = |d| chrono::NaiveDate::from_ymd_opt(2026, 10, d);
+        let sprint = item.iteration.as_ref().expect("the item's iteration");
+        assert_eq!(sprint.title.as_deref(), Some("Sprint 3"));
+        assert_eq!((sprint.start, sprint.end), (day(5), day(18)));
+        assert_eq!(item.placements.len(), 1);
+        assert_eq!(item.placements[0].board_title, "Roadmap");
+        assert_eq!(item.status.as_deref(), Some("Done"));
+        assert_eq!(item.closed_as, Some(work::ClosedAs::Completed));
         match kind {
             "github" => {
                 assert_eq!(item.labels, ["ws:alpha"]);
                 assert_eq!(item.issue_type.as_deref(), Some("Bug"));
-                assert_eq!(item.closed_as, Some(work::ClosedAs::Completed));
-                assert_eq!(
-                    item.relations,
-                    [
-                        work::Relation::Parent(key(3)),
-                        work::Relation::Child(key(14)),
-                        work::Relation::BlockedBy(key(11)),
-                        work::Relation::Blocks(key(15)),
-                        work::Relation::ClosedBy(Pr {
-                            number: 20,
-                            url: scene.request_url(20),
-                        }),
-                    ]
-                );
-                assert_eq!(item.placements.len(), 1);
-                assert_eq!(item.placements[0].board_title, "Roadmap");
+                // An issue has no status of its own on GitHub: it is its board's.
                 assert_eq!(item.placements[0].status.as_deref(), Some("Done"));
-                let sprint = item.iteration.as_ref().expect("the board's iteration");
-                assert_eq!(sprint.title.as_deref(), Some("Sprint 3"));
                 assert_eq!(
                     item.placements[0].iteration.as_ref(),
                     Some(sprint),
                     "the item's iteration is its board's"
                 );
-                assert_eq!(
-                    (sprint.start, sprint.end),
-                    (
-                        chrono::NaiveDate::from_ymd_opt(2026, 10, 5),
-                        chrono::NaiveDate::from_ymd_opt(2026, 10, 18)
-                    )
-                );
             }
             _ => {
                 assert_eq!(item.labels, ["charter::ws::alpha"]);
-                // FW-6b (#734) maps the rest of GitLab's issue; until then it is left empty, and
-                // GitLab keeps no close reason at all.
-                assert_eq!(item.closed_as, None);
-                assert!(item.relations.is_empty(), "{:?}", item.relations);
+                // GitLab's work item type, and its own iteration and status (Premium). A closed
+                // issue sits in no label list of a board, and its close reason is its status's
+                // category.
+                assert_eq!(item.issue_type.as_deref(), Some("Issue"));
+                assert_eq!(item.placements[0].status, None);
+                assert_eq!(item.placements[0].iteration, None);
             }
         }
         spent(&over);
@@ -1220,7 +1222,7 @@ mod network_log {
             // reader that skipped some, fails here rather than checking less.
             let expected = match kind {
                 "github" => 18,
-                _ => 21,
+                _ => 22,
             };
             assert_eq!(paths.len(), expected, "{kind}: the recorded REST calls");
             for path in paths {

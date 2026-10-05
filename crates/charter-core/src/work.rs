@@ -51,13 +51,19 @@ pub struct WorkItem {
     pub state: State,
     /// Why a closed item was closed, when its tracker says. `None` while it is open.
     pub closed_as: Option<ClosedAs>,
+    /// The item's status, as its tracker names it (`In progress`, `Won't do`). An item-level
+    /// status of the tracker's own (GitLab's work item status, a Jira or Linear status) comes
+    /// first; with none, it is the first board's in [`WorkItem::placements`] that gives one, as
+    /// [`WorkItem::iteration`] is. GitHub keeps a status per board only, so there it is always a
+    /// board's ([`crate::forge::Capability::ItemStatus`]).
+    pub status: Option<String>,
     pub milestone: Option<Milestone>,
     /// The iteration (sprint) the item is planned in. On GitHub it is a Projects v2 board's
     /// iteration field: each [`Placement`] keeps its own, and this is the first board's, in the
-    /// tracker's order, that gives one.
+    /// tracker's order, that gives one. On GitLab it is the item's own (a Premium feature).
     pub iteration: Option<Iteration>,
     /// The tracker's own boards that hold the item, and its status on each: GitHub's Projects
-    /// v2. A board here is the tracker's, never charter's own [`board::Board`], which is a view.
+    /// v2, a GitLab repo's issue boards. A board here is the tracker's, never charter's own [`board::Board`], which is a view.
     pub placements: Vec<Placement>,
     /// Label names, as the tracker spells them.
     pub labels: Vec<String>,
@@ -69,7 +75,7 @@ pub struct WorkItem {
 
 impl WorkItem {
     /// An item of `kind` with only its key and title known: open, with no forge id, page,
-    /// type, milestone, iteration, board, label, assignee or relation. A backend fills in the
+    /// type, status, milestone, iteration, board, label, assignee or relation. A backend fills in the
     /// rest.
     pub fn new(key: TrackerKey, kind: Kind, title: impl Into<String>) -> WorkItem {
         WorkItem {
@@ -81,6 +87,7 @@ impl WorkItem {
             issue_type: None,
             state: State::Open,
             closed_as: None,
+            status: None,
             milestone: None,
             iteration: None,
             placements: Vec::new(),
@@ -215,8 +222,9 @@ impl Iteration {
 /// there: a GitHub Projects v2 board, its `Status` field and its iteration field. FW-9 may group
 /// charter's board by the status.
 ///
-/// This status is per board. GitLab, Jira and Linear give an item one status of its own, and
-/// FW-6b (#734) adds an item-level status field beside this one for them.
+/// This status is per board. GitLab, Jira and Linear give an item one status of its own, which
+/// [`WorkItem::status`] holds beside this one. On GitLab a board is a repo's issue board, and the
+/// status there is the label of the first label list holding the item.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Placement {
     /// The board's id on the forge.

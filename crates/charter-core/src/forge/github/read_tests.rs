@@ -157,6 +157,11 @@ fn an_issue_is_read_with_its_type_reason_assignees_relations_boards_and_iteratio
         Some(sprint(3)),
         "the item's iteration is the first board's"
     );
+    assert_eq!(
+        item.status.as_deref(),
+        Some("Done"),
+        "an issue has no status of its own on GitHub: it is the first board's that has one"
+    );
 }
 
 /// Sprint 3 or 9 as `links()` answers it.

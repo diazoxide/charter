@@ -89,7 +89,7 @@ owner, repo, branch, number or commit. The CLI transport's argv for each is pinn
 | `Repos::top_level` | `discover`'s stack probe | `GET repos/{o}/{r}/git/trees/{ref}` (ref, else default branch, else `HEAD`) | `GET projects/{id}/repository/tree` (ref, else the default branch) | strict | same |
 | `Repos::about` | `charter ws todo promote` (ADR 0088 §5), before it sends; `charter doctor`'s `project remote` row (SQ-8) | `GET repos/{o}/{r}`: `visibility` (else `private`), `archived`, `has_issues`, `permissions.pull`, `security_and_analysis.secret_scanning_push_protection.status` (admins only, else unknown) | `GET projects/{path}`: `visibility`, `archived`, `issues_access_level` (else `issues_enabled`), membership from `permissions`, `secret_push_protection_enabled` (else `pre_receive_secret_detection_enabled`; else unknown) | strict | same |
 | `WorkItems::create` | `charter ws todo promote` | `POST repos/{o}/{r}/issues` with `title`, `body` and `labels[]` (`ws:<name>`, private repos only); keyed by `html_url` and `number`, `node_id` beside, the answer's `title`, `state`, `labels` and `milestone` mapped to the work model; every todo value a literal `-f` | `POST projects/{path}/issues` with `title`, `description` and `labels` (`charter::ws::<name>`, private repos only); keyed by `web_url`'s host, `references.full` and `iid`, `id` beside, the answer's `title`, `state`, `labels` and `milestone` mapped to the work model; every todo value a literal `-f` | strict | same |
-| `WorkItems::read` | the item cache (FW-7) | `GET repos/{o}/{r}/issues/{n}`: `title`, `state` and `state_reason` (closed only), `type.name`, `labels`, `milestone`, `assignees`; one GraphQL `WorkItem` query for `parent`, `subIssues`, `closedByPullRequestsReferences` (open and merged ones) and `projectItems` (each board's `Status` and the first iteration value); `GET …/dependencies/blocked_by` and `…/blocking` only when `issue_dependencies_summary` counts any. More than one answer holds is an error, never a shorter list | `GET projects/{path}/issues/{iid}`: what `create` maps, and `assignees`; the rest is FW-6b's (#734) | strict | **GitLab maps a subset until FW-6b** |
+| `WorkItems::read` | the item cache (FW-7) | `GET repos/{o}/{r}/issues/{n}`: `title`, `state` and `state_reason` (closed only), `type.name`, `labels`, `milestone`, `assignees`; one GraphQL `WorkItem` query for `parent`, `subIssues`, `closedByPullRequestsReferences` (open and merged ones) and `projectItems` (each board's `Status` and the first iteration value; the item's `status` is the first board's that has one, as GitHub keeps no status of an issue's own); `GET …/dependencies/blocked_by` and `…/blocking` only when `issue_dependencies_summary` counts any. More than one answer holds is an error, never a shorter list | `GET projects/{path}/issues/{iid}`: what `create` maps, and `assignees`; one GraphQL `project.workItems(iid:)` query for `workItemType.name`, `duplicatedToWorkItemUrl` and the widgets: hierarchy (`parent`, `children`, an epic keyed `&iid` at its group), linked items (`blocks`, `is_blocked_by`; `relates_to` is no relation the model has), `iteration`, `status` (Premium, 17.11) and development's `closingMergeRequests` (open and merged ones); the item is `closed_as` a duplicate when it names one, else by its status's category (`DONE` completed, `CANCELED` not planned); `GET projects/{path}/boards`: each board whose scope (milestone, labels, assignee) holds the item, its status there the first label list it carries while open; the item's `status` is its own, else the first board's. More than one answer holds is an error, never a shorter list | strict | same |
 | `Requests::open_or_update` | a request-mode save (ADR 0051), `charter change push` | `GET pulls?state=open&head={o}:{b}&base=…`, then `PATCH` or `POST pulls` | `GET merge_requests?state=opened&source_branch=…&target_branch=…`, the repo's own only (never a fork's), then `PUT` or `POST` | strict | same |
 | `Requests::state` | a request-mode save | `GET pulls/{n}`: `closed` + `merged` is merged, at `merge_commit_sha` | `GET merge_requests/{iid}`: `merged`, at `squash_commit_sha` else `merge_commit_sha` | strict | same |
 | `Requests::by_head` | `charter change show` and `push` (ADR 0060) | `GET pulls?state=all&head={o}:{b}`, checked against `head.repo.full_name` | `GET merge_requests?source_branch=…&state=all`, the repo's own only | strict | same |
@@ -102,7 +102,7 @@ owner, repo, branch, number or commit. The CLI transport's argv for each is pinn
 | `Requests::checks_at` | `charter change show` and `land` | check runs **and** commit statuses at the sha, each read whole | the request's pipelines at the sha; the newest decides | strict, `UNKNOWN` on failure | same, by design |
 | `Requests::open_on_branch` | `gl-refresh` | `GET pulls?state=open&head={o}:{b}&per_page=1` | `GET merge_requests?state=opened&source_branch=…&per_page=100`, the repo's own only | permissive | same (fixed here) |
 | `Requests::ci_word` | `gl-refresh` | GraphQL `statusCheckRollup.state` (5 values) | `GET pipelines?ref=…&per_page=1`, its `status` (13 values) | permissive | same |
-| `Capabilities::support` | the fallbacks of ADR 0070 §2 | no request: epics are never there; sub-issues, dependencies, boards, iterations and close reasons are there on github.com's instance; everything else is not asked yet | no request: epics, iterations, boards, child items and blocking links are there on gitlab.com's instance; a self-managed GitLab's are not asked yet | never yes unasked | same; the probes come with FG-2 (#802) |
+| `Capabilities::support` | the fallbacks of ADR 0070 §2 | no request: epics and an issue's own status are never there; sub-issues, dependencies, boards, iterations and close reasons are there on github.com's instance; everything else is not asked yet | no request: epics, iterations, boards, child items, blocking links, work item types, close reasons and an item's own status are there on gitlab.com's instance; a group or repo's tier and a self-managed GitLab's are not asked yet | never yes unasked | same, except an issue's own status, which GitHub never has (its boards' instead); the probes come with FG-2 (#802) |
 
 ### `charter change push`
 
@@ -228,9 +228,9 @@ again, it seeds only the members it has not seeded yet.
 
 **Work items beyond `create` and `read`.** Each forge's native client has its work items as that
 forge has them, crate-private, with recorded-request tests (`src/forge/github/work.rs`,
-`src/forge/gitlab/work_tests.rs`). GitHub's reads reach the seam through `WorkItems::read`
-(FW-6a, #733); its writes, and GitLab's reads beyond an issue's own answer, join the
-`WorkItems` area as FW-6b (#734) and the work view (FW-9) need them:
+`src/forge/gitlab/work_tests.rs`). Both forges' reads reach the seam through `WorkItems::read`
+(FW-6a, #733; FW-6b, #734); the writes join the `WorkItems` area as their first callers (the
+work view, FW-9; the item cache, FW-7) need them (#1202):
 
 | Concept | GitHub | GitLab |
 |---|---|---|
@@ -238,9 +238,10 @@ forge has them, crate-private, with recorded-request tests (`src/forge/github/wo
 | A child item | sub-issues | a GraphQL work item's parent |
 | Blocked by | issue dependencies | issue links, `blocks` |
 | Milestones | `repos/{o}/{r}/milestones` | `projects/{id}/milestones` |
-| Types | issue types | — (a work item's type; FW-6b decides) |
+| Types | issue types | a work item's type (`Issue`, `Task`, `Incident`, …) |
 | Epics | — | `groups/{id}/epics` (Premium) |
-| Iterations | a Projects v2 iteration field | `groups/{id}/iterations` (Premium) |
+| Iterations | a Projects v2 iteration field | `groups/{id}/iterations`, an issue's own (Premium) |
+| An item's own status | — (a board's `Status` only) | a work item's status (Premium, 17.11) |
 | Boards | a Projects v2 board, its items and fields | a repo's boards and their label lists |
 | Pipelines | — (checks are `Requests::checks_at`) | `projects/{id}/pipelines` |
 
@@ -307,15 +308,17 @@ GitLab's native transport is the same `Http` as GitHub's, speaking GitLab's dial
   `ratelimit-reset` as its reset.
 - **Conditional reads.** GitLab answers a read with a weak ETag (`W/"…"`) and a `304` to it, so
   a repeated read is answered from the same per-account ETag store GitHub's is.
-- **What it can do** (`Capabilities`). gitlab.com has epics, iterations, boards, child items and
-  blocking links, said of the instance. Whether one group or repo has them turns on its plan
-  (epics, iterations and blocking links need Premium), which FG-2's probes ask, so a narrower
-  reach is `Unknown` and takes its fallback. A self-managed GitLab shows its edition and licence
+- **What it can do** (`Capabilities`). gitlab.com has epics, iterations, boards, child items,
+  blocking links, work item types, close reasons and an item's own status, said of the
+  instance. Whether one group or repo has them turns on its plan (epics, iterations, blocking
+  links and work item status need Premium; a close reason other than a duplicate is a status's
+  category), which FG-2's probes ask, so a narrower reach is `Unknown` and takes its fallback. A self-managed GitLab shows its edition and licence
   to no one but an admin, so everything there is `Unknown`.
-- **Work items** (`src/forge/gitlab/work.rs`, crate-private until FW-6b maps them): issues,
-  blocking links, child items and their parent (GraphQL work items), milestones, epics and
-  iterations (Premium), boards and their label lists, and pipelines. A label with a comma is
-  refused, because GitLab reads it as two.
+- **Work items** (`src/forge/gitlab/work.rs`; reads mapped by `src/forge/gitlab/read.rs`, FW-6b):
+  issues, blocking links, child items and their parent (GraphQL work items), milestones, epics
+  and iterations (Premium), boards and their label lists, and pipelines. A read takes an issue's
+  epic as its hierarchy parent, a group's work item; the v4 epic writes move to work items with
+  their first caller (#1202). A label with a comma is refused, because GitLab reads it as two.
 - **The network log** lists a GitLab path by position: the id after `projects` or `groups` is
   one `{}`, whether it is a number or a full path, encoded (`acme%2Fapi`, as charter sends it)
   or not (`acme/sub/api`, up to the next word GitLab puts under a repo or group); the segment

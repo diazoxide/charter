@@ -2,9 +2,10 @@
 //! epics and iterations (Premium), boards and pipelines (FW-2b, FI4).
 //!
 //! **GitLab's own types, crate-private methods.** FW-5 defines the neutral work model, and
-//! FW-6b maps these onto it behind the `WorkItems` area trait (ADR 0070 §1). Until then nothing
-//! outside the core calls them, and every method still takes the [`Caller`] and sends its
-//! requests as [`Call`]s, so either transport carries them and the routing rules hold.
+//! FW-6b maps GitLab's reads onto it behind the `WorkItems` area trait (ADR 0070 §1, `read.rs`).
+//! The writes here join the seam when their first caller does (#1202), and every method takes
+//! the [`Caller`] and sends its requests as [`Call`]s, so either transport carries them and the
+//! routing rules hold.
 //!
 //! **Every field is a literal string unless charter wrote it** (charter #323): a title, a
 //! description, a label, a path or a global id is a [`Field::Text`]; only numbers charter holds
@@ -13,7 +14,9 @@
 //! **REST where GitLab's v4 has the operation, GraphQL where only work items do.** A child item
 //! (GitLab's hierarchy, its sub-issues) and an issue's iteration are written through GraphQL;
 //! everything else is REST v4. Epics use v4's epics endpoints, which GitLab deprecated in 17.0
-//! in favour of work items and still serves in v4; FW-6b moves them when it maps epics.
+//! in favour of work items and still serves in v4. A read maps an issue's epic as its work
+//! item's hierarchy parent (`read.rs`, FW-6b); these writes move to work items with their first
+//! caller (#1202).
 //!
 //! A repo or group is addressed by its full path, encoded as one segment (`acme%2Fapi`), which
 //! is what GitLab asks for and what keeps a nested group's names out of the network log.
@@ -137,12 +140,19 @@ pub struct Child {
     pub kind: String,
 }
 
-/// A board of a repo, with its lists.
+/// A board of a repo, with its lists and its scope.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Board {
     pub id: u64,
     pub name: String,
     pub lists: Vec<BoardList>,
+    /// The milestone the board is scoped to (Premium), by its id. GitLab names "none", "any",
+    /// "upcoming" and "started" by ids of zero or less.
+    pub milestone_id: Option<i64>,
+    /// The labels the board is scoped to (Premium): it holds only issues carrying all of them.
+    pub scope_labels: Vec<String>,
+    /// The assignee the board is scoped to (Premium), by username.
+    pub assignee: Option<String>,
 }
 
 /// One list of a board. A label list holds the issues carrying its label; a list with no label
@@ -714,6 +724,14 @@ impl GitLab {
                         position: list["position"].as_i64(),
                     })
                     .collect(),
+                milestone_id: board["milestone"]["id"].as_i64(),
+                scope_labels: board["labels"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|l| l["name"].as_str().map(str::to_string))
+                    .collect(),
+                assignee: board["assignee"]["username"].as_str().map(str::to_string),
             })
             .collect())
     }
