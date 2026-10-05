@@ -429,13 +429,14 @@ describe("a change at the Project level", () => {
     const { sent } = core();
     await atProject();
 
-    await userEvent.type(screen.getByLabelText("Default workspace"), "main");
+    // ST-1 made the defaults pickers: Worktrees folder is one line of text.
+    await userEvent.type(screen.getByLabelText("Worktrees folder"), "../wt");
     expect(sent).toHaveLength(0);
     await userEvent.tab();
 
     await waitFor(() => expect(sent).toHaveLength(1));
     expect(sent[0].edits).toEqual([
-      { path: [{ key: "workspace" }, { key: "default" }], value: { kind: "text", value: "main" } },
+      { path: [{ key: "plane" }, { key: "worktrees" }], value: { kind: "text", value: "../wt" } },
     ]);
   });
 
@@ -564,9 +565,9 @@ describe("a change at the Project level", () => {
   it("keeps a typed value that goes back to what it was while the first write is pending", async () => {
     const { sent, release } = core({ hold: true });
     await atProject();
-    const box = () => screen.getByLabelText("Default workspace");
+    const box = () => screen.getByLabelText("Worktrees folder");
 
-    await userEvent.type(box(), "main");
+    await userEvent.type(box(), "../wt");
     await userEvent.tab();
     await userEvent.clear(box());
     await userEvent.tab();
@@ -575,7 +576,7 @@ describe("a change at the Project level", () => {
     await release();
 
     expect(sent[1].edits).toEqual([
-      { path: [{ key: "workspace" }, { key: "default" }], value: null },
+      { path: [{ key: "plane" }, { key: "worktrees" }], value: null },
     ]);
     await waitFor(() => expect(box()).toHaveValue(""));
   });

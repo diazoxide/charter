@@ -257,6 +257,92 @@ fn a_harness_default_naming_nothing_is_refused_but_one_the_local_file_declares_s
     );
 }
 
+/// ST-1 (#1225): the default persona and workspace are pickers over what is here, and a value
+/// set by hand that names nothing is the core's to say, as `[harness] default`'s is.
+#[test]
+fn a_persona_default_naming_no_persona_is_refused_and_one_that_is_here_stands() {
+    let dir = plane("schema = 1\n");
+    let why = refusals(
+        dir.path(),
+        Which::Shared,
+        "[persona]\ndefault = \"ghost\"\n",
+    );
+    assert_eq!(why.len(), 1, "{why:?}");
+    assert!(
+        why[0].starts_with("[persona] default = \"ghost\" names no persona in this project"),
+        "{why:?}"
+    );
+    fs::create_dir_all(dir.path().join("personas/ghost")).unwrap();
+    fs::write(
+        dir.path().join("personas/ghost/persona.md"),
+        "---\nrole: Ghost\n---\n",
+    )
+    .unwrap();
+    assert_eq!(
+        refusals(
+            dir.path(),
+            Which::Shared,
+            "[persona]\ndefault = \"ghost\"\n"
+        ),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_workspace_default_naming_no_workspace_is_refused_but_the_built_in_one_stands() {
+    let dir = plane("schema = 1\n");
+    let why = refusals(
+        dir.path(),
+        Which::Shared,
+        "[workspace]\ndefault = \"gone\"\n",
+    );
+    assert_eq!(why.len(), 1, "{why:?}");
+    assert!(
+        why[0].starts_with("[workspace] default = \"gone\" names no workspace in this project"),
+        "{why:?}"
+    );
+    // `default` is the workspace every plane has, made where it is first used.
+    assert_eq!(
+        refusals(
+            dir.path(),
+            Which::Shared,
+            "[workspace]\ndefault = \"default\"\n"
+        ),
+        Vec::<String>::new()
+    );
+    fs::create_dir_all(dir.path().join("workspaces/gone")).unwrap();
+    fs::write(dir.path().join("workspaces/gone/workspace.json"), "{}").unwrap();
+    assert_eq!(
+        refusals(
+            dir.path(),
+            Which::Shared,
+            "[workspace]\ndefault = \"gone\"\n"
+        ),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_default_set_by_hand_to_nothing_does_not_stop_another_edit_but_a_new_one_is_refused() {
+    let dir = plane("schema = 1\n[persona]\ndefault = \"ghost\"\n");
+    write_one(
+        dir.path(),
+        &["memory", "share"],
+        Some(Value::Text("local".into())),
+    )
+    .unwrap();
+    let refused = write_one(
+        dir.path(),
+        &["workspace", "default"],
+        Some(Value::Text("nowhere".into())),
+    )
+    .unwrap_err();
+    assert!(
+        refused[0].starts_with("[workspace] default = \"nowhere\""),
+        "{refused:?}"
+    );
+}
+
 #[test]
 fn a_local_profile_charter_would_refuse_is_refused_in_its_own_sentence() {
     let dir = plane(COMMENTED);
