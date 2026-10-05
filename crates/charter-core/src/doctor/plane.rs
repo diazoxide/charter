@@ -229,10 +229,9 @@ fn is_persona(personas: &Path, name: &str) -> bool {
 /// `renamed leftovers` (RN-1, V93e): a name in the plane root that exists under both its
 /// purlis and its old spelling — state that may be split between two names.
 ///
-/// **It names both and blames neither.** While the rename is half done most readers still read
-/// the old name, so the new one is not simply "the one that counts", and deleting either can
-/// drop settings something still reads. The `rename-plane` fix reconciles them; until it
-/// ships, the row says so and carries no fix id.
+/// **It names both and blames neither.** Which file holds what the operator meant is theirs to
+/// say, so no fix merges them: `rename-plane` refuses while a file is under both names (RN-7),
+/// and the row says to settle it by hand first. It carries no fix id.
 ///
 /// **No row unless this is a project with a leftover**: a plane with only old names, or only
 /// new ones, prints exactly what it printed before the rename.
@@ -266,14 +265,18 @@ pub(super) fn renamed_leftovers(d: &Doctor) -> Option<Row> {
     let files = leftovers.iter().any(|at| !is_state(at));
     let fix = match (files, state) {
         (true, true) => {
-            "the `rename-plane` fix will reconcile the files, and `rename-local` the \
-                         state folders, into the purlis names."
+            "keep the file you mean under its purlis name and move what you need out of the \
+             other, then `charter doctor --fix rename-plane` renames the rest of the project; \
+             the `rename-local` fix will reconcile the state folders into the purlis name."
         }
         (false, true) => {
             "the `rename-local` fix will reconcile the state folders into the \
                           purlis name."
         }
-        _ => "the `rename-plane` fix will reconcile them into the purlis names.",
+        _ => {
+            "keep the file you mean under its purlis name and move what you need out of the \
+             other, then `charter doctor --fix rename-plane` renames the rest of the project."
+        }
     };
     (!found.is_empty()).then(|| {
         Row::warn(
@@ -281,7 +284,7 @@ pub(super) fn renamed_leftovers(d: &Doctor) -> Option<Row> {
             format!("under both names: {}", found.join(", ")),
             format!(
                 "This project holds the same thing under its purlis and its charter name, so \
-                 settings or state may be split between them. Keep both for now: {fix}"
+                 settings or state may be split between them. To settle it: {fix}"
             ),
         )
     })

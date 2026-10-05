@@ -54,9 +54,15 @@ pub fn schema(cfg: &toml::Table) -> Schema {
     }
 }
 
-/// The features this charter has. None yet: the first is added with the first change that
-/// needs one, so any `requires` entry makes a project read-only to this charter.
-const KNOWN: &[&str] = &[];
+/// The features this charter has. A `requires` entry naming any other makes a project read-only
+/// to it.
+///
+/// - `purlis-names` ([`crate::names::PURLIS_NAMES_FEATURE`], V93g): the project's committed
+///   files use purlis's names — `purlis.toml`, the purlis markers, the purlis hook commands. The
+///   `rename-plane` fix adds it in the one commit that renames them (RN-7), so a build that
+///   cannot read those names opens the project read-only instead of writing charter's beside
+///   them.
+pub const KNOWN: &[&str] = &[crate::names::PURLIS_NAMES_FEATURE];
 
 /// What this charter may do with a project.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -162,6 +168,12 @@ impl std::fmt::Display for Why {
 /// (V37a), which is what makes a charter older than FR-24 refuse it; a charter that knows
 /// `requires` does not need the `schema` to read it.
 pub fn read(root: &Path) -> Compat {
+    read_knowing(root, KNOWN)
+}
+
+/// [`read`], for a charter that has exactly the features `known`: how a build older than one of
+/// them answers the same project. [`read`] is this with [`KNOWN`].
+pub fn read_knowing(root: &Path, known: &[&str]) -> Compat {
     let file = crate::names::manifest_name(root);
     let unreadable = |detail: String| Compat::ReadOnly(Why::ManifestUnreadable { file, detail });
     let raw = match std::fs::read(crate::names::manifest(root)) {
@@ -200,7 +212,7 @@ pub fn read(root: &Path) -> Compat {
                 detail: "a `requires` entry has no `feature` this charter can read",
             });
         };
-        if KNOWN.contains(&feature) {
+        if known.contains(&feature) {
             continue;
         }
         return Compat::ReadOnly(Why::Missing {
@@ -345,6 +357,34 @@ mod tests {
                 "{toml:?}"
             );
         }
+    }
+
+    /// RN-7 (V93g): a project the `rename-plane` fix migrated requires `purlis-names`. This
+    /// build has it; a build without it opens the project read-only and says which build has it.
+    #[test]
+    fn a_project_requiring_purlis_names_is_writable_here_and_read_only_to_a_build_without_it() {
+        let migrated =
+            "schema = 2\nrequires = [{ feature = \"purlis-names\", since = \"0.9.0\" }]\n";
+        let dir = purlis_project(migrated);
+        assert_eq!(read(dir.path()), Compat::Writable);
+        let Compat::ReadOnly(why) = read_knowing(dir.path(), &[]) else {
+            panic!("a build without purlis-names must open the project read-only");
+        };
+        assert_eq!(
+            why,
+            Why::Missing {
+                feature: "purlis-names".into(),
+                since: Some("0.9.0".into())
+            }
+        );
+        let said = why.to_string();
+        assert!(
+            said.contains("requires the feature purlis-names")
+                && said.contains("0.9.0 or later has it")
+                && said.contains("opens the project read-only and writes nothing to it")
+                && said.ends_with("Upgrade charter: update the app."),
+            "{said}"
+        );
     }
 
     #[test]

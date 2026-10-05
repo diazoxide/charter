@@ -267,8 +267,9 @@ enum Command {
         /// apply the local fixes the doctor's rows offer (`reinit`, `local-ignore`,
         /// `memory-optimize`), and add the plane's default ask rule for `charter report --yes`
         /// when it is missing (what `charter guard ask` does). `discover` goes over the network,
-        /// so it runs only by name. With an ID (the `fix` a row carries in `--json`): apply that
-        /// fix alone. What each changed, or why it was refused, is printed on stderr.
+        /// and `rename-plane` commits the project's files under purlis's names, so each runs
+        /// only by name. With an ID (the `fix` a row carries in `--json`): apply that fix
+        /// alone. What each changed, or why it was refused, is printed on stderr.
         #[arg(
             long,
             value_name = "ID",

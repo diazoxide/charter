@@ -29,6 +29,7 @@ use std::path::Path;
 use crate::scaffold::Say;
 
 pub mod identity;
+pub mod rename_plane;
 
 /// A fix charter can make, by the id every surface names it with.
 ///
@@ -73,17 +74,31 @@ pub enum FixId {
     /// when either is unset. **It takes input** ([`FixId::takes_input`]): a name and an email,
     /// from the window's form or `--name`/`--email`, applied through [`identity::apply`].
     GitIdentity,
+    /// **`rename-plane`** (RN-7, V93g): the project's committed files under purlis's names, in
+    /// ONE commit. It renames `charter.toml` to `purlis.toml` and adds `requires = [{ feature =
+    /// "purlis-names" }]` to it, so a build without that feature opens the project read-only.
+    /// It renames `.charter-scan-allow.toml`, the managed blocks' markers (`.gitattributes`,
+    /// `.gitignore`, the personas block in `README.md`, each generated agent), a committed
+    /// `workspace.json`'s digest key, `.claude/settings.json`'s `CHARTER_HARNESS`, and personas'
+    /// `charter:` skill references. Each `charter …` ask or deny rule gets its `purlis …` twin
+    /// and is kept; hook commands keep `charter` for the window (D-RN7-11). It changes nothing
+    /// else and removes none of your content. Applied only by name ([`FixId::by_name_only`]):
+    /// it is a commit every teammate pulls. It refuses, writing nothing, from inside a chat, on
+    /// a project with uncommitted changes, outside git, or with a file under both names
+    /// ([`rename_plane`]).
+    RenamePlane,
 }
 
 impl FixId {
     /// Every fix, in the order `charter doctor --fix` applies them.
-    pub const ALL: [FixId; 6] = [
+    pub const ALL: [FixId; 7] = [
         FixId::PluginInstall,
         FixId::Reinit,
         FixId::LocalIgnore,
         FixId::MemoryOptimize,
         FixId::Discover,
         FixId::GitIdentity,
+        FixId::RenamePlane,
     ];
 
     /// The id, as `charter doctor --fix <id>`, `--json` and the window spell it.
@@ -95,15 +110,17 @@ impl FixId {
             Self::MemoryOptimize => "memory-optimize",
             Self::Discover => "discover",
             Self::GitIdentity => "git-identity",
+            Self::RenamePlane => "rename-plane",
         }
     }
 
     /// Whether this fix runs only when it is named — `charter doctor --fix <id>`, or its Fix
     /// button — and never from a bare `charter doctor --fix` (D-FX2-9). The fixes bare `--fix`
     /// applies are local and additive; `discover` asks a forge over the network and writes the
-    /// inventory and the docs, so it waits to be asked.
+    /// inventory and the docs, so it waits to be asked. `rename-plane` makes a commit every
+    /// teammate pulls, so it is never automatic (V93g).
     pub const fn by_name_only(self) -> bool {
-        matches!(self, Self::Discover)
+        matches!(self, Self::Discover | Self::RenamePlane)
     }
 
     /// Whether this fix needs the operator's input before it can be applied (FX-3, D-FX3-1).
@@ -197,6 +214,7 @@ fn applied(root: &Path, id: FixId, machine: Option<&crate::plugin_install::Machi
         FixId::MemoryOptimize => memory_optimize(root),
         FixId::Discover => discover(root),
         FixId::GitIdentity => needs_input(id),
+        FixId::RenamePlane => rename_plane::apply(root),
         FixId::PluginInstall => unreachable!("answered above"),
     }
 }

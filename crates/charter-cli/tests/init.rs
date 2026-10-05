@@ -238,13 +238,14 @@ fn init_in_an_empty_directory_leaves_exactly_the_plane_the_python_charter_leaves
         (
             ".claude/settings.json",
             r#""Bash(charter handoff *)"]"#,
-            r#""Bash(charter handoff *)","Bash(charter report *--yes*)","Bash(charter *todo*promote*)"]"#,
+            r#""Bash(charter handoff *)","Bash(charter report *--yes*)","Bash(charter *todo*promote*)","Bash(purlis handoff *)","Bash(purlis report *--yes*)","Bash(purlis *todo*promote*)"]"#,
         ),
         (
             "opencode.json",
             "\"charter handoff *\": \"ask\"\n",
             "\"charter handoff *\": \"ask\",\n      \"charter report *--yes*\": \"ask\",\n      \
-             \"charter *todo*promote*\": \"ask\"\n",
+             \"charter *todo*promote*\": \"ask\",\n      \"purlis handoff *\": \"ask\",\n      \
+             \"purlis report *--yes*\": \"ask\",\n      \"purlis *todo*promote*\": \"ask\"\n",
         ),
     ] {
         let Some(Node::File(python)) = want.get(Path::new(rel)) else {
@@ -350,13 +351,15 @@ fn a_file_already_at_every_path_init_writes_is_left_byte_for_byte() {
         ".claude/settings.json",
         "{\n    \"env\": {\"CHARTER_HARNESS\": \"claude-code\"},\n    \"permissions\": {\"ask\": \
          [\"Bash(charter handoff *)\", \"Bash(charter report *--yes*)\", \
-         \"Bash(charter *todo*promote*)\"]},\n    \"hooks\": {\"PreToolUse\": [{\"matcher\": \"Bash\", \
+         \"Bash(charter *todo*promote*)\", \"Bash(purlis handoff *)\", \
+         \"Bash(purlis report *--yes*)\", \"Bash(purlis *todo*promote*)\"]},\n    \"hooks\": {\"PreToolUse\": [{\"matcher\": \"Bash\", \
          \"hooks\": [{\"type\": \"command\", \"command\": \"charter hook pretooluse\"}]}]}\n}",
     );
     scene.write(
         "opencode.json",
         "{\"permission\": {\"bash\": {\"charter handoff *\": \"ask\", \"charter report *--yes*\": \
-         \"ask\", \"charter *todo*promote*\": \"ask\"}}}",
+         \"ask\", \"charter *todo*promote*\": \"ask\", \"purlis handoff *\": \"ask\", \
+         \"purlis report *--yes*\": \"ask\", \"purlis *todo*promote*\": \"ask\"}}}",
     );
     scene.write("personas/ops/persona.md", "---\nname: ops\n---\n");
     scene.write("inventory/repos.json", "{}");

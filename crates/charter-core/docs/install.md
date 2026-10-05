@@ -134,6 +134,17 @@ Bare `--fix` makes the local repairs, which only add what is missing:
 - **The report ask rule.** It adds the project's ask rule for `charter report --yes` when that
   rule is missing, as `charter guard ask` does.
 
+**`rename-plane` runs only by name**, as `charter doctor --fix rename-plane`, because it makes a
+commit every teammate pulls. It renames the project's committed files to purlis's names in one
+commit and nothing else: `charter.toml` becomes `purlis.toml` and requires the `purlis-names`
+feature, so a build without it opens the project read-only; `.charter-scan-allow.toml`, the
+managed blocks' markers, a committed `workspace.json`'s digest key, `.claude/settings.json`'s
+harness variable, and personas' `charter:` skill references follow. Each `charter …` ask or
+deny rule gets a `purlis …` twin and is kept. Hook commands keep `charter`, which runs on every
+build. It refuses, writing nothing, when run from inside a chat (run it from a terminal or the
+app), on a project with uncommitted changes, outside git, with a file under both names, or one this
+charter may not write. A step that fails puts every file back.
+
 **`discover` runs only by name**, as `charter doctor --fix discover` or the inventory row's
 Fix button, because it goes over the network. It is offered when the inventory is empty and
 `charter.toml` declares a forge. It runs `charter discover`, which asks that forge, adds the
