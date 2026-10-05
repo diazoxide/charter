@@ -17,10 +17,10 @@ workspace, not a sixth concept. It follows these of the operator's rulings:
 - **FI5:** *"No new top-level concept: work items, milestones and boards are views in a
   Workspace's "Work" section (and a Project's, for items spanning workspaces). X22 holds."*
 - **FI6:** *"Workspace membership in three layers: (1) every issue in a workspace's repos shows
-  automatically; (2) items created from charter carry a label (`charter::ws::<name>` scoped on
+  automatically; (2) items created from purlis carry a label (`charter::ws::<name>` scoped on
   GitLab, `ws:<name>` on GitHub; prefix configurable), on by default for private repos and off for
   public ones; (3) the plane records the link (workspace ↔ item, chat ↔ item), surviving label
-  renames and repos where labels can't be created. Charter never bulk-relabels existing issues."*
+  renames and repos where labels can't be created. purlis never bulk-relabels existing issues."*
 - **FI7:** *"A derived, rebuildable SQLite cache of forge items in app data (never the plane:
   private issues must not land in git; never a second source of truth, OV-8's rule). Offline
   reads; writes go straight to the forge; freshness by conditional-request polling under a
@@ -38,7 +38,7 @@ It builds on [ADR 0066](0066-a-chat-is-a-ulid-a-run-is-a-stretch-of-its-conversa
 (the audit's `target`). It amends ADR 0066, ADR 0069 and ADR 0070, each in a section of its own
 below. FW-6a/b, FW-7, FW-9, FW-11a/b, OV-6 and AC-7 build on it.
 
-## Where charter is today
+## Where purlis is today
 
 Two accepted records already name a work item, and they do not say the same thing:
 
@@ -191,7 +191,7 @@ to add if a ruling asks for project-root chats to link.
 
 ### 5. Promoting a todo to an issue
 
-**`charter ws todo promote <slug> --repo <repo>`**, and **Promote to issue** on a todo's row in the
+**`purlis ws todo promote <slug> --repo <repo>`**, and **Promote to issue** on a todo's row in the
 Work list, which runs the same core function.
 
 1. **The slug resolves as `ws todo done` resolves one**: an exact stem, else the one file whose
@@ -244,8 +244,8 @@ gives one a create.
   [#857](https://github.com/diazoxide/charter/issues/857) (§ *ADR 0070, amended*). A key needs only a repo's host and path, which FW-5 reads from the inventory row it
   already has. `RepoRecord` is the `Repos` area's return type, which every inventory caller moves
   to. That is FG-3's area, not the work model's, and FW-5 already blocks seven tickets.
-- **`charter report` (#806) moves with FW-6a (#733)**, as ADR 0070's amendment 2 says. It files on
-  charter's own tracker and writes no link, so FW-5 does not touch it.
+- **`purlis report` (#806) moves with FW-6a (#733)**, as ADR 0070's amendment 2 says. It files on
+  purlis's own tracker and writes no link, so FW-5 does not touch it.
 
 ### 7. What waits on #834
 
@@ -300,7 +300,7 @@ The code does not change with this record.
 | #857 (new) | The typed `RepoRecord` for the `Repos` area (§6) |
 | FW-6a (#733), FW-6b (#734) | The rest of FI4 on `WorkItems`; #806 moves with FW-6a |
 | FW-7 (#735) | The cache keeps each item's `ForgeRef` beside its key, and writes `moved` aliases |
-| `charter workspace rename`, `fork` | `rename` writes `renamed` aliases; `fork` does not copy `work/` |
+| `purlis workspace rename`, `fork` | `rename` writes `renamed` aliases; `fork` does not copy `work/` |
 
 ## What this costs
 
@@ -320,7 +320,7 @@ The code does not change with this record.
 - **The `ForgeRef` as the identity.** It is opaque, differs between a forge's REST and GraphQL
   answers, cannot name a todo or an extension's item, and means nothing to a person reading an audit
   export.
-- **A ULID charter mints per item.** Two devices would mint two ids for one issue, and the mapping
+- **A ULID purlis mints per item.** Two devices would mint two ids for one issue, and the mapping
   from forge item to ULID would become primary state that FI7's rebuildable cache could not hold.
 - **The link in the todo's file, or in `workspace.json`.** A todo has no fields, a forge item has no
   file, and `workspace.json` is rewritten whole, so two devices' links would conflict on every save.
@@ -353,7 +353,7 @@ record put to the operator, with its decision:
    `todo:<ws>/<file stem>` for a todo. The host is lowercased and keys are compared exactly.
    Extensions declare their own prefix. `ForgeRef` travels beside the key and never goes into the
    project. A moved key gets an alias line."* Applied in §1 and §2. Rejected: the `ForgeRef` as
-   the identity, and a ULID charter mints.
+   the identity, and a ULID purlis mints.
 2. **Where links are stored.** Decided as recommended. V40 (b): *"Links go in an append-only log
    per device at `workspaces/<ws>/work/<device>.jsonl`. It holds keys and chat ULIDs only, uses
    `merge=union`, is committed when the workspace is LIVE and is clone state when it is LOCAL."*
@@ -367,5 +367,5 @@ record put to the operator, with its decision:
 5. **A chat at the project root.** V40 does not rule it. FW-5 follows the recommendation, that a
    project-root chat cannot be linked (§4), until a ruling asks otherwise.
 
-Two things were stated, not asked, and stand: `charter report` (#806) moves with FW-6a (#733) as
+Two things were stated, not asked, and stand: `purlis report` (#806) moves with FW-6a (#733) as
 ADR 0070's amendment 2 rules, and #834 blocks FW-5's chat half only (§7), as #732 now records.

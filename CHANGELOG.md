@@ -1,10 +1,10 @@
 # Changelog
 
-What each release of charter, the desktop app, brought. About Charter shows the section for the
+What each release of purlis, the desktop app, brought. About purlis shows the section for the
 version you are running, and the same section is that version's GitHub release notes.
 
 The app has its own version line, starting at 0.1.0. It is not the version of the Python
-`charter` it was rebuilt from. `charter news` prints this file.
+`purlis` it was rebuilt from. `purlis news` prints this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
@@ -22,7 +22,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   #661).
 - **A first task, beside your first chat.** After the first run opens your repo, a **First task**
   tab sits beside the chat. It gives one small, real task to two chats, on two harnesses or two
-  profiles of one, each on a branch of its own in charter's copy of your repo, with the task typed
+  profiles of one, each on a branch of its own in purlis's copy of your repo, with the task typed
   in for you to read and send. The task asks each chat to record what it learned, so the second
   chat starts with the first one's lesson in its briefing, whichever harness it runs on. **Show its
   diff** opens a shell in that chat's branch with its diff. Nothing is written into your repo, and
@@ -30,30 +30,30 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **No harness found.** On a machine with no Claude Code, Codex or opencode, opening your repo
   on the first run opens a **Set up a harness** tab instead of the chat picker. It lists each
   harness with its vendor's own install command, and **Install** runs exactly that command in
-  a shell tab at the project's root. Each installer puts its harness where charter looks, so **Check
+  a shell tab at the project's root. Each installer puts its harness where purlis looks, so **Check
   again** finds it without a restart, and **Start a chat** opens the picker on it; the harness asks
   for its own login when its chat starts. If Ollama or LM Studio is already answering on this
   machine, the tab says so and names opencode as the harness that can use it with no account.
 
-- **A local network log.** charter's forge calls, through its own client or through `gh` and
-  `glab`, `charter report`'s filing and the updater's reads are listed in
+- **A local network log.** purlis's forge calls, through its own client or through `gh` and
+  `glab`, `purlis report`'s filing and the updater's reads are listed in
   `~/.config/charter/network-log/`, a file a day, kept for 30 days. Each line says which feature
   called which host, with the method, the path with names masked, the status and the time it
-  took, and whether it went to Charter or to a third party. It never holds a body, a header, a
+  took, and whether it went to purlis or to a third party. It never holds a body, a header, a
   token, a query or the names in a path, and nothing sends it anywhere. Without an account, and
-  unless you send a report, the only Charter addresses it lists are the updater's.
-- **Read any file of a worktree in charter.** A worktree's menu in the explorer has *Browse the
+  unless you send a report, the only purlis addresses it lists are the updater's.
+- **Read any file of a worktree in purlis.** A worktree's menu in the explorer has *Browse the
   files of …*: a tab listing the worktree's files, narrowed as you type, with the file you pick
-  drawn beside the list in the light editor, charter's read-only CodeMirror 6 viewer with syntax
+  drawn beside the list in the light editor, purlis's read-only CodeMirror 6 viewer with syntax
   colours from your theme. *Open in a tab of its own* gives a file a tab to itself. A binary file
   or one past 5 MiB is named rather than drawn. The diff view the Review tab will use is built
   on the same component (RC-5, #706).
 
 - **Agent commits say who made them.** A commit an agent makes in a chat, with its own
-  `git commit` in a workspace repo or with `charter save` in the project, ends with git
+  `git commit` in a workspace repo or with `purlis save` in the project, ends with git
   trailers: `Assisted-by: <harness>:<model>`, `Charter-Chat: <chat id>`,
   `Charter-Persona: <persona>`, and `Charter-Change: <change>` when its branch is a change's. A
-  trailer charter does not know is left out, a commit you make by hand gets none, and your own
+  trailer purlis does not know is left out, a commit you make by hand gets none, and your own
   `Co-Authored-By` lines stay. Set `assisted_by = "llm"` under `[plane]` or `[repos.<name>]` for
   the Linux kernel's bare `Assisted-by: LLM` (V67, GL-8, #702).
 
@@ -65,7 +65,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   workspace is LIVE, and it follows a todo when that todo is promoted to an issue. A chat at
   the project root is not offered it (V60, ADR 0088, FW-5, #732, #914).
 
-- **Promote a todo to an issue.** `charter ws todo promote <slug> --repo <repo>` opens an issue
+- **Promote a todo to an issue.** `purlis ws todo promote <slug> --repo <repo>` opens an issue
   with the todo's title and text in one of the workspace's repos, on GitHub or GitLab, as you.
   It names the repo, whether it is public and the workspace label it adds (private repos only)
   before it sends anything, and refuses a repo that is archived or takes no issue from your
@@ -74,15 +74,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`workspaces/<ws>/work/<device>.jsonl`, committed with a LIVE workspace) makes every work link
   on the todo reach the issue. The Work list shows the issue once, not the issue and the todo
   Claude Code and opencode ask you before
-  any spelling of it runs: `charter init` and `charter reinit` write the ask rule
-  `charter *todo*promote*` (V42) (ADR 0088, FW-5, #732).
+  any spelling of it runs: `purlis init` and `purlis reinit` write the ask rule
+  `purlis *todo*promote*` (V42) (ADR 0088, FW-5, #732).
 
 - **The changes view pushes a change and lands a member, and asks first.** Each change in the
   changes tab has a **Push** button, and each member row a **Land** button. Push names every
   repo, branch, commit and destination, and where each pull request or merge request goes, before
   anything is pushed. Land runs every gate first: a refusal is shown beside the row in the same
-  words as `charter change land`, and otherwise it names the request, the head commit its
-  checks passed at, and whether charter merges it now or puts it in the merge queue or merge
+  words as `purlis change land`, and otherwise it names the request, the head commit its
+  checks passed at, and whether purlis merges it now or puts it in the merge queue or merge
   train. Pressing Push or Land does exactly what was shown, and nothing if it has changed since
   (#474).
 
@@ -98,7 +98,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   clones' events named one chat. The record now says which clone and device wrote it, and the
   first launch of a copy, at another path or on another machine, gives every chat a new id. A
   moved project keeps its ids. Its chats also get new ids when the project moves to another
-  machine, when the machine store is reset, and when a different `CHARTER_CONFIG_HOME` opens
+  machine, when the machine store is reset, and when a different `PURLIS_CONFIG_HOME` opens
   it. A copy keeps its ids only when its original has
   been deleted and was never opened on this machine (V43,
   amending ADR 0066).
@@ -116,32 +116,32 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   back to it. Pressing the key again moves down the list, and typing narrows it by name. The
   button shows once a window holds two projects (FR-27, #620).
 
-- **`charter change revert` undoes a cross-repo change as a new one.** `charter change revert
-  <change>` creates `revert-<change>`: for every member charter landed, a branch off that repo's
-  default branch carrying `git revert` of the commit charter recorded, ordered so a member that
+- **`purlis change revert` undoes a cross-repo change as a new one.** `purlis change revert
+  <change>` creates `revert-<change>`: for every member purlis landed, a branch off that repo's
+  default branch carrying `git revert` of the commit purlis recorded, ordered so a member that
   depended on another is reverted first. It pushes and merges nothing; you push and land the
-  revert with `charter change push` and `charter change land` like any other change. A member
-  merged outside charter is named for you to revert by hand. A recorded commit that is not a
+  revert with `purlis change push` and `purlis change land` like any other change. A member
+  merged outside purlis is named for you to revert by hand. A recorded commit that is not a
   commit id, or that the default branch no longer holds, is refused by name, and so is a clone
   with uncommitted work. A revert that conflicts is aborted and its branch left for you to
   finish. Run it again once a refusal is put right, and it seeds only the members it has not
   seeded yet. It never force-pushes, deletes a branch or resets one (#473).
 
-- **`charter change land` lands one member of a cross-repo change.** `charter change land
+- **`purlis change land` lands one member of a cross-repo change.** `purlis change land
   <change> --repo <name>` merges that member's request at the commit its checks passed on, and
   only once every member it needs has landed. Each refusal says which gate stopped it: a
   blocker not landed, checks failed, running, not run or unreadable at that commit, a branch
   that moved after the checks were read, or more than one member named. Where the target
   branch has a merge queue (GitHub) or a merge train (GitLab), the request goes into it at that
-  commit, and running `land` again after it merged records the landing. A merge charter did
-  not start, in the browser or before a queue existed, is never recorded as charter's. It never
+  commit, and running `land` again after it merged records the landing. A merge purlis did
+  not start, in the browser or before a queue existed, is never recorded as purlis's. It never
   turns on auto-merge. The landing commit carries a `Charter-Change:` trailer where the forge lets
-  charter write the message, and a line goes into the change's landing log once the forge
+  purlis write the message, and a line goes into the change's landing log once the forge
   confirms the merge. Like `gh pr merge`, it is refused in a session nobody is watching.
-  `charter doctor` now also names a member landed ahead of one it needs, a member's pushed
-  branch merged outside charter, and a request GitLab was left set to merge later (#472).
+  `purlis doctor` now also names a member landed ahead of one it needs, a member's pushed
+  branch merged outside purlis, and a request GitLab was left set to merge later (#472).
 
-- **`charter change push` pushes a cross-repo change.** For each member it prints the repo,
+- **`purlis change push` pushes a cross-repo change.** For each member it prints the repo,
   the branch and where it goes, then pushes the branch, opens its pull request into the repo's
   default branch (or finds the one already there), and writes a block into each request's
   description that lists every member's request, so a partial landing can be read from any one
@@ -155,7 +155,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is adopted and stays a draft, and one from a fork with the same branch name is never touched.
   When members are on different hosts, a member elsewhere is named by its request's link, so
   a GitLab description never points at a GitHub number as if it were a GitLab one. The guard
-  that stops a live substitution in `charter change create` or `drop` now names `charter
+  that stops a live substitution in `purlis change create` or `drop` now names `purlis
   change push` as what writes the `why` into requests (#471).
 
 - **The first run lays your project out for the stack you work in.** Project templates for
@@ -164,24 +164,24 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   checked in the workspace's `workspace.md`, and the publish and deploy commands, such as
   `cargo publish` or `twine upload`, that Claude Code and opencode ask you about before they run
   them. Codex's command rules live in `CODEX_HOME` or a trusted project's `.codex/rules`, which
-  charter does not write, so charter's own guard applies there. The first run picks the
+  purlis does not write, so purlis's own guard applies there. The first run picks the
   template that fits your repo from the files at its top level, and says which when you type the
   path; pick another, or None, before you open it. Nothing is written into your repo, nothing you
   already have is replaced, and a command you deny stays denied.
-- **A project can say which charter it needs.** When a newer charter starts writing something an
+- **A project can say which purlis it needs.** When a newer purlis starts writing something an
   older one would get wrong, it lists the feature in `charter.toml`'s `requires` and sets
-  `schema = 2`. A charter that lacks the feature, or does not understand the project's `schema`,
-  or cannot read its `charter.toml`, treats the project as read-only. `charter` still reads it
+  `schema = 2`. A purlis that lacks the feature, or does not understand the project's `schema`,
+  or cannot read its `charter.toml`, treats the project as read-only. `purlis` still reads it
   (`status`, `recall`, `statusline`, `doctor`, and the `list` commands of workspaces, personas,
   changes, sessions, harnesses and guards, plus `workspace recall`), saying once that it is
   read-only and why. Every command that could write it is refused, extension commands,
-  `doctor --fix`, `init` and `reinit` included, with the version to upgrade to (update the app); `charter
-  doctor`'s `schema` row says the same. Keys and sections charter does not know are kept when it
+  `doctor --fix`, `init` and `reinit` included, with the version to upgrade to (update the app); `purlis
+  doctor`'s `schema` row says the same. Keys and sections purlis does not know are kept when it
   rewrites `charter.toml` or a workspace's `workspace.json`. The window and the chat hooks will
   follow the same rule before any release carries it (#826).
 
 - **A chat that starts in a repo gets a branch of its own.** Start a chat with *New tab in
-  <repo>*, or after *Start new chats in <repo>*, and charter cuts a new branch for it, in a folder
+  <repo>*, or after *Start new chats in <repo>*, and purlis cuts a new branch for it, in a folder
   beside the repo's clone, so two chats in one repo no longer edit the same files. The branch is
   named after the chat, or `chat-1`, `chat-2` and on. Clear *start on a new branch* in the picker
   to work on the branch the repo has checked out, as before. If the chat does not start, the
@@ -189,20 +189,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   without starting a chat, and new chats start on it.
 
 - **A chat in its own worktree leaves an `AGENTS.md` behind for any agent that opens it.** When
-  a chat starts in a piece of a repo that has no `AGENTS.md`, charter writes one there, hidden
+  a chat starts in a piece of a repo that has no `AGENTS.md`, purlis writes one there, hidden
   from `git status`. It says which persona the chat was started as and which piece it holds, so
   a Codex, opencode or other agent started there by hand is told the same. It never carries
   memory, todos or session records, and it is never written into a shared clone. A repo that has
   its own `AGENTS.md` keeps it. Because git hides the file by one line for every worktree of the
-  repo, `charter doctor`, a note on the chat's pane and the chat's briefing name any `AGENTS.md`
+  repo, `purlis doctor`, a note on the chat's pane and the chat's briefing name any `AGENTS.md`
   of yours that line hides (ADR 0085).
 
-- **charter keeps a log of every hook call its chats make.** Each state hook and each tool call
-  is one line in the event log in charter's data home (`~/Library/Application Support/charter`
-  on macOS, `~/.local/share/charter` on Linux, or `CHARTER_DATA_HOME`). A line records the chat
-  and the run it happened in, the tool, what charter's guard answered and how long it took. A
+- **purlis keeps a log of every hook call its chats make.** Each state hook and each tool call
+  is one line in the event log in purlis's data home (`~/Library/Application Support/charter`
+  on macOS, `~/.local/share/charter` on Linux, or `PURLIS_DATA_HOME`). A line records the chat
+  and the run it happened in, the tool, what purlis's guard answered and how long it took. A
   tool call's arguments are never written, only a digest keyed to this machine. The log is
-  never committed or sent anywhere; a backup of charter's data carries it, and anything running
+  never committed or sent anywhere; a backup of purlis's data carries it, and anything running
   as your user can read it. The coming timeline, audit and fleet views are built from it (#649).
 
 - **The first run offers your repo's agent instructions to its workspace's memory.** When the
@@ -214,7 +214,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   with invisible characters, starts unticked, and the preview shows each invisible character by
   its code point.
 
-- **Where to get help, in the app and the repository.** About Charter now links to Discussions
+- **Where to get help, in the app and the repository.** About purlis now links to Discussions
   for questions and ideas, to the bug report form, and to `SUPPORT.md`, which says where each
   kind of question goes and how soon it gets a first response. The repository gains a Code of
   Conduct (Contributor Covenant 2.1), a `CONTRIBUTING.md` with DCO sign-off, issue and
@@ -223,13 +223,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Every release says what it is made of.** Each release carries a CycloneDX SBOM per platform
   (`charter-macos-arm64.cdx.json`, `charter-linux-x86_64.cdx.json`). It lists the Rust crates
   read out of the built binaries and the front end's npm packages from its lockfile. Every
-  Rust binary charter ships now carries its own dependency list, so
+  Rust binary purlis ships now carries its own dependency list, so
   `cargo audit bin` can check an installed copy against the RustSec advisories. `SECURITY.md`
   says how to read both (#584).
 
 - **Every build file a release publishes carries signed build provenance.** Each installer and
   updater archive now has a SLSA build provenance attestation, so you can check that a download
-  came out of charter's own release workflow with `gh attestation verify`. `SECURITY.md` has
+  came out of purlis's own release workflow with `gh attestation verify`. `SECURITY.md` has
   the command (#583). The update manifest (`latest.json`, `dev.json`) is not attested; the
   updater checks each build's own minisign signature, as before.
 
@@ -239,22 +239,22 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   on macOS, `~/.local/share/dev.charter.app/logs` on Linux), as well as to standard error. An app
   started from the Dock or a desktop launcher used to lose all of it. A new file starts each
   day and the last seven are kept. A line that looks like it holds a credential is replaced by
-  a note saying what kind it looked like. `CHARTER_LOG_DIR` moves the log.
+  a note saying what kind it looked like. `PURLIS_LOG_DIR` moves the log.
 
-- **A kill switch that stops every chat and shell charter started.** Stop all on the title bar,
-  or `charter stop --all` in any terminal, interrupts and ends every chat's and shell's program in
+- **A kill switch that stops every chat and shell purlis started.** Stop all on the title bar,
+  or `purlis stop --all` in any terminal, interrupts and ends every chat's and shell's program in
   every project and every window within seconds. No chat starts again, not even from a relaunch,
   until you re-arm it from the title bar; you can still open a shell to look around. The stopped
   chats stay as tabs to reopen. Each stop, re-arm and tamper is one line in `kill-switch.jsonl`
-  in charter's config directory (ADR 0071).
+  in purlis's config directory (ADR 0071).
 
 - **A plane can run every Claude Code chat in a sandbox.** Add `[sandbox]` with `mode = "on"`
-  to `charter.toml`, and every Claude Code chat charter starts there runs inside Claude Code's
-  own sandbox, which charter compiles from one policy. It can reach only the hosts of the
+  to `charter.toml`, and every Claude Code chat purlis starts there runs inside Claude Code's
+  own sandbox, which purlis compiles from one policy. It can reach only the hosts of the
   plane's egress presets. Claude Code's web tools are turned off, because the host list does
-  not hold them. The chat can never read a vault's storage or write charter's own state. A
+  not hold them. The chat can never read a vault's storage or write purlis's own state. A
   plane can turn the sandbox on but never off, and a mistyped `mode` turns it on. If the
-  sandbox cannot be applied, the chat does not start, and charter says what is missing and how
+  sandbox cannot be applied, the chat does not start, and purlis says what is missing and how
   to install it. `SECURITY.md` says what the sandbox covers and what it does not. Planes that
   say nothing run as before (#695).
 
@@ -262,14 +262,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
   - A plane with a keyring vault starts no Claude Code chat while the sandbox is on. Keyring is
     the default vault provider, so on most machines this release can sandbox only a plane with
-    no keyring vault. That lifts when charter can wrap the harness, or resolve secrets for the
+    no keyring vault. That lifts when purlis can wrap the harness, or resolve secrets for the
     chat.
   - opencode chats are not started in a sandboxed plane yet.
 
 - **Codex chats run in the sandbox too.** In a plane with `mode = "on"`, every Codex chat
-  charter starts runs in Codex's own workspace-write sandbox, which charter selects explicitly
+  purlis starts runs in Codex's own workspace-write sandbox, which purlis selects explicitly
   and compiles from the same policy. It reaches only the plane's egress hosts, through Codex's
-  own proxy, and never reads a vault's storage or writes charter's own state. Codex never asks
+  own proxy, and never reads a vault's storage or writes purlis's own state. Codex never asks
   to run a command outside the sandbox, and its web search is off. A Codex chat whose command
   would drop or widen the sandbox is refused, and the refusal names the flag and where it is.
   That covers `-s`, `--add-dir`, `--cd`, `--enable`, `--disable`, an approval flag other than
@@ -277,7 +277,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   proxy feature starts no sandboxed chat. As with Claude Code, a plane with a keyring vault
   starts no sandboxed Codex chat yet (#695).
 
-- **A first run that goes straight to a chat.** On a machine with no project, charter asks for
+- **A first run that goes straight to a chat.** On a machine with no project, purlis asks for
   one thing: the repo to work on. It makes a project for you on this machine only
   (`~/.config/charter/local-plane`, with no remote), copies your repo into a workspace named
   after it, and opens the first chat there. When exactly one of Claude Code, Codex and opencode
@@ -285,11 +285,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   signed in, and offers **Sign in to GitHub**, which runs `gh auth login` in a shell tab. New
   project asks for a repo the same way, and the two-folder form is under Advanced (#603).
 - **A chat's commits are scanned for secrets and personal data before they are made, in any
-  repository.** Every chat the app starts on a harness commits through charter's own git
-  hooks. Before each commit, including a merge commit, charter reads the lines the commit adds.
+  repository.** Every chat the app starts on a harness commits through purlis's own git
+  hooks. Before each commit, including a merge commit, purlis reads the lines the commit adds.
   These refuse the commit:
 
-  - a token or key in a vendor's known shape (charter's forge-prefix rules plus gitleaks'
+  - a token or key in a vendor's known shape (purlis's forge-prefix rules plus gitleaks'
     prefix-anchored vendor rules);
   - an email address;
   - a card number;
@@ -298,7 +298,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   git prints where each one is and what kind it is, with the value masked, and the chat joins
   the needs-you queue saying why. This holds in a workspace repo, a piece, or a repository
   outside any plane. The repository's own hooks (husky, pre-commit, git-lfs) still run after
-  charter's check, except `post-index-change` and `reference-transaction`, which charter does
+  purlis's check, except `post-index-change` and `reference-transaction`, which purlis does
   not forward. The guard also refuses `git commit --no-verify`, `-n`, and a
   `core.hooksPath` or `GIT_CONFIG_*` set on the command line. These are not treated as anyone's
   email: documentation and private-use domains (`example.com`, `.test`, `.internal`, `.local`),
@@ -309,7 +309,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **An allowlist for the commit scan.** A repository's `.charter-scan-allow.toml` lets a
   finding through by its rule and paths. A key can also be let through by its fingerprint;
   personal data never is. Every entry gives its reason, and the file is reviewed like code.
-  `charter scan --explain` names a finding's rule and prints the entry that would let it
+  `purlis scan --explain` names a finding's rule and prints the entry that would let it
   through. The file is read as committed. A chat's own commit may not change it, and neither may
   its `git revert` or `git merge --ff-only`, so the operator is the one who commits an entry.
   This is a guard against mistakes; the sandbox is where it becomes a boundary (#784). An
@@ -361,33 +361,33 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the window already knows, then checked again behind them (FR-27, #620).
 
 - **A new project tracks the forge its repo is on, and asks when it cannot tell.** The first
-  run, the New project dialog and `charter init` now follow one rule. The forge, and its owner or
+  run, the New project dialog and `purlis init` now follow one rule. The forge, and its owner or
   group, come from the `origin` of the repo the project is made for, when that remote is on
   github.com or gitlab.com. Otherwise the window asks GitHub or GitLab with two buttons, and
-  `charter init` writes nothing and asks for `--forge` or `--adopt`. Before, the first run made
-  a GitHub project with no owner, and `charter init` defaulted to GitLab. **A script that runs a
-  bare `charter init` now exits 2 and makes nothing, where it used to make a GitLab project:
+  `purlis init` writes nothing and asks for `--forge` or `--adopt`. Before, the first run made
+  a GitHub project with no owner, and `purlis init` defaulted to GitLab. **A script that runs a
+  bare `purlis init` now exits 2 and makes nothing, where it used to make a GitLab project:
   add `--forge gitlab` to keep the old result.** `--forge` and `--owner` still win when given,
   and running `init` again on an existing project asks nothing.
 
-- **charter runs far fewer git processes in your repos while it is idle.** Auto-save, the
+- **purlis runs far fewer git processes in your repos while it is idle.** Auto-save, the
   title bar's save indicator, the Saving tab and the alerts used to each run `git status` and
   its friends on their own timers — about ten git processes every two seconds per project, and
   more in a busy repo, where they could pile up on each other. They now share one reading per
   repo, made again only when the repo's git files move, its project's watcher sees a change, a
   save or fetch finishes, a chat ends, or ten seconds have passed. Only one git process runs in
   a repo at a time for them. Where your git config says nothing about `core.untrackedCache`,
-  charter turns git's untracked cache on for these reads and for its saves, so `status` stays
+  purlis turns git's untracked cache on for these reads and for its saves, so `status` stays
   quick in a large repo: the cache is then kept in that project's and those clones' index, as
   git keeps it (`git update-index --no-untracked-cache` removes it, and setting
-  `core.untrackedCache` yourself, to anything, stops charter asking for it).
+  `core.untrackedCache` yourself, to anything, stops purlis asking for it).
 
 ### Fixed
 
-- **`charter doctor` names `charter persona optimize` for a persona's memory.** Its memory
+- **`purlis doctor` names `purlis persona optimize` for a persona's memory.** Its memory
   indexes row said curating a persona's memory from the CLI was "not in this version yet",
-  although `charter persona optimize` has shipped. It now names that command, as it names
-  `charter workspace optimize` for a workspace (HY-12).
+  although `purlis persona optimize` has shipped. It now names that command, as it names
+  `purlis workspace optimize` for a workspace (HY-12).
 - **A memory or session record written by an agent shows up in its panel straight away.**
   Before, a workspace's or persona's `memory/`, and the session records in `sessions/`, reached
   the Memory, Personas and Sessions panels only when something else in the project changed.
@@ -396,7 +396,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   panels and views that show it. When auto-save commits, pushes or fetches, only the save state
   and the alerts read again, where the whole window used to. A fetch or save that brings
   others' changes into your files still reads everything again (FD-10, #933).
-- **`charter guard ask` never turns a command opencode denies into one it asks about.** opencode
+- **`purlis guard ask` never turns a command opencode denies into one it asks about.** opencode
   goes by the last rule that matches a command, so a rule added after `"*": "deny"` used to win
   over it, and a rule for a command that was denied exactly used to replace the deny. Now a
   denied command stays denied, and the command says so. Claude Code was never affected: there a
@@ -405,7 +405,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   now says whether GitLab's `glab` is installed and signed in, beside GitHub's `gh`. If it is
   installed but not signed in, **Sign in to GitLab** opens a shell tab running `glab auth login`.
 
-- **Charter opened from the Finder or the Dock can hold two hundred chats.** macOS starts such
+- **purlis opened from the Finder or the Dock can hold two hundred chats.** macOS starts such
   an app with room for only 256 open files, and each chat needs several, so the app could run
   out well short of two hundred. It now raises its own limit as it starts, to 10,240 or the
   system's hard limit if that is lower, and never lowers a limit it was given (#683).
@@ -418,30 +418,30 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   canceled and did not pass. GitLab lists both in its pipelines API (#711).
 - **The status line no longer shows a GitLab fork's merge request as the branch's own.** When a
   fork had an open merge request from a branch of the same name, the status line could name it.
-  It now names only a merge request from the project itself, as `charter change show` already
+  It now names only a merge request from the project itself, as `purlis change show` already
   did (#711).
 - **Linux no longer waits half a minute for a desktop portal that cannot start.** Before GTK
-  starts, charter asks the session bus to start the portal and gives it 300 ms. If the bus is
-  still silent, charter restarts itself without the session bus, and the window comes up in
+  starts, purlis asks the session bus to start the portal and gives it 300 ms. If the bus is
+  still silent, purlis restarts itself without the session bus, and the window comes up in
   under 2 s where it used to take 26–31 s. For that run there is no tray icon and no desktop
   notifications, and a second launch is refused rather than handed over. A per-user lock keeps
   that refusal in place without the bus. Cold start is now measured in CI on X and on i3, and
   every launch is held to the limit (#24).
 - **A run without the session bus says so in the window, and chats keep the bus.** The line at
   the top names what is off (the tray icon, notifications, a keyring vault from the window,
-  handing a second launch over). charter asks the bus again after 5, 15 and 45 s, and when the
+  handing a second launch over). purlis asks the bus again after 5, 15 and 45 s, and when the
   portal answers the line offers **Restart with the full desktop integration**, asking first
-  about any chat that could be mid-turn; charter never restarts by itself. Chats, and the
-  programs charter starts itself, get the session bus charter was given rather than the one it
+  about any chat that could be mid-turn; purlis never restarts by itself. Chats, and the
+  programs purlis starts itself, get the session bus purlis was given rather than the one it
   turned off, so a keyring that git or a CLI uses through D-Bus keeps working. On i3 and other
-  X11 sessions with no session bus, charter now starts on the bus the X display holds, as GTK
+  X11 sessions with no session bus, purlis now starts on the bus the X display holds, as GTK
   would, so notifications reach a notification daemon started from the window manager's config
   (#746).
-- **The guard that stops a live substitution in `charter change create` or `drop` no longer
-  says `charter change` is missing.** It has shipped since 0.4.0; what is not in this version
-  yet is `charter change push`, which will write the `why` into request bodies (#571).
+- **The guard that stops a live substitution in `purlis change create` or `drop` no longer
+  says `purlis change` is missing.** It has shipped since 0.4.0; what is not in this version
+  yet is `purlis change push`, which will write the `why` into request bodies (#571).
 - **A heredoc `cat` reads inside a quoted command substitution is read as data.**
-  `x="$(cat <<'EOF' … EOF)"` no longer has `charter handoff` in its body refused as a handoff a
+  `x="$(cat <<'EOF' … EOF)"` no longer has `purlis handoff` in its body refused as a handoff a
   shell runs. The guard now reads the program that opens a heredoc inside `"$( … )"` as the
   command in the substitution, and still refuses the body when either that command or the one
   the substitution stands in runs it: a shell (anywhere in that command's words), `ssh`, `su`,
@@ -456,7 +456,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   pull or merge request merge on its own later (auto-merge, a merge queue or train), an alias
   that stands for a held command or the start of one, and the same commands inside a script a
   shell runs or a command substitution are refused, as `gh pr merge` already was. A forge API call whose effect on a merge
-  charter cannot read is refused too. Reads, opening a request and ordinary pushes are
+  purlis cannot read is refused too. Reads, opening a request and ordinary pushes are
   unchanged, and attended use is untouched (#866).
 - **An unattended agent cannot print the forge token or read other stored secrets.** The CLIs'
   token commands, the auth-status and config reads that show the token, git's credential fill,
@@ -479,7 +479,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Security
 
-- **The release runs only the code it pinned.** Every GitHub Action in charter's workflows is
+- **The release runs only the code it pinned.** Every GitHub Action in purlis's workflows is
   pinned to a commit rather than a tag, and the release jobs that hold the signing keys restore
   no build cache (ADR 0042).
 - **A chat starts from an allowlisted environment.** A chat is no longer given the app's whole
@@ -487,7 +487,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `XDG_*`, `CHARTER_*` and the like), the variables its harness declares, and whatever the plane's
   `charter.local.toml` lists under `[chat_env] pass`. Cloud, forge and model-provider credentials
   pass only when listed by exact name.
-- **A plane save scans every file it commits.** `charter save` reads every staged file for
+- **A plane save scans every file it commits.** `purlis save` reads every staged file for
   secrets, not only memory and refs, and also catches a bare token by its forge's prefix. A hit
   names the path and line, never the value; a binary or over-10-MiB file outside memory and refs
   is named as not scanned.
@@ -507,16 +507,16 @@ workspace, and the plane root, lists its records in a **Sessions** panel, and **
 one back as a new chat on its conversation, harness, profile and directory, with the record in
 its briefing. A memory opens in a tab of its own, rendered as Markdown, to be edited in place or
 deleted with an Undo, and the right column lists a workspace's memory and the shared memory,
-with a `+` for a new one. Beyond the window: `charter session record|list|show`, command-line
+with a `+` for a new one. Beyond the window: `purlis session record|list|show`, command-line
 verbs that edit, archive and unarchive a memory, and Codex and opencode chats that come back to
 their own conversation at a relaunch.
 
 ### Added
 
 - **Smart close.** Closing a chat now asks **Cancel**, **Close** or **Smart close**. Smart close
-  sends the chat one line asking charter's `smart-close` skill to write its session record — at
+  sends the chat one line asking purlis's `smart-close` skill to write its session record — at
   once to a chat that is waiting, at the end of its turn to one that is running — and the tab
-  closes only when `charter session record` says the record is saved. Meanwhile the chat goes
+  closes only when `purlis session record` says the record is saved. Meanwhile the chat goes
   into the background: its tab shrinks to a chip — the chat's icon and a breathing amber mark,
   its name in the tooltip — at the left edge of the chat strip, before the pinned tabs, and the
   chat that was beside it comes to the front, as Close would bring it. Click the chip to watch
@@ -526,23 +526,23 @@ their own conversation at a relaunch.
   says **Session saved — <title>** with **Open record**. If no record arrives within five
   minutes, the chat ends first, or its prompt could not be sent or Smart close could not start,
   the tab comes back where it was, the window says so in a sentence, and the title bar's ✋ list
-  names the chat and why. In a Claude Code chat the app starts, `charter session record` runs
+  names the chat and why. In a Claude Code chat the app starts, `purlis session record` runs
   without asking permission — that command and no other, and only as a command of its own: your
   own and the project's permission rules all still apply beside it. Codex runs it without asking
   in its default sandbox, which keeps the command from reaching the app, so the command leaves
   the news beside the chat and the chat's own `Stop` hook, which runs outside the sandbox, passes
   it on at the end of the same turn — only for that chat and conversation, and only within the
   five minutes the app waits (#517). Smart close is not offered on a shell tab, a chat never
-  prompted, a chat charter has heard nothing from, or one asking you something — answer it
+  prompted, a chat purlis has heard nothing from, or one asking you something — answer it
   first. **Close** is the default for a chat that has had at most one turn (ADR 0064, ADR 0039).
-- **Session records.** `charter session record --title "…"`, with the record on standard input,
+- **Session records.** `purlis session record --title "…"`, with the record on standard input,
   files a summary of a chat's session — Goal, Done, Decisions, Open, How to resume — in its
   workspace's `sessions/` (the plane's own `sessions/` at the plane root), keeps
   `sessions/index.md` newest first and a `## Sessions` line in `workspace.md` pointing at it,
   and tells the app the chat's record is saved. Which chat, persona, harness, harness profile,
-  directory, conversation and pieces a record is about is charter's to say, never the model's.
-  `charter session list` and `charter session show` read them back, a chat's briefing names the
-  last one, and charter's new `smart-close` skill writes one. A new workspace's `workspace.md`
+  directory, conversation and pieces a record is about is purlis's to say, never the model's.
+  `purlis session list` and `purlis session show` read them back, a chat's briefing names the
+  last one, and purlis's new `smart-close` skill writes one. A new workspace's `workspace.md`
   has a `## Sessions` section (ADR 0064).
 - **Old sessions come back from the window.** Each workspace has a **Sessions** panel — and the
   plane root's tab one of the plane's own — listing its session records newest first, with
@@ -575,8 +575,8 @@ their own conversation at a relaunch.
   it opens them as a list in a tab of its own. A `+` on the Memory section, on a persona's tab
   and on the shared list opens a new memory in edit mode, and Save lists it where it was made.
   The palette offers the same: New memory in, for or shared, and Open shared memory (ADR 0065).
-- **Edit, archive and unarchive a memory from the command line.** `charter workspace
-  edit|archive|unarchive` and `charter persona edit-memory|archive-memory|unarchive-memory
+- **Edit, archive and unarchive a memory from the command line.** `purlis workspace
+  edit|archive|unarchive` and `purlis persona edit-memory|archive-memory|unarchive-memory
   [--shared]` do what the window does. Edit takes `--title`, and the body as an argument or as
   `-` to read standard input; a slug is the memory's exact name, or the one file whose name
   ends `-<slug>.md`; and an archive that had to number its file prints an Undo that restores
@@ -585,12 +585,12 @@ their own conversation at a relaunch.
 ### Changed
 
 - **A short slug that more than one file ends in is refused, and the refusal names them.**
-  `charter persona forget` and `charter ws todo done|forget` took the first in sorted order.
+  `purlis persona forget` and `purlis ws todo done|forget` took the first in sorted order.
   `MEMORY`, the index, is refused as a slug, on a case-insensitive filesystem too.
 - **A LIVE workspace publishes its session records** with its memory and todos: the managed
-  `.gitignore` block un-ignores `sessions/`, and `charter reinit` brings an older block up to
-  date. **The plane root's session records stay on this machine**: `charter init` writes, and
-  `charter reinit` adds, `/sessions/` to the plane's `.gitignore`.
+  `.gitignore` block un-ignores `sessions/`, and `purlis reinit` brings an older block up to
+  date. **The plane root's session records stay on this machine**: `purlis init` writes, and
+  `purlis reinit` adds, `/sessions/` to the plane's `.gitignore`.
 
 ### Fixed
 
@@ -626,9 +626,9 @@ and a **Curate ▸** menu opens a chat for a curation action, in Claude Code or 
 prompt typed and never sent. Shell tabs are plain shells that warn when a harness is started in
 one by hand, every tab strip can be reordered by dragging, a chat's pane has find and takes
 Shift+Enter as a new line, and a trackpad scrolls it the way a native terminal does. Vaults,
-personas and todos can be created and deleted in the window, charter's skills reach Codex and
+personas and todos can be created and deleted in the window, purlis's skills reach Codex and
 opencode chats, and the window's own chrome no longer selects as text. Beyond the window:
-cross-repo changes with `charter change`, `charter report` for filing issues, workspace rename,
+cross-repo changes with `purlis change`, `purlis report` for filing issues, workspace rename,
 projects in windows of their own, and opencode chats started by the app.
 
 ### Added
@@ -639,17 +639,17 @@ projects in windows of their own, and opencode chats started by the app.
   `New tab` and `New shell` while it is focused. A chat started there is in no workspace on
   purpose: it is not asked which workspace to use, its briefing lists the plane's workspaces as
   ones it may manage, and `charter` asks it to name one with `-w` rather than acting on one it
-  picked (`charter workspace use` does not move it). The Todos box is not offered there, and
+  picked (`purlis workspace use` does not move it). The Todos box is not offered there, and
   the region says why. It replaces the "Outside every workspace" tab, and the chats it held are
   on it.
 - **Anywhere in the plane outside every workspace is the plane root, and says so.** A chat
   started in `docs/`, `.charter/` or any other directory of the plane that is not a
   workspace's is marked as a plane-root chat, like one started in the plane's own directory,
   and is not asked which workspace to use. A terminal session standing there that has not
-  chosen a workspace (no `-w`, no `$CHARTER_WORKSPACE`, no `charter workspace use`) is at the
+  chosen a workspace (no `-w`, no `$CHARTER_WORKSPACE`, no `purlis workspace use`) is at the
   plane root too: `charter` asks it to name a workspace with `-w` instead of acting on the
   plane's default, which now answers only for a caller outside the plane, and
-  `charter workspace use` still moves such a session. A root chat's footer
+  `purlis workspace use` still moves such a session. A root chat's footer
   (`charter statusline`) shows `⬢ plane root` rather than a workspace; a handoff from it is
   stamped `plane root` (the new chat still starts in the workspace you handed it to); and a
   report back to a root chat that has closed is kept for the next chat started at the plane
@@ -663,32 +663,32 @@ projects in windows of their own, and opencode chats started by the app.
   offer is listed, greyed, with why. It needs a Claude Code or Codex default profile. Codex
   says nothing until your first prompt, so its prompt is typed once its terminal has gone raw
   and then stayed quiet for a second. opencode goes quiet while it is still starting, and a
-  prompt pasted then is lost, so charter has no moment to type into it and the menu says so
+  prompt pasted then is lost, so purlis has no moment to type into it and the menu says so
   (ADR 0061).
-- **charter ships three curation actions, and a persona can add its own.** Safe remove,
-  Compact & improve, and Add curation action each name a new skill in charter's plugin
+- **purlis ships three curation actions, and a persona can add its own.** Safe remove,
+  Compact & improve, and Add curation action each name a new skill in purlis's plugin
   (`safe-remove`, `compact`, `add-curation-action`), so the prompt you read is one line — for
-  example *Use charter's safe-remove skill to remove the workspace alpha.* — and the skill
+  example *Use purlis's safe-remove skill to remove the workspace alpha.* — and the skill
   holds the steps. A persona adds its own as `personas/<name>/curation/<id>.md`, or with
-  `charter persona curation add`. `charter curation show workspace:<name>` (or
+  `purlis persona curation add`. `purlis curation show workspace:<name>` (or
   `persona:<name>`, or `plane`) lists what a subject is offered, who runs each action, where,
   and the exact prompt. A prompt types a literal brace as `{{` or `}}`, so `{{word}}` types
   `{word}`. Claude Code shows a paste over 800 characters or of 4 lines or more as
   `[Pasted text #N +M lines]`, and Codex one over 1,000 characters as
   `[Pasted Content N chars]`, so an action whose prompt would be shown that way opens no chat
-  on that harness and says why, and `charter persona lint` warns about it, naming the harness.
-  `charter persona lint` also reports an action that is broken or that takes a built-in's
+  on that harness and says why, and `purlis persona lint` warns about it, naming the harness.
+  `purlis persona lint` also reports an action that is broken or that takes a built-in's
   name. `charter` is now a reserved persona name, because its actions would read
-  `charter/<id>` like the built-ins: `charter persona create charter` is refused, and a persona
-  that already has the name is reported by `charter persona lint` and offers no curation
+  `charter/<id>` like the built-ins: `purlis persona create purlis` is refused, and a persona
+  that already has the name is reported by `purlis persona lint` and offers no curation
   actions (ADR 0061).
 - **Plain shell tabs, and a warning when a harness starts inside one.** `New shell` sits beside
   `New tab` in the palette, on the panes' menu and on each workspace's menu (`New shell in
   <workspace>`), on ⌘⇧T (Ctrl+Shift+T off a Mac): your own shell, where a new chat would start,
   with a terminal's mark on its tab and no chat-state mark. Typing `claude`, `codex` or
-  `opencode` in one still starts it, after one line saying it runs outside charter's session
+  `opencode` in one still starts it, after one line saying it runs outside purlis's session
   tracking, and the tab shows a banner whose **Open as chat** opens the picker there with that
-  harness picked. Detection is the command being started — charter's shims stand first on a
+  harness picked. Detection is the command being started — purlis's shims stand first on a
   shell tab's `PATH`, and stay first after zsh's and bash's own start files — and nothing
   reads what the harness prints (ADR 0062).
 - **Drag a tab to reorder it, in every strip.** Projects in the title bar, workspaces and chats
@@ -709,26 +709,26 @@ projects in windows of their own, and opencode chats started by the app.
   the secrets the vault holds by name, says plainly that a keychain vault's secrets are
   destroyed and cannot be recovered (a plain-file, references or 1Password vault's file or item
   is left where it is), and stays disabled until you type the vault's name. *Delete persona…*
-  runs `charter persona remove`, never forced, so a persona another one extends or uses is
+  runs `purlis persona remove`, never forced, so a persona another one extends or uses is
   refused with their names. *Edit persona.md* opens the file in the app your system opens `.md`
   files with. The Todos panel has a box for a new todo in the focused workspace, and each todo's
   menu has *Mark done* and *Forget*; the window refuses a todo with the same rules and words as
-  `charter ws todo`.
-- **Codex and opencode chats get charter's skills too.** `safe-remove`, `compact`, `handoff`
+  `purlis ws todo`.
+- **Codex and opencode chats get purlis's skills too.** `safe-remove`, `compact`, `handoff`
   and the other six reached only Claude Code chats. An opencode chat the app starts now finds
   them as its own skills, beside any `skills.paths` your `opencode.json` names, and a Codex chat
   is told about each one when it starts, with the file to read, since Codex cannot take a
   skills folder for one session. Nothing is written into `~/.codex` or `~/.config/opencode`
   (ADR 0063).
-- **The harness asks you before `charter report` files an issue.** `charter init` now writes an
-  ask rule for `charter report *--yes*` in `.claude/settings.json` and `opencode.json`, beside
-  the one for `charter handoff`, so a chat cannot file a public report without your yes.
-  `charter reinit` adds it to an existing plane and carries it into your workspaces.
-  `charter doctor`'s `ask rules` row warns when it is missing, and `charter guard report` or
-  `charter doctor --fix` puts it back. So `--fix` now writes the plane's committed harness
+- **The harness asks you before `purlis report` files an issue.** `purlis init` now writes an
+  ask rule for `purlis report *--yes*` in `.claude/settings.json` and `opencode.json`, beside
+  the one for `purlis handoff`, so a chat cannot file a public report without your yes.
+  `purlis reinit` adds it to an existing plane and carries it into your workspaces.
+  `purlis doctor`'s `ask rules` row warns when it is missing, and `purlis guard report` or
+  `purlis doctor --fix` puts it back. So `--fix` now writes the plane's committed harness
   settings too, not only this machine's. Codex has no rule that can say this, so nothing is
   written there (ADR 0059).
-- **`charter change` declares a piece of work that spans several repos.** `create` names it
+- **`purlis change` declares a piece of work that spans several repos.** `create` names it
   and says why, `add` puts in a repo already cloned in the workspace (on `change/<slug>` or a
   branch you name, with `--needs` for the repos that must land first), `drop` takes one out
   with the reason, and `list`, `show` and `forget` read and end it. The record is
@@ -736,14 +736,14 @@ projects in windows of their own, and opencode chats started by the app.
   workspace is LIVE. An unknown change, a repo with no clone, a repo added twice or an order
   that cannot be true is refused with exit 2. Pushing, landing and reverting come later
   (ADR 0060).
-- **`charter doctor` checks cross-repo changes in every workspace.** Its `changes` row fails on
-  a change record charter cannot read, naming the file and what is wrong with it, and on a
+- **`purlis doctor` checks cross-repo changes in every workspace.** Its `changes` row fails on
+  a change record purlis cannot read, naming the file and what is wrong with it, and on a
   change's branch sitting in a clone that is a member of no change. It reads only this disk and
   says which `changes/` directory it could not look at.
-- **`charter change show` says where each member's pull request stands.** Under the record it
+- **`purlis change show` says where each member's pull request stands.** Under the record it
   prints each member's request number, whether it is open, merged or rejected, and its checks at
   the request's exact head commit: PASSED, FAILED, RUNNING, NOT RUN or UNKNOWN. Zero checks is
-  NOT RUN and a check charter could not read is UNKNOWN, and neither is ever shown as passing.
+  NOT RUN and a check purlis could not read is UNKNOWN, and neither is ever shown as passing.
   It says which members still wait on a blocker, and when the reading was taken. If the forge
   cannot be asked, the record still prints and each member says why. Nothing it reads is
   written back.
@@ -752,15 +752,15 @@ projects in windows of their own, and opencode chats started by the app.
   request and its checks at the head commit, which members are blocked, and when that was read.
   It asks the forge when the tab opens and when you press Refresh, and never when you switch
   workspaces. A workspace with no changes says how to create one.
-- **charter's plugin teaches personas, vaults and the browser again.** It now ships the
+- **purlis's plugin teaches personas, vaults and the browser again.** It now ships the
   `charter:persona`, `charter:secrets` and `charter:browser` skills beside `handoff`,
-  `update` and `working-in-a-clone`, rewritten for this charter's commands. `charter browser
+  `update` and `working-in-a-clone`, rewritten for this purlis's commands. `purlis browser
   install [--version X.Y.Z]` generates Playwright's own page-driving skill into the plane's
   `.claude/skills/playwright-cli/` with `npx`, and gitignores `.playwright-cli/`, where traces
   of logged-in runs land. The version must be an exact version: anything else npm would read
   there, such as a tag or a git URL, is refused.
   ([#370](https://github.com/diazoxide/charter/issues/370))
-- **Worktrees can be cut, declared and removed from the command line.** `charter worktree`
+- **Worktrees can be cut, declared and removed from the command line.** `purlis worktree`
   (alias `wt`): `add <repo> <piece>` cuts a piece off the clone's HEAD and records the claim;
   `done`, and `abandon "<why>"`, run from inside a piece, say it is finished or given up;
   `list` shows each piece with what it declared or how long it has been silent; `history`
@@ -768,34 +768,34 @@ projects in windows of their own, and opencode chats started by the app.
   git. The session briefing and the footer now see those declarations. In the window, each
   worktree row shows the same word, and its menu can mark it done.
   ([#368](https://github.com/diazoxide/charter/issues/368))
-- **A persona's memory can be kept up like a workspace's.** `charter persona forget <name>
-  <slug>` deletes one memory, `charter persona dedupe` lists near-duplicate pairs to prune,
-  `charter persona optimize` runs the curation `charter workspace optimize` runs over each
-  persona's memory and the shared store (read-only unless `--apply`), and `charter persona
+- **A persona's memory can be kept up like a workspace's.** `purlis persona forget <name>
+  <slug>` deletes one memory, `purlis persona dedupe` lists near-duplicate pairs to prune,
+  `purlis persona optimize` runs the curation `purlis workspace optimize` runs over each
+  persona's memory and the shared store (read-only unless `--apply`), and `purlis persona
   log` notes to, or shows, a persona's activity in this session.
   ([#366](https://github.com/diazoxide/charter/issues/366))
-- **A persona can be made, read, cleared and removed from the command line.** `charter persona
+- **A persona can be made, read, cleared and removed from the command line.** `purlis persona
   create <name> --delegate-when "<the work that comes to it>"` writes
   `personas/<name>/persona.md` as a draft, with its memory and refs; `--extends` inherits from
-  another persona, `--with-vault` registers its vault and `--use` selects it. `charter persona
-  show` prints what a persona adopts, `charter persona clear` drops your selection, and
-  `charter persona remove` refuses while another persona still extends or uses it (`--force`
-  overrides). `charter persona lint` finds dangling `uses:`/`extends:`, keys charter cannot
-  read, a missing role, vault or `delegate-when`, and stale generated sub-agents, and `charter
+  another persona, `--with-vault` registers its vault and `--use` selects it. `purlis persona
+  show` prints what a persona adopts, `purlis persona clear` drops your selection, and
+  `purlis persona remove` refuses while another persona still extends or uses it (`--force`
+  overrides). `purlis persona lint` finds dangling `uses:`/`extends:`, keys purlis cannot
+  read, a missing role, vault or `delegate-when`, and stale generated sub-agents, and `purlis
   doctor`'s `personas` and `persona grant` rows now run it instead of saying "not checked".
-  A refusal about a missing persona suggests `charter persona create` again.
+  A refusal about a missing persona suggests `purlis persona create` again.
   ([#365](https://github.com/diazoxide/charter/issues/365))
 - **The app starts opencode chats.** Pick an opencode profile in the new-chat picker and the
-  chat runs with charter's guard: a tool call the guard refuses does not run, and opencode is
+  chat runs with purlis's guard: a tool call the guard refuses does not run, and opencode is
   told why. The chat shows when it is working, when opencode asks your permission, and when its
   turn ends. It also gets the briefing and handed-back reports with your prompt. Nothing is
   written into opencode's configuration for this. An opencode chat reports nothing before your
   first prompt, and it reads waiting after you answer a permission prompt until its turn ends.
   A profile that passes `--pure` would load no plugin, so it is refused with the reason.
-  `charter plugin install --harness opencode` installs the guard for opencode chats you start
+  `purlis plugin install --harness opencode` installs the guard for opencode chats you start
   in a terminal, and replaces the retired Python charter's opencode plugin if it is there.
   ([#371](https://github.com/diazoxide/charter/issues/371))
-- **A workspace can be renamed.** `charter workspace rename <old> <new>` (or `mv`), or *Rename
+- **A workspace can be renamed.** `purlis workspace rename <old> <new>` (or `mv`), or *Rename
   workspace…* on the workspace tab's menu and in the palette. The folder moves, every git
   worktree of its clones is repaired so it keeps working, and everything that names the
   workspace follows: its manifest, the LIVE list, the default and each session's choice, the
@@ -803,21 +803,21 @@ projects in windows of their own, and opencode chats started by the app.
   afterwards. It is refused while a chat is running in the workspace, naming the chats, and when
   the new name is taken or is not a valid name. Unpushed or uncommitted work is not a reason to
   refuse, because a rename moves it whole. If a rename is interrupted, running the same command
-  again finishes it. Claude Code keeps a conversation under the folder it ran in, and charter
-  does not move that folder, so `charter workspace rename`, and the Rename dialog before you
+  again finishes it. Claude Code keeps a conversation under the folder it ran in, and purlis
+  does not move that folder, so `purlis workspace rename`, and the Rename dialog before you
   confirm, list by name each Claude Code chat in the workspace that will start a fresh
   conversation. When you reopen one of those chats, it starts a new conversation and says why
   once, instead of failing to resume. Codex and opencode chats resume as before and are not
   listed. ([#367](https://github.com/diazoxide/charter/issues/367))
-- **`charter report bug` and `charter report feature` file an issue on charter's own tracker.**
+- **`purlis report bug` and `purlis report feature` file an issue on purlis's own tracker.**
   Each run shows the draft and files nothing. To file it, answer `y` at the prompt in a
   terminal, or run the same command again with `--yes` and the digest the draft printed. If the
   draft has changed since, nothing is sent. The issue is filed under your own `gh` login, never
-  under a token from the environment. Before you see the draft, charter removes secrets,
+  under a token from the environment. Before you see the draft, purlis removes secrets,
   environment values, your plane's path, home paths and the names of your workspaces, repos,
   personas and vaults, and says what it removed. It also lists possible duplicates.
-  `charter report bug --panic` drafts the last panic the app saved, with where it happened and
-  the charter version, which panic records now include.
+  `purlis report bug --panic` drafts the last panic the app saved, with where it happened and
+  the purlis version, which panic records now include.
   ([#363](https://github.com/diazoxide/charter/issues/363))
 - **A project tab can move into a window of its own, and back.** Right-click a project tab, or
   use the palette, and choose *Move project … to a new window*. Its chats keep running. In that
@@ -826,17 +826,17 @@ projects in windows of their own, and opencode chats started by the app.
   you, whichever window it is in, and pressing one takes you to that window. Quitting warns
   about the chats in every window. The next launch opens each window again.
   ([#126](https://github.com/diazoxide/charter/issues/126))
-- **`charter guard` is back: rules that always ask, or stop asking.** `charter guard ask
-  '<pattern>'` and `charter guard allow '<pattern>'` write the rule in each harness's own
+- **`purlis guard` is back: rules that always ask, or stop asking.** `purlis guard ask
+  '<pattern>'` and `purlis guard allow '<pattern>'` write the rule in each harness's own
   file: Claude Code's `.claude/settings.json`, or `.claude/settings.local.json` with
   `--local`, and opencode's `opencode.json`. They touch nothing else in either file, and if
-  one of those files cannot be read, they write nothing anywhere. `charter guard handoff` puts
-  back the handoff consent rule a plane lost, and `charter guard` on its own lists the rules
-  by file. `charter doctor` now checks its `handoff gate` and `ask rules` rows instead of
+  one of those files cannot be read, they write nothing anywhere. `purlis guard handoff` puts
+  back the handoff consent rule a plane lost, and `purlis guard` on its own lists the rules
+  by file. `purlis doctor` now checks its `handoff gate` and `ask rules` rows instead of
   saying "not checked". ([#364](https://github.com/diazoxide/charter/issues/364))
-- **`charter save --pull` brings in what the remote has before it saves.** A chat the app did
+- **`purlis save --pull` brings in what the remote has before it saves.** A chat the app did
   not start, such as a `claude` or `codex` in a terminal, gets no auto-save and no incoming
-  changes. Outside the app, the plane is saved only through `charter save`. `--pull` fetches
+  changes. Outside the app, the plane is saved only through `purlis save`. `--pull` fetches
   the plane's target branch and fast-forwards a clean tree first, the same way the app does.
   With unsaved work in the tree, what came in is left alone and the save still runs. If the
   tree has conflicts, or there is no remote to pull from, the command stops and saves nothing.
@@ -852,13 +852,13 @@ projects in windows of their own, and opencode chats started by the app.
   questions, for work with nothing to ask about, for slash commands and for unattended runs,
   and for the three prompts after it fires.
   ([#369](https://github.com/diazoxide/charter/issues/369))
-- **`charter plugin install` guards the `claude` and `codex` chats you start in a terminal.**
-  The app arms only the chats it starts, so a terminal chat ran charter's guard only if the
-  retired Python charter's plugin happened to still be installed. `charter plugin install`
-  registers the app's own plugin with Claude Code, and charter's Bash guard with Codex, for
+- **`purlis plugin install` guards the `claude` and `codex` chats you start in a terminal.**
+  The app arms only the chats it starts, so a terminal chat ran purlis's guard only if the
+  retired Python charter's plugin happened to still be installed. `purlis plugin install`
+  registers the app's own plugin with Claude Code, and purlis's Bash guard with Codex, for
   every chat on this machine. It prints each change, `--dry-run` shows them without writing,
   and a second run changes nothing. It never turns on the retired `charter@charter` plugin,
-  and turns it off where it writes. `charter plugin uninstall` takes it back.
+  and turns it off where it writes. `purlis plugin uninstall` takes it back.
   ([#374](https://github.com/diazoxide/charter/issues/374))
 
 ### Changed
@@ -874,16 +874,16 @@ projects in windows of their own, and opencode chats started by the app.
   refused over uncommitted changes no longer tells you to remove or force.
   ([#368](https://github.com/diazoxide/charter/issues/368))
 - **The app keeps the plugin you installed for terminal chats up to date.** When it starts,
-  it re-runs `charter plugin install` for each harness (Claude Code, Codex, opencode) whose
+  it re-runs `purlis plugin install` for each harness (Claude Code, Codex, opencode) whose
   installed copy runs the app's own `charter` and is older than what the app ships. It never
   installs for a harness you did not install for, and leaves a copy that runs another
   `charter` alone. ([#449](https://github.com/diazoxide/charter/issues/449))
-- **`charter guard ask` puts a new rule into your workspaces straight away.** It rewrites the
-  generated settings of every workspace, as a launch or `charter workspace reinit` would,
+- **`purlis guard ask` puts a new rule into your workspaces straight away.** It rewrites the
+  generated settings of every workspace, as a launch or `purlis workspace reinit` would,
   and names any workspace whose settings it could not rewrite. Before, the rule reached a
-  workspace only after `charter workspace reinit --all`.
+  workspace only after `purlis workspace reinit --all`.
   ([#449](https://github.com/diazoxide/charter/issues/449))
-- **A vault file that is a symlink is refused.** `charter secret set` and `charter secret rm`
+- **A vault file that is a symlink is refused.** `purlis secret set` and `purlis secret rm`
   on a plain-file or reference vault whose file is a link now stop with a message saying so,
   and write nothing. They used to write the secrets to wherever the link pointed. Point the
   vault's `file` at the real path instead.
@@ -893,11 +893,11 @@ projects in windows of their own, and opencode chats started by the app.
   can reach, and the signing keys live there instead of in the repository. A build started by
   hand from the Actions tab publishes nothing and is now always unsigned for the updater.
   `docs/updating.md` has the setup.
-- **`charter news` prints this changelog.** It shows every version of the app, newest first,
-  and `charter news --for <version>` shows one, the same notes as the release page and About
-  Charter. It used to read the Python charter's news and told every plane it had no update
+- **`purlis news` prints this changelog.** It shows every version of the app, newest first,
+  and `purlis news --for <version>` shows one, the same notes as the release page and About
+  purlis. It used to read the Python charter's news and told every plane it had no update
   baseline. `--since`, `--until` and `--pending` are retired and say what to run instead.
-  `charter update` points at `charter news`, and the pin dialog no longer has an empty news
+  `purlis update` points at `purlis news`, and the pin dialog no longer has an empty news
   list.
 - **Pinned workspaces stay in the order you pinned them.** The workspace strip draws them in
   that order, and a workspace you pin later goes after the others, until you drag it. Unpinning
@@ -913,7 +913,7 @@ projects in windows of their own, and opencode chats started by the app.
   ([#403](https://github.com/diazoxide/charter/issues/403))
 - **`routing:` in a persona is retired.** Personas are offered to the harness as sub-agents,
   which is where work is routed. A persona that still declares `routing:` loads as before,
-  `charter doctor` says the key is ignored, and `charter init` no longer writes it.
+  `purlis doctor` says the key is ignored, and `purlis init` no longer writes it.
   ([#369](https://github.com/diazoxide/charter/issues/369))
 
 ### Fixed
@@ -936,7 +936,7 @@ projects in windows of their own, and opencode chats started by the app.
   rows past 95 included. Claude Code and opencode use SGR reports and were never affected.
   ([#493](https://github.com/diazoxide/charter/issues/493))
 - **The prose guards treat a process substitution as the substitution it is.** A `gh` or
-  `glab` command that publishes prose, a charter command that persists it, and `charter
+  `glab` command that publishes prose, a purlis command that persists it, and `purlis
   handoff` now refuse `<(…)` and `>(…)` wherever the shell runs them, and zsh's `=(…)`, exactly
   as they refuse `$(…)`. Quoted, or in a heredoc body, they are text and are left alone. The
   refusal names a process substitution rather than calling it a command substitution.
@@ -958,11 +958,11 @@ projects in windows of their own, and opencode chats started by the app.
   It also stops reporting slow survivors as timeouts. New tests now cover the extension,
   executor, secrets, save, settings and `CHARTER_*` steering behaviour the run found untested.
   ([#464](https://github.com/diazoxide/charter/issues/464))
-- **`charter plugin uninstall --harness codex` no longer leaves Codex's trust record for the
+- **`purlis plugin uninstall --harness codex` no longer leaves Codex's trust record for the
   guard behind** in `[hooks.state]`. A record for a hook of yours that sat after the guard is
   moved to its new position, so Codex does not ask you to trust it again.
   ([#449](https://github.com/diazoxide/charter/issues/449))
-- **`charter doctor` quotes every path and your git identity on one line.** A newline, a
+- **`purlis doctor` quotes every path and your git identity on one line.** A newline, a
   carriage return or a terminal escape in the plane's path, the working directory,
   `$CLAUDE_CONFIG_DIR` or your git `user.name` and `user.email` is shown escaped instead of
   reaching your terminal. ([#449](https://github.com/diazoxide/charter/issues/449))
@@ -974,7 +974,7 @@ projects in windows of their own, and opencode chats started by the app.
   double quotes that holds an escape or a backslash-newline. In a heredoc that expands, a line
   joined to the one before by a trailing backslash no longer ends the body. The lines after a
   heredoc opened inside a `$( … )` or backticks that close on the same line are read as
-  commands too, because bash 3.2 and zsh run them. The body of `charter handoff` spelled in
+  commands too, because bash 3.2 and zsh run them. The body of `purlis handoff` spelled in
   other letter cases (`CHARTER handoff`) is read as its brief, as it is for the plain spelling.
   ([#359](https://github.com/diazoxide/charter/issues/359))
 - **A terminal pane that opens late no longer adds a line when a wide character sits in the
@@ -1024,7 +1024,7 @@ projects in windows of their own, and opencode chats started by the app.
   is read with the same rules.
 - **A save no longer commits unresolved conflicts.** When git has stopped part-way through a
   merge, rebase, cherry-pick, revert or bisect, or files still have conflicts, every save now
-  refuses and stages nothing: `charter save`, the Save button, auto-save and repo saves alike.
+  refuses and stages nothing: `purlis save`, the Save button, auto-save and repo saves alike.
   It says which files conflict and the git command that finishes or aborts the operation. The
   Saving tab shows the plane or repo as Blocked until you do, and auto-save waits.
   ([#433](https://github.com/diazoxide/charter/issues/433))
@@ -1036,18 +1036,18 @@ projects in windows of their own, and opencode chats started by the app.
   vault in place, so a crash or a full disk mid-write leaves the old vault whole. The file is
   still private to you (0600) from the moment it exists.
   ([#429](https://github.com/diazoxide/charter/issues/429))
-- **Every file charter replaces whole is written the same careful way.** `workspace.json`, the
-  settings charter generates for a workspace or a checkout, the profile approval record and
+- **Every file purlis replaces whole is written the same careful way.** `workspace.json`, the
+  settings purlis generates for a workspace or a checkout, the profile approval record and
   the hook bookkeeping now share one writer. Each is flushed to disk with its directory, keeps
-  the permissions it had (or stays private, for charter's own state), and is never replaced
+  the permissions it had (or stays private, for purlis's own state), and is never replaced
   when it is a symlink. A `workspace.json` or generated settings file you made read-only is
   now left alone and reported, where it used to be replaced.
   ([#430](https://github.com/diazoxide/charter/issues/430))
-- **More of charter's files are replaced whole and never written through a symlink.** The
+- **More of purlis's files are replaced whole and never written through a symlink.** The
   vault registry (both halves), the fingerprint key, memory files and a memory index's
   rewrite, the front-door persona charter scaffolds, a checkout's presence record, the
   remembered open chats (`reopen.json`), the app's machine store, extension record and window
-  layout, and charter's own state files (the active persona and workspace, MCP approvals, the
+  layout, and purlis's own state files (the active persona and workspace, MCP approvals, the
   forge cache and its lock) now go through the same writer: a new file beside the old one,
   flushed and swapped in. A crash mid-write leaves the old file whole, and a file that is a
   symlink is refused, where some of these used to write to wherever the link pointed and
@@ -1057,20 +1057,20 @@ projects in windows of their own, and opencode chats started by the app.
   - The shared vault registry keeps the permissions it has, where it used to be reset to 0644
     on every write. A new one gets your usual file permissions.
   - `reopen.json` is now private to you (0600). It used to get your usual file permissions.
-    So is a memory index under `.charter/` when charter removes a line from it.
-  - Charter's own state files that you made read-only are replaced, as charter owns their
+    So is a memory index under `.charter/` when purlis removes a line from it.
+  - purlis's own state files that you made read-only are replaced, as purlis owns their
     mode. A read-only shared vault registry, local registry or fingerprint key is refused.
-  - A `.gitkeep` that is a symlink stops `charter init`'s front-door persona with an error.
+  - A `.gitkeep` that is a symlink stops `purlis init`'s front-door persona with an error.
   ([#434](https://github.com/diazoxide/charter/issues/434))
-- **`charter doctor` knows the Python charter is retired.** Its `python3` row no longer warns.
-  Its three plugin rows, which said "not checked", now check charter's plugin for chats started
+- **`purlis doctor` knows the Python charter is retired.** Its `python3` row no longer warns.
+  Its three plugin rows, which said "not checked", now check purlis's plugin for chats started
   outside the app: whether it is installed, whether it is current, and whether the `charter` its
   hooks run still exists. A new `superseded plugin` row names every settings file that still
-  turns on the retired `charter@charter`. `charter doctor --fix` works again: it runs
-  `charter plugin install`, prints each change, then reports. A workspace or worktree layer no
+  turns on the retired `charter@charter`. `purlis doctor --fix` works again: it runs
+  `purlis plugin install`, prints each change, then reports. A workspace or worktree layer no
   longer copies `charter@charter` from the plane's settings.
   ([#373](https://github.com/diazoxide/charter/issues/373))
-- **Charter's private files are read without following a symlink, too.** The fingerprint key,
+- **purlis's private files are read without following a symlink, too.** The fingerprint key,
   both halves of the vault registry, a plain-file vault and its rotation record, a keyring
   vault's key index, and the hook bookkeeping (the session's tool ceiling, the commit-gate
   and memory counters, the sub-agent map and the running-dispatch records) are now refused
@@ -1086,49 +1086,49 @@ projects in windows of their own, and opencode chats started by the app.
 - **A `.charter/` directory that is a symlink is refused for the vault registry and the
   fingerprint key.** Neither is read from nor written to where it points. A `$CHARTER_HOME`
   outside the plane is still used as you set it.
-- **`charter reinit` reports a `workspaces/.gitkeep` that is a symlink.** It used to take it
+- **`purlis reinit` reports a `workspaces/.gitkeep` that is a symlink.** It used to take it
   as present when the link stayed inside the plane or pointed at nothing. Now it is an error,
   as a persona's `.gitkeep` already was.
-- **Temp files an older charter left behind are cleaned up.** An older charter killed
+- **Temp files an older purlis left behind are cleaned up.** An older purlis killed
   mid-write could leave `reopen.json.writing` or a temp of the profile approval record in a
   plane's `.charter/`, or a `*.writing` temp beside the app's machine store, extension record
   or window layout. Nothing removed them. The app now deletes them when it opens a plane:
   only those exact names, only plain files, and only when they are more than ten minutes old.
   ([#440](https://github.com/diazoxide/charter/issues/440))
-- **A guard that crashes now refuses the tool call instead of letting it run.** If charter hit
+- **A guard that crashes now refuses the tool call instead of letting it run.** If purlis hit
   an internal error while checking a tool call, the crash ended the process with a status
   Claude Code and Codex read as a non-blocking error, so the call went ahead unchecked. Any
   crash in a `PreToolUse` hook now exits 2, which both read as "block", with one line on
   stderr saying the guard could not answer. A crash in any other hook still never blocks.
   ([#349](https://github.com/diazoxide/charter/issues/349))
 - **A handoff leaves a todo in the workspace it went to.** Once the app has opened the new
-  chat, `charter handoff` records a todo there: the brief's first line and which chat handed it
+  chat, `purlis handoff` records a todo there: the brief's first line and which chat handed it
   off, never the rest of the brief. If a todo about the same work is already open there, it
   says so and records nothing twice. It also adds one row to the dispatch log saying whether
   the chat went to this workspace or another, and whether the handoff created it; the row
   names no workspace, persona or brief. A write that fails is said and never undoes the open.
   ([#372](https://github.com/diazoxide/charter/issues/372))
-- **`charter doctor` quotes a value it read from a file, a folder name or the environment on
+- **`purlis doctor` quotes a value it read from a file, a folder name or the environment on
   one line.** The plane root row's memory-push record, the session layer row's harness name,
   and the workspace and persona names in the clone and memory rows used to be printed as they
   were, so a value with a line break in it could print a row that looked like one of doctor's
   own. ([#353](https://github.com/diazoxide/charter/issues/353))
-- **`charter.toml` and the plane's `.gitignore` can no longer be left cut short.** charter
+- **`charter.toml` and the plane's `.gitignore` can no longer be left cut short.** purlis
   now writes the new version beside the file and swaps it in, so a crash or a full disk leaves
-  the old file whole. Two edits at once, such as `charter persona default` while the settings
+  the old file whole. Two edits at once, such as `purlis persona default` while the settings
   tab saves, or two workspaces made live together, now both land instead of one overwriting
-  the other. A `.gitignore` charter cannot read as text is now left alone rather than
+  the other. A `.gitignore` purlis cannot read as text is now left alone rather than
   rewritten from nothing. ([#357](https://github.com/diazoxide/charter/issues/357),
   [#358](https://github.com/diazoxide/charter/issues/358))
-- **`charter init` creates `workspaces/.gitkeep`**, the file its `.gitignore` already
-  expected, so an empty `workspaces/` can be committed. `charter reinit` adds it to older
+- **`purlis init` creates `workspaces/.gitkeep`**, the file its `.gitignore` already
+  expected, so an empty `workspaces/` can be committed. `purlis reinit` adds it to older
   planes. ([#355](https://github.com/diazoxide/charter/issues/355))
-- **A reference vault's file is private from the moment it is created.** charter used to
+- **A reference vault's file is private from the moment it is created.** purlis used to
   write it first and restrict its permissions afterwards; it now sets them before any content,
   as plain-file vaults already did.
   ([#356](https://github.com/diazoxide/charter/issues/356))
-- **`charter doctor` describes Codex correctly.** Its session layer row said Codex ignores a
-  project `.codex/config.toml` and gets charter's layer from a plugin. The app arms Codex with
+- **`purlis doctor` describes Codex correctly.** Its session layer row said Codex ignores a
+  project `.codex/config.toml` and gets purlis's layer from a plugin. The app arms Codex with
   flags on each chat's command line, and Codex reads a project's `.codex/config.toml` once you
   trust the project. The harness guide says the same.
   ([#354](https://github.com/diazoxide/charter/issues/354))
@@ -1142,11 +1142,11 @@ projects in windows of their own, and opencode chats started by the app.
 - **A `cd` that fails no longer hides the command after it.** `cd somewhere; git checkout x`
   was judged as running in `somewhere` even when the `cd` failed and git ran in the plane root.
   Now only `cd somewhere && …` counts as having moved, and only up to the end of that `&&`
-  chain. A `cd` in a pipeline or a subshell, `pushd`, `~`, and a destination charter can't read
+  chain. A `cd` in a pipeline or a subshell, `pushd`, `~`, and a destination purlis can't read
   (`cd "$DIR"`, `cd -`) are followed the way the shell follows them.
   ([#345](https://github.com/diazoxide/charter/issues/345))
 - **`GH issue create` and `CHARTER persona remember` are checked like their lower-case
-  spellings.** The check that refuses a live `` `…` `` or `$(…)` in a forge body or a charter
+  spellings.** The check that refuses a live `` `…` `` or `$(…)` in a forge body or a purlis
   memory skipped a program name typed in capitals or split by quotes.
   ([#347](https://github.com/diazoxide/charter/issues/347))
 - **An unattended run can no longer publish just because it listed the tags first.** Listing
@@ -1169,7 +1169,7 @@ and add to a chat's briefing, and show badges and repo columns, each capability 
 approval dialog; persona statistics ships built in. A workspace picks its repos when you make it
 and saves each one by its own mode, and a project says what is not saved yet and carries its
 commits on. It is also the first release from the repository's new name, `diazoxide/charter`,
-and charter's own plugin is now called `charter`.
+and purlis's own plugin is now called `charter`.
 
 ### Added
 
@@ -1188,7 +1188,7 @@ and charter's own plugin is now called `charter`.
   extension declares, with anything else they change reported. A chat's call goes through the
   same guard as any `charter` call, and a persona's grant never lets one that writes run
   without asking. An extension turned off, not yet approved or changed since you approved it
-  says so and runs nothing. An extension can never take one of charter's own words as its id.
+  says so and runs nothing. An extension can never take one of purlis's own words as its id.
   `charter <id>` alone lists its commands. The command line doesn't reach the app's built-in
   extensions yet. ([#342](https://github.com/diazoxide/charter/issues/342))
 - **Extensions can hear what happens, and add to a chat's briefing.** An extension that asks
@@ -1206,9 +1206,9 @@ and charter's own plugin is now called `charter`.
   approval dialog: `palette` adds commands to the palette, named with the extension's name, that
   open one of its views or run one of its actions; `actions` puts the extension's own actions on
   the rows of its views, and the answer can refresh the view; `writes` declares the plane paths
-  it writes, such as `workspaces/*/todos/`. charter asks before an action when the extension
+  it writes, such as `workspaces/*/todos/`. purlis asks before an action when the extension
   says to, and always before one that deletes. Each request tells the extension where it may
-  write, and after each one charter says what changed outside those paths, naming the
+  write, and after each one purlis says what changed outside those paths, naming the
   extension. That is a report, not a fence: an extension still runs as you. The protocol is now
   2; an extension written for protocol 1 is asked exactly as before and keeps its approval.
   ([#341](https://github.com/diazoxide/charter/issues/341))
@@ -1229,13 +1229,13 @@ and charter's own plugin is now called `charter`.
   `.npmrc` with a token, …) or a private key or forge token in what it would commit, and names
   the file.
   ([#299](https://github.com/diazoxide/charter/issues/299))
-- **Persona statistics comes with the app.** charter now ships its own extensions, and persona
+- **Persona statistics comes with the app.** purlis now ships its own extensions, and persona
   statistics is the first: there is no folder to assemble and add by hand, and no approval to
   give, because the app's signature covers it. The Extensions list marks it "built-in" and
   offers turning it off on this machine in the place of Remove. A project or a workspace can
   still turn it off, as it can any extension. A copy of it anywhere else is an ordinary
   extension that has to be approved. If you added it by hand before, that copy is set aside and
-  the built-in one is used. Its numbers are now `charter persona stats`'s: it counts the same
+  the built-in one is used. Its numbers are now `purlis persona stats`'s: it counts the same
   memories and dates them the same way, and "recent" means the last 14 days in both. For
   extension authors: a view about personas is now handed the day each memory was written,
   rather than its minute. ([#339](https://github.com/diazoxide/charter/issues/339))
@@ -1244,7 +1244,7 @@ and charter's own plugin is now called `charter`.
   that asks for `repo-columns` can add columns to the repo table in the bottom bar. It declares
   each one in its manifest, with how long a value stays fresh, and the approval dialog lists
   them. The values come from a facts file the extension keeps in its state directory, and
-  charter never starts the extension's program to draw them. A value older than its freshness
+  purlis never starts the extension's program to draw them. A value older than its freshness
   is dimmed and shows its age. A facts file that is too big, isn't JSON, or fills something the
   manifest didn't declare shows nothing and says why. So does an extension that changed since
   you approved it. Turning an extension off for a project or a workspace hides its badges and
@@ -1256,12 +1256,12 @@ and charter's own plugin is now called `charter`.
   ([#302](https://github.com/diazoxide/charter/issues/302))
 - **An extension says which capabilities it asks for.** An extension's `charter-extension.json`
   can list them in `capabilities`. The approval dialog and the Extensions list name each one,
-  and changing the list asks you again. An extension that asks for a capability this charter
+  and changing the list asks you again. An extension that asks for a capability this purlis
   doesn't know is refused as a whole, with a sentence naming it. Each capability arrives in
   its own change. An extension with no `capabilities` loads exactly as
   before and keeps its approval. `version` in the manifest is now the protocol its program
   speaks. ([#338](https://github.com/diazoxide/charter/issues/338))
-- **LIVE and LOCAL, from the window.** A LIVE workspace, whose charter, memory and todos are
+- **LIVE and LOCAL, from the window.** A LIVE workspace, whose purlis, memory and todos are
   published with the project, is marked on its tab, in the title bar and in the Explorer, and
   the Saving tab names the live ones. Its menu, the palette and its settings page offer
   *Make live…* or *Make local…*. Before anything changes, a confirmation says which files and
@@ -1270,12 +1270,12 @@ and charter's own plugin is now called `charter`.
   stays in history, and the confirmation says so. The new-workspace dialog has a *Live* box,
   unticked by default. ([#301](https://github.com/diazoxide/charter/issues/301))
 - **A blocked save shows its way out.** When a save can't go further (a conflict with the
-  remote, a secret the scan caught, a pull request mode on a remote charter can't open pull
+  remote, a secret the scan caught, a pull request mode on a remote purlis can't open pull
   requests on), the Saving tab says why, names the files a conflict is in, and offers
   *Resolve in a chat* (the chat picker, starting in the project) or *Open terminal here* (a plain
   shell in the project). The alerts drawer says so too: at once for a secret, and after ten
   minutes for anything else.
-- **Fewer conflicts in the first place.** `charter init` and `charter reinit` write a
+- **Fewer conflicts in the first place.** `purlis init` and `purlis reinit` write a
   `.gitattributes` block that merges the logs and memory indexes which only ever grow line by
   line, so two machines adding to the same one no longer conflict.
   ([#295](https://github.com/diazoxide/charter/issues/295))
@@ -1287,23 +1287,23 @@ and charter's own plugin is now called `charter`.
   pull request. `pr-merge` also asks GitHub or GitLab to merge it once its checks pass. If the
   forge will not queue the merge, the Saving tab says why and the pull request stays open for
   you. The Saving tab shows *Pushed — waiting on its pull request* with the link. Once the pull
-  request has merged, by a merge commit, a rebase or a squash, charter moves your branch onto
+  request has merged, by a merge commit, a rebase or a squash, purlis moves your branch onto
   the remote's and keeps anything newer you have not saved. If the pull request was closed
   without merging, or the branch no longer holds what was pushed, the project is **blocked**
   and nothing is moved; save again to open a new pull request. A file in the way of the move
-  just waits for the next look. Charter force-pushes only its own save branch, and only over
+  just waits for the next look. purlis force-pushes only its own save branch, and only over
   what that clone pushed there itself, so a second machine with the same name never
   overwrites the first's. It never pushes to the project's branch in these modes. ([#298](https://github.com/diazoxide/charter/issues/298))
 - **Commits left behind are carried on.** In a project whose mode pushes, a save with nothing
   new to commit still pushes the commits this machine has not pushed yet. That covers a push
   that quitting did not have time for, and a commit a chat made with plain git.
-- **Auto-save.** While charter is open, a project with auto-save on (`[plane] autosave`,
+- **Auto-save.** While purlis is open, a project with auto-save on (`[plane] autosave`,
   on by default) saves by itself: 30 seconds after the last change (`autosave_after`), as soon
   as a chat in it ends, and when you quit. At quit it commits at once and gives the push a few
-  seconds; whatever did not get pushed is pushed the next time charter opens the project. It
+  seconds; whatever did not get pushed is pushed the next time purlis opens the project. It
   pauses while a save is blocked, and a push that fails is retried every five minutes, not
   every 30 seconds.
-- **What came in.** Every five minutes, and when the window comes back into focus, charter
+- **What came in.** Every five minutes, and when the window comes back into focus, purlis
   fetches the project's branch. The title bar and the Saving tab say how many commits came in
   (*2 incoming*). With auto-save on, a project with nothing unsaved is fast-forwarded onto
   them. Otherwise they wait for your next save.
@@ -1316,17 +1316,17 @@ and charter's own plugin is now called `charter`.
   front shows where its unsaved work sits: *3 changed*, *committed, not pushed*,
   *waiting on its pull request*, *blocked*, or *Saved*. A save button sits next to it while
   there is anything to save. Press the words to open the project's **Saving** tab, which lists
-  the files the next save takes, lets you type a message (leave it empty and charter writes one
+  the files the next save takes, lets you type a message (leave it empty and purlis writes one
   that says what changed), and shows the last 50 saves and how each one ended. The tab is also on
   the project tab's menu and in the palette, as *Saving…*. The button runs the same save as
-  `charter save`, so both follow `[plane] mode`.
+  `purlis save`, so both follow `[plane] mode`.
   ([#294](https://github.com/diazoxide/charter/issues/294))
 - **Project settings has Plane and Repos sections.** Both files, Shared (`charter.toml`) and
   Local (`charter.local.toml`), now have a **Plane** group — mode, target branch, save branch,
   signing, auto-save and how long auto-save waits — and a **Repos** group with the same keys
   (bar the save branch) for every repo in `inventory/repos.json`. Beside each control is what
   the project actually uses and which file decided it, and a Shared value that Local overrides
-  says so. A value charter would not read is refused on save, in the words `charter doctor`
+  says so. A value purlis would not read is refused on save, in the words `purlis doctor`
   uses. The old `[memory] share` choice moved into the Shared Plane group, marked as the
   deprecated stand-in for Mode, and it says whether it is in force or a Mode set in either
   file wins. The rest of the old Plane group, `[plane] worktrees` included, is now called
@@ -1335,23 +1335,23 @@ and charter's own plugin is now called `charter`.
 
 ### Changed
 
-- **charter lives at `diazoxide/charter`.** The repository that was `diazoxide/charter-app` took
+- **purlis lives at `diazoxide/charter`.** The repository that was `diazoxide/charter-app` took
   the name, and the plane that held it before is `diazoxide/charter-plane`. Updates, releases and
   issues come from the new name; a build from before reaches them through GitHub's redirect.
   (ADR 0056)
-- **charter's own plugin is called `charter`.** Its skills are `charter:handoff`,
+- **purlis's own plugin is called `charter`.** Its skills are `charter:handoff`,
   `charter:update` and `charter:working-in-a-clone`, and a chat loads it as `charter@inline`.
   It was `charter-app`. A persona whose `skills:` lists a `charter-app:` skill needs it
-  renamed, and `charter persona sync-agents` carries that into `.claude/agents/`. A project or
+  renamed, and `purlis persona sync-agents` carries that into `.claude/agents/`. A project or
   workspace setting that still turns `charter-app@inline` on is refused with the new id, and
   the Python charter's `charter@charter` is still turned off in every chat. Turning that one off
-  never turns charter's own off. (#406, ADR 0056)
+  never turns purlis's own off. (#406, ADR 0056)
 - **Save in the title bar now saves only the project.** Before, when the workspace in front had
   repos with changes, the title bar's Save became Save all. It committed every changed file in
   those repos and pushed their branches, without asking. Now the title bar counts the repos but
   never saves them. Save all lives only in the Saving tab, and it first asks you to confirm a
   list of each repo, its branch, what it would take and where its save goes. Each repo row says
-  where its Save goes, too. A repo nobody has configured is now `off` instead of `pr`: charter
+  where its Save goes, too. A repo nobody has configured is now `off` instead of `pr`: purlis
   saves no repo until `[repos.<name>] mode` says how. To keep saving a repo as before, set its
   mode to `pr`.
 - **The project tabs are in the title bar**, after the window controls, and the breadcrumb
@@ -1364,7 +1364,7 @@ and charter's own plugin is now called `charter`.
   Personas, Vaults and every panel an extension adds. Each heading is a smaller, bolder title
   in brighter text, so it no longer looks like the first row of its list. The left sidebar's
   "Not cloned here" heading matches.
-- **`charter discover` adds to the inventory instead of replacing it.** Engineers on one plane
+- **`purlis discover` adds to the inventory instead of replacing it.** Engineers on one plane
   reach different repos, and each run used to drop every repo the last person's login could see
   and theirs could not. A repo now leaves `inventory/repos.json` only when `[[forge]].exclude`
   names it. (ADR 0055)
@@ -1373,18 +1373,18 @@ and charter's own plugin is now called `charter`.
   the default. Its remedy, in the drawer and on the terminal status line, now reads "save the
   plane, or move the work to a workspace clone".
   ([#332](https://github.com/diazoxide/charter/issues/332))
-- `charter save` follows `[plane] mode`. `off` commits nothing, `commit` stops after the
-  commit, and `push` pushes to `[plane] branch` when one is set. Until charter can open the
+- `purlis save` follows `[plane] mode`. `off` commits nothing, `commit` stops after the
+  commit, and `push` pushes to `[plane] branch` when one is set. Until purlis can open the
   pull request, `pr` and `pr-merge` commit but never push to the target branch. A plane that
   names no mode is saved exactly as before.
 - A save with no message says what changed in the plane's own words, for example
-  `charter save: 3 files (steward memory 2, ide todos 1)`, instead of only counting files.
+  `purlis save: 3 files (steward memory 2, ide todos 1)`, instead of only counting files.
 - `[plane] sign = true`, or `--sign`, now signs the save whatever the machine's own
   `commit.gpgsign` says. Before, `--sign` only allowed signing. A signer that fails still
   leaves an unsigned commit, and says so.
-- What charter tells an agent a memory will do, and what `charter remember` prints, now
+- What purlis tells an agent a memory will do, and what `purlis remember` prints, now
   follow `[plane] mode`: a memory travels with the plane's next save. The old text promised
-  that `share = "push"` pushed each memory immediately, which this charter never did.
+  that `share = "push"` pushed each memory immediately, which this purlis never did.
   ([#293](https://github.com/diazoxide/charter/issues/293))
 
 ### Fixed
@@ -1419,8 +1419,8 @@ and every settings group that it would have changed says so.
 - **Project settings**, a tab of its own: right-click a project's tab and choose _Project
   settings…_, or find it in the palette. It has two sections — **Shared**, `charter.toml`,
   which is committed and your team sees, and **Local**, `charter.local.toml`, which stays on
-  this machine — each as a form over the keys charter documents and as raw TOML for everything
-  else. Saving keeps your comments and the order of your keys, and refuses what charter would
+  this machine — each as a form over the keys purlis documents and as raw TOML for everything
+  else. Saving keeps your comments and the order of your keys, and refuses what purlis would
   refuse when it next reads the file, in the same words: a forge it cannot resolve, a profile
   in the committed file, a value that looks like a credential. Local is created on the first
   save, and never where git would commit it. ([#252](https://github.com/diazoxide/charter/issues/252))
@@ -1433,15 +1433,15 @@ and every settings group that it would have changed says so.
   extension on, as before. Panels, views and themes follow the project in front, and a view
   refuses to run in a project that turned its extension off. ([#253](https://github.com/diazoxide/charter/issues/253))
 - **Harness plugins per project.** Project settings has a *Harness plugins* group for each
-  harness charter knows, in Shared and in Local. For Claude Code it lists the plugins installed
-  on this machine, and each one can be on, off or not set for the chats charter starts in the
+  harness purlis knows, in Shared and in Local. For Claude Code it lists the plugins installed
+  on this machine, and each one can be on, off or not set for the chats purlis starts in the
   project. Local wins plugin by plugin, and not set leaves the plugin to Claude Code's own
-  settings. charter's own plugin is always on and the old `charter@charter` always off. No file
+  settings. purlis's own plugin is always on and the old `charter@charter` always off. No file
   can change either, and a save that tries is refused. Codex and opencode list what they have
   installed and say their plugins are not supported yet, with the reason: Codex ignores a
-  plugin's on/off given for one session, and charter does not start opencode chats yet.
+  plugin's on/off given for one session, and purlis does not start opencode chats yet.
   ([#274](https://github.com/diazoxide/charter/issues/274))
-- **A theme per project.** Project settings has a Theme select in Shared and in Local: charter's
+- **A theme per project.** Project settings has a Theme select in Shared and in Local: purlis's
   dark or light theme, *Follow the system*, or any theme an extension you approved contributes.
   Local wins over Shared. While that project is in front the window and every terminal draw its
   theme, and switching projects switches it live. A pick whose extension is off in the project,
@@ -1471,20 +1471,20 @@ and every settings group that it would have changed says so.
   **Harness plugins** group per harness, as in Project settings, with each plugin saying whether
   `charter.toml`, the workspace's `workspace.json` or `charter.local.toml` decided it, or that
   nothing did. A Claude Code chat started in the workspace gets that set; Codex and opencode say
-  their plugins are not supported yet, for a workspace as for a project. charter's own plugin
+  their plugins are not supported yet, for a workspace as for a project. purlis's own plugin
   stays on and the old one stays off whatever a workspace says.
   ([#282](https://github.com/diazoxide/charter/issues/282))
 - `charter.toml` and `charter.local.toml` accept a `[plane]` section and a `[repos.<name>]`
   table for each repo, which say how far a save goes: `mode` (`off`, `commit`, `push`, `pr`
   or `pr-merge`), `branch`, `save_branch`, `sign`, `autosave` and `autosave_after`. The local
   file overrides the shared one key by key. Nothing saves by these settings yet. For now,
-  `charter doctor` and the Project settings tab check them, and the doctor names
+  `purlis doctor` and the Project settings tab check them, and the doctor names
   `[memory] share` as the deprecated way of saying `mode`.
   ([#292](https://github.com/diazoxide/charter/issues/292))
 - A vault can live in your system's own credential store: the Keychain on macOS, the Secret
-  Service on Linux. `charter vault add <name>` makes one by default, and every `charter secret`
-  and `charter vault` command works on it as on the other kinds. Each secret is its own
-  Keychain item, and on macOS only the charter program that stored it can read it without the
+  Service on Linux. `purlis vault add <name>` makes one by default, and every `purlis secret`
+  and `purlis vault` command works on it as on the other kinds. Each secret is its own
+  Keychain item, and on macOS only the purlis program that stored it can read it without the
   Keychain asking you first. A plaintext vault file is now something you ask for, with
   `--provider plain-file`. ([#233](https://github.com/diazoxide/charter/issues/233))
 - **Vaults in the app.** A Vaults section in the Attention panel lists each vault with its
@@ -1497,20 +1497,20 @@ and every settings group that it would have changed says so.
   [#235](https://github.com/diazoxide/charter/issues/235))
 - **Reveal and copy.** A secret's eye shows its value for 30 seconds, until you press it again,
   or until you press Escape. **Copy** puts the value on the clipboard without it reaching the
-  window, marked for clipboard histories to skip. charter clears the clipboard a minute later, or
+  window, marked for clipboard histories to skip. purlis clears the clipboard a minute later, or
   when it quits, but only if the clipboard still holds that value. Each reveal and copy writes
-  the trace event `charter secret get --reveal` writes, `secret-reveal`, with a `to` field saying
+  the trace event `purlis secret get --reveal` writes, `secret-reveal`, with a `to` field saying
   `window` or `clipboard`. ([#236](https://github.com/diazoxide/charter/issues/236))
 - **1Password tokens go into the Keychain, not your chats.** A 1Password vault's tab has a box
   to paste its service-account token straight into the system keyring; the token never enters
-  charter's own environment. From then on every `charter secret` command reads it from the keyring,
-  so the vault works in a chat and in a terminal that exports nothing. charter runs only the `op`
+  purlis's own environment. From then on every `purlis secret` command reads it from the keyring,
+  so the vault works in a chat and in a terminal that exports nothing. purlis runs only the `op`
   it pinned when the token was stored, verified by path and code-signing team, so a chat cannot
   redirect the token to an `op` of its own; the keyring item is random per vault and machine, and
   the binding it was stored against is pinned locally, so a committed registry change cannot steer
   it. No chat the app starts is given any `OP_*` variable (case insensitively) or any other
   identity variable a vault declares. A tab can also move a token an app was launched with, and
-  then warns to relaunch charter so the export leaves its process.
+  then warns to relaunch purlis so the export leaves its process.
   ([#237](https://github.com/diazoxide/charter/issues/237))
 - **Text size and Preferences.** The window's text and the terminal's each have a size, kept
   per machine, and a change applies at once. Cmd with `=`, `-` or `0` (Ctrl off macOS) makes
@@ -1528,26 +1528,26 @@ and every settings group that it would have changed says so.
   fresh**, naming how many chats and view tabs each project had. Start fresh puts nothing back.
   Escape, closing the question, or no answer at all reopens them, as before.
   ([#250](https://github.com/diazoxide/charter/issues/250))
-- When an update is installed, the title bar says **Restart to update**. It restarts charter
+- When an update is installed, the title bar says **Restart to update**. It restarts purlis
   into the new version and offers every chat and view tab back, with **Reopen all** as the
-  answer in front and a line saying charter restarted to install an update. A chat that is
+  answer in front and a line saying purlis restarted to install an update. A chat that is
   mid-turn is named first, and you choose to restart now or wait. If the restart does not come
   back, the next launch offers the same sessions.
   ([#251](https://github.com/diazoxide/charter/issues/251))
 - A chat is named for its persona and a number, such as `steward 1`, or for its harness, such as
   `claude 4`, when it has no persona. The picker has an optional Name field, and a chat's tab
   renames by a double-click, F2, its menu's Rename row or the palette. A blank name gives the
-  default back. The name is charter's label only, so a rename never touches the running program,
+  default back. The name is purlis's label only, so a rename never touches the running program,
   and it comes back with the chat after a relaunch.
   ([#254](https://github.com/diazoxide/charter/issues/254))
-- A handed-off chat is named for its task. `charter handoff --name "<short task>"` names the new
+- A handed-off chat is named for its task. `purlis handoff --name "<short task>"` names the new
   chat's tab, and the handoff skill always writes one from the brief; without it the tab is the
   ordinary `<persona> <N>`, so four handoffs from one chat are four tabs you can tell apart. The
   chat it came from is shown by name, never by number — `↳ from steward 3 · platform-next` in the
   tab's tooltip and the chat's corner, and in the new chat's first line.
   ([#258](https://github.com/diazoxide/charter/issues/258))
-- A handoff can ask for an answer. With `charter handoff --report`, the new chat is told to
-  finish with `charter handoff report "<summary>"`, and the chat that asked gets a needs-you item
+- A handoff can ask for an answer. With `purlis handoff --report`, the new chat is told to
+  finish with `purlis handoff report "<summary>"`, and the chat that asked gets a needs-you item
   (`<chat> reported back`) and the report as context on its next turn — quoted as data, and never
   typed into it. The report goes only to the chat that asked, and exactly once per handoff —
   another needs another `--report` handoff; if that chat has closed, the next chat in its workspace learns it when
@@ -1556,7 +1556,7 @@ and every settings group that it would have changed says so.
   in** it, which starts that one tab's chat in the clone, and **Start new chats in** it, which
   makes the clone where every new chat starts until you pick somewhere else, as picking a
   worktree does one level down, and the explorer marks it.
-  Shift+F10 or the menu key opens any of charter's menus on the row the keyboard is on.
+  Shift+F10 or the menu key opens any of purlis's menus on the row the keyboard is on.
   ([#174](https://github.com/diazoxide/charter/issues/174))
 - The explorer is a tree to a screen reader and to the keyboard: Right opens a clone or moves to
   a row's first child, Left closes it or moves to its parent, and a typed letter moves to the
@@ -1570,8 +1570,8 @@ and every settings group that it would have changed says so.
 
 - The needs-you queue is in the title bar now, and nowhere else. A hand and a count sit left of
   About when anything needs you. When nothing has asked but a chat that can't report is open — a
-  shell, or a harness without charter's hooks — it is a faint hand with no number, and its
-  tooltip and list name those chats ("shell 2 can't tell charter it's waiting"). With neither,
+  shell, or a harness without purlis's hooks — it is a faint hand with no number, and its
+  tooltip and list name those chats ("shell 2 can't tell purlis it's waiting"). With neither,
   nothing is there. Pressing it lists every
   chat asking in every open project — its name, then its workspace and project — each with
   **Go**, which brings that chat to the front and switches project and workspace to get there,
@@ -1594,9 +1594,9 @@ and every settings group that it would have changed says so.
   chat is the interrupt again, not Copy, and the same goes for `Ctrl-A`, `Ctrl-Z`, `Ctrl-Y`,
   `Ctrl-V`, `Ctrl-X` and `Ctrl-H`. Quit is `Ctrl+Shift+Q` there, as in a terminal app. macOS is
   unchanged. ([#241](https://github.com/diazoxide/charter/pull/241))
-- `charter doctor`'s `git auth` row checks the one-credential git policy, the check
-  `charter git-policy` runs, instead of saying it is not checked. It only reads, and names
-  `charter git-policy --apply` for a clone that drifted.
+- `purlis doctor`'s `git auth` row checks the one-credential git policy, the check
+  `purlis git-policy` runs, instead of saying it is not checked. It only reads, and names
+  `purlis git-policy --apply` for a clone that drifted.
   ([#241](https://github.com/diazoxide/charter/pull/241))
 - Closing a chat that was asking for you, with the × on its tab or by ending its pane, takes it
   out of the needs-you queue and out of the red counts on its project and workspace tabs. It
@@ -1605,25 +1605,25 @@ and every settings group that it would have changed says so.
 - A chat's report that raced a close, or an Ignore, can no longer put the chat back in the
   needs-you queue: every update the window gets is numbered, and it keeps the newest.
   ([#248](https://github.com/diazoxide/charter/issues/248))
-- A persona's card names the vault `charter persona list` names. A persona whose definition has
+- A persona's card names the vault `purlis persona list` names. A persona whose definition has
   no `vault:` line but that `vaults.json` tags a vault to used to be shown as "not declared in
   its definition"; the card now shows that vault's name and says it came from the vault
   registry. A persona nothing names a vault for says so, a `vault: none` still says it holds no
-  credentials of its own, and a registry that does not read is shown with charter's reason.
+  credentials of its own, and a registry that does not read is shown with purlis's reason.
   ([#185](https://github.com/diazoxide/charter/issues/185))
-- `charter persona stats` reads a dispatch log's timestamps as Python's
+- `purlis persona stats` reads a dispatch log's timestamps as Python's
   `datetime.fromisoformat` did, digit for digit. A stamp such as `2026-03-04T100`, with three
   digits for the time, is skipped rather than read as ten o'clock, and so is a one-digit hour,
   minute or second. Any one character between the date and the time, a comma before the
   fraction and an offset with seconds all read as Python read them.
   ([#315](https://github.com/diazoxide/charter/issues/315))
-- The panels follow the plane on disk. A todo closed with `charter ws todo done` in a terminal
+- The panels follow the plane on disk. A todo closed with `purlis ws todo done` in a terminal
   leaves the Todos panel and its count at once, and a workspace made in a terminal is watched
   from then on. Before, a panel changed only when you focused another workspace and came back.
   ([#264](https://github.com/diazoxide/charter/issues/264))
-- `charter save` against a remote that moved no longer waits on a signer that never answers.
+- `purlis save` against a remote that moved no longer waits on a signer that never answers.
   The rebase that replays its commit has a two-minute deadline, as the commit itself does, and a
-  rebase stopped at it is reported as out of time, not as a conflict. `charter save --sign`
+  rebase stopped at it is reported as out of time, not as a conflict. `purlis save --sign`
   replays its commit signed, and a save without `--sign` never asks a signer.
   ([#242](https://github.com/diazoxide/charter/issues/242))
 
@@ -1638,12 +1638,12 @@ and every settings group that it would have changed says so.
   now separate guards on reveal and copy. Before, the policy was the only one.
   ([#276](https://github.com/diazoxide/charter/issues/276))
 - A `charter.local.toml` that git tracks, or would commit, no longer decides anything. The file
-  is meant to stay on one machine, and charter already refused the harness profiles in it when
+  is meant to stay on one machine, and purlis already refused the harness profiles in it when
   git would carry it. The extensions, theme and harness plugins it chose were still applied,
-  though, so a copy committed by mistake reached every clone of the plane. Now charter reads
+  though, so a copy committed by mistake reached every clone of the plane. Now purlis reads
   nothing in such a file, and the workspace and `charter.toml` decide instead. The Local section
   of Project settings still shows the file and says why it is not read and how to fix it: add
-  `/charter.local.toml` to `.gitignore` (`charter reinit` does that), or, if git already tracks
+  `/charter.local.toml` to `.gitignore` (`purlis reinit` does that), or, if git already tracks
   it, `git rm --cached` it first. ([#308](https://github.com/diazoxide/charter/issues/308))
   The Extensions, Theme and Harness plugins groups say it too, in the same words, in Project
   settings and in every Workspace settings tab, wherever the file set something. Before, a
@@ -1654,44 +1654,44 @@ and every settings group that it would have changed says so.
 ## [0.1.1] - 2026-09-24
 
 0.1.1 brings back what 0.1.0 left out and a working plane still used: vault access through
-`charter secret` and `charter persona secret`, and the `persona use`, `list`, `sync-agents` and
+`purlis secret` and `purlis persona secret`, and the `persona use`, `list`, `sync-agents` and
 `stats` commands. A chat started by charter 0.1.0 finds the app's own `charter` first on its
 `PATH`, so a plane whose instructions call those commands lost them. This release restores them.
 
 ### Fixed
 
-- `charter persona list`, `persona use`, `persona sync-agents` and `persona stats` work again,
-  and answer as the charter your plane was set up with did. Re-syncing a plane's sub-agents
+- `purlis persona list`, `persona use`, `persona sync-agents` and `persona stats` work again,
+  and answer as the purlis your plane was set up with did. Re-syncing a plane's sub-agents
   changes only the ones whose persona changed since they were last generated.
   ([#228](https://github.com/diazoxide/charter/pull/228))
-- `charter ws todo` says what it recorded, closed or dropped, and a slug that is not there
+- `purlis ws todo` says what it recorded, closed or dropped, and a slug that is not there
   says so instead of passing silently. ([#228](https://github.com/diazoxide/charter/pull/228))
-- `charter secret`, `charter persona secret` and `charter vault` are back. A chat that runs
-  `charter secret exec <vault> --file KUBECONFIG=<key> -- kubectl …` or `charter secret list
+- `purlis secret`, `purlis persona secret` and `purlis vault` are back. A chat that runs
+  `purlis secret exec <vault> --file KUBECONFIG=<key> -- kubectl …` or `purlis secret list
 <vault>` got a usage error from 0.1.0, which put charter first on the chat's `PATH` without
   them; they now answer as the Python charter did, with the plain-file, reference and 1Password
   providers, and a value still never reaches the chat: `list` prints names, `get` a size band
   and a keyed fingerprint, and `exec` hands values to the command's environment or to 0600 temp
   files it removes, redacting what the command prints.
   ([#227](https://github.com/diazoxide/charter/pull/227))
-- The Bash guard refuses a vault file read that is wrapped in `charter secret exec … --`, the
+- The Bash guard refuses a vault file read that is wrapped in `purlis secret exec … --`, the
   way it refuses one wrapped in `env`. ([#227](https://github.com/diazoxide/charter/pull/227))
 - The Bash guard no longer mistakes text for a handoff. A multi-line quoted string that
-  mentions `charter handoff`, such as a commit message, is read as the text it is, and a real
-  `charter handoff` after it is still judged. ([#226](https://github.com/diazoxide/charter/pull/226))
+  mentions `purlis handoff`, such as a commit message, is read as the text it is, and a real
+  `purlis handoff` after it is still judged. ([#226](https://github.com/diazoxide/charter/pull/226))
 - A harness profile that wraps another program (`["ccs", "work"]`) starts as
-  `ccs work --plugin-dir …`, with charter's flags after the profile's own words, so a wrapper
+  `ccs work --plugin-dir …`, with purlis's flags after the profile's own words, so a wrapper
   that expects its subcommand first works. A plain `claude` or `codex` profile starts exactly as
   before. ([#226](https://github.com/diazoxide/charter/pull/226))
-- What `charter docs show` serves, and every message charter prints, name only commands this
-  charter has. A page about something it does not do is gone, and a planned command says "not in
+- What `purlis docs show` serves, and every message purlis prints, name only commands this
+  purlis has. A page about something it does not do is gone, and a planned command says "not in
   this version yet". ([#226](https://github.com/diazoxide/charter/pull/226))
 
 ## [0.1.0] - 2026-09-23
 
 ### Added
 
-- charter is a desktop app for macOS and Linux. A window holds your projects as tabs, each
+- purlis is a desktop app for macOS and Linux. A window holds your projects as tabs, each
   project's workspaces, and each workspace's chats, and a chat is a live terminal running
   Claude Code or Codex.
   ([#14](https://github.com/diazoxide/charter/pull/14),
@@ -1724,7 +1724,7 @@ and every settings group that it would have changed says so.
   [#192](https://github.com/diazoxide/charter/pull/192))
 
   *Erratum:* 0.1.0 could remove a worktree from the window but not cut one, and no later
-  version can yet. Cut one with `charter worktree add` (since 0.4.0); cutting from the window
+  version can yet. Cut one with `purlis worktree add` (since 0.4.0); cutting from the window
   is [#701](https://github.com/diazoxide/charter/issues/701).
 - A command palette and right-click menus reach every action the bars have.
   ([#45](https://github.com/diazoxide/charter/pull/45),
@@ -1733,7 +1733,7 @@ and every settings group that it would have changed says so.
 - A project, a workspace and a chat can each be pinned.
   ([#143](https://github.com/diazoxide/charter/pull/143))
 - A status line along the bottom of the window carries the doctor, the alerts drawer for every
-  open project, and a note when a project pins an older charter.
+  open project, and a note when a project pins an older purlis.
   ([#153](https://github.com/diazoxide/charter/pull/153),
   [#160](https://github.com/diazoxide/charter/pull/160),
   [#162](https://github.com/diazoxide/charter/pull/162),
@@ -1744,13 +1744,13 @@ and every settings group that it would have changed says so.
 - The personas panel lists each persona with its memories, searchable and loaded a page at a
   time. ([#173](https://github.com/diazoxide/charter/pull/173),
   [#206](https://github.com/diazoxide/charter/pull/206))
-- An extension is a directory you point charter at. Nothing it declares is in force until you
-  approve it, and charter asks again when anything in that directory changes.
+- An extension is a directory you point purlis at. Nothing it declares is in force until you
+  approve it, and purlis asks again when anything in that directory changes.
   ([#150](https://github.com/diazoxide/charter/pull/150),
   [#180](https://github.com/diazoxide/charter/pull/180))
 - A request that belongs in another chat can be handed off from inside the app.
   ([#207](https://github.com/diazoxide/charter/pull/207))
-- The title bar says which project, workspace and chat you are in, and opens About Charter.
+- The title bar says which project, workspace and chat you are in, and opens About purlis.
   ([#205](https://github.com/diazoxide/charter/pull/205))
 - The app updates itself from a stable or a dev channel, and installs only what the release
   key signed. ([#158](https://github.com/diazoxide/charter/pull/158))
@@ -1759,7 +1759,7 @@ and every settings group that it would have changed says so.
   [#181](https://github.com/diazoxide/charter/pull/181))
 - A tab can hold a view, not only a chat. A persona opens as its own tab: what it is for, its
   tools and vault, and its memories, searchable. An approved extension can add a view of its
-  own. The first is persona statistics, with charts of each persona's memories, which charter
+  own. The first is persona statistics, with charts of each persona's memories, which purlis
   asks one question at a time and only when you open it. ([#212](https://github.com/diazoxide/charter/pull/212))
 - The view tabs you had open come back at the next launch, and wait for a click before an
   extension is asked anything.
@@ -1769,13 +1769,13 @@ and every settings group that it would have changed says so.
   `charter` something else put there. ([#219](https://github.com/diazoxide/charter/pull/219))
 - A chat opens knowing who it is: the persona you picked, what it remembers, and the
   workspace's todos arrive with its first message. The guards on reading a vault, on writing
-  into charter's own state, and on sending a sub-agent run in the app's own `charter`.
+  into purlis's own state, and on sending a sub-agent run in the app's own `charter`.
   ([#220](https://github.com/diazoxide/charter/pull/220))
 
 ### Changed
 
 - A chat needs nothing installed from the Python charter. The app carries its own Claude Code
-  plugin with charter's hooks, its Bash guard and its skills, and loads it into each chat it
+  plugin with purlis's hooks, its Bash guard and its skills, and loads it into each chat it
   starts, for that chat alone. The chat turns the Python charter's plugin off for itself, and
   finds the app's own `charter` first on its `PATH`. A chat starts offline.
   ([#219](https://github.com/diazoxide/charter/pull/219))
@@ -1784,7 +1784,7 @@ and every settings group that it would have changed says so.
 - The terminal follows a theme switch while it is open. The window's layout lives in
   `charter/layout.json`, which you can edit by hand, and it is in place before the first
   frame is drawn. ([#215](https://github.com/diazoxide/charter/pull/215))
-- About Charter tells this app's own story: its version and what that version brought.
+- About purlis tells this app's own story: its version and what that version brought.
   ([#215](https://github.com/diazoxide/charter/pull/215))
 - The region toggles sit at the left end of the status line. The context gauge floats over its
   pane rather than taking a row from it, and a very light line divides one tab from the next.
@@ -1799,18 +1799,18 @@ and every settings group that it would have changed says so.
 - Tab moves through every dialog, and Ctrl-K belongs to the chat that has the keyboard.
   ([#188](https://github.com/diazoxide/charter/pull/188),
   [#190](https://github.com/diazoxide/charter/pull/190))
-- `charter init` adopts the repository it is pointed at instead of turning it into a plane.
+- `purlis init` adopts the repository it is pointed at instead of turning it into a plane.
   ([#115](https://github.com/diazoxide/charter/pull/115),
   [#197](https://github.com/diazoxide/charter/pull/197))
-- The app, the dock and the menu bar carry charter's own mark.
+- The app, the dock and the menu bar carry purlis's own mark.
   ([#159](https://github.com/diazoxide/charter/pull/159),
   [#203](https://github.com/diazoxide/charter/pull/203))
 - A macOS build is ad-hoc signed when no Apple Developer ID is set up. The first install needs
   one command, and the release page says which.
   ([#201](https://github.com/diazoxide/charter/pull/201))
-- `charter version` prints the app's own version. A plane pinned to a release
-  of the Python charter is reported as that older line, not as drift. `charter doctor` and
-  every other message stop sending you to the Python charter, and `charter docs show`
+- `purlis version` prints the app's own version. A plane pinned to a release
+  of the Python charter is reported as that older line, not as drift. `purlis doctor` and
+  every other message stop sending you to the Python charter, and `purlis docs show`
   describes this app. ([#219](https://github.com/diazoxide/charter/pull/219),
   [#223](https://github.com/diazoxide/charter/pull/223))
 
@@ -1828,7 +1828,7 @@ and every settings group that it would have changed says so.
   not as a lost connection. ([#217](https://github.com/diazoxide/charter/pull/217))
 - A slow `git` is no longer reported as a broken repository.
   ([#44](https://github.com/diazoxide/charter/pull/44))
-- No program charter starts can hold a chat's terminal open after the chat ends.
+- No program purlis starts can hold a chat's terminal open after the chat ends.
   ([#105](https://github.com/diazoxide/charter/pull/105))
 
 [Unreleased]: https://github.com/diazoxide/charter/compare/v0.4.2...HEAD

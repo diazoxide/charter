@@ -1,4 +1,4 @@
-# charter serves one person's agents first, and its scale is a hot-chat count per RAM class
+# purlis serves one person's agents first, and its scale is a hot-chat count per RAM class
 
 **Accepted 2026-10-01** by the dispatcher under the operator's delegation of 2026-10-01 (only
 major decisions go to the operator); decisions D-0082a/b. Drafted for program-map ticket FD-1
@@ -23,7 +23,7 @@ major decisions go to the operator); decisions D-0082a/b. Drafted for program-ma
 
 It builds on [ADR 0026](0026-the-apps-stack-is-locked-by-what-m0-measured.md) (what M0
 measured at fifty sessions), [ADR 0068](0068-a-chat-lives-in-charterd-and-the-app-is-its-client.md)
-(`charterd`, one per OS user per device, and its descriptors), [ADR 0069](0069-every-store-charter-writes-is-in-one-of-four-tiers.md)
+(`purlisd`, one per OS user per device, and its descriptors), [ADR 0069](0069-every-store-charter-writes-is-in-one-of-four-tiers.md)
 (tiers), [ADR 0073](0073-a-harness-is-declared-as-data-and-a-chat-runs-it-at-one-of-three-levels.md)
 (`resumes_by_id`), [ADR 0076](0076-a-run-moves-only-by-a-named-cause-and-a-chats-state-is-read-from-its-runs.md)
 (run states, hibernation, holds) and [ADR 0078](0078-a-runner-is-charterd-behind-a-connector-and-charters-own-keys-say-who-is-on-the-link.md)
@@ -39,9 +39,9 @@ part belongs to **Project**.
 **Units.** Every memory size in this record is binary: 1 GB is 1024 MB, and 1 MB is 1024 KB.
 `stress.jsonl` records KB, and its figures below are converted.
 
-## Where charter is today
+## Where purlis is today
 
-Three records say three different things about whom charter is for and how far it goes.
+Three records say three different things about whom purlis is for and how far it goes.
 
 - **`docs/spec.md`'s goal** is one developer: *"A developer runs dozens of harness sessions
   (Claude Code, Codex) at once, across workspaces and repos, and always knows which one needs
@@ -65,9 +65,9 @@ These are the numbers the formula in §3 uses. They are written here because CI 
 | the operator's macOS machine, 2026-09-29, charter 0.2.0-dev.138 up 3 days with 12 chats, by `ps` | each of 14 Claude Code processes | **385 MB average**, 235 MB to 1.1 GB, 5.39 GB in all |
 | the same machine and moment, by `footprint` | the window's web content process | **813 MB, peak 1,529 MB**. No CI job measures it yet (SC-1) |
 
-The stress job's harness is a fake, so its numbers are charter's own cost. **At fifty chats,
-charter's native side costs a few hundred megabytes and the harnesses cost about 19 GB.** The
-ceiling on one machine is the harnesses' memory, not charter's code.
+The stress job's harness is a fake, so its numbers are purlis's own cost. **At fifty chats,
+purlis's native side costs a few hundred megabytes and the harnesses cost about 19 GB.** The
+ceiling on one machine is the harnesses' memory, not purlis's code.
 
 ## The decision
 
@@ -89,7 +89,7 @@ asks reach needs you (Q11, ADR 0071, ADR 0076). Both hold for **every** run what
 They are properties, not targets, and no budget below trades them away. A count past a target may
 make the window slower. It never makes a run invisible or unstoppable.
 
-**The targets are per device.** A device's `charterd` serves one OS user (ADR 0068), so a
+**The targets are per device.** A device's `purlisd` serves one OS user (ADR 0068), so a
 device's count is one human's chats on it. A human's total is the sum over their devices (§3).
 
 Two counts, each over a device's **chats** and read from the current run's state (ADR 0076 §1):
@@ -116,7 +116,7 @@ on harnesses that resume natively.
 memory.** A 12 GB machine is in the 8 GB class, and a 128 GB machine is in the 64 GB class. A
 machine with less than 8 GB has no class, and its hot target is **1**.
 
-The hot target is what fits when charter and its harnesses use **at most half** of the class's
+The hot target is what fits when purlis and its harnesses use **at most half** of the class's
 memory. That leaves the other half to the operating system, the editor, the browser and the
 builds the agents start:
 
@@ -126,7 +126,7 @@ hot target = max( 1, floor( (class / 2 − charter's own base) / (harness footpr
 
 The inputs, from the measurements above:
 
-- **charter's own base is 2 GB.** That is the web content peak of 1,529 MB plus the native side at
+- **purlis's own base is 2 GB.** That is the web content peak of 1,529 MB plus the native side at
   about 337 MB, rounded up.
 - **The harness footprint is 385 MB.** That is Claude Code, the only harness measured.
 - **The scrollback is 20.2 MB** for each hot chat.
@@ -145,14 +145,14 @@ The formula gives:
   hot"* is the top class's number (D-0082a), because 50 is what ADR 0026 measured the spec's
   felt-speed limits at, and nobody has measured the window past it. Only §6 raises it.
 - **Open is 200 in every class.** A hibernated chat has no process (ADR 0076 §1), so it costs only
-  charter's own resources: a row, a journal entry and what SC-4 keeps of its scrollback. SC-17 sets
+  purlis's own resources: a row, a journal entry and what SC-4 keeps of its scrollback. SC-17 sets
   that cost's budget. This record only requires that it does not grow with RAM class.
 - **The counts are targets, not measurements.** They are the formula applied to today's
   measurements. When SC-1 measures Codex's and opencode's footprints, or a release measurement
   records a new base (§5), the table is recomputed from the formula using the largest measured
   harness footprint. The formula is the decision; the table is its current answer.
 - **Beyond one device: Q1's *"unbounded through remote hosts"*.** A runner is a device running
-  `charter serve` (ADR 0078), with its own class and its own targets. A human's total is the sum
+  `purlis serve` (ADR 0078), with its own class and its own targets. A human's total is the sum
   over their devices. Visibility and governability (§2) hold across all of them.
 
 ### 4. A target is a budget, never a cap on the operator
@@ -173,17 +173,17 @@ is no reason to stop them.
 
 | Where | What | Kind | Owner |
 |---|---|---|---|
-| CI, `stress.yml`, macOS and Linux | fake harness: the top class's 50 hot plus 150 hibernated, three rounds. Native memory, web content memory, threads and descriptors, each against its SC-17 budget, and the leak check between rounds | **charter's own cost.** A relative-regression gate, required once SC-8 lands (V8) | SC-1 adds the fields, SC-8 the load and the budgets |
+| CI, `stress.yml`, macOS and Linux | fake harness: the top class's 50 hot plus 150 hibernated, three rounds. Native memory, web content memory, threads and descriptors, each against its SC-17 budget, and the leak check between rounds | **purlis's own cost.** A relative-regression gate, required once SC-8 lands (V8) | SC-1 adds the fields, SC-8 the load and the budgets |
 | CI, `bench.mjs` | the spec's latency limits at 50 hot | relative regression | SC-16 |
 | the operator's machine, each release | real harnesses at that machine's class: the harness footprint per harness and the web content peak | **absolute.** These feed the formula | **a follow-up ticket to file** (per-release scale measurement) |
 | the maintainers' devices, daily | the open and hot counts they actually run | what dogfood shows (§6) | the same follow-up ticket |
 
 **CI cannot measure a harness's footprint**, because CI runs a fake one. The formula is why that
-is enough: CI holds charter's own base and per-chat cost, and the release measurement supplies the
+is enough: CI holds purlis's own base and per-chat cost, and the release measurement supplies the
 harness term. Each class's count is arithmetic from both, not a run on a machine of that class.
 
 **Stores.** This record adds no store. `app/logs/stress.jsonl` is tier **None**: a CI artifact the
-e2e harness writes, not a store charter writes, and kept only by the workflow's artifact
+e2e harness writes, not a store purlis writes, and kept only by the workflow's artifact
 retention. **The hibernated chat's scrollback snapshot is SC-4's to decide**, with its store and
 tier. The RAM class is read from the operating system when the host starts and is not stored.
 
@@ -251,7 +251,7 @@ The code does not change with this record.
 ## What this costs
 
 - **A 16 GB laptop targets 15 hot chats, not 50.** That is what fits. A target of 50 would be a
-  number the harnesses break, not charter.
+  number the harnesses break, not purlis.
 - **The table moves when harnesses change.** A harness that doubles its memory halves the hot
   count, and the table follows the formula rather than keeping the old number.
 - **The half-of-memory share is a judgement.** It is a working machine's headroom, not a measured
@@ -282,7 +282,7 @@ The code does not change with this record.
 2. **A RAM class is the largest of 8, 16, 32 and 64 GB not more than physical memory, and a
    machine under 8 GB targets 1 hot chat.** Rejected: classes by available memory (it changes by
    the minute), classes by machine model (that misses Linux), and a target of 0, which would say a
-   small machine cannot run charter at all.
+   small machine cannot run purlis at all.
 3. **The hot target comes from a formula with a half-of-memory share**, and the table is its
    current answer. Rejected: fixed numbers per class, which age with every harness release, and a
    larger share, which leaves a working machine no room for builds.

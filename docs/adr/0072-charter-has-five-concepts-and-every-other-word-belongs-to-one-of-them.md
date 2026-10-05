@@ -1,4 +1,4 @@
-# charter has five concepts, and every other word belongs to one of them
+# purlis has five concepts, and every other word belongs to one of them
 
 **Accepted 2026-09-30** by the operator (ruling V23), drafted for program-map ticket FR-2
 (#601). It follows the operator's rulings **X22** (*"The five core concepts are Project,
@@ -9,7 +9,7 @@ already means `charter sync`); FR-2's ADR fixes the exact piece ↔ branch wordi
 gets Chat, Persona and Memory entries."*, and **V4**, which gives memory its owners and
 audiences.
 
-## Where charter is today
+## Where purlis is today
 
 `CONTEXT.md` defines about thirty words, and the internal audit of 2026-09 lists thirty-odd
 concepts in the product (plane, project, plane root, workspace, LIVE/LOCAL, repo, piece, change,
@@ -26,12 +26,12 @@ Three of the words collide:
   `New project…` and `Open a project…`, while the vault panel's empty state says *"No vaults on
   this plane"* and a chat with nowhere to start says *"charter has no plane open"*. They are one
   thing seen from two sides, and the operator sees both names.
-- **Sync.** `charter sync` fetches and fast-forwards a workspace's clones (`repocmd/sync.rs`).
-  `charter version sync` moves a plane to the charter version it pins. `charter persona
+- **Sync.** `purlis sync` fetches and fast-forwards a workspace's clones (`repocmd/sync.rs`).
+  `purlis version sync` moves a plane to the purlis version it pins. `purlis persona
   sync-agents` regenerates the harness sub-agents from the persona files. `workspace remember
   --no-sync` means *do not commit and push it*, which is a save. W10 put "Sync" in the
   first-hour budget as the plane's two-way state; `CONTEXT.md` already tells authors to avoid
-  "sync" for a save because *"that word is for fetching repos"*. V6 settled it for `charter
+  "sync" for a save because *"that word is for fetching repos"*. V6 settled it for `purlis
   sync`. The other three are still there.
 - **Piece and branch.** A piece is a git worktree (ADR 0027), and `CONTEXT.md` says to avoid
   "branch" for it. W10 wanted "the chat's branch" on the first-hour screen. The two are not
@@ -41,14 +41,14 @@ Three of the words collide:
   one machine while its branch is pushed.
 
 The product is also measured on its first ten minutes (W10, FR-1). A new user's first hour has
-room for a few nouns, and every noun past those is a cost the user pays before charter does
+room for a few nouns, and every noun past those is a cost the user pays before purlis does
 anything for them.
 
 ## The decision
 
-**charter has five concepts: Project, Workspace, Chat, Persona and Memory. Every other word in
-charter is a part, a view or a setting of exactly one of them. The first hour shows the five
-plus "Save" and "branch", and no other charter noun. "Sync" means only what `charter sync`
+**purlis has five concepts: Project, Workspace, Chat, Persona and Memory. Every other word in
+purlis is a part, a view or a setting of exactly one of them. The first hour shows the five
+plus "Save" and "branch", and no other purlis noun. "Sync" means only what `purlis sync`
 does. A chat's piece is shown as its branch, one per repo.**
 
 ### 1. The five
@@ -59,11 +59,11 @@ does. A chat's piece is shown as its branch, one per repo.**
 | **Workspace** | A named piece of work inside a project, with its own charter (`workspace.md`), memory, todos and repos. | `workspaces/<ws>/` |
 | **Chat** | One conversation with an agent, in a tab, in one workspace or at the project root. It is where work happens, and what "needs you". | the session host and `reopen.json`; its identity is ADR 0066's |
 | **Persona** | A role a chat can take: its own charter (`persona.md`), memory and vault, handed to the harness as a sub-agent. | `personas/<name>/` |
-| **Memory** | What charter keeps so that the next chat starts knowing what the last ones learned. Each memory has an **owner**: a workspace, a persona, everyone (shared) or **me**, one person's own. It also has an **audience**: this machine, me on all my machines, or the team. Approval follows the audience (V4). Session records are memory too (V23c). | the `memory/` and `sessions/` directories; *me* in a personal overlay project on the person's own private remote (V4) |
+| **Memory** | What purlis keeps so that the next chat starts knowing what the last ones learned. Each memory has an **owner**: a workspace, a persona, everyone (shared) or **me**, one person's own. It also has an **audience**: this machine, me on all my machines, or the team. Approval follows the audience (V4). Session records are memory too (V23c). | the `memory/` and `sessions/` directories; *me* in a personal overlay project on the person's own private remote (V4) |
 
 **"Project" stays (V23a), and "plane" is retired everywhere (V23b).** The word leaves every
-surface a user reads (the window, `charter --help` and the user docs, which FR-3 renames), and
-also the code, the plane format, `docs/plane-format.md` and the name of the `charter-plane`
+surface a user reads (the window, `purlis --help` and the user docs, which FR-3 renames), and
+also the code, the plane format, `docs/plane-format.md` and the name of the `purlis-plane`
 repo. Project is the one word for the thing, in every place.
 
 **The rename is follow-up work, not part of this record.** It has four parts:
@@ -73,26 +73,26 @@ repo. Project is the one word for the thing, in every place.
   tab carries `project.plane`), the pair becomes one project with its root.
 - **A project-format migration.** Every file, key, directory and environment variable named for
   the plane gets a project name (for example `CHARTER_PLANE_FENCE` and
-  `CHARTER_PLANE_ROOT_SESSION`). For a compat window of at least one release, charter still
+  `PURLIS_PLANE_ROOT_SESSION`). For a compat window of at least one release, purlis still
   reads the old names, writes only the new ones, and says so once when it reads an old one.
 - **A docs rename.** `docs/plane-format.md` becomes the project format's specification, and
   every ADR and doc written from now on says project. Accepted ADRs keep their words, since
   they are records.
-- **Renaming the `charter-plane` GitHub repo.** The operator does this, at the time of their
+- **Renaming the `purlis-plane` GitHub repo.** The operator does this, at the time of their
   choosing, and names the new repo. GitHub's redirect keeps old clones working.
 
 **Nothing else is called a project.** A code repo is a **repo** (§6). Claude Code's own *project
 settings* (its repo-level `.claude/settings.json`) are always named with Claude Code's name
-beside them, so that they are never read as a charter project's settings.
+beside them, so that they are never read as a purlis project's settings.
 
 First-run copy that explains it, shown once beside the first project's tab:
 
-> **A project is where charter keeps your workspaces, personas and memory.** It is a git repo
-> of its own, separate from your code. charter made this one for you, on this machine only.
+> **A project is where purlis keeps your workspaces, personas and memory.** It is a git repo
+> of its own, separate from your code. purlis made this one for you, on this machine only.
 
 ### 2. Everything else belongs to one of the five
 
-Each row is where a word already in charter, or ruled in the program, belongs. A part is
+Each row is where a word already in purlis, or ruled in the program, belongs. A part is
 inside its concept; a view shows it; a setting changes how it behaves.
 
 | Concept | Parts | Views | Settings |
@@ -116,17 +116,17 @@ which concept it is a part, view or setting of (ST9's definition of done already
 owning concept). A noun with no home is a sixth concept, and a sixth concept is a ruling, not a
 ticket.
 
-### 3. The surface budget: the first hour shows seven charter words
+### 3. The surface budget: the first hour shows seven purlis words
 
 **The first-hour surfaces** are what a new user sees before they open Settings or an advanced
 menu: the first-run flow (FR-4), the title bar and its project tab, the workspace and chat
 strips, the new-chat picker, a chat's tab and header, the save indicator, the needs-you menu,
 and the palette's rows that are not under "Advanced".
 
-**On those surfaces, charter's own nouns are exactly these:** Project, Workspace, Chat,
+**On those surfaces, purlis's own nouns are exactly these:** Project, Workspace, Chat,
 Persona, Memory, **Save** and **branch**. "Needs you" is a state a chat is in, and is allowed.
-Ordinary words (open, new, close, file, folder) are not charter's nouns and are free, and so
-are the products charter drives, named by their own names (Claude Code, Codex, opencode,
+Ordinary words (open, new, close, file, folder) are not purlis's nouns and are free, and so
+are the products purlis drives, named by their own names (Claude Code, Codex, opencode,
 GitHub, GitLab).
 
 The first-hour surfaces say **none of**: plane, piece, worktree, run, device, vault, mode,
@@ -140,7 +140,7 @@ budget: the new-chat picker names the harness by its product name, under a verb 
 card in the picker, the chat header and disabled controls' tooltips. It appears in all three.
 Its label is *What <product> can do here* (for example, *What Codex can do here*), and each line
 says what the user will or will not see in plain words and the budget's nouns: *Codex does not
-tell charter when it is waiting, so this chat will not show needs you.* The word "capability"
+tell purlis when it is waiting, so this chat will not show needs you.* The word "capability"
 stays in the card's code and in Settings, not on the card. A disabled control's tooltip is one
 such line, followed by the card's label as a link.
 
@@ -150,7 +150,7 @@ as a word inside an image.
 
 ### 4. A chat's piece is shown as its branch, one row per repo
 
-A piece is still a git worktree, and `charter worktree` still says so. On screen (V23d):
+A piece is still a git worktree, and `purlis worktree` still says so. On screen (V23d):
 
 - **A chat is shown with its branches, one row per repo it works in.** A row reads
   *`fix-login` in api*: the branch, then the repo. A chat that works in one repo, which GL-1
@@ -162,24 +162,24 @@ A piece is still a git worktree, and `charter worktree` still says so. On screen
   be cut in. The piece's directory is shown only where a path is needed (Reveal in Finder, a
   copied path), and is called the branch's *folder*.
 - **"Done" and "Abandon"** are the piece log's `done` and `abandoned`, said of the branch.
-  **"Remove folder"** is `charter worktree remove`, and it says the branch stays. Deleting a
+  **"Remove folder"** is `purlis worktree remove`, and it says the branch stays. Deleting a
   branch is git's and the forge's, never this row's.
-- **A branch whose piece is gone** is no longer charter's: the row goes, and the branch is left
+- **A branch whose piece is gone** is no longer purlis's: the row goes, and the branch is left
   to git and the forge. A branch pushed from another machine is shown as a branch, never as a
   piece, since pieces are per machine.
 - **The chat header and the session record** list the same rows, from the same `Touched` list,
   so what a chat said it worked on and what the window shows are one list.
 
-"Piece" leaves the window and `charter --help`'s summaries. It stays in the project format, the
-piece log, the code and `charter worktree`'s own help, where the difference between a
+"Piece" leaves the window and `purlis --help`'s summaries. It stays in the project format, the
+piece log, the code and `purlis worktree`'s own help, where the difference between a
 directory and a branch is the point.
 
-### 5. "Sync" means only what `charter sync` does
+### 5. "Sync" means only what `purlis sync` does
 
 **Sync is: fetch every clone in a workspace, and fast-forward the ones that hold no work.** No
 other operation, on screen or on the command line, is called Sync.
 
-- **The window.** When the window offers `charter sync`, it is labelled *Sync repos*. The project's
+- **The window.** When the window offers `purlis sync`, it is labelled *Sync repos*. The project's
   own commit-and-push is **Save**, and the commits it has not fetched yet are **Incoming**, as
   `CONTEXT.md` has them.
 - **The command line. Settled by V6 and FR-3's alias rule:** V6 makes "Sync" mean one
@@ -189,28 +189,28 @@ other operation, on screen or on the command line, is called Sync.
   | Today | Becomes | Why |
   |---|---|---|
   | `workspace remember --no-sync`, `workspace note --no-sync` | `--no-save` | it means *do not commit and push this now*, which is a save |
-  | `charter version sync` | `charter version apply` | it moves this project to the version its pin names |
-  | `charter persona sync-agents` | `charter persona write-agents` | it writes the harness's sub-agent files from the personas |
+  | `purlis version sync` | `purlis version apply` | it moves this project to the version its pin names |
+  | `purlis persona sync-agents` | `purlis persona write-agents` | it writes the harness's sub-agent files from the personas |
 
 - **Later features pick another word.** U10's device-state feature, a relay's catch-up and a
   vendor-memory import do not say Sync. Each names what moves and where to.
 
 **The test (FR-3's acceptance):** a UI-string test reads every user-visible string
 in `app/src` (text nodes, `aria-label`, `title`, placeholder, and copy constants) and fails on
-the word "sync" in any case, except the label bound to the `charter sync` command. A CLI
-counterpart checks `charter --help`'s command and flag names the same way, and allows the
+the word "sync" in any case, except the label bound to the `purlis sync` command. A CLI
+counterpart checks `purlis --help`'s command and flag names the same way, and allows the
 aliases only while they are marked deprecated.
 
-### 6. How charter's words map to other tools'
+### 6. How purlis's words map to other tools'
 
-The same word means different things in the tools charter's users already use. The table maps
-each concept to the nearest term, and says where a user's reading of charter's word would be
+The same word means different things in the tools purlis's users already use. The table maps
+each concept to the nearest term, and says where a user's reading of purlis's word would be
 wrong.
 
-| charter | GitHub | GitLab | Claude Code | Cursor | Codex, Zed, Amp | Conductor | Risk |
+| purlis | GitHub | GitLab | Claude Code | Cursor | Codex, Zed, Amp | Conductor | Risk |
 |---|---|---|---|---|---|---|---|
-| **Project** | *Projects*: a board or table of issues and pull requests; a view over work, holding no code | *project*: one repository, with its issues and CI | *Projects* (beta): a coordinating conversation that starts threads, with instructions and memory | *Projects* | the folder an editor opens (Zed's project) | — | **High.** On GitLab a code repo is a project. charter's UI never calls a code repo a project, on any forge: it is always a **repo** (V23a) |
-| **Workspace** | — (a Codespace is an environment) | *Workspaces*: a remote development environment | — | — | Amp's *workspace* is the team | *workspace*: one task's branch, files and terminal, which is charter's **piece** | **Medium.** A Conductor user reads a charter workspace as one branch. First-run copy says a workspace holds repos, chats and their memory |
+| **Project** | *Projects*: a board or table of issues and pull requests; a view over work, holding no code | *project*: one repository, with its issues and CI | *Projects* (beta): a coordinating conversation that starts threads, with instructions and memory | *Projects* | the folder an editor opens (Zed's project) | — | **High.** On GitLab a code repo is a project. purlis's UI never calls a code repo a project, on any forge: it is always a **repo** (V23a) |
+| **Workspace** | — (a Codespace is an environment) | *Workspaces*: a remote development environment | — | — | Amp's *workspace* is the team | *workspace*: one task's branch, files and terminal, which is purlis's **piece** | **Medium.** A Conductor user reads a purlis workspace as one branch. First-run copy says a workspace holds repos, chats and their memory |
 | **Chat** | a Copilot coding agent's *session* | — | *session*, *conversation* | *agent*, *chat* | *thread* | a workspace's chat | **Low.** "Session" stays out of UI text (it is the process, ADR 0066) |
 | **Persona** | *custom agent* | — | *subagent* | — | — | — | **Low.** opencode calls the same thing an *agent*. A persona is handed to the harness *as* a sub-agent, and the persona card says so |
 | **Memory** | *custom instructions* | — | *memory* (`CLAUDE.md`), a Project's memory | *Rules*, *Memories* | — | — | **Low.** Devin and Antigravity call it *knowledge*. FR-18a imports `CLAUDE.md`, `AGENTS.md` and Cursor rules as workspace memory, so the mapping is also the import path |
@@ -227,9 +227,9 @@ DS-8 audits the budget.
 |---|---|
 | `CONTEXT.md` | Gains **Chat**, **Persona**, **Memory**, **Work item**, **Branch** and **Sync** entries, and a new first section, "The five concepts", that holds the five entries. **Project** is the one word, and **Plane** says it is being retired. **Piece** and **Save** point at the branch and Sync wording. Run and Device already have entries (ADR 0066). The wholesale renaming of `CONTEXT.md` is FR-3's |
 | The window's copy (`app/src`) | FR-3: "plane" becomes "project" in every user-visible string; "piece" becomes the branch wording (§4); the first-hour budget holds (§3); the UI-string tests (§3, §5) |
-| `charter --help` | FR-3: the three `sync` renames with aliases; "plane" becomes "project" in summaries |
+| `purlis --help` | FR-3: the three `sync` renames with aliases; "plane" becomes "project" in summaries |
 | Recorded behaviour (`tests/fixtures/recorded/behaviour.jsonl`) | The `persona-sync-agents-…` scenarios keep passing through the alias. A scenario that records a renamed word moves only with the sentence ADR 0046 requires |
-| Code, the plane format, `docs/plane-format.md`, the `charter-plane` repo | The follow-up rename in §1: code, a format migration with a compat window for the old names, docs, and the repo rename the operator does |
+| Code, the plane format, `docs/plane-format.md`, the `purlis-plane` repo | The follow-up rename in §1: code, a format migration with a compat window for the old names, docs, and the repo rename the operator does |
 | Tickets and rulings | Each names its concept (X22). ST9's definition of done already carries it |
 
 ## What this costs
@@ -281,6 +281,6 @@ first release that writes the new form. #762's plane→project read-compat windo
 six months. This amends ADR 0072's "at least one release"."*
 
 The window is therefore **six months from the first release that writes the new names**. During
-it charter still reads the old names, writes only the new ones and says so once when it reads an
+it purlis still reads the old names, writes only the new ones and says so once when it reads an
 old one, as §1 says. It is the same window `docs/plane-format.md` gives every format change
-(*Compatibility across charter versions*, FR-24). The rest of ADR 0072 stands.
+(*Compatibility across purlis versions*, FR-24). The rest of ADR 0072 stands.

@@ -1,4 +1,4 @@
-# charter
+# purlis
 
 A desktop app for running many agent chats across your projects, and always knowing which of
 them needs you. This file is the glossary: the words, not how they are built.
@@ -7,7 +7,7 @@ them needs you. This file is the glossary: the words, not how they are built.
 
 ### The five concepts
 
-charter has five concepts: **Project**, **Workspace**, **Chat**, **Persona** and **Memory**.
+purlis has five concepts: **Project**, **Workspace**, **Chat**, **Persona** and **Memory**.
 Every other word here is a part, a view or a setting of one of them, and the first hour's
 screens say only those five plus **Save** and **branch** (ADR 0072).
 
@@ -21,7 +21,7 @@ _Avoid_: instance, plane (in UI text), project (for a GitLab repo)
 **Project template**:
 A part of **Project**: a stack's starting layout, chosen in the first run — two personas, a
 starter `workspace.md` context, a review checklist (`REVIEW.md` in the reviewer persona's refs)
-and the commands every harness asks about first. charter ships one each for Rust, TypeScript,
+and the commands every harness asks about first. purlis ships one each for Rust, TypeScript,
 Python, Go, monorepos and docs-only repos, as data with a version, and lays one out only where
 nothing is there yet (FR-17).
 _Avoid_: plane template, scaffold, starter kit
@@ -45,29 +45,37 @@ it.
 _Avoid_: agent, sub-agent (that is the harness's form of it), bot, role (as the name)
 
 **Memory**:
-One of the five concepts: what charter keeps so the next chat starts knowing what earlier ones
+One of the five concepts: what purlis keeps so the next chat starts knowing what earlier ones
 learned. Each memory has an **owner**: a workspace, a persona, everyone (shared memory, in
 `personas/_shared/memory/`) or **me**, one person's own, kept in a personal overlay plane on
 their own private remote. It also has an **audience**: this machine, me on all my machines, or
 the team. Approval follows the audience: memory the team will read waits for approval, so
-nothing reaches a teammate's briefing unreviewed. Session records are memory too. `charter recall`
+nothing reaches a teammate's briefing unreviewed. Session records are memory too. `purlis recall`
 searches it as one, and a chat's briefing is drawn from it (ADR 0072).
 _Avoid_: knowledge, rules, notes (for the whole of it), context
 
 ### The plane and what lives in it
 
 **Plane**:
-The git repo a project's charter lives in: its settings, personas, memory, todos and
+The git repo a project's purlis lives in: its settings, personas, memory, todos and
 workspaces. It is the project's database, and a change counts once it reaches the plane's
 remote. **The word is being retired**, everywhere: the new term is **Project**, in the window,
-`charter --help`, the docs, the code and the format. Until the rename lands, the code and the
-format still say plane, and charter reads the old names for a compat window (ADR 0072).
-_Avoid_: control plane, config repo, charter repo
+`purlis --help`, the docs, the code and the format. Until the rename lands, the code and the
+format still say plane, and purlis reads the old names for a compat window (ADR 0072).
+_Avoid_: control plane, config repo, purlis repo
 
-**charter-plane**:
-The charter project's own plane: the one charter is developed from, public as an example of a
-plane. It is not the product. The product, the app and its core, is **charter**.
-_Avoid_: charter (for the plane), the charter repo
+**purlis-plane**:
+The purlis project's own plane: the one purlis is developed from, at `purlis/purlis-plane`,
+private since it moved there (V92). It is not the product. The product, the app and its core, is
+**purlis**.
+_Avoid_: purlis (for the plane), the purlis repo
+
+**charter** (the old name):
+What purlis was called until 2026-10-05 (ADR 0091). purlis still reads its old names until 1.0
+(the compatibility window), the `charter` command runs purlis until then, and names the code
+still spells `charter` keep that spelling. In new prose it is only ever the old name, or a role's
+charter: the English word for what a persona or workspace is for.
+_Avoid_: charter (for the product)
 
 **Work item**:
 One piece of work a tracker holds: a forge issue, epic or sub-issue, or a todo (the plane's own
@@ -103,7 +111,7 @@ _Avoid_: project (GitHub's word for its boards), kanban
 The plane's own directory, as a place a chat works — and anywhere else in the plane that is no
 workspace's, such as `docs/`: the workspace strip's first tab, drawn as an icon, always there. A chat started there is in no workspace on purpose — it looks after the
 plane and names a workspace with `-w` when it acts on one. It is not a workspace: it has no
-charter, memory or todos. In code it is still `OUTSIDE`, the strip every chat working in no
+purlis, memory or todos. In code it is still `OUTSIDE`, the strip every chat working in no
 workspace is filed on.
 _Avoid_: master, home, outside every workspace (in UI text), the default workspace
 
@@ -115,14 +123,14 @@ _Avoid_: clone (as a noun in UI text), guest checkout, project
 **Piece**:
 A git worktree of a workspace's repo, at `workspaces/<ws>/.worktrees/<repo>/<piece>`, where
 one chat works on its own branch. Git says which pieces exist. The piece log says what git
-cannot: that charter cut it (`claimed`), and whether its worker declared it `done` or
+cannot: that purlis cut it (`claimed`), and whether its worker declared it `done` or
 `abandoned`. A piece that declared nothing is **silent**, reported as an age and never as a
 failure.
 On screen a piece is shown as its **branch**, and its directory as the branch's **folder**:
 the explorer's rows, the palette's titles, the bottom bar and the refusals the window shows say
 "branch" or "folder", never "worktree" (#989). A menu row names a branch by its own name, and
 a folder git has on no branch as a folder. "Piece" and "worktree" stay in the plane format, the
-code, the `[plane] worktrees` setting and `charter worktree` (ADR 0072).
+code, the `[plane] worktrees` setting and `purlis worktree` (ADR 0072).
 _Avoid_: task, slot, branch (for the directory), worktree (on screen)
 
 **Branch** (of a chat):
@@ -139,7 +147,7 @@ own instead: a piece named after the chat, or `chat-<n>`, cut before it starts a
 the start is refused. The picker's *start on a new branch* box, ticked by default, is the
 opt-out. A chat started in the workspace's own directory, at the project root or in an existing
 piece is not a writing chat and is cut nothing (GL-1).
-_Avoid_: guessing from what a chat does (charter never reads a harness's output to decide)
+_Avoid_: guessing from what a chat does (purlis never reads a harness's output to decide)
 
 **Change** (cross-repo):
 One piece of work across several of a workspace's repos, recorded as intent only in
@@ -158,16 +166,16 @@ A member's pull request, or merge request on GitLab.
 _Avoid_: change (for a PR), MR/PR in UI text
 
 **Landed**:
-A member whose request the forge reports merged, that charter landed, and whose merge commit, as
-charter's landing log recorded it, is still on the default branch. A merge charter queued, or
-whose read-back failed, is landed once a later `charter change land` finds it merged at its
+A member whose request the forge reports merged, that purlis landed, and whose merge commit, as
+purlis's landing log recorded it, is still on the default branch. A merge purlis queued, or
+whose read-back failed, is landed once a later `purlis change land` finds it merged at its
 **pending landing**'s head and logs it.
 _Avoid_: merged (a browser merge is merged but not logged), done
 
 **Pending landing**:
-Charter's evidence that it started landing a member: the request, the head its checks passed on
+purlis's evidence that it started landing a member: the request, the head its checks passed on
 and how (direct or queue), written before the forge is asked. Only a merge at that head is ever
-logged as charter's; a refused one is no evidence.
+logged as purlis's; a refused one is no evidence.
 _Avoid_: queued (a pending landing is also written for a direct merge), in flight
 
 **Inventory**:
@@ -187,18 +195,18 @@ through `gh`'s or `glab`'s own login. Each repo is bound to one (ADR 0070). It i
 signed in from the window through a forge registration, a PAT or an imported CLI login, and it
 never reaches a chat. It holds for the whole machine, so it is a setting of the **Project**
 (ADR 0072 §2, ADR 0077).
-_Avoid_: forge login (for charter's own sign-in), connection, integration
+_Avoid_: forge login (for purlis's own sign-in), connection, integration
 
 **Forge registration**:
-What a forge host knows charter by when a person signs in: a GitHub App on GitHub, an OAuth
-application on GitLab, identified by a public client id. charter's own exist on github.com and
+What a forge host knows purlis by when a person signs in: a GitHub App on GitHub, an OAuth
+application on GitLab, identified by a public client id. purlis's own exist on github.com and
 gitlab.com; a GHES or a self-managed GitLab needs one made on that host. It mints nothing for an
 agent. A setting of the **Project**, like the forge account that uses it (ADR 0072 §2, ADR 0077).
 _Avoid_: OAuth app (unqualified), integration, client
 
 **Forge capability**:
 One thing a forge may or may not do for one repo, such as a merge queue, judged per forge, host
-and tier, with the fallback charter uses where it is unavailable (ADR 0070).
+and tier, with the fallback purlis uses where it is unavailable (ADR 0070).
 _Avoid_: capability (unqualified, which is an extension's), feature flag
 
 **LIVE / LOCAL**:
@@ -207,7 +215,7 @@ this machine (LOCAL, the default).
 _Avoid_: shared/private, public
 
 **Tier** (of a store):
-Where a file charter keeps lives, and so what a backup, a second machine and a deletion do to
+Where a file purlis keeps lives, and so what a backup, a second machine and a deletion do to
 it. **Plane** is committed. **Clone state** is per clone and never committed: `.charter/`,
 `charter.local.toml` and a LOCAL workspace's files. **Machine** is outside every plane, and each
 store there is syncable or device-bound. **Keyring** is the operating system's credential store.
@@ -256,18 +264,18 @@ _Avoid_: status, session state (the old five), done (for completed), idle (for a
 **Hot chat**:
 A chat whose current run has a process: `starting`, `working`, `input-required` or `paused`.
 An **open** chat is any chat whose current run is live, hot or not; a hibernated one is open and
-not hot. charter's scale is counted in these per device: a target of 200 open, and a hot target
+not hot. purlis's scale is counted in these per device: a target of 200 open, and a hot target
 per **RAM class** (ADR 0082).
 _Avoid_: active chat, live chat (live is a run state's), running chat (in UI text)
 
 **RAM class**:
 A device's physical memory, as the largest of 8, 16, 32 and 64 GB it reaches, which sets how
 many hot chats the device targets; a device under 8 GB targets one. A property of the device, so
-it belongs to Project. A budget, never a cap: charter warns past it and refuses nothing (ADR 0082).
+it belongs to Project. A budget, never a cap: purlis warns past it and refuses nothing (ADR 0082).
 _Avoid_: tier (that is a store's), machine size, profile
 
 **Performance budget**:
-One measured limit on what charter's chats cost the device: a count, a size, a time or a share of
+One measured limit on what purlis's chats cost the device: a count, a size, a time or a share of
 a core, stated at the device's hot target, and named with the job that measures it. It is
 checked in CI either exactly or against what `main` last recorded, or on the operator's machine
 at each release. It is a target, never a promise, and never a cap on the operator. The spec's
@@ -276,36 +284,36 @@ _Avoid_: budget (unqualified: that is a chat's spend budget), limit (for a row C
 against earlier runs), SLA
 
 **Remote chat**:
-A vendor-cloud session charter lists read-only, with its state, pull request and cost: a chat of
-kind **observed**, which charter never pauses, stops or counts toward a budget. Every chat
-charter starts is **governed** (W8, ADR 0076).
+A vendor-cloud session purlis lists read-only, with its state, pull request and cost: a chat of
+kind **observed**, which purlis never pauses, stops or counts toward a budget. Every chat
+purlis starts is **governed** (W8, ADR 0076).
 _Avoid_: cloud chat, external agent, remote runner (that is a **Runner**)
 
 **Device**:
-A machine charter runs on: a desktop, a runner, or later a viewer. Each has a random id kept in
+A machine purlis runs on: a desktop, a runner, or later a viewer. Each has a random id kept in
 its machine store, which is how records, events and the audit say where something happened. Its
 hostname is a label, never a key. The operator on a device is its **local principal**
-(`local:<device>/<os-user>`), and charter never sends it anywhere without an account (ADR 0066).
-_Avoid_: host (that is `charterd`, the process), machine (in UI text), node
+(`local:<device>/<os-user>`), and purlis never sends it anywhere without an account (ADR 0066).
+_Avoid_: host (that is `purlisd`, the process), machine (in UI text), node
 
 **Harness declaration**:
 Data that says how to start one harness, how to name and resume its sessions, which levels it
-offers and what it can do. The ones for Claude Code, Codex and opencode ship with charter; a
+offers and what it can do. The ones for Claude Code, Codex and opencode ship with purlis; a
 project may declare more, which each machine approves before they run, and never replaces a
 built-in's (ADR 0073).
 _Avoid_: harness definition, harness config (that is the harness's own), profile (that is which
 program runs on this machine)
 
 **Harness level**:
-How much charter learns from a chat's harness, set when a run starts and fixed for it: **1**,
-the terminal alone; **2**, the terminal with the harness's own hooks reporting to charter; **3**,
+How much purlis learns from a chat's harness, set when a run starts and fixed for it: **1**,
+the terminal alone; **2**, the terminal with the harness's own hooks reporting to purlis; **3**,
 a structured protocol, ACP or the harness's own. A fall back to a lower level starts a new run.
 Never shown on a first-hour surface (ADR 0073).
 _Avoid_: tier (that is a store's), mode, integration level
 
 **Harness capability**:
 One thing a harness does or does not do for a chat, such as report that it is waiting: yes, no
-with the fallback charter uses, or unknown, which reads as no. The capability card shows the
+with the fallback purlis uses, or unknown, which reads as no. The capability card shows the
 *no*s in plain words (ADR 0073).
 _Avoid_: capability (unqualified, which is an extension's), feature, support
 
@@ -317,13 +325,13 @@ _Avoid_: model config, model settings
 
 **Model source**:
 How a chat reaches its model: the harness's own **login**, a **key** the user keeps in a vault,
-or a **local** model. None of them passes through Charter's servers. charter never reads, stores
+or a **local** model. None of them passes through purlis's servers. purlis never reads, stores
 or relays a harness's login (ADR 0087).
 _Avoid_: provider (that is who serves the model), backend, BYO (for the whole of it)
 
-**Session host** (`charterd`):
+**Session host** (`purlisd`):
 The process that owns every chat's terminal on a device, one per OS user per device: the
-`charter` binary run as `charter serve`. The app is its client (ADR 0068).
+`purlis` binary run as `purlis serve`. The app is its client (ADR 0068).
 _Avoid_: daemon, server (in UI text), backend
 
 **Session protocol**:
@@ -347,7 +355,7 @@ is a machine the operator adds; a short-lived one is made by a **runner provider
 a chat, for minutes or hours. Either way the desktop's session host reaches it through a
 **connector** and talks to it over a **link**, and its shell, logs, ports and browser views come
 only that way. It keeps its own device id, event log, audit chain and kill switch, and it needs
-no server charter runs. A short-lived runner is owned by the chat that started it, or by its
+no server purlis runs. A short-lived runner is owned by the chat that started it, or by its
 workspace when a human started it or **pinned** it there. A runner is a device, so it belongs to
 **Project**; which runner a workspace's chats run on is a **Workspace** setting, and the
 **Runners** view tab shows a workspace's runners (ADR 0072 §2, ADR 0078, ADR 0089).
@@ -373,14 +381,14 @@ were pinned)
 
 **Label** (of a runner):
 What a runner is for: exactly one of `harness` (runs chats), `app` (serves one version of a
-workspace repo) or `browser` (runs browsers only charter drives). charter enforces it at both
+workspace repo) or `browser` (runs browsers only purlis drives). purlis enforces it at both
 ends of the link: only a `harness` runner starts chats, and a `browser` runner never receives a
 vault value. Tags, any words the operator picks, sit beside it and are enforced by nothing. A
 part of **Runner**, so it belongs to **Project** (ADR 0089).
 _Avoid_: role (unqualified), type, capability (that is an extension's), tag (for the role label)
 
 **Runner provider**:
-What makes and destroys short-lived runners and hands back a connector to each: charter's own
+What makes and destroys short-lived runners and hands back a connector to each: purlis's own
 core provider, which drives Docker or Podman on this machine, or an extension on the provider
 seam for anything else. It declares which labels it may make; whether its machines are the
 user's own is the operator's setting for it, never its own claim, and starts as not owned. A
@@ -391,7 +399,7 @@ connector (that only reaches a runner)
 
 **Grant** (to a runner):
 A human's approval, once per workspace on this machine, of one vault entry an app runner's spec
-declares it needs. charter injects the value when that runner starts and only when it builds a
+declares it needs. purlis injects the value when that runner starts and only when it builds a
 ref a human chose, never an agent's own unreviewed branch, and never into its image or logs. An
 agent may start a runner with the grants it has and never adds one; a `browser` runner, and a
 runner of a provider not marked as owned, never gets one. A setting of **Workspace** (ADR 0089).
@@ -402,34 +410,34 @@ The part of the session host's public protocol an editor integration speaks: fin
 workspace a file belongs to, ask the window to show one, type a selection into a chat's prompt
 without sending it, and list a chat's changed files. Nothing in it starts, sends to or answers a
 chat. It is a part of the session host, so it belongs to **Project** (ADR 0072 §2, ADR 0081).
-_Avoid_: editor API, editor extension API (that is a non-goal: code running inside charter's editor)
+_Avoid_: editor API, editor extension API (that is a non-goal: code running inside purlis's editor)
 
 **Audit**:
 The record of who did what, for whom, to what, and whether it was allowed, kept per device by
-the session host as **audit entries** in charter's data home, never in a project. Once AU-3
+the session host as **audit entries** in purlis's data home, never in a project. Once AU-3
 lands, the entries are a device-signed hash chain. It is never sampled, and it is a separate
 system from telemetry (ADR 0075).
-_Avoid_: log (unqualified), history, `charter secret audit` (that is a vault health report)
+_Avoid_: log (unqualified), history, `purlis secret audit` (that is a vault health report)
 
 **Audit entry**:
 One line of the audit, written from one event: an action, its actor and whose behalf it acted
 on (both as keyed pseudonyms), what it acted on, its outcome, and typed metadata. Never a prompt,
-output, file contents, raw arguments or a secret value. An agent's entry says what charter could
+output, file contents, raw arguments or a secret value. An agent's entry says what purlis could
 see of its run: its **coverage** (ADR 0075).
 _Avoid_: audit event (the event is what the entry is written from), log line
 
 **Coverage** (of an audit entry):
-What charter could see of the run an agent's audit entry is about, set by its harness level:
+What purlis could see of the run an agent's audit entry is about, set by its harness level:
 the process only (level 1), the tool calls its hooks report (level 2), or every tool call its
 protocol reports (level 3). A level-2 run whose hooks never reported is **unarmed**, and a
-vendor-cloud chat charter only lists is **observed**. Shown beside the entry, so silence is never
+vendor-cloud chat purlis only lists is **observed**. Shown beside the entry, so silence is never
 read as "did nothing" (ADR 0073, ADR 0075).
 _Avoid_: level (that is the run's), completeness
 
 **Telemetry**:
-What charter measures about how chats and charter itself perform: time, resources, tokens and
+What purlis measures about how chats and purlis itself perform: time, resources, tokens and
 cost. It is one OpenTelemetry pipeline per device: the session host receives what the harnesses
-and charter report, keeps it on the device for a month, and sends it only to the user's own
+and purlis report, keeps it on the device for a month, and sends it only to the user's own
 **export destinations**. The opt-in product telemetry and crash reports are telemetry too, each
 with its own consent. It may be sampled, never names a person, and never reads the audit (ADR
 0075, ADR 0083).
@@ -449,7 +457,7 @@ _Avoid_: exporter (that is the harness's own sender), sink (that is the audit's)
 **Search index**:
 A derived SQLite full-text index that search, `recall` and the briefing read, kept so they need
 not scan every file. Each project clone has one over its memory, session records and todos, in
-`.charter/`; each machine has one over the transcript archive, in charter's data home. The
+`.charter/`; each machine has one over the transcript archive, in purlis's data home. The
 session host is its only writer, and a chat searches only its own clone's. It is never the
 truth: deleting it costs a rebuild. It holds the words of what it indexes, with their positions
 and after redaction, but not the text as written. A deleted item stops answering at once and
@@ -471,7 +479,7 @@ _Avoid_: spawn, delegate, sub-agent (that is the harness's child run)
 
 **Handoff**:
 A dispatch whose work now belongs to the operator to follow: it opens as a tab, and sends back at
-most one **report**. `charter handoff` is its route from a shell.
+most one **report**. `purlis handoff` is its route from a shell.
 _Avoid_: transfer, session record (that is what a closing chat writes)
 
 **Task** (of a dispatch):
@@ -502,7 +510,7 @@ _Avoid_: prompt (that is the operator's), message (unqualified), mail
 **Mailbox** (of a chat):
 Whether a chat takes peer messages: deliver, hold or refuse, set by the operator. Held messages wait
 on the chat's row.
-_Avoid_: inbox (that is `charter inbox`, a person's), queue
+_Avoid_: inbox (that is `purlis inbox`, a person's), queue
 
 **Dispatch grant**:
 A person's yes to a persona's dispatches, given ahead of time on a human scope: which personas it
@@ -556,7 +564,7 @@ _Avoid_: notification, alert (alerts are a separate drawer), waiting (for the st
 **Notice**:
 A standing line in a project's window about something that is true now, such as a pin to a
 workspace that is gone or a repo that could not be cloned. A Notice always offers a way out:
-the fix itself when charter can do it, or a link to the place where it is fixed. Dismiss
+the fix itself when purlis can do it, or a link to the place where it is fixed. Dismiss
 hides it until its cause changes. A reference to something gone is set aside, never removed,
 and comes back when its target does. Not an **Alert**, which is an event in the drawer, and not
 **Needs you**, which is a chat waiting on the operator.
@@ -571,7 +579,7 @@ elsewhere". An agent never answers one (ADR 0080 §5). A part of **Chat**.
 _Avoid_: prompt (that is what the operator types), approval (that is one kind of answer)
 
 **Kill switch**:
-Stop all on the title bar, or `charter stop --all`: every chat's and shell's program that charter
+Stop all on the title bar, or `purlis stop --all`: every chat's and shell's program that purlis
 started, in every project and window, is interrupted and ended, and no chat starts until the
 operator **re-arms** it from the title bar. It is a stop, not a close: the tabs stay, each
 reading as a chat whose program ended. A new shell still opens, so the operator can look around.
@@ -580,22 +588,22 @@ _Avoid_: panic button, pause (nothing is resumed on re-arm)
 
 **Shell tab**:
 A tab running the operator's own shell, with no harness and no profile, opened by `New shell`.
-A harness typed into one runs outside charter's session tracking, so charter's **shell-tab
+A harness typed into one runs outside purlis's session tracking, so purlis's **shell-tab
 shims** stand first on its `PATH`: the harness still starts, after one line saying so, and the
 tab shows a banner offering to open it as a chat instead (ADR 0062).
 _Avoid_: terminal (for the tab), console, plain chat
 
 **Light editor**:
-charter's one editor, for reading a file of a chat's branch, making a small edit in it and
+purlis's one editor, for reading a file of a chat's branch, making a small edit in it and
 reviewing a diff. It has no language server, debugger, repo-wide refactor or extension code of
 anyone else's; deep work opens in **your editor** at the same file and line. It is a view of a
 **Workspace**'s repos (ADR 0072 §2, ADR 0081).
 _Avoid_: editor (unqualified), code editor, IDE (except in the category phrase "the agent IDE",
-which is charter as a whole)
+which is purlis as a whole)
 
 **Your editor**:
 The editor the operator already uses (VS Code, Zed, a JetBrains IDE, or `$EDITOR`), where writing
-code by hand happens. charter opens a file there at a line, and never replaces it. Which editor
+code by hand happens. purlis opens a file there at a line, and never replaces it. Which editor
 is a setting of this machine, so it belongs to **Project** (ADR 0072 §2, ADR 0081).
 _Avoid_: external editor; IDE (except in the category phrase "the agent IDE")
 
@@ -610,9 +618,9 @@ A view tab showing one comparison (or one per member of a cross-repo change), wh
 reads the diff, ticks files as viewed, comments on lines, and ends by sending the comments to the
 chat, publishing them to the request, or approving. There is one per branch, and it remembers
 where the operator was. The forge's own review of a request stays the review of record. "Review"
-on its own is the plain verb, as on the chat tab's button, and is not a charter noun. It is a view
+on its own is the plain verb, as on the chat tab's button, and is not a purlis noun. It is a view
 of a **Workspace**'s repos (ADR 0084).
-_Avoid_: Review (as a noun for the tab), code review (for charter's), PR review (that is the
+_Avoid_: Review (as a noun for the tab), code review (for purlis's), PR review (that is the
 forge's), diff view
 
 **Review draft**:
@@ -623,7 +631,7 @@ and it leaves only by **Send to agent**, **Publish** or being kept. It belongs t
 _Avoid_: pending review (that is GitHub's), draft (unqualified)
 
 **Human edit**:
-An edit the operator saved to a file in a chat's branch from the light editor. charter records
+An edit the operator saved to a file in a chat's branch from the light editor. purlis records
 which file and lines, and announces it to the chat's harness at its next turn: one line of
 context naming the files edited since its last turn, paths only, never contents. Edits from
 several sittings add up until that turn, and the announcement is never a prompt sent for the
@@ -634,15 +642,15 @@ _Avoid_: manual edit, override
 A summary a chat writes of its own session when it closes through **Smart close** — its goal,
 what it did, what it decided, what is still open and how to pick it up — filed as one file in
 its workspace's `sessions/` (the plane's own, at the plane root). The chat gives the title and
-the five sections; charter gives everything else (which chat, persona, harness, profile,
+the five sections; purlis gives everything else (which chat, persona, harness, profile,
 conversation, workspace, directory and pieces), keeps the index and `workspace.md`'s one `## Sessions` line, and names
 the newest in the next chat's briefing (ADR 0064).
 _Avoid_: handoff, log, transcript
 
 **Smart close**:
 Closing a chat after it has written its session record: the app sends it one line naming
-charter's `smart-close` skill (the operator's click is the consent, the exception to a curation
-action's never-sent prompt), and the tab closes when `charter session record` tells the app the
+purlis's `smart-close` skill (the operator's click is the consent, the exception to a curation
+action's never-sent prompt), and the tab closes when `purlis session record` tells the app the
 record is saved — never on anything the chat printed. Until then the chat is **wrapping up**:
 its tab says so, and the operator's Cancel smart close or their own typing stops it.
 _Avoid_: save and close, archive
@@ -666,11 +674,11 @@ _Avoid_: stale, behind, outdated, Incoming (that is the remote's commits)
 
 **Save**:
 Taking what changed in the plane or a repo as far as its mode allows: commit, push, PR, merge.
-_Avoid_: sync (that word is `charter sync`'s), commit (a save may be more than one), publish
+_Avoid_: sync (that word is `purlis sync`'s), commit (a save may be more than one), publish
 
 **Sync**:
 Fetching every clone in a workspace and fast-forwarding the ones that hold no work:
-`charter sync`, and *Sync repos* in the window. Nothing else is called Sync: not a save, not
+`purlis sync`, and *Sync repos* in the window. Nothing else is called Sync: not a save, not
 moving a project to its pinned version, not writing persona sub-agents, and not any state kept
 between devices (ADR 0072).
 _Avoid_: pull, refresh, update (for this)
@@ -681,7 +689,7 @@ steps of the one before it. The plane has one mode, and each repo has its own.
 _Avoid_: policy, posture, share
 
 **Auto-save**:
-A save charter starts by itself: after a quiet period, when a session ends, or when the app
+A save purlis starts by itself: after a quiet period, when a session ends, or when the app
 quits.
 _Avoid_: sync, background push
 
@@ -717,7 +725,7 @@ _Avoid_: behind (in UI text)
 
 **Commit scan**:
 The check a chat's own commit passes before git makes it: the lines it adds, scanned for keys
-and personal data, and refused with each finding masked. `charter scan` runs it on what is
+and personal data, and refused with each finding masked. `purlis scan` runs it on what is
 staged. Part of Workspace, as a check on a repo's save (ADR 0074).
 _Avoid_: secret scan (that is the plane save's), leak check
 
@@ -734,7 +742,7 @@ between the two.
 _Avoid_: global/user, project/personal
 
 **Settings**:
-The one tab where every setting of charter is read and changed, at one level at a time. Each
+The one tab where every setting of purlis is read and changed, at one level at a time. Each
 group of settings has its own place in it, and anything that tells you to change a setting can
 open it at that place. Opening it from a project or a workspace opens it at that level.
 _Avoid_: Preferences, options, config page, project settings page (as a separate thing)
@@ -748,7 +756,7 @@ _Avoid_: scope (that word is kept off settings), layer, tier (tiers are where st
 ### Core and extensions
 
 **Core**:
-What charter does itself, on every platform, with no extension on. A plane's instructions and
+What purlis does itself, on every platform, with no extension on. A plane's instructions and
 the session-start briefing may depend only on the core.
 _Avoid_: built-ins (for core features), platform
 
@@ -764,18 +772,18 @@ an approval prompt. A copy of one anywhere else is an ordinary extension.
 _Avoid_: bundled plugin, first-party plugin, core extension
 
 **Capability**:
-One thing charter does for an extension that asked for it in its manifest and was approved,
-such as showing a badge or adding a CLI command. It describes charter's conduct, never a limit
+One thing purlis does for an extension that asked for it in its manifest and was approved,
+such as showing a badge or adding a CLI command. It describes purlis's conduct, never a limit
 on the extension.
 _Avoid_: permission, grant (that is a runner's **Grant**), power
 
 **Facts file**:
-A file an extension keeps in its own state directory, holding the values charter shows for it
+A file an extension keeps in its own state directory, holding the values purlis shows for it
 (badges, repo cells) without starting its program.
 _Avoid_: cache, status file
 
 **Event**:
-One question charter asks an extension after a core action it hears about has finished, such as
+One question purlis asks an extension after a core action it hears about has finished, such as
 a workspace being created or the plane being saved. What it answers never changes the action.
 _Avoid_: hook (for this), notification, subscription
 
@@ -786,13 +794,13 @@ _Avoid_: prompt, context injection
 
 **Action** (of an extension):
 A verb an extension declares and offers on the rows of its views: pressing one asks its program
-to *run action `<id>` on `<subject>`*. Never one of charter's own verbs. charter asks first when
+to *run action `<id>` on `<subject>`*. Never one of purlis's own verbs. purlis asks first when
 the manifest says so, and always before one that deletes.
 _Avoid_: command (for this), verb (unqualified), button
 
 **Curation action**:
-A chat charter opens on a workspace, a persona or the plane with a prompt already typed into it
-and never sent: the operator reads it and presses Enter. charter ships three of its own
+A chat purlis opens on a workspace, a persona or the plane with a prompt already typed into it
+and never sent: the operator reads it and presses Enter. purlis ships three of its own
 (`charter/safe-remove`, `charter/compact`, `charter/add-curation-action`), and a persona
 declares more as `personas/<name>/curation/<id>.md`, which that persona runs. Unlike an
 extension's **Action**, nothing runs a program: the chat is the whole of it (ADR 0061).
@@ -804,76 +812,76 @@ views or runs one of its actions.
 _Avoid_: shortcut, menu item
 
 **Extension command**:
-A command an extension adds to the `charter` command line, run as `charter <extension id>
+A command an extension adds to the `purlis` command line, run as `purlis <extension id>
 <command> …`. It says whether it writes, and what its program prints and its exit status reach
-the caller unchanged. An extension's id is never one of charter's own command words.
+the caller unchanged. An extension's id is never one of purlis's own command words.
 _Avoid_: subcommand (unqualified), plugin command, palette command (for this)
 
 **Core-owned alias**:
 A core command whose words forward to an extension command and give its output, so a plane's
-instructions keep working when a feature moves into an extension (`charter ws todo` once todos
+instructions keep working when a feature moves into an extension (`purlis ws todo` once todos
 does).
 _Avoid_: shim, redirect
 
 **Write paths**:
-The plane-relative paths an extension declares it writes. charter hands them resolved with
+The plane-relative paths an extension declares it writes. purlis hands them resolved with
 each request and reports a change outside them; it does not stop one.
 _Avoid_: sandbox, allowed paths, scope (as if enforced)
 
 **Harness adapter**:
-charter code that arms one harness through its own mechanism for one chat, with nothing written
+purlis code that arms one harness through its own mechanism for one chat, with nothing written
 into the harness's config: what level 2 and a harness's own protocol need. It never stands in for
 the harness's program (ADRs 0050, 0073).
 _Avoid_: wrapper, driver, plugin (that is the harness's)
 
 **ACP adapter program**:
 A program the user installs that speaks ACP for a harness that does not, such as
-`claude-agent-acp` or `codex-acp`. charter spawns it as a level-3 chat's program, found by name
+`claude-agent-acp` or `codex-acp`. purlis spawns it as a level-3 chat's program, found by name
 on `PATH`, and never ships, downloads or updates one. It is not a harness adapter, which is
-charter's code (ADRs 0073, 0080).
+purlis's code (ADRs 0073, 0080).
 _Avoid_: ACP adapter (on its own), harness adapter (for this), bridge
 
 **Wrap**:
-To run a chat's unmodified harness inside a sandbox profile or backend charter generates (ADR
-0067). Never to **stand in** for the harness: putting charter's own program where the harness's
-is expected and changing what it or its model sees, which charter never does. X34's *"wraps a
+To run a chat's unmodified harness inside a sandbox profile or backend purlis generates (ADR
+0067). Never to **stand in** for the harness: putting purlis's own program where the harness's
+is expected and changing what it or its model sees, which purlis never does. X34's *"wraps a
 harness binary"* means standing in (ADR 0073).
 _Avoid_: wrap (for a stand-in, a shim or an adapter)
 
 **Harness plugin**:
 A Claude Code, Codex or opencode plugin, chosen per project. "Plugin" on its own always means
-this, never a charter extension. charter's own is one too: the Claude Code plugin the app
+this, never a purlis extension. purlis's own is one too: the Claude Code plugin the app
 bundles, named `purlis` (`purlis@inline`, skills `purlis:<skill>`, MCP tools
 `mcp__purlis__<tool>`), always on in the chats the app starts. Its ids from before the rename
 (`charter@inline`, `charter-app@inline`, `charter@charter-app`) are always off there, and so
-is the Python charter's `charter@charter`. `charter plugin install` puts a copy of it,
-`purlis@purlis-app`, in front of the chats the operator starts outside the app (ADR 0057). For opencode, charter's own is the **opencode
+is the Python charter's `charter@charter`. `purlis plugin install` puts a copy of it,
+`purlis@purlis-app`, in front of the chats the operator starts outside the app (ADR 0057). For opencode, purlis's own is the **opencode
 shim**, a script the app loads into each opencode chat it starts, and whose guard-only variant
-`charter plugin install` writes into opencode's plugin directory (ADR 0058).
-_Avoid_: extension (for this); "charter plugin" for anything but charter's own
+`purlis plugin install` writes into opencode's plugin directory (ADR 0058).
+_Avoid_: extension (for this); "purlis plugin" for anything but purlis's own
 
-**charter's skills**:
-The skills in charter's plugin (`skills/` in the bundle), one source for every harness. Each
+**purlis's skills**:
+The skills in purlis's plugin (`skills/` in the bundle), one source for every harness. Each
 harness is handed them by its own route, for the chat alone: Claude Code loads the plugin,
 opencode is told the directory through the shim, and a Codex chat is **briefed** on them, a list
 of names, descriptions and `SKILL.md` paths at `SessionStart` (ADR 0063).
 _Avoid_: "Claude Code skills" for these; a copy of them anywhere
 
 **Vault**:
-A named set of secrets charter keeps in the system keyring and hands to a command, never to
+A named set of secrets purlis keeps in the system keyring and hands to a command, never to
 the model and never to an extension. Vaults are core.
 _Avoid_: secret store, keychain (as the name of the concept)
 
 **Forge extension**:
 An extension about a code host's pull requests, merge requests or issues, which reaches the
-forge through `gh` or `glab`'s own login and never through a secret charter hands it. Once
-PE-29 opens the forge seam to extensions, it asks charter to make the call instead (ADR 0070).
+forge through `gh` or `glab`'s own login and never through a secret purlis hands it. Once
+PE-29 opens the forge seam to extensions, it asks purlis to make the call instead (ADR 0070).
 _Avoid_: forge plugin, GitHub integration
 
 **Editor integration**:
-charter's own extension for VS Code or Zed, or its own plugin for JetBrains IDEs: installed in
-**your editor**, it opens a file's chat in charter, sends a selection to a chat's prompt for the
+purlis's own extension for VS Code or Zed, or its own plugin for JetBrains IDEs: installed in
+**your editor**, it opens a file's chat in purlis, sends a selection to a chat's prompt for the
 operator to send, and shows a chat's changes. It speaks the **editor protocol**, and is neither a
-charter **extension** nor a **harness plugin**. It is a view of a **Workspace** and its chats,
+purlis **extension** nor a **harness plugin**. It is a view of a **Workspace** and its chats,
 drawn in your editor (ADR 0072 §2, ADR 0081).
 _Avoid_: extension or plugin (on their own), IDE plugin

@@ -1,6 +1,6 @@
 # Supported platforms
 
-These are the platforms charter is held to. Each row names the CI label (the GitHub Actions
+These are the platforms purlis is held to. Each row names the CI label (the GitHub Actions
 image) it is covered on and what that job proves, because "supported" should mean "tested", and
 where a row is not tested it says so. A row marked **evidence** is reported on every push to `main`
 and every night, not on a pull request, and never gates a merge or a release, like the `windows`
@@ -21,16 +21,16 @@ table names is no longer used in `.github/workflows/ci.yml`; it does not check w
 
 What the table does not promise:
 
-- **Only the two latest macOS majors.** An older macOS may run charter, and nothing tests it.
+- **Only the two latest macOS majors.** An older macOS may run purlis, and nothing tests it.
   Release builds are for Apple silicon only; there is no Intel build.
 - **Ubuntu means its LTS releases, on x86_64.** Release builds are made on 24.04, so a system
   older than 24.04 is not expected to run them. On 26.04, CI builds the app from source; it does
   not install a release build.
-- **Fedora is covered from source.** The Fedora job builds charter there and starts it. It does
+- **Fedora is covered from source.** The Fedora job builds purlis there and starts it. It does
   not run the AppImage, and there is no `.rpm`. The row and the job's image are bumped together
   on each Fedora release.
 - **Evidence rows can be red without stopping anything.** A preview image or a new Fedora can
-  break for reasons that are not charter's; their jobs report it and block nothing. The 26.04
+  break for reasons that are not purlis's; their jobs report it and block nothing. The 26.04
   cold start has run close to the limit (a 1797 ms median against 2000 ms), so it is watched
   there before it gates anything.
 - **`-latest` labels move.** `macos-latest` is macOS 26 today. Each job prints the OS it ran on

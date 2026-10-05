@@ -70,7 +70,7 @@ table is empty of code today; two of the four are re-tenanted and one is new.**
 The needs-you queue is further along than a gap list would suggest, and this record would be
 wrong to describe it as absent. `app/src/NeedsYou.tsx` is a real component: it lists every chat
 that asked, by name, each a button that brings that chat forward; it names the chats that *can*
-be waiting without saying so (`quietOnes`, charter-app#52); and its two empty states are
+be waiting without saying so (`quietOnes`, purlis#52); and its two empty states are
 different claims, deliberately — "Nothing needs you" when every open chat can report, and
 "Nothing has said it needs you" when one cannot. `App.tsx` carries the count per project tab and
 `PlaneView.tsx` carries it per workspace tab (ADR 0036).
@@ -80,7 +80,7 @@ row with the tab strip, the `+`, the split buttons and the plane path. A queue t
 at fifty chats is sharing a line with six other things. Moving it to the right sidebar is this
 decision; building it is not, because most of it exists.
 
-**Alerts are the opposite case: the surface is assigned and there is nothing to draw.** charter's
+**Alerts are the opposite case: the surface is assigned and there is nothing to draw.** purlis's
 footer has an alert row in zone 2 (`charter/statusline.py:_alerts`), and it is not ported —
 `crates/purlis-core/src/footer.rs` names the omission in the output rather than hiding it:
 
@@ -97,17 +97,17 @@ exists.
 
 ## What has no region, recorded as open
 
-These are named as gaps, not scheduled as work. Each one is a fact charter already has, or
+These are named as gaps, not scheduled as work. Each one is a fact purlis already has, or
 already computes, with nowhere in the window to be. **None of them is decided by this record**,
 and the reason they are in it is that a four-region table is exactly the document a later reader
 will use to conclude that anything not in the table was considered and dropped.
 
 - **The `ctx` and `cache` gauges have no home, and the history they need is being written.** The
-  gauges are zone 3 of charter's own footer. [ADR 0019](https://github.com/diazoxide/charter-plane/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/docs/adr/0019-the-frame-owns-the-surface.md)
+  gauges are zone 3 of purlis's own footer. [ADR 0019](https://github.com/diazoxide/charter-plane/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/docs/adr/0019-the-frame-owns-the-surface.md)
   recorded the gap for the tmux frame — *"A framed Claude Code session has no context/cache gauge
   on any surface"* — and **that bullet is marked closed by #413**: the frame's top strip draws
   `statusline.recorded_context_gauge` from the recorded history, and `statusline.main` writes the
-  harness-session mapping because it is the one process that sees both ids. **charter-app has no
+  harness-session mapping because it is the one process that sees both ids. **purlis has no
   equivalent closure.** ADR 0029 states the position for the app in as many words: *"charter's
   Rust footer does not draw them yet either."* `footer.rs` draws zone 1 and the sentence above.
 
@@ -126,11 +126,11 @@ will use to conclude that anything not in the table was considered and dropped.
   session's turns rather than this turn's percentage. Zone 3. Nothing renders it and, as above,
   no renderer was ported.
 - **News, and "an update is available".** `crates/purlis-core/src/news.rs` is ported and
-  `charter news` works. The app has no command for it, so an operator who never types `charter`
+  `purlis news` works. The app has no command for it, so an operator who never types `purlis`
   in a pane is never told an update exists.
 - **`doctor`.** `crates/purlis-core/src/doctor/` is ported across twelve modules and is CLI
   only. It is the thing an operator reaches for when something is wrong, and in a window whose
-  whole premise is not typing `charter`, it is reachable only by typing `charter`.
+  whole premise is not typing `purlis`, it is reachable only by typing `purlis`.
 
 The app's full command surface was read to check this: thirty-six `#[tauri::command]`
 functions, none of them `news`, `doctor`, `usage`, `alerts` or `footer`.
@@ -164,7 +164,7 @@ functions, none of them `news`, `doctor`, `usage`, `alerts` or `footer`.
 - **The left sidebar loses the only place every workspace's chats can be seen at once.** ADR 0036
   gave it that job explicitly — *"the sidebar is the listing, and the only place the operator can
   see every workspace's chats at once"* — and re-purposing the region takes it away. The palette
-  lists every chat in the project with a search over it (charter-app#48), and the workspace strip
+  lists every chat in the project with a search over it (purlis#48), and the workspace strip
   carries the per-workspace counts and the needs-you marks. **That is the replacement, and it is
   a genuine loss of the at-a-glance view, not an equivalent.** If it is missed, the honest fix is
   a view of its own, not the vision text coming back.

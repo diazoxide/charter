@@ -10,7 +10,7 @@ _in_: a theme is a data file, every colour is a semantic token, and a literal an
 `app/src/theme/` fails the build. Read that one before writing a rule with a colour in it, and
 for what a copied-in shadcn/ui component has to satisfy.**
 
-**Where the rule is decided.** charter **ADR 0037**, _charter takes the behaviour and keeps the
+**Where the rule is decided.** purlis **ADR 0037**, _charter takes the behaviour and keeps the
 look_, and its amendment of 2026-09-22, which settled the conflict this file used to flag. That
 record is authoritative; this file is its code-side expression, and where the two disagree this
 file is the defect.
@@ -22,8 +22,8 @@ file is the defect.
   (`@radix-ui/react-<thing>`) — the primitives tree-shake per package, so the window pays for
   what it uses and nothing else.
 - **No library between you and the primitive, and no indirection you cannot read.** No `<Modal>`,
-  no `<Field>`, no house component library. The primitive is the component; charter's look is CSS
-  on it. A charter API in front of Radix is the custom tooling this repo's first rule exists to
+  no `<Field>`, no house component library. The primitive is the component; purlis's look is CSS
+  on it. A purlis API in front of Radix is the custom tooling this repo's first rule exists to
   prevent, and it is how a primitives migration turns back into hand-rolled markup with extra
   steps. The test is at the **call site**: can the next person see which primitive this is and
   reach its props?
@@ -38,7 +38,7 @@ file is the defect.
   holds six pieces — **SettingsLayout**, **SettingGroup**, **SettingRow**, **Field**, **Choice**
   and **SettingActions** — and nothing else may join it without a new amendment to that record. See
   [The settings set](#the-settings-set-is-the-one-house-set) below for why.
-- Charter's own look, always. Radix ships **no CSS at all** — every primitive is an unstyled
+- purlis's own look, always. Radix ships **no CSS at all** — every primitive is an unstyled
   element with `data-state` attributes to hang rules off. `App.css` stays the one place the
   window is drawn — but **no colour is written in it**: every one is `var(--<token>)` and the
   values live in `app/src/theme/`. See `design-system.md`.
@@ -256,11 +256,11 @@ details:
   paragraph: _"End chat 3 steward Ends the program it runs. There is no undo."_
 - **A group the catalogue decides the length of is a submenu**, Radix's own `ContextMenu.Sub`:
   "Curate ▸" on a workspace, a persona and the plane root's tab (ADR 0061). `actions.curateRows` picks that subject's
-  rows out of the catalogue by id — charter's own, then one named `ContextMenu.Label` group per
+  rows out of the catalogue by id — purlis's own, then one named `ContextMenu.Label` group per
   declaring persona, then each action the core left out as a disabled row whose tooltip is the
   core's sentence — and it runs inside the menu's content, which Radix mounts only while the
   menu is open, so a strip's fifty tabs do not pay the scan per render.
-- **Shift+F10 and the menu key open it on the element that has the keyboard** (charter-app#174).
+- **Shift+F10 and the menu key open it on the element that has the keyboard** (purlis#174).
   macOS has no keyboard convention for a context menu and its WebView raises no `contextmenu`
   for either key, so `Menued` dispatches the one a right-click would — and only when the
   trigger itself has focus, never a terminal inside the panes' trigger, whose program may want
@@ -288,7 +288,7 @@ Escape meaning Cancel. It keeps the four dialogs' rule that a click outside answ
 
 And the **alerts drawer** (`app/src/AlertsDrawer.tsx`, M6.5): `@radix-ui/react-dialog` drawn as a
 sheet from the right, over the whole window, opened from the status line. It is the primitive
-itself with charter's CSS on it — not a copied shadcn `Sheet`, whose class list is written in
+itself with purlis's CSS on it — not a copied shadcn `Sheet`, whose class list is written in
 shadcn's token names and would have emitted no CSS here (`design-system.md`). It is modal, and it
 parts from the four dialogs below on one decision: **a click outside closes it**, because a
 drawer asks nothing and a stray click cannot answer anything. Radix hands focus back only to a
@@ -298,13 +298,13 @@ of its rows is a Notice with the way out the core gives that kind of alert (NO-6
 Settings group, a fix of the doctor's registry, another project or the Saving view. A press that
 leaves the drawer closes it first; a fix keeps it open and says on the row why it was refused.
 
-And the **question a relaunch asks** (`app/src/RelaunchAsk.tsx`, charter-app#250): an
+And the **question a relaunch asks** (`app/src/RelaunchAsk.tsx`, purlis#250): an
 `AlertDialog`, because it arrives without being asked for. **"Reopen all sessions" is the
 primitive's `Cancel`**, first and focused, so Escape and a stray Return both keep the work.
 **"Start fresh" is a plain button, not the primitive's `Action`**: an `Action` also closes the
 dialog, and closing is this dialog's "Reopen all", so one press would send both answers.
 
-And the **ask before Restart to update** (`app/src/Updates.tsx`, charter-app#251): an
+And the **ask before Restart to update** (`app/src/Updates.tsx`, purlis#251): an
 `AlertDialog` naming each chat that is mid-turn or reports no state, in the quit warning's rows
 and words. **"Wait" is the primitive's `Cancel`**, first and focused; "Restart now" is a plain
 button, for the relaunch question's reason.
@@ -328,7 +328,7 @@ role exists for. Two consequences worth knowing before the next one:
   Cancel is the primitive's `Cancel`; Close and Smart close are both its `Action`, so either
   closes the dialog. **The focus goes to the default the operator ruled, not always to Cancel**:
   Smart close for a chat with turns behind it, Close for one with at most one, and Cancel
-  wherever charter cannot say. Smart close that is not offered is `disabled`, with the core's
+  wherever purlis cannot say. Smart close that is not offered is `disabled`, with the core's
   sentence beside it (`aria-describedby`); Radix's focus scope skips a disabled button, so
   Shift+Tab from Cancel reaches Close. Escape still answers Cancel.
 
@@ -338,7 +338,7 @@ over the other two surfaces Radix has for the same content:
 
 - **Not a dialog**, because a dialog is modal and modal is wrong here twice. Radix marks
   everything outside an open dialog `aria-hidden`, which then
-  included the needs-you queue two sections up (in the title bar since charter-app#249) — the
+  included the needs-you queue two sections up (in the title bar since purlis#249) — the
   one surface ADR 0038 says this region must never compete with — and a modal is
   for a question that has to be answered before anything else happens. A persona's role is
   reading.
@@ -419,7 +419,7 @@ the question is where Radix listens, and only a primitive that listens on `docum
 **A scenario run cannot right-click, on either engine — so a context menu is driven by the
 event and not by the pointer.** `element.click({ button: "right" })` is a W3C pointer sequence;
 `contextmenu` is a platform default action the engine raises from a native right-click, below
-where a synthesised sequence lands. Measured in charter's own window with a listener on the
+where a synthesised sequence lands. Measured in purlis's own window with a listener on the
 element: **0 `contextmenu` events after a WebDriver right-click, 1 after a dispatched
 `MouseEvent`** (webkit 605.1.15 on macOS, 2026-09-22), and run 35771806598 was red the same way
 on WebKitGTK 605.1.15. `e2e/specs/workspace-lifecycle.e2e.ts` therefore dispatches the event,
@@ -428,8 +428,8 @@ and says so where the dispatch is.
 **That is a driver limit and not a product one, and the discriminator is a jsdom test.**
 `src/Menus.test.tsx`, _"a real contextmenu event, with the suppressor live"_, dispatches one
 `MouseEvent` at a real workspace tab of the real `App` with `useNoBrowserMenu` mounted and no
-WebDriver anywhere, and charter's menu opens. Making that suppressor capture-phase — the one way
-charter could swallow the event — turns that test and only that test red. Put the question where
+WebDriver anywhere, and purlis's menu opens. Making that suppressor capture-phase — the one way
+purlis could swallow the event — turns that test and only that test red. Put the question where
 the driver is not, before changing a spec that cannot answer it.
 
 **A modal dialog really is modal, and the tests notice.** Radix marks everything outside the
@@ -448,7 +448,7 @@ nothing at all and the browser's own tab sequence decides.
 That matters because **WebKit does not put a `<button>` in the tab sequence at all** unless "tab
 to all controls" is turned on, or the button's `tabindex` is written down — and **WebKit is the
 engine on both platforms the scenarios run on**: a WKWebView on macOS and WebKitGTK on Linux.
-charter embeds the system WebView, so this is the window's own behaviour rather than one runner's
+purlis embeds the system WebView, so this is the window's own behaviour rather than one runner's
 quirk. The second half of that sentence is the whole of the fix and is the section below; it was
 not known when the rest of this was written.
 
@@ -456,7 +456,7 @@ It was measured rather than reasoned about, three times, and the third measureme
 the first two**. `palette.e2e.ts`'s _"closes the chat it just opened, by the keyboard alone"_
 pressed Tab to move from `Cancel` to the confirm; the question stayed on screen on `webkit macos`,
 and after that was read as a macOS default it did the same on `WebKitGTK linux`. Then the spec was
-made to write down every keydown the document sees, and it said (charter-app#176):
+made to write down every keydown the document sees, and it said (purlis#176):
 
 ```
 the page saw: Shift on <button> "Cancel"; Tab on <button> "Cancel"; Enter on <button> "Cancel"
@@ -471,13 +471,13 @@ the page saw: Shift on <button> "Cancel"; Tab on <button> "Cancel"; Enter on <bu
    keydown _to_ `Cancel`, unprevented — the focus was genuine and the engine agreed — and nothing
    happened. WebDriver key actions carry no implicit activation.
 
-The second is a fact about the **test rig**, not about charter, and it is the one that matters
+The second is a fact about the **test rig**, not about purlis, and it is the one that matters
 when writing a spec: **a scenario cannot press a button by keyboard at all, by any key.** That is
 why Escape works in these specs where nothing aimed at a button does — Radix listens for Escape on
 `document` — and why the palette's own Enter works, since the palette handles it in JavaScript.
 
 **A third face of the rig's finding, and it is the same fact underneath — measured in
-charter-app#186 while trying to prove the fix below in a real window.** The two above read like
+purlis#186 while trying to prove the fix below in a real window.** The two above read like
 two unrelated quirks; they are one. **This driver dispatches a synthetic DOM keydown and performs
 no default action whatsoever.** The decisive measurement is a control nobody can argue with: two
 plain text `<input>`s, injected into an open dialog in the running app, with the focus on the
@@ -500,7 +500,7 @@ So, for whoever writes the next spec: **the keyboard half of a scenario can only
 app does in JavaScript.** Escape, `F2`, the palette's own Enter — all handled by a listener — are
 fair game. Anything the _engine_ would have done in response to a key is not, and asking for it
 produces a red that looks like an app defect and is not one. The reachability half of
-charter-app#186 therefore stayed in jsdom, where the engine's rule is written down and modelled
+purlis#186 therefore stayed in jsdom, where the engine's rule is written down and modelled
 explicitly; `picker.e2e.ts` keeps the half a scenario really can prove, which is that the
 attribute the rule needs survives the build and is on the element in the shipped app.
 
@@ -515,12 +515,12 @@ Three things follow, and the last is the one a reviewer should hold us to:
   raising the question by keyboard and answering it with Escape.
 - **A control that is neither edge of a modal is reachable by neither mechanism**: the engine
   will not tab to a `<button>` and Radix only handles the edges. That was the state of this
-  window until charter-app#186, and the section below is what was measured and what was done
+  window until purlis#186, and the section below is what was measured and what was done
   about it.
 
 ## What Tab actually reached in each modal, and the one attribute that fixed it
 
-charter-app#186 asked the question above of **every** modal surface rather than of the one
+purlis#186 asked the question above of **every** modal surface rather than of the one
 dialog a scenario happened to break on, and the answer was worse than the ticket's guess.
 `app/src/Modals.keyboard.test.tsx` is the measurement and now the guard; it walks each surface
 with a Tab that is dispatched for real, so Radix's edge handling runs rather than being modelled,
@@ -543,10 +543,10 @@ What it found, before anything was changed:
 | `AlertsDrawer`, `PinItem`          | 1         | its one control | —                            | —                      | —                                         |
 | `Palette`                          | 1         | its box         | —                            | —                      | —                                         |
 
-The last three rows arrived from charter-app#172 while this was being measured, each with the
+The last three rows arrived from purlis#172 while this was being measured, each with the
 defect on the day it was written — which is the argument for a file that walks every surface
 rather than a fix per dialog. `NewProject` is the sharpest: only its folder box was in the
-engine's sequence at all, and the checkbox in the middle is the one that decides whether charter
+engine's sequence at all, and the checkbox in the middle is the one that decides whether purlis
 writes into a repository the operator already has.
 
 Read the `Tab reached` column first, because it is the one an operator lives in: **in eight of
@@ -585,7 +585,7 @@ bool HTMLFormControlElement::isKeyboardFocusable(const FocusEventData& focusEven
 **A `tabindex` that is written down is never weighed against full keyboard access at all.** The
 two lines that say so are WebKit's own, added in `[popover] Improve focus handling`
 (r263447, 2023-04-29) and shipped in Safari 17 and WebKitGTK 2.42 — both older than anything
-charter runs on. So every `<button>` inside a modal surface in this window now says
+purlis runs on. So every `<button>` inside a modal surface in this window now says
 `tabIndex={0}`, and Tab moves through these dialogs the way it moves through every other window
 on the machine.
 
@@ -595,7 +595,7 @@ Three things about that choice, because each was a fork:
   would have been the fourth of.** Nothing wraps a primitive, nothing intercepts a key, and
   Radix's own edge behaviour is untouched and still does the wrapping at the ends.
 - **It is not a WebView setting, and that route does not exist.** Turning "tab to all controls"
-  on for charter's own window would be the tidier answer and there is no public API for it:
+  on for purlis's own window would be the tidier answer and there is no public API for it:
   macOS exposes full keyboard access as a system preference and `WKPreferences` has only
   private SPI for the web half of it. WebKitGTK's `enable-tabs-to-links` is about links.
 - **It goes on the two-answer dialogs as well**, which did not need it. "The keyboard works
@@ -611,10 +611,10 @@ the tabs, the pane controls, the status line, the explorer rows — is equally a
 WebKit's tab sequence, and nothing there has a focus scope to wrap at the edges, so there is no
 "reachable backwards" to fall back on. That is a bigger change than a dialog's answer row and a
 different question (where should Tab go between four regions?), so #186 stopped at the modals,
-where a focus scope makes the boundary obvious and the surfaces are countable. charter-app#189
+where a focus scope makes the boundary obvious and the surfaces are countable. purlis#189
 carries the rest.
 
-## Where Tab goes in the rest of the window (charter-app#189)
+## Where Tab goes in the rest of the window (purlis#189)
 
 The attribute above fixed the dialogs. Outside them it is the floor and not the answer: a
 `tabIndex={0}` on every button would put fifty chat tabs between the explorer and the terminal.
@@ -630,11 +630,11 @@ model and a select-on-`mousedown` this window's strips do not have:
   arrowing past a chat must not swap the panes under the operator.
 - **Each list is ONE Tab stop** — the explorer, every panel's rows (`PanelList`, so a
   contributed panel gets it for nothing). Up, Down, Home and End move.
-- **A list behind a button is a menu** — the title bar's needs-you list (charter-app#249), the
+- **A list behind a button is a menu** — the title bar's needs-you list (purlis#249), the
   strips' show-more menus. The button is the Tab stop; Enter opens the menu on its first item,
   the arrows move, Escape closes it and puts the keyboard back on the button. Radix's
   `DropdownMenu` does all of that, so nothing here is hand-written.
-- **The explorer is a tree** (charter-app#238), the whole "Tree View" pattern on top of the
+- **The explorer is a tree** (purlis#238), the whole "Tree View" pattern on top of the
   same roving focus: `role="tree"`, each row a `treeitem` with its level and its place among
   its siblings, `aria-expanded` on every parent (a clone says whether it is open, a parent that
   cannot fold says `true`), Right to open or go in,
@@ -643,7 +643,7 @@ model and a select-on-`mousedown` this window's strips do not have:
   no longer `button`s to a role query, so a test reaches them by that role.
 - **Every other control says `tabIndex={0}`**, and a tab's `×` says `-1`: fifty closers would be
   fifty stops again. **Delete on a focused project or chat tab presses the row its `×` presses**
-  (charter-app#239, `closeOnDelete` in `app/src/tabKeys.ts`), and so does Backspace on a Mac,
+  (purlis#239, `closeOnDelete` in `app/src/tabKeys.ts`), and so does Backspace on a Mac,
   whose key marked "delete" sends it: ending a chat still asks first, a view tab still closes
   without asking, closing a project with chats open now asks first too (`ClosingProject`, on
   the row's verb, so the `×`, the menu and the palette ask it as well), and the keyboard lands
@@ -701,9 +701,9 @@ controls staying unseen until the keyboard is on them, and a dispatched Ctrl+Tab
 ## The three strips say their depth in shade, and that took no primitive either
 
 ADR 0036 makes the window an axis — a project holds workspaces, a workspace holds chats —
-and charter-app#171 drew that with three signals so the nesting would be legible before a word
+and purlis#171 drew that with three signals so the nesting would be legible before a word
 was read: **height** (a project's row is the tallest), **inset** (each row began under its
-parent's first tab) and **surface** (deep, raised, then the bar). charter-app#193 keeps
+parent's first tab) and **surface** (deep, raised, then the bar). purlis#193 keeps
 **height**, drops the **inset**, and turns **surface** into a quiet shade per strip in tokens of
 its own — and drops the accent edge under the selected tab too, on the operator's reading of
 the running app.
@@ -730,7 +730,7 @@ rows. Three properties of that answer are decisions rather than details:
   instruction. `layer.selected` is one token for all three strips, so the tab you are on reads
   the same way on every row.
 - **No primitive, and no component.** This is four declarations in `App.css` and four values per
-  theme file. A "strip" component parameterised by depth would be exactly the charter API in
+  theme file. A "strip" component parameterised by depth would be exactly the purlis API in
   front of nothing that the rule at the top of this file refuses.
 
 **And a tab's label is centred in its cell** — _"also lets make tabs labels center aligned"_ —
@@ -768,7 +768,7 @@ component library gets added on.
   derived from the current occupants would change the moment one moved, which is the second half
   of the same throw.
 - **A slot that starts with nothing in it starts at `0%`, and that is how the flash was fixed.**
-  charter-app#141 sized a hidden region normally and collapsed it from a `useEffect`, which runs
+  purlis#141 sized a hidden region normally and collapsed it from a `useEffect`, which runs
   after the browser has painted, so every launch drew it for one frame. The obvious repair —
   `useLayoutEffect` — **throws**, _"Group &lt;id&gt; not found"_: the group registers itself in
   its own layout effect, and React runs a child's layout effects before its parent's, so there
@@ -786,7 +786,7 @@ component library gets added on.
   belongs to the three tablists that are the axis (ADR 0036); this is the current item of a
   list. Radix has no tree or listbox primitive, and native buttons are not hand-rolled markup.
 - **The region buttons are `aria-pressed` toggles**, which is what the platform has for a
-  control that is on or off. They are **on the status line and icon-only** since charter-app
+  control that is on or off. They are **on the status line and icon-only** since purlis
   #193, which the operator asked for twice — _"show hide buttons can be movet to bottom status
   bar — again like ZED"_, and then _"let make them without labels, just small icons without
   texts, texts only with tooltips"_. Three things about that are decisions:
@@ -816,7 +816,7 @@ its right-hand end. The one thing about it that is not ordinary markup is the dr
 sequence above, so it is written down here for the same reason.
 
 - **`titleBarStyle: "Overlay"` is macOS only.** Windows and WebKitGTK ignore the key in
-  `tauri.conf.json` and keep drawing their own title bar above the webview. So charter's bar is
+  `tauri.conf.json` and keep drawing their own title bar above the webview. So purlis's bar is
   the title bar on one platform and the window's first row on the other two, and the only thing
   that differs in the markup is how much leading padding it reserves for the system's window
   controls. That number comes from `title_bar_room`, which is `cfg!(target_os = "macos")` in
@@ -832,10 +832,10 @@ sequence above, so it is written down here for the same reason.
   `false` at the first _clickable_ element it meets, and clickable there means a `<button>`, an
   `<a>`, an `<input>`, a `contenteditable`, an interactive `role` — **or anything carrying a
   `tabindex` other than `-1`**. **`BUTTON` is in that tag list, so the tag alone does it** and no
-  attribute of charter's is load-bearing for dragging. Worth writing down because it is easy to
+  attribute of purlis's is load-bearing for dragging. Worth writing down because it is easy to
   get backwards: the title bar's scenario was first written asserting `tabindex="0"` on every
   control and the real app refuted it — the update item's trigger carries none, for
-  charter-app#189's reason, and it presses perfectly well. Nothing in charter's own code says
+  purlis#189's reason, and it presses perfectly well. Nothing in purlis's own code says
   "do not drag here".
 - **`core:window:allow-start-dragging` is NOT in `core:default`.** The handler ends in
   `invoke('plugin:window|start_dragging')`, and without that permission named in
@@ -854,8 +854,8 @@ sequence above, so it is written down here for the same reason.
 
 Every pane in this window is a terminal running somebody's shell, and a shell's line editor has
 bindings of its own. So "the window takes this key" is never free: it is taken out of the
-program the operator is typing into. `F2` cost that once (charter-app#47) and `Ctrl-K` cost it
-again (charter-app#106), which is enough to write the rule down rather than decide it a third
+program the operator is typing into. `F2` cost that once (purlis#47) and `Ctrl-K` cost it
+again (purlis#106), which is enough to write the rule down rather than decide it a third
 time per key.
 
 > **A chord a terminal encodes belongs to the chat whenever a chat has the keyboard, unless the
@@ -902,12 +902,12 @@ it takes nothing. Off macOS muda 0.19.3 gives the predefined items fixed `Ctrl` 
 a key a shell owns: `Ctrl-C` (copy, against SIGINT), `Ctrl-A` (select all, against
 beginning-of-line), `Ctrl-Z` (undo, against SUSP), `Ctrl-Y` (redo, against `yank`), `Ctrl-V`
 (paste, against `quoted-insert`), `Ctrl-X` (cut, against readline's `C-x` prefix) and `Ctrl-H`
-(hide, against backward-delete-char). So since charter-app#187 the menu off macOS is Quit alone,
+(hide, against backward-delete-char). So since purlis#187 the menu off macOS is Quit alone,
 on `Ctrl+Shift+Q`: a terminal app's own keys add `Shift` (GNOME Terminal, Konsole), and xterm
 sends nothing for a `Ctrl+Shift` letter. `lifecycle::layout` is where that is decided, and its
 tests hold every accelerator it produces off macOS to this rule.
 
-**The text-size keys take nothing either** (charter-app#283, `textSize.sizeKey`). `⌘` on a Mac
+**The text-size keys take nothing either** (purlis#283, `textSize.sizeKey`). `⌘` on a Mac
 and `Ctrl` elsewhere, with `=` or `+`, makes the text in focus bigger, with `-` smaller, with `0`
 its default: a terminal pane's size inside a pane, the window's anywhere else. Measured in
 xterm.js 6.0.0, `Ctrl` is encoded with a letter, space, `3`–`8`, `[`, `\` and `]` — not `=`, `-`
@@ -940,7 +940,7 @@ than moving the focus, which the dialog's trap would only send round to the box 
 Konsole do for their own find, and a Mac's `Ctrl+F` stays the shell's as well. It is caught by the
 pane's own terminal (`attachCustomKeyEventHandler`) rather than on the window, because find is
 over the pane that has the keyboard and nowhere else. Neither the palette (`⌘K`, `F2`) nor the
-native menu claims `F`: the macOS menu is charter's, Edit's predefined items and nothing else.
+native menu claims `F`: the macOS menu is purlis's, Edit's predefined items and nothing else.
 
 **Search in the files is `⌘⇧F` on a Mac and `Ctrl+Shift+F` elsewhere, and takes nothing either**
 (FM-8, `searchKey.opensSearch`). xterm.js 6.0.0 sends nothing for a `⌘` chord, and `Ctrl+Shift+F`

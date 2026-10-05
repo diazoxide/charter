@@ -1,17 +1,17 @@
-# charter keeps a little state outside every plane
+# purlis keeps a little state outside every plane
 
 [ADR 0033](0033-a-plane-is-a-project-and-a-window-may-hold-several.md) says the app opens planes
 and arranges them in windows. That needs a list of planes and an arrangement, and neither is a
 fact about any one plane: the list cannot live in a plane without choosing which plane owns the
 others, and a plane deleted on Tuesday would take the list of the rest with it.
 
-So charter gets a machine-level file, under the operating system's application-data directory
-for this app. That bends the rule charter was built on — **the plane is the state** — and this
+So purlis gets a machine-level file, under the operating system's application-data directory
+for this app. That bends the rule purlis was built on — **the plane is the state** — and this
 record exists to bend it on purpose, with a stated limit, rather than to have it worn away.
 
 ## The rule is not as absolute as it sounds, and the exception is already shipped
 
-Two places in charter already answer this question, and they answer it in opposite directions.
+Two places in purlis already answer this question, and they answer it in opposite directions.
 Both were right, and the difference between them is the rule.
 
 [ADR 0022](https://github.com/diazoxide/charter-plane/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/docs/adr/0022-a-harness-profile-belongs-to-one-machine.md) considered **"a per-user
@@ -22,15 +22,15 @@ the plane and out of git — and `.charter/` for the launch record and the wirin
 left the plane.
 
 `charter/report.py:consent_path` does the opposite, and says why: consent to publish is kept
-under `$CHARTER_CONFIG_HOME`, else `$XDG_CONFIG_HOME`, else `~/.config`, as
+under `$PURLIS_CONFIG_HOME`, else `$XDG_CONFIG_HOME`, else `~/.config`, as
 `charter/reporting-consent` — **"Not STATE_DIR: that is per control plane, so a Reporter with
 several planes would be asked repeatedly until the safeguard became a reflex."**
 [ADR 0003](https://github.com/diazoxide/charter-plane/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/docs/adr/0003-no-unattended-publish.md) records the same sentence as a consequence: filing
 consent is "asked once per human and stored in user-level config".
 
-**So this is the second such file, not the first**, and the claim that charter has never stored
+**So this is the second such file, not the first**, and the claim that purlis has never stored
 anything outside a plane is wrong twice over: reporting consent has been outside every plane for
-as long as `charter report` has existed, and charter-app already writes its panic log to
+as long as `purlis report` has existed, and purlis already writes its panic log to
 `app.path().app_log_dir()`, which is an OS directory belonging to the app and to no plane.
 
 ## The rule this record states
@@ -59,13 +59,13 @@ with a reason. A chat pin is **not** here — this record forbids chat names out
 that one goes in the plane's own `.charter/app/reopen.json`.
 
 **Amended by [ADR 0042](0042-charter-updates-itself-and-nothing-it-cannot-verify-reaches-it.md)
-(2026-09-22): there is a sixth fact, `which update channel this machine takes charter from`**
+(2026-09-22): there is a sixth fact, `which update channel this machine takes purlis from`**
 (stable or dev). It is the first fact here that is not about planes at all, and it qualifies on
 this record's own test: it is about the machine (one binary serves every plane on it and cannot
 be on two channels), it is false inside any one plane, and deleting it costs the operator one
 preference, which falls back to stable. Every way of not knowing it reads as stable, never dev.
 
-**Amended by ADR 0054 (2026-09-25): beside the workspace pins, whether charter has pinned a
+**Amended by ADR 0054 (2026-09-25): beside the workspace pins, whether purlis has pinned a
 plane's most active workspaces for the operator once** (`Recent::most_active_pinned`). It is not
 a seventh fact. It is part of the fifth, because it describes those pins: the workspace strip
 draws what is pinned, so the first open of a plane with no workspace pins pins its three most
@@ -78,7 +78,7 @@ still opens with everything it had.
 (2026-09-30): whether this machine's agents are stopped, and the journal of that kill switch.**
 It qualifies on this record's test — it is about the machine, since the switch spans every
 plane, and false inside any one of them — and it is kept in two files of its own beside this
-store rather than in it, because `charter stop --all` writes it and it must be read without a
+store rather than in it, because `purlis stop --all` writes it and it must be read without a
 parse or a lock.
 
 **And never plane content.** No workspace names, no todos, no memory, no chat names, no persona,
@@ -93,15 +93,15 @@ docstrings.
 ## Where it lives, and what holds it shut
 
 **The OS application-data directory**, through Tauri's own path API — not `~/.charter`, and not a
-directory charter invents. Priority 2 is standard practice, the platform has a place for exactly
+directory purlis invents. Priority 2 is standard practice, the platform has a place for exactly
 this, and the app already uses that API's sibling for its log directory.
 
-**Not `$CHARTER_HOME`.** That variable moves a *plane's* state directory, and every reader of it
+**Not `$PURLIS_HOME`.** That variable moves a *plane's* state directory, and every reader of it
 in the core hard-codes `.charter` under a plane root — `adopt.rs:baseline_file` says so in its own
 docstring, and `profiletrust`, `wiring` and `hookwire` all do the same. A machine's file is not a
-plane's state, and borrowing the variable would make `$CHARTER_HOME` mean two things.
+plane's state, and borrowing the variable would make `$PURLIS_HOME` mean two things.
 
-**`0600` — the mode charter already keeps on its own private state.** Not by calling
+**`0600` — the mode purlis already keeps on its own private state.** Not by calling
 `plane::write_private`, which gates the path it writes against a plane root and there is no
 plane here; by holding the same mode through whatever writes this one. And the honest half: on
 Windows a mode bit is not an ACL, `write_private` drops the `0600` silently there, and that is
@@ -126,27 +126,27 @@ an entry would be stored and a later reader will be tempted to key it on the pat
 ## cwd is a first-launch hint, never ongoing truth
 
 The same decision settles where a window's plane comes from, because the alternative is the
-failure charter has already had twice.
+failure purlis has already had twice.
 
 - Launched from a terminal standing inside a plane → open that plane.
 - Launched any other way → the opener.
 - **Once a window has a plane, that plane is explicit, and the working directory is never
   consulted again.**
-- The CLI's own resolution (`plane::resolve`: `$CHARTER_ROOT`, else `find_root`) is untouched.
+- The CLI's own resolution (`plane::resolve`: `$PURLIS_ROOT`, else `find_root`) is untouched.
 
 The reason is measured and it is live in the app today. `plane_root` — the command the UI asks,
 and whose answer the UI hands to `worktreeRemove`, `worktreeMerge` and the palette — calls
-`charter_core::plane::resolve`, which takes `$CHARTER_ROOT` when it is set. `setup`, which
+`charter_core::plane::resolve`, which takes `$PURLIS_ROOT` when it is set. `setup`, which
 decides the hook socket, the chats that are reopened and the plane the exit handler writes its
 record into, calls `charter_core::plane::find_root` directly, which does not look at that
-variable at all. **Launch the app with `$CHARTER_ROOT` naming one plane while standing in
+variable at all. **Launch the app with `$PURLIS_ROOT` naming one plane while standing in
 another and the window's sessions belong to one plane while the window's UI names the other.**
 That is exactly M2.16 — `resolve` against `command_root` — reproduced inside the app, and
 `plane.rs` already records the verdict from the first time: *"Two functions whose whole contract
 is to name the same directory are kept in step by being one function."*
 
 After this decision there is one thing that decides a window's plane, and it is the window's own
-record. The working directory and `$CHARTER_ROOT` feed exactly one moment — the first window of a
+record. The working directory and `$PURLIS_ROOT` feed exactly one moment — the first window of a
 launch that restored nothing — and never again. A resolver that runs once cannot drift from a
 resolver that runs later, because there is no later.
 
@@ -155,9 +155,9 @@ resolver that runs later, because there is no later.
 - **Putting the list of planes in a plane.** Which one? The last one opened owns the rest, and
   deleting it loses them. There is no non-arbitrary answer, which is the shape of a fact that does
   not belong in a plane.
-- **Reusing `$CHARTER_HOME`.** Above: it names a plane's state directory, and every reader in the
+- **Reusing `$PURLIS_HOME`.** Above: it names a plane's state directory, and every reader in the
   core spells `.charter` under a plane root.
-- **A `~/.charter` directory of charter's own invention.** The platform has a directory for an
+- **A `~/.charter` directory of purlis's own invention.** The platform has a directory for an
   app's data on all three operating systems and Tauri hands it over. Priority 2.
 - **Re-resolving the plane from the working directory as the app runs.** It is how a terminal
   program behaves and it is why there were two resolvers to reconcile in M2.16.
@@ -167,7 +167,7 @@ resolver that runs later, because there is no later.
 
 ## Consequences
 
-- charter now has a file no plane can reproduce. Two machines sharing every plane still arrange
+- purlis now has a file no plane can reproduce. Two machines sharing every plane still arrange
   them differently, and a fresh machine opens the opener with an empty list — intended, and the
   price of the rule above.
 - A plane copied to another machine carries no approval with it, so ADR 0035's ask runs again
@@ -185,7 +185,7 @@ resolver that runs later, because there is no later.
 ## Amendment, 2026-09-30: the machine store is in the config home, not the application-data directory
 
 "Where it lives" above says the store is under the OS application-data directory, through
-Tauri's path API. **It is not.** `machine.rs` keeps it at `$CHARTER_CONFIG_HOME`, else
+Tauri's path API. **It is not.** `machine.rs` keeps it at `$PURLIS_CONFIG_HOME`, else
 `$XDG_CONFIG_HOME`, else `~/.config`, then `charter/machine.json`: the ladder
 `charter/report.py:consent_path` already used. The module note gives the reason. On macOS
 the application-data directory is `~/Library/Application Support`, so following the platform

@@ -1,4 +1,4 @@
-# Every performance budget names the job that measures it, and CI holds charter's own cost by regression
+# Every performance budget names the job that measures it, and CI holds purlis's own cost by regression
 
 **Accepted 2026-10-01** by the dispatcher under the operator's delegation of 2026-10-01 (decision
 D-0086), drafted for program-map ticket SC-17 (#685). It follows these of the
@@ -23,7 +23,7 @@ operator's rulings:
 
 It builds on [ADR 0026](0026-the-apps-stack-is-locked-by-what-m0-measured.md) (the spec's limits
 and what M0 measured), [ADR 0068](0068-a-chat-lives-in-charterd-and-the-app-is-its-client.md)
-(`charterd`), [ADR 0075](0075-an-audit-entry-is-metadata-in-a-store-of-its-own-and-telemetry-never-reads-it.md)
+(`purlisd`), [ADR 0075](0075-an-audit-entry-is-metadata-in-a-store-of-its-own-and-telemetry-never-reads-it.md)
 (the audit's throughput, group commit and disk cap),
 [ADR 0076](0076-a-run-moves-only-by-a-named-cause-and-a-chats-state-is-read-from-its-runs.md)
 (run states and hibernation), [ADR 0079](0079-search-runs-on-derived-sqlite-indexes-one-per-project-clone-and-one-per-machine.md)
@@ -32,12 +32,12 @@ and what M0 measured), [ADR 0068](0068-a-chat-lives-in-charterd-and-the-app-is-i
 (the hot and open targets per RAM class, their formula, and what is measured where). It
 **amends `docs/spec.md`**, in a section of its own below, and does not amend ADR 0082. SC-1,
 SC-4, SC-8, SC-15, SC-16, SC-18, SC-20, FD-5, FD-9, KN-22, KN-30 and #814 (the release scale
-run) build on it. Its concept is **Chat**, as ADR 0082's is: the budgets are what charter's chats
+run) build on it. Its concept is **Chat**, as ADR 0082's is: the budgets are what purlis's chats
 cost the device they run on.
 
 **Units.** As in ADR 0082, every memory size is binary.
 
-## Where charter is today
+## Where purlis is today
 
 - **`docs/spec.md`'s Limits** are seven felt-speed and memory rows, *"measured on the operator's
   machine, in the scenario harness"*, plus ADR 0082's two scale rows, Open chats and Hot chats. ADR 0026 measured them once, by hand,
@@ -62,12 +62,12 @@ cost the device they run on.
 | SC-17 asks | Settled by |
 |---|---|
 | The hot and open targets per RAM class, and the formula behind them | ADR 0082 §3 (V8, D-0082a). This record states every budget at those targets and re-decides none of them |
-| charter's own base in that formula, 2 GB | ADR 0082 §3. §2 below splits it into rows and keeps its total |
+| purlis's own base in that formula, 2 GB | ADR 0082 §3. §2 below splits it into rows and keeps its total |
 | What CI can and cannot measure (a fake harness; no harness footprint) | ADR 0082 §5 |
 | A target is a budget, never a cap on the operator | ADR 0082 §4 |
 | No public scale number until SC-8 and a release measurement confirm it | D-0082b |
 | `stress.yml` required on macOS and Linux, asserting descriptor counts | V8 |
-| The ADR 0026 speed limits in CI through `charterd` | V7, and SC-16's row: a regression of more than 20% cannot merge |
+| The ADR 0026 speed limits in CI through `purlisd` | V7, and SC-16's row: a regression of more than 20% cannot merge |
 | An idle-CPU budget, a context-tax budget, lazy restore, a disk-space guard | V8. SC-18, KN-30, SC-20 and GL-15 carry the numbers |
 | The audit's throughput, group commit and disk cap | ADR 0075 §7 and §8, V25b |
 | The search and SessionStart budgets at 50,000 | ADR 0079 §4 |
@@ -84,7 +84,7 @@ exactly, or one of the few timings §1 names, and going past it fails the job. A
 CI's shared runners measure with noise, and it fails the job when it is more than 20% worse than
 the last value `main` recorded, through github-action-benchmark. A *release absolute* row is
 measured with real harnesses on the operator's machine each release, and a miss is a bug.
-Every row is stated at the device's hot target, as charter's own base plus a cost per hot chat and
+Every row is stated at the device's hot target, as purlis's own base plus a cost per hot chat and
 a cost per hibernated chat, so that each RAM class's totals follow from ADR 0082's formula. The
 table of record is in `docs/spec.md`. Every row is a target, never a promise (ADR 0082 §3 and
 §4), and never published (D-0082b).**
@@ -135,13 +135,13 @@ Every row is stated at **the device's hot target** (ADR 0082 §3) with the rest 
 chats hibernated**, unless the row says otherwise. CI measures at the top class's 50 hot plus 150
 hibernated with the fake harness (ADR 0082 §5).
 
-**Memory: charter's own, with no harness.**
+**Memory: purlis's own, with no harness.**
 
 | # | What | Budget | Kind and job | Owner |
 |---|---|---|---|---|
-| M1 | charter's own base: web content peak plus the native side, at 200 open chats, scrollback excluded | **≤ 2 GB** (ADR 0082 §3's base) | release absolute (#814) | SC-1, #814 |
+| M1 | purlis's own base: web content peak plus the native side, at 200 open chats, scrollback excluded | **≤ 2 GB** (ADR 0082 §3's base) | release absolute (#814) | SC-1, #814 |
 | M2 | the web content process, peak, at the hot target | ≤ 1.5 GB. **At risk, expected to miss:** the only measurement is 1,529 MB, at 12 chats and not at the hot target | release absolute (#814); CI relative (`stress`, once SC-1 adds the field) | SC-1, #814 |
-| M3 | the native side (the app and `charterd` together) with no chats | ≤ 384 MB (measured 183 MB on macOS, 311 MB on Ubuntu) | CI absolute and CI relative (`stress`) | SC-8 |
+| M3 | the native side (the app and `purlisd` together) with no chats | ≤ 384 MB (measured 183 MB on macOS, 311 MB on Ubuntu) | CI absolute and CI relative (`stress`) | SC-8 |
 | M4 | the native side's cost of one hot chat, scrollback excluded | ≤ 4 MB (measured 3.1 MB on macOS, 0.12 MB on Ubuntu) | CI absolute (`stress`) | SC-8 |
 | M5 | the native side's cost of one hibernated chat | ≤ 1 MB, and no harness process (SC-4's acceptance) | CI absolute (`stress`, with SC-8's 150 hibernated) | SC-4, SC-8 |
 | M6 | an idle hidden session's scrollback at the shipped cap | ≤ 50 MB (the spec; measured 20.2 MB, ADR 0026) | release absolute (`bench.mjs`); CI relative (`bench`, SC-16) | SC-16, SC-5 |
@@ -161,7 +161,7 @@ is not yet known: it is the row most likely to break M1 (*At risk* above). A cha
 |---|---|---|---|---|
 | C1 | threads | ≤ 64 at no chats; ≤ 5 per hot chat; none per hibernated chat (measured 49 and 24 at none; 3.9 and 4.0 a chat) | CI absolute (`stress`) | SC-8 |
 | C2 | descriptors | ≤ 64 at no chats; ≤ 4 per hot chat; none per hibernated chat (measured 54 at none, 3 a chat on Ubuntu) | CI absolute (`stress`), on macOS once SC-15 counts them there (V8) | SC-8, SC-15 |
-| C3 | the open-file limit the app and `charterd` raise to | `min(hard, OPEN_MAX)`, and 200 fake chats open in a launchd-started macOS app | CI absolute (`stress`, macOS) | SC-15 |
+| C3 | the open-file limit the app and `purlisd` raise to | `min(hard, OPEN_MAX)`, and 200 fake chats open in a launchd-started macOS app | CI absolute (`stress`, macOS) | SC-15 |
 | C4 | hook processes spawned per second at the busy load | recorded, no budget | evidence only (`stress`) | SC-8 |
 
 **CPU and energy.**
@@ -181,7 +181,7 @@ is not yet known: it is the row most likely to break M1 (*At risk* above). A cha
 | L4 | synchronized-output animation | smooth, ≥ 30 fps (measured 52.4 and 52.0 draws a second against a 60 fps display, ADR 0026) | release absolute (`bench.mjs`) | SC-16 |
 | L5 | a hook call (`charter hook …`), p95, at 50,000 memories and the hot target | ≤ 50 ms. **Not yet measured** at that load | CI absolute, the exception in §1 (`stress`, KN-22's fixture) | KN-22 |
 | L6 | cold start to the first frame, no chats | ≤ 2 s | CI absolute on Linux (`app builds`: median of five ≤ 2 s; at most one past 2.5 s, reported and not gated; V39); release absolute on macOS (#814) | FR-8 |
-| L7 | reattach after the window restarts with `charterd` up: first paint of the focused pane, with the hot target's chats | ≤ 1 s (V7, FD-5's row) | CI relative (`bench`, through the host); release absolute (#814) | FD-5, FD-7 |
+| L7 | reattach after the window restarts with `purlisd` up: first paint of the focused pane, with the hot target's chats | ≤ 1 s (V7, FD-5's row) | CI relative (`bench`, through the host); release absolute (#814) | FD-5, FD-7 |
 | L8 | relaunch with the hot target's chats to put back: interactive | ≤ 3 s (SC-20's row) | CI relative (`bench`); release absolute (#814) | SC-20 |
 
 **The event log, the audit and disk.**
@@ -191,7 +191,7 @@ is not yet known: it is the row most likely to break M1 (*At risk* above). A cha
 | T1 | event log throughput | ≥ 1,000 events a second sustained, with L5 still inside its budget | CI absolute (`stress`) | FD-9 |
 | T2 | the audit's throughput and group commit | 1,000 entries a second, at most 100 ms between commits (ADR 0075 §7) | CI absolute (`stress`) | AU-3 |
 | D1 | bytes written per event-log event, and per audit entry | ≤ 1 KB, and ≤ 512 B (ADR 0075's estimate is about 400 B), before compression | CI absolute (`stress`) | FD-9, AU-3 |
-| D2 | charter's own disk writes over a busy day at the top class: 50 hot chats at 0.3 tool calls a second for 8 hours | ≤ 100 MB compressed, the event log and the audit together | CI absolute, computed from D1 and T1's run (`stress`) | FD-9 |
+| D2 | purlis's own disk writes over a busy day at the top class: 50 hot chats at 0.3 tool calls a second for 8 hours | ≤ 100 MB compressed, the event log and the audit together | CI absolute, computed from D1 and T1's run (`stress`) | FD-9 |
 | D3 | a hibernated chat's scrollback snapshot on disk | ≤ 1 MB, an initial value | CI absolute (`stress`) | SC-4 |
 | D4 | every store that grows is bounded | the audit: 1 year and 2 GiB (V25b). The event log: the retention FD-24 states (ADR 0066), which this record does not set. `.charter/sessions`, traces and reports: SC-7's rule. Indexes: rebuildable (ADR 0079) | CI absolute (`rust`: each store's prune is tested) | FD-24, SC-7 |
 
@@ -202,7 +202,7 @@ when less than 5 GB is) is a guard, not a budget. It is listed in the spec besid
 
 | # | What | Budget | Kind and job | Owner |
 |---|---|---|---|---|
-| K1 | the context tax: tokens charter injects at a chat's start (briefing, agent files, MCP tool schemas, packs), per harness | ≤ 3,000 on the 50,000-memory, 1,000-persona fixture (KN-30's row) | CI absolute (`stress`, on KN-22's fixture) | KN-30 |
+| K1 | the context tax: tokens purlis injects at a chat's start (briefing, agent files, MCP tool schemas, packs), per harness | ≤ 3,000 on the 50,000-memory, 1,000-persona fixture (KN-30's row) | CI absolute (`stress`, on KN-22's fixture) | KN-30 |
 
 **The formula's inputs** (ADR 0082 §3 asked SC-17 for a row naming them).
 
@@ -210,7 +210,7 @@ when less than 5 GB is) is a guard, not a budget. It is listed in the spec besid
 |---|---|---|---|---|
 | F1 | each harness's memory footprint, per process, with its child runs | Claude Code 385 MB (ADR 0082, by `ps` on the operator's machine). Codex and opencode not yet measured | release absolute (#814) | SC-1, #814 |
 | F2 | the scrollback term: one hot chat's scrollback at the shipped cap | 20.2 MB (ADR 0026), the measured value of M6 | release absolute (#814) | #814 |
-| F3 | charter's own base | M1 | release absolute (#814) | #814 |
+| F3 | purlis's own base | M1 | release absolute (#814) | #814 |
 
 When #814 records a new F1 or F3, ADR 0082 §3's table is recomputed from its formula with the
 largest measured F1, as that record says. These rows have values, not budgets: they are what
@@ -271,8 +271,8 @@ release measurement confirm it (D-0082b).
 
 **Stores.** This record adds no store. The relative baselines are github-action-benchmark's data
 on this repo's `benchmarks` branch, written by CI on pushes to `main`: tier **None**, a branch of
-the repo and not a store charter writes, as `stress.jsonl` is a CI artifact (ADR 0082 §5). The *Last
-measured* column is text in `docs/spec.md`, a document of this repo and not a store charter
+the repo and not a store purlis writes, as `stress.jsonl` is a CI artifact (ADR 0082 §5). The *Last
+measured* column is text in `docs/spec.md`, a document of this repo and not a store purlis
 writes.
 
 ## `docs/spec.md`, amended
@@ -309,7 +309,7 @@ The code does not change with this record.
   run finds the absolute miss, a release later at worst.
 - **A noisy row does not gate.** A row whose first five runs spread more than about 7% is evidence
   until its owner makes it steadier.
-- **A smaller machine's timings are never measured by charter.** An 8 GB laptop is held to the
+- **A smaller machine's timings are never measured by purlis.** An 8 GB laptop is held to the
   same limits at 5 hot chats by arithmetic and by reports.
 - **`stress` and `bench` cost runner minutes on every pull request** once required: about sixteen
   runner-minutes for `stress` today (its header), and `bench`'s cost is SC-16's to measure.
@@ -392,7 +392,7 @@ None. Every point is inside V8, Q1, V7, ADR 0082 and the rows of the tickets thi
   should gate.
 - **A flood row** (ten panes printing at full speed, a keystroke in an eleventh), which SC-12's
   measurement decides.
-- **`charter doctor --perf`**, showing these figures to the operator on their own machine, which is
+- **`purlis doctor --perf`**, showing these figures to the operator on their own machine, which is
   an OB ticket's.
 
 ## ADR 0086, amended (2026-10-02)
@@ -474,7 +474,7 @@ the macOS runner took 8–12 s for a first ⌘P find (budget 3 s; 0.43 s for the
 session of the same run) and 44–98 ms for its slowest ⌘P keystroke in the runs read. Writing the repo took 5–7 times as
 long as on Ubuntu, and the whole-repo scan took 3.5–13 times as long. The operator's machine does
 the same first find in 0.19 s warm and 1.7 s cold. Those are the runner's file system and its three
-cores. They are not charter's cost, and §1 already keeps a single-sample timing like "the worst
+cores. They are not purlis's cost, and §1 already keeps a single-sample timing like "the worst
 keystroke" out of CI's absolute rows.
 
 **What changes:**

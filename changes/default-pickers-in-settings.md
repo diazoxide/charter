@@ -5,7 +5,7 @@
   harness* and *Default profile*, are pickers over the project's personas, workspaces and harness
   profiles instead of free text. Each has a *New…* entry: New persona… and New workspace… open the
   usual dialog and pick what they made, and New profile… opens `charter.local.toml` under Edit as
-  TOML. A value set by hand that names nothing is shown as such, with charter's sentence about it
+  TOML. A value set by hand that names nothing is shown as such, with purlis's sentence about it
   beside the setting, until another is picked. A save that would make `[persona] default` name no
   persona is refused, as one for `[harness] default` already was; a default workspace may still be
   declared before it is made (ST-1, #1225).

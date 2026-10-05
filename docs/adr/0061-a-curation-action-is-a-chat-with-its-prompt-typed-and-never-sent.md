@@ -3,8 +3,8 @@
 **Accepted 2026-09-26**, by the operator's rulings on SI-2 (smart IDE).
 
 Keeping a plane healthy is mostly the same few conversations: retire a workspace without losing
-what it learned, compact a persona's memory, fold a lesson into a charter. Each one starts with
-the operator typing the same paragraph into a new chat. The operator ruled that charter offers
+what it learned, compact a persona's memory, fold a lesson into a purlis. Each one starts with
+the operator typing the same paragraph into a new chat. The operator ruled that purlis offers
 those conversations itself, on the thing they are about, and that personas can add their own.
 
 ## The decision
@@ -24,11 +24,11 @@ A **subject** is a workspace, a persona or the plane. `resolve(root, subject)` a
 list, each item with its id, label, source, the persona that runs it, the directory it runs in
 and its rendered prompt, plus a warning for every action it left out.
 
-1. **charter's own**, always first and in this order. They ship inside the binary, are never
+1. **purlis's own**, always first and in this order. They ship inside the binary, are never
    files, and their ids are `charter/<id>`:
    - `charter/safe-remove`, "Safe remove", on workspaces and personas: audit, promote durable
-     learnings to shared or persona memory or the plane's docs, then run `charter workspace
-     remove` or `charter persona remove`, whose guards still apply.
+     learnings to shared or persona memory or the plane's docs, then run `purlis workspace
+     remove` or `purlis persona remove`, whose guards still apply.
    - `charter/compact`, "Compact & improve", on workspaces and personas: the existing optimize
      and dedupe reports, pruning only with the operator's yes, then durable lessons folded into
      `workspace.md` or `persona.md`.
@@ -40,11 +40,11 @@ and its rendered prompt, plus a warning for every action it left out.
    id is `<persona>/<id>`, and **the declaring persona runs it**.
 
 **A built-in cannot be overridden or impersonated.** A persona's file whose id or label
-(case-insensitively) is a built-in's is an error. `charter persona lint` reports it, and
+(case-insensitively) is a built-in's is an error. `purlis persona lint` reports it, and
 `resolve` leaves it out and says so in a warning naming the file. Nothing is ever dropped
 silently: every action with an error is named in the warnings of any list it might have been
 meant for. One function, `curation::parse`, decides what is wrong with a file, and `resolve`,
-`lint` and `charter persona curation add` all ask it.
+`lint` and `purlis persona curation add` all ask it.
 
 ### The template is data
 
@@ -54,14 +54,14 @@ and no environment variable, vault or secret is read. Any other `{word}` is a li
 than text, so a typo, or a `${VAR}` copied from a shell script, never reaches a chat looking as
 if it had been filled in. Braces around anything that is not a word (`{"a": 1}`) stay text.
 
-### Who runs charter's own
+### Who runs purlis's own
 
 For a persona subject, **the persona being curated runs it**: it curates itself, with its own
-memory and charter in front of it. For a workspace or the plane, charter has no persona of its
-own to name. `steward` is this project's plane's front door, not a charter concept, and a plane
+memory and purlis in front of it. For a workspace or the plane, purlis has no persona of its
+own to name. `steward` is this project's plane's front door, not a purlis concept, and a plane
 may have no persona at all. So the runner is **the plane's default persona**: `[persona]
 default` in `charter.toml`, else the legacy `personas/.default`, each only when it names a
-persona that exists (`active::plane_default_persona`, the same answer `charter persona default`
+persona that exists (`active::plane_default_persona`, the same answer `purlis persona default`
 and the persona ladder give). With neither, the chat runs as **no persona**. This fails toward no
 change: a default naming a persona that was removed resolves to no persona, never to a guess.
 
@@ -78,46 +78,46 @@ away. The other built-ins take the default.
 
 ### The command line
 
-- `charter persona curation list [<persona>]`, `add <persona> <id> --label … --on … [--runs-in
+- `purlis persona curation list [<persona>]`, `add <persona> <id> --label … --on … [--runs-in
   …]` (the prompt on standard input) and `remove <persona> <id>`. These are persona verbs
   because the files belong to the persona, beside `persona create` and `persona remove`. `add`
   writes only a file that reads back with no error, and never over an existing one: to change
   one, remove it and add it again, which keeps a hand-edited file safe from a typo.
-- `charter curation show <subject>`, with `workspace:<name>`, `persona:<name>` or `plane`.
-  What a subject is offered is charter's own and every persona's together, so it belongs to no
+- `purlis curation show <subject>`, with `workspace:<name>`, `persona:<name>` or `plane`.
+  What a subject is offered is purlis's own and every persona's together, so it belongs to no
   persona and gets its own noun. The subject is positional because it is the one thing the
-  command is about, like `charter persona show <name>`. `curation` joins charter's core words,
+  command is about, like `purlis persona show <name>`. `curation` joins purlis's core words,
   so neither an extension nor a harness profile can take it.
 
 ### The skills the prompts name
 
-Each built-in's prompt is plain language that names a skill of charter's plugin and never uses
+Each built-in's prompt is plain language that names a skill of purlis's plugin and never uses
 a harness's `/slash` syntax: `safe-remove`, `compact` and `add-curation-action`, in
 `app/src-tauri/plugin/skills/`. Their content is CLI commands, so any harness can follow it. A
 test holds that every built-in names a skill the plugin ships.
 
 **They reach Claude Code only, exactly as the six existing skills do.** Claude Code loads the
 bundled plugin with `--plugin-dir` in an app chat and the installed copy outside it (ADR 0057),
-and both carry `skills/`. Codex and opencode get hooks from charter and no skills: the opencode
+and both carry `skills/`. Codex and opencode get hooks from purlis and no skills: the opencode
 shim carries only hooks (ADR 0058), and Codex gets `-c hooks.*` flags (ADR 0050 records why
-charter does not install into Codex's plugin cache). That gap is not new and this ADR does not
+purlis does not install into Codex's plugin cache). That gap is not new and this ADR does not
 close it. It is why each prompt says what to do in a sentence as well as naming the skill: a
 Codex or opencode chat can follow the prompt, the CLI commands it names and their `--help`, with
-no skill at all. Closing the gap is one adapter per harness (charter is harness-agnostic), and
-belongs with whichever change teaches those harnesses charter's skills.
+no skill at all. Closing the gap is one adapter per harness (purlis is harness-agnostic), and
+belongs with whichever change teaches those harnesses purlis's skills.
 
 **Amended 2026-09-26: the gap is closed** by [ADR 0063](0063-every-harness-a-chat-runs-on-is-handed-charters-skills-by-its-own-route.md).
-An opencode chat the app starts discovers charter's skills as its own, through the shim, and a
+An opencode chat the app starts discovers purlis's skills as its own, through the shim, and a
 Codex chat is briefed on them at `SessionStart`, with the path to each `SKILL.md`. ~~The prompts
 still say what to do in a sentence as well, because a chat outside the app, or a Codex chat whose
-hooks are not trusted yet, has no skills from charter.~~ Amended 2026-09-27 (Q28, below): each
+hooks are not trusted yet, has no skills from purlis.~~ Amended 2026-09-27 (Q28, below): each
 built-in prompt is one line that names its skill, and the skill alone holds the steps.
 
 ## The app's side
 
 - **Where it is offered.** A "Curate ▸" submenu on a workspace's, a persona's and the plane
   root tab's right-click menu (the plane root tab is the plane subject's, SI-1), and one palette
-  row per action, `Curate <subject>: <label>`. charter's own first, then a
+  row per action, `Curate <subject>: <label>`. purlis's own first, then a
   group per declaring persona, then each action the core left out as a row that cannot run, with
   the core's sentence as its reason.
 - **What opens.** The window names the subject and the action's id and nothing else;
@@ -126,7 +126,7 @@ built-in prompt is one line that names its skill, and the skill alone holds the 
   the row a new chat's picker starts on), as the action's runner, in its directory, and its tab
   says `<label> · <subject>`. It is filed under the subject workspace when it runs in that
   workspace's directory, and on the plane root's tab otherwise; `start::ready` hands a chat at
-  the root `$CHARTER_PLANE_ROOT_SESSION=1` as it does any other (SI-1).
+  the root `$PURLIS_PLANE_ROOT_SESSION=1` as it does any other (SI-1).
 - **When the prompt is typed.** The prompt is held in the app per chat, not in the window, until
   the chat's first `SessionStart` hook report that began a session. A report of a prompt, a
   turn's end or the chat's own end before that drops it; so does the chat ending or being
@@ -166,7 +166,7 @@ built-in prompt is one line that names its skill, and the skill alone holds the 
 - **Sending the prompt, or an opt-in to send it.** The operator ruled no opt-out of review.
 - **Built-ins as files a plane can edit.** Then a plane could rewrite what "Safe remove" does,
   and the menu would say "Safe remove" over it.
-- **`steward` as the built-ins' runner.** It is one plane's persona name, not charter's.
+- **`steward` as the built-ins' runner.** It is one plane's persona name, not purlis's.
 - **YAML frontmatter.** `persona.md` has line-based frontmatter, and a second parser for the
   same shape of file would be a second answer to what a key means.
 
@@ -177,20 +177,20 @@ Two gaps this decision left open, closed the day it was accepted.
 **A persona named `charter` could pass its own action off as a built-in.** Its ids read
 `charter/<id>`, the built-ins' namespace, so a file with an id no built-in uses looked like one
 in every menu. The id and label checks above cannot see it, because nothing about the file
-clashes; the persona's name does. So `charter` is a reserved persona name, beside the leading
-`_` charter already keeps for its own namespaces (`personas::RESERVED`, one function,
+clashes; the persona's name does. So `purlis` is a reserved persona name, beside the leading
+`_` purlis already keeps for its own namespaces (`personas::RESERVED`, one function,
 `reserved_refusal`, asked by all three readers):
 
-- `charter persona create charter` is refused with a sentence saying why.
+- `purlis persona create purlis` is refused with a sentence saying why.
 - A persona that already has the name is not made unusable: it still loads, runs and can be
   removed, because the reservation is not part of the name grammar every command checks
-  (`shape_refusal`). `charter persona lint` reports it as an error.
+  (`shape_refusal`). `purlis persona lint` reports it as an error.
 - `curation::parse` refuses every file under `personas/charter/curation/`, so `resolve` leaves
-  each out with the usual warning naming the file, and `charter persona curation add charter`
+  each out with the usual warning naming the file, and `purlis persona curation add purlis`
   writes nothing.
 
 The comparison ignores case, though the persona alphabet is lowercase and already refuses
-`Charter`.
+`purlis`.
 
 **A literal `{word}` could not be typed.** Now `{{` is a literal `{` and `}}` a literal `}`, the
 convention of Rust's `format!` and Python's `str.format`, read in the same single pass as the
@@ -229,7 +229,7 @@ first turn and so means something was already sent. Claude Code's path is unchan
 A prompt Codex would draw as a placeholder is not typed: codex-cli 0.147.0 draws a paste over
 1,000 characters as `[Pasted Content N chars]`, which the operator could not read before sending
 (`Harness::longest_paste_drawn_whole`). `curate` refuses such an action before anything starts,
-with the length in its sentence. charter's own three are well under it.
+with the length in its sentence. purlis's own three are well under it.
 
 ### Why this is within "nothing parses harness output to decide anything"
 
@@ -246,7 +246,7 @@ quiet looks like an input that is ready — and the cost of that is below.
 
 codex-cli 0.147.0 and opencode 1.18.32, each started exactly as the app starts it (the same
 `-c hooks.*` flags, and for opencode the same `OPENCODE_CONFIG_CONTENT` shim and `OPENCODE_PURE=0`)
-in charter's own `Session` and terminal engine at 160×50, with a scratch `HOME`, `CODEX_HOME` and
+in purlis's own `Session` and terminal engine at 160×50, with a scratch `HOME`, `CODEX_HOME` and
 `XDG_*` directories and a stand-in model server, so nothing reached a real model and neither the
 operator's `~/.codex` nor `~/.config/opencode` was touched (listed before and after). A hook
 logger stood in for `charter hook`. A control run that pressed Enter after the paste showed the
@@ -259,7 +259,7 @@ prompt reaching the stand-in and `userpromptsubmit` in the log, so both detector
 | longest silence after raw, before the first screen is whole | 0.16–0.18 s idle, 0.3 s with every core busy, 0.67 s at load 40 | 0.83–0.85 s idle, 1.25–1.42 s with every core busy, over 8 s at load 50 |
 | a paste during that silence | landed whole (pasted 80 ms after raw, mid-draw) | **lost**: the box is drawn, then takes no keys until its boot ends |
 | raw + 1 s quiet, a two-line prompt | 6 of 6: both lines in the input, one paste, nothing sent | — |
-| raw + 1 s quiet, charter's Safe remove prompt | 5 of 5 whole in the input, nothing sent | — |
+| raw + 1 s quiet, purlis's Safe remove prompt | 5 of 5 whole in the input, nothing sent | — |
 | raw + 2 s or 2.5 s quiet | 27 of 27 | 20 of 20 up to load 44; **6 of 10 lost** at load 50, the boot outlasting the quiet period |
 
 "Nothing sent" is no request at the stand-in and no `userpromptsubmit` in the hook log, for
@@ -268,10 +268,10 @@ did not answer it.
 
 ### What this costs
 
-- **A quiet dialog swallows the prompt.** Codex asks once to review charter's hooks ("Hooks need
+- **A quiet dialog swallows the prompt.** Codex asks once to review purlis's hooks ("Hooks need
   review") the first time it sees them. That screen is raw and quiet, the paste lands on it and
   is discarded — nothing is sent and nothing is chosen, measured — and the chat opens with an
-  empty input once the operator answers. charter cannot tell, because telling would mean
+  empty input once the operator answers. purlis cannot tell, because telling would mean
   reading the screen. The folder-trust screen animates, is never quiet, and is never typed into:
   the prompt is let go of at 15 s.
 - ~~**A prompt typed while the operator types.** Nothing drops the prompt when the operator
@@ -285,7 +285,7 @@ opencode draws its input box, goes raw, and then boots silently before the box t
 silence is its own work (plugins, the project, the file watcher; its log shows it), so it grows
 with load: 0.83 s idle, 1.4 s with every core busy, and more than 8 s while this machine ran
 other builds at load 50 — and a paste in it vanished, typed nowhere, with nothing to say so. The
-silence has no bound charter can know: a quiet period over the 8 s measured would keep every
+silence has no bound purlis can know: a quiet period over the 8 s measured would keep every
 opencode curation chat empty for most of ten seconds and still lose a prompt on a busier
 machine, and one short enough to wait for lost six of ten at load 50. So opencode as the default profile
 is still refused, now with that reason. Two findings for whoever gives it a moment:
@@ -318,29 +318,29 @@ started typing.
 
 ### Q28: one line, and never a placeholder
 
-**charter's own prompts are one plain line** that names the skill and the subject, and the skill
+**purlis's own prompts are one plain line** that names the skill and the subject, and the skill
 holds the procedure:
 
-- `charter/safe-remove`: *Use charter's safe-remove skill to remove the {subject.kind}
+- `charter/safe-remove`: *Use purlis's safe-remove skill to remove the {subject.kind}
   {subject.name}.*
-- `charter/compact`: *Use charter's compact skill to compact and improve the {subject.kind}
+- `charter/compact`: *Use purlis's compact skill to compact and improve the {subject.kind}
   {subject.name}.*
-- `charter/add-curation-action`: *Use charter's add-curation-action skill to add a curation
+- `charter/add-curation-action`: *Use purlis's add-curation-action skill to add a curation
   action to the persona {subject.name}.*
 
 What the old paragraphs said beyond the skill is now in the skill: every step, the guards,
 `--force` belonging to the operator, and showing the operator what was promoted, what is left
 behind, and what `curation list` says afterwards. The skill is named in words, never as a
-`/slash` command, so the line works in every harness that reaches charter's skills (ADR 0063):
+`/slash` command, so the line works in every harness that reaches purlis's skills (ADR 0063):
 Claude Code through the plugin, opencode through the shim's `skills.paths`, Codex through the
 `SessionStart` briefing. A Codex chat whose hooks are not trusted yet has no briefing, and so
-has no skills from charter; but such a chat shows Codex's hooks-review dialog first, and that
+has no skills from purlis; but such a chat shows Codex's hooks-review dialog first, and that
 dialog already swallows the paste (the amendment above), so the one line loses nothing there.
 
 **Each harness's limit is measured and lives in one place**:
 `Harness::longest_paste_drawn_whole()` returns the most lines and the most characters drawn
 whole, and `Harness::why_drawn_as_a_placeholder(text)` is the one judgment that `curate` and
-`charter persona lint` both call, on the text inside the paste (`curation::pasted`).
+`purlis persona lint` both call, on the text inside the paste (`curation::pasted`).
 
 | | drawn whole | placeholder |
 |---|---|---|
@@ -349,7 +349,7 @@ whole, and `Harness::why_drawn_as_a_placeholder(text)` is the one judgment that 
 | opencode 1.18.32 | up to 150 characters and up to 2 lines | `[Pasted ~N lines]` at 3 lines or 151 characters |
 
 Measured 2026-09-27 on the operator's machine by bracketed pastes into each harness started in
-charter's own `Session` and terminal engine at 160×50, reading the input box and never sending:
+purlis's own `Session` and terminal engine at 160×50, reading the input box and never sending:
 Claude Code with the real `HOME` (it needs its login to draw the input) in a scratch directory,
 trusted once through its own dialog, with `--settings '{"hooks":{}}'`; Codex with a scratch
 `CODEX_HOME` and a stand-in model. For both, a line feed counts among the characters (three lines
@@ -364,7 +364,7 @@ Claude Code and in Codex, and nothing was sent.
 
 - **`curate` refuses** a prompt the harness it resolved would draw as a placeholder, before
   anything starts, in a sentence naming the harness, its limit and the prompt's size.
-- **`charter persona lint` warns** about a persona's action whose prompt, rendered for a subject
+- **`purlis persona lint` warns** about a persona's action whose prompt, rendered for a subject
   named `LONG_SUBJECT_NAME` (43 characters) on each kind in its `on`, would be drawn as a
   placeholder by any harness a curation chat can be typed into (`Harness::ready_to_type`), and
   names which. A warning, not an error: the file is well-formed, and on another harness, or with

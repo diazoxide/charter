@@ -12,7 +12,7 @@ said three different things about how that happens:
 - **charter-app never honoured it.** `memory.rs` warns that "this version of charter does not
   commit memory yet". The tool hook still tells agents that `push` means "committed and pushed
   immediately". `workspace _autosave` is an empty stub.
-- **`charter save`** stages the whole tree, commits it, and pushes `HEAD` to whatever branch is
+- **`purlis save`** stages the whole tree, commits it, and pushes `HEAD` to whatever branch is
   checked out, falling back to a `charter/<sha>` branch when a protected branch refuses the push.
 
 Nothing configured the branch. No PR was ever opened. Nothing in the window said what was
@@ -27,7 +27,7 @@ configurable"*.
 **One mode, a ladder.** `[plane] mode` is one of five values. Each value includes everything
 the one before it does.
 
-- `off`: charter never commits.
+- `off`: purlis never commits.
 - `commit`: local commits only.
 - `push`: commit, then push to `branch`.
 - `pr`: commit, push to a save branch, then open or update a PR against `branch`.
@@ -47,7 +47,7 @@ deprecated alias:
 | `commit` | `commit` |
 | `push` | `push` |
 
-`charter doctor` warns about the alias. When both keys are present, `[plane] mode` wins.
+`purlis doctor` warns about the alias. When both keys are present, `[plane] mode` wins.
 
 **Every key can be set in either file, and `charter.local.toml` wins key by key.** This is ADR
 0048's overlay, extended to `[plane]` and `[repos.<name>]`. Every place that shows a value
@@ -67,15 +67,15 @@ and `autosave = false`.
 > - the title bar's save saves **the plane only**;
 > - *Save all* is in the Saving tab alone, behind a confirmation that names each repo, its
 >   branch, how many files, and where its save goes;
-> - a repo nobody configured is **`off`**: charter never commits, pushes or opens a PR for it
+> - a repo nobody configured is **`off`**: purlis never commits, pushes or opens a PR for it
 >   until `[repos.<name>] mode` says how;
 > - each repo row says where its own Save goes before it is pressed.
 >
 > **Amended 2026-09-26, by the operator (ADR 0060, D4).** `off` governs *saves*. It does not
-> cover `charter change push`, which pushes the branches of a cross-repo change's members and
+> cover `purlis change push`, which pushes the branches of a cross-repo change's members and
 > opens or updates their requests. That verb is run by hand over repos someone named in the
 > change, it commits nothing, and it prints each repo, branch and destination before it pushes.
-> "Charter never … opens a PR for it" holds for every save, and not for that verb.
+> "purlis never … opens a PR for it" holds for every save, and not for that verb.
 
 - **Why it is keyed by repo, not by workspace:** a repo's rules belong to its remote, not to
   whichever workspace it was cloned into.
@@ -83,7 +83,7 @@ and `autosave = false`.
   branch is theirs. Even a commit on it is an action nobody asked for, so the default does
   nothing at all.
 
-**One save function.** `charter-core` saves. The window's buttons, auto-save and `charter save`
+**One save function.** `charter-core` saves. The window's buttons, auto-save and `purlis save`
 all call it, so the CLI follows `mode` too. What a save does:
 
 - **Stages:** the whole tree (`git add -A`). `.gitignore` is the only way to leave something out.
@@ -91,7 +91,7 @@ all call it, so the CLI follows `mode` too. What a save does:
   because the plane's credential-assignment rule refuses ordinary code: it refuses a staged file
   whose name is a credential's (`.env`, an SSH private key, `*.pem`, `credentials.json`, a
   `.npmrc` holding a token, and the like) and any staged text holding a private key block or a
-  token with a forge's own prefix (charter-app#299).
+  token with a forge's own prefix (purlis#299).
   **Amended 2026-09-29:** the plane's scan reads every staged file, not only memory and refs,
   with the credential rules plus the forge-prefix token rule, and names each hit by path, line
   and kind, never by value. A file outside memory and refs that git calls binary (a NUL in its
@@ -101,7 +101,7 @@ all call it, so the CLI follows `mode` too. What a save does:
   way to name a credential in a plane file.
   A commit an agent makes itself, in any repository, is scanned by the git hooks a chat's
   environment arms ([ADR 0074](0074-a-chats-git-runs-charters-hooks-through-its-environment.md)).
-- **Commit message:** generated from what changed, grouped as `charter save` already prints it.
+- **Commit message:** generated from what changed, grouped as `purlis save` already prints it.
   A manual save may replace it.
 - **Signing:** `sign`, default `false`. A push refused for an unsigned commit tells the operator
   to set it.
@@ -113,7 +113,7 @@ Commits an agent makes with plain git are fine: the next save pushes them.
 - **The plane in `pr` and `pr-merge`:** one rolling save branch per machine
   (`save_branch`, default `charter/save/<host>`) and one open PR, updated by every save. It
   replaces `charter/<sha>`.
-- **A squash merge:** once the PR has merged, charter fetches `branch`. If the fetched tree
+- **A squash merge:** once the PR has merged, purlis fetches `branch`. If the fetched tree
   matches ours on every path the PR touched, the local branch moves to the remote one, keeping
   newer uncommitted work on top. Otherwise the plane is **blocked**.
 - **A repo:** a save commits on the branch the repo is on, and `pr` opens a PR from that
@@ -129,7 +129,7 @@ Commits an agent makes with plain git are fine: the next save pushes them.
   then merge-commit, then squash. An agent never does, which `floorguard` already enforces.
 
   > **Amended 2026-10-02 (ADR 0060 D3, ruling Q16, #472).** A save only ever *requests*
-  > auto-merge. `charter change land` is the one command that merges: one member of a
+  > auto-merge. `purlis change land` is the one command that merges: one member of a
   > cross-repo change, attended only (`floorguard` refuses it unattended, as it refuses
   > `gh pr merge`), at the head commit its checks passed on, directly or through the target
   > branch's merge queue or merge train. It never requests auto-merge.
@@ -147,9 +147,9 @@ Commits an agent makes with plain git are fine: the next save pushes them.
 - **Incoming changes:** it fetches every five minutes and on window focus, and fast-forwards a
   clean tree. With auto-save off, incoming changes are shown and not pulled.
 
-**Outside the app, the plane is saved only through `charter save`** (#375). A chat the app did
+**Outside the app, the plane is saved only through `purlis save`** (#375). A chat the app did
 not start (a terminal `claude` or `codex`) has no auto-save and no incoming loop, and no
-daemon stands in for them. `charter save --pull` runs the incoming loop's fetch and
+daemon stands in for them. `purlis save --pull` runs the incoming loop's fetch and
 fast-forward first, through the same core function, so one command does both from a terminal.
 The fast-forward waits on the same conditions. If the tree has unsaved work, what came in is
 left where it is and the save goes ahead. If the tree has conflicts, the command refuses and
@@ -165,7 +165,7 @@ Defaults:
 
 A plane with no `[plane] mode` whose `share` is absent or `local` is asked once in the Saving
 view before pushing starts, and the answer is written as `[plane] mode`. That covers every plane
-`charter init` ever made, since it always wrote `share = "local"`. Reading that as `off` would
+`purlis init` ever made, since it always wrote `share = "local"`. Reading that as `off` would
 have kept auto-save off on every existing plane. A new plane starts at `push`.
 
 **Conflicts.** The plane format gains a `.gitattributes` with `merge=union` for the files that
@@ -178,7 +178,7 @@ and the `MEMORY.md` indexes. Any other conflict makes the plane or repo **blocke
 
 The same holds for a tree git has stopped part-way through something (#433): a merge, rebase,
 cherry-pick, revert or bisect left unfinished, or files git still calls unmerged. Every save
-refuses it before anything is staged — `charter save`, the Save button, auto-save and repo
+refuses it before anything is staged — `purlis save`, the Save button, auto-save and repo
 saves alike — because `git add -A` would stage the conflict markers as the resolution. The
 refusal names the files and the git command that finishes or aborts the operation. The block
 is read from the tree as it is, never from a stored line, so finishing or aborting it by hand
@@ -228,7 +228,7 @@ The workspace settings page gets only *Live*.
 
 - **The contradiction is fixed:** the `memory.rs` warning and the hook text that promises `push`
   both change to describe `mode`.
-- **`charter save` changes contract.** It reads `mode`, `branch` and `save_branch`, so its
+- **`purlis save` changes contract.** It reads `mode`, `branch` and `save_branch`, so its
   recorded answers move on purpose (ADR 0046).
 - **The forge adapters gain their first write that isn't a push:** creating and updating a PR or
   MR, and requesting auto-merge.

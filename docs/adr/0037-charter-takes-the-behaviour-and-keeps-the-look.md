@@ -1,6 +1,6 @@
-# charter takes the behaviour and keeps the look
+# purlis takes the behaviour and keeps the look
 
-The operator opened charter-app's start-chat dialog on 2026-09-21 and found the harness picker
+The operator opened purlis's start-chat dialog on 2026-09-21 and found the harness picker
 reading `claudeclaudeclaudebuilt-indefault`. He proposed integrating **MUI**, and cited the rule
 that is priority 2 of `CLAUDE.md` in both repos:
 
@@ -9,7 +9,7 @@ that is priority 2 of `CLAUDE.md` in both repos:
 
 He is right about the rule and right that the app is breaking it. **What was argued against, and
 what he then decided against, is Material specifically.** The decision is **headless primitives
-with charter's own visual language**: charter takes the standard solution for *behaviour* —
+with purlis's own visual language**: purlis takes the standard solution for *behaviour* —
 label association, focus containment, roving tabindex, menus, keyboard navigation — and keeps
 hand-written CSS for *appearance*.
 
@@ -42,7 +42,7 @@ accessible name is that same run. `claude` + `claude` + `claude` + `built-in` + 
 would. MUI's `FormControlLabel` would have shipped the spacing; so does one flex rule. The row
 was not built out of the wrong parts — it was built and then never dressed. **The fix for it is
 a visual language written down and applied, which is exactly the half this decision keeps in
-charter's own hands.** Anything that names this ADR as the fix for the start-chat picker is citing
+purlis's own hands.** Anything that names this ADR as the fix for the start-chat picker is citing
 the wrong record.
 
 ## What IS missing, measured
@@ -77,7 +77,7 @@ is taken; none of these is an argument for building anything, only for which sta
 **1. Material is a phone-first design language, and this is not a phone.** The reference the
 operator gave for this whole product is **Zed**, by name —
 [ADR 0033](0033-a-plane-is-a-project-and-a-window-may-hold-several.md) records the same reference
-deciding the project tab. charter-app is a terminal emulator with fifty sessions in it, a
+deciding the project tab. purlis is a terminal emulator with fifty sessions in it, a
 three-deep tablist stack, a repo strip and a footer whose own ADR budgets it in *columns* —
 [ADR 0019](https://github.com/diazoxide/charter-plane/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/docs/adr/0019-the-frame-owns-the-surface.md)'s `slots._bottom` drops whole fields when it runs out of
 width. Material's density, its touch targets, its elevation and its type scale are all correct for
@@ -88,7 +88,7 @@ is *not* meant to be used buys none of the robustness it was taken for.
 **2. The cold-start budget has no slack to spend.**
 [ADR 0026](0026-the-apps-stack-is-locked-by-what-m0-measured.md) locked the stack against measured
 limits and records the one that is missed: cold start is **2 s** in the spec, met on macOS at p50
-370 ms, and **missed on Linux at 25 s** where the desktop portal cannot start (charter-app#24,
+370 ms, and **missed on Linux at 25 s** where the desktop portal cannot start (purlis#24,
 accepted and recorded as an amendment to 0026).
 
 This argument must be stated honestly or it will be knocked down in review, so: **the 25 s is a
@@ -99,7 +99,7 @@ is also the precedent for the shape of that reasoning: it kept `@xterm/addon-web
 shipped build never loads — only because it buys a re-measurable arm. A dependency's weight is
 paid for by what it is measured to buy.
 
-**3. Runtime CSS-in-JS would put a measured number back on the table.** charter-app#133
+**3. Runtime CSS-in-JS would put a measured number back on the table.** purlis#133
 measured the workspace strip's per-workspace counts at **0.022 ms** for ten workspaces and fifty
 chats — one eight-hundredth of a 16.7 ms frame — and the conclusion drawn was *not* to add a
 `useMemo`, because there was nothing to save. Material's styling engine computes styles during
@@ -113,7 +113,7 @@ only against the spec's limits*, and no limit is at stake here. Argument 1 decid
 
 ## What is accepted
 
-**Behaviour comes from a headless primitive library. Appearance is charter's own CSS.**
+**Behaviour comes from a headless primitive library. Appearance is purlis's own CSS.**
 
 The class of choice is what this record decides: an unstyled, accessible primitive set —
 **Radix UI or Base UI** — that ships behaviour and no design language. Which of the two is the
@@ -132,13 +132,13 @@ What is taken, concretely, and each of these is an item from the measured list a
   exist yet and must not be the fourth hand-written keyboard list.
 - **Label association** where a control is not already wrapped by its label.
 
-What is not taken: colour, type, spacing, density, elevation, motion, iconography. charter's
+What is not taken: colour, type, spacing, density, elevation, motion, iconography. purlis's
 look is hand-written CSS and stays that way.
 
 **Amended, 2026-09-22 (see the bottom of this record): a component copied into the repo is not
 the "library between you and the primitive" this rule refuses.** What is written above about
-where the look comes from is unchanged; what changes is that charter's own copy of a component's
-source is allowed to sit on top of a primitive, because it is charter's code and not a
+where the look comes from is unchanged; what changes is that purlis's own copy of a component's
+source is allowed to sit on top of a primitive, because it is purlis's code and not a
 dependency.
 
 ## The trap this decision walks towards, named
@@ -163,7 +163,7 @@ copies, this ADR bought nothing.
   modal and three tablists that no keyboard can walk, and it is the choice that priority 2
   forbids in as many words.
 - **A headless library for the look as well** — an unstyled component set plus a token system
-  imported from it. Rejected because the visual language is the part that is charter's, and the
+  imported from it. Rejected because the visual language is the part that is purlis's, and the
   reference is Zed rather than anything shipped in a package.
 - **Nothing, until an accessibility audit says what to buy.** The list above *is* the audit, it
   was read off the tree, and every item on it is a promise the markup already makes.
@@ -179,8 +179,8 @@ copies, this ADR bought nothing.
   the way 0026 measured the renderer arms. **If the delta is large enough to be felt at cold
   start on the platform that is already 12× over, argument 2 stops being precautionary and this
   decision is reopened.**
-- **Two systems now describe one control**: the primitive's behaviour and charter's CSS. A
-  primitive that renders an element charter has no rule for produces exactly the defect that
+- **Two systems now describe one control**: the primitive's behaviour and purlis's CSS. A
+  primitive that renders an element purlis has no rule for produces exactly the defect that
   started this — an unstyled run of text. The visual language has to be written down somewhere a
   new control can be built from, and it is not written down today.
 - **The bug that prompted this record is not fixed by this record.** It is a missing stylesheet,
@@ -195,21 +195,21 @@ copies, this ADR bought nothing.
 
 ## Amendment, 2026-09-22: a copied-in component is your own code, and the no-wrapper rule was never about that
 
-The agent that built the theme system (charter-app#144) hit this record's rule against the thing
+The agent that built the theme system (purlis#144) hit this record's rule against the thing
 the operator now wants, and left the conflict on the table rather than deciding it. The operator
-decided it on 2026-09-22: **shadcn/ui components may be copied into charter-app**, and this record
+decided it on 2026-09-22: **shadcn/ui components may be copied into purlis**, and this record
 is amended to say what its rule actually meant.
 
 **First, where the rule that conflicts is written, because it is not here.** The words are
-charter-app's, in `docs/ui-primitives.md`:
+purlis's, in `docs/ui-primitives.md`:
 
 > **Do not write a wrapper layer around them.** No `<Modal>`, no `<Field>`, no house component
-> library. The primitive is the component; charter's look is CSS on it. A wrapper is the custom
+> library. The primitive is the component; purlis's look is CSS on it. A wrapper is the custom
 > tooling this repo's first rule exists to prevent, and it is how a primitives migration turns
 > back into hand-rolled markup with extra steps.
 
 This record never says "wrapper". What it says is that behaviour comes from a headless primitive
-library and appearance is charter's own CSS, and it rejects *"a headless library for the look as
+library and appearance is purlis's own CSS, and it rejects *"a headless library for the look as
 well — an unstyled component set plus a token system imported from it"*. The no-wrapper rule is
 the code-side expression of that, written where an implementer reads it, and the two are read
 together as one rule. **Which is why the amendment belongs here**: a code-side file cannot loosen
@@ -230,7 +230,7 @@ without touching your diff. Every argument above — *Why not Material*, argumen
 is an argument against *that*. None of it is an argument against source code sitting in
 `app/src/`.
 
-**A copied-in component is charter's own code in charter's own repo, editable line by line.** It
+**A copied-in component is purlis's own code in purlis's own repo, editable line by line.** It
 arrives in a diff a reviewer reads, it changes only when somebody changes it, its props are on the
 page, and it has no upstream to fight because it has no upstream at all. Calling it and a
 dependency by one name is the conflation this record made, and it is the conflation this
@@ -259,19 +259,19 @@ cannot read.** Copied-in source is neither, and it is allowed.
   reach it. The `@radix-ui/*` packages are not this: they ship behaviour and no markup you have to
   keep.
 - **A house abstraction layer, whether written or copied.** `<ConfirmModal open onConfirm>` is
-  refused. A charter API in front of Radix is refused *because it is a charter API*, not because
+  refused. A purlis API in front of Radix is refused *because it is a purlis API*, not because
   of where the file came from — copying it from shadcn would not launder it. The test is at the
   **call site**: can the next person see which primitive this is and reach its props? If the
   answer needs the wrapper's source and then the wrapper's own decisions, it is the layer this
   record refuses.
 - **The look still does not come from a package.** A shadcn component arrives wearing Tailwind
   utility classes from shadcn's own token set — `bg-background`, `text-foreground`,
-  `bg-destructive` — and every one of them has to be renamed to charter's vocabulary by hand.
+  `bg-destructive` — and every one of them has to be renamed to purlis's vocabulary by hand.
   *"What is not taken: colour, type, spacing, density, elevation, motion, iconography"* is
   unchanged by this amendment and is the clause a paste is most likely to break.
 
   **And this is the cost the amendment actually adds, so it is stated rather than waved at: the
-  build does not catch it.** charter-app deletes Tailwind's palette (`--color-*: initial`), which
+  build does not catch it.** purlis deletes Tailwind's palette (`--color-*: initial`), which
   means a class naming a colour it does not have emits **no CSS at all** — it does not fail,
   it disappears. `literals.test.ts` catches a hex literal and an arbitrary value (`bg-[#fff]`)
   and would catch those; it cannot catch a class that simply does not exist, and
@@ -283,7 +283,7 @@ cannot read.** Copied-in source is neither, and it is allowed.
   this, and pretending otherwise would be the version of this amendment that gets somebody
   burned.
 - **Copying components nothing renders.** Unchanged, and it is `docs/design-system.md`'s existing
-  reason: a copied component that nothing uses is dead code in charter's tree, which is worse than
+  reason: a copied component that nothing uses is dead code in purlis's tree, which is worse than
   an unused dependency because it looks maintained.
 
 ### What this costs
@@ -293,14 +293,14 @@ cannot read.** Copied-in source is neither, and it is allowed.
   under you is the reason nothing improves under you either. The primitive underneath still
   updates with its package; the markup and the classes on top do not.
 - **The trap named above gets a second edge.** *"We style it ourselves" must not become "we build
-  the controls ourselves"* — and a file that is charter's to edit is a file that can be edited
+  the controls ourselves"* — and a file that is purlis's to edit is a file that can be edited
   until it is no longer the primitive's behaviour. The test in that section is unchanged and now
   has to be applied to the copies too: the next control that needs focus, arrows or a menu is not
   hand-written, and a copied component that has had its primitive edited out of it is
   hand-written.
 - **Provenance is the copying PR's to answer.** A copied file carries somebody else's licence and
   no dependency manifest records it. The PR that copies one says where it came from and at what
-  version, in the file, or charter has vendored code it cannot account for.
+  version, in the file, or purlis has vendored code it cannot account for.
 
 ### Where each rule now lives
 
@@ -333,7 +333,7 @@ abstraction layer" refusal above with **one named exception**, and only one: the
   a Radix primitive already in the window: radio group, checkbox, roving focus. Its props are
   the primitive's own words (`value`, `onValueChange`, `checked`, `onCheckedChange`), so the
   next person can see which primitive it is and reach its props.
-- **The look is still charter's.** The set is drawn in `App.css` under `ui-*` classes, and every
+- **The look is still purlis's.** The set is drawn in `App.css` under `ui-*` classes, and every
   colour in them is a design-system token.
 
 `<ConfirmModal open onConfirm>` and every other house wrapper are still refused. This amendment

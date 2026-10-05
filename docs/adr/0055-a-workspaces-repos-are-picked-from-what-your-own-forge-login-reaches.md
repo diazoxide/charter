@@ -4,7 +4,7 @@
 
 A workspace holds clones, and until now the app could not put any in one: `workspace_create`
 passed no repos, and nothing in the window cloned. The repos a plane could clone came from
-`inventory/repos.json`, which `charter discover` rewrote from scratch on every run. The file is
+`inventory/repos.json`, which `purlis discover` rewrote from scratch on every run. The file is
 tracked and pushed, and each engineer's `gh` or `glab` login reaches different repos. So one
 engineer's `discover` replaced everybody's list with what their own login could see, and the
 next engineer's run replaced it again. For a personal GitHub account it was worse still:
@@ -36,9 +36,9 @@ workspace's manifest.
 
 **A workspace's settings add and remove repos with the same picker.** Ticking clones. Unticking
 calls `drop_repo`, whose guard is inside the delete, as `workspace_remove`'s is: a clone holding
-uncommitted or unpushed work, or one charter could not read, is refused, and so is a repo with
+uncommitted or unpushed work, or one purlis could not read, is refused, and so is a repo with
 any worktree, because a worktree keeps its commits in the clone's object store. There is no
-`force` there. Throwing work away stays `charter workspace remove --force`'s job.
+`force` there. Throwing work away stays `purlis workspace remove --force`'s job.
 
 ## What this costs
 

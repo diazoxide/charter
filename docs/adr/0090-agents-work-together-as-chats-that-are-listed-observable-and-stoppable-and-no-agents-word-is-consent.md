@@ -11,7 +11,7 @@ part of Chat (ADR 0072). It follows these of the operator's rulings:
   guidance."*
 - **Q18:** *"Keep plane ADR 0006, and add a todo↔chat claim link (not a sync)."*
 - **U1:** *"The coordinator is a plain persona on dispatch + claim links, not an engine."*
-- **F4**, in part: workflows as data are *"a structured form of U1"*, run by charter, each step
+- **F4**, in part: workflows as data are *"a structured form of U1"*, run by purlis, each step
   *"visible, stoppable and audited, with human gates where placed"*.
 - **W8**, in part: *"The agent run is the unit of governance, whoever spawned it. […] child agents
   show under their chat; budgets and the kill switch apply at the parent."*
@@ -36,21 +36,21 @@ It builds on [ADR 0066](0066-a-chat-is-a-ulid-a-run-is-a-stretch-of-its-conversa
 control"* in `hookwire.rs`, each in a section of its own below. AC-2 to AC-12, AC-18 and WF-1
 build on it.
 
-## Where charter is today
+## Where purlis is today
 
 Today the channel between agents is narrow on purpose.
 
-- **One handoff, and at most one report back.** `charter handoff` opens a chat in a workspace
+- **One handoff, and at most one report back.** `purlis handoff` opens a chat in a workspace
   with a brief, stamped `⟨handoff from chat N · …⟩` (`charter-core/src/handoff.rs`). The consent
-  is the harness's own permission prompt for the exact spelling `charter handoff …`, which
-  `charter init` writes as an `ask` rule (plane ADR 0014). `--report` lets the new chat send one
+  is the harness's own permission prompt for the exact spelling `purlis handoff …`, which
+  `purlis init` writes as an `ask` rule (plane ADR 0014). `--report` lets the new chat send one
   summary back, which reaches the parent as quoted data on its next turn, or its workspace if the
   parent is gone (`handback.rs`). Lineage is ADR 0066's `handed_from`.
 - **The ticket is not the control.** A single-use ticket on the hook socket stops one approval
   from opening two chats. `hookwire.rs` says plainly that it does not authenticate the approval,
   and that **"Visibility is the control here, not the ticket"**: the app opens a handed-off chat
   only as a tab on a strip, because any process in the chat's tree could already start a harness
-  headless where nobody sees it (charter-app#204).
+  headless where nobody sees it (purlis#204).
 - **Guard A7** refuses a handoff from a sub-agent, from an unattended run
   (`bypassPermissions`), and in spellings the `ask` rule cannot match (`handoffguard.rs`).
 - **Child runs** (a harness's sub-agents) show under their chat. The kill switch and closing the
@@ -68,7 +68,7 @@ team feature.
 
 **Agents work together only as chats.** An agent is a run of a chat, and W8 makes the run the
 unit of governance, whoever started it. So every agent another agent starts is a chat, with
-the chat's identity, persona, sandbox, budget, asks, audit and stop. charter has no second kind
+the chat's identity, persona, sandbox, budget, asks, audit and stop. purlis has no second kind
 of agent, and no channel between agents that is not a chat's.
 
 **Q11 replaces "visibility is the control".** The control is three properties every chat has,
@@ -93,11 +93,11 @@ A tab is one way to be listed, not the only one. That is what lets a chat be hea
 | `handoff` | work that now belongs to someone else: the new chat is the operator's to follow | nothing, or one report (`--report`, as today) | a tab on the target workspace's strip |
 | `task` | work done for the chat that dispatched it (AC-2) | a result, which the dispatcher polls or subscribes to | headless, listed under its dispatcher (§7) |
 
-- **The route is charter's MCP server** (Q15). AC-2 builds `task` on the MCP Tasks extension: the
-  dispatcher calls a dispatch tool, `charterd` starts the chat and returns a task, and the
+- **The route is purlis's MCP server** (Q15). AC-2 builds `task` on the MCP Tasks extension: the
+  dispatcher calls a dispatch tool, `purlisd` starts the chat and returns a task, and the
   dispatcher polls or subscribes. A harness without the Tasks extension gets a plain status
   tool over the same task. AC-2 proposes the tool names, which are public (V74).
-- **`charter handoff` stays the shell's route to the `handoff` mode**, with its words, its brief
+- **`purlis handoff` stays the shell's route to the `handoff` mode**, with its words, its brief
   rules, its stamp and its one report. Its stamp line is kept for both modes, naming the mode.
 - **Lineage is ADR 0066's `handed_from` for both modes.** The `chat.dispatched` event and audit
   entry carry the mode (see *ADR 0066, amended*).
@@ -105,8 +105,8 @@ A tab is one way to be listed, not the only one. That is what lets a chat be hea
 ### 2. Every act between chats is on the `chat` scope, and the host decides (D-0090b)
 
 **No new client scope, and no new power for any existing one.** A dispatch, a message, a
-report, a stop of another chat and a lease all arrive at `charterd` on the dispatching chat's
-`chat` scope: from charter's MCP server, which runs as the chat's child, or from a `charter`
+report, a stop of another chat and a lease all arrive at `purlisd` on the dispatching chat's
+`chat` scope: from purlis's MCP server, which runs as the chat's child, or from a `purlis`
 command inside the chat, over the project's hook socket with the chat's own token
 (ADR 0068 §5). The human scopes stay on a socket the chat cannot open (FD-27, item 3).
 
@@ -120,11 +120,11 @@ command inside the chat, over the project's hook socket with the chat's own toke
 ### 3. Starting a chat needs a person's yes: per dispatch, or once as a grant (D-0090c)
 
 **Today's rule stands as the default: a dispatch waits for the operator's yes.** For the MCP
-route the yes is **charter's own ask**, not the harness's tool prompt: a normalised Ask (HP-5)
+route the yes is **purlis's own ask**, not the harness's tool prompt: a normalised Ask (HP-5)
 raised on the dispatching chat, showing the target workspace, the persona, the mode, whether it
 opens headless, and the brief, answered only on a human scope (V75). A harness's "always allow"
-for a tool happens where charter cannot see it, and differs per harness, so it cannot stand for
-the yes. AC-2 also moves `charter handoff` onto the same ask, which adds a check and removes
+for a tool happens where purlis cannot see it, and differs per harness, so it cannot stand for
+the yes. AC-2 also moves `purlis handoff` onto the same ask, which adds a check and removes
 none: the harness prompt and guard A7 stay in front of it.
 
 **A dispatch grant is the yes given ahead of time.** A person may grant a persona the right to
@@ -199,7 +199,7 @@ nothing in ADR 0080 §5 or V75. What it adds is what that means once chats start
   (*dispatched by steward 3, under a grant on coordinator*), so the person answering sees the
   chain that led to it.
 - **The dispatcher never answers its dispatched chat's asks.** MCP Tasks lets a task report that
-  it needs input, and lets the requester supply it. charter maps that state to *waiting on the
+  it needs input, and lets the requester supply it. purlis maps that state to *waiting on the
   operator* and nothing more: the dispatcher learns that its task waits on a person, and is given
   no way to supply the answer. The person answers in needs-you.
 - **Approvals do not travel along a lineage.** An approval is for the chat that asked
@@ -286,7 +286,7 @@ reads it, and in the event log the session host already keeps.
 - **Sub-agents still may not dispatch (A7).** AC-5 lifts that per harness, and only where the
   harness brings the child run's own permission prompt to the operator, so the yes of §3 is still
   a person's. A child run's dispatch is attributed to the child run and counts against its chat.
-- **Outside agents are not peers.** A vendor-cloud chat that charter only observes (W8) cannot be
+- **Outside agents are not peers.** A vendor-cloud chat that purlis only observes (W8) cannot be
   dispatched to or messaged. A fleet MCP client (HP-20) lists and stops, as FD-27 granted, and
   dispatches nothing.
 - **A trigger is a person's act, not an agent's.** A chat a trigger starts (AC-9) was started
@@ -327,7 +327,7 @@ The code does not change with this record.
 |---|---|
 | `CONTEXT.md` | Gains **Dispatch**, **Handoff**, **Task**, **Report**, **Lineage**, **Headless chat**, **Peer message**, **Mailbox**, **Dispatch grant** and **Message link** (in this PR) |
 | ADR 0066, ADR 0076 | Amended above. Their texts are left as they are, and this record is the amendment |
-| AC-2 | Dispatch in both modes through the MCP server, the dispatch ask, dispatch grants, the caps, `charter handoff` on the same ask, and the `hookwire.rs` comment |
+| AC-2 | Dispatch in both modes through the MCP server, the dispatch ask, dispatch grants, the caps, `purlis handoff` on the same ask, and the `hookwire.rs` comment |
 | AC-3 | Peer messages, message links, the mailbox setting, and delivery at turn boundaries |
 | AC-4 | §5's enforcement and its test |
 | AC-5 | A7 lifted per harness, under §10 |
@@ -366,8 +366,8 @@ The code does not change with this record.
 - **Letting a dispatcher answer its task's input requests.** It is what MCP Tasks allows, and
   what a coordinator would want. It is exactly an agent answering an ask (V16, V75).
 - **The harness's permission prompt as the consent for the MCP route.** It works for
-  `charter handoff` because guard A7 reads its spelling. A tool's "always allow" is set where
-  charter cannot see it, and differs per harness, so charter asks itself.
+  `purlis handoff` because guard A7 reads its spelling. A tool's "always allow" is set where
+  purlis cannot see it, and differs per harness, so purlis asks itself.
 - **Approvals that flow down a lineage** ("the coordinator was approved for this secret, so its
   tasks are too"). It is convenient, and it turns one approval into as many uses as a lineage has
   chats, which V15's per-chat scope exists to stop.
@@ -385,8 +385,8 @@ recommendation above, and none is decided until the record is accepted.
 1. **The dispatch grant (§3)** is new standing authority: a persona may start chats without a
    per-dispatch yes. The default stays a yes per dispatch. *Recommended: accept, since U1, F4 and
    AC-9 need it, and it is a person's act on a human scope.*
-2. **charter's own ask, not the harness's prompt, as the consent for dispatch (§3)**, and
-   `charter handoff` moved onto it as well. *Recommended: accept.*
+2. **purlis's own ask, not the harness's prompt, as the consent for dispatch (§3)**, and
+   `purlis handoff` moved onto it as well. *Recommended: accept.*
 3. **The new words** Dispatch, Task, Lineage, Peer message, Mailbox, Headless chat, Dispatch
    grant and Message link are user-visible concept names. *Recommended: accept, all as parts of Chat.*
 4. **The cause `dispatcher` (ADR 0076, amended)** adds to an accepted closed list.

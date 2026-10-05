@@ -1,11 +1,11 @@
 # The pane footer is blanked by default, and a chat may keep it
 
-ADR 0018 drew a line charter has kept since: **charter may run the harness, but never draws
-it.** ADR 0019 then answered a second question — what happens when charter draws the plane
+ADR 0018 drew a line purlis has kept since: **purlis may run the harness, but never draws
+it.** ADR 0019 then answered a second question — what happens when purlis draws the plane
 *twice* on one screen — and decided that inside a live tmux frame the panels are the surface
 and `charter statusline` prints an empty line.
 
-charter-app blanks the footer inside every pane it opens. **That was never decided.** It
+purlis blanks the footer inside every pane it opens. **That was never decided.** It
 arrived when `charter statusline` was ported to Rust: the port read ADR 0019, found the same
 picture with tmux taken out — the app draws the workspace's repos, their branches, their dirt
 and their CI in panels, and a chat is a terminal in the same window — and transposed the rule.
@@ -23,23 +23,23 @@ does not show: context left, model, mode"* — is **false**, and this ADR is wri
 so nobody has to rediscover that.
 
 `charter statusline` **is** Claude Code's `statusLine` command. There is one such line and one
-occupant of it. When charter prints an empty line, Claude Code is being told there is nothing
+occupant of it. When purlis prints an empty line, Claude Code is being told there is nothing
 to show; it does not fall back to a status line of its own. ADR 0019 measured exactly that and
 wrote it into its consequences:
 
 > **A framed Claude Code session has no context/cache gauge on any surface.** The status line
 > is where `ctx NN%` and `cache NN%` were drawn, and it is now blank inside a frame.
 
-Those gauges are *charter's* — zone 3 of charter's own footer. So the choice in a pane is
-between **charter's footer** and **nothing**. Nothing about the harness's own presentation is
+Those gauges are *purlis's* — zone 3 of purlis's own footer. So the choice in a pane is
+between **purlis's footer** and **nothing**. Nothing about the harness's own presentation is
 being suppressed or restored, and the setting this ADR decides cannot give an operator back
-context, model or mode, because charter's Rust footer does not draw them yet either (M2.18
+context, model or mode, because purlis's Rust footer does not draw them yet either (M2.18
 draws zone 1 and says in the body which surfaces it does not draw).
 
 ## The honest argument against the old default
 
 ADR 0019's premise is that suppression *removes a duplicate*: the plane's state is already on
-this screen, drawn by charter, and drawing it again teaches the reader to stop reading it. One
+this screen, drawn by purlis, and drawing it again teaches the reader to stop reading it. One
 difference between a frame and the app attacks that premise directly.
 
 **A frame held one harness. This window holds fifty.** In a frame, the panels and the
@@ -50,9 +50,9 @@ the workspace **that chat** resolves to. For any chat that is not the focused on
 not the same fact, and calling the footer a duplicate of the panels is calling two different
 answers one answer.
 
-There is a second, weaker point worth stating because it will be raised. ADR 0018 says charter
-never draws the harness, and `statusLine` is the one place a harness *invites* charter inside
-its own rectangle. That cuts both ways: printing an empty line is charter declining the
+There is a second, weaker point worth stating because it will be raised. ADR 0018 says purlis
+never draws the harness, and `statusLine` is the one place a harness *invites* purlis inside
+its own rectangle. That cuts both ways: printing an empty line is purlis declining the
 invitation, which is if anything more 0018-compliant than filling it. So 0018 is not an
 argument against the blank — but it is a reason the blank is not obviously wrong either, and
 the decision cannot be read off either ADR.
@@ -65,7 +65,7 @@ four times over.
 
 ## The decision
 
-**The blanking stays, as the DEFAULT. A chat may be started drawing charter's footer in its
+**The blanking stays, as the DEFAULT. A chat may be started drawing purlis's footer in its
 own pane, and that choice belongs to the chat and to nothing larger.**
 
 Decided by the operator on **2026-09-20**, asked directly, with three answers on the table:
@@ -76,13 +76,13 @@ it was a choice and not an obvious one — the argument above is why it was put 
   this decision — which has no such field — brings every chat back exactly as it behaved when
   it was written.
 * **Per chat**, chosen in the picker beside the profile and the persona, carried into the
-  chat's environment as `CHARTER_FOOTER=show`, and written into `.charter/app/reopen.json` so
+  chat's environment as `PURLIS_FOOTER=show`, and written into `.charter/app/reopen.json` so
   a relaunch brings the choice back with the chat.
 * **One word turns it on.** Anything else in that variable — inherited from the shell the app
   was launched from, left over, hand-edited into the record — reads as the default, because a
   surface the operator never picked is worse than no surface. The name and the value are both
   constants in the launcher, so nothing a chat or a record can write reaches the environment
-  charter builds.
+  purlis builds.
 
 ## Why it lives there, and not in the three other places it could have
 
@@ -96,7 +96,7 @@ for everyone who pulls — and "plane-wide" is the wrong shape for a choice abou
 settings live, and it was the closest rival. It loses on granularity: a profile is shared by
 every chat started on it, so two panes on one profile could never differ. It also loses on
 subject. A profile says what program runs and with what environment; this says what the
-operator wants to look at. Charter's own `CHARTER_`-prefixed names are refused in a profile's
+operator wants to look at. purlis's own `CHARTER_`-prefixed names are refused in a profile's
 `env` (ruling 14), so the variable cannot be set there even by hand — which is deliberate, not
 incidental: it keeps one answer to "what turned this chat's footer on".
 
@@ -119,9 +119,9 @@ re-litigation of taste. Any of them alone is a case; none of them is true today.
 
 * **The panels learn to answer per chat.** The strongest argument against the default is that
   the footer says which workspace *this* chat is on and the panels say it only for the focused
-  one. Put a chat's own workspace on its pane — a title, a strip, anything charter draws — and
+  one. Put a chat's own workspace on its pane — a title, a strip, anything purlis draws — and
   the footer is a duplicate again, and the default is clearly right.
-* **Charter's footer grows what only it can show.** Zones 2 and 3 are not drawn by this build:
+* **purlis's footer grows what only it can show.** Zones 2 and 3 are not drawn by this build:
   the alert row, the persona chips with vault health, `ctx`/`cache`. An alert is the one thing
   an operator reads a footer for, and a pane that can show one while the panels are scrolled
   away is worth more than the row it costs. When those land, the balance moves the other way.
@@ -145,10 +145,10 @@ re-litigation of taste. Any of them alone is a case; none of them is true today.
   variable is absent rather than set to a second word, so there is no value to unset and no way
   for an old record to mean something new.
 * **The record grew a field**, and a record is a file anyone who can write the plane's state
-  directory can write. It is held to the same rule as `profile` and `persona`: one word charter
+  directory can write. It is held to the same rule as `profile` and `persona`: one word purlis
   itself writes, and everything else is the default. It reaches no command line — the launcher
   emits a constant name and a constant value, or nothing.
-* **ADR 0019 is not amended.** Inside a tmux frame the status line is still charter's own
+* **ADR 0019 is not amended.** Inside a tmux frame the status line is still purlis's own
   surface drawn twice, and nothing here touches that. What this narrows is the
   *transposition* — the app is not a frame, its window is not one session, and the rule it
   inherited is now a default with a name on it.

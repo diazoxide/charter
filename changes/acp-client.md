@@ -1,10 +1,10 @@
 ### Added
 
-- **The groundwork for opencode chats over ACP.** charter's core now has an Agent Client
+- **The groundwork for opencode chats over ACP.** purlis's core now has an Agent Client
   Protocol client, tested against `opencode acp`. It starts the agent in the chat's worktree,
-  hands the session charter's MCP server, and follows each turn's plan, usage, tool calls and
+  hands the session purlis's MCP server, and follows each turn's plan, usage, tool calls and
   reply in the same model it uses for hooks. It gives the agent no file system and no terminal
-  of charter's, and it never answers a login prompt or supplies a credential. A permission the
+  of purlis's, and it never answers a login prompt or supplies a credential. A permission the
   agent asks for waits, with no deadline, until you answer it; only you can answer it, and the
   first answer wins. Such a chat starts from the same profile approval and sandbox decision
   as a chat in a terminal, with the same environment and nothing else of the app's. In a

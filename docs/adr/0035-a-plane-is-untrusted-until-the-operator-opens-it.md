@@ -2,7 +2,7 @@
 
 [ADR 0033](0033-a-plane-is-a-project-and-a-window-may-hold-several.md) turns opening a plane into
 picking a directory in a file dialog. Until now a plane was a directory the operator was already
-standing in, having typed `charter init` there themselves or cloned it deliberately. A file
+standing in, having typed `purlis init` there themselves or cloned it deliberately. A file
 dialog will happily point at a directory that arrived in a tarball, a shared volume, a colleague's
 checkout or a repository cloned to see what it does.
 
@@ -20,11 +20,11 @@ two keys out of it:
 const WORKSPACE_KEYS: [&str; 2] = ["enabledPlugins", "env"];
 ```
 
-into the `.claude/settings.json` that charter generates in every directory a harness reads
+into the `.claude/settings.json` that purlis generates in every directory a harness reads
 configuration from but the plane's own files do not reach — a checkout with a git root of its own
 (`guest.rs`) and each `workspaces/<ws>/` (`wslayer.rs`).
 
-That source file is committed by design. `charter init`'s baseline `.gitignore` ignores
+That source file is committed by design. `purlis init`'s baseline `.gitignore` ignores
 `/.claude/settings.local.json` with the comment *"Its committed sibling `.claude/settings.json`
 is deliberately NOT ignored — that one is the team's."* So it clones. A stranger's plane therefore
 decides which plugins are enabled in every chat the operator starts under it, and sets environment
@@ -59,7 +59,7 @@ over-state what this decision is for.
    stranger's plane can add prompts and refusals to your harness; it cannot pre-approve anything.
 
 2. **A committed file cannot decide how a chat launches.** ADR 0022 puts harness profiles in
-   `charter.local.toml`, which `charter init` gitignores and `doctor` warns about while git would
+   `charter.local.toml`, which `purlis init` gitignores and `doctor` warns about while git would
    commit it, and a `[harness.<name>]` table in the committed `charter.toml` is refused by name.
    Beside it, `profiletrust` shows a new or changed profile command and asks `run this? [y/N]`
    before it runs.
@@ -94,7 +94,7 @@ holds unchanged here — *"Treating silence as a yes is the one state this recor
 out."*
 
 **The ask is a dialog, not a printed command.** ADR 0003 and `test_init_first_clone.py` both
-record that charter's consent is a second command because `util.py` has nothing that reads stdin
+record that purlis's consent is a second command because `util.py` has nothing that reads stdin
 and blocking a hook on stdin hangs a turn. That constraint is about the CLI. The app has a window
 and a person looking at it, so here the prompt is the prompt. The CLI is unchanged and keeps the
 two-command shape where it needs it.
@@ -115,11 +115,11 @@ harness's ordinary prompt until the operator approves the plane again, which clo
 the project asks for. The per-session ceiling (charter#432) still applies beneath this: it can
 narrow the approved grant, never widen it.
 
-**charter vouches only for what it writes.** charter rewrites the reopen record and refreshes the
+**purlis vouches only for what it writes.** purlis rewrites the reopen record and refreshes the
 fingerprint to match (`Store::vouch`). It does not write the plane's settings or its personas, so
 a vouch now refreshes only the record's half and keeps the rest as approved. Before this, a
 change to the settings made while the plane was open was taken into the approval at the next chat
-charter opened.
+purlis opened.
 
 **Where no approval can be kept, nothing is smoothed.** A plane this machine never approved, and a
 platform with no machine store (ADR 0031), have no approved grant, so every persona tool meets the
@@ -129,19 +129,19 @@ declines rather than guesses.
 A store written before this amendment has no grants in it, so the first open of each plane after
 it asks once.
 
-## `charter init` on an existing repo adopts it, rather than colonising it
+## `purlis init` on an existing repo adopts it, rather than colonising it
 
-**Today**, `charter init` scaffolds the plane in whatever directory it was run in. Run inside a
+**Today**, `purlis init` scaffolds the plane in whatever directory it was run in. Run inside a
 repository it writes `charter.toml`, `personas/`, `workspaces/`, `.charter/` and a block of
 `.gitignore` rules (`_GITIGNORE_BASELINE`, `_ensure_gitignore`) into that repository, and then
-*offers* — as a printed command, because charter cannot prompt — `charter init --clone-this-repo`,
+*offers* — as a printed command, because purlis cannot prompt — `purlis init --clone-this-repo`,
 which clones the repo into `workspaces/default/<name>/`. The offer exists already, as a
 consequence of [ADR 0007](https://github.com/diazoxide/charter-plane/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/docs/adr/0007-one-plane-shape.md) removing the embedded shape; it is pinned by
 `tests/test_init_first_clone.py` and ported to Rust in `crates/purlis-core/src/scaffold/`.
 
-**The default reverses.** `charter init` on an existing repo adopts that repo as the plane's first
+**The default reverses.** `purlis init` on an existing repo adopts that repo as the plane's first
 clone and makes the plane beside it. "Make this repo itself the plane" stays available — it is how
-charter's own plane exists — and becomes the non-default.
+purlis's own plane exists — and becomes the non-default.
 
 The reason is this record's subject. `_is_repo_top_level`'s docstring already draws the line the
 old default rests on: the offer is refused for a repo the plane merely sits inside, because *"the
@@ -154,7 +154,7 @@ writes nothing into it.
 ## What this is not
 
 **Not a boundary.** `profiletrust.rs` says it at full volume about its own record and the same
-sentence applies here: a chat that can edit the plane can edit whatever charter reads from it.
+sentence applies here: a chat that can edit the plane can edit whatever purlis reads from it.
 Once a plane is approved, everything in it is in force, and this record adds no guard inside an
 approved plane — with the one exception *Grants* describes, where the tool gate compares against
 the approval rather than the file. What the ask closes is the accident and the stranger's directory — the plane
@@ -163,11 +163,11 @@ afternoon. It is the difference between a plugin that was enabled unseen and one
 loud first. It is not a defence against an agent that set out to forge the fingerprint, and
 nothing here should be built as though it were.
 
-**Not a complete inventory of what a plane does.** The ask shows what charter can enumerate: the
+**Not a complete inventory of what a plane does.** The ask shows what purlis can enumerate: the
 two `WORKSPACE_KEYS`, the restrictive rules, the programs the reopen record names, and the
 personas' tool grants. It does not
 and cannot summarise a plane's persona charters, its memory or its todos, which are text a model
-will read and act on. charter *"has no model and makes no judgements about the content of work"*
+will read and act on. purlis *"has no model and makes no judgements about the content of work"*
 (`CONTEXT.md`), and that is exactly the sentence that limits this ask. Named here rather than left
 to be discovered by whoever first assumes the dialog covered everything.
 
@@ -186,7 +186,7 @@ to be discovered by whoever first assumes the dialog covered everything.
 - **Asking once per window rather than once per machine.** `report.py` already measured where that
   ends: *"a Reporter with several planes would be asked repeatedly until the safeguard became a
   reflex."*
-- **Keeping the old `charter init` default and warning instead.** The warning would arrive after
+- **Keeping the old `purlis init` default and warning instead.** The warning would arrive after
   the scaffolding and the `.gitignore` edit had been written into somebody's repository.
 
 ## Consequences
@@ -198,14 +198,14 @@ to be discovered by whoever first assumes the dialog covered everything.
   again, which will happen on an ordinary `git pull` of a plane the team shares. That is the
   fingerprint working, and it will read as noise until somebody reads the diff it is showing.
 - The operator's own edit to a persona's `tools:`, or to a script in its `bin/`, prompts until the
-  plane is approved again, the same as a teammate's. charter cannot tell the two apart, and a
+  plane is approved again, the same as a teammate's. purlis cannot tell the two apart, and a
   rule that trusted "edits made on this machine" would trust every chat on it.
-- `charter init`'s new default is a **deliberate divergence from the Python oracle**. `init` is
+- `purlis init`'s new default is a **deliberate divergence from the Python oracle**. `init` is
   ported (`scaffold/mod.rs`) and spec decision 15 requires every ported command to give the same
   result as Python on the same input; this one now will not, and Python is frozen (decision 17), so
   it does not follow. The differential scenario for `init` inside a repository must be recorded as
   an *intended* difference with this record named, never normalised until it stops failing.
-- An operator who wants charter's own plane shape — the repo *is* the plane — now types a flag.
-  Every charter developer will meet this, since charter develops itself through a clone of itself.
+- An operator who wants purlis's own plane shape — the repo *is* the plane — now types a flag.
+  Every purlis developer will meet this, since purlis develops itself through a clone of itself.
 - The machine-level record grows a third kind of entry (ADR 0034's list). Its rule was written to
   admit this one and to make the fourth argue for itself.

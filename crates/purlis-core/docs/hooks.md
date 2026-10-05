@@ -1,6 +1,6 @@
 # The hooks
 
-A hook is the harness calling charter at a moment nobody had to remember: a session
+A hook is the harness calling purlis at a moment nobody had to remember: a session
 starting, a prompt, a tool call about to run, a turn ending. Every one of them is a
 `charter hook <name>` call. What the app itself runs for a hook is its own binary, by its
 absolute path inside the app bundle (see [install.md](install.md)). A hook a plane declares in
@@ -9,7 +9,7 @@ the app extends with its bundle's directory.
 
 The app ships a Claude Code plugin in its bundle and loads it into each chat it starts, with
 `claude --plugin-dir`, so the hooks arrive with the chat and there is nothing to install per
-project or per machine. Its hooks name the app's `charter` through `$CHARTER_HOOK_BINARY`,
+project or per machine. Its hooks name the app's `purlis` through `$CHARTER_HOOK_BINARY`,
 which the app sets in the chat's environment. A Codex chat is armed with the state hooks and
 the Bash guard as `-c hooks.<Event>=…` flags. Both are for that session alone; see
 [harnesses.md](harnesses.md#per-profile--armed-at-launch).
@@ -22,7 +22,7 @@ each is wired to.
 | Hook | What it does |
 | --- | --- |
 | `sessionstart`, `userpromptsubmit`, `notification`, `subagentstop`, `stop`, `sessionend` | reports what the session just did to the app that started it, which is how the window knows which chat needs you. Outside the app it has nobody to tell, except that `sessionstart` starts a background forge refresh |
-| `sessionstart`, in a plane | also briefs the session, as `additionalContext`: the workspace gate (confirm a workspace before repo work, unless the session is locked to one or `$CHARTER_WORKSPACE` pins it; a plane-root chat, `$CHARTER_PLANE_ROOT_SESSION=1`, is told it is at the root instead, and is shown every workspace as one it may manage in place of a workspace's todos and neighbours), the persona it was started as and a digest of that persona's memory, memory not yet shared, the workspace's oldest open todos, the plane's other workspaces, and the piece the session stands in. It also freezes each persona's `tools:` for the persona tool gate below |
+| `sessionstart`, in a plane | also briefs the session, as `additionalContext`: the workspace gate (confirm a workspace before repo work, unless the session is locked to one or `$PURLIS_WORKSPACE` pins it; a plane-root chat, `$PURLIS_PLANE_ROOT_SESSION=1`, is told it is at the root instead, and is shown every workspace as one it may manage in place of a workspace's todos and neighbours), the persona it was started as and a digest of that persona's memory, memory not yet shared, the workspace's oldest open todos, the plane's other workspaces, and the piece the session stands in. It also freezes each persona's `tools:` for the persona tool gate below |
 | `userpromptsubmit`, in a plane | also adds, as `additionalContext`, the commitment gate: a prompt that asks for work and leaves a real fork open (open-ended wording, a broad scope, something irreversible, a long many-part ask) is told to scout first, then ask the operator at the fork before building. Never on a question, on work with nothing to ask about, or on a slash command; never in an unattended run (`permission_mode: bypassPermissions`); and quiet for the three prompts after it fires. A report a handed-off chat sent back rides the same context |
 | `pretooluse` on `Bash` | the guards below, then the persona tool gate |
 | `pretooluse-read` on `Read`/`Grep` | the vault guard on those tools (*Vault read*, below) |
@@ -45,7 +45,7 @@ wires is answered, so this only ever meets a word nobody has invented yet.
 ## The guards
 
 These are what `charter hook pretooluse` answers on a `Bash` call, and the two guards on the
-file tools beside it. Every one of them **denies**. None of them asks: charter holds no nudge
+file tools beside it. Every one of them **denies**. None of them asks: purlis holds no nudge
 on the Bash tool.
 
 The guards about the shell itself (the secret leak and the two substitution guards) run in
@@ -57,7 +57,7 @@ A denial from these is **the rule working, not a bug** — the single most commo
 mistaken for a defect. Each prints why, because a developer who reads the reason learns the
 rule while one who reads a bare refusal files an issue.
 
-- **Secret leak.** A charter invocation carrying `--reveal`, or a **known** file-reading
+- **Secret leak.** A purlis invocation carrying `--reveal`, or a **known** file-reading
   program whose argument, as written, spells a path under `.charter/`. It is a name-based
   check on the argv it can see, and that is its ceiling: an interpreter (`python3 -c`,
   `node -e`), a program not on the list (`base64`, `cp`, `jq`, `cut`,
@@ -65,7 +65,7 @@ rule while one who reads a bare refusal files an issue.
   is one argument here and is not re-parsed) is not covered. Widening the list is not the
   fix — the missing name is always the next one, and false positives arrive immediately.
   "Argv" now means the real one. A wrapper (`env`, `sudo`, `command`, `xargs`,
-  `charter secret exec … --`, a `{ … }` group, a `then` branch) does not change what the
+  `purlis secret exec … --`, a `{ … }` group, a `then` branch) does not change what the
   program is — and where a wrapper opens a
   file *itself* (`xargs -a <file>`) that file counts as read, even though the program named
   on the line is something else. A **redirection** is neither the program nor an operand: it
@@ -105,7 +105,7 @@ rule while one who reads a bare refusal files an issue.
   at `$EOF`.
   A **commit message on stdin** is the same data on the same terms: the quoted body of
   `git commit -F -`, `-F-`, `--file=-` or `--file -`, git's global options before `commit`
-  included, is dropped when no executor is in its pipeline, so a message describing charter's
+  included, is dropped when no executor is in its pipeline, so a message describing purlis's
   own layout is not refused. Any
   spelling of `--edit` keeps it visible, because git hands the message to the editor and
   `core.editor=sh` runs it; so does a redirection target spelled like the flag (`> -F-`), which
@@ -119,7 +119,7 @@ rule while one who reads a bare refusal files an issue.
   `--body-file -`, `--body-file=-`, `-F -` or `-F-` is dropped when no executor is in its
   pipeline. Before that, one
   apostrophe in a body left the call unparseable, the body's words became operands of a
-  `| tail -1` after it, and two neighbours such as "`~`." and "Charter" joined into `.Charter`
+  `| tail -1` after it, and two neighbours such as "`~`." and "charter" joined into `.charter`
   and were refused as a vault read. `-e`, `--editor` and a short cluster holding `e` keep the
   body visible, as a redirection target spelled like the flag and `-F -` after `--` do; gh 2.83.2
   opens no editor on a body from stdin, but the refusal does not rest on that. `gh pr edit`,
@@ -157,7 +157,7 @@ rule while one who reads a bare refusal files an issue.
   refused, and so is a `Grep` that would walk into the plane's state directory — one with no
   path searches the directory it stands in, which is the commonest spelling of that walk —
   unless its `glob` selects nothing in there. Like the leak guard it runs in any directory,
-  because `$CHARTER_HOME` can put a real vault within reach of one that holds no
+  because `$PURLIS_HOME` can put a real vault within reach of one that holds no
   `charter.toml`.
 - **Plane-root branch move.** The plane is not a work tree (ADR 0008); a branch switch there
   is almost always meant for a clone. `--detach` counts — with an operand, without one, and
@@ -172,9 +172,9 @@ rule while one who reads a bare refusal files an issue.
   name the answer is genuinely ambiguous, git breaks the tie in favour of the ref, and the
   denial says *that* and names the two unambiguous spellings rather than assuming a branch.
   The options are read the same way round: the restore gate opens only when every option
-  present is one charter can place as restore-only, because an option decides what its
+  present is one purlis can place as restore-only, because an option decides what its
   operand means — `git checkout --orphan README` creates a branch called `README`. An option
-  charter cannot place is refused rather than assumed harmless, value forms included
+  purlis cannot place is refused rather than assumed harmless, value forms included
   (`-bREADME`, `--orphan=README`), which costs a false denial on a restore-only flag nobody
   has added to the list yet; `git restore <path>` needs no flags and is always allowed.
   Aliases are followed before the guard stands aside — `co = checkout` makes `git co
@@ -200,7 +200,7 @@ rule while one who reads a bare refusal files an issue.
   so `git checkout <branch>` typed in a workspace clone wrote into the plane root and the
   guard saw a plain checkout in a clone. The repository's config is read now — the one
   invocation-derived subject that costs a disk read, at 13–65 µs, stated in
-  charter's git-config reader along with the routes it declines: `git -c core.worktree=…` on the
+  purlis's git-config reader along with the routes it declines: `git -c core.worktree=…` on the
   command line (git ignores it, so it reaches nothing), `include`/`includeIf`, and the
   global and system configs. A `-C`
   counts as git's
@@ -221,7 +221,7 @@ rule while one who reads a bare refusal files an issue.
   that would take commits off the branch which no remote has a copy of — the command that
   destroyed eleven memory commits in one session. Only that: the unstage
   (`git reset HEAD -- <path>`), `--soft`/`--mixed`, a reset with no ref, and any reset over
-  commits that are already pushed all run untouched. It clears itself — `charter save` lands
+  commits that are already pushed all run untouched. It clears itself — `purlis save` lands
   the commits and the same command is allowed. It follows **aliases** exactly as the branch
   guard does — `wipe = reset --hard` makes `git wipe origin/main` the same command, and so
   does `git -c alias.z='reset --hard origin/main' z` — and shares every route above,
@@ -236,7 +236,7 @@ rule while one who reads a bare refusal files an issue.
   `bypassPermissions` means *stop asking me*, not *stop knowing things*, and a published
   version number can never be reused. The line runs between *opening* a request and
   *merging* one: `gh pr create` is deliberately not on this list. The floor also refuses
-  `charter change land`, which merges one member of a cross-repo change: it is attended only.
+  `purlis change land`, which merges one member of a cross-repo change: it is attended only.
 
 - **Forge body substitution.** A `gh`/`glab` command that publishes prose — `issue
   create|comment|edit`, `pr create|comment|edit|review`, `release create|edit`, `gist
@@ -301,10 +301,10 @@ rule while one who reads a bare refusal files an issue.
   So a liveness-keyed guard on `git commit` would refuse the exact form that makes those
   backticks harmless: its trigger would be the prescribed workflow, which is not a
   miscalibrated guard but an inverted one — and that is the argument which deleted the
-  clone-commit nudge outright rather than narrowing it (see *What charter stopped asking*).
+  clone-commit nudge outright rather than narrowing it (see *What purlis stopped asking*).
   Exempting `$(cat <<'QUOTED')` by name
   would mean the guard deciding which substitutions are *safe* rather than which are *live*,
-  and a parser that gets that wrong fails open. `charter save <message>` writes a commit
+  and a parser that gets that wrong fails open. `purlis save <message>` writes a commit
   message too, so it is out for the same reason rather than by oversight. `git commit` is therefore a **stated limit, not an open
   question**.
 
@@ -331,13 +331,13 @@ rule while one who reads a bare refusal files an issue.
   and its remedy is plain `gh`/`glab` usage — the same reason the secret-leak guard is
   ungated.
 
-- **charter's own text substitution.** The same rule on charter's own text-taking commands. The guard above covers somebody
+- **purlis's own text substitution.** The same rule on purlis's own text-taking commands. The guard above covers somebody
   else's tools; these persist prose that this plane commits and pushes, so the same defect
   reaches a public repository by an indirect route:
 
   ```bash
-  charter persona remember "the marker is appended to `pending` each pass"   # DENIED
-  charter persona remember "the marker is appended to \`pending\` each pass"  # allowed
+  purlis persona remember "the marker is appended to `pending` each pass"   # DENIED
+  purlis persona remember "the marker is appended to \`pending\` each pass"  # allowed
   ```
 
   That is not a constructed example. It happened while a guard review's findings were being
@@ -366,24 +366,24 @@ rule while one who reads a bare refusal files an issue.
   **Why this one is a guard where `git commit` is a limit** is the same question answered by
   two different corpora. 13 of those 284 bodies would meet this guard — **5%**, not the
   87% the issue predicted, and 254 of the 284 predate the working rule that warns against
-  the shape, so that is charter's natural prose. The reason is structural: a commit message
+  the shape, so that is purlis's natural prose. The reason is structural: a commit message
   is rendered as markdown by a forge, so agents write code spans in them, while a memory
-  body is read back by `charter recall` in a terminal, so they write *"the `$(` branch"* as
+  body is read back by `purlis recall` in a terminal, so they write *"the `$(` branch"* as
   words. And **283 of the 284 bodies are single-line**, so none came through the
   `"$(cat <<'EOF' …)"` spelling that makes a backtick inert — a live backtick in a
   single-line double-quoted operand is a command that was going to corrupt its own text.
 
   **What it does not reach**, on the same terms as the guard above: `python3 -m charter …`
-  is covered, but a shell wrapper (`sh -c 'charter …'`), an alias, and a program name arriving in a variable are
+  is covered, but a shell wrapper (`sh -c 'purlis …'`), an alias, and a program name arriving in a variable are
   not — nor is `python3 -mcharter`, a fail-open hole named in the guard rather than closed
-  with a short-option parser inside it. It reads the first two words after `charter`, which
-  is exact only because charter's root parser has no option that takes a value — a test
+  with a short-option parser inside it. It reads the first two words after `purlis`, which
+  is exact only because purlis's root parser has no option that takes a value — a test
   asserts that, so if one is ever added the guard is told rather than quietly
   under-reading. Ungated on there being a control plane, for the reason above.
 
 - **A handoff the prompt cannot stand in front of.** A handoff's brief becomes a new chat's
   first message and runs with your authority, so its consent is your harness's own permission
-  prompt: the `ask` rule for `charter handoff *` that `charter init` writes (see
+  prompt: the `ask` rule for `purlis handoff *` that `purlis init` writes (see
   [handoff.md](handoff.md), *The prompt is the consent*). This guard refuses the handoffs it can
   recognise that the prompt would not stand in front of. Each refusal needs a fact no command
   pattern can see.
@@ -391,13 +391,13 @@ rule while one who reads a bare refusal files an issue.
   | Refused | Why the prompt cannot cover it |
   | --- | --- |
   | a call from a **sub-agent**: the payload carries `agent_id` | You are talking to the parent chat, and what the sub-agent found goes back there anyway. Measured on Claude Code 2.1.268 and codex-cli 0.147.0: a sub-agent's Bash call carries `agent_id` and a main-conversation call does not. A harness nobody has measured is not read this way. |
-  | an **unattended run**: `permission_mode: bypassPermissions` | Nobody is there to answer the prompt. The refusal names `charter ws todo` as the way to keep the work. |
-  | a **spelling** of `charter handoff …` it can recognise as other than the exact one: a wrapper, a prefix, a path or `python3 -m charter`; a word quoted or escaped; a word that still reads `charter` or `handoff` once its quoting, expansion and glob characters are removed (`$'handoff'`, `${x:-handoff}`, `{handoff,}`), or that `handoff` matches as a glob (`hando?f`); a gap other than one ASCII space before or after `handoff`, a line continuation included | On Claude Code 2.1.268, `python3 -m charter handoff`, a path to charter, `charter 'handoff'`, `charter $'handoff'`, `charter {handoff,}` and `charter hando?f` ran with no prompt. A `FOO=1` prefix, an `env` wrapper, a quoted `charter`, two spaces and a tab were matched there and are refused anyway, so a model has one spelling to follow. The first two words are judged as written, never as a shell would rewrite them — which is also why a brace split inside a word (`{hand,}off`) and a parameter default split across one (`hand${x:-}off`) are not recognised; the first of those ran with no prompt too. An ANSI-C word is the exception, because the shared reader decodes it the way the shell does: `charter $'\x68andoff'` is `charter handoff` spelled another way, and is refused as one. |
+  | an **unattended run**: `permission_mode: bypassPermissions` | Nobody is there to answer the prompt. The refusal names `purlis ws todo` as the way to keep the work. |
+  | a **spelling** of `purlis handoff …` it can recognise as other than the exact one: a wrapper, a prefix, a path or `python3 -m charter`; a word quoted or escaped; a word that still reads `purlis` or `handoff` once its quoting, expansion and glob characters are removed (`$'handoff'`, `${x:-handoff}`, `{handoff,}`), or that `handoff` matches as a glob (`hando?f`); a gap other than one ASCII space before or after `handoff`, a line continuation included | On Claude Code 2.1.268, `python3 -m charter handoff`, a path to purlis, `purlis 'handoff'`, `purlis $'handoff'`, `purlis {handoff,}` and `purlis hando?f` ran with no prompt. A `FOO=1` prefix, an `env` wrapper, a quoted `purlis`, two spaces and a tab were matched there and are refused anyway, so a model has one spelling to follow. The first two words are judged as written, never as a shell would rewrite them — which is also why a brace split inside a word (`{hand,}off`) and a parameter default split across one (`hand${x:-}off`) are not recognised; the first of those ran with no prompt too. An ANSI-C word is the exception, because the shared reader decodes it the way the shell does: `purlis $'\x68andoff'` is `purlis handoff` spelled another way, and is refused as one. |
   | a handoff **inside a string or a heredoc a shell runs**, one level deep: `eval`, or `sh`, `bash`, `zsh`, `dash`, `ksh` with `-c` (alone or in a cluster such as `-lc`) or reading a heredoc body (`bash <<'EOF'`) | The rule reads the outer command: on Claude Code 2.1.268, a handoff inside `eval '…'`, `bash -c '…'` or a `bash <<'EOF'` body ran with no prompt. The refusal says to run it directly. Which heredoc bodies a shell runs is the same answer the leak guard uses, so a brief is never one of them. |
-  | a **stdin** other than one quoted heredoc on the handoff's own segment: an unquoted `<<BRIEF`, a pipe, `< file`, `<<<`, no heredoc, two heredocs, or a live `$(…)` anywhere in the call | The prompt has to show the exact text the new chat is sent. An unquoted heredoc expands before charter reads it, a file shows as a path, and with two heredocs bash hands the command only the last body (GNU bash 3.2.57). |
+  | a **stdin** other than one quoted heredoc on the handoff's own segment: an unquoted `<<BRIEF`, a pipe, `< file`, `<<<`, no heredoc, two heredocs, or a live `$(…)` anywhere in the call | The prompt has to show the exact text the new chat is sent. An unquoted heredoc expands before purlis reads it, a file shows as a path, and with two heredocs bash hands the command only the last body (GNU bash 3.2.57). |
 
   **Text that only mentions a handoff is not one.** A heredoc body a reader takes (`cat > f
-  <<'EOF'`), a quoted argument (`grep 'charter handoff' docs`), an `echo`'s words, and the
+  <<'EOF'`), a quoted argument (`grep 'purlis handoff' docs`), an `echo`'s words, and the
   later lines of a quoted string that spans lines (a `git commit -m '…'` message, a
   `python3 -c "…"` script) are data, and are not searched for a handoff. What a shell runs is:
   a `-c` string, `eval`'s words, and a heredoc fed to a shell. Where a multi-line quote closes
@@ -405,7 +405,7 @@ rule while one who reads a bare refusal files an issue.
 
   **Which heredoc bodies A7 searches.** A body is searched when its OWN opener is a shell or an
   interpreter (`bash`, `sh`, `python3`, `perl`, one of those behind `env`/`nohup`, or `ssh`,
-  whose remote shell runs it); when charter cannot resolve the opener to a name
+  whose remote shell runs it); when purlis cannot resolve the opener to a name
   (`${RUNNER} <<'EOF'`, decided at runtime, or `$(which bash) <<'EOF'`, a word out of a
   substitution); or when an executor stands downstream of the opener **in the same pipeline**,
   since `cat <<'A' | bash` is a script where `cat <<'A'; bash` is not. Any other opener hands its
@@ -432,17 +432,17 @@ rule while one who reads a bare refusal files an issue.
   openers until it was fixed.
 
   **The brief is data to the secret-leak guard.** The body of a heredoc on the handoff's own
-  segment is stdin charter sends on, never a command the shell runs, so it is skipped the way a
+  segment is stdin purlis sends on, never a command the shell runs, so it is skipped the way a
   reader's is. A brief that names `.charter/vaults/…` in prose, holds one apostrophe, or
   opens a line with a reader (`cat .charter/vaults/dev.json would print it, so never run
-  that.`) is not refused as a read. Only that body: in `charter handoff beta && bash <<'EOF'` the body belongs
+  that.`) is not refused as a read. Only that body: in `purlis handoff beta && bash <<'EOF'` the body belongs
   to `bash` and is read as commands.
 
   Gated on a control plane, unlike the two substitution guards above: this is a policy about a
   plane's chats, not a fact about the shell. **What it does not reach:** Codex has no
   command-pattern permissions, so an attended Codex chat's handoff runs without a prompt, and
   `codex exec --approve-for-me` reports `permission_mode: default`, so it is not refused as
-  unattended. `charter doctor` does not check the handoff gate yet, so nothing names that gap
+  unattended. `purlis doctor` does not check the handoff gate yet, so nothing names that gap
   on a plane but this page.
 
   **What it does not see, on any harness.** It refuses the spellings of a handoff it can
@@ -451,11 +451,11 @@ rule while one who reads a bare refusal files an issue.
   `os.system` inside a `python3 - <<'PY'` body),
   through a variable, from a script file, behind an expansion that does not leave the word whole
   (`{hand,}off`, `hand${x:-}off`), or more than one string deep is not seen.
-  Nor is a shell behind a **name charter cannot know**: `r() { bash; }; r <<'EOF'` defines a
+  Nor is a shell behind a **name purlis cannot know**: `r() { bash; }; r <<'EOF'` defines a
   function and calls it, so the opener reads as `r` and its body is treated as data — the same
   class as an interpreter or a script file. The same rule costs the other direction, which is
   the price of the fail-safe: **when the word that NAMES THE PROGRAM is itself a variable or a
-  substitution** charter cannot name the program and treats that body as something that could
+  substitution** purlis cannot name the program and treats that body as something that could
   run, so a brief-shaped body is refused even when the program is an editor or a pager. An
   expansion elsewhere on the line — a redirect target, an argument — does not, in any of the
   three spellings: `( tee ${OUT} <<'EOF' )`, `( tee "$(mktemp)" <<'EOF' )` and
@@ -474,20 +474,20 @@ rule while one who reads a bare refusal files an issue.
   a Bash rule "isn't a security boundary around the program"
   ([What a Bash rule doesn't match](https://code.claude.com/docs/en/permissions#bash-rule-limits)).
 
-- **A hand-written state file.** A `Write`, `Edit` or `MultiEdit` into charter's state
-  directory (`.charter/`, or `$CHARTER_HOME`), which holds the persona tool gate's frozen
+- **A hand-written state file.** A `Write`, `Edit` or `MultiEdit` into purlis's state
+  directory (`.charter/`, or `$PURLIS_HOME`), which holds the persona tool gate's frozen
   ceiling and the persona pointers (`charter hook pretooluse-edit`). The target is resolved
   through links before it is compared. Gated on a control plane.
 
 ## Two answers that are not denials
 
-- **The persona tool gate.** When nothing above refused a `Bash` call, charter asks whether
+- **The persona tool gate.** When nothing above refused a `Bash` call, purlis asks whether
   the active persona's `tools:` declares the program, and if it does answers `allow`, so the
   harness does not prompt. It never denies; the worst it can do is leave the prompt. It
   declines a command the shell would still rewrite (`$`, `~`, `*`, `;`, `|`, `>` and the
   like), an interpreter or wrapper (`bash`, `python`, `env`, `sudo`, `xargs`, `find`,
   `make`), an argument that names another program, a destructive subcommand, and anything
-  that touches charter's control surface. The ceiling is frozen at `SessionStart`: a session
+  that touches purlis's control surface. The ceiling is frozen at `SessionStart`: a session
   that edits its own persona's `tools:` can narrow the grant mid-session, never widen it.
   Gated on a control plane.
 - **A dispatch beside a running agent.** A `Task`/`Agent` call that sends out a persona
@@ -498,7 +498,7 @@ rule while one who reads a bare refusal files an issue.
 
 ## Where the secret-leak guard stops
 
-charter's position is **guard rails, not guarantees — a guard against mistakes, not an attacker with shell access
+purlis's position is **guard rails, not guarantees — a guard against mistakes, not an attacker with shell access
 as your user.** The secret-leak guard is worth having because an agent reaching for a vault
 file by name is a real and frequent event, and the guard catches those spellings reliably.
 It is not a sandbox, and the list above is not a claim of completeness.
@@ -519,11 +519,11 @@ it, is not winnable in a tokeniser, so the honest move is to say what is open:
 - **a quoted command substitution** — the example above, and `` "`cat <vault>`" `` and
   `"$(<vault>)"`. Two command families are the
   exception, and they are an exception for a different reason rather than a fix for this
-  one: a `gh`/`glab` command that publishes prose, and a charter command that persists it,
+  one: a `gh`/`glab` command that publishes prose, and a purlis command that persists it,
   are refused whenever a live substitution stands on the line — so
   `gh issue create --body "$(cat <vault>)"` and
-  `charter persona remember "$(cat <vault>)"` both stop. See *Forge body substitution* and
-  *charter's own text substitution* above. Neither guard looks inside the substitution or
+  `purlis persona remember "$(cat <vault>)"` both stop. See *Forge body substitution* and
+  *purlis's own text substitution* above. Neither guard looks inside the substitution or
   knows anything about vaults; they refuse the shape. Everywhere else on this page, a quoted
   substitution is still open;
 - **any expansion between the guard and `open()`** — globs (`.charter/vault?/x.json`,
@@ -539,13 +539,13 @@ it, is not winnable in a tokeniser, so the honest move is to say what is open:
 There is no second line of defence behind it: nothing scans Bash *output*. What actually
 makes a vault not worth reading is keeping the value in a system built for custody and
 resolving it on demand, so there is no plaintext on disk for any of the above to print. That
-is the control; the hook is the guard rail. `charter secret exec` hands a value to a command
+is the control; the hook is the guard rail. `purlis secret exec` hands a value to a command
 without anyone reading it ([secrets.md](secrets.md)).
 
 ## A line that looks like a secret, in memory or a brief
 
 A second guard reads text rather than commands. Three places ask it the same question:
-`charter save` before it commits a memory or ref file, `charter handoff` before it sends a
+`purlis save` before it commits a memory or ref file, `purlis handoff` before it sends a
 brief, and the `PostToolUse` hook after a memory or ref is written, which warns rather than
 refuses. Each answer is a **kind**, never the text it matched: an AgentMail key, a
 JWT, a PEM private key, an AWS access key, or a **credential assignment**, which is a
@@ -554,16 +554,16 @@ non-blank characters.
 
 **Naming where a credential lives is not a credential assignment.** The brief refusal tells
 you to do exactly that, and the rule used to refuse the answer whenever it was one word:
-`api_key = vault:forge/api-token` and ``token: `charter secret get forge token` `` were both
+`api_key = vault:forge/api-token` and ``token: `purlis secret get forge token` `` were both
 refused as credentials. A value in
-one of the four spellings charter uses is now let through, with at most a quote or backtick
-on each side: `vault:<vault>/<key>`, `charter secret get <vault> <key>`, and the two URIs a
+one of the four spellings purlis uses is now let through, with at most a quote or backtick
+on each side: `vault:<vault>/<key>`, `purlis secret get <vault> <key>`, and the two URIs a
 `reference` vault stores, `op://<vault>/<item>/<field>` and `vault://<path>#<field>`. Because that happens in the one classifier, every
 place gives the same answer. **The
 whole value, to the end of its line, has to be the reference, and its names have to look
 like names**. No name may start with a prefix a credential issuer puts on its tokens (`ghp_`,
 `github_pat_`, `glpat-`, `sk_live_`, `sk-`, `xoxb-`, `AIza`, `pypi-`, `npm_`, `hf_`, `AKIA`
-and the rest of charter's list of credential prefixes). And all the names together — every vault, key,
+and the rest of purlis's list of credential prefixes). And all the names together — every vault, key,
 item, field and path segment, counted without the scheme or the `/`, `#` and space between
 them — come to **at most 32 characters**. The cap is on the total rather than on each name
 because a secret can hold a `/`: capped per name, AWS's documented example secret key
@@ -572,14 +572,14 @@ refused:
 
 - a bare `forge/token`, because a secret can contain a slash;
 - a token typed into any slot of a reference — `vault:forge/ghp_…`,
-  `charter secret get forge <40 hex>`, `op://<token>/item/field` — by its prefix or by the
+  `purlis secret get forge <40 hex>`, `op://<token>/item/field` — by its prefix or by the
   length it adds, which is the accident this rule exists for;
 - a secret of more than 32 name characters however it is split across names, including a
   `vault://` path of many short segments;
 - a real value beside the reference, glued onto it, or in a second assignment on that line
   or the next;
 - prose after the reference on the same line;
-- any other spelling, including `$(charter secret get …)`, `op:/…`, an `op://` with more or
+- any other spelling, including `$(purlis secret get …)`, `op:/…`, an `op://` with more or
   fewer than three names, and a `vault://` with no `#<field>`.
 
 The four other kinds are checked on the whole text whatever the assignment says:
@@ -596,15 +596,15 @@ refused as a credential.
 Every guard is eventually wrong about something, and the response a design invites at that
 moment is the response it gets. So this is written down rather than left to be discovered.
 
-**There is no config key, environment variable or `charter guard` verb that lifts a
+**There is no config key, environment variable or `purlis guard` verb that lifts a
 denial, and there will not be one.** That is the answer, not an omission:
 
-- charter's guards exist because **committed data must not be able to reach a credential or
-  make something run**. A switch charter read from `charter.toml` would be a switch a
+- purlis's guards exist because **committed data must not be able to reach a credential or
+  make something run**. A switch purlis read from `charter.toml` would be a switch a
   committed file could flip — a teammate's pull request turning off the guard that keeps a
   vault out of the transcript. An environment variable is no better: the agent writes the
   command line the variable would sit on.
-- So an override charter can read is an override the *agent* controls, which is precisely
+- So an override purlis can read is an override the *agent* controls, which is precisely
   the party the guards bound.
 
 **The override is that you run the command yourself.** The guards are `PreToolUse` hooks on
@@ -617,14 +617,14 @@ Some guards name a narrower move first, and it is usually the one you want:
 - **Forge body substitution** — `--body-file <path>`, or `--body-file -` with a quoted
   heredoc. This one is rarely wrong about the shape and often wrong about the intent: the
   body you meant is exactly the body you get, and it is the shorter line to type anyway.
-- **charter's own text substitution** — backslash-escape each backtick, which is one
+- **purlis's own text substitution** — backslash-escape each backtick, which is one
   character and leaves the apostrophes in your prose working.
 - **Release floor** — re-run the step **attended**. This is a mode, and it is yours to set.
-- **One credential** — `charter git-policy --apply` configures every clone for the token
+- **One credential** — `purlis git-policy --apply` configures every clone for the token
   transport, which is what most denials of it are actually asking for.
-- **Plane-root history wipe** — `charter save`. The guard is measuring commits that exist
+- **Plane-root history wipe** — `purlis save`. The guard is measuring commits that exist
   nowhere else; push them and it stops firing, on that command and every other one.
-- **A handoff the prompt cannot stand in front of** — spell it `charter handoff <workspace>
+- **A handoff the prompt cannot stand in front of** — spell it `purlis handoff <workspace>
   <<'BRIEF'`, from the chat the operator is talking to, attended. Three of its four refusals
   have that as the fix, and the fourth (a sub-agent's call) is answered by returning what the
   sub-agent found to the parent chat, which can propose the handoff itself. Your own terminal
@@ -632,12 +632,12 @@ Some guards name a narrower move first, and it is usually the one you want:
   prints what to run rather than opening a chat ([handoff.md](handoff.md)).
 
 **If a guard is wrong about you *every time*, that is not an override problem.** It means
-charter is holding a policy your organisation does not — an org that mandates signed
+purlis is holding a policy your organisation does not — an org that mandates signed
 commits, say. Switching the guard off locally hides that; the fix belongs in the rule.
-[Open an issue](https://github.com/diazoxide/charter/issues).
+[Open an issue](https://github.com/purlis/purlis/issues).
 
 **The thing that is not an override**, named here so nobody finds it by accident and
-believes they found the switch: removing charter's hooks from `.claude/settings.json`, or
+believes they found the switch: removing purlis's hooks from `.claude/settings.json`, or
 disabling the plugin. That takes out every guard, the briefing and every log together,
 because one of them was wrong once. It is an uninstall.
 
@@ -653,12 +653,12 @@ handoffs, and no trace of verdicts is written.
 
 ## When a hook fails
 
-A reporting hook swallows its failures, for the reason above: nothing charter draws is worth
+A reporting hook swallows its failures, for the reason above: nothing purlis draws is worth
 wedging a session over.
 
 **A denial is the exception, and it is load-bearing.** A guard refuses by printing one JSON
 object on stdout, so a hook that cannot write has said nothing, and a `PreToolUse` hook that
-says nothing is an *allow*. Deciding is still allowed to fail: a payload charter cannot parse
+says nothing is an *allow*. Deciding is still allowed to fail: a payload purlis cannot parse
 is judged as an empty command, and no guard fires on that. Refusing is not allowed to fail.
 When the verdict is deny and the write fails, the process exits **2** with the reason on
 stderr, which is the harness's other refusal channel; every other non-zero status is a

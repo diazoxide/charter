@@ -1,4 +1,4 @@
-# A runner is `charterd` behind a connector, and charter's own keys say who is on the link
+# A runner is `purlisd` behind a connector, and purlis's own keys say who is on the link
 
 **Accepted 2026-10-01** by the operator (ruling V29), drafted for program-map ticket RR-13 (#722). It
 follows these of the operator's rulings:
@@ -31,14 +31,14 @@ follows these of the operator's rulings:
 - **E1**, in part: *"Every adapter seam is an extension point"*.
 - **FI3:** *"The human's UI token never reaches an agent; agents keep their own narrow identity
   (SD-7a/b, gap G3), and gain no new power from this feature before those land."*
-- **B1** and **W13**, in short: a feature that needs no server charter runs stays in the
-  open-source build and is complete there. The relay and anything charter would host wait for
+- **B1** and **W13**, in short: a feature that needs no server purlis runs stays in the
+  open-source build and is complete there. The relay and anything purlis would host wait for
   the GT-CLOUD gate. Nothing in this record waits on it.
 
 It builds on [ADR 0066](0066-a-chat-is-a-ulid-a-run-is-a-stretch-of-its-conversation-and-a-device-is-random.md)
 (devices and the event cursor), [ADR 0067](0067-a-chat-runs-in-a-sandbox-charter-compiles-for-its-harness.md)
 (the chat sandbox), [ADR 0068](0068-a-chat-lives-in-charterd-and-the-app-is-its-client.md)
-(`charterd`, its scopes and its §8, which left the runner to this record),
+(`purlisd`, its scopes and its §8, which left the runner to this record),
 [ADR 0069](0069-every-store-charter-writes-is-in-one-of-four-tiers.md) (tiers),
 [ADR 0073](0073-a-harness-is-declared-as-data-and-a-chat-runs-it-at-one-of-three-levels.md)
 (levels) and [ADR 0075](0075-an-audit-entry-is-metadata-in-a-store-of-its-own-and-telemetry-never-reads-it.md)
@@ -55,9 +55,9 @@ reaches another, so all three belong to **Project**, where ADR 0072 §2 puts the
 machine store. Which runner a workspace's chats run on is a **Workspace** setting (RR-23). That
 choice is the ticket's concept, and it is the only part of a runner a workspace holds.
 
-## Where charter is today
+## Where purlis is today
 
-charter has no runner, and no code that reaches another machine. `docs/spec.md` says *"Remote
+purlis has no runner, and no code that reaches another machine. `docs/spec.md` says *"Remote
 sessions are not in v1"* and keeps sessions behind one interface so that SSH or devcontainers
 can come later. Four accepted records already lean on this one:
 
@@ -65,7 +65,7 @@ can come later. Four accepted records already lean on this one:
   keeps the session protocol public and versioned (N−1), with `subscribe(since)`.
 - **ADR 0068 §5** names a sixth client scope, `remote-link`, *"authenticated by the device key
   inside the stream (RR-13)"*, and gives it the session protocol.
-- **ADR 0068 §8** has a runner run the same `charter serve`, drain instead of hand off on an
+- **ADR 0068 §8** has a runner run the same `purlis serve`, drain instead of hand off on an
   upgrade, keep its versions under `<config>/server/<ver>/`, and deny its install files to chats.
   It ends: *"RR-13 decides the rest."*
 - **ADR 0066** makes a runner a device with its own id, and turns the event cursor into a map
@@ -78,34 +78,34 @@ installs to `~/.charter/server/<ver>/`, where V22a put the versions under the ma
 
 ## The decision
 
-**A runner is a device running `charter serve`. The desktop's `charterd` reaches it through a
+**A runner is a device running `purlis serve`. The desktop's `purlisd` reaches it through a
 connector: a command whose stdin and stdout are a byte stream to the runner's host. Inside that
-stream, the two hosts authenticate each other with keys charter pinned when the runner was added,
+stream, the two hosts authenticate each other with keys purlis pinned when the runner was added,
 and encrypt everything after, whatever the connector is. The connector gives reachability and
-never identity. Nothing on this path needs a server charter runs.**
+never identity. Nothing on this path needs a server purlis runs.**
 
 ### 1. Four layers, and what is not a layer
 
 | Layer | What it is | Who decides its details |
 |---|---|---|
 | **L0 · the session protocol** | ADR 0068 §4's public protocol, unchanged, over the link of §3 | FD-4, FD-26, LV-2a |
-| **L1 · the connector** | a command whose stdio reaches `charter bridge` on the runner (§2) | this record; presets in RR-1 and RR-3 |
-| **L2 · bootstrap** | install a verified `charter` of the right version on the runner, and keep its host running (§5) | RR-14, RR-15 |
+| **L1 · the connector** | a command whose stdio reaches `purlis bridge` on the runner (§2) | this record; presets in RR-1 and RR-3 |
+| **L2 · bootstrap** | install a verified `purlis` of the right version on the runner, and keep its host running (§5) | RR-14, RR-15 |
 | **L3 · a provider** (optional) | an extension that creates, starts, stops and destroys a machine in the user's own account, and hands back a connector (§6) | RR-21 |
 
 **Networks are not layers.** Tailscale, WireGuard, a VPN, a jump host, an IAP tunnel or AWS SSM
-are how the user's own `ssh` already reaches a machine. charter runs `ssh` and inherits all of
+are how the user's own `ssh` already reaches a machine. purlis runs `ssh` and inherits all of
 them from `~/.ssh/config`, as Zed and VS Code Remote-SSH do.
 
 ### 2. A connector is a command, held as data
 
-- **A connector is an argument vector,** to which charter appends the runner-side command,
-  `<config>/server/<ver>/charter bridge`. charter never builds a shell string of its own on the
+- **A connector is an argument vector,** to which purlis appends the runner-side command,
+  `<config>/server/<ver>/charter bridge`. purlis never builds a shell string of its own on the
   desktop, and never runs a connector through a shell there.
 - **Two places at the far end are shell by design, and are stated here:**
   - `ssh`, `gh codespace ssh` and `coder ssh` join their remote arguments into one string, which
-    the remote login shell parses. So every argument charter appends is quoted for a POSIX shell,
-    paths included, and those arguments are only charter's own: the bridge's path and fixed
+    the remote login shell parses. So every argument purlis appends is quoted for a POSIX shell,
+    paths included, and those arguments are only purlis's own: the bridge's path and fixed
     words. Nothing a project or a chat wrote is ever among them.
   - The bootstrap's probe (§5) is a POSIX `sh` script, sent the same way and quoted the same way.
 - **Presets, each with every forwarding its tool offers turned off:**
@@ -113,39 +113,39 @@ them from `~/.ssh/config`, as Zed and VS Code Remote-SSH do.
   | Preset | Connector | Forwarding |
   |---|---|---|
   | SSH | `ssh -T <alias> --` | `-o ForwardAgent=no -o ForwardX11=no -o ClearAllForwardings=yes -o Tunnel=no` |
-  | Codespaces | `gh codespace ssh -c <name> --` | the same `-o` options, passed through to the `ssh` it runs. `gh`'s own port forwarding (`gh codespace ports`) is a separate command that charter never runs |
-  | Coder | `coder ssh <workspace> --` | forwards nothing unless asked: charter passes none of `--forward-agent`, `--forward-gpg` or `--remote-forward`, and clears their `CODER_SSH_*` environment variables. RR-1 checks this against the Coder version it tests |
+  | Codespaces | `gh codespace ssh -c <name> --` | the same `-o` options, passed through to the `ssh` it runs. `gh`'s own port forwarding (`gh codespace ports`) is a separate command that purlis never runs |
+  | Coder | `coder ssh <workspace> --` | forwards nothing unless asked: purlis passes none of `--forward-agent`, `--forward-gpg` or `--remote-forward`, and clears their `CODER_SSH_*` environment variables. RR-1 checks this against the Coder version it tests |
   | a container, or a devcontainer (RR-3) | `docker exec -i -u <user> <container>` | nothing to turn off. `-u` names a non-root user, because one OS user is one person (§3) |
-  | Kubernetes | `kubectl exec -i <pod> [-c <container>] --` | nothing to turn off. The user is the container's, set by the pod's security context; `charter runner doctor` warns when it is root |
+  | Kubernetes | `kubectl exec -i <pod> [-c <container>] --` | nothing to turn off. The user is the container's, set by the pod's security context; `purlis runner doctor` warns when it is root |
   | anything else | an argument vector the operator types | the operator's to set. Doctor says it cannot check it |
 
-  `charter runner doctor` warns when the user's own configuration turns a forwarding back on for
+  `purlis runner doctor` warns when the user's own configuration turns a forwarding back on for
   that host. A runner never receives a way to act as the operator's SSH or GPG identity.
-- **`charter bridge` is a pipe, not a host.** It connects its stdio to the runner's
+- **`purlis bridge` is a pipe, not a host.** It connects its stdio to the runner's
   `charterd.sock` as the same OS user, starting the host under its supervisor (§5) when none
   answers. The link's handshake (§3) ends in the runner's host, not in the bridge, so the bridge
   holds no key and makes no decision.
 - **A runner is defined only on the machine that uses it.** A connector runs a program on a
   click, which is ADR 0022's reason for asking before anything a project declares runs. So the
   definition, with its connector and pinned key, is Machine state on the desktop (§8), written
-  only from the window or from `charter runner add` on a human scope. **A project may name a
+  only from the window or from `purlis runner add` on a human scope. **A project may name a
   runner, and never define one.** RR-23's workspace default names a runner by name. A name this
   machine does not know starts no chat, and the window says which runner is missing and offers
   to add it.
 - **The relay is a second kind of connector, built in rather than a command**, once GT-CLOUD
-  opens (W13, LW-1). A hosted runner is then a provider that charter operates, reached through
+  opens (W13, LW-1). A hosted runner is then a provider that purlis operates, reached through
   the relay. Both use the link of §3 unchanged, so nothing on the connector path changes when
   they come.
 - **A connector that fails shows its own words.** Its stderr is shown in full when the link does
   not come up, since that is where `ssh` explains a host key or an authentication failure.
-  charter never parses it to decide anything.
+  purlis never parses it to decide anything.
 - **Reconnect is the desktop's.** A dropped connector is retried with backoff, the runner's tabs
   say *reconnecting…*, and the SSH preset sets `ServerAliveInterval`. On reconnect the desktop
   resubscribes from its cursor and re-attaches its views with a snapshot (ADR 0068 §4). The
   runner's chats never notice. There is no UDP transport: persistence comes from the host owning
   the sessions, not from the connector.
 
-### 3. The link: charter's keys inside the stream
+### 3. The link: purlis's keys inside the stream
 
 ADR 0068 §5 already decided that `remote-link` is authenticated *"by the device key inside the
 stream"*, not by the transport. This section says how.
@@ -176,7 +176,7 @@ stream"*, not by the transport. This section says how.
   twice, and it costs little CPU. It keeps one path for every connector, including those whose
   stream passes through a party the operator does not run (a Kubernetes API server, a vendor's
   gateway, later the relay). A forwarded secret (§7) then crosses every connector the same way.
-- **Pairing happens once, over the connector, when the runner is added.** `charter runner add`
+- **Pairing happens once, over the connector, when the runner is added.** `purlis runner add`
   bootstraps the runner (§5), then asks the runner's host, through the bridge, to add the
   desktop's public link key to its peers and to return its own device id and public link key.
   Both are pinned: the desktop in its runner definition, the runner in its peers file (§8). The
@@ -189,23 +189,23 @@ stream"*, not by the transport. This section says how.
 - **The runner's host refuses a handshake whose key is not in its peers**, and records the
   refusal with the offered key's fingerprint, which `XX` has delivered by then (§10). Removing a
   runner removes its row on the desktop and, when the link is up, the desktop's key from the
-  runner's peers. `charter runner peers` on the runner lists and removes peers from a shell on
+  runner's peers. `purlis runner peers` on the runner lists and removes peers from a shell on
   that machine.
 - **One OS user on a runner is one person, and its peers are that person's devices (RR-26).**
-  Pairing needs the connector's own login as that user, so charter adds no second way in. A
+  Pairing needs the connector's own login as that user, so purlis adds no second way in. A
   second person on a shared machine uses a user of their own, and the docs say so (V9: a shared
-  runner never lets two humans use one subscription). `charter runner doctor` names each peer it
+  runner never lets two humans use one subscription). `purlis runner doctor` names each peer it
   holds, so a peer nobody expected is visible. A device outside the owner's set is refused, and
   team grants wait for GT-CLOUD.
 
 ### 4. Who may do what over the link
 
-**The link is asymmetric. The desktop is always the client.** The desktop's `charterd` opens it
+**The link is asymmetric. The desktop is always the client.** The desktop's `purlisd` opens it
 and holds `remote-link` on the runner's host. The runner never holds a scope on the desktop's
 host. What the runner sends back is events on a connection the desktop opened: output, state,
 asks and requests. The desktop's host decides what to do with each.
 
-- **The link lives in the desktop's `charterd`, not in the app.** A runner's asks and secret
+- **The link lives in the desktop's `purlisd`, not in the app.** A runner's asks and secret
   requests must reach the desktop's host while no window is open, which is ADR 0068 §1's rule
   for what the host holds. The window reaches a runner through its own `local-ui` connection to
   its own host, which relays. Holding a link does not keep the desktop's host running: see
@@ -222,7 +222,7 @@ asks and requests. The desktop's host decides what to do with each.
   | nothing | `chat` |
 
 - **A stop needs no human.** Stopping only removes power, so a stop may go down the link whatever
-  asked for it, as `charter stop --all` may stop a machine from any shell (ADR 0071). A stop that
+  asked for it, as `purlis stop --all` may stop a machine from any shell (ADR 0071). A stop that
   arrives over the link is recorded on the runner as `unattributed`, never `human`, because the
   runner cannot know who asked.
 - **A re-arm and a sandbox opt-out come from the window only.** They restore or widen power, so
@@ -231,7 +231,7 @@ asks and requests. The desktop's host decides what to do with each.
   (V29b).
 - **Why an agent on the desktop cannot act on a runner.** Three things hold it, not one:
   - the `chat` scope has no command that reaches a link;
-  - the human scopes' credentials are denied to a chat's sandbox, and `charterd` refuses those
+  - the human scopes' credentials are denied to a chat's sandbox, and `purlisd` refuses those
     scopes to a connection from a chat's process tree (ADR 0068 §5, V16a);
   - the link key is denied to a chat's sandbox (ADR 0067, amended), so a chat cannot open a link
     of its own.
@@ -248,9 +248,9 @@ asks and requests. The desktop's host decides what to do with each.
 **Settled by V9 and V22a**, applied. RR-14 and RR-15 build it.
 
 - **Where:** `<config>/server/<ver>/charter` on the runner, `<config>` being the machine store as
-  the runner resolves it (`$CHARTER_CONFIG_HOME`, else `$XDG_CONFIG_HOME`, else `~/.config`, then
+  the runner resolves it (`$PURLIS_CONFIG_HOME`, else `$XDG_CONFIG_HOME`, else `~/.config`, then
   `charter/`). RR-14's row, which said `~/.charter/server/<ver>/`, follows V22a.
-- **What:** the same `charter` binary the desktop ships, built for the runner's platform, as a
+- **What:** the same `purlis` binary the desktop ships, built for the runner's platform, as a
   release asset of its own: Linux x86_64 and aarch64, and macOS arm64. Each is signed with
   minisign by ADR 0042's key (ADR 0042, amended). A Windows runner waits for the Windows port
   (ADR 0068's *Later decisions*).
@@ -258,7 +258,7 @@ asks and requests. The desktop's host decides what to do with each.
   the asset's minisign signature with the key ADR 0042 commits, and only then trusts its SHA-256.
   The asset reaches the runner one of two ways: the runner downloads it from GitHub Releases, or
   the desktop uploads it through the connector for a machine with no outbound access. Either way
-  it lands in a temporary name in `<config>/server/`, not yet executable. **No `charter` exists
+  it lands in a temporary name in `<config>/server/`, not yet executable. **No `purlis` exists
   on the runner yet to check it, so the check is the probe's:** the desktop runs `sha256sum`,
   or `shasum -a 256` where that is what the platform has, over the file through the connector,
   compares the result with the digest it verified, and only then has the probe mark the file
@@ -273,7 +273,7 @@ asks and requests. The desktop's host decides what to do with each.
   version. A new version takes new chats, and the old host keeps its chats until each ends and is
   never killed (ADR 0068 §8). The session protocol's N−1 promise (E5) covers the overlap.
 - **The host stays up with no client (RR-15).** A `systemd --user` unit with linger on Linux (the
-  bootstrap asks once, and says why), a LaunchAgent on macOS, and `charter serve --foreground`
+  bootstrap asks once, and says why), a LaunchAgent on macOS, and `purlis serve --foreground`
   in a container, whose runtime is the supervisor. See ADR 0068, amended, for what that changes.
 - **The probe is small, and changes nothing but the one file.** Before installing, the desktop
   runs the probe through the connector to report the platform, the resolved `<config>`, the
@@ -289,7 +289,7 @@ asks and requests. The desktop's host decides what to do with each.
   OCI and Fly. *Not binding:* RR-21 may add a call for prices when it builds its cost guard.
 - **The provider's token stays in a vault on the desktop**, and the calls go from the desktop to
   the provider's own API. The machine it creates gets the user's SSH key and nothing else from
-  cloud-init. charter's bootstrap (§5) then runs as on any other host.
+  cloud-init. purlis's bootstrap (§5) then runs as on any other host.
 - **Idle shutdown and the cost guard are RR-21's**, from V9's row: stop after a period with no
   running chat and no client, snapshot-and-delete where a stopped machine still bills, a monthly
   cap with a hard stop, and destroy on workspace remove.
@@ -318,16 +318,16 @@ where it is kept, its tier, and how step-up meets V15's approval.
 for the SSH preset and for no other connector, and would put a second path into the runner's
 bare repos beside the one the host guards. Carrying the pack protocol on the link keeps every
 connector equal, and keeps the bare repos behind the host that V16d already denies to chats.
-RR-16 picks how git on the desktop reaches the link: a remote helper, `git-remote-charter`, is
+RR-16 picks how git on the desktop reaches the link: a remote helper, `git-remote-purlis`, is
 git's standard way.
 
 **The kill switch reaches every runner the link can reach.** When this machine is stopped, by
-**Stop all** in the window or by `charter stop --all` in any shell, the desktop's host sees the
+**Stop all** in the window or by `purlis stop --all` in any shell, the desktop's host sees the
 switch (ADR 0071's watch) and sends a stop down every open link at once. Each runner's host
 throws its own switch: its own `halted` and journal, with `by: link`. While the desktop is
 stopped, a stop is the first thing any link carries when it opens, so a runner that was asleep
 is stopped as soon as it is reached. A runner that cannot be reached keeps its agents running
-until it is, and the window names it as *not reached* (V29c). On the runner itself, `charter stop --all` from a shell stops it as on any machine.
+until it is, and the window names it as *not reached* (V29c). On the runner itself, `purlis stop --all` from a shell stops it as on any machine.
 
 **The window's re-arm re-arms this machine and every runner the same stop reached**, and lists
 them before it does. A runner stopped from its own command line, or one the re-arm cannot reach,
@@ -341,7 +341,7 @@ stays stopped, shows so on its row, and has a re-arm of its own there.
 | the runner's peers | `<config>/peers.json` on the runner: each paired device's id and pinned public link key, and when it was paired | Machine, device-bound |
 | the link key | the Keyring; on a headless runner, the same age-encrypted form V1 gives the device key | Keyring |
 | the runner's host versions | `<config>/server/<ver>/` on the runner (V22a) | Machine, device-bound, rebuildable |
-| the bare repos | `<data>/repos/<workspace>/<repo>.git` on the runner, in charter's data home (ADR 0075), one per workspace repo | Machine, device-bound, rebuildable. The desktop's clone is the truth, and a push rebuilds them |
+| the bare repos | `<data>/repos/<workspace>/<repo>.git` on the runner, in purlis's data home (ADR 0075), one per workspace repo | Machine, device-bound, rebuildable. The desktop's clone is the truth, and a push rebuilds them |
 
 **Both pinned records are device-bound.** A pinned key says which two devices trust each other,
 and a second machine of the same person pairs on its own. A restore onto a machine that does not
@@ -362,10 +362,10 @@ chat's sandbox always denies.
   *on that runner* (ADR 0073 §2). A project's harness declaration is approved per machine
   (V24b), so a runner approves it once too, from the desktop's window over the link.
 - **Harness logins stay in the harness's flow** (RR-20). A login happens in a shell tab on the
-  runner, through the harness's own device or paste-code flow. charter never reads, copies,
+  runner, through the harness's own device or paste-code flow. purlis never reads, copies,
   stores, vaults or relays a harness credential.
 - **Needs-you with the desktop closed** goes through notifiers the user owns (IB-12) and
-  `charter inbox` over any SSH client on the runner (IB-13), which answers asks through the
+  `purlis inbox` over any SSH client on the runner (IB-13), which answers asks through the
   runner's own `approval` scope. A secret approval is never answered there: it happens where the
   vault lives (V15).
 - **The runner is an audited device** (RR-22). Its host writes its own chain, the desktop keeps
@@ -388,13 +388,13 @@ chat's sandbox always denies.
 
 ## ADR 0042, amended
 
-§1 and §3 sign what the updater installs: the app's bundles. They gain **one `charter` binary
+§1 and §3 sign what the updater installs: the app's bundles. They gain **one `purlis` binary
 per runner platform** (Linux x86_64 and aarch64, macOS arm64), published as release assets and
 signed with minisign by the same key, with its public half the one `tauri.conf.json` commits.
 The manifest names each asset's version as the updater's manifest does, so a runner's binary is
 bound to the version it claims, as §3's `requireSignedVersion` binds the app's. The desktop
 verifies every runner asset before it trusts its digest (ADR 0078 §5). A release that is missing
-a runner asset, or its signature, fails as a bundle without one fails today. Nothing charter
+a runner asset, or its signature, fails as a bundle without one fails today. Nothing purlis
 cannot verify reaches a runner either.
 
 ## ADR 0066, amended
@@ -424,7 +424,7 @@ The classes stay classes, and SD-2 and RR-5 turn them into rules and tests.
   runner is not a login item for that reason, and **Quit still ends every local chat and exits
   the host**, as ADR 0025's promise and §2's table say. Quitting closes the host's links. The
   runner's chats keep running on the runner, and its asks and secret requests wait there: an ask
-  until the next link or `charter inbox` on the runner, a secret request until V15's timeout
+  until the next link or `purlis inbox` on the runner, a secret request until V15's timeout
   denies it. A desktop that is a login item for another reason (a trigger) keeps its links while
   it runs.
 - **§2, the lifecycle, on a runner.** The table there reads the app going away three ways. On a
@@ -450,7 +450,7 @@ The classes stay classes, and SD-2 and RR-5 turn them into rules and tests.
   it to run and its own gate approved (ADR 0078 §7). The push is the desktop host's act, not a
   capability of any scope.
 - **§8, *"The app reaches it through a connector command's stdio"*,** now reads: **the desktop's
-  `charterd` reaches it through a connector command's stdio, and the window reaches it through
+  `purlisd` reaches it through a connector command's stdio, and the window reaches it through
   its own host** (ADR 0078 §4). *"RR-13 decides the rest"* is this record.
 
 ## ADR 0069, amended
@@ -470,7 +470,7 @@ The classes stay classes, and SD-2 and RR-5 turn them into rules and tests.
 
 ## ADR 0071, amended
 
-- **The switch reaches runners.** A stop on the desktop, from the window or from `charter stop
+- **The switch reaches runners.** A stop on the desktop, from the window or from `purlis stop
   --all`, is sent down every open link, and is the first command on any link that opens while
   the desktop is stopped (ADR 0078 §7). A runner that is not reached keeps its agents running
   until it is, and the window says so.
@@ -512,10 +512,10 @@ The code does not change with this record.
 | Where | Change |
 |---|---|
 | `CONTEXT.md` | Gains **Runner**, **Connector** and **Link**; **Remote chat**'s avoid line points to **Runner** (in this PR) |
-| `docs/plane-format.md` | The stores of §8 in the table of what charter-app keeps outside every project, each **decided, not yet written** with its tier; the kill switch's `by` gains `link` on a runner (in this PR) |
+| `docs/plane-format.md` | The stores of §8 in the table of what purlis keeps outside every project, each **decided, not yet written** with its tier; the kill switch's `by` gains `link` on a runner (in this PR) |
 | ADR 0042, ADR 0066, ADR 0067, ADR 0068, ADR 0069, ADR 0071, ADR 0075 | Amended above. Their texts are left as accepted, and this record is the amendment |
-| RR-14 | The install path is `<config>/server/<ver>/` (V22a); the probe's digest check before the first run (§5). The release gains a signed `charter` asset per runner platform (ADR 0042, amended); `release.yml` publishes Linux x86_64 only today |
-| RR-1 | The SSH preset with its options, `charter runner add`, pairing (§3), the link on the desktop's host, and the scope table of §4 |
+| RR-14 | The install path is `<config>/server/<ver>/` (V22a); the probe's digest check before the first run (§5). The release gains a signed `purlis` asset per runner platform (ADR 0042, amended); `release.yml` publishes Linux x86_64 only today |
+| RR-1 | The SSH preset with its options, `purlis runner add`, pairing (§3), the link on the desktop's host, and the scope table of §4 |
 | RR-2 | Pairing through the relay produces the same two pinned records as pairing over a connector (§3), and uses the link unchanged |
 | RR-3 | The container preset, with its named non-root user |
 | RR-5 | ADR 0067's classes on the runner, including the amendment |
@@ -538,7 +538,7 @@ The code does not change with this record.
 - **The first install trusts the runner's own hash tool.** A runner that lies about a digest is
   already lost to that user, so this guards the path from the release, not the runner itself.
 - **A runner cannot be stopped while it cannot be reached.** Its agents keep running until the
-  link returns, and the window says so. `charter stop --all` in a shell on the runner is the
+  link returns, and the window says so. `purlis stop --all` in a shell on the runner is the
   fallback.
 - **Quitting the desktop leaves runner chats running, and waiting.** Their secret requests are
   denied at V15's timeout until a desktop is back.
@@ -558,7 +558,7 @@ The code does not change with this record.
   cannot reach `kubectl exec`, `gh codespace ssh`, `docker exec` or the relay. Stdio into a bridge
   works through anything that runs a command.
 - **The transport's authentication as the runner's identity.** It exists for SSH only, differs
-  per connector, and would vanish with the relay. A pinned pair of charter keys survives a change
+  per connector, and would vanish with the relay. A pinned pair of purlis keys survives a change
   of connector.
 - **Noise `KK`.** It fits one peer. With several it needs a peer hint in the clear, and it never
   tells a refusing runner which key was offered (§3).
@@ -592,7 +592,7 @@ The operator accepted all four questions as recommended:
    It amends V22d, which now reads *"only a window re-arms: this machine's, or, for a runner, its
    desktop's"*.
 3. **V29c: a runner never stops itself after a silence.** The window names every runner a stop
-   has not reached and keeps trying, and `charter stop --all` on the runner is the fallback.
+   has not reached and keeps trying, and `purlis stop --all` on the runner is the fallback.
 4. **V29d: this record merges before LW-1 and LW-19 exist.** LW-1 and RR-2 must reuse the same
    two pinned records over the same Noise `XX` link, and LW-19 must pin its bundle hash beside
    them.

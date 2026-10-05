@@ -31,7 +31,7 @@ ruling quotes those numbers. They are the filed spec.
 
 It builds on ADR 0066, [ADR 0067](0067-a-chat-runs-in-a-sandbox-charter-compiles-for-its-harness.md)
 (the chat sandbox), [ADR 0068](0068-a-chat-lives-in-charterd-and-the-app-is-its-client.md)
-(`charterd` and the hook spool), [ADR 0069](0069-every-store-charter-writes-is-in-one-of-four-tiers.md)
+(`purlisd` and the hook spool), [ADR 0069](0069-every-store-charter-writes-is-in-one-of-four-tiers.md)
 (storage tiers) and [ADR 0073](0073-a-harness-is-declared-as-data-and-a-chat-runs-it-at-one-of-three-levels.md)
 (harness levels). It amends ADR 0066, ADR 0067, ADR 0069,
 [ADR 0070](0070-a-forge-is-one-seam-with-a-native-client-per-forge-and-gh-and-glab-are-its-fallback.md)
@@ -43,9 +43,9 @@ side (OB-1 to OB-3).
 Its concept is **Project**. The audit is a part of the project, like the device and the machine
 store ([ADR 0072](0072-charter-has-five-concepts-and-every-other-word-belongs-to-one-of-them.md) §2).
 
-## Where charter is today
+## Where purlis is today
 
-charter writes no audit and no telemetry. There is no audit store, no OTel exporter and no
+purlis writes no audit and no telemetry. There is no audit store, no OTel exporter and no
 receiver. But five accepted records already promise audit entries:
 
 - **ADR 0067** records `trust.sandbox.off` and `trust.sandbox.on`, and each unlisted-egress
@@ -70,7 +70,7 @@ Three more facts shape it:
   kept their own copy. The phase-2 critique estimated about 650 MB per 8-hour day at 50 busy
   chats (P3-24, an estimate). No record says when an entry is flushed, how long it is kept, or
   what happens when the disk fills.
-- **The word "audit" is taken once already.** `charter secret audit` is a report on vault health.
+- **The word "audit" is taken once already.** `purlis secret audit` is a report on vault health.
   It is not this, and it keeps its name.
 - **The local principal holds a login name** (`local:<device>/<os-user>`, ADR 0066). That is
   personal data, and a hash chain cannot be edited to remove it later.
@@ -104,7 +104,7 @@ Three more facts shape it:
   dependency, and the OTel exporter has no path into `<data>/audit/`.
 - **They join only on the event id.** Both carry the event's `ulid` (`charter.event.id` on the
   OTel side, `event` in an entry). A join happens in the user's own backend, after the user
-  exports both. charter never ships one to the other.
+  exports both. purlis never ships one to the other.
 - **Product telemetry (O4) and crash reports (O9) are telemetry.** They stay opt-in, with their
   local viewer. Nothing here changes them.
 
@@ -117,7 +117,7 @@ Where one fact has an act and a number, the act is audit and the number is telem
 | A budget pausing a chat (N4) | `budget.paused` | the spend that crossed it |
 | A sandbox denial | `sandbox.denied` | the denial rate (SD-2's outcome bar) |
 | An extension (E9) | capability use, and a crash | CPU and memory. This narrows E9 (V25d) |
-| `charterd` restarting | `host.started`, with the reconcile result | uptime, restart count |
+| `purlisd` restarting | `host.started`, with the reconcile result | uptime, restart count |
 
 ### 2. One entry: who, for whom, did what, to what, with what result
 
@@ -147,7 +147,7 @@ outcome, and metadata only. This record fixes their form. Each entry is one JSON
 | `org` | the org the act was under. `null` until an account and an org exist (§9) |
 | `target` | what was acted on: a list of `{type, id}`. Chats and runs by their ULIDs, work items by the tracker's key (FW-5), a repo by its inventory name, a vault and a secret by name. **Never a chat's number** (ADR 0066) |
 | `outcome` | `allowed` or `denied` for a decision; `succeeded` or `failed` for an act; `recorded` for a fact with no result, such as a run starting |
-| `coverage` | for an agent's entry, what charter could see of that run (§5). `null` otherwise |
+| `coverage` | for an agent's entry, what purlis could see of that run (§5). `null` otherwise |
 | `meta` | the action's typed metadata (§4) |
 | `chain` | the hash of the previous entry and the device's signature. AU-2 fixes the algorithms. The hash covers the entry in its RFC 8785 canonical form, without `chain.sig` |
 
@@ -159,8 +159,8 @@ through the operator's own client scope."* This record adds two actor forms to A
 | `actor_kind` | Who | The actor, before it is pseudonymised |
 |---|---|---|
 | `agent` | a run, reporting through the hook channel, its protocol (level 3) or the host acting for it | `agent:<persona>/<run>` (ADR 0066) |
-| `human` | the operator, through a human client scope: the window, or `charter` on a human scope (ADR 0068) | the local principal, or the account's principal after `account.link` |
-| `host` | `charterd` itself: a drain, a reconcile, a gap, a prune, a key rotation | `host:<device>` |
+| `human` | the operator, through a human client scope: the window, or `purlis` on a human scope (ADR 0068) | the local principal, or the account's principal after `account.link` |
+| `host` | `purlisd` itself: a drain, a reconcile, a gap, a prune, a key rotation | `host:<device>` |
 | `unattributed` | a fact the host read from a file any process of the user can write, such as the kill switch's `cli` lines (ADR 0071, amended below) | `unattributed:<device>` |
 
 **`on_behalf_of` is always set.** For an agent it is the human the chat runs for. For `host` and
@@ -180,7 +180,7 @@ stays intact.
 - **The key is in the Keyring tier**, one per human principal on this device. AU-18 fixes the
   algorithm, the key's item name and how the viewer shows names while the key exists.
 - **Erasure deletes the key.** The chain hashes the pseudonym, never the name, so
-  `charter audit verify` still passes and the entries no longer say who.
+  `purlis audit verify` still passes and the entries no longer say who.
 - **What stays plain:** the device id, chat, run and work-item ids in `target`, and names in
   `meta`. They are random ids or project names. What links a device or a chat to a person lives in
   the project and the machine store, not here. Erasure makes an entry unreadable as to *who*, not
@@ -228,7 +228,7 @@ rest of O3's sources.
 | `audit.chain.gap`, `audit.chain.genesis`, `audit.segment.pruned`, `audit.retention.changed`, `audit.exported` | this record, AU-3, AU-4, AU-22 | ranges, hashes, the settings, the export's target kind |
 | `account.link` | ADR 0066 | nothing beyond the two pseudonyms |
 
-### 5. Coverage says what charter could see
+### 5. Coverage says what purlis could see
 
 **Settled by W8** (a coverage label per harness level) and **ADR 0073 §7**, applied. Every
 `agent` entry carries its run's coverage:
@@ -239,7 +239,7 @@ rest of O3's sources.
 | `hooks` | level 2: the tool calls its hooks report |
 | `unarmed` | level 2 whose hooks have never reported (ADR 0073 §7) |
 | `protocol` | level 3: every tool call its protocol reports |
-| `observed` | a vendor-cloud "remote chat" charter lists but does not govern (W8, FD-19) |
+| `observed` | a vendor-cloud "remote chat" purlis lists but does not govern (W8, FD-19) |
 
 A view of the audit shows the label beside the entry, so a reader never takes a level-1 chat's
 silence for "it did nothing".
@@ -248,17 +248,17 @@ silence for "it did nothing".
 
 **Settled by X47:** the audit lives only in the app data directory, and never in `.charter/`.
 
-- **Where:** `<data>/audit/<device>/`. `<data>` is `$CHARTER_DATA_HOME` if set, else
+- **Where:** `<data>/audit/<device>/`. `<data>` is `$PURLIS_DATA_HOME` if set, else
   `$XDG_DATA_HOME/charter`, else the OS data directory's `charter/` (`~/Library/Application
   Support/charter` on macOS, `~/.local/share/charter` on Linux). This is a new Machine location
   beside the machine store in the config home (ADR 0069, amended below; V25a).
 - **The writer refuses a path under a project or inside any git work tree**, whatever `<data>`
-  resolves to. That is AU-3's acceptance and research 08 §6.3's rule that charter refuses any
+  resolves to. That is AU-3's acceptance and research 08 §6.3's rule that purlis refuses any
   path under a project, and a test holds it.
 - **One directory per device.** After a restore onto a machine that does not replace the old one,
   the old device's chain is kept as its records and never appended to (ADR 0069 §5). A directory
   per device id makes that a matter of not writing to it.
-- **`charterd` is the only writer, and chats are denied the directory** (W8, ADR 0067 §5
+- **`purlisd` is the only writer, and chats are denied the directory** (W8, ADR 0067 §5
   class 2).
 
 | Store | Tier | Backed up (FR-10) |
@@ -351,7 +351,7 @@ that: it mints no id. It adds:
 
 - **A field, `actor_kind`,** set from the channel an event arrived on (§2), so a reader never
   has to parse an actor to learn what it is. A pseudonymised actor cannot be parsed anyway.
-- **Two actor forms:** `host:<device>`, for what `charterd` does on its own account (a drain, a
+- **Two actor forms:** `host:<device>`, for what `purlisd` does on its own account (a drain, a
   reconcile, a gap, a prune, a key rotation), and `unattributed:<device>`, for a fact the host
   read from a file any process of the user can write. Neither is a principal that can be granted
   anything. They exist so that C4's rule, an actor on every entry, never forces a false one.
@@ -371,8 +371,8 @@ note (§4). The denials of §5 class 2 name the directory §6 places: `<data>/au
 ## ADR 0069, amended
 
 - **§1, the Machine tier's places.** They were the machine store in the config home, the app's OS
-  directories, and charter's lines in a harness's global config. They gain a fourth: **`<data>`,
-  charter's data home**. That is `$CHARTER_DATA_HOME`, else `$XDG_DATA_HOME/charter`, else the OS
+  directories, and purlis's lines in a harness's global config. They gain a fourth: **`<data>`,
+  purlis's data home**. That is `$PURLIS_DATA_HOME`, else `$XDG_DATA_HOME/charter`, else the OS
   data directory's `charter/`. It holds data that is too large or too long-lived for the config
   home and must never be kept with configuration. The audit is its first store. Every store in it
   is Machine, and names its own mark.
@@ -402,7 +402,7 @@ parse, and nothing here changes how it fails closed. What is added: **the host r
 journal line as an event when it reads it**, at start or through the watch, and the audit writes
 it as `killswitch.stop`, `killswitch.rearm` or `killswitch.tamper`. A `window` line is a `human`
 entry, an `app` line (a tamper the app wrote back) is a `host` entry, and a `cli` line is
-`unattributed`, because any process of the user can run `charter stop --all` and the command is
+`unattributed`, because any process of the user can run `purlis stop --all` and the command is
 not on a human scope. The residual that ADR 0071 states stands: a re-arm forged while no host
 runs is recorded as what the host read.
 
@@ -413,13 +413,13 @@ The code does not change with this record.
 | Where | Change |
 |---|---|
 | `CONTEXT.md` | Gains **Audit**, **Audit entry**, **Coverage** and **Telemetry** (in this PR) |
-| `docs/plane-format.md` | `<data>` and its stores in the table of what charter-app keeps outside every project, each **decided, not yet written** with its tier; `<data>` in the Machine tier's definition; `CHARTER_DATA_HOME` and `XDG_DATA_HOME` among the variables (in this PR) |
+| `docs/plane-format.md` | `<data>` and its stores in the table of what purlis keeps outside every project, each **decided, not yet written** with its tier; `<data>` in the Machine tier's definition; `PURLIS_DATA_HOME` and `XDG_DATA_HOME` among the variables (in this PR) |
 | ADR 0066, ADR 0067, ADR 0069, ADR 0070, ADR 0071 | Amended above. Their texts are left as accepted, and this record is the amendment |
 | AU-18 | The pseudonym and its key. It lands before AU-3 and before any write to the audit store (§10) |
 | AU-2 (`charter-audit`) | The entry type, the action registry with its `meta` types, RFC 8785 canonical form, the hash chain and signature |
 | AU-3 | The store of §6 and the writer of §7, with the path refusal, group commit, reconcile and the throughput test. Moves the `docs/plane-format.md` rows from decided to written |
 | AU-4, AU-5 | Register the rest of O3's sources |
-| AU-7 | Checkpoints in `checkpoints/`; `charter audit verify` across pruned segments |
+| AU-7 | Checkpoints in `checkpoints/`; `purlis audit verify` across pruned segments |
 | AU-8 | The viewer, the coverage labels and the retention settings of §8 |
 | AU-19 | The args digest |
 | AU-20 | The sandbox denial of `<data>/audit/` and the device key |
@@ -451,9 +451,9 @@ The code does not change with this record.
 - **One store for audit and telemetry, with a kind column.** It is O1's opposite: one retention,
   one schema, and a sampler one setting away from the audit.
 - **OTel logs as the audit store.** OTel may sample and batch-drop by design, and its exporter
-  sends to a collector charter does not control.
+  sends to a collector purlis does not control.
 - **Writing audit entries straight from hooks.** The hook would pay for the write, the chain
-  would have many writers, and W8's "charterd is the only writer" would not hold.
+  would have many writers, and W8's "purlisd is the only writer" would not hold.
 - **SQLite as the store.** A hash chain is append-only and sequential, and plain segments are
   what tiled logs and exporters read. SQLite stays available as a rebuildable index over them.
 - **Plain principals, erased by rewriting the chain.** A rewrite breaks every later hash, and
@@ -470,7 +470,7 @@ The code does not change with this record.
 
 The operator accepted all five questions as recommended:
 
-1. **V25a: the audit lives in charter's data home, `<data>`.** ADR 0069 §1 gains it as a fourth
+1. **V25a: the audit lives in purlis's data home, `<data>`.** ADR 0069 §1 gains it as a fourth
    Machine location.
 2. **V25b: retention defaults are one year and 2 GiB.** A segment is pruned only once a checkpoint
    covers it and, where a sink exists, once the sink has it. When none qualifies, the store grows

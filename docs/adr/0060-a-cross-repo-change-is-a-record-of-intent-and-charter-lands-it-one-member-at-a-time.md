@@ -1,7 +1,7 @@
-# A cross-repo change is a record of intent, and charter lands it one member at a time
+# A cross-repo change is a record of intent, and purlis lands it one member at a time
 
 **Accepted 2026-09-26**, by the operator's rulings D1–D7 on the split of charter#360 (#466).
-The design is the Python charter's Phase 4 spec (charter-plane,
+The design is the Python charter's Phase 4 spec (purlis-plane,
 `docs/superpowers/specs/2026-08-28-phase4-cross-repo-change.md`, §3.1–3.7, §6 and §8), carried
 over in the app's terms. Where the operator's rulings changed a Python answer, this record says
 so. `docs/plane-format.md` already records the files; nothing here changes their format.
@@ -36,17 +36,17 @@ Serialisation is canonical, so a record read and written back is byte-identical.
 - **It is committed exactly when its workspace is LIVE.** The LIVE block already un-ignores
   `changes/**` and re-ignores `changes/log/`. A LOCAL workspace's change is a file on one
   machine.
-- **A change ends.** `charter change forget <slug>` deletes the record. Its name lives on in
+- **A change ends.** `purlis change forget <slug>` deletes the record. Its name lives on in
   branch names, request bodies and commit trailers.
 
-**2. Landing is a declaration, read against git (§3.1).** `charter change land` appends one line
+**2. Landing is a declaration, read against git (§3.1).** `purlis change land` appends one line
 to `workspaces/<ws>/changes/log/<host>.jsonl`, which is never committed and is unioned by
-`.gitattributes`. The line records that charter merged this commit for this change. A member
+`.gitattributes`. The line records that purlis merged this commit for this change. A member
 is *landed* when the forge reports its request merged **and** the default branch contains the
 sha the log recorded. The forge alone cannot see a revert, and the log alone cannot see a
 browser merge.
 
-**3. Ordering is declared, derived on each read, and enforced where charter acts (§3.2).**
+**3. Ordering is declared, derived on each read, and enforced where purlis acts (§3.2).**
 
 - `needs` names the members that must land first. A cycle is refused at write time, with both
   members named.
@@ -54,12 +54,12 @@ browser merge.
 - `land` refuses a member whose blockers have not landed. It cannot stop a person merging in the
   browser. When that happens, doctor names it as a divergence at FAIL.
 
-**4. There is no cross-repo merge loop (§3.3).** `charter change land <slug> --repo <name>`
+**4. There is no cross-repo merge loop (§3.3).** `purlis change land <slug> --repo <name>`
 lands one member. There is no `--all`, and a test asserts that it does not exist. A flag an
 agent can pass is a flag it will pass. `--all` would also have to guess what to do when member 3
 of 5 is rejected. There is no atomicity. What replaces it:
 
-- the slug is on every artifact charter makes: branch, request title, cross-link block and a
+- the slug is on every artifact purlis makes: branch, request title, cross-link block and a
   `Charter-Change: <slug>` trailer;
 - a partial landing is shown as `PARTIALLY LANDED (n of m)` with the outstanding members named;
 - a change is never shown greener than its worst member.
@@ -71,14 +71,14 @@ of 5 is rejected. There is no atomicity. What replaces it:
 > named somebody else's issue or nothing. A change whose members share one host gets the
 > Python block, byte for byte.
 
-A rebase merge is refused for charter's own landing, because it leaves no commit to carry the
+A rebase merge is refused for purlis's own landing, because it leaves no commit to carry the
 trailer and no single sha to revert.
 
 **5. The work happens in the clones the workspace already has (§3.4).** A member must resolve
-to a clone in this workspace, and `add` names `charter clone` as the fix when it does not.
+to a clone in this workspace, and `add` names `purlis clone` as the fix when it does not.
 Each member's branch is stored in the record, with `change/<slug>` as the default offered.
-Charter builds no symlink farm, mount or synthetic monorepo. The workspace directory already
-holds the clones side by side, and `charter change show` says which of them are one change.
+purlis builds no symlink farm, mount or synthetic monorepo. The workspace directory already
+holds the clones side by side, and `purlis change show` says which of them are one change.
 
 **6. CI is read at the exact head sha, as one of five closed values (§3.5).**
 
@@ -87,12 +87,12 @@ holds the clones side by side, and `charter change show` says which of them are 
 - `FAILED`: failure, cancelled, timed out, startup failure or `action_required`.
 - `RUNNING`: queued or in progress.
 - `NOT RUN`: zero checks at this head. A stale run does not count.
-- `UNKNOWN`: charter could not ask, or got an answer it does not recognise.
+- `UNKNOWN`: purlis could not ask, or got an answer it does not recognise.
 
 Precedence is `UNKNOWN` > `FAILED` > `RUNNING` > `NOT RUN` > `PASSED`. `gh pr checks`,
 `mergeStateStatus` and the status line's `ci_status` are forbidden inputs, because each one
-turns "nothing ran" into green (charter-plane #561). A pushed fixup returns its member to
-`NOT RUN` at once, because checks at another sha are not checks on this head. Charter never
+turns "nothing ran" into green (purlis-plane#561). A pushed fixup returns its member to
+`NOT RUN` at once, because checks at another sha are not checks on this head. purlis never
 waits or polls for checks to appear. Where it cannot see every check a person would see at that
 head, the answer is `UNKNOWN`, never `NOT RUN`.
 
@@ -111,19 +111,19 @@ Every value from the record goes through containment before it is laid out.
 >   or record only. The yes hands that answer back, and `push_confirmed` / `land_verified` take
 >   every gate again and refuse, before anything outward runs, when it is no longer true.
 > - Landing stays attended only. The window's IPC is the attended path; a chat's only way to
->   land is the `charter` binary, which `floorguard::PUBLISH_FORGE` refuses unattended.
+>   land is the `purlis` binary, which `floorguard::PUBLISH_FORGE` refuses unattended.
 > - The view's answer carries, beside its blocks, where each change's member list is and each
 >   member row's repo (`change::view::ChangeAt`), so the window reads nothing out of a row's
 >   words or key. A member row's key is `<change>/<repo>`, unique in the view.
 > - Push names each branch's commit too, and a commit made between the question and the yes is
->   refused as not what was confirmed. Squash is offered only where it is charter's to ask
+>   refused as not what was confirmed. Squash is offered only where it is purlis's to ask
 >   (`Verified::squash_is_charters`): never on GitHub's merge queue.
 
-**8. A revert is a new change (§3.7).** `charter change revert <slug>` seeds `revert-<slug>`.
+**8. A revert is a new change (§3.7).** `purlis change revert <slug>` seeds `revert-<slug>`.
 Each landed member gets a branch carrying `git revert` of the logged sha, with `-m 1` only when
 git says the sha has more than one parent. The new change is then pushed, checked and landed
-like any other. Charter never force-pushes, deletes a branch, resets a default branch, or closes
-a request it did not open. A member merged outside charter has no log line, and revert names it
+like any other. purlis never force-pushes, deletes a branch, resets a default branch, or closes
+a request it did not open. A member merged outside purlis has no log line, and revert names it
 as needing a person.
 
 > **Amended 2026-10-02 (implementation note, #473; not a ruling).** For revert, "landed" is the
@@ -145,7 +145,7 @@ as needing a person.
   invocation, through the merge API's `sha` guard, after both gates pass: every blocker has
   landed, and CI is `PASSED` at that same sha. Requesting auto-merge would not work here:
   GitHub refuses to queue it on a PR that is already mergeable, and the gates exist only if
-  charter is the one merging. `floorguard::PUBLISH_FORGE` already keeps `charter change land`
+  purlis is the one merging. `floorguard::PUBLISH_FORGE` already keeps `purlis change land`
   attended-only, and an agent still never merges. This makes `forge::pr`'s "Nothing here
   merges" false once T7 lands, and T7 updates that module's doc.
 
@@ -162,20 +162,20 @@ as needing a person.
   >
   > - **D-472a, which supersedes D-0023** (D-0023 recorded a queued member's merge on any
   >   later `land` once the gates passed, which would have taken a browser or admin merge for
-  >   charter's). A landing is recorded only on evidence that
-  >   charter started it. Before the forge is asked, `land` appends a pending landing
+  >   purlis's). A landing is recorded only on evidence that
+  >   purlis started it. Before the forge is asked, `land` appends a pending landing
   >   (`workspaces/<ws>/changes/log/pending/<host>.jsonl`, clone state, never committed). A
   >   queued member, or one whose read-back failed, is logged by a later `land` that finds the
   >   request merged at that pending head. A request merged with no pending landing (a person,
-  >   an admin, a merge from before the queue existed) is never logged as charter's, and as a
-  >   blocker it is refused as merged outside charter. The land gate and doctor read one
+  >   an admin, a merge from before the queue existed) is never logged as purlis's, and as a
+  >   blocker it is refused as merged outside purlis. The land gate and doctor read one
   >   definition of this.
   > - **A GitLab repo that does not say whether it has a merge train is not merged**, since a
   >   direct merge there could skip a train.
   > - **D-0028: a missing trailer is not a divergence.** A queue writes its own merge commit
   >   message, on GitHub's merge queue and on GitLab's merge train alike, so those landings
   >   carry no `Charter-Change:` trailer, and doctor does not flag one that lacks it.
-- **D4: `charter change push` ignores a repo's `mode = "off"`.** ADR 0051's `off` governs
+- **D4: `purlis change push` ignores a repo's `mode = "off"`.** ADR 0051's `off` governs
   *saves*, which commit a developer's work nobody asked to commit. `change push` is an explicit
   verb over repos someone named by hand, and it commits nothing. It prints every repo, branch and
   destination before it pushes, and the app asks first with the *Save all* confirmation. ADR
@@ -193,10 +193,10 @@ as needing a person.
 
 ## Consequences
 
-- `charter change` is a new CLI command group in `charter-core` and `charter-cli`.
+- `purlis change` is a new CLI command group in `charter-core` and `charter-cli`.
 - Doctor's deferred `changes` row is replaced by a real check that reads every workspace from
   disk and never fetches (#468).
 - `forge` gains two reads: a request looked up by head branch (number, state, head sha, and the
   merge commit when merged) and the checks at one exact sha (#469). T7 adds its first merge.
 - The view tab's command goes on the window's allow-list (ADR 0052).
-- ADR 0051 is amended: `off` does not cover `charter change push`.
+- ADR 0051 is amended: `off` does not cover `purlis change push`.
