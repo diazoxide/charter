@@ -178,7 +178,8 @@ function App() {
    *  state, so it is the same list whichever project is in front. */
   const [extensions, setExtensions] = useState(false);
   /**
-   * The last ask for a project's settings tab (charter-app#252): which project, and a count so
+   * The last ask for a project's Settings tab at the Project level (SE-19, #1213; the retired
+   * Project settings page before it, charter-app#252): which project, and a count so
    * that asking twice opens it twice — the second ask brings forward a tab the operator may
    * have left behind. The project's own `PlaneView` opens it, because its tabs are its own.
    */

@@ -359,8 +359,8 @@ export const PlaneView = memo(function PlaneView({
   /** The palette commands approved extensions add (charter-app#341), the window's for the same
    *  reason, and filtered here by what this project has on, as the views are. */
   commands?: readonly ExtensionCommand[];
-  /** A count that goes up each time the window is asked for THIS project's settings tab
-   *  (`WindowDoing.openSettings`); `undefined` until it is. */
+  /** A count that goes up each time the window is asked for THIS project's Settings tab at the
+   *  Project level (`WindowDoing.openSettings`, SE-19); `undefined` until it is. */
   settingsAsked?: number;
   /** The same, for THIS project's Saving tab (`WindowDoing.openSaving`, charter-app#294). */
   savingAsked?: number;
