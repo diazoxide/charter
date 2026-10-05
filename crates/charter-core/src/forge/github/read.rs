@@ -71,6 +71,12 @@ impl GitHub {
     ) -> Result<WorkItem, ForgeError> {
         let doing = format!("reading issue #{number} of {path}");
         let issue = self.issue(caller, path, number)?;
+        if issue.pull_request.is_some() {
+            return Err(ForgeError::of(
+                Failure::NotFound,
+                format!("{doing}: #{number} is a pull request, not an issue"),
+            ));
+        }
         let summary = issue.issue_dependencies_summary;
         let mut item = item_of(issue, &doing)?;
 
@@ -108,6 +114,17 @@ impl GitHub {
             "closing pull requests",
         )?;
         whole(links.project_items.page_info.has_next_page, "boards")?;
+        let on_boards: Vec<_> = links
+            .project_items
+            .nodes
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|on| !on.is_archived)
+            .collect();
+        for on in &on_boards {
+            whole(on.field_values.page_info.has_next_page, "board fields")?;
+        }
 
         if let Some(parent) = links.parent {
             item.relations
@@ -150,34 +167,36 @@ impl GitHub {
 
         use work_item::WorkItemRepositoryIssueProjectItemsNodesFieldValuesNodes as Value;
         use work_item::WorkItemRepositoryIssueProjectItemsNodesStatus as Status;
-        for on in links.project_items.nodes.into_iter().flatten().flatten() {
+        for on in on_boards {
             let status = match on.status {
                 Some(Status::ProjectV2ItemFieldSingleSelectValue(v)) => v.name,
                 _ => None,
             };
+            let iteration = on
+                .field_values
+                .nodes
+                .into_iter()
+                .flatten()
+                .flatten()
+                .find_map(|v| match v {
+                    Value::ProjectV2ItemFieldIterationValue(i) => Some(Iteration::lasting(
+                        Some(ForgeRef(i.iteration_id)),
+                        Some(&i.title),
+                        &i.start_date,
+                        u32::try_from(i.duration).unwrap_or_default(),
+                    )),
+                    _ => None,
+                });
+            if item.iteration.is_none() {
+                item.iteration = iteration.clone();
+            }
             item.placements.push(Placement {
                 board: ForgeRef(on.project.id),
                 board_title: on.project.title,
                 board_url: on.project.url,
                 status,
+                iteration,
             });
-            if item.iteration.is_none() {
-                item.iteration = on
-                    .field_values
-                    .nodes
-                    .into_iter()
-                    .flatten()
-                    .flatten()
-                    .find_map(|v| match v {
-                        Value::ProjectV2ItemFieldIterationValue(i) => Some(Iteration::lasting(
-                            Some(ForgeRef(i.iteration_id)),
-                            i.title,
-                            &i.start_date,
-                            u32::try_from(i.duration).unwrap_or_default(),
-                        )),
-                        _ => None,
-                    });
-            }
         }
         Ok(item)
     }

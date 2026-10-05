@@ -146,7 +146,9 @@ A **forge capability** is one thing a forge may or may not do for one repo, such
 queue. It is not an extension's **capability** (CONTEXT.md), and the word is always qualified.
 
 ```rust
-pub enum Capability { AutoMerge, MergeQueue, SubIssues, IssueTypes, Epics, Iterations, Boards, Dependencies }
+pub enum Capability { AutoMerge, MergeQueue, SubIssues, IssueTypes, Epics, Iterations, Boards, Dependencies, CloseReasons }
+// The enum grows by ticket: each ticket that maps a field some forge lacks adds its capability
+// (`CloseReasons`: FW-6a, #733). `src/forge/backend.rs` holds the current list.
 
 pub enum Support { Available, Unavailable(Unavailable), Unknown(UnknownWhy) }
 

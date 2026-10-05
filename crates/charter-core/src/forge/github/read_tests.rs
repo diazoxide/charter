@@ -70,15 +70,17 @@ fn links() -> Value {
         "projectItems": {"pageInfo": {"hasNextPage": false}, "nodes": [
             {"project": {"id": "PVT_1", "title": "Roadmap",
                          "url": "https://github.com/orgs/acme/projects/1"},
+             "isArchived": false,
              "status": {"__typename": "ProjectV2ItemFieldSingleSelectValue", "name": "Done"},
-             "fieldValues": {"nodes": [
+             "fieldValues": {"pageInfo": {"hasNextPage": false}, "nodes": [
                  {"__typename": "ProjectV2ItemFieldTextValue"},
                  {"__typename": "ProjectV2ItemFieldIterationValue", "iterationId": "it3",
                   "title": "Sprint 3", "startDate": "2026-10-05", "duration": 14}]}},
             {"project": {"id": "PVT_2", "title": "Triage",
                          "url": "https://github.com/orgs/acme/projects/2"},
+             "isArchived": false,
              "status": null,
-             "fieldValues": {"nodes": [
+             "fieldValues": {"pageInfo": {"hasNextPage": false}, "nodes": [
                  {"__typename": "ProjectV2ItemFieldIterationValue", "iterationId": "it9",
                   "title": "Sprint 9", "startDate": "2026-12-01", "duration": 7}]}}]}
     }}}})
@@ -139,25 +141,88 @@ fn an_issue_is_read_with_its_type_reason_assignees_relations_boards_and_iteratio
                 board_title: "Roadmap".into(),
                 board_url: "https://github.com/orgs/acme/projects/1".into(),
                 status: Some("Done".into()),
+                iteration: Some(sprint(3)),
             },
             Placement {
                 board: ForgeRef("PVT_2".into()),
                 board_title: "Triage".into(),
                 board_url: "https://github.com/orgs/acme/projects/2".into(),
                 status: None,
+                iteration: Some(sprint(9)),
             },
         ]
     );
-    let day = |m, d| chrono::NaiveDate::from_ymd_opt(2026, m, d);
     assert_eq!(
         item.iteration,
-        Some(Iteration {
+        Some(sprint(3)),
+        "the item's iteration is the first board's"
+    );
+}
+
+/// Sprint 3 or 9 as `links()` answers it.
+fn sprint(n: u32) -> Iteration {
+    let day = |m, d| chrono::NaiveDate::from_ymd_opt(2026, m, d);
+    match n {
+        3 => Iteration {
             forge_ref: Some(ForgeRef("it3".into())),
-            title: "Sprint 3".into(),
+            title: Some("Sprint 3".into()),
             start: day(10, 5),
             end: day(10, 18),
-        }),
-        "the first board's iteration"
+        },
+        _ => Iteration {
+            forge_ref: Some(ForgeRef("it9".into())),
+            title: Some("Sprint 9".into()),
+            start: day(12, 1),
+            end: day(12, 7),
+        },
+    }
+}
+
+#[test]
+fn an_archived_board_item_is_not_a_placement() {
+    let mut answer = links();
+    let items = &mut answer["data"]["repository"]["issue"]["projectItems"]["nodes"];
+    items[0]["isArchived"] = json!(true);
+    items[1]["isArchived"] = json!(false);
+    let (backend, recorded) = over(json!([
+        rest("repos/acme/api/issues/12", closed_issue()),
+        gql(answer),
+        rest(
+            "repos/acme/api/issues/12/dependencies/blocked_by?per_page=100&page=1",
+            json!([listed("acme/api", 11)])
+        ),
+        rest(
+            "repos/acme/api/issues/12/dependencies/blocking?per_page=100&page=1",
+            json!([listed("acme/web", 15)])
+        ),
+    ]));
+    let item = backend.read(&Caller::command(), "acme/api", 12).unwrap();
+    assert_eq!(recorded.unspent(), Vec::new(), "recorded and never asked");
+    assert!(
+        work_item::QUERY.contains("projectItems(first: 100, includeArchived: false)"),
+        "GitHub's default is to include archived items"
+    );
+    let boards: Vec<&str> = item
+        .placements
+        .iter()
+        .map(|p| p.board_title.as_str())
+        .collect();
+    assert_eq!(boards, ["Triage"]);
+    assert_eq!(item.iteration, Some(sprint(9)));
+}
+
+#[test]
+fn a_pull_requests_number_is_refused_as_a_pull_request() {
+    let mut pr = closed_issue();
+    pr["pull_request"] = json!({"url": "https://api.github.com/repos/acme/api/pulls/12"});
+    let (backend, _) = over(json!([rest("repos/acme/api/issues/12", pr)]));
+    let refused = backend
+        .read(&Caller::command(), "acme/api", 12)
+        .unwrap_err();
+    assert!(
+        refused.said().contains("#12 is a pull request"),
+        "{}",
+        refused.said()
     );
 }
 
@@ -214,16 +279,33 @@ fn an_answer_with_no_dependency_summary_asks_for_no_dependencies() {
 
 #[test]
 fn more_relations_than_one_answer_holds_is_an_error_never_a_shorter_list() {
-    let mut more = links();
-    more["data"]["repository"]["issue"]["projectItems"]["pageInfo"]["hasNextPage"] = json!(true);
-    let (backend, _) = over(json!([
-        rest("repos/acme/api/issues/12", closed_issue()),
-        gql(more)
-    ]));
-    let refused = backend
-        .read(&Caller::command(), "acme/api", 12)
-        .unwrap_err();
-    assert!(refused.said().contains("boards"), "{}", refused.said());
+    let page = |answer: &mut Value, at: &str| {
+        let issue = &mut answer["data"]["repository"]["issue"];
+        match at {
+            "fieldValues" => {
+                issue["projectItems"]["nodes"][0]["fieldValues"]["pageInfo"] =
+                    json!({"hasNextPage": true})
+            }
+            _ => issue[at]["pageInfo"]["hasNextPage"] = json!(true),
+        }
+    };
+    for (at, what) in [
+        ("subIssues", "sub-issues"),
+        ("closedByPullRequestsReferences", "closing pull requests"),
+        ("projectItems", "boards"),
+        ("fieldValues", "board fields"),
+    ] {
+        let mut more = links();
+        page(&mut more, at);
+        let (backend, _) = over(json!([
+            rest("repos/acme/api/issues/12", closed_issue()),
+            gql(more)
+        ]));
+        let refused = backend
+            .read(&Caller::command(), "acme/api", 12)
+            .unwrap_err();
+        assert!(refused.said().contains(what), "{at}: {}", refused.said());
+    }
 }
 
 #[test]

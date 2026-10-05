@@ -53,7 +53,8 @@ pub struct WorkItem {
     pub closed_as: Option<ClosedAs>,
     pub milestone: Option<Milestone>,
     /// The iteration (sprint) the item is planned in. On GitHub it is a Projects v2 board's
-    /// iteration field, the first board in the tracker's order that gives one.
+    /// iteration field: each [`Placement`] keeps its own, and this is the first board's, in the
+    /// tracker's order, that gives one.
     pub iteration: Option<Iteration>,
     /// The tracker's own boards that hold the item, and its status on each: GitHub's Projects
     /// v2. A board here is the tracker's, never charter's own [`board::Board`], which is a view.
@@ -162,7 +163,8 @@ impl ClosedAs {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Iteration {
     pub forge_ref: Option<ForgeRef>,
-    pub title: String,
+    /// Its title. A GitLab cadence's iterations have none: they are named by their dates.
+    pub title: Option<String>,
     /// Its first day.
     pub start: Option<chrono::NaiveDate>,
     /// Its last day, inclusive.
@@ -175,13 +177,13 @@ impl Iteration {
     /// none.
     pub fn of_forge(
         forge_ref: Option<ForgeRef>,
-        title: impl Into<String>,
+        title: Option<&str>,
         start: Option<&str>,
         end: Option<&str>,
     ) -> Iteration {
         Iteration {
             forge_ref,
-            title: title.into(),
+            title: title.map(str::to_string),
             start: start.and_then(day_of),
             end: end.and_then(day_of),
         }
@@ -191,7 +193,7 @@ impl Iteration {
     /// GitHub Projects v2 iteration field does (`startDate`, `duration`).
     pub fn lasting(
         forge_ref: Option<ForgeRef>,
-        title: impl Into<String>,
+        title: Option<&str>,
         start: &str,
         days: u32,
     ) -> Iteration {
@@ -202,15 +204,19 @@ impl Iteration {
         });
         Iteration {
             forge_ref,
-            title: title.into(),
+            title: title.map(str::to_string),
             start,
             end,
         }
     }
 }
 
-/// One of the tracker's own boards that holds an item, and the item's status there: a GitHub
-/// Projects v2 board and its `Status` field. FW-9 may group charter's board by the status.
+/// One of the tracker's own boards that holds an item, and the item's status and iteration
+/// there: a GitHub Projects v2 board, its `Status` field and its iteration field. FW-9 may group
+/// charter's board by the status.
+///
+/// This status is per board. GitLab, Jira and Linear give an item one status of its own, and
+/// FW-6b (#734) adds an item-level status field beside this one for them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Placement {
     /// The board's id on the forge.
@@ -220,6 +226,8 @@ pub struct Placement {
     /// The item's status on that board, as the board names the option; `None` when it has
     /// none set, or the board has no status field.
     pub status: Option<String>,
+    /// The item's iteration on that board, when the board has an iteration field set for it.
+    pub iteration: Option<Iteration>,
 }
 
 /// A day from a forge's date or timestamp, read by its first ten characters.
@@ -331,13 +339,24 @@ mod tests {
     #[test]
     fn an_iteration_that_lasts_fourteen_days_ends_on_its_fourteenth() {
         let day = |d| chrono::NaiveDate::from_ymd_opt(2026, 10, d);
-        let sprint = Iteration::lasting(None, "Sprint 3", "2026-10-05", 14);
+        let sprint = Iteration::lasting(None, Some("Sprint 3"), "2026-10-05", 14);
         assert_eq!((sprint.start, sprint.end), (day(5), day(18)));
-        let gitlab = Iteration::of_forge(None, "Sprint 3", Some("2026-10-05"), Some("2026-10-18"));
+        let gitlab = Iteration::of_forge(
+            None,
+            Some("Sprint 3"),
+            Some("2026-10-05"),
+            Some("2026-10-18"),
+        );
         assert_eq!(gitlab, sprint);
-        let undated = Iteration::lasting(None, "Sprint 3", "soon", 14);
+        let undated = Iteration::lasting(None, Some("Sprint 3"), "soon", 14);
         assert_eq!((undated.start, undated.end), (None, None));
-        assert_eq!(Iteration::lasting(None, "x", "2026-10-05", 0).end, None);
+        assert_eq!(
+            Iteration::lasting(None, Some("x"), "2026-10-05", 0).end,
+            None
+        );
+        // A GitLab cadence names its iterations by their dates and gives them no title.
+        let cadence = Iteration::of_forge(None, None, Some("2026-10-05"), Some("2026-10-18"));
+        assert_eq!((cadence.title, cadence.start), (None, day(5)));
     }
 
     #[test]

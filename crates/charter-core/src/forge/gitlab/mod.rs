@@ -248,7 +248,7 @@ impl WorkItems for GitLab {
             fields,
         );
         let issue = self.0.ask(caller, &call, &doing)?;
-        item_of(&issue, &new.title, &doing)
+        item_of(&issue, Some(&new.title), &doing)
     }
 
     fn read(
@@ -263,7 +263,7 @@ impl WorkItems for GitLab {
             LIST_TIMEOUT,
         );
         let issue = self.0.ask(caller, &call, &doing)?;
-        let mut item = item_of(&issue, "", &doing)?;
+        let mut item = item_of(&issue, None, &doing)?;
         // FW-6b (#734) maps the rest of GitLab's issue: type, iteration, child items, links.
         item.assignees = issue["assignees"]
             .as_array()
@@ -276,10 +276,11 @@ impl WorkItems for GitLab {
 }
 
 /// GitLab's answer for an issue, in the neutral model: its key, ids, title, state, labels and
-/// milestone. A title it leaves out is `sent`, the one charter sent.
+/// milestone. A title it leaves out is `sent`, the one charter sent; with none sent, an answer
+/// with no title is malformed, as GitHub's is.
 fn item_of(
     issue: &serde_json::Value,
-    sent: &str,
+    sent: Option<&str>,
     doing: &str,
 ) -> Result<crate::work::WorkItem, ForgeError> {
     let url = issue["web_url"].as_str().unwrap_or_default().to_string();
@@ -295,9 +296,13 @@ fn item_of(
     };
     let key = crate::work::TrackerKey::gitlab_issue(&host, place, iid)
         .map_err(|why| ForgeError::new(format!("{doing}: {why}")))?;
-    // GitHub's answer without a title is refused as malformed; GitLab's is read field by
-    // field, so a title it leaves out is the one charter sent.
-    let title = issue["title"].as_str().unwrap_or(sent);
+    // GitHub's answer without a title is refused as malformed. GitLab's is read field by field:
+    // a title it leaves out of a create's answer is the one charter sent, and a read's is refused.
+    let Some(title) = issue["title"].as_str().or(sent) else {
+        return Err(ForgeError::new(format!(
+            "{doing}: GitLab's answer names no title"
+        )));
+    };
     let mut item = crate::work::WorkItem::new(key, crate::work::Kind::Issue, title);
     item.forge_ref = issue["id"].as_u64().map(|id| ForgeRef(id.to_string()));
     item.url = url;
@@ -775,6 +780,53 @@ mod capability_tests {
                 "{what:?}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod read_mapping_tests {
+    use std::sync::Arc;
+
+    use serde_json::json;
+
+    use crate::forge::Forge;
+    use crate::forge::Kind;
+    use crate::forge::backend::Caller;
+    use crate::forge::recorded::Recorded;
+
+    fn read(answer: serde_json::Value) -> Result<crate::work::WorkItem, crate::forge::ForgeError> {
+        let call = json!({"endpoint": {"rest": {"method": null, "path": "projects/acme%2Fapi/issues/12"}},
+                          "fields": []});
+        let text = json!({"source": "GitLab REST API v4, issues: Single project issue",
+                          "exchanges": [{"call": call, "reply": {"code": 0, "out": answer.to_string()}}]});
+        let recorded = Arc::new(Recorded::parse(&text.to_string()).unwrap());
+        Forge::default_of(Kind::GitLab).backend_over(recorded).read(
+            &Caller::command(),
+            "acme/api",
+            12,
+        )
+    }
+
+    fn issue() -> serde_json::Value {
+        json!({"id": 84012, "iid": 12, "title": "Port the picker", "state": "opened",
+               "labels": [], "assignees": [{"username": "octocat"}],
+               "web_url": "https://gitlab.com/acme/api/-/issues/12",
+               "references": {"full": "acme/api#12"}})
+    }
+
+    #[test]
+    fn an_issue_is_read_with_its_assignees() {
+        let item = read(issue()).unwrap();
+        assert_eq!(item.title, "Port the picker");
+        assert_eq!(item.assignees, ["octocat"]);
+    }
+
+    #[test]
+    fn an_answer_with_no_title_is_refused_as_malformed() {
+        let mut answer = issue();
+        answer.as_object_mut().unwrap().remove("title");
+        let refused = read(answer).unwrap_err();
+        assert!(refused.said().contains("no title"), "{}", refused.said());
     }
 }
 
