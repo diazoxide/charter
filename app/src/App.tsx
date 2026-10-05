@@ -40,6 +40,7 @@ import type { ForgeAsk } from "./ForgeQuestion";
 type RepoTried = { refused?: string; asksForge?: string };
 import { UnsavedMark } from "./SavingView";
 import { SessionBusNotice } from "./SessionBusNotice";
+import { VaultsWaitingNotice } from "./VaultsWaitingNotice";
 import { Notice } from "./Notice";
 import { GoneProjectNotice } from "./GoneProjectNotice";
 import { tellSaved, useRepoSaving } from "./saving";
@@ -1895,6 +1896,9 @@ function App() {
 
       {/* A launch without the session bus, and what that run has not got (charter#746). */}
       <SessionBusNotice chats={ending} />
+
+      {/* Vaults the launch left under the old name because macOS would have asked (#1306). */}
+      <VaultsWaitingNotice />
 
       {/* A project the last quit had open that has moved or gone, with Locate… and Forget
           (NO-5). A line, never an error dialog: the record is a convenience and the project

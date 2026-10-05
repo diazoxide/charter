@@ -202,10 +202,16 @@ impl Items for OsItems {
     fn add(&self, service: &str, account: &str, value: &str) -> Result<(), Refused> {
         use security_framework::os::macos::keychain::{SecKeychain, SecPreferencesDomain};
         let failed = |e: security_framework::base::Error| {
-            Refused::Failed(VaultError::new(format!(
+            let said = format!(
                 "charter could not write '{service}' in {}: {e}",
                 super::keyring::STORE_NAME
-            )))
+            );
+            // Its dialogs off, and this write would have asked (#1306).
+            Refused::Failed(if e.code() == INTERACTION_NOT_ALLOWED {
+                VaultError::would_ask(said)
+            } else {
+                VaultError::new(said)
+            })
         };
         // The user's keychain, the one the `keyring` crate reads and writes.
         let added = SecKeychain::default_for_domain(SecPreferencesDomain::User)
@@ -228,6 +234,10 @@ impl Items for OsItems {
 /// `errSecDuplicateItem`: an add found the item there already.
 #[cfg(target_os = "macos")]
 const DUPLICATE: i32 = -25299;
+
+/// `errSecInteractionNotAllowed`: the write would have asked the person, with dialogs off.
+#[cfg(target_os = "macos")]
+const INTERACTION_NOT_ALLOWED: i32 = -25308;
 
 /// The item deleted and made again by this process, so it is this program's alone.
 fn make_here(service: &str, account: &str, value: &str) -> Result<(), Refused> {
@@ -306,6 +316,12 @@ fn the_app() -> Option<PathBuf> {
     app_beside(&std::env::current_exe().ok()?)
 }
 
+/// Whether the app's binary sits beside this one, so an item this process writes is made by the
+/// app ([`set`]).
+pub fn app_is_beside() -> bool {
+    the_app().is_some()
+}
+
 /// The app's binary beside the program at `exe`, as the kernel names it, where there is one
 /// and `exe` is not it. A link on `PATH` (`/usr/local/bin/charter`, made by the app's Install
 /// on PATH) is followed to the bundle, and nothing beside the link is ever looked at.
@@ -332,6 +348,22 @@ fn not_ours(service: &str) -> VaultError {
     VaultError::new(format!(
         "another program's item is under '{service}', so charter wrote nothing there"
     ))
+}
+
+/// The item made fresh by this process itself, never through the app's writer, and never
+/// written into an item another program owns (`Store::make_own`, #1306): held to the app when
+/// this is the app, and this command's own anywhere else ([`Held::NotYet`]). A fenced build
+/// refuses, as [`set`] does.
+pub fn make_own(service: &str, account: &str, value: &str) -> Result<Held, VaultError> {
+    if crate::fence::FENCED {
+        return Err(fenced(service));
+    }
+    match make_here(service, account, value) {
+        Ok(()) if THE_APP.load(Ordering::SeqCst) => Ok(Held::ToTheApp),
+        Ok(()) => Ok(Held::NotYet),
+        Err(Refused::Owned) => Err(not_ours(service)),
+        Err(Refused::Failed(e)) => Err(e),
+    }
 }
 
 /// What a fenced build says instead of reaching the operating system's store.

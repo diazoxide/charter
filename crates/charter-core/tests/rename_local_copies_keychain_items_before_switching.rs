@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use charter_core::machine;
 use charter_core::names;
-use charter_core::renamelocal::keychain::Asking;
+use charter_core::renamelocal::keychain::{Asking, Reach};
 use charter_core::renamelocal::{self, Local, Seams};
 use charter_core::secrets::keyring::{self, FileStore, Held, Secret, Store};
 use charter_core::secrets::registry::{self, Vault};
@@ -311,9 +311,9 @@ fn a_copy_that_does_not_read_back_the_same_leaves_everything_on_the_old_prefix()
     let m = machine();
     let old = service(&m);
     let garbling = |ctx: &Ctx, _: Asking| {
-        Some(
-            Box::new(Garbling(FileStore::at(ctx.state.join(keyring::STUB_FILE)))) as Box<dyn Store>,
-        )
+        Some(Reach::Every(Box::new(Garbling(FileStore::at(
+            ctx.state.join(keyring::STUB_FILE),
+        )))))
     };
     let seams = Seams {
         keyring: &garbling,
@@ -424,11 +424,11 @@ impl Store for CutOff {
 fn cut_off_after_one(m: &Machine) -> renamelocal::Moved {
     // Asked once for the one project: one write in all, across the vault and the record.
     let cut = |ctx: &Ctx, _: Asking| {
-        Some(Box::new(CutOff {
+        Some(Reach::Every(Box::new(CutOff {
             under: FileStore::at(ctx.state.join(keyring::STUB_FILE)),
             ok: 1,
             writes: AtomicUsize::new(0),
-        }) as Box<dyn Store>)
+        }) as Box<dyn Store>))
     };
     renamelocal::run(
         &m.local,
@@ -620,7 +620,7 @@ fn a_copy_the_store_could_not_hold_to_the_app_is_never_switched_to() {
     charter_core::unsteered!();
     let m = machine();
     let old = service(&m);
-    let not_yet = |ctx: &Ctx, _: Asking| Some(holding(ctx, |_| Held::NotYet));
+    let not_yet = |ctx: &Ctx, _: Asking| Some(Reach::Every(holding(ctx, |_| Held::NotYet)));
 
     let moved = renamelocal::run(
         &m.local,
@@ -660,7 +660,7 @@ fn an_undo_whose_copy_back_the_store_could_not_hold_keeps_reading_the_copies() {
         "2026-10-06T09:00:00Z",
     )
     .unwrap();
-    let not_yet = |ctx: &Ctx, _: Asking| Some(holding(ctx, |_| Held::NotYet));
+    let not_yet = |ctx: &Ctx, _: Asking| Some(Reach::Every(holding(ctx, |_| Held::NotYet)));
 
     let undone = renamelocal::undo(
         &m.local,
@@ -698,8 +698,13 @@ fn where_items_are_held_an_item_there_with_the_same_value_is_made_again_by_the_a
     stub(&m.plane).set(&new, "API_TOKEN", API).unwrap();
     // What was there before is another program's: the app cannot make it its own.
     let planted = vec![(new.clone(), "API_TOKEN".to_owned())];
-    let foreign =
-        move |ctx: &Ctx, _: Asking| Some(holding_with(ctx, |_| Held::ToTheApp, planted.clone()));
+    let foreign = move |ctx: &Ctx, _: Asking| {
+        Some(Reach::Every(holding_with(
+            ctx,
+            |_| Held::ToTheApp,
+            planted.clone(),
+        )))
+    };
 
     let moved = renamelocal::run(
         &m.local,
@@ -724,10 +729,10 @@ fn where_items_are_held_an_item_there_with_the_same_value_is_made_again_by_the_a
     let counted = {
         let writes = writes.clone();
         move |ctx: &Ctx, _: Asking| {
-            Some(Box::new(Counted {
+            Some(Reach::Every(Box::new(Counted {
                 under: FileStore::at(ctx.state.join(keyring::STUB_FILE)),
                 writes: writes.clone(),
-            }) as Box<dyn Store>)
+            }) as Box<dyn Store>))
         }
     };
     let moved = renamelocal::run(
@@ -806,10 +811,10 @@ fn a_secret_written_between_its_copy_and_the_switch_is_never_left_behind() {
     let m = machine();
     let old = service(&m);
     let racing = |ctx: &Ctx, _: Asking| {
-        Some(Box::new(SetDuringTheCopy {
+        Some(Reach::Every(Box::new(SetDuringTheCopy {
             under: FileStore::at(ctx.state.join(keyring::STUB_FILE)),
             plane: ctx.root.clone(),
-        }) as Box<dyn Store>)
+        }) as Box<dyn Store>))
     };
 
     let moved = renamelocal::run(
@@ -864,8 +869,13 @@ fn another_programs_item_where_a_copy_was_journalled_is_never_written_into() {
     );
     stub(&m.plane).set(&new, "API_TOKEN", "planted").unwrap();
     let planted = vec![(new.clone(), "API_TOKEN".to_owned())];
-    let foreign =
-        move |ctx: &Ctx, _: Asking| Some(holding_with(ctx, |_| Held::ToTheApp, planted.clone()));
+    let foreign = move |ctx: &Ctx, _: Asking| {
+        Some(Reach::Every(holding_with(
+            ctx,
+            |_| Held::ToTheApp,
+            planted.clone(),
+        )))
+    };
     let seams = Seams {
         keyring: &foreign,
         ..nobody_running()
@@ -909,8 +919,13 @@ fn another_programs_item_where_the_undo_copies_back_a_new_key_is_never_written_i
     // The key has no old item: another program makes one there, under its own access.
     stub(&m.plane).set(&old, "NEW_KEY", "planted").unwrap();
     let planted = vec![(old.clone(), "NEW_KEY".to_owned())];
-    let foreign =
-        move |ctx: &Ctx, _: Asking| Some(holding_with(ctx, |_| Held::ToTheApp, planted.clone()));
+    let foreign = move |ctx: &Ctx, _: Asking| {
+        Some(Reach::Every(holding_with(
+            ctx,
+            |_| Held::ToTheApp,
+            planted.clone(),
+        )))
+    };
     let seams = Seams {
         keyring: &foreign,
         ..nobody_running()
@@ -937,4 +952,351 @@ fn another_programs_item_where_the_undo_copies_back_a_new_key_is_never_written_i
     renamelocal::run(&m.local, &seams);
     assert_eq!(item(&m, &old, "NEW_KEY").as_deref(), Some("planted"));
     assert_eq!(service(&m), new);
+}
+
+// ---------------------------------------------------------------------------------------
+// No Keychain prompts at launch (#1306).
+
+/// The stub as macOS's store: it holds items to the app, and an item in `asks` makes the
+/// Keychain ask whoever reads it. With the dialogs off (`quiet`, a run's copy) that read fails
+/// the way macOS fails it; with them on the person is asked, said yes, and it is counted.
+struct Asks {
+    under: FileStore,
+    asks: Vec<(String, String)>,
+    quiet: bool,
+    /// Whether the person, asked, says no.
+    denies: bool,
+    asked: std::sync::Arc<AtomicUsize>,
+    /// Items this process made itself (`make_own`): a terminal's copies.
+    own: std::sync::Arc<AtomicUsize>,
+}
+
+impl Store for Asks {
+    fn get(&self, service: &str, account: &str) -> Result<Option<Secret>, VaultError> {
+        if self.asks.iter().any(|(s, a)| s == service && a == account) {
+            if self.quiet {
+                return Err(VaultError::would_ask(format!(
+                    "charter could not read '{service}': User interaction is not allowed."
+                )));
+            }
+            self.asked.fetch_add(1, Ordering::SeqCst);
+            if self.denies {
+                return Err(VaultError::new(format!(
+                    "charter could not read '{service}': The user name or passphrase you \
+                     entered is not correct."
+                )));
+            }
+        }
+        self.under.get(service, account)
+    }
+    fn set(&self, service: &str, account: &str, value: &str) -> Result<Held, VaultError> {
+        self.under.set(service, account, value)?;
+        Ok(Held::ToTheApp)
+    }
+    fn delete(&self, service: &str, account: &str) -> Result<bool, VaultError> {
+        self.under.delete(service, account)
+    }
+    fn holds(&self) -> bool {
+        true
+    }
+    fn make_own(&self, service: &str, account: &str, value: &str) -> Result<Held, VaultError> {
+        self.own.fetch_add(1, Ordering::SeqCst);
+        self.under.set(service, account, value)?;
+        Ok(Held::NotYet)
+    }
+}
+
+/// How a test's keychain answers, and what it counted.
+#[derive(Clone, Default)]
+struct Keychain {
+    asks: Vec<(String, String)>,
+    denies: bool,
+    asked: std::sync::Arc<AtomicUsize>,
+    own: std::sync::Arc<AtomicUsize>,
+}
+
+impl Keychain {
+    fn asking_for(asks: Vec<(String, String)>) -> Self {
+        Self {
+            asks,
+            ..Self::default()
+        }
+    }
+
+    fn store(&self, ctx: &Ctx, asking: Asking) -> Box<dyn Store> {
+        Box::new(Asks {
+            under: FileStore::at(ctx.state.join(keyring::STUB_FILE)),
+            asks: self.asks.clone(),
+            quiet: asking == Asking::Never,
+            denies: self.denies,
+            asked: self.asked.clone(),
+            own: self.own.clone(),
+        })
+    }
+
+    /// As the app reaches it.
+    fn in_the_app(&self) -> impl Fn(&Ctx, Asking) -> Option<Reach> + use<> {
+        let me = self.clone();
+        move |ctx: &Ctx, asking: Asking| Some(Reach::Every(me.store(ctx, asking)))
+    }
+
+    /// As the command in a terminal reaches it.
+    fn in_a_terminal(&self) -> impl Fn(&Ctx, Asking) -> Option<Reach> + use<> {
+        let me = self.clone();
+        move |ctx: &Ctx, asking: Asking| Some(Reach::ItsOwn(me.store(ctx, asking)))
+    }
+
+    fn asked(&self) -> usize {
+        self.asked.load(Ordering::SeqCst)
+    }
+}
+
+#[test]
+fn at_launch_a_vault_whose_items_would_ask_waits_on_the_old_prefix_and_keeps_working() {
+    charter_core::unsteered!();
+    let m = machine();
+    let old = service(&m);
+    // Held to an earlier build: reading it would make the system ask.
+    let keychain = Keychain::asking_for(vec![(old.clone(), "API_TOKEN".to_owned())]);
+    let app = keychain.in_the_app();
+
+    let moved = renamelocal::run(
+        &m.local,
+        &Seams {
+            keyring: &app,
+            ..nobody_running()
+        },
+    );
+
+    assert_eq!(keychain.asked(), 0, "nothing asked at launch");
+    // Not a failure: the vault is whole, on the old prefix, and said to wait.
+    assert!(moved.complete, "{:#?}", moved.said);
+    assert_eq!(
+        moved.waiting,
+        vec![renamelocal::Waiting {
+            plane: m.plane.clone(),
+            vault: "ops".to_owned(),
+            identity: false,
+            items: 2,
+        }]
+    );
+    assert!(
+        moved
+            .said
+            .iter()
+            .any(|l| l.starts_with('–') && l.contains("vault 'ops'") && l.contains("waits")),
+        "{:#?}",
+        moved.said
+    );
+    assert_eq!(service(&m), old, "not half-switched");
+    // The record, which asks nothing, moved.
+    assert_eq!(record(&m).1.as_deref(), Some("purlis"));
+    reads_everything(&m);
+}
+
+#[test]
+fn finishing_moves_the_waiting_vaults_with_the_keychain_asking_and_the_undo_puts_them_back() {
+    charter_core::unsteered!();
+    let m = machine();
+    let old = service(&m);
+    let keychain = Keychain::asking_for(vec![(old.clone(), "API_TOKEN".to_owned())]);
+    let app = keychain.in_the_app();
+    let seams = Seams {
+        keyring: &app,
+        ..nobody_running()
+    };
+    let launched = renamelocal::run(&m.local, &seams);
+    assert_eq!(launched.waiting.len(), 1, "{:#?}", launched.said);
+
+    let finished = renamelocal::finish(&m.local, &seams, &launched.waiting);
+
+    assert!(
+        finished.complete && finished.changed,
+        "{:#?}",
+        finished.said
+    );
+    assert!(finished.waiting.is_empty(), "{:#?}", finished.said);
+    assert_eq!(service(&m), old.replacen("charter/", "purlis/", 1));
+    assert_eq!(
+        keychain.asked(),
+        1,
+        "asked once, for the one item that asks"
+    );
+    reads_everything(&m);
+
+    let undone = renamelocal::undo(&m.local, &seams);
+    assert!(undone.complete, "{:#?}", undone.said);
+    assert_eq!(service(&m), old);
+    assert_eq!(record(&m).1, None);
+    reads_everything(&m);
+}
+
+#[test]
+fn finishing_moves_only_what_waits() {
+    charter_core::unsteered!();
+    let m = machine();
+    let old = service(&m);
+    let app = Keychain::default().in_the_app();
+    let seams = Seams {
+        keyring: &app,
+        ..nobody_running()
+    };
+
+    let finished = renamelocal::finish(&m.local, &seams, &[]);
+
+    assert!(
+        finished.complete && !finished.changed,
+        "{:#?}",
+        finished.said
+    );
+    assert_eq!(service(&m), old);
+    assert_eq!(record(&m).1, None);
+}
+
+/// Mark every key of `vault`'s index held to the app, as the app's writes leave it.
+fn held_to_the_app(m: &Machine, vault: &str) {
+    let path = keyring::index_path(&ctx(&m.plane), &self::vault(&m.plane, vault));
+    let mut doc: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    for entry in doc["keys"].as_object_mut().unwrap().values_mut() {
+        entry["held"] = Value::Bool(true);
+    }
+    std::fs::write(&path, serde_json::to_string_pretty(&doc).unwrap()).unwrap();
+}
+
+#[test]
+fn a_terminal_copies_a_vault_whose_every_key_is_the_commands_own_and_the_undo_puts_it_back() {
+    charter_core::unsteered!();
+    let m = machine();
+    let old = service(&m);
+    // A second vault the app wrote: held to it, so a terminal leaves it to the app.
+    let ctx = ctx(&m.plane);
+    registry::add_vault(&ctx, "app", "keyring", Map::new(), None, false, false).unwrap();
+    let held = vault(&m.plane, "app");
+    keyring::set_with(
+        &stub(&m.plane),
+        &ctx,
+        &held,
+        "K",
+        "held-value",
+        "2026-10-01T00:00:00Z",
+    )
+    .unwrap();
+    let held_index = keyring::index_path(&ctx, &held);
+    replace_in(&held_index, "\"purlis/app/", "\"charter/app/");
+    let held_old = keyring::load_index(&ctx, &held).unwrap().service.unwrap();
+    replace_in(
+        &ctx.state.join(keyring::STUB_FILE),
+        &format!("\"{}", held_old.replacen("charter/", "purlis/", 1)),
+        &format!("\"{held_old}"),
+    );
+    held_to_the_app(&m, "app");
+    let keychain = Keychain::default();
+    let terminal = keychain.in_a_terminal();
+    let seams = Seams {
+        keyring: &terminal,
+        ..nobody_running()
+    };
+
+    let moved = renamelocal::run(&m.local, &seams);
+
+    assert!(moved.complete && moved.changed, "{:#?}", moved.said);
+    // The state folder moved with the run.
+    let ctx = self::ctx(&m.plane);
+    let held = vault(&m.plane, "app");
+    let new = old.replacen("charter/", "purlis/", 1);
+    assert_eq!(service(&m), new);
+    assert_eq!(
+        keychain.own.load(Ordering::SeqCst),
+        2,
+        "each copy made by the command itself"
+    );
+    for (key, value) in [("API_TOKEN", API), ("DB_PASSWORD", DB)] {
+        assert_eq!(item(&m, &new, key).as_deref(), Some(value));
+        assert_eq!(item(&m, &old, key).as_deref(), Some(value));
+    }
+    // The vault held to the app, and the identity record, are left to the app's launch.
+    assert_eq!(
+        keyring::load_index(&ctx, &held).unwrap().service.unwrap(),
+        held_old
+    );
+    assert_eq!(record(&m).1, None);
+    for what in ["vault 'app'", "identity"] {
+        assert!(
+            moved
+                .said
+                .iter()
+                .any(|l| l.starts_with('–') && l.contains(what) && l.contains("next launch")),
+            "{what}: {:#?}",
+            moved.said
+        );
+    }
+    assert!(moved.waiting.is_empty(), "{:#?}", moved.waiting);
+    reads_everything(&m);
+
+    // A key written since, then the undo from the terminal: copied back by the command too.
+    let ops = vault(&m.plane, "ops");
+    keyring::set_with(
+        &stub(&m.plane),
+        &ctx,
+        &ops,
+        "NEW_KEY",
+        "added-1306",
+        "2026-10-06T09:00:00Z",
+    )
+    .unwrap();
+    let undone = renamelocal::undo(&m.local, &seams);
+    assert!(undone.complete, "{:#?}", undone.said);
+    assert_eq!(service(&m), old);
+    assert_eq!(item(&m, &old, "NEW_KEY").as_deref(), Some("added-1306"));
+    assert_eq!(keychain.own.load(Ordering::SeqCst), 3);
+    reads_everything(&m);
+}
+
+#[test]
+fn a_terminal_leaves_a_vault_of_its_own_whose_items_would_ask_waiting() {
+    charter_core::unsteered!();
+    let m = machine();
+    let old = service(&m);
+    // The command's own, but an earlier build's: reading it would ask.
+    let keychain = Keychain::asking_for(vec![(old.clone(), "DB_PASSWORD".to_owned())]);
+    let terminal = keychain.in_a_terminal();
+
+    let moved = renamelocal::run(
+        &m.local,
+        &Seams {
+            keyring: &terminal,
+            ..nobody_running()
+        },
+    );
+
+    assert!(moved.complete, "{:#?}", moved.said);
+    assert_eq!(keychain.asked(), 0);
+    assert_eq!(service(&m), old);
+    assert_eq!(moved.waiting.len(), 1, "{:#?}", moved.said);
+    reads_everything(&m);
+}
+
+#[test]
+fn a_vault_the_person_does_not_allow_while_finishing_still_waits_and_keeps_working() {
+    charter_core::unsteered!();
+    let m = machine();
+    let old = service(&m);
+    let keychain = Keychain {
+        denies: true,
+        ..Keychain::asking_for(vec![(old.clone(), "API_TOKEN".to_owned())])
+    };
+    let app = keychain.in_the_app();
+    let seams = Seams {
+        keyring: &app,
+        ..nobody_running()
+    };
+    let launched = renamelocal::run(&m.local, &seams);
+
+    let finished = renamelocal::finish(&m.local, &seams, &launched.waiting);
+
+    assert!(!finished.complete, "{:#?}", finished.said);
+    assert_eq!(finished.waiting, launched.waiting, "offered again");
+    assert_eq!(keychain.asked(), 1);
+    assert_eq!(service(&m), old);
+    reads_everything(&m);
 }
