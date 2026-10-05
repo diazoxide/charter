@@ -1,4 +1,4 @@
-import { useId, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
 import { LoaderCircle } from "lucide-react";
 import { commands, type PlaneId, type SettingsEdit, type SettingsWhich } from "../bindings";
 import { NewPersona } from "../NewPersona";
@@ -20,12 +20,20 @@ import {
   type SettingsFileId,
   type SettingsGroup,
 } from "./groups";
-import { chooseGroup, levelOf, linkToGroup, settingsPlace, useShownGroup } from "./links";
+import {
+  chooseGroup,
+  focusedSetting,
+  levelOf,
+  linkToGroup,
+  settingsPlace,
+  useShownGroup,
+} from "./links";
 import { KEPT, projectGroups, useProjectLevel } from "./project";
 import { named, RawEditor, RawLinks, type RawDraft, type RawFile } from "./RawToml";
 import { useWorkspaceLevel, workspaceGroups } from "./workspace";
 import { youGroups } from "./you";
 import { CollectionView } from "./Collection";
+import { standingIn, type Standing } from "./standing";
 
 /**
  * **Settings** (SE-16, #1166; the spec on #558, rulings V89a–i): the one tab where a setting is
@@ -148,16 +156,22 @@ function ProjectLevelTab({ plane, ...switcher }: Switcher & { plane: PlaneId }) 
     project.state === "read"
       ? (["shared", "local"] as const).map((which: SettingsWhich) => ({
           id: which,
+          as: "TOML",
           file: project.read[which],
           kept: KEPT[which],
           save: (base, text) => project.writeRaw(which, base, text),
         }))
       : [];
-  const standing =
+  // Each with a link to the setting it names, where this level has one (NO-7, #1232).
+  const standing: Standing[] =
     project.state === "read"
-      ? [project.read.shared, project.read.local].flatMap((file) =>
-          file.refusals.map((why) => `${file.file}: ${why}`),
-        )
+      ? (["shared", "local"] as const).flatMap((which) => {
+          const file = project.read[which];
+          return standingIn(file.refusals, file.file, which, groups).map((one) => ({
+            ...one,
+            why: `${file.file}: ${one.why}`,
+          }));
+        })
       : [];
   return (
     <Shown
@@ -245,6 +259,23 @@ function WorkspaceLevelTab({
     () => (level.state === "read" ? workspaceGroups(level.read, level.reread) : []),
     [level],
   );
+  // The manifest as its whole text (NO-7, #1232), written through the level's driver as Edit as
+  // TOML's files are: the core checks it, against the text the edit began from.
+  const raw: RawFile[] =
+    level.state === "read"
+      ? [
+          {
+            id: "workspace",
+            as: "JSON",
+            file: level.read.settings,
+            kept: level.read.settings.live
+              ? "It is committed with this LIVE workspace: your team sees it."
+              : "It stays on this machine while the workspace is not LIVE.",
+            save: (base, text) => level.writeRaw("workspace", base, text),
+          },
+        ]
+      : [];
+  const settings = level.state === "read" ? level.read.settings : undefined;
   return (
     <Shown
       level="workspace"
@@ -253,8 +284,18 @@ function WorkspaceLevelTab({
       about={`The workspace ${workspace}, read between charter.toml and charter.local.toml: it refines its project for the team, and this machine has the last word. Never put a secret in its settings: keep it in a vault and name it as vault:<vault>/<key>.`}
       groups={groups}
       waiting={waitingFor(level)}
-      standing={level.state === "read" ? level.read.settings.refusals : []}
+      standing={
+        settings
+          ? standingIn(settings.refusals, settings.file, "workspace", groups, "settings")
+          : []
+      }
+      mend={
+        settings && !settings.parsed
+          ? [`Open ${named(settings)} under Edit as JSON to mend it.`]
+          : []
+      }
       driver={level.state === "read" ? level : undefined}
+      raw={raw}
     />
   );
 }
@@ -288,13 +329,15 @@ function Shown({
   about: string;
   groups: readonly SettingsGroup[];
   waiting?: ReactNode;
-  /** What charter refuses in the level's files as they stand. */
-  standing?: readonly string[];
+  /** What charter refuses in the level's files as they stand, each with the setting it is about
+   *  where the level has one (NO-7). */
+  standing?: readonly Standing[];
   /** Where a file that is not read as it stands is mended: said under {@link standing}. */
   mend?: readonly string[];
   /** What writes the level's file settings, once the level has been read. */
   driver?: Driven<unknown>;
-  /** The level's files as raw TOML, each with its link at the foot of the nav (SE-19). */
+  /** The level's files as their whole text, each with its link at the foot of the nav (SE-19,
+   *  NO-7). */
   raw?: readonly RawFile[];
   /** Where a picker's New… goes for a persona or a workspace (ST-1). */
   onNew?: OnNew;
@@ -323,6 +366,27 @@ function Shown({
     filter,
   );
   const group = groups.find((one) => one.id === shown?.group) ?? groups[0];
+  /** The group on screen, once the level is read and no file's text is in its place. */
+  const drawn = waiting === undefined && editing === undefined ? group?.id : undefined;
+  /**
+   * **A link that names a setting focuses it** (NO-7, #1232): once its group is drawn, the
+   * setting's control takes the focus, so the person lands on the field and not only near it.
+   * Done once per link: the place forgets the setting once it is focused. Asked again as the
+   * level is read and its groups are declared, since a link can land before either.
+   */
+  const target = shown?.setting;
+  useEffect(() => {
+    if (target === undefined) return;
+    const row = [...document.querySelectorAll<HTMLElement>("[data-setting]")].find(
+      (one) => one.dataset.setting === target,
+    );
+    if (row === undefined) return;
+    row.scrollIntoView?.({ block: "nearest" });
+    row
+      .querySelector<HTMLElement>("input, select, textarea, button, [tabindex]")
+      ?.focus({ preventScroll: true });
+    focusedSetting(place);
+  }, [linked, place, target, drawn, declared]);
   /** What is typed into each file's text, kept while a group is looked at. */
   const [drafts, setDrafts] = useState<Partial<Record<string, RawDraft>>>({});
   const rawFile = raw.find((one) => one.id === editing);
@@ -370,9 +434,23 @@ function Shown({
             <div className="ui-settings-standing">
               <p className="note">charter does not take this from the files as they stand:</p>
               <ul>
-                {standing.map((why, at) => (
+                {standing.map(({ why, to }, at) => (
                   <li key={at} className="trouble">
                     {why}
+                    {to && (
+                      <>
+                        {" "}
+                        <button
+                          type="button"
+                          className="ui-setting-reset"
+                          // #190: WebKit leaves a button out of the tab sequence without `tabIndex`.
+                          tabIndex={0}
+                          onClick={() => linkToGroup(place, to.group, to.setting)}
+                        >
+                          {`Go to ${to.label}`}
+                        </button>
+                      </>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -485,6 +563,7 @@ function LiveRow({ setting }: { setting: LiveSetting }) {
   const { control, reset, grouped, error, undo } = setting.useControl();
   return (
     <SettingRow
+      setting={setting.id}
       label={setting.label}
       help={setting.help}
       reset={reset}
@@ -582,6 +661,7 @@ function FileRow({
   const overridden = from === "local" ? sharedUnder(setting, project.files) : undefined;
   return (
     <SettingRow
+      setting={setting.id}
       label={setting.label}
       help={setting.help}
       error={

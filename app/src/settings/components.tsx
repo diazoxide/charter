@@ -218,6 +218,7 @@ export function SettingRow({
   badge,
   place,
   control,
+  setting,
 }: {
   label: string;
   /** One line on what the value does. A node and not only a string, because a dialog's help
@@ -236,6 +237,8 @@ export function SettingRow({
   /** Which file the value is kept in, as a choice (SE-18). */
   place?: ReactNode;
   control: (ids: RowIds) => ReactNode;
+  /** The setting's id, which a link into Settings names to focus its control (NO-7). */
+  setting?: string;
 }) {
   const id = useId();
   const labelledBy = useId();
@@ -248,7 +251,7 @@ export function SettingRow({
       .filter(Boolean)
       .join(" ") || undefined;
   return (
-    <div className="ui-setting-row">
+    <div className="ui-setting-row" data-setting={setting}>
       {grouped ? (
         <span className="ui-setting-label" id={labelledBy}>
           {label}

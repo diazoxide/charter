@@ -8,6 +8,7 @@ import {
   type PlaneId,
   type ProjectExtensions,
   type ProjectTheme,
+  type SettingsChange,
   type WorkspaceSettings,
 } from "../bindings";
 import {
@@ -20,7 +21,7 @@ import {
   type Control,
   type Shown,
 } from "./fileControls";
-import { asked, fileSetting, useSettingsDriver, type Driven } from "./driver";
+import { asked, fileSetting, useSettingsDriver, type Driven, type Wrote } from "./driver";
 import type { FileSetting, LiveSetting, SettingsGroup } from "./groups";
 
 /**
@@ -195,10 +196,28 @@ export function workspaceGroups(read: WorkspaceRead, switched: () => void): Sett
   ];
 }
 
+/** Writes the manifest of `workspace` through the core: a form's edits, or its whole text. */
+function saveManifest(
+  plane: PlaneId,
+  workspace: string,
+  base: string | null,
+  change: SettingsChange,
+): Promise<Wrote<WorkspaceSettings>> {
+  return commands
+    .saveWorkspaceSettings(plane, workspace, base, change)
+    .then((said) =>
+      said.status === "error"
+        ? { refused: [said.error] }
+        : said.data.kind === "refused"
+          ? { refused: said.data.reasons }
+          : { saved: said.data.settings },
+    );
+}
+
 /**
  * **The Workspace level's driver** (`driver.ts`): reads the workspace's `workspace.json` and what
  * the core says is in force in it, and writes one setting at a time through
- * `save_workspace_settings`.
+ * `save_workspace_settings`, and the whole manifest under Edit as JSON (NO-7, #1232).
  */
 export function useWorkspaceLevel(plane: PlaneId, workspace: string): WorkspaceLevel {
   const [extensions, setExtensions] = useState<ProjectExtensions>(NO_EXTENSIONS);
@@ -252,16 +271,9 @@ export function useWorkspaceLevel(plane: PlaneId, workspace: string): WorkspaceL
         .workspaceSettings(plane, workspace)
         .then((said) => (said.status === "ok" ? { ok: said.data } : { trouble: said.error })),
     files: (settings) => ({ workspace: settings }),
-    save: (_which, base, edits) =>
-      commands
-        .saveWorkspaceSettings(plane, workspace, base, edits)
-        .then((said) =>
-          said.status === "error"
-            ? { refused: [said.error] }
-            : said.data.kind === "refused"
-              ? { refused: said.data.reasons }
-              : { saved: said.data.settings },
-        ),
+    save: (_which, base, edits) => saveManifest(plane, workspace, base, { kind: "edits", edits }),
+    // Edit as JSON (NO-7, #1232): the whole manifest, checked by the core as a form's write is.
+    saveRaw: (_which, base, text) => saveManifest(plane, workspace, base, { kind: "raw", text }),
     inForce: readInForce,
   });
 

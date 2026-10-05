@@ -1278,6 +1278,14 @@ Two rules hold for the whole area and are not repeated per file:
   rewrites `name` and keeps the owner: a manifest charter stamped is stamped again, one a hand
   wrote stays unstamped),
   `workspace reinit` (backfill, `charter/workspace.py:4645`).
+  **In charter-app, also the Settings tab's Workspace level** (`charter_core::settings::workspace`,
+  charter-app#280, NO-7 #1232): a setting's change to `settings` (`save`), or the whole text
+  from its Edit as JSON link (`save_text`). Both refuse to write over a manifest that changed on
+  disk since the tab read it, refuse what the settings readers would refuse that the manifest did
+  not already hold, and refuse a value `secretshape` calls a credential; Edit as JSON also refuses
+  text that is not a JSON object. Neither changes who owns the manifest: one a hand wrote is
+  written unstamped (Edit as JSON's text byte for byte), and one charter wrote, or a first one,
+  is stamped again.
 - **Read by:** `workspace.read_manifest` (`charter/workspace.py:1500`), `manifest_owner`
   (`charter/workspace.py:1556`), `restore` (`charter/commands_workspace.py:955`), `fork`
   (`charter/commands_workspace.py:1709`), `merge_repo_rows` (`charter/workspace.py:1739`),

@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "../App";
-import type { DoctorRow } from "../bindings";
+import type { DoctorRow, PlaneSaving } from "../bindings";
 import { forgetThisLaunch } from "../regions";
 import { GLOBAL } from "../windowprefs";
 
@@ -41,6 +41,28 @@ const ROW = (over: Partial<DoctorRow> = {}): DoctorRow => ({
 
 let doctorRows: DoctorRow[] = [];
 
+/** The project's save standing: a request mode on an origin no forge charter knows (NO-7). */
+const NO_FORGE =
+  "[plane] mode is pr, and this plane's origin is not a GitHub or GitLab forge charter knows, so a save goes no further than a commit";
+const saving: PlaneSaving = {
+  stage: "changed",
+  changed: ["a.md"],
+  ahead: 0,
+  pr: null,
+  request: "pull request",
+  blocked: null,
+  branch: "main",
+  pushes: false,
+  behind: 0,
+  pushFailed: null,
+  live: [],
+  conflicts: [],
+  notice: NO_FORGE,
+  mode: "pr",
+  modeFrom: "charter.toml",
+  journal: [],
+};
+
 beforeEach(() => {
   forgetThisLaunch();
   doctorRows = [ROW()];
@@ -61,6 +83,7 @@ beforeEach(() => {
       if (cmd === "project_settings") return { shared: FILE("shared"), local: FILE("local") };
       if (cmd === "plane_doctor") return { rows: doctorRows, full: true, app_rows: [], path: null };
       if (cmd === "alerts_everywhere") return [];
+      if (cmd === "plane_saving") return saving;
       return null;
     },
     { shouldMockEvents: true },
@@ -228,5 +251,21 @@ describe("each level", () => {
     await waitFor(() => expect(group("Editor")).toHaveAttribute("aria-current", "true"));
     await userEvent.click(level("Project"));
     await waitFor(() => expect(group("Sandbox")).toHaveAttribute("aria-current", "true"));
+  });
+});
+
+describe("the Saving view's notice about a request mode no forge serves (NO-7, #1232)", () => {
+  it("links to Settings › Saving with the Mode setting focused", async () => {
+    render(<App />);
+    await screen.findByRole("tab", { name: /plane/ });
+    await palette("Saving…");
+    const line = (await screen.findByText(NO_FORGE)).closest("[data-cause]") as HTMLElement;
+    expect(line).toHaveAttribute("data-cause", "saving-no-forge");
+
+    await userEvent.click(within(line).getByRole("button", { name: "Change the mode" }));
+
+    await waitFor(() => expect(group("Saving")).toHaveAttribute("aria-current", "true"));
+    expect(level("Project")).toBeChecked();
+    await waitFor(() => expect(screen.getByLabelText("Mode")).toHaveFocus());
   });
 });

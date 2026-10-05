@@ -283,6 +283,82 @@ pub fn save(
     })
 }
 
+/// **Write `text` as the whole manifest of `workspace`** (Edit as JSON, NO-7 #1232) — or say
+/// every reason it was not written. The Workspace level's counterpart of Edit as TOML
+/// (`settings::save`), under the same rules:
+///
+/// - `base` is the manifest as the caller read it (`None`: not there), and one that changed
+///   since is not written over;
+/// - text that is not a JSON object is refused, so a half-mended manifest is never written;
+/// - what the settings reader would refuse in it is refused, except what the manifest already
+///   held — an edit is not refused for a key it did not touch;
+/// - a secret-shaped value anywhere in it is refused, whatever it held before: a LIVE
+///   workspace's manifest is committed.
+///
+/// **It stays whose it was**, as a form's save leaves it: a manifest a hand wrote (charter's
+/// digest does not match) is written as typed, byte for byte, and stays the operator's; one
+/// charter wrote, or a first one, is stamped again, so charter's writers go on keeping it.
+pub fn save_text(
+    root: &Path,
+    workspace: &str,
+    base: Option<&str>,
+    text: &str,
+) -> Result<(), Vec<String>> {
+    let ws = workspace_of(root, workspace).map_err(|why| vec![why])?;
+    let file = named(workspace);
+    let now = on_disk(&ws).map_err(|why| vec![why])?;
+    if now.as_deref() != base {
+        return Err(vec![format!(
+            "{file} changed on disk since this tab read it, so nothing was saved. Read it again, \
+             then make the change again."
+        )]);
+    }
+    let doc = match serde_json::from_str::<Json>(text) {
+        Ok(doc @ Json::Object(_)) => doc,
+        Ok(_) => {
+            return Err(vec![format!(
+                "{file} would not be a JSON object, so nothing was saved: a workspace's manifest \
+                 is one object, {{…}}"
+            )]);
+        }
+        Err(e) => {
+            return Err(vec![format!(
+                "{file} would not be a JSON object, so nothing was saved: {e}"
+            )]);
+        }
+    };
+    let standing = now
+        .as_deref()
+        .filter(|now| serde_json::from_str::<Json>(now).is_ok_and(|doc| doc.is_object()))
+        .map_or_else(Vec::new, |now| refusals(now, workspace));
+    let mut refused: Vec<String> = refusals(text, workspace)
+        .into_iter()
+        .filter(|why| !standing.contains(why))
+        .collect();
+    if let Some(kind) = crate::secretshape::secret_kind(text) {
+        refused.push(format!(
+            "{file} looks like it holds a secret ({kind}), so nothing was saved — it is \
+             committed with a LIVE workspace, so every clone of this plane would carry the \
+             secret. Keep the value in a vault and name it where it is needed as \
+             vault:<vault>/<key>."
+        ));
+    }
+    if !refused.is_empty() {
+        return Err(refused);
+    }
+    let not_written = |e: std::io::Error| {
+        vec![format!(
+            "{file} could not be written ({}), so nothing was saved.",
+            crate::shown::short(&e.to_string())
+        )]
+    };
+    if crate::manifest::ownership(now.as_deref()) == Ownership::Operator {
+        ws.write_manifest_text(text).map_err(not_written)
+    } else {
+        ws.write_manifest_as(&doc, true).map_err(not_written)
+    }
+}
+
 /// The manifest a workspace gets when it has none, as charter's own scaffold writes it.
 fn birth(ws: &Workspace) -> Map<String, Json> {
     match ws.birth_manifest(chrono::Utc::now(), &crate::wscmd::ensure::author()) {
