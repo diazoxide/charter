@@ -40,6 +40,7 @@ fn approved_and_pinned(config: &Path, plane: &Path) {
 
 #[test]
 fn a_forgotten_project_is_gone_from_the_disk_with_its_approval_pins_and_tab() {
+    charter_core::unsteered!();
     let config = machine();
     let planes = tempfile::tempdir().unwrap();
     let plane = a_plane(&planes.path().join("p"), &["ide"]);
@@ -63,6 +64,7 @@ fn a_forgotten_project_is_gone_from_the_disk_with_its_approval_pins_and_tab() {
 
 #[test]
 fn a_project_that_is_gone_from_the_disk_can_still_be_forgotten() {
+    charter_core::unsteered!();
     let config = machine();
     let planes = tempfile::tempdir().unwrap();
     let plane = a_plane(&planes.path().join("p"), &[]);
@@ -76,6 +78,7 @@ fn a_project_that_is_gone_from_the_disk_can_still_be_forgotten() {
 
 #[test]
 fn a_revoked_approval_is_asked_for_again_and_the_project_stays_remembered() {
+    charter_core::unsteered!();
     let config = machine();
     let planes = tempfile::tempdir().unwrap();
     let plane = a_plane(&planes.path().join("p"), &["ide"]);
@@ -100,6 +103,7 @@ fn a_revoked_approval_is_asked_for_again_and_the_project_stays_remembered() {
 
 #[test]
 fn revoking_a_project_charter_does_not_remember_remembers_nothing() {
+    charter_core::unsteered!();
     let config = machine();
 
     assert!(!machine::revoke_approval(config.path(), Path::new("/planes/never")).unwrap());
@@ -109,6 +113,7 @@ fn revoking_a_project_charter_does_not_remember_remembers_nothing() {
 
 #[test]
 fn an_unpinned_workspace_is_pinned_back_in_its_place() {
+    charter_core::unsteered!();
     let mut store = machine::Store::default();
     let plane = Path::new("/planes/p");
     store.remember(plane, 1);
@@ -139,6 +144,7 @@ fn an_unpinned_workspace_is_pinned_back_in_its_place() {
 
 #[test]
 fn pinning_back_in_place_keeps_every_rule_a_pin_has() {
+    charter_core::unsteered!();
     let mut store = machine::Store::default();
     let plane = Path::new("/planes/p");
 
