@@ -238,22 +238,24 @@ fn settings(
 }
 
 /// The Claude Code settings files a chat at `cwd` reads from its project: `.claude/settings.json`
-/// and `.claude/settings.local.json` in `cwd` and in each folder above it, up to the project's
-/// root (the first holding a project manifest or a `.git`).
+/// and `.claude/settings.local.json` in `cwd` and in each folder above it, up to the nearer of
+/// the project's root (a project manifest) and the first `.git`. A `cwd` in no project and no
+/// repository is read alone: the walk never climbs to `/` or into the home directory.
 fn project_settings_files(cwd: Option<&std::path::Path>) -> Vec<std::path::PathBuf> {
-    let mut out = Vec::new();
     let Some(cwd) = cwd else {
-        return out;
+        return Vec::new();
     };
-    for dir in cwd.ancestors().take(64) {
-        for file in [".claude/settings.json", ".claude/settings.local.json"] {
-            out.push(dir.join(file));
-        }
+    let files = |dir: &std::path::Path| {
+        [".claude/settings.json", ".claude/settings.local.json"].map(|file| dir.join(file))
+    };
+    let mut out = Vec::new();
+    for dir in cwd.ancestors() {
+        out.extend(files(dir));
         if crate::names::has_manifest(dir) || dir.join(".git").exists() {
-            break;
+            return out;
         }
     }
-    out
+    files(cwd).to_vec()
 }
 
 /// Claude Code's `PermissionRequest` hook, pointed at `charter hook permissionrequest` for THIS
@@ -487,5 +489,45 @@ mod tests {
     #[test]
     fn the_claude_code_adapter_hands_a_chat_claude_code_s_own_plugins() {
         assert_eq!(adapter().plugins().harness(), "claude");
+    }
+
+    #[test]
+    fn a_chat_outside_any_project_reads_only_its_own_folders_settings() {
+        // D-RN8-12's walk stops at the nearer of the project root and the first `.git`, and a
+        // folder in neither never climbs: not to `/`, not into the home directory.
+        let dir = tempfile::tempdir().expect("a directory");
+        let chat = dir.path().join("loose/chat");
+        std::fs::create_dir_all(&chat).expect("the chat's folder");
+        assert_eq!(
+            project_settings_files(Some(&chat)),
+            [
+                chat.join(".claude/settings.json"),
+                chat.join(".claude/settings.local.json")
+            ]
+        );
+        assert!(project_settings_files(None).is_empty());
+    }
+
+    #[test]
+    fn the_walk_stops_at_the_nearer_of_the_git_root_and_the_project_root() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let project = dir.path().join("project");
+        let repo = project.join("workspaces/alpha/repo");
+        let chat = repo.join("src");
+        std::fs::create_dir_all(&chat).expect("folders");
+        std::fs::create_dir_all(project.join(".git")).expect("the project's git");
+        std::fs::write(project.join("charter.toml"), "schema = 1\n").expect("manifest");
+        std::fs::create_dir_all(repo.join(".git")).expect("the clone's git");
+        let read = project_settings_files(Some(&chat));
+        assert_eq!(read.last(), Some(&repo.join(".claude/settings.local.json")));
+        assert!(!read.iter().any(|p| p.starts_with(project.join(".claude"))));
+
+        let layer = project.join("workspaces/alpha");
+        let read = project_settings_files(Some(&layer));
+        assert_eq!(
+            read.last(),
+            Some(&project.join(".claude/settings.local.json"))
+        );
+        assert_eq!(read.len(), 6, "{read:?}");
     }
 }
