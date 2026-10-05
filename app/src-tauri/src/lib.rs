@@ -2256,7 +2256,7 @@ pub fn run() {
             // else of charter's still running makes it wait for the next launch (D-RN5-11).
             // Off in the scenario build, whose specs name the old folders (D-RN5-7).
             #[cfg(not(feature = "e2e"))]
-            if let Some(renamed) = charter_core::renamelocal::at_launch() {
+            if let Some(renamed) = charter_core::renamelocal::at_launch(&app.config().identifier) {
                 log_the_rename(&renamed);
             }
             // From here on this app holds the config home: no rename-local of a later launch,
