@@ -530,6 +530,9 @@ function App() {
   const takeOut = useCallback((plane: string) => {
     setPlanes((was) => {
       const at = was.indexOf(plane);
+      // Twice is once: the window that asked the close takes the tab out, and then hears the
+      // core say `plane-closed` about the same project (#1242).
+      if (at < 0) return was;
       const left = was.filter((held) => held !== plane);
       // The tab beside it comes to the front, which is `closeTab`'s rule one scope up. With
       // nothing left, the opener — the window has to stay useful with no project (#111).
@@ -1091,6 +1094,17 @@ function App() {
     ).catch(() => undefined);
     return () => void listening.then((stop) => stop?.()).catch(() => undefined);
   }, []);
+
+  // The core let go of a project (#1242): by this window's own `×`, which has already taken
+  // it out, or behind this window's back — the UI RPC, another window. Either way it is not
+  // drawn a moment longer: its tab, its chats and its views go, and what comes next comes to
+  // the front, as a close from here would.
+  useEffect(() => {
+    const listening = listen<{ plane: PlaneId }>("plane-closed", (event) =>
+      takeOut(event.payload.plane),
+    ).catch(() => undefined);
+    return () => void listening.then((stop) => stop?.()).catch(() => undefined);
+  }, [takeOut]);
 
   // Cold start ends when a person can see the window, which is the frame after the one this
   // paints in. The core answers with why that took as long as it did, when it took longer

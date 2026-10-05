@@ -9,7 +9,6 @@ import {
 import { dirname, join } from "node:path";
 import { $, $$, browser, expect } from "@wdio/globals";
 import { copyFixturePlane } from "../harness.js";
-import { closeProject } from "../opening.js";
 
 /**
  * **A tab that holds something other than a chat**, in the built app (ADR 0043, as
@@ -408,13 +407,13 @@ describe("view tabs", function () {
     })();
 
     after(async () => {
-      // **Let go of through the window, not behind its back.** `close_plane` asked directly
-      // leaves the window drawing a project the core no longer holds, in front — and the next
-      // spec file shares this app process (it cost `workspace-explorer.e2e.ts` its clones).
-      const selector = `${PROJECTS} button[aria-label="Close project views-back"]`;
-      const closer = await $(selector);
-      if (!(await closer.isExisting())) return;
-      await closeProject(selector);
+      // Let go of in the core, and its tab leaves the strip with it: the core tells every
+      // window drawing a project it closed (`plane-closed`, #1242). The next spec file shares
+      // this app process, and a tab left in front here cost `workspace-explorer.e2e.ts` its
+      // clones before that.
+      const closer = await $(`${PROJECTS} button[aria-label="Close project views-back"]`);
+      if (!(await ask<string[]>("open_planes")).includes(other)) return;
+      await ask("close_plane", { plane: other });
       await browser.waitUntil(async () => !(await ask<string[]>("open_planes")).includes(other), {
         timeout: 20_000,
         timeoutMsg: "the views-back project was not let go of",

@@ -514,7 +514,8 @@ fn open_planes(planes: tauri::State<'_, Planes>) -> Vec<PlaneId> {
 }
 
 /// Lets go of a plane: its record is written, its sessions are ended, and its hook socket is
-/// released.
+/// released. Every window drawing it is told `plane-closed` and takes its tab out, whoever
+/// asked (#1242).
 ///
 /// **Nothing of the plane on disk goes.** Closing a project is the app letting go of it, and
 /// a plane closed here can be opened again — by this process or another — with everything
@@ -2515,6 +2516,21 @@ pub fn run() {
                         if let Some(watch) = app.try_state::<branchwatch::BranchWatch>() {
                             watch.let_go_of_plane(root);
                         }
+                    })
+                })
+                // A plane closed, by whoever asked: every window drawing it takes its tab out,
+                // so none goes on drawing a project the core no longer holds (#1242).
+                .telling_closed({
+                    let window = app.handle().clone();
+                    std::sync::Arc::new(move |plane: &PlaneId| {
+                        windows::emit_for_plane(
+                            &window,
+                            plane,
+                            planes::CLOSED,
+                            planes::PlaneClosed {
+                                plane: plane.clone(),
+                            },
+                        );
                     })
                 })
                 // Auto-save saved a plane: the extensions that hear it are told, as after the

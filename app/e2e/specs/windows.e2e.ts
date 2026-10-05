@@ -2,7 +2,6 @@ import { realpathSync, renameSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { $, browser, expect } from "@wdio/globals";
 import { anEmptyRecord, copyFixturePlane } from "../harness.js";
-import { closeProject } from "../opening.js";
 import { attributesOfEach } from "../reading.js";
 
 /**
@@ -17,11 +16,11 @@ import { attributesOfEach } from "../reading.js";
  * **Every row is pressed from the palette**, in whichever window it is about: each window has
  * its own palette and its own `F2`, which is one of the three things #126 named.
  *
- * **It leaves the app as it found it**: back in the main window, with its own project closed —
- * through the window, not behind its back. One app process serves the whole run, and a project
- * let go of by `close_plane` alone stays drawn, in front, as a project the core no longer holds:
- * the next spec (`workspace-explorer.e2e.ts`) then found an empty workspace strip and no clones,
- * on `main` on both platforms, whenever an earlier test here had left `splitme` in front.
+ * **It leaves the app as it found it**: back in the main window, with its own project closed by
+ * `close_plane`, and its tab gone from the strip. One app process serves the whole run, and a
+ * project left drawn here is the strip the next spec (`workspace-explorer.e2e.ts`) reads. The
+ * core tells every window drawing a project it closed (`plane-closed`, #1242), so the tab goes
+ * however the close was asked.
  */
 
 const PROJECTS = '[role="tablist"][aria-label="Projects"]';
@@ -167,9 +166,9 @@ describe("a project tab in a window of its own", function () {
       await windowThere(label, false);
     }
     await browser.switchToWindow(MAIN);
-    // Let go of through the window, by its tab's ×, so the window stops drawing it too.
-    const closer = `${PROJECTS} button[aria-label="Close project splitme"]`;
-    if (await $(closer).isExisting()) await closeProject(closer);
+    // Let go of in the core, which tells the window to stop drawing it (#1242).
+    if ((await ask<string[]>("open_planes")).includes(split))
+      await ask("close_plane", { plane: split });
     await browser.waitUntil(async () => !(await ask<string[]>("open_planes")).includes(split), {
       timeout: 20_000,
       timeoutMsg: "the splitme project was not let go of",
