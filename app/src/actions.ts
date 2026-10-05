@@ -297,6 +297,10 @@ export type Does =
   /** Opens the dialog that cuts a new branch in that clone (GL-1, ADR 0072 §4). The dialog
    *  names the branch; the core cuts it, and nothing is started. */
   | { verb: "newBranch"; repo: string }
+  /** Clones repos the workspace names and this machine has not cloned, one after another,
+   *  through the clone path Settings › Repos uses (`clone_repo`, #1215). Where each lands is
+   *  the core's answer; credentials are git's and the forge's, never asked for here. */
+  | { verb: "cloneMissing"; workspace: string; repos: string[] }
   /** Shows the opener, so another project can be opened into this window beside the ones it
    *  already holds. It opens nothing by itself — the trust gate is the opener's (ADR 0035). */
   | { verb: "openProject" }
@@ -461,6 +465,14 @@ export type Now = {
    * counted beside the pieces in `actions.test.ts`.
    */
   clones?: readonly Clone[];
+  /**
+   * The repos the focused workspace names that are not cloned here (`Panels.absent`), one
+   * `Clone <repo>` row each, and one row that clones them all (#1215).
+   */
+  absent?: readonly string[];
+  /** Of those, the ones this window is cloning or about to: their rows say so rather than
+   *  start a second clone of the same repo. */
+  cloning?: readonly string[];
   /** Where the next chat starts, when the explorer has picked somewhere — the path, so a
    *  clone's pick row can say it is already the spot rather than offer it again. */
   startsIn?: string;
@@ -646,6 +658,9 @@ export type Doing = {
   pickClone: (repo: string, path: string) => void;
   /** Opens the New branch dialog for that clone. It cuts nothing until it is answered. */
   newBranch: (repo: string) => void;
+  /** Clones those repos into the workspace, in turn. Each one's progress and failure is drawn
+   *  on its own row; the `Ran` says which failed, in the core's words. */
+  cloneMissing: (workspace: string, repos: string[]) => Promise<Ran>;
   /** Opens the picker for a new tab whose chat starts in that directory, and nowhere else. */
   newChatIn: (path: string) => void;
   sendKey: (key: string) => Promise<Ran>;
@@ -931,6 +946,13 @@ export const KEEPS_THE_BRANCH = "Takes the folder, not the branch. The branch st
 
 /** Nothing happened worth saying, which is the ordinary answer. */
 const DID: Ran = { ok: true };
+
+/** The row that clones every repo the focused workspace names and this machine lacks — the
+ *  explorer's `Clone all` presses it (#1215). */
+export const CLONE_ALL_ID = "absent.cloneAll";
+
+/** The row that clones one of them — the explorer's row button and its Retry press it. */
+export const cloneMissingId = (repo: string) => `absent.clone:${repo}`;
 
 /** Whether one of the operator's pins names this thing. */
 function isPinned<T>(held: readonly T[], one: T): boolean {
@@ -1576,6 +1598,42 @@ export function catalogue(now: Now): Offer[] {
     );
   }
 
+  // **The repos the workspace names and nobody has cloned here, one row each, and one for all
+  // of them** (#1215). Above the line: a clone adds a folder and touches nothing that is
+  // there. A repo already being cloned says so instead of starting a second clone of itself.
+  const workspace = now.focused;
+  if (workspace !== undefined && workspace !== OUTSIDE) {
+    const missing = now.absent ?? [];
+    const busy = new Set(now.cloning ?? []);
+    for (const repo of missing) {
+      const title = `Clone ${repo}`;
+      offers.push(
+        busy.has(repo)
+          ? cannot(cloneMissingId(repo), title, `${repo} is being cloned.`, repo)
+          : {
+              ...can(
+                cloneMissingId(repo),
+                title,
+                { verb: "cloneMissing", workspace, repos: [repo] },
+                repo,
+              ),
+              note: `${workspace} names it and it is not cloned on this machine.`,
+            },
+      );
+    }
+    // Listed while something is missing, like the per-repo rows: with every repo cloned there
+    // is nothing for it to be about, and a greyed row in every palette query that shares its
+    // letters would be noise, not a reason (D-1215-3).
+    const idle = missing.filter((repo) => !busy.has(repo));
+    const all = "Clone all missing repos";
+    if (missing.length > 0)
+      offers.push(
+        idle.length === 0
+          ? cannot(CLONE_ALL_ID, all, "Every missing repo is being cloned.")
+          : can(CLONE_ALL_ID, all, { verb: "cloneMissing", workspace, repos: idle }),
+      );
+  }
+
   // **And every view an approved extension offers, one row each.** The personas panel's heading
   // draws the same views as buttons for a pointer; this is how a keyboard reaches them, and it
   // is the same verb. The extension's id is in the words, because what is in force is shown
@@ -2019,6 +2077,8 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
     case "newBranch":
       doing.newBranch(does.repo);
       return DID;
+    case "cloneMissing":
+      return doing.cloneMissing(does.workspace, does.repos);
     case "newTabIn":
     case "newChatIn":
       doing.newChatIn(does.path);
@@ -2446,6 +2506,9 @@ export type MenuOn =
   /** One clone of the focused workspace, by name — the explorer's clone heading and the bottom
    *  bar's repo row. The path is the catalogue's, so the menu does not carry it. */
   | { on: "clone"; repo: string }
+  /** One repo the focused workspace names that is not cloned here — the explorer's "Not
+   *  cloned here" rows and the bottom bar's (#1215). */
+  | { on: "absent"; repo: string }
   /** One file or folder row of a branch's tree — the explorer's and the file tab's (FM-10):
    *  what it is as the tree drew it, and why it does not open when the tree said. */
   | FileOn
@@ -2567,6 +2630,9 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
         above: [`clone.chat:${what.repo}`, `clone.branch:${what.repo}`, `clone.pick:${what.repo}`],
         below: [],
       };
+    case "absent":
+      // Clone above; the line below is where taking the repo out of the workspace goes.
+      return { above: [cloneMissingId(what.repo)], below: [] };
     case "pane":
       return {
         above: ["chat.new", "shell.new", "pane.split.right", "pane.split.down", PASS_THROUGH_ID],

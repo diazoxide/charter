@@ -140,6 +140,10 @@ function doing(): Doing & { calls: string[] } {
       calls.push(`focusBranch:${cut.repo}/${cut.piece}`);
     }),
     newBranch: note("newBranch"),
+    cloneMissing: vi.fn(async (workspace: string, repos: string[]) => {
+      calls.push(`cloneMissing:${workspace}:${repos.join(",")}`);
+      return { ok: true as const };
+    }),
     newChatIn: note("newChatIn"),
     sendKey: vi.fn(async (key: string) => {
       calls.push(`sendKey:${key}`);
@@ -882,6 +886,54 @@ describe("the one list of actions", () => {
     it("lists the new tab, the new branch, then the pick, and nothing below the line", () => {
       expect(menuOn({ on: "clone", repo: "svc" })).toEqual({
         above: ["clone.chat:svc", "clone.branch:svc", "clone.pick:svc"],
+        below: [],
+      });
+    });
+  });
+
+  describe("a repo the focused workspace names and has not cloned here (#1215)", () => {
+    it("offers to clone each one, and all of them, into that workspace", async () => {
+      const hands = doing();
+      const offers = catalogue(now({ focused: "alpha", absent: ["charter", "web"] }));
+
+      expect(by(offers, "absent.clone:charter")?.title).toBe("Clone charter");
+      expect(by(offers, "absent.cloneAll")?.title).toBe("Clone all missing repos");
+      await run(offers, "absent.clone:charter", hands);
+      await run(offers, "absent.cloneAll", hands);
+
+      expect(hands.calls).toEqual(["cloneMissing:alpha:charter", "cloneMissing:alpha:charter,web"]);
+    });
+
+    it("greys a repo already being cloned, and leaves it out of Clone all", () => {
+      const offers = catalogue(
+        now({ focused: "alpha", absent: ["charter", "web"], cloning: ["charter"] }),
+      );
+
+      expect(by(offers, "absent.clone:charter")?.available).toBe(false);
+      expect(by(offers, "absent.clone:charter")?.reason).toBe("charter is being cloned.");
+      expect(by(offers, "absent.cloneAll")?.does).toEqual({
+        verb: "cloneMissing",
+        workspace: "alpha",
+        repos: ["web"],
+      });
+    });
+
+    it("greys Clone all with its reason while every missing repo is already being cloned", () => {
+      const offers = catalogue(now({ focused: "alpha", absent: ["web"], cloning: ["web"] }));
+
+      expect(by(offers, "absent.cloneAll")?.reason).toBe("Every missing repo is being cloned.");
+    });
+
+    it("has no Clone all when nothing is missing, nor at the project root", () => {
+      expect(by(catalogue(now({ focused: "alpha" })), "absent.cloneAll")).toBeUndefined();
+      expect(
+        by(catalogue(now({ focused: OUTSIDE, absent: ["web"] })), "absent.cloneAll"),
+      ).toBeUndefined();
+    });
+
+    it("draws Clone on the row's menu, with the line below left for taking it out", () => {
+      expect(menuOn({ on: "absent", repo: "web" })).toEqual({
+        above: ["absent.clone:web"],
         below: [],
       });
     });

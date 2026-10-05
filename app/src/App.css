@@ -1387,7 +1387,7 @@ button.show-more:focus-visible {
 .explorer .clone > summary,
 .explorer .chat,
 .explorer .worktree,
-.explorer .absent li {
+.explorer .absent-row {
   min-width: max-content;
   white-space: nowrap;
 }
@@ -1982,10 +1982,42 @@ h2.sidebar-title .node-icon {
   opacity: 0.7;
 }
 
-.explorer .absent li {
+.explorer .absent-heading,
+.explorer .absent-row {
   display: flex;
   gap: 0.35rem;
   align-items: center;
+}
+
+/* The heading's Clone all and a row's Clone sit on their line, not under it (#1215). */
+.explorer .absent-actions {
+  margin-left: auto;
+}
+
+.explorer .absent-actions .ui-setting-actions {
+  margin: 0;
+}
+
+.explorer .absent-actions .ui-setting-actions button {
+  padding: 0 0.5rem;
+}
+
+/* A row's Clone shows on hover or focus. Opacity and not `visibility`, so it stays a Tab stop
+   and appears when the keyboard reaches it; always shown where there is no hover. A Retry is
+   not a `row-action`: a failure keeps its way out on screen. */
+.explorer .absent-row .row-action {
+  opacity: 0;
+}
+
+.explorer .absent-row:hover .row-action,
+.explorer .absent-row:focus-within .row-action {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .explorer .absent-row .row-action {
+    opacity: 1;
+  }
 }
 
 .explorer .trouble {
