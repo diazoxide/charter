@@ -1223,7 +1223,7 @@ pub fn move_agents_md_aside(
 /// `from` renamed to `to`, never over anything: `Ok(false)`, moving nothing, when something is
 /// at `to`. The kernel's no-replace rename where there is one, as `held.rs`'s is; a filesystem
 /// without it is renamed onto after a look.
-fn rename_new(from: &Path, to: &Path) -> std::io::Result<bool> {
+pub(crate) fn rename_new(from: &Path, to: &Path) -> std::io::Result<bool> {
     #[cfg(any(
         target_os = "linux",
         target_os = "android",

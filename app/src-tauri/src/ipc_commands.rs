@@ -242,6 +242,7 @@ macro_rules! app_commands {
                 windowprefs::write_layout,
                 windowprefs::adopt_layout,
                 windowprefs::set_dismissed,
+                windowprefs::use_built_in_theme,
             ],
             vault_values: [
                 vaults::vault_secret_reveal,

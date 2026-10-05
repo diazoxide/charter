@@ -569,6 +569,9 @@ pub(super) fn version_lock(d: &Doctor) -> Row {
                 crate::adopt::app_version()
             ),
             "Run: charter version  (says how to conform the plane or the app)",
-        ),
+        )
+        // The version lock is set in Project › General, where the Alerts drawer's pin row
+        // links too (NO-6).
+        .in_settings(SettingsGroup::General),
     }
 }

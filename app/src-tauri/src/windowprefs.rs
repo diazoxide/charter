@@ -80,6 +80,18 @@ pub async fn adopt_layout(text: String) -> Result<bool, String> {
         .map_err(|err| err.to_string())
 }
 
+/// **Use built-in** (NO-6): moves the operator's theme file aside to `theme.aside.json`, never
+/// over another file, so what is in force without it is drawn from here on. Answers where the
+/// file went.
+#[tauri::command]
+#[specta::specta]
+pub async fn use_built_in_theme() -> Result<String, String> {
+    let root = config_root()?;
+    tauri::async_runtime::spawn_blocking(move || windowprefs::use_built_in_theme(&root))
+        .await
+        .map_err(|err| format!("moving the theme aside did not finish: {err}"))?
+}
+
 /// Keeps the Notices dismissed in one project until their cause changes (NO-2, V91j):
 /// `causes` replaces that project's list in the layout file and nothing else, so two windows
 /// dismissing in different projects both keep theirs. An empty list takes the project out.

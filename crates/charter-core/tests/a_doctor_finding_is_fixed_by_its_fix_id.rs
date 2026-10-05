@@ -230,7 +230,8 @@ fn a_fix_id_is_spelled_one_way_and_read_back_the_same() {
             "memory-optimize",
             "discover",
             "git-identity",
-            "rename-plane"
+            "rename-plane",
+            "workspace-reinit"
         ]
     );
     for id in FixId::ALL {
@@ -255,7 +256,10 @@ fn every_fix_but_discover_is_applied_by_bare_fix() {
             "reinit",
             "local-ignore",
             "memory-optimize",
-            "git-identity"
+            "git-identity",
+            // Eligible for bare --fix, but no doctor row offers it yet, so bare --fix (which
+            // applies the fixes the rows offer) does not run it today.
+            "workspace-reinit"
         ]
     );
     // git-identity is chosen by bare --fix too, and refused there: it takes input
@@ -713,4 +717,112 @@ fn a_project_with_no_forge_is_not_offered_discover() {
     let found = row(&root, "inventory");
     assert_eq!(found.status, Status::Warn, "{found:?}");
     assert_eq!(found.fix, None, "{found:?}");
+}
+
+// ---- workspace-reinit ---------------------------------------------------------------------
+
+/// The alerts as the window asks for them: every stale workspace counts (NO-6).
+fn stale_workspaces(root: &Path) -> Vec<String> {
+    charter_core::alerts::read(&charter_core::alerts::Asking {
+        root,
+        active: None,
+        standing: root,
+        shared: false,
+    })
+    .alerts
+    .into_iter()
+    .find_map(|alert| match alert {
+        charter_core::alerts::Alert::Reinit { stale } => Some(stale),
+        _ => None,
+    })
+    .unwrap_or_default()
+}
+
+#[test]
+fn workspaces_behind_the_layout_are_brought_up_by_workspace_reinit_and_then_alert_nothing() {
+    charter_core::unsteered!();
+    let (_d, root) = baseline("schema = 1\n");
+    let ws = root.join("workspaces/ide");
+    std::fs::create_dir_all(&ws).unwrap();
+    std::fs::write(ws.join("workspace.md"), "# ide\n\nMine.\n").unwrap();
+    assert_eq!(stale_workspaces(&root), ["ide"]);
+
+    ran(&fix::apply(&root, FixId::WorkspaceReinit));
+
+    assert_eq!(stale_workspaces(&root), Vec::<String>::new());
+    // Additive: what the operator wrote is kept as it was.
+    assert_eq!(
+        std::fs::read_to_string(ws.join("workspace.md")).unwrap(),
+        "# ide\n\nMine.\n"
+    );
+}
+
+#[test]
+fn workspace_reinit_is_refused_where_there_is_no_project_and_writes_nothing() {
+    charter_core::unsteered!();
+    let dir = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+    std::fs::create_dir_all(root.join("workspaces/ide")).unwrap();
+    let before = tree(&root);
+
+    let why = refused(&fix::apply(&root, FixId::WorkspaceReinit)).to_owned();
+
+    assert!(why.contains("no project"), "{why}");
+    assert_eq!(tree(&root), before);
+}
+
+// ---- a charter.toml that is a link out of the project -------------------------------------
+
+/// A project whose `charter.toml` is a link to a writable manifest outside it, with something
+/// for each fix to do: a git repo with a local file to ignore, an unindexed memory and a
+/// workspace behind the layout.
+#[cfg(unix)]
+fn linked_out() -> (tempfile::TempDir, tempfile::TempDir, PathBuf) {
+    let (dir, root) = baseline("schema = 1\n");
+    let outside = tempfile::tempdir().unwrap();
+    let elsewhere = std::fs::canonicalize(outside.path())
+        .unwrap()
+        .join("charter.toml");
+    std::fs::write(&elsewhere, "schema = 1\n").unwrap();
+    std::fs::remove_file(root.join("charter.toml")).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, root.join("charter.toml")).unwrap();
+    git(&root, &["init", "-q"]);
+    std::fs::write(root.join("charter.local.toml"), PROFILE).unwrap();
+    std::fs::create_dir_all(root.join("personas/steward/memory")).unwrap();
+    std::fs::write(
+        root.join("personas/steward/persona.md"),
+        "---\nrole: x\n---\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("personas/steward/memory/MEMORY.md"), "").unwrap();
+    std::fs::write(root.join("personas/steward/memory/a.md"), "# A\nfirst\n").unwrap();
+    std::fs::create_dir_all(root.join("workspaces/ide")).unwrap();
+    std::fs::write(root.join("workspaces/ide/workspace.md"), "# ide\n").unwrap();
+    (dir, outside, root)
+}
+
+/// **No fix writes through a `charter.toml` that links out of the project**: it is somebody
+/// else's file, so charter writes nothing at all there. Each fix is refused with the words that
+/// name the link, and the project and the file it points to are left as they were.
+#[cfg(unix)]
+#[test]
+fn every_fix_is_refused_on_a_project_whose_charter_toml_links_out_of_it_and_writes_nothing() {
+    charter_core::unsteered!();
+    for id in [
+        FixId::Reinit,
+        FixId::WorkspaceReinit,
+        FixId::LocalIgnore,
+        FixId::MemoryOptimize,
+        FixId::Discover,
+    ] {
+        let (_d, outside, root) = linked_out();
+        let before = outside_git(&root);
+        let target = tree(outside.path());
+
+        let why = refused(&fix::apply(&root, id)).to_owned();
+
+        assert!(why.contains("outside this project"), "{id}: {why}");
+        assert_eq!(outside_git(&root), before, "{id} wrote in the project");
+        assert_eq!(tree(outside.path()), target, "{id} wrote through the link");
+    }
 }
