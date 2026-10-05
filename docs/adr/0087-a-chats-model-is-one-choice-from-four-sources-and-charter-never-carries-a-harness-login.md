@@ -1,4 +1,4 @@
-# A chat's model is one choice from four sources, and charter never carries a harness login
+# A chat's model is one choice from four sources, and purlis never carries a harness login
 
 **Accepted 2026-10-01** by the operator (ruling V36), with dispatcher decisions D-0087a/b,
 drafted for program-map ticket MS-1 (#700). It follows these of the operator's rulings:
@@ -36,7 +36,7 @@ drafted for program-map ticket MS-1 (#700). It follows these of the operator's r
 - **X12**, through SD-28's row: *"unattended runs (triggers, gardeners, workflows, off-peak,
   headless, race) prefer API-key or local-model sources, with a one-time acknowledgement before a
   consumer subscription runs unattended"*.
-- **C3**, its wording requirement, in short: the encryption protects content from Charter's
+- **C3**, its wording requirement, in short: the encryption protects content from purlis's
   servers, and never from the harness's model provider.
 - **V15**, in part: a vault or secret sets its approval, *"off · every use · once per chat · for
   N minutes in this chat · require OS authentication"*. *"The command needing the secret
@@ -44,7 +44,7 @@ drafted for program-map ticket MS-1 (#700). It follows these of the operator's r
   minutes). *"Creating a scheduled or triggered agent warns when it uses an approval-required
   secret."*
 - **V36**, the ruling on this record (*Ruled*, below): a key reaches the harness through a proxy
-  in `charterd` wherever the harness accepts a base URL.
+  in `purlisd` wherever the harness accepts a base URL.
 - **V34c**, through [ADR 0083](0083-telemetry-is-one-otel-pipeline-on-the-device-and-only-the-signed-updater-calls-charter.md):
   *"A spend budget may pause a chat on harness-reported spend."*
 
@@ -63,11 +63,11 @@ GT-CLOUD. This record fixes only how the gateway appears as a source.
 Its concept is **Chat**: the model is one of a chat's settings, beside its harness, profile and
 persona (ADR 0072 §2). A persona and a workspace give a chat its default.
 
-## Where charter is today
+## Where purlis is today
 
-- **charter chooses no model.** A chat runs its harness with the harness's own default model and
-  the harness's own login. The only "model" in charter's code is the word in a refusal.
-- **charter refuses to hold a credential where the model can read it.** A profile may not set an
+- **purlis chooses no model.** A chat runs its harness with the harness's own default model and
+  the harness's own login. The only "model" in purlis's code is the word in a refusal.
+- **purlis refuses to hold a credential where the model can read it.** A profile may not set an
   environment variable named like a credential (`profiles::named_like_a_credential`), because
   *"anything set on the harness process reaches the shell the model runs"*, which was measured on
   Claude Code and Codex. `chatenv` starts every chat from an empty environment and does not pass
@@ -92,7 +92,7 @@ persona (ADR 0072 §2). A persona and a workspace give a chat its default.
 **A chat runs on one model choice: a model, its provider, and the source it is reached through.
 There are four sources: the harness's own login, a key from a vault, the gateway, and a local
 model. The choice is made per chat, persona, workspace or project, applied by the harness's
-adapter when a run starts, and always shown with the account it is billed to. charter never reads,
+adapter when a run starts, and always shown with the account it is billed to. purlis never reads,
 stores or relays a harness login, and never lets one be pointed anywhere but its vendor. The
 end-to-end encryption promise covers live sessions, never model traffic.**
 
@@ -138,22 +138,22 @@ model = "gpt-5-codex"
 
 | `source` | What it is | Billed to | Route | Shown as |
 |---|---|---|---|---|
-| `login` | **The harness's own login**: whatever `claude /login`, `codex login` or the harness's own flow set up. The default | the harness's account: the user's plan, or a key the harness itself stores | harness → its vendor. charter is not on the path | lock · *"your Claude plan"* (the harness and its plan, as the harness reports it) |
+| `login` | **The harness's own login**: whatever `claude /login`, `codex login` or the harness's own flow set up. The default | the harness's account: the user's plan, or a key the harness itself stores | harness → its vendor. purlis is not on the path | lock · *"your Claude plan"* (the harness and its plan, as the harness reports it) |
 | `key` | **A key from a vault**: the user's own provider key (M1's second source) | the key's owner, at the provider | harness → provider, from this device | lock · *"your Anthropic key"* |
-| `gateway` | **Through Charter's gateway**: an org's own provider keys (M5, M8 step 2), or credits where they are cleared (M9) | the org's key, or credits | harness → Charter's gateway → provider | gateway icon. Its wording is GT-CLOUD's copy to decide |
+| `gateway` | **Through purlis's gateway**: an org's own provider keys (M5, M8 step 2), or credits where they are cleared (M9) | the org's key, or credits | harness → purlis's gateway → provider | gateway icon. Its wording is GT-CLOUD's copy to decide |
 | `local` | **A local model** on this device or this runner: Ollama, LM Studio, vLLM (N15, MS-17) | nobody | harness → a loopback or LAN endpoint | lock · *"on this machine"* |
 
-- **Lock for direct, gateway icon for via Charter.** Settled by M3. `login`, `key` and `local`
-  never pass through Charter's servers, so all three show the lock. Only `gateway` shows the
+- **Lock for direct, gateway icon for via purlis.** Settled by M3. `login`, `key` and `local`
+  never pass through purlis's servers, so all three show the lock. Only `gateway` shows the
   gateway icon.
-- **`login`, `key` and `local` need no account and no connection to Charter's servers.** Settled
+- **`login`, `key` and `local` need no account and no connection to purlis's servers.** Settled
   by M2. `local` works with no network at all.
 - **`gateway` waits for GT-CLOUD.** Until then the picker does not offer it. Its tickets
   (MS-7 to MS-16) build it, and this record changes nothing in them. What the picker calls it,
   such as the word for credits, is GT-CLOUD's copy to decide.
 - **`login` covers a harness's own key too.** Some harnesses log in with a key the harness itself
   stores, such as an API key typed into the harness's own login prompt. That is still the
-  harness's login: charter does not read it, and it is not source `key`.
+  harness's login: purlis does not read it, and it is not source `key`.
 
 ### 3. Five places a choice is set, and which one wins
 
@@ -183,7 +183,7 @@ With none of them set, the chat uses `login` with the harness's default model, a
   models. If the first is blocked or refused, the next model on the *same* source is tried.
 - **An unattended run prefers `key` or `local`.** Settled by X12 through SD-28. A chat started by
   a trigger, a schedule, a workflow, a race, or headless resolves its choice the same way. If that
-  choice is `login`, charter asks once, per project, harness and login on this machine, for the
+  choice is `login`, purlis asks once, per project, harness and login on this machine, for the
   operator's acknowledgement before a subscription runs unattended. Until the acknowledgement is
   given, the run waits as a needs-you item. The acknowledgement is a new store, decided here and
   written by SD-28 (§11).
@@ -195,7 +195,7 @@ With none of them set, the chat uses `login` with the harness's default model, a
 - **The choice is resolved once, when a run starts,** and passed to the harness's adapter
   (FD-13). The adapter turns it into that harness's flags, environment or config, the
   per-harness mapping of research 09 §6.1. A running chat is never moved to another choice by
-  charter (X23). A new choice is a new run.
+  purlis (X23). A new choice is a new run.
 - **The matrix decides what may be offered** (M10, MS-2). A (harness, source, model) tuple that is
   `blocked` is never offered or applied. A `degraded` one is offered only behind its switch, with
   its breakage listed. Credits are hidden where they are not cleared, with the reason and BYO
@@ -206,34 +206,34 @@ With none of them set, the chat uses `login` with the harness's default model, a
   proxy of §7, and sees only a loopback URL and a per-chat token. A harness that does not gets the
   key in its process environment. A harness that reads its configuration from a file is given a
   generated file that names a variable (`${ANTHROPIC_API_KEY}`, `{env:…}`), never a value.
-  charter never writes a key to disk.
+  purlis never writes a key to disk.
 
-### 5. What charter never does with a login
+### 5. What purlis never does with a login
 
-**Settled by V9:** charter never reads, copies, stores or relays a harness credential.
+**Settled by V9:** purlis never reads, copies, stores or relays a harness credential.
 
 - **A `login` chat starts with no routing variables.** The adapter removes `ANTHROPIC_BASE_URL`,
   `ANTHROPIC_AUTH_TOKEN`, `OPENAI_BASE_URL` and their like for that harness, whatever the
   operator's `[chat_env] pass` lists.
 - **Committed harness config cannot reroute a login either.** Before a `login` chat starts, the
   adapter reads the configuration the harness would load from the chat's directory:
-  - **Where the harness gives charter a flag that takes precedence, charter uses it.** For Codex
+  - **Where the harness gives purlis a flag that takes precedence, purlis uses it.** For Codex
     that is `-c model_provider=…` naming the vendor's own provider, which overrides a committed
     `.codex/config.toml`'s `model_provider` and `model_providers` entries.
-  - **Where it does not, charter refuses to start the chat.** A committed `.claude/settings.json`
+  - **Where it does not, purlis refuses to start the chat.** A committed `.claude/settings.json`
     or `.claude/settings.local.json` whose `env` block sets a base URL, an auth token or a
     provider switch for Claude Code is one such case. The refusal names the file and the key, and
     offers the chat on a `key` source instead.
   - **The user's own global harness config** (`~/.claude/settings.json`, `~/.codex/config.toml`)
-    is the user's choice, not a project's. charter does not refuse it. It shows the chat as
+    is the user's choice, not a project's. purlis does not refuse it. It shows the chat as
     *"routed by your own settings"*, with a warning, and records that the route was not
-    charter's.
+    purlis's.
 
   The adapter of each harness lists the keys it checks, and a harness without an adapter cannot
   take `login` with a chosen model at level 2 or above. MS-5's test covers the committed cases:
   *"no subscription token crosses charter"*, and none is sent anywhere but its vendor.
-- **charter never captures a login.** Logging in is the harness's own flow, in a shell tab (V9),
-  with the harness's own files. charter only says which login is in use, from what the harness
+- **purlis never captures a login.** Logging in is the harness's own flow, in a shell tab (V9),
+  with the harness's own files. purlis only says which login is in use, from what the harness
   reports in a hook.
 - **Smart model choice never moves a `login` chat** (X23, MS-18). It picks among tuples marked
   native or supported, only at spawn, and never a gateway route for a harness on a login.
@@ -262,10 +262,10 @@ With none of them set, the chat uses `login` with the harness's default model, a
   `key` source only when the operator marks it as a model key for one provider. The mark is set
   from a human scope and kept in the vault's metadata, and MS-4 records it in `docs/plane-format.md`
   with its tier. A committed `key = "vault:…"` reference to an entry without the mark is refused
-  when it is read, so a merged pull request cannot make `charterd` put an arbitrary secret, such
+  when it is read, so a merged pull request cannot make `purlisd` put an arbitrary secret, such
   as a database password, into a chat's environment. A marked key is injected only into the
   variables of the provider its mark names, or used by the proxy only toward that provider.
-- **One path to the value.** `charterd` reads the key at spawn, as it reads every vault value
+- **One path to the value.** `purlisd` reads the key at spawn, as it reads every vault value
   (ADR 0068 §1), and keeps it in the proxy or hands it to the harness's process (below). **The key's approval setting applies**
   (V15). A key set to *every use* or *OS authentication* makes the chat's start wait for the
   operator, and the ask shows the chat, the harness, the key's name and that it is the chat's model
@@ -301,7 +301,7 @@ With none of them set, the chat uses `login` with the harness's default model, a
   - **The sandbox's egress narrows where the key can go, and does not close it.** A new project's
     presets are `model-providers`, `forge` and `toolchains` (ADR 0067 §3). The last two open the
     forge hosts and the package registries, and any of those can accept data an agent sends.
-  - **The key can land in what charter keeps.** An agent that prints it puts it in the
+  - **The key can land in what purlis keeps.** An agent that prints it puts it in the
     conversation, and from there in the transcript archive, a session record or a memory. LW-8a's
     redaction masks vault values in the archive. The save scanner's shapes catch many provider key
     formats before a memory or record is committed. Neither is a guarantee.
@@ -337,25 +337,25 @@ With none of them set, the chat uses `login` with the harness's default model, a
   gate on the desktop and V9's allowlist and step-up (ADR 0078 §7). The runner keeps it in memory
   for that run only: in the runner host's own proxy (§7), or, for a harness with no base URL, in
   the run's process environment. It is never written there, and it is dropped when the run ends. **This is a new exception to ADR 0078 §7's "for that one command", and ADR 0078 is amended
-  below.** A harness calls its provider throughout a run, with no command charter sees, so a key
+  below.** A harness calls its provider throughout a run, with no command purlis sees, so a key
   forwarded per command would not be there when the harness needed it. An unattended runner uses
   its resident store (V9), whose approvals still happen on the desktop.
 
 ### 10. What the encryption promise covers
 
-**Settled by M3 and C3's wording requirement.** charter's end-to-end encryption, where it exists
-(shared live sessions, sync, the relay), protects content from Charter's servers. It does not cover
+**Settled by M3 and C3's wording requirement.** purlis's end-to-end encryption, where it exists
+(shared live sessions, sync, the relay), protects content from purlis's servers. It does not cover
 model traffic, and it is never described as if it did:
 
 - **`login`, `key` and `local`:** the prompt goes from the harness to the provider or the local
-  endpoint, and never through Charter's servers. The provider sees it, under the user's own terms
+  endpoint, and never through purlis's servers. The provider sees it, under the user's own terms
   with that provider.
-- **`gateway`:** Charter's gateway processes the prompt in memory, like any provider, with zero
+- **`gateway`:** purlis's gateway processes the prompt in memory, like any provider, with zero
   content retention. Only the token count, cost and model are logged, and ZDR upstreams are used
   where they exist (M3, MS-11, MS-15). The picker and the chat header show the gateway icon, and
   the gateway's own page says this.
 
-The sentence charter uses wherever encryption is described, from FR-15's site to the shared-session
+The sentence purlis uses wherever encryption is described, from FR-15's site to the shared-session
 view: **"End-to-end encryption protects your live sessions from Charter. Your model provider still
 sees what you send it."**
 
@@ -406,7 +406,7 @@ where it is kept when it writes it.
   its model sends or receives stands in. The key proxy of ADR 0087 §7 does not.** That proxy
   changes only the credential header on a request the harness sends to the provider the user
   chose, and passes the rest, the stream included, byte for byte. The model never sees that header.
-  Any other change to a request or a response is still standing in, and charter never does it.
+  Any other change to a request or a response is still standing in, and purlis never does it.
 - **A capability, `model_sources`**, lists the sources a harness can take (ADR 0073 §6: yes, no
   with a reason, or unknown). The card and the picker read it, so a *no* is shown in words.
 - **The harness × model matrix stays its own project data** (M10, MS-2), as ADR 0073 §3 says.
@@ -429,7 +429,7 @@ where it is kept when it writes it.
   *"plan usage, as the harness reports it"* for `login` and *"billed to your key"* for `key`. For
   `gateway` they use GT-CLOUD's wording, and for `local` they show nothing.
 - **Behind the proxy, the host meters `key` spend itself.** Every model call of a proxied chat
-  crosses `charterd`, which counts it from the provider's own usage fields. Harness-reported spend
+  crosses `purlisd`, which counts it from the provider's own usage fields. Harness-reported spend
   stays V34c's source for every other chat.
 - **Without the proxy, the meter can miss `key` spend.** On a harness with no base URL, an agent
   that uses the key directly is not reported (§7). The budget view says so where a key source is
@@ -447,8 +447,8 @@ The code does not change with this record.
 | FD-13 | `ModelChoice` joins the neutral model, and the adapter applies it |
 | MS-2 | The matrix, keyed by (harness, source, model) |
 | MS-3, MS-14 | The picker, the icons, the "billed to" line, hidden and degraded tuples, per-harness tables |
-| MS-4 | The model-key mark, and a key read by `charterd` through V15 and never written to a file. Its environment path is only for harnesses that take no base URL, and waits on the proxy ticket for every other |
-| The proxy ticket (new, V36) | The model-key proxy in `charterd`: a loopback listener, per-run tokens, the header swap over M8's shared passthrough crate, the host's own metering, the refusal of `login` |
+| MS-4 | The model-key mark, and a key read by `purlisd` through V15 and never written to a file. Its environment path is only for harnesses that take no base URL, and waits on the proxy ticket for every other |
+| The proxy ticket (new, V36) | The model-key proxy in `purlisd`: a loopback listener, per-run tokens, the header swap over M8's shared passthrough crate, the host's own metering, the refusal of `login` |
 | MS-5 | Routing variables removed for `login`, committed harness config overridden or refused, and the test |
 | MS-6 | Persona preferences and fallbacks, within one source |
 | MS-17 | Local endpoints, the `localhost` preset, a runner's own endpoint |
@@ -457,7 +457,7 @@ The code does not change with this record.
 
 ## What this costs
 
-- **A proxy in the host's path.** Every proxied model call crosses `charterd`, so a host that is down
+- **A proxy in the host's path.** Every proxied model call crosses `purlisd`, so a host that is down
   takes its chats' model calls with it, and the passthrough must keep up with streaming.
 - **A key in the environment is still readable by the agent** on a harness with no base URL (§7).
   For those, the sandbox's egress only narrows where it can go, and the meter can miss spend made
@@ -465,7 +465,7 @@ The code does not change with this record.
 - **No automatic fallback.** A key that hits its quota stops the next chat's start until the
   operator picks another source, even when a working login is right there.
 - **A committed harness config can block a `login` chat.** A repo whose `.claude/settings.json`
-  points Claude Code at a gateway cannot run that harness on a login in charter. It runs on a key
+  points Claude Code at a gateway cannot run that harness on a login in purlis. It runs on a key
   instead.
 - **A harness's default model is shown as unknown** until the harness reports it, and some
   harnesses report it late or not at all.
@@ -481,12 +481,12 @@ The code does not change with this record.
 - **Writing a key into the harness's config file.** It would put a long-lived credential on disk
   where every backup and every process of the user's can read it.
 - **Gateway tokens for the direct path.** Research 09 §6.1's short-lived tokens are the gateway's.
-  A direct key is the provider's, and charter cannot mint a shorter one.
+  A direct key is the provider's, and purlis cannot mint a shorter one.
 - **Falling back to `login` when a key fails.** It moves the bill silently (D-0087a).
-- **Treating a harness-stored key as source `key`.** charter would have to read the harness's
+- **Treating a harness-stored key as source `key`.** purlis would have to read the harness's
   credential store to know it, which V9 forbids.
 - **Forwarding a runner's model key per command**, as ADR 0078 §7 does for every other secret. A
-  harness calls its provider with no command charter sees, so the key would never be there in time.
+  harness calls its provider with no command purlis sees, so the key would never be there in time.
 - **Any vault entry as a key source.** A committed reference could then make the host inject any
   secret into a chat (§7).
 
@@ -506,7 +506,7 @@ recorded in DECISIONS.md as D-0087:
 
 The operator chose option (a), as recommended:
 
-1. **V36: a key reaches the harness through a proxy in `charterd`.** The harness gets a loopback base
+1. **V36: a key reaches the harness through a proxy in `purlisd`.** The harness gets a loopback base
    URL and a per-chat token, never the key, and the host swaps in the credential header and passes
    bytes through. Every harness that accepts a base URL uses it, which includes Claude Code, Codex
    and opencode. Environment injection is only for the rest, with the residual stated. The proxy

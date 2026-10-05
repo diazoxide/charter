@@ -15,12 +15,12 @@ those are written down, because the alternative is that each new milestone redis
 window and re-argues it from scratch.
 
 **The gates stay checks on a path. The race between the check and the open is accepted, and
-the reason is that a process racing charter on the operator's own machine is not this plane's
+the reason is that a process racing purlis on the operator's own machine is not this plane's
 adversary — `SECURITY.md` already declines to defend against one, in those words, about a
-guard with far more to lose. Two things change. The record charter keeps under
+guard with far more to lose. Two things change. The record purlis keeps under
 `.charter/app/` — the one file in the plane no Python charter writes — has its last component
 opened with `O_NOFOLLOW`, so the kernel answers the link question at the instant of the open
-instead of charter answering it a moment before. And the `openat`-beneath-a-descriptor rewrite
+instead of purlis answering it a moment before. And the `openat`-beneath-a-descriptor rewrite
 of the whole core goes to M3, with the external review decision 16 already requires for a
 security-critical part, rather than into M1 one module at a time.**
 
@@ -28,32 +28,32 @@ security-critical part, rather than into M1 one module at a time.**
 
 The gate exists for a **committed symlink that travels with a clone**. That is not a
 reconstruction; it is what the code was written for. `workspaces/evil -> ../../elsewhere`, with
-a name that passes every lexical rule, made `charter workspace vision` print a file from
-outside the plane (charter #442). `personas/x/persona.md -> ../../.charter/vaults/devops.json`
+a name that passes every lexical rule, made `purlis workspace vision` print a file from
+outside the plane (purlis #442). `personas/x/persona.md -> ../../.charter/vaults/devops.json`
 did the same to the secrets home from inside the plane, which is why the boundary is the data
-directories and not "the plane, minus `.charter/`" (charter #336). Both attackers hold a
+directories and not "the plane, minus `.charter/`" (purlis #336). Both attackers hold a
 commit. Neither holds a process.
 
 A racing writer is a different principal, and there are four candidates. They get four
 different answers, and only one of them is hard.
 
 **A `git checkout` is in the model as a state, not as a race.** An attacker who controls two
-branches controls what is on disk after a checkout; they do not control when charter reads it.
-The state they can produce — a link where charter expected a directory — is exactly what the
+branches controls what is on disk after a checkout; they do not control when purlis reads it.
+The state they can produce — a link where purlis expected a directory — is exactly what the
 gate refuses when it looks, with no race involved, which is the whole point of the gate. To
 turn a checkout into a race they would have to aim it at a window measured in microseconds, on
 a clock that belongs to the operator. What a checkout concurrent with a plane write *can* do is
-leave charter's own file half-written somewhere unhelpful, and that is a robustness problem
-with a different fix (charter writes beside and renames over), not a containment one.
+leave purlis's own file half-written somewhere unhelpful, and that is a robustness problem
+with a different fix (purlis writes beside and renames over), not a containment one.
 
 **The operator's editor is not an adversary.** It is the operator.
 
-**Another chat, another agent, or a hook charter itself started is the candidate that has to be
+**Another chat, another agent, or a hook purlis itself started is the candidate that has to be
 answered rather than waved at, and the answer is already written down.** `SECURITY.md`, about
 the `PreToolUse` guard that stands between a model and a vault — a guard with much more to lose
 than this one — says it plainly: *"It is a guard against mistakes, not an attacker with shell
 access as your user."* It then spends two pages enumerating what that means: a glob, a
-variable, a command substitution, an interpreter, `base64`, `git show`, a program charter does
+variable, a command substitution, an interpreter, `base64`, `git show`, a program purlis does
 not know walking a directory. Each is one keystroke from a denied form and each is allowed.
 
 An agent that can write plane files has a shell as the operator. To put bytes outside the plane
@@ -63,16 +63,16 @@ this repository has a name for that shape — `contain.py` refused to do half of
 and file the rest, on the reasoning that *"doing half of this while claiming all of it would be
 worse than filing it."*
 
-**A confined agent would be in the model, and charter does not have one.** The honest version
-of the third answer is conditional: the race is out of scope *because* nothing in charter makes
-an agent less privileged than charter itself. The moment something does — a sandboxed harness,
+**A confined agent would be in the model, and purlis does not have one.** The honest version
+of the third answer is conditional: the race is out of scope *because* nothing in purlis makes
+an agent less privileged than purlis itself. The moment something does — a sandboxed harness,
 a per-chat user, a seccomp or Seatbelt profile that denies writes outside the plane — the
-racing writer becomes a principal that can do through charter what it cannot do directly, and
+racing writer becomes a principal that can do through purlis what it cannot do directly, and
 this decision is the first thing that has to be re-opened. That is written here so the
 re-opening is a lookup rather than a rediscovery.
 
 **What the race buys an attacker who already has a shell is worth naming, because it is not
-nothing.** Charter writes content *charter* chose, with the operator's hand, to a path the
+nothing.** purlis writes content *purlis* chose, with the operator's hand, to a path the
 attacker chose. The record under `.charter/app/` is the sharpest case: it holds the command
 lines the next launch runs, and a launch that reads it from outside the plane runs a command
 line nobody consented to, with no prompt in the way. That is an escalation of attribution and
@@ -83,7 +83,7 @@ reason the record, and not the whole core, gets a fix in this milestone.
 
 **By the shipped gates themselves**, in
 `the_window_each_gate_leaves` (`crates/purlis-core/tests/nothing_escapes_while_a_writer_races.rs`
-in charter-app), on CI's `ubuntu-24.04` runner. One thread runs a gate and then the caller's own
+in purlis), on CI's `ubuntu-24.04` runner. One thread runs a gate and then the caller's own
 open, 20,000 rounds; a second plants and removes a symlink at the path. It is committed and
 `#[ignore]`d, so it can be run again rather than believed:
 
@@ -127,11 +127,11 @@ workspace read, every memory read and the persona a chat starts on go through it
 one row `O_NOFOLLOW` cannot help.
 
 **The escapes come through the last component, and the reason is structural.** The attack that
-writes a whole record outside the plane plants a link at `reopen.json.writing`, the file charter
+writes a whole record outside the plane plants a link at `reopen.json.writing`, the file purlis
 is about to create. Swapping a *directory* component — `.charter/app` for a link out — was
 attempted for 20,000 rounds and never won once: a directory cannot be replaced by a symlink with
 a single `rename` (both macOS and Linux answer `ENOTDIR`), so the attacker has to `rmdir` and
-then `symlink`, and charter's own `create_dir_all` competes for the same gap. This is not a
+then `symlink`, and purlis's own `create_dir_all` competes for the same gap. This is not a
 claim that directory components are safe. It is the measured reason the fix below is aimed where
 it is.
 
@@ -148,7 +148,7 @@ pre-existing `reopen` tests, which is how the wiring into the call sites is prov
 sites reverted to check-then-open took both end-to-end racing tests, 423 planted command lines
 taken in 4,000 rounds.
 
-## What is closed, and it is the half charter owns alone
+## What is closed, and it is the half purlis owns alone
 
 `contain::no_link_on_the_way` refuses **every** link on the way, including the last component.
 Its callers — the reopen record and the hook socket, both under `.charter/app/` — are the only
@@ -201,7 +201,7 @@ those two steps in the wrong order.
 
 ## What this rules out
 
-- Presenting the gates as a defence against a process racing charter, in the module docs, a
+- Presenting the gates as a defence against a process racing purlis, in the module docs, a
   release note, or anywhere else. The window is now written into `contain.rs` with the
   measurement, so the next reader meets it as a decision rather than as a defect.
 - Closing the race one call site at a time. A gate that is atomic here and a check there is
@@ -219,22 +219,22 @@ those two steps in the wrong order.
 This record accepts the `stat`-then-open race on one condition, and states the condition rather
 than hiding it:
 
-> A confined agent would be in the model, and charter does not have one. The honest version of the
-> third answer is conditional: the race is out of scope *because* nothing in charter makes an agent
-> less privileged than charter itself. The moment something does … this decision is the first thing
+> A confined agent would be in the model, and purlis does not have one. The honest version of the
+> third answer is conditional: the race is out of scope *because* nothing in purlis makes an agent
+> less privileged than purlis itself. The moment something does … this decision is the first thing
 > that has to be re-opened.
 
 **[ADR 0041](0041-a-plugin-is-a-subprocess-or-charter-has-no-plugins.md) is that moment arriving,
 and its own gate item 7 requires this re-opening in the same change as the ruling that triggered
 it.** The whole proposition of a plugin boundary is that a plugin is *less* privileged than
-charter. If that were true, the accepted race would stop being an accident nobody can exploit
+purlis. If that were true, the accepted race would stop being an accident nobody can exploit
 without already having the operator's shell: it would become a way for a confined principal to
-have charter write charter's own bytes to a path the plugin chose.
+have purlis write purlis's own bytes to a path the plugin chose.
 
 **It is not true, and that is the answer.** The operator ruled on 2026-09-22 to ship the plugin
 runtime with **no OS sandbox**. A subprocess runs as the same user, with the same filesystem and
-the same ability to `exec`; a plugin can write the plane directly without asking charter for
-anything. So a plugin is not a principal confined below charter, nothing in charter makes one, and
+the same ability to `exec`; a plugin can write the plane directly without asking purlis for
+anything. So a plugin is not a principal confined below purlis, nothing in purlis makes one, and
 the condition this record's third answer rests on still holds. The race stays out of scope, on the
 grounds it was always out of scope on, and not because nobody looked.
 
@@ -242,7 +242,7 @@ grounds it was always out of scope on, and not because nobody looked.
 named trigger with a date on it, and the trigger is a sandbox rather than a plugin:
 
 - **The day a sandbox lands** — Seatbelt on macOS, seccomp or Landlock on Linux, AppContainer on
-  Windows, any of them, for any subprocess charter starts — the condition is false and this record
+  Windows, any of them, for any subprocess purlis starts — the condition is false and this record
   is re-opened for real. Not amended again: re-opened, because the answer changes rather than the
   wording.
 - **A plugin runtime without one does not re-open it**, and this amendment is written so that the

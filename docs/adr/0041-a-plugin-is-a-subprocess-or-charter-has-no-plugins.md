@@ -1,14 +1,14 @@
-# A plugin is a subprocess, or charter has no plugins
+# A plugin is a subprocess, or purlis has no plugins
 
-The operator decided on 2026-09-22 that charter-app becomes a pluggable platform with a plugin
+The operator decided on 2026-09-22 that purlis becomes a pluggable platform with a plugin
 runtime that runs third-party code. The recommendation given was *not now*; the decision went the
 other way and is not re-litigated here. What was agreed alongside it is that **the threat model
 gates the runtime**, and this is that model. It says where third-party code may run, what it may
 reach, how it is installed and trusted, why a theme is not any of those things, and — numbered at
 the end — what has to be true before a line of runtime ships.
 
-The work is charter-app's. The record is here because `0001`–`0040` are here and a decision about
-charter's trust boundary kept in the other repository would split the sequence; ADR 0031 made the
+The work is purlis's. The record is here because `0001`–`0040` are here and a decision about
+purlis's trust boundary kept in the other repository would split the sequence; ADR 0031 made the
 same move for the same reason. Every path below (`crates/purlis-core/…`, `app/src-tauri/…`,
 `app/src/…`) is in `diazoxide/charter` and every bare `#nnn` is an issue there.
 
@@ -17,7 +17,7 @@ is the only order in which a gate is worth anything.
 
 ## The irony is load-bearing, so it goes first
 
-charter-app's whole M3 milestone is a guard that stands between a model and a credential. Its
+purlis's whole M3 milestone is a guard that stands between a model and a credential. Its
 state today, read off the tree rather than remembered:
 
 - `charter hook pretooluse` is **one switch**. `crates/purlis-cli/src/main.rs`'s `is_a_tool_hook`
@@ -33,7 +33,7 @@ state today, read off the tree rather than remembered:
 - #92 measured the size of what is left: A7 alone has a transitive closure of **60 definitions and
   2,138 lines**, 41 of them (68%) shared with the leak guard.
 
-So charter-app is at its safest on this axis precisely because the guard has never run. A plugin
+So purlis is at its safest on this axis precisely because the guard has never run. A plugin
 runtime would put third-party code inside the process that is going to host that guard, and it
 would do it through a path that has no hook in it at all: a plugin does not call a tool, so
 `pretooluse` never sees it, whatever stage it reaches. **A plugin is not a thing the tool guard
@@ -58,10 +58,10 @@ One thing the summary of 0022 leaves out, and it cuts against the simple reading
 probe finds a definite unwired answer, the launch now installs `charter@charter` into the
 folder that profile names — no second question, because *"the approval prompt already stands for
 the command, and a second yes about the plugin would be asking permission to enforce the rule."*
-So the precedent is not "charter never installs anything". It is: charter installs exactly the
+So the precedent is not "purlis never installs anything". It is: purlis installs exactly the
 thing that makes a chat guarded, into exactly the folder an approved profile names, and says one
 line about it. A plugin install is the opposite case on both halves — it is not the guard, and the
-folder is charter's own.
+folder is purlis's own.
 
 **[ADR 0035](0035-a-plane-is-untrusted-until-the-operator-opens-it.md) — a plane is untrusted
 until the operator opens it, and the trust record fingerprints what it contributes.** Correct, and
@@ -71,11 +71,11 @@ this is the shape to follow. Read off the code rather than the record: `layer.rs
 two travelling keys, the restrictive rules, and the programs `.charter/app/reopen.json` would
 start, with `starts` and `profiles` held apart *because only one of them is a grant*.
 
-Two corrections. First, **`enabledPlugins` is Claude Code's plugin list, not charter's.** The word
+Two corrections. First, **`enabledPlugins` is Claude Code's plugin list, not purlis's.** The word
 "plugin" is already spoken for inside this exact threat model and inside the exact dialog a
-charter plugin would have to appear in. A first-open prompt that says *this project enables 3
+purlis plugin would have to appear in. A first-open prompt that says *this project enables 3
 plugins* and *this machine has 2 plugins installed*, meaning two unrelated things, is a consent
-surface that has stopped being read. Whatever charter's own extension is called, it is not called
+surface that has stopped being read. Whatever purlis's own extension is called, it is not called
 a plugin in that dialog.
 
 Second, **the approval path 0035 describes has two open defects, and a plugin trust record built
@@ -97,15 +97,15 @@ reason not to copy it before they are closed.
 and does not hold it; the race is accepted and named.** Correct. The paragraph that matters here
 is not the measurement, it is the re-opening clause:
 
-> A confined agent would be in the model, and charter does not have one. The honest version of the
-> third answer is conditional: the race is out of scope *because* nothing in charter makes an agent
-> less privileged than charter itself. The moment something does … this decision is the first thing
+> A confined agent would be in the model, and purlis does not have one. The honest version of the
+> third answer is conditional: the race is out of scope *because* nothing in purlis makes an agent
+> less privileged than purlis itself. The moment something does … this decision is the first thing
 > that has to be re-opened.
 
 A plugin runtime is that moment, arriving from the other direction. The whole proposition of a
-plugin boundary is that a plugin is *less* privileged than charter. If that is true, then the
+plugin boundary is that a plugin is *less* privileged than purlis. If that is true, then the
 accepted race stops being an accident nobody can exploit without already having the operator's
-shell: it becomes a way for a confined principal to have charter write charter's own bytes to a
+shell: it becomes a way for a confined principal to have purlis write purlis's own bytes to a
 path the plugin chose. Whether the boundary is real enough to trip that clause is the single
 sharpest question about anything below, and the answer in this record is that it is **not real
 enough yet** — see the honesty paragraph under decision 1.
@@ -133,7 +133,7 @@ any chat produces), `worktree_remove` and `worktree_merge`, `start_chat`, `appro
 
 **The main webview — ruled out.** A plugin there reaches all forty, because Tauri's IPC has no
 per-caller identity *inside* one webview: `app/src-tauri/capabilities/default.json`
-grants `core:default`, `opener:default` and `notification:default` to the window, and charter's
+grants `core:default`, `opener:default` and `notification:default` to the window, and purlis's
 own commands are reachable by anything executing in it. The only thing keeping foreign script out
 of that window today is `tauri.conf.json`'s
 `"csp": "default-src 'self'; style-src 'self' 'unsafe-inline'"`, and a plugin is local by
@@ -150,7 +150,7 @@ which is 0022's sentence about a chat that looks guarded and is not, applied to 
 
 **A second Tauri webview — ruled out as "the protocol, plus a browser".** This one is real: Tauri
 capabilities are per-window, so a plugin window can be granted a different permission set. But
-capabilities gate *Tauri's* plugin permissions, not charter's own `#[tauri::command]`s, which are
+capabilities gate *Tauri's* plugin permissions, not purlis's own `#[tauri::command]`s, which are
 registered on the app and would each need a gate written by hand — which is the protocol, written
 in a harder place. Meanwhile a second WebKit view costs memory against ADR 0026's limits for the
 benefit of a boundary that still has to be hand-built inside it.
@@ -169,7 +169,7 @@ hot-reloadable, and that day is not the first day.
 priority order:
 
 1. **DX (priority 1).** A plugin is a program. It runs in a terminal, takes a debugger, prints to
-   its own stderr, and its whole conversation with charter is a log a human can read. Every other
+   its own stderr, and its whole conversation with purlis is a log a human can read. Every other
    option debugs worse, and an isolation model nobody can debug gets routed around — which is the
    failure mode this decision is most exposed to.
 2. **Standard practice (priority 2).** LSP, DAP and MCP are all this shape. The repository's own
@@ -182,9 +182,9 @@ priority order:
    arm is **already a refusal** — `bind` and `send` return `Unsupported`, because Rust's standard
    library exposes no `AF_UNIX` there and a socket file has no mode bit to set. That is ADR 0031's
    rule already applied once, in the exact code a plugin channel would reuse.
-4. **The OS supplies the part charter cannot write.** The workspace is `unsafe_code = "forbid"`, so
+4. **The OS supplies the part purlis cannot write.** The workspace is `unsafe_code = "forbid"`, so
    a Windows DACL is out of reach today (0031, #98) and so is anything else that needs a raw
-   syscall. A process boundary is the one boundary charter gets without writing `unsafe`.
+   syscall. A process boundary is the one boundary purlis gets without writing `unsafe`.
 
 What it costs, stated: a round trip instead of a call, and one process per plugin. The nearest
 measured number in the tree is `hookwire`'s own — *"the 1.8 ms the whole hook call was measured
@@ -197,36 +197,36 @@ and the day a plugin *wants* the hot path, the answer is to refuse, not to move 
 
 **A subprocess does not confine a plugin below the operator.** It runs as the same user, with the
 same filesystem, the same network and the same ability to `exec`. It can read `.charter/vaults/`,
-write the machine store, and edit `charter.local.toml` without asking charter for anything. The
-protocol bounds **what charter will do on the plugin's behalf**; it does not bound what the plugin
+write the machine store, and edit `charter.local.toml` without asking purlis for anything. The
+protocol bounds **what purlis will do on the plugin's behalf**; it does not bound what the plugin
 can do itself.
 
-Everything in decision 2 is therefore a statement about charter's own conduct, not a cage. Saying
+Everything in decision 2 is therefore a statement about purlis's own conduct, not a cage. Saying
 otherwise would be the exact error `SECURITY.md` refuses to make about the vault guard — *"a
 guard against mistakes, not an attacker with shell access as your user"* — and `profiletrust.rs`
 refuses to make about its own record. Real confinement is a sandbox: Seatbelt on macOS, seccomp or
 Landlock on Linux, AppContainer on Windows. Each is a platform-specific piece of work, at least
 one of them needs `unsafe` or a vetted crate, and none of them is costed. Until one exists, **a
-plugin is trusted code that charter is polite to**, and the trust decision at install time is
+plugin is trusted code that purlis is polite to**, and the trust decision at install time is
 carrying the entire weight. That is why decision 3 is long and decision 2 is short.
 
 ## Decision 2 — the capability surface, enumerated honestly
 
-"Grantable" below means *charter will do this for a plugin that asked and was approved*. It never
+"Grantable" below means *purlis will do this for a plugin that asked and was approved*. It never
 means *a plugin cannot do this otherwise*; see the paragraph above.
 
 | Surface | What it is, in the code | Grantable? | What a grant means |
 | --- | --- | --- | --- |
-| The DOM, the window's pixels | one webview, `app/src/` | **No, ever** | A theme reaches appearance as data. Code never reaches the tree charter draws consent prompts into. |
+| The DOM, the window's pixels | one webview, `app/src/` | **No, ever** | A theme reaches appearance as data. Code never reaches the tree purlis draws consent prompts into. |
 | Tauri commands, as a set | the forty in `collect_commands!` | **No** | There is no grant called "the commands". Each is its own grant or it is not one. |
 | A chat's output bytes | `watch_session` | Yes, **per chat**, revocable, visible while live | The highest-value grant in the table: a transcript carries whatever the operator pasted in. Never per plane, never standing. |
 | Typing into a chat | `send_input` | Yes, but **not in the minimum set** | A keystroke into a shell with the operator's hands' authority. Per chat, time-bounded, shown while held. |
 | The plane on disk | `plane.rs`, `workspaces.rs`, `personas.rs` | Not as "the plane" | A plugin gets what the protocol hands it. "Read the plane" is not a capability, it is the absence of one. |
-| The machine store | `machine.rs`, `$CHARTER_CONFIG_HOME/charter/` | **No, at any level** | It is where charter records *what it may open without asking*. A write there is a forged approval for a project, which is a program that starts at the next launch. |
+| The machine store | `machine.rs`, `$CHARTER_CONFIG_HOME/charter/` | **No, at any level** | It is where purlis records *what it may open without asking*. A write there is a forged approval for a project, which is a program that starts at the next launch. |
 | `.charter/app/reopen.json` | `reopen.rs` | **No, at any level** | `reopen.rs` says it: *"a way to have a command run at every later launch — before any window, with nothing to click"*, and `program`, `args` and `cwd` are **not checked at all**. |
 | Harness profiles | `charter.local.toml`, `profiletrust.rs` | **No** | ADR 0022's entire argument. A plugin that can write a profile has written a command line. |
 | The harness environment | `layer.rs` `WORKSPACE_KEYS` | **No** | ADR 0022 measured where it lands: *"A variable set on the harness process reaches the shell the model runs."* 0022 already refuses `KEY`/`TOKEN`/`SECRET`/`PASSWORD` in a profile's own `env`. |
-| The network | — | **Declared, not granted** | charter cannot enforce it on a subprocess. It is shown in the prompt as a claim the plugin makes about itself, and the record must say that it is a claim. |
+| The network | — | **Declared, not granted** | purlis cannot enforce it on a subprocess. It is shown in the prompt as a claim the plugin makes about itself, and the record must say that it is a claim. |
 | Vaults | `.charter/vaults/` | **Absent** | Not "denied". There is no capability name for it and there must not be one, because a name is a thing a later grant can be attached to. |
 
 **The machine store and `reopen.json` are execution inputs, and the record proves it.** #129 was a
@@ -243,7 +243,7 @@ sense:**
 2. **Contribute a named palette command that, when the operator invokes it, sends one request to
    the plugin and displays the text that comes back.** This is the smallest thing that is
    executable at all: no ambient read, no standing subscription, one round trip per deliberate
-   human action, and an answer that lands in a surface charter controls.
+   human action, and an answer that lands in a surface purlis controls.
 
 Everything else waits for a plugin that exists and wants it, and the want is written down before
 the capability is. A capability invented for a hypothetical plugin is a grant nobody audited
@@ -256,7 +256,7 @@ against a real use.
 that contributed a palette command would run on a click, which is the very gap 0022 opens with. A
 `[plugin.<name>]` table in `charter.toml` is refused by name, exactly as
 `[harness.<name>]` is. This also settles the collision noted above: a project cannot bring a
-charter extension with it, so the trust dialog's two uses of the word "plugin" never appear in the
+purlis extension with it, so the trust dialog's two uses of the word "plugin" never appear in the
 same list.
 
 **A plugin is machine state, and it has to argue for that.** ADR 0034's rule is that a fact may
@@ -267,14 +267,14 @@ plugins this machine has, and what the operator approved each to do, is about th
 false inside any one plane, and passes 0034's own test — *deleting this file must cost the
 operator their arrangement and their approvals and nothing else*. It does, provided **a plugin's
 own data never lives in the store**. A plugin is re-installable by name; its state is its own
-problem, kept wherever it likes, and charter's store holds a path, a fingerprint and an approval.
+problem, kept wherever it likes, and purlis's store holds a path, a fingerprint and an approval.
 
 **Installed by path, by the operator, from nowhere.** No registry, no marketplace, no fetch by
-name. The moment charter resolves a plugin name over the network it owns a supply chain, and
+name. The moment purlis resolves a plugin name over the network it owns a supply chain, and
 priority 2 (standard practice) has no standard answer for that which fits a tool with one
-operator. `charter harness add` was rejected in 0022 on the grounds that *"a chat can run a
+operator. `purlis harness add` was rejected in 0022 on the grounds that *"a chat can run a
 command as easily as it can edit a file, so the command could never stand for the operator's
-approval of what it wrote"*; the same sentence forbids `charter plugin install <name>` as a
+approval of what it wrote"*; the same sentence forbids `purlis plugin install <name>` as a
 consent step. What stands for consent is the prompt, and nothing else.
 
 **Trust is 0035's shape, with one difference that costs something.** Show what it contributes, ask
@@ -298,36 +298,36 @@ should be built as though it were more.
 
 ## Themes are the first extension point, and a theme is not a plugin
 
-A theme is declarative data with no executable surface: a file of semantic tokens that charter
+A theme is declarative data with no executable surface: a file of semantic tokens that purlis
 turns into CSS custom properties and into xterm's theme object — which today is hard-coded, one
 literal, at `app/src/SessionPane.tsx:54`:
 `theme: { background: "#181818", foreground: "#d8d8d8" }`. It is the ideal first extension point
-because it has a bounded vocabulary charter already owns, a real consumer on day one, and nothing
+because it has a bounded vocabulary purlis already owns, a real consumer on day one, and nothing
 to isolate.
 
 **What makes a declarative extension safe is four properties, and it is safe only while it has all
 four:**
 
-1. **The vocabulary is closed and charter decides it.** The extension fills in values for names
-   charter published; it cannot introduce a name.
+1. **The vocabulary is closed and purlis decides it.** The extension fills in values for names
+   purlis published; it cannot introduce a name.
 2. **The value space is not a program.** A colour, a number, a member of an enumeration. Nothing
    whose evaluation is an action.
-3. **charter chooses the consumer.** charter decides that this token becomes that CSS custom
+3. **purlis chooses the consumer.** purlis decides that this token becomes that CSS custom
    property and that xterm field. The theme never names a destination.
-4. **charter parses and re-emits, never interpolates.** A token's text is read into a typed value
+4. **purlis parses and re-emits, never interpolates.** A token's text is read into a typed value
    and a fresh string is written out from that value. The theme's bytes never reach a stylesheet.
    An unknown or malformed entry is dropped with a reason and the default stands.
 
 **The line a plugin crosses when it stops being data** — three crossings, each of which turns
 property 4 or property 1 into a lie, and each of which will be proposed by somebody reasonable:
 
-- **A value that reaches a CSS context charter did not choose.** `url(…)` inside a token is a fetch
+- **A value that reaches a CSS context purlis did not choose.** `url(…)` inside a token is a fetch
   from the app's origin, which is the CSP's whole job. Parse-and-re-emit is the rule that makes
   this unreachable rather than filtered; a blocklist of CSS functions is the version of this rule
   that fails.
 - **Any way of saying *where*.** A selector, a rule, a media query, an element name. A theme says
   what a semantic token is worth. The moment it says where a token applies it is choosing
-  charter's layout, and there is no bounded vocabulary left to check against.
+  purlis's layout, and there is no bounded vocabulary left to check against.
 - **A reference to a file.** A font path, a background image, an `@import`. Every one of them is a
   read of a path the extension chose, which is a capability wearing a theme's clothes.
 
@@ -335,7 +335,7 @@ property 4 or property 1 into a lie, and each of which will be proposed by someb
 that paints the *needs you* state the same as idle hides a chat that is waiting. A theme that makes
 the refusal button in the first-open dialog look like the accept button is an attack on a consent
 prompt, delivered entirely in legal data. So the closed vocabulary has a floor: **the consent
-surfaces and the state colours are charter's, not the theme's**, and a contrast minimum is
+surfaces and the state colours are purlis's, not the theme's**, and a contrast minimum is
 enforced on what the theme does get. A declarative extension is safe from *code execution* by
 construction; it is not automatically safe from *deception*, and those are different properties
 that this document keeps apart.
@@ -349,7 +349,7 @@ each one is something the runtime would otherwise have to invent badly while und
    excluded, and the contrast floor. Already being built; this record only adds the four properties
    and the three crossings.
 2. **An extension registry with no executor.** One place that answers *what has contributed what to
-   this window*, populated at first only by charter's own built-ins and by themes. Every later
+   this window*, populated at first only by purlis's own built-ins and by themes. Every later
    decision here needs that list to exist, and building it now means the first plugin is not also
    the thing that invents it.
 3. **Close #112 and #123.** The trust path is the foundation the plugin trust record would be poured
@@ -394,14 +394,14 @@ Falsifiable, so that "are we ready" is a checklist and not a conversation.
 - **The main webview, because it is easy.** It is forty commands and a deliberate hole in the CSP.
 - **A Web Worker as isolation.** It isolates the DOM and not the command surface, and it would read
   as a boundary to every later reviewer.
-- **A second Tauri webview.** Capabilities gate Tauri's permissions, not charter's commands; the
+- **A second Tauri webview.** Capabilities gate Tauri's permissions, not purlis's commands; the
   gate still has to be written, now inside a browser.
 - **WASM first.** Worst DX of the five against priority 1, and it enforces a capability list it
   cannot help design. It stays the right answer for later.
 - **A plugin travelling in a plane.** ADR 0022's argument, one level up, where the click has even
   less in front of it.
-- **A registry or marketplace.** charter would own a supply chain, and `charter plugin install`
-  could no more stand for approval than `charter harness add` could.
+- **A registry or marketplace.** purlis would own a supply chain, and `purlis plugin install`
+  could no more stand for approval than `purlis harness add` could.
 - **A capability called "the plane" or "the filesystem".** Those are the absence of a capability
   model, named as though they were one.
 - **Calling a theme a plugin.** It has no executable surface, it needs none of this machinery, and
@@ -416,7 +416,7 @@ Falsifiable, so that "are we ready" is a checklist and not a conversation.
 - **A subprocess is a second process to start, supervise and reap**, in an app whose session
   lifecycle is already the hardest part of it. `Planes`, `Chats` and the hook socket all learned
   this the expensive way, and a plugin host is a fourth thing with the same failure modes.
-- **A plugin can do everything the operator can, and charter's grants are charter's manners.**
+- **A plugin can do everything the operator can, and purlis's grants are purlis's manners.**
   Until a sandbox exists, the install-time decision carries the whole weight, and this record says
   so in three separate places on purpose.
 - **The fingerprint is a hash of code, checked at each launch**, so a plugin makes launches slower
@@ -427,7 +427,7 @@ Falsifiable, so that "are we ready" is a checklist and not a conversation.
   down so that widening it is a decision with a name on it.
 - **The machine store grows a sixth kind of entry**, and ADR 0034's rule is narrower for it: the
   next one has to argue against five precedents instead of four.
-- **charter-app now has a decision it has not implemented.** That is the point, and the risk is the
+- **purlis now has a decision it has not implemented.** That is the point, and the risk is the
   ordinary one for such a record — that the first implementer reads the recommendation and not the
   gate. The gate is numbered so that skipping an item is visible.
 
@@ -436,7 +436,7 @@ Falsifiable, so that "are we ready" is a checklist and not a conversation.
 **The operator ruled on 2026-09-22 to ship the subprocess runtime with no OS sandbox.** He was
 shown the honesty paragraph under decision 1 first — that a subprocess runs as his user, with his
 filesystem, and can read `.charter/vaults/`, write the machine store and edit `charter.local.toml`
-without asking charter for anything — and chose to ship anyway. His words:
+without asking purlis for anything — and chose to ship anyway. His words:
 
 > *"Ship the subprocess runtime as ADR 0041 recommends — for pure plugin system, but in future we
 > can control it on level of future marketplace, so some checks can restrict plugins to have bad
@@ -459,7 +459,7 @@ and the runtime may be built.
 re-opened in the same PR." It is, in the same change as this amendment: 0028's own record now
 carries the note that its re-opening clause has been triggered and what the answer to it is. That
 clause exists because 0028 accepts a `stat`-then-open race *only* on the grounds that nothing in
-charter makes an agent less privileged than charter itself — and the whole proposition of a plugin
+purlis makes an agent less privileged than purlis itself — and the whole proposition of a plugin
 boundary is that a plugin is less privileged. 0028's answer, written there, is the same one as
 here: with no sandbox, a plugin is **not** less privileged, so the ground 0028 stands on has not
 moved. That is a reprieve and not a resolution, and the day a sandbox lands the clause fires for
@@ -470,8 +470,8 @@ risk that the ruling created; it is the risk the record already described, now a
 than deferred.
 
 - A plugin can do everything the operator can, and the capability table in decision 2 describes
-  **charter's own conduct** and not a cage. Every "No, at any level" in it is a promise about what
-  charter will not do on a plugin's behalf, and none of them is an obstacle to a plugin doing it
+  **purlis's own conduct** and not a cage. Every "No, at any level" in it is a promise about what
+  purlis will not do on a plugin's behalf, and none of them is an obstacle to a plugin doing it
   itself.
 - The install-time decision carries the entire weight, which decision 3 already said and which is
   now the *final* answer rather than the interim one.
@@ -482,7 +482,7 @@ than deferred.
 **What the deferred answer is, and what it is not.** Marketplace vetting and an untrusted-source
 warning are a *label on a supply chain*. A warning tells an operator where something came from; it
 does not bound what the thing does once it is running, and no amount of it turns the table in
-decision 2 into a cage. Vetting scales with reviewers and charter has one operator, which is the
+decision 2 into a cage. Vetting scales with reviewers and purlis has one operator, which is the
 same argument the "What was rejected" section already makes against a registry. Both are worth
 building and neither is a substitute for the sandbox, so neither is written here as though it
 were. When they are built they get their own record and their own honest limits.
@@ -491,9 +491,9 @@ were. When they are built they get their own record and their own honest limits.
 Because the table is conduct and not a cage, **the consent surface has to say exactly that.** A
 prompt listing *this plugin may: contribute a theme, add one palette command*, while the plugin
 can in fact read the operator's vaults, is worse than no prompt — it manufactures confidence
-charter cannot back, and a surface that over-promises is one the operator stops reading and then
-trusts anyway. The prompt must say, in charter's own plain voice, that **a plugin runs with the
-operator's own access**, and that what charter shows is what the plugin **declares** and not what
+purlis cannot back, and a surface that over-promises is one the operator stops reading and then
+trusts anyway. The prompt must say, in purlis's own plain voice, that **a plugin runs with the
+operator's own access**, and that what purlis shows is what the plugin **declares** and not what
 it is **limited to**. That sentence belongs in the core, beside the trust record, pinned by a
 test, and carried to whatever draws it — not composed in the dialog, where it would drift kinder
 than the truth one edit at a time.
@@ -512,8 +512,8 @@ exactly that. **So a plugin could add or change an UNDECLARED sibling and the fi
 unchanged** — a `.dylib` beside the program, a script it `source`s, a config it reads. None of
 those is declared; none of them was hashed.
 
-charter-app#150's author followed the record rather than widening it unasked, which was right.
-charter-app#152 is where the widening got decided, and the operator ruled on 2026-09-22.
+purlis#150's author followed the record rather than widening it unasked, which was right.
+purlis#152 is where the widening got decided, and the operator ruled on 2026-09-22.
 
 **Why it is not a small thing.** It is harmless while stage 1 has no executor and nothing reads
 an undeclared file. It stops being harmless the moment stage 2 starts a program, because a
@@ -539,7 +539,7 @@ dialog people click through is worse than no dialog at all.**
   beside it asks at every launch, and the prompt becomes a reflex;
 - **refusing to run a plugin whose directory holds anything undeclared** — strictest, and it
   breaks on `node_modules`, `.git`, `README`, `__pycache__`. It reads to the operator as
-  *charter refuses my plugin over a file I didn't write*, which is a tool telling its owner the
+  *purlis refuses my plugin over a file I didn't write*, which is a tool telling its owner the
   filesystem is wrong;
 - **keeping the declared list and rewording the dialog** — cheapest, and it moves the problem
   onto the reader. The record already knows what that costs: decision 3's own *"treating silence
@@ -557,8 +557,8 @@ described:
 2. **Named in the manifest, which is itself hashed**, so the carve-out cannot appear, move or
    widen without the operator being asked again.
 3. **Nothing the manifest declares may live inside it** — a theme or a program declared under it
-   is refused when the manifest is read, so charter never opens a byte in there.
-4. **charter refuses to load a plugin whose state directory holds a symlink or a file with an
+   is refused when the manifest is read, so purlis never opens a byte in there.
+4. **purlis refuses to load a plugin whose state directory holds a symlink or a file with an
    executable bit.** Metadata only, nothing read, so a cache of ten thousand files is checked
    without being hashed and without prompting anybody.
 
@@ -580,7 +580,7 @@ there, and a loop cannot hang the walk because nothing is walked *through*.
 Refusing links outright was the alternative and is the wrong one for the reason the second
 rejected option above is wrong: `node_modules/.bin/` is a tree of them. What this leaves honest
 is that the *target* of a link out of the plugin is not fingerprinted — it is not part of the
-plugin, the link that names it is, and charter does not claim about files it was never pointed
+plugin, the link that names it is, and purlis does not claim about files it was never pointed
 at.
 
 ### The bound, which the declared list did not need and a directory does
@@ -592,7 +592,7 @@ Directories count as entries, which bounds the depth without a second limit to k
 
 ### The cost, which this record left as an open number
 
-charter-app#150's point 6 left this unmeasured and the operator asked for it. Measured on an
+purlis#150's point 6 left this unmeasured and the operator asked for it. Measured on an
 M-series machine, release build, warm page cache, mean of five re-hashes
 (`what_the_re_hash_costs_at_launch` in `crates/purlis-core/src/extension/tests.rs`, so it can be
 re-run rather than believed):
@@ -621,19 +621,19 @@ process and nothing here touches it.
   with the numbers above.
 - The first amendment's obligation on the consent surface now has a second clause: the prompt
   says a plugin runs with the operator's own access and that the list is a declaration rather
-  than a limit, **and it says which one directory charter did not read**, when there is one.
+  than a limit, **and it says which one directory purlis did not read**, when there is one.
 
 ### What is still unmet
 
 **Items 2, 3, 4, 5, 6 and 8 stand exactly as written**, and nothing in this amendment closes any
 of them. In particular this is not a sandbox, it is not a boundary, and it does not make a
 plugin's code safe to run — it makes the fingerprint mean what the dialog already claimed it
-meant. The implementation is charter-app#152.
+meant. The implementation is purlis#152.
 
 ## Amendment, 2026-09-23: stage 2 exists — the executor, the gate item by item, and what it is not
 
 **This amendment is not a sign-off and does not claim one.** It records that the runtime this
-record gates has been built, in charter-app#212 (unmerged when this was written), and
+record gates has been built, in purlis#212 (unmerged when this was written), and
 it goes through the gate one item at a time so that whether the gate was honoured is a thing a
 reader checks rather than a thing a brief asserts. The operator has not ruled on any of it.
 
@@ -641,7 +641,7 @@ reader checks rather than a thing a brief asserts. The operator has not ruled on
 
 - `crates/purlis-core/src/executor.rs` — the executor. It starts an approved extension's
   declared program, hands it one question, reads one answer, and stops it.
-- `crates/purlis-core/src/handed.rs` — the one file that says what charter hands a program,
+- `crates/purlis-core/src/handed.rs` — the one file that says what purlis hands a program,
   and the one sentence the consent prompt says about it, held to each other by a test.
 - A third word in the manifest vocabulary, **`views`**: a surface the operator opens, filled by
   asking the extension's program. It is this record's second minimum capability — *"a named
@@ -649,11 +649,11 @@ reader checks rather than a thing a brief asserts. The operator has not ruled on
   displays the text that comes back"* — with *the text* widened to ADR 0043's panel vocabulary,
   and nothing else widened.
 - `crates/persona-statistics` — the first consumer, written as a stranger's extension would be:
-  it does not link charter's core, and it knows only the protocol.
+  it does not link purlis's core, and it knows only the protocol.
 
 ### The design, read against decision 1
 
-**A subprocess over a unix socket, as ruled — and the socket is a `socketpair`.** charter makes
+**A subprocess over a unix socket, as ruled — and the socket is a `socketpair`.** purlis makes
 both ends, keeps one, and hands the program the other as its standard input and output. That is
 inside the ruling's words and is argued rather than assumed, because it is a choice the record
 did not make: decision 1 reached for `hookwire`'s bound socket file and its `0600`/`0700`
@@ -673,7 +673,7 @@ therefore small: there is nothing to supervise between questions, and the app's 
 whatever is mid-answer. The cost is a spawn per question, measured below.
 
 **The gate is re-taken at the press.** The executor re-reads the extension record and
-re-fingerprints the extension's **whole directory** (charter-app#152's tree hash) at the moment
+re-fingerprints the extension's **whole directory** (purlis#152's tree hash) at the moment
 it is about to start the program, and starts nothing unless the result is *approved, these
 bytes, at this path*. A survey taken when the window opened decides which buttons are drawn,
 never what runs. This is what makes the consent dialog's sentence — *"charter has read every
@@ -689,7 +689,7 @@ that says it will run. A theme-only extension is not re-asked; nothing its yes c
 ### The gate, item by item
 
 1. **ADR 0031 signed off.** Met, 2026-09-22 (unchanged).
-2. **The tool guard is wired.** **Met by charter-app#181** (merged 2026-09-22): *"charter answers
+2. **The tool guard is wired.** **Met by purlis#181** (merged 2026-09-22): *"charter answers
    the Bash guard: A7 is ported, the eight arms are one verdict, and the switch flips"* — M3.1
    stage 6, and `charter hook pretooluse` answers from the guard rather than a blanket `exit 2`.
    The paragraph under the previous amendment that says the guard is still one switch was true
@@ -717,7 +717,7 @@ that says it will run. A theme-only extension is not re-asked; nothing its yes c
    the approved path, the record unreadable, an approval borrowed from another id naming the same
    directory, the program not executable, a view the manifest does not declare. Where the program
    could have run, a marker it would have written is checked absent. The mutation run that removed
-   each guard and watched its test go red is in charter-app#212's body.
+   each guard and watched its test go red is in purlis#212's body.
 7. **Confinement decided.** Met, 2026-09-22: explicitly not a sandbox. Unchanged, and see below.
 8. **The round trip is measured before the protocol is fixed.** Measured on the operator's
    machine (macOS, Apple silicon), 20 rounds after a warm-up:
@@ -740,7 +740,7 @@ that says it will run. A theme-only extension is not re-asked; nothing its yes c
 - **Not a sandbox**, as ruled. The program runs as the operator. It can write anywhere he can —
   outside its state directory included — and the consent prompt says so from the core
   (`RUNS_AS_YOU`, and a state-directory note that now says writes outside the extension's
-  directory are not something charter sees at all).
+  directory are not something purlis sees at all).
 - **Not proof against a program set on outliving its question.** The process-group kill closes
   the ordinary case. A program that calls `setsid` or double-forks out of its group escapes it,
   because it runs as the operator; what would stop that is the sandbox that was declined.
@@ -751,20 +751,20 @@ that says it will run. A theme-only extension is not re-asked; nothing its yes c
   (`unsafe`) or a private copy of the binary per press (a new unseen executable each time, which
   is the macOS assessment above on every click).
 
-### What charter hands a program, and what it keeps back
+### What purlis hands a program, and what it keeps back
 
 The request is one line: the protocol number, the extension and view ids, the subject, the
 persona the view was opened from (when it was), and the value `handed.rs` built. The program is
 started with **an empty environment plus eight variables a program needs to be a program**
 (`PATH`, `HOME`, `USER`, `LOGNAME`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TMPDIR`) and three that say
-what it is (`CHARTER_EXTENSION`, `CHARTER_PROTOCOL`, and `CHARTER_EXTENSION_STATE` when it has a
-state directory) — decision 2's row *"the harness environment: No"*, applied to charter's own
+what it is (`PURLIS_EXTENSION`, `PURLIS_PROTOCOL`, and `CHARTER_EXTENSION_STATE` when it has a
+state directory) — decision 2's row *"the harness environment: No"*, applied to purlis's own
 environment. It is started through `forklock`, so it cannot inherit a chat's half-open terminal
-(charter-app#53). It is started in the extension's own directory.
+(purlis#53). It is started in the extension's own directory.
 
 ### What is still open
 
-- **No second grant exists, and none was invented.** A view cannot put a charter verb on a row
+- **No second grant exists, and none was invented.** A view cannot put a purlis verb on a row
   (`panel::NO_VERB` refuses it in an answer exactly as in a manifest); it cannot subscribe,
   cannot be pushed to, cannot run on a timer, and is handed nothing but its subject's facts.
   Each of those is a capability a later plugin may want, and this record's rule still applies:
@@ -783,16 +783,16 @@ machine already has.
 ## Amended 2026-09-25: capabilities are granted one at a time
 
 [ADR 0053](0053-an-extension-is-granted-capabilities-one-at-a-time.md) adds a `capabilities` list to
-the manifest. A word this charter does not know refuses the whole manifest, by name, and every
+the manifest. A word this purlis does not know refuses the whole manifest, by name, and every
 capability is named in the approval prompt and covered by the fingerprint. Each capability is
 added in its own change, with its own amendment here. Where this record's two amendments of
 2026-09-22 and 2026-09-23 disagree about which gate items are met, the 2026-09-23 one supersedes
 the earlier, and its item-by-item account of the gate is the current one. Nothing here changes decision 2's
 table. No capability can reach the machine store, `reopen.json`, harness profiles or vaults.
 
-## Amended 2026-09-25: an extension can act and write, and charter reports what it wrote
+## Amended 2026-09-25: an extension can act and write, and purlis reports what it wrote
 
-charter-app#341 adds the `palette`, `actions` and `writes` capabilities (ADR 0053's amendment
+purlis#341 adds the `palette`, `actions` and `writes` capabilities (ADR 0053's amendment
 of the same day). What this changes in the threat model:
 
 - **A second request, from the same gate.** Running an action starts the program the same way a
@@ -804,17 +804,17 @@ of the same day). What this changes in the threat model:
   asks first (its manifest's `confirm`, or `deletes`) unless the operator said yes.
 - **Writes are declared, handed and watched, not confined.** The declared paths are inside the
   fingerprint and named in the prompt. Each request hands them resolved. After each question
-  charter compares what `git status` shows in the plane and reports a change outside them,
+  purlis compares what `git status` shows in the plane and reports a change outside them,
   naming the extension. This does not change decision 1: there is still no sandbox, and an
   extension can still write anywhere the operator can. What is new is that the ordinary case
   of writing outside the declared paths is visible, where before it was silent. No declared
-  path may cover the files charter reads settings, grants or vaults from.
+  path may cover the files purlis reads settings, grants or vaults from.
 - **What is still open:** the report cannot see an ignored path or a plane that is not a git
   repository, and it cannot tell who made a change. An extension that lies about `deletes` is
   reported, not stopped.
 ## Amended 2026-09-25: a built-in extension is trusted through the app
 
-charter-app#339, the first change in [ADR 0053](0053-an-extension-is-granted-capabilities-one-at-a-time.md)'s
+purlis#339, the first change in [ADR 0053](0053-an-extension-is-granted-capabilities-one-at-a-time.md)'s
 build order. Persona statistics now ships inside the app, in the bundle's resources
 (`Contents/Resources/extensions/` on macOS, `/usr/lib/charter/extensions/` in a `.deb`, and
 `$APPDIR/usr/lib/charter/extensions/` inside an AppImage). It is a **built-in extension**: the registry lists it with `source: app` and treats it as
@@ -826,10 +826,10 @@ when its directory is directly inside that one, and it is approved at that path 
 Nothing a file says can make an extension built in:
 
 - **A write to the record.** A row with `"source": "app"` holds one thing, whether the operator
-  turned that built-in off on this machine. charter reads nothing else from it, not a path and not a
+  turned that built-in off on this machine. purlis reads nothing else from it, not a path and not a
   fingerprint. A record row that claims a directory is the app's grants that directory nothing.
 - **A copy of a built-in.** The same directory with the same bytes, anywhere outside the running
-  app's resources, is an ordinary extension and reads as new. charter refuses to install an
+  app's resources, is an ordinary extension and reads as new. purlis refuses to install an
   extension whose id is a built-in's while the app ships that built-in. One id is one extension, so a
   copy takes its own id. A row the operator installed before the app shipped the extension under
   that id is set aside and said: that is the hand-assembled persona statistics on the day this
@@ -846,7 +846,7 @@ paragraph.
 
 **A writer into the app bundle gains nothing it did not have.** Whoever can change
 `Contents/Resources` can change `Contents/MacOS/charter-app` too, and replacing the app is strictly
-more than replacing one of its extensions. So charter does not fingerprint a built-in. Any bytes
+more than replacing one of its extensions. So purlis does not fingerprint a built-in. Any bytes
 inside the bundle are trusted, which is also how an update's new version of the extension is
 trusted without asking. What covers those bytes is what already covers the app:
 
@@ -861,29 +861,29 @@ trusted without asking. What covers those bytes is what already covers the app:
 
 **What built-in trust skips, and what it does not.** It skips the approval prompt and the
 fingerprint comparison, and nothing else. The executor still re-reads the directory at every press
-and refuses what it cannot read. The manifest is still parsed against this charter's vocabulary,
+and refuses what it cannot read. The manifest is still parsed against this purlis's vocabulary,
 and an unknown capability still refuses it. The program still runs one question at a time, with the
 same empty environment, deadline and bounds, and is handed only what `handed.rs` hands any
 extension. A project or a workspace still turns it off as it turns off any extension (ADR 0048).
 Off on this machine, it contributes nothing and the executor starts nothing. It is never removed,
 because the app would bring it back at the next read. Windows still refuses (ADR 0031). A record
-charter cannot read leaves every built-in off, since it cannot say whether the operator turned one
+purlis cannot read leaves every built-in off, since it cannot say whether the operator turned one
 off. That record cannot make an installed extension approved either.
 
 **Persona statistics links the core, and that is a first-party decision, not a change to the
-contract.** It links `charter_core::personaverbs::stats`, the code `charter persona stats` counts
-with, so the view and the CLI give the same numbers. It reads nothing more than before: charter
+contract.** It links `charter_core::personaverbs::stats`, the code `purlis persona stats` counts
+with, so the view and the CLI give the same numbers. It reads nothing more than before: purlis
 still hands it names, the default, and one date per memory, and linking the core gives it no reach
 that `RUNS_AS_YOU` did not already say it had. The date is now the day `memstore.memory_date` finds,
 the stamp line's date or a `YYYYMMDD-` file name, where it was the stamp's minute. That hands
 less, and it dates a memory as the CLI does. It is the same protocol, so nothing re-asks. The claim
 this extension used to carry, that a stranger can meet the contract without linking the core, is now
-carried by `extension-probe`, which links nothing of charter's.
+carried by `extension-probe`, which links nothing of purlis's.
 
-## Amended 2026-09-25: badges and repo columns read a facts file (charter-app#340)
+## Amended 2026-09-25: badges and repo columns read a facts file (purlis#340)
 
 The `badges` and `repo-columns` capabilities (ADR 0053) let an extension show values in the
-status bar, the terminal footer and the repo table. charter reads them from `<state>/facts.json`
+status bar, the terminal footer and the repo table. purlis reads them from `<state>/facts.json`
 and never starts the program to draw them, so this adds no process and changes nothing in
 decision 2's table. What it adds to the threat model:
 
@@ -898,11 +898,11 @@ decision 2's table. What it adds to the threat model:
 - **Approval is re-checked before anything is drawn.** The reader takes the executor's gate: the
   record, then the fingerprint over the whole tree. An extension that changed since it was
   approved contributes nothing, and the project and workspace on/off (ADR 0048) is asked as well.
-- **What it does not close.** The state directory is outside the fingerprint (charter-app#152),
+- **What it does not close.** The state directory is outside the fingerprint (purlis#152),
   so the values can change at any time without asking. That is the point: they are data the
   extension reports, not code, and they are drawn as text beside its name.
 
-## Amended 2026-09-25: events, and a quoted section in the session-start briefing (charter-app#343)
+## Amended 2026-09-25: events, and a quoted section in the session-start briefing (purlis#343)
 
 The `events` and `briefing` capabilities (ADR 0053, protocol 2) are the first that start an
 extension's program **without the operator opening anything**: after a core action it hears
@@ -912,13 +912,13 @@ capability reaches the machine store, `reopen.json`, harness profiles, vaults or
 What it adds to the threat model:
 
 - **"Never on its own" is no longer true of such an extension, and the prompt says so.** The
-  program line of the approval prompt names when charter starts it — after each event it
+  program line of the approval prompt names when purlis starts it — after each event it
   hears, when a chat starts — instead of the view-only sentence, and every event it hears is
   listed. The lists are inside the manifest's bytes, so adding an event re-asks.
 - **An event never changes the action it reports.** It is delivered after the action has
   finished, by the surface that did it. **In the app it is off the command's path**: the app
   starts a thread once a command — or auto-save — has its answer, and returns the answer
-  without waiting. **The `charter` binary answers first and then waits**: it prints and flushes
+  without waiting. **The `purlis` binary answers first and then waits**: it prints and flushes
   its answer, with its exit status already decided, and only then asks, before the process
   ends. A shell or a chat waiting for the process to end therefore waits up to one deadline,
   and only when an extension that hears that event is slow — every extension is asked at once
@@ -928,7 +928,7 @@ What it adds to the threat model:
   and an event waits its turn behind a question still in flight rather than being refused. A
   failure or a timeout is one note naming the extension — the status line's extension notes in
   the app, a line on stderr in a terminal — and nothing else.
-- **Both are protocol-2 questions like #341's actions.** Each carries `writes`, and charter
+- **Both are protocol-2 questions like #341's actions.** Each carries `writes`, and purlis
   watches the plane while it is answered; a write outside the declared paths is one more note
   naming the extension. Protocol 2 was unreleased when they were added, so they grew it rather
   than bumping to 3.
@@ -937,12 +937,12 @@ What it adds to the threat model:
   because the hook that reports it is what holds the chat's start: told after it, it would be
   told by a process the harness is still waiting on.
 - **A briefing section is extension-written text in front of the model, so it is quoted as
-  data.** It sits under a line of charter's own naming the extension and saying it is data,
+  data.** It sits under a line of purlis's own naming the extension and saying it is data,
   not instructions, and that nothing in it is a task, a permission, a hook or a setting; every
   line of it is set off with `> `. It is cut at 1,500 characters, all sections together at
   6,000, and a section holding anything `panel::undrawable` refuses is left out whole, with a
-  line of charter's own saying it is missing. It cannot add a permission, a hook or a setting
-  by construction: it is one string inside `additionalContext`, which charter serializes
+  line of purlis's own saying it is missing. It cannot add a permission, a hook or a setting
+  by construction: it is one string inside `additionalContext`, which purlis serializes
   itself beside its own `hookEventName`.
 - **A chat's start is bounded whatever the extensions do.** `charter hook sessionstart` asks
   every extension that briefs or hears the start at once, gives each question 2 seconds and
@@ -953,32 +953,32 @@ What it adds to the threat model:
   project and workspace on/off (ADR 0048) and the fingerprint are asked before anything
   starts; an extension that changed since it was approved is a note for the operator and adds
   not even the missing-section line.
-- **A built-in extension (charter-app#339) hears and briefs like any other, where charter knows
+- **A built-in extension (purlis#339) hears and briefs like any other, where purlis knows
   it is one.** The app's executor knows its bundle, so a built-in hears the events the window's
   commands and auto-save report, and one turned off on this machine hears nothing. The
-  `charter` binary passes no bundle — as `charter statusline` does — so a built-in neither
+  `purlis` binary passes no bundle — as `charter statusline` does — so a built-in neither
   hears a terminal's commands nor briefs a chat's start. That is deliberate for now: the binary
   cannot tell an app bundle from a folder claiming to be one, and a briefing that trusted a
   path the binary guessed would be trusting a file's word.
 - **A fork carries an extension's workspace folder even while it is off.** It is data the
   extension keeps in the plane, and a fork is not the moment to decide it stays behind. The
-  folder is one plain name declared in the fingerprinted manifest, never one of charter's own
+  folder is one plain name declared in the fingerprinted manifest, never one of purlis's own
   names in a workspace, only for an approved and unchanged extension, and never a clone.
 - **What it does not close.** The program still runs as the operator (`RUNS_AS_YOU`). An
   extension that hears events runs more often than one the operator opens, which is more
   chances to do what any program running as the operator can do; the prompt says when, and
   that is the whole of the answer.
 
-## Amended 2026-09-25: commands under the extension's own id (charter-app#342)
+## Amended 2026-09-25: commands under the extension's own id (purlis#342)
 
 The `cli` capability (ADR 0053, protocol 2) lets a chat or a script start an extension's program
-from a terminal: `charter <extension id> <command> …`. Decision 1 is unchanged: one process per
+from a terminal: `purlis <extension id> <command> …`. Decision 1 is unchanged: one process per
 command, the gate taken again first, the same deadline and kill. Decision 2's table is unchanged.
 What it adds to the threat model:
 
-- **A new caller: whoever can run `charter`, a chat included.** Until now a person in the window
+- **A new caller: whoever can run `purlis`, a chat included.** Until now a person in the window
   started every question, or a core action the person took. A command is started by a command
-  line, and a chat can type one. So the tool guard judges it like any `charter` call. The
+  line, and a chat can type one. So the tool guard judges it like any `purlis` call. The
   persona tool gate never waves through one that writes. It prompts for any extension command
   unless the installed manifest declares that command `"writes": false`, and that includes a
   command the extension does not declare and an extension that is not installed. It reads the
@@ -990,19 +990,19 @@ What it adds to the threat model:
 - **What the program prints reaches the caller unchanged.** That includes a chat's context,
   as the output of any program the chat runs does. It is not quoted as data the way a briefing
   section is, because the caller asked for it by name. The output is bounded at 512 KiB for
-  each stream. charter's only addition is its own line on stderr after the program's: a write
+  each stream. purlis's only addition is its own line on stderr after the program's: a write
   outside the declared paths, or any plane change at all from a command that says it only
   reads.
 - **No extension can stand where a core command does.** An extension id that is a core command
-  word is refused at every read of the manifest. The `charter` binary asks its own parser
+  word is refused at every read of the manifest. The `purlis` binary asks its own parser
   before it looks for an extension. A test fails the build for a new core command that the
   refusal does not know.
 - **The command line does not reach built-in extensions yet.** It passes no bundle, as it does
   for badges, events and the briefing (#340, #343). It cannot tell the app's bundle from a
   folder claiming to be one, so a built-in's commands would be trusted on a guessed path. No
-  built-in declares a command today. A word that is neither charter's nor an installed
+  built-in declares a command today. A word that is neither purlis's nor an installed
   extension's gets clap's own error, followed by one line saying so. Reaching built-ins needs
   the binary to find the bundle it shipped in, with the same containment the app uses. That is
   its own change.
-- **What it does not close.** The program runs as whoever runs `charter` (`RUNS_AS_YOU`). A
+- **What it does not close.** The program runs as whoever runs `purlis` (`RUNS_AS_YOU`). A
   command that says it only reads and writes anyway is reported, not stopped, as for an action.

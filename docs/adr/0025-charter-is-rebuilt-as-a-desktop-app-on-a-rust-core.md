@@ -1,7 +1,7 @@
-# Charter is rebuilt as a desktop app on a Rust core
+# purlis is rebuilt as a desktop app on a Rust core
 
-The tmux frame was supposed to be how charter scales to many harness sessions. Six weeks in, it
-is what stops charter from scaling. The operator named the pain in a grill on 2026-09-17:
+The tmux frame was supposed to be how purlis scales to many harness sessions. Six weeks in, it
+is what stops purlis from scaling. The operator named the pain in a grill on 2026-09-17:
 development has become very slow, the tests and the mutation sweep are very slow, the frame
 has no room to bend, and nothing proves end to end that finished work actually works. The
 measurements behind that:
@@ -32,24 +32,24 @@ The operator set it, and every choice below is made in this order:
 
 ## The decision
 
-**Charter is rebuilt from scratch as one cross-platform desktop app plus one `charter` binary,
+**purlis is rebuilt from scratch as one cross-platform desktop app plus one `purlis` binary,
 both on a Rust core, with the UI on Tauri 2, React and TypeScript.** The concepts carry over
 word for word: the plane, workspaces, personas, todos, memory, vaults, guards, and every ADR
 that is not about tmux. The Python code does not.
 
-- **The plane on disk does not change.** The new charter reads and writes the plane the Python
+- **The plane on disk does not change.** The new purlis reads and writes the plane the Python
   one does. The format is written down as a spec with fixture planes before any module is
   ported, so "the same plane" is something tested rather than hoped for.
 - **Modules move over one at a time, and Python is the reference.** Each module that moves to
   Rust passes a differential test: the same plane and the same input give the same result in
   both. **Amended 2026-09-18:** the app never calls Python at runtime, at any milestone. The
-  first plan had it shelling out to Python `charter` for writes and hooks until M3; on the
+  first plan had it shelling out to Python `purlis` for writes and hooks until M3; on the
   operator's instruction ("fully clean implementation in rust — no need to mix languages")
   whatever a feature needs is ported before the feature that needs it. Python stays as today's
   product until cutover and as the differential oracle in CI, never as something the app runs.
   The security-critical parts (hooks guard, gitpolicy, vaults) keep their external review, and
   nothing ships on a Python fallback while they wait for it.
-- **There is no terminal frontend.** The terminal story is the `charter` CLI, for hooks,
+- **There is no terminal frontend.** The terminal story is the `purlis` CLI, for hooks,
   scripts and agents. A TUI would be a terminal emulator inside a terminal again, which is
   the problem ADR 0018 measured, and it would be a second UI to keep in step.
 - **No daemons.** Every session is a child of the app. Quitting ends them all, the way PTYs
@@ -66,7 +66,7 @@ A rewrite fixes what the language and tmux cause: the frame's plumbing and the 1
 test files it brings, the missing Windows support, the Python start paid on every hook, and
 managing dozens of PTYs from a Python process.
 
-It does **not** fix what comes from how charter has been run. Tests at 3.3× the source and a
+It does **not** fix what comes from how purlis has been run. Tests at 3.3× the source and a
 mutation run on every change would be *slower* in Rust, because cargo-mutants does an
 incremental build plus the full test suite for every mutant and cannot pick which tests to run
 per mutant (research note §8). So the testing approach changes with the rewrite, and that
@@ -96,7 +96,7 @@ So **the Rust core owns every PTY and every terminal's state, headless.** `alacr
 is the engine: a released Apache-2.0 crate whose changelog marks breaking changes. The UI draws
 only the panes on screen. When a pane becomes visible, the core sends a snapshot of its screen
 and then streams its output to an xterm.js instance. That is the shape VS Code uses to reconnect
-terminals (a headless terminal, serialized into the visible one), so charter adopts a proven
+terminals (a headless terminal, serialized into the visible one), so purlis adopts a proven
 pattern instead of writing a renderer. libghostty-vt measures far higher, but its API "is
 definitely going to change", and priority 2 outranks priority 3. The engine stays behind a
 trait so it could be swapped later, with no second implementation built now.
@@ -114,17 +114,17 @@ fastest and the ecosystem is largest: Tauri 2 (stable) with React and TypeScript
 - **Electron** is the most proven desktop shell, but its 120–160 MB runtime buys nothing this
   split needs.
 - **GPUI** would be the fastest, but it is pre-1.0 and pinned to Zed's git, has thin
-  documentation, and Zed's terminal crate is GPL-3.0, so charter would write its own terminal
+  documentation, and Zed's terminal crate is GPL-3.0, so purlis would write its own terminal
   view. That fails priorities 1 and 2 for a speed priority 3 does not ask for. It stays the
   fallback only if the M0 skeleton misses a limit a person would notice.
 
 ## What this replaces
 
-For the new app, this supersedes **ADR 0018** (charter may run the harness but never draws
+For the new app, this supersedes **ADR 0018** (purlis may run the harness but never draws
 it), **ADR 0019** (the frame owns the surface) and **ADR 0023** (one tmux server per plane).
 Their reasons stay true for the tmux frame, which keeps them until it is retired.
 
-ADR 0018's core refusal carries over unchanged: **charter never parses a harness's output to
+ADR 0018's core refusal carries over unchanged: **purlis never parses a harness's output to
 decide anything.** It draws the terminal, and it learns a session's state (running, waiting
 for you, done) only from the harness's hooks. A harness with no such hook shows "unknown",
 labelled as unknown, not guessed.
@@ -133,5 +133,5 @@ labelled as unknown, not guessed.
 
 [ADR 0068](0068-a-chat-lives-in-charterd-and-the-app-is-its-client.md) (FD-2, from the operator's
 ruling Q2, accepted in ruling V22a) replaces the "No daemons" bullet above with its section 2,
-which says when the chats end now that `charterd`, a session host the app starts, holds them. The
+which says when the chats end now that `purlisd`, a session host the app starts, holds them. The
 rest of this record stands.

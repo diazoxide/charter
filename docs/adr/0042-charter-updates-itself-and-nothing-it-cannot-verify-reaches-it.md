@@ -1,4 +1,4 @@
-# charter updates itself from two channels, and nothing it cannot verify reaches either
+# purlis updates itself from two channels, and nothing it cannot verify reaches either
 
 charter-app is one desktop app with the `charter` binary inside it, and
 [ADR 0030](0030-a-rust-charter-reports-the-charter-it-brought.md) already says what follows
@@ -21,16 +21,16 @@ alive. The manifest is a file, and GitHub already serves files.
 
 This is the standard mechanism for a Tauri app. It was chosen over writing one, and the choice
 holds the rest of this record to the plugin's contract. The plugin does two things well that
-charter must not undo, and leaves two things to the application that charter has to do itself:
+purlis must not undo, and leaves two things to the application that purlis has to do itself:
 
 - **It always verifies.** `minisign-verify` is an ordinary dependency of the plugin, not a
-  feature. No build of it skips the check, and nothing in charter-app tries to.
+  feature. No build of it skips the check, and nothing in purlis tries to.
 - **It refuses plain HTTP** in a release build unless `dangerousInsecureTransportProtocol` is
-  set. charter-app sets none of the plugin's `dangerous*` options, nor `allowDowngrades`, and a
+  set. purlis sets none of the plugin's `dangerous*` options, nor `allowDowngrades`, and a
   test fails if any of them appears in `tauri.conf.json`.
 - **It does not know whether its public key is a key.** `pubkey` is a required string, and a
   placeholder deserialises fine. The failure then arrives at the *end* of an update, after the
-  download. charter asks first (§3).
+  download. purlis asks first (§3).
 - **It does not bind a version to an artifact unless asked** (§3, `requireSignedVersion`).
 
 `tauri-action`, the official GitHub Action, was the obvious alternative to extending
@@ -48,7 +48,7 @@ Each channel is its own manifest file, `latest.json` or `dev.json`, not one file
 channel field. The installed app reads whichever file the machine's setting names, and **the
 default is stable**.
 
-Two files and not one field, because the thing that keeps the channels apart is not charter's
+Two files and not one field, because the thing that keeps the channels apart is not purlis's
 code. It is GitHub's own `/releases/latest/download/` pointer, which resolves to the newest
 release that is **not** a prerelease. Stable reads through that pointer. Dev reads a fixed
 prerelease named `dev`, whose assets each green `main` replaces. However recent a dev build
@@ -94,21 +94,21 @@ fact** in 0034's list (0040 added the fifth), and 0034 is amended to say so.
 It was weighed against a small file of its own beside the store, and that lost on two counts.
 It would need a second copy of the store's hardened read (`open_no_link`, `fstat` of the
 descriptor, the size bound, the `0700` directory), which is a second place to get containment
-right. And it would need a lock of its own, because the app and a `charter` in a terminal both
+right. And it would need a lock of its own, because the app and a `purlis` in a terminal both
 write it. `machine::update`'s `flock` already makes the store's read-modify-write one act
 across processes.
 
-**Every way of not knowing reads as stable.** A missing field, a word charter did not write
-(`Dev`, `dev `, `nightly`), a store charter will not open, a platform with no store: all stable,
+**Every way of not knowing reads as stable.** A missing field, a word purlis did not write
+(`Dev`, `dev `, `nightly`), a store purlis will not open, a platform with no store: all stable,
 and a word that was dropped is recorded with its reason. The reader is exact, with no trimming
 and no case folding. The two directions are not symmetric: reading a corrupt store as stable
 costs one trip to the setting, while reading it as dev puts a machine on a stream cut from any
 green `main` without anybody asking.
 
 Until M6.4's status bar exists there is no window control for the channel, so
-`charter update` names it and `charter update --channel dev|stable` moves it. That command
+`purlis update` names it and `purlis update --channel dev|stable` moves it. That command
 already opens with `THE_APP_MOVES_IT`, so the channel sits under the sentence that names the
-app as the mover. The flag is charter-app's and not Python charter's: this binary moves as the
+app as the mover. The flag is purlis's and not Python charter's: this binary moves as the
 app moves, so it has a channel and a Python package does not.
 
 ## 3. Two signatures, held apart: minisign is mandatory, Developer ID optional, notarization no
@@ -158,7 +158,7 @@ lockfile pinned `@tauri-apps/cli` 2.11.4. A signature from 2.11.4 carries
 first release that writes `\tversion:X`, and `tauri build` sets it automatically. An app with
 `requireSignedVersion` refuses every 2.11.4 signature with `MissingSignedVersion`, so turning
 the setting on without the bump would have shipped an updater that rejects every update.
-charter-app has published nothing yet, so every release it will ever have carries the version
+purlis has published nothing yet, so every release it will ever have carries the version
 and nothing is left behind by turning it on from the first one.
 
 ### Developer ID: required for a publish, and checked on the bundle
@@ -170,7 +170,7 @@ where the certificate exists; what it must no longer be read as is a requirement
 A published macOS build is signed with a **Developer ID Application** certificate
 (`APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`). The workflow
 does not trust that the secrets being set means the bundle is signed correctly. It runs
-`codesign` on the built `.app` and on the `charter` sidecar inside it, and fails unless both
+`codesign` on the built `.app` and on the `purlis` sidecar inside it, and fails unless both
 carry `Authority=Developer ID Application:`. A set-but-wrong secret (expired, the wrong
 identity, an Apple *Development* certificate) otherwise produces a bundle signed with
 something else, and nothing downstream notices until someone installs it.
@@ -187,7 +187,7 @@ prompt. See the amendment.**
 No `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` or `APPLE_API_*` is passed anywhere, so Tauri's
 bundler never notarizes. **A browser-downloaded first install still meets Gatekeeper.** A
 browser marks what it downloads as quarantined, and macOS 15 and later answer a quarantined app
-Apple has not notarized with **"charter" Not Opened**, offering only *Done* and *Move to
+Apple has not notarized with **"purlis" Not Opened**, offering only *Done* and *Move to
 Trash*. The way past is **System Settings → Privacy & Security → Open Anyway**, confirmed with
 a password, or `xattr -dr com.apple.quarantine /Applications/charter.app` before the first
 launch. The release job summary and `docs/updating.md` both say this, in those words.
@@ -223,7 +223,7 @@ this section should be amended if either differs.
 
 The app updates itself and its sidecar. It never looks at a plane's `[charter] version` before
 doing so, because one app serves every plane on the machine, and no plane's pin can speak for
-the others. When the charter the app brought no longer matches a plane's pin, **`charter
+the others. When the purlis the app brought no longer matches a plane's pin, **`purlis
 version` already says so**, exits 1, and tells the operator how to conform the plane. That is
 ADR 0030's output, and this record does not add a second way of describing the same skew.
 
@@ -238,11 +238,11 @@ The operator asked for automatic updates. The app checks a minute after launch a
 hours after that, and a new version raises a notification, because closing the window only
 hides it (ADR 0025). It **installs when asked**. That is an implementation consequence, not a
 re-opened decision: every session in the app is a child of this process, and installing on
-macOS replaces the bundle and needs a relaunch. A silent install would be charter ending the
+macOS replaces the bundle and needs a relaunch. A silent install would be purlis ending the
 operator's work from a timer.
 
 The timer never runs in a fenced (test) build, where the network is a reach outside the run's
-own tree (charter-app#129), nor in a debug build, whose version is always `0.1.0`.
+own tree (purlis#129), nor in a debug build, whose version is always `0.1.0`.
 
 ## What is published, and for whom
 
@@ -274,9 +274,9 @@ own tree (charter-app#129), nor in a debug build, whose version is always `0.1.0
 
 ## Consequences, including the ones that cost something
 
-- **The minisign private key is forever.** Every installed charter trusts the key it was built
+- **The minisign private key is forever.** Every installed purlis trusts the key it was built
   with. Lose it, and no installed app can ever be updated again: every operator reinstalls by
-  hand. Leak it, and whoever has it can sign an update every installed charter accepts.
+  hand. Leak it, and whoever has it can sign an update every installed purlis accepts.
   `docs/updating.md` says to keep it and its password in a password manager.
 - **Until the operator acts, nothing is published and no app offers an update.** The steps are
   in `docs/updating.md`: generate the minisign keypair, commit its public half, store two Tauri
@@ -289,7 +289,7 @@ own tree (charter-app#129), nor in a debug build, whose version is always `0.1.0
 - **`cargo deny` allows one more licence**, `CDLA-Permissive-2.0`, for `webpki-root-certs`:
   Mozilla's CA list as data, which TLS checks the update endpoint against.
 - The machine store gains a field, and a store with no channel is byte-identical to one written
-  before this record. An older charter reading a newer store ignores the field.
+  before this record. An older purlis reading a newer store ignores the field.
 
 ## Amendment, 2026-09-23: Developer ID is optional, and a build without it is ad-hoc signed
 
@@ -299,7 +299,7 @@ and `APPLE_SIGNING_IDENTITY` unset, every publish was refused before the build. 
 before twenty minutes of building, which was the right shape and is why it blocked everything:
 on a repository with the minisign key set, the public key committed and the `dev` release
 created, **nothing could publish on any channel**, because the one remaining requirement costs
-an Apple Developer account that charter does not have and is not getting.
+an Apple Developer account that purlis does not have and is not getting.
 
 **The sentence changes. A published macOS build is signed; whether Apple can name the signer is
 optional.** When the three secrets are set the bundle is Developer ID signed exactly as above.
@@ -387,12 +387,12 @@ ID** path that remains the unmeasured one, not this one.
   attempted: it would put a Gatekeeper dialog on the operator's screen. The quarantine row
   above was obtained by marking the bundle quarantined while it was already running, which is
   the same filesystem state without the dialog. So it is **not established** that an ad-hoc
-  build shows the same *"charter" Not Opened* / **Open Anyway** flow as an un-notarized
+  build shows the same *"purlis" Not Opened* / **Open Anyway** flow as an un-notarized
   Developer ID one; macOS has a blunter *"is damaged and can't be opened"* wording for apps it
   cannot attribute. `docs/updating.md` therefore gives `xattr -dr com.apple.quarantine` as the
   instruction that works either way, and does not promise Open Anyway.
 - **The real bundle.** The probe is a single small binary in a minimal `.app`, not `charter.app`
-  with its WebKit-linked executable and `charter` sidecar. The syscalls are the same; the tree
+  with its WebKit-linked executable and `purlis` sidecar. The syscalls are the same; the tree
   is bigger.
 - **A real browser download.** As before, the quarantine attribute was written by hand.
 - **Why** it passed. That an ad-hoc bundle is simply not a bundle App Management protects — for
@@ -409,7 +409,7 @@ ID** path that remains the unmeasured one, not this one.
   in the same check, and turned on by setting the three secrets. Moving from ad-hoc to a real
   team is the one-time reinstall any team change is — §3's *keep the team* rule applies from
   the moment there is a team, not before.
-- **charter can publish to the dev channel with the secrets that exist**, which was the point.
+- **purlis can publish to the dev channel with the secrets that exist**, which was the point.
 
 ## Amendment, 2026-09-26: the signing keys live in a protected `release` environment
 

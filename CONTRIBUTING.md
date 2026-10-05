@@ -1,8 +1,8 @@
-# Contributing to charter
+# Contributing to purlis
 
 Thank you for helping. Contributions of every size are welcome: a typo, a failing test that
 shows a bug, a fix, a feature, or an answer to someone's question in
-[Discussions](https://github.com/diazoxide/charter/discussions).
+[Discussions](https://github.com/purlis/purlis/discussions).
 
 Everyone taking part follows the [Code of Conduct](CODE_OF_CONDUCT.md). If you have found a
 security vulnerability, do not open an issue or a pull request; follow
@@ -12,9 +12,9 @@ security vulnerability, do not open an issue or a pull request; follow
 
 - **A bug fix** needs no discussion first. If there is no issue for the bug yet, the pull
   request can say what was wrong.
-- **Anything larger**, such as a new feature, a new setting or a change to what charter does,
-  starts as an [issue](https://github.com/diazoxide/charter/issues/new/choose) or an
-  [idea in Discussions](https://github.com/diazoxide/charter/discussions/categories/ideas), so
+- **Anything larger**, such as a new feature, a new setting or a change to what purlis does,
+  starts as an [issue](https://github.com/purlis/purlis/issues/new/choose) or an
+  [idea in Discussions](https://github.com/purlis/purlis/discussions/categories/ideas), so
   we can agree on it before you spend time on it.
 - **A change to a decision** that is already recorded goes through a new record in
   [`docs/adr/`](docs/adr/). Read the records near what you are changing first: they say why
@@ -26,14 +26,14 @@ security vulnerability, do not open an issue or a pull request; follow
 to run them locally. [CLAUDE.md](CLAUDE.md) lists the rules that are easy to break, such as
 keeping the core free of the UI and changing a recorded answer only on purpose. The
 specification is [`docs/spec.md`](docs/spec.md), and [`CONTEXT.md`](CONTEXT.md) defines the
-words charter uses.
+words purlis uses.
 
 A good pull request:
 
 - **comes with a test** that fails without the change and passes with it, named for the
   behaviour it checks;
 - **passes what CI runs**: formatting, clippy with `-D warnings`, and the Rust and app tests;
-- **adds a changelog fragment, `changes/<slug>.md`,** when people using charter would notice
+- **adds a changelog fragment, `changes/<slug>.md`,** when people using purlis would notice
   the change. It holds a `### Added`, `### Changed`, `### Fixed` or `### Security` heading (or
   another of Keep a Changelog's) and the entry under it, written as it will read in
   [CHANGELOG.md](CHANGELOG.md). Don't edit CHANGELOG.md itself: release prep folds the
@@ -68,7 +68,7 @@ ticket:
 
 ## Sign your commits off (DCO)
 
-charter uses the [Developer Certificate of Origin](https://developercertificate.org/) (DCO)
+purlis uses the [Developer Certificate of Origin](https://developercertificate.org/) (DCO)
 instead of a contributor licence agreement. By signing a commit off you state that you wrote
 it, or otherwise have the right to submit it under the project's licence. Every commit in a
 pull request from a contributor outside the maintainers carries a line like this at the end of
@@ -92,7 +92,7 @@ maintainer's coding agents make in it.
 
 ## Licence
 
-charter is released under the [MIT licence](LICENSE). Contributions are accepted under the
+purlis is released under the [MIT licence](LICENSE). Contributions are accepted under the
 same licence as the project: what you contribute is licensed to everyone under the terms you
 received it under.
 

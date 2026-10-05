@@ -25,7 +25,7 @@ operator's rulings:
 
 It builds on [ADR 0066](0066-a-chat-is-a-ulid-a-run-is-a-stretch-of-its-conversation-and-a-device-is-random.md)
 (chat, run and device identity), [ADR 0068](0068-a-chat-lives-in-charterd-and-the-app-is-its-client.md)
-(`charterd`, its grace period and crash recovery), [ADR 0071](0071-the-kill-switch-is-machine-state-the-command-line-stops-and-only-the-window-re-arms.md)
+(`purlisd`, its grace period and crash recovery), [ADR 0071](0071-the-kill-switch-is-machine-state-the-command-line-stops-and-only-the-window-re-arms.md)
 (the kill switch), [ADR 0073](0073-a-harness-is-declared-as-data-and-a-chat-runs-it-at-one-of-three-levels.md)
 (harness levels and `fallback`), [ADR 0074](0074-a-chats-git-runs-charters-hooks-through-its-environment.md) (a refused commit) and
 [ADR 0075](0075-an-audit-entry-is-metadata-in-a-store-of-its-own-and-telemetry-never-reads-it.md)
@@ -41,12 +41,12 @@ and `run.unpaused` (*ADR 0075, amended*), ahead of AU-2's registry and AU-4's so
 
 Its concept is **Chat** ([ADR 0072](0072-charter-has-five-concepts-and-every-other-word-belongs-to-one-of-them.md)).
 
-## Where charter is today
+## Where purlis is today
 
 `crates/purlis-core/src/state.rs` holds a chat's state as one of five values: `Unknown`,
 `Running`, `Waiting`, `Done` and `Failed`. Hooks move it, and so does the program's exit. Beside
 the state, a `needs_you` flag says whether the chat is in the queue, with three kinds of item on
-top of it: an ask (`asking`), a report back (charter-app#259) and a refused
+top of it: an ask (`asking`), a report back (purlis#259) and a refused
 commit (ADR 0074). `docs/spec.md` names the same five as the *session state*.
 
 That machine was built for one chat, one process and one conversation. The program map adds
@@ -57,9 +57,9 @@ states without adding them to it, and each ticket would add its own flag:
 - a chat **stopped** by the kill switch (OV-1). Today it reads `Failed`, because a signal leaves
   no exit code, and so does a chat the operator closed mid-turn;
 - a chat **queued** by a trigger (AC-7), a lazy restore (SC-20) or the launch question
-  (charter-app#250), which today has no state at all;
-- a chat whose process died with `charterd` (FD-29), which ADR 0068 calls `failed(host-crash)`;
-- a **remote chat** charter only observes (FD-19);
+  (purlis#250), which today has no state at all;
+- a chat whose process died with `purlisd` (FD-29), which ADR 0068 calls `failed(host-crash)`;
+- a **remote chat** purlis only observes (FD-19);
 - a child agent (FD-18), which ADR 0066 made a run, and which has no state yet.
 
 ADR 0066 left the states to this record: *"FD-23 gives runs their states, and derives the chat's
@@ -82,10 +82,10 @@ and never a state.**
 | `starting` | its program has been started, and its harness has not reported yet | yes |
 | `working` | a turn is in flight | yes |
 | `input-required` | the harness has handed control back. Its **reason** says why: `asked` (a question or a permission, in the middle of a turn), `turn-ended` (the turn is over) or `ready` (a session began and nothing has been asked) | yes |
-| `paused` | charter is holding it: no tool call runs and no input is delivered until it is unpaused. Its hold says who paused it | yes, stopped (§4) |
+| `paused` | purlis is holding it: no tool call runs and no input is delivered until it is unpaused. Its hold says who paused it | yes, stopped (§4) |
 | `hibernated` | its program was ended on purpose at a turn boundary, and its conversation is kept to be resumed | no |
 | `completed` | **end.** Its program exited cleanly, or the next run of the chat took over from it | no |
-| `failed` | **end.** Its program ended in a way nobody chose: a non-zero exit, a signal charter did not send, a start that could not happen, a lost protocol channel or a host crash | no |
+| `failed` | **end.** Its program ended in a way nobody chose: a non-zero exit, a signal purlis did not send, a start that could not happen, a lost protocol channel or a host crash | no |
 | `stopped` | **end.** A person, a policy or the host ended it on purpose | no |
 
 `queued` to `hibernated` are **live**. The three ends are final: a run never leaves one, and a
@@ -132,7 +132,7 @@ record's causes say why a run *moved*. The two lists share no word.
 | `starting`, `working`, `input-required`, `paused` | `completed` | `exited` | the program exited with code 0, and the host had not stopped it |
 | `starting`, `working`, `input-required`, `paused` | `failed` | `exited` | the program exited non-zero or on a signal the host did not send |
 | `queued`, `starting` | `failed` | `spawn-failed` | the program could not be started: not found, not executable, or its sandbox could not be compiled |
-| `working`, `input-required` | `failed` | `channel-lost` | level 3: the protocol channel ended or reported an error charter cannot continue past, while the chat carries on at a lower level. The next run begins with ADR 0073's `fallback` |
+| `working`, `input-required` | `failed` | `channel-lost` | level 3: the protocol channel ended or reported an error purlis cannot continue past, while the chat carries on at a lower level. The next run begins with ADR 0073's `fallback` |
 | `starting`, `working`, `paused` | `failed` | `host-crash` | the next host found the run in its journal, and its program gone (FD-29, ADR 0068 §3) |
 | `input-required (ready or turn-ended)` | `hibernated` | `host-crash` | the same, for a run idle at a turn boundary on a harness that resumes natively (ADR 0068, amended) |
 | `input-required` | `failed` | `host-crash` | the same, for any other `input-required` run |
@@ -149,7 +149,7 @@ A hibernated or queued run has no process to lose, so a host crash leaves it as 
 **A stop the host caused is a stop, whatever the exit code says.** The host writes its intent
 before it sends the signal. The exit that follows ends the run `stopped`, with the host's cause,
 even though a signal leaves no code. This refines the spec's *"`failed` is a non-zero exit"*
-(operator's ruling, 2026-09-18): `failed` is a non-zero exit that charter did not cause.
+(operator's ruling, 2026-09-18): `failed` is a non-zero exit that purlis did not cause.
 
 **A hook never leaves a chat without a live run, and a hook alone never makes a run
 `completed`.** Precisely:
@@ -180,7 +180,7 @@ the `ended` flag to the state. Hooks still move the four states in the middle, b
 
 | Hold | Waits for | From |
 |---|---|---|
-| `launch` | the operator's answer to the launch question. Nothing a record names starts before it | charter-app#250, ADR 0035 |
+| `launch` | the operator's answer to the launch question. Nothing a record names starts before it | purlis#250, ADR 0035 |
 | `stagger` | its turn in a relaunch's staggered restart | SC-20 |
 | `budget` | the operator to raise the chat's budget, which is spent | N4 |
 | `capacity` | a slot, where a trigger queue or a cap on running chats is full | AC-7 |
@@ -220,7 +220,7 @@ own, so it keeps running while the run is paused. What stops is the harness and 
 in its group, which is where model requests come from, so spending stops. A daemon that spends on
 its own, or does work of its own, goes on. The kill switch has the same gap today (ADR 0071
 signals process groups). Holding every process a chat started is the sandbox's work: a cgroup
-freezer on Linux, and on macOS nothing charter can use yet (SD-2).
+freezer on Linux, and on macOS nothing purlis can use yet (SD-2).
 
 **Budgets pause at the chat, and the whole chat pauses.** Settled by W8: *"budgets and the kill
 switch apply at the parent"*. A child run shares its parent's process group, so stopping the
@@ -237,7 +237,7 @@ record?"*). In this record's terms, that is a harness whose declaration answers 
 **Of X35's two answers for the others, this record takes "kept hot".** A chat on a harness that
 cannot resume natively is never hibernated, and it is never closed for being idle. Closing it
 with a session record is left to the operator's own Smart close (ADR 0064), because a close is
-final (§8) and charter does not end a chat that nobody asked it to end.
+final (§8) and purlis does not end a chat that nobody asked it to end.
 
 - **Only at a turn boundary.** A run hibernates from `input-required` with reason `ready` or
   `turn-ended`, never `asked`, because the ask would be lost with the process. Never from
@@ -264,14 +264,14 @@ it under its chat (W8). No child move changes the chat's own state.
 
 ### 7. Remote chats: the `observed` kind
 
-**Every chat has a kind: `governed`, for a chat charter starts, or `observed`, for a
-vendor-cloud session charter lists (FD-19). Settled by W8** (*"read-only"*, and *"records them in
+**Every chat has a kind: `governed`, for a chat purlis starts, or `observed`, for a
+vendor-cloud session purlis lists (FD-19). Settled by W8** (*"read-only"*, and *"records them in
 the audit as `observed`, not `governed`"*).
 
 - An observed chat's runs use the same nine states. The vendor's status is mapped onto them, and
   **every move has the one cause `observed`**: the vendor reported it. The host causes no move.
 - There is no pause, hibernation, budget enforcement or queue for them. Their cost is shown, and
-  never counted toward a budget charter enforces.
+  never counted toward a budget purlis enforces.
 - **The kill switch does not reach them**, and the window says so beside **Stop all**. A read-only
   listing cannot stop anything. Q11's *"stoppable"* is met by a link to the vendor's own page for
   the session. Ruled by V27.
@@ -286,7 +286,7 @@ the audit as `observed`, not `governed`"*).
 |---|---|
 | **open** | it has a tab. The sidebar draws its **current run's** state, with the reason or hold. A chat put away by a quit is still open: it is in the reopen record, and its run ended `stopped \| quit` |
 | **wrapping up** | open, with a Smart close sent and its record not yet saved (ADR 0064). A flag on an open chat, not a run state |
-| **closed with a record** | its tab closed after `charter session record` saved its session record |
+| **closed with a record** | its tab closed after `purlis session record` saved its session record |
 | **closed without a record** | its tab closed any other way |
 
 **Closed is final.** No run begins in a closed chat. **Resume** starts a new chat from the
@@ -307,7 +307,7 @@ items:
 | its current run is `input-required` with reason `asked` or `turn-ended` | hooks, the protocol |
 | its current run is `paused` with hold `budget` or `policy` (not the operator's own pause) | N4, N8 |
 | its next run is `queued` with hold `budget` | N4 |
-| another chat reported back to it (charter-app#259) | the hook channel |
+| another chat reported back to it (purlis#259) | the hook channel |
 | a commit it made was refused (ADR 0074). Settled by V26a: *"A refused-commit needs-you item clears on the chat's next prompt."* | the hook channel |
 | a command in it waits for a secret's approval. Settled by V15: *"the ask tops needs-you"* | the host (V15, V16) |
 | its current run ended `completed \| exited` or `failed`, until the chat is shown. Settled by W10: *"LW-5's queue and IB-10 show finished and failed chats"* | the exit, the host |
@@ -316,7 +316,7 @@ A run that ended `stopped` is not an item: the operator, a policy or the host en
 and the kill switch's own control says so. W1's list, *"done / failed / blocked / asking /
 over-budget, not only permission asks"*, matches these items. A run that ended `completed |
 superseded` is not one either, because its chat carries on. A run that is `ready` is not an item: a chat that has just started or been put back has asked for
-nothing. **Ignore** (charter-app#248) clears a chat's items until the next one arrives, and
+nothing. **Ignore** (purlis#248) clears a chat's items until the next one arrives, and
 changes no run. The order, priorities and channels of the view are TS4's and IB-10's.
 
 ### 10. What ends each concept
@@ -326,12 +326,12 @@ The five concepts end in different ways. None of them ends a run except through 
 | Concept | Its end | What it does to runs |
 |---|---|---|
 | **Chat** | closed (§8). Final | its live run ends `stopped \| closed` |
-| **Workspace** | removed (`charter workspace remove`, the safe-remove skill). Final in charter, recoverable from git while committed | **refused while any chat in it has a live run**, as a rename is refused today. A removal must not leave a program running in a deleted directory |
-| **Persona** | removed. Final in charter, recoverable from git while committed | **refused while a live run has adopted it**. A run's persona is fixed (ADR 0066), and its files must outlast the run |
+| **Workspace** | removed (`purlis workspace remove`, the safe-remove skill). Final in purlis, recoverable from git while committed | **refused while any chat in it has a live run**, as a rename is refused today. A removal must not leave a program running in a deleted directory |
+| **Persona** | removed. Final in purlis, recoverable from git while committed | **refused while a live run has adopted it**. A run's persona is fixed (ADR 0066), and its files must outlast the run |
 | **Project** | closed on this machine, which lets go of it and keeps it on disk. Opened again later | every live run ends `stopped \| quit`, and the reopen record is kept |
 | **Memory** | archived, with Undo (ADR 0065) | none |
 
-The run's own end states are §1's. A device does not end in charter. A deleted machine store
+The run's own end states are §1's. A device does not end in purlis. A deleted machine store
 makes it a new device (ADR 0066).
 
 ## ADR 0066, amended
@@ -343,7 +343,7 @@ ADR 0066 says when a run begins. It does not say when a run ends. It now also sa
   chat has at most one live top-level run.
 - **A child run ends with its parent** when the parent ends first (§6).
 - **Every chat has a kind**, `governed` or `observed` (§7). ADR 0066 already gave an observed chat
-  an id when charter first lists it.
+  an id when purlis first lists it.
 
 ## ADR 0067, amended
 
@@ -427,7 +427,7 @@ The code does not change with this record.
 | `Board`, the app's `hooks.rs` | Track each chat's current run and its children. `chat-moved` carries the run state and its reason or hold |
 | `app/src/chatState.ts`, `NeedsYou.tsx` | Draw the nine states, and read needs you from the items. The words shown are the design system's (ADR 0072 §3) |
 | `docs/spec.md` | Its *Session state* line is replaced by this record's states, when `state.rs` changes |
-| `charterd` (FD-5, FD-29) | Writes the run journal, and does the crash accounting of *ADR 0068, amended* |
+| `purlisd` (FD-5, FD-29) | Writes the run journal, and does the crash accounting of *ADR 0068, amended* |
 | `halt.rs`, `Planes::stop_every_agent` | The host records the stop intent before signalling, so each run ends `stopped \| killed` (*ADR 0071, amended*) |
 | OV-7, SC-4, SC-20, AC-7 | Use `paused`, `hibernated` and `queued` with their holds, and add no state of their own |
 | FD-19 | The `observed` kind |
@@ -481,7 +481,7 @@ The operator accepted all five questions as recommended:
 3. **V27c: a pause is `SIGSTOP` of the run's process group at every level**, with the guard as a
    backstop. Processes that `setsid` out of the group keep running until the sandbox can hold
    them.
-4. **V27d: remote chats cannot be stopped from charter.** It links to the vendor's page, and
+4. **V27d: remote chats cannot be stopped from purlis.** It links to the vendor's page, and
    **Stop all** says so. **Removing a workspace or a persona is refused** while a live run is in
    it or has adopted it.
 

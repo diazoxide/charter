@@ -6,17 +6,17 @@ extensions/themes/plugins enabled/disabled/configured"*, in a Project settings t
 day, he settled three things: Local overrides Shared; approval stays per machine (ADR 0041); and
 the machine-wide extension list keeps working, with a project's choices taking precedence for
 that project. This record is the precedence those three add up to, and why it is in the order it
-is (charter-app#246, #253).
+is (purlis#246, #253).
 
-"Plugin" in the request is charter's **extension** (ADR 0041 kept the words apart:
+"Plugin" in the request is purlis's **extension** (ADR 0041 kept the words apart:
 `enabledPlugins` is Claude Code's list). A theme is enabled and disabled with the extension that
-contributes it. **Amended 2026-09-24 (charter-app#273):** a project also *picks* its theme, by the
+contributes it. **Amended 2026-09-24 (purlis#273):** a project also *picks* its theme, by the
 same precedence — see [A project's theme](#a-projects-theme) below. **Amended 2026-09-24
-(charter-app#280):** a workspace is a layer of the same order, between Shared and Local — see
+(purlis#280):** a workspace is a layer of the same order, between Shared and Local — see
 [A workspace refines its project](#a-workspace-refines-its-project) below. **Amended 2026-09-24
-(charter-app#281):** a workspace picks a theme in that order too, and has a colour of its own —
+(purlis#281):** a workspace picks a theme in that order too, and has a colour of its own —
 see [A workspace's theme and colour](#a-workspaces-theme-and-colour) below. **Amended 2026-09-24
-(charter-app#308):** a `charter.local.toml` git would carry is no layer at all — see
+(purlis#308):** a `charter.local.toml` git would carry is no layer at all — see
 [A Local file git would carry decides nothing](#a-local-file-git-would-carry-decides-nothing)
 below.
 
@@ -78,7 +78,7 @@ inside the fingerprint.
 
 ## A project's theme
 
-Added by charter-app#273, after the operator asked to *"pick a theme per project"*. A project picks
+Added by purlis#273, after the operator asked to *"pick a theme per project"*. A project picks
 in `[theme] use`, in either file: `charter-dark`, `charter-light`, `system`, or
 `<extension-id>/<theme name>`. It is resolved by one function beside `resolve`,
 `charter_core::extension::project::theme::resolve`, which is handed `resolve`'s answer for the same
@@ -119,7 +119,7 @@ both live (#216).
 
 ## A workspace refines its project
 
-Added by charter-app#280, the first of three (#279: extensions, then a workspace's theme and
+Added by purlis#280, the first of three (#279: extensions, then a workspace's theme and
 colour, #281, then its harness plugins, #282). The operator, grilled 2026-09-24: *"per workspace
 also configuration — as we already have workspace.json files"*; and the ruling on the order:
 **Shared, then the workspace, then Local** — a workspace refines its project for the team, and
@@ -173,12 +173,12 @@ the manifest mutates the document it read, so `snapshot`, `fork` and a clone's r
 settings (a fork inherits them).
 
 **A save keeps the manifest's owner.** `charter_generated` is how the automatic writers tell
-charter's manifest from a hand's (`crate::manifest`). The Workspace settings tab's save changes
-only `settings` and re-stamps a manifest charter wrote, and writes one a hand wrote unstamped, so
+purlis's manifest from a hand's (`crate::manifest`). The Workspace settings tab's save changes
+only `settings` and re-stamps a manifest purlis wrote, and writes one a hand wrote unstamped, so
 saving a setting never hands an operator's manifest to the automatic writers.
 
 **Where it is edited: a Workspace settings view tab, not a section of Project settings.**
-charter-app#252 made Project settings one tab for one holder of settings — a plane — with one
+purlis#252 made Project settings one tab for one holder of settings — a plane — with one
 section per file. A plane has as many `workspace.json` files as it has workspaces, so a section
 per workspace would grow the tab without bound, and one section with a picker would be a tab
 whose content depends on a control rather than on what it is. A view keyed by the workspace is
@@ -197,7 +197,7 @@ still asks for the project alone. The theme stayed the project's until #281, bel
 
 ## A workspace's theme and colour
 
-Added by charter-app#281. The operator: *"if user selected theme in project or local config —
+Added by purlis#281. The operator: *"if user selected theme in project or local config —
 workspace collor can add some filter and make same theme but with different collor"*.
 
 **A workspace picks a theme in the same order.** `settings.theme.use` in its `workspace.json` is
@@ -237,7 +237,7 @@ Rejected:
 
 - **A colour as a second theme, or a palette of accent tokens per colour.** Eight colours times
   every theme is a theme author's work multiplied, and an extension theme would have no colours
-  at all. A hue shift works on any theme, including one charter has never seen.
+  at all. A hue shift works on any theme, including one purlis has never seen.
 - **Tinting the text or the terminal.** It is the only way a colour could break contrast, and
   the terminal is where the operator reads all day.
 - **HSL.** Its lightness is not perceived lightness, so a yellow and a blue tint of one shade
@@ -247,7 +247,7 @@ Rejected:
 
 ## A Local file git would carry decides nothing
 
-Added by charter-app#308. Everything above lets `charter.local.toml` hold `[extensions]` and
+Added by purlis#308. Everything above lets `charter.local.toml` hold `[extensions]` and
 `[theme]` (and, by ADR 0050, `[harness_plugins]`) on one condition: the file stays on this
 machine. That is the file's own rule — an ignored file must not change plane policy with no trace
 in git — and the profiles loader has enforced it since ADR 0022 with one check,
@@ -262,7 +262,7 @@ every table in it.
 
 **One way in.** Every reader of the two files reads them through
 `charter_core::settings::layer_text(root, which)`, which hands a Local file the check refuses to
-no reader — `LayerText::LeftOut`, carrying the check's sentence (charter-app#319, below); `extension::project::Choices::read`, `theme::Said::read` and
+no reader — `LayerText::LeftOut`, carrying the check's sentence (purlis#319, below); `extension::project::Choices::read`, `theme::Said::read` and
 `harness_plugin::Choices::read` each call it, and so does every `read_in` through them. #308 was
 three readers that each read the file themselves and so each forgot the check, so a test
 (`crates/purlis-core/tests/the_local_layer_has_one_reader.rs`) fails on production code that
@@ -271,16 +271,16 @@ plane's own save settings (ADR 0051) are the next — goes through `layer_text` 
 red.
 
 **What the tab shows.** The Project settings tab's Local section still shows the file, as a form
-and as raw TOML, because that is where it is mended. Its standing refusals (_"charter does not take
+and as raw TOML, because that is where it is mended. Its standing refusals (_"purlis does not take
 this from the file as it stands:"_) carry the check's own sentence, which names the file and the
-fix: _"git would commit charter.local.toml, so charter reads nothing in it until it is ignored —
-charter reinit adds /charter.local.toml to .gitignore."_, or, for a tracked file, the same with
+fix: _"git would commit charter.local.toml, so purlis reads nothing in it until it is ignored —
+purlis reinit adds /charter.local.toml to .gitignore."_, or, for a tracked file, the same with
 `git rm --cached` first. The sentence is the profiles loader's, widened from "the profiles in it
-are refused" to "charter reads nothing in it", so `charter harness list`, `charter doctor` and the
+are refused" to "purlis reads nothing in it", so `purlis harness list`, `purlis doctor` and the
 tab say one thing about one state. Each extension, theme and plugin in the tab says which layer
 decided it, and none says Local.
 
-**And every group that shows what is in force says why** (charter-app#319). A value set in Local
+**And every group that shows what is in force says why** (purlis#319). A value set in Local
 and not applied would otherwise read "decided by charter.toml" with no reason beside it — worst in
 Workspace settings, which has no Local section. So each reader keeps the check's sentence with
 what it read (`Choices::local_left_out`, `theme::Said::local_left_out`), each answer the settings
@@ -296,7 +296,7 @@ that holds only profiles does not put the sentence in five groups that had nothi
 
 **The cost** is one `git status` of one path per read, and only when the file exists; a plane with
 no `charter.local.toml` runs no git. Rejected: caching the answer, since a file is ignored or
-committed by an edit outside charter and a stale pass is the bug this closes.
+committed by an edit outside purlis and a stale pass is the bug this closes.
 
 ## Where each consumer asks
 
@@ -344,7 +344,7 @@ rule it is an exception to says an ignored file must not change plane policy wit
 git. Turning an approved extension on or off for oneself is not plane policy: it changes nothing
 a teammate's clone does, and it cannot reach past this machine's approval. That holds only while
 the file stays on this machine, which is why a Local file git would carry is not read at all
-(charter-app#308, above).
+(purlis#308, above).
 
 ## What was rejected
 
@@ -352,7 +352,7 @@ the file stays on this machine, which is why a Local file git would carry is not
 - **A second list of extensions per project.** An extension is installed and approved per
   machine; a project that could name a directory to load one from would be a plane bringing an
   extension with it.
-- **Choosing a theme per project** was out of scope when this was first written; charter-app#273
+- **Choosing a theme per project** was out of scope when this was first written; purlis#273
   added it, above, on the same precedence.
 - **Resolving in each consumer.** Four consumers with four copies of the order would drift; one
   function answers, and a precedence matrix in its tests pins it

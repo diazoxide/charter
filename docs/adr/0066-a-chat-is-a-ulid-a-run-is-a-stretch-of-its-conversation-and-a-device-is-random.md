@@ -5,7 +5,7 @@ operator's ruling V1 (phase-2 critique, accepted 2026-09-30). It
 lands before FD-9's event log and AU-1's audit schema, and both build on it.
 
 Today a chat's identity is a `u32`. `Sessions` deals it, and `reopen.json`'s `dealt` makes sure
-it is never dealt twice (charter-app#90). That holds only **in one plane, on one machine**.
+it is never dealt twice (purlis#90). That holds only **in one plane, on one machine**.
 Four things lean on the number as if it held everywhere:
 
 - **Session records** commit `chat: 7` to the plane's git (`sessionrecord::render`). They
@@ -39,7 +39,7 @@ machine that created the chat. The origin device is a fact about the chat, not p
 contained a device would carry a stale device once RR-4 moves the chat.
 
 **The `u32` stays, as the chat's display number** (`steward 3`). It keeps doing everything it
-does today on this machine: `$CHARTER_CHAT` and `$CHARTER_SESSION_ID`, the hook token map, the
+does today on this machine: `$PURLIS_CHAT` and `$PURLIS_SESSION_ID`, the hook token map, the
 per-chat files under `.charter/sessions/<n>.*`, the `chat-<n>/` handback directory, the
 `<chat>.saved` relay marker. `dealt` still guarantees that no number is dealt twice in a plane.
 
@@ -51,11 +51,11 @@ session record's frontmatter, lineage, events, audit entries and OTel. A number 
 is a label next to the id, never a key.
 
 **Who mints it.** The host deals the number and mints the id in the same step. Today that is
-the app's `Sessions`, and after FD-5 it is `charterd`. A chat charter only observes (FD-19's
-vendor-cloud "remote chats", W8) gets an id when charter first lists it.
+the app's `Sessions`, and after FD-5 it is `purlisd`. A chat purlis only observes (FD-19's
+vendor-cloud "remote chats", W8) gets an id when purlis first lists it.
 
 **No new environment variable.** A process inside a chat asks the app's record for its chat's id
-by number, the way `reopen::conversation_of` answers its conversation today. `charter session
+by number, the way `reopen::conversation_of` answers its conversation today. `purlis session
 record` already reads the record that way. A second answer in the environment would be one more
 place for the two to disagree.
 
@@ -91,7 +91,7 @@ learns from a hook, the process exit or its own action. None is read from output
 | `reopen` | the app relaunches the chat and resumes its conversation (`reopen.json`'s `resume`) |
 | `wake` | a hibernated chat is resumed (SC-4) |
 | `fresh` | the chat is started again without its conversation: the harness could not find it (`lostOnResume`), or a workspace rename dropped it (`renamed_from`) |
-| `switch` | an attribute changes while the chat carries on: another harness or profile (FR-28's "continue on"), a model a hook reports, a persona adopted mid-chat (the adopting command tells the host on the hook channel, as `charter session record` does; today it only writes `.charter/sessions/<n>.persona`), or a sandbox backend turned on or off |
+| `switch` | an attribute changes while the chat carries on: another harness or profile (FR-28's "continue on"), a model a hook reports, a persona adopted mid-chat (the adopting command tells the host on the hook channel, as `purlis session record` does; today it only writes `.charter/sessions/<n>.persona`), or a sandbox backend turned on or off |
 
 Two things that look like causes are not:
 
@@ -132,7 +132,7 @@ child of the top-level run, until a harness reports nesting itself.
 
 | Link | Set when | Held on |
 |---|---|---|
-| `handed_from` | a handoff opens this chat (charter-app#258) | the new chat |
+| `handed_from` | a handoff opens this chat (purlis#258) | the new chat |
 | `resumed_from` | **Resume** starts this chat from a session record (ADR 0064) | the new chat, taken from the record's `chat-id` |
 | `forked_from` | a race (N1) or a fork starts this chat from another | the new chat |
 | `moved_from` | RR-4 moves a chat between devices | the chat on its new device |
@@ -150,7 +150,7 @@ so the link still resolves once the report is gone or is read somewhere else.
 
 **Each device gets a device id: a ULID minted at the first launch that finds none, and kept in
 the machine store** (`machine.rs`, `$CHARTER_CONFIG_HOME/charter/machine.json`). A device is any
-machine charter runs on: a desktop, a runner (V9) or, later, a viewer. Each has its own machine
+machine purlis runs on: a desktop, a runner (V9) or, later, a viewer. Each has its own machine
 store and so its own id.
 
 **It is random, not derived from the device key.** AU-3's key rotates, and a rotation must not
@@ -172,7 +172,7 @@ stored, so it cannot disagree with its parts. A git identity may be shown next t
 never as part of it. **Agents act as `agent:<persona>/<run>`** (`none` for a chat with no
 persona) on behalf of the local principal.
 
-**What "never leaves the machine without an account" means.** Charter never sends the principal,
+**What "never leaves the machine without an account" means.** purlis never sends the principal,
 or the device id, to any service by itself. The principal is written only to machine-tier stores:
 the event log and the audit chain, in the app data directory. It is never written into a plane.
 **The device id does go into the plane**, in session records and, after FD-25, in the names of
@@ -199,7 +199,7 @@ only for the chat whose token it carries, and FD-6 generalises it.
 | Field | Meaning |
 |---|---|
 | `device_id` | the device whose host wrote the event |
-| `seq` | that device's sequence number: a `u64`, starting at 1, one higher for each event, and never reused. It is assigned by the single writer on the device (the app today, `charterd` after FD-5). A `charter` command reaches that writer through the hook channel and never numbers an event itself |
+| `seq` | that device's sequence number: a `u64`, starting at 1, one higher for each event, and never reused. It is assigned by the single writer on the device (the app today, `purlisd` after FD-5). A `purlis` command reaches that writer through the hook channel and never numbers an event itself |
 | `ulid` | the event's own id, unique everywhere. Its time part is the event's time, so there is no separate timestamp field |
 | `chat` | the chat the event is about. It is set on every event about a chat, including those with no run, such as the chat being created or closed |
 | `run` | the run the event is about, or `null` for an event about the chat as a whole |
@@ -217,7 +217,7 @@ for that device. The host sends every later event in order, then keeps the strea
 older than what the host still keeps gets a fresh snapshot and a marker saying events were
 missed, never a silent gap. With more than one device (a runner, later the relay), the cursor is a
 map from device id to `seq`. The session protocol (V7, LV-2a) carries the call. FD-24 states the
-retention and holds the acceptance test: kill `charterd` mid-turn, and a client that resubscribes
+retention and holds the acceptance test: kill `purlisd` mid-turn, and a client that resubscribes
 from its cursor misses nothing and duplicates nothing. The event log is machine state, in the app
 data directory, never in a plane.
 
@@ -233,10 +233,10 @@ a crash between an event and its audit entry can be found (P5-05).
 | `charter.run.parent_id` | a child run's spans | its `parent_run` |
 | `charter.event.id` | a span or log record derived from an event | the event's `ulid` |
 | `host.id` | resource | the device id, in OTel's own attribute for a unique host id |
-| `gen_ai.conversation.id` | GenAI spans | the harness's conversation id, **only where the harness supplied one**. The GenAI conventions say never to make one up, so a charter id never goes here |
+| `gen_ai.conversation.id` | GenAI spans | the harness's conversation id, **only where the harness supplied one**. The GenAI conventions say never to make one up, so a purlis id never goes here |
 
 **The local principal is never an OTel attribute.** `enduser.id` is not set. An OTel exporter
-sends to a collector outside charter's control, and ruling V1 keeps the principal on the machine.
+sends to a collector outside purlis's control, and ruling V1 keeps the principal on the machine.
 OTel carries the run instead, and the audit chain carries whose behalf the run acted on. The
 display number is not exported either, following the rule above.
 
@@ -265,7 +265,7 @@ tickets after it, change:
 | `handedFrom.ts` | Draws the same sentence. The link it names is followed by id wherever a parent is looked up, and never by name |
 | `sessionrecord.rs`: `ChatFacts` and `render` | The frontmatter gains `chat-id`, `device` (the chat's origin device, so the pair is V1's "ULID plus its origin device"), `run` (the run that wrote the record), `handed-from` and `resumed-from`, each always written, as `unknown` or `none` when not known. `ChatFacts` reads them from `reopen.json`, as it reads `conversation`. `chat:` stays as the display number. The record never gains a principal or a hostname |
 | `machine.rs`: "Five things, and nothing else" | Gains the device id, with its creation time. ADR 0034 is amended (above). Where the store refuses (not unix, ADR 0031), there is no device id: chats still get ids, and `device` reads `unknown` |
-| `hookwire.rs` and the per-chat token (#535) | **No change to the line.** A hook still carries the chat number and that chat's token, and nothing more. The host maps the number to the chat's id and current run in its own memory, and decides run boundaries from the facts it already reads (`SessionStart` source, the conversation it adopts or follows, `agent_id`). A hook never names a run. It cannot know one, because its environment was fixed at the `exec` and a run can change after it. So a chat also cannot claim another run as its own. FD-6 re-keys the token map on the chat id when `charterd` holds several planes' chats |
+| `hookwire.rs` and the per-chat token (#535) | **No change to the line.** A hook still carries the chat number and that chat's token, and nothing more. The host maps the number to the chat's id and current run in its own memory, and decides run boundaries from the facts it already reads (`SessionStart` source, the conversation it adopts or follows, `agent_id`). A hook never names a run. It cannot know one, because its environment was fixed at the `exec` and a run can change after it. So a chat also cannot claim another run as its own. FD-6 re-keys the token map on the chat id when `purlisd` holds several planes' chats |
 | `dispatch::host` and the `<host>` logs | Unchanged here. FD-25 re-keys per-host logs on the device id, with the hostname as a label, and migrates them through FR-9. The save branch's `<host>` is a name the operator reads and stays one |
 | `state.rs` | Unchanged here. FD-23 gives runs their states, and derives the chat's from them |
 
@@ -311,7 +311,7 @@ tickets after it, change:
 - **Using the harness's conversation id as the chat's or the run's id.** It moves on `/clear`,
   Codex and opencode name it only in the first turn, a nested harness can report someone else's,
   and it belongs to a vendor. The OTel conventions forbid inventing one, and this is the mirror
-  rule: charter does not borrow one either.
+  rule: purlis does not borrow one either.
 - **Deriving the device id from the device key.** The key rotates, and the id must not. It would
   also make FD-25 wait for AU-3.
 - **The OS user, the git email or the hostname as the principal.** Each is shared, changes, or
@@ -328,8 +328,8 @@ The three calls that went beyond the words of V1 were each ruled yes:
 
 1. **`chat` is in the envelope**, beside V1's seven fields: chat-level events have no run.
 2. **The device id is committed in session records** as a random pseudonym; the principal never
-   is. "Never leaves the machine" means charter never sends it to a service.
-3. **A mid-chat persona adoption or model switch starts a new run**, and `charter persona use`
+   is. "Never leaves the machine" means purlis never sends it to a service.
+3. **A mid-chat persona adoption or model switch starts a new run**, and `purlis persona use`
    tells the host on the hook channel.
 
 ## ADR 0066, amended
@@ -390,7 +390,7 @@ New ids are therefore also minted when:
 
 - the project moves to another machine;
 - the machine store is reset, which mints a new device id;
-- a different `CHARTER_CONFIG_HOME` opens the same project (a dev or isolated build).
+- a different `PURLIS_CONFIG_HOME` opens the same project (a dev or isolated build).
 
 Each of those starts the chats a new history under new ids. None of them merges two.
 

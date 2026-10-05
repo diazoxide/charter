@@ -13,4 +13,4 @@
 
 - [ ] Every commit is signed off (`Signed-off-by`, `git commit -s`), per the DCO in CONTRIBUTING.md (not needed when a maintainer opens the pull request).
 - [ ] What CI runs passes locally (README.md, "Develop").
-- [ ] A changelog fragment, `changes/<slug>.md` (see `changes/README.md`), if people using charter would notice. CHANGELOG.md itself is not edited.
+- [ ] A changelog fragment, `changes/<slug>.md` (see `changes/README.md`), if people using purlis would notice. CHANGELOG.md itself is not edited.

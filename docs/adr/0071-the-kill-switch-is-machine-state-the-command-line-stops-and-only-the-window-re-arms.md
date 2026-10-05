@@ -4,16 +4,16 @@
 (charter#639) from the `/code-review` of charter#747. It amends
 [ADR 0034](0034-charter-keeps-a-little-state-outside-every-plane.md).
 
-The kill switch stops every chat and shell charter started, in every project and every window,
+The kill switch stops every chat and shell purlis started, in every project and every window,
 and starts no chat until the operator re-arms it. It is thrown from two places: **Stop all** on
-the title bar, and `charter stop --all` in any terminal. The second works with no app running,
+the title bar, and `purlis stop --all` in any terminal. The second works with no app running,
 and must reach an app that is running. The stop has to outlive a quit, too: a relaunch puts back
 every chat its record names, so a stop that ended with the process would undo itself at the next
 launch.
 
 ## The decision
 
-**The switch is two files in charter's config directory** (`$CHARTER_CONFIG_HOME`, else
+**The switch is two files in purlis's config directory** (`$PURLIS_CONFIG_HOME`, else
 `$XDG_CONFIG_HOME`, else `~/.config`, then `charter/`), beside `machine.json`:
 
 - `halted`, an empty file whose existence means stopped;
@@ -24,13 +24,13 @@ launch.
 A marker removed by hand therefore re-arms nothing.
 
 **The command line stops, and never re-arms.** Any agent can run a command, so a command that
-lets agents start again would put a human's power in every agent's hands. `charter stop --all`
+lets agents start again would put a human's power in every agent's hands. `purlis stop --all`
 exits non-zero, and says agents were NOT stopped, when it cannot write the stop.
 
 **Only the window re-arms.** The window's control is the one caller of `halt::rearm`, and a
 re-arm writes its journal line or does not happen.
 
-**While the app runs, the switch in its memory is the authority.** It watches charter's
+**While the app runs, the switch in its memory is the authority.** It watches purlis's
 directory (`notify`, non-recursive, filtered to the switch's two files). A stop that appears on
 disk stops the app and ends every session. A marker that disappears while stopped is written
 back and journaled as a `tamper`; it never re-arms. The re-arm and the watch take one lock, so
@@ -69,12 +69,12 @@ Both files belong to the operator's user. A process running as that user can edi
 forge a re-arm in the journal and remove the marker while no app is running, and the next launch
 believes it. While the app runs, its memory holds, and a removed marker is put back and
 journaled. Protecting the switch from the agents it stops needs the switch held somewhere no
-chat can write: the chat host of ADR 0068, with the chat sandbox denying charter's config
+chat can write: the chat host of ADR 0068, with the chat sandbox denying purlis's config
 directory (V16). That is follow-up work, not this record's.
 
 ## Not in scope
 
-Headless agents, triggered chats, and chats a `charterd` hosts are OV-2. Revoking tokens on
+Headless agents, triggered chats, and chats a `purlisd` hosts are OV-2. Revoking tokens on
 a stop is OV-4. A policy that throws the switch is OV-5.
 
 ## Ruled (V22, 2026-09-30)

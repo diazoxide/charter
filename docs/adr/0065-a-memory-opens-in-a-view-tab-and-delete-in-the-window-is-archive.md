@@ -54,7 +54,7 @@ is one.
 **Q9. Create is a `+` in each memory section's heading** — the workspace's Memory section, a
 persona's tab, the shared list. It opens a new memory tab in edit mode, and Save writes through
 the existing `remember` write (`memstore::write`), so a memory made in the window is exactly the
-file `charter … remember` would have made.
+file `purlis … remember` would have made.
 
 **Q10. The lists refresh on the trigger Todos refreshes on.** A save is checked against the file
 as it was when the tab opened it; when the file has changed since, the save is refused and the
@@ -78,7 +78,7 @@ before the code, as every change to the plane is.
 
 It is reached three ways, by one function each (`memstore::edit`, through
 `Workspace::edit_memory` and `Persona::edit_memory`): the window (SI-9b's Tauri command), and the
-command line for parity — `charter workspace edit <slug>` and `charter persona edit-memory <name>
+command line for parity — `purlis workspace edit <slug>` and `purlis persona edit-memory <name>
 <slug> [--shared]`, each taking `--title` and the body as an argument or, as `-`, from standard
 input.
 
@@ -91,7 +91,7 @@ back; a deleted one is in git history only.
 
 Archive and unarchive are core operations too (`memstore::archive_one`, `memstore::unarchive`,
 through `archive_memory` and `unarchive_memory` on `Workspace` and `Persona`), with command-line
-verbs for parity: `charter workspace archive|unarchive <slug>` and `charter persona
+verbs for parity: `purlis workspace archive|unarchive <slug>` and `purlis persona
 archive-memory|unarchive-memory <name> <slug> [--shared]`. Both are safe to repeat: archiving a
 memory already in `archive/` and unarchiving one already back change nothing and succeed, and a
 slug in neither place is an error that names it. An archive that has to number the file (a
@@ -152,7 +152,7 @@ What building the tab settled, inside the rulings above rather than beside them:
   land; a double-click on the preview tab keeps it (`tab.keep:<id>`, also in the palette), as
   VS Code's does. A row's own double-click keeps too (`actions.toKeep`), which is what a list
   that stays on screen — SI-9c's, in the side region — uses. `tab.keep` is not on the tab's
-  menu, which is held to five rows a tab at fifty tabs (charter-app#174).
+  menu, which is held to five rows a tab at fifty tabs (purlis#174).
 - **A row that runs a catalogue row opens no card, and carries no native tooltip**, whichever
   list draws it: a persona's row and a session's already opened a tab and had no card, and a
   memory's now does too. Its detail, where it has one, is what the search reads. A row with a
@@ -172,7 +172,7 @@ What building the tab settled, inside the rulings above rather than beside them:
 
 ## As built (SI-9c)
 
-- **The workspace's Memory section is a panel of charter's own at order 15**, between Todos
+- **The workspace's Memory section is a panel of purlis's own at order 15**, between Todos
   (10) and Personas (20), produced by `panels::of` beside the todos, so it is read again on
   exactly the trigger they are (Q10). The shared store's list is the built-in view
   `shared-memory`, and the Personas panel's "shared" row — keyed `_shared`, which no persona
@@ -213,15 +213,15 @@ Two loose ends SI-9d left, each reproduced by a test before its fix:
   to its last append, as remember does since SI-9d. In a stress run beside an edit's retitles,
   about one repair in four had to relink a line the retitle had dropped.
 - **Which files the index lists is read by the leading link**, the rule a retitle and a drop use.
-  `listed` had kept charter's pattern over the whole file, so a title that mentioned `(b.md)`
+  `listed` had kept purlis's pattern over the whole file, so a title that mentioned `(b.md)`
   listed `b.md`, and unarchiving `b` appended no line for it. A line of another shape is still
-  read by charter's pattern, and so is the leading link itself, so `- [docs](https://…)` lists
+  read by purlis's pattern, and so is the leading link itself, so `- [docs](https://…)` lists
   nothing.
 
 ## As reviewed (SI-9f)
 
 The last index append that kept neither rule, reproduced by a test before its fix: a pre-v2
 workspace's legacy `notes.md` line (`remember` and `scaffold_memory`, through one function). It
-is appended when `listed` does not list `notes.md` — charter's `(notes.md)` anywhere in the text
+is appended when `listed` does not list `notes.md` — purlis's `(notes.md)` anywhere in the text
 took a title mentioning it for the memo's line — and under the store's lock, released before
 `write` takes it again.

@@ -5,7 +5,7 @@ core. Five of its choices sit against rules written elsewhere in this repo, and 
 re-proposed by whoever picks up the next milestone. They are written down here, together,
 because most of them share one reason.
 
-**Charter shells out to the git binary and gives it an environment charter constructed
+**purlis shells out to the git binary and gives it an environment purlis constructed
 rather than one it inherited; it records nothing of its own about a worktree; it confines
 every worktree operation to one workspace rather than to the plane; it ships worktrees that
 carry no harness layer; and it keeps M1.4's differential comparing trees, with the
@@ -19,7 +19,7 @@ The alternatives are libgit2 through `git2`, and gitoxide. Neither is chosen.
 gitlink files pointing both ways, a `prunable` state for a tree whose directory went away,
 and a locking protocol between concurrent `add`s. The binary is the definition of that
 behaviour. libgit2 reimplements it and diverges in the corners that matter here — which is
-the wrong kind of difference to discover from a bug report about a worktree charter created
+the wrong kind of difference to discover from a bug report about a worktree purlis created
 and git cannot see. Gitoxide has no `worktree add` at all.
 
 Priority 1 is development experience, and `git2` costs a C toolchain on every machine and in
@@ -54,11 +54,11 @@ PWNED
 ```
 
 `git worktree add` runs `post-checkout`; `merge` runs `post-merge`; `publish` runs
-`pre-push`. Charter's own binary runs **from a hook**, where an attacker-set environment is
+`pre-push`. purlis's own binary runs **from a hook**, where an attacker-set environment is
 the ordinary case rather than an exotic one. So this is arbitrary code execution as the
-operator, reached through an environment charter never looked at.
+operator, reached through an environment purlis never looked at.
 
-**Subtracting a denylist cannot work, so charter builds the child's environment instead.**
+**Subtracting a denylist cannot work, so purlis builds the child's environment instead.**
 
 The first fix here was Python's: take everything `git rev-parse --local-env-vars` prints, add
 the three `GIT_CONFIG*` names, and hold the list to git with a test. That is right about the
@@ -71,7 +71,7 @@ the **redirection** surface — where git looks for a repository. It is not a de
   `git-remote-https` planted there ran on `git -C r push origin main`.
 - `GIT_TRACE`, and the whole `GIT_TRACE2*` family, take a path and append to it — arbitrary
   file append as the operator, on *every* verb including the read-only ones, to a path outside
-  the plane that charter never constructs and no containment check ever sees.
+  the plane that purlis never constructs and no containment check ever sees.
 - `GIT_SSH_COMMAND`, `GIT_SSH`, `GIT_ASKPASS`, `SSH_ASKPASS` and `GIT_PROXY_COMMAND` each name
   a program git runs. `GIT_TERMINAL_PROMPT=0` closes the terminal prompt and not the askpass
   helper.
@@ -79,8 +79,8 @@ the **redirection** surface — where git looks for a repository. It is not a de
 
 Enumerating that is a list that is wrong the next time git is released, which is the thing
 this ADR already refuses to keep. So the child's environment is **constructed, not inherited**:
-charter builds it from the few variables git needs to work (`HOME`, `PATH` pinned to a
-resolved absolute git, the locale, and the credential-helper variables charter's own auth
+purlis builds it from the few variables git needs to work (`HOME`, `PATH` pinned to a
+resolved absolute git, the locale, and the credential-helper variables purlis's own auth
 design requires), and nothing else is passed through. A variable git grows next year is absent
 by default rather than present until someone notices.
 
@@ -91,20 +91,20 @@ rather than a redirection. But it is the check on the fix, not the fix.
 ## Nothing records a worktree except git
 
 Python charter's `worktree.py` opens with the rule and the reason: *"Git is the only registry.
-Nothing here writes state."* A worktree made by hand with plain git is visible to charter, and
-one removed by hand cannot leave charter reporting a tree that is not there. The alternative
+Nothing here writes state."* A worktree made by hand with plain git is visible to purlis, and
+one removed by hand cannot leave purlis reporting a tree that is not there. The alternative
 is a marker that can disagree with reality, and this project has been bitten by that shape
 before.
 
 Python then breaks its own rule in one place: it records `claimed` / `done` / `abandoned` per
-piece so that `charter wt history` can show pieces that no longer exist. The Rust core does
+piece so that `purlis wt history` can show pieces that no longer exist. The Rust core does
 not carry that. History is a genuine want, but it is a plane-format write, and a plane-format
 write needs its own differential test and its own entry in `docs/plane-format.md`. Riding it
 in on a milestone about worktrees is how a second registry gets created by accident.
 
 **Amended 2026-09-26 (charter#368): the Rust core now carries it, on the terms above.** The
 log was already in `docs/plane-format.md`, and the briefing and the footer already read it;
-what was missing was a writer, so every piece read as silent. `charter worktree add` appends
+what was missing was a writer, so every piece read as silent. `purlis worktree add` appends
 `claimed`, and `done` and `abandon` append the worker's declaration. The line is Python's
 `pieces.record` byte for byte, which `pieces::tests::a_recorded_line_is_the_one_pythons_pieces_record_wrote`
 holds. It is still not a registry: which pieces exist is asked of git every time, and the log
@@ -127,12 +127,12 @@ it.
 
 Three things about that key are **not** free, and the design document says what is done about
 each. A config key can hold more than one value, and `git config --get` then returns the last
-one with exit 0 and no warning — so charter reads with `--get-all` and treats more than one
+one with exit 0 and no warning — so purlis reads with `--get-all` and treats more than one
 value as a refusal, and writes with `--replace-all`. The *value* is a branch name, whose
 lifetime is its own: a base that is renamed or deleted leaves a record naming something that
 is no longer there, which `merge` must report rather than act on.
 
-And a worktree with no such key is **not** necessarily one charter did not cut. Python
+And a worktree with no such key is **not** necessarily one purlis did not cut. Python
 charter writes no `charterBase` at all, so throughout the cutover — when both implementations
 drive one plane, which decisions 14 to 17 arrange for deliberately — every Python-cut worktree
 lacks it. The honest reading of an absent key is "the base was not recorded", and the honest
@@ -142,11 +142,11 @@ is foreign.
 ## A worktree operation is confined to one workspace, not to the plane
 
 `contain::writable` asks whether a resolved path lands inside the plane's data directories:
-`personas/`, `workspaces/`, `.charter/persona-state`. For everything charter has written so
+`personas/`, `workspaces/`, `.charter/persona-state`. For everything purlis has written so
 far that is the right question. For this feature it is not sufficient, and the gap is a
 deletion.
 
-`git worktree remove` resolves symlinks in its argument, and git — not charter — does the
+`git worktree remove` resolves symlinks in its argument, and git — not purlis — does the
 removing. Measured:
 
 ```console
@@ -164,7 +164,7 @@ passed too — they ran against B's tree, which was clean, so "nothing to lose" 
 wrong tree.
 
 This is the failure shape M1.1's five review rounds kept finding, one notch sideways: not a
-gate one level shallower than the write, but a gate on the name charter built while the write
+gate one level shallower than the write, but a gate on the name purlis built while the write
 lands on what the kernel resolves it to. So worktree paths get a stricter boundary than the
 plane's data directories — the workspace's own worktree root — and the path handed to git is
 resolved, link-free and absolute before git sees it. The design document states, per path,
@@ -174,23 +174,23 @@ which check runs.
 asking whether the resolved path starts with the resolved root — is vacuous exactly when it
 matters: point `workspaces/<ws>/.worktrees` at somewhere else and the root resolves there too,
 so every path under it "starts with" it and passes. The anchor is therefore
-`workspaces/<ws>`, which charter created and which the plane's own gate already covers, and
+`workspaces/<ws>`, which purlis created and which the plane's own gate already covers, and
 `.worktrees` itself is required to be link-free rather than followed. A check whose reference
 point the attack can relocate is not a check.
 
-## A worktree charter cuts carries no harness layer, and says so
+## A worktree purlis cuts carries no harness layer, and says so
 
 This is the accepted gap, and it is a guard hole, so it is stated plainly rather than left to
 be discovered.
 
 Python charter writes a *guest layer* into every tree it owns, including every piece:
-`workspace.wire_guest` materialises the harness plugin, `$CHARTER_HARNESS`, the persona's
+`workspace.wire_guest` materialises the harness plugin, `$PURLIS_HARNESS`, the persona's
 agents and the plane's ask/deny rules, and hides them through a managed block in
-`.git/info/exclude`. A session started in a tree without it runs without them. Charter #951 is
+`.git/info/exclude`. A session started in a tree without it runs without them. purlis #951 is
 the bug report for exactly this, from when pieces were missed.
 
 The Rust core does not port that in M1.4. It is a four-hundred-line subsystem with its own
-ownership model — which paths charter may claim, which are co-written, what happens when the
+ownership model — which paths purlis may claim, which are co-written, what happens when the
 block cannot be written — and folding it into this milestone would put it in the same review
 as the containment work, where neither gets read properly.
 
@@ -201,28 +201,28 @@ The choice made is to ship the feature with the gap named at every point an oper
 meet it, rather than to hold M1.4 behind a subsystem port — and to record that this is a debt
 against decision 14 and not a reading of it that makes the debt disappear.
 
-The bounds are three, and each reads the world rather than remembering what charter did, so
+The bounds are three, and each reads the world rather than remembering what purlis did, so
 each stops firing on its own when the layer is ported:
 
-- **`charter wt add` prints a warning** naming what the new tree does not have. This is the
+- **`purlis wt add` prints a warning** naming what the new tree does not have. This is the
   path with no UI in it: a person cuts a piece in a terminal, `cd`s in and runs a harness, and
   nothing else in this list would ever be shown to them. It matters more because the verb is
-  spelled the same as Python's, and Python's `charter wt add` wires the layer before it prints
+  spelled the same as Python's, and Python's `purlis wt add` wires the layer before it prints
   `enter: cd <path> && claude`. Same command, same operator, opposite guarantee, decided by
   which binary is first on `PATH`.
 - **A chat's row reads `unwired`** when the worktree has no harness layer. Derived from the
   tree, so a worktree Python cut reads as wired and one that *becomes* wired later stops
-  showing the label with no code to delete. The marker is not taken at face value: charter's
+  showing the label with no code to delete. The marker is not taken at face value: purlis's
   own is per-checkout and untracked, so a **tracked** `.charter-generated` is content some
-  cloned repository committed and is not charter's word about anything — `workspace.py:2176`
+  cloned repository committed and is not purlis's word about anything — `workspace.py:2176`
   already treats it that way, and so does this.
 - **A persona cannot be attached to a chat in an unwired worktree.** A persona whose agents
   and vault rules are silently absent is worse than no persona: the operator believes a
-  charter is loaded and it is not.
+  purlis is loaded and it is not.
 
 What the bounds do **not** cover is stated too: an ordinary chat with no persona still runs in
 a tree with none of the plane's ask/deny rules, and the label is passive. And the repair
-available today — `charter reinit`, which writes the layer — is the Python implementation,
+available today — `purlis reinit`, which writes the layer — is the Python implementation,
 which decision 17 has frozen. A milestone the spec calls "daily driver on macOS, on Rust
 alone" has one gap whose only closing move is the implementation being retired. That is the
 debt, stated at its full size.
@@ -255,10 +255,10 @@ a divergence is ported the harness says "drop the note" rather than quietly agre
 So M1.4's differential stays a tree comparison. The two deliberate divergences — the guest
 layer and the piece history — become `ignore` entries carrying their reason, `.git/**` becomes
 one more with the reason that a git repository does not compare byte for byte against itself
-(reflog entries take the real clock, which `--now` does not pin, because charter shells out to
+(reflog entries take the real clock, which `--now` does not pin, because purlis shells out to
 git), and the escape sentinel and the directory set are kept. The scenarios cover `remove`,
 `merge` and `publish` as well as `add`, because those are the destructive ones and decision 15
-says every ported module, not every ported verb charter found convenient.
+says every ported module, not every ported verb purlis found convenient.
 
 ## What this rules out
 
@@ -269,9 +269,9 @@ says every ported module, not every ported verb charter found convenient.
   record means the worktree is foreign.
 - Gating a worktree path against the plane when the write lands in a workspace, or anchoring
   that gate on a path the attack can relocate.
-- Naming a branch to git as a bare string. Every ref charter passes is fully qualified
+- Naming a branch to git as a bare string. Every ref purlis passes is fully qualified
   (`refs/heads/<branch>`): a branch legally named `@` makes `git merge --ff-only @` resolve
-  HEAD instead, print "Already up to date" and exit 0 — a merge charter would report as
+  HEAD instead, print "Already up to date" and exit 0 — a merge purlis would report as
   successful that landed nothing.
 - A silent unwired worktree: if a warning, the label or the persona refusal is removed, the
   layer is ported first.
@@ -293,7 +293,7 @@ for git to run (#810). Blanking those programs with `-c` lost a race to a config
 read that starts no git process has no such race (dispatcher decision D-88f;
 `charter_core::files::status` and `files::Root`).
 
-**The read runs in a short-lived, bounded child of charter's own binary** (D-88h). It is the app's
+**The read runs in a short-lived, bounded child of purlis's own binary** (D-88h). It is the app's
 executable started again, answering one question; it starts no git and no shell. The child has a
 cleared environment (only `HOME` and `XDG_CONFIG_HOME`, for the operator's own git config). It stops
 itself past the runner's 30-second deadline and past a 1 GiB resident-memory cap, which it checks on

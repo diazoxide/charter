@@ -1,11 +1,11 @@
 # An extension is granted capabilities, one at a time
 
-**Accepted 2026-09-25**, from the operator's grill of the same day (charter-app#336). The first
-change under it is charter-app#338.
+**Accepted 2026-09-25**, from the operator's grill of the same day (purlis#336). The first
+change under it is purlis#338.
 
-charter has an extension runtime (ADR 0041, ADR 0043, ADR 0048). Today an extension can add a
+purlis has an extension runtime (ADR 0041, ADR 0043, ADR 0048). Today an extension can add a
 theme, a side panel, or a view. A view's program is asked one question per click and answers
-with blocks charter draws, and those blocks cannot be acted on. The operator chose to give
+with blocks purlis draws, and those blocks cannot be acted on. The operator chose to give
 extensions their full set of capabilities first, and to build the extensions after that. The
 other option was to start with read-only extensions. This record fixes how every capability is
 added, so each one reads like the last. It follows ADR 0041's threat model as its **2026-09-23
@@ -14,8 +14,8 @@ amendment** states it: stage 2 exists and the gate items are met. **That amendme
 
 ## The decision
 
-**A capability is something charter does for an extension that asked for it and was
-approved.** It describes charter's conduct. It is never a limit on what the extension can do.
+**A capability is something purlis does for an extension that asked for it and was
+approved.** It describes purlis's conduct. It is never a limit on what the extension can do.
 An extension still runs as the operator, and `RUNS_AS_YOU` stays true.
 
 **The manifest names its capabilities.** `charter-extension.json` has a top-level
@@ -27,26 +27,26 @@ each, in the core's words (`Capability::asks`). The dialog and the Extensions li
 that one list.
 
 **An unknown word refuses the whole manifest.** The refusal is a sentence naming the word.
-charter never loads the rest. If it did, the operator would have approved the extension for less
-than it asked for, and the same extension would behave differently on a charter that knows the
+purlis never loads the rest. If it did, the operator would have approved the extension for less
+than it asked for, and the same extension would behave differently on a purlis that knows the
 word. A manifest with no `capabilities` asks for none, and loads exactly as it did before the
 list existed. Its fingerprint is unchanged.
 
 **`version` is the protocol the extension speaks.** Until now it was the manifest format's
-version. It was also the same number as the executor's request protocol (`"charter": 1`), and
+version. It was also the same number as the executor's request protocol (`"purlis": 1`), and
 from here on that is the only thing it means. The protocol goes up once for each capability that
-changes what a request or an answer holds. charter keeps answering every version up to its own,
+changes what a request or an answer holds. purlis keeps answering every version up to its own,
 and asks each extension in the version its manifest names. The first capability that bumps it also
 makes the executor ask in the declared version, and hashes the declared version into the
-fingerprint in place of the executor's own. charter-app#341 did both (see its amendment below).
+fingerprint in place of the executor's own. purlis#341 did both (see its amendment below).
 A capability that needs a later protocol is refused in a manifest that names an earlier one.
 
-**Protocol 2 holds three request kinds.** charter-app#341 made it with *run action*.
-charter-app#343 added two more while it was still unreleased, rather than bumping to 3: an event
+**Protocol 2 holds three request kinds.** purlis#341 made it with *run action*.
+purlis#343 added two more while it was still unreleased, rather than bumping to 3: an event
 request carries `event` (and `workspace`, `from` where the event has them) and is answered
-`{"charter": 2}` or an `error`; a briefing request carries `briefing` (`workspace`, `persona`)
+`{"purlis": 2}` or an `error`; a briefing request carries `briefing` (`workspace`, `persona`)
 and is answered with `section`, a string. Both carry `writes` like every protocol-2 request, and
-charter watches the plane while each is answered. `events` and `briefing` need protocol 2.
+purlis watches the plane while each is answered. `events` and `briefing` need protocol 2.
 
 **The vocabulary grows one capability per change.** Each change adds the capability to
 `crates/purlis-core/src/extension/capability.rs`. The same change adds it to the
@@ -64,13 +64,13 @@ the second would be a yes to nothing.
 
 **The vocabulary so far:**
 
-| Word | What charter does | Its shape, under `contributes` | Change |
+| Word | What purlis does | Its shape, under `contributes` | Change |
 |---|---|---|---|
-| `probe` | nothing (test builds only) | none | charter-app#338 |
-| `badges` | draws values from the facts file as badges in the status bar and the terminal footer | `badges`: `id`, `label`, `surfaces` (`status-bar`, `footer`), `fresh_seconds` | charter-app#340 |
-| `repo-columns` | draws values from the facts file as extra columns in the repo table | `repo-columns`: `id`, `title`, `fresh_seconds` | charter-app#340 |
-| `events` | asks the program one question after each core action it hears has finished; a fork carries the folder it keeps in each workspace (protocol 2) | `events`: `hears` (`workspace-focused`, `workspace-created`, `workspace-forked`, `workspace-removed`, `handoff-created`, `session-started`, `plane-saved`), `workspace_folder` | charter-app#343 |
-| `briefing` | adds text to every chat's first message, quoted as data under the extension's name (protocol 2) | `briefing`: `title` | charter-app#343 |
+| `probe` | nothing (test builds only) | none | purlis#338 |
+| `badges` | draws values from the facts file as badges in the status bar and the terminal footer | `badges`: `id`, `label`, `surfaces` (`status-bar`, `footer`), `fresh_seconds` | purlis#340 |
+| `repo-columns` | draws values from the facts file as extra columns in the repo table | `repo-columns`: `id`, `title`, `fresh_seconds` | purlis#340 |
+| `events` | asks the program one question after each core action it hears has finished; a fork carries the folder it keeps in each workspace (protocol 2) | `events`: `hears` (`workspace-focused`, `workspace-created`, `workspace-forked`, `workspace-removed`, `handoff-created`, `session-started`, `plane-saved`), `workspace_folder` | purlis#343 |
+| `briefing` | adds text to every chat's first message, quoted as data under the extension's name (protocol 2) | `briefing`: `title` | purlis#343 |
 
 ### Process life
 
@@ -82,13 +82,13 @@ the repo cells read the facts file.
 
 ### The facts file
 
-**The facts file is a JSON file in the extension's state directory, and charter reads it
+**The facts file is a JSON file in the extension's state directory, and purlis reads it
 without starting the extension.** It has a size cap, and each field has a declared freshness.
-It supplies values only for fields the manifest declared. charter reports undeclared fields, and
+It supplies values only for fields the manifest declared. purlis reports undeclared fields, and
 they contribute nothing. The extension rewrites the file whenever it is asked a question or sent
 an event. One reader in the core serves the status bar, the terminal footer and the repo table.
 
-As built in charter-app#340: the file is `<state>/facts.json`, at most 64 KiB, and holds
+As built in purlis#340: the file is `<state>/facts.json`, at most 64 KiB, and holds
 `{"badges": {"<id>": {"value", "at"}}, "repo-columns": {"<id>": {"<repo>": {"value", "at"}}}}`,
 where `at` is Unix seconds. A manifest that declares a badge or a column must name a state
 directory. The reader (`extension::facts::gather`) asks the record, then the manifest, then the
@@ -105,10 +105,10 @@ confinement. ADR 0041 already ruled out a sandbox.
 
 ### Naming
 
-**An extension's CLI commands run as `charter <extension-id> <command> …`**, and an extension's
+**An extension's CLI commands run as `purlis <extension-id> <command> …`**, and an extension's
 id may never be a core command word. The registry refuses one that is. A core word that forwards
-to an extension, such as `charter ws todo` once todos moves, is core code. Palette commands carry
-the extension's name. "Plugin" alone always means a harness's plugin, never charter's own
+to an extension, such as `purlis ws todo` once todos moves, is core code. Palette commands carry
+the extension's name. "Plugin" alone always means a harness's plugin, never purlis's own
 extension (ADR 0041, `CONTEXT.md`).
 
 ### What no capability grants
@@ -135,7 +135,7 @@ a plane's instructions or the session-start briefing depend on moves into an ext
 Windows executor exists. Personas and vaults stay core permanently. Todos moves only after the
 capabilities it needs exist, extensions run on Windows, and todos has had its own grill.
 
-## Amended 2026-09-25: palette commands, actions and writes (charter-app#341)
+## Amended 2026-09-25: palette commands, actions and writes (purlis#341)
 
 The first three real capabilities, built together because each needs the others to be useful.
 The approval prompt names each one and then lists what it declares, one line each.
@@ -146,18 +146,18 @@ The approval prompt names each one and then lists what it declares, one line eac
 - **`actions`** puts the extension's own actions on the rows of its views
   (`contributes.actions`: `id`, `title`, `confirm`, and optional `deletes`). An answered row
   names the actions it offers by id. The executor refuses an answer whose row names one the
-  manifest does not declare. The button's title and whether charter asks first come from the
+  manifest does not declare. The button's title and whether purlis asks first come from the
   manifest, never from the answer.
 - **`writes`** declares the plane paths the extension writes (`contributes.writes`:
   plane-relative globs, `*` and `?` within one segment). A path that starts with a pattern,
-  names anything hidden, or covers a file charter reads settings, grants or vaults from
+  names anything hidden, or covers a file purlis reads settings, grants or vaults from
   (`charter.toml`, `charter.local.toml`, `vaults.json`, a workspace's `workspace.json`) is
   refused at parse.
 
 **A capability's shape is under its own word, and is there exactly when the word is asked
 for.** A manifest with `contributes.actions` but no `actions` in its list is refused, and so is
 one that lists `actions` and declares none, empty list included. This is the pairing check
-charter-app#340 built (`Capability::has_shape`), and every shaped capability keeps it.
+purlis#340 built (`Capability::has_shape`), and every shaped capability keeps it.
 
 **The protocol is 2**, because an action is a second kind of request: *run action `<id>` on
 `<subject>`*, with the view and the row it was pressed on, and an answer that may carry the view's
@@ -169,11 +169,11 @@ persona statistics is asked the same bytes as before and keeps its approval: a t
 fingerprint. `actions` and `writes` need protocol 2, so a manifest that names version 1 and asks
 for either is refused. `palette` needs only 1.
 
-**Confirmation is charter's, and a delete always asks.** An action says whether charter asks
+**Confirmation is purlis's, and a delete always asks.** An action says whether purlis asks
 first (`confirm`, required). It also says whether it deletes (`deletes`, default false). An
 action that deletes is asked about whatever `confirm` says. The executor refuses to run an
 action that asks first without the operator's yes, so a window that forgot to ask gets a
-refusal, not a delete. **How charter knows an action deletes is that the manifest says so.** An
+refusal, not a delete. **How purlis knows an action deletes is that the manifest says so.** An
 extension that deletes without saying so skipped the question. The write report catches that
 case: a path deleted by any question except an action declared as deleting is reported, even
 inside the declared paths.
@@ -185,10 +185,10 @@ the answer or the refusal. It sees what git would commit. It does not see an ign
 write that keeps size and time, or a plane that is not a git repository. It cannot tell the
 extension's write from a chat's in the same moment, and the sentence says so.
 
-## Amended 2026-09-25: commands on the command line (charter-app#342)
+## Amended 2026-09-25: commands on the command line (purlis#342)
 
-- **`cli`** adds commands to the `charter` command line (`contributes.cli`: `name`, `title`,
-  and `writes`, which is required). They run as `charter <extension id> <name> <args…>`. A
+- **`cli`** adds commands to the `purlis` command line (`contributes.cli`: `name`, `title`,
+  and `writes`, which is required). They run as `purlis <extension id> <name> <args…>`. A
   command that writes needs the `writes` capability's declared paths, and the approval prompt
   lists it; one that only reads is not listed, beyond the capability's own line.
 - **It is protocol 2, not 3.** A command is one more request kind, *run command `<name>` with
@@ -196,14 +196,14 @@ extension's write from a chat's in the same moment, and the sentence says so.
   while 2 was unreleased. Its answer is not a line of JSON: the program's stdout and stderr and
   its exit status are passed back to the caller unchanged, each bounded at 512 KiB and read to
   the end within the normal deadline. A program that is still running at the deadline, is
-  killed by a signal, or prints more is a refusal of charter's own, and none of its output is
+  killed by a signal, or prints more is a refusal of purlis's own, and none of its output is
   passed on. **The deadline is the executor's 5 seconds, unchanged.** "Process life is
-  unchanged" (charter-app#336). A command that needs longer, streams its output or reads the
+  unchanged" (purlis#336). A command that needs longer, streams its output or reads the
   caller's stdin is a change to process life, and it is its own decision, not a capability's.
-- **The naming rule above is enforced where the id is read.** An id that is one of charter's
+- **The naming rule above is enforced where the id is read.** An id that is one of purlis's
   own command words refuses the whole manifest, for every extension, so at install, at
   approval and at every later read. The list is `extension::cli::CORE_WORDS`. The core cannot
-  read the `charter` binary's parser, because the app approves extensions and does not link the
+  read the `purlis` binary's parser, because the app approves extensions and does not link the
   command line, so a test in the binary reads every word off the parser and fails for one the
   list is missing. The binary also asks its parser first, so a core word never reaches an
   extension whatever a record says.
@@ -211,15 +211,15 @@ extension's write from a chat's in the same moment, and the sentence says so.
   typed as, the extension and the command. It is in the core so that the tool guard reads an
   aliased call as the extension command it runs. None exists in a release build; a test build
   has two onto the probe, and a test proves an alias's output is byte for byte the direct
-  command's. `charter ws todo` has not moved.
+  command's. `purlis ws todo` has not moved.
 
 ## Considered options
 
 - **Read-only extensions first.** Rejected by the operator: the extensions worth building, todos
   among them, need to write, act and brief.
 - **Capabilities inferred from `contributes`.** Rejected. The list is what the operator reads
-  and what a charter that lacks a capability refuses by name. An inferred list would load a
-  manifest with a `contributes` key an older charter ignores, which is the half-load this record
+  and what a purlis that lacks a capability refuses by name. An inferred list would load a
+  manifest with a `contributes` key an older purlis ignores, which is the half-load this record
   refuses.
 - **A separate manifest version and protocol version.** Rejected. Both numbers change for the
   same reason, when a request or an answer gains a field, so two numbers would only drift apart.

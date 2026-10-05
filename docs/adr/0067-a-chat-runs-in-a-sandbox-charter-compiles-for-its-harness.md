@@ -1,16 +1,16 @@
-# A chat runs in a sandbox charter compiles for its harness, and it shows when one does not
+# A chat runs in a sandbox purlis compiles for its harness, and it shows when one does not
 
 **Accepted 2026-09-30** by the operator (ruling V21; program map SD-1; rulings Q10, C9, W8, V16
 and X18). It re-opens [ADR 0028](0028-containment-checks-a-path-and-does-not-hold-it.md), whose
 own re-opening clause this decision triggers.
 
-## Where charter is today
+## Where purlis is today
 
-Chat isolation is whatever each harness does by default, and charter does not add to it or make
+Chat isolation is whatever each harness does by default, and purlis does not add to it or make
 it the same across harnesses (gap G1 in the security review). A Claude Code chat runs as the
-operator, with charter's hooks and nothing else. A Codex chat runs under Codex's own default
-sandbox, and charter passes it no sandbox setting on purpose: the test
-`a_codex_chat_is_handed_no_approval_or_sandbox_setting` stops charter from loosening it. An
+operator, with purlis's hooks and nothing else. A Codex chat runs under Codex's own default
+sandbox, and purlis passes it no sandbox setting on purpose: the test
+`a_codex_chat_is_handed_no_approval_or_sandbox_setting` stops purlis from loosening it. An
 opencode chat is not confined at all. Egress is open wherever the harness leaves it open, and a
 secret goes to whatever process the model names (gap G2).
 
@@ -24,18 +24,18 @@ it: *"The day a sandbox lands … for any subprocess charter starts."* This ADR 
 
 ## The decision
 
-**Every chat charter starts in a new plane runs sandboxed. The policy is one harness-agnostic
-schema, and charter compiles it into each harness's own mechanism. If the sandbox cannot be
+**Every chat purlis starts in a new plane runs sandboxed. The policy is one harness-agnostic
+schema, and purlis compiles it into each harness's own mechanism. If the sandbox cannot be
 applied, the chat does not start. The operator can turn it off for one chat, and that chat's tab
 shows it for as long as the chat lives. Every opt-out is audited.**
 
 ### 1. On by default for new planes, and it fails closed
 
-- A plane that charter creates after this ships records `sandbox = "on"` in its committed
+- A plane that purlis creates after this ships records `sandbox = "on"` in its committed
   settings. Turning the sandbox on is a restriction, so a plane may carry it (ADR 0035: *"a plane
   can restrict, never grant"*). **A plane can never carry `off`.** A committed file cannot
   loosen what a chat is confined to, just as it cannot pre-approve a permission.
-- An existing plane keeps running as it does today. The first time charter opens it after the
+- An existing plane keeps running as it does today. The first time purlis opens it after the
   upgrade, a notice offers to turn the sandbox on, and nothing flips on its own (see open
   question 1).
 - **`failIfUnavailable` is the only mode.** If this machine cannot apply the compiled policy (no
@@ -58,11 +58,11 @@ egress = ["model-providers", "forge", "toolchains"]   # named presets (section 3
 # denied: the classes in section 5, which no plane can remove
 ```
 
-| Harness | What charter compiles the policy into |
+| Harness | What purlis compiles the policy into |
 |---|---|
-| Claude Code | The `--settings` blob charter already passes gets a `sandbox` object: enabled, `allowUnsandboxedCommands: false`, `failIfUnavailable: true`, filesystem read and write rules, and `network.allowedDomains` from the egress presets. `--settings` sits above project settings, and project settings cannot turn filesystem isolation off. |
-| Codex | **Charter's own wrap, as for opencode** (#1123, amended 2026-10-04): charter runs the whole of Codex inside the Seatbelt profile it writes, with Codex's own sandbox off inside it (`--sandbox danger-full-access`, last among its flags) under ruling V21 4, because macOS applies one Seatbelt profile to a process and Codex's own could not be applied inside charter's (measured: every command failed). The rest of this row is what charter compiled before #1123, and no chat starts with it. *Before #1123:* held back (ruling V87f); Codex's own workspace-write, set explicitly rather than inherited: a permissions profile that extends `:workspace`, selected with `default_permissions`, which holds the denied paths, and Codex's own network proxy (`--enable network_proxy`) holding egress to the presets. *Amended 2026-09-30 (SD-2 slice 2):* this row first said `-s workspace-write`. On codex-cli 0.147.0 any `-s` switches Codex to its legacy sandbox mode, which reads no permissions profile, so the denied paths and the proxy's allowlist would be dropped. The profile is the only form that carries them, and a `-s` in a chat's own words refuses the chat. The test that forbids Codex sandbox arguments is rewritten so it forbids only *looser* values: charter may tighten Codex's sandbox and still may never loosen it. |
-| opencode | opencode has no sandbox of its own, so charter generates a Seatbelt profile (macOS) or a bubblewrap invocation (Linux) and starts opencode inside it. The profile is generated by charter's Rust core: charter does not ship `sandbox-runtime` (no language mixing in the shipped app), which stays available as a test oracle. |
+| Claude Code | The `--settings` blob purlis already passes gets a `sandbox` object: enabled, `allowUnsandboxedCommands: false`, `failIfUnavailable: true`, filesystem read and write rules, and `network.allowedDomains` from the egress presets. `--settings` sits above project settings, and project settings cannot turn filesystem isolation off. |
+| Codex | **purlis's own wrap, as for opencode** (#1123, amended 2026-10-04): purlis runs the whole of Codex inside the Seatbelt profile it writes, with Codex's own sandbox off inside it (`--sandbox danger-full-access`, last among its flags) under ruling V21 4, because macOS applies one Seatbelt profile to a process and Codex's own could not be applied inside purlis's (measured: every command failed). The rest of this row is what purlis compiled before #1123, and no chat starts with it. *Before #1123:* held back (ruling V87f); Codex's own workspace-write, set explicitly rather than inherited: a permissions profile that extends `:workspace`, selected with `default_permissions`, which holds the denied paths, and Codex's own network proxy (`--enable network_proxy`) holding egress to the presets. *Amended 2026-09-30 (SD-2 slice 2):* this row first said `-s workspace-write`. On codex-cli 0.147.0 any `-s` switches Codex to its legacy sandbox mode, which reads no permissions profile, so the denied paths and the proxy's allowlist would be dropped. The profile is the only form that carries them, and a `-s` in a chat's own words refuses the chat. The test that forbids Codex sandbox arguments is rewritten so it forbids only *looser* values: purlis may tighten Codex's sandbox and still may never loosen it. |
+| opencode | opencode has no sandbox of its own, so purlis generates a Seatbelt profile (macOS) or a bubblewrap invocation (Linux) and starts opencode inside it. The profile is generated by purlis's Rust core: purlis does not ship `sandbox-runtime` (no language mixing in the shipped app), which stays available as a test oracle. |
 
 *Amended 2026-10-03 (rulings V73 and V73a, SD-2 slice 3):* opencode runs whole inside the
 profile, so it can write more than the chat's worktree and per-chat temp directory that
@@ -78,7 +78,7 @@ directory: its credentials file can name a remote config that starts servers, an
 snapshot repositories are directories git is later run in. So the config and cache stay
 read-only, the credentials files are never written, no snapshot is written (a wrapped chat
 is started with opencode's snapshots off), and no link is made where a later opencode
-writes. Charter makes opencode's own directories before the wrap, and a chat may neither make
+writes. purlis makes opencode's own directories before the wrap, and a chat may neither make
 nor move one, so none is moved out, changed and moved back. Every denial class in section 5 still wins over these grants. The Linux wrap is
 #1040.
 
@@ -89,16 +89,16 @@ the chat's window instead, never dropped in silence. Moving opencode's hooks out
 is #1069.
 
 *Amended 2026-10-04 (#1123, D-88q):* Codex runs whole inside the same profile, with a Codex
-home of the project's own (`CODEX_HOME`, under charter's data home, one per project), never
+home of the project's own (`CODEX_HOME`, under purlis's data home, one per project), never
 the operator's `~/.codex`, which the profile neither reads nor writes (only Codex's installed
 program in it is read, to run it). The reason is measured: Codex keeps state every thread
 shares and a resume hands the model (each thread's goals, its queue, the threads' table, the
 sessions), so a chat that could write the operator's home could plant instructions in a thread
-the operator later resumes outside any sandbox. Charter seeds the project's home before the
+the operator later resumes outside any sandbox. purlis seeds the project's home before the
 wrap with the operator's login (copied when the project's is missing or older) and a config
 it writes itself, which marks the chat's folder and every folder above it untrusted and trusts
-exactly the hooks charter arms (D-88r: Codex's own trust records, keyed and hashed as Codex
-keys and hashes them, so charter's hooks run and no other hook is trusted). What a
+exactly the hooks purlis arms (D-88r: Codex's own trust records, keyed and hashed as Codex
+keys and hashes them, so purlis's hooks run and no other hook is trusted). What a
 turn writes in that home is granted, as V73 and V73a grant opencode's (measured: a turn stops
 without its locks and installation id): the threads' state, sessions (a folder for each day),
 history, shell snapshots, writer locks, log, installation id and a refreshed login, and its
@@ -106,7 +106,7 @@ memories, goals and queue (*amended by D-88s*: Codex's interactive screen opens 
 write at every start and does not start without them, measured; D-88q had refused them).
 Never written: its config, skills, plugins and helper links. No link
 is made in it, and no folder but a day's sessions; a folder can still be moved in under a
-date-shaped name, since Seatbelt does not tell a rename from a create, so charter takes every
+date-shaped name, since Seatbelt does not tell a rename from a create, so purlis takes every
 link and every folder that is not a day's out of the home's folders before each start. One
 sandboxed Codex chat can still influence what a later sandboxed Codex chat of the same project
 loads (its memories, goals and queue, sessions, shell snapshots and history), inside the
@@ -116,13 +116,13 @@ profile refuses the keychain's service. The Linux wrap is #1040 for both harness
 
 **The compile is total, or the chat is wrapped.** Every denial class in section 5 must hold for
 every harness. When a harness's native sandbox cannot express a class (for example, a read-deny
-that its write-only confinement cannot state), charter wraps the harness in its own generated
+that its write-only confinement cannot state), purlis wraps the harness in its own generated
 profile as well. Where both apply, the stricter answer wins. A harness that has neither route on
 this machine fails closed, as in section 1.
 
-**A `charter` command that a chat runs is part of that chat.** It inherits the chat's sandbox and
+**A `purlis` command that a chat runs is part of that chat.** It inherits the chat's sandbox and
 its denials. Anything that needs to reach past them (resolving a secret, writing the audit,
-recording a session outcome) is asked of `charterd` over its socket and is never done from
+recording a session outcome) is asked of `purlisd` over its socket and is never done from
 inside the chat. Each compiled profile allows the chat to connect to that socket and nothing more.
 
 ### 3. Egress is named presets, and anything unlisted is a visible exception
@@ -137,26 +137,26 @@ inside the chat. Each compiled profile allows the chat to connect to that socket
   If the operator allows it, that is an audited exception for that chat, not a change to the
   plane's policy.
 - Enforcement uses the harness's own proxy where it has one. For a harness without one, the
-  generated profile allows network traffic only to charter's local egress proxy. That same proxy
+  generated profile allows network traffic only to purlis's local egress proxy. That same proxy
   is the long-term home of gap G2's broker, where a secret is released only to the hosts it is
   bound to.
 
-### 4. Charter never writes a vendor's managed tier. It only adds stricter overlays (W8, SD-32)
+### 4. purlis never writes a vendor's managed tier. It only adds stricter overlays (W8, SD-32)
 
-- Charter **never writes** a harness's managed or admin tier: the files, profiles and registry
+- purlis **never writes** a harness's managed or admin tier: the files, profiles and registry
   keys an organisation's MDM owns. Those belong to the customer's administrators.
-- Charter **reads** the effective managed policy and shows each value it fixes as "locked by
+- purlis **reads** the effective managed policy and shows each value it fixes as "locked by
   <vendor> admin" in the chat's sandbox view.
-- Charter's compiled policy is an **overlay**. It may tighten what the managed tier allows and it
-  may never loosen it. Where the managed tier is stricter, it wins, and charter shows that it did.
-  Where the managed tier forbids an overlay charter needs for a denial class, the chat is wrapped
+- purlis's compiled policy is an **overlay**. It may tighten what the managed tier allows and it
+  may never loosen it. Where the managed tier is stricter, it wins, and purlis shows that it did.
+  Where the managed tier forbids an overlay purlis needs for a denial class, the chat is wrapped
   (section 2) or fails closed. It never runs with that class missing.
 - C9's layers (MDM profile, Windows policy key, `/etc/charter/policy.json`, server org policy)
-  compile into charter's own overlay, with the strictest value winning. SD-14 **exports** org
+  compile into purlis's own overlay, with the strictest value winning. SD-14 **exports** org
   policy as each harness's native managed artifact, for the customer to push through their own
-  MDM. Charter exports that artifact and does not install it.
-- **The claim charter makes is exactly this:** *enforced for agents charter launches; for the
-  whole fleet, charter exports each harness's managed settings.* Nothing in the product, the docs
+  MDM. purlis exports that artifact and does not install it.
+- **The claim purlis makes is exactly this:** *enforced for agents purlis launches; for the
+  whole fleet, purlis exports each harness's managed settings.* Nothing in the product, the docs
   or the trust page may claim more.
 
 ### 5. What a chat's sandbox always denies (V16)
@@ -166,22 +166,22 @@ each class has its own test. No plane, persona or preset can remove one. Only th
 opt-out in section 7 lifts them, and the audit records when it does.
 
 1. **Chats never read a vault directly.** Every vault provider's storage, whether a plane file,
-   a keyring item or a provider's local session, is denied to the chat. `charterd` resolves a
+   a keyring item or a provider's local session, is denied to the chat. `purlisd` resolves a
    secret and hands it to the command it runs, so the approval gate that V15 sets (SD-37..SD-39)
    is enforced rather than advisory (SD-9). The `PreToolUse` guard stays, because it can explain
    a refusal and the sandbox cannot (gap G13).
-2. **Charter's integrity state is denied to chats:** the audit directory and the device key, and
-   every chat's hook spool but its own. `charterd` is the only writer of the first two. A chat's
+2. **purlis's integrity state is denied to chats:** the audit directory and the device key, and
+   every chat's hook spool but its own. `purlisd` is the only writer of the first two. A chat's
    hooks may append only to that chat's own spool, never to another chat's, and the host verifies
    and seals each spool as it drains it ([ADR 0068](0068-a-chat-lives-in-charterd-and-the-app-is-its-client.md)
    §6, corrected 2026-09-30 by ruling V22). A chat that could change them could change the record
    of what it did.
 3. **Human powers are unreachable from a chat.** The credentials behind the terminal,
-   fleet-MCP and approval client scopes are unreadable inside the sandbox. `charterd` also
+   fleet-MCP and approval client scopes are unreadable inside the sandbox. `purlisd` also
    refuses those scopes to any connection from a chat's process tree, so an agent can never
    answer its own asks or approve its own secret requests (V16a).
-4. **On a runner, the chat is also denied `charterd`'s install files and the git internals
-   `charterd` operates on** (RR-5, V16d). A runner chat is sandboxed by default, and V19 makes
+4. **On a runner, the chat is also denied `purlisd`'s install files and the git internals
+   `purlisd` operates on** (RR-5, V16d). A runner chat is sandboxed by default, and V19 makes
    this a blocker for the first runner slice.
 5. **A chat never writes what a program run later, outside any sandbox, loads** (added
    2026-10-03, rulings V73b and V73d). At any depth of every directory it may write, its own
@@ -211,14 +211,14 @@ opt-out in section 7 lifts them, and the audit records when it does.
 - **`charter.toml` must be readable.** A `charter.toml` that cannot be read starts no chat: it
   may say `[sandbox]`, so it never reads as "not set". That covers one that is not a regular
   file (a link, dangling or not, a FIFO, a device, a socket or a directory), one larger than
-  charter reads, and such an entry above a chat on every path a chat starts by.
+  purlis reads, and such an entry above a chat on every path a chat starts by.
 - **Folders between a chat's own and a denied path.** Each is held as an entry, so it is never
   moved away with the denied path inside it and replaced. The chat's own folder and its temp
-  folder are held too, in charter's own compiled sandbox.
+  folder are held too, in purlis's own compiled sandbox.
 - **A sandboxed project refused Codex until #1123.** Codex's own sandbox resolves its paths
   again at every command, so a running chat, or another chat that can write above its folder,
   could move what the compiled profile names, and no class held (measured). *Amended
-  2026-10-04 (#1123):* Codex now runs inside charter's own compiled sandbox, as opencode does,
+  2026-10-04 (#1123):* Codex now runs inside purlis's own compiled sandbox, as opencode does,
   and holds every class there, the later-code class at any depth included (measured live: a
   folder holding a protected name moved aside, changed and moved back; the temp folder and the
   chat's folder swapped for a link; each refused). Codex's own sandbox is off inside it
@@ -232,7 +232,7 @@ opt-out in section 7 lifts them, and the audit records when it does.
   sandboxed chat of the same project loads, inside the wrap, never an unsandboxed run's Codex
   state. Files a chat writes in its own folder
   (an instruction file, a skills folder) are read by a later Codex started there, unsandboxed
-  too, as for every harness. On Linux, where charter cannot
+  too, as for every harness. On Linux, where purlis cannot
   wrap it yet (#1040), a sandboxed project still starts Codex only on a person's audited
   opt-out.
 - **The program is the harness, and lies where no chat writes** (ruling V87g, widened by
@@ -255,12 +255,12 @@ opt-out in section 7 lifts them, and the audit records when it does.
   (D-88j). A word over 4 KiB is refused outright, so the check stays fast.
   - **The word check is a lint, not the boundary** (D-88k). It catches a profile that hands
     its program a chat-writable file by mistake. For opencode and Codex the boundary is
-    charter's own wrap around the whole harness. Claude Code is not wrapped: Seatbelt cannot
-    apply Claude Code's own sandbox inside charter's (measured: every command failed with
+    purlis's own wrap around the whole harness. Claude Code is not wrapped: Seatbelt cannot
+    apply Claude Code's own sandbox inside purlis's (measured: every command failed with
     `sandbox_apply: Operation not permitted`), and turning it off inside the wrap is a ruling
     not yet made (#1150). Encodings the check does not read stay a residual for Claude Code
     until then.
-  - **The probe runs inside charter's wrap** (D-88k, #1123): on macOS, the `--version` probe
+  - **The probe runs inside purlis's wrap** (D-88k, #1123): on macOS, the `--version` probe
     runs under a profile that lets it write nothing but a temp folder of its own and reach no
     network, so a command that loads a file a chat wrote gets nothing out of it. The Linux
     probe is not wrapped yet (#1040).
@@ -276,7 +276,7 @@ opt-out in section 7 lifts them, and the audit records when it does.
     builds the path of a script in the project, and a program outside those places that itself
     reads and runs a file a chat can write, one it is not handed as a word (by its own logic, its
     environment or a config it reads).
-- **`charter.local.toml`** joins the later-code names: charter reads it outside any sandbox at
+- **`charter.local.toml`** joins the later-code names: purlis reads it outside any sandbox at
   every start.
 
 *Amended 2026-10-04 (#1057):* class 5 names each harness's project config by file, and the
@@ -300,13 +300,13 @@ Checked and left out of the class:
 harness's sandbox keeps a chat off the operating system's credential store, which is a service,
 not a path, so a sandboxed project with a keyring vault started no chat at all.
 
-- **macOS (V90a).** Every keyring item charter writes is held to charter's app: only the app's
-  own binary reads it without the person's confirmation, and any other program, the `charter`
+- **macOS (V90a).** Every keyring item purlis writes is held to purlis's app: only the app's
+  own binary reads it without the person's confirmation, and any other program, the `purlis`
   command and every program a chat runs included, is refused or makes the system ask the person
   (ADR 0047 as amended). The class is then held for every harness, so a Claude Code chat
   starts, whose own sandbox lets a command reach the service (measured live: from inside it, an
   item was refused to every program but the one it is held to).
-- **Charter's own wrap (V90b)** denies the service as well, so Codex and opencode cannot reach it
+- **purlis's own wrap (V90b)** denies the service as well, so Codex and opencode cannot reach it
   at all (measured). Neither needs it for its own login: both keep it in a file.
 - **Linux (V90c).** The Secret Service answers any process of the session, and no harness's
   sandbox has been measured keeping a chat off the session bus, so a Claude Code chat there is
@@ -314,8 +314,8 @@ not a path, so a sandboxed project with a keyring vault started no chat at all.
   from the new-chat picker (§7), or to move those secrets to a plain-file or 1Password vault,
   which the sandbox can keep from a chat. A resumed or relaunched chat has no opt-out, so moving
   them is its way on. Codex and opencode wait for the Linux wrap (#1040).
-- **Existing items (V90d)** are written again, held, the next time charter reads them; one the
-  `charter` command made is moved by the command, since only an item's maker can delete it.
+- **Existing items (V90d)** are written again, held, the next time purlis reads them; one the
+  `purlis` command made is moved by the command, since only an item's maker can delete it.
   Until then an item keeps the access it had.
 
 ### 6. External enforcement backends are an option, and never the default (SD-33)
@@ -329,7 +329,7 @@ express a class, the chat is wrapped or fails closed, as in section 2.
 ### 7. The opt-out is per chat, visible and audited
 
 - **Only a human can turn the sandbox off, and only for one chat:** from the window, or from
-  `charter` on a human client scope. A chat cannot ask for it on its own behalf and succeed,
+  `purlis` on a human client scope. A chat cannot ask for it on its own behalf and succeed,
   because the opt-out goes through the same scopes V16a keeps out of a chat's reach. An opt-out
   is never inherited by a new chat, a resumed chat, a workspace or a plane.
 - **The tab shows it for the chat's whole life** (SD-3): every tab carries a sandbox badge, and
@@ -340,7 +340,7 @@ express a class, the chat is wrapped or fails closed, as in section 2.
   chat, harness, persona and machine, the reason if one was typed, and which classes were
   lifted. `trust.sandbox.on` records it going back on. An unlisted-egress exception (section 3)
   is audited the same way. Until the audit chain (AU-1..AU-3) exists, these events go into the
-  chat's session record and charter's machine-state log (ADR 0034). AU-1 takes them over, and
+  chat's session record and purlis's machine-state log (ADR 0034). AU-1 takes them over, and
   none is dropped when it does.
 - The dogfood opt-out rate is SD-2's outcome bar: under 10% of chats, together with the false
   denials measured on SD-45's everyday corpus (V12).
@@ -348,14 +348,14 @@ express a class, the chat is wrapped or fails closed, as in section 2.
 ## ADR 0028, re-opened
 
 The condition ADR 0028 rested on is false for a sandboxed chat. That chat is a principal less
-privileged than charter. It can write inside its worktree, and charter reads and writes paths
+privileged than purlis. It can write inside its worktree, and purlis reads and writes paths
 there by name. So the check-then-open race that ADR 0028 measured (a quarter of reads through
-`contain::readable` with a racer present) becomes a way for a confined chat to get charter to do
+`contain::readable` with a racer present) becomes a way for a confined chat to get purlis to do
 what the chat itself cannot. ADR 0028 kept the fix and its order, and both still hold: the
 `openat`-beneath-a-descriptor rewrite of the whole core, done in one piece, with the external
 review decision 16 requires, and never one call site at a time. What changes is its standing.
-**It is no longer optional, and until it lands, charter does not call the sandbox a boundary
-against charter itself.** `SECURITY.md` and the sandbox view state that residual, in those terms,
+**It is no longer optional, and until it lands, purlis does not call the sandbox a boundary
+against purlis itself.** `SECURITY.md` and the sandbox view state that residual, in those terms,
 from the release SD-2 ships in. Open question 2 asks whether SD-2 waits for the rewrite.
 
 ADR 0041's extensions are not covered by this decision. An extension is still a subprocess with
@@ -367,7 +367,7 @@ no OS sandbox, by the ruling of 2026-09-22. Sandboxing extensions would be a sep
   class.
 - Running a chat unsandboxed because the sandbox was unavailable, without a person choosing that
   for that chat.
-- Writing any harness's managed tier, or claiming enforcement over agents charter did not start.
+- Writing any harness's managed tier, or claiming enforcement over agents purlis did not start.
 - A per-harness policy dialect. Each harness has one schema and one compiler.
 - Moving "chats never read a vault" back into the hook. The hook explains a refusal, and the
   sandbox is what enforces it.
@@ -381,8 +381,8 @@ no OS sandbox, by the ruling of 2026-09-22. Sandboxing extensions would be a sep
    its external review.
 3. **Windows keeps the default on** (ADR 0031): chats there start at the visible opt-out until a
    backend exists.
-4. **charter may turn Codex's own sandbox off only when its wrap is measured strictly stricter**;
-   otherwise Codex keeps its own. *Applied 2026-10-04 (#1123):* on macOS, inside charter's
+4. **purlis may turn Codex's own sandbox off only when its wrap is measured strictly stricter**;
+   otherwise Codex keeps its own. *Applied 2026-10-04 (#1123):* on macOS, inside purlis's
    wrap, where Codex's own cannot be applied at all.
 5. **A new plane's default egress** is `model-providers`, `forge` and `toolchains`.
 
@@ -392,15 +392,15 @@ The four questions SD-2's last slice (#1056) left open:
 
 1. **No new CLI word.** One chat opts out from the window's new-chat picker, "Start without the
    sandbox", with the reason the sandbox cannot be applied shown beside it. §7's "or from
-   `charter` on a human client scope" is not built: the picker is the one place an opt-out is
+   `purlis` on a human client scope" is not built: the picker is the one place an opt-out is
    made. A project's default stays `[sandbox] mode` in `charter.toml`.
 2. **Windows starts are audited.** Every start without the sandbox writes `trust.sandbox.off`,
-   the forced Windows ones (V21 3) included. For those, the actor is `charter (no backend on
+   the forced Windows ones (V21 3) included. For those, the actor is `purlis (no backend on
    this OS)`, a host actor (ADR 0075 §2), never the operator.
 3. **SD-30's install action types the distribution's install command into a shell tab at the
    project root, and does not run it.** Installing needs `sudo`. This is unlike FR-29's
    installers (V65), which one press runs.
-4. **The opt-out rate is a local count.** `charter doctor` and Project settings show it, and it
+4. **The opt-out rate is a local count.** `purlis doctor` and Project settings show it, and it
    is never sent anywhere.
 
 The offer to an existing project (§1, V21 1) is a notice in the project view, answered once

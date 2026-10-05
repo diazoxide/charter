@@ -1,6 +1,6 @@
 ### Changed
 
-- **New saves, landings and requests use purlis names on the forge.** Branches charter creates
+- **New saves, landings and requests use purlis names on the forge.** Branches purlis creates
   are now `purlis/…` (`purlis/save/<host>-<clone>`, `purlis/<workspace>/<sha>`, `purlis/<sha>`),
   agent commits carry `Purlis-Chat`, `Purlis-Persona` and `Purlis-Change` trailers, and pull
   request bodies carry the purlis markers. A save pull request still open from a `charter/…`

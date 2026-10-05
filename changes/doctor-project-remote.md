@@ -1,6 +1,6 @@
 ### Added
 
-- **The doctor says who can read what your project pushes.** `charter doctor`, and the full
+- **The doctor says who can read what your project pushes.** `purlis doctor`, and the full
   doctor in the app, have a `project remote` row: whether the project's `origin` is public,
   internal or private on GitHub or GitLab, and whether the forge's own push protection (GitHub's
   push protection, GitLab's secret push protection) is on. A public remote without it is a

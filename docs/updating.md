@@ -1,6 +1,6 @@
-# How charter updates itself, and the steps only the operator can take
+# How purlis updates itself, and the steps only the operator can take
 
-charter-app updates itself with Tauri's updater, from GitHub Releases, on one of two channels.
+purlis updates itself with Tauri's updater, from GitHub Releases, on one of two channels.
 The reasons are ADR 0042. This page is the part a person has to do by hand: create one
 environment, generate one keypair, store two secrets, create one release. Until they are done,
 nothing is published and the app offers no updates. Every error the release workflow prints points back to one of
@@ -15,18 +15,18 @@ updates fine (ADR 0042 §3, amended 2026-09-23).
 | **stable** (the default) | a `v*` tag, pushed by the operator | `releases/latest/download/latest.json` |
 | **dev** | any green `main` | `releases/download/dev/dev.json` |
 
-A machine switches with `charter update --channel dev` (or `stable`). The app checks a minute
+A machine switches with `purlis update --channel dev` (or `stable`). The app checks a minute
 after launch and every six hours after that. The week's first check reads the channel's weekly
-manifest instead, which is how charter counts weekly users without an identifier (below). It **installs only when asked**, because
-installing restarts charter and charter owns every running session.
+manifest instead, which is how purlis counts weekly users without an identifier (below). It **installs only when asked**, because
+installing restarts purlis and purlis owns every running session.
 
 On macOS and Linux an installed update waits in place, and the title bar says **Restart to
 update**. That writes down every chat and view tab each open project holds, ends the chats, and
 restarts into the new version, which asks whether to reopen every session or start fresh, says
 that it restarted to install an update, and has **Reopen all** as the answer in front. A chat
 that is mid-turn, or one that reports no state, is named first, and the operator chooses to
-restart now or wait. A charter started with `--no-restore` still puts its projects back after
-the restart. On Windows the installer closes charter itself when Install is pressed; charter
+restart now or wait. A purlis started with `--no-restore` still puts its projects back after
+the restart. On Windows the installer closes purlis itself when Install is pressed; purlis
 writes the same records just before it does, and the installer starts it again. Nothing names
 a mid-turn chat there first, and none of the Windows path has been run: nothing is ported to
 Windows yet.
@@ -47,12 +47,12 @@ sees a key. An on-demand `workflow_dispatch` build takes no environment at all: 
 nowhere and comes out unsigned for the updater.
 
 ```sh
-gh api -X PUT repos/diazoxide/charter/environments/release \
+gh api -X PUT repos/purlis/purlis/environments/release \
   -F 'deployment_branch_policy[protected_branches]=false' \
   -F 'deployment_branch_policy[custom_branch_policies]=true'
-gh api -X POST repos/diazoxide/charter/environments/release/deployment-branch-policies \
+gh api -X POST repos/purlis/purlis/environments/release/deployment-branch-policies \
   -f name=main -f type=branch
-gh api -X POST repos/diazoxide/charter/environments/release/deployment-branch-policies \
+gh api -X POST repos/purlis/purlis/environments/release/deployment-branch-policies \
   -f name='v*' -f type=tag
 ```
 
@@ -63,7 +63,7 @@ environment holds them, delete the repository copies:
 ```sh
 for s in TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD \
          APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY; do
-  gh secret delete "$s" --repo diazoxide/charter 2>/dev/null || true
+  gh secret delete "$s" --repo purlis/purlis 2>/dev/null || true
 done
 ```
 
@@ -87,14 +87,14 @@ npx tauri signer generate -w ~/.tauri/charter-updater.key
 #   (on a machine where npx hangs: node node_modules/@tauri-apps/cli/tauri.js signer generate -w ~/.tauri/charter-updater.key)
 #   Give it a password when asked.
 
-gh secret set TAURI_SIGNING_PRIVATE_KEY          --repo diazoxide/charter --env release < ~/.tauri/charter-updater.key
-gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD --repo diazoxide/charter --env release   # prompts; paste the password
+gh secret set TAURI_SIGNING_PRIVATE_KEY          --repo purlis/purlis --env release < ~/.tauri/charter-updater.key
+gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD --repo purlis/purlis --env release   # prompts; paste the password
 ```
 
 **Put the private key and its password in your password manager as well.** Every installed
-charter trusts this one key for good. If it is lost, no installed app can ever be updated again,
+purlis trusts this one key for good. If it is lost, no installed app can ever be updated again,
 and every operator has to reinstall by hand. If it leaks, whoever has it can sign an update every
-installed charter will accept. Do not rotate it casually: an app only trusts the key it was built
+installed purlis will accept. Do not rotate it casually: an app only trusts the key it was built
 with.
 
 ## 2. Commit the public half
@@ -135,9 +135,9 @@ certificate silently signs with something nobody chose.
 ```sh
 security find-identity -v -p codesigning    # copy the "Developer ID Application: … (TEAMID)" line
 
-base64 -i charter-devid.p12 | gh secret set APPLE_CERTIFICATE --repo diazoxide/charter --env release
-gh secret set APPLE_CERTIFICATE_PASSWORD --repo diazoxide/charter --env release       # the .p12 password
-gh secret set APPLE_SIGNING_IDENTITY --repo diazoxide/charter --env release \
+base64 -i charter-devid.p12 | gh secret set APPLE_CERTIFICATE --repo purlis/purlis --env release
+gh secret set APPLE_CERTIFICATE_PASSWORD --repo purlis/purlis --env release       # the .p12 password
+gh secret set APPLE_SIGNING_IDENTITY --repo purlis/purlis --env release \
   --body "Developer ID Application: Your Name (TEAMID)"
 ```
 
@@ -163,7 +163,7 @@ GitHub has no release without a tag, and nothing in CI creates a tag. So you cre
 dev channel hangs on, once:
 
 ```sh
-gh release create dev --repo diazoxide/charter --prerelease --target main \
+gh release create dev --repo purlis/purlis --prerelease --target main \
   --title "dev channel" --notes "The rolling dev channel. Not a release."
 ```
 
@@ -194,7 +194,7 @@ git tag vX.Y.Z && git push origin vX.Y.Z      # this, and only this, publishes a
 ```
 
 The `## [X.Y.Z]` section is the release: it becomes the GitHub release's body and the notes in
-`latest.json`, and About Charter in that build shows the same section out of the copy compiled
+`latest.json`, and About purlis in that build shows the same section out of the copy compiled
 into it. The release page puts **how to install** above it (`.github/release-install.md`, with the
 tag and version filled in), because the page is where a first install starts. Lead the section
 with a short paragraph saying what the release is, before `### Added`: that paragraph is the
@@ -223,8 +223,8 @@ xattr -dr com.apple.quarantine /Applications/purlis.app
 Quarantine is the flag Gatekeeper assesses. Remove it and there is nothing left to refuse.
 
 **With a Developer ID (step 3 done).** macOS 15 and later answer a quarantined, un-notarized
-app with **"charter" Not Opened**, which offers only *Done* and *Move to Trash*. Click *Done*,
-open **System Settings → Privacy & Security**, click **Open Anyway** beside charter, and
+app with **"purlis" Not Opened**, which offers only *Done* and *Move to Trash*. Click *Done*,
+open **System Settings → Privacy & Security**, click **Open Anyway** beside purlis, and
 confirm.
 
 **Ad-hoc signed (step 3 skipped).** Gatekeeper has no developer to check, so it refuses a
@@ -234,7 +234,7 @@ a separate, blunter *"is damaged and can't be opened"* wording it uses for apps 
 attribute to anyone. Use the `xattr` command and the question does not arise.
 
 **Updates do not meet any of this, ad-hoc included.** The quarantine flag comes from the
-program that downloaded the file, not from macOS itself. charter's updater downloads into
+program that downloaded the file, not from macOS itself. purlis's updater downloads into
 memory, verifies the minisign signature, unpacks the new bundle itself and renames it into
 place, so nothing it writes carries the flag. Measured on macOS 26.2 (Apple Silicon) against a
 replica of the updater's own install code, running inside an ad-hoc-signed app in
@@ -261,7 +261,7 @@ terminal does not, until they are put there:
 
 ## Counting weekly users, without an identifier
 
-charter estimates how many machines use it each week from a download count, and from nothing
+purlis estimates how many machines use it each week from a download count, and from nothing
 else (OB-17, ADR 0083 as amended for it). No install id, device id, hash or salt is sent, and
 nothing is stored about anyone.
 
@@ -283,24 +283,24 @@ install id would still send something that a log could join on. Here there is on
 GitHub can still connect one IP address's weekly fetch to that address's usual fetches. When the
 weekly file is missing, the fallback also makes two requests back to back.
 
-**Opting out.** Set `DO_NOT_TRACK=1` in the environment charter starts with, and it never reads
+**Opting out.** Set `DO_NOT_TRACK=1` in the environment purlis starts with, and it never reads
 the weekly file. The ordinary update check goes on. On macOS an app opened from the Dock or
 Finder does not see variables set in a shell profile. Run `launchctl setenv DO_NOT_TRACK 1`
-before opening charter, or start charter from a shell where the variable is set. A switch in
-charter's settings is tracked in #1185. Test builds and development builds make no
+before opening purlis, or start purlis from a shell where the variable is set. A switch in
+purlis's settings is tracked in #1185. Test builds and development builds make no
 checks at all. A machine that cannot keep the note is never counted, because otherwise it would
 be counted at every check: that means no config home, or a platform with no machine store.
 
 **What GitHub sees.** GitHub serves the files, so GitHub sees each request's IP address and
 user agent, as it does for every update check and download. That is GitHub's view, under
-GitHub's privacy statement. charter never receives an IP address: it reads only the per-asset
+GitHub's privacy statement. purlis never receives an IP address: it reads only the per-asset
 `download_count` that GitHub's releases API returns for every public repository.
 
 **The estimator.** A download count only grows, so the estimate is a difference. Take two
 listings a week apart:
 
 ```bash
-gh api --paginate repos/diazoxide/charter/releases > releases-2026-W41.json
+gh api --paginate repos/purlis/purlis/releases > releases-2026-W41.json
 cargo run -p release-manifest --bin weekly-users -- releases-2026-W41.json releases-2026-W40.json
 ```
 
@@ -309,7 +309,7 @@ installers, with the growth since the earlier listing for each. Weekly users per
 **the sum, over that channel's releases, of the growth of the weekly-manifest count**. The
 sum covers every release because stable's `latest/download` address hands the check to whichever
 release is newest at that moment. A count therefore belongs to the release that was newest
-then, not to the version the machine runs. Keep the listings yourself. charter publishes no
+then, not to the version the machine runs. Keep the listings yourself. purlis publishes no
 estimate; the raw count is public, as every asset's is.
 
 **Its biases:**
@@ -340,7 +340,7 @@ estimate; the raw count is public, as every asset's is.
 Nothing has to be installed into Claude Code or Codex. The bundle carries its own Claude Code
 plugin, `charter` (`Contents/Resources/plugin` on macOS, `/usr/lib/charter/plugin` on
 Linux), and each Claude Code chat the app starts loads it for that session alone with
-`--plugin-dir`: charter's hooks, its Bash guard, and the `handoff`, `working-in-a-clone`,
+`--plugin-dir`: purlis's hooks, its Bash guard, and the `handoff`, `working-in-a-clone`,
 `update`, `persona`, `secrets` and `browser` skills. The same chat turns the Python charter's
 `charter@charter` plugin off for itself, so a plane whose settings enable that plugin for your terminal sessions does not give
 an app chat two sets of hooks. A Codex chat is armed the same way with `-c` flags. A `claude`

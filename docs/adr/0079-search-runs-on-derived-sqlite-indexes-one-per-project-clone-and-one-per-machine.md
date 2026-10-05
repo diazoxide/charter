@@ -26,7 +26,7 @@ operator's rulings:
   only in the app data dir, with `.charter/` reserved for derived, rebuildable indexes (Q12)?"*
 - **V22a**, in part: *"one host per OS user per device serving every plane"*. **V22b**, in part:
   *"`$CHARTER_HOME` moves all clone state or none (#750)"*.
-- **V25a**, which defines charter's data home: *"`$CHARTER_DATA_HOME`, else
+- **V25a**, which defines purlis's data home: *"`$PURLIS_DATA_HOME`, else
   `$XDG_DATA_HOME/charter`, else the OS data dir's `charter/`"*.
 
 It also takes the rules of KN-1's own row in the program map, which came from the phase-2
@@ -38,7 +38,7 @@ KN-32 are quoted from their rows in the same way.
 It builds on [ADR 0066](0066-a-chat-is-a-ulid-a-run-is-a-stretch-of-its-conversation-and-a-device-is-random.md)
 (chat and run ids), [ADR 0067](0067-a-chat-runs-in-a-sandbox-charter-compiles-for-its-harness.md)
 (the chat sandbox), [ADR 0068](0068-a-chat-lives-in-charterd-and-the-app-is-its-client.md)
-(`charterd`), ADR 0069 (storage tiers), [ADR 0072](0072-charter-has-five-concepts-and-every-other-word-belongs-to-one-of-them.md)
+(`purlisd`), ADR 0069 (storage tiers), [ADR 0072](0072-charter-has-five-concepts-and-every-other-word-belongs-to-one-of-them.md)
 (the five concepts) and [ADR 0075](0075-an-audit-entry-is-metadata-in-a-store-of-its-own-and-telemetry-never-reads-it.md)
 (`<data>`). It amends ADR 0067, ADR 0068 and ADR 0069, each in a section of its own below. KN-2
 (project search and `recall` on the index), KN-9, KN-22 (scale budgets), KN-32 (transcript
@@ -51,9 +51,9 @@ and recall's results and the briefing are its views (ADR 0072 §2).
 record to say project. This one does. File paths, code names and `docs/plane-format.md` keep
 their current names until the rename lands, so `<plane>` in a path is the project's root.
 
-## Where charter is today
+## Where purlis is today
 
-- **There is no index and no database.** `Cargo.lock` has no SQLite, redb or sled. `charter
+- **There is no index and no database.** `Cargo.lock` has no SQLite, redb or sled. `purlis
   recall` reads every entry of every memory base and keyword-scans it per query
   (`crates/purlis-core/src/recall.rs`, through `memstore::read_files`). A chat's briefing reads
   its store's entries the same way (`briefing.rs`), and so do the memory duplicate checks. Track 02
@@ -69,8 +69,8 @@ their current names until the rename lands, so `<plane>` in a path is the projec
   event arrives.
 - **There is no transcript archive.** A chat's conversation lives only in its harness's own
   store. KN-31 adds a redacted archive in the Machine tier. KN-32's search reads it.
-- **Charter already has a secret scanner.** `secretshape` finds credential shapes in text and
-  answers with the kind, never the value. `charter save` refuses a memory or ref it flags, and the
+- **purlis already has a secret scanner.** `secretshape` finds credential shapes in text and
+  answers with the kind, never the value. `purlis save` refuses a memory or ref it flags, and the
   commit scan (ADR 0074) runs it over every line a chat's commit adds.
 
 Three questions have no answer yet. Where does each index live, given ADR 0069's tiers? Who
@@ -81,7 +81,7 @@ which can hold secrets, avoid becoming a second copy of them?
 
 **Search runs on two kinds of derived SQLite FTS5 index. Each project clone has one, in its
 `.charter/`, over the project's own files. Each machine has one, in `<data>`, over the transcript
-archive only. `charterd` is the only writer of both. Neither is ever the truth: deleting one costs
+archive only. `purlisd` is the only writer of both. Neither is ever the truth: deleting one costs
 a rebuild and nothing else, and every reader has a correct answer without it. An index holds the
 words of what it indexes, after redaction and the scanner, and never their text as written. It
 never answers a reader with anything that reader could not have read from the files.**
@@ -140,19 +140,19 @@ way.
 - **A schema change is a rebuild, never a migration.** Each index records its schema version, the
   version of the redaction rules it was built with (§6), and the source position it reflects. A
   writer that finds a version it did not write discards the index and builds a new one.
-- **One test holds it**, as the phase-2 critique's P5-09 asked. Deleting every SQLite file charter
+- **One test holds it**, as the phase-2 critique's P5-09 asked. Deleting every SQLite file purlis
   keeps and restarting gives the same search, recall and briefing answers on a fixture project.
   The same test covers FI7's forge cache when that lands. KN-2 holds it.
 
-### 3. One writer: `charterd`
+### 3. One writer: `purlisd`
 
-**Settled by the KN-1 row:** one writer, `charterd`. V22a makes it one host per OS user per
+**Settled by the KN-1 row:** one writer, `purlisd`. V22a makes it one host per OS user per
 device, serving every project, so there is one writer per index without further coordination.
 
-- **`charterd` builds and updates both kinds of index, on its own device.** A runner's host
+- **`purlisd` builds and updates both kinds of index, on its own device.** A runner's host
   (ADR 0078) builds the indexes of the clones and the archive on the runner. A desktop never opens a
   runner's index files. How a desktop searches a runner's chats is the runner tickets' to decide.
-- **`charterd` is the writer.** It already owns `planewatch` and the
+- **`purlisd` is the writer.** It already owns `planewatch` and the
   event log (ADR 0068 §1), so it sees the changes the index needs.
 - **Every other process only reads.** The app's panels, the hooks (the SessionStart briefing), the
   CLI and the palette open the index read-only (`SQLITE_OPEN_READONLY`, `query_only`). ADR 0068
@@ -161,7 +161,7 @@ device, serving every project, so there is one writer per index without further 
 - **With no host running, the CLI reads and never writes.** If the index is there it uses it,
   even if it is behind (§5), and if it is missing it scans the files. It never builds one. This is
   P3-21's fix: *"the CLI reads only when the host is absent"*.
-- **The writer holds a lock.** `charterd` takes an advisory `flock` on the index's `writer.lock`
+- **The writer holds a lock.** `purlisd` takes an advisory `flock` on the index's `writer.lock`
   before writing and keeps it while it runs. A second writer, such as a transient host during an
   upgrade handoff (ADR 0068 §7) or two runner versions (ADR 0068 §8), waits for it and does not
   write alongside.
@@ -185,7 +185,7 @@ project index also keeps the commit it last reconciled against.
 - **At start, a stat sweep.** The writer compares every indexed directory's files with what it
   recorded, and re-indexes what differs. At 50,000 files that is 50,000 `stat` calls, well under
   a second (an estimate). Only a changed stat leads to a read.
-- **The machine index follows the archive.** `charterd` writes the archive at a turn's end and at
+- **The machine index follows the archive.** `purlisd` writes the archive at a turn's end and at
   close (KN-31), and indexes the new turns in the same pass. Archive retention and erasure delete
   the rows in the same act that deletes the chat (§6).
 - **A full rebuild runs in the background.** It is used when there is no index, when a version
@@ -232,10 +232,10 @@ that outlives the source.
   archive is redacted before it is written (KN-31, with LW-8a's redaction: vault values, the
   shape rules and path excludes). So the index is built from text that has already been redacted.
 - **Every text is scanned again before it is indexed.** Before tokenising, the writer runs each
-  text, from either kind of index, through charter's existing shape scanner (`secretshape`), with
+  text, from either kind of index, through purlis's existing shape scanner (`secretshape`), with
   the rules a project save uses. A span it flags is replaced by its kind, such as `[JWT]`. Neither
   the value nor a masked head of it reaches the index. For the project index this catches a
-  secret that reached the files without `charter save`, such as a hand edit or a teammate's
+  secret that reached the files without `purlis save`, such as a hand edit or a teammate's
   commit. For the machine index it is a second check after LW-8a.
 - **The index keeps terms and their positions, not the text as written.** Both kinds use FTS5
   contentless tables (`content=''`, `contentless_delete=1`) at `detail=full`. They hold each term
@@ -260,7 +260,7 @@ that outlives the source.
   - **Not promised:** blocks the filesystem kept elsewhere. An old generation that a rebuild
     unlinks (§5) is not overwritten. Copy-on-write filesystems, SSD wear levelling and filesystem
     snapshots can also keep earlier blocks of the live file. So **erasure never relies on a
-    rebuild**. It is done in place, in the live generation, as above. Copies outside charter's
+    rebuild**. It is done in place, in the live generation, as above. Copies outside purlis's
     reach are a matter for full-disk encryption, which is the operator's to turn on.
 - **When redaction changes, the index follows.** If LW-8a re-redacts archived chats, for example
   after a vault value is added that an older chat contained, the archive names the chats it
@@ -286,11 +286,11 @@ An index is a faster way to answer a question, not a way to answer a different o
   audience. `recall` and the briefing, which put memory into a chat, serve only memory approved
   for that audience. The operator's own palette may show a pending item, labelled as pending.
 - **A chat searches through the host, and only its own clone.** A chat reaches search through
-  `charterd` with the `chat` scope's search capability (ADR 0068, amended below), and is answered
+  `purlisd` with the `chat` scope's search capability (ADR 0068, amended below), and is answered
   from its own clone only:
   - **The project index:** the host opens only the index under the chat's own `<clone-key>`, which
     it computes from the clone the chat runs in and never takes from the request. Under a shared
-    `$CHARTER_HOME` the state directory holds several clones' indexes, and a chat is never
+    `$PURLIS_HOME` the state directory holds several clones' indexes, and a chat is never
     answered from another one.
   - **The machine index:** every row carries the chat's id, run and turn (ADR 0066) and the
     `<clone-key>` of the clone the chat ran in. The host filters on that key. A chat therefore sees
@@ -311,13 +311,13 @@ written**. A store names its tier before it ships (ADR 0069, ruling 10).
 | `<data>/index/writer.lock` | Machine, device-bound, transient | no |
 
 - **The project index is under the clone's state directory, keyed by clone.** **Settled by
-  V22b:** `$CHARTER_HOME` moves all clone state or none, and the index moves with the rest.
-  Because a shared `$CHARTER_HOME` can serve several clones, and each clone can be at a different
+  V22b:** `$PURLIS_HOME` moves all clone state or none, and the index moves with the rest.
+  Because a shared `$PURLIS_HOME` can serve several clones, and each clone can be at a different
   commit, the index sits under `<clone-key>`: the first 16 hex characters of the SHA-256 of the
   clone's canonical root path. Two clones never share an index, and a chat is answered only from
   its own (§7). A moved clone builds a new one, and the writer deletes a `<clone-key>` directory
   whose clone no longer exists when it starts.
-- **The machine index is in `<data>`**, charter's data home (V25a). **Decided by D-0079b:** in
+- **The machine index is in `<data>`**, purlis's data home (V25a). **Decided by D-0079b:** in
   `<data>`, beside the archive, not in the OS cache. The archive's home is KN-31's to decide, and
   this record does not decide it. KN-31's row and V11 say *"app data"*. ADR 0069 names the Tauri
   application-data directory `<app data>`, and that directory is not `<data>`. If KN-31 puts the
@@ -346,9 +346,9 @@ written**. A store names its tier before it ships (ADR 0069, ruling 10).
 
 §5 lists what a chat's sandbox always denies, as classes. Two additions:
 
-- **Class 2, charter's integrity state, gains both kinds of index, for writing.** A chat that
+- **Class 2, purlis's integrity state, gains both kinds of index, for writing.** A chat that
   could write an index could change what `recall`, the briefing and the palette tell the next
-  chat. `charterd` is their only writer (§3).
+  chat. `purlisd` is their only writer (§3).
 - **Chats may not read the machine index or the transcript archive either. Ruled by V33.** The machine index describes every project's chats on this machine,
   so reading it would let a chat in one project search another project's conversations. The
   host's `chat`-scoped search (§7, and ADR 0068, amended) would be the chat's way in. The project
@@ -364,9 +364,9 @@ written**. A store names its tier before it ships (ADR 0069, ruling 10).
   chat's own `<clone-key>` and from machine-index rows carrying that key (§7). It derives the key
   from the chat's identity and never from the request. The capability reads and never writes.
   It reaches no other clone, project or chat's archive, and it gives a chat no human power.
-- **§1's table gains a row.** *Moves into `charterd`:* **the derived search indexes, as their only
+- **§1's table gains a row.** *Moves into `purlisd`:* **the derived search indexes, as their only
   writer (ADR 0079)**, because one writer per device is what makes a WAL index safe without
-  cross-process coordination, and `charterd` already owns the watcher that drives it.
+  cross-process coordination, and `purlisd` already owns the watcher that drives it.
 - **"Everything else stays in the app" is unchanged.** The app reads the index read-only, as it
   reads the project's files.
 - **`planewatch` gains the memory and session directories** that §4 names, still without
@@ -389,10 +389,10 @@ The code does not change with this record.
 
 | Where | Change |
 |---|---|
-| `docs/plane-format.md` | An entry for `.charter/index/<clone-key>/` and one for its `writer.lock`, each **decided, not yet written**, with its tier; rows for `<data>/index/` and its `writer.lock` in the table of what charter-app keeps outside every project; the index added to the `CHARTER_HOME` row (in this PR) |
+| `docs/plane-format.md` | An entry for `.charter/index/<clone-key>/` and one for its `writer.lock`, each **decided, not yet written**, with its tier; rows for `<data>/index/` and its `writer.lock` in the table of what purlis keeps outside every project; the index added to the `PURLIS_HOME` row (in this PR) |
 | `CONTEXT.md` | Gains **Search index** (in this PR) |
 | ADR 0067, ADR 0068, ADR 0069 | Amended above. Their texts are left as they are, and this record is the amendment |
-| KN-2 | The project index, the writer in `charterd`, `recall` and the briefing on it, the no-index scan kept as the fallback, the equal-answers test (§7) and the delete-and-restart test (§2) |
+| KN-2 | The project index, the writer in `purlisd`, `recall` and the briefing on it, the no-index scan kept as the fallback, the equal-answers test (§7) and the delete-and-restart test (§2) |
 | KN-32 | The machine index over the archive, keyed by clone; the palette's grouped hits; the `chat` scope's search capability; its row amended by D-0079a |
 | KN-31 | Names the chats it re-redacts, so the index can follow (§6); decides the archive's home, which this record does not (§8) |
 | KN-22 | The budgets of §4 in `stress.yml` |
@@ -402,8 +402,8 @@ The code does not change with this record.
 
 ## What this costs
 
-- **A C dependency.** Bundled SQLite compiles C into the `charter` binary, which adds build time
-  and a library to keep patched. It is the one charter takes on for search and the forge cache.
+- **A C dependency.** Bundled SQLite compiles C into the `purlis` binary, which adds build time
+  and a library to keep patched. It is the one purlis takes on for search and the forge cache.
 - **Snippets cost a read.** A contentless index keeps no text as written, so the top hits'
   snippets are read from their sources at query time. At 20 hits that is 20 small reads. The index
   gives up `snippet()` and `highlight()` in return for not holding a readable copy of the prose.

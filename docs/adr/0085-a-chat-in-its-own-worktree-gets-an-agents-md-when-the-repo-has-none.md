@@ -9,13 +9,13 @@
 Both are set out in their own sections below. How the file is hidden (§5) is settled by V35;
 see *Ruled*.
 
-## Where charter is today
+## Where purlis is today
 
-A chat that charter starts is told who it is by its harness's `SessionStart` hook. That
+A chat that purlis starts is told who it is by its harness's `SessionStart` hook. That
 briefing (`charter_core::briefing`) reaches every built-in harness through the harness's own
 adapter (ADRs 0050, 0058, 0063).
 
-A harness that charter did not arm gets none of it. That covers:
+A harness that purlis did not arm gets none of it. That covers:
 
 - a `codex` typed into a shell tab (ADR 0062);
 - a harness started by hand in a worktree after the chat closed;
@@ -30,11 +30,11 @@ repository, read from the git root down to the working directory.
 ## The decision
 
 **When a chat starts in its own worktree and that repository has no `AGENTS.md` of its own,
-charter writes one there, hidden from git, holding the redacted form of the chat's briefing.**
+purlis writes one there, hidden from git, holding the redacted form of the chat's briefing.**
 
 - **Own worktree** means a piece (ADR 0027).
 - **The file is never written into a shared clone.**
-- **charter steps aside** whenever the repository has an `AGENTS.md` of its own.
+- **purlis steps aside** whenever the repository has an `AGENTS.md` of its own.
 - **The file never stops a chat from starting.**
 
 ### 1. Only a chat's own worktree
@@ -55,7 +55,7 @@ The last of them to start writes the file.
 A file in a repository is read by anything that opens the tree. It outlives the chat, and it is
 one `git add -f` away from a commit. So it carries two things only.
 
-**The persona the chat was started as.** This is charter's line naming the persona, with its
+**The persona the chat was started as.** This is purlis's line naming the persona, with its
 `role:` and `delegate-when:` quoted as data, and without the memory digest.
 
 - That line names the persona's charter as `personas/<name>/persona.md`. That path is relative
@@ -76,9 +76,9 @@ The file never carries memory titles, session records, todos, other workspaces, 
 listing. A block added to the briefing later stays out of the file until someone adds it to the
 allowlist.
 
-### 3. charter's own file, under the guest layer's ownership rule
+### 3. purlis's own file, under the guest layer's ownership rule
 
-- **`AGENTS.md` is one more path in the piece's `.charter-generated` record.** charter rewrites
+- **`AGENTS.md` is one more path in the piece's `.charter-generated` record.** purlis rewrites
   it only while its digest is one the record names.
 - **It is hidden from git before it is written** (see §5 for where the line goes).
 - **Its first line is a generated marker:**
@@ -92,7 +92,7 @@ This file is guidance, not a guard. Nothing that stops it being written stops th
 **Not written:**
 
 - when the repository tracks an `AGENTS.md`;
-- when an `AGENTS.md` that charter did not write is there, whether untracked or unreadable. It
+- when an `AGENTS.md` that purlis did not write is there, whether untracked or unreadable. It
   is the operator's, and it is left exactly as it is.
 
 **Withheld**, as the machine-local settings are, because a generated file that is not hidden is
@@ -111,12 +111,12 @@ on git 2.50.1:
    file with the tracked one. Git treats an ignored file as expendable.
 3. The next chat to start there finds `AGENTS.md` tracked and writes nothing.
 
-charter's record still holds the old digest, which the file no longer has. So the file reads as
+purlis's record still holds the old digest, which the file no longer has. So the file reads as
 somebody else's. That is the direction the ownership rule is built to fail in.
 
 ### 5. Where the line that hides it goes: settled by V35 (see *Ruled*)
 
-The guest layer hides its files with lines in charter's block in `info/exclude`. For a linked
+The guest layer hides its files with lines in purlis's block in `info/exclude`. For a linked
 worktree, git reads only the common directory's `info/exclude`. These facts were measured on
 git 2.50.1, in a clone with one linked worktree:
 
@@ -143,7 +143,7 @@ The operator chose (a), the common `info/exclude` with a warning (V35). See *Rul
 
 `docs/plane-format.md`, under *Mirrored plane paths in a clone*, says:
 
-> **`CLAUDE.md` / `AGENTS.md` are deliberately never generated or mirrored** … charter writes no
+> **`CLAUDE.md` / `AGENTS.md` are deliberately never generated or mirrored** … purlis writes no
 > project-instructions file.
 
 This record reverses that line **for `AGENTS.md` in a piece, and only there**.
@@ -151,9 +151,9 @@ This record reverses that line **for `AGENTS.md` in a piece, and only there**.
 - **`CLAUDE.md` is still never generated or mirrored**, for the reason `guest::WALKUP_DIRS`
   gives. It walks up past the git root, so the project's own copy already reaches a piece, and a
   mirror would be read as that repository's own instructions.
-- **`AGENTS.md` is still never mirrored.** charter copies neither the project's own nor anyone
+- **`AGENTS.md` is still never mirrored.** purlis copies neither the project's own nor anyone
   else's.
-- **What charter writes is a new store, `<piece>/AGENTS.md`**, set out under its own heading in
+- **What purlis writes is a new store, `<piece>/AGENTS.md`**, set out under its own heading in
   `docs/plane-format.md`.
 
 The edit to `docs/plane-format.md` is in the same change as this record.
@@ -202,15 +202,15 @@ would only bring back a snapshot of a chat that is gone.
 - **A CLI word that prints the file.** A new public word that still reaches no harness by
   itself.
 - **Merging into a repository's own `AGENTS.md`.** That file is the operator's, and the
-  ownership rule never edits what charter did not write.
+  ownership rule never edits what purlis did not write.
 - **Refusing the chat when the file cannot be written**, as the guest layer refuses over a
   foreign file. A chat without the file still has its hook briefing.
 - **The whole briefing.** See §2.
 
 ## Ruled (V34d, V35, 2026-10-01)
 
-- **V34d.** charter may write a git-excluded, redacted `AGENTS.md` into a chat's own worktree when the repository has none. It never writes one into a shared clone, and it steps aside when the repository has its own. This reverses `docs/plane-format.md`'s "charter writes no project-instructions file". The operator confirmed it directly on 2026-10-01.
-- **V35.** The file is hidden by a line in the common `info/exclude`, the way the rest of the guest layer is hidden. `charter doctor` and every chat start report an untracked `AGENTS.md` that charter's line hides and charter did not write. Two alternatives are rejected:
+- **V34d.** purlis may write a git-excluded, redacted `AGENTS.md` into a chat's own worktree when the repository has none. It never writes one into a shared clone, and it steps aside when the repository has its own. This reverses `docs/plane-format.md`'s "purlis writes no project-instructions file". The operator confirmed it directly on 2026-10-01.
+- **V35.** The file is hidden by a line in the common `info/exclude`, the way the rest of the guest layer is hidden. `purlis doctor` and every chat start report an untracked `AGENTS.md` that purlis's line hides and purlis did not write. Two alternatives are rejected:
   - (b) worktreeConfig, because it changes the repository's configuration and drops the operator's own global ignores;
   - (c) no exclude, because the file would sit one command from a commit.
 
@@ -222,13 +222,13 @@ would only bring back a snapshot of a chat that is gone.
   start note that names one offers both. Move aside… asks first, then renames the file to
   `AGENTS.aside.md` (or the next free `AGENTS.aside-N.md`) and never writes over a file.
   Opening the file is a narrow exception to the light editor's rule that only what git does not
-  ignore opens (ADR 0084 §2). The exception applies only to the file charter's own line hides,
+  ignore opens (ADR 0084 §2). The exception applies only to the file purlis's own line hides,
   and the core checks that before either action:
   - the file is `AGENTS.md` at the top of a branch of this project, placed by name, with no link
     on the way and one name on disk;
-  - it is untracked, and charter's record does not vouch for it;
+  - it is untracked, and purlis's record does not vouch for it;
   - it is one the V35 check names;
-  - git names charter's `/AGENTS.md` line in charter's block of the exclude file as the rule that
+  - git names purlis's `/AGENTS.md` line in purlis's block of the exclude file as the rule that
     ignores it (`git check-ignore -v`). When any other rule ignores it, that rule wins, and the
     file is refused.
 

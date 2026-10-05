@@ -1,16 +1,16 @@
 # Forges: GitLab and GitHub
 
-A **forge** is a code-hosting platform `charter` talks to — GitLab or GitHub today. Every
-forge operation `charter` performs goes through **one seam**: a small set of traits, one per
+A **forge** is a code-hosting platform `purlis` talks to — GitLab or GitHub today. Every
+forge operation `purlis` performs goes through **one seam**: a small set of traits, one per
 area, that each forge implements once ([ADR 0070](../../../docs/adr/0070-a-forge-is-one-seam-with-a-native-client-per-forge-and-gh-and-glab-are-its-fallback.md)).
 A backend builds each request once, and a **transport** sends it. There are two. The **CLI
 transport** is that forge's own official CLI (`gh api`, `glab api`), authenticated once, over
 HTTPS, so the token stays in the CLI. The **native transport** (GitHub's, FW-2a; GitLab's,
-FW-2b) sends the same request over HTTPS with a token charter holds, and makes repeated reads
+FW-2b) sends the same request over HTTPS with a token purlis holds, and makes repeated reads
 conditional against a per-account ETag store. `forge::route` decides which a call takes, from
-its account and its `Caller`: **only a human in the window, on an account charter holds a
-sign-in for, takes the native transport**; a chat, an MCP call, a trigger and every `charter`
-command take the CLI, and no failure is retried on the other. Until FW-1 and FW-3a give charter
+its account and its `Caller`: **only a human in the window, on an account purlis holds a
+sign-in for, takes the native transport**; a chat, an MCP call, a trigger and every `purlis`
+command take the CLI, and no failure is retried on the other. Until FW-1 and FW-3a give purlis
 a sign-in, nothing holds one, so every call still takes the CLI. [git-policy.md](git-policy.md) says why the CLI's own login
 matters to an autonomous agent specifically.
 
@@ -18,8 +18,8 @@ matters to an autonomous agent specifically.
 
 - **What it needs:** [`glab`](https://gitlab.com/gitlab-org/cli) installed and
   authenticated (`glab auth login`, then `glab auth status` should say "Logged in").
-  `charter doctor` lists a row for the CLI and one for its auth, and in this version says
-  of both that they are not checked yet; `charter discover` asks `auth status` itself
+  `purlis doctor` lists a row for the CLI and one for its auth, and in this version says
+  of both that they are not checked yet; `purlis discover` asks `auth status` itself
   before it lists anything.
 - **What "group" means:** the GitLab group (or subgroup) whose repos this forge block
   tracks. `include_subgroups` is always on, so a group tracks everything beneath it too.
@@ -32,7 +32,7 @@ matters to an autonomous agent specifically.
 
 - **What it needs:** [`gh`](https://cli.github.com/) installed and authenticated (`gh
   auth login`, then `gh auth status`).
-- **What "owner" means:** a GitHub **org** or a personal **user** account. `charter`
+- **What "owner" means:** a GitHub **org** or a personal **user** account. `purlis`
   tries the org endpoint first and falls back to the user endpoint on a genuine 404 —
   you don't have to say which one it is.
 - **Default host:** `github.com`. Declare `host = "github.example.com"` for a GitHub
@@ -42,13 +42,13 @@ matters to an autonomous agent specifically.
 
 Every repo record in `inventory/repos.json` carries a `forge` stamp (which backend
 produced it) so a mixed inventory stays unambiguous, and every clone's *own* git policy
-(`charter git-policy`) is resolved from **its own `origin` remote**, not from whichever
+(`purlis git-policy`) is resolved from **its own `origin` remote**, not from whichever
 forge happens to be first in `charter.toml`. A self-hosted GitLab clone gets `glab`'s
 credential helper and *its own host's* SSH→HTTPS rewrite; a `github.com` clone gets
 `gh`'s. This is what lets a mixed-forge control plane's clones each authenticate
-correctly without you telling `charter` which is which per repo.
+correctly without you telling `purlis` which is which per repo.
 
-## What charter asks a forge
+## What purlis asks a forge
 
 Every operation is a method of an area trait in `src/forge/backend.rs`, with a GitHub body in
 `src/forge/github/` and a GitLab body in `src/forge/gitlab/`. Nothing else in the core
@@ -60,7 +60,7 @@ There are two disciplines, and they stay with the caller: the trait returns what
 **Strict:** a failure is an error, because collapsing "the call failed" into "the result was
 empty" is how a rate-limited lookup wipes an inventory, or a save opens a second request.
 
-**Permissive:** the status line's open request and CI word (`charter gl-refresh`). Any failure
+**Permissive:** the status line's open request and CI word (`purlis gl-refresh`). Any failure
 answers nothing. Being wrong costs a blank column, retried at the next refresh, and this path
 must never break a surface that draws all the time.
 
@@ -84,29 +84,29 @@ owner, repo, branch, number or commit. The CLI transport's argv for each is pinn
 
 | Area · method | Who calls it | GitHub | GitLab | Discipline | Parity |
 |---|---|---|---|---|---|
-| `Repos::owned` | `charter discover` | `GET orgs/{owner}/repos`, then `users/{owner}/repos` on a 404 | `GET groups/{owner}/projects?include_subgroups=true&archived=false` | strict | **gaps 1, 2** (#803, #804) |
+| `Repos::owned` | `purlis discover` | `GET orgs/{owner}/repos`, then `users/{owner}/repos` on a 404 | `GET groups/{owner}/projects?include_subgroups=true&archived=false` | strict | **gaps 1, 2** (#803, #804) |
 | `Repos::reachable` | the repo picker (ADR 0055) | `GET user/repos?affiliation=owner,collaborator,organization_member` | `GET projects?membership=true&archived=false` | strict | same |
 | `Repos::top_level` | `discover`'s stack probe | `GET repos/{o}/{r}/git/trees/{ref}` (ref, else default branch, else `HEAD`) | `GET projects/{id}/repository/tree` (ref, else the default branch) | strict | same |
-| `Repos::about` | `charter ws todo promote` (ADR 0088 §5), before it sends; `charter doctor`'s `project remote` row (SQ-8) | `GET repos/{o}/{r}`: `visibility` (else `private`), `archived`, `has_issues`, `permissions.pull`, `security_and_analysis.secret_scanning_push_protection.status` (admins only, else unknown) | `GET projects/{path}`: `visibility`, `archived`, `issues_access_level` (else `issues_enabled`), membership from `permissions`, `secret_push_protection_enabled` (else `pre_receive_secret_detection_enabled`; else unknown) | strict | same |
-| `WorkItems::create` | `charter ws todo promote` | `POST repos/{o}/{r}/issues` with `title`, `body` and `labels[]` (`ws:<name>`, private repos only); keyed by `html_url` and `number`, `node_id` beside, the answer's `title`, `state`, `labels` and `milestone` mapped to the work model; every todo value a literal `-f` | `POST projects/{path}/issues` with `title`, `description` and `labels` (`charter::ws::<name>`, private repos only); keyed by `web_url`'s host, `references.full` and `iid`, `id` beside, the answer's `title`, `state`, `labels` and `milestone` mapped to the work model; every todo value a literal `-f` | strict | same |
+| `Repos::about` | `purlis ws todo promote` (ADR 0088 §5), before it sends; `purlis doctor`'s `project remote` row (SQ-8) | `GET repos/{o}/{r}`: `visibility` (else `private`), `archived`, `has_issues`, `permissions.pull`, `security_and_analysis.secret_scanning_push_protection.status` (admins only, else unknown) | `GET projects/{path}`: `visibility`, `archived`, `issues_access_level` (else `issues_enabled`), membership from `permissions`, `secret_push_protection_enabled` (else `pre_receive_secret_detection_enabled`; else unknown) | strict | same |
+| `WorkItems::create` | `purlis ws todo promote` | `POST repos/{o}/{r}/issues` with `title`, `body` and `labels[]` (`ws:<name>`, private repos only); keyed by `html_url` and `number`, `node_id` beside, the answer's `title`, `state`, `labels` and `milestone` mapped to the work model; every todo value a literal `-f` | `POST projects/{path}/issues` with `title`, `description` and `labels` (`charter::ws::<name>`, private repos only); keyed by `web_url`'s host, `references.full` and `iid`, `id` beside, the answer's `title`, `state`, `labels` and `milestone` mapped to the work model; every todo value a literal `-f` | strict | same |
 | `WorkItems::read` | the item cache (FW-7) | `GET repos/{o}/{r}/issues/{n}`: `title`, `state` and `state_reason` (closed only), `type.name`, `labels`, `milestone`, `assignees`; one GraphQL `WorkItem` query for `parent`, `subIssues`, `closedByPullRequestsReferences` (open and merged ones) and `projectItems` (each board's `Status` and the first iteration value; the item's `status` is the first board's that has one, as GitHub keeps no status of an issue's own); `GET …/dependencies/blocked_by` and `…/blocking` only when `issue_dependencies_summary` counts any. More than one answer holds is an error, never a shorter list | `GET projects/{path}/issues/{iid}`: what `create` maps, and `assignees`; one GraphQL `project.workItems(iid:)` query for `workItemType.name`, `duplicatedToWorkItemUrl` and the widgets: hierarchy (`parent`, `children`, an epic keyed `&iid` at its group), linked items (`blocks`, `is_blocked_by`; `relates_to` is no relation the model has), `iteration`, `status` (Premium, GitLab 18.1, asked only where `ItemStatus` is there) and development's `closingMergeRequests` (open and merged ones); the item is `closed_as` a duplicate when it names one, else by its status's category, where asked (`DONE` completed, `CANCELED` not planned); `GET projects/{path}/boards`: each board whose scope (milestone, `No milestone`, labels, assignee) holds the item, its status there the first label list it carries while open; the item's `status` is its own, else the first board's. More than one answer holds is an error, never a shorter list | strict | same |
-| `Requests::open_or_update` | a request-mode save (ADR 0051), `charter change push` | `GET pulls?state=open&head={o}:{b}&base=…`, then `PATCH` or `POST pulls` | `GET merge_requests?state=opened&source_branch=…&target_branch=…`, the repo's own only (never a fork's), then `PUT` or `POST` | strict | same |
+| `Requests::open_or_update` | a request-mode save (ADR 0051), `purlis change push` | `GET pulls?state=open&head={o}:{b}&base=…`, then `PATCH` or `POST pulls` | `GET merge_requests?state=opened&source_branch=…&target_branch=…`, the repo's own only (never a fork's), then `PUT` or `POST` | strict | same |
 | `Requests::state` | a request-mode save | `GET pulls/{n}`: `closed` + `merged` is merged, at `merge_commit_sha` | `GET merge_requests/{iid}`: `merged`, at `squash_commit_sha` else `merge_commit_sha` | strict | same |
-| `Requests::by_head` | `charter change show` and `push` (ADR 0060) | `GET pulls?state=all&head={o}:{b}`, checked against `head.repo.full_name` | `GET merge_requests?source_branch=…&state=all`, the repo's own only | strict | same |
-| `Requests::body` | `charter change push` (ADR 0060) | `GET pulls/{n}`, its `body` (`null` is empty) | `GET merge_requests/{iid}`, its `description` (`null` is empty) | strict | same |
-| `Requests::set_body` | `charter change push` | `PATCH pulls/{n}` with `body` alone | `PUT merge_requests/{iid}` with `description` alone | strict | same |
+| `Requests::by_head` | `purlis change show` and `push` (ADR 0060) | `GET pulls?state=all&head={o}:{b}`, checked against `head.repo.full_name` | `GET merge_requests?source_branch=…&state=all`, the repo's own only | strict | same |
+| `Requests::body` | `purlis change push` (ADR 0060) | `GET pulls/{n}`, its `body` (`null` is empty) | `GET merge_requests/{iid}`, its `description` (`null` is empty) | strict | same |
+| `Requests::set_body` | `purlis change push` | `PATCH pulls/{n}` with `body` alone | `PUT merge_requests/{iid}` with `description` alone | strict | same |
 | `Requests::request_auto_merge` | a PR-merge save | GraphQL `enablePullRequestAutoMerge` with `expectedHeadOid` | `PUT merge_requests/{iid}/merge` with `merge_when_pipeline_succeeds` and `sha`, only while a pipeline runs | strict | **gap 3** (#805) |
-| `Requests::lands_through_queue` | `charter change land` (ruling Q16) | GraphQL `pullRequest.isMergeQueueEnabled` | `GET projects/{id}`, its `merge_trains_enabled` (absent below Premium is no) | strict | same |
-| `Requests::merge_at` | `charter change land` (ADR 0060 D3) | `PUT pulls/{n}/merge` with `merge_method`, `commit_title`, `commit_message` and `sha` | `PUT merge_requests/{iid}/merge` with `squash`, `sha` and `merge_commit_message`, **never** `merge_when_pipeline_succeeds` or `auto_merge` | strict | same |
-| `Requests::enqueue_at` | `charter change land` (ruling Q16) | GraphQL `enqueuePullRequest` with `expectedHeadOid` | `POST merge_trains/merge_requests/{iid}` with `squash` and `sha`, no `auto_merge` | strict | same, except the method (below) |
-| `Requests::checks_at` | `charter change show` and `land` | check runs **and** commit statuses at the sha, each read whole | the request's pipelines at the sha; the newest decides | strict, `UNKNOWN` on failure | same, by design |
+| `Requests::lands_through_queue` | `purlis change land` (ruling Q16) | GraphQL `pullRequest.isMergeQueueEnabled` | `GET projects/{id}`, its `merge_trains_enabled` (absent below Premium is no) | strict | same |
+| `Requests::merge_at` | `purlis change land` (ADR 0060 D3) | `PUT pulls/{n}/merge` with `merge_method`, `commit_title`, `commit_message` and `sha` | `PUT merge_requests/{iid}/merge` with `squash`, `sha` and `merge_commit_message`, **never** `merge_when_pipeline_succeeds` or `auto_merge` | strict | same |
+| `Requests::enqueue_at` | `purlis change land` (ruling Q16) | GraphQL `enqueuePullRequest` with `expectedHeadOid` | `POST merge_trains/merge_requests/{iid}` with `squash` and `sha`, no `auto_merge` | strict | same, except the method (below) |
+| `Requests::checks_at` | `purlis change show` and `land` | check runs **and** commit statuses at the sha, each read whole | the request's pipelines at the sha; the newest decides | strict, `UNKNOWN` on failure | same, by design |
 | `Requests::open_on_branch` | `gl-refresh` | `GET pulls?state=open&head={o}:{b}&per_page=1` | `GET merge_requests?state=opened&source_branch=…&per_page=100`, the repo's own only | permissive | same (fixed here) |
 | `Requests::ci_word` | `gl-refresh` | GraphQL `statusCheckRollup.state` (5 values) | `GET pipelines?ref=…&per_page=1`, its `status` (13 values) | permissive | same |
 | `Capabilities::support` | the fallbacks of ADR 0070 §2 | no request: epics and an issue's own status are never there; sub-issues, dependencies, boards, iterations and close reasons are there on github.com's instance; everything else is not asked yet | no request: epics, iterations, boards, child items, blocking links, work item types, close reasons and an item's own status are there on gitlab.com's instance; a group or repo's tier and a self-managed GitLab's are not asked yet | never yes unasked | same, except an issue's own status, which GitHub never has (its boards' instead); the probes come with FG-2 (#802) |
 
-### `charter change push`
+### `purlis change push`
 
-`charter change push <slug>` is the first change verb that writes to a forge (ADR 0060, #471).
+`purlis change push <slug>` is the first change verb that writes to a forge (ADR 0060, #471).
 For each member it reads the forge, the repository path and the HTTPS push URL from the
 member's own repo's `origin`, and prints every repo, branch and destination before it pushes
 anything. Each push is `git push <https-url> refs/heads/<branch>:refs/heads/<branch>`, through
@@ -120,9 +120,9 @@ ADR 0060 D4).
 Then `by_head` finds the member's request in any state. When there is none, `open_or_update`
 opens one into the repo's default branch, titled `<slug>: <repo>`, with the change's `why` and
 an empty cross-link block as its description. Last, every request's description is read
-(`body`) and the block between charter's two markers is replaced with one that names every
-member's request, `—` for a member charter could not reach. A description that is already
-current is not written (`set_body`), so a second run asks the forge nothing new. Charter writes
+(`body`) and the block between purlis's two markers is replaced with one that names every
+member's request, `—` for a member purlis could not reach. A description that is already
+current is not written (`set_body`), so a second run asks the forge nothing new. purlis writes
 only between its markers: a description without exactly one pair of them outside a code fence
 (a fence closes only on its own kind) is left alone and named, and everything outside the block
 keeps its line endings. The markers are the Python charter's, to the byte.
@@ -137,7 +137,7 @@ different host too.
 **On GitLab** (GL-3b), the same steps are GitLab's merge request calls in the table above. A
 merge request in any state from the repo's own branch is adopted, a draft included: only
 its `description` is written, so it stays a draft and keeps its title. One from a fork with the
-same branch name is never adopted, written or merged; charter opens the repo's own. A
+same branch name is never adopted, written or merged; purlis opens the repo's own. A
 `"description": null` holds no block, and is named like any description without one. A
 self-managed GitLab is pushed to and asked at the host `charter.toml` declares for it.
 
@@ -145,16 +145,16 @@ One member's failure costs only that member. A member that is not a repo in the 
 refused by name. The exit is 1 when any member was not pushed, opened or written, as the Python
 charter answered, and 2 only when the whole command is refused.
 
-### `charter change land`
+### `purlis change land`
 
-`charter change land <slug> --repo <name>` merges one member of a cross-repo change (ADR 0060
+`purlis change land <slug> --repo <name>` merges one member of a cross-repo change (ADR 0060
 §2–§4 and D3, ruling Q16, #472). It is the one change verb that merges, and it is attended
 only: `floorguard::PUBLISH_FORGE` refuses it from a run nobody is watching, as it refuses
 `gh pr merge`.
 
 The gates come first, each refusal its own sentence and exit 2: one member named (`--repo`
 once), not by rebase; a member with a clone here and an open request (`by_head`); every member
-it `needs` landed, which is the forge reporting the blocker's request merged and charter having
+it `needs` landed, which is the forge reporting the blocker's request merged and purlis having
 landed it: a landing-log line whose commit the clone's default branch (its `origin/` tracking
 ref, else the local branch) still holds, or a pending landing found merged at its head, which is
 logged then; and the checks `PASSED` at the request's head
@@ -165,15 +165,15 @@ Then `lands_through_queue` decides the call. On GitLab a repo whose answer has n
 trains) is refused and nothing is merged: a direct merge there could skip a train.
 
 **Before the call, a pending landing is written** (`changes/log/pending/<device>.jsonl`, clone
-state): the request, the head, `direct` or `queue`. It is charter's evidence that it started
+state): the request, the head, `direct` or `queue`. It is purlis's evidence that it started
 this landing, and a later `land` records a merge it did not see happen only on that evidence.
 A refusal moves it to `refused`, so a later merge of the same head by somebody else is never
-taken for charter's.
+taken for purlis's.
 
 - **No queue:** `merge_at`, now, pinned to the head whose checks were read. GitHub's `sha` and
-  GitLab's `sha` make the forge refuse a head that moved, and charter, reading the request
-  again, names the move. The landing commit's message is charter's, so it carries
-  `Charter-Change: <slug>`. Charter never asks for auto-merge here: on GitLab
+  GitLab's `sha` make the forge refuse a head that moved, and purlis, reading the request
+  again, names the move. The landing commit's message is purlis's, so it carries
+  `Charter-Change: <slug>`. purlis never asks for auto-merge here: on GitLab
   `merge_when_pipeline_succeeds` (or `auto_merge`) would merge whatever head the branch has when
   a later pipeline passes. A GitLab that answers by setting it anyway has it cancelled at once,
   the cancel confirmed by reading the merge request again, and the landing refused; a cancel
@@ -184,11 +184,11 @@ taken for charter's.
 - **A merge queue or merge train:** `enqueue_at`, pinned the same way (`expectedHeadOid`,
   `sha`), and with no `auto_merge` on GitLab, so the merge request is added now or refused. The
   queue runs its own checks and merges it later, so nothing is logged then. A later
-  `charter change land` of the member finds the request merged at the pending head and records
-  the landing. A request merged with no pending landing of charter's is never recorded, and as a
-  blocker it is refused as merged outside charter. A queue writes its own merge commit message
+  `purlis change land` of the member finds the request merged at the pending head and records
+  the landing. A request merged with no pending landing of purlis's is never recorded, and as a
+  blocker it is refused as merged outside purlis. A queue writes its own merge commit message
   on both forges, so these landings carry no trailer. GitHub's queue merges by the method its
-  rule sets, so `--squash` is not charter's to choose there; GitLab's train takes `squash`
+  rule sets, so `--squash` is not purlis's to choose there; GitLab's train takes `squash`
   (`Kind::queue_takes_squash`).
 
 ### From the changes view
@@ -204,16 +204,16 @@ merged, when what they find is not what the operator confirmed (a destination or
 commit changed, a head moved, a queue appeared). Everything else, the pinning and the pending
 landing included, is the CLI's path unchanged.
 
-### `charter change revert`
+### `purlis change revert`
 
-`charter change revert <slug>` (ADR 0060 §8, #473) asks no forge at all, so it is the same for a
+`purlis change revert <slug>` (ADR 0060 §8, #473) asks no forge at all, so it is the same for a
 GitHub member and a GitLab one. It seeds a new change, `revert-<slug>`: in each member the
 landing log records, it branches `change/revert-<slug>` off the default branch (its `origin/`
 tracking ref, else the local branch) and runs `git revert` of the logged commit there, with
 `-m 1` only when git says the commit has two or more parents. The revert reaches a forge only
-when someone runs `charter change push` and `charter change land` on it, through the same gates and
+when someone runs `purlis change push` and `purlis change land` on it, through the same gates and
 the same attended-only floor as any change. A request merged with no landing-log line is named
-as a person's to revert; charter does not guess its commit from the forge or a branch. Run
+as a person's to revert; purlis does not guess its commit from the forge or a branch. Run
 again, it seeds only the members it has not seeded yet.
 
 **Not behind the seam, and why:**
@@ -221,10 +221,10 @@ again, it seeds only the members it has not seeded yet.
 | Call | Where | Why |
 |---|---|---|
 | `gh auth status` / `glab auth status` | `Forge::check_auth`, the CLI transport's own check | It asks whether the transport can speak as someone, not the forge anything. The native transport answers it from its own sign-in |
-| `gh search issues`, `gh issue create` | `report.rs`, through `forge::gh_as_the_operator` | It files on charter's own tracker, which is on GitHub whatever forge a project uses, under the reporter's own login. It moves to the work-item area (FW-6a) with #806 |
+| `gh search issues`, `gh issue create` | `report.rs`, through `forge::gh_as_the_operator` | It files on purlis's own tracker, which is on GitHub whatever forge a project uses, under the reporter's own login. It moves to the work-item area (FW-6a) with #806 |
 | `gh auth git-credential`, `glab`'s helper | a clone's git credential helper | Git's own credential path is not part of the seam (ADR 0070 §4, #752) |
 | `gh auth status` / `glab auth status`, from the first run | the app's first run, through `Forge::check_auth` | The same check as the first row, asked of each forge whose CLI is installed |
-| `gh …` and `glab …` in a chat's own commands | the guard tables (`personagate`, `proseguard`, `floorguard`, `heredoc`, `leakguard`) | They decide whether a chat's command asks first or is refused. charter sends nothing through them. Their parity between the two CLIs is #1068 |
+| `gh …` and `glab …` in a chat's own commands | the guard tables (`personagate`, `proseguard`, `floorguard`, `heredoc`, `leakguard`) | They decide whether a chat's command asks first or is refused. purlis sends nothing through them. Their parity between the two CLIs is #1068 |
 
 **Work items beyond `create` and `read`.** Each forge's native client has its work items as that
 forge has them, crate-private, with recorded-request tests (`src/forge/github/work.rs`,
@@ -247,11 +247,11 @@ work view, FW-9; the item cache, FW-7) need them (#1202):
 
 ### Gaps the audit found
 
-Fixed in this audit, each with a case in `tests/forge_contract.rs`. The first two move charter
+Fixed in this audit, each with a case in `tests/forge_contract.rs`. The first two move purlis
 away from what the Python charter answered, on purpose (ADR 0046):
 
 - **Two GitLab pipeline statuses were unread.** GitLab 19.4 lists thirteen (`doc/api/pipelines.md`,
-  the `status` filter), and charter, like Python's `gitlab._CI_MAP`, mapped eleven.
+  the `status` filter), and purlis, like Python's `gitlab._CI_MAP`, mapped eleven.
   `waiting_for_callback` is now `pending` on the status line, `RUNNING` for `change show`, and a
   pipeline auto-merge waits for. `canceling` is now `canceled` and `FAILED`.
 - **The GitLab status line could show a fork's merge request.** `open_on_branch` took the first
@@ -280,14 +280,14 @@ Open, each filed:
    group is discovered as if it were the group's. `with_shared=false` would match GitHub.
 3. **GitLab's auto-merge parameter is deprecated** (#805, after FG-2, #802).
    `merge_when_pipeline_succeeds` was deprecated in GitLab 17.11 in favour of `auto_merge`, and
-   19.4 still accepts it. charter keeps it on purpose: a GitLab older than `auto_merge` ignores an
+   19.4 still accepts it. purlis keeps it on purpose: a GitLab older than `auto_merge` ignores an
    unknown parameter and would merge at once. Since 19.1, `auto_merge` on a project with merge
    trains joins the train.
 4. **No recording captured from a live forge** (#742). The native contract runs on each forge's
    own instance and on a self-managed one, but every run replays the forge's documented answers.
    The live nightly (FG-4, below) now runs the same cases against github.com and gitlab.com;
    re-recording from what it sees, and the self-managed GitLab, are FW-15's.
-5. **`charter report` is outside the seam** (#806), until the work-item area (FW-6a) exists.
+5. **`purlis report` is outside the seam** (#806), until the work-item area (FW-6a) exists.
 6. **A request-mode save on GitLab says "pull request"** (#1067). The project's and a repo's
    `pr` and `pr-merge` saves, their doctor rows and alerts, and the app's saving view name a
    merge request `pull request #12`. The changes view already says what each forge says.
@@ -324,7 +324,7 @@ GitLab's native transport is the same `Http` as GitHub's, speaking GitLab's dial
   epic as its hierarchy parent, a group's work item; the v4 epic writes move to work items with
   their first caller (#1202). A label with a comma is refused, because GitLab reads it as two.
 - **The network log** lists a GitLab path by position: the id after `projects` or `groups` is
-  one `{}`, whether it is a number or a full path, encoded (`acme%2Fapi`, as charter sends it)
+  one `{}`, whether it is a number or a full path, encoded (`acme%2Fapi`, as purlis sends it)
   or not (`acme/sub/api`, up to the next word GitLab puts under a repo or group); the segment
   after a collection word (`issues`, `merge_requests`, `epics`, `links`, …) is an id, masked
   however it is spelled.
@@ -333,10 +333,10 @@ GitLab's native transport is the same `Http` as GitHub's, speaking GitLab's dial
 
 Every call a `route::Resolver` resolves for a caller naming an account is admitted and counted
 by that account's meter (`src/forge/budget.rs`), on the native route and the CLI route alike.
-Nothing sends with a charter sign-in token without it: only the resolver builds the native
+Nothing sends with a purlis sign-in token without it: only the resolver builds the native
 transport outside tests (`tests/only_the_resolver_builds_the_native_transport.rs`). A call that
 names no account, or one sent through `Forge::backend()` with no resolver, goes over the CLI with
-the CLI's own login, not a charter account, and has no budget. A chat's or a `charter` command's
+the CLI's own login, not a purlis account, and has no budget. A chat's or a `purlis` command's
 call that names an account takes the CLI route (ADR 0070 §4), so it spends the CLI's login too,
 counted against the account it named.
 
@@ -351,7 +351,7 @@ account.
   `administration/settings/user_and_ip_rate_limits`) throttle API requests and make no exception
   for a `304`. So a conditional read that finds nothing new costs nothing on GitHub and one
   request on GitLab. A call with no status (the CLI, a timeout) is counted.
-- **charter's allowance** is 1,000 counted requests an hour per account, a fifth of GitHub's
+- **purlis's allowance** is 1,000 counted requests an hour per account, a fifth of GitHub's
   5,000 an hour for a signed-in user. Once it is spent, a background call is held back until the
   hour turns (`RateLimited`, with the hour's end as its reset); a call a person is waiting on is
   never held back. A chat's or an MCP call is admitted as background whatever its priority:
@@ -363,7 +363,7 @@ account.
   GitLab counts it, and GitHub's secondary limits count requests whatever their answer. Below a
   fifth of the forge's own limit remaining (`x-ratelimit-*` on GitHub, by
   `x-ratelimit-resource`; `ratelimit-*` on GitLab), every interval is four times longer.
-- **Shown in `charter doctor`** as one `forge budget` row per account: the hour's counted
+- **Shown in `purlis doctor`** as one `forge budget` row per account: the hour's counted
   requests against the allowance, how many were sent and how many were `304`s, and what the forge
   says is left. The meter keeps it in the machine tier, `<config>/forge-budget/<account>.json`.
 - **The CLI route has no rate-limit reading.** `gh api` and `glab api` print no headers without
@@ -391,9 +391,9 @@ closes it.
 
 ### What the operator provisions
 
-Nothing below exists until the operator makes it; no charter run creates or deletes any of it.
+Nothing below exists until the operator makes it; no purlis run creates or deletes any of it.
 Each forge gets a **fixture org or group**, a **machine account** with a token, and a **GitHub
-environment** in `diazoxide/charter` holding that token and the owner's name.
+environment** in `purlis/purlis` holding that token and the owner's name.
 
 **The two environments** (Settings → Environments): `forge-live-github` and `forge-live-gitlab`.
 Each one holds:
@@ -468,20 +468,20 @@ its host in `FORGE_LIVE_GITLAB_HOST`, which `tests/forge_contract/live.rs` alrea
 ## The mixed-forge collision rule
 
 Repos are addressed by their **bare name** — the last path segment — everywhere:
-`charter clone api`, `charter status`, `docs/topology.md`. That's convenient until two
+`purlis clone api`, `purlis status`, `docs/topology.md`. That's convenient until two
 different forges (or two blocks of the *same* forge kind — e.g. two GitHub orgs, or a
 GitLab group whose subgroups both have a repo called the same thing) expose a repo with
-the same bare name. `charter discover` refuses to guess which one you meant:
+the same bare name. `purlis discover` refuses to guess which one you meant:
 
 - **Different forges, same bare name** (`gitlab:api` and `github:api`) — qualify it:
-  `charter clone github:api`. The `<forge>:<name>` prefix disambiguates.
+  `purlis clone github:api`. The `<forge>:<name>` prefix disambiguates.
 - **Same forge, different namespace, same bare name** (e.g.
   `acme/team-a/api` and `acme/team-b/api` under one GitLab group with subgroups, or two
   `[[forge]]` blocks of the same kind) — there is **no forge-qualifier that can tell
   these apart**, since they're already on the same forge. The only fix is excluding one
   of them via that block's `exclude = [...]` in `charter.toml`.
 
-Either way, `charter discover` names both colliding repos (their full
+Either way, `purlis discover` names both colliding repos (their full
 `path_with_namespace`, not just the ambiguous bare name) and stops rather than picking
 one silently — a workspace clone's on-disk path is derived from the bare name, so
 guessing wrong would mean two unrelated repos could clone over each other.

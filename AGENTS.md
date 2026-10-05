@@ -1,9 +1,9 @@
-# Working in charter-app
+# Working in purlis
 
 Read the spec before changing behaviour: [`docs/spec.md`](docs/spec.md). The decisions and their
 reasons are in [`docs/adr/`](docs/adr/), starting at ADR 0025; the plane on disk is
 [`docs/plane-format.md`](docs/plane-format.md). ADRs 0001 to 0024 are the Python charter's and stay
-in `diazoxide/charter-plane` as history (ADR 0044). A new decision is the next number in
+in `purlis/purlis-plane` as history (ADR 0044). A new decision is the next number in
 `docs/adr/`.
 
 ## Priorities, in order
@@ -27,8 +27,8 @@ in `diazoxide/charter-plane` as history (ADR 0044). A new decision is the next n
   `crates/purlis-core/tests/every_store_the_plane_format_names_has_a_tier.rs` fails until it
   has one. This is part of every feature's definition of done.
 - **Nothing depends on the Python charter, shipped or not.** No message, doc page or code path in
-  the app or the `charter` binary tells anyone to install or run it, and nothing in CI or the
-  tests installs it or contacts `diazoxide/charter-plane`: its answers are frozen into recorded
+  the app or the `purlis` binary tells anyone to install or run it, and nothing in CI or the
+  tests installs it or contacts `purlis/purlis-plane`: its answers are frozen into recorded
   fixtures (ADR 0044, ADR 0045, ADR 0046). No Python in the shipped path.
 - **A recorded answer changes only on purpose.** `tests/fixtures/recorded/behaviour.jsonl` is
   what the Python charter answered for 404 scenarios, replayed against every build by
@@ -44,7 +44,7 @@ in `diazoxide/charter-plane` as history (ADR 0044). A new decision is the next n
   a `// SAFETY:` comment (clippy's `undocumented_unsafe_blocks` is denied), and
   `crates/purlis-core/tests/one_unsafe_block.rs` fails if `unsafe` or an allow of the lint
   appears anywhere else. A second block is a new ruling, not an edit.
-- **UI is built from Radix primitives, never hand-rolled markup**, and never behind a charter API
+- **UI is built from Radix primitives, never hand-rolled markup**, and never behind a purlis API
   of our own — no `<Modal>`, no `<Field>`. A shadcn/ui component's source **copied into the repo
   is allowed** and is not that layer (ADR 0037, amended 2026-09-22). **One house set is the
   exception:** the six settings pieces in `app/src/settings/components.tsx` (SettingsLayout,
@@ -123,7 +123,7 @@ is told, is `tools/mutants-report.py notice`, tested in `tools/mutants-report.te
 
 ### Issue tracker
 
-GitHub Issues on `diazoxide/charter`, through `gh`. See `docs/agents/issue-tracker.md`.
+GitHub Issues on `purlis/purlis`, through `gh`. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 

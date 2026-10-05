@@ -12,7 +12,7 @@ layer, and both are recorded here rather than designed around.
 
 ## How it was measured
 
-`node tools/bench.mjs` in charter-app at commit `2b85efc`, with nothing uncommitted — the run
+`node tools/bench.mjs` in purlis at commit `2b85efc`, with nothing uncommitted — the run
 records both, so a number can be tied to the code that produced it. On the operator's machine:
 Apple M4 Pro, 14 cores, 48 GB, macOS 26.2, tmux 3.7c, Node v24.12.0, cargo 1.98.1, on
 2026-09-17 from 00:03 local. Raw results: `target/bench/2026-09-17T20-03-53/results.json`.
@@ -118,14 +118,14 @@ pull.**
 
 **Met on 2026-09-18, in M1.3, earlier than this ADR expected.** The Rust binary answers
 `charter hook stop` at **p50 1.7 ms**, worst 2.2 — 30 samples, the same method, now an arm of
-`node tools/bench.mjs --only hook` in charter-app. The like-for-like Python row measures
+`node tools/bench.mjs --only hook` in purlis. The like-for-like Python row measures
 93.2 ms on that run (`charter hook stop`, not the guard). Everything below stands as the
 reasoning; only "M3 is where it is met" was wrong, and it was wrong because the EVENT path
 turned out to be separable from the guard, which is still Python's and still misses the limit.
 
 `charter hook pretooluse` costs 107.6 ms at the median. That is the Python start ADR 0025
 already counted as a reason for the rewrite, measured again: the hook path today is Python
-charter's, and no drawing layer changes it. The Rust `charter` binary answers `charter root` in
+charter's, and no drawing layer changes it. The Rust `purlis` binary answers `purlis root` in
 **1.8 ms** on the same machine, which is the floor the limit will be held to once M2 and M3
 move hooks off Python. **The limit stays missed until then, and M3 is where it is met.** It is
 not a reason to reopen the stack.
@@ -186,7 +186,7 @@ rewrite of the UI and buys nothing the limits ask for.
 
 ## The benchmark
 
-`node tools/bench.mjs` in charter-app, with a line in its README. It builds what it needs,
+`node tools/bench.mjs` in purlis, with a line in its README. It builds what it needs,
 measures cold start, the hook call, tmux and the window — the window once per renderer arm, one
 WebdriverIO run per spec file so no spec measures what the one before it left running — and
 writes `target/bench/<time>/results.json`, with the commit, the machine and the tool versions
@@ -196,10 +196,10 @@ of it.
 ## Amendment, 2026-09-19: cold start is met on macOS and missed on a Linux whose portal cannot start
 
 The cold-start row above was measured on macOS only. On Linux the same app took 25 s to reach
-its own `setup` (charter-app#24), twelve times the limit, and nothing recorded it. This
+its own `setup` (purlis#24), twelve times the limit, and nothing recorded it. This
 amendment records the miss on Linux, names its cause, and says which milestone owns it.
 
-**How it was measured.** On GitHub's `ubuntu-24.04` runner, charter-app at `f93129b`, a debug
+**How it was measured.** On GitHub's `ubuntu-24.04` runner, purlis at `f93129b`, a debug
 build (`npx tauri build --debug --no-bundle`) under `xvfb-run`, in an empty plane. The runner
 was used because it is exactly the kind of machine the issue is about. Each condition was
 launched three times, timing to the window's first frame (`CHARTER_BENCH_LOG`) and to the
@@ -215,7 +215,7 @@ slow row is two timeouts and does not depend on the build.
 | **The runner's own: present, with an activatable desktop portal that cannot start** | **30.5 s, 30.5 s, 26.4 s** | **missed** |
 | None reachable (`DBUS_SESSION_BUS_ADDRESS` pointing at nothing) | 482 ms, 463 ms, 526 ms | met |
 
-**The cause is two waits, and charter makes neither call.**
+**The cause is two waits, and purlis makes neither call.**
 
 1. **25.0 s inside `tauri::Builder::build()`.** Tauri's event loop (tao 0.35) creates a
    `GtkApplication` and registers it. At startup GTK 3 looks for a session manager
@@ -243,33 +243,32 @@ desktop all fit that description. A full Linux desktop, where the portal is alre
 would answer straight away. That follows from the trace and was not measured on a desktop.
 
 **Why it is not fixed now.** The wait belongs to GTK and xdg-desktop-portal, reached through
-tao, and charter cannot switch the proxy's auto-start off. The only lever inside the app is
+tao, and purlis cannot switch the proxy's auto-start off. The only lever inside the app is
 process-wide: give the app no session bus when the portal looks dead. That would also remove
-the three things charter uses the bus for, and one of them is a guarantee the core depends on.
+the three things purlis uses the bus for, and one of them is a guarantee the core depends on.
 The single-instance name is what makes it safe for `hookwire` to remove a stale hook socket at
-startup (charter-app `crates/purlis-core/src/hookwire.rs`: "there is no second live app whose
+startup (purlis `crates/purlis-core/src/hookwire.rs`: "there is no second live app whose
 socket this could be"). Notifications and the tray would go as well. Trading a startup delay
 for two live apps on one plane makes the product worse, not faster.
 
 **The decision.** The 2 s cold-start limit is **met on macOS** (p50 370 ms, above) and
 **missed on a Linux whose session bus has a desktop portal that cannot start** (26–31 s), with
 the cause named above and tracked in
-[charter-app#24](https://github.com/diazoxide/charter/issues/24). It belongs to **M4**,
-where Linux becomes a platform charter ships for, alongside the rest of the Linux desktop
+[purlis#24](https://github.com/diazoxide/charter/issues/24). It belongs to **M4**,
+where Linux becomes a platform purlis ships for, alongside the rest of the Linux desktop
 integration. At that point either tao or GTK can register without the portal proxy's
-auto-start, or charter finds a narrower lever than removing the whole bus. The limit itself
+auto-start, or purlis finds a narrower lever than removing the whole bus. The limit itself
 stays at 2 s: an operator waiting half a minute for a window is noticing, and the number is
 right. M1 is macOS, and nothing in M1 depends on this.
 
-The scenario job keeps running the Linux relaunch test under `dbus-run-session` (charter-app
-#23). That is a Linux desktop with a working bus, and passing it proves nothing about this
+The scenario job keeps running the Linux relaunch test under `dbus-run-session` (purlis#23). That is a Linux desktop with a working bus, and passing it proves nothing about this
 miss.
 
 **Addendum, 2026-09-20: the miss is no longer silent.** Everything above stands — the trade is
-still the wrong one to take and the fix is still M4's. What has changed is the part charter
+still the wrong one to take and the fix is still M4's. What has changed is the part purlis
 owns. The worst of a 26-second start was that nothing said anything: no window, on some
 desktops not even an icon, and the only record of the wait was a marker behind an environment
-variable that nobody sets before they have a reason to. charter-app#108 makes the wait visible
+variable that nobody sets before they have a reason to. purlis#108 makes the wait visible
 on the two channels that exist before there is a window. At the 2 s limit the app writes one
 line to standard error naming what it is waiting for, which is what a terminal launch, a
 `.desktop` file's journal and a CI log have; and when the window does arrive it says on screen
@@ -283,7 +282,7 @@ operator who is told why they are waiting is still waiting.
 **Addendum, 2026-09-30: met, by starting without the bus when the portal is silent.** The
 trade above was refused for one reason: the single-instance name was what made it safe for
 `hookwire` to remove a stale hook socket, and a launch with no bus has no name. That reason is
-now answered on its own terms, and the trade is taken (charter-app#24, program map FR-8).
+now answered on its own terms, and the trade is taken (purlis#24, program map FR-8).
 
 - **Ask first, for 300 ms.** Before `tauri::Builder::build()`, the app asks the session bus to
   start `org.freedesktop.portal.Desktop` (`StartServiceByName`, the call GTK's proxy makes). A
@@ -293,7 +292,7 @@ now answered on its own terms, and the trade is taken (charter-app#24, program m
   process, binary and arguments, and with `DBUS_SESSION_BUS_ADDRESS` pointing at nothing. It
   says on standard error what the run loses: the tray, notifications, and handing a second
   launch to this one (`portal.rs`).
-- **One charter per user, with or without the bus.** On Linux the app also holds an `flock`
+- **One purlis per user, with or without the bus.** On Linux the app also holds an `flock`
   on `$XDG_RUNTIME_DIR/<identifier>.lock` from the start of `setup`. The single-instance
   plugin has already handed an ordinary second launch over by then, so only a launch the bus
   could not hand over reaches the lock, and that launch is refused. The lock is released at
@@ -324,7 +323,7 @@ still not measured.
 
 What remains to fix later: a portal that answers the question and then stalls is not caught,
 and on a machine where the bus is silent, a second launch is refused instead of being handed
-over. `charterd` (FD-5) removes the second cost, because the hook socket is no longer the
+over. `purlisd` (FD-5) removes the second cost, because the hook socket is no longer the
 app's.
 
 **Addendum, 2026-09-30 (charter#746), superseding the addendum above's ruling to pin the
@@ -350,7 +349,7 @@ with it.
 Two more things changed with it. The bus is healthy and only the portal is silent, so
 everything the app starts gets the bus the app was given, not the dead address
 (`SESSION_BUS_KEPT`): chats through `charter_core::chatenv::inherited`, and the app's own
-`git`, `gh` and `charter` through `forklock::spawn`, which every program the app starts goes
+`git`, `gh` and `purlis` through `forklock::spawn`, which every program the app starts goes
 through. The app's own process cannot be given it back without setting its environment, so a
 keyring vault's reveal and copy from the window do not work for that run, and the window says
 so. And a run without the bus says so in the window, asks the bus again after 5, 15 and 45 s

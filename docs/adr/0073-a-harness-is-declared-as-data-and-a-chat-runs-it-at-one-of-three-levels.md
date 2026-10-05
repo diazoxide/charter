@@ -5,8 +5,8 @@ operator's rulings:
 
 - **Q6′:** *"Three harness levels (terminal-only, hooks/native, ACP). Harnesses are declared as
   data in the plane, and charter never ships harness code."*
-- **X34**, accepted with the consistency review: *"never ships harness code"* means charter never
-  ships, patches or wraps a harness binary. Per-harness adapters are charter code, and they are
+- **X34**, accepted with the consistency review: *"never ships harness code"* means purlis never
+  ships, patches or wraps a harness binary. Per-harness adapters are purlis code, and they are
   data where a template suffices.
 - **W8:** the agent run is the unit of governance. Audit reads *"every tool call a level-2 or
   level-3 harness reports"*, with a coverage label per harness level and an org key
@@ -29,9 +29,9 @@ It builds on [ADR 0050](0050-a-harness-plugin-is-chosen-per-project-through-one-
 (one neutral model and one adapter per harness), on
 [ADR 0067](0067-a-chat-runs-in-a-sandbox-charter-compiles-for-its-harness.md) (the sandbox
 compiled per harness), on [ADR 0068](0068-a-chat-lives-in-charterd-and-the-app-is-its-client.md)
-(`charterd` owns every chat's terminal) and on
+(`purlisd` owns every chat's terminal) and on
 [ADR 0069](0069-every-store-charter-writes-is-in-one-of-four-tiers.md) (storage tiers). It
-**amends** charter-plane's
+**amends** purlis-plane's
 [ADR 0022](https://github.com/diazoxide/charter-plane/blob/main/docs/adr/0022-a-harness-profile-belongs-to-one-machine.md)
 (a harness profile belongs to one machine), ADR 0066 (runs), and the rule in `CLAUDE.md` and
 `AGENTS.md` that a session's state comes from hooks only. Each amendment has its own section
@@ -39,14 +39,14 @@ below. FD-13 (the neutral model and `HarnessAdapter`), FD-14 (the declaration sc
 as level 3), HP-19 (the capability card) and PE-29 (the extension-point catalogue) build on it.
 Its concept is **Chat**. The declarations themselves are a Project setting (ST6).
 
-## Where charter is today
+## Where purlis is today
 
-charter starts three harnesses: Claude Code, Codex and opencode. What it knows about each is
+purlis starts three harnesses: Claude Code, Codex and opencode. What it knows about each is
 Rust code:
 
 - **`charter_core::harness::Harness`** is a closed enum of the three, with about twenty methods,
   and each method is a `match` over them. Most are facts measured on one version of one harness:
-  the flags that start, name and resume a session; whether charter chooses the session id; the
+  the flags that start, name and resume a session; whether purlis chooses the session id; the
   bytes a Shift+Enter sends; the biggest paste drawn whole; whether the harness reports its start
   before the first prompt; and the sentence a chat shows about what the harness does not report
   (`unreported`). Only a few are behaviour: `state_hooks` arms a chat (the plugin for Claude
@@ -60,32 +60,32 @@ Rust code:
   this machine, with its `kind` (`claude`, `codex` or `opencode`) and its environment. A kind
   outside the three is refused.
 
-So every harness charter supports is an edit to four modules and a release, and a harness that
-charter has never measured cannot run as a chat at all, not even as a plain terminal. The three
+So every harness purlis supports is an edit to four modules and a release, and a harness that
+purlis has never measured cannot run as a chat at all, not even as a plain terminal. The three
 it has all run at one level: a terminal that the harness's own hooks report into. None of them
 yet runs over ACP or a harness's own protocol.
 
 ## The decision
 
 **A harness is a declaration: data that says how to start it, what it can do and which levels
-it can run at. Built-in harnesses are declarations too, shipped with charter. A chat runs its
+it can run at. Built-in harnesses are declarations too, shipped with purlis. A chat runs its
 harness at one of three levels, chosen when the run starts and fixed for it: 1, the terminal
-alone; 2, the terminal with the harness's own hooks reporting to charter; 3, a structured
-protocol. Levels 1 and 3 over ACP need no charter code for a new harness. Level 2 and a
-harness's own protocol need an adapter. charter never ships, patches or stands in for a
+alone; 2, the terminal with the harness's own hooks reporting to purlis; 3, a structured
+protocol. Levels 1 and 3 over ACP need no purlis code for a new harness. Level 2 and a
+harness's own protocol need an adapter. purlis never ships, patches or stands in for a
 harness's program.**
 
-### 1. Three levels, named by what charter learns
+### 1. Three levels, named by what purlis learns
 
-| Level | What charter gets | How | What a new harness needs from charter |
+| Level | What purlis gets | How | What a new harness needs from purlis |
 |---|---|---|---|
-| **1. Terminal** | The process: started, writing, exited. A snapshot of the pane. | `charterd` runs the declared program in a PTY (ADR 0068). | A declaration. |
+| **1. Terminal** | The process: started, writing, exited. A snapshot of the pane. | `purlisd` runs the declared program in a PTY (ADR 0068). | A declaration. |
 | **2. Hooks** | The chat's state (working, waiting, idle), its session id, and the tool calls its hooks report, on the hook channel (ADR 0068 §6). | The harness's own hook or plugin mechanism, armed for this chat alone (ADRs 0050, 0058, 0063). | A declaration and an adapter. |
-| **3. Structured** | Typed turns, items, plans, usage, and asks that carry their options, answered as data. | charter is the client of a protocol: **ACP** (one client in charter for every ACP harness, HP-2), or where ACP lags, the harness's own protocol (the Codex app-server, the opencode server) mapped into the same neutral model (HP-3). | A declaration, for ACP. An adapter, for a harness's own protocol. |
+| **3. Structured** | Typed turns, items, plans, usage, and asks that carry their options, answered as data. | purlis is the client of a protocol: **ACP** (one client in purlis for every ACP harness, HP-2), or where ACP lags, the harness's own protocol (the Codex app-server, the opencode server) mapped into the same neutral model (HP-3). | A declaration, for ACP. An adapter, for a harness's own protocol. |
 
 **Q6′'s "hooks/native" is level 2, the harness's native hooks.** The program map already puts
 the Codex app-server at level 3 (HP-3: *"Codex chat at level 3"*; HP-16 answers app-server
-approvals as level-3 asks), so level 3 is "a structured protocol", with ACP as the one charter
+approvals as level-3 asks), so level 3 is "a structured protocol", with ACP as the one purlis
 writes once.
 
 **Level 1 is a complete product. Settled by W8.** A level-1 chat starts, is sandboxed, is shown, is stopped
@@ -97,14 +97,14 @@ capability card, never discovered.
 
 HP-1's title, *"ACP is level 3, beside the PTY"*, and the synthesis map's Q-6(c), *"ACP beside
 the PTY, as the default for dispatch, headless, remote and inbox answers"*, read as if one chat
-could have both. It cannot. An ACP agent is a process charter spawns and speaks to over stdio,
+could have both. It cannot. An ACP agent is a process purlis spawns and speaks to over stdio,
 and it does not drive the program that is drawing in the chat's PTY. Codex's app-server and
-opencode's server are the same: charter reaches the host process, not the TUI already running.
+opencode's server are the same: purlis reaches the host process, not the TUI already running.
 
 **So "beside" holds per harness.** A harness offers its terminal and its protocol side by side,
-and charter picks one for each run. A level-2 chat is a terminal with hooks. A level-3 chat has
+and purlis picks one for each run. A level-2 chat is a terminal with hooks. A level-3 chat has
 no harness terminal of its own. The one way one chat has both is a harness host that serves its
-own TUI and charter at once, which is FD-20 (W8: *"charterd attaches to it instead of owning the
+own TUI and purlis at once, which is FD-20 (W8: *"charterd attaches to it instead of owning the
 PTY"*). **A chat in a tab starts in its terminal (V24a)**: level 2, or level 1 without an
 adapter, even when its harness offers level 3, and FD-20's Codex half moves to Next ★ so that a
 Codex tab chat gets both. A chat with no terminal shown
@@ -162,24 +162,24 @@ stays in an adapter because it is behaviour:
 | `harness_plugin::Adapter` | the adapter; a harness without one is *not supported yet*, as ADR 0050 already says |
 | `sandbox::Form` | the adapter where the harness has a sandbox of its own; otherwise ADR 0067's generated OS profile |
 
-**The built-ins are declarations charter ships, not files in the project. This departs from
+**The built-ins are declarations purlis ships, not files in the project. This departs from
 Q6′'s "declared in the plane" on purpose.** Claude Code, Codex and opencode are three
-declaration files in charter's source, read by the same reader and in the same format as a
+declaration files in purlis's source, read by the same reader and in the same format as a
 project's, so "declared as data" holds for them. They are not copied into each project because:
 
 - **their arming carries the guard.** Claude Code's declaration decides how its chats are armed,
   including ADR 0050's pins (`charter-app@inline` always on). A copy in the project would be
   changeable by a merged pull request;
-- **their facts are measured per harness version by charter's own nightly run (TS1)**, and ship
-  with the charter that measured them. A copy in every project would go stale project by project;
-- **a project still declares every harness charter does not ship**, which is what Q6′ asks for.
+- **their facts are measured per harness version by purlis's own nightly run (TS1)**, and ship
+  with the purlis that measured them. A copy in every project would go stale project by project;
+- **a project still declares every harness purlis does not ship**, which is what Q6′ asks for.
 
-`charter harness show <name>` prints any declaration, built-in or not (FD-14 names the command).
+`purlis harness show <name>` prints any declaration, built-in or not (FD-14 names the command).
 Moving the built-ins is FD-14's migration, and a project on an older format reads through FR-9.
 The enum `Harness` becomes the adapter registry for level 2, keyed by declared name.
 
 **Tiers (ADR 0069).** A project's declarations are **Plane** tier. A declaration in
-`charter.local.toml` is **Clone state**, as that file is. The built-ins are part of charter's
+`charter.local.toml` is **Clone state**, as that file is. The built-ins are part of purlis's
 install and are no store.
 
 **The harness × model matrix is not in the declaration.** It is its own project data (M10,
@@ -187,34 +187,34 @@ MS-2), keyed by the declared name.
 
 ### 4. What "never ships harness code" means (X34)
 
-**charter never ships, patches or stands in for a harness's program.** X34 says *"wraps a
+**purlis never ships, patches or stands in for a harness's program.** X34 says *"wraps a
 harness binary"*. In this record, and in `CONTEXT.md` from now on, that is called **standing in**:
-putting charter's own program where the harness's is expected (a repackaged binary, a
+putting purlis's own program where the harness's is expected (a repackaged binary, a
 replacement under the harness's name, a proxy that edits its traffic) and changing what the
 harness or its model sees. **"Wrap" keeps the one meaning ADR 0067 gave it**: running the
-unmodified harness inside a sandbox profile or backend charter generates. charter wraps; it
+unmodified harness inside a sandbox profile or backend purlis generates. purlis wraps; it
 never stands in.
 
 None of these stands in:
 
-- **An adapter**: charter code that arms a harness through the harness's own documented
+- **An adapter**: purlis code that arms a harness through the harness's own documented
   mechanism, for one chat, with nothing written into the harness's config (ADR 0050). The
   bundled Claude Code plugin, the Codex hooks and the opencode shim are adapters.
-- **Running the unmodified program in charter's PTY, or wrapping it** (ADRs 0067, 0068). The
+- **Running the unmodified program in purlis's PTY, or wrapping it** (ADRs 0067, 0068). The
   harness gets the argv it was declared with and sees the files it would outside, minus what the
   sandbox denies.
 - **The shell-tab shims** (ADR 0062). A shim prints one line and `exec`s the real program with
   the same argv and environment, and does not stay between them.
 - **An ACP adapter program** such as `claude-agent-acp` or `codex-acp`. The user installs it, and
-  charter spawns it like any declared program. HP-1's row already says charter never ships one,
+  purlis spawns it like any declared program. HP-1's row already says purlis never ships one,
   and HP-1 records it.
 
 **Data where a template suffices.** Everything level 1 needs is a template: argv, environment
-names, and the facts in `[terminal]`. Everything level 3 over ACP needs is the ACP client charter
+names, and the facts in `[terminal]`. Everything level 3 over ACP needs is the ACP client purlis
 has, plus the command that starts the agent. So a new harness at level 1, or at level 3 over
-ACP, is **a declaration and no release of charter** (FD-14's acceptance, HP-14). Level 2 is code:
+ACP, is **a declaration and no release of purlis** (FD-14's acceptance, HP-14). Level 2 is code:
 each harness's hooks differ in where they are registered, what they report and how one chat is
-armed alone, and each of today's three took an ADR of its own. **Level 2 always needs charter code**, in core or in an
+armed alone, and each of today's three took an ADR of its own. **Level 2 always needs purlis code**, in core or in an
 extension after PE-29, and declarations get no hook templates for now (V24c).
 
 ### 5. Who may declare a harness: the minimum this record needs
@@ -239,7 +239,7 @@ A declaration names a program, and ADR 0022's reason holds: a program runs on a 
   declared harness, not only the three.
 
 FD-14 settles the rest: file layout, schema, refusals, the approval prompt's words, and
-`charter doctor`'s reporting.
+`purlis doctor`'s reporting.
 
 ### 6. Capabilities: silence never reads as "yes"
 
@@ -248,9 +248,9 @@ that it is waiting. It is not an extension's capability, and the word is always 
 ADR 0070 did for forges. Each is one of:
 
 - **yes**;
-- **no**, with the reason and the fallback charter uses (for example, *no* to "reports waiting",
+- **no**, with the reason and the fallback purlis uses (for example, *no* to "reports waiting",
   with the fallback "the chat does not show needs you");
-- **unknown**, which charter treats as *no* and says so. This is ADR 0070 §2's rule: no word for
+- **unknown**, which purlis treats as *no* and says so. This is ADR 0070 §2's rule: no word for
   silence reads as passing.
 
 **The initial set** is what the code reads today: the three facts §3 moves out of `Harness`
@@ -263,7 +263,7 @@ since a harness can report more over its own protocol than through its hooks.
 **The capability card reads the declaration.** W10 places it in the picker, the chat header and
 disabled controls' tooltips. ADR 0072 §3 sets its words: it is labelled *What <product> can do
 here*, each *no* is one line that says what the user will or will not see, and "capability"
-stays in its code and in Settings. "Level" is a charter noun outside §3's seven, so it stays off
+stays in its code and in Settings. "Level" is a purlis noun outside §3's seven, so it stays off
 the card too. `unreported` becomes those lines, so there is one source.
 
 ### 7. Governance follows the level
@@ -296,7 +296,7 @@ measured.
 
 ## ADR 0022, amended
 
-charter-plane's ADR 0022 says profiles live only in `charter.local.toml` because *"a command in
+purlis-plane's ADR 0022 says profiles live only in `charter.local.toml` because *"a command in
 the committed file could be changed by a merged pull request … and then run on every machine
 that pulls it"*, and that *"the local file carries `[harness]` and nothing else"*. This record
 changes two things and keeps the reason:
@@ -325,7 +325,7 @@ ADR 0066's run section changes in three places:
   (*Continue on*, or a reattach through FD-20) is a new run with cause `switch`.
 - **A new cause, `fallback`.** When a run's structured channel ends while the chat carries on at a
   lower level, the run ends and the next run begins with cause `fallback`. Example: an ACP agent
-  process exits, or the protocol reports an error charter cannot continue past, and charter starts
+  process exits, or the protocol reports an error purlis cannot continue past, and purlis starts
   the chat again in its terminal. A fall-back is never silent. The chat says it, and the audit has
   the cause.
 - **At level 3, causes are learned from the protocol.** ADR 0066 says each cause is learned from
@@ -340,7 +340,7 @@ ADR 0066's run section changes in three places:
 state comes from hooks only."* A level-3 chat has no hooks. It has a protocol, which reports
 state as typed messages, the way hooks do. The rule now reads: *"A session's state comes from
 hooks only, or, for a chat at level 3, from its structured protocol (ADR 0073)."* A protocol's
-messages are data the harness sends to charter on purpose. They are not the text it draws.
+messages are data the harness sends to purlis on purpose. They are not the text it draws.
 "Nothing parses harness output" still holds for every level. This PR changes the rule in
 `AGENTS.md`; `CLAUDE.md` is a link to it, so the two stay identical.
 
@@ -363,7 +363,7 @@ The code does not change with this record.
 
 ## What this costs
 
-- **Level 2 is still a release per harness.** Most of a harness's value to charter today comes
+- **Level 2 is still a release per harness.** Most of a harness's value to purlis today comes
   from its hooks, and a declaration cannot give it that. A new harness that wants needs you
   without ACP waits for an adapter.
 - **A project declaration is one more thing to approve.** It asks once per machine and again on
@@ -377,26 +377,26 @@ The code does not change with this record.
 ## What was rejected
 
 - **Every harness as a declaration alone, including hooks as templates.** The three hook
-  mechanisms charter uses share no shape. A template general enough to cover them would be a
+  mechanisms purlis uses share no shape. A template general enough to cover them would be a
   small language, and a hook arming that half works reads as level 2 while it misses asks.
 - **Keeping the enum, and adding harnesses by release.** Q6′ ruled against it, and it leaves every
-  ACP harness waiting on charter.
+  ACP harness waiting on purlis.
 - **Levels named by channel** ("the ACP level"). A Codex chat over its app-server gets what an ACP
-  chat gets, and W8's coverage label and `minimumHarnessLevel` are about what charter learns, not
+  chat gets, and W8's coverage label and `minimumHarnessLevel` are about what purlis learns, not
   which wire it came over.
 - **Built-in declarations copied into each project.** See §3: a merged pull request could change
   how Claude Code chats are armed, and the copies would go stale.
-- **Shipping the ACP adapter programs with charter.** X34 rules it out, and they are Node or Rust
+- **Shipping the ACP adapter programs with purlis.** X34 rules it out, and they are Node or Rust
   programs that trail their harnesses.
 
 ## Ruled (V24, 2026-09-30)
 
 1. **A chat in a tab starts in its terminal**: level 2, or level 1 without an adapter, even when
    level 3 is offered. FD-20's Codex-daemon half moves from Later to Next ★, ahead of GM-2,
-   starting with a measurement that Codex's own host serves both its TUI and charter; Claude
+   starting with a measurement that Codex's own host serves both its TUI and purlis; Claude
    Code's Remote Control half stays Later (V24a).
 2. **ADR 0022's ask-once extends to committed harness declarations**: the operator approves the
    program per machine, and again after any change, recorded in
    `.charter/harness-declarations-approved.json` (Clone state) (V24b).
-3. **Level 2 always needs charter code** (core, or an extension after PE-29): no hook templates in
+3. **Level 2 always needs purlis code** (core, or an extension after PE-29): no hook templates in
    declarations for now (V24c).

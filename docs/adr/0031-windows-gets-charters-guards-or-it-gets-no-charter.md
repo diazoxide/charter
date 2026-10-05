@@ -1,4 +1,4 @@
-# Windows gets charter's guards, or it gets no charter
+# Windows gets purlis's guards, or it gets no purlis
 
 **Accepted by the operator on 2026-09-22, as written.** The evidence below is measured and
 re-runnable, and the decision is settled: build on it.
@@ -11,26 +11,26 @@ a precedent — which is what surfaced that the rule had been quoted as settled 
 was not. Nothing in the decision, the evidence, the issue list or the estimate changed at
 sign-off. Only its standing did.
 
-The work it describes is charter-app's, and the file is here because the decision is
-charter's: this sequence runs `0001`–`0030` in one place, and a Windows decision kept in the
+The work it describes is purlis's, and the file is here because the decision is
+purlis's: this sequence runs `0001`–`0030` in one place, and a Windows decision kept in the
 other repo would split it. That matters more than it sounds. `0029` and `0030` were both free
 when this was drafted and were both taken while it was being written (charter#1153, the
-footer; charter#1152, the version a Rust charter reports), so this is the third number it has
+footer; charter#1152, the version a Rust purlis reports), so this is the third number it has
 had. Several agents allocate from this sequence at once and nothing reserves one — worth a
 glance at `git ls-tree origin/main docs/adr/` immediately before this merges.
 
-ADR 0025 rebuilt charter as a desktop app on a Rust core and named three platforms: macOS,
+ADR 0025 rebuilt purlis as a desktop app on a Rust core and named three platforms: macOS,
 Linux and Windows. macOS and Linux build, test and package. Nothing has ever been compiled on
-Windows — charter-app#93 is the first time any of this code has run there — and the estimate
+Windows — purlis#93 is the first time any of this code has run there — and the estimate
 for the whole rebuild has been resting on that gap.
 
 Every path below (`crates/purlis-core/…`, `app/src-tauri/…`, `tests/differential/run.py`) is
 in `diazoxide/charter`, and every bare `#nnn` is an issue there.
 
-**The decision: Windows does not ship until charter's containment guards have a Windows
+**The decision: Windows does not ship until purlis's containment guards have a Windows
 expression, and until then every guard that cannot be expressed there REFUSES rather than
-degrades.** A platform charter declines to run on is a known quantity. A platform where
-charter runs with its gate open is not, and the difference is not visible from inside the
+degrades.** A platform purlis declines to run on is a known quantity. A platform where
+purlis runs with its gate open is not, and the difference is not visible from inside the
 app — which is exactly why it has to be decided here rather than discovered in a review.
 
 This is not a decision to drop Windows. It is a decision about the order: the guards first,
@@ -38,7 +38,7 @@ then the port, and the guards are the part that needs a design rather than a tra
 
 ## What is already in the tree, and why it is the problem
 
-The core was written with Windows in mind. Before charter-app#93, eleven places carried an
+The core was written with Windows in mind. Before purlis#93, eleven places carried an
 explicit `#[cfg(not(unix))]` arm, and several more simply omit a `#[cfg(unix)]` block that
 sets a mode. (That PR adds five more, in `hookwire`, and they are all refusals — which is what
 this ADR is asking for everywhere else.)
@@ -48,7 +48,7 @@ translation of the guard — they are the guard removed, with a comment where th
 be:
 
 - `contain::nofollow` is `options` unchanged. `open_no_link` and `create_no_link` exist to
-  move the last component's link question from charter to the kernel, at the instant of the
+  move the last component's link question from purlis to the kernel, at the instant of the
   open; without the flag they are `no_link_on_the_way` alone, which is the version the module
   measured at 1881 escapes per 20,000 reads and 7600 per 20,000 writes. The three tests that
   prove the flag bites are `cfg(unix)`, so nothing on Windows goes red when it is gone.
@@ -88,7 +88,7 @@ resolve the path to itself and call it contained.
 
 The Windows expression is a question about the reparse **tag**, not about `is_symlink`: refuse
 any component carrying `FILE_ATTRIBUTE_REPARSE_POINT` at all. That is stricter than unix and
-it is the right way round: charter's own paths are made by charter, so a reparse point
+it is the right way round: purlis's own paths are made by purlis, so a reparse point
 anywhere on the way has no honest use.
 
 **`O_NOFOLLOW` has a near-equivalent that answers a different question.**
@@ -102,7 +102,7 @@ that flag exists for does not arise. `contain.rs` already says this arm "needs i
 at M4, not a guess now". This is that decision, and the answer is that it is a rewrite of the
 pair rather than a flag swap.
 
-**A mode bit is not an ACL.** `0600` and `0700` are how charter keeps the vault registry, the
+**A mode bit is not an ACL.** `0600` and `0700` are how purlis keeps the vault registry, the
 trust record, the memory store and the usage trend off every other account on the machine.
 Windows has no mode; it has a DACL, and the equivalent is creating the file or directory with
 a security descriptor that grants the owner's SID alone. That is `CreateFileW` with
@@ -110,9 +110,9 @@ a security descriptor that grants the owner's SID alone. That is `CreateFileW` w
 is a crate (`windows-acl`, or `windows-sys` behind a small wrapper), a licence review, and a
 test that proves the ACL bites, which means a second account on the runner. None of that is
 hard. All of it is work that has not been costed, and until it is done the honest arm is a
-refusal: charter cannot write private state on this platform.
+refusal: purlis cannot write private state on this platform.
 
-**Windows resolves names charter believes are ordinary.** `contain::segment_ok` refuses a
+**Windows resolves names purlis believes are ordinary.** `contain::segment_ok` refuses a
 separator, a NUL, `.`, `..`, an absolute path and a drive-qualified name — and it is used
 *alone*, without the `^[A-Za-z0-9][A-Za-z0-9._-]*$` alphabet, on session ids, memory
 identifiers, repo names on clone, worktree names and inventory entries. It does not refuse:
@@ -139,7 +139,7 @@ Every one of these is a string rule, which makes them the cheapest guards on thi
 ones to write first — and each needs a test, because `segment_ok`'s existing tests run on a
 platform where none of these strings mean anything.
 
-**`ETXTBSY` does not exist, and its absence is not good news.** `crates/stand-in` is charter's
+**`ETXTBSY` does not exist, and its absence is not good news.** `crates/stand-in` is purlis's
 one answer to writing a program a test is about to run, and it is `#[cfg(unix)]` from top to
 bottom: `/bin/sh` writes the bytes, `/bin/cp` copies the binary, `chmod 0755`, then a rename.
 On Windows the crate compiles to nothing and every test that writes a stand-in fails to
@@ -158,12 +158,12 @@ global config (`USERPROFILE`, or `HOMEDRIVE`+`HOMEPATH`); the `PATH` it builds i
 `git.exe` in any case. The guard's *reasoning* survives: an attacker-settable `PATH` must not
 choose the binary. Its implementation does not.
 
-**Before any of that: charter-app had no `.gitattributes`.** Git for Windows turns
+**Before any of that: purlis had no `.gitattributes`.** Git for Windows turns
 `core.autocrlf` on by default, and almost every test here is a byte comparison —
 `tests/fixtures/planes/**` is regenerated and diffed byte for byte, the differential compares
 every file under two plane copies, `fixtures/corpora/*.raw` are raw terminal recordings full of
 escape sequences. A checkout that rewrote a line ending would make all of them measure the
-checkout instead of the code, silently and on one platform only. charter-app#93 adds
+checkout instead of the code, silently and on one platform only. purlis#93 adds
 `* -text`; it marks nothing in the tree as changed, because everything here is already LF, and
 it is the precondition for trusting any Windows measurement at all.
 
@@ -171,7 +171,7 @@ it is the precondition for trusting any Windows measurement at all.
 armed state hook as `shell_quoted(binary) + " hook <word>"`, POSIX single-quoting, and on
 Windows a hook command runs through `cmd.exe`, where `'` quotes nothing: the program is
 literally named `'C:\…\charter.exe'` and there is none. A session's state comes from hooks
-only (ADR 0018), so a Windows charter's board would never move and would have no way to say
+only (ADR 0018), so a Windows purlis's board would never move and would have no way to say
 why. #103.
 
 **And a chat has no program to run.** `app/src-tauri/src/sessions.rs:296` is
@@ -182,13 +182,13 @@ as a technical one, and it changes what a profile's command line means.
 
 **A unix socket with `0600` on it is the hook channel.** There is no expression at all: Rust's
 standard library does not surface `AF_UNIX` on Windows, and a named pipe's access is an ACL
-again. charter-app#93 changes the `compile_error!` that used to stand here into a refusal, so
+again. purlis#93 changes the `compile_error!` that used to stand here into a refusal, so
 the crate can be built and the rest of the platform measured; that refusal is the shipped
 behaviour until a named pipe with a security descriptor exists.
 
 ## What was measured
 
-charter-app#93 adds a non-gating `windows-latest` job to CI — deliberately not one of the nine
+purlis#93 adds a non-gating `windows-latest` job to CI — deliberately not one of the nine
 required checks, because a required check on a platform with no port blocks every merge in the
 repo including the ports that would make it green. It reports the whole `cargo check` error
 list rather than its first line, and it runs `tools/windows-probe`, which asks a real ConPTY
@@ -232,7 +232,7 @@ crates\charter-cli\tests\memory.rs:145    error[E0433] cannot find `unix` in `os
 
 Two of them are the hook channel again under another name — `statusline.rs` reaches for
 `std::os::unix::net::UnixStream` directly rather than through `hookwire`, which is the second
-copy charter-app#95 asks to remove. One is `detach_self`'s `process_group(0)`. Three are
+copy purlis#95 asks to remove. One is `detach_self`'s `process_group(0)`. Three are
 tests.
 
 These are fixed here too, and the same way: the surface check answers "no app is listening",
@@ -253,13 +253,13 @@ crates\charter-cli\tests\repo_commands.rs:619  error[E0425] cannot find `program
 crates\charter-cli\tests\init.rs:79            error[E0433] cannot find `unix` in `os`
 ```
 
-**The `charter` binary builds on Windows.** `charter-core`'s library and `charter-cli`'s
+**The `purlis` binary builds on Windows.** `charter-core`'s library and `charter-cli`'s
 binary both compile; `cargo build -p charter-cli` produces an executable. Everything a plane
 runs as a command is, at the level of "it compiles", there.
 
 What does not is the **test suite**, and the first of the two remaining errors is the wall
 itself: `stand_in::program` is `#[cfg(unix)]`, and rustc says so — *"found an item that was
-configured out"*. That is charter-app#101 arriving exactly where it was predicted.
+configured out"*. That is purlis#101 arriving exactly where it was predicted.
 
 Two things this PR's own `cfg` work leaves behind, said here so a reviewer does not have to
 find them: three constants in `hookwire` and `session` became unix-only and are now marked so
@@ -275,9 +275,9 @@ next two runs have something to be checked against rather than discovered:
 
 - **`charter-core`'s test targets: 14 of its 20 integration tests** reach for `stand_in::` or
   `std::os::unix`, plus the `#[cfg(test)]` modules inside the source. This is the stand-in
-  wall (charter-app#101) and it is the big one.
+  wall (purlis#101) and it is the big one.
 - **`app/src-tauri`: 12 sites across three files** — `chats.rs` (8), `panels.rs` (2, its own
-  inline stand-in, which is the duplication charter-app#81 already wanted removed) and
+  inline stand-in, which is the duplication purlis#81 already wanted removed) and
   `sessions.rs` (2, one of them the `SHELL` fallback above).
 
 Each run moves the frontier by one rung. That is the shape of the remaining work rather than
@@ -286,7 +286,7 @@ a surprise, and it is why the estimate below counts test infrastructure separate
 **The `-c core.hooksPath=/dev/null` guard still bites.** Measured rather than assumed, and
 this is a refutation of a worry rather than a finding: without the flag the planted
 `pre-commit` ran and refused the commit (`THE-HOOK-RAN`, exit 1); with it the commit went
-through (exit 0). Git for Windows maps `/dev/null`, and charter's hook guard survives the
+through (exit 0). Git for Windows maps `/dev/null`, and purlis's hook guard survives the
 platform unchanged.
 
 **None of the four directories `worktree::git` searches exists**, as Windows resolves them —
@@ -329,10 +329,10 @@ because what they got wrong is part of the answer.**
   runs a single line, and a session that does not pay it never starts at all. Every other
   question here was measuring that.
 
-  This is a real constraint on `Session::start` and not a probe artefact. charter's engine
+  This is a real constraint on `Session::start` and not a probe artefact. purlis's engine
   does answer a DSR — `alacritty_terminal` raises it and `read_until_the_output_ends` calls
   `take_replies` on **every** read, with no view open — and `Session::start` already takes the
-  writer and starts the reader before it spawns. So charter satisfies this today, by an
+  writer and starts the reader before it spawns. So purlis satisfies this today, by an
   ordering that was chosen for other reasons. On Windows it stops being an accident: anything
   that moved the spawn earlier, or started the engine lazily on first output, would produce a
   chat that opens and then does nothing at all, with no error anywhere. That belongs in a test
@@ -378,7 +378,7 @@ unix harness turns on by itself.
 
 ## The work, as issues
 
-Each of these is filed on charter-app, so this ADR decides the order rather than holding the
+Each of these is filed on purlis, so this ADR decides the order rather than holding the
 detail:
 
 | issue | what it is | shape |
@@ -386,9 +386,9 @@ detail:
 | #95 | the hook channel: a named pipe, and an ACL where the `0600` was | design |
 | #96 | `segment_ok` accepts four kinds of name Windows resolves elsewhere | string rules, cheap |
 | #97 | every gate asks "is this a symlink", which misses most reparse tags | design |
-| #98 | the `0600`/`0700` on charter's own state silently vanishes | design |
+| #98 | the `0600`/`0700` on purlis's own state silently vanishes | design |
 | #99 | ConPTY breaks the session lifecycle, and holds the program until the terminal answers `ESC[6n` | fix, sized |
-| #100 | charter cannot find or run git, and two more lookups share the bugs | fix, sized |
+| #100 | purlis cannot find or run git, and two more lookups share the bugs | fix, sized |
 | #101 | `crates/stand-in` is `cfg(unix)` end to end, so the tests cannot compile | rewrite |
 | #102 | `glstate::alive` and `news::alive` disagree off unix | decide once |
 | #103 | the armed state hooks are POSIX shell commands, so no chat ever reports | design |
@@ -403,7 +403,7 @@ comment on one of three platforms is a guard that is documented rather than enfo
 
 **B. Refuse on Windows until each guard has an expression.** Taken. The string rules are
 cheap and can land immediately; the ACL, the reparse-tag walk and `stand-in` are each a small
-piece of design with a test that has to be seen to fail. Until they land, a Windows charter
+piece of design with a test that has to be seen to fail. Until they land, a Windows purlis
 refuses to start rather than starting without them.
 
 **C. Do Windows together with the descriptor-based containment rewrite.** This is the
@@ -417,19 +417,19 @@ throwing the first away.
 
 So: the string rules and the two coin-toss `alive` defaults are worth fixing now, because they
 are cheap and they are wrong on every platform's terms. Everything else waits for M3 and lands
-with the rewrite, and charter refuses on Windows in the meantime.
+with the rewrite, and purlis refuses on Windows in the meantime.
 
 ## What is left, in weeks rather than in adjectives
 
 The estimate ADR 0025 rested on had no Windows number in it at all. This is one, with its
-basis written next to it so it can be argued with. It is the work to reach a Windows charter
-as trustworthy as the macOS and Linux ones — not a Windows charter that starts.
+basis written next to it so it can be argued with. It is the work to reach a Windows purlis
+as trustworthy as the macOS and Linux ones — not a Windows purlis that starts.
 
 | | work | basis | estimate |
 | --- | --- | --- | --- |
-| **A** | the string rules (#96), one `alive` answer (#102), and the mechanical half of the program lookups (#100: `git.exe`, `join_paths`, `USERPROFILE`, the `SystemRoot` allowlist, `PATHEXT`) | each is a named function with a test that can go red on macOS today; and the *compiling* half of A is already done — the `charter` binary builds there | **3–5 days** |
+| **A** | the string rules (#96), one `alive` answer (#102), and the mechanical half of the program lookups (#100: `git.exe`, `join_paths`, `USERPROFILE`, the `SystemRoot` allowlist, `PATHEXT`) | each is a named function with a test that can go red on macOS today; and the *compiling* half of A is already done — the `purlis` binary builds there | **3–5 days** |
 | **B** | the guards that need a design: ACLs for private state (#98), the reparse-tag walk (#97), the named-pipe channel (#95) | each is a crate choice, a `deny.toml` licence review, and a test that needs a second account on the runner | **3–5 weeks** |
-| **C** | the session lifecycle (#99): end from a wait on the handle, a job object for the kill, `259` | needs either an upstream `portable-pty` change or charter assigning the job after `spawn_command` | **1 week**, and it cannot be trusted until the scenario tests run on Windows |
+| **C** | the session lifecycle (#99): end from a wait on the handle, a job object for the kill, `259` | needs either an upstream `portable-pty` change or purlis assigning the job after `spawn_command` | **1 week**, and it cannot be trusted until the scenario tests run on Windows |
 | **D** | test infrastructure (#101): `stand-in` rewritten, and the 44 files that reach for `std::os::unix` | 1177 tests; 21 `#!/bin/sh` stand-ins across 12 files; symlink tests need Developer Mode or admin on the runner; `mkfifo` has no counterpart | **2–3 weeks** |
 | **E** | not attempted and not costed here: the Tauri bundle, WebView2 bootstrapping, signing, the tray, single-instance, and the scenario suite on Windows | nothing has been built, so any number would be invented | **unknown** |
 

@@ -6,13 +6,13 @@ draft bug, and the command line comes before any button in the window.
 
 The Python charter's reporting surface had eight verbs: `bug`, `gap`, `list`, `show`, `delete`,
 `consent`, `send` and `comment`. It kept drafts on disk, asked for consent once per person, and
-filed only through `send`. Its ADR 0003 (charter-plane, *"Nothing publishes without a human
+filed only through `send`. Its ADR 0003 (purlis-plane, *"Nothing publishes without a human
 'yes' — and there is no `--yes` flag"*) gave the reason for the two steps: *"a flag the agent
 can pass is a flag the agent will pass unprompted."*
 
 ## The decision
 
-**`charter report bug|feature` drafts, scrubs and prints the draft on every run. It files only
+**`purlis report bug|feature` drafts, scrubs and prints the draft on every run. It files only
 on the reporter's yes**: `y` at a prompt when both standard input and standard error are a
 terminal, or `--yes <digest>`, where the digest is the one the preview of that same draft
 printed. The digest is twelve hex characters of SHA-256 over the repository, the title and the
@@ -25,7 +25,7 @@ it changes afterwards can be filed under the old yes. It does **not** make the y
 An agent can run the preview and then `--yes <digest>` in one turn with nobody answering, which
 is ADR 0003's objection, and it still holds. What stands in front of that is the harness's own
 permission prompt on the second run. A plane that wants a report to always ask can add
-`charter guard ask 'charter report *--yes*'`. The operator asked for `--yes` knowing that; this
+`purlis guard ask 'purlis report *--yes*'`. The operator asked for `--yes` knowing that; this
 record is where the residual is written down.
 
 Every bare run is the dry run the issue asked for: the preview is the exact title and body
@@ -34,21 +34,21 @@ Every bare run is the dry run the issue asked for: the preview is the exact titl
 
 **Other decisions:**
 
-- **Filed as the reporter, never as a token** (charter-plane ADR 0001). A chat can hold a
+- **Filed as the reporter, never as a token** (purlis-plane ADR 0001). A chat can hold a
   plane's or a vault's token in `GH_TOKEN`, and `gh` prefers that variable to its own stored
   login. So `forge::gh_as_the_operator` hands `gh` none of `GH_TOKEN`, `GITHUB_TOKEN`,
   `GH_ENTERPRISE_TOKEN` and `GITHUB_ENTERPRISE_TOKEN`, and passes everything else a forge call
   gets, including `GH_CONFIG_DIR`, where the reporter's own login lives. When `gh` cannot
-  file, charter prints the prefilled `issues/new` link, as the Python did, leaving the body out
+  file, purlis prints the prefilled `issues/new` link, as the Python did, leaving the body out
   when it would make the link too long to open. `GH_CONFIG_DIR` still passes: it is where the
   reporter's own login lives, so a chat that points it at another account's configuration
   files as that account. That residual is the reporter's own environment, and is named here.
-- **Scrubbed by what charter can identify, visibly.** Four kinds of text are removed:
+- **Scrubbed by what purlis can identify, visibly.** Four kinds of text are removed:
   - any line `secretshape` reads as a credential;
   - the value of any variable in the environment of eight characters or more (a terminal's
     name excepted). When a chat holds a vault's values, this is where they are;
   - the plane's path and home-directory paths;
-  - the names of the plane's workspaces, clones, personas and vaults — except charter's own
+  - the names of the plane's workspaces, clones, personas and vaults — except purlis's own
     words (`charter`, `charter-app`, `charter-plane`, `steward`) and the placeholders' words,
     which identify nobody.
 
@@ -59,7 +59,7 @@ Every bare run is the dry run the issue asked for: the preview is the exact titl
   allowlist test. Only a panic draft is a closed set of fields.
 - **A panic is a closed set of fields.** From the app's `panics.log`, the draft keeps where it
   panicked (an absolute path is cut to its last three parts), the message (scrubbed, and
-  marked as free text), and the charter version the record names. The app now writes that
+  marked as free text), and the purlis version the record names. The app now writes that
   version into every record. The thread and the backtrace are dropped.
 - **Duplicates are searched with `gh search issues --repo diazoxide/charter`.** `gh api
   search/issues` answers 404 on this repository. The candidates are shown for the reporter to
@@ -72,7 +72,7 @@ Every bare run is the dry run the issue asked for: the preview is the exact titl
   caps and expiry exist to carry a draft from one command to another. A draft that is rebuilt
   from its input on every run, and filed under its own digest, needs none of them.
   `report comment` (adding a reproduction to an existing issue) is the one verb whose loss
-  costs something: the preview lists possible duplicates, and charter cannot yet comment on
+  costs something: the preview lists possible duplicates, and purlis cannot yet comment on
   one. It can come back as `--on <issue>` without a store.
 - **A bare `--yes`.** Rejected, for ADR 0003's reason.
 - **Unlock every vault to scrub its values.** Rejected. It would prompt the keyring and call
@@ -86,34 +86,34 @@ one now.
 
 ## Amendment, 2026-09-26: the ask rule is written by default
 
-The operator ruled on #363 (D11): keep `charter report --yes <digest>`, and have charter write
-an **ask** permission rule for `charter report *--yes*` by default, so the harness always asks
+The operator ruled on #363 (D11): keep `purlis report --yes <digest>`, and have purlis write
+an **ask** permission rule for `purlis report *--yes*` by default, so the harness always asks
 the operator before a report is filed. The residual named above, an agent previewing and then
 filing in one turn, is now met by a prompt every plane has, not one a plane has to add.
 
-- **`charter init` writes it** beside the handoff rule, in each harness's own syntax:
-  `Bash(charter report *--yes*)` in `.claude/settings.json`'s `permissions.ask`, and
-  `"charter report *--yes*": "ask"` in `opencode.json`'s `permission.bash`. As with the
-  handoff rule, it goes into every harness or none: a file charter cannot read stops both
+- **`purlis init` writes it** beside the handoff rule, in each harness's own syntax:
+  `Bash(purlis report *--yes*)` in `.claude/settings.json`'s `permissions.ask`, and
+  `"purlis report *--yes*": "ask"` in `opencode.json`'s `permission.bash`. As with the
+  handoff rule, it goes into every harness or none: a file purlis cannot read stops both
   writes.
-- **`charter reinit` adds it** to a plane made before this. It appends to the existing lists
+- **`purlis reinit` adds it** to a plane made before this. It appends to the existing lists
   and touches no other rule, and it mentions the rule only when it added it.
 - **Workspace layers carry it at once.** When `init` or `reinit` writes the rule, every
-  workspace layer charter generates is rewritten through the same writer `charter guard ask`
+  workspace layer purlis generates is rewritten through the same writer `purlis guard ask`
   uses (#449), so a chat started in a workspace is asked too.
-- **`charter doctor`'s `ask rules` row warns when it is missing** from the settings a chat
+- **`purlis doctor`'s `ask rules` row warns when it is missing** from the settings a chat
   started in that directory reads, or from `opencode.json`, and names the harnesses that lack
-  it. `charter guard report` puts it back, as `charter guard handoff` does for the handoff
-  rule, and `charter doctor --fix` adds it through the same writer. Removing it stays the
+  it. `purlis guard report` puts it back, as `purlis guard handoff` does for the handoff
+  rule, and `purlis doctor --fix` adds it through the same writer. Removing it stays the
   operator's choice: the row warns and never fails, and only `guard report`, `reinit` and
   `--fix` put it back, all of which the operator runs.
 - **Codex has no equivalent.** Codex's `.rules` files (`prefix_rule`) match a command's
   arguments as a prefix, in order, so they cannot say "`--yes` anywhere after
-  `charter report`". A `prefix_rule(["charter", "report"], decision = "prompt")` would ask
+  `purlis report`". A `prefix_rule(["purlis", "report"], decision = "prompt")` would ask
   before every preview as well, and a prefix ending in `--yes` misses a `--yes` that follows
-  another flag. So charter writes nothing for Codex. There, the digest and Codex's own
+  another flag. So purlis writes nothing for Codex. There, the digest and Codex's own
   approval policy are what stand in front of a filing.
 
-The rule matches `--yes` anywhere after `charter report`, so both `--yes=<digest>` and a
+The rule matches `--yes` anywhere after `purlis report`, so both `--yes=<digest>` and a
 `--yes <digest>` that follows `--title` get the prompt. Answering `y` at the terminal prompt
 is unaffected, because the person typing it is already the operator.

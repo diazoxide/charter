@@ -4,25 +4,25 @@ This page takes you from nothing installed to a chat working in one of your GitL
 gitlab.com or on a self-managed GitLab. The same steps for GitHub are in
 [Getting started with GitHub](github.md).
 
-charter says **repo** for what GitLab calls a project. In charter, a **project** is something
-else: the git repository where charter keeps your workspaces, personas, memory and settings.
+purlis says **repo** for what GitLab calls a project. In purlis, a **project** is something
+else: the git repository where purlis keeps your workspaces, personas, memory and settings.
 
 ## What you need
 
 - A Mac with Apple Silicon, or a Linux machine on x86_64. There is no Windows build yet.
 - At least one harness, the coding agent a chat runs: Claude Code (`claude`), Codex or
   opencode. Each one signs in with its own login, the first time a chat starts it. With none
-  installed, charter lists each one's official installer once your repo is open, and
+  installed, purlis lists each one's official installer once your repo is open, and
   **Install** runs it in a shell tab.
 - GitLab's own command-line tool, [`glab`](https://gitlab.com/gitlab-org/cli), signed in with
-  `glab auth login` (add `--hostname <host>` for a self-managed GitLab). charter lists your
+  `glab auth login` (add `--hostname <host>` for a self-managed GitLab). purlis lists your
   repos, clones them and opens merge requests through `glab`, as you: it keeps no GitLab token
   of its own.
 
 ## Install
 
 Download the newest release from the
-[releases page](https://github.com/diazoxide/charter/releases/latest):
+[releases page](https://github.com/purlis/purlis/releases/latest):
 
 - **macOS:** `purlis-macos-arm64.dmg`. Open it and drag **purlis** to Applications. The build
   is not notarized, so macOS refuses the first launch from a download. Run this once, before
@@ -37,16 +37,16 @@ Download the newest release from the
 - **Linux:** `purlis-linux-x86_64.deb` (`sudo apt install ./purlis-linux-x86_64.deb`, which also
   puts `purlis` on your `PATH`), or the AppImage, `purlis-linux-x86_64-appimage.AppImage`.
 
-After that, charter updates itself: it checks the release's signature before it installs
+After that, purlis updates itself: it checks the release's signature before it installs
 anything, and it asks before it installs. A `.deb` install is updated by installing the next
-`.deb`. [How charter updates itself](../updating.md) has the details.
+`.deb`. [How purlis updates itself](../updating.md) has the details.
 
 ## The first run
 
 The first window says **Open a repo to start**. Pick a repo folder on your machine with
 **Open a repo…**, or type its path. A clone of a GitLab repo works like any other.
 
-charter then makes a project for you, on this machine only. Your repo is cloned into a
+purlis then makes a project for you, on this machine only. Your repo is cloned into a
 workspace named after it, and the first chat starts in that clone. Nothing is written into the
 repo you picked.
 
@@ -61,7 +61,7 @@ teammate shared as a GitLab repo.
 
 ## Working with your GitLab repos
 
-The project charter makes on the first run tracks the forge your repo's `origin` is on, and its
+The project purlis makes on the first run tracks the forge your repo's `origin` is on, and its
 group: a repo cloned from `gitlab.com/my-group/widget` gives a project that tracks GitLab, group
 `my-group`. If the repo has no remote, or its remote is on a self-managed GitLab, the first run
 asks which forge before it makes the project; pick **GitLab**. To list and clone the repos in
@@ -74,16 +74,16 @@ your GitLab group:
 2. Open **New workspace…**. Its repo picker lists the repos your own `glab` login is a member
    of under that group, asked when the dialog opens; **Refresh** asks again. Pick the ones this
    piece of work needs. A workspace with no repos is fine too.
-3. charter clones each one over HTTPS from its default branch, and sets the clone up to fetch
+3. purlis clones each one over HTTPS from its default branch, and sets the clone up to fetch
    and push with `glab auth git-credential`, so git uses your `glab` login.
 4. Start a chat in the workspace and choose its harness.
 
 If the picker cannot ask GitLab, it says why in `glab`'s words, for example that `glab` is not
 signed in for that host, and tells you the command to run.
 
-From a terminal, `charter init --forge gitlab --owner <group>` makes a project in the current
+From a terminal, `purlis init --forge gitlab --owner <group>` makes a project in the current
 directory that tracks that group. Add `--host <host>` for a self-managed GitLab. With
-`--adopt <repo>`, `charter init` reads the forge and group from that repo's `origin` instead,
+`--adopt <repo>`, `purlis init` reads the forge and group from that repo's `origin` instead,
 and without either it asks you to name the forge.
 
 ## Saving your project to GitLab
@@ -99,14 +99,14 @@ before it:
 | `pr` | pushes to a save branch and opens or updates one merge request |
 | `pr-merge` | also sets that merge request to merge when its pipeline succeeds |
 
-charter sets that only while a pipeline is running or waiting to run for the merge request.
+purlis sets that only while a pipeline is running or waiting to run for the merge request.
 Until a mode is set, the **Saving** view asks once, before anything is pushed. The project from
 the first run has no remote, so only `off` and `commit` have anywhere to go until you push it to
 a GitLab repo of its own. The keys are in [the project format](../plane-format.md#chartertoml).
 
 ## The five words
 
-charter has five concepts, and every other word belongs to one of them
+purlis has five concepts, and every other word belongs to one of them
 ([ADR 0072](../adr/0072-charter-has-five-concepts-and-every-other-word-belongs-to-one-of-them.md)):
 
 - **Project:** the git repository that holds your workspaces, personas, memory and settings. A
@@ -114,4 +114,4 @@ charter has five concepts, and every other word belongs to one of them
 - **Workspace:** a named piece of work, with its own `workspace.md`, memory, todos and repos.
 - **Chat:** one conversation with an agent, in a tab.
 - **Persona:** a role a chat can take, with its own instructions, memory and vault.
-- **Memory:** what charter keeps so that the next chat knows what earlier ones learned.
+- **Memory:** what purlis keeps so that the next chat knows what earlier ones learned.

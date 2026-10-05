@@ -1,4 +1,4 @@
-# Telemetry is one OTel pipeline on the device, and only the signed updater calls Charter
+# Telemetry is one OTel pipeline on the device, and only the signed updater calls purlis
 
 **Accepted 2026-10-01** by the operator (ruling V34c), with dispatcher decisions D-0083a/b,
 drafted for program-map ticket OB-1 (#686). It follows these of the operator's rulings:
@@ -41,7 +41,7 @@ It builds on [ADR 0042](0042-charter-updates-itself-and-nothing-it-cannot-verify
 (the signed updater), [ADR 0066](0066-a-chat-is-a-ulid-a-run-is-a-stretch-of-its-conversation-and-a-device-is-random.md)
 (ids and the OTel attributes), [ADR 0067](0067-a-chat-runs-in-a-sandbox-charter-compiles-for-its-harness.md)
 (the chat sandbox and its egress proxy), [ADR 0068](0068-a-chat-lives-in-charterd-and-the-app-is-its-client.md)
-(`charterd` and the event log), [ADR 0069](0069-every-store-charter-writes-is-in-one-of-four-tiers.md)
+(`purlisd` and the event log), [ADR 0069](0069-every-store-charter-writes-is-in-one-of-four-tiers.md)
 (tiers), [ADR 0073](0073-a-harness-is-declared-as-data-and-a-chat-runs-it-at-one-of-three-levels.md)
 (harness adapters), [ADR 0075](0075-an-audit-entry-is-metadata-in-a-store-of-its-own-and-telemetry-never-reads-it.md)
 (audit and telemetry apart) and [ADR 0076](0076-a-run-moves-only-by-a-named-cause-and-a-chats-state-is-read-from-its-runs.md)
@@ -54,12 +54,12 @@ Its concept is **Chat**: what telemetry measures is chats and their runs
 ([ADR 0072](0072-charter-has-five-concepts-and-every-other-word-belongs-to-one-of-them.md)). The
 receiver is a part of the session host, so that part belongs to **Project**, as the audit does.
 
-## Where charter is today
+## Where purlis is today
 
-- **charter collects no telemetry.** There is no receiver, no exporter and no store. No harness
-  is started with OTel settings, so Claude Code, Codex and opencode export nothing to charter.
+- **purlis collects no telemetry.** There is no receiver, no exporter and no store. No harness
+  is started with OTel settings, so Claude Code, Codex and opencode export nothing to purlis.
 - **Two things already reach the network on their own.** The updater fetches `latest.json` from
-  GitHub Releases and verifies what it downloads (ADR 0042). `charter report` files an issue
+  GitHub Releases and verifies what it downloads (ADR 0042). `purlis report` files an issue
   through the operator's own `gh`, after showing the text (#363). Neither sends a usage number.
 - **Three records already name telemetry and leave it to OB.** ADR 0066 fixes four `charter.*`
   attributes, `host.id` and `gen_ai.conversation.id`, and says `enduser.id` is never set. ADR
@@ -90,15 +90,15 @@ host counters (OB-19) ───────────────────�
 the event log (V25d) ──────────────────────┘
 ```
 
-- **The receiver is in `charterd`**, the one host per OS user per device (ADR 0068). The window
+- **The receiver is in `purlisd`**, the one host per OS user per device (ADR 0068). The window
   reads telemetry from its host like everything else. There is no Collector binary and no second
   process.
-- **Four sources, and only four.** The harnesses' own exporters, charter's own spans, the host's
+- **Four sources, and only four.** The harnesses' own exporters, purlis's own spans, the host's
   counters, and OTel logs derived from the event log (V25d). A new source is a change to this
   record. The last three are inside the host and need no credential.
 - **Two things are never a source.** **The audit store**, settled by V25d and O1. **The
   diagnostic log** (FD-8): it is unstructured text, redacted by shape, and written by the app
-  process. No `tracing` bridge feeds it to OTel. charter's own spans (OB-10) are made from events
+  process. No `tracing` bridge feeds it to OTel. purlis's own spans (OB-10) are made from events
   and the host's own timing, not from log lines.
 - **Product telemetry and crash reports are not an export of this pipeline** (§9).
 
@@ -148,8 +148,8 @@ the event log (V25d) ───────────────────�
   **best-effort**. That is the same residual every opted-out chat carries (ADR 0067 §7).
 - **It answers at once and never pushes back.** It accepts a request, queues it, and replies
   success. When the queue is full it drops the oldest work and counts the drop. A harness never
-  retries into its own memory because charter was slow, and no hook waits on telemetry (ADR 0075
-  §1: *"dropped quietly, and counted"*). The counts are rows in `charter doctor --perf` (OB-19).
+  retries into its own memory because purlis was slow, and no hook waits on telemetry (ADR 0075
+  §1: *"dropped quietly, and counted"*). The counts are rows in `purlis doctor --perf` (OB-19).
 - **A chat whose harness cannot export still runs.** Its meters say *not reported*, and nothing
   else changes (OB-20's rule).
 
@@ -179,7 +179,7 @@ harness's equivalent (`OTEL_LOG_USER_PROMPTS` and its kin for Claude Code).
   want prompts.
 - **A gate is opened per project, in the Machine tier, and only from a human client scope.** The
   open gates live in `<config>/telemetry.json`, keyed by project, which chats are denied (*ADR
-  0067, amended*). Only a `local-ui` caller can open one: the window, or `charter` on that scope.
+  0067, amended*). Only a `local-ui` caller can open one: the window, or `purlis` on that scope.
   **No file in a project opens a gate**: not `charter.toml`, and not `charter.local.toml`, which
   is Clone state that a chat at the project root or without a sandbox can write.
 - **A gate can be closed from more places than it can be opened.** `[telemetry] content` in
@@ -191,15 +191,15 @@ harness's equivalent (`OTEL_LOG_USER_PROMPTS` and its kin for Claude Code).
 
 ### 5. The conventions are pinned
 
-- **charter writes GenAI and MCP attributes by their semantic-convention names, pinned to one
+- **purlis writes GenAI and MCP attributes by their semantic-convention names, pinned to one
   release** of `open-telemetry/semantic-conventions-genai`. OB-2 picks the newest tagged release
   when it lands and records it as a constant and as the resource's `schema_url`.
 - **Moving the pin is a PR that maps old names to new**, for the store and for every export. A
   record stored under one pin is read through the map, never rewritten.
-- **charter never invents a GenAI value.** ADR 0066's rule on `gen_ai.conversation.id` holds for
+- **purlis never invents a GenAI value.** ADR 0066's rule on `gen_ai.conversation.id` holds for
   every `gen_ai.*` attribute.
 
-### 6. Attributes charter sets
+### 6. Attributes purlis sets
 
 ADR 0066's four `charter.*` attributes and `host.id` stand, with their places: `host.id` on the
 resource, and `charter.chat.id`, `charter.run.id`, `charter.run.parent_id` and `charter.event.id`
@@ -223,7 +223,7 @@ on each record (§2). This record adds, on the resource, set by the receiver fro
 
 ### 7. The local store: rolling, capped, and the user's to change
 
-- **Where:** `<data>/telemetry/`, charter's data home (ADR 0075), never in a project or a git work
+- **Where:** `<data>/telemetry/`, purlis's data home (ADR 0075), never in a project or a git work
   tree. The writer refuses such a path, as the audit's does. Chats are denied it (*ADR 0067,
   amended*).
 - **Why `<data>`, when FD-8 kept its log out of it.** ADR 0069, as ADR 0075 amended it, gives
@@ -260,7 +260,7 @@ on each record (§2). This record adds, on the resource, set by the receiver fro
   (C9). Before an account exists, there is no org, and only the user's settings apply.
 - **The org fleet dashboard is TM-2's**, after GT-CLOUD. Nothing here waits on it.
 
-### 9. What calls Charter, and nothing else does
+### 9. What calls purlis, and nothing else does
 
 **Settled by O4** (*"No phone-home offline, except the signed updater"*) **and X50** (*"no network
 calls to Charter's servers without an account, except the signed updater; third-party calls that
@@ -272,13 +272,13 @@ For this pipeline that means:
   applied C-21, and the weekly manifest asset (V13, OB-17). They are reads of files. They carry
   no identifier, and each appears in the network log.
   *Amended by V64 (operator, 2026-10-02, OB-15 #687): **and a report the operator explicitly
-  sends** (`charter report`, ADR 0059). It is the operator's own act. The network log lists it as
-  a Charter line, and a run that sends no report still lists no Charter address but the
+  sends** (`purlis report`, ADR 0059). It is the operator's own act. The network log lists it as
+  a purlis line, and a run that sends no report still lists no purlis address but the
   updater's.*
-- **The OTel pipeline never sends to a Charter host by default**, and has no built-in destination.
-  A Charter destination can exist only as an org's, after an account (§8).
+- **The OTel pipeline never sends to a purlis host by default**, and has no built-in destination.
+  A purlis destination can exist only as an org's, after an account (§8).
 - **Product telemetry (OB-12) is a separate, closed registry**, not a filter over this pipeline.
-  Its events are written by charter's own code, each declared with its fields; nothing from a
+  Its events are written by purlis's own code, each declared with its fields; nothing from a
   harness and no path or content can enter it. It is off until the user turns it on, shows its
   queue in a local viewer, and is listed in the network log when it sends. **Settled by O4 and
   O5:** *"Charter product telemetry is opt-in only."*
@@ -289,7 +289,7 @@ For this pipeline that means:
 ### 10. What telemetry is trusted for
 
 - **Telemetry is what a harness reports about itself**, through an exporter that runs in the
-  harness and whose credential its own tool commands can read. charter treats it as a
+  harness and whose credential its own tool commands can read. purlis treats it as a
   measurement: meters, timings and the views.
 - **Time and tool-call budgets are counted from hooks**, as ADR 0076 has it: the host's own
   counts. Telemetry never moves them.
@@ -329,7 +329,7 @@ For this pipeline that means:
 - **§6, an external backend that wraps the whole harness**, reaches the receiver only through the
   proxy, as D-0083b says.
 - **§4, a vendor's managed tier.** Where a harness's managed settings fix its OTel endpoint or
-  its content settings, charter does not override them. That chat's meters say *locked by
+  its content settings, purlis does not override them. That chat's meters say *locked by
   <vendor> admin*, and the receiver still enforces this record's gates on whatever reaches it.
 
 ## ADR 0068, amended
@@ -354,7 +354,7 @@ For this pipeline that means:
 
 - **§2, what FR-10 backs up, gains a second exception**, beside the plain-file vault in Clone
   state: **the telemetry store is Machine and not rebuildable, and FR-10 does not copy it.**
-  Losing it costs past charts and nothing charter or the user relies on, and gigabytes of charts
+  Losing it costs past charts and nothing purlis or the user relies on, and gigabytes of charts
   restored to a new machine are worth less than the backup they would fill. The mark keeps its
   meaning; this is an exception to the rule, named as one.
 - **Row 82 is rebuildable** because a lost cursor restarts its destination at the store's oldest
@@ -370,7 +370,7 @@ For this pipeline that means:
 §1's table, column *Telemetry*:
 
 - **Source** read *"harness exporters (OB-3), the host's counters (OB-19), and the event log
-  (V25d)"*. It now reads: **harness exporters (OB-3), charter's own spans (OB-10), the host's
+  (V25d)"*. It now reads: **harness exporters (OB-3), purlis's own spans (OB-10), the host's
   counters (OB-19), and the event log (V25d)** (ADR 0083 §1).
 - **Store** read *"the OTel pipeline's own store and the user's own backend (OB-1, OB-2)"*. It now
   reads: **`<data>/telemetry/` (ADR 0083 §7), and the destinations the user or an org's policy
@@ -400,13 +400,13 @@ The code does not change with this record.
 
 | Where | What changes |
 |---|---|
-| `docs/plane-format.md` | Rows 81 to 84 of ADR 0069's inventory, as paths in *State charter keeps outside the plane*, marked **decided, not yet written** (in this PR) |
+| `docs/plane-format.md` | Rows 81 to 84 of ADR 0069's inventory, as paths in *State purlis keeps outside the plane*, marked **decided, not yet written** (in this PR) |
 | `CONTEXT.md` | **Telemetry** names the receiver and the store; gains **Content gate** and **Export destination** (in this PR) |
 | ADR 0066, ADR 0067, ADR 0068, ADR 0069, ADR 0075, ADR 0076 | Amended above. Their texts are left as accepted, and this record is the amendment |
-| OB-2 | The receiver in `charterd`: OTLP/HTTP on a unix socket behind the egress proxy, per-run credentials and the checks of §2, the stripping of §3, the gates of §4, the pin of §5, the store of §7, the highest-value rule of §10. Its acceptance adds: a record naming another chat is attributed to its credential's chat; a child run's records keep its run; a content attribute with its gate off is not stored |
+| OB-2 | The receiver in `purlisd`: OTLP/HTTP on a unix socket behind the egress proxy, per-run credentials and the checks of §2, the stripping of §3, the gates of §4, the pin of §5, the store of §7, the highest-value rule of §10. Its acceptance adds: a record naming another chat is attributed to its credential's chat; a child run's records keep its run; a content attribute with its gate off is not stored |
 | OB-3 | Each adapter injects the proxy endpoint with the credential prefix, asks for cumulative temporality where offered, turns the harness's content settings off, defers to a vendor's managed tier, and lists its harness's person attributes, held by a test against recorded output |
 | OB-9 | Destinations as §8 says: machine settings from a human scope, keyring headers, a cursor each |
-| OB-10 | charter's spans are made from events and host timing, not from the diagnostic log |
+| OB-10 | purlis's spans are made from events and host timing, not from the diagnostic log |
 | OB-12 | Product telemetry is a closed registry of its own (§9) |
 | OB-15 | Its no-account test runs with collection on |
 | OB-18 | The attributes of §6, without `charter.on_behalf_of` |
@@ -437,8 +437,8 @@ The code does not change with this record.
 ## What was rejected
 
 - **Shipping an OTel Collector.** A second binary to sign and update, in another language, for
-  what one receiver in `charterd` does (research 04 §2.1).
-- **Pointing harnesses straight at the user's backend.** Then charter's own meters and views would
+  what one receiver in `purlisd` does (research 04 §2.1).
+- **Pointing harnesses straight at the user's backend.** Then purlis's own meters and views would
   have nothing, and every harness would need its own export settings and credentials.
 - **A loopback port for the receiver**, or a new sandbox allowance for it. D-0083b routes through
   the proxy that already exists.
@@ -456,7 +456,7 @@ The code does not change with this record.
 - **Product telemetry as a filtered export of this pipeline.** A filter lets through whatever it
   forgot to exclude. A closed registry lets through only what it names.
 - **Bridging the diagnostic log into OTel.** It is unstructured text with no schema, already
-  redacted by shape, and written by another process. Its job is debugging charter, not measuring
+  redacted by shape, and written by another process. Its job is debugging purlis, not measuring
   chats.
 - **Backing up the store**, and **redefining *rebuildable*** to skip it. The first costs more than
   it saves. The second would blur a mark every other store relies on; an exception says what it
@@ -468,7 +468,7 @@ The code does not change with this record.
 
 ## Decided in drafting
 
-1. **The receiver is in `charterd`, not the app or a sidecar.** The host already outlives the
+1. **The receiver is in `purlisd`, not the app or a sidecar.** The host already outlives the
    window and owns the event log. Rejected: the app (it is not always running while chats are),
    and a sidecar (a second process to supervise).
 2. **A run is known by a credential in a path prefix of its endpoint**, under which the standard
@@ -489,11 +489,11 @@ The code does not change with this record.
    each. Rejected: a project setting (a commit would redirect telemetry), and an in-memory
    exporter queue (an outage would lose data the store still has).
 8. **A user's existing OTel settings.** A vendor's managed tier wins, as ADR 0067 §4 says:
-   charter never overrides an endpoint or a content setting the vendor's admin fixed, and the
+   purlis never overrides an endpoint or a content setting the vendor's admin fixed, and the
    meters say *locked by <vendor> admin*. A user's own `OTEL_*` settings are replaced for chats
-   charter starts, and the window offers the earlier endpoint once as an export destination.
-   Rejected: leaving the user's settings (charter's meters would be empty), and adopting them
-   silently (an export the user did not choose in charter).
+   purlis starts, and the window offers the earlier endpoint once as an export destination.
+   Rejected: leaving the user's settings (purlis's meters would be empty), and adopting them
+   silently (an export the user did not choose in purlis).
 9. **Attribute names under `charter.*`, freezing at OB-18.** `charter.branch` is a string array.
    Rejected: freezing now, before any outside reader exists, and `charter.piece` (above).
 10. **Each device keeps its own pipeline.** A runner's chats report to the runner's host, and its
@@ -505,7 +505,7 @@ The code does not change with this record.
 
 ## Decided (dispatcher, 2026-10-01)
 
-- **D-0083a:** *"charter does not emit `charter.on_behalf_of` on the device, which keeps V1 and
+- **D-0083a:** *"purlis does not emit `charter.on_behalf_of` on the device, which keeps V1 and
   V25 intact. An org member id may be added under org policy once org projects exist, after
   GT-CLOUD. The keyed-pseudonym scheme is dropped."* Applied in §3, §6 and the amendments of ADR
   0066 and ADR 0075.
@@ -535,7 +535,7 @@ Answered yes, as recommended.
 
 ## Amended for OB-17 (2026-10-05): the weekly count carries no identifier
 
-§9 names *"the weekly manifest asset (V13, OB-17)"* among the Charter reads that *"carry no
+§9 names *"the weekly manifest asset (V13, OB-17)"* among the purlis reads that *"carry no
 identifier"*. OB-17 (#688) builds it, and this section records how it keeps that promise.
 `docs/updating.md`, *Counting weekly users*, is the operator's account of it.
 
@@ -550,11 +550,11 @@ identifier"*. OB-17 (#688) builds it, and this section records how it keeps that
 - **What is counted.** GitHub's `download_count` of the weekly file, per release. The estimate
   of a channel's weekly users is the sum, over that channel's releases, of the growth of that
   count between two listings a week apart (`weekly-users`, in `crates/release-manifest`).
-  charter publishes no estimate; the raw count is public, as every asset's is (V38). The
+  purlis publishes no estimate; the raw count is public, as every asset's is (V38). The
   operator keeps the listings.
 - **What GitHub sees** is each request's IP address and user agent, as for every update check.
-  This is disclosed in `docs/updating.md`. charter never receives an IP address, and no store
-  of charter's holds one (X50).
+  This is disclosed in `docs/updating.md`. purlis never receives an IP address, and no store
+  of purlis's holds one (X50).
 
 ### Decided in implementation (OB-17)
 
@@ -563,7 +563,7 @@ identifier"*. OB-17 (#688) builds it, and this section records how it keeps that
   token. **It cannot be linked across weeks or devices because there is nothing in it to
   link.** Two machines send the same bytes, and one machine sends the same bytes in two weeks.
   What is left to correlate is GitHub's own view of the transport, the IP address and the
-  user agent. Every update check already exposes that view, and charter never sees it.
+  user agent. Every update check already exposes that view, and purlis never sees it.
   Rejected: a per-week random salt over an install id, which is unlinkable across weeks only
   while the salt is secret and still lets a log join a device's requests within a week. Also
   rejected: k-anonymous bucketed ids, which buy deduplication this estimate does not need,
@@ -574,9 +574,9 @@ identifier"*. OB-17 (#688) builds it, and this section records how it keeps that
   sent, or got no answer, including a 404 from a release published before the weekly file existed, gives the
   week back. That check then reads the usual manifest. Rejected: noting the week after the
   answer, which counts a machine with no store at every check.
-- **D-OB17c: the opt-out is `DO_NOT_TRACK`.** charter has no telemetry switch of its own yet:
+- **D-OB17c: the opt-out is `DO_NOT_TRACK`.** purlis has no telemetry switch of its own yet:
   OB-12's product telemetry and §7's collection setting are not built. The cross-tool
-  `DO_NOT_TRACK` convention is the opt-out that already exists, so charter honours it. Any value
+  `DO_NOT_TRACK` convention is the opt-out that already exists, so purlis honours it. Any value
   but empty or `0` opts out. The weekly count is the updater's (§9), not product telemetry, so
   it is on unless opted out, as V13 rules. A settings switch is a follow-up, made when OB-12's
   switch exists.

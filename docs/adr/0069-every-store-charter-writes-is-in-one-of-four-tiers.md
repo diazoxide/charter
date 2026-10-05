@@ -1,4 +1,4 @@
-# Every store charter writes is in one of four tiers
+# Every store purlis writes is in one of four tiers
 
 **Accepted 2026-09-30** by the operator (ruling V22b), drafted for program-map ticket FR-30
 (#623). It follows the operator's ruling **V2** (phase-2 critique): *"An ADR names four tiers: Plane (committed), Clone
@@ -11,26 +11,26 @@ It amends **OQ-10** and [ADR 0034](0034-charter-keeps-a-little-state-outside-eve
 records add: [ADR 0066](0066-a-chat-is-a-ulid-a-run-is-a-stretch-of-its-conversation-and-a-device-is-random.md)
 (chat, run and device identity),
 [ADR 0067](0067-a-chat-runs-in-a-sandbox-charter-compiles-for-its-harness.md) (the chat sandbox)
-and [ADR 0068](0068-a-chat-lives-in-charterd-and-the-app-is-its-client.md) (`charterd`), all
+and [ADR 0068](0068-a-chat-lives-in-charterd-and-the-app-is-its-client.md) (`purlisd`), all
 accepted. FR-10 (#608, backups) is built on it. So are LW-27, KN-26, KN-28, KN-29, KN-31
 (#717) and FW-7 (#735), which each add a store.
 
-## Where charter is today
+## Where purlis is today
 
-charter keeps its files in three places, and none of them has a name that says what it is for.
+purlis keeps its files in three places, and none of them has a name that says what it is for.
 
 - **The plane's git.** `charter.toml`, personas, a LIVE workspace, `vaults.json`. The rule
-  charter was built on is that the plane is the state.
+  purlis was built on is that the plane is the state.
 - **`.charter/` and the other files git ignores.** `docs/plane-format.md` calls `.charter/`
   "runtime state". OQ-10 ruled that it *"holds only derived, rebuildable indexes"*. The code
   says otherwise. The vault registry, `fingerprint.key`, `reopen.json`, the save and push
   journals, the profile and MCP consent records and the rename journal all live there. None of
-  them can be rebuilt. Deleting `fingerprint.key` changes every `fp:` value charter has shown,
+  them can be rebuilt. Deleting `fingerprint.key` changes every `fp:` value purlis has shown,
   and deleting `harness-profiles-launched.json` makes every profile ask for consent again.
 - **Outside every plane.** ADR 0034 allowed a machine store for facts about the operator or the
   machine. It holds `machine.json`, and it now also holds `layout.json`, `theme.json`,
   `extensions.json`, the plugin copy and the restart marker. Beside it are the app's OS
-  directories (the shell-tab shims, the git hooks, the panic log), the lines charter writes into Claude Code's,
+  directories (the shell-tab shims, the git hooks, the panic log), the lines purlis writes into Claude Code's,
   Codex's and opencode's global config, and two kinds of keyring item.
 
 Three questions have no answer until each store has a tier. What does a backup carry (FR-10)?
@@ -45,13 +45,13 @@ registry.
 | Tier | Where it is | What it means |
 |---|---|---|
 | **Plane** | committed to the plane's git | It travels to every clone, and the remote is its backup. |
-| **Clone state** | in the plane directory, never committed: `<plane>/.charter/`, `workspaces/<ws>/.charter/`, `charter.local.toml`, a LOCAL workspace's files, the generated harness layer, charter's block in a clone's `.git/info/exclude` | Per clone. Not derived, unless it is marked rebuildable. FR-10 backs it up. |
-| **Machine** | outside every plane: the machine store (below), the app's OS directories, and charter's lines in a harness's global config | About the operator or this machine, true in no single plane. Each store is **syncable** or **device-bound**. |
+| **Clone state** | in the plane directory, never committed: `<plane>/.charter/`, `workspaces/<ws>/.charter/`, `charter.local.toml`, a LOCAL workspace's files, the generated harness layer, purlis's block in a clone's `.git/info/exclude` | Per clone. Not derived, unless it is marked rebuildable. FR-10 backs it up. |
+| **Machine** | outside every plane: the machine store (below), the app's OS directories, and purlis's lines in a harness's global config | About the operator or this machine, true in no single plane. Each store is **syncable** or **device-bound**. |
 | **Keyring** | the operating system's credential store: the macOS Keychain, the Secret Service | Secret values and key material. Nothing else holds a value, except a plain-file vault. FR-10 never copies it. |
 
 **The Machine tier's home is ADR 0034's machine store, which is not the OS application-data
 directory.** V2 says "Machine (app data)", and ADR 0034 put the store under the application-data
-directory. `machine.rs` then moved it to the config home (`$CHARTER_CONFIG_HOME`, else
+directory. `machine.rs` then moved it to the config home (`$PURLIS_CONFIG_HOME`, else
 `$XDG_CONFIG_HOME`, else `~/.config`, then `charter/`), so that a machine has one `charter/`
 directory. ADR 0034 is amended to say so plainly. This record calls the tier **Machine** and
 says where each store in it is. It does
@@ -59,9 +59,9 @@ not move any store. The Tauri application-data and log directories are Machine t
 only the shims and the git hooks (ADR 0074), which are rebuilt at every launch, and the panic
 log. Since the amendment of 2026-10-01 below, they also hold the diagnostic log.
 
-A path `docs/plane-format.md` records that is **not charter's store** gets the tier **None**:
+A path `docs/plane-format.md` records that is **not purlis's store** gets the tier **None**:
 the operator's checkout and its worktrees, a harness's own files, a vendor CLI's output, an
-extension's own folder. The tier says that FR-10 does not carry it and that charter is not the
+extension's own folder. The tier says that FR-10 does not carry it and that purlis is not the
 one to rebuild it.
 
 ### 2. Marks
@@ -76,7 +76,7 @@ A tier is followed by the marks that apply to it:
   V2's "derived indexes" are these.
 - **transient**: it lives for one session, one turn or one operation. Examples are a gate file,
   a per-session pointer, a report waiting for its hook, a lock or a socket.
-- **legacy**: only the retired Python charter creates it. charter-app neither reads it nor
+- **legacy**: only the retired Python charter creates it. purlis neither reads it nor
   writes it, or at most keeps it consistent across a rename.
 
 **What FR-10 backs up follows from the tier and the marks.** It backs up every Clone state and
@@ -93,10 +93,10 @@ does not name them, is right as well.
 
 Every store heading in `docs/plane-format.md` now carries a `**Tier:**` line, and every table
 of paths has a Tier column. The document gains a section defining the tiers and marks, and a
-table of what charter-app keeps outside the plane. That table did not exist, because the
+table of what purlis keeps outside the plane. That table did not exist, because the
 document was written about the Python charter. Two entries are new: `.charter/app/hooks.sock`,
-which the app binds and no document mentioned, and the keys that `charter plugin install`
-writes into `~/.claude/settings.json`. The document said charter never writes that file, and
+which the app binds and no document mentioned, and the keys that `purlis plugin install`
+writes into `~/.claude/settings.json`. The document said purlis never writes that file, and
 that is still true of the Python charter.
 
 `crates/purlis-core/tests/every_store_the_plane_format_names_has_a_tier.rs` reads the document's
@@ -150,10 +150,10 @@ chooses. Two rules follow from the tiers:
   secret values (§2). A restore restores the entry in `.charter/vaults.json`, marks the vault
   **file missing**, and names it in the restore's summary, so the operator knows which values
   to put back. It never drops the entry silently. Its file may also be outside the plane
-  (`charter vault add --file`), and it is Clone state only while it is inside `.charter/`.
+  (`purlis vault add --file`), and it is Clone state only while it is inside `.charter/`.
 - **A restore brings back what a clone held, not what a harness held.** `reopen.json` names each
   chat's harness conversation. That conversation lives in the harness's own store, which is not
-  charter's. A restored chat whose conversation is not on the new machine starts fresh and says
+  purlis's. A restored chat whose conversation is not on the new machine starts fresh and says
   why, as a renamed workspace's chat already does.
 
 ### 6. The stores that records in flight add
@@ -165,13 +165,13 @@ start from it.
 |---|---|---|
 | the device id, in `machine.json` | ADR 0066 | Machine, device-bound |
 | the event log (FD-9) | ADR 0066, 0068 | Machine, device-bound. It is backed up |
-| the local audit chain (AU-1..AU-3) | ADR 0066, 0067 | Machine, device-bound. It is backed up, and `charter audit verify` passes after a restore (FR-10) |
+| the local audit chain (AU-1..AU-3) | ADR 0066, 0067 | Machine, device-bound. It is backed up, and `purlis audit verify` passes after a restore (FR-10) |
 | the device key (AU-3) | ADR 0066 | Keyring. On a headless host, V1's age-encrypted file stands in for it |
-| the human scopes' credentials, `<config>/charterd/` | ADR 0068 | Machine, device-bound, transient. Minted at each start of `charterd` |
+| the human scopes' credentials, `<config>/charterd/` | ADR 0068 | Machine, device-bound, transient. Minted at each start of `purlisd` |
 | `charterd.sock`, in `$XDG_RUNTIME_DIR/charter/` on Linux or the per-user `TMPDIR` on macOS, not in the machine store | ADR 0068 | Machine, device-bound, transient |
 | the per-chat hook spool, beside the chat's files in `.charter/` | ADR 0068 | Clone state, transient. See the rulings |
-| the run journal `charterd` resumes from (FD-29) | ADR 0068 | Machine, device-bound |
-| `charterd`'s copy of itself for an AppImage, under the machine store | ADR 0068 | Machine, device-bound, rebuildable |
+| the run journal `purlisd` resumes from (FD-29) | ADR 0068 | Machine, device-bound |
+| `purlisd`'s copy of itself for an AppImage, under the machine store | ADR 0068 | Machine, device-bound, rebuildable |
 | a runner's host versions, under the machine store at `<config>/server/<ver>/` | ADR 0068 | Machine, device-bound, rebuildable |
 | a runner's resident secret store (age-encrypted, V9) | V9 | Keyring, in its headless form |
 | the forge-item cache (FI7) | FI7 | Machine, device-bound, rebuildable |
@@ -240,7 +240,7 @@ relative to the plane root unless they start with `<config>` (the machine store)
 | 40 | `.charter/unrecorded/*.json` | Clone state, rebuildable | — | no | yes |
 | 41 | `workspaces/<ws>/.charter-structure` | Clone state, rebuildable | — | no | yes |
 | 42 | the generated harness layer: `workspaces/<ws>/.claude/settings.json`, a clone's `.claude/settings*.json`, mirrored plane paths | Clone state, rebuildable | — | no | yes |
-| 43 | charter's block in `<clone>/.git/info/exclude`, and the git config charter sets | Clone state, rebuildable | — | no | yes |
+| 43 | purlis's block in `<clone>/.git/info/exclude`, and the git config purlis sets | Clone state, rebuildable | — | no | yes |
 | 44 | `.charter/frame/**` | Clone state, legacy | — | no | — |
 | 45 | `.charter/reports/`, `chat-turns/`, `guard-seen.json`, `locks/`, `dispatch-commit.lock` | Clone state, legacy | — | no | — |
 | 46 | `.charter/cache/{repostate,update,vaulthealth,harness-wiring}.json`, `cache/update-baseline` | Clone state, legacy | — | no | — |
@@ -255,7 +255,7 @@ relative to the plane root unless they start with `<config>` (the machine store)
 | 55 | `<config>/plugin/` | Machine, rebuildable | device-bound | no | yes |
 | 56 | `<app data>/shims/` | Machine, rebuildable | device-bound | no | yes |
 | 57 | `<app log>/panics.log` | Machine, transient | device-bound | no | no |
-| 58 | charter's keys in `~/.claude/settings.json`, its hook in `~/.codex/config.toml`, and `~/.config/opencode/{plugin/charter.ts,command/charter.md,charter-context.md}` with its keys in `opencode.json` | Machine, rebuildable | device-bound | no | yes |
+| 58 | purlis's keys in `~/.claude/settings.json`, its hook in `~/.codex/config.toml`, and `~/.config/opencode/{plugin/charter.ts,command/charter.md,charter-context.md}` with its keys in `opencode.json` | Machine, rebuildable | device-bound | no | yes |
 | 59 | `<config>/reporting-consent` | Machine, legacy | syncable | no | — |
 | 60 | `keyring charter/<vault>/<8 hex>`: a keyring vault's values | Keyring | — | no | no |
 | 61 | `keyring charter/@identity/<16 hex>`: a provider's identity token | Keyring | — | no | no |
@@ -266,7 +266,7 @@ relative to the plane root unless they start with `<config>` (the machine store)
 | 66 | `<config>/charterd/` credentials, and `charterd.sock` in `$XDG_RUNTIME_DIR/charter/` or the per-user `TMPDIR` (ADR 0068) | Machine, transient | device-bound | no | no |
 | 67 | the per-chat hook spool (ADR 0068) | Clone state, transient | — | no | no |
 | 68 | the run journal (FD-29) | Machine | device-bound | yes | no |
-| 69 | `charterd`'s copies of itself: an AppImage's, and a runner's `<config>/server/<ver>/` | Machine, rebuildable | device-bound | no | yes |
+| 69 | `purlisd`'s copies of itself: an AppImage's, and a runner's `<config>/server/<ver>/` | Machine, rebuildable | device-bound | no | yes |
 | 70 | the forge-item cache (FI7) | Machine, rebuildable | device-bound | no | yes |
 | 71 | review drafts (R5), private memory (KN-7) | Machine | syncable | yes | no |
 | 72 | a guest checkout, its worktrees, an extension's workspace folder or state directory, a vendor's `.playwright*` files, Claude Code's own files | None | — | no | — |
@@ -303,7 +303,7 @@ the rulings.
    keyed by absolute path, and the device id is about to join them. So the file is
    device-bound as a whole. Syncing pins would mean moving them to a file of their own, and no
    ticket asks for that yet.
-4. **`$CHARTER_HOME` splits clone state in two, and shares part of it across clones.**
+4. **`$PURLIS_HOME` splits clone state in two, and shares part of it across clones.**
    `plane::state_dir` honours the variable, and `plane.rs` says why: *"an operator points it at a
    shared directory to keep one vault and one state across several clones"*. The vault
    registry, `fingerprint.key`, the push and save journals, the gate files and the MCP consent
@@ -311,12 +311,12 @@ the rulings.
    profile trust and the rename journal are always under `<plane>/.charter`. With the variable
    set, "per clone" is false for the first group, and FR-10 has to back up both directories.
    This is a defect, filed as [#750](https://github.com/diazoxide/charter/issues/750), and
-   `docs/plane-format.md`'s row for `CHARTER_HOME` now says what moves and what does not.
-5. **Harness config that charter co-writes is Machine, but it is not in the machine store.**
-   charter owns a few keys in `~/.claude/settings.json`, one hook in `~/.codex/config.toml` and
-   three opencode files. The tier applies to charter's lines, which are rebuilt by
-   `charter plugin install`, and not to the files, which belong to the harness.
-6. **The hook spool is transient, but it carries audit events.** ADR 0068 has `charterd` drain
+   `docs/plane-format.md`'s row for `PURLIS_HOME` now says what moves and what does not.
+5. **Harness config that purlis co-writes is Machine, but it is not in the machine store.**
+   purlis owns a few keys in `~/.claude/settings.json`, one hook in `~/.codex/config.toml` and
+   three opencode files. The tier applies to purlis's lines, which are rebuilt by
+   `purlis plugin install`, and not to the files, which belong to the harness.
+6. **The hook spool is transient, but it carries audit events.** ADR 0068 has `purlisd` drain
    each chat's spool and seal it into the audit chain. A spool that was never drained, because
    the machine died first, holds events nothing else has. Marking it transient means a backup
    does not save them. A chat may write its own spool and never another chat's (ADR 0068), so
@@ -336,7 +336,7 @@ the rulings.
 | Where | Change |
 |---|---|
 | `docs/adr/0034-…` | An amendment: the machine store is in the config home, not the application-data directory |
-| `docs/plane-format.md` | A section defining the tiers and marks. A `**Tier:**` line on every store entry (136 of them), a Tier column in the pointers table, a table of what charter-app keeps outside the plane, an entry for `.charter/app/hooks.sock`, a correction to "Claude Code's own files", which `charter plugin install` does write into, and a correction to the `CHARTER_HOME` row (#750) |
+| `docs/plane-format.md` | A section defining the tiers and marks. A `**Tier:**` line on every store entry (136 of them), a Tier column in the pointers table, a table of what purlis keeps outside the plane, an entry for `.charter/app/hooks.sock`, a correction to "Claude Code's own files", which `purlis plugin install` does write into, and a correction to the `PURLIS_HOME` row (#750) |
 | `crates/purlis-core/tests/every_store_the_plane_format_names_has_a_tier.rs` | New. In the file sections, it fails on a heading with no tier unless the test lists it as not a store, on a table of paths with no Tier column, on a tier it cannot read, and when the section it checks cannot be found. It does not see a store named only in the prose under another heading |
 | `AGENTS.md` (`CLAUDE.md`) | The rule that a new store names its tier, as part of the definition of done |
 | `CONTEXT.md` | **Tier** (of a store) |
@@ -361,12 +361,12 @@ the rulings.
 - **Moving every non-derived file out of `.charter/`** to make OQ-10's original sentence true.
   Where a store is was never the problem. The problem was that the sentence was false and
   nothing checked it. Moving the vault registry would also break every plane on disk and the
-  `$CHARTER_HOME` sharing that operators use today.
+  `$PURLIS_HOME` sharing that operators use today.
 - **A tier per directory rather than per file.** `.charter/` holds consent records, journals,
   gate files, sockets and caches side by side, and a directory-level tier would be wrong for
   most of them.
 - **"App data" as the name of the Machine tier.** The code's machine store is in the config
-  home, not the application-data directory, and the tier also covers charter's lines in harness
+  home, not the application-data directory, and the tier also covers purlis's lines in harness
   config. A name that points at one directory would be wrong about the rest.
 - **Deciding syncable per field.** It would be more exact for `machine.json`, but the unit that
   a backup or a sync moves is a file. The tier describes files.
@@ -377,13 +377,13 @@ the rulings.
 
 ## Ruled (V22, 2026-09-30)
 
-1. **A fifth answer, `None`**, for paths charter records but does not own.
+1. **A fifth answer, `None`**, for paths purlis records but does not own.
 2. **The marks `transient` and `legacy`**, beside V2's `rebuildable`.
 3. **`machine.json` is device-bound as a whole.**
 4. **A plain-file vault is Clone state and is not backed up**; a restore marks it "file missing".
 5. **A restore keeps device-bound state only when the operator says this machine replaces the old
    one.**
-6. **`$CHARTER_HOME` moves all clone state or none** ([#750](https://github.com/diazoxide/charter/issues/750)).
+6. **`$PURLIS_HOME` moves all clone state or none** ([#750](https://github.com/diazoxide/charter/issues/750)).
 7. **Review drafts and private memory are Machine and syncable.**
 8. **The hook spool is transient**, and is drained before any backup.
 9. **Runner binaries live under the machine store**, at `<config>/server/<ver>/`.
