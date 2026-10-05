@@ -62,7 +62,8 @@ its own.
 - **`rename-plane` is one explicit commit (V93g).** A project's committed files are migrated only
   by the doctor Fix `rename-plane`, never automatically. It renames `charter.toml`,
   `.charter-scan-allow.toml`, the managed `.gitignore`, `.gitattributes` and exclude blocks, the
-  AGENTS.md markers, and the hooks and rules in the project's `.claude/settings.json`, and it
+  AGENTS.md markers, adds a `purlis` twin beside each `charter` permission rule in the
+  project's `.claude/settings.json`, leaving its hook commands as they are (D-RN7-11), and
   adds `requires = ["purlis-names"]`. A build that knows the `requires` mechanism but not this
   requirement opens the project read-only. Builds 0.4.1 and earlier do not read `purlis.toml`
   at all, so a migrated project is not a project to them: they find nothing there to open, and
