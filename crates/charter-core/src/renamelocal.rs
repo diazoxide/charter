@@ -75,6 +75,9 @@ pub struct Local {
     pub logs: Option<Logs>,
     /// Projects to migrate besides the ones this machine remembers.
     pub planes: Vec<PathBuf>,
+    /// The identifier of the app this runs in, at its launch: its own single-instance lock and
+    /// socket are its own, not a second app's ([`busy::Instances::of`]). `None` in a terminal.
+    pub own_app: Option<String>,
 }
 
 /// The app's log folder under each identifier.
@@ -109,6 +112,7 @@ impl Local {
             data_base,
             logs,
             planes: planes.to_vec(),
+            own_app: None,
         })
     }
 
@@ -164,6 +168,10 @@ impl Moved {
     }
 }
 
+/// Why something is running, asked with the app's own identifier (or `None`) and the projects in
+/// play ([`busy::why`]).
+pub type Busy = dyn Fn(Option<&str>, &[PathBuf]) -> Option<String>;
+
 /// How a run touches the world: a seam for the tests, [`Seams::real`] otherwise.
 pub struct Seams<'a> {
     /// Renames `from` to `to`.
@@ -171,7 +179,7 @@ pub struct Seams<'a> {
     /// Why something that may hold charter's folders is running, given the projects in play, or
     /// `None` ([`busy::why`]). The config home's lock ([`busy::LOCK`]) is asked as well,
     /// whatever this says.
-    pub busy: &'a dyn Fn(&[PathBuf]) -> Option<String>,
+    pub busy: &'a Busy,
 }
 
 fn real_rename(from: &Path, to: &Path) -> io::Result<()> {
@@ -306,7 +314,7 @@ fn quiet(
 ) -> Result<std::fs::File, String> {
     let lock =
         busy::exclusive(&local.config_root).map_err(|why| refused_while_running(&why, again))?;
-    if let Some(why) = (seams.busy)(planes) {
+    if let Some(why) = (seams.busy)(local.own_app.as_deref(), planes) {
         return Err(refused_while_running(&why, again));
     }
     Ok(lock)
@@ -896,19 +904,20 @@ fn undo_one(local: &Local, seams: &Seams, moved: &mut Moved, entry: &Entry) {
     }
 }
 
-/// The app's launch: [`run`] on this machine, unless the last thing done was an undo (finished
+/// The app's launch, by the app whose identifier is `identifier`: [`run`] on this machine, unless the last thing done was an undo (finished
 /// or not), or the environment names the project twice over (the app refuses that launch
 /// itself). `None` when nothing was said; what was said is for the app's log.
 ///
 /// **The log folder is left where it is** (D-RN5-12): the app has its own log file open in it
 /// by now, and a move under the open file would have the next day's file made under the old
 /// name again. `purlis migrate` and the `rename-local` fix move it, with the app closed.
-pub fn at_launch() -> Option<Moved> {
+pub fn at_launch(identifier: &str) -> Option<Moved> {
     if crate::envvar::disagreement().is_some() {
         return None;
     }
     let mut local = Local::of_this_machine(&[])?;
     local.logs = None;
+    local.own_app = Some(identifier.to_owned());
     if undone(&local) {
         return None;
     }

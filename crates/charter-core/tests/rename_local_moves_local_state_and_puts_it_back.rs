@@ -86,6 +86,7 @@ fn machine() -> Machine {
             data_base: Some(data_base),
             logs: Some(logs),
             planes: Vec::new(),
+            own_app: None,
         },
         home,
         plane,
@@ -95,7 +96,7 @@ fn machine() -> Machine {
 
 fn nobody_running() -> Seams<'static> {
     Seams {
-        busy: &|_| None,
+        busy: &|_, _| None,
         ..Seams::real()
     }
 }
@@ -341,7 +342,7 @@ fn a_move_that_fails_leaves_the_old_name_in_place_and_read() {
     };
     let seams = Seams {
         rename: &refuse,
-        busy: &|_| None,
+        busy: &|_, _| None,
     };
 
     let moved = renamelocal::run(&m.local, &seams);
@@ -373,7 +374,7 @@ fn a_move_that_fails_leaves_the_old_name_in_place_and_read() {
         renamelocal::undo(
             &m.local,
             &Seams {
-                busy: &|_| None,
+                busy: &|_, _| None,
                 ..Seams::real()
             }
         )
@@ -393,7 +394,7 @@ fn nothing_moves_while_a_charter_has_a_project_open() {
     let moved = renamelocal::run(
         &m.local,
         &Seams {
-            busy: &|_| Some("a chat is running".to_owned()),
+            busy: &|_, _| Some("a chat is running".to_owned()),
             ..Seams::real()
         },
     );
@@ -627,4 +628,93 @@ fn a_charter_is_seen_by_its_program_and_its_fallback_socket() {
     );
     // A socket file nothing answers on is a crashed app's.
     assert!(!renamelocal::busy::answers(&found[0]));
+}
+
+/// A Linux machine whose single-instance locks live under `dir`.
+fn linux_places(dir: &Path) -> renamelocal::busy::Places {
+    renamelocal::busy::Places {
+        linux: true,
+        runtime: Some(dir.to_path_buf()),
+        uid: 501,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn the_app_at_its_launch_is_not_kept_waiting_by_its_own_instance_lock_but_by_the_others() {
+    charter_core::unsteered!();
+    use renamelocal::busy::Instances;
+    let dir = tempfile::tempdir().unwrap();
+    let places = linux_places(dir.path());
+    let lock = |id: &str| {
+        let file = std::fs::File::create(dir.path().join(format!("{id}.lock"))).unwrap();
+        file.lock().unwrap();
+        file
+    };
+
+    // This app's own lock, as `one_per_user` holds it by the time the launch asks.
+    let own = lock("dev.charter.app");
+    assert_eq!(
+        Instances::of(&places, Some("dev.charter.app")).running(),
+        None
+    );
+    // A terminal asks about every identifier, this one included.
+    assert!(Instances::of(&places, None).running().is_some());
+    drop(own);
+
+    // The other identifier's app is a second app, and the launch waits for it.
+    let other = lock("dev.purlis.app");
+    let why = Instances::of(&places, Some("dev.charter.app"))
+        .running()
+        .expect("the other app is running");
+    assert!(why.contains("dev.purlis.app.lock"), "{why}");
+    drop(other);
+}
+
+#[test]
+fn the_macos_single_instance_socket_is_named_as_the_plugin_names_it() {
+    charter_core::unsteered!();
+    let places = renamelocal::busy::Places {
+        macos: true,
+        socket_dir: PathBuf::from("/tmp"),
+        ..Default::default()
+    };
+    assert_eq!(
+        renamelocal::busy::Instances::of(&places, None).sockets,
+        [
+            PathBuf::from("/tmp/dev_purlis_app_si.sock"),
+            PathBuf::from("/tmp/dev_charter_app_si.sock"),
+        ]
+    );
+    assert_eq!(
+        renamelocal::busy::Instances::of(&places, Some("dev.charter.app")).sockets,
+        [PathBuf::from("/tmp/dev_purlis_app_si.sock")]
+    );
+}
+
+#[test]
+fn a_process_list_that_cannot_be_read_refuses_rather_than_passes() {
+    charter_core::unsteered!();
+    use renamelocal::busy::others_in;
+    let fine = "  20 19 501 /x/purlis\n  21 1 501 /bin/zsh\n".to_owned();
+    assert_eq!(others_in(Ok((true, fine.clone())), 501, 20, 19), Ok(vec![]));
+    // `ps` did not start.
+    assert!(others_in(Err(io::Error::other("no ps")), 501, 20, 19).is_err());
+    // `ps` failed.
+    assert!(others_in(Ok((false, fine)), 501, 20, 19).is_err());
+    // A list that does not show this very process shows nothing reliably.
+    assert!(others_in(Ok((true, "  21 1 501 /bin/zsh\n".to_owned())), 501, 20, 19).is_err());
+    // A charter in it is named.
+    assert_eq!(
+        others_in(
+            Ok((
+                true,
+                "  20 19 501 /x/purlis\n  30 1 501 /usr/bin/charter\n".to_owned()
+            )),
+            501,
+            20,
+            19
+        ),
+        Ok(vec!["charter (pid 30)".to_owned()])
+    );
 }
