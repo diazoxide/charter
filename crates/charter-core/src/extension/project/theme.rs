@@ -240,7 +240,7 @@ impl Said {
     }
 
     /// Why `charter.local.toml` is not among what the files say, when it is there, git would carry it,
-    /// and it said something here: the ignore check's sentence, which the Project settings tab's Local section says too
+    /// and it said something here: the ignore check's sentence, which the Settings tab says at the Project level too
     /// (charter-app#319). A settings tab says it in every group that shows these in force, so a
     /// value set in Local and not applied is never shown without its reason.
     pub fn local_left_out(&self) -> Option<&str> {
@@ -539,7 +539,7 @@ fn unavailable(
 }
 
 /// Everything in `text`'s `[theme]` that charter would not read, as `file` holds it, one sentence
-/// each — what the Project settings tab refuses to save. Empty when the text is not TOML at all:
+/// each — what the Settings tab refuses to save. Empty when the text is not TOML at all:
 /// that is the file's own reader's refusal.
 pub fn refusals(text: &str, file: &str) -> Vec<String> {
     let Ok(top) = text.parse::<toml::Table>() else {

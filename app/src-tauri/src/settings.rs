@@ -1,4 +1,4 @@
-//! The Project settings tab's wire (charter-app#252): a plane's `charter.toml` and
+//! The Settings tab's wire (charter-app#252): a plane's `charter.toml` and
 //! `charter.local.toml`, read and written through [`charter_core::settings`].
 //!
 //! Thin by design, as `doctor.rs` is. Every refusal is the core's sentence — the same one the
@@ -230,7 +230,7 @@ pub struct RepoInForce {
 }
 
 /// How far a save of the plane and of each repo goes in this project, and which file decided
-/// each key: what the Project settings tab's Plane and Repos groups say beside each control.
+/// each key: what the Settings tab's Saving group says beside each control.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
 pub struct SavingInForce {
     pub plane: PlaneInForce,

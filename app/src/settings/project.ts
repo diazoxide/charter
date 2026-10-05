@@ -7,6 +7,7 @@ import {
   type ProjectExtensions,
   type ProjectTheme,
   type SandboxState,
+  type SettingsChange,
   type SettingsEdit,
   type SettingsFile,
   type SettingsStep,
@@ -32,8 +33,8 @@ import {
   type Saving,
   type Shown,
 } from "./fileControls";
-import { asked, fileSetting, useSettingsDriver, type Driven } from "./driver";
-import type { FileSetting, SettingsGroup } from "./groups";
+import { asked, fileSetting, useSettingsDriver, type Driven, type Wrote } from "./driver";
+import type { FileSetting, SettingsFileId, SettingsGroup } from "./groups";
 
 /**
  * **The Project level** (SE-17, #1167; V89b, V89e, V89h): a project's settings in the Settings
@@ -342,6 +343,23 @@ export function useProjectLevel(plane: PlaneId): ProjectLevel {
     if (answers > 0) readTheme();
   }, [answers, readTheme]);
 
+  /** Writes one of the two files through the core: a setting's keys, or its whole text. */
+  const saveFile = (
+    which: SettingsFileId,
+    base: string | null,
+    change: SettingsChange,
+    both: ProjectFiles,
+  ): Promise<Wrote<ProjectFiles>> =>
+    commands
+      .saveProjectSettings(plane, which as SettingsWhich, base, change)
+      .then((said) =>
+        said.status === "error"
+          ? { refused: [said.error] }
+          : said.data.kind === "refused"
+            ? { refused: said.data.reasons }
+            : { saved: { ...both, [which]: said.data.file } },
+      );
+
   const driver = useSettingsDriver<ProjectFiles>(plane, {
     plane,
     read: () =>
@@ -349,16 +367,8 @@ export function useProjectLevel(plane: PlaneId): ProjectLevel {
         .projectSettings(plane)
         .then((said) => (said.status === "ok" ? { ok: said.data } : { trouble: said.error })),
     files: (both) => both,
-    save: (which, base, edits, both) =>
-      commands
-        .saveProjectSettings(plane, which as SettingsWhich, base, { kind: "edits", edits })
-        .then((said) =>
-          said.status === "error"
-            ? { refused: [said.error] }
-            : said.data.kind === "refused"
-              ? { refused: said.data.reasons }
-              : { saved: { ...both, [which]: said.data.file } },
-        ),
+    save: (which, base, edits, both) => saveFile(which, base, { kind: "edits", edits }, both),
+    saveRaw: (which, base, text, both) => saveFile(which, base, { kind: "raw", text }, both),
     inForce: readInForce,
     // Nothing here takes the sandbox back off (D-SE17g), whichever setting's change it undoes.
     mayUndo: (back) => !loosensTheSandbox(back),

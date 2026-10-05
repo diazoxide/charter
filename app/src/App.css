@@ -5668,7 +5668,9 @@ h2.sidebar-title .node-icon {
   gap: 0.1rem;
 }
 
-.ui-settings-nav button {
+/* The nav's groups, and the Edit as TOML links at its foot (SE-19): one look. */
+.ui-settings-nav button,
+.ui-settings-raw button {
   padding: 0.3rem 0.6rem;
   color: var(--text-secondary);
   text-align: left;
@@ -5679,11 +5681,13 @@ h2.sidebar-title .node-icon {
   cursor: pointer;
 }
 
-.ui-settings-nav button:hover {
+.ui-settings-nav button:hover,
+.ui-settings-raw button:hover {
   background: var(--surface-hover);
 }
 
-.ui-settings-nav button[aria-current="true"] {
+.ui-settings-nav button[aria-current="true"],
+.ui-settings-raw button[aria-current="true"] {
   color: var(--text-primary);
   background: var(--accent-surface);
 }
@@ -5704,31 +5708,6 @@ h2.sidebar-title .node-icon {
   padding: 0 0.6rem;
   font-size: 0.75rem;
   color: var(--text-muted);
-}
-
-.ui-settings-raw button {
-  padding: 0.3rem 0.6rem;
-  color: var(--text-secondary);
-  text-align: left;
-  background: none;
-  border: 0;
-  border-radius: 4px;
-  font: inherit;
-  cursor: pointer;
-}
-
-.ui-settings-raw button:hover {
-  background: var(--surface-hover);
-}
-
-.ui-settings-raw button[aria-current="true"] {
-  color: var(--text-primary);
-  background: var(--accent-surface);
-}
-
-.ui-settings-raw button:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
 }
 
 /* The file's whole text: the field's surface, in the monospace the light editor uses. */
@@ -5778,6 +5757,7 @@ h2.sidebar-title .node-icon {
 
 .ui-level:focus-visible,
 .ui-settings-nav button:focus-visible,
+.ui-settings-raw button:focus-visible,
 .ui-setting-reset:focus-visible,
 .ui-setting-control > .ui-field + button:focus-visible,
 .ui-field:focus-visible,

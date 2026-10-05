@@ -1,4 +1,4 @@
-//! A project's harness plugins, as the Project settings tab asks about them (charter-app#274).
+//! A project's harness plugins, as the Settings tab asks about them (charter-app#274).
 //!
 //! `charter_core::harness_plugin` does the thinking: the adapters, the precedence, the pins. This
 //! file is the wire: one group per harness, every one of them, including a harness whose adapter
@@ -26,7 +26,7 @@ pub struct HarnessPlugins {
     pub trouble: Option<String>,
     pub plugins: Vec<HarnessPlugin>,
     /// The ignore check's sentence while git would carry `charter.local.toml` and it names a
-    /// plugin of this harness — the one the Project settings tab's Local section says — so this
+    /// plugin of this harness — the one the Settings tab says at the Project level — so this
     /// group says why a plugin set there is not applied (charter-app#319). The core's
     /// `Choices::local_left_out`, asked for this harness.
     pub local_left_out: Option<String>,

@@ -25,7 +25,10 @@ import type { FileSetting, SettingsFileId } from "./groups";
  * - **a refused write is kept by its setting**, in the core's words, and the files are read
  *   again so what is shown is what is on disk;
  * - **a file changed outside the tab** — by hand, by a chat, by another page — is read again, in
- *   the queue, so the next write is made against it rather than refused as changed on disk.
+ *   the queue, so the next write is made against it rather than refused as changed on disk;
+ * - **a file's whole text** (Edit as TOML, SE-19) is written in the same queue, against the
+ *   text its edit began from; once written it is what the next change is made against, and the
+ *   last change's Undo is gone, so an Undo never writes a key back over the text.
  */
 
 /** A level's settings files, by which file each is. */
@@ -47,6 +50,13 @@ export type Driven<T> = {
   /** The setting the last change was made to, which offers its Undo. */
   undoable: string | undefined;
   write: (setting: FileSetting, draft: string) => void;
+  /** Writes `text` as the whole of `which`, whose text was `base` when the edit began
+   *  (`null`: not there yet); answers why nothing was written, or `undefined` once it was. */
+  writeRaw: (
+    which: SettingsFileId,
+    base: string | null,
+    text: string,
+  ) => Promise<readonly string[] | undefined>;
   undo: () => void;
   /** Reads the files again, in the queue: after something outside the files changed them. */
   reread: () => void;
@@ -72,6 +82,9 @@ export type Level<T> = {
   inForce: () => void;
   /** Whether a change may be undone by writing `back`; every change may unless it says no. */
   mayUndo?: (back: readonly SettingsEdit[]) => boolean;
+  /** Writes `text` as the whole of `which`, whose text was `base`: a level whose files are
+   *  edited as text (SE-19) says how. */
+  saveRaw?: (which: SettingsFileId, base: string | null, text: string, now: T) => Promise<Wrote<T>>;
 };
 
 /** The last change made here: the setting, its file, and the edits that put it back. */
@@ -133,6 +146,20 @@ export function useSettingsDriver<T>(target: string, level: Level<T>): Driver<T>
     if (changes > 0) enqueue(readFiles);
   }, [changes, enqueue, readFiles]);
 
+  /** What a write left the level as: what the next one is made against, and what is shown. */
+  const took = useCallback(
+    (saved: T) => {
+      held.current = saved;
+      setNow({ ok: saved });
+      latest.current.inForce();
+      // The window keeps of its surveyed panels, views and themes what is on here, and the
+      // theme and colour it draws while this is in front.
+      extensionsChanged(plane);
+      projectThemeChanged(plane);
+    },
+    [plane],
+  );
+
   /** Writes `edits` to `which` for `id`; answers whether the core wrote them. */
   const send = useCallback(
     async (id: string, which: SettingsFileId, edits: SettingsEdit[]): Promise<boolean> => {
@@ -148,17 +175,11 @@ export function useSettingsDriver<T>(target: string, level: Level<T>): Driver<T>
         await readFiles();
         return false;
       }
-      held.current = said.saved;
-      setNow({ ok: said.saved });
+      took(said.saved);
       setRefused((before) => without(before, id));
-      latest.current.inForce();
-      // The window keeps of its surveyed panels, views and themes what is on here, and the
-      // theme and colour it draws while this is in front.
-      extensionsChanged(plane);
-      projectThemeChanged(plane);
       return true;
     },
-    [plane, readFiles],
+    [readFiles, took],
   );
 
   const write = useCallback(
@@ -193,6 +214,34 @@ export function useSettingsDriver<T>(target: string, level: Level<T>): Driver<T>
     });
   }, [enqueue, last, send]);
 
+  const writeRaw = useCallback(
+    (which: SettingsFileId, base: string | null, text: string) =>
+      new Promise<readonly string[] | undefined>((answer) => {
+        enqueue(async () => {
+          const was = held.current;
+          const save = latest.current.saveRaw;
+          if (was === undefined || save === undefined) {
+            answer(["These settings are not kept as text, so nothing was saved."]);
+            return;
+          }
+          const said = await save(which, base, text, was).catch((err: unknown): Wrote<T> => ({
+            refused: [String(err)],
+          }));
+          if ("refused" in said) {
+            // What is shown is what is on disk: a refusal may be the file having moved.
+            await readFiles();
+            answer(said.refused);
+            return;
+          }
+          took(said.saved);
+          // The keys an Undo would write back are the text's now.
+          setLast(undefined);
+          answer(undefined);
+        });
+      }),
+    [enqueue, readFiles, took],
+  );
+
   const reread = useCallback(() => enqueue(readFiles), [enqueue, readFiles]);
 
   if (now === undefined) return { state: "reading" };
@@ -205,6 +254,7 @@ export function useSettingsDriver<T>(target: string, level: Level<T>): Driver<T>
     refused,
     undoable: last?.setting,
     write,
+    writeRaw,
     undo,
     reread,
   };

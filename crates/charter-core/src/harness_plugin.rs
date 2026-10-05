@@ -563,7 +563,7 @@ impl Choices {
 
     /// Why `charter.local.toml` is not among `harness`'s choices, when it is there, git would
     /// carry it, and it named a plugin of `harness`: the ignore check's sentence, which the
-    /// Project settings tab's Local section says too (charter-app#319). A settings tab says it in
+    /// Settings tab says too, at the Project level (charter-app#319). A settings tab says it in
     /// that harness's group, so a plugin set in Local and not applied is never shown without its
     /// reason.
     pub fn local_left_out(&self, harness: &str) -> Option<&str> {

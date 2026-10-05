@@ -37,7 +37,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { OWN_MARKS, ViewPane } from "../Views";
@@ -806,7 +806,9 @@ const STATES: State[] = [
     drawn: /The whole file, comments and all/,
     then: async () => {
       await userEvent.click(
-        await screen.findByRole("button", { name: "Edit charter.toml as TOML" }),
+        within(await screen.findByRole("group", { name: "Edit as TOML" })).getByRole("button", {
+          name: "charter.toml",
+        }),
       );
     },
   },

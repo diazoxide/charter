@@ -325,7 +325,7 @@ pub fn read_local(root: &Path) -> std::io::Result<Option<String>> {
 }
 
 /// [`derive`] over the two files' TEXT rather than the plane's — what the files would say, so
-/// the Project settings tab can ask it of a file before it is written (charter-app#252) and
+/// the Settings tab can ask it of a file before it is written (charter-app#252) and
 /// get the refusals the next read would give, in the same words.
 ///
 /// `local` is the local file's read: `Ok(None)` when there is none, and the error when there is

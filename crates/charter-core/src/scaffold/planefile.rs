@@ -236,7 +236,7 @@ pub fn ensure_project_id(root: &Path) -> std::io::Result<String> {
     id.ok_or_else(|| std::io::Error::other("no project id was read or minted"))
 }
 
-/// `body` with `[project] id = "<minted>"` added, through `toml_edit` as the Project settings
+/// `body` with `[project] id = "<minted>"` added, through `toml_edit` as the Settings
 /// tab's save edits (`settings::save`), so every comment, key order and spacing is kept and a
 /// `project` table written any way TOML allows (a header with a comment, spaces or quotes, an
 /// inline table, a dotted key, a subtable) is the one the id goes into.

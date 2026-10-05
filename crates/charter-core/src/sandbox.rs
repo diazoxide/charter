@@ -302,7 +302,7 @@ impl Said {
 }
 
 /// Everything in `text`'s `[sandbox]` that charter would not honour as written, as `file`
-/// holds it — for the Project settings tab's save, which refuses to write it. Only the
+/// holds it — for the Settings tab's save, which refuses to write it. Only the
 /// committed file is read for it; `charter.local.toml` already refuses every table it does not
 /// carry.
 pub fn refusals(text: &str, file: &str) -> Vec<String> {

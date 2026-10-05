@@ -3,7 +3,7 @@
 //! with the sandbox and without it — the opt-out rate (ADR 0067 §7, V12).
 //!
 //! **Local, and never sent** (ruling V78 d). The count is shown by `charter doctor` and the
-//! Project settings tab, and nothing reads it for anything else.
+//! Settings tab, and nothing reads it for anything else.
 //!
 //! **Where:** `.charter/app/sandbox.json`, which the integrity class denies every sandboxed chat
 //! ([`super::Class::Integrity`]), so a sandboxed chat can neither answer the offer nor change the

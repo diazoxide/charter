@@ -1,6 +1,6 @@
 //! The `sandbox` row: where the project turned the sandbox on (ADR 0067), how many new chats
 //! on this machine started without it — the opt-out rate SD-2's outcome bar is measured by
-//! (V12). A local count, shown here and in Project settings and never sent (ruling V78 d).
+//! (V12). A local count, shown here and in Settings and never sent (ruling V78 d).
 
 use super::{Config, Doctor, Row};
 
