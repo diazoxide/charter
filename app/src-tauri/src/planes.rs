@@ -1479,6 +1479,38 @@ impl Planes {
         self.arranging(|store| store.arrange_workspaces(&plane, &order).map(drop))
     }
 
+    /// Pins a workspace back at the place it had among the project's workspace pins: the Undo
+    /// of an unpin made in Settings › You › This machine (ST-2), refusing as [`Self::pin`]
+    /// does.
+    pub fn pin_workspace_at(&self, root: &Path, workspace: &str, at: usize) -> Result<(), String> {
+        let plane = root.to_path_buf();
+        self.arranging(|store| store.pin_workspace_at(&plane, workspace, at).map(drop))
+    }
+
+    /// Forgets a project on this machine (ST-2): its recent, approval, pins and tabs. A
+    /// project that is gone from the disk is forgotten the same way.
+    pub fn forget(&self, root: &Path) -> Result<(), String> {
+        let config = self.store_home("forget a project")?;
+        machine::forget_project(config, root)
+            .map(drop)
+            .map_err(|why| format!("charter could not forget that project: {why}"))
+    }
+
+    /// Revokes this machine's approval of a project (ST-2): the next open asks again.
+    pub fn revoke(&self, root: &Path) -> Result<(), String> {
+        let config = self.store_home("revoke an approval")?;
+        machine::revoke_approval(config, root)
+            .map(drop)
+            .map_err(|why| format!("charter could not revoke that approval: {why}"))
+    }
+
+    /// The config home the machine store is in, or why there is none to `act` in.
+    fn store_home(&self, act: &str) -> Result<&Path, String> {
+        self.config.as_deref().ok_or_else(|| {
+            format!("charter has no config home on this machine, so it cannot {act}.")
+        })
+    }
+
     /// Changes how the operator arranged things in the machine store, and hands back the
     /// store's own refusal whole: the one path [`Self::pin`] and [`Self::arrange_workspaces`]
     /// both take, so a store that cannot be written says the same sentence for either.

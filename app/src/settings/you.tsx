@@ -13,10 +13,11 @@ import {
 import { EDITORS, setYourEditor, useYourEditor } from "../yourEditor";
 import { Choice, Field } from "./components";
 import type { Setting, SettingsGroup } from "./groups";
+import { thisMachineGroup } from "./thisMachine";
 
 /**
  * **The You level's groups** (V89h): Text and Editor, which were the Preferences tab's
- * (charter-app#283, RC-20). Nothing here is a project's: each value is this machine's, kept in
+ * (charter-app#283, RC-20), and This machine (ST-2), which is the machine store's. Nothing here is a project's: each value is this machine's, kept in
  * its layout file (`charter/layout.json`, beside `machine.json`), so it is the same in every
  * project and reaches no clone.
  *
@@ -37,6 +38,7 @@ export function youGroups(): SettingsGroup[] {
       help: "The editor charter hands a file to.",
       settings: [editor],
     },
+    thisMachineGroup(),
   ];
 }
 

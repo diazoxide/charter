@@ -64,6 +64,7 @@ mod sessions;
 mod settings;
 mod slowstart;
 mod smartclose;
+mod thismachine;
 mod todos;
 mod updates;
 mod usage;
