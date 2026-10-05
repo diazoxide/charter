@@ -95,7 +95,7 @@ describe("Settings › Forges", () => {
 
   it("adds a forge that lands in charter.toml, and removes it again", async () => {
     await openProjectSettings();
-    await $('nav[aria-label="Groups"] button=Forges').click();
+    await $('nav[aria-label="Groups"]').$("button=Forges").click();
 
     await $("button=Add forge").click();
     const form = await $('form[aria-label="New forge"]');
