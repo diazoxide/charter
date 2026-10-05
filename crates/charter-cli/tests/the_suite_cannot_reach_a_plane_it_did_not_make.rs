@@ -22,6 +22,17 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+/// `command` without any spelling of the variables that choose a project, which a suite run
+/// inside a chat inherits under both names (V93k): the test sets its own after.
+fn unsteered(mut command: Command) -> Command {
+    for rest in charter_core::envvar::SELECTING {
+        for spelling in charter_core::envvar::spellings(&format!("PURLIS_{rest}")) {
+            command.env_remove(spelling);
+        }
+    }
+    command
+}
+
 /// A plane at `at`: a directory with the one file that makes it one.
 fn a_plane(at: &Path) -> PathBuf {
     std::fs::create_dir_all(at).expect("the plane's directory");
@@ -32,7 +43,7 @@ fn a_plane(at: &Path) -> PathBuf {
 /// `charter root` — the command whose whole job is to answer with the resolved plane — run in
 /// `cwd`, fenced to `fence`, with `$CHARTER_ROOT` as `root` says.
 fn asking_for_the_root(cwd: &Path, fence: &Path, root: Option<&Path>) -> Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_charter"));
+    let mut command = unsteered(Command::new(env!("CARGO_BIN_EXE_charter")));
     command
         .arg("root")
         .current_dir(cwd)

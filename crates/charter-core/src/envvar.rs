@@ -78,8 +78,9 @@ pub fn var(name: &str) -> Option<String> {
 ///
 /// For these, two names with two values are never silently read under one of them: the
 /// caller refuses ([`disagreement`]). Inside a chat both carry the same value, so the case is
-/// a `CHARTER_<X>=…` typed in front of a command — which, read under the purlis name, would
-/// act on the chat's own project instead of the one asked for. Every other variable (logs,
+/// one name typed in front of a command — which, read under the other, would act on the chat's
+/// own project instead of the one asked for. The remedy names both, because a chat carries
+/// both and setting one alone always disagrees there. Every other variable (logs,
 /// knobs, the footer) is read under the purlis name when the two differ (V93e).
 ///
 /// `SESSION_ID` is not here: it keys a chat's own state rather than naming a scope, and an
@@ -108,7 +109,8 @@ impl std::fmt::Display for Disagreement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{purlis} and {old} disagree — set only {purlis} ({old} is the old name).",
+            "{purlis} and {old} disagree — set both to the same value ({purlis}=<x> {old}=<x> \
+             charter …); {old} is the old name.",
             purlis = self.purlis,
             old = self.old
         )

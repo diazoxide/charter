@@ -8,8 +8,19 @@
 use std::path::Path;
 use std::process::{Command, Output};
 
+/// `command` without any spelling of the variables that choose a project, which a suite run
+/// inside a chat inherits under both names (V93k): the test sets its own after.
+fn unsteered(mut command: Command) -> Command {
+    for rest in charter_core::envvar::SELECTING {
+        for spelling in charter_core::envvar::spellings(&format!("PURLIS_{rest}")) {
+            command.env_remove(spelling);
+        }
+    }
+    command
+}
+
 fn charter(root: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_charter"))
+    unsteered(Command::new(env!("CARGO_BIN_EXE_charter")))
         .args(args)
         .current_dir(root)
         .env("CHARTER_ROOT", root)

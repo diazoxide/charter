@@ -7,6 +7,17 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// `command` without any spelling of the variables that choose a project, which a suite run
+/// inside a chat inherits under both names (V93k): the test sets its own after.
+fn unsteered(mut command: Command) -> Command {
+    for rest in charter_core::envvar::SELECTING {
+        for spelling in charter_core::envvar::spellings(&format!("PURLIS_{rest}")) {
+            command.env_remove(spelling);
+        }
+    }
+    command
+}
+
 fn charter() -> PathBuf {
     // `CARGO_BIN_EXE_<name>` is the binary cargo just built for this test.
     PathBuf::from(env!("CARGO_BIN_EXE_charter"))
@@ -19,7 +30,7 @@ fn plane(at: PathBuf) -> PathBuf {
 }
 
 fn root_seen(cwd: &Path, charter_root: Option<&Path>) -> String {
-    let mut command = Command::new(charter());
+    let mut command = unsteered(Command::new(charter()));
     command
         .arg("root")
         .current_dir(cwd)
@@ -76,7 +87,7 @@ fn an_empty_variable_is_treated_as_unset_rather_than_as_the_root_directory() {
 
 /// Run `charter` in `cwd` with `CHARTER_ROOT` pinned, and return stdout.
 fn output(cwd: &Path, args: &[&str]) -> String {
-    let out = Command::new(charter())
+    let out = unsteered(Command::new(charter()))
         .args(args)
         .current_dir(cwd)
         .env("CHARTER_ROOT", cwd)

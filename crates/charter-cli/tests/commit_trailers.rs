@@ -125,9 +125,13 @@ impl Project {
             .env("GIT_AUTHOR_EMAIL", "operator@example.invalid")
             .env("GIT_COMMITTER_NAME", "operator")
             .env("GIT_COMMITTER_EMAIL", "operator@example.invalid")
-            .env("HOME", self.dir.path())
-            .env_remove("CHARTER_ROOT")
-            .env_remove("CHARTER_SESSION_ID");
+            .env("HOME", self.dir.path());
+        // Under either name (V93k): a suite run in a chat inherits both.
+        for name in ["PURLIS_ROOT", "PURLIS_SESSION_ID"] {
+            for spelling in charter_core::envvar::spellings(name) {
+                cmd.env_remove(spelling);
+            }
+        }
         if chat {
             for (k, v) in &self.env {
                 cmd.env(k, v);

@@ -19,6 +19,17 @@ use std::process::{Command, Output, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+/// `command` without any spelling of the variables that choose a project, which a suite run
+/// inside a chat inherits under both names (V93k): the test sets its own after.
+fn unsteered(mut command: Command) -> Command {
+    for rest in charter_core::envvar::SELECTING {
+        for spelling in charter_core::envvar::spellings(&format!("PURLIS_{rest}")) {
+            command.env_remove(spelling);
+        }
+    }
+    command
+}
+
 use charter_core::hookwire::{
     Answer, Ask, CHAT_ENV, ChatToken, Listener, OpenChat, Reading, SOCKET_ENV, TOKEN_ENV, Tickets,
 };
@@ -103,7 +114,7 @@ fn charter_with(
     args: &[&str],
     env: &[(&str, &str)],
 ) -> Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_charter"));
+    let mut command = unsteered(Command::new(env!("CARGO_BIN_EXE_charter")));
     command
         .args(args)
         .current_dir(root)
@@ -555,7 +566,7 @@ fn an_opened_handoff_leaves_its_todo_in_the_target_workspace_and_not_the_brief()
 
 /// The workspace `charter handoff` stamps as its source, asked of the binary itself.
 fn source_workspace(root: &Path) -> String {
-    let out = Command::new(env!("CARGO_BIN_EXE_charter"))
+    let out = unsteered(Command::new(env!("CARGO_BIN_EXE_charter")))
         .args(["workspace", "current"])
         .current_dir(root)
         .env("CHARTER_ROOT", root)

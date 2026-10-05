@@ -1463,6 +1463,31 @@ fn tell_the_host_about_the_tool_call(
 ) {
 }
 
+/// The rule a `PreToolUse` call refused for a disagreeing variable is recorded under.
+const DISAGREEING_NAMES_RULE: &str = "env-names-disagree";
+
+/// A hook run where a variable that chooses the project disagrees with its old name
+/// (D-RN2d-8): it acts on no project, and says why on standard error.
+///
+/// - **A `PreToolUse` hook blocks** (exit 2, the sentence as the reason the harness shows): the
+///   guard would otherwise judge the call against a project it guessed, and a refused write is
+///   the safe side. The host hears the refusal, as it hears every tool call.
+/// - **Every other hook stands aside** (exit 0, nothing on standard output): it only reports,
+///   briefs or records, and exiting 2 from one would leave a session unable to end.
+fn hook_on_disagreement(name: &str, disagree: &charter_core::envvar::Disagreement) -> ExitCode {
+    eprintln!("charter: {disagree}");
+    if !is_a_pretooluse_hook(name) {
+        return ExitCode::SUCCESS;
+    }
+    let answered = hooks::Answered::exit(
+        ExitCode::from(BLOCK),
+        hookwire::Decision::Deny,
+        Some(DISAGREEING_NAMES_RULE),
+    );
+    tell_the_host_about_the_tool_call(name, &payload(), &answered, Duration::ZERO);
+    answered.print()
+}
+
 /// `charter hook <name>` — always succeeds, whatever went wrong.
 ///
 /// **Never exit 2, except where the whole point is to.** A harness reads 2 as "block": on
@@ -1472,23 +1497,6 @@ fn tell_the_host_about_the_tool_call(
 /// decided and could not print ([`guard::deny`]), a word in the tool-hook namespace this
 /// binary does not answer at all ([`is_a_tool_hook`]), and a `PreToolUse` hook that crashed
 /// ([`guard::refuse_on_a_crash`]).
-/// A hook run where a variable that chooses the project disagrees with its old name
-/// (D-RN2d-8): it acts on no project, and says why on standard error.
-///
-/// - **A `PreToolUse` hook blocks** (exit 2, the sentence as the reason the harness shows): the
-///   guard would otherwise judge the call against a project it guessed, and a refused write is
-///   the safe side.
-/// - **Every other hook stands aside** (exit 0, nothing on standard output): it only reports,
-///   briefs or records, and exiting 2 from one would leave a session unable to end.
-fn hook_on_disagreement(name: &str, disagree: &charter_core::envvar::Disagreement) -> ExitCode {
-    eprintln!("charter: {disagree}");
-    if is_a_pretooluse_hook(name) {
-        ExitCode::from(BLOCK)
-    } else {
-        ExitCode::SUCCESS
-    }
-}
-
 fn hook(name: &str, now: Option<&str>) -> ExitCode {
     // FIRST, in front of `Event::parse`, because none of these is one of the app's reporting
     // events: a tool call carries no chat state worth a `Report`.
@@ -3121,14 +3129,20 @@ fn main() -> ExitCode {
     // (D-RN2d-8), never read under one of its names: inside a chat both names carry the same
     // value, so this is a `CHARTER_ROOT=…` typed in front of a command, which would otherwise
     // act on the chat's own project. Every command that acts on a project refuses; a hook
-    // decides per kind ([`hook_on_disagreement`]); `report` and the shell guard need no
-    // project, and a guarded program that is `charter` refuses on its own.
+    // decides per kind ([`hook_on_disagreement`]); the commands below need no project, and a
+    // guarded program that is `charter` refuses on its own.
     if let Some(disagree) = charter_core::envvar::disagreement() {
         match &cli.command {
             Command::Hook {
                 name, list: false, ..
             } => return hook_on_disagreement(name.as_deref().unwrap_or_default(), &disagree),
-            Command::Hook { list: true, .. } | Command::Report(_) | Command::ShellGuard { .. } => {}
+            // `report`, the shell guard, git's hooks and `scan` need no project: a commit in a
+            // repository that is not one is never blocked over the project's variables.
+            Command::Hook { list: true, .. }
+            | Command::Report(_)
+            | Command::ShellGuard { .. }
+            | Command::GitHook { .. }
+            | Command::Scan { .. } => {}
             _ => return refused(&disagree.to_string()),
         }
     }
