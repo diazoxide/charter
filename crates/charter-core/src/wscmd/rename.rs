@@ -25,8 +25,8 @@
 //! - the per-workspace state charter keeps by name: `.charter/workspace-arrivals/<ws>`,
 //!   `.charter/ws-autosave/<ws>` and the reports waiting in `.charter/handbacks/workspace-<ws>/`.
 //! - the app's record, `.charter/app/reopen.json`: each chat's directory, the workspace a
-//!   handed-off chat came from, and each view tab's strip — so a relaunch reopens them under the
-//!   new name.
+//!   handed-off chat came from, each view tab's strip, and the key of every view keyed by the
+//!   workspace's name (#1248) — so a relaunch reopens them under the new name.
 //! - this machine's pins (`machine.rs`), which would otherwise dangle.
 //!
 //! # What does NOT follow: a harness's own conversation files
@@ -207,18 +207,27 @@ impl Move {
 
     /// Follows the move in one view tab of the app's record; `true` when it changed.
     ///
-    /// A view on the workspace's strip moves with it, and the workspace's own settings view is
-    /// keyed and titled by the name (`app/src/tabs.ts`), so it follows too.
+    /// A view on the workspace's strip moves with it, and **every view keyed by the workspace's
+    /// name is keyed by the new one** ([`renamed_key`], #1248) — its settings, its changes, a
+    /// piece's files — titled by it too while its title is the one the window gave it under the
+    /// old name. The window follows the same rule (`app/src/tabs.ts` `renamedView`), so the two
+    /// agree on what comes back at the next launch.
     pub fn view(&self, view: &mut crate::reopen::View) -> bool {
         let mut changed = false;
         if view.workspace.as_deref() == Some(self.old.as_str()) {
             view.workspace = Some(self.new.clone());
             changed = true;
         }
-        if view.from.is_none() && view.view == SETTINGS_VIEW && view.key == self.old {
-            view.key.clone_from(&self.new);
-            if view.title == settings_title(&self.old) {
-                view.title = settings_title(&self.new);
+        if view.from.is_none()
+            && let Some(key) = renamed_key(&view.view, &view.key, &self.old, &self.new)
+        {
+            view.key = key;
+            if let (Some(old), Some(new)) = (
+                title_of(&view.view, &self.old),
+                title_of(&view.view, &self.new),
+            ) && view.title == old
+            {
+                view.title = new;
             }
             changed = true;
         }
@@ -251,12 +260,53 @@ impl Move {
     }
 }
 
-/// The window's view of one workspace's settings, keyed by the workspace's name.
-const SETTINGS_VIEW: &str = "workspace-settings";
+/// How a view of charter's own spells a workspace's name in its key, as `(spelling, whole)`:
+/// `whole` is a key that is the spelling and nothing more, otherwise the spelling is the key's
+/// first part and what follows its `/` is kept — a todo's slug, a memory's, a piece and a file, a
+/// session record's file. `None` for a view not keyed by a workspace's name.
+///
+/// The window's table (`app/src/tabs.ts` `BY_WORKSPACE`), and tested against the same keys. The
+/// views keyed by a clone's directory (`first-task`, `harness-setup`) are not here: a path is
+/// never a key the record holds (`reopen::ViewOnDisk::held`).
+fn spelling(view: &str, workspace: &str) -> Option<(String, bool)> {
+    match view {
+        "workspace-settings" | "changes" | "repo-instructions" => {
+            Some((workspace.to_owned(), true))
+        }
+        "todo" | "piece-files" | "piece-file" | "piece-diff" => Some((workspace.to_owned(), false)),
+        "memory" => Some((format!("workspace/{workspace}"), false)),
+        "memory-archive" => Some((format!("workspace/{workspace}"), true)),
+        "session" => Some((format!("workspaces/{workspace}"), false)),
+        _ => None,
+    }
+}
 
-/// What that view's tab is titled (`app/src/tabs.ts` `workspaceSettingsTitle`).
-fn settings_title(workspace: &str) -> String {
-    format!("Workspace settings · {workspace}")
+/// `key`, a key of charter's own view `view`, after workspace `old` is renamed `new`; `None`
+/// when it does not name `old`.
+fn renamed_key(view: &str, key: &str, old: &str, new: &str) -> Option<String> {
+    let (before, whole) = spelling(view, old)?;
+    let (after, _) = spelling(view, new)?;
+    if key == before {
+        return Some(after);
+    }
+    if whole {
+        return None;
+    }
+    let rest = key.strip_prefix(&before)?.strip_prefix('/')?;
+    Some(format!("{after}/{rest}"))
+}
+
+/// What the window titles a view keyed by a workspace's name, where the title says the name
+/// (`app/src/tabs.ts` `TITLED_BY_WORKSPACE`).
+fn title_of(view: &str, workspace: &str) -> Option<String> {
+    let before = match view {
+        "workspace-settings" => "Workspace settings",
+        "changes" => "Changes",
+        "repo-instructions" => "Memory from the repo",
+        "memory-archive" => "Archived memory",
+        _ => return None,
+    };
+    Some(format!("{before} · {workspace}"))
 }
 
 /// The steps of a rename, in order, named for a test to stop one dead after: the journal, the

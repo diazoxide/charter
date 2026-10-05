@@ -177,6 +177,7 @@ import {
   splitOf,
   refileViews,
   followRename,
+  renamedViewKey,
   SAVING_TITLE,
   SAVING_VIEW,
   SETTINGS_TAB_TITLE,
@@ -2734,9 +2735,9 @@ export const PlaneView = memo(function PlaneView({
    *
    * **The core decides and moves everything on disk**: the refusals (a taken or invalid name, a
    * chat running in it), the folder, the worktrees, every record, the pins and the save. What
-   * the window follows is its own: the view tabs on the workspace's strip, the settings tab
-   * keyed by its name and its pin, and the workspace it has picked. Then it reads the plane
-   * again, as after any change to what workspaces there are.
+   * the window follows is its own: the view tabs on the workspace's strip, every view keyed by
+   * its name and those views' pins (#1248), and the workspace it has picked. Then it reads the
+   * plane again, as after any change to what workspaces there are.
    */
   const doRename = useCallback(
     async (workspace: string, name: string) => {
@@ -2751,11 +2752,10 @@ export const PlaneView = memo(function PlaneView({
         return;
       }
       setRenamingWs(undefined);
-      setTabs((was) => followRename(was, workspace, name));
-      const oldSettings = viewKey(workspaceSettingsView(workspace));
-      setPinnedViews((was) =>
-        was.map((key) => (key === oldSettings ? viewKey(workspaceSettingsView(name)) : key)),
-      );
+      // Through `change`, as every other write to the tabs is: a write past it is undone by the
+      // next one, which starts from `now` (#1248).
+      change((was) => followRename(was, workspace, name, root));
+      setPinnedViews((was) => was.map((key) => renamedViewKey(key, workspace, name, root)));
       setPicked((was) => (was === workspace ? name : was));
       setPickedSpot((was) => (was?.workspace === workspace ? undefined : was));
       setReport({
@@ -2766,7 +2766,7 @@ export const PlaneView = memo(function PlaneView({
       setPinning((asked) => asked + 1);
       setReplan((asked) => asked + 1);
     },
-    [plane],
+    [change, plane, root],
   );
 
   /**

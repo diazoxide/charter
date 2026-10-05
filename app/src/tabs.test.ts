@@ -29,6 +29,8 @@ import {
   offerView,
   refileViews,
   followRename,
+  renamedView,
+  renamedViewKey,
   contentsOf,
   renameTab,
   workspaceSettingsTitle,
@@ -791,6 +793,88 @@ describe("a tab that shows a view (ADR 0043, as amended 2026-09-23)", () => {
     expect(workspaceOf(moved, other.id, filed)).toBe("other");
     // Nothing at all when the workspace has no tab, so a caller can tell.
     expect(followRename(moved, "alpha", "beta")).toBe(moved);
+  });
+});
+
+describe("a workspace's rename, in the keys of its views (#1248)", () => {
+  const charter = (view: string, key: string) => ({ from: null, view, key });
+
+  it("rekeys every view keyed by the workspace's name, keeping the rest of the key", () => {
+    // The keys as each view spells them (`todos.ts`, `memories.ts`, `pieceViews.ts`,
+    // `sessions.ts`), written out: the core's `Move::view` is tested against the same ones.
+    const cases: [string, string, string][] = [
+      ["workspace-settings", "alpha", "beta"],
+      ["changes", "alpha", "beta"],
+      ["repo-instructions", "alpha", "beta"],
+      ["todo", "alpha/20260302-091400-review", "beta/20260302-091400-review"],
+      ["memory", "workspace/alpha/deploys", "workspace/beta/deploys"],
+      ["memory", "workspace/alpha/\\", "workspace/beta/\\"],
+      ["memory-archive", "workspace/alpha", "workspace/beta"],
+      ["piece-files", "alpha/api/fix-login", "beta/api/fix-login"],
+      ["piece-files", "alpha/api/", "beta/api/"],
+      ["piece-file", "alpha/api/fix-login/src/main.rs", "beta/api/fix-login/src/main.rs"],
+      ["piece-diff", "alpha/api/fix-login/src/main.rs", "beta/api/fix-login/src/main.rs"],
+      [
+        "session",
+        "workspaces/alpha/sessions/2026-10-05-review.md",
+        "workspaces/beta/sessions/2026-10-05-review.md",
+      ],
+    ];
+    for (const [view, before, after] of cases)
+      expect(renamedView(charter(view, before), "alpha", "beta")).toEqual(charter(view, after));
+  });
+
+  it("leaves a view about another workspace, a persona or an extension as it is", () => {
+    for (const view of [
+      charter("todo", "alphabet/20260302-091400-review"),
+      charter("memory", "persona/alpha/deploys"),
+      charter("memory", "workspace/alphabet/deploys"),
+      charter("changes", "alphabet"),
+      charter("persona", "alpha"),
+      charter("vault", "alpha"),
+      charter("session", "sessions/alpha.md"),
+      { from: "acme", view: "todo", key: "alpha/one" },
+    ])
+      expect(renamedView(view, "alpha", "beta")).toBeUndefined();
+  });
+
+  it("follows a view keyed by a clone's directory only when the plane's root is known", () => {
+    const firstTask = charter("first-task", "/home/dev/plane/workspaces/alpha/api");
+
+    expect(renamedView(firstTask, "alpha", "beta")).toBeUndefined();
+    expect(renamedView(firstTask, "alpha", "beta", "/home/dev/plane")).toEqual(
+      charter("first-task", "/home/dev/plane/workspaces/beta/api"),
+    );
+  });
+
+  it("rekeys a pinned view, and no other pin", () => {
+    expect(renamedViewKey("charter/todo/alpha/one", "alpha", "beta")).toBe("charter/todo/beta/one");
+    expect(renamedViewKey("charter/workspace-settings/alpha", "alpha", "beta")).toBe(
+      "charter/workspace-settings/beta",
+    );
+    expect(renamedViewKey("charter/persona/alpha", "alpha", "beta")).toBe("charter/persona/alpha");
+    expect(renamedViewKey("ext/acme/stats/alpha", "alpha", "beta")).toBe("ext/acme/stats/alpha");
+  });
+
+  it("moves an open todo and memory with it, so opening either again finds the same tab", () => {
+    let tabs = openView(noTabs(), charter("todo", "alpha/one"), "Ship it", "alpha");
+    tabs = openView(tabs, charter("memory", "workspace/alpha/deploys"), "Deploys", "alpha");
+    tabs = openView(tabs, charter("changes", "alpha"), "Changes · alpha", "alpha");
+
+    const moved = followRename(tabs, "alpha", "beta");
+
+    expect(findView(moved, charter("todo", "beta/one"))).toBeDefined();
+    expect(findView(moved, charter("memory", "workspace/beta/deploys"))).toBeDefined();
+    expect(findView(moved, charter("todo", "alpha/one"))).toBeUndefined();
+    const again = openView(moved, charter("todo", "beta/one"), "Ship it", "beta");
+    expect(again.order).toEqual(moved.order);
+    // A tab called what its view is titled under the old name is called the new one; a todo's
+    // and a memory's titles do not say the workspace, and stay.
+    expect(moved.order.map((id) => moved.byId[id].name)).toEqual([
+      "Ship it",
+      "Deploys",
+      "Changes · beta",
+    ]);
   });
 });
 

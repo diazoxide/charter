@@ -94,6 +94,10 @@ function todoRow(todo: TodoView): PanelRow {
 /** The core. The open todos are the ones not closed or forgotten, and `extra` is one more. */
 function core(extra?: Pick<TodoView, "title" | "body">) {
   const asked: { cmd: string; args: Record<string, unknown> }[] = [];
+  // The workspace's name, which `workspace_rename` changes: what the plane answers by after.
+  let named = "alpha";
+  const here = () => `${PLANE}/workspaces/${named}`;
+  const chat = () => ({ ...CHAT, cwd: here() });
   const gone = new Set<string>();
   const all: TodoView[] =
     extra === undefined
@@ -107,9 +111,13 @@ function core(extra?: Pick<TodoView, "title" | "body">) {
     const given = (args ?? {}) as Record<string, unknown>;
     asked.push({ cmd, args: given });
     if (cmd === "plane_at_launch") return { plane: PLANE, from: PLANE, why: null };
-    if (cmd === "plane_sidebar") return SIDEBAR;
+    if (cmd === "plane_sidebar")
+      return {
+        ...SIDEBAR,
+        workspaces: [{ ...SIDEBAR.workspaces[0], name: named, path: here(), chats: [chat()] }],
+      };
     if (cmd === "opened_chats")
-      return [{ ...CHAT, unreported: null, guessed: null, pinned: false }];
+      return [{ ...chat(), unreported: null, guessed: null, pinned: false }];
     if (cmd === "reopened_views") return [];
     if (["chat_states", "chats_that_would_not_start", "running_sessions"].includes(cmd)) return [];
     if (["extension_views", "extension_commands", "extension_panels"].includes(cmd)) return [];
@@ -117,7 +125,7 @@ function core(extra?: Pick<TodoView, "title" | "body">) {
     if (cmd === "project_theme_drawn") return null;
     if (cmd === "workspace_panels")
       return {
-        workspace: "alpha",
+        workspace: named,
         repos: [],
         paths: {},
         absent: [],
@@ -144,10 +152,18 @@ function core(extra?: Pick<TodoView, "title" | "body">) {
           },
         ],
       };
-    if (cmd === "workspace_repos") return { workspace: "alpha", repos: [], cache_refused: null };
+    if (cmd === "workspace_repos") return { workspace: named, repos: [], cache_refused: null };
+    if (cmd === "workspace_starts_fresh") return null;
+    if (cmd === "workspace_rename") {
+      named = String(given.name);
+      return [`✓ Renamed workspace '${String(given.workspace)}' to '${named}'.`];
+    }
     if (cmd === "vault_list") return [];
     if (cmd === "todo_read") {
-      return open().find((todo) => todo.slug === given.slug) ?? null;
+      // A todo is read in the workspace the tab names: under a name that has gone, there is none.
+      if (given.workspace !== named) throw `no workspace '${String(given.workspace)}'`;
+      const found = open().find((todo) => todo.slug === given.slug);
+      return found ? { ...found, workspace: named } : null;
     }
     if (cmd === "todo_done") {
       gone.add(String(given.slug));
@@ -280,6 +296,50 @@ describe("a todo row", () => {
       "Mark done: Review the rollout plan",
       "Forget todo Review the rollout plan",
     ]);
+  });
+});
+
+describe("a workspace renamed under an open todo (#1248)", () => {
+  it("keeps the tab, now reading the todo under the new name, and a second open brings it forward", async () => {
+    const { asked } = core();
+    render(<App />);
+    await userEvent.click(await todoRowFor("Review the rollout plan"));
+    await screen.findByTestId("todo-body");
+
+    const workspaces = screen.getByRole("tablist", { name: "Workspaces" });
+    const alpha = within(workspaces)
+      .getAllByRole("tab")
+      .find((one) => one.querySelector(".workspace-name")?.textContent === "alpha");
+    if (!alpha) throw new Error("no alpha on the strip");
+    fireEvent.contextMenu(alpha);
+    await userEvent.click(await screen.findByRole("menuitem", { name: /Rename workspace alpha/ }));
+    const dialog = await screen.findByRole("dialog", { name: "Rename workspace alpha" });
+    const box = within(dialog).getByLabelText("New name");
+    await userEvent.clear(box);
+    await userEvent.type(box, "beta");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Rename workspace" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    // The open tab reads the todo where it is now, not under the name that has gone.
+    await waitFor(() =>
+      expect(
+        asked.filter((one) => one.cmd === "todo_read").map((one) => one.args.workspace),
+      ).toContain("beta"),
+    );
+    expect(await screen.findByTestId("todo-body")).toHaveTextContent(
+      "The rollout plan, in full: every region before Friday.",
+    );
+    expect(screen.queryByText(/no workspace 'alpha'/)).toBeNull();
+
+    // Opening it again from beta's own row brings that same tab forward.
+    await userEvent.click(within(strip()).getByRole("tab", { name: /steward 1/ }));
+    await userEvent.click(await todoRowFor("Review the rollout plan"));
+    await waitFor(() =>
+      expect(within(strip()).getByRole("tab", { selected: true })).toHaveTextContent(
+        "Review the rollout plan",
+      ),
+    );
+    expect(tabNames()).toEqual(["steward 1", "Review the rollout plan"]);
   });
 });
 

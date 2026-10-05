@@ -1,3 +1,5 @@
+import { archiveTitle } from "./memories";
+
 /**
  * The tabs the window shows, and how each one is split into panes.
  *
@@ -607,32 +609,106 @@ export function focusedContent(tabs: Tabs): Content | undefined {
 }
 
 /**
- * Every view tab follows a workspace renamed from `from` to `to` (charter#367): a view on
- * its strip moves to the new strip, and the workspace's own settings tab is keyed and titled by
- * the new name. The core does the same to the record (`wscmd::rename::Move::view`), so the two
- * agree on what comes back at the next launch.
+ * **Every view keyed by a workspace's name, and how its key spells that name** (#1248): the one
+ * rule a rename follows, here for the window's tabs and pins and in the core for the saved
+ * record (`wscmd::rename::Move::view`, tested against the same keys).
+ *
+ * `whole` is a key that is the spelling and nothing more; otherwise the spelling is the key's
+ * first part, and what follows its `/` is kept as it is — a todo's slug, a memory's, a piece and
+ * a file, a session record's file.
+ */
+const BY_WORKSPACE: { view: string; spell: (workspace: string) => string; whole: boolean }[] = [
+  { view: "workspace-settings", spell: (ws) => ws, whole: true },
+  { view: "changes", spell: (ws) => ws, whole: true },
+  { view: "repo-instructions", spell: (ws) => ws, whole: true },
+  { view: "todo", spell: (ws) => ws, whole: false },
+  { view: "piece-files", spell: (ws) => ws, whole: false },
+  { view: "piece-file", spell: (ws) => ws, whole: false },
+  { view: "piece-diff", spell: (ws) => ws, whole: false },
+  { view: "memory", spell: (ws) => `workspace/${ws}`, whole: false },
+  { view: "memory-archive", spell: (ws) => `workspace/${ws}`, whole: true },
+  { view: "session", spell: (ws) => `workspaces/${ws}`, whole: false },
+];
+
+/** What a view keyed by a workspace's name is titled, where the title says the name. */
+const TITLED_BY_WORKSPACE: Record<string, (workspace: string) => string> = {
+  "workspace-settings": workspaceSettingsTitle,
+  changes: changesTitle,
+  "repo-instructions": repoInstructionsTitle,
+  "memory-archive": (ws) => archiveTitle({ kind: "workspace", name: ws }),
+  "first-task": firstTaskTitle,
+  "harness-setup": harnessSetupTitle,
+};
+
+/**
+ * `view` after its workspace is renamed from `from` to `to`, or `undefined` when its key does
+ * not name that workspace (#1248).
+ *
+ * The views keyed by a path rather than a name — the first task's and the harness setup's, keyed
+ * by a clone's directory — follow when the plane's `root` is given, by the folder that moved:
+ * `<root>/workspaces/<from>`.
+ */
+export function renamedView(
+  view: ViewRef,
+  from: string,
+  to: string,
+  root?: string,
+): ViewRef | undefined {
+  if (view.from !== null) return undefined;
+  const swap = (before: string, after: string, whole: boolean): ViewRef | undefined => {
+    if (view.key === before) return { ...view, key: after };
+    if (!whole && view.key.startsWith(`${before}/`))
+      return { ...view, key: after + view.key.slice(before.length) };
+    return undefined;
+  };
+  if (view.view === "first-task" || view.view === "harness-setup")
+    return root === undefined
+      ? undefined
+      : swap(`${root}/workspaces/${from}`, `${root}/workspaces/${to}`, false);
+  const rule = BY_WORKSPACE.find((one) => one.view === view.view);
+  return rule && swap(rule.spell(from), rule.spell(to), rule.whole);
+}
+
+/**
+ * A pinned view's key ({@link viewKey}) after the rename {@link renamedView} follows, or the key
+ * itself when it names no view the rename touches.
+ */
+export function renamedViewKey(key: string, from: string, to: string, root?: string): string {
+  const [space, view, ...rest] = key.split("/");
+  if (space !== "charter" || view === undefined || rest.length === 0) return key;
+  const moved = renamedView({ from: null, view, key: rest.join("/") }, from, to, root);
+  return moved ? viewKey(moved) : key;
+}
+
+/**
+ * Every view tab follows a workspace renamed from `from` to `to` (charter#367): a view on its
+ * strip moves to the new strip, and **every view keyed by the workspace's name is keyed by the
+ * new one** ({@link renamedView}, #1248) — its settings, its changes, a todo, a memory, a piece's
+ * files — so it reads the workspace where it is now, and opening the same thing again finds it.
+ * A tab still called what its view is titled under the old name is titled by the new one. The
+ * core does the same to the record (`wscmd::rename::Move::view`), so the two agree on what
+ * comes back at the next launch.
  *
  * Answers `tabs` itself when nothing moved, so a caller can tell. A chat needs nothing here:
  * its strip is where it works, which the plane answers (`FiledIn`).
  */
-export function followRename(tabs: Tabs, from: string, to: string): Tabs {
+export function followRename(tabs: Tabs, from: string, to: string, root?: string): Tabs {
   let moved = false;
-  const oldSettings = viewKey(workspaceSettingsView(from));
   const follow = (layout: Layout): Layout => {
     if (layout.kind === "split")
       return { ...layout, children: layout.children.map(follow) as [Layout, Layout] };
     const content = layout.content;
     if (content.kind !== "view") return layout;
     const strip = content.workspace === from;
-    const settings = viewKey(content.view) === oldSettings;
-    if (!strip && !settings) return layout;
+    const view = renamedView(content.view, from, to, root);
+    if (!strip && !view) return layout;
     moved = true;
     return {
       ...layout,
       content: {
         ...content,
         workspace: strip ? to : content.workspace,
-        view: settings ? workspaceSettingsView(to) : content.view,
+        view: view ?? content.view,
       },
     };
   };
@@ -641,11 +717,14 @@ export function followRename(tabs: Tabs, from: string, to: string): Tabs {
       const tab = tabs.byId[id];
       const layout = follow(tab.layout);
       const lead = contents(layout)[0]?.content;
+      const title = lead?.kind === "view" ? TITLED_BY_WORKSPACE[lead.view.view] : undefined;
       const retitle =
         lead?.kind === "view" &&
-        viewKey(lead.view) === viewKey(workspaceSettingsView(to)) &&
-        tab.name === workspaceSettingsTitle(from);
-      const name = retitle ? workspaceSettingsTitle(to) : tab.name;
+        lead.view.from === null &&
+        title !== undefined &&
+        lead !== contents(tab.layout)[0]?.content &&
+        tab.name === title(from);
+      const name = retitle ? title(to) : tab.name;
       return [id, { ...tab, layout, name, defaultName: retitle ? name : tab.defaultName }];
     }),
   );
