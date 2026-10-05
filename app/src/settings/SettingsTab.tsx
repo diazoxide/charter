@@ -353,7 +353,7 @@ function ShownGroup({ group, driver }: { group: SettingsGroup; driver?: Driven<u
 }
 
 function LiveRow({ setting }: { setting: LiveSetting }) {
-  const { control, reset, grouped, error } = setting.useControl();
+  const { control, reset, grouped, error, undo } = setting.useControl();
   return (
     <SettingRow
       label={setting.label}
@@ -361,6 +361,7 @@ function LiveRow({ setting }: { setting: LiveSetting }) {
       reset={reset}
       grouped={grouped}
       error={error}
+      undo={undo}
       control={control}
     />
   );

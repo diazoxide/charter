@@ -5743,6 +5743,34 @@ h2.sidebar-title .node-icon {
   min-width: 0;
 }
 
+/* You › This machine (ST-2): one line per thing the machine store holds, with its action at
+   the end of the line. */
+.ui-machine-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ui-machine-entry {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0;
+}
+
+.ui-machine-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.ui-machine-entry .ui-setting-reset {
+  margin-inline-start: auto;
+}
+
 .ui-setting-control > .ui-field + button,
 .ui-setting-reset {
   padding: 0.2rem 0.6rem;

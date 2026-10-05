@@ -1072,28 +1072,53 @@ impl Store {
         workspace: &str,
         pinned: bool,
     ) -> Result<bool, String> {
+        if pinned {
+            // A new pin goes last: the order is the order they were pinned in.
+            return self.pin_workspace_at(plane, workspace, usize::MAX);
+        }
         usable_workspace(workspace)?;
         let Some(entry) = self.recents.iter_mut().find(|one| one.plane == plane) else {
             return Err(
                 "charter does not remember that project, so there is nothing to pin in.".to_owned(),
             );
         };
-        if pinned {
-            if entry.pinned_workspaces.iter().any(|one| one == workspace) {
-                return Ok(false);
-            }
-            if entry.pinned_workspaces.len() >= MOST_PINNED_WORKSPACES {
-                return Err(format!(
-                    "charter pins at most {MOST_PINNED_WORKSPACES} workspaces in one project. \
-                     Unpin one first."
-                ));
-            }
-            entry.pinned_workspaces.push(workspace.to_owned());
-            return Ok(true);
-        }
         let had = entry.pinned_workspaces.len();
         entry.pinned_workspaces.retain(|one| one != workspace);
         Ok(entry.pinned_workspaces.len() != had)
+    }
+
+    /// Pins a workspace at place `at` among the plane's workspace pins — the end, where `at` is
+    /// past it — answering whether anything changed (ST-2, #1226).
+    ///
+    /// **The Undo of an unpin**: the pin goes back where it was, so the strip the operator
+    /// arranged is the strip they get back. Every rule [`Self::pin_workspace`] keeps is kept
+    /// here, because that is the one pinning path and this is it: the name is a plain name,
+    /// the plane is one charter remembers, and the bound holds. A pin already there keeps its
+    /// own place.
+    pub fn pin_workspace_at(
+        &mut self,
+        plane: &Path,
+        workspace: &str,
+        at: usize,
+    ) -> Result<bool, String> {
+        usable_workspace(workspace)?;
+        let Some(entry) = self.recents.iter_mut().find(|one| one.plane == plane) else {
+            return Err(
+                "charter does not remember that project, so there is nothing to pin in.".to_owned(),
+            );
+        };
+        if entry.pinned_workspaces.iter().any(|one| one == workspace) {
+            return Ok(false);
+        }
+        if entry.pinned_workspaces.len() >= MOST_PINNED_WORKSPACES {
+            return Err(format!(
+                "charter pins at most {MOST_PINNED_WORKSPACES} workspaces in one project. \
+                 Unpin one first."
+            ));
+        }
+        let at = at.min(entry.pinned_workspaces.len());
+        entry.pinned_workspaces.insert(at, workspace.to_owned());
+        Ok(true)
     }
 
     /// Puts a plane's pinned workspaces in the order `order` names them — the order the
@@ -1308,8 +1333,10 @@ impl Store {
             .map(String::as_str)
     }
 
-    /// Drop `plane` from the list, and with it any approval.
-    pub fn forget(&mut self, plane: &Path) {
+    /// Drop `plane` from the list, and with it any approval, its pins and its tabs, answering
+    /// whether it was remembered at all.
+    pub fn forget(&mut self, plane: &Path) -> bool {
+        let had = self.recents.len();
         self.recents.retain(|entry| entry.plane != plane);
         for window in &mut self.windows {
             window.planes.retain(|open| open != plane);
@@ -1318,6 +1345,22 @@ impl Store {
         for window in &mut self.windows {
             window.active = window.active.min(window.planes.len() - 1);
         }
+        self.recents.len() != had
+    }
+
+    /// Take back the approval of `plane`, keeping it remembered and pinned, and answer whether
+    /// there was one (ST-2, #1226).
+    ///
+    /// **The safe direction, and only that one.** The next open asks again, exactly as a first
+    /// open does ([`Consent::New`]), and a persona's approved grant goes with it. There is no
+    /// way back from here but the ask: an approval is only ever minted by the operator
+    /// answering it ([`Self::approve`]), never restored.
+    pub fn revoke(&mut self, plane: &Path) -> bool {
+        self.recents
+            .iter_mut()
+            .find(|entry| entry.plane == plane)
+            .and_then(|entry| entry.trust.take())
+            .is_some()
     }
 
     /// Whether `plane` may be opened without asking, given what it contributes now.
@@ -1334,6 +1377,25 @@ impl Store {
             Consent::Noted(changes)
         }
     }
+}
+
+/// Forget `plane` on this machine (You › This machine, ST-2): the recent, its approval, its
+/// pins and any tab a window would put back. Answers whether it was remembered.
+///
+/// One call for the window and the CLI alike. A project that is gone from the disk is
+/// forgotten the same way, which is how a gone recent stops coming back at every launch.
+pub fn forget_project(config_root: &Path, plane: &Path) -> io::Result<bool> {
+    let mut forgot = false;
+    update(config_root, |store| forgot = store.forget(plane))?;
+    Ok(forgot)
+}
+
+/// Revoke the approval of `plane` on this machine (ST-2): see [`Store::revoke`]. Answers
+/// whether there was one.
+pub fn revoke_approval(config_root: &Path, plane: &Path) -> io::Result<bool> {
+    let mut revoked = false;
+    update(config_root, |store| revoked = store.revoke(plane))?;
+    Ok(revoked)
 }
 
 /// Something the store held that charter would not take back.

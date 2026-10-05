@@ -429,6 +429,29 @@ export const commands = {
 	 */
 	arrangeWorkspacePins: (plane: PlaneId, workspaces: string[]) => typedError<null, string>(__TAURI_INVOKE("arrange_workspace_pins", { plane, workspaces })),
 	/**
+	 *  What this machine's store holds, each project checked against the disk.
+	 * 
+	 *  **On a blocking thread**, for `recent_planes`' reason: each row costs a `stat`, and a
+	 *  remembered project can be on a share that is not coming back.
+	 */
+	thisMachine: () => typedError<ThisMachine, string>(__TAURI_INVOKE("this_machine")),
+	/**
+	 *  Forgets a project on this machine: its recent, its approval, its pins and any tab a launch
+	 *  would put back. A project that is gone from the disk is forgotten the same way.
+	 */
+	forgetProject: (path: string) => typedError<null, string>(__TAURI_INVOKE("forget_project", { path })),
+	/**
+	 *  Revokes this machine's approval of a project. It stays remembered and pinned; the next open
+	 *  asks again, as a first open does.
+	 */
+	revokeApproval: (path: string) => typedError<null, string>(__TAURI_INVOKE("revoke_approval", { path })),
+	/**
+	 *  Pins or unpins a project, or one workspace in it, by the path the store holds it under —
+	 *  whether or not it is open. `at` puts a workspace pin back at that place among the project's
+	 *  workspace pins (the Undo of an unpin); without it a pin goes last.
+	 */
+	pinOnThisMachine: (path: string, workspace: string | null, pinned: boolean, at: number | null) => typedError<null, string>(__TAURI_INVOKE("pin_on_this_machine", { path, workspace, pinned, at })),
+	/**
 	 *  Pins or unpins one chat.
 	 * 
 	 *  Its own command rather than a third case of the two above, because it is written
@@ -2560,6 +2583,34 @@ export type LocalModelRow = {
 	harness: string,
 };
 
+/**  One project this machine remembers, with what it holds about it. */
+export type MachineProject = {
+	/**  The path the store holds it under: what every command here is handed back. */
+	path: string,
+	/**  The directory's own name. */
+	name: string,
+	/**  Why it is no longer a project here — moved, or gone — or null when it is one. */
+	gone: string | null,
+	/**  Whether this machine approved it (the opener's trust ask). */
+	approved: boolean,
+	/**  Whether the project itself is pinned. */
+	pinned: boolean,
+	/**  Its workspace pins, in the order they were pinned in. */
+	workspace_pins: MachineWorkspacePin[],
+};
+
+/**  One workspace pin, as This machine lists it. */
+export type MachineWorkspacePin = {
+	/**  The workspace's name, as it was pinned. */
+	name: string,
+	/**
+	 *  Whether the project no longer has a workspace by that name: a **dangling** pin, listed
+	 *  so it can be unpinned. False where the project itself cannot be read, since then
+	 *  nothing is known about its workspaces.
+	 */
+	gone: boolean,
+};
+
 /**  What a Delete did, and what its Undo hands back. */
 export type MemoryArchived = {
 	/**  The memory's own slug, which Undo restores it under. */
@@ -4179,6 +4230,16 @@ export type ThemeOption = {
 	value: string,
 	/**  What the select shows. */
 	label: string,
+};
+
+/**  Everything This machine lists. */
+export type ThisMachine = {
+	/**  Most recently opened first. */
+	projects: MachineProject[],
+	/**  What the store would not take back, one line each. */
+	dropped: string[],
+	/**  Why this machine keeps no store at all, or null when it does. */
+	forgetful: string | null,
 };
 
 /**  What the operating system has already spent of the window's own title bar. */

@@ -91,6 +91,8 @@ export type LiveSetting = Named & {
     grouped?: boolean;
     /** Why the last thing done here was refused, in the core's words: said beside it. */
     error?: readonly string[];
+    /** Puts back what the last thing done here changed, while that is the one Undo on offer. */
+    undo?: () => void;
   };
 };
 
